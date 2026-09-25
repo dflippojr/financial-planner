@@ -10,8 +10,8 @@ Build a private, self hosted personal finance app that can eventually replace Ro
 
 - Repository: private GitHub repository with GitHub Issues as the backlog.
 - First usable workflow: import bank and credit card CSV exports, then inspect the resulting transactions.
-- Hosting target: basement PC, reachable from the home network.
-- The app will support multiple people, with both private data and an explicitly shared household view.
+- Hosting target: basement PC, reachable from the home network and the existing Tailscale setup.
+- The app will support multiple people, with both private data and an explicitly shared household view. All household members can edit shared accounts and transactions.
 - The first milestone tracks actual transactions; goals and forecasts come later.
 - Cash flow over time is the lead dashboard view, showing income, spending, and net cash flow.
 - Plaid may be considered later for account connections; the user does not intend to pay for it now.
@@ -48,7 +48,7 @@ Build a private, self hosted personal finance app that can eventually replace Ro
 
 - Verify CSV shapes for Huntington Bank, Capital One, Apple Card, and Vanguard using synthetic examples. Confirm how Vanguard investment activity should affect cash flow and net worth.
 - Should cash flow chart net movement, separate income and expenses, or both?
-- Define the rules for moving or sharing an account with a household, including who can edit it and who can see historical transactions.
+- Define the rules for moving or sharing an account with a household, including ownership, deletion, and visibility of historical transactions. Shared accounts and transactions are editable by all household members.
 - Which goal or forecast capability should follow transaction tracking?
 - Is home-network access sufficient, or should it work through the existing Tailscale setup?
 - What category scheme and custom category/rule behavior does the user want?

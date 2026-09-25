@@ -1,4 +1,4 @@
-﻿# Backlog and milestones
+# Backlog and milestones
 
 [GitHub Issues](https://github.com/dflippojr/financial-planner/issues) are the work queue. Priority labels are `P0` (first usable release), `P1` (next release), and `P2` (later). `ready` means implementation can begin; `needs-refinement` means an open product or architecture decision remains.
 
@@ -16,7 +16,7 @@
 4. [#9 Cash flow over time](https://github.com/dflippojr/financial-planner/issues/9) as the lead view, plus [#10 spending by category](https://github.com/dflippojr/financial-planner/issues/10).
 5. [#11 Basement PC deployment, backup, and restore](https://github.com/dflippojr/financial-planner/issues/11).
 
-A release is usable when people can sign in, keep private accounts private, view explicitly shared household accounts, import the four target providers, safely reimport an overlap, correct transactions, and see cash flow without double counting transfers. Provider-specific transaction meaning and any format limitations must be documented.
+A release is usable when people can sign in, keep private accounts private, view and edit explicitly shared household accounts, access the app over home network and Tailscale, import the four target providers, safely reimport an overlap, correct transactions, and see cash flow without double counting transfers. Provider-specific transaction meaning and any format limitations must be documented.
 
 ## Milestone 2: deeper insight
 
