@@ -4,21 +4,22 @@ Updated: 2026-09-25. This is a working product brief; open questions are explici
 
 ## Goal
 
-Build a private, self hosted personal finance app that can eventually replace Rocket Money. The immediate value is transaction-level insight across checking accounts and credit cards, improving on the existing checking-account Google Sheet. The first milestone uses exported bank and credit card CSV files from several providers. Cash flow over time is the lead view. Automatic bank connections are a later research decision.
+Build a private, self hosted personal finance app that can eventually replace Rocket Money. The immediate value is transaction-level insight across checking accounts and credit cards, improving on the existing checking-account Google Sheet. The first milestone uses exported CSV files from Huntington Bank, Capital One, Apple Card, and Vanguard, subject to verifying each export format and transaction meaning. Cash flow over time is the lead view. Automatic bank connections are a later research decision.
 
 ## Confirmed decisions
 
 - Repository: private GitHub repository with GitHub Issues as the backlog.
 - First usable workflow: import bank and credit card CSV exports, then inspect the resulting transactions.
 - Hosting target: basement PC, reachable from the home network.
-- The app will support multiple people. The data-sharing model (private, household, or both) is still open.
+- The app will support multiple people, with both private data and an explicitly shared household view.
 - The first milestone tracks actual transactions; goals and forecasts come later.
 - Cash flow over time is the lead dashboard view.
+- Plaid may be considered later for account connections; the user does not intend to pay for it now.
 - Financial account numbers, statements, credentials, and real transaction data stay out of Git.
 
 ## First milestone: import to insight
 
-1. Sign in as a person and add an account without storing bank credentials. Access to each person's data follows the agreed sharing model.
+1. Sign in as a person and add an account without storing bank credentials. Each account is private to one person or explicitly shared with a household.
 2. Upload a CSV, map its columns, preview how dates, amounts, and descriptions will be interpreted, and see row-level errors before import.
 3. Import valid transactions with an account and source file attached.
 4. Reimport the same or overlapping export without double-counting transactions.
@@ -45,9 +46,9 @@ Build a private, self hosted personal finance app that can eventually replace Ro
 
 ## Open questions
 
-- Which banks and card issuers should be supported first? Do their CSVs report debit/credit in one amount column or separate columns?
+- Verify CSV shapes for Huntington Bank, Capital One, Apple Card, and Vanguard using synthetic examples. Confirm how Vanguard investment activity should affect cash flow and net worth.
 - Should cash flow chart net movement, separate income and expenses, or both?
-- Should people have private data, a shared household view, or both?
+- Define the rules for moving or sharing an account with a household, including who can edit it and who can see historical transactions.
 - Which goal or forecast capability should follow transaction tracking?
 - Is home-network access sufficient, or should it work through the existing Tailscale setup?
 - What category scheme and custom category/rule behavior does the user want?
@@ -57,4 +58,4 @@ Build a private, self hosted personal finance app that can eventually replace Ro
 
 ## First milestone acceptance
 
-Multiple people can sign in under the chosen sharing model. A user can deploy the app on the basement PC, import bank and card CSVs from several providers, correct mapping errors, reimport an overlap safely, review and categorize transactions, and view cash flow over time and category spending without internal transfers counted as expenses. Deployment instructions include authentication and backup/restore.
+Multiple people can sign in, keep private accounts private, and view explicitly shared household accounts. A user can deploy the app on the basement PC, import bank and card CSVs from several providers, correct mapping errors, reimport an overlap safely, review and categorize transactions, and view cash flow over time and category spending without internal transfers counted as expenses. Deployment instructions include authentication and backup/restore.

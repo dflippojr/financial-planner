@@ -4,13 +4,13 @@ GitHub Issues are the work queue. This file records the delivery order and scope
 
 ## Milestone 0: decide the first supported workflow
 
-- Confirm provider names, private/household sharing, chart semantics, and retention expectations.
+- Verify Huntington, Capital One, Apple Card, and Vanguard CSV formats; define private/household access rules, chart semantics, and retention.
 - Choose a small stack and storage format suited to self hosting and exact monetary values.
 - Define a synthetic example for each supported CSV shape.
 
 ## Milestone 1: usable CSV to dashboard flow
 
-1. Person, account, and transaction data model with access boundaries and migration baseline.
+1. Person, household, account, and transaction data model with private/shared access boundaries and migration baseline.
 2. CSV upload, mapping, preview, and validation.
 3. Idempotent import, provenance, and import undo.
 4. Transaction list with search, filters, and correction.
@@ -24,7 +24,7 @@ GitHub Issues are the work queue. This file records the delivery order and scope
 - Recurring charges and subscriptions.
 - Account balance and net worth history.
 - Export, portability, and Google Sheet migration.
-- Evaluate automatic account connection options.
+- Evaluate automatic account connection options, including Plaid costs and coverage, without requiring a paid service for the first release.
 
 ## Milestone 3: planning
 
