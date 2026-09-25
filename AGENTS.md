@@ -19,7 +19,7 @@ The first release imports CSV exports from Huntington Bank, Capital One, Apple C
 
 The local launcher is D:/Projects/agent-loop, configured as project financial-planner in its ignored projects/financial-planner.env. Run its scripts from Git Bash in that directory. Logs and state go under its ignored logs/financial-planner directory; issue worktrees are siblings under D:/Projects.
 
-- Work from one GitHub issue at a time. Refine an issue marked needs-refinement before implementation. A ready label is meaningful only when dependencies are merged and no product decision remains.
+- Each worker owns one GitHub issue. Independent ready issues may run concurrently up to the agent-loop project cap. Check dependencies on main and avoid parallel changes to the same schema, access model, or import semantics without an explicit coordination plan. Refine an issue marked needs-refinement before implementation; a ready label is meaningful only when dependencies are merged and no product decision remains.
 - For a ready issue, use audit-issue.sh when a pre-implementation review is warranted, then run-issue.sh --project financial-planner --issue N --tier standard (adjust the tier to the work). The launcher creates an isolated worktree and pushes an issue branch. Do not edit main from a worker session.
 - Check status with status.sh --project financial-planner. Once a branch is reviewable, open-pr.sh --project financial-planner --issue N creates or finds the PR. Use run-pr.sh for work on an existing PR branch when needed.
 - Link the PR to its issue with Closes #N. The owner approves every merge; agents must not merge, close issues early, or publish financial data.
