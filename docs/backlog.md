@@ -1,6 +1,6 @@
 # Backlog and milestones
 
-[GitHub Issues](https://github.com/dflippojr/financial-planner/issues) are the work queue. Priority labels are `P0` (first usable release), `P1` (next release), and `P2` (later). `ready` means implementation can begin; `needs-refinement` means an open product or architecture decision remains.
+[GitHub Issues](https://github.com/dflippojr/financial-planner/issues) are the work queue. Priority labels are `P0` (first usable release), `P1` (next release), and `P2` (later). Readiness labels are exclusive: `needs-refinement` means a decision or acceptance criterion is missing; `blocked` means the issue is fully specified but a prerequisite has not landed on `main`; `ready` means the issue is fully specified and all prerequisites have landed. Recheck blocked issues after each prerequisite merges.
 
 ## Milestone 0: settle first release decisions
 
