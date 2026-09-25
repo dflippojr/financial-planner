@@ -1,0 +1,28 @@
+﻿# Sensitive local data
+.env
+.env.*
+!.env.example
+data/
+imports/
+exports/
+backups/
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.csv
+*.ofx
+*.qfx
+*.qif
+*.xlsx
+*.xls
+
+# Local tooling
+.venv/
+__pycache__/
+.pytest_cache/
+node_modules/
+dist/
+build/
+.DS_Store
+Thumbs.db
