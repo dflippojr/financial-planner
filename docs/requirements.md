@@ -13,7 +13,7 @@ Build a private, self hosted personal finance app that can eventually replace Ro
 - Hosting target: basement PC, reachable from the home network.
 - The app will support multiple people, with both private data and an explicitly shared household view.
 - The first milestone tracks actual transactions; goals and forecasts come later.
-- Cash flow over time is the lead dashboard view.
+- Cash flow over time is the lead dashboard view, showing income, spending, and net cash flow.
 - Plaid may be considered later for account connections; the user does not intend to pay for it now.
 - Financial account numbers, statements, credentials, and real transaction data stay out of Git.
 
