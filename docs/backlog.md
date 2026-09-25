@@ -1,22 +1,22 @@
-﻿# Backlog and milestones
+# Backlog and milestones
 
 GitHub Issues are the work queue. This file records the delivery order and scope so the issues remain coherent.
 
 ## Milestone 0: decide the first supported workflow
 
-- Confirm export formats, account scope, first dashboard view, and retention expectations.
+- Confirm provider names, private/household sharing, chart semantics, and retention expectations.
 - Choose a small stack and storage format suited to self hosting and exact monetary values.
 - Define a synthetic example for each supported CSV shape.
 
 ## Milestone 1: usable CSV to dashboard flow
 
-1. Transaction/account data model and migration baseline.
+1. Person, account, and transaction data model with access boundaries and migration baseline.
 2. CSV upload, mapping, preview, and validation.
 3. Idempotent import, provenance, and import undo.
 4. Transaction list with search, filters, and correction.
 5. Categories and transfer handling.
-6. Spending and cash flow views.
-7. Authenticated basement PC deployment and backup/restore guide.
+6. Cash flow over time as the lead view, plus category spending.
+7. Multi-person authentication, authorized data access, basement PC deployment, and backup/restore guide.
 
 ## Milestone 2: Rocket Money replacement depth
 
