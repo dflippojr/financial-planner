@@ -47,10 +47,8 @@ Build a private, self hosted personal finance app that can eventually replace Ro
 ## Open questions
 
 - Verify CSV shapes for Huntington Bank, Capital One, Apple Card, and Vanguard using synthetic examples. Confirm how Vanguard investment activity should affect cash flow and net worth.
-- Should cash flow chart net movement, separate income and expenses, or both?
 - Define the rules for moving or sharing an account with a household, including ownership, deletion, and visibility of historical transactions. Shared accounts and transactions are editable by all household members.
 - Which goal or forecast capability should follow transaction tracking?
-- Is home-network access sufficient, or should it work through the existing Tailscale setup?
 - What category scheme and custom category/rule behavior does the user want?
 - What period of historical data should be brought in initially?
 - Should the existing Google Sheet be imported later, remain a comparison source, or be retired?
