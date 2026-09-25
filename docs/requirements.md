@@ -58,4 +58,4 @@ Build a private, self hosted personal finance app that can eventually replace Ro
 
 ## First milestone acceptance
 
-Multiple people can sign in, keep private accounts private, and view explicitly shared household accounts. A user can deploy the app on the basement PC, import bank and card CSVs from several providers, correct mapping errors, reimport an overlap safely, review and categorize transactions, and view cash flow over time and category spending without internal transfers counted as expenses. Deployment instructions include authentication and backup/restore.
+Multiple people can sign in, keep private accounts private, and view and edit explicitly shared household accounts. A user can deploy the app on the basement PC with home-network and Tailscale access, import bank and card CSVs from several providers, correct mapping errors, reimport an overlap safely, review and categorize transactions, and view cash flow over time and category spending without internal transfers counted as expenses. Deployment instructions include authentication and backup/restore.

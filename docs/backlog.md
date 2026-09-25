@@ -4,7 +4,7 @@
 
 ## Milestone 0: settle first release decisions
 
-- [#1 Resolve import and reporting details](https://github.com/dflippojr/financial-planner/issues/1): verify synthetic CSV shapes, cash flow definitions, and retention.
+- [#1 Resolve import and reporting details](https://github.com/dflippojr/financial-planner/issues/1): verify synthetic CSV shapes, remaining account-sharing rules, and retention.
 - [#2 Choose application stack](https://github.com/dflippojr/financial-planner/issues/2): record the implementation and deployment shape.
 - [#3 Define private and household access](https://github.com/dflippojr/financial-planner/issues/3): settle sharing, editing, and history rules.
 
