@@ -27,7 +27,7 @@ A release is usable when people can sign in, keep private accounts private, view
 
 ## Milestone 3: connections and planning
 
-- [#20 Research optional account connections](https://github.com/dflippojr/financial-planner/issues/20), including Plaid without a paid requirement now.
+- [#20 Research optional account connections](https://github.com/dflippojr/financial-planner/issues/20) (findings: [docs/research/account-connections.md](research/account-connections.md)), including Plaid without a paid requirement now.
 - [#21 Savings goals and future cash flow](https://github.com/dflippojr/financial-planner/issues/21).
 
 Work from an issue to a pull request and link it with `Closes #<issue>`. The owner reviews merges.
