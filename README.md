@@ -23,6 +23,10 @@ python -m pytest
 
 Load the explicitly synthetic example records into a development database with `python manage.py loaddata synthetic_demo`. Never substitute a real statement or transaction export into a committed fixture.
 
+## Continuous integration
+
+`.github/workflows/sonar.yml` runs the test suite with coverage and reports it to SonarCloud on every push to `main` and every pull request. It needs a `SONARCLOUD_TOKEN` repository secret (Settings > Secrets and variables > Actions); see the workflow file for what it expects from the SonarCloud project (organization `dflippojr`, project key `dflippojr_financial-planner`).
+
 ## Working conventions
 
 - Use GitHub Issues for work items. Link pull requests with `Closes #<issue>`.
