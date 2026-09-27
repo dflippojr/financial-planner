@@ -21,6 +21,7 @@ Build a private, self hosted personal finance app that can eventually replace Ro
 - Preserve shared-account history when account scope or household membership changes, and revoke a person's access when they leave the household. Exact join, share/unshare, delete, and ownership-transfer permissions remain open.
 - The MVP does not require balance history, investment-performance reporting, or portfolio composition. Balance and investment-performance history is a post-MVP goal; composition may follow later.
 - Financial account numbers, statements, credentials, and real transaction data stay out of Git.
+- Stack (issue #2, see docs/architecture.md): Python with Django, server-rendered pages, PostgreSQL, and Django's built-in migrations. Money is stored as integer minor units plus an explicit currency column. Deployment is Docker Desktop (WSL2) on the Windows basement PC, reached over Tailscale via `tailscale serve` for HTTPS. Backups are nightly `pg_dump` to a second local disk on the basement PC (schedule/retention finalized in issue #11).
 
 ## First milestone: import to insight
 
