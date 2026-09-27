@@ -1,10 +1,14 @@
 import os
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
+
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "development-only-not-for-production")
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY")
+if not SECRET_KEY:
+    raise ImproperlyConfigured("DJANGO_SECRET_KEY must be set.")
 DEBUG = os.environ.get("DJANGO_DEBUG", "false").lower() == "true"
 ALLOWED_HOSTS = [host for host in os.environ.get("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",") if host]
 
@@ -20,6 +24,7 @@ MIDDLEWARE = [
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.auth.middleware.LoginRequiredMiddleware",
 ]
@@ -81,6 +86,13 @@ SESSION_COOKIE_SECURE = os.environ.get("DJANGO_SECURE_COOKIES", "true").lower() 
 SESSION_COOKIE_SAMESITE = "Lax"
 CSRF_COOKIE_SECURE = SESSION_COOKIE_SECURE
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+SECURE_SSL_REDIRECT = os.environ.get("DJANGO_SECURE_SSL_REDIRECT", "true").lower() == "true"
+SECURE_HSTS_SECONDS = int(os.environ.get("DJANGO_SECURE_HSTS_SECONDS", "31536000"))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+SECURE_HSTS_PRELOAD = False
+CSRF_TRUSTED_ORIGINS = [
+    origin for origin in os.environ.get("DJANGO_CSRF_TRUSTED_ORIGINS", "").split(",") if origin
+]
 
 INVITATION_TTL_HOURS = int(os.environ.get("INVITATION_TTL_HOURS", "48"))
 LOGIN_FAILURE_LIMIT = int(os.environ.get("LOGIN_FAILURE_LIMIT", "5"))

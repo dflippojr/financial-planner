@@ -1,0 +1,5 @@
+{% extends "finance/base.html" %}
+{% block content %}
+<h1>Recover account</h1>
+{% if recovered %}<p>Password updated. All existing sessions were signed out.</p><p><a href="{% url 'login' %}">Sign in</a></p>{% else %}<form method="post">{% csrf_token %}{{ form.as_p }}<button type="submit">Update password</button></form>{% endif %}
+{% endblock %}
