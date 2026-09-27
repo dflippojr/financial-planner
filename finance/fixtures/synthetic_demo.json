@@ -1,0 +1,185 @@
+[
+  {
+    "model": "auth.user",
+    "pk": 1,
+    "fields": {
+      "password": "!",
+      "last_login": null,
+      "is_superuser": false,
+      "username": "synthetic_alex",
+      "first_name": "Synthetic",
+      "last_name": "Alex",
+      "email": "",
+      "is_staff": false,
+      "is_active": true,
+      "date_joined": "2026-01-01T12:00:00Z",
+      "groups": [],
+      "user_permissions": []
+    }
+  },
+  {
+    "model": "finance.person",
+    "pk": 1,
+    "fields": {
+      "user": 1,
+      "display_name": "Synthetic Alex",
+      "created_at": "2026-01-01T12:00:00Z",
+      "updated_at": "2026-01-01T12:00:00Z"
+    }
+  },
+  {
+    "model": "finance.household",
+    "pk": 1,
+    "fields": {
+      "name": "Synthetic Household",
+      "created_at": "2026-01-01T12:00:00Z",
+      "updated_at": "2026-01-01T12:00:00Z"
+    }
+  },
+  {
+    "model": "finance.membership",
+    "pk": 1,
+    "fields": {
+      "person": 1,
+      "household": 1,
+      "joined_at": "2026-01-01T12:00:00Z",
+      "ended_at": null
+    }
+  },
+  {
+    "model": "finance.account",
+    "pk": 1,
+    "fields": {
+      "status": "active",
+      "archived_at": null,
+      "name": "Synthetic Checking",
+      "account_type": "checking",
+      "owner": 1,
+      "scope": "private",
+      "household": null,
+      "currency": "USD",
+      "created_at": "2026-01-01T12:00:00Z",
+      "updated_at": "2026-01-01T12:00:00Z"
+    }
+  },
+  {
+    "model": "finance.account",
+    "pk": 2,
+    "fields": {
+      "status": "active",
+      "archived_at": null,
+      "name": "Synthetic Investment",
+      "account_type": "investment",
+      "owner": 1,
+      "scope": "household",
+      "household": 1,
+      "currency": "USD",
+      "created_at": "2026-01-01T12:00:00Z",
+      "updated_at": "2026-01-01T12:00:00Z"
+    }
+  },
+  {
+    "model": "finance.importbatch",
+    "pk": 1,
+    "fields": {
+      "status": "active",
+      "archived_at": null,
+      "account": 1,
+      "imported_by": 1,
+      "source": "huntington",
+      "source_file_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "date_range_start": "2026-01-01",
+      "date_range_end": "2026-01-31",
+      "imported_at": "2026-02-01T12:00:00Z"
+    }
+  },
+  {
+    "model": "finance.importbatch",
+    "pk": 2,
+    "fields": {
+      "status": "active",
+      "archived_at": null,
+      "account": 2,
+      "imported_by": 1,
+      "source": "vanguard",
+      "source_file_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "date_range_start": "2026-01-01",
+      "date_range_end": "2026-01-31",
+      "imported_at": "2026-02-01T12:05:00Z"
+    }
+  },
+  {
+    "model": "finance.transaction",
+    "pk": 1,
+    "fields": {
+      "status": "active",
+      "archived_at": null,
+      "account": 1,
+      "import_batch": 1,
+      "transaction_date": "2026-01-15",
+      "amount_minor": 250000,
+      "currency": "USD",
+      "description": "Synthetic payroll",
+      "kind": "cash_flow",
+      "source_row_number": 2,
+      "source_transaction_id": "synthetic-income-1",
+      "fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "original_fields": {
+        "Date": "01/15/2026",
+        "Description": "SYNTHETIC PAYROLL",
+        "Amount": "2500.00"
+      },
+      "created_at": "2026-02-01T12:00:00Z",
+      "updated_at": "2026-02-01T12:00:00Z"
+    }
+  },
+  {
+    "model": "finance.transaction",
+    "pk": 2,
+    "fields": {
+      "status": "active",
+      "archived_at": null,
+      "account": 1,
+      "import_batch": 1,
+      "transaction_date": "2026-01-16",
+      "amount_minor": -1099,
+      "currency": "USD",
+      "description": "Synthetic groceries",
+      "kind": "cash_flow",
+      "source_row_number": 3,
+      "source_transaction_id": "",
+      "fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "original_fields": {
+        "Date": "01/16/2026",
+        "Description": "SYNTHETIC GROCERIES",
+        "Amount": "-10.99"
+      },
+      "created_at": "2026-02-01T12:00:00Z",
+      "updated_at": "2026-02-01T12:00:00Z"
+    }
+  },
+  {
+    "model": "finance.transaction",
+    "pk": 3,
+    "fields": {
+      "status": "active",
+      "archived_at": null,
+      "account": 2,
+      "import_batch": 2,
+      "transaction_date": "2026-01-20",
+      "amount_minor": 0,
+      "currency": "USD",
+      "description": "Synthetic unverified investment activity",
+      "kind": "investment_activity",
+      "source_row_number": 2,
+      "source_transaction_id": "",
+      "fingerprint": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "original_fields": {
+        "Type": "SYNTHETIC UNKNOWN ACTIVITY",
+        "Amount": "0.00"
+      },
+      "created_at": "2026-02-01T12:05:00Z",
+      "updated_at": "2026-02-01T12:05:00Z"
+    }
+  }
+]

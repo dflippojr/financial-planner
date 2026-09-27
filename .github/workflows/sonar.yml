@@ -1,0 +1,75 @@
+name: SonarCloud
+
+# Disabled manually (owner decision 2026-09-27): this repo is private, and
+# we don't want a misconfigured token or unresolved SonarCloud project
+# silently burning GitHub Actions minutes on every push/PR while that gets
+# sorted out. Scanning happens locally via SonarQube for now. Re-enable with
+# `gh workflow enable "SonarCloud"` once the SonarCloud project/token are
+# confirmed working and the owner wants this running in CI again.
+#
+# Adapted from agent-harness's sonar.yml for this repo's stack (Django +
+# pytest, GitHub-hosted Linux runner -- no Windows-native test dependency
+# here, so ubuntu-latest instead of windows-latest, and no self-hosted
+# runner pool exists for this repo per AGENTS.md). This workflow both runs
+# the tests (for coverage) and performs the SonarCloud analysis; automatic
+# analysis should stay off in the SonarCloud project settings.
+#
+# pytest.ini already points DJANGO_SETTINGS_MODULE at
+# financial_planner.test_settings (SQLite, in-memory), so this job needs no
+# database service. That only exercises migrations against SQLite; the
+# PostgreSQL-specific migration/fixture check remains a manual step until a
+# deploy or integration workflow adds a Postgres service container for it.
+#
+# Coverage is produced here (pytest-cov Cobertura XML) before the scanner
+# runs. sonar.qualitygate.wait then fails the check when the SonarCloud
+# quality gate fails, including coverage on new code (Sonar way: 80%).
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: sonar-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sonar:
+    runs-on: ubuntu-latest
+    # Secrets are not passed to pull requests from forks; skip rather than fail.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so SonarCloud can blame lines and find the PR base.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest-cov
+
+      - name: Run tests with coverage
+        timeout-minutes: 20
+        run: >
+          python -m pytest tests -q
+          --cov=finance --cov=financial_planner
+          --cov-report=xml:coverage.xml --cov-report=term
+
+      - name: Scan with SonarCloud
+        uses: SonarSource/sonarqube-scan-action@v8
+        env:
+          SONAR_TOKEN: ${{ secrets.SONARCLOUD_TOKEN }}
+        with:
+          args: >
+            -Dsonar.host.url=https://sonarcloud.io
+            -Dsonar.qualitygate.wait=true
