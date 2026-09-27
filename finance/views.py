@@ -5,7 +5,7 @@ from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.cache import never_cache
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_GET, require_POST
 
 from .auth_services import (
     InvalidOneTimeCode,
@@ -21,6 +21,7 @@ from .forms import JoinForm, LoginForm, RecoveryForm
 from .models import Account
 
 
+@require_GET
 def home(request):
     return render(request, "finance/home.html", {"accounts": Account.objects.visible_to(request.user)})
 
