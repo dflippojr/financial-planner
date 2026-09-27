@@ -105,7 +105,7 @@ def test_invitation_is_hashed_one_time_and_joins_same_household():
 
     join_data = {
         "invitation_code": code,
-        "username": "new-member",
+        "username": "New-Member",
         "display_name": "New Example",
         "password1": PASSWORD,
         "password2": PASSWORD,
@@ -118,6 +118,7 @@ def test_invitation_is_hashed_one_time_and_joins_same_household():
     assert Membership.objects.filter(person=new_user.person, household=household, ended_at__isnull=True).exists()
     invitation.refresh_from_db()
     assert invitation.used_at is not None
+    assert joined["Cache-Control"] == "max-age=0, no-cache, no-store, must-revalidate, private"
 
     reused = Client().post(reverse("join"), {**join_data, "username": "another-member"})
     assert b"could not be used" in reused.content

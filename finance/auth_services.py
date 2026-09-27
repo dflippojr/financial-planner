@@ -57,7 +57,7 @@ def accept_invitation(code, username, display_name, password):
     if invitation is None:
         raise InvalidOneTimeCode
     try:
-        user = get_user_model().objects.create_user(username=username, password=password)
+        user = get_user_model().objects.create_user(username=username.strip().casefold(), password=password)
     except IntegrityError as exc:
         raise InvalidOneTimeCode from exc
     person = Person.objects.create(user=user, display_name=display_name)
@@ -126,9 +126,12 @@ def clear_login_failures(key):
 
 @transaction.atomic
 def seed_first_household(username, display_name, household_name, password):
-    if Person.objects.exists():
+    if get_user_model().objects.exists() or Person.objects.exists():
         raise ValueError("The first household member has already been created.")
-    user = get_user_model().objects.create_user(username=username, password=password)
+    try:
+        user = get_user_model().objects.create_user(username=username.strip().casefold(), password=password)
+    except IntegrityError as exc:
+        raise ValueError("The first household member could not be created.") from exc
     person = Person.objects.create(user=user, display_name=display_name)
     household = Household.objects.create(name=household_name)
     Membership.objects.create(person=person, household=household)

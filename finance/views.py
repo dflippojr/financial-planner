@@ -4,6 +4,7 @@ from django.contrib.auth.decorators import login_not_required
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
+from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_POST
 
 from .auth_services import (
@@ -25,6 +26,7 @@ def home(request):
 
 
 @login_not_required
+@never_cache
 def sign_in(request):
     form = LoginForm(request.POST or None)
     if request.method == "POST" and form.is_valid():
@@ -56,6 +58,7 @@ def sign_out(request):
     return redirect("login")
 
 
+@never_cache
 def invite(request):
     code = None
     if request.method == "POST":
@@ -68,6 +71,7 @@ def invite(request):
 
 
 @login_not_required
+@never_cache
 def join(request):
     form = JoinForm(request.POST or None)
     recovery_codes = None
@@ -85,6 +89,7 @@ def join(request):
 
 
 @login_not_required
+@never_cache
 def recover(request):
     form = RecoveryForm(request.POST or None)
     recovered = False
