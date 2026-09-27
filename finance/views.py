@@ -26,6 +26,31 @@ def home(request):
     return render(request, "finance/home.html", {"accounts": Account.objects.visible_to(request.user)})
 
 
+def _authenticate_member(request, username, password, key):
+    """Resolve a signed-in member for (username, password), or None.
+
+    Only a genuine failed authentication attempt counts toward the login
+    throttle: recording one for a request that was already blocked would let
+    a caller reset record_login_failure's window (and clear blocked_until)
+    simply by retrying, before the block is meant to expire.
+    """
+    if login_is_blocked(key):
+        return None
+    user = authenticate(request, username=username, password=password)
+    if user is not None and not hasattr(user, "person"):
+        user = None
+    if user is None:
+        record_login_failure(key)
+    return user
+
+
+def _redirect_target(request):
+    target = request.POST.get("next", "")
+    if not url_has_allowed_host_and_scheme(target, allowed_hosts={request.get_host()}):
+        target = reverse("home")
+    return target
+
+
 @login_not_required
 @never_cache
 def sign_in(request):
@@ -33,23 +58,13 @@ def sign_in(request):
     if request.method == "POST" and form.is_valid():
         username = form.cleaned_data["username"].strip().casefold()
         key = throttle_key(username, request.META.get("REMOTE_ADDR"))
-        user = None if login_is_blocked(key) else authenticate(
-            request,
-            username=username,
-            password=form.cleaned_data["password"],
-        )
-        if user is not None and not hasattr(user, "person"):
-            user = None
+        user = _authenticate_member(request, username, form.cleaned_data["password"], key)
         if user is None:
-            record_login_failure(key)
             form.add_error(None, "Sign-in failed. Check your credentials and try again later.")
         else:
             clear_login_failures(key)
             login(request, user)
-            target = request.POST.get("next", "")
-            if not url_has_allowed_host_and_scheme(target, allowed_hosts={request.get_host()}):
-                target = reverse("home")
-            return redirect(target)
+            return redirect(_redirect_target(request))
     return render(request, "finance/login.html", {"form": form, "next": request.GET.get("next", "")})
 
 

@@ -10,7 +10,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from finance.auth_services import create_recovery_codes
-from finance.models import Account, Household, Invitation, Membership, Person, RecoveryCode
+from finance.models import Account, Household, Invitation, LoginThrottle, Membership, Person, RecoveryCode
 
 
 PASSWORD = "Synthetic-passphrase-42!"
@@ -77,6 +77,32 @@ def test_repeated_login_failures_block_correct_password_and_show_generic_error()
     assert blocked.status_code == 200
     assert b"Sign-in failed" in blocked.content
     assert "_auth_user_id" not in client.session
+
+
+@pytest.mark.django_db
+@override_settings(LOGIN_FAILURE_LIMIT=2, LOGIN_BLOCK_SECONDS=900, LOGIN_FAILURE_WINDOW_SECONDS=900)
+def test_retrying_a_blocked_login_does_not_extend_or_clear_the_block():
+    user, _person, _household = make_member()
+    client = Client()
+    for _ in range(2):
+        client.post(reverse("login"), {"username": user.username, "password": "wrong"})
+
+    throttle = LoginThrottle.objects.get()
+    assert throttle.blocked_until is not None
+    failure_count_before = throttle.failure_count
+    window_started_before = throttle.window_started_at
+    blocked_until_before = throttle.blocked_until
+
+    # A request against an already-blocked key must not itself count as a
+    # failure: doing so would let a caller reset record_login_failure's
+    # window (and clear blocked_until) simply by retrying, well before the
+    # block is meant to expire.
+    client.post(reverse("login"), {"username": user.username, "password": PASSWORD})
+
+    throttle.refresh_from_db()
+    assert throttle.failure_count == failure_count_before
+    assert throttle.window_started_at == window_started_before
+    assert throttle.blocked_until == blocked_until_before
 
 
 @pytest.mark.django_db
