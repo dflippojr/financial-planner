@@ -15,6 +15,11 @@ Build a private, self hosted personal finance app that can eventually replace Ro
 - The first milestone tracks actual transactions; goals and forecasts come later.
 - Cash flow over time is the lead dashboard view, showing income, spending, and net cash flow.
 - Plaid may be considered later for account connections; the user does not intend to pay for it now.
+- The user chooses the date span represented by each CSV import; there is no fixed lookback period.
+- Discard each uploaded CSV after a successful import. Retain batch, source-hash, and row-level provenance needed to trace, correct, and undo an import; do not log raw source rows.
+- A refund reduces spending in its original category rather than counting as income.
+- Preserve shared-account history when account scope or household membership changes, and revoke a person's access when they leave the household. Exact join, share/unshare, delete, and ownership-transfer permissions remain open.
+- The MVP does not require balance history, investment-performance reporting, or portfolio composition. Balance and investment-performance history is a post-MVP goal; composition may follow later.
 - Financial account numbers, statements, credentials, and real transaction data stay out of Git.
 
 ## First milestone: import to insight
@@ -39,20 +44,19 @@ Build a private, self hosted personal finance app that can eventually replace Ro
 
 - Saved mapping profiles and import rules for specific institutions.
 - Recurring charge detection, subscription review, and alerts.
-- Account balance and net worth history.
+- Account balance, net worth, and investment-performance history (issue #18); portfolio/account composition may follow later.
 - Savings goals, future cash flow, and scenario planning.
 - Automatic bank/card aggregation after cost, coverage, privacy, and reliability are evaluated.
 - Import or reconciliation with the existing Google Sheet.
 
 ## Open questions
 
-- Verify CSV shapes for Huntington Bank, Capital One, Apple Card, and Vanguard using synthetic examples. Confirm how Vanguard investment activity should affect cash flow and net worth.
-- Define the rules for moving or sharing an account with a household, including ownership, deletion, and visibility of historical transactions. Shared accounts and transactions are editable by all household members.
+- Verify CSV shapes for Huntington Bank, Capital One, Apple Card, and Vanguard using synthetic examples. Confirm how Vanguard investment activity should affect MVP cash flow; balance and investment-performance data sources and calculations can be settled in post-MVP issue #18.
+- Define household join/leave, account ownership, share/unshare, deletion, and historical visibility rules. Shared accounts and transactions are editable by all current household members.
 - Which goal or forecast capability should follow transaction tracking?
 - What category scheme and custom category/rule behavior does the user want?
-- What period of historical data should be brought in initially?
 - Should the existing Google Sheet be imported later, remain a comparison source, or be retired?
-- What retention and deletion controls are wanted for uploaded CSV files and imported rows?
+- What deletion controls are wanted for imported batches, transactions, accounts, and household data? Uploaded CSVs are discarded after successful import; batch undo must remain possible.
 
 ## First milestone acceptance
 
