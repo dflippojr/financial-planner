@@ -22,17 +22,25 @@ def _digest(value):
 
 
 def normalize_username(username):
-    """The single username-normalization pipeline shared by creation and sign-in.
+    """The single username-normalization pipeline shared by creation, sign-in,
+    and recovery -- every place a username is turned into its canonical form.
 
     Django's UserManager.create_user() applies its own NFKC
     normalize_username() to whatever we pass it, after any transformation of
-    ours. If we casefold before that happens, a character whose NFKC
-    decomposition changes case (e.g. U+210C "ℌ" -> "H") can end up
-    stored differently than what we computed here, and no input at sign-in
-    would ever match it again. Apply Django's normalize_username() first, so
-    casefold() runs last and nothing afterward can change the string.
+    ours, so our result has to already be a fixed point of that call.
+    normalize_username() alone is not enough: a character whose NFKC
+    decomposition changes case (e.g. U+210C "ℌ" -> "H") can end up stored
+    differently than what we computed if we casefold after it. But
+    casefold() alone is not enough either -- full case folding can *un*-NFKC
+    a precomposed character into a base character plus a combining mark
+    (e.g. U+01F0 "ǰ" folds to "j" + U+030C), which create_user()'s own
+    normalize_username() call then recomposes back to something other than
+    what we computed. Apply NFKC, then casefold, then NFKC again so the
+    result is stable under create_user()'s later NFKC pass no matter which
+    direction casefold() perturbed it.
     """
-    return get_user_model().normalize_username(username.strip()).casefold()
+    user_model = get_user_model()
+    return user_model.normalize_username(user_model.normalize_username(username.strip()).casefold())
 
 
 def create_recovery_codes(user, count=8):
@@ -89,7 +97,11 @@ def revoke_user_sessions(user):
 
 @transaction.atomic
 def recover_account(username, code, password):
-    user = get_user_model().objects.filter(username__iexact=username).first()
+    # Stored usernames are already normalize_username()'s output, so an
+    # exact match on the normalized submission is both correct and more
+    # precise than an iexact match against the raw input, which wouldn't
+    # apply the same NFKC/casefold pipeline used at creation and sign-in.
+    user = get_user_model().objects.filter(username=normalize_username(username)).first()
     if user is None:
         raise InvalidOneTimeCode
     recovery_code = RecoveryCode.objects.select_for_update().filter(

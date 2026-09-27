@@ -179,6 +179,31 @@ def test_username_normalization_is_consistent_between_join_and_sign_in():
 
 
 @pytest.mark.django_db
+def test_username_normalization_survives_a_casefold_that_decomposes():
+    # U+01F0 "ǰ" is precomposed; full case folding maps it to "j" plus a
+    # combining caron (decomposed), which create_user()'s own NFKC
+    # normalization then recomposes back to "ǰ". A single
+    # NFKC-then-casefold pass would compute the decomposed form and never
+    # match what actually gets stored.
+    user, _person, _household = make_member()
+    client = Client()
+    client.force_login(user)
+    code = client.post(reverse("invite")).context["invitation_code"]
+
+    join_data = {
+        "invitation_code": code,
+        "username": "ǰane",
+        "display_name": "Jane Example",
+        "password1": PASSWORD,
+        "password2": PASSWORD,
+    }
+    Client().post(reverse("join"), join_data)
+
+    response = Client().post(reverse("login"), {"username": "ǰane", "password": PASSWORD})
+    assert response.status_code == 302
+
+
+@pytest.mark.django_db
 def test_expired_invitation_cannot_be_used():
     user, _person, _household = make_member()
     client = Client()
@@ -228,6 +253,35 @@ def test_recovery_code_changes_password_is_consumed_and_revokes_all_sessions():
         {"username": user.username, "recovery_code": code, "password1": PASSWORD, "password2": PASSWORD},
     )
     assert b"Recovery failed" in reused.content
+
+
+@pytest.mark.django_db
+def test_recovery_succeeds_with_the_original_unnormalized_username():
+    user, _person, _household = make_member()
+    client = Client()
+    client.force_login(user)
+    code = client.post(reverse("invite")).context["invitation_code"]
+
+    join_data = {
+        "invitation_code": code,
+        "username": "ℌenry",
+        "display_name": "Henry Example",
+        "password1": PASSWORD,
+        "password2": PASSWORD,
+    }
+    joined = Client().post(reverse("join"), join_data)
+    recovery_code = joined.context["recovery_codes"][0]
+
+    # Submitting the original, un-normalized username (as registered) rather
+    # than its stored/normalized form must still find the account.
+    response = Client().post(
+        reverse("recover"),
+        {"username": "Henry", "recovery_code": recovery_code, "password1": NEW_PASSWORD, "password2": NEW_PASSWORD},
+    )
+
+    assert response.context["recovered"] is True
+    new_user = get_user_model().objects.get(username="henry")
+    assert new_user.check_password(NEW_PASSWORD)
 
 
 @pytest.mark.django_db
