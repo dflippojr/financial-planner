@@ -152,6 +152,33 @@ def test_invitation_is_hashed_one_time_and_joins_same_household():
 
 
 @pytest.mark.django_db
+def test_username_normalization_is_consistent_between_join_and_sign_in():
+    # U+210C "ℌ" NFKC-decomposes to "H", but str.casefold() alone leaves
+    # it unchanged. Django's create_user() applies its own NFKC
+    # normalize_username() to whatever we pass it, so casefolding before
+    # that (rather than after) let account creation and sign-in disagree.
+    user, _person, _household = make_member()
+    client = Client()
+    client.force_login(user)
+    code = client.post(reverse("invite")).context["invitation_code"]
+
+    join_data = {
+        "invitation_code": code,
+        "username": "ℌenry",
+        "display_name": "Henry Example",
+        "password1": PASSWORD,
+        "password2": PASSWORD,
+    }
+    Client().post(reverse("join"), join_data)
+
+    new_user = get_user_model().objects.exclude(pk=user.pk).get()
+    assert new_user.username == "henry"
+
+    response = Client().post(reverse("login"), {"username": "Henry", "password": PASSWORD})
+    assert response.status_code == 302
+
+
+@pytest.mark.django_db
 def test_expired_invitation_cannot_be_used():
     user, _person, _household = make_member()
     client = Client()

@@ -21,6 +21,20 @@ def _digest(value):
     return hmac.new(settings.SECRET_KEY.encode(), value.encode(), hashlib.sha256).hexdigest()
 
 
+def normalize_username(username):
+    """The single username-normalization pipeline shared by creation and sign-in.
+
+    Django's UserManager.create_user() applies its own NFKC
+    normalize_username() to whatever we pass it, after any transformation of
+    ours. If we casefold before that happens, a character whose NFKC
+    decomposition changes case (e.g. U+210C "ℌ" -> "H") can end up
+    stored differently than what we computed here, and no input at sign-in
+    would ever match it again. Apply Django's normalize_username() first, so
+    casefold() runs last and nothing afterward can change the string.
+    """
+    return get_user_model().normalize_username(username.strip()).casefold()
+
+
 def create_recovery_codes(user, count=8):
     codes = [f"{secrets.token_hex(3)}-{secrets.token_hex(3)}" for _ in range(count)]
     RecoveryCode.objects.bulk_create(
@@ -57,7 +71,7 @@ def accept_invitation(code, username, display_name, password):
     if invitation is None:
         raise InvalidOneTimeCode
     try:
-        user = get_user_model().objects.create_user(username=username.strip().casefold(), password=password)
+        user = get_user_model().objects.create_user(username=normalize_username(username), password=password)
     except IntegrityError as exc:
         raise InvalidOneTimeCode from exc
     person = Person.objects.create(user=user, display_name=display_name)
@@ -129,7 +143,7 @@ def seed_first_household(username, display_name, household_name, password):
     if get_user_model().objects.exists() or Person.objects.exists():
         raise ValueError("The first household member has already been created.")
     try:
-        user = get_user_model().objects.create_user(username=username.strip().casefold(), password=password)
+        user = get_user_model().objects.create_user(username=normalize_username(username), password=password)
     except IntegrityError as exc:
         raise ValueError("The first household member could not be created.") from exc
     person = Person.objects.create(user=user, display_name=display_name)

@@ -13,6 +13,7 @@ from .auth_services import (
     clear_login_failures,
     create_invitation,
     login_is_blocked,
+    normalize_username,
     recover_account,
     record_login_failure,
     throttle_key,
@@ -56,7 +57,7 @@ def _redirect_target(request):
 def sign_in(request):
     form = LoginForm(request.POST or None)
     if request.method == "POST" and form.is_valid():
-        username = form.cleaned_data["username"].strip().casefold()
+        username = normalize_username(form.cleaned_data["username"])
         key = throttle_key(username, request.META.get("REMOTE_ADDR"))
         user = _authenticate_member(request, username, form.cleaned_data["password"], key)
         if user is None:
