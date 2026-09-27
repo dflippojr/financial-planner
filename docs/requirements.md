@@ -23,6 +23,9 @@ Build a private, self hosted personal finance app that can eventually replace Ro
 - The MVP does not require balance history, investment-performance reporting, or portfolio composition. Balance and investment-performance history is a post-MVP goal; composition may follow later.
 - Financial account numbers, statements, credentials, and real transaction data stay out of Git.
 - Stack (issue #2, see docs/architecture.md): Python with Django, server-rendered pages, PostgreSQL, and Django's built-in migrations. Money is stored as integer minor units plus an explicit currency column. Deployment is Docker Desktop (WSL2) on the Windows basement PC, reached over Tailscale via `tailscale serve` for HTTPS. Backups are nightly `pg_dump` to a second local disk on the basement PC (schedule/retention finalized in issue #11).
+- Categories: a standard household-scoped preset list (all members see and use the same categories); custom rules are issue #16.
+- Google Sheet: keep it as an ongoing comparison source alongside the app for a trial period rather than retiring or importing it immediately; revisit later.
+- Deletion beyond source files: transactions and import batches are archived (soft-deleted), never hard-erased, matching the account-deletion decision in #3 — batch undo and transaction correction stay possible. Household-level data deletion (e.g. a person's full data on request) remains open and is not required for the first release.
 
 ## First milestone: import to insight
 
@@ -55,9 +58,9 @@ Build a private, self hosted personal finance app that can eventually replace Ro
 
 - Verify CSV shapes for Huntington Bank, Capital One, Apple Card, and Vanguard using synthetic examples. Confirm how Vanguard investment activity should affect MVP cash flow; balance and investment-performance data sources and calculations can be settled in post-MVP issue #18.
 - Which goal or forecast capability should follow transaction tracking?
-- What category scheme and custom category/rule behavior does the user want?
-- Should the existing Google Sheet be imported later, remain a comparison source, or be retired?
-- What deletion controls are wanted for imported batches, transactions, accounts, and household data? Uploaded CSVs are discarded after successful import; batch undo must remain possible.
+- What custom categorization rule behavior does the user want beyond the starter category preset (issue #16)?
+- Whether/when to retire the Google Sheet once the app is trusted as the comparison winner.
+- Whether household-level data deletion (e.g. removing a person's data entirely) is needed, and if so, its rules.
 
 ## First milestone acceptance
 
