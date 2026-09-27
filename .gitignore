@@ -26,3 +26,10 @@ dist/
 build/
 .DS_Store
 Thumbs.db
+# Python and Django
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+.test.sqlite3
