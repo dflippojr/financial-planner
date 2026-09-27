@@ -18,7 +18,8 @@ Build a private, self hosted personal finance app that can eventually replace Ro
 - The user chooses the date span represented by each CSV import; there is no fixed lookback period.
 - Discard each uploaded CSV after a successful import. Retain batch, source-hash, and row-level provenance needed to trace, correct, and undo an import; do not log raw source rows.
 - A refund reduces spending in its original category rather than counting as income.
-- Preserve shared-account history when account scope or household membership changes, and revoke a person's access when they leave the household. Exact join, share/unshare, delete, and ownership-transfer permissions remain open.
+- Preserve shared-account history when account scope or household membership changes, and revoke a person's access when they leave the household.
+- Household lifecycle (issue #3): joining is invitation-based, and a person belongs to at most one household at a time. Any current household member may share a private account with the household or unshare it back to private. When an account's scope changes, its full transaction history follows the new scope (fully visible once shared, owner-only once private again). Any current household member may delete/archive a shared account; deletion archives (soft-delete) rather than erasing transactions or import batches. If a shared account's owner leaves the household, ownership transfers to another current member; if they were the last member, the account becomes private to them instead.
 - The MVP does not require balance history, investment-performance reporting, or portfolio composition. Balance and investment-performance history is a post-MVP goal; composition may follow later.
 - Financial account numbers, statements, credentials, and real transaction data stay out of Git.
 - Stack (issue #2, see docs/architecture.md): Python with Django, server-rendered pages, PostgreSQL, and Django's built-in migrations. Money is stored as integer minor units plus an explicit currency column. Deployment is Docker Desktop (WSL2) on the Windows basement PC, reached over Tailscale via `tailscale serve` for HTTPS. Backups are nightly `pg_dump` to a second local disk on the basement PC (schedule/retention finalized in issue #11).
@@ -53,7 +54,6 @@ Build a private, self hosted personal finance app that can eventually replace Ro
 ## Open questions
 
 - Verify CSV shapes for Huntington Bank, Capital One, Apple Card, and Vanguard using synthetic examples. Confirm how Vanguard investment activity should affect MVP cash flow; balance and investment-performance data sources and calculations can be settled in post-MVP issue #18.
-- Define household join/leave, account ownership, share/unshare, deletion, and historical visibility rules. Shared accounts and transactions are editable by all current household members.
 - Which goal or forecast capability should follow transaction tracking?
 - What category scheme and custom category/rule behavior does the user want?
 - Should the existing Google Sheet be imported later, remain a comparison source, or be retired?
