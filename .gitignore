@@ -32,4 +32,8 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .venv/
+.venv-*/
 .test.sqlite3
+.coverage
+coverage.xml
+.scannerwork/

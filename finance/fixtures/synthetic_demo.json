@@ -147,7 +147,7 @@
       "description": "Synthetic groceries",
       "kind": "cash_flow",
       "source_row_number": 3,
-      "source_transaction_id": null,
+      "source_transaction_id": "",
       "fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
       "original_fields": {
         "Date": "01/16/2026",
@@ -172,7 +172,7 @@
       "description": "Synthetic unverified investment activity",
       "kind": "investment_activity",
       "source_row_number": 2,
-      "source_transaction_id": null,
+      "source_transaction_id": "",
       "fingerprint": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
       "original_fields": {
         "Type": "SYNTHETIC UNKNOWN ACTIVITY",

@@ -83,7 +83,7 @@ class Migration(migrations.Migration):
                 ('description', models.TextField()),
                 ('kind', models.CharField(choices=[('cash_flow', 'Cash flow'), ('investment_activity', 'Investment activity (neutral)')], default='cash_flow', max_length=19)),
                 ('source_row_number', models.PositiveIntegerField()),
-                ('source_transaction_id', models.CharField(blank=True, max_length=255, null=True)),
+                ('source_transaction_id', models.CharField(blank=True, max_length=255)),
                 ('fingerprint', models.CharField(db_index=True, max_length=64, validators=[django.core.validators.RegexValidator(message='Enter a lowercase hexadecimal SHA-256 digest.', regex='^[0-9a-f]{64}$')])),
                 ('original_fields', models.JSONField(validators=[finance.models.validate_json_object])),
                 ('created_at', models.DateTimeField(auto_now_add=True)),

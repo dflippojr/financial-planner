@@ -100,13 +100,15 @@ def test_person_can_have_only_one_current_household(person, household):
 @pytest.mark.django_db
 def test_membership_end_cannot_precede_join(person):
     household = Household.objects.create(name="Example Household")
+    joined_at = timezone.now()
+    ended_at = joined_at - timedelta(days=1)
 
     with pytest.raises(IntegrityError), transaction.atomic():
         Membership.objects.create(
             person=person,
             household=household,
-            joined_at=timezone.now(),
-            ended_at=timezone.now() - timedelta(days=1),
+            joined_at=joined_at,
+            ended_at=ended_at,
         )
 
 
@@ -149,11 +151,13 @@ def test_transaction_preserves_exact_signed_minor_units_and_provenance(private_a
 
 @pytest.mark.django_db
 def test_database_rejects_non_usd_transaction(private_account, import_batch):
+    transaction_date = date(2026, 1, 15)
+
     with pytest.raises(IntegrityError), transaction.atomic():
         Transaction.objects.create(
             account=private_account,
             import_batch=import_batch,
-            transaction_date=date(2026, 1, 15),
+            transaction_date=transaction_date,
             amount_minor=100,
             currency="CAD",
             description="Invalid currency",
@@ -221,8 +225,10 @@ def test_investment_activity_is_stored_as_neutral_kind(private_account, import_b
 
 @pytest.mark.django_db
 def test_archived_records_require_archive_timestamp(private_account):
+    unarchived = Account.objects.filter(pk=private_account.pk)
+
     with pytest.raises(IntegrityError), transaction.atomic():
-        Account.objects.filter(pk=private_account.pk).update(status=Account.Status.ARCHIVED)
+        unarchived.update(status=Account.Status.ARCHIVED)
 
     archived_at = timezone.now()
     Account.objects.filter(pk=private_account.pk).update(

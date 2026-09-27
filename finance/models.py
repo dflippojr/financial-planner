@@ -176,7 +176,7 @@ class Transaction(ArchivableModel):
     description = models.TextField()
     kind = models.CharField(max_length=19, choices=Kind, default=Kind.CASH_FLOW)
     source_row_number = models.PositiveIntegerField()
-    source_transaction_id = models.CharField(max_length=255, null=True, blank=True)
+    source_transaction_id = models.CharField(max_length=255, blank=True)
     fingerprint = models.CharField(max_length=64, validators=(sha256_validator,), db_index=True)
     original_fields = models.JSONField(validators=(validate_json_object,))
     created_at = models.DateTimeField(auto_now_add=True)
