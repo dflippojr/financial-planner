@@ -17,8 +17,11 @@ class Command(BaseCommand):
         parser.add_argument("--household", required=True)
 
     def handle(self, *args, **options):
-        password = getpass.getpass("Password: ")
-        confirmation = getpass.getpass("Password (again): ")
+        # Match the strip=True default on the web sign-in/join/recovery forms'
+        # CharField password inputs, so a CLI-seeded password with accidental
+        # surrounding whitespace does not become unenterable through the UI.
+        password = getpass.getpass("Password: ").strip()
+        confirmation = getpass.getpass("Password (again): ").strip()
         if password != confirmation:
             raise CommandError("Passwords do not match.")
         try:

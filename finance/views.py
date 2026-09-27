@@ -31,7 +31,7 @@ def home(request):
 def sign_in(request):
     form = LoginForm(request.POST or None)
     if request.method == "POST" and form.is_valid():
-        username = form.cleaned_data["username"]
+        username = form.cleaned_data["username"].strip().casefold()
         key = throttle_key(username, request.META.get("REMOTE_ADDR"))
         user = None if login_is_blocked(key) else authenticate(
             request,
