@@ -55,6 +55,16 @@ def test_login_creates_long_lived_server_side_session_and_logout_revokes_it():
 
 
 @pytest.mark.django_db
+def test_user_without_person_profile_cannot_sign_in():
+    user = get_user_model().objects.create_user(username="orphan", password=PASSWORD)
+
+    response = Client().post(reverse("login"), {"username": user.username, "password": PASSWORD})
+
+    assert response.status_code == 200
+    assert b"Sign-in failed" in response.content
+
+
+@pytest.mark.django_db
 @override_settings(LOGIN_FAILURE_LIMIT=2, LOGIN_BLOCK_SECONDS=900)
 def test_repeated_login_failures_block_correct_password_and_show_generic_error():
     user, _person, _household = make_member()

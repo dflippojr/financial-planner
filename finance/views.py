@@ -35,6 +35,8 @@ def sign_in(request):
             username=username,
             password=form.cleaned_data["password"],
         )
+        if user is not None and not hasattr(user, "person"):
+            user = None
         if user is None:
             record_login_failure(key)
             form.add_error(None, "Sign-in failed. Check your credentials and try again later.")

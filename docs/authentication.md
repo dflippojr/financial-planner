@@ -1,0 +1,39 @@
+# Authentication, onboarding, and recovery
+
+The app uses Django usernames and passwords with database-backed sessions. Authentication is required by default for every view; only sign-in, invitation acceptance, and account recovery are public. Financial records must be queried through the model `visible_to()` methods so private records do not appear in pages, aggregates, searches, errors, or exports.
+
+## First member
+
+Set `DJANGO_SECRET_KEY` to a long random value, apply migrations, then run:
+
+```console
+python manage.py seed_first_user --username USERNAME --display-name "DISPLAY NAME" --household "HOUSEHOLD NAME"
+```
+
+The command works only while no `Person` exists. It prompts twice for a password and applies Django's configured password validators. It then prints eight one-time recovery codes. Store those codes in a password manager; the app stores only keyed digests and cannot display them again.
+
+## Inviting another member
+
+Any person with a current household membership can open **Invite a household member** and create a code. The raw code is shown only in that response. Share it outside the app using a trusted channel. The recipient enters it on **Use an invitation**, chooses a username and password, and receives their own eight recovery codes.
+
+An invitation can be used once and expires after 48 hours. Creating a new invitation does not invalidate older unused invitations. `INVITATION_TTL_HOURS` can change the duration for future codes.
+
+## Recovery
+
+On **Recover account**, a person enters their username, one unused recovery code, and a new password. A successful recovery consumes the code and deletes every existing server-side session for that user. Other recovery codes remain valid. There is deliberately no email, administrator, or host CLI password-reset path. If the only member loses both the password and every recovery code, the account cannot be recovered through the application; restore a database backup or rebuild the installation.
+
+## Sessions and sign-in protection
+
+Sessions expire 28 days after sign-in and do not extend with activity. Signing out deletes the current server-side session. Five failed attempts for the same normalized username and remote address within 15 minutes block that pair for 15 minutes. Responses remain generic so they do not confirm whether a username exists.
+
+The defaults can be changed with `DJANGO_SESSION_COOKIE_AGE`, `LOGIN_FAILURE_LIMIT`, `LOGIN_FAILURE_WINDOW_SECONDS`, and `LOGIN_BLOCK_SECONDS`. Values are seconds except the invitation duration noted above.
+
+## HTTPS settings
+
+The deployment must terminate HTTPS with `tailscale serve` and forward `X-Forwarded-Proto: https`. Direct HTTP requests redirect to HTTPS. Configure these environment variables:
+
+- `DJANGO_SECRET_KEY`: required; use a long random value and keep it out of Git and logs.
+- `DJANGO_ALLOWED_HOSTS`: comma-separated Tailscale hostnames accepted by Django.
+- `DJANGO_CSRF_TRUSTED_ORIGINS`: comma-separated HTTPS origins, including the scheme, used to access the app.
+
+Secure session and CSRF cookies, HTTPS redirects, and one-year HSTS are enabled by default. `DJANGO_SECURE_COOKIES`, `DJANGO_SECURE_SSL_REDIRECT`, and `DJANGO_SECURE_HSTS_SECONDS` exist for isolated local development and tests; do not weaken them on the deployed app.

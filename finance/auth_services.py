@@ -6,6 +6,7 @@ from datetime import timedelta
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.sessions.models import Session
+from django.core.exceptions import PermissionDenied
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
@@ -34,7 +35,7 @@ def create_invitation(inviter):
         ended_at__isnull=True,
     ).select_related("household").first()
     if membership is None:
-        raise PermissionError("A current household membership is required.")
+        raise PermissionDenied("A current household membership is required.")
     code = secrets.token_urlsafe(24)
     Invitation.objects.create(
         household=membership.household,

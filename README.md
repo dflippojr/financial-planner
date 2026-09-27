@@ -8,7 +8,8 @@ The Django application foundation and its core financial data model are under de
 
 - [Requirements](docs/requirements.md)
 - [Backlog and milestones](docs/backlog.md)
-- [Data model](docs/data-model.md)
+- [Data model](docs/data-model.md)
+- [Authentication and onboarding](docs/authentication.md)
 - [Agent guide and agent-loop workflow](AGENTS.md)
 - [GitHub Issues](https://github.com/dflippojr/financial-planner/issues)
 
@@ -22,6 +23,8 @@ python -m pytest
 ```
 
 Load the explicitly synthetic example records into a development database with `python manage.py loaddata synthetic_demo`. Never substitute a real statement or transaction export into a committed fixture.
+
+Authentication requires `DJANGO_SECRET_KEY`; production also needs the Tailscale HTTPS and host/origin values described in [the authentication guide](docs/authentication.md). After migrating a new installation, create its first household member with `python manage.py seed_first_user --username USERNAME --display-name "DISPLAY NAME" --household "HOUSEHOLD NAME"`. The command prompts for a password without echoing it and prints recovery codes once.
 
 ## Continuous integration
 

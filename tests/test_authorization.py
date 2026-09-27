@@ -1,7 +1,9 @@
+from datetime import date
+
 import pytest
 from django.contrib.auth import get_user_model
 
-from finance.models import Account, Household, Membership, Person
+from finance.models import Account, Household, ImportBatch, Membership, Person, Transaction
 
 
 def make_person(username):
@@ -57,3 +59,31 @@ def test_anonymous_account_visibility_is_empty():
     Account.objects.create(name="Private", account_type="checking", owner=owner)
 
     assert not Account.objects.visible_to(None).exists()
+
+
+@pytest.mark.django_db
+def test_related_financial_records_follow_account_visibility():
+    viewer = make_person("viewer")
+    other = make_person("other")
+    private = Account.objects.create(name="Other Private", account_type="checking", owner=other)
+    batch = ImportBatch.objects.create(
+        account=private,
+        imported_by=other,
+        source="huntington",
+        source_file_sha256="a" * 64,
+        date_range_start=date(2026, 1, 1),
+        date_range_end=date(2026, 1, 31),
+    )
+    transaction = Transaction.objects.create(
+        account=private,
+        import_batch=batch,
+        transaction_date=date(2026, 1, 2),
+        amount_minor=-1234,
+        description="Synthetic private transaction",
+        source_row_number=2,
+        fingerprint="b" * 64,
+        original_fields={"synthetic": "value"},
+    )
+
+    assert not ImportBatch.objects.visible_to(viewer).filter(pk=batch.pk).exists()
+    assert not Transaction.objects.visible_to(viewer.user).filter(pk=transaction.pk).exists()
