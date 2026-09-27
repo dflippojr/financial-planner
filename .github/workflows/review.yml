@@ -1,0 +1,192 @@
+name: Automated Code Review
+
+# Adapted from agent-harness's review.yml. Trigger only on PR open (not every
+# push) to keep this bounded to one pass per PR by default; use
+# workflow_dispatch for an on-demand re-review after later commits. Runs on
+# the self-hosted review runner for this repo (financial-planner-review, a
+# single runner -- unlike agent-harness's 3-way pool, this repo's PR volume
+# doesn't need parallel review capacity yet) so it can reuse the runner
+# service user's already-authenticated Codex, Claude, and Cursor CLIs. The
+# dispatch input can select one backend; auto uses the ordered
+# REVIEW_BACKENDS repository variable, then codex,claude,cursor by default.
+# The optional mode input is auto (incremental when a prior review marker
+# makes that safe) or full. Pre-merge reviews should dispatch mode=full.
+#
+# pull_request runs already appear in the PR Checks tab. workflow_dispatch
+# does not, so those re-reviews publish a Check Run on the PR head SHA.
+on:
+  pull_request:
+    types: [opened]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to review"
+        required: true
+      backend:
+        description: "Review backend (auto uses REVIEW_BACKENDS)"
+        required: false
+        default: auto
+        type: choice
+        options:
+          - auto
+          - cursor
+          - codex
+          - claude
+      mode:
+        description: "Review coverage (auto = incremental when safe)"
+        required: false
+        default: auto
+        type: choice
+        options:
+          - auto
+          - full
+
+permissions:
+  pull-requests: write
+  contents: read
+  checks: write
+
+concurrency:
+  group: review-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Single dedicated review runner: D:\Agents\github-runner-review-financial-planner.
+    # Add a second/third with ops/github/install-runner.ps1 -Labels
+    # financial-planner-review if PR volume ever needs parallel reviews.
+    runs-on: [self-hosted, Windows, X64, financial-planner-review]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Ensure GitHub CLI is on PATH
+        shell: powershell
+        run: Add-Content -Path $env:GITHUB_PATH -Value 'C:\Program Files\GitHub CLI'
+
+      - name: Resolve PR number
+        id: pr
+        shell: powershell
+        env:
+          EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
+          INPUT_PR_NUMBER: ${{ github.event.inputs.pr_number }}
+        run: |
+          $num = $env:EVENT_PR_NUMBER
+          if ([string]::IsNullOrEmpty($num)) { $num = $env:INPUT_PR_NUMBER }
+          $workspace = Join-Path $env:GITHUB_WORKSPACE 'pr'
+          "number=$num" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "workspace=$workspace" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Check out PR head for review context
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', steps.pr.outputs.number) }}
+          path: pr
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Attach running check to the PR
+        id: check
+        if: github.event_name == 'workflow_dispatch'
+        continue-on-error: true
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          $sha = gh pr view $env:PR_NUMBER --json headRefOid --jq .headRefOid
+          if ([string]::IsNullOrWhiteSpace($sha)) { throw "no head SHA for PR $($env:PR_NUMBER)" }
+          $details = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          $started = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+          # Do not ConvertTo-Json + pipe: Windows PowerShell emits nested hashtables as
+          # Key/Value arrays and UTF-16 stdin, which the Check Runs API rejects (HTTP 400).
+          $id = gh api --method POST "repos/$env:GITHUB_REPOSITORY/check-runs" `
+            -f name="Automated Code Review" `
+            -f head_sha="$sha" `
+            -f status="in_progress" `
+            -f started_at="$started" `
+            -f details_url="$details" `
+            -f "output[title]=Review in progress" `
+            -f "output[summary]=Automated review is running for PR #$($env:PR_NUMBER)." `
+            --jq .id
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($id) -or $id -notmatch '^\d+$') {
+            throw "failed to create check run"
+          }
+          "id=$id" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "Check run $id on $sha ($details)"
+
+      - name: Run automated review
+        id: agent
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          REVIEW_WORKSPACE: ${{ steps.pr.outputs.workspace }}
+          REQUESTED_BACKEND: ${{ github.event.inputs.backend }}
+          REVIEW_MODE: ${{ github.event.inputs.mode }}
+          REVIEW_BACKENDS: ${{ vars.REVIEW_BACKENDS }}
+          REVIEW_MODEL_CLAUDE: ${{ vars.REVIEW_MODEL_CLAUDE }}
+          REVIEW_MODEL_CURSOR: ${{ vars.REVIEW_MODEL_CURSOR }}
+          REVIEW_MODEL_CODEX: ${{ vars.REVIEW_MODEL_CODEX }}
+          REVIEW_EFFORT_CLAUDE: ${{ vars.REVIEW_EFFORT_CLAUDE }}
+          REVIEW_EFFORT_CODEX: ${{ vars.REVIEW_EFFORT_CODEX }}
+          REVIEW_MAX_DIFF_BYTES: ${{ vars.REVIEW_MAX_DIFF_BYTES }}
+          REVIEW_PROMPT: |
+            Review the pull request diff embedded in this prompt for correctness bugs only (not style or simplification). Report only high-confidence findings as a short Markdown list: file:line, the defect, and a concrete failure scenario that would trigger it. If you find nothing significant, reply with exactly one line saying so.
+
+            The embedded diff is authoritative for what changed. The workspace is the pull request head and is available only for surrounding code, history, and blame context.
+
+            Do not edit files, commit, push, open a PR, or merge. Print only the review text; this job posts it as the PR comment. Only after you have actually inspected the embedded diff and reported findings or no significant findings, end with a final line exactly `REVIEW_STATUS: COMPLETE`. Do not print that marker if you could not inspect the diff.
+        run: |
+          & .\ops\review\run-review.ps1 `
+            -Backend $env:REQUESTED_BACKEND `
+            -ConfiguredBackends $env:REVIEW_BACKENDS `
+            -Mode $env:REVIEW_MODE `
+            -Workspace $env:REVIEW_WORKSPACE `
+            -Prompt $env:REVIEW_PROMPT `
+            -OutputPath (Join-Path $env:GITHUB_WORKSPACE 'review-output.md') `
+            -ScratchDirectory $env:RUNNER_TEMP
+
+      - name: Post review as PR comment
+        id: post
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          gh pr comment $env:PR_NUMBER --body-file review-output.md
+
+      - name: Complete PR check
+        if: always() && github.event_name == 'workflow_dispatch' && steps.check.outcome == 'success' && steps.check.outputs.id != ''
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHECK_ID: ${{ steps.check.outputs.id }}
+          AGENT_CONCLUSION: ${{ steps.agent.conclusion }}
+          POST_CONCLUSION: ${{ steps.post.conclusion }}
+          REVIEW_BACKEND: ${{ steps.agent.outputs.backend }}
+        run: |
+          $conclusion = 'failure'
+          if ($env:AGENT_CONCLUSION -eq 'success' -and $env:POST_CONCLUSION -eq 'success') {
+            $conclusion = 'success'
+          } elseif ($env:AGENT_CONCLUSION -eq 'cancelled' -or $env:POST_CONCLUSION -eq 'cancelled') {
+            $conclusion = 'cancelled'
+          }
+          $backend = $env:REVIEW_BACKEND
+          if ([string]::IsNullOrWhiteSpace($backend)) { $backend = 'configured backends' }
+          $title = "Automated review $conclusion"
+          $summary = "Automated review $conclusion; no review was posted."
+          if ($conclusion -eq 'success') {
+            $title = "Review by $backend"
+            $summary = "$backend review posted."
+          }
+          $completed = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+          gh api --method PATCH "repos/$env:GITHUB_REPOSITORY/check-runs/$env:CHECK_ID" `
+            -f status="completed" `
+            -f conclusion="$conclusion" `
+            -f completed_at="$completed" `
+            -f "output[title]=$title" `
+            -f "output[summary]=$summary"
+          if ($LASTEXITCODE -ne 0) { throw "failed to complete check run $($env:CHECK_ID)" }
