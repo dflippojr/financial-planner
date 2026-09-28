@@ -32,9 +32,15 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       POSTGRES_HOST: db
       POSTGRES_PORT: "5432"
+      # Staged CSV uploads live on the tmpfs below, so they never reach disk.
+      CSV_IMPORT_STAGING_DIR: /run/csv-staging/uploads
     depends_on:
       db:
         condition: service_healthy
+    tmpfs:
+      # Memory-backed and discarded whenever the container stops. The app creates
+      # its own 0700 subdirectory here, so the mount itself needs no fixed user id.
+      - /run/csv-staging:size=128m,mode=1777
     ports:
       - "127.0.0.1:${APP_PORT:-8000}:8000"
     healthcheck:

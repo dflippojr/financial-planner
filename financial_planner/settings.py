@@ -1,4 +1,5 @@
 import os
+import tempfile
 from pathlib import Path
 
 from django.core.exceptions import ImproperlyConfigured
@@ -112,3 +113,24 @@ INVITATION_TTL_HOURS = int(os.environ.get("INVITATION_TTL_HOURS", "48"))
 LOGIN_FAILURE_LIMIT = int(os.environ.get("LOGIN_FAILURE_LIMIT", "5"))
 LOGIN_FAILURE_WINDOW_SECONDS = int(os.environ.get("LOGIN_FAILURE_WINDOW_SECONDS", "900"))
 LOGIN_BLOCK_SECONDS = int(os.environ.get("LOGIN_BLOCK_SECONDS", "900"))
+
+# Uploaded CSVs are short-lived, private staging data. Keep the default outside
+# the repository and allow deployments to place it on an appropriate local disk.
+CSV_IMPORT_STAGING_DIR = os.environ.get(
+    "CSV_IMPORT_STAGING_DIR",
+    str(Path(tempfile.gettempdir()) / "financial-planner-csv-imports"),
+)
+CSV_IMPORT_STAGE_TTL_SECONDS = max(
+    1,
+    min(int(os.environ.get("CSV_IMPORT_STAGE_TTL_SECONDS", "3600")), 3600),
+)
+
+# Handle uploads in memory only. Django's default handlers write any upload over
+# 2.5 MB to a temporary file in /tmp before application code runs, which would put
+# a real bank export on disk even though staging itself is memory-backed, and it
+# does so at any size. With only the memory handler, a file larger than the
+# threshold is dropped instead of written anywhere. The threshold sits a little
+# above the 5 MB import cap so a file just over the cap still gets the specific
+# "exceeds the 5 MB limit" message; anything larger gets the form's generic one.
+FILE_UPLOAD_HANDLERS = ["django.core.files.uploadhandler.MemoryFileUploadHandler"]
+FILE_UPLOAD_MAX_MEMORY_SIZE = 6 * 1024 * 1024

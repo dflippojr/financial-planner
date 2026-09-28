@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from django.conf import settings
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.decorators import login_not_required
@@ -6,6 +8,7 @@ from django.db import transaction as database_transaction
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
+from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
@@ -160,6 +163,12 @@ def sign_in(request):
         else:
             clear_login_failures(key)
             login(request, user)
+            # Sessions last a fixed period from sign-in. Django's default expiry is
+            # relative to the last time the session was saved, so any later write to
+            # it (such as CSV staging metadata) would push the expiry out again, and
+            # repeated activity would keep the session alive indefinitely. An
+            # absolute expiry is stored once and never moves.
+            request.session.set_expiry(timezone.now() + timedelta(seconds=settings.SESSION_COOKIE_AGE))
             return redirect(_redirect_target(request))
     return render(request, "finance/login.html", {"form": form, "next": request.GET.get("next", "")})
 
