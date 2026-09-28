@@ -270,23 +270,44 @@ def _run_has_money(rows, start, end):
     )
 
 
+def _header_quality(row):
+    """Fuller rows (more filled cells, then more LABEL-like cells) rank higher."""
+    cells = [cell.strip() for cell in row if cell.strip()]
+    labels = sum(1 for cell in cells if LABEL.fullmatch(cell))
+    return (len(cells), labels)
+
+
 def _header_before(rows, start, width):
-    """Nearest full-width header above start, walking back past filler rows."""
+    """Best full-width header above start, walking back past filler rows.
+
+    A sparser label row between the real header and the first dated row
+    (a name line, or Beginning,Balance,) must not win over a fuller
+    header above it with only filler in between. Equal quality keeps the
+    nearer row so a same-width preamble name line above the real header
+    does not steal it.
+    """
+    best_index = None
+    best_quality = (-1, -1)
     for index in range(start - 1, -1, -1):
         row = rows[index]
         if len(row) == width and looks_like_header(row):
-            return index
+            quality = _header_quality(row)
+            if quality > best_quality:
+                best_index = index
+                best_quality = quality
+            continue
         if not _is_filler(row, width):
-            return None
-    return None
+            break
+    return best_index
 
 
 def find_header(rows, width):
     """(header index or None, winning dated block (start, end) or None).
 
-    The header is the nearest label-like full-width row above the main
+    The header is the fullest label-like full-width row above the main
     transaction block: dated, amount-bearing rows, with filler such as an
-    opening-balance or subtotal line skipped when walking back. Rank a
+    opening-balance or subtotal line skipped when walking back. A sparser
+    label row between that header and the first dated row does not win. Rank a
     labeled, money-bearing block that continues to the end of the file
     above a longer earlier table (balance history), then any other
     labeled money-bearing block, then any labeled dated block, then the

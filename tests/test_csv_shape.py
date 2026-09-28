@@ -773,6 +773,36 @@ def test_header_is_found_when_filler_rows_split_the_dated_block(raw):
     assert "Subtotal" not in report
 
 
+@pytest.mark.parametrize(
+    "filler",
+    [
+        "Jamie Q Example,Checking account,",
+        "Beginning,Balance,",
+    ],
+)
+def test_a_sparser_label_row_between_header_and_data_does_not_steal_the_header(filler):
+    # Walk-back used to stop at the nearest looks_like_header row, so a
+    # two-cell name or Beginning,Balance, line sitting under Date,Description,Amount
+    # became the header. --show-headers then printed the filler as titles.
+    raw = (
+        "Date,Description,Amount\n"
+        f"{filler}\n"
+        "2026-09-27,SYNTHETIC COFFEE,-12.50\n"
+        "2026-09-28,SYNTHETIC BOOK,-3.25\n"
+    ).encode()
+
+    report = describe(raw)
+
+    assert "header row: line 1" in report
+    assert "- Date: date" in report
+    assert "- Description: text" in report
+    assert "- Amount: money" in report
+    assert "Jamie Q Example" not in report
+    assert "Checking account" not in report
+    assert "- Beginning:" not in report
+    assert "- Balance:" not in report
+
+
 def test_a_shorter_transaction_table_is_preferred_over_a_longer_balance_history():
     # A longer same-width dated labeled section (balance history) used to
     # outscore the real transaction table below it, so --show-headers named
