@@ -33,6 +33,29 @@ def _session_stages(request):
     return request.session.get(SESSION_KEY, {})
 
 
+def _is_account_stage(request, metadata, account_id):
+    return metadata.get("user_id") == request.user.pk and metadata.get("account_id") == account_id
+
+
+def find_live_stage(request, account_id):
+    cleanup_expired(request)
+    matches = [
+        (token, metadata)
+        for token, metadata in _session_stages(request).items()
+        if _is_account_stage(request, metadata, account_id)
+    ]
+    if not matches:
+        return None
+    token, _metadata = max(matches, key=lambda item: item[1].get("created_at", 0))
+    return token
+
+
+def _delete_account_stages(request, account_id):
+    for token, metadata in list(_session_stages(request).items()):
+        if _is_account_stage(request, metadata, account_id):
+            delete_stage(request, token)
+
+
 def cleanup_expired(request):
     cutoff = time.time() - settings.CSV_IMPORT_STAGE_TTL_SECONDS
     stages = _session_stages(request)
@@ -62,6 +85,7 @@ def create_stage(request, account_id, uploaded_file):
     if len(content) > MAX_FILE_BYTES:
         raise CsvInputError("The CSV file exceeds the 5 MB limit.")
 
+    _delete_account_stages(request, account_id)
     token = uuid.uuid4().hex
     path = _path(token)
     with path.open("xb") as staged:

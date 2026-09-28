@@ -7,7 +7,7 @@ from finance.models import Account
 
 from .forms import CsvMappingForm, CsvUploadForm
 from .parser import CsvInputError, preview_csv, read_csv
-from .staging import StageUnavailable, create_stage, delete_stage, load_stage
+from .staging import StageUnavailable, create_stage, delete_stage, find_live_stage, load_stage
 
 
 PREVIEW_TEMPLATE = "finance/csv_import/preview.html"
@@ -23,12 +23,33 @@ def _visible_account(request, account_id):
     )
 
 
+def _mapping_context(context, token, document):
+    context["mapping_form"] = CsvMappingForm(
+        headers=document.headers,
+        initial={"token": token, "amount_mode": "signed"},
+    )
+    context["headers"] = document.headers
+    return context
+
+
+def _restore_live_stage(request, account, context):
+    token = find_live_stage(request, account.pk)
+    if not token:
+        return
+    try:
+        document = read_csv(load_stage(request, token, account.pk))
+    except (CsvInputError, StageUnavailable):
+        return
+    _mapping_context(context, token, document)
+
+
 @never_cache
 @require_http_methods(["GET", "POST"])
 def csv_preview(request, account_id):
     account = _visible_account(request, account_id)
     context = {"account": account, "upload_form": CsvUploadForm()}
     if request.method == "GET":
+        _restore_live_stage(request, account, context)
         return render(request, PREVIEW_TEMPLATE, context)
 
     action = request.POST.get("action", "upload")
@@ -48,11 +69,7 @@ def csv_preview(request, account_id):
                     delete_stage(request, token)
                 upload_form.add_error("csv_file", str(exc))
             else:
-                context["mapping_form"] = CsvMappingForm(
-                    headers=document.headers,
-                    initial={"token": token, "amount_mode": "signed"},
-                )
-                context["headers"] = document.headers
+                _mapping_context(context, token, document)
         return render(request, PREVIEW_TEMPLATE, context)
 
     token = request.POST.get("token", "")

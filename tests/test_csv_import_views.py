@@ -11,6 +11,7 @@ from django.test import Client, override_settings
 from django.urls import reverse
 
 from finance.csv_import.parser import MAX_FILE_BYTES
+from finance.csv_import.staging import SESSION_KEY
 from finance.lifecycle_services import archive_account
 from finance.models import Account, Household, ImportBatch, Membership, Person, Transaction
 
@@ -340,3 +341,74 @@ def test_uploading_a_csv_does_not_extend_the_session(staging_settings):
 
     assert response.status_code == 200
     assert Session.objects.get(session_key=session_key).expire_date == at_sign_in
+
+
+@pytest.mark.django_db
+def test_get_after_upload_restores_mapping_and_cancel_from_live_stage(staging_settings):
+    user, person = make_person("owner")
+    account = Account.objects.create(name="Synthetic Checking", account_type="checking", owner=person)
+    other = Account.objects.create(name="Synthetic Savings", account_type="savings", owner=person)
+    client = Client()
+    client.force_login(user)
+    staged = upload(client, account)
+    token = staged.context["mapping_form"].initial["token"]
+    preview_url = reverse("csv-import-preview", args=(account.pk,))
+
+    refreshed = client.get(preview_url)
+    other_get = client.get(reverse("csv-import-preview", args=(other.pk,)))
+
+    assert refreshed.status_code == 200
+    assert refreshed.context["mapping_form"].initial["token"] == token
+    assert list(refreshed.context["headers"]) == ["When", "Memo", "Amount", "Currency"]
+    assert b"Cancel and delete upload" in refreshed.content
+    assert other_get.status_code == 200
+    assert other_get.context.get("mapping_form") is None
+    assert b"Cancel and delete upload" not in other_get.content
+
+    cancelled = client.post(preview_url, {"action": "cancel", "token": token})
+    assert cancelled.status_code == 302
+    assert not (Path(staging_settings) / f"{token}.csvstage").exists()
+    blank = client.get(preview_url)
+    assert blank.context.get("mapping_form") is None
+    assert b"Cancel and delete upload" not in blank.content
+
+
+@pytest.mark.django_db
+def test_reupload_replaces_prior_stage_for_the_same_account(staging_settings):
+    user, person = make_person("owner")
+    account = Account.objects.create(name="Synthetic Checking", account_type="checking", owner=person)
+    other = Account.objects.create(name="Synthetic Savings", account_type="savings", owner=person)
+    client = Client()
+    client.force_login(user)
+    first_token = upload(client, account).context["mapping_form"].initial["token"]
+    other_token = upload(client, other).context["mapping_form"].initial["token"]
+    second_csv = b"When,Memo,Amount,Currency\n09/28/2026,SYNTHETIC CAFE,-5.00,USD\n"
+    second_token = upload(client, account, second_csv).context["mapping_form"].initial["token"]
+
+    files = {path.name for path in Path(staging_settings).glob("*.csvstage")}
+    stages = client.session[SESSION_KEY]
+    assert first_token != second_token
+    assert files == {f"{second_token}.csvstage", f"{other_token}.csvstage"}
+    assert set(stages) == {second_token, other_token}
+    assert stages[second_token]["account_id"] == account.pk
+    assert stages[other_token]["account_id"] == other.pk
+    assert not (Path(staging_settings) / f"{first_token}.csvstage").exists()
+    assert (Path(staging_settings) / f"{second_token}.csvstage").read_bytes() == second_csv
+
+
+@pytest.mark.django_db
+def test_get_does_not_restore_an_expired_stage(staging_settings):
+    user, person = make_person("owner")
+    account = Account.objects.create(name="Synthetic Checking", account_type="checking", owner=person)
+    client = Client()
+    client.force_login(user)
+    token = upload(client, account).context["mapping_form"].initial["token"]
+    path = Path(staging_settings) / f"{token}.csvstage"
+
+    with patch("finance.csv_import.staging.time.time", return_value=time.time() + 4000):
+        expired = client.get(reverse("csv-import-preview", args=(account.pk,)))
+
+    assert expired.status_code == 200
+    assert expired.context.get("mapping_form") is None
+    assert b"Cancel and delete upload" not in expired.content
+    assert not path.exists()
