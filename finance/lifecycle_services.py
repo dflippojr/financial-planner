@@ -94,54 +94,64 @@ def archive_account(principal, account_id):
         account.save(update_fields=("status", "archived_at", "updated_at"))
 
 
-def _current_membership_for_update(person):
-    membership = (
-        Membership.objects.select_for_update()
-        .filter(person=person, ended_at__isnull=True)
-        .first()
-    )
-    if membership is None:
-        raise PermissionDenied(_DENIED)
-    return membership
-
-
 def _end_membership(actor, target_id):
-    actor_membership = _current_membership_for_update(actor)
-    target_membership = (
+    actor_membership_ref = Membership.objects.filter(
+        person=actor,
+        ended_at__isnull=True,
+    ).values("pk", "household_id").first()
+    if actor_membership_ref is None:
+        raise PermissionDenied(_DENIED)
+
+    # Every exit from one household locks memberships in the same order so two
+    # concurrent removals cannot lock actor and target rows in opposite orders.
+    current_memberships = list(
         Membership.objects.select_for_update()
         .filter(
-            person_id=target_id,
-            household_id=actor_membership.household_id,
+            household_id=actor_membership_ref["household_id"],
             ended_at__isnull=True,
         )
-        .first()
+        .order_by("pk")
+    )
+    actor_is_still_current = any(
+        membership.pk == actor_membership_ref["pk"]
+        for membership in current_memberships
+    )
+    if not actor_is_still_current:
+        raise PermissionDenied(_DENIED)
+    target_membership = next(
+        (membership for membership in current_memberships if membership.person_id == target_id),
+        None,
     )
     if target_membership is None:
         raise PermissionDenied(_DENIED)
 
-    remaining_memberships = list(
-        Membership.objects.select_for_update()
-        .filter(
-            household_id=actor_membership.household_id,
-            ended_at__isnull=True,
-        )
-        .exclude(pk=target_membership.pk)
-        .order_by("joined_at", "pk")
+    remaining_memberships = sorted(
+        (
+            membership
+            for membership in current_memberships
+            if membership.pk != target_membership.pk
+        ),
+        key=lambda membership: (membership.joined_at, membership.pk),
     )
     owned_shared_accounts = Account.objects.select_for_update().filter(
         owner_id=target_id,
         scope=Account.Scope.HOUSEHOLD,
-        household_id=actor_membership.household_id,
+        household_id=actor_membership_ref["household_id"],
     )
+    transitioned_at = timezone.now()
     if remaining_memberships:
-        owned_shared_accounts.update(owner_id=remaining_memberships[0].person_id)
+        owned_shared_accounts.update(
+            owner_id=remaining_memberships[0].person_id,
+            updated_at=transitioned_at,
+        )
     else:
         owned_shared_accounts.update(
             scope=Account.Scope.PRIVATE,
             household=None,
+            updated_at=transitioned_at,
         )
 
-    target_membership.ended_at = timezone.now()
+    target_membership.ended_at = transitioned_at
     target_membership.save(update_fields=("ended_at",))
 
 
