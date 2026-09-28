@@ -509,3 +509,32 @@ def test_no_truncation_note_when_everything_fits():
     report = csv_shape.describe_csv(BANK_STYLE)
 
     assert "counted by column count only" not in report
+
+
+def test_a_newline_inside_a_quoted_field_is_preserved_for_profiling():
+    # Feeding the csv module pre-split lines dropped the newline, so "12", a
+    # newline, "34" became 1234 and a text memo was reported as money.
+    content = b'Date,Memo,Amount\n2026-09-27,"12\n34",-1.00\n2026-09-28,"56\r\n78",2.00\n'
+
+    report = csv_shape.describe_csv(content, show_headers=True)
+
+    assert "- Memo: text" in report
+    assert "rows: 3 total" in report
+    assert "3 columns x3" in report
+
+
+def test_unicode_line_separators_inside_a_field_are_not_row_breaks():
+    content = "Date,Memo,Amount\n2026-09-27,line\u2028break,-1.00\n2026-09-28,x\u0085y,2.00\n".encode()
+
+    report = csv_shape.describe_csv(content, show_headers=True)
+
+    assert "rows: 3 total" in report
+    assert "3 columns x3" in report
+
+
+def test_amounts_with_space_thousands_separators_are_still_money():
+    content = "Date,Memo,Amount\n2026-09-27,x,1 234,56\n2026-09-28,y,2\u00a0345,67\n".encode()
+
+    report = csv_shape.describe_csv(content, show_headers=True)
+
+    assert "- Amount: money" in report

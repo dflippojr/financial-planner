@@ -29,6 +29,7 @@ Standard library only. Review the output before sharing it.
 import argparse
 import codecs
 import csv
+import io
 import re
 import sys
 from collections import Counter
@@ -41,7 +42,10 @@ DELIMITERS = (",", ";", "\t", "|")
 KEPT_PUNCTUATION = set(" /-.,$()+:;@#&%'\"*_")
 
 DATE_LIKE = re.compile(r"\d{1,4}([/.-])\d{1,2}\1\d{1,4}")
-MONEY_LIKE = re.compile(r"[-+(]?[$€£]?\s?[-+(]?\d[\d,.\s]*[)-]?")
+# Spaces and the non-breaking spaces some exports use as thousands separators are
+# allowed inside an amount; a newline is not, or a multi-line text field of digits
+# such as "12" newline "34" would be classified as money.
+MONEY_LIKE = re.compile(r"[-+(]?[$€£]? ?[-+(]?\d[\d,. \xa0 ]*[)-]?")
 LABEL = re.compile(r"[A-Za-z][A-Za-z /#&()._'-]{0,39}")
 SAFE_VOCABULARY = re.compile(r"[A-Za-z][A-Za-z /&()._'-]{0,39}")
 LONG_RUN = re.compile(r"(.)\1{5,}")
@@ -113,7 +117,7 @@ def _delimiter_score(sample, delimiter):
     how many fields the punctuation produces instead would let commas inside
     amounts such as 1,234,567.89 outvote a tab that really separates columns.
     """
-    lengths = Counter(len(row) for row in csv.reader(sample, delimiter=delimiter) if row)
+    lengths = Counter(len(row) for row in _reader(sample, delimiter) if row)
     if not lengths:
         return 0, 0
     modal, count = max(lengths.items(), key=lambda item: (item[1], item[0]))
@@ -125,8 +129,19 @@ def _delimiter_score(sample, delimiter):
     return count / sum(lengths.values()), modal
 
 
+def _reader(text, delimiter):
+    """A csv reader over text with its line endings intact.
+
+    The csv module needs the newline characters to keep a newline inside a
+    quoted field; handing it text.splitlines() removed them (so "12", newline,
+    "34" became 1234 and looked like money) and also split on Unicode line
+    separators that are not row breaks.
+    """
+    return csv.reader(io.StringIO(text, newline=""), delimiter=delimiter)
+
+
 def choose_delimiter(text):
-    sample = text.splitlines()[:500]
+    sample = "".join(text.splitlines(keepends=True)[:500])
     best_score, best = max(((_delimiter_score(sample, d), d) for d in DELIMITERS), key=lambda item: item[0])
     return best if best_score > (0, 0) else ","
 
@@ -141,7 +156,7 @@ def read_rows(text, delimiter):
     rows = []
     beyond = Counter()
     try:
-        for row in csv.reader(text.splitlines(), delimiter=delimiter):
+        for row in _reader(text, delimiter):
             if not row:
                 continue
             if len(rows) >= MAX_ROWS:
