@@ -574,3 +574,31 @@ def test_a_field_over_the_limit_in_the_delimiter_sample_does_not_crash(monkeypat
     report = csv_shape.describe_csv(content)
 
     assert "yyyyy" not in report
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("2026-09-27\t1,234,567.89\n2026-09-28\t2,345,678.90\n", "\t"),
+        ("2026-09-27,a;b;c,1.00\n2026-09-28,d;e;f,2.00\n", ","),
+        ("27.09.2026;x;1.234,56\n28.09.2026;y;2.345,67\n", ";"),
+        ("2026-09-27|a,b,c|1.00\n2026-09-28|d,e,f|2.00\n", "|"),
+        ("Date\tAmount\n2026-09-27\t1,234,567.89\n2026-09-28\t2,345,678.90\n", "\t"),
+        ('Date,Amount\n2026-09-27,"1,234.56"\n2026-09-28,"2,345.67"\n', ","),
+    ],
+)
+def test_the_delimiter_is_right_with_or_without_a_header_line(text, expected):
+    # Without a header line two delimiters can be equally consistent, so
+    # plausibility of the resulting fields decides, not how many fields appear.
+    assert csv_shape.choose_delimiter(text) == expected
+
+
+@pytest.mark.parametrize("data_rows", [2, 50, 499])
+def test_a_headerless_tab_file_with_thousands_commas_keeps_its_tab_delimiter(data_rows):
+    rows = "".join(f"2026-09-{1 + i % 28:02d}\t{1000000 + i:,}.89\n" for i in range(data_rows))
+
+    report = csv_shape.describe_csv(rows.encode(), show_headers=True)
+
+    assert "delimiter: TAB" in report
+    assert "- col 1: date" in report
+    assert "- col 2: money" in report

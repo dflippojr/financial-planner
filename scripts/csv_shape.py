@@ -111,29 +111,49 @@ def line_endings(text):
     return f"mixed (CRLF {crlf}, LF {lone_lf})"
 
 
-def _delimiter_score(sample, delimiter):
-    """(consistency, width) for a delimiter, or (0, 0) if it does not split rows into 2+ columns.
+def _plausibility(cells, delimiter):
+    """Share of cells that look like a sensible field under this delimiter.
 
-    The right delimiter gives every row the same number of columns. Scoring by
-    how many fields the punctuation produces instead would let commas inside
-    amounts such as 1,234,567.89 outvote a tab that really separates columns.
+    A field is sensible if it is a date, an amount, or text that does not still
+    contain one of the other candidate delimiters. A wrong split leaves stray
+    delimiters inside fields (a tab inside "2026-09-27<TAB>1") and cuts amounts
+    into fragments, so it scores lower than the split that yields clean columns.
+    """
+    others = set(DELIMITERS) - {delimiter}
+    clean = sum(
+        bool(DATE_LIKE.fullmatch(cell) or MONEY_LIKE.fullmatch(cell) or not (set(cell) & others))
+        for cell in cells
+    )
+    return clean / len(cells) if cells else 0
+
+
+def _delimiter_score(sample, delimiter):
+    """(consistency, plausibility, width), or (0, 0, 0) if it does not split rows into 2+ columns.
+
+    The right delimiter gives every row the same number of columns, so that comes
+    first: scoring by how many fields the punctuation produces would let commas
+    inside amounts such as 1,234,567.89 outvote a tab that really separates
+    columns. When two delimiters are equally consistent (any file without a
+    header line can be), plausibility decides, and width only breaks a further tie.
     """
     lengths = Counter()
+    cells = []
     try:
         for row in _reader(sample, delimiter):
             if row:
                 lengths[len(row)] += 1
+                cells.extend(cell.strip() for cell in row if cell.strip())
     except csv.Error:
         pass
     if not lengths:
-        return 0, 0
+        return 0, 0, 0
     modal, count = max(lengths.items(), key=lambda item: (item[1], item[0]))
     if modal < 2:
-        return 0, 0
+        return 0, 0, 0
     # Not rounded: with hundreds of rows a single header line that the wrong
     # delimiter splits differently is a tiny fraction, and rounding it away
     # turns a clear preference for the right delimiter into a tie.
-    return count / sum(lengths.values()), modal
+    return count / sum(lengths.values()), _plausibility(cells, delimiter), modal
 
 
 def _reader(text, delimiter):
@@ -151,7 +171,7 @@ def _reader(text, delimiter):
 def choose_delimiter(text):
     sample = "".join(text.splitlines(keepends=True)[:500])
     best_score, best = max(((_delimiter_score(sample, d), d) for d in DELIMITERS), key=lambda item: item[0])
-    return best if best_score > (0, 0) else ","
+    return best if best_score > (0, 0, 0) else ","
 
 
 def read_rows(text, delimiter):
