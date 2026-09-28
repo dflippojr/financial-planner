@@ -11,6 +11,7 @@ This runbook deploys the first release to the Windows basement PC with Docker De
 | PostgreSQL data | Docker named volume selected by `POSTGRES_VOLUME_NAME` | Durable across container replacement; never commit or manually edit it. |
 | Logical backups | `BACKUP_DIR` on the second local disk | Keep the 14 newest nightly dumps and 8 newest Sunday weekly copies. |
 | Source CSV exports | A private folder outside the checkout | The application discards an uploaded source after a successful import; the operator should remove the original export when no longer needed. |
+| Staged CSV uploads | A tmpfs (memory-backed) mount at `/run/csv-staging` inside the app container | Never written to disk. Each upload expires within an hour, is deleted on cancel, and is discarded whenever the container stops or restarts. |
 | Web listener | `127.0.0.1:APP_PORT` on the basement PC | No direct LAN listener. Tailscale Serve exposes HTTPS only inside the tailnet. |
 
 Django still requires a valid signed-in session after a request reaches the app. Tailscale controls which devices can reach the service; it does not replace application authentication or private/household authorization. Do not use Tailscale Funnel, a router port-forward, or a `0.0.0.0` host port.

@@ -98,3 +98,13 @@ def test_gunicorn_access_log_never_records_query_strings_or_referrers():
 
     assert "%(U)s" in log_format
     assert [token for token in ("%(r)s", "%(q)s", "%(f)s", "%({referer}i)s") if token in log_format] == []
+
+
+def test_compose_stages_csv_uploads_on_a_memory_backed_mount():
+    # An abandoned upload of a real bank export must never sit on disk, so the
+    # staging directory has to live on a tmpfs and the app has to be pointed at it.
+    compose = (Path(__file__).resolve().parent.parent / "compose.yml").read_text()
+
+    assert "CSV_IMPORT_STAGING_DIR: /run/csv-staging/uploads" in compose
+    assert "tmpfs:" in compose
+    assert "- /run/csv-staging:size=128m,mode=1777" in compose
