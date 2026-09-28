@@ -1,3 +1,4 @@
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -68,3 +69,21 @@ def test_health_probe_succeeds_when_only_the_tailnet_name_is_allowed(client):
 
     assert rejected.status_code == 400
     assert probed.status_code == 200
+
+
+def test_container_scripts_and_dockerfiles_use_lf_line_endings():
+    # A CR before the newline in a "#!/bin/sh" line makes the kernel look for
+    # an interpreter named "/bin/sh\r", so the container cannot start. Git on
+    # Windows (core.autocrlf=true) adds the CR unless .gitattributes forbids it.
+    root = Path(__file__).resolve().parent.parent
+    files = [*root.glob("scripts/*.sh"), *root.glob("ops/**/*.sh"), root / "Dockerfile", root / "ops/backup/Dockerfile"]
+
+    assert files
+    assert [str(path.relative_to(root)) for path in files if b"\r" in path.read_bytes()] == []
+
+
+def test_gitattributes_forces_lf_for_container_files():
+    attributes = (Path(__file__).resolve().parent.parent / ".gitattributes").read_text()
+
+    assert "*.sh text eol=lf" in attributes
+    assert "Dockerfile text eol=lf" in attributes
