@@ -85,6 +85,7 @@ def test_transaction_list_never_exposes_another_persons_private_data_or_filter_c
     assert "PRIVATE SECRET TRANSACTION" not in content
     assert secret.account.name not in content
     assert "Select a valid choice" in content
+    assert not response.context["transactions"].exists()
 
 
 @pytest.mark.django_db
@@ -142,6 +143,7 @@ def test_invalid_date_range_is_reported_without_exposing_transactions():
     response = client.get(reverse("transaction-list"), {"date_from": "2026-02-01", "date_to": "2026-01-01"})
 
     assert "End date must be on or after start date." in response.content.decode()
+    assert not response.context["transactions"].exists()
 
 
 @pytest.mark.django_db
@@ -204,6 +206,36 @@ def test_current_household_member_can_correct_shared_transaction():
     assert response.status_code == 302
     financial_transaction.refresh_from_db()
     assert financial_transaction.description == "Shared correction"
+
+
+@pytest.mark.django_db
+def test_former_household_member_cannot_correct_shared_transaction():
+    owner = make_person("owner")
+    former_member = make_person("former-member")
+    household = Household.objects.create(name="Synthetic Household")
+    Membership.objects.create(person=owner, household=household)
+    membership = Membership.objects.create(person=former_member, household=household)
+    account = Account.objects.create(
+        name="Synthetic Shared",
+        account_type=Account.Type.CHECKING,
+        owner=owner,
+        scope=Account.Scope.HOUSEHOLD,
+        household=household,
+    )
+    financial_transaction = make_transaction(owner, account=account)
+    membership.ended_at = membership.joined_at
+    membership.save(update_fields=("ended_at",))
+    client = Client()
+    client.force_login(former_member.user)
+
+    response = client.post(
+        reverse("transaction-edit", args=(financial_transaction.pk,)),
+        {"transaction_date": "2026-01-02", "description": "Revoked correction", "amount": "-12.34"},
+    )
+
+    assert response.status_code == 404
+    financial_transaction.refresh_from_db()
+    assert financial_transaction.description == "Synthetic groceries"
 
 
 @pytest.mark.django_db

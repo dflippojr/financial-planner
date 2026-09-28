@@ -49,6 +49,8 @@ def transaction_list(request):
             transactions = transactions.filter(description__icontains=filters["q"])
         # All transactions remain uncategorized until issue #8 introduces the
         # agreed category scheme, so its sole category choice needs no query.
+    elif form.is_bound:
+        transactions = transactions.none()
     return render(
         request,
         "finance/transaction_list.html",
