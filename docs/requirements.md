@@ -67,3 +67,31 @@ Build a private, self hosted personal finance app that can eventually replace Ro
 ## First milestone acceptance
 
 Multiple people can sign in, keep private accounts private, and view and edit explicitly shared household accounts. A user can deploy the app on the basement PC with home-network and Tailscale access, import bank and card CSVs from several providers, correct mapping errors, reimport an overlap safely, review and categorize transactions, and view cash flow over time and category spending without internal transfers counted as expenses. Deployment instructions include authentication and backup/restore.
+
+## Household access, transfer, and data-gathering decisions (2026-09-28)
+
+Owner decisions. Where they differ from the earlier "Household lifecycle (issue #3)" bullet, these supersede it. Items marked *(proposed)* are the implementer's reading of a decision and need the owner's confirmation before the work that depends on them starts.
+
+**Membership**
+- A member can only leave a household themselves. No member can remove another member in the application. Evicting someone is an operator action: a management command run on the host by whoever administers the basement PC.
+
+**Sharing an account.** Sharing offers two modes, chosen by the owner when sharing:
+- *Co-owned* (fully shared): the account belongs to the household. Every current member may view and edit it, and it stays with the household if the owner leaves (ownership moves to another current member, as before).
+- *Lent* (owner keeps it): household members may view and edit the account and its transactions while they are members, but the owner remains its owner. If the owner leaves the household, the account leaves with them and becomes private to them; the household loses access and history is preserved.
+- If a non-owner member leaves, they simply lose access. If the last member leaves, shared accounts become private to them, as before.
+- Both modes apply to the whole household. Sharing with one named person is not in scope; it can be added later if a household grows beyond a few people. *(proposed)*
+- In lent mode only the owner may unshare, archive, or change the mode; borrowers may view and edit transactions. In co-owned mode any current member may unshare or archive, as already decided. *(proposed)*
+
+**Uploaded CSV staging.** Staged uploads live in memory-backed storage (tmpfs) and never reach disk. They still expire within an hour and are deleted on cancel or on the next access after expiry; a restart discards them.
+
+**Transaction edit history.** Recording who changed which correction and when is wanted but is not part of the first release; it is tracked as a separate enhancement.
+
+**Transfers and credit-card payments (issue #8)**
+- Transfers between the person's own accounts are detected as pairs of transactions that cancel out (opposite signs, equal amounts, in two accounts the person can see, close in date), each with a confidence reading and the reasons behind it.
+- A transaction is excluded from income and spending only when its counterpart is actually present. An unpaired transaction counts normally and may be shown as a possible transfer. A credit-card payment is excluded only when both sides are visible: the outflow from the paying account and the matching credit on the card account.
+- Pairs above a high confidence threshold are marked as transfers automatically and listed for review with one-click undo; lower-confidence pairs are only suggested until confirmed. Thresholds and the date window are configurable. *(proposed)*
+- The scorer is a deterministic, explainable function that computes locally and shows the reasons behind each confidence reading. A learned or hosted scorer is deliberately out of scope for now; if one is ever considered it needs its own decision, because it would send financial data off the machine.
+- Vanguard investment activity stays out of income and spending until its real transaction types are verified (issues #1 and #15). A contribution from a cash account to Vanguard counts as a transfer only when paired.
+- Starter category list (household-scoped, editable): Income, Groceries, Dining, Transportation, Housing, Utilities, Health, Insurance, Shopping, Entertainment, Subscriptions, Travel, Education, Personal care, Gifts and donations, Fees and interest, Taxes, and Uncategorized. "Transfer" is a system category that is excluded from income and spending.
+
+**Provider CSV shapes (issue #1).** The owner will run a local tool that reads real exports on their own machine and prints only column headers and masked value patterns, never values, and will provide that output. No real export is committed, attached, or pasted.
