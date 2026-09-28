@@ -705,3 +705,20 @@ def test_a_same_width_preamble_date_does_not_steal_the_header():
     assert "- Date: date" in report
     assert "- Amount: money" in report
     assert "- Description: text" in report
+
+
+def test_header_labels_may_include_common_punctuation():
+    # Labels such as Amount ($) were rejected because $ was not allowed, so a
+    # short file missed its header and classified every column as text.
+    content = (
+        b"Date,Description,Amount ($)\n"
+        b"2026-09-27,SYNTHETIC MEMO,-12.50\n"
+        b"2026-09-28,SYNTHETIC MEMO TWO,3.25\n"
+    )
+
+    report = csv_shape.describe_csv(content, show_headers=True)
+
+    assert "header row: line 1" in report
+    assert "- Date: date" in report
+    assert "- Amount ($): money" in report
+    assert "negative values: 1 of 2" in report

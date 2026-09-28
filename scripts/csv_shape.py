@@ -49,7 +49,7 @@ DATE_LIKE = re.compile(r"\d{1,4}([/.-])\d{1,2}\1\d{1,4}" + _TIME)
 # allowed inside an amount; a newline is not, or a multi-line text field of digits
 # such as "12" newline "34" would be classified as money.
 MONEY_LIKE = re.compile(r"[-+(]?[$€£]? ?[-+(]?\d[\d,. \xa0 ]*[)-]?")
-LABEL = re.compile(r"[A-Za-z][A-Za-z /#&()._'-]{0,39}")
+LABEL = re.compile(r"[A-Za-z][A-Za-z /$%#&()._'-]{0,39}")
 SAFE_VOCABULARY = re.compile(r"[A-Za-z][A-Za-z /&()._'-]{0,39}")
 LONG_RUN = re.compile(r"(.)\1{5,}")
 
