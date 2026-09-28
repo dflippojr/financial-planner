@@ -376,3 +376,95 @@ def test_show_values_can_select_a_masked_column_by_the_header_text_or_position()
     assert "Alpha; Beta" in by_text
     assert "Alpha; Beta" in by_position
     assert "Frobnicate" not in by_text
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["debit", "credit", "money", "text", "date", "empty", "patterns", "columns", "9999", "AAAA", "delimiter"],
+)
+def test_cell_values_that_match_the_reports_own_wording_do_not_break_it(value):
+    # The report contains fixed words such as "debit/credit" and "money"; an
+    # ordinary cell with the same text used to make the guard refuse the file.
+    raw = f"Date,Memo,Amount\n2026-09-27,{value},-1.00\n2026-09-28,{value},2.00\n".encode()
+
+    report = csv_shape.describe_csv(raw)
+
+    assert "- Memo:" in report
+
+
+def test_a_cell_that_is_also_a_word_in_a_printed_header_does_not_break_it():
+    raw = b"Date,Type,Commissions and Fees\n2026-09-27,Fees,-1.00\n2026-09-28,Fees,2.00\n"
+
+    report = csv_shape.describe_csv(raw)
+
+    assert "Commissions and Fees" in report
+
+
+def test_a_row_is_printed_as_written_only_if_every_cell_is_a_generic_label():
+    # "Price" alone is ordinary column vocabulary, but next to "Checking account"
+    # this is a preamble line, so no part of it may print.
+    raw = (
+        "Price,Checking account,USD\n"
+        "2026-09-27,SYNTHETIC COFFEE HOUSE,-12.50\n"
+        "2026-09-28,SYNTHETIC BOOK STORE,-3.25\n"
+    ).encode()
+
+    report = csv_shape.describe_csv(raw)
+
+    assert "Price" not in report
+    assert "Checking" not in report
+    assert "masked:" in report
+
+
+def test_the_guard_still_refuses_when_masking_is_broken(monkeypatch):
+    # The guard exists for the day masking has a bug, so it must not rely on it.
+    monkeypatch.setattr(csv_shape, "mask", lambda value: value)
+    raw = b"Date,Merchant,Amount\n2026-09-27,SYNTHETIC COFFEE HOUSE,-12.50\n2026-09-28,SYNTHETIC BOOK STORE,-3.25\n"
+
+    with pytest.raises(csv_shape.LeakError):
+        csv_shape.describe_csv(raw)
+
+
+def test_only_tagged_text_is_searched_when_asked():
+    rows = [["Date", "Note"], ["2026-09-27", "money"]]
+    report = "kind: money\n" + csv_shape.data_text("patterns: aaaaa")
+
+    csv_shape.check_no_leak(report, rows, allowed={"Date", "Note"}, dynamic_only=True)
+
+
+def test_shape_only_values_are_recognized_without_using_the_mask():
+    assert csv_shape.is_shape_only("9999") is True
+    assert csv_shape.is_shape_only("Aaaa 99/99") is True
+    assert csv_shape.is_shape_only("9{16}") is True
+    assert csv_shape.is_shape_only("4111111111111111") is False
+    assert csv_shape.is_shape_only("Jamie") is False
+
+
+def test_tag_characters_in_a_cell_cannot_confuse_the_guard():
+    raw = b"Date,Memo,Amount\n2026-09-27,\x00SYNTHETIC COFFEE HOUSE\x01,-1.00\n2026-09-28,x,2.00\n"
+
+    report = csv_shape.describe_csv(raw)
+
+    assert "SYNTHETIC" not in report
+    assert "\x00" not in report
+    assert "\x01" not in report
+
+
+def test_utf16_exports_are_decoded_by_their_byte_order_mark():
+    # Excel's "Unicode text" export is UTF-16, which contains NUL bytes that
+    # used to crash the csv module.
+    text = "Date,Memo,Amount\n2026-09-27,SYNTHETIC COFFEE HOUSE,-12.50\n2026-09-28,x,2.00\n"
+
+    report = csv_shape.describe_csv(text.encode("utf-16"))
+
+    assert "encoding: utf-16 (BOM)" in report
+    assert "SYNTHETIC" not in report
+    assert "- Amount: money" in report
+
+
+def test_a_nul_byte_in_the_middle_of_a_file_does_not_crash_the_tool():
+    raw = b"Date,Memo,Amount\n2026-09-27,ab\x00cd,-1.00\n2026-09-28,x,2.00\n"
+
+    report = csv_shape.describe_csv(raw)
+
+    assert "- Amount: money" in report

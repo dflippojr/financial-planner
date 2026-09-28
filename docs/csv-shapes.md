@@ -12,8 +12,8 @@ It needs Python 3 and nothing else. Run it once per provider and per account typ
 
 ## What it prints
 
-- File facts: encoding, line endings, delimiter, row count, and how many rows have each column count (a second column count usually means a summary or a second section, as some brokerage exports have).
-- The header row: the row just above the first row that contains a date. Its labels are printed as written only when every word is an ordinary column-label word (date, amount, description, symbol, shares, and so on). Anything else, such as a name that happens to sit above the data, is masked, so it can never be printed. If a real header comes out masked and you have looked at the file and know it is safe, add `--trust-headers`; add `--mask-headers` to mask them all.
+- File facts: encoding (UTF-8, Windows-1252, or UTF-16 detected from its byte-order mark), line endings, delimiter, row count, and how many rows have each column count (a second column count usually means a summary or a second section, as some brokerage exports have).
+- The header row: the row just above the first row that contains a date. The row is printed as written only when every word in every cell is an ordinary column-label word (date, amount, description, symbol, shares, and so on); if any cell has another word, the whole row is masked, so a name that happens to sit above the data can never be printed, even next to a word like "Price". If a real header comes out masked and you have looked at the file and know it is safe, add `--trust-headers`; add `--mask-headers` to mask them all.
 - Masked examples of any rows that do not fit the main layout, such as a summary line or a second section, with how many columns they have.
 - For each column: its kind (date, money, or text), how many rows are empty, and its masked patterns. Masking turns every letter into `a` or `A` and every digit into `9`, so `09/27/2026` becomes `99/99/9999` and a 16-digit card number becomes `9{16}`.
 - For date columns, whether day or month comes first, judged only from whether a field ever exceeds 12.

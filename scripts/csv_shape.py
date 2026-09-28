@@ -59,6 +59,14 @@ withdrawals withheld year
 """.split())
 
 
+START, END = "\x00", "\x01"
+
+
+def data_text(text):
+    """Tag text that came from the file so the leak guard checks it and nothing else."""
+    return f"{START}{text}{END}"
+
+
 class LeakError(RuntimeError):
     """Raised when the output would contain a value from the file."""
 
@@ -76,8 +84,12 @@ def mask(value):
     return LONG_RUN.sub(lambda match: f"{match.group(1)}{{{len(match.group(0))}}}", "".join(out))
 
 
-def decode_text(raw):
-    """Return (text, encoding label). UTF-8 first, then Windows-1252, then Latin-1."""
+def _decode(raw):
+    if raw.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        try:
+            return raw.decode("utf-16"), "utf-16 (BOM)"
+        except UnicodeDecodeError:
+            pass
     bom = " with BOM" if raw.startswith(codecs.BOM_UTF8) else ""
     for encoding, label in (("utf-8-sig", "utf-8" + bom), ("cp1252", "windows-1252")):
         try:
@@ -85,6 +97,16 @@ def decode_text(raw):
         except UnicodeDecodeError:
             continue
     return raw.decode("latin-1"), "latin-1"
+
+
+def decode_text(raw):
+    """Return (text, encoding label): UTF-16 by its BOM, else UTF-8, Windows-1252, or Latin-1.
+
+    NUL bytes make the csv module fail, and the report's own tag characters must
+    not appear in the data, so all of them are removed here.
+    """
+    text, label = _decode(raw)
+    return text.replace("\x00", "").replace(START, "").replace(END, ""), label
 
 
 def line_endings(text):
@@ -152,15 +174,16 @@ def is_generic_label(text):
     return bool(words) and all(word in HEADER_WORDS for word in words)
 
 
-def label_for(cell, index, mask_headers=False, trust_headers=False):
-    """The header as written when it is a generic label (or trusted), else its mask.
+def label_for(cell, index, verbatim):
+    """The header as written when the caller judged the whole row safe, else its mask.
 
     Structure alone cannot tell a header from a preamble line such as an account
-    holder's name that has the same number of cells, so only labels made of
-    ordinary column-label words are ever printed as written.
+    holder's name that has the same number of cells, so the caller decides per
+    row (all cells must be ordinary column-label words) and only then is a
+    plain label printed as written.
     """
     text = cell.strip()
-    if not mask_headers and LABEL.fullmatch(text) and (trust_headers or is_generic_label(text)):
+    if verbatim and LABEL.fullmatch(text):
         return text
     return f"col {index + 1} (masked: {mask(text)})"
 
@@ -236,12 +259,12 @@ def describe_column(name, values, show_values=False):
     """Report lines for one column, plus the raw values shown (for the leak guard)."""
     kind = classify(values)
     filled = [value for value in values if value]
-    lines = [f"- {name}: {kind}, empty in {len(values) - len(filled)} of {len(values)} rows"]
+    lines = [f"- {data_text(name)}: {kind}, empty in {len(values) - len(filled)} of {len(values)} rows"]
     shown = []
     patterns = Counter(mask(value) for value in filled)
     if patterns and len(patterns) <= MAX_DISTINCT_TO_LIST:
         listed = ", ".join(f"{pattern} x{count}" for pattern, count in patterns.most_common(MAX_LISTED_PATTERNS))
-        lines.append(f"    patterns: {listed}")
+        lines.append(f"    patterns: {data_text(listed)}")
     elif patterns:
         lengths = [len(value) for value in filled]
         lines.append(f"    {len(patterns)} distinct patterns; length {min(lengths)} to {max(lengths)}")
@@ -257,7 +280,7 @@ def describe_column(name, values, show_values=False):
             lines.append(f"    values NOT shown: more than {MAX_SHOWN_VALUES} distinct or not a plain vocabulary")
         else:
             shown = vocabulary
-            lines.append("    values (shown because you asked): " + "; ".join(vocabulary))
+            lines.append("    values (shown because you asked): " + data_text("; ".join(vocabulary)))
     return lines, shown
 
 
@@ -270,7 +293,7 @@ def debit_credit_pairs(columns, names):
             either = sum(bool(a) or bool(b) for a, b in zip(columns[first], columns[second]))
             exactly_one = sum(bool(a) != bool(b) for a, b in zip(columns[first], columns[second]))
             if either and exactly_one >= 0.9 * either and any(columns[first]) and any(columns[second]):
-                pairs.append(f"{names[first]} and {names[second]}")
+                pairs.append(f"{data_text(names[first])} and {data_text(names[second])}")
     return pairs
 
 
@@ -296,7 +319,7 @@ def _file_lines(label, text, encoding, delimiter, rows, lengths, header_index, d
 
 
 def _masked(row):
-    return " | ".join(mask(cell.strip()) for cell in row)
+    return data_text(" | ".join(mask(cell.strip()) for cell in row))
 
 
 def _tail_lines(rows, header_index, width):
@@ -321,7 +344,11 @@ def describe_csv(raw, label="file", show=(), mask_headers=False, trust_headers=F
         return f"{label}: no readable rows"
     lengths, width, header_index, data = _layout(rows)
     header = rows[header_index] if header_index is not None else []
-    names = [label_for(cell, i, mask_headers, trust_headers) for i, cell in enumerate(header)] or [f"col {i + 1}" for i in range(width)]
+    # All or nothing: a real header is made entirely of ordinary label words, while a
+    # preamble line with a name in it is not. Judging the row as a whole means one
+    # word that happens to be a surname (Price, Day) cannot print on its own.
+    verbatim = not mask_headers and (trust_headers or all(is_generic_label(cell.strip()) for cell in header))
+    names = [label_for(cell, i, verbatim) for i, cell in enumerate(header)] or [f"col {i + 1}" for i in range(width)]
     columns = [[row[i].strip() for row in data] for i in range(width)]
     wanted = {name.strip().lower() for name in show}
 
@@ -342,16 +369,40 @@ def describe_csv(raw, label="file", show=(), mask_headers=False, trust_headers=F
     out += [f"--show-values column not found: {name}" for name in sorted(missing)]
     out += _tail_lines(rows, header_index, width)
     report = "\n".join(out)
-    check_no_leak(report, rows, allowed)
-    return report
+    check_no_leak(report, rows, allowed, dynamic_only=True)
+    return report.replace(START, "").replace(END, "")
 
 
-def check_no_leak(report, rows, allowed):
-    """Refuse to return a report that contains any value from the file."""
+SHAPE_ONLY = re.compile(r"[Aa9 /\-.,$()+:;@#&%'\"*_]+")
+
+
+def is_shape_only(value):
+    """True for a value made only of mask characters (A, a, 9, punctuation), such as "9999".
+
+    Such a value reveals nothing beyond its shape, so finding it in the report is
+    not a leak. This is deliberately independent of mask(): the guard must still
+    work if masking is ever broken.
+    """
+    return bool(SHAPE_ONLY.fullmatch(re.sub(r"\{\d+\}", "", value)))
+
+
+def check_no_leak(report, rows, allowed, dynamic_only=False):
+    """Refuse to return a report that contains any value from the file.
+
+    With dynamic_only, only the text tagged by data_text() is searched. The
+    report's own fixed wording ("money", "debit/credit", "empty in") would
+    otherwise collide with ordinary cell values and make the tool refuse
+    valid files. Printed header labels and requested vocabularies are removed
+    first, since printing those is intended, and a value identical to its own
+    mask reveals nothing beyond its shape.
+    """
+    text = "\n".join(re.findall(f"{START}(.*?){END}", report, flags=re.S)) if dynamic_only else report
+    for item in sorted(allowed, key=len, reverse=True):
+        text = text.replace(item, "")
     values = {cell.strip() for row in rows for cell in row}
     leaked = [
         value for value in values
-        if len(value) >= 4 and any(c.isalnum() for c in value) and value not in allowed and value in report
+        if len(value) >= 4 and any(c.isalnum() for c in value) and not is_shape_only(value) and value in text
     ]
     if leaked:
         raise LeakError(f"{len(leaked)} value(s) from the file would appear in the output; nothing printed")
