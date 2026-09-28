@@ -1,3 +1,4 @@
+import time
 from io import StringIO
 from unittest.mock import patch
 
@@ -47,7 +48,7 @@ def test_login_creates_long_lived_server_side_session_and_logout_revokes_it():
     session_key = client.session.session_key
     assert session_key
     assert Session.objects.filter(session_key=session_key).exists()
-    assert client.cookies["sessionid"]["max-age"] == 60 * 60 * 24 * 28
+    assert abs(int(client.cookies["sessionid"]["max-age"]) - 60 * 60 * 24 * 28) <= 5
 
     response = client.post(reverse("logout"))
 
@@ -373,3 +374,21 @@ def test_login_form_enforces_csrf():
     response = client.post(reverse("login"), {"username": "nobody", "password": "invalid"})
 
     assert response.status_code == 403
+
+
+@pytest.mark.django_db
+def test_session_expiry_is_fixed_at_sign_in_and_later_writes_do_not_extend_it():
+    user, _person, _household = make_member()
+    client = Client()
+    client.post(reverse("login"), {"username": user.username, "password": PASSWORD})
+    session_key = client.session.session_key
+    at_sign_in = Session.objects.get(session_key=session_key).expire_date
+
+    time.sleep(0.05)
+    session = client.session
+    session["written_later"] = "value"
+    session.save()
+    after_write = Session.objects.get(session_key=session_key).expire_date
+
+    assert after_write == at_sign_in
+    assert abs((at_sign_in - timezone.now()).total_seconds() - 60 * 60 * 24 * 28) < 30

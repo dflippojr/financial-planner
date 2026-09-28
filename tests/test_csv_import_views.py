@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.contrib.sessions.models import Session
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, override_settings
 from django.urls import reverse
@@ -289,3 +290,21 @@ def test_a_very_large_upload_is_refused_without_touching_disk(staging_settings):
     assert response.status_code == 200
     assert b"at most 5 MB" in response.content
     assert not list(Path(staging_settings).glob("*.csvstage"))
+
+
+@pytest.mark.django_db
+def test_uploading_a_csv_does_not_extend_the_session(staging_settings):
+    # Staging writes to the session, and Django's default expiry slides with every
+    # save, so repeated uploads used to keep a session alive past its fixed 28 days.
+    user, person = make_person("owner")
+    account = Account.objects.create(name="Synthetic Checking", account_type="checking", owner=person)
+    client = Client()
+    client.post(reverse("login"), {"username": user.username, "password": PASSWORD})
+    session_key = client.session.session_key
+    at_sign_in = Session.objects.get(session_key=session_key).expire_date
+
+    time.sleep(0.05)
+    response = upload(client, account)
+
+    assert response.status_code == 200
+    assert Session.objects.get(session_key=session_key).expire_date == at_sign_in
