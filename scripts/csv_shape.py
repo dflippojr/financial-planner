@@ -15,9 +15,13 @@ Use --show-values only for a column whose values are a fixed vocabulary, such
 as a transaction type, never for descriptions or anything that names a person,
 merchant, or account.
 
-Standard library only. Review the output before sharing it: headers are shown
-as written when they look like plain labels, so a file whose first row is not
-a header may show that row masked instead.
+Header labels are shown as written only when every word is an ordinary column
+label word (date, amount, description, symbol, and so on); anything else is
+masked, so a name in a preamble line can never be printed. If a real header is
+masked and you have checked that it is safe, --trust-headers prints plain-label
+headers as written; --mask-headers masks them all.
+
+Standard library only. Review the output before sharing it.
 """
 import argparse
 import codecs
@@ -34,10 +38,25 @@ DELIMITERS = (",", ";", "\t", "|")
 KEPT_PUNCTUATION = set(" /-.,$()+:;@#&%'\"*_")
 
 DATE_LIKE = re.compile(r"\d{1,4}([/.-])\d{1,2}\1\d{1,4}")
-MONEY_LIKE = re.compile(r"[-+(]?[$€£]?\s?[-+(]?\d[\d,.\s]*\)?")
+MONEY_LIKE = re.compile(r"[-+(]?[$€£]?\s?[-+(]?\d[\d,.\s]*[)-]?")
 LABEL = re.compile(r"[A-Za-z][A-Za-z /#&()._'-]{0,39}")
 SAFE_VOCABULARY = re.compile(r"[A-Za-z][A-Za-z /&()._'-]{0,39}")
 LONG_RUN = re.compile(r"(.)\1{5,}")
+
+# Ordinary words found in bank and brokerage column headers. A header made only
+# of these can be printed as written because nothing identifying can be built
+# from them; anything else is masked unless the owner passes --trust-headers.
+HEADER_WORDS = frozenset("""
+account accrued action activity actual additional address amount and available balance basis branch by
+card category charge charges check cheque city class clearing cleared closing code commission commissions
+cost country credit currency date day deposit deposits desc description detail details debit effective
+fee fees for from fund gain id in interest investment ledger location loss market memo merchant month name
+narrative net no note notes num number of on opening original out payee payment payments pending post
+posted posting price principal purchase purchased purchases quantity realized ref reference running
+security sequence serial settle settlement share shares split state status subcategory symbol tags tax
+taxes ticker time to total trade trans transaction transactions type units usd value withdrawal
+withdrawals withheld year
+""".split())
 
 
 class LeakError(RuntimeError):
@@ -111,25 +130,39 @@ def looks_like_header(row):
 
 
 def find_header(rows, width):
-    """Index of the first full-width row that looks like a header, else None.
+    """Index of the header row, else None.
 
-    A full-width row containing a date is data, so stop looking: the file has
-    no header row and its first rows must not be shown as labels.
+    The header is the row immediately before the first full-width row that
+    contains a date, and only if it is itself full-width and label-like. Taking
+    the first label-like row instead would let a preamble line such as an
+    account holder's name be mistaken for the header and printed as written.
     """
     for index, row in enumerate(rows):
-        if len(row) != width:
-            continue
-        if looks_like_header(row):
-            return index
-        if any(DATE_LIKE.fullmatch(cell.strip()) for cell in row):
+        if len(row) == width and any(DATE_LIKE.fullmatch(cell.strip()) for cell in row):
+            previous = rows[index - 1] if index else None
+            if previous is not None and len(previous) == width and looks_like_header(previous):
+                return index - 1
             return None
     return None
 
 
-def label_for(cell, index):
-    """The header as written when it is a plain label, else its mask."""
+def is_generic_label(text):
+    """True when every word is ordinary column-label vocabulary, so it cannot be a name."""
+    words = re.findall(r"[a-z]+", text.lower())
+    return bool(words) and all(word in HEADER_WORDS for word in words)
+
+
+def label_for(cell, index, mask_headers=False, trust_headers=False):
+    """The header as written when it is a generic label (or trusted), else its mask.
+
+    Structure alone cannot tell a header from a preamble line such as an account
+    holder's name that has the same number of cells, so only labels made of
+    ordinary column-label words are ever printed as written.
+    """
     text = cell.strip()
-    return text if LABEL.fullmatch(text) else f"col {index + 1} (masked: {mask(text)})"
+    if not mask_headers and LABEL.fullmatch(text) and (trust_headers or is_generic_label(text)):
+        return text
+    return f"col {index + 1} (masked: {mask(text)})"
 
 
 def classify(values):
@@ -160,21 +193,34 @@ def date_order(values):
     return "ambiguous (no field exceeds 12)"
 
 
+def sign_prefix(value):
+    """Everything before the first digit, where a leading sign or opening parenthesis lives."""
+    return re.split(r"\d", value, maxsplit=1)[0]
+
+
+def is_negative(value):
+    """A minus or opening parenthesis before the digits (also after a currency symbol), or a trailing minus."""
+    prefix = sign_prefix(value)
+    return "-" in prefix or "(" in prefix or value.rstrip().endswith("-")
+
+
 def money_facts(values):
     filled = [value for value in values if value]
-    negative = sum(value.lstrip().startswith(("-", "(")) for value in filled)
+    negative = sum(is_negative(value) for value in filled)
     facts = [f"negative values: {negative} of {len(filled)}"]
-    stripped = [value.rstrip(")") for value in filled]
+    stripped = [value.rstrip(")-") for value in filled]
     if any(re.search(r"\d,\d{3}", value) for value in filled):
         facts.append("thousands separator ','")
     if any(re.search(r"\d\.\d{1,2}$", value) for value in stripped):
         facts.append("decimal point")
     elif any(re.search(r"\d,\d{1,2}$", value) for value in stripped):
         facts.append("decimal comma")
-    if any(value.lstrip("-(+ ")[:1] in "$€£" for value in filled):
+    if any(any(symbol in sign_prefix(value) for symbol in "$€£") for value in filled):
         facts.append("currency symbol present")
-    if any(value.startswith("(") for value in filled):
+    if any("(" in sign_prefix(value) for value in filled):
         facts.append("parentheses mean negative")
+    if any(value.rstrip().endswith("-") for value in filled):
+        facts.append("trailing minus means negative")
     return facts
 
 
@@ -249,16 +295,24 @@ def _file_lines(label, text, encoding, delimiter, rows, lengths, header_index, d
     ]
 
 
-def _tail_lines(rows, header_index):
-    masked = lambda row: " | ".join(mask(cell.strip()) for cell in row)  # noqa: E731
+def _masked(row):
+    return " | ".join(mask(cell.strip()) for cell in row)
+
+
+def _tail_lines(rows, header_index, width):
+    """Masked examples of everything that is not a data row: preamble and other sections."""
+    lines = []
     if header_index is None:
-        return ["first row (masked): " + masked(rows[0])]
-    if header_index:
-        return ["rows before the header (masked): " + " || ".join(masked(row) for row in rows[: min(header_index, 5)])]
-    return []
+        lines.append("first row (masked): " + _masked(rows[0]))
+    elif header_index:
+        lines.append("rows before the header (masked): " + " || ".join(_masked(row) for row in rows[: min(header_index, 5)]))
+    for other in sorted({len(row) for row in rows} - {width}):
+        examples = [row for row in rows if len(row) == other][:3]
+        lines.append(f"rows with {other} columns (masked, first {len(examples)}): " + " || ".join(_masked(row) for row in examples))
+    return lines
 
 
-def describe_csv(raw, label="file", show=()):
+def describe_csv(raw, label="file", show=(), mask_headers=False, trust_headers=False):
     """The whole report for one file's bytes, or LeakError if it would expose a value."""
     text, encoding = decode_text(raw)
     delimiter = choose_delimiter(text)
@@ -267,21 +321,26 @@ def describe_csv(raw, label="file", show=()):
         return f"{label}: no readable rows"
     lengths, width, header_index, data = _layout(rows)
     header = rows[header_index] if header_index is not None else []
-    names = [label_for(cell, i) for i, cell in enumerate(header)] or [f"col {i + 1}" for i in range(width)]
+    names = [label_for(cell, i, mask_headers, trust_headers) for i, cell in enumerate(header)] or [f"col {i + 1}" for i in range(width)]
     columns = [[row[i].strip() for row in data] for i in range(width)]
     wanted = {name.strip().lower() for name in show}
 
     out = _file_lines(label, text, encoding, delimiter, rows, lengths, header_index, data) + ["", "columns:"]
-    allowed = {cell.strip() for cell in header if LABEL.fullmatch(cell.strip())}
-    for name, values in zip(names, columns):
-        lines, shown = describe_column(name, values, show_values=name.lower() in wanted)
+    allowed = {cell.strip() for cell, name in zip(header, names) if name == cell.strip()}
+    matched = set()
+    for index, (name, values) in enumerate(zip(names, columns)):
+        # A requested column matches its printed name, "col N", or the header text you typed.
+        keys = {name.lower(), f"col {index + 1}"} | ({header[index].strip().lower()} if index < len(header) else set())
+        hit = keys & wanted
+        matched |= hit
+        lines, shown = describe_column(name, values, show_values=bool(hit))
         out.extend(lines)
         allowed.update(shown)
-    missing = wanted - {name.lower() for name in names}
+    missing = wanted - matched
     pairs = debit_credit_pairs(columns, names)
     out += ["", "separate debit/credit style pairs: " + ("; ".join(pairs) if pairs else "none detected")]
     out += [f"--show-values column not found: {name}" for name in sorted(missing)]
-    out += _tail_lines(rows, header_index)
+    out += _tail_lines(rows, header_index, width)
     report = "\n".join(out)
     check_no_leak(report, rows, allowed)
     return report
@@ -304,11 +363,15 @@ def main(argv=None):
     parser.add_argument("--label", default="the file", help="name to show in the report")
     parser.add_argument("--show-values", action="append", default=[], metavar="COLUMN",
                         help="also list the distinct values of this column (only for a fixed vocabulary such as a transaction type)")
+    parser.add_argument("--mask-headers", action="store_true",
+                        help="mask the header labels too (use if a header row could contain a name or account detail)")
+    parser.add_argument("--trust-headers", action="store_true",
+                        help="print any plain-label header as written, not only generic column words (after you have checked the file)")
     args = parser.parse_args(argv)
     try:
         with open(args.path, "rb") as handle:
             raw = handle.read()
-        print(describe_csv(raw, args.label, args.show_values))
+        print(describe_csv(raw, args.label, args.show_values, args.mask_headers, args.trust_headers))
     except OSError as error:
         print(f"cannot read the file: {error.strerror}", file=sys.stderr)
         return 1

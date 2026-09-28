@@ -236,3 +236,143 @@ def test_random_files_never_trigger_the_leak_guard():
             cells = ["".join(generator.choice(alphabet) for _ in range(generator.randint(0, 24))) for _ in range(width)]
             lines.append(",".join('"' + cell.replace('"', '""') + '"' for cell in cells))
         csv_shape.describe_csv("\n".join(lines).encode())
+
+
+def test_a_preamble_line_is_never_mistaken_for_the_header():
+    # A full-width, label-like preamble row (here a holder's name) sits above the
+    # real header. Taking the first such row as the header printed it verbatim
+    # and exempted it from the leak guard.
+    raw = (
+        "Jamie Q Example,Checking account,USD\n"
+        "Date,Description,Amount\n"
+        "2026-09-27,SYNTHETIC COFFEE HOUSE,-12.50\n"
+        "2026-09-28,SYNTHETIC BOOK STORE,-3.25\n"
+    ).encode()
+
+    report = csv_shape.describe_csv(raw)
+
+    assert "Jamie Q Example" not in report
+    assert "Checking account" not in report
+    assert "header row: line 2" in report
+    assert "- Amount: money" in report
+
+
+def test_a_headerless_file_with_a_label_like_first_row_shows_no_labels():
+    raw = (
+        "Jamie Q Example,Checking account,USD\n"
+        "2026-09-27,SYNTHETIC COFFEE HOUSE,-12.50\n"
+        "2026-09-28,SYNTHETIC BOOK STORE,-3.25\n"
+    ).encode()
+
+    report = csv_shape.describe_csv(raw)
+
+    assert "Jamie Q Example" not in report
+    assert "Checking account" not in report
+    assert "masked:" in report
+
+
+@pytest.mark.parametrize(
+    "amounts",
+    [
+        ("$-12.50", "$-3.25"),
+        ("-$12.50", "-$3.25"),
+        ("($12.50)", "($3.25)"),
+        ("-12.50", "-3.25"),
+        ("12.50-", "3.25-"),
+    ],
+)
+def test_negative_amounts_are_counted_however_the_sign_is_written(amounts):
+    raw = ("Date,Memo,Amount\n" + "".join(f"2026-09-{27 + i},x,{amount}\n" for i, amount in enumerate(amounts))).encode()
+
+    report = csv_shape.describe_csv(raw)
+
+    assert "negative values: 2 of 2" in report
+
+
+def test_positive_amounts_are_not_counted_as_negative():
+    raw = b"Date,Memo,Amount\n2026-09-27,x,$12.50\n2026-09-28,x,3.25\n"
+
+    report = csv_shape.describe_csv(raw)
+
+    assert "negative values: 0 of 2" in report
+
+
+def test_rows_from_another_section_are_described_masked():
+    raw = (
+        "Date,Type,Amount\n"
+        "2026-09-27,Buy,-10.00\n"
+        "2026-09-28,Sell,20.00\n"
+        "Total holdings SYNTHETIC FUND 4111111111111111\n"
+    ).encode()
+
+    report = csv_shape.describe_csv(raw)
+
+    assert "SYNTHETIC FUND" not in report
+    assert "4111111111111111" not in report
+    assert "rows with 1 columns (masked, first 1)" in report
+
+
+def test_mask_headers_masks_labels_too():
+    report = csv_shape.describe_csv(BANK_STYLE, mask_headers=True)
+
+    assert "Posting Date" not in report
+    assert "masked" in report
+
+
+def test_command_line_accepts_mask_headers(tmp_path, capsys):
+    path = tmp_path / "export.csv"
+    path.write_bytes(BANK_STYLE)
+
+    exit_code = csv_shape.main([str(path), "--mask-headers"])
+
+    assert exit_code == 0
+    assert "Posting Date" not in capsys.readouterr().out
+
+
+def test_unusual_header_words_are_masked_unless_headers_are_trusted():
+    raw = b"Date,Frobnicate Level,Amount\n2026-09-27,x,1.00\n2026-09-28,y,2.00\n"
+
+    default = csv_shape.describe_csv(raw)
+    trusted = csv_shape.describe_csv(raw, trust_headers=True)
+
+    assert "Frobnicate" not in default
+    assert "masked" in default
+    assert "Frobnicate Level" in trusted
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        "Trade Date,Settlement Date,Transaction Type,Transaction Description,Investment Name,Symbol,Shares,Share Price,Principal Amount,Commissions and Fees,Net Amount,Accrued Interest,Account Number",
+        "Transaction Date,Clearing Date,Description,Merchant,Category,Type,Amount (USD),Purchased By",
+        "Transaction Date,Posted Date,Card No.,Description,Category,Debit,Credit",
+        "Date,Description,Check Number,Amount,Balance",
+    ],
+)
+def test_typical_bank_and_brokerage_headers_are_readable_by_default(header):
+    width = len(header.split(","))
+    row = ",".join(["2026-09-27"] + ["x"] * (width - 1))
+    raw = f"{header}\n{row}\n{row}\n".encode()
+
+    report = csv_shape.describe_csv(raw)
+
+    assert "masked:" not in report.split("columns:")[1].split("separate debit")[0].replace("(masked", "")
+    for label in header.split(","):
+        assert label in report
+
+
+def test_a_names_words_are_not_generic_labels():
+    assert csv_shape.is_generic_label("Jamie Q Example") is False
+    assert csv_shape.is_generic_label("Checking account") is False
+    assert csv_shape.is_generic_label("Transaction Type") is True
+
+
+def test_show_values_can_select_a_masked_column_by_the_header_text_or_position():
+    raw = b"Date,Frobnicate Level,Amount\n2026-09-27,Alpha,1.00\n2026-09-28,Beta,2.00\n"
+
+    by_text = csv_shape.describe_csv(raw, show=["frobnicate level"])
+    by_position = csv_shape.describe_csv(raw, show=["col 2"])
+
+    assert "Alpha; Beta" in by_text
+    assert "Alpha; Beta" in by_position
+    assert "Frobnicate" not in by_text

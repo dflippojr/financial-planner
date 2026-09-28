@@ -13,7 +13,8 @@ It needs Python 3 and nothing else. Run it once per provider and per account typ
 ## What it prints
 
 - File facts: encoding, line endings, delimiter, row count, and how many rows have each column count (a second column count usually means a summary or a second section, as some brokerage exports have).
-- The header row, when its cells are plain labels with no digits. Otherwise the headers, or the first row of a file without headers, are shown masked.
+- The header row: the row just above the first row that contains a date. Its labels are printed as written only when every word is an ordinary column-label word (date, amount, description, symbol, shares, and so on). Anything else, such as a name that happens to sit above the data, is masked, so it can never be printed. If a real header comes out masked and you have looked at the file and know it is safe, add `--trust-headers`; add `--mask-headers` to mask them all.
+- Masked examples of any rows that do not fit the main layout, such as a summary line or a second section, with how many columns they have.
 - For each column: its kind (date, money, or text), how many rows are empty, and its masked patterns. Masking turns every letter into `a` or `A` and every digit into `9`, so `09/27/2026` becomes `99/99/9999` and a 16-digit card number becomes `9{16}`.
 - For date columns, whether day or month comes first, judged only from whether a field ever exceeds 12.
 - For money columns, how many values are negative, whether thousands separators, a decimal point or comma, currency symbols, or parentheses are used, and whether a pair of columns looks like separate debit and credit columns.
@@ -35,6 +36,6 @@ Unless you use `--show-values` for a column, it never prints a cell value from a
 
 ## Before you share the output
 
-Read it once. The tool is conservative but you know your data. In particular, a file whose first row is a transaction rather than a header can show up as "none detected" with that row masked, which is the intended behavior. If anything in the report looks like real data, do not share it and tell us.
+Read it once. The tool is conservative but you know your data. If anything in the report looks like real data, do not share it and tell us.
 
 Never commit an export, its output for a real account with your own edits, or anything derived from a statement. The tool's tests use only synthetic data.
