@@ -231,20 +231,27 @@ def find_header(rows, width):
 
 
 def label_for(cell, index, show_headers):
-    """The header as written only if the owner asked for it, else its mask.
+    """(printed title, True if that title is copied from the file).
 
     Nothing in the file distinguishes a header from a line that names a person
     or account and happens to have the same number of cells (even "Price,
     Account,USD"), and any word list of "safe" labels has a counterexample. So
     labels are masked unless the owner, who can see their own file, passes
-    --show-headers.
+    --show-headers. Generated titles such as "col N (no header text)" are not
+    file values; tagging them would let the leak guard collide with ordinary
+    cells like "text" or "header".
     """
     text = cell.strip()
     if not text:
-        return f"col {index + 1} (no header text)"
+        return f"col {index + 1} (no header text)", False
     if show_headers and LABEL.fullmatch(text):
-        return text
-    return f"col {index + 1} (masked: {mask(text)})"
+        return text, True
+    return f"col {index + 1} (masked: {mask(text)})", False
+
+
+def _shown_name(name, from_file):
+    """Tag only titles copied from the file so the leak guard can check them."""
+    return data_text(name) if from_file else name
 
 
 def classify(values):
@@ -314,11 +321,11 @@ def safe_vocabulary(values):
     return distinct if all(SAFE_VOCABULARY.fullmatch(value) for value in distinct) else None
 
 
-def describe_column(name, values, show_values=False):
+def describe_column(name, values, show_values=False, from_file=False):
     """Report lines for one column, plus the raw values shown (for the leak guard)."""
     kind = classify(values)
     filled = [value for value in values if value]
-    lines = [f"- {data_text(name)}: {kind}, empty in {len(values) - len(filled)} of {len(values)} rows"]
+    lines = [f"- {_shown_name(name, from_file)}: {kind}, empty in {len(values) - len(filled)} of {len(values)} rows"]
     shown = []
     patterns = Counter(mask(value) for value in filled)
     if patterns and len(patterns) <= MAX_DISTINCT_TO_LIST:
@@ -343,8 +350,9 @@ def describe_column(name, values, show_values=False):
     return lines, shown
 
 
-def debit_credit_pairs(columns, names):
+def debit_credit_pairs(columns, names, from_file=None):
     """Names of money-column pairs where each row fills exactly one of the two."""
+    origin = from_file or [False] * len(names)
     money = [index for index, values in enumerate(columns) if classify(values) == "money"]
     pairs = []
     for position, first in enumerate(money):
@@ -352,7 +360,9 @@ def debit_credit_pairs(columns, names):
             either = sum(bool(a) or bool(b) for a, b in zip(columns[first], columns[second]))
             exactly_one = sum(bool(a) != bool(b) for a, b in zip(columns[first], columns[second]))
             if either and exactly_one >= 0.9 * either and any(columns[first]) and any(columns[second]):
-                pairs.append(f"{data_text(names[first])} and {data_text(names[second])}")
+                pairs.append(
+                    f"{_shown_name(names[first], origin[first])} and {_shown_name(names[second], origin[second])}"
+                )
     return pairs
 
 
@@ -410,7 +420,13 @@ def describe_csv(raw, label="file", show=(), show_headers=False):
         return f"{label}: no readable rows" + (f"\n{warning}" if warning else "")
     lengths, width, header_index, data = _layout(rows, beyond)
     header = rows[header_index] if header_index is not None else []
-    names = [label_for(cell, i, show_headers) for i, cell in enumerate(header)] or [f"col {i + 1}" for i in range(width)]
+    labeled = [label_for(cell, i, show_headers) for i, cell in enumerate(header)]
+    if labeled:
+        names = [name for name, _ in labeled]
+        from_file = [flag for _, flag in labeled]
+    else:
+        names = [f"col {i + 1}" for i in range(width)]
+        from_file = [False] * width
     columns = [[row[i].strip() for row in data] for i in range(width)]
     wanted = {name.strip().lower() for name in show}
 
@@ -424,11 +440,11 @@ def describe_csv(raw, label="file", show=(), show_headers=False):
         keys = {name.lower(), f"col {index + 1}"} | ({header[index].strip().lower()} if index < len(header) else set())
         hit = keys & wanted
         matched |= hit
-        lines, shown = describe_column(name, values, show_values=bool(hit))
+        lines, shown = describe_column(name, values, show_values=bool(hit), from_file=from_file[index])
         out.extend(lines)
         allowed.update(shown)
     missing = wanted - matched
-    pairs = debit_credit_pairs(columns, names)
+    pairs = debit_credit_pairs(columns, names, from_file)
     out += ["", "separate debit/credit style pairs: " + ("; ".join(pairs) if pairs else "none detected")]
     out += [f"--show-values column not found: {name}" for name in sorted(missing)]
     out += _tail_lines(rows, header_index, width)

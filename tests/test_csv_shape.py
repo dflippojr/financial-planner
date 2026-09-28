@@ -644,3 +644,17 @@ def test_a_line_with_a_single_label_is_not_a_header():
     report = csv_shape.describe_csv(content, show_headers=True)
 
     assert "header row: none detected" in report
+
+
+def test_ordinary_cells_do_not_collide_with_generated_empty_header_labels():
+    # Empty header cells are titled "col N (no header text)". Tagging that
+    # generated phrase used to make the leak guard treat a memo of "text" or
+    # "header" as a leak, even with --show-headers.
+    content = b"Date,Memo,Amount,\n2026-09-27,text,-1.00,\n2026-09-28,header,2.00,\n"
+
+    report = csv_shape.describe_csv(content, show_headers=True)
+
+    assert "header row: line 1" in report
+    assert "- Memo: text" in report
+    assert "- Amount: money" in report
+    assert "(no header text)" in report
