@@ -1,11 +1,14 @@
 from django.conf import settings
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.decorators import login_not_required
-from django.shortcuts import redirect, render
+from django.db import DatabaseError, connections
+from django.db import transaction as database_transaction
+from django.http import HttpResponse
+from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.cache import never_cache
-from django.views.decorators.http import require_GET, require_POST
+from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
 from .auth_services import (
     InvalidOneTimeCode,
@@ -18,13 +21,102 @@ from .auth_services import (
     record_login_failure,
     throttle_key,
 )
-from .forms import JoinForm, LoginForm, RecoveryForm
-from .models import Account
+from .forms import JoinForm, LoginForm, RecoveryForm, TransactionCorrectionForm, TransactionFilterForm
+from .lifecycle_services import lock_actor_household
+from .models import Account, Transaction
+
+
+@login_not_required
+@never_cache
+@require_GET
+def health(request):
+    """Report process and database readiness without exposing application data."""
+    try:
+        with connections["default"].cursor() as cursor:
+            cursor.execute("SELECT 1")
+            cursor.fetchone()
+    except DatabaseError:
+        return HttpResponse("unavailable\n", status=503, content_type="text/plain")
+    return HttpResponse("ok\n", content_type="text/plain")
 
 
 @require_GET
 def home(request):
     return render(request, "finance/home.html", {"accounts": Account.objects.visible_to(request.user)})
+
+
+@require_GET
+def transaction_list(request):
+    transactions = (
+        Transaction.objects.visible_to(request.user)
+        .filter(status=Transaction.Status.ACTIVE)
+        .select_related("account", "import_batch")
+        .order_by("-transaction_date", "-pk")
+    )
+    form = TransactionFilterForm(request.GET or None, principal=request.user)
+    if form.is_valid():
+        filters = form.cleaned_data
+        if filters["date_from"]:
+            transactions = transactions.filter(transaction_date__gte=filters["date_from"])
+        if filters["date_to"]:
+            transactions = transactions.filter(transaction_date__lte=filters["date_to"])
+        if filters["account"]:
+            transactions = transactions.filter(account=filters["account"])
+        if filters["q"]:
+            transactions = transactions.filter(description__icontains=filters["q"])
+        # All transactions remain uncategorized until issue #8 introduces the
+        # agreed category scheme, so its sole category choice needs no query.
+    elif form.is_bound:
+        transactions = transactions.none()
+    return render(
+        request,
+        "finance/transaction_list.html",
+        {"filter_form": form, "transactions": transactions},
+    )
+
+
+def _visible_active_transaction(principal, transaction_id):
+    return get_object_or_404(
+        Transaction.objects.visible_to(principal)
+        .filter(status=Transaction.Status.ACTIVE)
+        .select_related("account", "import_batch"),
+        pk=transaction_id,
+    )
+
+
+@require_http_methods(["GET", "POST"])
+def transaction_edit(request, transaction_id):
+    financial_transaction = _visible_active_transaction(request.user, transaction_id)
+    if request.method == "POST":
+        form = TransactionCorrectionForm(request.POST)
+        if form.is_valid():
+            with database_transaction.atomic():
+                # Same lock order as the lifecycle services: the household's
+                # memberships, then the account, then the transaction. The
+                # membership lock is what stops a concurrent removal from
+                # committing between the visibility check and the save.
+                person = getattr(request.user, "person", None)
+                if person is not None:
+                    lock_actor_household(person)
+                account = get_object_or_404(
+                    Account.objects.visible_to(request.user).select_for_update(),
+                    pk=financial_transaction.account_id,
+                )
+                financial_transaction = get_object_or_404(
+                    Transaction.objects.select_for_update(),
+                    pk=financial_transaction.pk,
+                    account=account,
+                    status=Transaction.Status.ACTIVE,
+                )
+                form.apply(financial_transaction)
+            return redirect("transaction-list")
+    else:
+        form = TransactionCorrectionForm.for_transaction(financial_transaction)
+    return render(
+        request,
+        "finance/transaction_edit.html",
+        {"form": form, "transaction": financial_transaction},
+    )
 
 
 def _authenticate_member(request, username, password, key):

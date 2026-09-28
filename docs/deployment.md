@@ -1,0 +1,133 @@
+# Basement PC deployment
+
+This runbook deploys the first release to the Windows basement PC with Docker Desktop's WSL2 backend. The application is available only through the existing Tailscale tailnet: Docker publishes the application on Windows loopback, and `tailscale serve` terminates HTTPS and proxies to that loopback port. PostgreSQL is not published to the host or network.
+
+## Storage and network boundaries
+
+| Item | Location | Retention or exposure |
+|---|---|---|
+| Application source and synthetic fixture | Git checkout | Code only; never add populated environment files, CSV exports, database files, or dumps. |
+| Secrets and per-machine settings | A protected file outside the checkout, such as `D:/financial-planner-config/production.env` | Keep until rotated; restrict its Windows permissions to the operator account. |
+| PostgreSQL data | Docker named volume selected by `POSTGRES_VOLUME_NAME` | Durable across container replacement; never commit or manually edit it. |
+| Logical backups | `BACKUP_DIR` on the second local disk | Keep the 14 newest nightly dumps and 8 newest Sunday weekly copies. |
+| Source CSV exports | A private folder outside the checkout | The application discards an uploaded source after a successful import; the operator should remove the original export when no longer needed. |
+| Web listener | `127.0.0.1:APP_PORT` on the basement PC | No direct LAN listener. Tailscale Serve exposes HTTPS only inside the tailnet. |
+
+Django still requires a valid signed-in session after a request reaches the app. Tailscale controls which devices can reach the service; it does not replace application authentication or private/household authorization. Do not use Tailscale Funnel, a router port-forward, or a `0.0.0.0` host port.
+
+## First deployment
+
+Prerequisites are Docker Desktop configured to use WSL2 and start when Windows signs in, Tailscale connected to the intended tailnet, Git, and a second local disk for backups. Run these commands in PowerShell from the checkout.
+
+1. Create protected configuration and backup directories outside the checkout:
+
+   ```powershell
+   New-Item -ItemType Directory -Force D:\financial-planner-config
+   New-Item -ItemType Directory -Force E:\financial-planner-backups
+   Copy-Item .env.example D:\financial-planner-config\production.env
+   ```
+
+2. Edit `D:\financial-planner-config\production.env`. Replace both example secrets, use the basement PC's MagicDNS name for `DJANGO_ALLOWED_HOSTS`, use the matching `https://` URL for `DJANGO_CSRF_TRUSTED_ORIGINS`, and set `BACKUP_DIR=E:/financial-planner-backups`. Generate the Django secret and database password independently. One PowerShell option for each is:
+
+   ```powershell
+   [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(48))
+   ```
+
+   Do not reuse the example values. Keep `DJANGO_SECURE_COOKIES` and redirect behavior at their production defaults in `compose.yml`.
+
+3. Validate, build, migrate, and start the stack:
+
+   ```powershell
+   $Config = 'D:\financial-planner-config\production.env'
+   docker compose --env-file $Config config --quiet
+   docker compose --env-file $Config up -d --build
+   docker compose --env-file $Config ps
+   ```
+
+   The app entrypoint runs `python manage.py migrate --noinput` before Gunicorn starts. Both the application and PostgreSQL should report `healthy`; the backup scheduler should report `Up`.
+
+4. Configure persistent tailnet-only HTTPS using the current Tailscale CLI syntax:
+
+   ```powershell
+   tailscale serve --bg http://127.0.0.1:8000
+   tailscale serve status
+   ```
+
+   If `APP_PORT` is not 8000, use its value in the target URL. Tailscale Serve accepts only loopback HTTP proxy targets and supplies `X-Forwarded-Proto`; Django trusts that proxy header, redirects other HTTP requests to HTTPS, and uses secure session and CSRF cookies. Open the HTTPS MagicDNS URL shown by `tailscale serve status`. The command uses Serve, not Funnel, so it does not intentionally expose the app to the public internet. See the [Tailscale Serve command reference](https://tailscale.com/docs/reference/tailscale-cli/serve).
+
+5. Seed the first account interactively, then save the one-time recovery codes somewhere protected:
+
+   ```powershell
+   docker compose --env-file $Config exec app python manage.py seed_first_user --username USERNAME --display-name "DISPLAY NAME" --household "HOUSEHOLD NAME"
+   ```
+
+## Health and operations
+
+`GET /health/` is intentionally unauthenticated so Docker and an operator can monitor readiness. It performs `SELECT 1` and returns only `ok` with HTTP 200 or `unavailable` with HTTP 503; it never returns financial records, database names, credentials, or error details.
+
+```powershell
+Invoke-WebRequest https://BASEMENT-PC.MAGICDNS-NAME/health/
+docker compose --env-file $Config ps
+docker compose --env-file $Config logs --tail 50 app backup db
+```
+
+The container health check (`python -m financial_planner.healthcheck`) probes the app on loopback using the first concrete entry of `DJANGO_ALLOWED_HOSTS` as its `Host` header, because Django rejects any host that is not allowed. Put the MagicDNS name first and do not start the list with `*`; otherwise the container can be reported unhealthy while the app works.
+
+Application logs must not be used for transaction details or raw import rows. Stop the deployment with `docker compose --env-file $Config stop`; do not add `--volumes` when stopping or updating it.
+
+## Backups
+
+The backup container runs `pg_dump` in PostgreSQL custom format every night at 2:00 AM in `TZ` (default `America/New_York`). A Sunday dump is also copied into `weekly/`. A dump is published atomically only after `pg_restore --list` verifies it. Pruning keeps the newest 14 files in `nightly/` and 8 in `weekly/`.
+
+Run and verify an extra backup before an upgrade or restore drill:
+
+```powershell
+docker compose --env-file $Config run --rm backup /opt/financial-planner/backup.sh
+Get-ChildItem E:\financial-planner-backups\nightly
+docker compose --env-file $Config logs --tail 50 backup
+```
+
+The backup directory is a bind mount from the second disk, not part of the database volume or image. Monitor that disk's free space and confirm new nightly files appear. Retention is not an off-site backup; copying encrypted backups off-site is a separate operational decision.
+
+## Restore into a fresh database volume
+
+Use a fresh named volume so the old database remains available for investigation or rollback. The commands below cause downtime and assume `BACKUP_DIR` still points to the directory containing the selected dump.
+
+1. Choose a known-good file and stop writers:
+
+   ```powershell
+   $Config = 'D:\financial-planner-config\production.env'
+   $Dump = 'financial_planner_YYYYMMDDTHHMMSSZ.dump'
+   docker compose --env-file $Config stop app backup db
+   ```
+
+2. In `production.env`, change `POSTGRES_VOLUME_NAME` to a new name such as `financial-planner-postgres-data-restored-YYYYMMDD`. Do not delete or reuse the old volume.
+
+3. Start empty PostgreSQL, restore, and start the application:
+
+   ```powershell
+   docker compose --env-file $Config up -d db
+   docker compose --env-file $Config run --rm backup /opt/financial-planner/restore.sh "/backups/nightly/$Dump"
+   docker compose --env-file $Config up -d app backup
+   docker compose --env-file $Config ps
+   Invoke-WebRequest https://BASEMENT-PC.MAGICDNS-NAME/health/
+   ```
+
+4. Sign in and verify expected synthetic or real records according to the purpose of the restore. Keep the old volume until the owner explicitly accepts the restored database. Volume deletion is intentionally not part of this runbook.
+
+## Upgrades and migrations
+
+Review release notes and take a verified manual backup first. Then fetch the approved revision and run:
+
+```powershell
+docker compose --env-file $Config build --pull app backup
+docker compose --env-file $Config up -d
+docker compose --env-file $Config ps
+Invoke-WebRequest https://BASEMENT-PC.MAGICDNS-NAME/health/
+```
+
+Starting the new app applies all pending Django migrations before Gunicorn accepts traffic. If a migration or health check fails, inspect bounded logs with `docker compose --env-file $Config logs --tail 100 app db`; do not repeatedly restart or run migrations by hand. Restore the pre-upgrade dump into a fresh volume using the procedure above when database rollback is required.
+
+## Synthetic restore exercise record
+
+On 2026-09-27, this procedure was exercised locally with Docker Desktop 29.8.0, PostgreSQL 16, and only the committed `synthetic_demo` fixture. The app and database health checks passed; the fixture contained 3 synthetic transactions; a custom-format dump produced both nightly and forced weekly copies; the transactions were deleted (count 0); and `pg_restore` recovered the count to 3. The same dump was then restored into a second, fresh named volume, where the count was 3 and `/health/` returned HTTP 200. No real statement, credential, account number, or financial record was used or written to Git.

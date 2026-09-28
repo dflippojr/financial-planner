@@ -5,6 +5,7 @@ from finance.csv_import import views as csv_import_views
 
 
 urlpatterns = [
+    path("health/", views.health, name="health"),
     path("", views.home, name="home"),
     path("sign-in/", views.sign_in, name="login"),
     path("sign-out/", views.sign_out, name="logout"),
@@ -12,4 +13,6 @@ urlpatterns = [
     path("join/", views.join, name="join"),
     path("recover/", views.recover, name="recover"),
     path("accounts/<int:account_id>/imports/preview/", csv_import_views.csv_preview, name="csv-import-preview"),
+    path("transactions/", views.transaction_list, name="transaction-list"),
+    path("transactions/<int:transaction_id>/edit/", views.transaction_edit, name="transaction-edit"),
 ]

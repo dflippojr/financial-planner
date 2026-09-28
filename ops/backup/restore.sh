@@ -1,0 +1,37 @@
+#!/bin/sh
+set -eu
+
+if [ "$#" -ne 1 ]; then
+  echo "Usage: restore.sh /backups/nightly/financial_planner_TIMESTAMP.dump" >&2
+  exit 2
+fi
+
+for variable in POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD POSTGRES_HOST; do
+  eval "value=\${$variable:-}"
+  if [ -z "$value" ]; then
+    echo "$variable must be set" >&2
+    exit 2
+  fi
+done
+
+backup_file=$1
+if [ ! -f "$backup_file" ]; then
+  echo "Backup file does not exist: $backup_file" >&2
+  exit 2
+fi
+
+export PGPASSWORD=$POSTGRES_PASSWORD
+pg_restore --list "$backup_file" >/dev/null
+pg_restore \
+  --host "$POSTGRES_HOST" \
+  --port "${POSTGRES_PORT:-5432}" \
+  --username "$POSTGRES_USER" \
+  --dbname "$POSTGRES_DB" \
+  --clean \
+  --if-exists \
+  --no-owner \
+  --no-privileges \
+  --exit-on-error \
+  "$backup_file"
+
+echo "Restore completed from $(basename "$backup_file")"
