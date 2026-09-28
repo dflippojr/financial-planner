@@ -789,3 +789,21 @@ def test_a_shorter_transaction_table_is_preferred_over_a_longer_balance_history(
     assert "- Day:" not in report
     assert "- When:" not in report
     assert "- Balance:" not in report
+
+
+def test_unicode_minus_amounts_are_money_and_negative():
+    # Spreadsheet exports (Excel) write U+2212 MINUS SIGN; only ASCII '-' and
+    # parentheses were treated as negative, so these amounts were classified
+    # as text with no sign facts.
+    minus = "\u2212"
+    raw = (
+        "Date,Memo,Amount\n"
+        f"2026-09-27,x,{minus}12.50\n"
+        f"2026-09-28,x,{minus}3.25\n"
+    ).encode()
+
+    report = describe(raw)
+
+    assert "- Amount: money" in report
+    assert "negative values: 2 of 2" in report
+

@@ -48,7 +48,8 @@ DATE_LIKE = re.compile(r"\d{1,4}([/.-])\d{1,2}\1\d{1,4}" + _TIME)
 # Spaces and the non-breaking spaces some exports use as thousands separators are
 # allowed inside an amount; a newline is not, or a multi-line text field of digits
 # such as "12" newline "34" would be classified as money.
-MONEY_LIKE = re.compile(r"[-+(]?[$€£]? ?[-+(]?\d[\d,. \xa0 ]*[)-]?")
+# ASCII hyphen-minus and U+2212 MINUS SIGN (spreadsheet / Excel exports).
+MONEY_LIKE = re.compile(r"[-\u2212+(]?[$€£]? ?[-\u2212+(]?\d[\d,. \xa0 ]*[)\u2212-]?")
 LABEL = re.compile(r"[A-Za-z][A-Za-z /$%#&()._'-]{0,39}")
 SAFE_VOCABULARY = re.compile(r"[A-Za-z][A-Za-z /&()._'-]{0,39}")
 LONG_RUN = re.compile(r"(.)\1{5,}")
@@ -367,16 +368,19 @@ def sign_prefix(value):
 
 
 def is_negative(value):
-    """A minus or opening parenthesis before the digits (also after a currency symbol), or a trailing minus."""
+    """A minus or opening parenthesis before the digits (also after a currency symbol), or a trailing minus.
+
+    Spreadsheet exports use U+2212 MINUS SIGN as well as ASCII '-' .
+    """
     prefix = sign_prefix(value)
-    return "-" in prefix or "(" in prefix or value.rstrip().endswith("-")
+    return "-" in prefix or "\u2212" in prefix or "(" in prefix or value.rstrip().endswith(("-", "\u2212"))
 
 
 def money_facts(values):
     filled = [value for value in values if value]
     negative = sum(is_negative(value) for value in filled)
     facts = [f"negative values: {negative} of {len(filled)}"]
-    stripped = [value.rstrip(")-") for value in filled]
+    stripped = [value.rstrip(")\u2212-") for value in filled]
     if any(re.search(r"\d,\d{3}", value) for value in filled):
         facts.append("thousands separator ','")
     if any(re.search(r"\d\.\d{1,2}$", value) for value in stripped):
@@ -387,7 +391,7 @@ def money_facts(values):
         facts.append("currency symbol present")
     if any("(" in sign_prefix(value) for value in filled):
         facts.append("parentheses mean negative")
-    if any(value.rstrip().endswith("-") for value in filled):
+    if any(value.rstrip().endswith(("-", "\u2212")) for value in filled):
         facts.append("trailing minus means negative")
     return facts
 
