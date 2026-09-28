@@ -1,10 +1,11 @@
+from decimal import Decimal
+
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
 from django.db import models
 from django.db.models import F, Q
 from django.utils import timezone
-from decimal import Decimal
 
 
 sha256_validator = RegexValidator(

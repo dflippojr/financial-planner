@@ -1,4 +1,5 @@
 from datetime import date
+from decimal import Decimal
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -248,3 +249,13 @@ def test_correction_form_converts_money_exactly_and_rejects_bigint_overflow():
     assert int(exact.cleaned_data["amount"] * 100) == 12_345_678_901_234
     assert not overflow.is_valid()
     assert "supported range" in overflow.errors["amount"][0]
+
+
+@pytest.mark.django_db
+def test_correction_form_initial_amount_does_not_round_through_float():
+    owner = make_person("owner")
+    financial_transaction = make_transaction(owner, amount_minor=9_007_199_254_740_993)
+
+    form = TransactionCorrectionForm.for_transaction(financial_transaction)
+
+    assert form.initial["amount"] == Decimal("90071992547409.93")

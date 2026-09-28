@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django import forms
 from django.contrib.auth import get_user_model, password_validation
 from django.core.exceptions import ValidationError
@@ -97,7 +99,7 @@ class TransactionCorrectionForm(forms.Form):
             initial={
                 "transaction_date": transaction.transaction_date,
                 "description": transaction.description,
-                "amount": transaction.amount_minor / 100,
+                "amount": Decimal(transaction.amount_minor) / Decimal(100),
             },
             **kwargs,
         )
