@@ -99,6 +99,14 @@ def test_utf8_bom_semicolon_quoted_newline_and_negative_zero():
     assert "LINE 2" in result.rows[0].description
 
 
+def test_semicolon_delimiter_wins_when_a_quoted_header_contains_a_comma():
+    document = read_csv(
+        b'When;"Memo, full";Amount\n09/27/2026;SYNTHETIC ITEM;12.34\n'
+    )
+    result = preview_csv(document, mapping(description_column="Memo, full", number_format="dot_none"))
+    assert result.valid_count == 1
+
+
 @pytest.mark.parametrize(
     ("content", "message"),
     [

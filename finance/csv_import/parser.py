@@ -104,13 +104,20 @@ def read_csv(content: bytes, *, max_rows=MAX_DATA_ROWS) -> CsvDocument:
         raise CsvInputError("The CSV file is empty.")
 
     try:
+        try:
+            delimiter = csv.Sniffer().sniff(text[:8192], delimiters=",;").delimiter
+        except csv.Error:
+            delimiter = None
         candidates = []
         for candidate in (",", ";"):
             candidate_headers = next(
                 csv.reader(io.StringIO(text, newline=""), delimiter=candidate, strict=True)
             )
             candidates.append((len(candidate_headers), candidate, candidate_headers))
-        column_count, delimiter, headers = max(candidates, key=lambda item: item[0])
+        if delimiter:
+            column_count, _candidate, headers = next(item for item in candidates if item[1] == delimiter)
+        else:
+            column_count, delimiter, headers = max(candidates, key=lambda item: item[0])
         if column_count < 2:
             raise csv.Error
         records = csv.reader(io.StringIO(text, newline=""), delimiter=delimiter, strict=True)
