@@ -289,8 +289,10 @@ def find_header(rows, width):
     opening-balance or subtotal line skipped when walking back. Rank a
     labeled, money-bearing block that continues to the end of the file
     above a longer earlier table (balance history), then any other
-    labeled money-bearing block, then the later start. Length is not the
-    primary score: a short transaction table must beat a long preamble.
+    labeled money-bearing block, then any labeled dated block, then the
+    later start. Length is not the primary score: a short transaction
+    table must beat a long preamble. A dated table with no amounts still
+    counts if it is the only labeled block.
     Taking the row before the first date in the file would treat a
     same-width preamble export-date line as data and print the
     account-holder line as headers.
@@ -299,13 +301,14 @@ def find_header(rows, width):
     best_header = None
     for start, end in _dated_blocks(rows, width):
         header = _header_before(rows, start, width)
-        is_tx = header is not None and _run_has_money(rows, start, end)
+        has_label = header is not None
+        is_tx = has_label and _run_has_money(rows, start, end)
         continues_to_eof = end == len(rows)
-        score = (is_tx and continues_to_eof, is_tx, start)
+        score = (is_tx and continues_to_eof, is_tx, has_label, start)
         if best is None or score > best:
             best = score
             best_header = header
-    if best is None or not best[1]:
+    if best is None or not best[2]:
         return None
     return best_header
 
