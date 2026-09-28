@@ -472,3 +472,16 @@ def test_the_delimiter_is_the_one_that_gives_every_row_the_same_column_count(con
 
     assert expected in report
     assert "3 columns" in report or "2 columns" in report
+
+
+@pytest.mark.parametrize("data_rows", [3, 49, 499, 2000])
+def test_a_long_tab_file_with_thousands_commas_keeps_its_tab_delimiter(data_rows):
+    # One header line that the wrong delimiter splits differently is 1/N of the
+    # rows; rounding that away once made comma win on width for N of a few hundred.
+    rows = "".join(f"2026-09-{1 + i % 28:02d}\t{1000000 + i:,}.89\n" for i in range(data_rows))
+    content = ("Date\tAmount\n" + rows).encode()
+
+    report = csv_shape.describe_csv(content, show_headers=True)
+
+    assert "delimiter: TAB" in report
+    assert "- Amount: money" in report

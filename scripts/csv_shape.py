@@ -119,7 +119,10 @@ def _delimiter_score(sample, delimiter):
     modal, count = max(lengths.items(), key=lambda item: (item[1], item[0]))
     if modal < 2:
         return 0, 0
-    return round(count / sum(lengths.values()), 2), modal
+    # Not rounded: with hundreds of rows a single header line that the wrong
+    # delimiter splits differently is a tiny fraction, and rounding it away
+    # turns a clear preference for the right delimiter into a tie.
+    return count / sum(lengths.values()), modal
 
 
 def choose_delimiter(text):
