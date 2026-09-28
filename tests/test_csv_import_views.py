@@ -11,6 +11,7 @@ from django.test import Client, override_settings
 from django.urls import reverse
 
 from finance.csv_import.parser import MAX_FILE_BYTES
+from finance.lifecycle_services import archive_account
 from finance.models import Account, Household, ImportBatch, Membership, Person, Transaction
 
 
@@ -76,6 +77,37 @@ def test_missing_and_private_unauthorized_accounts_are_indistinguishable(staging
 
     assert private_response.status_code == missing_response.status_code == 404
     assert private_response.content == missing_response.content
+
+
+@pytest.mark.django_db
+def test_archived_account_preview_is_missing_and_home_omits_its_import_link(staging_settings):
+    owner_user, owner = make_person("owner")
+    _viewer_user, viewer = make_person("viewer")
+    active = Account.objects.create(name="Synthetic Active", account_type="checking", owner=owner)
+    archived = Account.objects.create(name="Synthetic Archived", account_type="savings", owner=owner)
+    foreign = Account.objects.create(name="Viewer Private", account_type="checking", owner=viewer)
+    archive_account(owner_user, archived.pk)
+    client = Client()
+    client.force_login(owner_user)
+    preview_url = reverse("csv-import-preview", args=(archived.pk,))
+
+    get_response = client.get(preview_url)
+    upload_response = upload(client, archived)
+    map_response = client.post(preview_url, mapping_data("unused-token"))
+    cancel_response = client.post(preview_url, {"action": "cancel", "token": "unused-token"})
+    missing_response = client.get(reverse("csv-import-preview", args=(archived.pk + 999,)))
+    foreign_response = client.get(reverse("csv-import-preview", args=(foreign.pk,)))
+    active_get = client.get(reverse("csv-import-preview", args=(active.pk,)))
+    home = client.get(reverse("home"))
+
+    assert get_response.status_code == missing_response.status_code == 404
+    assert get_response.content == missing_response.content
+    assert upload_response.status_code == map_response.status_code == cancel_response.status_code == 404
+    assert foreign_response.status_code == 404
+    assert active_get.status_code == 200
+    assert reverse("csv-import-preview", args=(active.pk,)).encode() in home.content
+    assert preview_url.encode() not in home.content
+    assert b"Synthetic Archived" in home.content
 
 
 @pytest.mark.django_db

@@ -14,7 +14,13 @@ PREVIEW_TEMPLATE = "finance/csv_import/preview.html"
 
 
 def _visible_account(request, account_id):
-    return get_object_or_404(Account.objects.visible_to(request.user), pk=account_id)
+    return get_object_or_404(
+        Account.objects.visible_to(request.user).filter(
+            status=Account.Status.ACTIVE,
+            archived_at__isnull=True,
+        ),
+        pk=account_id,
+    )
 
 
 @never_cache
