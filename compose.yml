@@ -1,0 +1,71 @@
+name: financial-planner
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-financial_planner}
+      POSTGRES_USER: ${POSTGRES_USER:-financial_planner}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?DJANGO_SECRET_KEY must be set}
+      DJANGO_DEBUG: "false"
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:?DJANGO_ALLOWED_HOSTS must be set}
+      DJANGO_CSRF_TRUSTED_ORIGINS: ${DJANGO_CSRF_TRUSTED_ORIGINS:?DJANGO_CSRF_TRUSTED_ORIGINS must be set}
+      DJANGO_SECURE_COOKIES: "true"
+      DJANGO_SECURE_SSL_REDIRECT: "true"
+      POSTGRES_DB: ${POSTGRES_DB:-financial_planner}
+      POSTGRES_USER: ${POSTGRES_USER:-financial_planner}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${APP_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-m", "financial_planner.healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  backup:
+    build: ops/backup
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-financial_planner}
+      POSTGRES_USER: ${POSTGRES_USER:-financial_planner}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      BACKUP_CRON: ${BACKUP_CRON:-0 2 * * *}
+      TZ: ${TZ:-America/New_York}
+      NIGHTLY_RETENTION: ${NIGHTLY_RETENTION:-14}
+      WEEKLY_RETENTION: ${WEEKLY_RETENTION:-8}
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - type: bind
+        source: ${BACKUP_DIR:?BACKUP_DIR must be set}
+        target: /backups
+    command: ["/opt/financial-planner/run-backups.sh"]
+
+volumes:
+  postgres_data:
+    name: ${POSTGRES_VOLUME_NAME:-financial-planner-postgres-data}

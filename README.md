@@ -10,7 +10,8 @@ The Django application foundation and its core financial data model are under de
 - [Backlog and milestones](docs/backlog.md)
 - [Data model](docs/data-model.md)
 - [Authentication and onboarding](docs/authentication.md)
-- [Agent guide and agent-loop workflow](AGENTS.md)
+- [Basement PC deployment, backup, and restore](docs/deployment.md)
+- [Agent guide and agent-loop workflow](AGENTS.md)
 - [GitHub Issues](https://github.com/dflippojr/financial-planner/issues)
 
 ## Local model development

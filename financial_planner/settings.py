@@ -10,7 +10,21 @@ SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY")
 if not SECRET_KEY:
     raise ImproperlyConfigured("DJANGO_SECRET_KEY must be set.")
 DEBUG = os.environ.get("DJANGO_DEBUG", "false").lower() == "true"
-ALLOWED_HOSTS = [host for host in os.environ.get("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",") if host]
+
+
+def allowed_hosts_from_env(value):
+    """Split DJANGO_ALLOWED_HOSTS the same way the container health probe does.
+
+    A wrapped env file can leave a space after `DJANGO_ALLOWED_HOSTS=`. The
+    probe strips that space for its Host header; Django must allow the same
+    host or the container is reported unhealthy while serving real requests.
+    """
+    return [host.strip() for host in value.split(",") if host.strip()]
+
+
+ALLOWED_HOSTS = allowed_hosts_from_env(
+    os.environ.get("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1")
+)
 
 INSTALLED_APPS = [
     "django.contrib.auth",
