@@ -658,3 +658,28 @@ def test_ordinary_cells_do_not_collide_with_generated_empty_header_labels():
     assert "- Memo: text" in report
     assert "- Amount: money" in report
     assert "(no header text)" in report
+
+
+@pytest.mark.parametrize(
+    "stamp, expected_order",
+    [
+        ("2026-09-27 10:15:00", "not a day/month/year layout"),
+        ("09/27/2026 12:00:00 AM", "month first"),
+    ],
+)
+def test_timestamps_are_recognized_as_dates(stamp, expected_order):
+    # Provider exports often stamp a time of day on the date. DATE_LIKE used to
+    # require the whole cell to be date-only, so the header was missed and the
+    # amount column was profiled as text.
+    day_two = stamp.replace("27", "28", 1)
+    content = (
+        f"Date,Memo,Amount\n{stamp},SYNTHETIC MEMO,-12.50\n{day_two},SYNTHETIC MEMO TWO,3.25\n"
+    ).encode()
+
+    report = csv_shape.describe_csv(content, show_headers=True)
+
+    assert "header row: line 1" in report
+    assert "- Date: date" in report
+    assert expected_order in report
+    assert "- Amount: money" in report
+    assert "negative values: 1 of 2" in report

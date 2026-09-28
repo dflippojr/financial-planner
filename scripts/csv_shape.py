@@ -42,7 +42,9 @@ FIELD_LIMIT = 16 * 1024 * 1024
 DELIMITERS = (",", ";", "\t", "|")
 KEPT_PUNCTUATION = set(" /-.,$()+:;@#&%'\"*_")
 
-DATE_LIKE = re.compile(r"\d{1,4}([/.-])\d{1,2}\1\d{1,4}")
+# Optional time of day so a datetime stamp still counts as a date (issue #1).
+_TIME = r"(?:[ T]\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AaPp][Mm])?)?"
+DATE_LIKE = re.compile(r"\d{1,4}([/.-])\d{1,2}\1\d{1,4}" + _TIME)
 # Spaces and the non-breaking spaces some exports use as thousands separators are
 # allowed inside an amount; a newline is not, or a multi-line text field of digits
 # such as "12" newline "34" would be classified as money.
@@ -269,7 +271,7 @@ def date_order(values):
     """Say whether dd/mm or mm/dd is implied, from field maxima only."""
     firsts, seconds = [], []
     for value in values:
-        match = re.fullmatch(r"(\d{1,2})[/.-](\d{1,2})[/.-]\d{2,4}", value)
+        match = re.fullmatch(r"(\d{1,2})[/.-](\d{1,2})[/.-]\d{2,4}" + _TIME, value)
         if match:
             firsts.append(int(match.group(1)))
             seconds.append(int(match.group(2)))
