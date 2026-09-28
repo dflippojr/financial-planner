@@ -235,6 +235,31 @@ def _dated_runs(rows, width):
     return runs
 
 
+def _is_filler(row, width):
+    """A non-dated or ragged row that is not itself a header."""
+    return not _has_date(row, width) and not (len(row) == width and looks_like_header(row))
+
+
+def _dated_blocks(rows, width):
+    """Dated runs merged across filler rows (opening balance, subtotal, ragged).
+
+    A label-like full-width row between runs is a new section, not filler, so a
+    preamble table and the transaction table stay separate.
+    """
+    runs = _dated_runs(rows, width)
+    if not runs:
+        return []
+    blocks = [runs[0]]
+    for start, end in runs[1:]:
+        prev_start, prev_end = blocks[-1]
+        gap = rows[prev_end:start]
+        if gap and all(_is_filler(row, width) for row in gap):
+            blocks[-1] = (prev_start, end)
+        else:
+            blocks.append((start, end))
+    return blocks
+
+
 def _run_has_money(rows, start, end):
     return any(
         MONEY_LIKE.fullmatch(cell.strip())
@@ -244,25 +269,40 @@ def _run_has_money(rows, start, end):
     )
 
 
+def _header_before(rows, start, width):
+    """Nearest full-width header above start, walking back past filler rows."""
+    for index in range(start - 1, -1, -1):
+        row = rows[index]
+        if len(row) == width and looks_like_header(row):
+            return index
+        if not _is_filler(row, width):
+            return None
+    return None
+
+
 def find_header(rows, width):
     """Index of the header row, else None.
 
-    The header is the label-like full-width row immediately above the main
-    transaction block: consecutive full-width rows that each contain a date,
-    preferring the longest such run that also contains amounts. Taking the
-    row before the first date in the file would treat a same-width preamble
-    export-date line as data and print the account-holder line as headers.
+    The header is the nearest label-like full-width row above the main
+    transaction block: dated, amount-bearing rows, with filler such as an
+    opening-balance or subtotal line skipped when walking back. Preferring the
+    longest dated run without that walk would miss the header whenever a
+    non-dated or ragged row split the block. Taking the row before the first
+    date in the file would treat a same-width preamble export-date line as
+    data and print the account-holder line as headers.
     """
     best = None
-    for start, end in _dated_runs(rows, width):
-        previous = rows[start - 1] if start else None
-        has_label = previous is not None and len(previous) == width and looks_like_header(previous)
+    best_header = None
+    for start, end in _dated_blocks(rows, width):
+        header = _header_before(rows, start, width)
+        has_label = header is not None
         score = (_run_has_money(rows, start, end), end - start, has_label, start)
         if best is None or score > best:
             best = score
+            best_header = header
     if best is None or not best[2]:
         return None
-    return best[3] - 1
+    return best_header
 
 
 def label_for(cell, index, show_headers):

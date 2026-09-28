@@ -722,3 +722,44 @@ def test_header_labels_may_include_common_punctuation():
     assert "- Date: date" in report
     assert "- Amount ($): money" in report
     assert "negative values: 1 of 2" in report
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        # Opening-balance line between the header and the dated transactions.
+        (
+            "Date,Description,Amount\n"
+            "Beginning Balance,,1000.00\n"
+            "2026-09-27,SYNTHETIC COFFEE,-12.50\n"
+            "2026-09-28,SYNTHETIC BOOK,-3.25\n"
+            "2026-09-29,SYNTHETIC GROCER,-8.00\n"
+        ),
+        # Mid-file subtotal splits an otherwise uniform dated block; the longer
+        # fragment after the split must still walk back to the real header.
+        (
+            "Date,Description,Amount\n"
+            "2026-09-27,SYNTHETIC COFFEE,-1.00\n"
+            "Subtotal,,3.00\n"
+            "2026-09-28,SYNTHETIC BOOK,-2.00\n"
+            "2026-09-29,SYNTHETIC GROCER,-3.00\n"
+            "2026-09-30,SYNTHETIC FUEL,-4.00\n"
+        ),
+        # First data row omits a trailing optional column, so it is ragged.
+        (
+            "Date,Description,Amount,Notes\n"
+            "2026-09-27,SYNTHETIC COFFEE,-12.50\n"
+            "2026-09-28,SYNTHETIC BOOK,-3.25,memo\n"
+            "2026-09-29,SYNTHETIC GROCER,-8.00,memo\n"
+        ),
+    ],
+)
+def test_header_is_found_when_filler_rows_split_the_dated_block(raw):
+    report = describe(raw.encode())
+
+    assert "header row: none detected" not in report
+    assert "header row: line 1" in report
+    assert "- Date:" in report
+    assert "- Amount:" in report
+    assert "Beginning Balance" not in report
+    assert "Subtotal" not in report
