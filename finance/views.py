@@ -20,6 +20,7 @@ from .auth_services import (
     throttle_key,
 )
 from .forms import JoinForm, LoginForm, RecoveryForm, TransactionCorrectionForm, TransactionFilterForm
+from .lifecycle_services import lock_actor_household
 from .models import Account, Transaction
 
 
@@ -74,9 +75,13 @@ def transaction_edit(request, transaction_id):
         form = TransactionCorrectionForm(request.POST)
         if form.is_valid():
             with database_transaction.atomic():
-                # Lifecycle operations lock accounts before their related
-                # transactions. Use the same order so authorization cannot
-                # change between the check and the correction.
+                # Same lock order as the lifecycle services: the household's
+                # memberships, then the account, then the transaction. The
+                # membership lock is what stops a concurrent removal from
+                # committing between the visibility check and the save.
+                person = getattr(request.user, "person", None)
+                if person is not None:
+                    lock_actor_household(person)
                 account = get_object_or_404(
                     Account.objects.visible_to(request.user).select_for_update(),
                     pk=financial_transaction.account_id,

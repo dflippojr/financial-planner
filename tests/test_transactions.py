@@ -1,12 +1,16 @@
+import threading
 from datetime import date
 from decimal import Decimal
+from unittest.mock import patch
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.db import connection, connections
 from django.test import Client
 from django.urls import reverse
 
 from finance.forms import TransactionCorrectionForm
+from finance.lifecycle_services import remove_household_member
 from finance.models import Account, Household, ImportBatch, Membership, Person, Transaction
 
 
@@ -290,3 +294,76 @@ def test_correction_form_initial_amount_does_not_round_through_float():
     form = TransactionCorrectionForm.for_transaction(financial_transaction)
 
     assert form.initial["amount"] == Decimal("90071992547409.93")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_correction_cannot_be_saved_after_the_editor_is_removed_from_the_household():
+    # A correction must lock the membership that authorizes it, in the same
+    # order as the lifecycle services (memberships, then accounts, then
+    # transactions). Otherwise a member being removed can pass the visibility
+    # check, have the removal commit, and still save their edit afterward.
+    # SQLite ignores row locks, so this runs under scripts/test_postgres.sh.
+    if connection.vendor != "postgresql":
+        pytest.skip("row-lock ordering can only be exercised on PostgreSQL")
+
+    owner = make_person("owner")
+    editor = make_person("editor")
+    household = Household.objects.create(name="Synthetic Household")
+    Membership.objects.create(person=owner, household=household)
+    Membership.objects.create(person=editor, household=household)
+    account = Account.objects.create(
+        name="Synthetic Shared",
+        account_type=Account.Type.CHECKING,
+        owner=owner,
+        scope=Account.Scope.HOUSEHOLD,
+        household=household,
+    )
+    financial_transaction = make_transaction(owner, account=account)
+
+    editing_paused = threading.Event()
+    removal_committed = threading.Event()
+    observed = {}
+    errors = []
+    original_apply = TransactionCorrectionForm.apply
+
+    def pause_before_saving(form, target):
+        editing_paused.set()
+        # If the edit holds the membership lock, the removal cannot finish
+        # while it waits here, so this wait simply times out.
+        removal_committed.wait(timeout=3)
+        observed["removal_committed_before_save"] = removal_committed.is_set()
+        return original_apply(form, target)
+
+    def edit():
+        try:
+            client = Client()
+            client.force_login(editor.user)
+            client.post(
+                reverse("transaction-edit", args=(financial_transaction.pk,)),
+                {"transaction_date": "2026-01-05", "description": "Late correction", "amount": "-1.00"},
+            )
+        except Exception as exc:  # noqa: BLE001 - reported to the main thread
+            errors.append(exc)
+        finally:
+            connections.close_all()
+
+    def remove():
+        try:
+            remove_household_member(owner, editor.pk)
+            removal_committed.set()
+        except Exception as exc:  # noqa: BLE001 - reported to the main thread
+            errors.append(exc)
+        finally:
+            connections.close_all()
+
+    with patch.object(TransactionCorrectionForm, "apply", pause_before_saving):
+        editing = threading.Thread(target=edit)
+        editing.start()
+        assert editing_paused.wait(timeout=10)
+        removing = threading.Thread(target=remove)
+        removing.start()
+        editing.join(timeout=30)
+        removing.join(timeout=30)
+
+    assert errors == []
+    assert observed["removal_committed_before_save"] is False

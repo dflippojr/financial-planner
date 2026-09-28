@@ -23,8 +23,8 @@ def _person_for(principal):
 # memberships (in primary-key order), then accounts, then import batches, then
 # transactions. Two transactions that take the same locks in a different order
 # can each hold what the other awaits, and PostgreSQL then aborts one of them
-# with a deadlock error. Always call _lock_actor_household() first.
-def _lock_actor_household(person):
+# with a deadlock error. Always call lock_actor_household() first.
+def lock_actor_household(person):
     """Lock every current membership of the person's household, in pk order.
 
     Returns (own_membership, memberships). own_membership is the person's own
@@ -63,7 +63,7 @@ def _visible_account_for_update(principal, account_id):
 def share_account(principal, account_id):
     """Share the actor's private account with their current household."""
     person = _person_for(principal)
-    membership, _memberships = _lock_actor_household(person)
+    membership, _memberships = lock_actor_household(person)
     account = _visible_account_for_update(person, account_id)
     if (
         membership is None
@@ -81,7 +81,7 @@ def share_account(principal, account_id):
 def unshare_account(principal, account_id):
     """Return a visible household account to its owner's private scope."""
     person = _person_for(principal)
-    membership, _memberships = _lock_actor_household(person)
+    membership, _memberships = lock_actor_household(person)
     account = _visible_account_for_update(person, account_id)
     if (
         account.scope != Account.Scope.HOUSEHOLD
@@ -99,7 +99,7 @@ def unshare_account(principal, account_id):
 def archive_account(principal, account_id):
     """Soft-delete a visible account and every active provenance row beneath it."""
     person = _person_for(principal)
-    _lock_actor_household(person)
+    lock_actor_household(person)
     account = _visible_account_for_update(person, account_id)
     now = timezone.now()
 
@@ -118,7 +118,7 @@ def archive_account(principal, account_id):
 
 
 def _end_membership(actor, target_id):
-    actor_membership, current_memberships = _lock_actor_household(actor)
+    actor_membership, current_memberships = lock_actor_household(actor)
     if actor_membership is None:
         raise PermissionDenied(_DENIED)
     target_membership = next(
