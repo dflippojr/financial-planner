@@ -10,6 +10,9 @@ from .parser import CsvInputError, preview_csv, read_csv
 from .staging import StageUnavailable, create_stage, delete_stage, load_stage
 
 
+PREVIEW_TEMPLATE = "finance/csv_import/preview.html"
+
+
 def _visible_account(request, account_id):
     return get_object_or_404(Account.objects.visible_to(request.user), pk=account_id)
 
@@ -20,7 +23,7 @@ def csv_preview(request, account_id):
     account = _visible_account(request, account_id)
     context = {"account": account, "upload_form": CsvUploadForm()}
     if request.method == "GET":
-        return render(request, "finance/csv_import/preview.html", context)
+        return render(request, PREVIEW_TEMPLATE, context)
 
     action = request.POST.get("action", "upload")
     if action == "cancel":
@@ -44,7 +47,7 @@ def csv_preview(request, account_id):
                     initial={"token": token, "amount_mode": "signed"},
                 )
                 context["headers"] = document.headers
-        return render(request, "finance/csv_import/preview.html", context)
+        return render(request, PREVIEW_TEMPLATE, context)
 
     token = request.POST.get("token", "")
     try:
@@ -59,4 +62,4 @@ def csv_preview(request, account_id):
         context["preview"] = preview_csv(document, mapping_form.mapping())
         # Guard the out-of-scope boundary: previewing must never persist imports.
         context["commit_available"] = False
-    return render(request, "finance/csv_import/preview.html", context)
+    return render(request, PREVIEW_TEMPLATE, context)

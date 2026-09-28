@@ -91,7 +91,7 @@ class Preview:
         return len(self.rows) - self.valid_count
 
 
-def read_csv(content: bytes, *, max_rows=MAX_DATA_ROWS) -> CsvDocument:
+def _decode(content: bytes) -> str:
     if not content:
         raise CsvInputError("The CSV file is empty.")
     if len(content) > MAX_FILE_BYTES:
@@ -102,47 +102,66 @@ def read_csv(content: bytes, *, max_rows=MAX_DATA_ROWS) -> CsvDocument:
         raise CsvInputError("The CSV file must use UTF-8 encoding.") from exc
     if not text.strip():
         raise CsvInputError("The CSV file is empty.")
+    return text
 
+
+def _choose_delimiter(text):
+    """Return (delimiter, raw_headers), preferring the sniffed delimiter."""
     try:
-        try:
-            delimiter = csv.Sniffer().sniff(text[:8192], delimiters=",;").delimiter
-        except csv.Error:
-            delimiter = None
-        candidates = []
-        for candidate in (",", ";"):
-            candidate_headers = next(
-                csv.reader(io.StringIO(text, newline=""), delimiter=candidate, strict=True)
-            )
-            candidates.append((len(candidate_headers), candidate, candidate_headers))
-        if delimiter:
-            column_count, _candidate, headers = next(item for item in candidates if item[1] == delimiter)
-        else:
-            column_count, delimiter, headers = max(candidates, key=lambda item: item[0])
-        if column_count < 2:
-            raise csv.Error
+        sniffed = csv.Sniffer().sniff(text[:8192], delimiters=",;").delimiter
+    except csv.Error:
+        sniffed = None
+    candidates = []
+    for candidate in (",", ";"):
+        headers = next(csv.reader(io.StringIO(text, newline=""), delimiter=candidate, strict=True))
+        candidates.append((len(headers), candidate, headers))
+    if sniffed:
+        _count, delimiter, headers = next(item for item in candidates if item[1] == sniffed)
+    else:
+        _count, delimiter, headers = max(candidates, key=lambda item: item[0])
+    if len(headers) < 2:
+        raise csv.Error
+    return delimiter, headers
+
+
+def _open_records(text):
+    try:
+        delimiter, headers = _choose_delimiter(text)
         records = csv.reader(io.StringIO(text, newline=""), delimiter=delimiter, strict=True)
         next(records)
     except (csv.Error, StopIteration) as exc:
         raise CsvInputError("The file is not a valid comma- or semicolon-delimited CSV.") from exc
+    return headers, records
 
-    cleaned_headers = tuple(header.strip() for header in headers)
-    if not cleaned_headers or any(not header for header in cleaned_headers):
+
+def _clean_headers(headers):
+    cleaned = tuple(header.strip() for header in headers)
+    if not cleaned or any(not header for header in cleaned):
         raise CsvInputError("Every CSV column must have a header.")
-    if len(set(cleaned_headers)) != len(cleaned_headers):
+    if len(set(cleaned)) != len(cleaned):
         raise CsvInputError("CSV column headers must be unique.")
+    return cleaned
 
+
+def _collect_rows(records, column_count, max_rows):
     rows = []
     try:
         for number, cells in enumerate(records, start=2):
             if len(rows) >= max_rows:
                 raise CsvInputError(f"The CSV file exceeds the {max_rows:,} row limit.")
             structural_error = None
-            if len(cells) != len(cleaned_headers):
+            if len(cells) != column_count:
                 structural_error = "The row has a different number of columns than the header."
             rows.append(CsvRow(number, tuple(cells), structural_error))
     except csv.Error as exc:
         raise CsvInputError("The CSV contains malformed quoting.") from exc
-    return CsvDocument(cleaned_headers, tuple(rows))
+    return tuple(rows)
+
+
+def read_csv(content: bytes, *, max_rows=MAX_DATA_ROWS) -> CsvDocument:
+    headers, records = _open_records(_decode(content))
+    cleaned_headers = _clean_headers(headers)
+    return CsvDocument(cleaned_headers, _collect_rows(records, len(cleaned_headers), max_rows))
 
 
 def _parse_money(value, number_format):
@@ -189,12 +208,7 @@ def _cell(row, indexes, column):
     return row.cells[index] if index < len(row.cells) else ""
 
 
-def preview_csv(document: CsvDocument, mapping: Mapping) -> Preview:
-    if mapping.date_format not in DATE_FORMATS or mapping.number_format not in NUMBER_FORMATS:
-        raise CsvInputError("Choose supported date and number formats.")
-    if mapping.amount_mode not in ("signed", "separate"):
-        raise CsvInputError("Choose a supported amount mapping.")
-
+def _required_columns(mapping):
     required = [mapping.date_column, mapping.description_column]
     if mapping.amount_mode == "signed":
         required.append(mapping.amount_column)
@@ -202,55 +216,85 @@ def preview_csv(document: CsvDocument, mapping: Mapping) -> Preview:
         required.extend((mapping.debit_column, mapping.credit_column))
     if mapping.currency_column:
         required.append(mapping.currency_column)
-    if any(column not in document.headers for column in required):
+    return required
+
+
+def _validate_mapping(document, mapping):
+    if mapping.date_format not in DATE_FORMATS or mapping.number_format not in NUMBER_FORMATS:
+        raise CsvInputError("Choose supported date and number formats.")
+    if mapping.amount_mode not in ("signed", "separate"):
+        raise CsvInputError("Choose a supported amount mapping.")
+    if any(column not in document.headers for column in _required_columns(mapping)):
         raise CsvInputError("One or more mapped columns are not present in the CSV.")
 
+
+def _parse_date(row, indexes, mapping):
+    """Return (date, error); exactly one of them is None."""
+    pattern = DATE_FORMATS[mapping.date_format][1]
+    try:
+        return datetime.strptime(_cell(row, indexes, mapping.date_column).strip(), pattern).date(), None
+    except ValueError:
+        return None, "Date does not match the selected format."
+
+
+def _signed_amount(row, indexes, mapping):
+    amount_minor = _parse_money(_cell(row, indexes, mapping.amount_column), mapping.number_format)
+    return -amount_minor if mapping.invert_sign else amount_minor
+
+
+def _separate_amount(row, indexes, mapping):
+    debit = _cell(row, indexes, mapping.debit_column).strip()
+    credit = _cell(row, indexes, mapping.credit_column).strip()
+    if bool(debit) == bool(credit):
+        raise ValueError
+    amount_minor = _parse_money(debit or credit, mapping.number_format)
+    if amount_minor < 0:
+        raise ValueError
+    return -amount_minor if debit else amount_minor
+
+
+def _parse_amount(row, indexes, mapping):
+    """Return (amount_minor, error); exactly one of them is None."""
+    parser = _signed_amount if mapping.amount_mode == "signed" else _separate_amount
+    try:
+        return parser(row, indexes, mapping), None
+    except OverflowError:
+        return None, "Amount is outside the supported range."
+    except ValueError:
+        return None, "Amount is not valid for the selected mapping and number format."
+
+
+def _parse_currency(row, indexes, mapping):
+    """Return (currency, error). Only USD is supported in v1."""
+    if not mapping.currency_column:
+        return "USD", None
+    currency = _cell(row, indexes, mapping.currency_column).strip().upper()
+    return currency, (None if currency == "USD" else "Currency must be USD.")
+
+
+def _preview_row(row, indexes, mapping):
+    parsed_date, date_error = _parse_date(row, indexes, mapping)
+    description = _safe_description(_cell(row, indexes, mapping.description_column))
+    amount_minor, amount_error = _parse_amount(row, indexes, mapping)
+    currency, currency_error = _parse_currency(row, indexes, mapping)
+    errors = (
+        row.structural_error,
+        date_error,
+        None if description.strip() else "Description is required.",
+        amount_error,
+        currency_error,
+    )
+    return PreviewRow(
+        row.number,
+        parsed_date,
+        description,
+        amount_minor,
+        currency,
+        tuple(error for error in errors if error),
+    )
+
+
+def preview_csv(document: CsvDocument, mapping: Mapping) -> Preview:
+    _validate_mapping(document, mapping)
     indexes = {header: index for index, header in enumerate(document.headers)}
-    date_pattern = DATE_FORMATS[mapping.date_format][1]
-    preview_rows = []
-    for row in document.rows:
-        errors = []
-        if row.structural_error:
-            errors.append(row.structural_error)
-
-        parsed_date = None
-        try:
-            parsed_date = datetime.strptime(_cell(row, indexes, mapping.date_column).strip(), date_pattern).date()
-        except ValueError:
-            errors.append("Date does not match the selected format.")
-
-        description = _safe_description(_cell(row, indexes, mapping.description_column))
-        if not description.strip():
-            errors.append("Description is required.")
-
-        amount_minor = None
-        try:
-            if mapping.amount_mode == "signed":
-                amount_minor = _parse_money(_cell(row, indexes, mapping.amount_column), mapping.number_format)
-                if mapping.invert_sign:
-                    amount_minor = -amount_minor
-            else:
-                debit = _cell(row, indexes, mapping.debit_column).strip()
-                credit = _cell(row, indexes, mapping.credit_column).strip()
-                if bool(debit) == bool(credit):
-                    raise ValueError
-                amount_minor = _parse_money(debit or credit, mapping.number_format)
-                if amount_minor < 0:
-                    raise ValueError
-                if debit:
-                    amount_minor = -amount_minor
-        except OverflowError:
-            errors.append("Amount is outside the supported range.")
-        except ValueError:
-            errors.append("Amount is not valid for the selected mapping and number format.")
-
-        currency = "USD"
-        if mapping.currency_column:
-            currency = _cell(row, indexes, mapping.currency_column).strip().upper()
-            if currency != "USD":
-                errors.append("Currency must be USD.")
-
-        preview_rows.append(
-            PreviewRow(row.number, parsed_date, description, amount_minor, currency, tuple(errors))
-        )
-    return Preview(tuple(preview_rows))
+    return Preview(tuple(_preview_row(row, indexes, mapping) for row in document.rows))
