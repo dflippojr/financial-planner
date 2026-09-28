@@ -737,6 +737,7 @@ def test_header_labels_may_include_common_punctuation():
         ),
         # Mid-file subtotal splits an otherwise uniform dated block; the longer
         # fragment after the split must still walk back to the real header.
+        # Profiling the Subtotal as a data row used to drop Date below 90% date.
         (
             "Date,Description,Amount\n"
             "2026-09-27,SYNTHETIC COFFEE,-1.00\n"
@@ -744,6 +745,13 @@ def test_header_labels_may_include_common_punctuation():
             "2026-09-28,SYNTHETIC BOOK,-2.00\n"
             "2026-09-29,SYNTHETIC GROCER,-3.00\n"
             "2026-09-30,SYNTHETIC FUEL,-4.00\n"
+        ),
+        # Trailing Total is same-width but not a date; it must not be profiled.
+        (
+            "Date,Description,Amount\n"
+            "2026-09-27,SYNTHETIC COFFEE,-12.50\n"
+            "2026-09-28,SYNTHETIC BOOK,-25.00\n"
+            "Total,,-37.50\n"
         ),
         # First data row omits a trailing optional column, so it is ragged.
         (
@@ -759,8 +767,8 @@ def test_header_is_found_when_filler_rows_split_the_dated_block(raw):
 
     assert "header row: none detected" not in report
     assert "header row: line 1" in report
-    assert "- Date:" in report
-    assert "- Amount:" in report
+    assert "- Date: date" in report
+    assert "- Amount: money" in report
     assert "Beginning Balance" not in report
     assert "Subtotal" not in report
 

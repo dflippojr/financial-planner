@@ -282,7 +282,7 @@ def _header_before(rows, start, width):
 
 
 def find_header(rows, width):
-    """Index of the header row, else None.
+    """(header index or None, winning dated block (start, end) or None).
 
     The header is the nearest label-like full-width row above the main
     transaction block: dated, amount-bearing rows, with filler such as an
@@ -299,6 +299,7 @@ def find_header(rows, width):
     """
     best = None
     best_header = None
+    best_block = None
     for start, end in _dated_blocks(rows, width):
         header = _header_before(rows, start, width)
         has_label = header is not None
@@ -308,9 +309,10 @@ def find_header(rows, width):
         if best is None or score > best:
             best = score
             best_header = header
+            best_block = (start, end)
     if best is None or not best[2]:
-        return None
-    return best_header
+        return None, None
+    return best_header, best_block
 
 
 def label_for(cell, index, show_headers):
@@ -455,9 +457,16 @@ def debit_credit_pairs(columns, names, from_file=None):
 def _layout(rows, beyond):
     lengths = Counter(len(row) for row in rows) + beyond
     width = max(lengths.items(), key=lambda item: (item[1], item[0]))[0]
-    header_index = find_header(rows, width)
-    start = 0 if header_index is None else header_index + 1
-    data = [row for row in rows[start:] if len(row) == width]
+    header_index, block = find_header(rows, width)
+    if block is not None:
+        start, end = block
+        # Only the dated rows of the winning block. A same-width Total /
+        # Subtotal / category trailer is not a date, and mixing it in drops
+        # classify() below the 90% date threshold.
+        data = [row for row in rows[start:end] if _has_date(row, width)]
+    else:
+        origin = 0 if header_index is None else header_index + 1
+        data = [row for row in rows[origin:] if len(row) == width]
     return lengths, width, header_index, data
 
 
