@@ -4,7 +4,13 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
 
-from finance.lifecycle_services import archive_account, share_account, unshare_account
+from finance.lifecycle_services import (
+    archive_account,
+    leave_household,
+    remove_household_member,
+    share_account,
+    unshare_account,
+)
 from finance.models import Account, Household, ImportBatch, Membership, Person, Transaction
 
 
@@ -234,3 +240,114 @@ def test_archiving_twice_preserves_original_archive_timestamp():
     assert account.archived_at == first_archived_at
     assert batch.archived_at == first_archived_at
     assert financial_transaction.archived_at == first_archived_at
+
+
+@pytest.mark.django_db
+def test_leaving_revokes_shared_history_access_and_allows_joining_another_household():
+    owner = make_person("owner")
+    leaving_member = make_person("leaving")
+    household = Household.objects.create(name="Synthetic Household")
+    Membership.objects.create(person=owner, household=household)
+    membership = Membership.objects.create(person=leaving_member, household=household)
+    account = Account.objects.create(
+        name="Synthetic Shared",
+        account_type=Account.Type.CHECKING,
+        owner=owner,
+        scope=Account.Scope.HOUSEHOLD,
+        household=household,
+    )
+    batch, financial_transaction = add_history(account, owner)
+
+    leave_household(leaving_member.user)
+
+    membership.refresh_from_db()
+    assert membership.ended_at is not None
+    assert not Account.objects.visible_to(leaving_member).filter(pk=account.pk).exists()
+    assert not ImportBatch.objects.visible_to(leaving_member).filter(pk=batch.pk).exists()
+    assert not Transaction.objects.visible_to(leaving_member).filter(pk=financial_transaction.pk).exists()
+    assert Account.objects.filter(pk=account.pk).exists()
+    assert ImportBatch.objects.filter(pk=batch.pk).exists()
+    assert Transaction.objects.filter(pk=financial_transaction.pk).exists()
+
+    another_household = Household.objects.create(name="Another Synthetic Household")
+    Membership.objects.create(person=leaving_member, household=another_household)
+    assert Membership.objects.filter(person=leaving_member, ended_at__isnull=True).count() == 1
+
+
+@pytest.mark.django_db
+def test_member_removes_owner_and_transfers_shared_accounts_to_longest_serving_member():
+    owner = make_person("owner")
+    replacement = make_person("replacement")
+    actor = make_person("actor")
+    household = Household.objects.create(name="Synthetic Household")
+    owner_membership = Membership.objects.create(person=owner, household=household)
+    Membership.objects.create(person=replacement, household=household)
+    Membership.objects.create(person=actor, household=household)
+    account = Account.objects.create(
+        name="Synthetic Shared",
+        account_type=Account.Type.CHECKING,
+        owner=owner,
+        scope=Account.Scope.HOUSEHOLD,
+        household=household,
+    )
+    batch, financial_transaction = add_history(account, owner)
+
+    result = remove_household_member(actor.user, owner.pk)
+
+    owner_membership.refresh_from_db()
+    account.refresh_from_db()
+    assert result is None
+    assert owner_membership.ended_at is not None
+    assert account.owner == replacement
+    assert account.scope == Account.Scope.HOUSEHOLD
+    assert account.household == household
+    assert not Account.objects.visible_to(owner).filter(pk=account.pk).exists()
+    assert not Transaction.objects.visible_to(owner).filter(pk=financial_transaction.pk).exists()
+    assert ImportBatch.objects.visible_to(replacement).filter(pk=batch.pk).exists()
+    assert Transaction.objects.visible_to(actor).filter(pk=financial_transaction.pk).exists()
+
+
+@pytest.mark.django_db
+def test_last_member_leaves_and_owned_shared_history_becomes_private():
+    owner = make_person("owner")
+    household = Household.objects.create(name="Synthetic Household")
+    membership = Membership.objects.create(person=owner, household=household)
+    account = Account.objects.create(
+        name="Synthetic Shared",
+        account_type=Account.Type.CHECKING,
+        owner=owner,
+        scope=Account.Scope.HOUSEHOLD,
+        household=household,
+    )
+    batch, financial_transaction = add_history(account, owner)
+
+    leave_household(owner)
+
+    membership.refresh_from_db()
+    account.refresh_from_db()
+    assert membership.ended_at is not None
+    assert account.owner == owner
+    assert account.scope == Account.Scope.PRIVATE
+    assert account.household is None
+    assert Account.objects.visible_to(owner).filter(pk=account.pk).exists()
+    assert ImportBatch.objects.visible_to(owner).filter(pk=batch.pk).exists()
+    assert Transaction.objects.visible_to(owner).filter(pk=financial_transaction.pk).exists()
+
+
+@pytest.mark.django_db
+def test_outsider_cannot_remove_member_or_learn_membership_from_error():
+    owner = make_person("owner")
+    member = make_person("member")
+    outsider = make_person("outsider")
+    household = Household.objects.create(name="Synthetic Household")
+    Membership.objects.create(person=owner, household=household)
+    membership = Membership.objects.create(person=member, household=household)
+
+    with pytest.raises(PermissionDenied) as member_error:
+        remove_household_member(outsider, member.pk)
+    with pytest.raises(PermissionDenied) as missing_error:
+        remove_household_member(outsider, member.pk + 1000)
+
+    assert str(member_error.value) == str(missing_error.value)
+    membership.refresh_from_db()
+    assert membership.ended_at is None

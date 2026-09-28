@@ -92,3 +92,68 @@ def archive_account(principal, account_id):
         account.status = Account.Status.ARCHIVED
         account.archived_at = now
         account.save(update_fields=("status", "archived_at", "updated_at"))
+
+
+def _current_membership_for_update(person):
+    membership = (
+        Membership.objects.select_for_update()
+        .filter(person=person, ended_at__isnull=True)
+        .first()
+    )
+    if membership is None:
+        raise PermissionDenied(_DENIED)
+    return membership
+
+
+def _end_membership(actor, target_id):
+    actor_membership = _current_membership_for_update(actor)
+    target_membership = (
+        Membership.objects.select_for_update()
+        .filter(
+            person_id=target_id,
+            household_id=actor_membership.household_id,
+            ended_at__isnull=True,
+        )
+        .first()
+    )
+    if target_membership is None:
+        raise PermissionDenied(_DENIED)
+
+    remaining_memberships = list(
+        Membership.objects.select_for_update()
+        .filter(
+            household_id=actor_membership.household_id,
+            ended_at__isnull=True,
+        )
+        .exclude(pk=target_membership.pk)
+        .order_by("joined_at", "pk")
+    )
+    owned_shared_accounts = Account.objects.select_for_update().filter(
+        owner_id=target_id,
+        scope=Account.Scope.HOUSEHOLD,
+        household_id=actor_membership.household_id,
+    )
+    if remaining_memberships:
+        owned_shared_accounts.update(owner_id=remaining_memberships[0].person_id)
+    else:
+        owned_shared_accounts.update(
+            scope=Account.Scope.PRIVATE,
+            household=None,
+        )
+
+    target_membership.ended_at = timezone.now()
+    target_membership.save(update_fields=("ended_at",))
+
+
+@transaction.atomic
+def leave_household(principal):
+    """End the actor's current membership and apply shared-account exit rules."""
+    person = _person_for(principal)
+    _end_membership(person, person.pk)
+
+
+@transaction.atomic
+def remove_household_member(principal, person_id):
+    """Remove a current member from the actor's household."""
+    actor = _person_for(principal)
+    _end_membership(actor, person_id)
