@@ -533,7 +533,7 @@ def test_unicode_line_separators_inside_a_field_are_not_row_breaks():
 
 
 def test_amounts_with_space_thousands_separators_are_still_money():
-    content = "Date,Memo,Amount\n2026-09-27,x,1 234,56\n2026-09-28,y,2\u00a0345,67\n".encode()
+    content = "Date;Memo;Amount\n2026-09-27;x;1 234,56\n2026-09-28;y;2\u00a0345,67\n".encode()
 
     report = csv_shape.describe_csv(content, show_headers=True)
 
