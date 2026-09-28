@@ -763,3 +763,29 @@ def test_header_is_found_when_filler_rows_split_the_dated_block(raw):
     assert "- Amount:" in report
     assert "Beginning Balance" not in report
     assert "Subtotal" not in report
+
+
+def test_a_shorter_transaction_table_is_preferred_over_a_longer_balance_history():
+    # A longer same-width dated labeled section (balance history) used to
+    # outscore the real transaction table below it, so --show-headers named
+    # Day/When/Balance and never printed Date/Description/Amount.
+    raw = (
+        "Day,When,Balance\n"
+        "2026-09-01,Open,100.00\n"
+        "2026-09-02,Close,110.00\n"
+        "2026-09-03,Open,110.00\n"
+        "2026-09-04,Close,120.00\n"
+        "Date,Description,Amount\n"
+        "2026-09-27,SYNTHETIC COFFEE,-12.50\n"
+        "2026-09-28,SYNTHETIC BOOK,-3.25\n"
+    ).encode()
+
+    report = describe(raw)
+
+    assert "header row: line 6" in report
+    assert "- Date: date" in report
+    assert "- Description: text" in report
+    assert "- Amount: money" in report
+    assert "- Day:" not in report
+    assert "- When:" not in report
+    assert "- Balance:" not in report
