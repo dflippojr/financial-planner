@@ -538,3 +538,39 @@ def test_amounts_with_space_thousands_separators_are_still_money():
     report = csv_shape.describe_csv(content, show_headers=True)
 
     assert "- Amount: money" in report
+
+
+def _file_with_a_huge_field(field_length):
+    big = "x" * field_length
+    rows = "".join(f"2026-09-{day:02d},short,1.00\n" for day in range(1, 11))
+    tail = "".join(f"2026-09-{day:02d},after,2.00\n" for day in range(12, 21))
+    return ("Date,Memo,Amount\n" + rows + f'2026-09-11,"{big}",1.00\n' + tail).encode()
+
+
+def test_a_very_long_quoted_field_is_read_not_a_crash_or_a_silent_stop():
+    # Python's default csv field limit is 131,072 characters. A longer quoted memo
+    # crashed delimiter sampling, or stopped parsing with everything after it
+    # missing from a report that looked complete.
+    report = csv_shape.describe_csv(_file_with_a_huge_field(200_000), show_headers=True)
+
+    assert "rows: 21 total" in report
+    assert "warning" not in report
+
+
+def test_a_csv_error_partway_through_is_reported_as_an_incomplete_profile(monkeypatch):
+    monkeypatch.setattr(csv_shape, "FIELD_LIMIT", 100)
+
+    report = csv_shape.describe_csv(_file_with_a_huge_field(500), show_headers=True)
+
+    assert "warning: parsing stopped after" in report
+    assert "this profile is incomplete" in report
+    assert "xxxxx" not in report
+
+
+def test_a_field_over_the_limit_in_the_delimiter_sample_does_not_crash(monkeypatch):
+    monkeypatch.setattr(csv_shape, "FIELD_LIMIT", 100)
+    content = ('Date,Memo,Amount\n2026-09-27,"' + "y" * 500 + '",1.00\n').encode()
+
+    report = csv_shape.describe_csv(content)
+
+    assert "yyyyy" not in report

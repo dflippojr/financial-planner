@@ -38,6 +38,7 @@ MAX_ROWS = 200_000
 MAX_LISTED_PATTERNS = 4
 MAX_DISTINCT_TO_LIST = 12
 MAX_SHOWN_VALUES = 25
+FIELD_LIMIT = 16 * 1024 * 1024
 DELIMITERS = (",", ";", "\t", "|")
 KEPT_PUNCTUATION = set(" /-.,$()+:;@#&%'\"*_")
 
@@ -117,7 +118,13 @@ def _delimiter_score(sample, delimiter):
     how many fields the punctuation produces instead would let commas inside
     amounts such as 1,234,567.89 outvote a tab that really separates columns.
     """
-    lengths = Counter(len(row) for row in _reader(sample, delimiter) if row)
+    lengths = Counter()
+    try:
+        for row in _reader(sample, delimiter):
+            if row:
+                lengths[len(row)] += 1
+    except csv.Error:
+        pass
     if not lengths:
         return 0, 0
     modal, count = max(lengths.items(), key=lambda item: (item[1], item[0]))
@@ -137,6 +144,7 @@ def _reader(text, delimiter):
     "34" became 1234 and looked like money) and also split on Unicode line
     separators that are not row breaks.
     """
+    csv.field_size_limit(FIELD_LIMIT)
     return csv.reader(io.StringIO(text, newline=""), delimiter=delimiter)
 
 
@@ -147,14 +155,18 @@ def choose_delimiter(text):
 
 
 def read_rows(text, delimiter):
-    """Return (rows kept, Counter of column counts for rows past the cap).
+    """Return (rows kept, Counter of column counts for rows past the cap, warning or None).
 
     Only the first MAX_ROWS rows are kept for profiling, but the rest are still
     counted by column count so totals and the layout stay accurate; a differently
-    shaped summary row at the end of a very long file must not vanish.
+    shaped summary row at the end of a very long file must not vanish. If the csv
+    module raises (for example a field over FIELD_LIMIT), parsing stops there and
+    the warning says so, because a profile that silently omits everything after
+    that row would look complete.
     """
     rows = []
     beyond = Counter()
+    warning = None
     try:
         for row in _reader(text, delimiter):
             if not row:
@@ -163,9 +175,12 @@ def read_rows(text, delimiter):
                 beyond[len(row)] += 1
             else:
                 rows.append(row)
-    except csv.Error:
-        pass
-    return rows, beyond
+    except csv.Error as error:
+        warning = (
+            f"warning: parsing stopped after {len(rows) + sum(beyond.values())} rows because of a CSV error "
+            f"({str(error)[:60]}); the rows after that point were not read, so this profile is incomplete"
+        )
+    return rows, beyond, warning
 
 
 def looks_like_header(row):
@@ -363,16 +378,18 @@ def describe_csv(raw, label="file", show=(), show_headers=False):
     """The whole report for one file's bytes, or LeakError if it would expose a value."""
     text, encoding = decode_text(raw)
     delimiter = choose_delimiter(text)
-    rows, beyond = read_rows(text, delimiter)
+    rows, beyond, warning = read_rows(text, delimiter)
     if not rows:
-        return f"{label}: no readable rows"
+        return f"{label}: no readable rows" + (f"\n{warning}" if warning else "")
     lengths, width, header_index, data = _layout(rows, beyond)
     header = rows[header_index] if header_index is not None else []
     names = [label_for(cell, i, show_headers) for i, cell in enumerate(header)] or [f"col {i + 1}" for i in range(width)]
     columns = [[row[i].strip() for row in data] for i in range(width)]
     wanted = {name.strip().lower() for name in show}
 
-    out = _file_lines(label, text, encoding, delimiter, rows, lengths, header_index, data) + ["", "columns:"]
+    out = _file_lines(label, text, encoding, delimiter, rows, lengths, header_index, data)
+    out += [warning] if warning else []
+    out += ["", "columns:"]
     allowed = {cell.strip() for cell, name in zip(header, names) if name == cell.strip()}
     matched = set()
     for index, (name, values) in enumerate(zip(names, columns)):
