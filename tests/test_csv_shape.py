@@ -683,3 +683,25 @@ def test_timestamps_are_recognized_as_dates(stamp, expected_order):
     assert expected_order in report
     assert "- Amount: money" in report
     assert "negative values: 1 of 2" in report
+
+
+def test_a_same_width_preamble_date_does_not_steal_the_header():
+    # The header is the label row above the repeating dated, amount-bearing
+    # block, not the row before the first date in the file. A same-width
+    # export-date line used to make --show-headers print the account holder.
+    raw = (
+        "Pat Q Sample,Checking account,USD\n"
+        "Exported,09/27/2026,Checking\n"
+        "Date,Description,Amount\n"
+        "2026-09-27,SYNTHETIC COFFEE HOUSE,-12.50\n"
+        "2026-09-28,SYNTHETIC BOOK STORE,-3.25\n"
+        "2026-09-29,SYNTHETIC GROCER,-8.00\n"
+    ).encode()
+
+    report = csv_shape.describe_csv(raw, show_headers=True)
+
+    assert "Pat Q Sample" not in report
+    assert "header row: line 3" in report
+    assert "- Date: date" in report
+    assert "- Amount: money" in report
+    assert "- Description: text" in report

@@ -215,21 +215,54 @@ def looks_like_header(row):
     return len(labels) >= 2 and all(LABEL.fullmatch(label) for label in labels) and len(set(labels)) == len(labels)
 
 
+def _has_date(row, width):
+    return len(row) == width and any(DATE_LIKE.fullmatch(cell.strip()) for cell in row)
+
+
+def _dated_runs(rows, width):
+    """(start, end) spans of consecutive full-width rows that each contain a date."""
+    runs = []
+    start = None
+    for index, row in enumerate(rows):
+        if _has_date(row, width):
+            if start is None:
+                start = index
+        elif start is not None:
+            runs.append((start, index))
+            start = None
+    if start is not None:
+        runs.append((start, len(rows)))
+    return runs
+
+
+def _run_has_money(rows, start, end):
+    return any(
+        MONEY_LIKE.fullmatch(cell.strip())
+        for row in rows[start:end]
+        for cell in row
+        if cell.strip()
+    )
+
+
 def find_header(rows, width):
     """Index of the header row, else None.
 
-    The header is the row immediately before the first full-width row that
-    contains a date, and only if it is itself full-width and label-like. Taking
-    the first label-like row instead would let a preamble line such as an
-    account holder's name be mistaken for the header and printed as written.
+    The header is the label-like full-width row immediately above the main
+    transaction block: consecutive full-width rows that each contain a date,
+    preferring the longest such run that also contains amounts. Taking the
+    row before the first date in the file would treat a same-width preamble
+    export-date line as data and print the account-holder line as headers.
     """
-    for index, row in enumerate(rows):
-        if len(row) == width and any(DATE_LIKE.fullmatch(cell.strip()) for cell in row):
-            previous = rows[index - 1] if index else None
-            if previous is not None and len(previous) == width and looks_like_header(previous):
-                return index - 1
-            return None
-    return None
+    best = None
+    for start, end in _dated_runs(rows, width):
+        previous = rows[start - 1] if start else None
+        has_label = previous is not None and len(previous) == width and looks_like_header(previous)
+        score = (_run_has_money(rows, start, end), end - start, has_label, start)
+        if best is None or score > best:
+            best = score
+    if best is None or not best[2]:
+        return None
+    return best[3] - 1
 
 
 def label_for(cell, index, show_headers):
