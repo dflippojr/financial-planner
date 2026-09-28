@@ -9,17 +9,20 @@ it refuses to print anything if a check finds an unrequested value in its
 own output.
 
     python scripts/csv_shape.py path/to/export.csv
-    python scripts/csv_shape.py export.csv --show-values "Transaction Type"
+    python scripts/csv_shape.py export.csv --show-headers
+    python scripts/csv_shape.py export.csv --show-headers --show-values "Transaction Type"
 
-Use --show-values only for a column whose values are a fixed vocabulary, such
-as a transaction type, never for descriptions or anything that names a person,
-merchant, or account.
+Two options print text from the file, and you choose them because only you
+can look at your file and know they are safe:
 
-Header labels are shown as written only when every word is an ordinary column
-label word (date, amount, description, symbol, and so on); anything else is
-masked, so a name in a preamble line can never be printed. If a real header is
-masked and you have checked that it is safe, --trust-headers prints plain-label
-headers as written; --mask-headers masks them all.
+  --show-headers   print the header row's labels as written. Use it only after
+                   opening the file and confirming its first lines are nothing
+                   but column names. The tool cannot tell a header from a line
+                   that names a person or account (even "Price,Account,USD"),
+                   so by default every label is masked.
+  --show-values C  list the distinct values of column C, for a fixed vocabulary
+                   such as a transaction type. Never use it for descriptions or
+                   anything that names a person, merchant, or account.
 
 Standard library only. Review the output before sharing it.
 """
@@ -42,22 +45,6 @@ MONEY_LIKE = re.compile(r"[-+(]?[$€£]?\s?[-+(]?\d[\d,.\s]*[)-]?")
 LABEL = re.compile(r"[A-Za-z][A-Za-z /#&()._'-]{0,39}")
 SAFE_VOCABULARY = re.compile(r"[A-Za-z][A-Za-z /&()._'-]{0,39}")
 LONG_RUN = re.compile(r"(.)\1{5,}")
-
-# Ordinary words found in bank and brokerage column headers. A header made only
-# of these can be printed as written because nothing identifying can be built
-# from them; anything else is masked unless the owner passes --trust-headers.
-HEADER_WORDS = frozenset("""
-account accrued action activity actual additional address amount and available balance basis branch by
-card category charge charges check cheque city class clearing cleared closing code commission commissions
-cost country credit currency date day deposit deposits desc description detail details debit effective
-fee fees for from fund gain id in interest investment ledger location loss market memo merchant month name
-narrative net no note notes num number of on opening original out payee payment payments pending post
-posted posting price principal purchase purchased purchases quantity realized ref reference running
-security sequence serial settle settlement share shares split state status subcategory symbol tags tax
-taxes ticker time to total trade trans transaction transactions type units usd value withdrawal
-withdrawals withheld year
-""".split())
-
 
 START, END = "\x00", "\x01"
 
@@ -120,17 +107,25 @@ def line_endings(text):
 
 
 def _delimiter_score(sample, delimiter):
+    """(consistency, width) for a delimiter, or (0, 0) if it does not split rows into 2+ columns.
+
+    The right delimiter gives every row the same number of columns. Scoring by
+    how many fields the punctuation produces instead would let commas inside
+    amounts such as 1,234,567.89 outvote a tab that really separates columns.
+    """
     lengths = Counter(len(row) for row in csv.reader(sample, delimiter=delimiter) if row)
     if not lengths:
-        return 0
+        return 0, 0
     modal, count = max(lengths.items(), key=lambda item: (item[1], item[0]))
-    return count * modal if modal >= 2 else 0
+    if modal < 2:
+        return 0, 0
+    return round(count / sum(lengths.values()), 2), modal
 
 
 def choose_delimiter(text):
     sample = text.splitlines()[:500]
     best_score, best = max(((_delimiter_score(sample, d), d) for d in DELIMITERS), key=lambda item: item[0])
-    return best if best_score > 0 else ","
+    return best if best_score > (0, 0) else ","
 
 
 def read_rows(text, delimiter):
@@ -168,22 +163,17 @@ def find_header(rows, width):
     return None
 
 
-def is_generic_label(text):
-    """True when every word is ordinary column-label vocabulary, so it cannot be a name."""
-    words = re.findall(r"[a-z]+", text.lower())
-    return bool(words) and all(word in HEADER_WORDS for word in words)
+def label_for(cell, index, show_headers):
+    """The header as written only if the owner asked for it, else its mask.
 
-
-def label_for(cell, index, verbatim):
-    """The header as written when the caller judged the whole row safe, else its mask.
-
-    Structure alone cannot tell a header from a preamble line such as an account
-    holder's name that has the same number of cells, so the caller decides per
-    row (all cells must be ordinary column-label words) and only then is a
-    plain label printed as written.
+    Nothing in the file distinguishes a header from a line that names a person
+    or account and happens to have the same number of cells (even "Price,
+    Account,USD"), and any word list of "safe" labels has a counterexample. So
+    labels are masked unless the owner, who can see their own file, passes
+    --show-headers.
     """
     text = cell.strip()
-    if verbatim and LABEL.fullmatch(text):
+    if show_headers and LABEL.fullmatch(text):
         return text
     return f"col {index + 1} (masked: {mask(text)})"
 
@@ -310,7 +300,7 @@ def _file_lines(label, text, encoding, delimiter, rows, lengths, header_index, d
     delimiter_name = "TAB" if delimiter == "\t" else repr(delimiter)
     header_text = f"line {header_index + 1}" if header_index is not None else "none detected"
     return [
-        f"Shape of {label}  (headers and masked patterns only; review before sharing)",
+        f"Shape of {label}  (masked patterns only unless you asked for more; review before sharing)",
         f"encoding: {encoding}; line endings: {line_endings(text)}; delimiter: {delimiter_name}",
         f"rows: {len(rows)} total; column counts: " + ", ".join(f"{n} columns x{c}" for n, c in sorted(lengths.items())),
         f"header row: {header_text}; rows before it: {header_index or 0}",
@@ -335,7 +325,7 @@ def _tail_lines(rows, header_index, width):
     return lines
 
 
-def describe_csv(raw, label="file", show=(), mask_headers=False, trust_headers=False):
+def describe_csv(raw, label="file", show=(), show_headers=False):
     """The whole report for one file's bytes, or LeakError if it would expose a value."""
     text, encoding = decode_text(raw)
     delimiter = choose_delimiter(text)
@@ -344,11 +334,7 @@ def describe_csv(raw, label="file", show=(), mask_headers=False, trust_headers=F
         return f"{label}: no readable rows"
     lengths, width, header_index, data = _layout(rows)
     header = rows[header_index] if header_index is not None else []
-    # All or nothing: a real header is made entirely of ordinary label words, while a
-    # preamble line with a name in it is not. Judging the row as a whole means one
-    # word that happens to be a surname (Price, Day) cannot print on its own.
-    verbatim = not mask_headers and (trust_headers or all(is_generic_label(cell.strip()) for cell in header))
-    names = [label_for(cell, i, verbatim) for i, cell in enumerate(header)] or [f"col {i + 1}" for i in range(width)]
+    names = [label_for(cell, i, show_headers) for i, cell in enumerate(header)] or [f"col {i + 1}" for i in range(width)]
     columns = [[row[i].strip() for row in data] for i in range(width)]
     wanted = {name.strip().lower() for name in show}
 
@@ -368,6 +354,8 @@ def describe_csv(raw, label="file", show=(), mask_headers=False, trust_headers=F
     out += ["", "separate debit/credit style pairs: " + ("; ".join(pairs) if pairs else "none detected")]
     out += [f"--show-values column not found: {name}" for name in sorted(missing)]
     out += _tail_lines(rows, header_index, width)
+    if header_index is not None and not show_headers:
+        out.append("header labels are masked; if the first lines of your file are only column names, re-run with --show-headers")
     report = "\n".join(out)
     check_no_leak(report, rows, allowed, dynamic_only=True)
     return report.replace(START, "").replace(END, "")
@@ -414,15 +402,13 @@ def main(argv=None):
     parser.add_argument("--label", default="the file", help="name to show in the report")
     parser.add_argument("--show-values", action="append", default=[], metavar="COLUMN",
                         help="also list the distinct values of this column (only for a fixed vocabulary such as a transaction type)")
-    parser.add_argument("--mask-headers", action="store_true",
-                        help="mask the header labels too (use if a header row could contain a name or account detail)")
-    parser.add_argument("--trust-headers", action="store_true",
-                        help="print any plain-label header as written, not only generic column words (after you have checked the file)")
+    parser.add_argument("--show-headers", action="store_true",
+                        help="print the header labels as written; use only after checking that the first lines of the file are just column names")
     args = parser.parse_args(argv)
     try:
         with open(args.path, "rb") as handle:
             raw = handle.read()
-        print(describe_csv(raw, args.label, args.show_values, args.mask_headers, args.trust_headers))
+        print(describe_csv(raw, args.label, args.show_values, args.show_headers))
     except OSError as error:
         print(f"cannot read the file: {error.strerror}", file=sys.stderr)
         return 1
