@@ -2,6 +2,8 @@ from django import forms
 from django.contrib.auth import get_user_model, password_validation
 from django.core.exceptions import ValidationError
 
+from .auth_services import validated_username
+
 
 class PasswordPairForm(forms.Form):
     password1 = forms.CharField(label="New password", widget=forms.PasswordInput)
@@ -34,6 +36,11 @@ class JoinForm(PasswordPairForm):
     display_name = forms.CharField(max_length=150)
 
     field_order = ("invitation_code", "username", "display_name", "password1", "password2")
+
+    def clean_username(self):
+        username = self.cleaned_data["username"]
+        validated_username(username)
+        return username
 
 
 class RecoveryForm(PasswordPairForm):

@@ -43,6 +43,19 @@ def normalize_username(username):
     return user_model.normalize_username(user_model.normalize_username(username.strip()).casefold())
 
 
+def validated_username(username):
+    """normalize_username() plus the user model's own username validators.
+
+    Validation has to run on the normalized value: normalization can lengthen
+    a username (casefold turns each U+00DF into "ss"), so a raw-input length
+    check does not bound what reaches the database column, and create_user()
+    never runs field validators itself. Raises ValidationError.
+    """
+    normalized = normalize_username(username)
+    get_user_model()._meta.get_field("username").run_validators(normalized)
+    return normalized
+
+
 def create_recovery_codes(user, count=8):
     codes = [f"{secrets.token_hex(3)}-{secrets.token_hex(3)}" for _ in range(count)]
     RecoveryCode.objects.bulk_create(
@@ -79,7 +92,7 @@ def accept_invitation(code, username, display_name, password):
     if invitation is None:
         raise InvalidOneTimeCode
     try:
-        user = get_user_model().objects.create_user(username=normalize_username(username), password=password)
+        user = get_user_model().objects.create_user(username=validated_username(username), password=password)
     except IntegrityError as exc:
         raise InvalidOneTimeCode from exc
     person = Person.objects.create(user=user, display_name=display_name)
@@ -155,7 +168,7 @@ def seed_first_household(username, display_name, household_name, password):
     if get_user_model().objects.exists() or Person.objects.exists():
         raise ValueError("The first household member has already been created.")
     try:
-        user = get_user_model().objects.create_user(username=normalize_username(username), password=password)
+        user = get_user_model().objects.create_user(username=validated_username(username), password=password)
     except IntegrityError as exc:
         raise ValueError("The first household member could not be created.") from exc
     person = Person.objects.create(user=user, display_name=display_name)

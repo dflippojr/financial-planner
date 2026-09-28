@@ -5,6 +5,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.sessions.models import Session
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import Client, override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -315,6 +316,55 @@ def test_first_user_command_creates_household_and_prints_recovery_codes():
     assert Membership.objects.count() == 1
     assert RecoveryCode.objects.count() == 8
     assert "Save these one-time recovery codes" in output.getvalue()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "bad_username",
+    [
+        "ß" * 100,  # 100 chars in, but casefolds to 200 -- over the 150-char column
+        "has space",
+    ],
+)
+def test_join_rejects_usernames_that_are_invalid_once_normalized(bad_username):
+    user, _person, _household = make_member()
+    client = Client()
+    client.force_login(user)
+    code = client.post(reverse("invite")).context["invitation_code"]
+
+    response = Client().post(
+        reverse("join"),
+        {
+            "invitation_code": code,
+            "username": bad_username,
+            "display_name": "Bad Example",
+            "password1": PASSWORD,
+            "password2": PASSWORD,
+        },
+    )
+
+    assert response.status_code == 200
+    assert "username" in response.context["form"].errors
+    assert get_user_model().objects.count() == 1
+    assert Invitation.objects.get().used_at is None
+
+
+@pytest.mark.django_db
+def test_first_user_command_rejects_a_username_that_is_invalid_once_normalized():
+    too_long_once_casefolded = "ß" * 100
+    output = StringIO()
+
+    with patch("finance.management.commands.seed_first_user.getpass.getpass", side_effect=[PASSWORD, PASSWORD]):
+        with pytest.raises(CommandError):
+            call_command(
+                "seed_first_user",
+                username=too_long_once_casefolded,
+                display_name="First Example",
+                household="Synthetic Household",
+                stdout=output,
+            )
+
+    assert get_user_model().objects.count() == 0
 
 
 @pytest.mark.django_db
