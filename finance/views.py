@@ -41,11 +41,13 @@ def health(request):
 
 
 @require_GET
+@never_cache
 def home(request):
     return render(request, "finance/home.html", {"accounts": Account.objects.visible_to(request.user)})
 
 
 @require_GET
+@never_cache
 def transaction_list(request):
     transactions = (
         Transaction.objects.visible_to(request.user)
@@ -85,6 +87,7 @@ def _visible_active_transaction(principal, transaction_id):
 
 
 @require_http_methods(["GET", "POST"])
+@never_cache
 def transaction_edit(request, transaction_id):
     financial_transaction = _visible_active_transaction(request.user, transaction_id)
     if request.method == "POST":
