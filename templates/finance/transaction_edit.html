@@ -1,0 +1,12 @@
+{% extends "finance/base.html" %}
+{% block content %}
+<h1>Correct transaction</h1>
+<p>{{ transaction.account.name }} · {{ transaction.import_batch.get_source_display }} · {{ transaction.currency }}</p>
+<form method="post">
+  {% csrf_token %}
+  {{ form.as_p }}
+  <button type="submit">Save correction</button>
+  <a href="{% url 'transaction-list' %}">Cancel</a>
+</form>
+<p>The original imported fields and import batch provenance are retained.</p>
+{% endblock %}

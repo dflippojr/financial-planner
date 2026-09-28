@@ -4,6 +4,7 @@ from django.core.validators import RegexValidator
 from django.db import models
 from django.db.models import F, Q
 from django.utils import timezone
+from decimal import Decimal
 
 
 sha256_validator = RegexValidator(
@@ -251,6 +252,16 @@ class Transaction(ArchivableModel):
 
     def __str__(self):
         return f"{self.transaction_date}: {self.amount_minor} {self.currency}"
+
+    @property
+    def amount_display(self):
+        amount = Decimal(self.amount_minor) / Decimal(100)
+        return f"{amount:,.2f} {self.currency}"
+
+    @property
+    def category_display(self):
+        # Issue #8 owns the category schema and assignment behavior.
+        return "Uncategorized"
 
 
 class Invitation(models.Model):
