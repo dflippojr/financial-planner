@@ -485,3 +485,27 @@ def test_a_long_tab_file_with_thousands_commas_keeps_its_tab_delimiter(data_rows
 
     assert "delimiter: TAB" in report
     assert "- Amount: money" in report
+
+
+def test_rows_past_the_cap_are_counted_not_silently_dropped(monkeypatch):
+    # A summary row after the cap used to vanish, and the retained count was
+    # reported as the total. The rest are now counted by column count.
+    monkeypatch.setattr(csv_shape, "MAX_ROWS", 5)
+    rows = "".join(f"2026-09-{day:02d},SYNTHETIC COFFEE HOUSE,-1.00\n" for day in range(1, 11))
+    content = ("Date,Memo,Amount\n" + rows + "Total SYNTHETIC 4111111111111111\n").encode()
+
+    report = csv_shape.describe_csv(content)
+
+    assert "rows: 12 total" in report
+    assert "1 columns x1" in report
+    assert "3 columns x11" in report
+    assert "only the first 5 rows were profiled" in report
+    assert "the other 7 were counted by column count only" in report
+    assert "SYNTHETIC" not in report
+    assert "4111111111111111" not in report
+
+
+def test_no_truncation_note_when_everything_fits():
+    report = csv_shape.describe_csv(BANK_STYLE)
+
+    assert "counted by column count only" not in report

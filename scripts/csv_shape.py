@@ -132,16 +132,25 @@ def choose_delimiter(text):
 
 
 def read_rows(text, delimiter):
+    """Return (rows kept, Counter of column counts for rows past the cap).
+
+    Only the first MAX_ROWS rows are kept for profiling, but the rest are still
+    counted by column count so totals and the layout stay accurate; a differently
+    shaped summary row at the end of a very long file must not vanish.
+    """
     rows = []
+    beyond = Counter()
     try:
         for row in csv.reader(text.splitlines(), delimiter=delimiter):
+            if not row:
+                continue
             if len(rows) >= MAX_ROWS:
-                break
-            if row:
+                beyond[len(row)] += 1
+            else:
                 rows.append(row)
     except csv.Error:
         pass
-    return rows
+    return rows, beyond
 
 
 def looks_like_header(row):
@@ -290,8 +299,8 @@ def debit_credit_pairs(columns, names):
     return pairs
 
 
-def _layout(rows):
-    lengths = Counter(len(row) for row in rows)
+def _layout(rows, beyond):
+    lengths = Counter(len(row) for row in rows) + beyond
     width = max(lengths.items(), key=lambda item: (item[1], item[0]))[0]
     header_index = find_header(rows, width)
     start = 0 if header_index is None else header_index + 1
@@ -302,13 +311,20 @@ def _layout(rows):
 def _file_lines(label, text, encoding, delimiter, rows, lengths, header_index, data):
     delimiter_name = "TAB" if delimiter == "\t" else repr(delimiter)
     header_text = f"line {header_index + 1}" if header_index is not None else "none detected"
-    return [
+    total = sum(lengths.values())
+    lines = [
         f"Shape of {label}  (masked patterns only unless you asked for more; review before sharing)",
         f"encoding: {encoding}; line endings: {line_endings(text)}; delimiter: {delimiter_name}",
-        f"rows: {len(rows)} total; column counts: " + ", ".join(f"{n} columns x{c}" for n, c in sorted(lengths.items())),
+        f"rows: {total} total; column counts: " + ", ".join(f"{n} columns x{c}" for n, c in sorted(lengths.items())),
         f"header row: {header_text}; rows before it: {header_index or 0}",
         f"data rows profiled: {len(data)}",
     ]
+    if total > len(rows):
+        lines.append(
+            f"note: only the first {len(rows)} rows were profiled and masked examples come from them; "
+            f"the other {total - len(rows)} were counted by column count only"
+        )
+    return lines
 
 
 def _masked(row):
@@ -332,10 +348,10 @@ def describe_csv(raw, label="file", show=(), show_headers=False):
     """The whole report for one file's bytes, or LeakError if it would expose a value."""
     text, encoding = decode_text(raw)
     delimiter = choose_delimiter(text)
-    rows = read_rows(text, delimiter)
+    rows, beyond = read_rows(text, delimiter)
     if not rows:
         return f"{label}: no readable rows"
-    lengths, width, header_index, data = _layout(rows)
+    lengths, width, header_index, data = _layout(rows, beyond)
     header = rows[header_index] if header_index is not None else []
     names = [label_for(cell, i, show_headers) for i, cell in enumerate(header)] or [f"col {i + 1}" for i in range(width)]
     columns = [[row[i].strip() for row in data] for i in range(width)]
