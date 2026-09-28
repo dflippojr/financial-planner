@@ -151,12 +151,10 @@ def test_authorized_owner_can_correct_user_controlled_fields_and_preserve_proven
     owner = make_person("owner")
     financial_transaction = make_transaction(owner)
     original_fields = financial_transaction.original_fields.copy()
-    provenance = (
-        financial_transaction.account_id,
-        financial_transaction.import_batch_id,
-        financial_transaction.source_row_number,
-        financial_transaction.fingerprint,
-    )
+    account_id = financial_transaction.account_id
+    import_batch_id = financial_transaction.import_batch_id
+    source_row_number = financial_transaction.source_row_number
+    fingerprint = financial_transaction.fingerprint
     client = Client()
     client.force_login(owner.user)
 
@@ -165,19 +163,20 @@ def test_authorized_owner_can_correct_user_controlled_fields_and_preserve_proven
         {"transaction_date": "2026-01-05", "description": "Corrected synthetic groceries", "amount": "-98.76"},
     )
 
+    list_url = reverse("transaction-list")
+    corrected_date = date(2026, 1, 5)
+
     assert response.status_code == 302
-    assert response.url == reverse("transaction-list")
+    assert response.url == list_url
     financial_transaction.refresh_from_db()
-    assert financial_transaction.transaction_date == date(2026, 1, 5)
+    assert financial_transaction.transaction_date == corrected_date
     assert financial_transaction.description == "Corrected synthetic groceries"
     assert financial_transaction.amount_minor == -9876
     assert financial_transaction.original_fields == original_fields
-    assert (
-        financial_transaction.account_id,
-        financial_transaction.import_batch_id,
-        financial_transaction.source_row_number,
-        financial_transaction.fingerprint,
-    ) == provenance
+    assert financial_transaction.account_id == account_id
+    assert financial_transaction.import_batch_id == import_batch_id
+    assert financial_transaction.source_row_number == source_row_number
+    assert financial_transaction.fingerprint == fingerprint
 
 
 @pytest.mark.django_db
