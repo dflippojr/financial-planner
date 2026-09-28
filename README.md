@@ -28,6 +28,8 @@ Load the explicitly synthetic example records into a development database with `
 
 Authentication requires `DJANGO_SECRET_KEY`; production also needs the Tailscale HTTPS and host/origin values described in [the authentication guide](docs/authentication.md). After migrating a new installation, create its first household member with `python manage.py seed_first_user --username USERNAME --display-name "DISPLAY NAME" --household "HOUSEHOLD NAME"`. The command prompts for a password without echoing it and prints recovery codes once.
 
+CSV preview temporarily stages uploads outside the repository. Set `CSV_IMPORT_STAGING_DIR` to a private local directory; the default is the operating system's temporary directory. `CSV_IMPORT_STAGE_TTL_SECONDS` defaults to 3600 and is capped at one hour. Uploaded source rows are not logged, and staged files are deleted on cancel, rejected upload, expiry enforcement, and later successful import work.
+
 ## Continuous integration
 
 `.github/workflows/review.yml` posts an automated code-bug review as a PR comment when a pull request opens (re-run on demand via `workflow_dispatch`). It runs on a dedicated self-hosted runner (`financial-planner-review`, registered with `ops/github/install-runner.ps1`) that reuses already-authenticated Codex/Claude/Cursor CLIs; see `ops/review/run-review.ps1` for the review logic, adapted from agent-harness.

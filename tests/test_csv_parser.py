@@ -137,3 +137,11 @@ def test_amounts_outside_exact_minor_unit_range_are_invalid(value):
         read_csv(f"When,Memo,Amount\n09/27/2026,SYNTHETIC,{value}\n".encode()), mapping()
     )
     assert result.invalid_count == 1
+
+
+@pytest.mark.parametrize("value", ["12,34.56", "1e2", "$12.34", "1.234"])
+def test_invalid_grouping_notation_and_sub_cent_values_are_rejected(value):
+    result = preview_csv(
+        read_csv(f'When,Memo,Amount\n09/27/2026,SYNTHETIC,"{value}"\n'.encode()), mapping()
+    )
+    assert result.invalid_count == 1

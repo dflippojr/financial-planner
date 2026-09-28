@@ -1,5 +1,6 @@
 import csv
 import io
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -142,6 +143,14 @@ def _parse_money(value, number_format):
     normalized = value.strip()
     if not normalized:
         raise ValueError
+    decimal_pattern = re.escape(decimal_separator)
+    if thousands_separator:
+        thousands_pattern = re.escape(thousands_separator)
+        integer_pattern = rf"(?:\d+|\d{{1,3}}(?:{thousands_pattern}\d{{3}})+)"
+    else:
+        integer_pattern = r"\d+"
+    if not re.fullmatch(rf"[+-]?{integer_pattern}(?:{decimal_pattern}\d{{1,2}})?", normalized):
+        raise ValueError
     if thousands_separator:
         normalized = normalized.replace(thousands_separator, "")
     normalized = normalized.replace(decimal_separator, ".")
@@ -163,7 +172,7 @@ def _parse_money(value, number_format):
 def _safe_description(value):
     # Keep previews and any future spreadsheet export from interpreting text
     # as a formula. The original source remains untouched in the staged file.
-    if value.startswith(("=", "+", "-", "@")):
+    if value.lstrip().startswith(("=", "+", "-", "@")):
         return "'" + value
     return value
 

@@ -1,4 +1,5 @@
 import os
+import tempfile
 from pathlib import Path
 
 from django.core.exceptions import ImproperlyConfigured
@@ -98,3 +99,14 @@ INVITATION_TTL_HOURS = int(os.environ.get("INVITATION_TTL_HOURS", "48"))
 LOGIN_FAILURE_LIMIT = int(os.environ.get("LOGIN_FAILURE_LIMIT", "5"))
 LOGIN_FAILURE_WINDOW_SECONDS = int(os.environ.get("LOGIN_FAILURE_WINDOW_SECONDS", "900"))
 LOGIN_BLOCK_SECONDS = int(os.environ.get("LOGIN_BLOCK_SECONDS", "900"))
+
+# Uploaded CSVs are short-lived, private staging data. Keep the default outside
+# the repository and allow deployments to place it on an appropriate local disk.
+CSV_IMPORT_STAGING_DIR = os.environ.get(
+    "CSV_IMPORT_STAGING_DIR",
+    str(Path(tempfile.gettempdir()) / "financial-planner-csv-imports"),
+)
+CSV_IMPORT_STAGE_TTL_SECONDS = max(
+    1,
+    min(int(os.environ.get("CSV_IMPORT_STAGE_TTL_SECONDS", "3600")), 3600),
+)

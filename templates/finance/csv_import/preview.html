@@ -1,0 +1,40 @@
+{% extends "finance/base.html" %}
+{% block content %}
+<h1>Preview CSV import for {{ account.name }}</h1>
+<p>This tool previews data only. It does not import transactions.</p>
+{% if not mapping_form %}
+<form method="post" enctype="multipart/form-data">
+  {% csrf_token %}
+  {{ upload_form.as_p }}
+  <button type="submit" name="action" value="upload">Upload and map</button>
+</form>
+{% else %}
+<p>Map the uploaded columns. Stored amounts use negative for money out and positive for money in.</p>
+<form method="post">
+  {% csrf_token %}
+  {{ mapping_form.as_p }}
+  <button type="submit" name="action" value="preview">Preview rows</button>
+  <button type="submit" name="action" value="cancel" formnovalidate>Cancel and delete upload</button>
+</form>
+{% endif %}
+{% if preview %}
+<h2>Preview results</h2>
+<p><strong>{{ preview.valid_count }}</strong> valid row{{ preview.valid_count|pluralize }}; <strong>{{ preview.invalid_count }}</strong> invalid row{{ preview.invalid_count|pluralize }}.</p>
+<table>
+  <thead><tr><th>Row</th><th>Date</th><th>Description</th><th>Amount</th><th>Currency</th><th>Errors</th></tr></thead>
+  <tbody>
+  {% for row in preview.rows %}
+    <tr>
+      <td>{{ row.row_number }}</td>
+      <td>{{ row.transaction_date|default:"—" }}</td>
+      <td>{{ row.description }}</td>
+      <td>{{ row.amount_display|default:"—" }}</td>
+      <td>{{ row.currency }}</td>
+      <td>{% for error in row.errors %}<div>{{ error }}</div>{% empty %}Valid{% endfor %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+<p><a href="{% url 'home' %}">Back to accounts</a></p>
+{% endblock %}
