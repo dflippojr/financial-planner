@@ -75,6 +75,32 @@ class Membership(models.Model):
         return f"{self.person} in {self.household}"
 
 
+def _person_for(principal):
+    if isinstance(principal, Person):
+        return principal
+    if getattr(principal, "is_authenticated", False):
+        try:
+            return principal.person
+        except Person.DoesNotExist:
+            return None
+    return None
+
+
+class AccountQuerySet(models.QuerySet):
+    def visible_to(self, principal):
+        person = _person_for(principal)
+        if person is None:
+            return self.none()
+        current_households = Membership.objects.filter(
+            person=person,
+            ended_at__isnull=True,
+        ).values("household_id")
+        return self.filter(
+            Q(owner=person)
+            | Q(scope="household", household_id__in=current_households)
+        ).distinct()
+
+
 class Account(ArchivableModel):
     class Type(models.TextChoices):
         CHECKING = "checking", "Checking"
@@ -100,6 +126,7 @@ class Account(ArchivableModel):
     currency = models.CharField(max_length=3, default="USD")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    objects = AccountQuerySet.as_manager()
 
     class Meta:
         constraints = [
@@ -139,6 +166,13 @@ class ImportBatch(ArchivableModel):
     date_range_start = models.DateField()
     date_range_end = models.DateField()
     imported_at = models.DateTimeField(auto_now_add=True)
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            visible_accounts = Account.objects.visible_to(principal).values("pk")
+            return self.filter(account_id__in=visible_accounts)
+
+    objects = QuerySet.as_manager()
 
     class Meta:
         constraints = [
@@ -182,6 +216,13 @@ class Transaction(ArchivableModel):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            visible_accounts = Account.objects.visible_to(principal).values("pk")
+            return self.filter(account_id__in=visible_accounts)
+
+    objects = QuerySet.as_manager()
+
     class Meta:
         indexes = [
             models.Index(fields=("account", "transaction_date"), name="txn_account_date_idx"),
@@ -210,3 +251,26 @@ class Transaction(ArchivableModel):
 
     def __str__(self):
         return f"{self.transaction_date}: {self.amount_minor} {self.currency}"
+
+
+class Invitation(models.Model):
+    household = models.ForeignKey(Household, on_delete=models.CASCADE, related_name="invitations")
+    invited_by = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="invitations_created")
+    token_digest = models.CharField(max_length=64, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    used_at = models.DateTimeField(null=True, blank=True)
+
+
+class RecoveryCode(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="recovery_codes")
+    code_digest = models.CharField(max_length=64, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    used_at = models.DateTimeField(null=True, blank=True)
+
+
+class LoginThrottle(models.Model):
+    key_digest = models.CharField(max_length=64, unique=True)
+    failure_count = models.PositiveIntegerField(default=0)
+    window_started_at = models.DateTimeField()
+    blocked_until = models.DateTimeField(null=True, blank=True)

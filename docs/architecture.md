@@ -16,6 +16,7 @@ Updated: 2026-09-27. Records the stack and deployment decisions for issue #2. Ow
 ## Authentication and authorization
 
 - Authentication uses Django's built-in `User` model and session-based login (cookie sessions over HTTPS via Tailscale; see Network below). No third-party identity provider for the first release.
+- Authentication is denied by default at the middleware layer. Only sign-in, invitation acceptance, and recovery are explicitly public. Session state is stored server-side; cookies are secure, HTTP-only, and SameSite=Lax. See `docs/authentication.md` for lifecycle and operator procedures.
 - The private/household authorization model itself (household membership, share/unshare, ownership transfer) is specified in issue #3. Architecturally: every `Account` and `Transaction` queryset is built through a shared manager/query layer that filters by "owned by this person" or "shared with a household this person currently belongs to." Views, dashboard aggregates, search, import, and export all go through that layer rather than filtering ad hoc, so a private-account leak requires a defect in one place, not many.
 - No personal financial data is ever included in logs or error messages; the shared query layer is the single place that enforces this, per AGENTS.md.
 

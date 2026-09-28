@@ -1,0 +1,5 @@
+{% extends "finance/base.html" %}
+{% block content %}
+<h1>Invite a household member</h1>
+{% if invitation_code %}<p>Share this one-time code securely. It expires in {{ invitation_ttl_hours }} hours and will not be shown again.</p><pre>{{ invitation_code }}</pre>{% else %}<form method="post">{% csrf_token %}<button type="submit">Create invitation code</button></form>{% endif %}
+{% endblock %}

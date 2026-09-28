@@ -1,0 +1,7 @@
+{% extends "finance/base.html" %}
+{% block content %}
+<h1>Accounts</h1>
+<ul>{% for account in accounts %}<li>{{ account.name }}</li>{% empty %}<li>No accounts yet.</li>{% endfor %}</ul>
+<p><a href="{% url 'invite' %}">Invite a household member</a></p>
+<form method="post" action="{% url 'logout' %}">{% csrf_token %}<button type="submit">Sign out</button></form>
+{% endblock %}
