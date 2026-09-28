@@ -83,7 +83,12 @@ class TransactionFilterForm(forms.Form):
 class TransactionCorrectionForm(forms.Form):
     transaction_date = forms.DateField(label="Date", widget=forms.DateInput(attrs={"type": "date"}))
     description = forms.CharField(widget=forms.Textarea(attrs={"rows": 3}))
-    amount = forms.DecimalField(max_digits=19, decimal_places=2, help_text="Negative is money out; positive is money in.")
+    amount = forms.DecimalField(
+        max_digits=19,
+        decimal_places=2,
+        help_text="Negative is money out; positive is money in.",
+        widget=forms.TextInput(attrs={"inputmode": "decimal"}),
+    )
 
     def clean_amount(self):
         amount = self.cleaned_data["amount"]

@@ -312,6 +312,36 @@ def test_correction_form_initial_amount_does_not_round_through_float():
     assert form.initial["amount"] == Decimal("90071992547409.93")
 
 
+@pytest.mark.django_db
+def test_correction_edit_posts_large_amount_as_decimal_text():
+    owner = make_person("owner")
+    financial_transaction = make_transaction(owner, amount_minor=9_007_199_254_740_993)
+    client = Client()
+    client.force_login(owner.user)
+    url = reverse("transaction-edit", args=(financial_transaction.pk,))
+
+    get_response = client.get(url)
+    html = get_response.content.decode()
+    assert 'name="amount"' in html
+    assert 'type="text"' in html
+    assert 'type="number"' not in html
+    assert 'inputmode="decimal"' in html
+    assert 'value="90071992547409.93"' in html
+
+    post_response = client.post(
+        url,
+        {
+            "transaction_date": "2026-01-02",
+            "description": financial_transaction.description,
+            "amount": "90071992547409.93",
+        },
+    )
+
+    assert post_response.status_code == 302
+    financial_transaction.refresh_from_db()
+    assert financial_transaction.amount_minor == 9_007_199_254_740_993
+
+
 @pytest.mark.django_db(transaction=True)
 def test_correction_cannot_be_saved_after_the_editor_is_removed_from_the_household():
     # A correction must lock the membership that authorizes it, in the same
