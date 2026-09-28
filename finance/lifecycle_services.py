@@ -1,7 +1,8 @@
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
+from django.utils import timezone
 
-from .models import Account, Membership, Person
+from .models import Account, ImportBatch, Membership, Person, Transaction
 
 
 _DENIED = "Operation is not permitted."
@@ -70,3 +71,24 @@ def unshare_account(principal, account_id):
     account.scope = Account.Scope.PRIVATE
     account.household = None
     account.save(update_fields=("scope", "household", "updated_at"))
+
+
+@transaction.atomic
+def archive_account(principal, account_id):
+    """Soft-delete a visible account and every active provenance row beneath it."""
+    person = _person_for(principal)
+    account = _visible_account_for_update(person, account_id)
+    now = timezone.now()
+
+    ImportBatch.objects.select_for_update().filter(
+        account=account,
+        status=ImportBatch.Status.ACTIVE,
+    ).update(status=ImportBatch.Status.ARCHIVED, archived_at=now)
+    Transaction.objects.select_for_update().filter(
+        account=account,
+        status=Transaction.Status.ACTIVE,
+    ).update(status=Transaction.Status.ARCHIVED, archived_at=now)
+    if account.status == Account.Status.ACTIVE:
+        account.status = Account.Status.ARCHIVED
+        account.archived_at = now
+        account.save(update_fields=("status", "archived_at", "updated_at"))
