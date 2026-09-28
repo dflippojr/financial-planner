@@ -25,3 +25,10 @@ Updated: 2026-09-27. This document records the storage contract introduced by is
 - Deleting related people, accounts, or batches is protected at the database relationship level. Correction and undo features must archive records rather than hard-delete them.
 
 The committed `synthetic_demo` fixture contains invented names, hashes, descriptions, and amounts only. It is suitable for schema demonstrations, not provider-format verification.
+
+## Transaction review and correction
+
+- The transaction review UI starts with `Transaction.objects.visible_to(person)` on every request, excludes archived transactions, and orders by transaction date and then primary key descending.
+- User corrections may change only `transaction_date`, `description`, and `amount_minor`. Amount entry converts decimal major units directly to integer minor units without using binary floating point.
+- Corrections never replace `original_fields` or change the transaction's account, import batch, source row number, fingerprint, currency, or kind. Those fields continue to describe the imported record and its provenance.
+- The list exposes category as `Uncategorized` for now. Issue #8 owns category persistence, assignment, and transfer/exclusion semantics after its product decisions are resolved.

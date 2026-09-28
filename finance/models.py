@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
@@ -251,6 +253,16 @@ class Transaction(ArchivableModel):
 
     def __str__(self):
         return f"{self.transaction_date}: {self.amount_minor} {self.currency}"
+
+    @property
+    def amount_display(self):
+        amount = Decimal(self.amount_minor) / Decimal(100)
+        return f"{amount:,.2f} {self.currency}"
+
+    @property
+    def category_display(self):
+        # Issue #8 owns the category schema and assignment behavior.
+        return "Uncategorized"
 
 
 class Invitation(models.Model):
