@@ -1,6 +1,8 @@
 from django.conf import settings
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.decorators import login_not_required
+from django.db import DatabaseError, connections
+from django.http import HttpResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
@@ -20,6 +22,20 @@ from .auth_services import (
 )
 from .forms import JoinForm, LoginForm, RecoveryForm
 from .models import Account
+
+
+@login_not_required
+@never_cache
+@require_GET
+def health(request):
+    """Report process and database readiness without exposing application data."""
+    try:
+        with connections["default"].cursor() as cursor:
+            cursor.execute("SELECT 1")
+            cursor.fetchone()
+    except DatabaseError:
+        return HttpResponse("unavailable\n", status=503, content_type="text/plain")
+    return HttpResponse("ok\n", content_type="text/plain")
 
 
 @require_GET
