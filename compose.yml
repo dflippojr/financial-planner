@@ -38,7 +38,7 @@ services:
     ports:
       - "127.0.0.1:${APP_PORT:-8000}:8000"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; request=urllib.request.Request('http://127.0.0.1:8000/health/', headers={'X-Forwarded-Proto':'https'}); urllib.request.urlopen(request, timeout=3)"]
+      test: ["CMD", "python", "-m", "financial_planner.healthcheck"]
       interval: 30s
       timeout: 5s
       retries: 3
