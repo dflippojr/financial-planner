@@ -106,21 +106,28 @@ def _decode(content: bytes) -> str:
 
 
 def _choose_delimiter(text):
-    """Return (delimiter, raw_headers), preferring the sniffed delimiter."""
+    """Return (delimiter, raw_headers), preferring the sniffed delimiter.
+
+    A strict reader raises on a header row that the wrong delimiter cannot
+    parse (for example quoted headers under ";"), so each candidate is tried
+    on its own and only the ones that parse are considered.
+    """
     try:
         sniffed = csv.Sniffer().sniff(text[:8192], delimiters=",;").delimiter
     except csv.Error:
         sniffed = None
-    candidates = []
+    usable = []
     for candidate in (",", ";"):
-        headers = next(csv.reader(io.StringIO(text, newline=""), delimiter=candidate, strict=True))
-        candidates.append((len(headers), candidate, headers))
-    if sniffed:
-        _count, delimiter, headers = next(item for item in candidates if item[1] == sniffed)
-    else:
-        _count, delimiter, headers = max(candidates, key=lambda item: item[0])
-    if len(headers) < 2:
+        try:
+            headers = next(csv.reader(io.StringIO(text, newline=""), delimiter=candidate, strict=True))
+        except csv.Error:
+            continue
+        if len(headers) >= 2:
+            usable.append((len(headers), candidate, headers))
+    if not usable:
         raise csv.Error
+    preferred = next((item for item in usable if item[1] == sniffed), None)
+    _count, delimiter, headers = preferred or max(usable, key=lambda item: item[0])
     return delimiter, headers
 
 

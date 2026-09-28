@@ -153,3 +153,23 @@ def test_invalid_grouping_notation_and_sub_cent_values_are_rejected(value):
         read_csv(f'When,Memo,Amount\n09/27/2026,SYNTHETIC,"{value}"\n'.encode()), mapping()
     )
     assert result.invalid_count == 1
+
+
+@pytest.mark.parametrize(
+    ("content", "first_row"),
+    [
+        (b'"When","Memo","Amount"\n"1/1/2026","x","1.00"\n', ("1/1/2026", "x", "1.00")),
+        (b'"When";"Memo";"Amount"\n"1/1/2026";"x";"1,00"\n', ("1/1/2026", "x", "1,00")),
+        (b"When,Memo,Amount\n1/1/2026,x,1.00\n", ("1/1/2026", "x", "1.00")),
+        (b"When;Memo;Amount\n1/1/2026;x;1,00\n", ("1/1/2026", "x", "1,00")),
+        # The other delimiter appears inside a quoted header; it must not win.
+        (b'"When","Memo; note","Amount"\n"1/1/2026","x","1.00"\n', ("1/1/2026", "x", "1.00")),
+        (b'"When";"Memo, note";"Amount"\n"1/1/2026";"x";"1,00"\n', ("1/1/2026", "x", "1,00")),
+    ],
+)
+def test_delimiter_is_detected_for_quoted_and_unquoted_headers(content, first_row):
+    document = read_csv(content)
+
+    assert len(document.headers) == 3
+    assert document.rows[0].cells == first_row
+    assert document.rows[0].structural_error is None
