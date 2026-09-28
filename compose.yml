@@ -68,3 +68,4 @@ services:
 
 volumes:
   postgres_data:
+    name: ${POSTGRES_VOLUME_NAME:-financial-planner-postgres-data}
