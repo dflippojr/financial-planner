@@ -1,8 +1,9 @@
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
+from django.utils import timezone
 
 from finance.lifecycle_services import (
     archive_account,
@@ -351,3 +352,33 @@ def test_outsider_cannot_remove_member_or_learn_membership_from_error():
     assert str(member_error.value) == str(missing_error.value)
     membership.refresh_from_db()
     assert membership.ended_at is None
+
+
+@pytest.mark.django_db
+def test_visible_accounts_query_is_lockable_and_never_duplicates_rows():
+    # PostgreSQL rejects SELECT ... FOR UPDATE combined with DISTINCT, and the
+    # in-memory SQLite used by default ignores FOR UPDATE entirely, so this
+    # asserts on the query itself rather than relying on the backend to fail.
+    owner = make_person("owner")
+    household = Household.objects.create(name="Synthetic Household")
+    Membership.objects.create(person=owner, household=household)
+    ended = Household.objects.create(name="Former Household")
+    now = timezone.now()
+    Membership.objects.create(
+        person=owner,
+        household=ended,
+        joined_at=now - timedelta(days=2),
+        ended_at=now - timedelta(days=1),
+    )
+    shared = Account.objects.create(
+        name="Synthetic Shared",
+        account_type=Account.Type.CHECKING,
+        owner=owner,
+        scope=Account.Scope.HOUSEHOLD,
+        household=household,
+    )
+
+    visible = Account.objects.visible_to(owner)
+
+    assert visible.query.distinct is False
+    assert list(visible) == [shared]

@@ -22,6 +22,8 @@ python manage.py migrate --settings=financial_planner.test_settings
 python -m pytest
 ```
 
+The default test settings use in-memory SQLite for speed, which is not the production engine and hides PostgreSQL-only behavior. Before opening or updating a pull request, also run `scripts/test_postgres.sh` (requires Docker), which runs the same suite against a throwaway PostgreSQL 16 container.
+
 Load the explicitly synthetic example records into a development database with `python manage.py loaddata synthetic_demo`. Never substitute a real statement or transaction export into a committed fixture.
 
 Authentication requires `DJANGO_SECRET_KEY`; production also needs the Tailscale HTTPS and host/origin values described in [the authentication guide](docs/authentication.md). After migrating a new installation, create its first household member with `python manage.py seed_first_user --username USERNAME --display-name "DISPLAY NAME" --household "HOUSEHOLD NAME"`. The command prompts for a password without echoing it and prints recovery codes once.

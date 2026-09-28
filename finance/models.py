@@ -98,7 +98,7 @@ class AccountQuerySet(models.QuerySet):
         return self.filter(
             Q(owner=person, scope="private")
             | Q(scope="household", household_id__in=current_households)
-        ).distinct()
+        )
 
 
 class Account(ArchivableModel):
