@@ -10,4 +10,6 @@ urlpatterns = [
     path("invite/", views.invite, name="invite"),
     path("join/", views.join, name="join"),
     path("recover/", views.recover, name="recover"),
+    path("transactions/", views.transaction_list, name="transaction-list"),
+    path("transactions/<int:transaction_id>/edit/", views.transaction_edit, name="transaction-edit"),
 ]
