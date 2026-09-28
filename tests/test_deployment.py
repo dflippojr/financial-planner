@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -7,6 +8,7 @@ from django.test import override_settings
 from django.urls import reverse
 
 from financial_planner.healthcheck import probe_host
+from financial_planner.settings import allowed_hosts_from_env
 
 
 @pytest.mark.django_db
@@ -55,6 +57,23 @@ def test_tailscale_proxy_header_marks_request_secure(client):
 )
 def test_health_probe_uses_a_host_the_deployment_allows(allowed_hosts, expected):
     assert probe_host(allowed_hosts) == expected
+
+
+@pytest.mark.django_db
+def test_health_probe_succeeds_when_allowed_hosts_env_has_leading_space(client, monkeypatch):
+    # A wrapped env file can leave a space after DJANGO_ALLOWED_HOSTS=. The
+    # probe already strips it; Django's ALLOWED_HOSTS must too, or validate_host
+    # answers 400 and the container is unhealthy while the app is reachable.
+    monkeypatch.setenv("DJANGO_ALLOWED_HOSTS", " basement-pc.example-tailnet.ts.net")
+    raw = os.environ["DJANGO_ALLOWED_HOSTS"]
+    hosts = allowed_hosts_from_env(raw)
+    probed = probe_host(raw)
+
+    assert hosts == [probed] == ["basement-pc.example-tailnet.ts.net"]
+    with override_settings(ALLOWED_HOSTS=hosts):
+        response = client.get(reverse("health"), HTTP_HOST=probed, HTTP_X_FORWARDED_PROTO="https")
+
+    assert response.status_code == 200
 
 
 @pytest.mark.django_db
