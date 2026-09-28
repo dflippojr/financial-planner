@@ -110,3 +110,13 @@ CSV_IMPORT_STAGE_TTL_SECONDS = max(
     1,
     min(int(os.environ.get("CSV_IMPORT_STAGE_TTL_SECONDS", "3600")), 3600),
 )
+
+# Handle uploads in memory only. Django's default handlers write any upload over
+# 2.5 MB to a temporary file in /tmp before application code runs, which would put
+# a real bank export on disk even though staging itself is memory-backed, and it
+# does so at any size. With only the memory handler, a file larger than the
+# threshold is dropped instead of written anywhere. The threshold sits a little
+# above the 5 MB import cap so a file just over the cap still gets the specific
+# "exceeds the 5 MB limit" message; anything larger gets the form's generic one.
+FILE_UPLOAD_HANDLERS = ["django.core.files.uploadhandler.MemoryFileUploadHandler"]
+FILE_UPLOAD_MAX_MEMORY_SIZE = 6 * 1024 * 1024

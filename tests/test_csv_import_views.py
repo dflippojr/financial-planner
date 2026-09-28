@@ -245,3 +245,47 @@ def test_bad_uploads_and_size_cap_are_safe_and_not_staged(staging_settings):
     assert oversized.status_code == 200
     assert b"exceeds the 5 MB limit" in oversized.content
     assert not list(Path(staging_settings).glob("*.csvstage"))
+
+
+def _spooled_temp_files():
+    """A spy on Django's upload temp-file creation, which is what would write to disk."""
+    from django.core.files import uploadedfile
+
+    return patch.object(uploadedfile.tempfile, "NamedTemporaryFile", wraps=uploadedfile.tempfile.NamedTemporaryFile)
+
+
+@pytest.mark.django_db
+def test_a_normal_sized_upload_is_never_spooled_to_a_temp_file_on_disk(staging_settings):
+    # Django writes uploads over FILE_UPLOAD_MAX_MEMORY_SIZE (2.5 MB by default)
+    # to a temporary file in /tmp before our code sees them, which would put a
+    # real bank export on disk even though staging itself is memory-backed.
+    user, person = make_person("owner")
+    account = Account.objects.create(name="Synthetic Checking", account_type="checking", owner=person)
+    client = Client()
+    client.force_login(user)
+    row = b"09/27/2026," + b"S" * 1000 + b",-12.34,USD\n"
+    content = b"When,Memo,Amount,Currency\n" + row * 3000
+
+    with _spooled_temp_files() as spool:
+        response = upload(client, account, content)
+
+    assert len(content) > 2_621_440
+    assert spool.call_count == 0
+    assert response.status_code == 200
+    assert len(list(Path(staging_settings).glob("*.csvstage"))) == 1
+
+
+@pytest.mark.django_db
+def test_a_very_large_upload_is_refused_without_touching_disk(staging_settings):
+    user, person = make_person("owner")
+    account = Account.objects.create(name="Synthetic Checking", account_type="checking", owner=person)
+    client = Client()
+    client.force_login(user)
+
+    with _spooled_temp_files() as spool:
+        response = upload(client, account, b"x" * (12 * 1024 * 1024))
+
+    assert spool.call_count == 0
+    assert response.status_code == 200
+    assert b"at most 5 MB" in response.content
+    assert not list(Path(staging_settings).glob("*.csvstage"))

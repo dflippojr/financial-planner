@@ -4,7 +4,10 @@ from .parser import DATE_FORMATS, NUMBER_FORMATS, Mapping
 
 
 class CsvUploadForm(forms.Form):
-    csv_file = forms.FileField(label="CSV file")
+    csv_file = forms.FileField(
+        label="CSV file",
+        error_messages={"required": "Choose a CSV file of at most 5 MB."},
+    )
 
 
 class CsvMappingForm(forms.Form):
