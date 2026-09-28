@@ -19,6 +19,34 @@ def _person_for(principal):
     raise PermissionDenied(_DENIED)
 
 
+# Lock order, for every operation in this module: the household's current
+# memberships (in primary-key order), then accounts, then import batches, then
+# transactions. Two transactions that take the same locks in a different order
+# can each hold what the other awaits, and PostgreSQL then aborts one of them
+# with a deadlock error. Always call _lock_actor_household() first.
+def _lock_actor_household(person):
+    """Lock every current membership of the person's household, in pk order.
+
+    Returns (own_membership, memberships). own_membership is the person's own
+    current membership, re-checked under the lock, or None when they have no
+    current membership (then nothing is locked).
+    """
+    reference = (
+        Membership.objects.filter(person=person, ended_at__isnull=True)
+        .values("pk", "household_id")
+        .first()
+    )
+    if reference is None:
+        return None, []
+    memberships = list(
+        Membership.objects.select_for_update()
+        .filter(household_id=reference["household_id"], ended_at__isnull=True)
+        .order_by("pk")
+    )
+    own = next((m for m in memberships if m.pk == reference["pk"]), None)
+    return own, memberships
+
+
 def _visible_account_for_update(principal, account_id):
     account = (
         Account.objects.visible_to(principal)
@@ -35,12 +63,8 @@ def _visible_account_for_update(principal, account_id):
 def share_account(principal, account_id):
     """Share the actor's private account with their current household."""
     person = _person_for(principal)
+    membership, _memberships = _lock_actor_household(person)
     account = _visible_account_for_update(person, account_id)
-    membership = (
-        Membership.objects.select_for_update()
-        .filter(person=person, ended_at__isnull=True)
-        .first()
-    )
     if (
         membership is None
         or account.owner_id != person.pk
@@ -57,15 +81,13 @@ def share_account(principal, account_id):
 def unshare_account(principal, account_id):
     """Return a visible household account to its owner's private scope."""
     person = _person_for(principal)
+    membership, _memberships = _lock_actor_household(person)
     account = _visible_account_for_update(person, account_id)
-    if account.scope != Account.Scope.HOUSEHOLD:
-        raise PermissionDenied(_DENIED)
-    is_current_member = Membership.objects.select_for_update().filter(
-        person=person,
-        household_id=account.household_id,
-        ended_at__isnull=True,
-    ).exists()
-    if not is_current_member:
+    if (
+        account.scope != Account.Scope.HOUSEHOLD
+        or membership is None
+        or account.household_id != membership.household_id
+    ):
         raise PermissionDenied(_DENIED)
 
     account.scope = Account.Scope.PRIVATE
@@ -77,6 +99,7 @@ def unshare_account(principal, account_id):
 def archive_account(principal, account_id):
     """Soft-delete a visible account and every active provenance row beneath it."""
     person = _person_for(principal)
+    _lock_actor_household(person)
     account = _visible_account_for_update(person, account_id)
     now = timezone.now()
 
@@ -95,28 +118,8 @@ def archive_account(principal, account_id):
 
 
 def _end_membership(actor, target_id):
-    actor_membership_ref = Membership.objects.filter(
-        person=actor,
-        ended_at__isnull=True,
-    ).values("pk", "household_id").first()
-    if actor_membership_ref is None:
-        raise PermissionDenied(_DENIED)
-
-    # Every exit from one household locks memberships in the same order so two
-    # concurrent removals cannot lock actor and target rows in opposite orders.
-    current_memberships = list(
-        Membership.objects.select_for_update()
-        .filter(
-            household_id=actor_membership_ref["household_id"],
-            ended_at__isnull=True,
-        )
-        .order_by("pk")
-    )
-    actor_is_still_current = any(
-        membership.pk == actor_membership_ref["pk"]
-        for membership in current_memberships
-    )
-    if not actor_is_still_current:
+    actor_membership, current_memberships = _lock_actor_household(actor)
+    if actor_membership is None:
         raise PermissionDenied(_DENIED)
     target_membership = next(
         (membership for membership in current_memberships if membership.person_id == target_id),
@@ -136,7 +139,7 @@ def _end_membership(actor, target_id):
     owned_shared_accounts = Account.objects.select_for_update().filter(
         owner_id=target_id,
         scope=Account.Scope.HOUSEHOLD,
-        household_id=actor_membership_ref["household_id"],
+        household_id=actor_membership.household_id,
     )
     transitioned_at = timezone.now()
     if remaining_memberships:

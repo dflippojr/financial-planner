@@ -1,10 +1,15 @@
+import threading
+import time
 from datetime import date, timedelta
+from unittest.mock import patch
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
+from django.db import connection, connections
 from django.utils import timezone
 
+from finance import lifecycle_services
 from finance.lifecycle_services import (
     archive_account,
     leave_household,
@@ -382,3 +387,62 @@ def test_visible_accounts_query_is_lockable_and_never_duplicates_rows():
 
     assert visible.query.distinct is False
     assert list(visible) == [shared]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_unshare_and_owner_leaving_concurrently_do_not_deadlock():
+    # Lock order must be the same everywhere: memberships, then accounts.
+    # unshare_account used to lock the account first and a membership second
+    # while leaving locks every membership first and the owner's shared
+    # accounts second, so each transaction could hold what the other awaited.
+    # SQLite ignores row locks entirely, so this only means something on
+    # PostgreSQL (scripts/test_postgres.sh).
+    if connection.vendor != "postgresql":
+        pytest.skip("row-lock ordering can only be exercised on PostgreSQL")
+
+    owner = make_person("owner")
+    member = make_person("member")
+    household = Household.objects.create(name="Synthetic Household")
+    Membership.objects.create(person=owner, household=household)
+    Membership.objects.create(person=member, household=household)
+    account = Account.objects.create(
+        name="Synthetic Shared",
+        account_type=Account.Type.CHECKING,
+        owner=owner,
+        scope=Account.Scope.HOUSEHOLD,
+        household=household,
+    )
+
+    first_lock_held = threading.Event()
+    other_is_waiting = threading.Event()
+    errors = []
+    original_lock = lifecycle_services._visible_account_for_update
+
+    def lock_then_pause(principal, account_id):
+        locked = original_lock(principal, account_id)
+        first_lock_held.set()
+        other_is_waiting.wait(timeout=10)
+        return locked
+
+    def run(action):
+        try:
+            action()
+        except Exception as exc:  # noqa: BLE001 - reported to the main thread
+            errors.append(exc)
+        finally:
+            connections.close_all()
+
+    with patch.object(lifecycle_services, "_visible_account_for_update", lock_then_pause):
+        unsharing = threading.Thread(target=run, args=(lambda: unshare_account(member, account.pk),))
+        unsharing.start()
+        assert first_lock_held.wait(timeout=10)
+        leaving = threading.Thread(target=run, args=(lambda: leave_household(owner),))
+        leaving.start()
+        time.sleep(1.5)  # let the second transaction reach whatever it blocks on
+        other_is_waiting.set()
+        unsharing.join(timeout=30)
+        leaving.join(timeout=30)
+
+    assert not unsharing.is_alive()
+    assert not leaving.is_alive()
+    assert errors == []
