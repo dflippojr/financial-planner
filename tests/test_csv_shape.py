@@ -602,3 +602,45 @@ def test_a_headerless_tab_file_with_thousands_commas_keeps_its_tab_delimiter(dat
     assert "delimiter: TAB" in report
     assert "- col 1: date" in report
     assert "- col 2: money" in report
+
+
+@pytest.mark.parametrize(
+    "header_line",
+    ["Date,Description,Amount,", ",Date,Description,Amount", "Date,,Description,Amount"],
+)
+def test_empty_header_cells_do_not_make_the_header_look_like_data(header_line):
+    # Many exports end each line with a comma, giving the header an empty last
+    # cell. That used to reject the whole header and profile it as a data row.
+    labels = header_line.split(",")
+    date_position = labels.index("Date")
+
+    def data_row(day):
+        cells = ["x"] * len(labels)
+        cells[date_position] = f"2026-09-{day}"
+        return ",".join(cells)
+
+    content = f"{header_line}\n{data_row(27)}\n{data_row(28)}\n".encode()
+
+    report = csv_shape.describe_csv(content, show_headers=True)
+
+    assert "header row: line 1" in report
+    assert "- Date: date" in report
+    assert "(no header text)" in report
+
+
+def test_a_trailing_comma_export_keeps_amounts_and_signs_and_names_columns():
+    content = b"Date,Description,Amount,\n2026-09-27,x,-1.00,\n2026-09-28,y,2.00,\n"
+
+    report = csv_shape.describe_csv(content, show=["amount"], show_headers=True)
+
+    assert "- Amount: money" in report
+    assert "negative values: 1 of 2" in report
+    assert "col 4 (no header text): empty" in report
+
+
+def test_a_line_with_a_single_label_is_not_a_header():
+    content = b"Statement,,\n2026-09-27,x,1.00\n2026-09-28,y,2.00\n"
+
+    report = csv_shape.describe_csv(content, show_headers=True)
+
+    assert "header row: none detected" in report

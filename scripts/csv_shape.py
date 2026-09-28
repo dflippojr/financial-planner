@@ -204,8 +204,13 @@ def read_rows(text, delimiter):
 
 
 def looks_like_header(row):
-    cells = [cell.strip() for cell in row]
-    return all(cell and LABEL.fullmatch(cell) for cell in cells) and len(set(cells)) == len(cells)
+    """At least two labels, every non-empty cell label-like and distinct.
+
+    Empty cells are allowed: many exports end every line with a comma, which
+    gives the header an empty last cell, or start with an unnamed index column.
+    """
+    labels = [cell.strip() for cell in row if cell.strip()]
+    return len(labels) >= 2 and all(LABEL.fullmatch(label) for label in labels) and len(set(labels)) == len(labels)
 
 
 def find_header(rows, width):
@@ -235,6 +240,8 @@ def label_for(cell, index, show_headers):
     --show-headers.
     """
     text = cell.strip()
+    if not text:
+        return f"col {index + 1} (no header text)"
     if show_headers and LABEL.fullmatch(text):
         return text
     return f"col {index + 1} (masked: {mask(text)})"
