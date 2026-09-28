@@ -45,6 +45,22 @@ def make_transaction(owner, *, account=None, transaction_date=date(2026, 1, 2), 
 
 
 @pytest.mark.django_db
+def test_transaction_pages_and_home_are_not_browser_cached():
+    owner = make_person("owner")
+    financial_transaction = make_transaction(owner)
+    client = Client()
+    client.force_login(owner.user)
+
+    list_response = client.get(reverse("transaction-list"))
+    edit_response = client.get(reverse("transaction-edit", args=(financial_transaction.pk,)))
+    home_response = client.get(reverse("home"))
+
+    assert "no-store" in list_response["Cache-Control"]
+    assert "no-store" in edit_response["Cache-Control"]
+    assert "no-store" in home_response["Cache-Control"]
+
+
+@pytest.mark.django_db
 def test_transaction_list_requires_sign_in():
     response = Client().get(reverse("transaction-list"))
 
