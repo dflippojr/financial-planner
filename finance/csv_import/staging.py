@@ -95,4 +95,3 @@ def delete_stage(request, token):
         _path(token).unlink(missing_ok=True)
         stages.pop(token, None)
         request.session[SESSION_KEY] = stages
-

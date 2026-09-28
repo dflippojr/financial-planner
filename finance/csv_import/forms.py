@@ -61,4 +61,3 @@ class CsvMappingForm(forms.Form):
             currency_column=self.cleaned_data.get("currency_column", ""),
             invert_sign=self.cleaned_data.get("invert_sign", False),
         )
-
