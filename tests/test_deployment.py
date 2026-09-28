@@ -87,3 +87,14 @@ def test_gitattributes_forces_lf_for_container_files():
 
     assert "*.sh text eol=lf" in attributes
     assert "Dockerfile text eol=lf" in attributes
+
+
+def test_gunicorn_access_log_never_records_query_strings_or_referrers():
+    # Transaction search text travels in the query string (/transactions/?q=...)
+    # and the Referer header repeats it on the next page, so neither may reach
+    # the Docker logs. %(U)s is the path alone; %(r)s, %(q)s, and %(f)s are not.
+    script = (Path(__file__).resolve().parent.parent / "scripts/start-production.sh").read_text()
+    log_format = next(line for line in script.splitlines() if "--access-logformat" in line)
+
+    assert "%(U)s" in log_format
+    assert [token for token in ("%(r)s", "%(q)s", "%(f)s", "%({referer}i)s") if token in log_format] == []
