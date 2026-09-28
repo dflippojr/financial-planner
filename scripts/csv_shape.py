@@ -207,13 +207,16 @@ def read_rows(text, delimiter):
 
 
 def looks_like_header(row):
-    """At least two labels, every non-empty cell label-like and distinct.
+    """At least two label-like cells; other cells may contain digits and are masked.
 
     Empty cells are allowed: many exports end every line with a comma, which
     gives the header an empty last cell, or start with an unnamed index column.
+    A title such as 'Card 4' is not LABEL-like, but two other labels are enough
+    to treat the row as a header; label_for masks the non-label cells.
     """
-    labels = [cell.strip() for cell in row if cell.strip()]
-    return len(labels) >= 2 and all(LABEL.fullmatch(label) for label in labels) and len(set(labels)) == len(labels)
+    cells = [cell.strip() for cell in row if cell.strip()]
+    labels = [cell for cell in cells if LABEL.fullmatch(cell)]
+    return len(labels) >= 2 and len(set(cells)) == len(cells)
 
 
 def _has_date(row, width):

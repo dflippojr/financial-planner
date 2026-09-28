@@ -423,12 +423,17 @@ def test_a_line_that_could_name_someone_is_never_printed_by_default(first_line):
 
 
 def test_show_headers_still_masks_a_label_that_contains_digits():
+    # Digit-containing titles used to reject the whole row as a header. They
+    # are still masked in place; the other labels remain a usable header.
     raw = b"Date,Acct 987654321,Amount\n2026-09-27,x,1.00\n2026-09-28,y,2.00\n"
 
     report = csv_shape.describe_csv(raw, show_headers=True)
 
     assert "987654321" not in report
-    assert "first row (masked)" in report
+    assert "header row: line 1" in report
+    assert "- Date: date" in report
+    assert "- Amount: money" in report
+    assert "col 2 (masked: Aaaa 9{9})" in report
 
 
 def test_show_values_can_select_a_masked_column_by_the_header_text_or_position():
@@ -636,6 +641,25 @@ def test_a_trailing_comma_export_keeps_amounts_and_signs_and_names_columns():
     assert "- Amount: money" in report
     assert "negative values: 1 of 2" in report
     assert "col 4 (no header text): empty" in report
+
+
+def test_a_digit_in_one_header_label_does_not_reject_the_row():
+    # LABEL rejects digits, so requiring every cell to be LABEL-like dropped
+    # Date,Card 4,Amount as a header and classified every column as text.
+    raw = (
+        "Date,Card 4,Amount\n"
+        "2026-09-27,x,-12.50\n"
+        "2026-09-28,y,3.25\n"
+    ).encode()
+
+    report = describe(raw)
+
+    assert "header row: line 1" in report
+    assert "- Date: date" in report
+    assert "- Amount: money" in report
+    assert "negative values: 1 of 2" in report
+    assert "Card 4" not in report
+    assert "col 2 (masked: Aaaa 9)" in report
 
 
 def test_a_line_with_a_single_label_is_not_a_header():
