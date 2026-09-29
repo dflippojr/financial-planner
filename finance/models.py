@@ -283,11 +283,11 @@ class TransactionCorrectionHistory(models.Model):
     field_name = models.CharField(max_length=16, choices=Field)
     previous_date = models.DateField(null=True, blank=True)
     new_date = models.DateField(null=True, blank=True)
-    previous_description = models.TextField(null=True, blank=True)
-    new_description = models.TextField(null=True, blank=True)
+    previous_description = models.TextField(blank=True, default="")
+    new_description = models.TextField(blank=True, default="")
     previous_amount_minor = models.BigIntegerField(null=True, blank=True)
     new_amount_minor = models.BigIntegerField(null=True, blank=True)
-    currency = models.CharField(max_length=3, null=True, blank=True)
+    currency = models.CharField(max_length=3, blank=True, default="")
 
     class QuerySet(models.QuerySet):
         def visible_to(self, principal):
@@ -307,28 +307,26 @@ class TransactionCorrectionHistory(models.Model):
                         field_name="transaction_date",
                         previous_date__isnull=False,
                         new_date__isnull=False,
-                        previous_description__isnull=True,
-                        new_description__isnull=True,
+                        previous_description="",
+                        new_description="",
                         previous_amount_minor__isnull=True,
                         new_amount_minor__isnull=True,
-                        currency__isnull=True,
+                        currency="",
                     )
                     | Q(
                         field_name="description",
                         previous_date__isnull=True,
                         new_date__isnull=True,
-                        previous_description__isnull=False,
-                        new_description__isnull=False,
                         previous_amount_minor__isnull=True,
                         new_amount_minor__isnull=True,
-                        currency__isnull=True,
+                        currency="",
                     )
                     | Q(
                         field_name="amount_minor",
                         previous_date__isnull=True,
                         new_date__isnull=True,
-                        previous_description__isnull=True,
-                        new_description__isnull=True,
+                        previous_description="",
+                        new_description="",
                         previous_amount_minor__isnull=False,
                         new_amount_minor__isnull=False,
                         currency="USD",

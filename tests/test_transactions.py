@@ -448,6 +448,14 @@ def test_correction_records_one_history_entry_per_changed_field():
     assert amount_entry.previous_amount_minor == -1234
     assert amount_entry.new_amount_minor == -9876
     assert amount_entry.currency == "USD"
+    assert date_entry.previous_display == "2026-01-02"
+    assert date_entry.new_display == "2026-01-05"
+    assert description_entry.previous_display == "Synthetic groceries"
+    assert description_entry.new_display == "Corrected synthetic groceries"
+    assert amount_entry.previous_display == "-12.34 USD"
+    assert amount_entry.new_display == "-98.76 USD"
+    assert str(date_entry) == "Correction of transaction_date"
+    assert not TransactionCorrectionHistory.objects.visible_to(None).exists()
     financial_transaction.refresh_from_db()
     assert financial_transaction.original_fields == original_fields
 
@@ -540,7 +548,10 @@ def test_failed_correction_leaves_no_history_entry():
     client = Client()
     client.force_login(owner.user)
 
-    with patch.object(Transaction, "save", side_effect=DatabaseError("synthetic failure")):
+    def raise_on_save(*args, **kwargs):
+        raise DatabaseError("synthetic failure")
+
+    with patch.object(Transaction, "save", side_effect=raise_on_save):
         with pytest.raises(DatabaseError, match="synthetic failure"):
             client.post(
                 reverse("transaction-edit", args=(financial_transaction.pk,)),
@@ -559,11 +570,10 @@ def test_failed_history_write_rolls_back_the_correction():
     client = Client()
     client.force_login(owner.user)
 
-    with patch.object(
-        TransactionCorrectionHistory.objects,
-        "bulk_create",
-        side_effect=DatabaseError("synthetic history failure"),
-    ):
+    def raise_on_history(*args, **kwargs):
+        raise DatabaseError("synthetic history failure")
+
+    with patch.object(TransactionCorrectionHistory.objects, "bulk_create", side_effect=raise_on_history):
         with pytest.raises(DatabaseError, match="synthetic history failure"):
             client.post(
                 reverse("transaction-edit", args=(financial_transaction.pk,)),
