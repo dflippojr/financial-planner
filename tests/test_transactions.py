@@ -6,12 +6,13 @@ from unittest.mock import patch
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
-from django.db import connection, connections
+from django.db import DatabaseError, connection, connections
 from django.test import Client
 from django.urls import reverse
 
 from finance.forms import TransactionCorrectionForm
-from finance.models import Account, Household, ImportBatch, Membership, Person, Transaction
+from finance.lifecycle_services import archive_account
+from finance.models import Account, Household, ImportBatch, Membership, Person, Transaction, TransactionCorrectionHistory
 
 
 PASSWORD = "Synthetic-passphrase-42!"
@@ -372,13 +373,13 @@ def test_correction_cannot_be_saved_after_the_editor_is_evicted_from_the_househo
     errors = []
     original_apply = TransactionCorrectionForm.apply
 
-    def pause_before_saving(form, target):
+    def pause_before_saving(form, target, **kwargs):
         editing_paused.set()
         # If the edit holds the membership lock, the removal cannot finish
         # while it waits here, so this wait simply times out.
         removal_committed.wait(timeout=3)
         observed["removal_committed_before_save"] = removal_committed.is_set()
-        return original_apply(form, target)
+        return original_apply(form, target, **kwargs)
 
     def edit():
         try:
@@ -413,3 +414,163 @@ def test_correction_cannot_be_saved_after_the_editor_is_evicted_from_the_househo
 
     assert errors == []
     assert observed["removal_committed_before_save"] is False
+
+
+@pytest.mark.django_db
+def test_correction_records_one_history_entry_per_changed_field():
+    owner = make_person("owner")
+    financial_transaction = make_transaction(owner)
+    original_fields = financial_transaction.original_fields.copy()
+    client = Client()
+    client.force_login(owner.user)
+
+    response = client.post(
+        reverse("transaction-edit", args=(financial_transaction.pk,)),
+        {"transaction_date": "2026-01-05", "description": "Corrected synthetic groceries", "amount": "-98.76"},
+    )
+
+    assert response.status_code == 302
+    entries = list(TransactionCorrectionHistory.objects.order_by("field_name", "pk"))
+    assert [entry.field_name for entry in entries] == [
+        TransactionCorrectionHistory.Field.AMOUNT_MINOR,
+        TransactionCorrectionHistory.Field.DESCRIPTION,
+        TransactionCorrectionHistory.Field.TRANSACTION_DATE,
+    ]
+    assert {entry.actor_id for entry in entries} == {owner.pk}
+    assert {entry.recorded_at for entry in entries} == {entries[0].recorded_at}
+    date_entry = next(entry for entry in entries if entry.field_name == TransactionCorrectionHistory.Field.TRANSACTION_DATE)
+    description_entry = next(entry for entry in entries if entry.field_name == TransactionCorrectionHistory.Field.DESCRIPTION)
+    amount_entry = next(entry for entry in entries if entry.field_name == TransactionCorrectionHistory.Field.AMOUNT_MINOR)
+    assert date_entry.previous_date == date(2026, 1, 2)
+    assert date_entry.new_date == date(2026, 1, 5)
+    assert description_entry.previous_description == "Synthetic groceries"
+    assert description_entry.new_description == "Corrected synthetic groceries"
+    assert amount_entry.previous_amount_minor == -1234
+    assert amount_entry.new_amount_minor == -9876
+    assert amount_entry.currency == "USD"
+    financial_transaction.refresh_from_db()
+    assert financial_transaction.original_fields == original_fields
+
+
+@pytest.mark.django_db
+def test_noop_correction_adds_no_history():
+    owner = make_person("owner")
+    financial_transaction = make_transaction(owner)
+    client = Client()
+    client.force_login(owner.user)
+
+    response = client.post(
+        reverse("transaction-edit", args=(financial_transaction.pk,)),
+        {"transaction_date": "2026-01-02", "description": "Synthetic groceries", "amount": "-12.34"},
+    )
+
+    assert response.status_code == 302
+    assert TransactionCorrectionHistory.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_edit_page_shows_history_only_to_people_who_can_see_the_transaction():
+    owner = make_person("owner")
+    member = make_person("member")
+    outsider = make_person("outsider")
+    household = Household.objects.create(name="Synthetic Household")
+    Membership.objects.create(person=owner, household=household)
+    Membership.objects.create(person=member, household=household)
+    account = Account.objects.create(
+        name="Synthetic Shared",
+        account_type=Account.Type.CHECKING,
+        owner=owner,
+        scope=Account.Scope.HOUSEHOLD,
+        household=household,
+    )
+    financial_transaction = make_transaction(owner, account=account)
+    client = Client()
+    client.force_login(owner.user)
+    client.post(
+        reverse("transaction-edit", args=(financial_transaction.pk,)),
+        {"transaction_date": "2026-01-03", "description": "Household correction", "amount": "-12.34"},
+    )
+
+    member_client = Client()
+    member_client.force_login(member.user)
+    member_response = member_client.get(reverse("transaction-edit", args=(financial_transaction.pk,)))
+    outsider_client = Client()
+    outsider_client.force_login(outsider.user)
+    outsider_response = outsider_client.get(reverse("transaction-edit", args=(financial_transaction.pk,)))
+    missing_response = outsider_client.get(reverse("transaction-edit", args=(financial_transaction.pk + 999,)))
+
+    page = member_response.content.decode()
+    assert member_response.status_code == 200
+    assert "Correction history" in page
+    assert "Owner Example" in page
+    assert "Household correction" in page
+    assert outsider_response.status_code == 404
+    assert outsider_response.content == missing_response.content
+    assert not TransactionCorrectionHistory.objects.visible_to(outsider).exists()
+    assert TransactionCorrectionHistory.objects.visible_to(outsider).count() == 0
+    assert TransactionCorrectionHistory.objects.visible_to(member).count() == 2
+
+
+@pytest.mark.django_db
+def test_history_remains_visible_on_archived_accounts_through_visible_to():
+    owner = make_person("owner")
+    outsider = make_person("outsider")
+    financial_transaction = make_transaction(owner)
+    client = Client()
+    client.force_login(owner.user)
+    client.post(
+        reverse("transaction-edit", args=(financial_transaction.pk,)),
+        {"transaction_date": "2026-01-06", "description": "Synthetic groceries", "amount": "-12.34"},
+    )
+    archive_account(owner.user, financial_transaction.account_id)
+
+    owner_client = Client()
+    owner_client.force_login(owner.user)
+    archived_edit = owner_client.get(reverse("transaction-edit", args=(financial_transaction.pk,)))
+
+    assert TransactionCorrectionHistory.objects.visible_to(owner).count() == 1
+    assert TransactionCorrectionHistory.objects.visible_to(outsider).count() == 0
+    assert archived_edit.status_code == 404
+
+
+@pytest.mark.django_db(transaction=True)
+def test_failed_correction_leaves_no_history_entry():
+    owner = make_person("owner")
+    financial_transaction = make_transaction(owner)
+    client = Client()
+    client.force_login(owner.user)
+
+    with patch.object(Transaction, "save", side_effect=DatabaseError("synthetic failure")):
+        with pytest.raises(DatabaseError, match="synthetic failure"):
+            client.post(
+                reverse("transaction-edit", args=(financial_transaction.pk,)),
+                {"transaction_date": "2026-01-05", "description": "Corrected synthetic groceries", "amount": "-1.00"},
+            )
+
+    financial_transaction.refresh_from_db()
+    assert financial_transaction.description == "Synthetic groceries"
+    assert TransactionCorrectionHistory.objects.count() == 0
+
+
+@pytest.mark.django_db(transaction=True)
+def test_failed_history_write_rolls_back_the_correction():
+    owner = make_person("owner")
+    financial_transaction = make_transaction(owner)
+    client = Client()
+    client.force_login(owner.user)
+
+    with patch.object(
+        TransactionCorrectionHistory.objects,
+        "bulk_create",
+        side_effect=DatabaseError("synthetic history failure"),
+    ):
+        with pytest.raises(DatabaseError, match="synthetic history failure"):
+            client.post(
+                reverse("transaction-edit", args=(financial_transaction.pk,)),
+                {"transaction_date": "2026-01-05", "description": "Corrected synthetic groceries", "amount": "-1.00"},
+            )
+
+    financial_transaction.refresh_from_db()
+    assert financial_transaction.description == "Synthetic groceries"
+    assert TransactionCorrectionHistory.objects.count() == 0
+

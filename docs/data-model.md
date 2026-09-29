@@ -1,6 +1,6 @@
 # Core financial data model
 
-Updated: 2026-09-28. This document records the storage contract introduced by issue #4 and the reimport rules from issue #6. Provider parsing, access-enforcing query APIs, categories, transfer links, and reporting are separate issues.
+Updated: 2026-09-29. This document records the storage contract introduced by issue #4, the reimport rules from issue #6, and correction history from issue #31. Provider parsing, access-enforcing query APIs, categories, transfer links, and reporting are separate issues.
 
 ## People and sharing
 
@@ -31,5 +31,6 @@ The committed `synthetic_demo` fixture contains invented names, hashes, descript
 
 - The transaction review UI starts with `Transaction.objects.visible_to(person)` on every request, excludes archived transactions, and orders by transaction date and then primary key descending.
 - User corrections may change only `transaction_date`, `description`, and `amount_minor`. Amount entry converts decimal major units directly to integer minor units without using binary floating point.
+- Each changed field writes one append-only `TransactionCorrectionHistory` row in the same database transaction as the correction (lock order: memberships, then account, then transaction, then history insert). A no-op save writes none. Amounts on history rows are integer minor units plus currency. History is listed through `TransactionCorrectionHistory.objects.visible_to`, which is `Transaction.objects.visible_to` on the parent row, including shared and archived accounts. History values are never written to logs or error messages.
 - Corrections never replace `original_fields` or change the transaction's account, import batch, source row number, fingerprint, currency, or kind. Those fields continue to describe the imported record and its provenance.
 - The list exposes category as `Uncategorized` for now. Issue #8 owns category persistence, assignment, and transfer/exclusion semantics after its product decisions are resolved.

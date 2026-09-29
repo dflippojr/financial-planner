@@ -20,6 +20,7 @@ A release is usable when people can sign in, keep private accounts private, view
 
 ## Milestone 2: deeper insight
 
+- [#31 Transaction correction history](https://github.com/dflippojr/financial-planner/issues/31)
 - [#16 Saved mapping and categorization rules](https://github.com/dflippojr/financial-planner/issues/16)
 - [#17 Recurring charges](https://github.com/dflippojr/financial-planner/issues/17)
 - [#18 Account balance, net worth, and investment-performance history](https://github.com/dflippojr/financial-planner/issues/18); portfolio/account composition is a possible later extension.

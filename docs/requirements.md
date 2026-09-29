@@ -87,7 +87,7 @@ Owner decisions. Where they differ from the earlier "Household lifecycle (issue 
 
 **Uploaded CSV staging.** Staged uploads live in memory-backed storage (tmpfs) and never reach disk. They still expire within an hour and are deleted on cancel or on the next access after expiry; a restart discards them.
 
-**Transaction edit history.** Recording who changed which correction and when is wanted but is not part of the first release; it is tracked as a separate enhancement.
+**Transaction edit history (issue #31).** Each correction of date, description, or amount appends one history row per changed field (actor, time, previous and new values). Amounts stay integer minor units plus currency. History is visible only through `visible_to` on the parent transaction, including shared and archived accounts. Original imported fields are not rewritten. Undo of a correction is out of scope. This is not part of the first release.
 
 **Transfers and credit-card payments (issue #8)**
 - Transfers between the person's own accounts are detected as pairs of transactions that cancel out (opposite signs, equal amounts, in two accounts the person can see, close in date), each with a confidence reading and the reasons behind it.

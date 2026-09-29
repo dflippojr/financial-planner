@@ -6,7 +6,7 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
-from finance.models import Account, Household, ImportBatch, Membership, Person, Transaction
+from finance.models import Account, Household, ImportBatch, Membership, Person, Transaction, TransactionCorrectionHistory
 
 
 @pytest.fixture
@@ -237,3 +237,27 @@ def test_archived_records_require_archive_timestamp(private_account):
     )
     private_account.refresh_from_db()
     assert private_account.archived_at == archived_at
+
+
+@pytest.mark.django_db
+def test_correction_history_rejects_mismatched_value_columns(person, import_batch):
+    financial_transaction = Transaction.objects.create(
+        account=import_batch.account,
+        import_batch=import_batch,
+        transaction_date=date(2026, 1, 2),
+        amount_minor=-100,
+        description="Synthetic groceries",
+        source_row_number=2,
+        fingerprint="c" * 64,
+        original_fields={"synthetic": "value"},
+    )
+
+    with pytest.raises(IntegrityError), transaction.atomic():
+        TransactionCorrectionHistory.objects.create(
+            transaction=financial_transaction,
+            actor=person,
+            field_name=TransactionCorrectionHistory.Field.AMOUNT_MINOR,
+            previous_date=date(2026, 1, 1),
+            new_date=date(2026, 1, 2),
+        )
+
