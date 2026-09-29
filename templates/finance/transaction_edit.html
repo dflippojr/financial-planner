@@ -9,4 +9,12 @@
   <a href="{% url 'transaction-list' %}">Cancel</a>
 </form>
 <p>The original imported fields and import batch provenance are retained.</p>
+{% if correction_history %}
+<h2>Correction history</h2>
+<ol>
+  {% for entry in correction_history %}
+  <li>{{ entry.recorded_at }} · {{ entry.actor.display_name }} · {{ entry.get_field_name_display }}: {{ entry.previous_display }} → {{ entry.new_display }}</li>
+  {% endfor %}
+</ol>
+{% endif %}
 {% endblock %}

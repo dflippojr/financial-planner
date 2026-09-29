@@ -265,6 +265,101 @@ class Transaction(ArchivableModel):
         return "Uncategorized"
 
 
+class TransactionCorrectionHistory(models.Model):
+    """Append-only record of one corrected field. Never log these values."""
+
+    class Field(models.TextChoices):
+        TRANSACTION_DATE = "transaction_date", "Date"
+        DESCRIPTION = "description", "Description"
+        AMOUNT_MINOR = "amount_minor", "Amount"
+
+    transaction = models.ForeignKey(
+        Transaction,
+        on_delete=models.PROTECT,
+        related_name="correction_history",
+    )
+    actor = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="transaction_correction_history")
+    recorded_at = models.DateTimeField(default=timezone.now)
+    field_name = models.CharField(max_length=16, choices=Field)
+    previous_date = models.DateField(null=True, blank=True)
+    new_date = models.DateField(null=True, blank=True)
+    previous_description = models.TextField(blank=True, default="")
+    new_description = models.TextField(blank=True, default="")
+    previous_amount_minor = models.BigIntegerField(null=True, blank=True)
+    new_amount_minor = models.BigIntegerField(null=True, blank=True)
+    currency = models.CharField(max_length=3, blank=True, default="")
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            visible_transactions = Transaction.objects.visible_to(principal).values("pk")
+            return self.filter(transaction_id__in=visible_transactions)
+
+    objects = QuerySet.as_manager()
+
+    class Meta:
+        indexes = [
+            models.Index(fields=("transaction", "recorded_at"), name="txn_corr_hist_txn_time_idx"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        field_name="transaction_date",
+                        previous_date__isnull=False,
+                        new_date__isnull=False,
+                        previous_description="",
+                        new_description="",
+                        previous_amount_minor__isnull=True,
+                        new_amount_minor__isnull=True,
+                        currency="",
+                    )
+                    | Q(
+                        field_name="description",
+                        previous_date__isnull=True,
+                        new_date__isnull=True,
+                        previous_amount_minor__isnull=True,
+                        new_amount_minor__isnull=True,
+                        currency="",
+                    )
+                    | Q(
+                        field_name="amount_minor",
+                        previous_date__isnull=True,
+                        new_date__isnull=True,
+                        previous_description="",
+                        new_description="",
+                        previous_amount_minor__isnull=False,
+                        new_amount_minor__isnull=False,
+                        currency="USD",
+                    )
+                ),
+                name="correction_history_value_shape",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Correction of {self.field_name}"
+
+    def _amount_display(self, minor):
+        amount = Decimal(minor) / Decimal(100)
+        return f"{amount:,.2f} {self.currency}"
+
+    @property
+    def previous_display(self):
+        if self.field_name == self.Field.TRANSACTION_DATE:
+            return str(self.previous_date)
+        if self.field_name == self.Field.DESCRIPTION:
+            return self.previous_description
+        return self._amount_display(self.previous_amount_minor)
+
+    @property
+    def new_display(self):
+        if self.field_name == self.Field.TRANSACTION_DATE:
+            return str(self.new_date)
+        if self.field_name == self.Field.DESCRIPTION:
+            return self.new_description
+        return self._amount_display(self.new_amount_minor)
+
+
 class Invitation(models.Model):
     household = models.ForeignKey(Household, on_delete=models.CASCADE, related_name="invitations")
     invited_by = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="invitations_created")

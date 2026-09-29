@@ -26,7 +26,7 @@ from .auth_services import (
 )
 from .forms import JoinForm, LoginForm, RecoveryForm, TransactionCorrectionForm, TransactionFilterForm
 from .lifecycle_services import lock_actor_household
-from .models import Account, Transaction
+from .models import Account, Person, Transaction, TransactionCorrectionHistory
 
 
 @login_not_required
@@ -101,9 +101,10 @@ def transaction_edit(request, transaction_id):
                 # memberships, then the account, then the transaction. The
                 # membership lock is what stops a concurrent removal from
                 # committing between the visibility check and the save.
-                person = getattr(request.user, "person", None)
-                if person is not None:
-                    lock_actor_household(person)
+                # History rows are inserted after the transaction lock, in
+                # this same database transaction.
+                person = get_object_or_404(Person, user=request.user)
+                lock_actor_household(person)
                 account = get_object_or_404(
                     Account.objects.visible_to(request.user).select_for_update(),
                     pk=financial_transaction.account_id,
@@ -114,14 +115,24 @@ def transaction_edit(request, transaction_id):
                     account=account,
                     status=Transaction.Status.ACTIVE,
                 )
-                form.apply(financial_transaction)
+                form.apply(financial_transaction, actor=person)
             return redirect("transaction-list")
     else:
         form = TransactionCorrectionForm.for_transaction(financial_transaction)
+    correction_history = (
+        TransactionCorrectionHistory.objects.visible_to(request.user)
+        .filter(transaction=financial_transaction)
+        .select_related("actor")
+        .order_by("-recorded_at", "-pk")
+    )
     return render(
         request,
         "finance/transaction_edit.html",
-        {"form": form, "transaction": financial_transaction},
+        {
+            "form": form,
+            "transaction": financial_transaction,
+            "correction_history": correction_history,
+        },
     )
 
 
