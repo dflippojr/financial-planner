@@ -51,9 +51,13 @@ def find_live_stage(request, account_id):
 
 
 def _delete_account_stages(request, account_id):
-    for token, metadata in list(_session_stages(request).items()):
-        if _is_account_stage(request, metadata, account_id):
-            delete_stage(request, token)
+    tokens = [
+        token
+        for token, metadata in _session_stages(request).items()
+        if _is_account_stage(request, metadata, account_id)
+    ]
+    for token in tokens:
+        delete_stage(request, token)
 
 
 def cleanup_expired(request):

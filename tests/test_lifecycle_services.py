@@ -1,11 +1,14 @@
 import threading
 import time
 from datetime import date, timedelta
+from io import StringIO
 from unittest.mock import patch
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
+from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.db import connection, connections
 from django.utils import timezone
 
@@ -13,7 +16,6 @@ from finance import lifecycle_services
 from finance.lifecycle_services import (
     archive_account,
     leave_household,
-    remove_household_member,
     share_account,
     unshare_account,
 )
@@ -281,14 +283,19 @@ def test_leaving_revokes_shared_history_access_and_allows_joining_another_househ
 
 
 @pytest.mark.django_db
-def test_member_removes_owner_and_transfers_shared_accounts_to_longest_serving_member():
+def test_application_has_no_member_removal_service():
+    assert not hasattr(lifecycle_services, "remove_household_member")
+
+
+@pytest.mark.django_db
+def test_owner_leaving_transfers_shared_accounts_to_longest_serving_member():
     owner = make_person("owner")
     replacement = make_person("replacement")
-    actor = make_person("actor")
+    later_member = make_person("later")
     household = Household.objects.create(name="Synthetic Household")
     owner_membership = Membership.objects.create(person=owner, household=household)
     Membership.objects.create(person=replacement, household=household)
-    Membership.objects.create(person=actor, household=household)
+    Membership.objects.create(person=later_member, household=household)
     account = Account.objects.create(
         name="Synthetic Shared",
         account_type=Account.Type.CHECKING,
@@ -298,11 +305,10 @@ def test_member_removes_owner_and_transfers_shared_accounts_to_longest_serving_m
     )
     batch, financial_transaction = add_history(account, owner)
 
-    result = remove_household_member(actor.user, owner.pk)
+    leave_household(owner.user)
 
     owner_membership.refresh_from_db()
     account.refresh_from_db()
-    assert result is None
     assert owner_membership.ended_at is not None
     assert account.owner == replacement
     assert account.scope == Account.Scope.HOUSEHOLD
@@ -310,7 +316,7 @@ def test_member_removes_owner_and_transfers_shared_accounts_to_longest_serving_m
     assert not Account.objects.visible_to(owner).filter(pk=account.pk).exists()
     assert not Transaction.objects.visible_to(owner).filter(pk=financial_transaction.pk).exists()
     assert ImportBatch.objects.visible_to(replacement).filter(pk=batch.pk).exists()
-    assert Transaction.objects.visible_to(actor).filter(pk=financial_transaction.pk).exists()
+    assert Transaction.objects.visible_to(later_member).filter(pk=financial_transaction.pk).exists()
 
 
 @pytest.mark.django_db
@@ -341,22 +347,62 @@ def test_last_member_leaves_and_owned_shared_history_becomes_private():
 
 
 @pytest.mark.django_db
-def test_outsider_cannot_remove_member_or_learn_membership_from_error():
+def test_eviction_command_transfers_shared_accounts_like_leaving():
     owner = make_person("owner")
-    member = make_person("member")
-    outsider = make_person("outsider")
+    replacement = make_person("replacement")
+    household = Household.objects.create(name="Synthetic Household")
+    owner_membership = Membership.objects.create(person=owner, household=household)
+    Membership.objects.create(person=replacement, household=household)
+    account = Account.objects.create(
+        name="Synthetic Shared",
+        account_type=Account.Type.CHECKING,
+        owner=owner,
+        scope=Account.Scope.HOUSEHOLD,
+        household=household,
+    )
+    batch, financial_transaction = add_history(account, owner)
+    output = StringIO()
+
+    call_command("evict_household_member", username="owner", stdout=output)
+
+    owner_membership.refresh_from_db()
+    account.refresh_from_db()
+    printed = output.getvalue()
+    assert "Ended current household membership for owner." in printed
+    assert "Synthetic Shared" not in printed
+    assert "1234" not in printed
+    assert owner_membership.ended_at is not None
+    assert account.owner == replacement
+    assert account.scope == Account.Scope.HOUSEHOLD
+    assert account.household == household
+    assert not Account.objects.visible_to(owner).filter(pk=account.pk).exists()
+    assert ImportBatch.objects.visible_to(replacement).filter(pk=batch.pk).exists()
+    assert Transaction.objects.visible_to(replacement).filter(pk=financial_transaction.pk).exists()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("username", "message"),
+    [
+        ("nobody", "Unknown username."),
+        ("outsider", "That person has no current household membership."),
+    ],
+)
+def test_eviction_command_rejects_unknown_and_non_member_usernames(username, message):
+    make_person("outsider")
+    with pytest.raises(CommandError, match=message):
+        call_command("evict_household_member", username=username)
+
+
+@pytest.mark.django_db
+def test_eviction_command_rejects_a_repeated_eviction():
+    owner = make_person("owner")
     household = Household.objects.create(name="Synthetic Household")
     Membership.objects.create(person=owner, household=household)
-    membership = Membership.objects.create(person=member, household=household)
 
-    with pytest.raises(PermissionDenied) as member_error:
-        remove_household_member(outsider, member.pk)
-    with pytest.raises(PermissionDenied) as missing_error:
-        remove_household_member(outsider, member.pk + 1000)
-
-    assert str(member_error.value) == str(missing_error.value)
-    membership.refresh_from_db()
-    assert membership.ended_at is None
+    call_command("evict_household_member", username="owner")
+    with pytest.raises(CommandError, match="That person has no current household membership."):
+        call_command("evict_household_member", username="owner")
 
 
 @pytest.mark.django_db
@@ -390,13 +436,14 @@ def test_visible_accounts_query_is_lockable_and_never_duplicates_rows():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_unshare_and_owner_leaving_concurrently_do_not_deadlock():
+@pytest.mark.parametrize("exit_kind", ["leave", "evict"])
+def test_unshare_and_membership_exit_concurrently_do_not_deadlock(exit_kind):
     # Lock order must be the same everywhere: memberships, then accounts.
     # unshare_account used to lock the account first and a membership second
-    # while leaving locks every membership first and the owner's shared
-    # accounts second, so each transaction could hold what the other awaited.
-    # SQLite ignores row locks entirely, so this only means something on
-    # PostgreSQL (scripts/test_postgres.sh).
+    # while leaving and eviction lock every membership first and the owner's
+    # shared accounts second, so each transaction could hold what the other
+    # awaited. SQLite ignores row locks entirely, so this only means something
+    # on PostgreSQL (scripts/test_postgres.sh).
     if connection.vendor != "postgresql":
         pytest.skip("row-lock ordering can only be exercised on PostgreSQL")
 
@@ -432,17 +479,23 @@ def test_unshare_and_owner_leaving_concurrently_do_not_deadlock():
         finally:
             connections.close_all()
 
+    def exit_membership():
+        if exit_kind == "leave":
+            leave_household(owner)
+        else:
+            call_command("evict_household_member", username="owner")
+
     with patch.object(lifecycle_services, "_visible_account_for_update", lock_then_pause):
         unsharing = threading.Thread(target=run, args=(lambda: unshare_account(member, account.pk),))
         unsharing.start()
         assert first_lock_held.wait(timeout=10)
-        leaving = threading.Thread(target=run, args=(lambda: leave_household(owner),))
-        leaving.start()
+        exiting = threading.Thread(target=run, args=(exit_membership,))
+        exiting.start()
         time.sleep(1.5)  # let the second transaction reach whatever it blocks on
         other_is_waiting.set()
         unsharing.join(timeout=30)
-        leaving.join(timeout=30)
+        exiting.join(timeout=30)
 
     assert not unsharing.is_alive()
-    assert not leaving.is_alive()
+    assert not exiting.is_alive()
     assert errors == []
