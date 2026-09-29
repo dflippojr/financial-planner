@@ -50,7 +50,6 @@ def _restore_live_stage(request, account, context):
         try:
             _huntington_preview(
                 context,
-                token,
                 document,
                 account,
                 {"token": token, "source": ImportBatch.Source.HUNTINGTON},
@@ -102,7 +101,7 @@ def _store_result(request, account_id, *, new_count=0, duplicate_count=0, invali
     }
 
 
-def _huntington_preview(context, token, document, account, post_data):
+def _huntington_preview(context, document, account, post_data):
     require_huntington_headers(document.headers)
     preview = classify_overlap(account, preview_csv(document, HUNTINGTON_MAPPING))
     filled = _prefill_date_range(post_data, preview)
@@ -135,100 +134,75 @@ def _require_import_range(mapping_form, *, source_required):
     return source, start, end
 
 
-@never_cache
-@require_http_methods(["GET", "POST"])
-def csv_preview(request, account_id):
-    account = _visible_account(request, account_id)
-    context = {}
-    if request.method == "GET":
-        _restore_live_stage(request, account, context)
+def _handle_upload(request, account, context):
+    upload_form = CsvUploadForm(request.POST, request.FILES)
+    context["upload_form"] = upload_form
+    if not upload_form.is_valid():
         return _render_preview(request, account, context)
-
-    action = request.POST.get("action", "upload")
-    if action == "cancel":
-        delete_stage(request, request.POST.get("token", ""))
-        return redirect("home")
-    if action == "upload":
-        upload_form = CsvUploadForm(request.POST, request.FILES)
-        context["upload_form"] = upload_form
-        if upload_form.is_valid():
-            token = None
-            try:
-                profile = upload_form.cleaned_data["import_profile"]
-                token, content = create_stage(
-                    request,
-                    account.pk,
-                    upload_form.cleaned_data["csv_file"],
-                    import_profile=profile,
-                )
-                document = read_csv(content)
-                if profile == HUNTINGTON:
-                    _huntington_preview(
-                        context,
-                        token,
-                        document,
-                        account,
-                        {"token": token, "source": ImportBatch.Source.HUNTINGTON},
-                    )
-                else:
-                    _mapping_context(context, token, document, profile)
-            except CsvInputError as exc:
-                if token:
-                    delete_stage(request, token)
-                upload_form.add_error("csv_file", str(exc))
-        return _render_preview(request, account, context)
-
-    token = request.POST.get("token", "")
+    token = None
     try:
-        content = load_stage(request, token, account.pk)
+        profile = upload_form.cleaned_data["import_profile"]
+        token, content = create_stage(
+            request,
+            account.pk,
+            upload_form.cleaned_data["csv_file"],
+            import_profile=profile,
+        )
         document = read_csv(content)
-        profile = stage_profile(request, token, account.pk)
-    except (CsvInputError, StageUnavailable):
-        # Missing, expired, cross-user, and cross-account stages are deliberately
-        # indistinguishable and never expose metadata about the staged upload.
-        raise Http404 from None
+        if profile == HUNTINGTON:
+            _huntington_preview(
+                context,
+                document,
+                account,
+                {"token": token, "source": ImportBatch.Source.HUNTINGTON},
+            )
+        else:
+            _mapping_context(context, token, document, profile)
+    except CsvInputError as exc:
+        if token:
+            delete_stage(request, token)
+        upload_form.add_error("csv_file", str(exc))
+    return _render_preview(request, account, context)
 
+
+def _prepare_staged_preview(request, account, document, profile, context):
     if profile == HUNTINGTON:
         mapping_form = HuntingtonImportForm(request.POST)
         context.update(
             {"mapping_form": mapping_form, "headers": document.headers, "import_profile": HUNTINGTON}
         )
         if not mapping_form.is_valid():
-            return _render_preview(request, account, context)
+            return None
         try:
-            preview, mapping_form = _huntington_preview(context, token, document, account, request.POST)
+            preview, mapping_form = _huntington_preview(context, document, account, request.POST)
         except CsvInputError:
             raise Http404 from None
-        mapping = HUNTINGTON_MAPPING
-        source_required = False
-    else:
-        mapping_form = CsvMappingForm(request.POST, headers=document.headers)
-        context.update({"mapping_form": mapping_form, "headers": document.headers, "import_profile": profile})
-        if not mapping_form.is_valid():
-            return _render_preview(request, account, context)
-        mapping = mapping_form.mapping()
-        preview = classify_overlap(account, preview_csv(document, mapping))
-        source_required = True
+        return preview, mapping_form, HUNTINGTON_MAPPING, False
+    mapping_form = CsvMappingForm(request.POST, headers=document.headers)
+    context.update({"mapping_form": mapping_form, "headers": document.headers, "import_profile": profile})
+    if not mapping_form.is_valid():
+        return None
+    mapping = mapping_form.mapping()
+    preview = classify_overlap(account, preview_csv(document, mapping))
+    return preview, mapping_form, mapping, True
 
-    if action == "preview":
-        if profile != HUNTINGTON:
-            filled = _prefill_date_range(request.POST, preview)
-            mapping_form = CsvMappingForm(filled, headers=document.headers)
-            mapping_form.is_valid()
-            context["mapping_form"] = mapping_form
-            context["preview"] = preview
-            context["commit_available"] = True
-        return _render_preview(request, account, context)
 
-    if action != "commit":
-        return _render_preview(request, account, context)
+def _render_generic_preview(request, account, context, document, preview):
+    filled = _prefill_date_range(request.POST, preview)
+    mapping_form = CsvMappingForm(filled, headers=document.headers)
+    mapping_form.is_valid()
+    context["mapping_form"] = mapping_form
+    context["preview"] = preview
+    context["commit_available"] = True
+    return _render_preview(request, account, context)
 
+
+def _commit_staged_import(request, account, context, *, token, content, document, mapping, mapping_form, preview, source_required):
     source, start, end = _require_import_range(mapping_form, source_required=source_required)
     if mapping_form.errors:
         context["preview"] = preview
         context["commit_available"] = True
         return _render_preview(request, account, context)
-
     try:
         result = commit_csv_import(
             request.user,
@@ -247,7 +221,6 @@ def csv_preview(request, account_id):
         context["preview"] = preview
         context["commit_available"] = True
         return _render_preview(request, account, context)
-
     delete_stage(request, token)
     _store_result(
         request,
@@ -257,6 +230,57 @@ def csv_preview(request, account_id):
         invalid_count=result.invalid_count,
     )
     return redirect("csv-import-preview", account_id=account.pk)
+
+
+@never_cache
+@require_http_methods(["GET", "POST"])
+def csv_preview(request, account_id):
+    account = _visible_account(request, account_id)
+    context = {}
+    if request.method == "GET":
+        _restore_live_stage(request, account, context)
+        return _render_preview(request, account, context)
+
+    action = request.POST.get("action", "upload")
+    if action == "cancel":
+        delete_stage(request, request.POST.get("token", ""))
+        return redirect("home")
+    if action == "upload":
+        return _handle_upload(request, account, context)
+
+    token = request.POST.get("token", "")
+    try:
+        content = load_stage(request, token, account.pk)
+        document = read_csv(content)
+        profile = stage_profile(request, token, account.pk)
+    except (CsvInputError, StageUnavailable):
+        # Missing, expired, cross-user, and cross-account stages are deliberately
+        # indistinguishable and never expose metadata about the staged upload.
+        raise Http404 from None
+
+    prepared = _prepare_staged_preview(request, account, document, profile, context)
+    if prepared is None:
+        return _render_preview(request, account, context)
+    preview, mapping_form, mapping, source_required = prepared
+
+    if action == "preview":
+        if profile != HUNTINGTON:
+            return _render_generic_preview(request, account, context, document, preview)
+        return _render_preview(request, account, context)
+    if action != "commit":
+        return _render_preview(request, account, context)
+    return _commit_staged_import(
+        request,
+        account,
+        context,
+        token=token,
+        content=content,
+        document=document,
+        mapping=mapping,
+        mapping_form=mapping_form,
+        preview=preview,
+        source_required=source_required,
+    )
 
 
 @never_cache

@@ -115,8 +115,9 @@ def test_missing_or_renamed_huntington_headers_are_rejected_without_echoing_them
         "09/15/2026,1,SYNTHETIC GROCER,WEEKLY FOOD,-1.00,,1\r\n"
     ).encode()
 
+    document = read_csv(content)
     with pytest.raises(CsvInputError, match="does not match the Huntington checking export") as caught:
-        require_huntington_headers(read_csv(content).headers)
+        require_huntington_headers(document.headers)
 
     assert secret_header not in str(caught.value)
     assert HUNTINGTON_HEADER_ERROR == str(caught.value)
