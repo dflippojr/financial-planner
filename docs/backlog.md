@@ -6,12 +6,13 @@
 
 - [#1 Resolve import and reporting details](https://github.com/dflippojr/financial-planner/issues/1): verify synthetic CSV shapes, remaining account-sharing rules, and retention.
 - [#2 Choose application stack](https://github.com/dflippojr/financial-planner/issues/2): record the implementation and deployment shape.
+- [#36 Gather remaining provider CSV shapes and Vanguard meaning](https://github.com/dflippojr/financial-planner/issues/36): Capital One, Apple Card, and Vanguard.
 - [#3 Define private and household access](https://github.com/dflippojr/financial-planner/issues/3): settle sharing, editing, and history rules.
 
 ## Milestone 1: CSV to cash flow
 
 1. [#4 Account and transaction storage](https://github.com/dflippojr/financial-planner/issues/4) and [#12 sign-in](https://github.com/dflippojr/financial-planner/issues/12).
-2. [#5 CSV mapping and preview](https://github.com/dflippojr/financial-planner/issues/5), [#6 safe reimports](https://github.com/dflippojr/financial-planner/issues/6), and provider profiles: [#13 Huntington/Capital One](https://github.com/dflippojr/financial-planner/issues/13), [#14 Apple Card](https://github.com/dflippojr/financial-planner/issues/14), [#15 Vanguard](https://github.com/dflippojr/financial-planner/issues/15).
+2. [#5 CSV mapping and preview](https://github.com/dflippojr/financial-planner/issues/5), [#6 safe reimports](https://github.com/dflippojr/financial-planner/issues/6), and provider profiles: [#13 Huntington](https://github.com/dflippojr/financial-planner/issues/13), [#37 Capital One](https://github.com/dflippojr/financial-planner/issues/37), [#14 Apple Card](https://github.com/dflippojr/financial-planner/issues/14), [#15 Vanguard](https://github.com/dflippojr/financial-planner/issues/15).
 3. [#7 Transaction review](https://github.com/dflippojr/financial-planner/issues/7) and [#8 categories and transfers](https://github.com/dflippojr/financial-planner/issues/8).
 4. [#9 Cash flow over time](https://github.com/dflippojr/financial-planner/issues/9) as the lead view, plus [#10 spending by category](https://github.com/dflippojr/financial-planner/issues/10).
 5. [#11 Basement PC deployment, backup, and restore](https://github.com/dflippojr/financial-planner/issues/11).

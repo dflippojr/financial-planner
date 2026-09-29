@@ -118,3 +118,13 @@ Recorded from `scripts/csv_shape.py` output supplied by the owner. Only masked p
 ### Variant seen: a six-column file from another tool (`Transactions_29-09-2026.csv`)
 
 Same 439 rows and 282 negative amounts as the native file, so the same transactions. Columns: `Date`, `Description`, `Category`, `Amount`, `Split`, `Tags`. LF endings, `M/D/YY` dates with no zero padding and no stated century, one signed `Amount`, 16 source-assigned categories (at least one with an HTML-escaped `&amp;`), `Split` and `Tags` empty, and no transaction ID. Its origin is unconfirmed. It is not the target for the Huntington importer unless the owner says otherwise.
+
+### Owner decisions on the Huntington profile and on transfers (2026-09-29)
+
+- Huntington description (#13): `Payee Name - Memo`, joined with " - ", with the payee dropped when it is empty. It feeds the reimport fingerprint, so the rule is fixed once shipped.
+- Profile choice (#13): the user picks "Huntington" at upload; the profile is not auto-detected. Any other file uses the generic mapper.
+- `Transaction Number` (#13) is stored as the source transaction id but is not used for reimport matching; the existing per-account fingerprint stays the matching rule. Cross-export stability may be tested later.
+- Transfers (#8): pairs above a high confidence threshold are marked as transfers automatically and listed for review with one-click undo; lower-confidence pairs are only suggested until confirmed.
+- Transfer match starting values (#8), all configurable: 5-day window between dates, exactly equal and opposite amounts, both accounts visible to the same person (including a shared household account).
+- Undoing a wrong exclusion (#8) restores the transaction to income or spending with its original category.
+- Refunds (#8): a person links a refund to its original transaction manually, and it inherits that transaction's category and reduces that category's spending.
