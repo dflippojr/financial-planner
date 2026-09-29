@@ -117,29 +117,30 @@ def archive_account(principal, account_id):
         account.save(update_fields=("status", "archived_at", "updated_at"))
 
 
-def _end_membership(actor, target_id):
-    actor_membership, current_memberships = lock_actor_household(actor)
-    if actor_membership is None:
-        raise PermissionDenied(_DENIED)
-    target_membership = next(
-        (membership for membership in current_memberships if membership.person_id == target_id),
-        None,
-    )
-    if target_membership is None:
+@transaction.atomic
+def end_current_membership(person):
+    """End this person's current membership and apply shared-account exit rules.
+
+    Shared by leave_household and the operator eviction command so the two
+    cannot drift. Locks the household's current memberships in primary-key
+    order, then the person's household-scoped accounts.
+    """
+    own_membership, current_memberships = lock_actor_household(person)
+    if own_membership is None:
         raise PermissionDenied(_DENIED)
 
     remaining_memberships = sorted(
         (
             membership
             for membership in current_memberships
-            if membership.pk != target_membership.pk
+            if membership.pk != own_membership.pk
         ),
         key=lambda membership: (membership.joined_at, membership.pk),
     )
     owned_shared_accounts = Account.objects.select_for_update().filter(
-        owner_id=target_id,
+        owner_id=person.pk,
         scope=Account.Scope.HOUSEHOLD,
-        household_id=actor_membership.household_id,
+        household_id=own_membership.household_id,
     )
     transitioned_at = timezone.now()
     if remaining_memberships:
@@ -154,19 +155,10 @@ def _end_membership(actor, target_id):
             updated_at=transitioned_at,
         )
 
-    target_membership.ended_at = transitioned_at
-    target_membership.save(update_fields=("ended_at",))
+    own_membership.ended_at = transitioned_at
+    own_membership.save(update_fields=("ended_at",))
 
 
-@transaction.atomic
 def leave_household(principal):
     """End the actor's current membership and apply shared-account exit rules."""
-    person = _person_for(principal)
-    _end_membership(person, person.pk)
-
-
-@transaction.atomic
-def remove_household_member(principal, person_id):
-    """Remove a current member from the actor's household."""
-    actor = _person_for(principal)
-    _end_membership(actor, person_id)
+    end_current_membership(_person_for(principal))

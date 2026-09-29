@@ -5,12 +5,12 @@ from unittest.mock import patch
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.core.management import call_command
 from django.db import connection, connections
 from django.test import Client
 from django.urls import reverse
 
 from finance.forms import TransactionCorrectionForm
-from finance.lifecycle_services import remove_household_member
 from finance.models import Account, Household, ImportBatch, Membership, Person, Transaction
 
 
@@ -343,11 +343,11 @@ def test_correction_edit_posts_large_amount_as_decimal_text():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_correction_cannot_be_saved_after_the_editor_is_removed_from_the_household():
+def test_correction_cannot_be_saved_after_the_editor_is_evicted_from_the_household():
     # A correction must lock the membership that authorizes it, in the same
     # order as the lifecycle services (memberships, then accounts, then
-    # transactions). Otherwise a member being removed can pass the visibility
-    # check, have the removal commit, and still save their edit afterward.
+    # transactions). Otherwise a member being evicted can pass the visibility
+    # check, have the eviction commit, and still save their edit afterward.
     # SQLite ignores row locks, so this runs under scripts/test_postgres.sh.
     if connection.vendor != "postgresql":
         pytest.skip("row-lock ordering can only be exercised on PostgreSQL")
@@ -393,9 +393,9 @@ def test_correction_cannot_be_saved_after_the_editor_is_removed_from_the_househo
         finally:
             connections.close_all()
 
-    def remove():
+    def evict():
         try:
-            remove_household_member(owner, editor.pk)
+            call_command("evict_household_member", username="editor")
             removal_committed.set()
         except Exception as exc:  # noqa: BLE001 - reported to the main thread
             errors.append(exc)
@@ -406,10 +406,10 @@ def test_correction_cannot_be_saved_after_the_editor_is_removed_from_the_househo
         editing = threading.Thread(target=edit)
         editing.start()
         assert editing_paused.wait(timeout=10)
-        removing = threading.Thread(target=remove)
-        removing.start()
+        evicting = threading.Thread(target=evict)
+        evicting.start()
         editing.join(timeout=30)
-        removing.join(timeout=30)
+        evicting.join(timeout=30)
 
     assert errors == []
     assert observed["removal_committed_before_save"] is False

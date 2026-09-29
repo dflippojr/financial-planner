@@ -76,6 +76,14 @@ The container health check (`python -m financial_planner.healthcheck`) probes th
 
 Application logs must not be used for transaction details or raw import rows. Stop the deployment with `docker compose --env-file $Config stop`; do not add `--volumes` when stopping or updating it.
 
+A household member can only leave through the application. To end someone else's current membership from the basement PC, run:
+
+```powershell
+docker compose --env-file $Config exec app python manage.py evict_household_member --username USERNAME
+```
+
+That applies the same shared-account exit rules as leaving. It prints a short confirmation and does not name accounts, transactions, or amounts. An unknown username, a person with no current membership, and a repeated eviction each fail with a clear message.
+
 ## Backups
 
 The backup container runs `pg_dump` in PostgreSQL custom format every night at 2:00 AM in `TZ` (default `America/New_York`). A Sunday dump is also copied into `weekly/`. A dump is published atomically only after `pg_restore --list` verifies it. Pruning keeps the newest 14 files in `nightly/` and 8 in `weekly/`.
