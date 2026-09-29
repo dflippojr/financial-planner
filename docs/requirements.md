@@ -98,3 +98,23 @@ Owner decisions. Where they differ from the earlier "Household lifecycle (issue 
 - Starter category list (household-scoped, editable): Income, Groceries, Dining, Transportation, Housing, Utilities, Health, Insurance, Shopping, Entertainment, Subscriptions, Travel, Education, Personal care, Gifts and donations, Fees and interest, Taxes, and Uncategorized. "Transfer" is a system category that is excluded from income and spending.
 
 **Provider CSV shapes (issue #1).** The owner will run a local tool that reads real exports on their own machine and prints only column headers and masked value patterns, never values, and will provide that output. No real export is committed, attached, or pasted.
+
+## Observed provider CSV shapes (2026-09-29)
+
+Recorded from `scripts/csv_shape.py` output supplied by the owner. Only masked patterns and header labels were shared; no values. Importers must be built from these observations, not assumed formats.
+
+### Huntington checking, native download (`Huntington_Delimited.csv`, 439 data rows)
+
+- UTF-8, CRLF line endings, comma delimiter, header on line 1, no rows before the header, seven columns on every row.
+- Columns in order: `Date`, `Reference Number`, `Payee Name`, `Memo`, `Amount`, `Category Name`, `Transaction Number`.
+- `Date`: month first, `MM/DD/YYYY`, four-digit year.
+- `Amount`: one signed column with a decimal point and no thousands separator or currency symbol; 282 of 439 values are negative. There are no separate debit and credit columns. Owner confirmed (2026-09-29): a negative amount is money leaving the account, a positive amount is money entering it.
+- `Payee Name` is empty in 4 rows (121 distinct values); `Memo` is filled in every row (320 distinct values). Owner decision (2026-09-29): keep both. The importer stores both fields and builds the display description from them; the exact combination rule belongs in #13.
+- `Reference Number` is all digits, mostly a single digit (434 of 439 rows), so it does not identify a transaction.
+- `Transaction Number` is all digits, 18 digits in 394 rows and 10 digits in 45. All 439 values are distinct within this one export (checked locally, count only). It is a candidate provider transaction ID for reimport matching (#6). Stability across separate, overlapping exports is **still unverified**; until it is, reimport matching must not depend on it alone.
+- `Category Name` is empty in every row, so this export carries no category.
+- The file has no account identifier and no running balance; the account is chosen at import.
+
+### Variant seen: a six-column file from another tool (`Transactions_29-09-2026.csv`)
+
+Same 439 rows and 282 negative amounts as the native file, so the same transactions. Columns: `Date`, `Description`, `Category`, `Amount`, `Split`, `Tags`. LF endings, `M/D/YY` dates with no zero padding and no stated century, one signed `Amount`, 16 source-assigned categories (at least one with an HTML-escaped `&amp;`), `Split` and `Tags` empty, and no transaction ID. Its origin is unconfirmed. It is not the target for the Huntington importer unless the owner says otherwise.
