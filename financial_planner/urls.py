@@ -13,6 +13,7 @@ urlpatterns = [
     path("join/", views.join, name="join"),
     path("recover/", views.recover, name="recover"),
     path("accounts/<int:account_id>/imports/preview/", csv_import_views.csv_preview, name="csv-import-preview"),
+    path("accounts/<int:account_id>/imports/<int:batch_id>/undo/", csv_import_views.csv_undo_import, name="csv-import-undo"),
     path("transactions/", views.transaction_list, name="transaction-list"),
     path("transactions/<int:transaction_id>/edit/", views.transaction_edit, name="transaction-edit"),
 ]

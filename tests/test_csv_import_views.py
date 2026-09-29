@@ -412,3 +412,92 @@ def test_get_does_not_restore_an_expired_stage(staging_settings):
     assert expired.context.get("mapping_form") is None
     assert b"Cancel and delete upload" not in expired.content
     assert not path.exists()
+
+
+def commit_data(token, **changes):
+    data = mapping_data(token, action="commit", source="huntington", date_range_start="2026-09-01", date_range_end="2026-09-30")
+    data.update(changes)
+    return data
+
+
+@pytest.mark.django_db
+def test_preview_reports_overlap_counts_without_writing(staging_settings):
+    user, person = make_person("owner")
+    account = Account.objects.create(name="Synthetic Checking", account_type="checking", owner=person)
+    client = Client()
+    client.force_login(user)
+    token = upload(client, account).context["mapping_form"].initial["token"]
+    preview_url = reverse("csv-import-preview", args=(account.pk,))
+
+    first = client.post(preview_url, mapping_data(token))
+    assert first.status_code == 200
+    assert first.context["preview"].new_count == 1
+    assert first.context["preview"].duplicate_count == 0
+    assert first.context["commit_available"] is True
+    assert b"Import new rows" in first.content
+    assert not Transaction.objects.exists()
+
+    client.post(preview_url, commit_data(token))
+    token = upload(client, account).context["mapping_form"].initial["token"]
+    overlap = client.post(preview_url, mapping_data(token))
+    assert overlap.context["preview"].new_count == 0
+    assert overlap.context["preview"].duplicate_count == 1
+    assert Transaction.objects.count() == 1
+
+
+@pytest.mark.django_db
+def test_commit_imports_new_rows_discards_stage_and_skips_duplicates(staging_settings):
+    user, person = make_person("owner")
+    account = Account.objects.create(name="Synthetic Checking", account_type="checking", owner=person)
+    client = Client()
+    client.force_login(user)
+    preview_url = reverse("csv-import-preview", args=(account.pk,))
+    token = upload(client, account).context["mapping_form"].initial["token"]
+    path = Path(staging_settings) / f"{token}.csvstage"
+
+    imported = client.post(preview_url, commit_data(token), follow=True)
+    assert imported.status_code == 200
+    assert b"1</strong> new" in imported.content
+    assert Transaction.objects.filter(account=account, status="active").count() == 1
+    assert not path.exists()
+
+    token = upload(client, account).context["mapping_form"].initial["token"]
+    skipped = client.post(preview_url, commit_data(token), follow=True)
+    assert Transaction.objects.filter(account=account, status="active").count() == 1
+    assert b"0</strong> new" in skipped.content
+    assert b"1</strong> duplicate" in skipped.content
+
+
+@pytest.mark.django_db
+def test_undo_archives_one_batch_and_foreign_accounts_are_404(staging_settings):
+    owner_user, owner = make_person("owner")
+    viewer_user, viewer = make_person("viewer")
+    account = Account.objects.create(name="Synthetic Checking", account_type="checking", owner=owner)
+    other = Account.objects.create(name="Viewer Private", account_type="checking", owner=viewer)
+    client = Client()
+    client.force_login(owner_user)
+    preview_url = reverse("csv-import-preview", args=(account.pk,))
+    token = upload(client, account).context["mapping_form"].initial["token"]
+    client.post(preview_url, commit_data(token))
+    batch = ImportBatch.objects.get()
+    earlier_id = batch.pk
+    later_csv = b"When,Memo,Amount,Currency\n09/28/2026,SYNTHETIC CAFE,-5.00,USD\n"
+    token = upload(client, account, later_csv).context["mapping_form"].initial["token"]
+    client.post(preview_url, commit_data(token, date_range_start="2026-09-28", date_range_end="2026-09-28"))
+    later = ImportBatch.objects.exclude(pk=earlier_id).get()
+
+    undone = client.post(reverse("csv-import-undo", args=(account.pk, later.pk)), follow=True)
+    assert undone.status_code == 200
+    assert b"undone" in undone.content
+    later.refresh_from_db()
+    assert later.status == ImportBatch.Status.ARCHIVED
+    assert ImportBatch.objects.get(pk=earlier_id).status == ImportBatch.Status.ACTIVE
+
+    viewer = Client()
+    viewer.force_login(viewer_user)
+    private_undo = viewer.post(reverse("csv-import-undo", args=(account.pk, earlier_id)))
+    missing_undo = viewer.post(reverse("csv-import-undo", args=(other.pk + 999, earlier_id)))
+    assert private_undo.status_code == missing_undo.status_code == 404
+    assert private_undo.content == missing_undo.content
+    assert ImportBatch.objects.get(pk=earlier_id).status == ImportBatch.Status.ACTIVE
+
