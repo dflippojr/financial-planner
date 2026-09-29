@@ -64,10 +64,22 @@ class PreviewRow:
     amount_minor: int | None
     currency: str
     errors: tuple[str, ...]
+    overlap_status: str | None = None
 
     @property
     def is_valid(self):
         return not self.errors
+
+    def classified(self, overlap_status):
+        return PreviewRow(
+            self.row_number,
+            self.transaction_date,
+            self.description,
+            self.amount_minor,
+            self.currency,
+            self.errors,
+            overlap_status,
+        )
 
     @property
     def amount_display(self):
@@ -89,6 +101,14 @@ class Preview:
     @property
     def invalid_count(self):
         return len(self.rows) - self.valid_count
+
+    @property
+    def new_count(self):
+        return sum(row.overlap_status == "new" for row in self.rows)
+
+    @property
+    def duplicate_count(self):
+        return sum(row.overlap_status == "duplicate" for row in self.rows)
 
 
 def _decode(content: bytes) -> str:
