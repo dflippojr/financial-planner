@@ -1,5 +1,7 @@
 from django import forms
 
+from finance.models import ImportBatch
+
 from .parser import DATE_FORMATS, NUMBER_FORMATS, Mapping
 
 
@@ -28,6 +30,9 @@ class CsvMappingForm(forms.Form):
         required=False,
         help_text="Use when the source shows money out as positive; positive values become negative when stored.",
     )
+    source = forms.ChoiceField(choices=ImportBatch.Source.choices, required=False)
+    date_range_start = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
+    date_range_end = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
 
     def __init__(self, *args, headers, **kwargs):
         super().__init__(*args, **kwargs)

@@ -1,7 +1,18 @@
 {% extends "finance/base.html" %}
 {% block content %}
 <h1>Preview CSV import for {{ account.name }}</h1>
-<p>This tool previews data only. It does not import transactions.</p>
+<p>This tool previews data only. It does not import transactions until you confirm an import.</p>
+{% if import_result %}
+<p>
+  {% if import_result.undone %}
+  The selected import was undone. Earlier imports were left in place.
+  {% else %}
+  Import finished: <strong>{{ import_result.new_count }}</strong> new,
+  <strong>{{ import_result.duplicate_count }}</strong> duplicate,
+  <strong>{{ import_result.invalid_count }}</strong> invalid.
+  {% endif %}
+</p>
+{% endif %}
 {% if not mapping_form %}
 <form method="post" enctype="multipart/form-data">
   {% csrf_token %}
@@ -14,14 +25,19 @@
   {% csrf_token %}
   {{ mapping_form.as_p }}
   <button type="submit" name="action" value="preview">Preview rows</button>
+  {% if commit_available %}<button type="submit" name="action" value="commit">Import new rows</button>{% endif %}
   <button type="submit" name="action" value="cancel" formnovalidate>Cancel and delete upload</button>
 </form>
 {% endif %}
 {% if preview %}
 <h2>Preview results</h2>
-<p><strong>{{ preview.valid_count }}</strong> valid row{{ preview.valid_count|pluralize }}; <strong>{{ preview.invalid_count }}</strong> invalid row{{ preview.invalid_count|pluralize }}.</p>
+<p>
+  <strong>{{ preview.new_count }}</strong> new;
+  <strong>{{ preview.duplicate_count }}</strong> duplicate;
+  <strong>{{ preview.invalid_count }}</strong> invalid.
+</p>
 <table>
-  <thead><tr><th>Row</th><th>Date</th><th>Description</th><th>Amount</th><th>Currency</th><th>Errors</th></tr></thead>
+  <thead><tr><th>Row</th><th>Date</th><th>Description</th><th>Amount</th><th>Currency</th><th>Status</th><th>Errors</th></tr></thead>
   <tbody>
   {% for row in preview.rows %}
     <tr>
@@ -30,11 +46,26 @@
       <td>{{ row.description }}</td>
       <td>{{ row.amount_display|default:"—" }}</td>
       <td>{{ row.currency }}</td>
+      <td>{{ row.overlap_status|default:"—" }}</td>
       <td>{% for error in row.errors %}<div>{{ error }}</div>{% empty %}Valid{% endfor %}</td>
     </tr>
   {% endfor %}
   </tbody>
 </table>
+{% endif %}
+{% if import_batches %}
+<h2>Active imports</h2>
+<ul>
+  {% for batch in import_batches %}
+    <li>
+      {{ batch.get_source_display }} {{ batch.date_range_start }}–{{ batch.date_range_end }}
+      <form method="post" action="{% url 'csv-import-undo' account.pk batch.pk %}">
+        {% csrf_token %}
+        <button type="submit">Undo this import</button>
+      </form>
+    </li>
+  {% endfor %}
+</ul>
 {% endif %}
 <p><a href="{% url 'home' %}">Back to accounts</a></p>
 {% endblock %}

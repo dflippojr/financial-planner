@@ -1,6 +1,6 @@
 # Core financial data model
 
-Updated: 2026-09-27. This document records the storage contract introduced by issue #4. Provider parsing, deduplication behavior, access-enforcing query APIs, categories, transfer links, and reporting are separate issues.
+Updated: 2026-09-28. This document records the storage contract introduced by issue #4 and the reimport rules from issue #6. Provider parsing, access-enforcing query APIs, categories, transfer links, and reporting are separate issues.
 
 ## People and sharing
 
@@ -20,7 +20,8 @@ Updated: 2026-09-27. This document records the storage contract introduced by is
 ## Import provenance
 
 - An `ImportBatch` identifies its account, importing person, source provider, user-selected date range, import timestamp, and SHA-256 hash of the discarded source file. The application must discard uploaded CSV contents after a successful import.
-- Each transaction identifies its batch, source row number, optional provider transaction ID, and a fingerprint field reserved for issue #6. The fingerprint's logical inputs are account, date, amount, and description; issue #6 owns normalization, computation, uniqueness, and reimport behavior.
+- Each transaction identifies its batch, source row number, optional provider transaction ID, and a SHA-256 fingerprint of account id, ISO date, signed minor amount, and the stored description (newline-separated). The fingerprint is computed at import and never rewritten. It is not unique: the same fingerprint may occur more than once on an account when the export contains legitimate repeated purchases. Overlap detection counts active fingerprints on the target account only (the account the importer can already see); archived rows do not count, so an undone batch can be reimported. A matching fingerprint on a different account is not an overlap.
+- Reimport preview reports new, duplicate, and invalid counts. Commit creates an import batch only when at least one row is new, stores those rows with batch provenance and original field names/values, and discards the staged CSV. Duplicate valid rows are left on their original batches. Undo archives one active batch and only that batch's transactions.
 - `original_fields` is a JSON object on each transaction. It keeps the imported row's original field names and values without retaining a batch-level raw file. These values are financial data: never write them to logs, errors, fixtures, issues, or screenshots.
 - Deleting related people, accounts, or batches is protected at the database relationship level. Correction and undo features must archive records rather than hard-delete them.
 
