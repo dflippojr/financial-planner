@@ -7,6 +7,7 @@ from pathlib import Path
 from django.conf import settings
 
 from .parser import MAX_FILE_BYTES, CsvInputError
+from .profiles import normalize_profile
 
 
 SESSION_KEY = "csv_import_stages"
@@ -81,7 +82,7 @@ def cleanup_expired(request):
             pass
 
 
-def create_stage(request, account_id, uploaded_file):
+def create_stage(request, account_id, uploaded_file, import_profile="generic"):
     cleanup_expired(request)
     if uploaded_file.size > MAX_FILE_BYTES:
         raise CsvInputError("The CSV file exceeds the 5 MB limit.")
@@ -100,20 +101,30 @@ def create_stage(request, account_id, uploaded_file):
         "user_id": request.user.pk,
         "account_id": account_id,
         "created_at": time.time(),
+        "import_profile": import_profile,
     }
     request.session[SESSION_KEY] = stages
     return token, content
 
 
-def load_stage(request, token, account_id):
+def _live_metadata(request, token, account_id):
     cleanup_expired(request)
     metadata = _session_stages(request).get(token)
     if not metadata or metadata.get("user_id") != request.user.pk or metadata.get("account_id") != account_id:
         raise StageUnavailable
+    return metadata
+
+
+def load_stage(request, token, account_id):
+    _live_metadata(request, token, account_id)
     try:
         return _path(token).read_bytes()
     except OSError as exc:
         raise StageUnavailable from exc
+
+
+def stage_profile(request, token, account_id):
+    return normalize_profile(_live_metadata(request, token, account_id).get("import_profile"))
 
 
 def delete_stage(request, token):

@@ -6,10 +6,11 @@ from django.views.decorators.http import require_http_methods, require_POST
 
 from finance.models import Account, ImportBatch
 
-from .forms import CsvMappingForm, CsvUploadForm
+from .forms import CsvMappingForm, CsvUploadForm, HuntingtonImportForm
 from .parser import CsvInputError, preview_csv, read_csv
+from .profiles import HUNTINGTON, HUNTINGTON_MAPPING, require_huntington_headers
 from .services import classify_overlap, commit_csv_import, undo_import_batch
-from .staging import StageUnavailable, create_stage, delete_stage, find_live_stage, load_stage
+from .staging import StageUnavailable, create_stage, delete_stage, find_live_stage, load_stage, stage_profile
 
 
 PREVIEW_TEMPLATE = "finance/csv_import/preview.html"
@@ -26,12 +27,18 @@ def _visible_account(request, account_id):
     )
 
 
-def _mapping_context(context, token, document):
+def _mapping_context(context, token, document, profile):
+    context["import_profile"] = profile
+    context["headers"] = document.headers
+    if profile == HUNTINGTON:
+        context["mapping_form"] = HuntingtonImportForm(
+            initial={"token": token, "source": ImportBatch.Source.HUNTINGTON},
+        )
+        return context
     context["mapping_form"] = CsvMappingForm(
         headers=document.headers,
         initial={"token": token, "amount_mode": "signed"},
     )
-    context["headers"] = document.headers
     return context
 
 
@@ -43,7 +50,20 @@ def _restore_live_stage(request, account, context):
         document = read_csv(load_stage(request, token, account.pk))
     except (CsvInputError, StageUnavailable):
         return
-    _mapping_context(context, token, document)
+    profile = stage_profile(request, token, account.pk)
+    if profile == HUNTINGTON:
+        try:
+            _huntington_preview(
+                context,
+                token,
+                document,
+                account,
+                {"token": token, "source": ImportBatch.Source.HUNTINGTON},
+            )
+        except CsvInputError:
+            return
+        return
+    _mapping_context(context, token, document, profile)
 
 
 def _import_batches(request, account):
@@ -87,6 +107,39 @@ def _store_result(request, account_id, *, new_count=0, duplicate_count=0, invali
     }
 
 
+def _huntington_preview(context, token, document, account, post_data):
+    require_huntington_headers(document.headers)
+    preview = classify_overlap(account, preview_csv(document, HUNTINGTON_MAPPING))
+    filled = _prefill_date_range(post_data, preview)
+    mapping_form = HuntingtonImportForm(filled)
+    mapping_form.is_valid()
+    context.update(
+        {
+            "mapping_form": mapping_form,
+            "headers": document.headers,
+            "import_profile": HUNTINGTON,
+            "preview": preview,
+            "commit_available": True,
+        }
+    )
+    return preview, mapping_form
+
+
+def _require_import_range(mapping_form, *, source_required):
+    source = mapping_form.cleaned_data.get("source")
+    start = mapping_form.cleaned_data.get("date_range_start")
+    end = mapping_form.cleaned_data.get("date_range_end")
+    if source_required and not source:
+        mapping_form.add_error("source", "Choose the source of this export.")
+    if not start:
+        mapping_form.add_error("date_range_start", "Choose the start of the import date range.")
+    if not end:
+        mapping_form.add_error("date_range_end", "Choose the end of the import date range.")
+    elif start and end < start:
+        mapping_form.add_error("date_range_end", "The date range must end on or after it starts.")
+    return source, start, end
+
+
 @never_cache
 @require_http_methods(["GET", "POST"])
 def csv_preview(request, account_id):
@@ -106,53 +159,76 @@ def csv_preview(request, account_id):
         if upload_form.is_valid():
             token = None
             try:
-                token, content = create_stage(request, account.pk, upload_form.cleaned_data["csv_file"])
+                profile = upload_form.cleaned_data["import_profile"]
+                token, content = create_stage(
+                    request,
+                    account.pk,
+                    upload_form.cleaned_data["csv_file"],
+                    import_profile=profile,
+                )
                 document = read_csv(content)
+                if profile == HUNTINGTON:
+                    _huntington_preview(
+                        context,
+                        token,
+                        document,
+                        account,
+                        {"token": token, "source": ImportBatch.Source.HUNTINGTON},
+                    )
+                else:
+                    _mapping_context(context, token, document, profile)
             except CsvInputError as exc:
                 if token:
                     delete_stage(request, token)
                 upload_form.add_error("csv_file", str(exc))
-            else:
-                _mapping_context(context, token, document)
         return _render_preview(request, account, context)
 
     token = request.POST.get("token", "")
     try:
         content = load_stage(request, token, account.pk)
         document = read_csv(content)
+        profile = stage_profile(request, token, account.pk)
     except (CsvInputError, StageUnavailable):
         # Missing, expired, cross-user, and cross-account stages are deliberately
         # indistinguishable and never expose metadata about the staged upload.
         raise Http404 from None
-    mapping_form = CsvMappingForm(request.POST, headers=document.headers)
-    context.update({"mapping_form": mapping_form, "headers": document.headers})
-    if not mapping_form.is_valid():
-        return _render_preview(request, account, context)
 
-    preview = classify_overlap(account, preview_csv(document, mapping_form.mapping()))
+    if profile == HUNTINGTON:
+        mapping_form = HuntingtonImportForm(request.POST)
+        context.update(
+            {"mapping_form": mapping_form, "headers": document.headers, "import_profile": HUNTINGTON}
+        )
+        if not mapping_form.is_valid():
+            return _render_preview(request, account, context)
+        try:
+            preview, mapping_form = _huntington_preview(context, token, document, account, request.POST)
+        except CsvInputError:
+            raise Http404 from None
+        mapping = HUNTINGTON_MAPPING
+        source_required = False
+    else:
+        mapping_form = CsvMappingForm(request.POST, headers=document.headers)
+        context.update({"mapping_form": mapping_form, "headers": document.headers, "import_profile": profile})
+        if not mapping_form.is_valid():
+            return _render_preview(request, account, context)
+        mapping = mapping_form.mapping()
+        preview = classify_overlap(account, preview_csv(document, mapping))
+        source_required = True
+
     if action == "preview":
-        filled = _prefill_date_range(request.POST, preview)
-        mapping_form = CsvMappingForm(filled, headers=document.headers)
-        mapping_form.is_valid()
-        context["mapping_form"] = mapping_form
-        context["preview"] = preview
-        context["commit_available"] = True
+        if profile != HUNTINGTON:
+            filled = _prefill_date_range(request.POST, preview)
+            mapping_form = CsvMappingForm(filled, headers=document.headers)
+            mapping_form.is_valid()
+            context["mapping_form"] = mapping_form
+            context["preview"] = preview
+            context["commit_available"] = True
         return _render_preview(request, account, context)
 
     if action != "commit":
         return _render_preview(request, account, context)
 
-    source = mapping_form.cleaned_data.get("source")
-    start = mapping_form.cleaned_data.get("date_range_start")
-    end = mapping_form.cleaned_data.get("date_range_end")
-    if not source:
-        mapping_form.add_error("source", "Choose the source of this export.")
-    if not start:
-        mapping_form.add_error("date_range_start", "Choose the start of the import date range.")
-    if not end:
-        mapping_form.add_error("date_range_end", "Choose the end of the import date range.")
-    elif start and end < start:
-        mapping_form.add_error("date_range_end", "The date range must end on or after it starts.")
+    source, start, end = _require_import_range(mapping_form, source_required=source_required)
     if mapping_form.errors:
         context["preview"] = preview
         context["commit_available"] = True
@@ -164,7 +240,7 @@ def csv_preview(request, account_id):
             account.pk,
             content=content,
             document=document,
-            mapping=mapping_form.mapping(),
+            mapping=mapping,
             source=source,
             date_range_start=start,
             date_range_end=end,
