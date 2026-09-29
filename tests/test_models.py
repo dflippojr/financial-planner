@@ -252,13 +252,14 @@ def test_correction_history_rejects_mismatched_value_columns(person, import_batc
         original_fields={"synthetic": "value"},
     )
 
+    invalid_history = TransactionCorrectionHistory(
+        transaction=financial_transaction,
+        actor=person,
+        field_name=TransactionCorrectionHistory.Field.AMOUNT_MINOR,
+        previous_date=date(2026, 1, 1),
+        new_date=date(2026, 1, 2),
+    )
     with transaction.atomic():
         with pytest.raises(IntegrityError):
-            TransactionCorrectionHistory.objects.create(
-                transaction=financial_transaction,
-                actor=person,
-                field_name=TransactionCorrectionHistory.Field.AMOUNT_MINOR,
-                previous_date=date(2026, 1, 1),
-                new_date=date(2026, 1, 2),
-            )
+            invalid_history.save()
 

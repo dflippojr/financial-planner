@@ -551,12 +551,11 @@ def test_failed_correction_leaves_no_history_entry():
     def raise_on_save(*args, **kwargs):
         raise DatabaseError("synthetic failure")
 
+    url = reverse("transaction-edit", args=(financial_transaction.pk,))
+    payload = {"transaction_date": "2026-01-05", "description": "Corrected synthetic groceries", "amount": "-1.00"}
     with patch.object(Transaction, "save", side_effect=raise_on_save):
         with pytest.raises(DatabaseError, match="synthetic failure"):
-            client.post(
-                reverse("transaction-edit", args=(financial_transaction.pk,)),
-                {"transaction_date": "2026-01-05", "description": "Corrected synthetic groceries", "amount": "-1.00"},
-            )
+            client.post(url, payload)
 
     financial_transaction.refresh_from_db()
     assert financial_transaction.description == "Synthetic groceries"
@@ -573,12 +572,11 @@ def test_failed_history_write_rolls_back_the_correction():
     def raise_on_history(*args, **kwargs):
         raise DatabaseError("synthetic history failure")
 
+    url = reverse("transaction-edit", args=(financial_transaction.pk,))
+    payload = {"transaction_date": "2026-01-05", "description": "Corrected synthetic groceries", "amount": "-1.00"}
     with patch.object(TransactionCorrectionHistory.objects, "bulk_create", side_effect=raise_on_history):
         with pytest.raises(DatabaseError, match="synthetic history failure"):
-            client.post(
-                reverse("transaction-edit", args=(financial_transaction.pk,)),
-                {"transaction_date": "2026-01-05", "description": "Corrected synthetic groceries", "amount": "-1.00"},
-            )
+            client.post(url, payload)
 
     financial_transaction.refresh_from_db()
     assert financial_transaction.description == "Synthetic groceries"
