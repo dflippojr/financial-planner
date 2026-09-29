@@ -240,3 +240,33 @@ def test_huntington_wrong_headers_are_not_staged_or_logged(caplog, staging_setti
     assert secret not in caplog.text
     assert not list(staging_settings.glob("*.csvstage"))
     assert response.context.get("preview") is None
+
+
+@pytest.mark.django_db
+def test_huntington_get_restores_preview_and_commit_needs_a_date_range(staging_settings):
+    user, person = make_person("owner")
+    account = Account.objects.create(name="Synthetic Checking", account_type="checking", owner=person)
+    client = Client()
+    client.force_login(user)
+    preview_url = reverse("csv-import-preview", args=(account.pk,))
+    staged = upload_huntington(client, account)
+    token = staged.context["mapping_form"].data["token"]
+
+    restored = client.get(preview_url)
+    assert restored.status_code == 200
+    assert restored.context["preview"].valid_count == 3
+    assert b"Huntington checking columns are mapped automatically" in restored.content
+
+    reversed_range = client.post(
+        preview_url,
+        {
+            "action": "commit",
+            "token": token,
+            "date_range_start": "2026-09-30",
+            "date_range_end": "2026-09-01",
+        },
+    )
+    assert reversed_range.status_code == 200
+    assert not Transaction.objects.exists()
+    assert b"end on or after it starts" in reversed_range.content
+

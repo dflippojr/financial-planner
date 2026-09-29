@@ -30,11 +30,6 @@ def _visible_account(request, account_id):
 def _mapping_context(context, token, document, profile):
     context["import_profile"] = profile
     context["headers"] = document.headers
-    if profile == HUNTINGTON:
-        context["mapping_form"] = HuntingtonImportForm(
-            initial={"token": token, "source": ImportBatch.Source.HUNTINGTON},
-        )
-        return context
     context["mapping_form"] = CsvMappingForm(
         headers=document.headers,
         initial={"token": token, "amount_mode": "signed"},
