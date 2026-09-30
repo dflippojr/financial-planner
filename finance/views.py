@@ -3,9 +3,11 @@ from datetime import timedelta
 from django.conf import settings
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.decorators import login_not_required
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import DatabaseError, connections
 from django.db import transaction as database_transaction
-from django.http import HttpResponse
+from django.db.models import Q
+from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
@@ -24,9 +26,33 @@ from .auth_services import (
     record_login_failure,
     throttle_key,
 )
-from .forms import JoinForm, LoginForm, RecoveryForm, TransactionCorrectionForm, TransactionFilterForm
+from .forms import (
+    CategoryNameForm,
+    JoinForm,
+    LoginForm,
+    RecoveryForm,
+    RefundLinkForm,
+    TransactionCategoryForm,
+    TransactionCorrectionForm,
+    TransactionFilterForm,
+    TransferWindowForm,
+)
 from .lifecycle_services import lock_actor_household
-from .models import Account, Person, Transaction, TransactionCorrectionHistory
+from .models import Account, Category, Person, RefundLink, Transaction, TransactionCorrectionHistory, TransferPair
+from .category_services import (
+    add_category,
+    assign_category,
+    confirm_transfer_pair,
+    current_household,
+    dismiss_transfer_pair,
+    ensure_household_categories,
+    exclusion_exists_for,
+    link_refund,
+    refresh_transfer_pairs,
+    rename_category,
+    set_transfer_window_days,
+    undo_transfer_pair,
+)
 
 
 @login_not_required
@@ -55,7 +81,8 @@ def transaction_list(request):
     transactions = (
         Transaction.objects.visible_to(request.user)
         .filter(status=Transaction.Status.ACTIVE)
-        .select_related("account", "import_batch")
+        .select_related("account", "import_batch", "category")
+        .annotate(_excluded=exclusion_exists_for(request.user))
         .order_by("-transaction_date", "-pk")
     )
     form = TransactionFilterForm(request.GET or None, principal=request.user)
@@ -69,8 +96,15 @@ def transaction_list(request):
             transactions = transactions.filter(account=filters["account"])
         if filters["q"]:
             transactions = transactions.filter(description__icontains=filters["q"])
-        # All transactions remain uncategorized until issue #8 introduces the
-        # agreed category scheme, so its sole category choice needs no query.
+        category = filters["category"]
+        if category == "uncategorized":
+            transactions = transactions.filter(
+                Q(category__isnull=True) | Q(category__code=Category.Code.UNCATEGORIZED)
+            ).exclude(_excluded=True)
+        elif category == "transfer":
+            transactions = transactions.filter(_excluded=True)
+        elif category:
+            transactions = transactions.filter(category_id=category)
     elif form.is_bound:
         transactions = transactions.none()
     return render(
@@ -130,9 +164,150 @@ def transaction_edit(request, transaction_id):
         "finance/transaction_edit.html",
         {
             "form": form,
+            "category_form": TransactionCategoryForm(
+                principal=request.user,
+                initial={"category": financial_transaction.category_id},
+            ),
+            "refund_form": RefundLinkForm(principal=request.user, refund=financial_transaction),
+            "refund_link": RefundLink.objects.visible_to(request.user)
+            .select_related("original")
+            .filter(refund=financial_transaction)
+            .first(),
             "transaction": financial_transaction,
             "correction_history": correction_history,
         },
+    )
+
+
+def _service_or_404(action):
+    try:
+        return action()
+    except PermissionDenied as exc:
+        raise Http404 from exc
+
+
+@require_POST
+@never_cache
+def transaction_categorize(request, transaction_id):
+    _visible_active_transaction(request.user, transaction_id)
+    form = TransactionCategoryForm(request.POST, principal=request.user)
+    if form.is_valid():
+        category = form.cleaned_data["category"]
+        _service_or_404(
+            lambda: assign_category(request.user, transaction_id, None if category is None else category.pk)
+        )
+    return redirect("transaction-edit", transaction_id=transaction_id)
+
+
+@require_POST
+@never_cache
+def transaction_link_refund(request, transaction_id):
+    _visible_active_transaction(request.user, transaction_id)
+    form = RefundLinkForm(request.POST, principal=request.user, refund=_visible_active_transaction(request.user, transaction_id))
+    if form.is_valid():
+        _service_or_404(lambda: link_refund(request.user, transaction_id, form.cleaned_data["original"].pk))
+    return redirect("transaction-edit", transaction_id=transaction_id)
+
+
+@require_http_methods(["GET", "POST"])
+@never_cache
+def category_list(request):
+    person = get_object_or_404(Person, user=request.user)
+    household = current_household(person)
+    if household is None:
+        return render(
+            request,
+            "finance/category_list.html",
+            {"household": None, "categories": [], "add_form": CategoryNameForm(), "window_form": None},
+        )
+    ensure_household_categories(household)
+    add_form = CategoryNameForm(request.POST if request.POST.get("action") == "add" else None)
+    window_form = TransferWindowForm(
+        request.POST if request.POST.get("action") == "window" else None,
+        initial={"transfer_match_window_days": household.transfer_match_window_days},
+    )
+    if request.method == "POST" and request.POST.get("action") == "add" and add_form.is_valid():
+        try:
+            _service_or_404(lambda: add_category(request.user, add_form.cleaned_data["name"]))
+        except ValidationError as exc:
+            add_form.add_error("name", exc.messages[0] if exc.messages else "The category could not be saved.")
+        else:
+            return redirect("category-list")
+    if request.method == "POST" and request.POST.get("action") == "window" and window_form.is_valid():
+        try:
+            _service_or_404(
+                lambda: set_transfer_window_days(request.user, window_form.cleaned_data["transfer_match_window_days"])
+            )
+        except ValidationError as exc:
+            window_form.add_error(
+                "transfer_match_window_days",
+                exc.messages[0] if exc.messages else "The match window could not be saved.",
+            )
+        else:
+            return redirect("category-list")
+    if request.method == "POST" and request.POST.get("action") == "rename":
+        rename_form = CategoryNameForm(request.POST)
+        if rename_form.is_valid():
+            try:
+                _service_or_404(
+                    lambda: rename_category(
+                        request.user,
+                        int(request.POST.get("category_id", "0")),
+                        rename_form.cleaned_data["name"],
+                    )
+                )
+            except (ValidationError, ValueError) as exc:
+                messages = getattr(exc, "messages", None)
+                add_form.add_error(None, messages[0] if messages else "The category could not be renamed.")
+            else:
+                return redirect("category-list")
+    categories = Category.objects.visible_to(request.user).order_by("name", "pk")
+    return render(
+        request,
+        "finance/category_list.html",
+        {
+            "household": household,
+            "categories": categories,
+            "add_form": add_form if add_form is not None else CategoryNameForm(),
+            "window_form": window_form,
+        },
+    )
+
+
+@require_http_methods(["GET", "POST"])
+@never_cache
+def transfer_review(request):
+    _service_or_404(lambda: refresh_transfer_pairs(request.user))
+    if request.method == "POST":
+        try:
+            pair_id = int(request.POST.get("pair_id", "0"))
+        except (TypeError, ValueError) as exc:
+            raise Http404 from exc
+        action = request.POST.get("action")
+        actions = {
+            "confirm": confirm_transfer_pair,
+            "dismiss": dismiss_transfer_pair,
+            "undo": undo_transfer_pair,
+        }
+        handler = actions.get(action)
+        if handler is None:
+            raise Http404
+        _service_or_404(lambda: handler(request.user, pair_id))
+        return redirect("transfer-review")
+    visible = TransferPair.objects.visible_to(request.user).select_related(
+        "leg_a",
+        "leg_b",
+        "leg_a__account",
+        "leg_b__account",
+    )
+    exclusions = visible.filter(status__in=(TransferPair.Status.AUTO_MARKED, TransferPair.Status.CONFIRMED)).order_by(
+        "-updated_at", "-pk"
+    )
+    suggestions = visible.filter(status=TransferPair.Status.SUGGESTED).order_by("-updated_at", "-pk")
+    return render(
+        request,
+        "finance/transfer_review.html",
+        {"exclusions": exclusions, "suggestions": suggestions},
     )
 
 

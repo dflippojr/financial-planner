@@ -9,6 +9,20 @@
   <a href="{% url 'transaction-list' %}">Cancel</a>
 </form>
 <p>The original imported fields and import batch provenance are retained.</p>
+<form method="post" action="{% url 'transaction-categorize' transaction.pk %}">
+  {% csrf_token %}
+  {{ category_form.as_p }}
+  <button type="submit">Save category</button>
+</form>
+{% if refund_link %}
+<p>This refund is linked to a purchase on {{ refund_link.original.transaction_date }} and inherits that category.</p>
+{% else %}
+<form method="post" action="{% url 'transaction-link-refund' transaction.pk %}">
+  {% csrf_token %}
+  {{ refund_form.as_p }}
+  <button type="submit">Link refund</button>
+</form>
+{% endif %}
 {% if correction_history %}
 <h2>Correction history</h2>
 <ol>

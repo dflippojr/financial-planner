@@ -6,7 +6,7 @@ from django.core.exceptions import ValidationError
 from django.utils import timezone
 
 from .auth_services import validated_username
-from .models import Account, TransactionCorrectionHistory
+from .models import Account, Category, Transaction, TransactionCorrectionHistory
 
 
 MIN_SIGNED_BIGINT = -(2**63)
@@ -71,6 +71,13 @@ class TransactionFilterForm(forms.Form):
     def __init__(self, *args, principal=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["account"].queryset = Account.objects.visible_to(principal).order_by("name", "pk")
+        choices = [("", "All categories"), ("uncategorized", "Uncategorized"), ("transfer", "Transfer")]
+        if principal is not None:
+            from .category_services import assignable_categories
+
+            for category in assignable_categories(principal).exclude(code=Category.Code.UNCATEGORIZED):
+                choices.append((str(category.pk), category.name))
+        self.fields["category"].choices = choices
 
     def clean(self):
         cleaned = super().clean()
@@ -170,3 +177,32 @@ class TransactionCorrectionForm(forms.Form):
         transaction.save(update_fields=("transaction_date", "description", "amount_minor", "updated_at"))
         TransactionCorrectionHistory.objects.bulk_create(history_rows)
         return transaction
+
+
+class TransactionCategoryForm(forms.Form):
+    category = forms.ModelChoiceField(queryset=Category.objects.none(), required=False, empty_label="Uncategorized")
+
+    def __init__(self, *args, principal=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        from .category_services import assignable_categories
+
+        self.fields["category"].queryset = assignable_categories(principal)
+
+
+class RefundLinkForm(forms.Form):
+    original = forms.ModelChoiceField(queryset=Transaction.objects.none(), required=True, label="Original purchase")
+
+    def __init__(self, *args, principal=None, refund=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        visible = Transaction.objects.visible_to(principal).filter(status=Transaction.Status.ACTIVE)
+        if refund is not None:
+            visible = visible.exclude(pk=refund.pk)
+        self.fields["original"].queryset = visible.order_by("-transaction_date", "-pk")
+
+
+class CategoryNameForm(forms.Form):
+    name = forms.CharField(max_length=80)
+
+
+class TransferWindowForm(forms.Form):
+    transfer_match_window_days = forms.IntegerField(min_value=0, max_value=366, label="Match window (days)")

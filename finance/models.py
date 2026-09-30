@@ -19,6 +19,11 @@ def validate_json_object(value):
         raise ValidationError("Original imported fields must be a JSON object.")
 
 
+def validate_reason_list(value):
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValidationError("Reasons must be a list of strings.")
+
+
 class ArchivableModel(models.Model):
     class Status(models.TextChoices):
         ACTIVE = "active", "Active"
@@ -47,8 +52,17 @@ class Person(models.Model):
 
 class Household(models.Model):
     name = models.CharField(max_length=150)
+    transfer_match_window_days = models.PositiveSmallIntegerField(default=5)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(transfer_match_window_days__lte=366),
+                name="household_transfer_window_days_range",
+            ),
+        ]
 
     def __str__(self):
         return self.name
@@ -75,6 +89,49 @@ class Membership(models.Model):
 
     def __str__(self):
         return f"{self.person} in {self.household}"
+
+
+class Category(models.Model):
+    class Code(models.TextChoices):
+        CUSTOM = "custom", "Custom"
+        UNCATEGORIZED = "uncategorized", "Uncategorized"
+        TRANSFER = "transfer", "Transfer"
+
+    household = models.ForeignKey(Household, on_delete=models.PROTECT, related_name="categories")
+    name = models.CharField(max_length=80)
+    code = models.CharField(max_length=13, choices=Code, default=Code.CUSTOM)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            person = _person_for(principal)
+            if person is None:
+                return self.none()
+            current_households = Membership.objects.filter(
+                person=person,
+                ended_at__isnull=True,
+            ).values("household_id")
+            return self.filter(household_id__in=current_households)
+
+    objects = QuerySet.as_manager()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("household", "name"), name="category_unique_name_per_household"),
+            models.UniqueConstraint(
+                fields=("household", "code"),
+                condition=~Q(code="custom"),
+                name="category_unique_system_code_per_household",
+            ),
+            models.CheckConstraint(
+                condition=Q(code__in=("custom", "uncategorized", "transfer")),
+                name="category_code_valid",
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
 
 
 def _person_for(principal):
@@ -215,6 +272,13 @@ class Transaction(ArchivableModel):
     source_transaction_id = models.CharField(max_length=255, blank=True)
     fingerprint = models.CharField(max_length=64, validators=(sha256_validator,), db_index=True)
     original_fields = models.JSONField(validators=(validate_json_object,))
+    category = models.ForeignKey(
+        Category,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="transactions",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -261,8 +325,20 @@ class Transaction(ArchivableModel):
 
     @property
     def category_display(self):
-        # Issue #8 owns the category schema and assignment behavior.
-        return "Uncategorized"
+        if self.is_excluded_transfer:
+            return "Transfer"
+        if self.category_id is None:
+            return "Uncategorized"
+        return self.category.name
+
+    @property
+    def is_excluded_transfer(self):
+        pairs = getattr(self, "_prefetched_exclusion_pairs", None)
+        if pairs is not None:
+            return any(pair.is_active_exclusion for pair in pairs)
+        return TransferPair.objects.excluding_income_and_spending().filter(
+            Q(leg_a=self) | Q(leg_b=self)
+        ).exists()
 
 
 class TransactionCorrectionHistory(models.Model):
@@ -272,6 +348,9 @@ class TransactionCorrectionHistory(models.Model):
         TRANSACTION_DATE = "transaction_date", "Date"
         DESCRIPTION = "description", "Description"
         AMOUNT_MINOR = "amount_minor", "Amount"
+        CATEGORY = "category", "Category"
+        EXCLUSION = "exclusion", "Transfer exclusion"
+        REFUND_LINK = "refund_link", "Refund link"
 
     transaction = models.ForeignKey(
         Transaction,
@@ -314,7 +393,7 @@ class TransactionCorrectionHistory(models.Model):
                         currency="",
                     )
                     | Q(
-                        field_name="description",
+                        field_name__in=("description", "category", "exclusion", "refund_link"),
                         previous_date__isnull=True,
                         new_date__isnull=True,
                         previous_amount_minor__isnull=True,
@@ -347,7 +426,12 @@ class TransactionCorrectionHistory(models.Model):
     def previous_display(self):
         if self.field_name == self.Field.TRANSACTION_DATE:
             return str(self.previous_date)
-        if self.field_name == self.Field.DESCRIPTION:
+        if self.field_name in (
+            self.Field.DESCRIPTION,
+            self.Field.CATEGORY,
+            self.Field.EXCLUSION,
+            self.Field.REFUND_LINK,
+        ):
             return self.previous_description
         return self._amount_display(self.previous_amount_minor)
 
@@ -355,9 +439,98 @@ class TransactionCorrectionHistory(models.Model):
     def new_display(self):
         if self.field_name == self.Field.TRANSACTION_DATE:
             return str(self.new_date)
-        if self.field_name == self.Field.DESCRIPTION:
+        if self.field_name in (
+            self.Field.DESCRIPTION,
+            self.Field.CATEGORY,
+            self.Field.EXCLUSION,
+            self.Field.REFUND_LINK,
+        ):
             return self.new_description
         return self._amount_display(self.new_amount_minor)
+
+
+class TransferPair(models.Model):
+    class Status(models.TextChoices):
+        SUGGESTED = "suggested", "Suggested"
+        AUTO_MARKED = "auto_marked", "Auto-marked"
+        CONFIRMED = "confirmed", "Confirmed"
+        DISMISSED = "dismissed", "Dismissed"
+        UNDONE = "undone", "Undone"
+
+    class Kind(models.TextChoices):
+        TRANSFER = "transfer", "Transfer"
+        CARD_PAYMENT = "card_payment", "Credit-card payment"
+
+    class Confidence(models.TextChoices):
+        HIGH = "high", "High"
+        LOW = "low", "Low"
+
+    leg_a = models.ForeignKey(Transaction, on_delete=models.PROTECT, related_name="transfer_pairs_as_a")
+    leg_b = models.ForeignKey(Transaction, on_delete=models.PROTECT, related_name="transfer_pairs_as_b")
+    status = models.CharField(max_length=11, choices=Status)
+    kind = models.CharField(max_length=12, choices=Kind)
+    confidence = models.CharField(max_length=4, choices=Confidence)
+    reasons = models.JSONField(validators=(validate_reason_list,))
+    leg_a_category_id_at_mark = models.PositiveIntegerField(null=True, blank=True)
+    leg_b_category_id_at_mark = models.PositiveIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            visible_transactions = Transaction.objects.visible_to(principal).values("pk")
+            return self.filter(leg_a_id__in=visible_transactions, leg_b_id__in=visible_transactions)
+
+        def excluding_income_and_spending(self):
+            return self.filter(status__in=(TransferPair.Status.AUTO_MARKED, TransferPair.Status.CONFIRMED))
+
+    objects = QuerySet.as_manager()
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(condition=Q(leg_a_id__lt=F("leg_b_id")), name="transfer_pair_leg_order"),
+            models.UniqueConstraint(fields=("leg_a", "leg_b"), name="transfer_pair_unique_legs"),
+            models.CheckConstraint(
+                condition=Q(status__in=("suggested", "auto_marked", "confirmed", "dismissed", "undone")),
+                name="transfer_pair_status_valid",
+            ),
+            models.CheckConstraint(
+                condition=Q(kind__in=("transfer", "card_payment")),
+                name="transfer_pair_kind_valid",
+            ),
+            models.CheckConstraint(
+                condition=Q(confidence__in=("high", "low")),
+                name="transfer_pair_confidence_valid",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Transfer pair {self.leg_a_id}/{self.leg_b_id}"
+
+    @property
+    def is_active_exclusion(self):
+        return self.status in (self.Status.AUTO_MARKED, self.Status.CONFIRMED)
+
+
+class RefundLink(models.Model):
+    refund = models.OneToOneField(Transaction, on_delete=models.PROTECT, related_name="refund_link")
+    original = models.ForeignKey(Transaction, on_delete=models.PROTECT, related_name="refunds")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            visible_transactions = Transaction.objects.visible_to(principal).values("pk")
+            return self.filter(refund_id__in=visible_transactions, original_id__in=visible_transactions)
+
+    objects = QuerySet.as_manager()
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(condition=~Q(refund=F("original")), name="refund_link_distinct_transactions"),
+        ]
+
+    def __str__(self):
+        return f"Refund {self.refund_id} for {self.original_id}"
 
 
 class Invitation(models.Model):

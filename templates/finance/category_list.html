@@ -1,0 +1,42 @@
+{% extends "finance/base.html" %}
+{% block content %}
+<h1>Categories</h1>
+<p><a href="{% url 'home' %}">Accounts</a> · <a href="{% url 'transaction-list' %}">Transactions</a></p>
+{% if not household %}
+<p>Join or create a household to edit the shared category list.</p>
+{% else %}
+<form method="post">
+  {% csrf_token %}
+  <input type="hidden" name="action" value="window">
+  {{ window_form.as_p }}
+  <button type="submit">Save match window</button>
+</form>
+<table>
+  <thead><tr><th>Name</th><th></th></tr></thead>
+  <tbody>
+  {% for category in categories %}
+    <tr>
+      <td>{{ category.name }}{% if category.code == "transfer" %} (system, excluded from income and spending){% endif %}</td>
+      <td>
+        {% if category.code != "transfer" %}
+        <form method="post">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="rename">
+          <input type="hidden" name="category_id" value="{{ category.pk }}">
+          <input type="text" name="name" value="{{ category.name }}" maxlength="80" required>
+          <button type="submit">Rename</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+<form method="post">
+  {% csrf_token %}
+  <input type="hidden" name="action" value="add">
+  {{ add_form.as_p }}
+  <button type="submit">Add category</button>
+</form>
+{% endif %}
+{% endblock %}

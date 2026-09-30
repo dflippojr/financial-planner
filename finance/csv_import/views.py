@@ -177,6 +177,10 @@ def csv_preview(request, account_id):
         context["commit_available"] = True
         return _render_preview(request, account, context)
 
+    from finance.category_services import refresh_transfer_pairs
+
+    refresh_transfer_pairs(request.user)
+
     delete_stage(request, token)
     _store_result(
         request,
