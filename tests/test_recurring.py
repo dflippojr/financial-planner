@@ -509,3 +509,58 @@ def test_merged_confirmed_series_leave_no_overlapping_active_series():
 
     assert active.count() == 1
     assert abs(monthly) == 1000
+
+
+@pytest.mark.django_db
+def test_long_descriptions_are_truncated_to_the_stored_name_length():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    add_monthly_charges(owner, account, description="Synthetic Stream " + "x" * 240)
+
+    refresh_recurring_series(owner)
+    series = RecurringSeries.objects.get(person=owner)
+
+    assert len(series.display_name) == RecurringSeries._meta.get_field("display_name").max_length
+
+
+@pytest.mark.django_db
+def test_second_amount_cluster_suggestion_survives_a_new_occurrence():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    add_monthly_charges(owner, account, description="Synthetic Stream", amount_minor=-1000)
+    add_monthly_charges(owner, account, description="Synthetic Stream", amount_minor=-3000)
+    refresh_recurring_series(owner)
+    assert RecurringSeries.objects.filter(person=owner).count() == 2
+    add_monthly_charges(owner, account, description="Synthetic Stream", amount_minor=-3000, count=1, start=date(2026, 4, 15))
+
+    refresh_recurring_series(owner)
+    amounts = sorted(RecurringSeries.objects.filter(person=owner).values_list("typical_amount_minor", flat=True))
+
+    assert amounts == [-3000, -1000]
+
+
+@pytest.mark.django_db
+def test_confirmed_series_is_renamed_when_named_transactions_become_private():
+    from finance.lifecycle_services import unshare_account
+
+    owner = make_person("owner")
+    member = make_person("member")
+    household = make_household(owner, member)
+    shared = make_account(owner, name="Synthetic Shared", scope=Account.Scope.HOUSEHOLD, household=household)
+    private = make_account(member, name="Synthetic Member Card")
+    make_transaction(owner, shared, transaction_date=date(2026, 1, 15), amount_minor=-1599, description="Synthetic Gym 111111")
+    make_transaction(owner, shared, transaction_date=date(2026, 2, 15), amount_minor=-1599, description="Synthetic Gym 111111")
+    make_transaction(member, private, transaction_date=date(2026, 3, 15), amount_minor=-1599, description="Synthetic Gym 222222")
+    refresh_recurring_series(member)
+    series = RecurringSeries.objects.get(person=member)
+    assert series.display_name == "Synthetic Gym 111111"
+    confirm_recurring_series(member, series.pk)
+
+    unshare_account(owner, shared.pk)
+    refresh_recurring_series(member)
+    series.refresh_from_db()
+
+    assert series.is_active
+    assert series.display_name == "Synthetic Gym 222222"

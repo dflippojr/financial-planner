@@ -175,7 +175,8 @@ def _confidence_and_reasons(chain, cadence):
 
 def _display_name(chain):
     counts = Counter(item.description.strip() or merchant_key(item.description) for item in chain)
-    return counts.most_common(1)[0][0]
+    # Descriptions are unbounded; the stored name is not.
+    return counts.most_common(1)[0][0][: RecurringSeries._meta.get_field("display_name").max_length]
 
 
 def _fingerprint(transaction_ids):
@@ -334,7 +335,8 @@ def _match_confirmed(confirmed, detected, kept_ids):
 
 def _find_open_match(open_rows, open_by_fingerprint, kept_ids, item):
     match = open_by_fingerprint.get(item.fingerprint)
-    if match is not None:
+    # A row already refreshed this pass belongs to another chain now.
+    if match is not None and match.pk not in kept_ids:
         return match
     for series in open_rows:
         if series.pk in kept_ids:
@@ -426,6 +428,10 @@ def _reconcile_unmatched_confirmed(confirmed, kept_ids, eligible_ids):
         ]
         if remaining:
             RecurringSeriesMember.objects.filter(series=series).exclude(transaction_id__in=remaining).delete()
+            # The stored name may come from a transaction the person can no
+            # longer see, so rename from what remains.
+            series.display_name = _display_name(Transaction.objects.filter(pk__in=remaining).order_by("pk"))
+            series.save(update_fields=("display_name", "updated_at"))
             continue
         RecurringSeriesMember.objects.filter(series=series).delete()
         RecurringSeries.objects.filter(pk=series.pk).update(is_active=False)
