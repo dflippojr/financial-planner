@@ -27,6 +27,7 @@ from .auth_services import (
     throttle_key,
 )
 from .forms import (
+    CashFlowFilterForm,
     CategoryNameForm,
     JoinForm,
     LoginForm,
@@ -39,6 +40,7 @@ from .forms import (
 )
 from .lifecycle_services import lock_actor_household
 from .models import Account, Category, Person, RefundLink, Transaction, TransactionCorrectionHistory, TransferPair
+from .cash_flow import cash_flow_report, default_date_range
 from .category_services import (
     add_category,
     assign_category,
@@ -72,7 +74,57 @@ def health(request):
 @require_GET
 @never_cache
 def home(request):
-    return render(request, "finance/home.html", {"accounts": Account.objects.visible_to(request.user)})
+    today = timezone.localdate()
+    default_from, default_to = default_date_range(today)
+    form = CashFlowFilterForm(request.GET or None, principal=request.user)
+    if not form.is_bound:
+        form = CashFlowFilterForm(
+            principal=request.user,
+            initial={
+                "date_from": default_from,
+                "date_to": default_to,
+                "grouping": "month",
+            },
+        )
+        date_from, date_to, grouping, account, scope = default_from, default_to, "month", None, ""
+    elif form.is_valid():
+        date_from = form.cleaned_data["date_from"] or default_from
+        date_to = form.cleaned_data["date_to"] or default_to
+        grouping = form.cleaned_data["grouping"]
+        account = form.cleaned_data["account"]
+        scope = form.cleaned_data["scope"]
+    else:
+        date_from = date_to = grouping = account = scope = None
+    report = None
+    import_account = None
+    if date_from is not None:
+        report = cash_flow_report(
+            request.user,
+            date_from=date_from,
+            date_to=date_to,
+            grouping=grouping,
+            account=account,
+            scope=scope,
+            today=today,
+        )
+        import_account = next(
+            (
+                item
+                for item in report.accounts
+                if item.status == Account.Status.ACTIVE and item.archived_at is None
+            ),
+            None,
+        )
+    return render(
+        request,
+        "finance/home.html",
+        {
+            "filter_form": form,
+            "report": report,
+            "import_account": import_account,
+            "accounts": Account.objects.visible_to(request.user),
+        },
+    )
 
 
 @require_GET
@@ -94,6 +146,8 @@ def transaction_list(request):
             transactions = transactions.filter(transaction_date__lte=filters["date_to"])
         if filters["account"]:
             transactions = transactions.filter(account=filters["account"])
+        if filters["scope"]:
+            transactions = transactions.filter(account__scope=filters["scope"])
         if filters["q"]:
             transactions = transactions.filter(description__icontains=filters["q"])
         category = filters["category"]

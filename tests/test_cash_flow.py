@@ -1,7 +1,11 @@
 from datetime import date
+from unittest.mock import patch
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.test import Client
+from django.urls import reverse
 from django.utils import timezone
 
 from finance.cash_flow import (
@@ -295,3 +299,118 @@ def test_quarter_and_year_windows_cover_selected_range():
     assert [item.calendar_start for item in windows] == [date(2026, 1, 1), date(2026, 4, 1), date(2026, 7, 1)]
     assert years[0].calendar_start == date(2025, 1, 1)
     assert years[1].calendar_start == date(2026, 1, 1)
+
+
+@pytest.mark.django_db
+@patch("finance.views.timezone.localdate", return_value=date(2026, 9, 15))
+def test_home_is_cash_flow_with_default_range_and_partial_current_month(_localdate):
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    make_transaction(
+        owner,
+        account,
+        transaction_date=date(2026, 8, 10),
+        amount_minor=-1200,
+        range_start=date(2026, 8, 1),
+        range_end=date(2026, 8, 31),
+    )
+    client = Client()
+    client.force_login(owner.user)
+
+    response = client.get(reverse("home"))
+    content = response.content.decode()
+
+    assert response.status_code == 200
+    assert "<h1>Cash flow</h1>" in content
+    assert "August 2026" in content
+    assert "August 2026 (partial)" not in content
+    assert "September 2026 (partial)" in content
+    assert "12.00 USD" in content
+    assert "Missing import" in content
+    assert 'role="img"' in content
+    periods = response.context["report"].periods
+    assert periods[0].start == date(2025, 9, 1)
+    assert periods[-1].end == date(2026, 9, 15)
+    august = next(item for item in periods if item.label == "August 2026")
+    parsed = parse_qs(urlparse(august.drilldown_url).query)
+    assert parsed["date_from"] == ["2026-08-01"]
+    assert parsed["date_to"] == ["2026-08-31"]
+
+
+@pytest.mark.django_db
+def test_home_empty_state_links_to_csv_import():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    client = Client()
+    client.force_login(owner.user)
+
+    response = client.get(
+        reverse("home"),
+        {"date_from": "2026-01-01", "date_to": "2026-01-31", "grouping": "month"},
+    )
+    content = response.content.decode()
+
+    assert "No visible transactions yet." in content
+    assert reverse("csv-import-preview", args=(account.pk,)) in content
+    assert "Missing import" in content
+
+
+@pytest.mark.django_db
+def test_home_filters_and_drilldown_keep_account_and_scope():
+    owner = make_person("owner")
+    member = make_person("member")
+    household = make_household(owner, member)
+    shared = make_account(
+        owner,
+        name="Synthetic Shared",
+        scope=Account.Scope.HOUSEHOLD,
+        household=household,
+    )
+    private = make_account(owner, name="SECRET PRIVATE LEDGER")
+    make_transaction(owner, shared, amount_minor=-1100)
+    make_transaction(
+        owner,
+        private,
+        amount_minor=-8800,
+        fingerprint="i" * 64,
+        description="Synthetic secret spend",
+    )
+    client = Client()
+    client.force_login(member.user)
+
+    response = client.get(
+        reverse("home"),
+        {"date_from": "2026-01-01", "date_to": "2026-01-31", "grouping": "month", "scope": "household"},
+    )
+    content = response.content.decode()
+    period = response.context["report"].periods[0]
+    parsed = parse_qs(urlparse(period.drilldown_url).query)
+
+    assert "SECRET PRIVATE LEDGER" not in content
+    assert period.spending_minor == 1100
+    assert parsed["scope"] == ["household"]
+    assert "account" not in parsed
+
+    listed = client.get(reverse("transaction-list"), {"date_from": "2026-01-01", "date_to": "2026-01-31", "scope": "household"})
+    assert list(listed.context["transactions"]) == list(
+        Transaction.objects.filter(account=shared, status=Transaction.Status.ACTIVE)
+    )
+
+
+@pytest.mark.django_db
+def test_home_does_not_treat_missing_import_as_a_zero_amount():
+    owner = make_person("owner")
+    make_household(owner)
+    make_account(owner)
+    client = Client()
+    client.force_login(owner.user)
+    response = client.get(
+        reverse("home"),
+        {"date_from": "2026-03-01", "date_to": "2026-03-31", "grouping": "month"},
+    )
+    content = response.content.decode()
+    assert "Missing import" in content
+    assert "<td>0.00 USD</td>" in content
+    assert "Missing import</td>" not in content

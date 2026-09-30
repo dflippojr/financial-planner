@@ -67,6 +67,14 @@ class TransactionFilterForm(forms.Form):
         choices=(("", "All categories"), ("uncategorized", "Uncategorized")),
     )
     q = forms.CharField(required=False, label="Description contains", max_length=200)
+    scope = forms.ChoiceField(
+        required=False,
+        choices=(
+            ("", "All visible accounts"),
+            (Account.Scope.PRIVATE, "Private"),
+            (Account.Scope.HOUSEHOLD, "Household"),
+        ),
+    )
 
     def __init__(self, *args, principal=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -78,6 +86,40 @@ class TransactionFilterForm(forms.Form):
             for category in assignable_categories(principal).exclude(code=Category.Code.UNCATEGORIZED):
                 choices.append((str(category.pk), category.name))
         self.fields["category"].choices = choices
+
+    def clean(self):
+        cleaned = super().clean()
+        date_from = cleaned.get("date_from")
+        date_to = cleaned.get("date_to")
+        if date_from and date_to and date_from > date_to:
+            self.add_error("date_to", "End date must be on or after start date.")
+        return cleaned
+
+
+class CashFlowFilterForm(forms.Form):
+    date_from = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
+    date_to = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
+    grouping = forms.ChoiceField(
+        choices=(
+            ("month", "Month"),
+            ("week", "Week"),
+            ("quarter", "Quarter"),
+            ("year", "Year"),
+        )
+    )
+    account = forms.ModelChoiceField(queryset=Account.objects.none(), required=False)
+    scope = forms.ChoiceField(
+        required=False,
+        choices=(
+            ("", "All visible accounts"),
+            (Account.Scope.PRIVATE, "Private"),
+            (Account.Scope.HOUSEHOLD, "Household"),
+        ),
+    )
+
+    def __init__(self, *args, principal=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["account"].queryset = Account.objects.visible_to(principal).order_by("name", "pk")
 
     def clean(self):
         cleaned = super().clean()
