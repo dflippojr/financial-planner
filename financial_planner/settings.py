@@ -114,6 +114,10 @@ LOGIN_FAILURE_LIMIT = int(os.environ.get("LOGIN_FAILURE_LIMIT", "5"))
 LOGIN_FAILURE_WINDOW_SECONDS = int(os.environ.get("LOGIN_FAILURE_WINDOW_SECONDS", "900"))
 LOGIN_BLOCK_SECONDS = int(os.environ.get("LOGIN_BLOCK_SECONDS", "900"))
 
+# Transfer pairing (issue #8). High confidence means each leg has exactly one
+# counterpart in the window. Override per household when a window is stored there.
+TRANSFER_MATCH_WINDOW_DAYS = int(os.environ.get("TRANSFER_MATCH_WINDOW_DAYS", "5"))
+
 # Uploaded CSVs are short-lived, private staging data. Keep the default outside
 # the repository and allow deployments to place it on an appropriate local disk.
 CSV_IMPORT_STAGING_DIR = os.environ.get(

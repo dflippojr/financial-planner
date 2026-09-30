@@ -16,4 +16,8 @@ urlpatterns = [
     path("accounts/<int:account_id>/imports/<int:batch_id>/undo/", csv_import_views.csv_undo_import, name="csv-import-undo"),
     path("transactions/", views.transaction_list, name="transaction-list"),
     path("transactions/<int:transaction_id>/edit/", views.transaction_edit, name="transaction-edit"),
+    path("transactions/<int:transaction_id>/category/", views.transaction_categorize, name="transaction-categorize"),
+    path("transactions/<int:transaction_id>/refund/", views.transaction_link_refund, name="transaction-link-refund"),
+    path("categories/", views.category_list, name="category-list"),
+    path("transfers/", views.transfer_review, name="transfer-review"),
 ]

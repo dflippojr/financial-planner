@@ -115,6 +115,9 @@ def archive_account(principal, account_id):
         account.status = Account.Status.ARCHIVED
         account.archived_at = now
         account.save(update_fields=("status", "archived_at", "updated_at"))
+    from finance.category_services import refresh_transfer_pairs
+
+    refresh_transfer_pairs(person)
 
 
 @transaction.atomic

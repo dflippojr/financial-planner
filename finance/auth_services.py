@@ -174,4 +174,7 @@ def seed_first_household(username, display_name, household_name, password):
     person = Person.objects.create(user=user, display_name=display_name)
     household = Household.objects.create(name=household_name)
     Membership.objects.create(person=person, household=household)
+    from .category_services import ensure_household_categories
+
+    ensure_household_categories(household)
     return user, create_recovery_codes(user)

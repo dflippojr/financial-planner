@@ -151,4 +151,7 @@ def undo_import_batch(principal, account_id, batch_id):
     batch.status = ImportBatch.Status.ARCHIVED
     batch.archived_at = now
     batch.save(update_fields=("status", "archived_at"))
+    from finance.category_services import refresh_transfer_pairs
+
+    refresh_transfer_pairs(person)
     return batch

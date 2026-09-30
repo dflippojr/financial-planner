@@ -1,6 +1,6 @@
 # Core financial data model
 
-Updated: 2026-09-29. This document records the storage contract introduced by issue #4, the reimport rules from issue #6, and correction history from issue #31. Provider parsing, access-enforcing query APIs, categories, transfer links, and reporting are separate issues.
+Updated: 2026-09-30. This document records the storage contract introduced by issue #4, the reimport rules from issue #6, correction history from issue #31, and category/transfer/refund rules from issue #8. Provider parsing, cash-flow views, and Vanguard-specific activity meaning remain separate issues.
 
 ## People and sharing
 
@@ -30,7 +30,15 @@ The committed `synthetic_demo` fixture contains invented names, hashes, descript
 ## Transaction review and correction
 
 - The transaction review UI starts with `Transaction.objects.visible_to(person)` on every request, excludes archived transactions, and orders by transaction date and then primary key descending.
-- User corrections may change only `transaction_date`, `description`, and `amount_minor`. Amount entry converts decimal major units directly to integer minor units without using binary floating point.
+- User corrections may change `transaction_date`, `description`, and `amount_minor`. Category assignment, transfer exclusions, and refund links are separate writes from issue #8 and also append correction history. Amount entry converts decimal major units directly to integer minor units without using binary floating point.
 - Each changed field writes one append-only `TransactionCorrectionHistory` row in the same database transaction as the correction (lock order: memberships, then account, then transaction, then history insert). A no-op save writes none. Amounts on history rows are integer minor units plus currency. History is listed through `TransactionCorrectionHistory.objects.visible_to`, which is `Transaction.objects.visible_to` on the parent row, including shared and archived accounts. History values are never written to logs or error messages.
 - Corrections never replace `original_fields` or change the transaction's account, import batch, source row number, fingerprint, currency, or kind. Those fields continue to describe the imported record and its provenance.
-- The list exposes category as `Uncategorized` for now. Issue #8 owns category persistence, assignment, and transfer/exclusion semantics after its product decisions are resolved.
+- The list shows the assigned household category, `Uncategorized` when none is assigned, and `Transfer` when both legs of an exclusion pair are visible to the viewer and still active.
+
+## Categories, transfers, and refunds
+
+- Each household has an editable category list seeded with Income, Groceries, Dining, Transportation, Housing, Utilities, Health, Insurance, Shopping, Entertainment, Subscriptions, Travel, Education, Personal care, Gifts and donations, Fees and interest, Taxes, Uncategorized, and the system Transfer category. Transfer cannot be assigned by hand and is never itself what excludes a row from income and spending.
+- `Transaction.category` is optional. Clearing it leaves the transaction uncategorized.
+- A `TransferPair` records two transactions (`leg_a_id` < `leg_b_id`), a confidence reading (`high` or `low`), a list of reasons, a kind (`transfer` or `card_payment`), and a status. High confidence means each leg has exactly one counterpart in the configured date window. Auto-marked and confirmed pairs are excluded from income and spending only when both legs are visible to the person asking and both remain active. Archiving or undoing an import of one leg unmarks the pair and restores the surviving transaction. Suggested pairs are not excluded until confirmed. Suggestions whose legs no longer cancel are invalidated so they stop occupying those transactions, and pairing then recomputes. Undoing restores the category ids stored at mark time. Dismissed and undone pairs are not auto-marked again.
+- Pairing requires opposite signs, equal absolute amounts, different accounts, dates within the household match window (default 5 days), and at least one person who can see both accounts. Detection runs on the actor's visible transactions only. Saving a new match window revalidates suggested and auto-marked pairs, undoes auto-marked pairs that no longer fit the window (restoring snapshot categories), leaves confirmed pairs, and then refreshes pairing.
+- A `RefundLink` is a manual link from a refund transaction to an original. The refund must be a positive amount and the original a negative purchase of the same transaction kind; otherwise the link is rejected with a safe message. The refund stores the inherited category on itself. Recategorizing the original copies that category onto linked refunds and records correction history. `income_and_spending_totals` never treats a linked refund as income; it subtracts the refund's own amount from spending in the refund's stored category without requiring the original to remain visible and without exposing the original.
