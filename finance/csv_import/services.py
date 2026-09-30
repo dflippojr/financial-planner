@@ -10,7 +10,7 @@ from finance.csv_import.fingerprint import transaction_fingerprint
 from finance.csv_import.parser import Preview, preview_csv
 from finance.lifecycle_services import (
     _DENIED,
-    _lock_account_and_pair_counterparts,
+    _lock_visible_account_with_pair_counterparts,
     _person_for,
     _visible_account_for_update,
     lock_actor_household,
@@ -141,8 +141,9 @@ def undo_import_batch(principal, account_id, batch_id):
     seed_leg_ids = list(
         Transaction.objects.filter(import_batch_id=batch_id, account_id=account_id).values_list("pk", flat=True)
     )
-    _lock_account_and_pair_counterparts(account_id, seed_leg_ids=seed_leg_ids)
-    account = _active_account(person, account_id)
+    account = _lock_visible_account_with_pair_counterparts(person, account_id, seed_leg_ids=seed_leg_ids)
+    if account.status != Account.Status.ACTIVE or account.archived_at is not None:
+        raise PermissionDenied(_DENIED)
     batch = (
         ImportBatch.objects.select_for_update()
         .filter(

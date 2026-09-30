@@ -77,13 +77,27 @@ def share_account(principal, account_id):
     account.save(update_fields=("scope", "household", "updated_at"))
 
 
-def _lock_account_and_pair_counterparts(account_id, seed_leg_ids=None):
+def _pair_counterpart_account_ids(account_id, seed_leg_ids=None):
     from finance.category_services import account_ids_in_pairs_touching_transactions
 
     if seed_leg_ids is None:
         seed_leg_ids = list(Transaction.objects.filter(account_id=account_id).values_list("pk", flat=True))
-    lock_ids = sorted(account_ids_in_pairs_touching_transactions(seed_leg_ids) | {account_id})
-    list(Account.objects.select_for_update().filter(pk__in=lock_ids).order_by("pk"))
+    return account_ids_in_pairs_touching_transactions(seed_leg_ids) - {account_id}
+
+
+def _lock_accounts_in_pk_order(account_ids):
+    ids = sorted(account_ids)
+    if not ids:
+        return
+    list(Account.objects.select_for_update().filter(pk__in=ids).order_by("pk"))
+
+
+def _lock_visible_account_with_pair_counterparts(person, account_id, seed_leg_ids=None):
+    extras = _pair_counterpart_account_ids(account_id, seed_leg_ids)
+    _lock_accounts_in_pk_order(pk for pk in extras if pk < account_id)
+    account = _visible_account_for_update(person, account_id)
+    _lock_accounts_in_pk_order(pk for pk in extras if pk > account_id)
+    return account
 
 
 @transaction.atomic
@@ -93,10 +107,7 @@ def unshare_account(principal, account_id):
     membership, _memberships = lock_actor_household(person)
     if not Account.objects.visible_to(person).filter(pk=account_id).exists():
         raise PermissionDenied(_DENIED)
-    _lock_account_and_pair_counterparts(account_id)
-    account = Account.objects.visible_to(person).filter(pk=account_id).first()
-    if account is None:
-        raise PermissionDenied(_DENIED)
+    account = _lock_visible_account_with_pair_counterparts(person, account_id)
     if (
         account.scope != Account.Scope.HOUSEHOLD
         or membership is None
@@ -119,10 +130,7 @@ def archive_account(principal, account_id):
     lock_actor_household(person)
     if not Account.objects.visible_to(person).filter(pk=account_id).exists():
         raise PermissionDenied(_DENIED)
-    _lock_account_and_pair_counterparts(account_id)
-    account = Account.objects.visible_to(person).filter(pk=account_id).first()
-    if account is None:
-        raise PermissionDenied(_DENIED)
+    account = _lock_visible_account_with_pair_counterparts(person, account_id)
     now = timezone.now()
 
     ImportBatch.objects.select_for_update().filter(
