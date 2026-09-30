@@ -2,8 +2,7 @@
 {% block content %}
 <h1>Set up the first household</h1>
 {% if recovery_codes %}
-<p>Save these one-time recovery codes now. They will not be shown again.</p>
-<ul>{% for code in recovery_codes %}<li><code>{{ code }}</code></li>{% endfor %}</ul>
+{% include "finance/_recovery_codes.html" %}
 <p><a href="{% url 'home' %}">Continue</a></p>
 {% elif not setup_configured %}
 <p>The operator must set <code>SETUP_CODE</code> in the environment before the first member can be created in the browser.</p>
