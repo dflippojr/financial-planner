@@ -413,11 +413,16 @@ def _drop_stale_open_rows(open_rows, kept_ids):
 
 def _reconcile_unmatched_confirmed(confirmed, kept_ids, eligible_ids):
     stale = [series for series in confirmed if series.pk not in kept_ids]
+    # A transaction belongs to one series: anything a refreshed series now
+    # holds no longer counts toward an unmatched one.
+    claimed = set(
+        RecurringSeriesMember.objects.filter(series_id__in=kept_ids).values_list("transaction_id", flat=True)
+    )
     for series in stale:
         remaining = [
             member.transaction_id
             for member in series.members.all()
-            if member.transaction_id in eligible_ids
+            if member.transaction_id in eligible_ids and member.transaction_id not in claimed
         ]
         if remaining:
             RecurringSeriesMember.objects.filter(series=series).exclude(transaction_id__in=remaining).delete()

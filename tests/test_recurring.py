@@ -487,3 +487,25 @@ def test_corrected_confirmed_series_with_a_new_occurrence_is_not_counted_twice()
     assert series.status == RecurringSeries.Status.CONFIRMED
     assert series.typical_amount_minor == -2000
     assert series.members.count() == 4
+
+
+@pytest.mark.django_db
+def test_merged_confirmed_series_leave_no_overlapping_active_series():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    add_monthly_charges(owner, account, description="Synthetic Stream", amount_minor=-1000)
+    later = add_monthly_charges(owner, account, description="Synthetic Stream", amount_minor=-3000, start=date(2026, 4, 15))
+    refresh_recurring_series(owner)
+    for series in RecurringSeries.objects.filter(person=owner):
+        confirm_recurring_series(owner, series.pk)
+    Transaction.objects.filter(pk__in=[charge.pk for charge in later]).update(amount_minor=-1000)
+
+    refresh_recurring_series(owner)
+    active = RecurringSeries.objects.filter(
+        person=owner, status=RecurringSeries.Status.CONFIRMED, is_active=True
+    )
+    monthly, _annual = confirmed_totals(RecurringSeries.objects.filter(person=owner))
+
+    assert active.count() == 1
+    assert abs(monthly) == 1000
