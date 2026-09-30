@@ -19,7 +19,7 @@ from finance.category_services import (
     set_transfer_window_days,
     undo_transfer_pair,
 )
-from finance.lifecycle_services import share_account, unshare_account
+from finance.lifecycle_services import archive_account, share_account, unshare_account
 from finance.csv_import.services import undo_import_batch
 from finance.models import (
     Account,
@@ -929,3 +929,99 @@ def test_undo_records_the_restored_category_in_history():
 
     assert latest.previous_description == "Dining"
     assert latest.new_description == "Groceries"
+
+
+@pytest.mark.django_db
+def test_archiving_shared_account_unmarks_pair_with_other_members_private_leg():
+    owner = make_person("owner")
+    member = make_person("member")
+    household = make_household(owner, member)
+    groceries = household.categories.get(name="Groceries")
+    dining = household.categories.get(name="Dining")
+    shared = make_account(owner, name="Synthetic Shared Checking", scope=Account.Scope.HOUSEHOLD, household=household)
+    private = make_account(member, name="Synthetic Member Savings", account_type=Account.Type.SAVINGS)
+    shared_leg = make_transaction(owner, shared, amount_minor=-2800, description="Synthetic shared out")
+    private_leg = make_transaction(member, private, amount_minor=2800, description="Synthetic private in")
+    assign_category(member, private_leg.pk, groceries.pk)
+    refresh_transfer_pairs(member)
+    pair = TransferPair.objects.get()
+    assert pair.status == TransferPair.Status.AUTO_MARKED
+    assign_category(member, private_leg.pk, dining.pk)
+
+    archive_account(owner, shared.pk)
+    pair.refresh_from_db()
+    private_leg.refresh_from_db()
+
+    assert pair.status == TransferPair.Status.UNDONE
+    assert private_leg.category_id == groceries.pk
+    assert income_and_spending_totals(member).income_minor == 2800
+    assert TransactionCorrectionHistory.objects.filter(
+        transaction=private_leg,
+        field_name=TransactionCorrectionHistory.Field.EXCLUSION,
+        new_description="included",
+        actor=owner,
+    ).exists()
+    assert not Transaction.objects.visible_to(owner).filter(pk=private_leg.pk).exists()
+    shared_leg.refresh_from_db()
+    assert shared_leg.status == Transaction.Status.ARCHIVED
+
+
+@pytest.mark.django_db
+def test_unsharing_shared_account_unmarks_pair_with_other_members_private_leg():
+    owner = make_person("owner")
+    member = make_person("member")
+    household = make_household(owner, member)
+    shared = make_account(owner, name="Synthetic Shared Checking", scope=Account.Scope.HOUSEHOLD, household=household)
+    private = make_account(member, name="Synthetic Member Savings", account_type=Account.Type.SAVINGS)
+    make_transaction(owner, shared, amount_minor=-2900, description="Synthetic shared out")
+    private_leg = make_transaction(member, private, amount_minor=2900, description="Synthetic private in")
+    refresh_transfer_pairs(member)
+    pair = TransferPair.objects.get()
+    assert pair.status == TransferPair.Status.AUTO_MARKED
+
+    unshare_account(owner, shared.pk)
+    pair.refresh_from_db()
+    private_leg.refresh_from_db()
+
+    assert pair.status == TransferPair.Status.UNDONE
+    assert private_leg.category_id is None
+    assert income_and_spending_totals(member).income_minor == 2900
+    assert TransactionCorrectionHistory.objects.filter(
+        transaction=private_leg,
+        field_name=TransactionCorrectionHistory.Field.EXCLUSION,
+        new_description="included",
+        actor=owner,
+    ).exists()
+
+
+@pytest.mark.django_db
+def test_undoing_import_of_shared_leg_restores_other_members_snapshot_category():
+    owner = make_person("owner")
+    member = make_person("member")
+    household = make_household(owner, member)
+    groceries = household.categories.get(name="Groceries")
+    dining = household.categories.get(name="Dining")
+    shared = make_account(member, name="Synthetic Shared Checking", scope=Account.Scope.HOUSEHOLD, household=household)
+    private = make_account(owner, name="Synthetic Owner Savings", account_type=Account.Type.SAVINGS)
+    shared_leg = make_transaction(member, shared, amount_minor=-3000, description="Synthetic shared out")
+    private_leg = make_transaction(owner, private, amount_minor=3000, description="Synthetic private in")
+    assign_category(owner, private_leg.pk, groceries.pk)
+    refresh_transfer_pairs(owner)
+    pair = TransferPair.objects.get()
+    assert pair.status == TransferPair.Status.AUTO_MARKED
+    assign_category(owner, private_leg.pk, dining.pk)
+
+    undo_import_batch(member, shared.pk, shared_leg.import_batch_id)
+    pair.refresh_from_db()
+    private_leg.refresh_from_db()
+
+    assert pair.status == TransferPair.Status.UNDONE
+    assert private_leg.category_id == groceries.pk
+    assert income_and_spending_totals(owner).income_minor == 3000
+    assert TransactionCorrectionHistory.objects.filter(
+        transaction=private_leg,
+        field_name=TransactionCorrectionHistory.Field.CATEGORY,
+        previous_description="Dining",
+        new_description="Groceries",
+        actor=member,
+    ).exists()
