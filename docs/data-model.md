@@ -1,6 +1,6 @@
 # Core financial data model
 
-Updated: 2026-09-30. This document records the storage contract introduced by issue #4, the reimport rules from issue #6, correction history from issue #31, category/transfer/refund rules from issue #8, and recurring-charge series from issue #17. Provider parsing, cash-flow views, and Vanguard-specific activity meaning remain separate issues.
+Updated: 2026-09-30. This document records the storage contract introduced by issue #4, the reimport rules from issue #6, correction history from issue #31, category/transfer/refund rules from issue #8, cash-flow reporting from issue #9, and recurring-charge series from issue #17. Provider parsing and Vanguard-specific activity meaning remain separate issues.
 
 ## People and sharing
 
@@ -50,3 +50,10 @@ The committed `synthetic_demo` fixture contains invented names, hashes, descript
 - Series identity for dismiss is a SHA-256 fingerprint of the sorted member transaction ids. A dismissed fingerprint is not suggested again until that set of transactions changes. Confirmed series stay confirmed and absorb later occurrences of the same merchant, cadence, and amount band (within 25% of that series' typical amount). One confirmed row is never reassigned onto a second amount cluster, and a refresh never writes a fingerprint that already belongs to another series for that person. Refresh keeps a confirmed series active while at least one of its member occurrences is still eligible, even if those leftovers cannot form a detected chain; it marks the series inactive and clears members only when none remain. A later eligible chain of the same merchant, cadence, and amount band can reactivate it; inactive confirmed series are omitted from Recurring-page totals.
 - Cadences are weekly, biweekly, monthly, quarterly, and annual, each with a few days of calendar tolerance. Two occurrences are stored as `possible`; three or more at a regular interval are `suggested` until confirmed. Exact amounts raise confidence above varying amounts (still capped at 25% from the selected cadence chain's median).
 - Typical amount, monthly equivalent, and annual equivalent are integer minor units (annual is typical absolute amount times occurrences per year; monthly is that annual figure integer-divided by 12). The Recurring page lists confirmed series and those totals; suggestions on the same page can be confirmed or dismissed.
+
+## Cash flow over time
+
+- Period totals call `income_and_spending_totals` for each window so transfer, refund, and investment rules are not re-derived. Optional account lists are intersected with `Account.objects.visible_to`.
+- Missing-import flags use active `ImportBatch` date ranges on those same visible selected accounts. A period is flagged when any selected account has no overlapping active batch; the flag is separate from the zero amounts.
+- Unverified `investment_activity` rows remain omitted from income and spending; the home view states that when an investment account is included in the selection.
+

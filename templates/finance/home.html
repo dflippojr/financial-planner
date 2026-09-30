@@ -1,11 +1,73 @@
 {% extends "finance/base.html" %}
 {% block content %}
-<h1>Accounts</h1>
+<h1>Cash flow</h1>
+<p>
+  <a href="{% url 'home' %}">Cash flow</a> ·
+  <a href="{% url 'transaction-list' %}">Transactions</a> ·
+  <a href="{% url 'transfer-review' %}">Transfers</a> ·
+  <a href="{% url 'recurring-review' %}">Recurring</a> ·
+  <a href="{% url 'category-list' %}">Categories</a>
+</p>
+<form method="get">
+  {{ filter_form.as_p }}
+  <button type="submit">Update</button>
+  <a href="{% url 'home' %}">Reset to default range</a>
+</form>
+{% if report and report.includes_investment %}
+<p role="note">{{ report.investment_notice }}</p>
+{% endif %}
+{% if report and not report.has_visible_transactions %}
+<p>
+  No visible transactions yet.
+  {% if import_account %}
+  <a href="{% url 'csv-import-preview' import_account.pk %}">Import a CSV</a>
+  to see income, spending, and net cash flow.
+  {% else %}
+  Add an account below, then import a CSV to see income, spending, and net cash flow.
+  {% endif %}
+</p>
+{% endif %}
+{% if report %}
+<figure>
+  <figcaption>Income, spending, and net cash flow by period</figcaption>
+  <svg width="{{ report.chart.width }}" height="{{ report.chart.height }}" role="img" aria-labelledby="cash-flow-chart-title">
+    <title id="cash-flow-chart-title">Income, spending, and net cash flow</title>
+    <line x1="36" y1="{{ report.chart.zero_y }}" x2="684" y2="{{ report.chart.zero_y }}" stroke="#888" />
+    {% for line in report.chart.lines %}
+    <polyline fill="none" stroke="{{ line.color }}" stroke-width="2" points="{{ line.points }}">
+      <title>{{ line.name }}</title>
+    </polyline>
+    {% endfor %}
+  </svg>
+</figure>
+<table>
+  <thead>
+    <tr>
+      <th>Period</th>
+      <th>Income</th>
+      <th>Spending</th>
+      <th>Net cash flow</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for period in report.periods %}
+    <tr>
+      <td>
+        {{ period.label }}
+        {% if period.missing_import %}<span>Missing import</span>{% endif %}
+      </td>
+      <td>{{ period.income_display }}</td>
+      <td>{{ period.spending_display }}</td>
+      <td>{{ period.net_display }}</td>
+      <td><a href="{{ period.drilldown_url }}">Transactions</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+<h2>Accounts</h2>
 <ul>{% for account in accounts %}<li>{{ account.name }}{% if account.status == "active" and account.archived_at is None %} — <a href="{% url 'csv-import-preview' account.pk %}">Preview CSV import</a>{% endif %}</li>{% empty %}<li>No accounts yet.</li>{% endfor %}</ul>
-<p><a href="{% url 'transaction-list' %}">Review transactions</a></p>
-<p><a href="{% url 'transfer-review' %}">Review transfers</a></p>
-<p><a href="{% url 'recurring-review' %}">Recurring</a></p>
-<p><a href="{% url 'category-list' %}">Categories</a></p>
 <p><a href="{% url 'invite' %}">Invite a household member</a></p>
 <form method="post" action="{% url 'logout' %}">{% csrf_token %}<button type="submit">Sign out</button></form>
 {% endblock %}
