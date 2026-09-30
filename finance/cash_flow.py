@@ -12,11 +12,15 @@ from .models import Account, ImportBatch, Transaction
 
 
 MAX_REPORT_DATE = date(9998, 12, 31)
+# Each period runs its own queries, so one request must not ask for an
+# unbounded number of them. 500 weeks is almost ten years.
+MAX_REPORT_PERIODS = 500
 GROUPING_MONTH = "month"
 GROUPING_WEEK = "week"
 GROUPING_QUARTER = "quarter"
 GROUPING_YEAR = "year"
 GROUPINGS = (GROUPING_MONTH, GROUPING_WEEK, GROUPING_QUARTER, GROUPING_YEAR)
+UNKNOWN_GROUPING = "Unknown grouping."
 INVESTMENT_NOTICE = (
     "Investment activity is left out of income and spending until those "
     "transaction types are verified."
@@ -49,7 +53,20 @@ def period_start(value, grouping):
         return date(value.year, ((value.month - 1) // 3) * 3 + 1, 1)
     if grouping == GROUPING_YEAR:
         return date(value.year, 1, 1)
-    raise ValueError("Unknown grouping.")
+    raise ValueError(UNKNOWN_GROUPING)
+
+
+def period_count(date_from, date_to, grouping):
+    """Number of periods a range spans, computed without iterating them."""
+    if grouping == GROUPING_WEEK:
+        return (period_start(date_to, grouping) - period_start(date_from, grouping)).days // 7 + 1
+    if grouping == GROUPING_MONTH:
+        return (date_to.year - date_from.year) * 12 + date_to.month - date_from.month + 1
+    if grouping == GROUPING_QUARTER:
+        return (date_to.year - date_from.year) * 4 + (date_to.month - 1) // 3 - (date_from.month - 1) // 3 + 1
+    if grouping == GROUPING_YEAR:
+        return date_to.year - date_from.year + 1
+    raise ValueError(UNKNOWN_GROUPING)
 
 
 def next_period_start(start, grouping):
@@ -68,7 +85,7 @@ def next_period_start(start, grouping):
         return date(year, month, 1)
     if grouping == GROUPING_YEAR:
         return date(start.year + 1, 1, 1)
-    raise ValueError("Unknown grouping.")
+    raise ValueError(UNKNOWN_GROUPING)
 
 
 def iter_period_windows(date_from, date_to, grouping):
@@ -155,6 +172,8 @@ def cash_flow_report(
     scope="",
     today=None,
 ):
+    if period_count(date_from, date_to, grouping) > MAX_REPORT_PERIODS:
+        raise ValueError("Too many periods for one report.")
     today = today or timezone.localdate()
     accounts = selected_accounts(principal, account=account, scope=scope)
     batches_by_account = _batches_by_account(principal, accounts)

@@ -6,7 +6,7 @@ from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator
 from django.utils import timezone
 
-from .cash_flow import MAX_REPORT_DATE, default_date_range
+from .cash_flow import MAX_REPORT_DATE, MAX_REPORT_PERIODS, default_date_range, period_count
 
 from .auth_services import validated_username
 from .models import Account, Category, Transaction, TransactionCorrectionHistory
@@ -139,8 +139,15 @@ class CashFlowFilterForm(forms.Form):
         date_to = cleaned.get("date_to") or default_to
         cleaned["date_from"] = date_from
         cleaned["date_to"] = date_to
+        grouping = cleaned.get("grouping")
         if date_from > date_to:
             self.add_error("date_to", "End date must be on or after start date.")
+        elif grouping and period_count(date_from, date_to, grouping) > MAX_REPORT_PERIODS:
+            self.add_error(
+                None,
+                f"That range has more than {MAX_REPORT_PERIODS} periods. "
+                "Choose a shorter range or a longer grouping.",
+            )
         return cleaned
 
 

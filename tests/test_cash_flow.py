@@ -17,6 +17,7 @@ from finance.cash_flow import (
     default_date_range,
     format_minor,
     iter_period_windows,
+    period_count,
     period_label,
 )
 from finance.category_services import (
@@ -463,3 +464,39 @@ def test_home_rejects_dates_past_the_last_safe_period_boundary():
     assert response.status_code == 200
     assert response.context["report"] is None
     assert "9998-12-31" in response.content.decode()
+
+
+@pytest.mark.parametrize("grouping", [GROUPING_WEEK, GROUPING_MONTH, GROUPING_QUARTER, GROUPING_YEAR])
+def test_period_count_agrees_with_the_period_windows(grouping):
+    for date_from, date_to in (
+        (date(2025, 9, 1), date(2026, 9, 30)),
+        (date(2024, 2, 29), date(2024, 3, 1)),
+        (date(2023, 12, 31), date(2025, 1, 1)),
+    ):
+        assert period_count(date_from, date_to, grouping) == len(list(iter_period_windows(date_from, date_to, grouping)))
+
+
+@pytest.mark.django_db
+def test_home_rejects_a_range_with_too_many_periods_without_building_it():
+    owner = make_person("owner")
+    make_household(owner)
+    make_account(owner)
+    client = Client()
+    client.force_login(owner.user)
+
+    with patch("finance.cash_flow.iter_period_windows") as iterate:
+        response = client.get(
+            reverse("home"),
+            {"date_from": "0001-01-01", "date_to": "9998-12-31", "grouping": "week"},
+        )
+
+    assert response.status_code == 200
+    assert response.context["report"] is None
+    assert "more than 500 periods" in response.content.decode()
+    iterate.assert_not_called()
+
+
+def test_report_refuses_too_many_periods_when_called_directly():
+    date_from, date_to = date(2000, 1, 1), date(2020, 1, 1)
+    with pytest.raises(ValueError):
+        cash_flow_report(None, date_from=date_from, date_to=date_to, grouping=GROUPING_WEEK)
