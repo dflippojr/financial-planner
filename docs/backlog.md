@@ -25,6 +25,7 @@ A release is usable when people can sign in, keep private accounts private, view
 - [#16 Saved mapping and categorization rules](https://github.com/dflippojr/financial-planner/issues/16)
 - [#17 Recurring charges](https://github.com/dflippojr/financial-planner/issues/17)
 - [#46 Recurring detection amount clustering per cadence chain](https://github.com/dflippojr/financial-planner/issues/46)
+- [#50 Recurring detection: drop amount outliers and re-pick the cadence chain](https://github.com/dflippojr/financial-planner/issues/50)
 - [#18 Account balance, net worth, and investment-performance history](https://github.com/dflippojr/financial-planner/issues/18); portfolio/account composition is a possible later extension.
 - [#19 Export and Google Sheet migration](https://github.com/dflippojr/financial-planner/issues/19)
 
