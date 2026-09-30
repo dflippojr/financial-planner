@@ -640,3 +640,17 @@ def test_suggestion_deleted_while_waiting_for_the_lock_is_denied(monkeypatch, ac
 
     with pytest.raises(PermissionDenied):
         action(owner, series.pk)
+
+
+@pytest.mark.django_db
+def test_two_occurrence_amount_clusters_in_a_mixed_chain_are_possible_series():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    add_monthly_charges(owner, account, description="Synthetic Stream", amount_minor=-1000, count=2, start=date(2026, 1, 1))
+    add_monthly_charges(owner, account, description="Synthetic Stream", amount_minor=-5000, count=2, start=date(2026, 3, 1))
+
+    refresh_recurring_series(owner)
+    found = sorted(RecurringSeries.objects.filter(person=owner).values_list("typical_amount_minor", "status"))
+
+    assert found == [(-5000, RecurringSeries.Status.POSSIBLE), (-1000, RecurringSeries.Status.POSSIBLE)]

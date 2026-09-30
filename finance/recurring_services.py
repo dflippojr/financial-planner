@@ -281,7 +281,8 @@ def _split_chain_by_amount(key, chain, detected, used):
     split_any = False
     for cluster in _cluster_by_amount(chain):
         sub_cadence, sub_chain = _pick_cadence_chain(cluster)
-        if sub_cadence is None or len(sub_chain) < 3:
+        # Two occurrences still make a "possible" series (#17 decisions).
+        if sub_cadence is None or len(sub_chain) < 2:
             continue
         if not amounts_within_tolerance(item.amount_minor for item in sub_chain):
             continue
