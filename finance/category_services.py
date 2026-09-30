@@ -476,11 +476,25 @@ def _restore_refund_categories(original, actor):
         )
 
 
+def _restore_snapshot_category(leg, category_id, actor):
+    if leg.category_id == category_id:
+        return
+    previous = leg.category
+    restored = None if category_id is None else Category.objects.get(pk=category_id)
+    leg.category = restored
+    leg.save(update_fields=("category", "updated_at"))
+    _record_text_history(
+        leg,
+        actor,
+        TransactionCorrectionHistory.Field.CATEGORY,
+        _history_label(previous),
+        _history_label(restored),
+    )
+
+
 def _unmark_exclusion(pair, left, right, actor):
-    left.category_id = pair.leg_a_category_id_at_mark
-    right.category_id = pair.leg_b_category_id_at_mark
-    left.save(update_fields=("category", "updated_at"))
-    right.save(update_fields=("category", "updated_at"))
+    _restore_snapshot_category(left, pair.leg_a_category_id_at_mark, actor)
+    _restore_snapshot_category(right, pair.leg_b_category_id_at_mark, actor)
     _restore_refund_categories(left, actor)
     _restore_refund_categories(right, actor)
     pair.status = TransferPair.Status.UNDONE

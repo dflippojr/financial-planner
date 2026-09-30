@@ -900,3 +900,32 @@ def test_undoing_a_transfer_keeps_linked_refunds_with_the_restored_category():
     assert purchase.category_id == groceries.pk
     assert refund.category_id == groceries.pk
     assert dining.pk not in income_and_spending_totals(owner).spending_by_category_id
+
+
+@pytest.mark.django_db
+def test_undo_records_the_restored_category_in_history():
+    owner = make_person("owner")
+    household = make_household(owner)
+    groceries = household.categories.get(name="Groceries")
+    dining = household.categories.get(name="Dining")
+    checking = make_account(owner, name="Synthetic Checking")
+    savings = make_account(owner, name="Synthetic Savings", account_type=Account.Type.SAVINGS)
+    outflow = make_transaction(owner, checking, amount_minor=-3300, description="Synthetic out")
+    make_transaction(owner, savings, amount_minor=3300, description="Synthetic in")
+    assign_category(owner, outflow.pk, groceries.pk)
+    refresh_transfer_pairs(owner)
+    pair = TransferPair.objects.get(status=TransferPair.Status.AUTO_MARKED)
+    assign_category(owner, outflow.pk, dining.pk)
+
+    undo_transfer_pair(owner, pair.pk)
+    latest = (
+        TransactionCorrectionHistory.objects.filter(
+            transaction=outflow,
+            field_name=TransactionCorrectionHistory.Field.CATEGORY,
+        )
+        .order_by("-recorded_at", "-pk")
+        .first()
+    )
+
+    assert latest.previous_description == "Dining"
+    assert latest.new_description == "Groceries"
