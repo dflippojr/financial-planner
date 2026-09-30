@@ -363,22 +363,38 @@ def _create_series(person, detected):
     return created
 
 
+def _confirmed_owner(confirmed, fingerprint, kept_ids):
+    """The confirmed series that already holds this fingerprint (same transactions)."""
+    for series in confirmed:
+        if series.pk not in kept_ids and series.fingerprint == fingerprint:
+            return series
+    return None
+
+
+def _confirmed_target(person, item, confirmed, kept_ids):
+    # The same transactions are the same series even when corrected amounts
+    # move it out of the confirmed amount band.
+    target = _confirmed_owner(confirmed, item.fingerprint, kept_ids) or _match_confirmed(confirmed, item, kept_ids)
+    if target is not None and _fingerprint_taken(person, item.fingerprint, exclude_pk=target.pk):
+        return None
+    return target
+
+
 def _upsert_detected(person, item, *, dismissed_fingerprints, confirmed, open_rows, open_by_fingerprint, kept_ids):
     if item.fingerprint in dismissed_fingerprints:
         return
-    confirmed_match = _match_confirmed(confirmed, item, kept_ids)
-    if confirmed_match is not None and _fingerprint_taken(person, item.fingerprint, exclude_pk=confirmed_match.pk):
-        confirmed_match = None
-    if confirmed_match is not None:
-        _apply_detection(confirmed_match, item)
-        kept_ids.add(confirmed_match.pk)
+    target = _confirmed_target(person, item, confirmed, kept_ids)
+    if target is None:
+        target = _find_open_match(open_rows, open_by_fingerprint, kept_ids, item)
+    if target is not None:
+        if not _fingerprint_taken(person, item.fingerprint, exclude_pk=target.pk):
+            _apply_detection(target, item)
+            kept_ids.add(target.pk)
         return
-    open_match = _find_open_match(open_rows, open_by_fingerprint, kept_ids, item)
-    if open_match is not None:
-        _apply_detection(open_match, item)
-        kept_ids.add(open_match.pk)
-        return
-    kept_ids.add(_create_series(person, item).pk)
+    # Another row (for example a confirmed series already refreshed this
+    # pass) owns the fingerprint: never create a duplicate.
+    if not _fingerprint_taken(person, item.fingerprint, exclude_pk=None):
+        kept_ids.add(_create_series(person, item).pk)
 
 
 def _drop_stale_open_rows(open_rows, kept_ids):

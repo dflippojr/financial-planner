@@ -441,3 +441,28 @@ def test_member_cannot_confirm_another_persons_private_series():
     assert response.status_code == 404
     series.refresh_from_db()
     assert series.status == RecurringSeries.Status.SUGGESTED
+
+
+@pytest.mark.django_db
+def test_correcting_every_amount_of_a_confirmed_series_keeps_one_series():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    charges = add_monthly_charges(owner, account, description="Synthetic Stream", amount_minor=-1000)
+    refresh_recurring_series(owner)
+    series = RecurringSeries.objects.get(person=owner)
+    confirm_recurring_series(owner, series.pk)
+    Transaction.objects.filter(pk__in=[charge.pk for charge in charges]).update(amount_minor=-2000)
+    client = Client()
+    client.force_login(owner.user)
+
+    first = client.get(reverse("recurring-review"))
+    second = client.get(reverse("recurring-review"))
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    series.refresh_from_db()
+    assert RecurringSeries.objects.filter(person=owner).count() == 1
+    assert series.status == RecurringSeries.Status.CONFIRMED
+    assert series.is_active
+    assert series.typical_amount_minor == -2000
