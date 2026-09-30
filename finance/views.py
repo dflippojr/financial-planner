@@ -127,6 +127,29 @@ def home(request):
     )
 
 
+def _apply_transaction_filters(transactions, filters):
+    if filters["date_from"]:
+        transactions = transactions.filter(transaction_date__gte=filters["date_from"])
+    if filters["date_to"]:
+        transactions = transactions.filter(transaction_date__lte=filters["date_to"])
+    if filters["account"]:
+        transactions = transactions.filter(account=filters["account"])
+    if filters["scope"]:
+        transactions = transactions.filter(account__scope=filters["scope"])
+    if filters["q"]:
+        transactions = transactions.filter(description__icontains=filters["q"])
+    category = filters["category"]
+    if category == "uncategorized":
+        return transactions.filter(
+            Q(category__isnull=True) | Q(category__code=Category.Code.UNCATEGORIZED)
+        ).exclude(_excluded=True)
+    if category == "transfer":
+        return transactions.filter(_excluded=True)
+    if category:
+        return transactions.filter(category_id=category).exclude(_excluded=True)
+    return transactions
+
+
 @require_GET
 @never_cache
 def transaction_list(request):
@@ -139,26 +162,7 @@ def transaction_list(request):
     )
     form = TransactionFilterForm(request.GET or None, principal=request.user)
     if form.is_valid():
-        filters = form.cleaned_data
-        if filters["date_from"]:
-            transactions = transactions.filter(transaction_date__gte=filters["date_from"])
-        if filters["date_to"]:
-            transactions = transactions.filter(transaction_date__lte=filters["date_to"])
-        if filters["account"]:
-            transactions = transactions.filter(account=filters["account"])
-        if filters["scope"]:
-            transactions = transactions.filter(account__scope=filters["scope"])
-        if filters["q"]:
-            transactions = transactions.filter(description__icontains=filters["q"])
-        category = filters["category"]
-        if category == "uncategorized":
-            transactions = transactions.filter(
-                Q(category__isnull=True) | Q(category__code=Category.Code.UNCATEGORIZED)
-            ).exclude(_excluded=True)
-        elif category == "transfer":
-            transactions = transactions.filter(_excluded=True)
-        elif category:
-            transactions = transactions.filter(category_id=category).exclude(_excluded=True)
+        transactions = _apply_transaction_filters(transactions, form.cleaned_data)
     elif form.is_bound:
         transactions = transactions.none()
     return render(
