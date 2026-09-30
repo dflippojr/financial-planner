@@ -725,18 +725,26 @@ def link_refund(principal, refund_id, original_id):
     return refund
 
 
-def income_and_spending_totals(principal, *, date_from=None, date_to=None):
+def income_and_spending_totals(principal, *, date_from=None, date_to=None, accounts=None):
     """Access-filtered income and spending for later cash-flow views.
 
     Transfers are excluded only when both legs are visible. Linked refunds are
     never income; they reduce spending from the refund's own stored category and
     amount even when the original purchase is no longer visible. Unverified
-    investment activity is omitted.
+    investment activity is omitted. Optional `accounts` must already be visible;
+    ids the viewer cannot see are dropped rather than queried.
     """
     person = _person_for(principal)
+    visible_accounts = Account.objects.visible_to(person)
+    if accounts is not None:
+        visible_accounts = visible_accounts.filter(pk__in=[getattr(item, "pk", item) for item in accounts])
     transactions = (
         Transaction.objects.visible_to(person)
-        .filter(status=Transaction.Status.ACTIVE, kind=Transaction.Kind.CASH_FLOW)
+        .filter(
+            status=Transaction.Status.ACTIVE,
+            kind=Transaction.Kind.CASH_FLOW,
+            account_id__in=visible_accounts.values("pk"),
+        )
         .select_related("category")
     )
     if date_from:
