@@ -54,6 +54,10 @@ class Mapping:
     credit_column: str = ""
     currency_column: str = ""
     invert_sign: bool = False
+    description_mode: str = "column"
+    payee_column: str = ""
+    memo_column: str = ""
+    source_id_column: str = ""
 
 
 @dataclass(frozen=True)
@@ -64,6 +68,7 @@ class PreviewRow:
     amount_minor: int | None
     currency: str
     errors: tuple[str, ...]
+    source_transaction_id: str = ""
     overlap_status: str | None = None
 
     @property
@@ -78,6 +83,7 @@ class PreviewRow:
             self.amount_minor,
             self.currency,
             self.errors,
+            self.source_transaction_id,
             overlap_status,
         )
 
@@ -236,13 +242,18 @@ def _cell(row, indexes, column):
 
 
 def _required_columns(mapping):
-    required = [mapping.date_column, mapping.description_column]
+    if mapping.description_mode == "payee_memo":
+        required = [mapping.date_column, mapping.payee_column, mapping.memo_column]
+    else:
+        required = [mapping.date_column, mapping.description_column]
     if mapping.amount_mode == "signed":
         required.append(mapping.amount_column)
     else:
         required.extend((mapping.debit_column, mapping.credit_column))
     if mapping.currency_column:
         required.append(mapping.currency_column)
+    if mapping.source_id_column:
+        required.append(mapping.source_id_column)
     return required
 
 
@@ -251,6 +262,10 @@ def _validate_mapping(document, mapping):
         raise CsvInputError("Choose supported date and number formats.")
     if mapping.amount_mode not in ("signed", "separate"):
         raise CsvInputError("Choose a supported amount mapping.")
+    if mapping.description_mode not in ("column", "payee_memo"):
+        raise CsvInputError("Choose a supported description mapping.")
+    if mapping.description_mode == "payee_memo" and not (mapping.payee_column and mapping.memo_column):
+        raise CsvInputError("Choose the payee and memo columns.")
     if any(column not in document.headers for column in _required_columns(mapping)):
         raise CsvInputError("One or more mapped columns are not present in the CSV.")
 
@@ -299,9 +314,34 @@ def _parse_currency(row, indexes, mapping):
     return currency, (None if currency == "USD" else "Currency must be USD.")
 
 
+def _join_payee_memo(payee, memo):
+    payee = payee.strip()
+    memo = memo.strip()
+    if payee and memo:
+        return f"{payee} - {memo}"
+    return payee or memo
+
+
+def _description(row, indexes, mapping):
+    if mapping.description_mode == "payee_memo":
+        raw = _join_payee_memo(
+            _cell(row, indexes, mapping.payee_column),
+            _cell(row, indexes, mapping.memo_column),
+        )
+    else:
+        raw = _cell(row, indexes, mapping.description_column)
+    return _safe_description(raw)
+
+
+def _source_transaction_id(row, indexes, mapping):
+    if not mapping.source_id_column:
+        return ""
+    return _cell(row, indexes, mapping.source_id_column).strip()
+
+
 def _preview_row(row, indexes, mapping):
     parsed_date, date_error = _parse_date(row, indexes, mapping)
-    description = _safe_description(_cell(row, indexes, mapping.description_column))
+    description = _description(row, indexes, mapping)
     amount_minor, amount_error = _parse_amount(row, indexes, mapping)
     currency, currency_error = _parse_currency(row, indexes, mapping)
     errors = (
@@ -318,6 +358,7 @@ def _preview_row(row, indexes, mapping):
         amount_minor,
         currency,
         tuple(error for error in errors if error),
+        _source_transaction_id(row, indexes, mapping),
     )
 
 

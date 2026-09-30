@@ -115,6 +115,7 @@ def commit_csv_import(principal, account_id, *, content, document, mapping, sour
                     description=row.description,
                     kind=kind,
                     source_row_number=row.row_number,
+                    source_transaction_id=row.source_transaction_id,
                     fingerprint=_fingerprint_for(account, row),
                     original_fields=_original_fields(document, row.row_number),
                 )
