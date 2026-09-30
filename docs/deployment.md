@@ -56,6 +56,18 @@ Prerequisites are Docker Desktop configured to use WSL2 and start when Windows s
 
    If `APP_PORT` is not 8000, use its value in the target URL. Tailscale Serve accepts only loopback HTTP proxy targets and supplies `X-Forwarded-Proto`; Django trusts that proxy header, redirects other HTTP requests to HTTPS, and uses secure session and CSRF cookies. Open the HTTPS MagicDNS URL shown by `tailscale serve status`. The command uses Serve, not Funnel, so it does not intentionally expose the app to the public internet. See the [Tailscale Serve command reference](https://tailscale.com/docs/reference/tailscale-cli/serve).
 
+   **When the PC already runs other services**, check before choosing ports:
+
+   - Run `netstat -ano | findstr LISTENING` and pick an unused loopback `APP_PORT`. Another container, such as Portainer, often holds 8000.
+   - Run `tailscale serve status` first. The command above maps the default HTTPS port (443). If 443 already proxies another app, running it replaces that mapping. Add the app on its own HTTPS port instead, one that is neither listed in `tailscale serve status` nor listening on the tailnet address:
+
+     ```powershell
+     tailscale serve --bg --https=10443 http://127.0.0.1:8210
+     ```
+
+   - With a non-default HTTPS port, `DJANGO_CSRF_TRUSTED_ORIGINS` must include it, for example `https://basement-pc.example-tailnet.ts.net:10443`, or every sign-in and form post fails the CSRF check. `DJANGO_ALLOWED_HOSTS` stays the bare MagicDNS name, without a port.
+   - To remove only this app's route later, run `tailscale serve --https=10443 off`.
+
 5. Seed the first account interactively, then save the one-time recovery codes somewhere protected:
 
    ```powershell
@@ -73,6 +85,8 @@ docker compose --env-file $Config logs --tail 50 app backup db
 ```
 
 The container health check (`python -m financial_planner.healthcheck`) probes the app on loopback using the first concrete entry of `DJANGO_ALLOWED_HOSTS` as its `Host` header, because Django rejects any host that is not allowed. Put the MagicDNS name first and do not start the list with `*`; otherwise the container can be reported unhealthy while the app works.
+
+All three containers use `restart: unless-stopped`, and the Tailscale Windows service starts automatically. Docker Desktop, however, starts only when a Windows user signs in. After a reboot the app is unavailable until someone signs in to the basement PC. Confirm that **Start Docker Desktop when you sign in** is enabled in Docker Desktop settings.
 
 Application logs must not be used for transaction details or raw import rows. Stop the deployment with `docker compose --env-file $Config stop`; do not add `--volumes` when stopping or updating it.
 
