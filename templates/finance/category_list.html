@@ -1,7 +1,7 @@
 {% extends "finance/base.html" %}
 {% block content %}
 <h1>Categories</h1>
-<p><a href="{% url 'home' %}">Accounts</a> · <a href="{% url 'transaction-list' %}">Transactions</a></p>
+<p><a href="{% url 'home' %}">Cash flow</a> · <a href="{% url 'transaction-list' %}">Transactions</a></p>
 {% if not household %}
 <p>Join or create a household to edit the shared category list.</p>
 {% else %}

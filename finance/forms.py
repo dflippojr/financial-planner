@@ -3,7 +3,10 @@ from decimal import Decimal
 from django import forms
 from django.contrib.auth import get_user_model, password_validation
 from django.core.exceptions import ValidationError
+from django.core.validators import MaxValueValidator
 from django.utils import timezone
+
+from .cash_flow import MAX_REPORT_DATE, MAX_REPORT_PERIODS, default_date_range, period_count
 
 from .auth_services import validated_username
 from .models import Account, Category, Transaction, TransactionCorrectionHistory
@@ -67,6 +70,14 @@ class TransactionFilterForm(forms.Form):
         choices=(("", "All categories"), ("uncategorized", "Uncategorized")),
     )
     q = forms.CharField(required=False, label="Description contains", max_length=200)
+    scope = forms.ChoiceField(
+        required=False,
+        choices=(
+            ("", "All visible accounts"),
+            (Account.Scope.PRIVATE, "Private"),
+            (Account.Scope.HOUSEHOLD, "Household"),
+        ),
+    )
 
     def __init__(self, *args, principal=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -85,6 +96,58 @@ class TransactionFilterForm(forms.Form):
         date_to = cleaned.get("date_to")
         if date_from and date_to and date_from > date_to:
             self.add_error("date_to", "End date must be on or after start date.")
+        return cleaned
+
+
+class CashFlowFilterForm(forms.Form):
+    date_from = forms.DateField(
+        required=False,
+        widget=forms.DateInput(attrs={"type": "date"}),
+        validators=[MaxValueValidator(MAX_REPORT_DATE)],
+    )
+    date_to = forms.DateField(
+        required=False,
+        widget=forms.DateInput(attrs={"type": "date"}),
+        validators=[MaxValueValidator(MAX_REPORT_DATE)],
+    )
+    grouping = forms.ChoiceField(
+        choices=(
+            ("month", "Month"),
+            ("week", "Week"),
+            ("quarter", "Quarter"),
+            ("year", "Year"),
+        )
+    )
+    account = forms.ModelChoiceField(queryset=Account.objects.none(), required=False)
+    scope = forms.ChoiceField(
+        required=False,
+        choices=(
+            ("", "All visible accounts"),
+            (Account.Scope.PRIVATE, "Private"),
+            (Account.Scope.HOUSEHOLD, "Household"),
+        ),
+    )
+
+    def __init__(self, *args, principal=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["account"].queryset = Account.objects.visible_to(principal).order_by("name", "pk")
+
+    def clean(self):
+        cleaned = super().clean()
+        default_from, default_to = default_date_range()
+        date_from = cleaned.get("date_from") or default_from
+        date_to = cleaned.get("date_to") or default_to
+        cleaned["date_from"] = date_from
+        cleaned["date_to"] = date_to
+        grouping = cleaned.get("grouping")
+        if date_from > date_to:
+            self.add_error("date_to", "End date must be on or after start date.")
+        elif grouping and period_count(date_from, date_to, grouping) > MAX_REPORT_PERIODS:
+            self.add_error(
+                None,
+                f"That range has more than {MAX_REPORT_PERIODS} periods. "
+                "Choose a shorter range or a longer grouping.",
+            )
         return cleaned
 
 

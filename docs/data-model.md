@@ -1,6 +1,6 @@
 # Core financial data model
 
-Updated: 2026-09-30. This document records the storage contract introduced by issue #4, the reimport rules from issue #6, correction history from issue #31, and category/transfer/refund rules from issue #8. Provider parsing, cash-flow views, and Vanguard-specific activity meaning remain separate issues.
+Updated: 2026-09-30. This document records the storage contract introduced by issue #4, the reimport rules from issue #6, correction history from issue #31, category/transfer/refund rules from issue #8, and cash-flow reporting from issue #9. Provider parsing and Vanguard-specific activity meaning remain separate issues.
 
 ## People and sharing
 
@@ -42,3 +42,10 @@ The committed `synthetic_demo` fixture contains invented names, hashes, descript
 - A `TransferPair` records two transactions (`leg_a_id` < `leg_b_id`), a confidence reading (`high` or `low`), a list of reasons, a kind (`transfer` or `card_payment`), and a status. High confidence means each leg has exactly one counterpart in the configured date window. Auto-marked and confirmed pairs are excluded from income and spending only when both legs are visible to the person asking and both remain active. Archiving, unsharing, or undoing an import of an account or batch revalidates every pair with a leg there even when the other leg is not visible to the actor, unmarks pairs that no longer hold, and restores snapshot categories on surviving legs. Suggested pairs are not excluded until confirmed. Suggestions whose legs no longer cancel are invalidated so they stop occupying those transactions, and pairing then recomputes. Undoing restores the category ids stored at mark time. Dismissed and undone pairs are not auto-marked again.
 - Pairing requires opposite signs, equal absolute amounts, different accounts, dates within the household match window (default 5 days), and at least one person who can see both accounts. Detection runs on the actor's visible transactions only. Saving a new match window revalidates suggested and auto-marked pairs, undoes auto-marked pairs that no longer fit the window (restoring snapshot categories), leaves confirmed pairs, and then refreshes pairing.
 - A `RefundLink` is a manual link from a refund transaction to an original. The refund must be a positive amount and the original a negative purchase of the same transaction kind; otherwise the link is rejected with a safe message. The refund stores the inherited category on itself. Recategorizing the original copies that category onto linked refunds and records correction history. `income_and_spending_totals` never treats a linked refund as income; it subtracts the refund's own amount from spending in the refund's stored category without requiring the original to remain visible and without exposing the original.
+
+## Cash flow over time
+
+- Period totals call `income_and_spending_totals` for each window so transfer, refund, and investment rules are not re-derived. Optional account lists are intersected with `Account.objects.visible_to`.
+- Missing-import flags use active `ImportBatch` date ranges on those same visible selected accounts. A period is flagged when any selected account has no overlapping active batch; the flag is separate from the zero amounts.
+- Unverified `investment_activity` rows remain omitted from income and spending; the home view states that when an investment account is included in the selection.
+
