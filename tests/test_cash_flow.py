@@ -425,3 +425,41 @@ def test_period_clipped_at_the_range_start_is_labeled_partial():
     assert period_label(windows[1], today=today) == "2026 (partial)"
     full_year = list(iter_period_windows(date(2024, 1, 1), date(2024, 12, 31), GROUPING_YEAR))
     assert period_label(full_year[0], today=today) == "2024"
+
+
+@pytest.mark.django_db
+@patch("finance.views.timezone.localdate", return_value=date(2026, 9, 30))
+@patch("finance.cash_flow.timezone.localdate", return_value=date(2026, 9, 30))
+def test_home_applies_default_start_before_range_validation(_cash_today, _view_today):
+    owner = make_person("owner")
+    make_household(owner)
+    make_account(owner)
+    client = Client()
+    client.force_login(owner.user)
+
+    response = client.get(
+        reverse("home"),
+        {"date_to": "2025-08-31", "grouping": "month"},
+    )
+
+    assert response.status_code == 200
+    assert response.context["report"] is None
+    assert "End date must be on or after start date." in response.content.decode()
+
+
+@pytest.mark.django_db
+def test_home_rejects_dates_past_the_last_safe_period_boundary():
+    owner = make_person("owner")
+    make_household(owner)
+    make_account(owner)
+    client = Client()
+    client.force_login(owner.user)
+
+    response = client.get(
+        reverse("home"),
+        {"date_from": "9999-12-01", "date_to": "9999-12-31", "grouping": "month"},
+    )
+
+    assert response.status_code == 200
+    assert response.context["report"] is None
+    assert "9998-12-31" in response.content.decode()

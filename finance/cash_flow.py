@@ -11,6 +11,7 @@ from .category_services import income_and_spending_totals
 from .models import Account, ImportBatch, Transaction
 
 
+MAX_REPORT_DATE = date(9998, 12, 31)
 GROUPING_MONTH = "month"
 GROUPING_WEEK = "week"
 GROUPING_QUARTER = "quarter"

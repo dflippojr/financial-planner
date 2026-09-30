@@ -3,7 +3,10 @@ from decimal import Decimal
 from django import forms
 from django.contrib.auth import get_user_model, password_validation
 from django.core.exceptions import ValidationError
+from django.core.validators import MaxValueValidator
 from django.utils import timezone
+
+from .cash_flow import MAX_REPORT_DATE, default_date_range
 
 from .auth_services import validated_username
 from .models import Account, Category, Transaction, TransactionCorrectionHistory
@@ -97,8 +100,16 @@ class TransactionFilterForm(forms.Form):
 
 
 class CashFlowFilterForm(forms.Form):
-    date_from = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
-    date_to = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
+    date_from = forms.DateField(
+        required=False,
+        widget=forms.DateInput(attrs={"type": "date"}),
+        validators=[MaxValueValidator(MAX_REPORT_DATE)],
+    )
+    date_to = forms.DateField(
+        required=False,
+        widget=forms.DateInput(attrs={"type": "date"}),
+        validators=[MaxValueValidator(MAX_REPORT_DATE)],
+    )
     grouping = forms.ChoiceField(
         choices=(
             ("month", "Month"),
@@ -123,9 +134,12 @@ class CashFlowFilterForm(forms.Form):
 
     def clean(self):
         cleaned = super().clean()
-        date_from = cleaned.get("date_from")
-        date_to = cleaned.get("date_to")
-        if date_from and date_to and date_from > date_to:
+        default_from, default_to = default_date_range()
+        date_from = cleaned.get("date_from") or default_from
+        date_to = cleaned.get("date_to") or default_to
+        cleaned["date_from"] = date_from
+        cleaned["date_to"] = date_to
+        if date_from > date_to:
             self.add_error("date_to", "End date must be on or after start date.")
         return cleaned
 
