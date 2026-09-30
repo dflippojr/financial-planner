@@ -14,6 +14,8 @@ from .models import Account, Category, Transaction, TransactionCorrectionHistory
 
 MIN_SIGNED_BIGINT = -(2**63)
 MAX_SIGNED_BIGINT = 2**63 - 1
+ALL_VISIBLE_ACCOUNTS = "All visible accounts"
+END_DATE_ORDER_ERROR = "End date must be on or after start date."
 
 
 class PasswordPairForm(forms.Form):
@@ -73,7 +75,7 @@ class TransactionFilterForm(forms.Form):
     scope = forms.ChoiceField(
         required=False,
         choices=(
-            ("", "All visible accounts"),
+            ("", ALL_VISIBLE_ACCOUNTS),
             (Account.Scope.PRIVATE, "Private"),
             (Account.Scope.HOUSEHOLD, "Household"),
         ),
@@ -95,7 +97,7 @@ class TransactionFilterForm(forms.Form):
         date_from = cleaned.get("date_from")
         date_to = cleaned.get("date_to")
         if date_from and date_to and date_from > date_to:
-            self.add_error("date_to", "End date must be on or after start date.")
+            self.add_error("date_to", END_DATE_ORDER_ERROR)
         return cleaned
 
 
@@ -122,7 +124,7 @@ class CashFlowFilterForm(forms.Form):
     scope = forms.ChoiceField(
         required=False,
         choices=(
-            ("", "All visible accounts"),
+            ("", ALL_VISIBLE_ACCOUNTS),
             (Account.Scope.PRIVATE, "Private"),
             (Account.Scope.HOUSEHOLD, "Household"),
         ),
@@ -141,7 +143,7 @@ class CashFlowFilterForm(forms.Form):
         cleaned["date_to"] = date_to
         grouping = cleaned.get("grouping")
         if date_from > date_to:
-            self.add_error("date_to", "End date must be on or after start date.")
+            self.add_error("date_to", END_DATE_ORDER_ERROR)
         elif grouping and period_count(date_from, date_to, grouping) > MAX_REPORT_PERIODS:
             self.add_error(
                 None,
@@ -166,7 +168,7 @@ class SpendingFilterForm(forms.Form):
     scope = forms.ChoiceField(
         required=False,
         choices=(
-            ("", "All visible accounts"),
+            ("", ALL_VISIBLE_ACCOUNTS),
             (Account.Scope.PRIVATE, "Private"),
             (Account.Scope.HOUSEHOLD, "Household"),
         ),
@@ -184,7 +186,7 @@ class SpendingFilterForm(forms.Form):
         cleaned["date_from"] = date_from
         cleaned["date_to"] = date_to
         if date_from > date_to:
-            self.add_error("date_to", "End date must be on or after start date.")
+            self.add_error("date_to", END_DATE_ORDER_ERROR)
         return cleaned
 
 
