@@ -1,6 +1,6 @@
 from calendar import month_name
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from types import SimpleNamespace
 from urllib.parse import urlencode
 
@@ -8,7 +8,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from .category_services import income_and_spending_totals
-from .models import Account, ImportBatch, Transaction
+from .models import Account, Category, ImportBatch, Transaction
 
 
 MAX_REPORT_DATE = date(9998, 12, 31)
@@ -32,16 +32,62 @@ def format_minor(amount_minor, currency="USD"):
     return f"{amount:,.2f} {currency}"
 
 
+def _shift_month_start(value, months):
+    year = value.year
+    month = value.month + months
+    while month <= 0:
+        month += 12
+        year -= 1
+    while month > 12:
+        month -= 12
+        year += 1
+    return date(year, month, 1)
+
+
 def default_date_range(today=None):
     """Last 12 full months plus the current month through today."""
     today = today or timezone.localdate()
     current_month_start = today.replace(day=1)
-    year = current_month_start.year
-    month = current_month_start.month - 12
-    if month <= 0:
-        month += 12
-        year -= 1
-    return date(year, month, 1), today
+    return _shift_month_start(current_month_start, -12), today
+
+
+def date_range_presets(today=None):
+    """Named ranges that match the cash-flow filter presets."""
+    today = today or timezone.localdate()
+    month_start = today.replace(day=1)
+    last_month_start = _shift_month_start(month_start, -1)
+    return (
+        SimpleNamespace(
+            key="this-month",
+            label="This month",
+            date_from=month_start,
+            date_to=today,
+        ),
+        SimpleNamespace(
+            key="last-month",
+            label="Last month",
+            date_from=last_month_start,
+            date_to=month_start - timedelta(days=1),
+        ),
+        SimpleNamespace(
+            key="last-3-months",
+            label="Last 3 months",
+            date_from=_shift_month_start(month_start, -2),
+            date_to=today,
+        ),
+        SimpleNamespace(
+            key="last-12-months",
+            label="Last 12 months",
+            date_from=_shift_month_start(month_start, -11),
+            date_to=today,
+        ),
+        SimpleNamespace(
+            key="year-to-date",
+            label="Year to date",
+            date_from=date(today.year, 1, 1),
+            date_to=today,
+        ),
+    )
 
 
 def period_start(value, grouping):
@@ -153,13 +199,115 @@ def _period_missing_import(window, accounts, batches_by_account):
     return False
 
 
-def _drilldown_url(window, *, account=None, scope=""):
-    query = {"date_from": window.start.isoformat(), "date_to": window.end.isoformat()}
+def _filter_query(date_from, date_to, *, account=None, scope="", category=None):
+    query = {"date_from": date_from.isoformat(), "date_to": date_to.isoformat()}
     if account is not None:
         query["account"] = str(account.pk)
     if scope:
         query["scope"] = scope
-    return f"{reverse('transaction-list')}?{urlencode(query)}"
+    if category is not None:
+        query["category"] = category
+    return query
+
+
+def _drilldown_url(window, *, account=None, scope=""):
+    return f"{reverse('transaction-list')}?{urlencode(_filter_query(window.start, window.end, account=account, scope=scope))}"
+
+
+def format_percent(amount_minor, total_minor):
+    if total_minor == 0:
+        return "—"
+    percent = (Decimal(amount_minor) * Decimal(100) / Decimal(total_minor)).quantize(
+        Decimal("0.1"),
+        rounding=ROUND_HALF_UP,
+    )
+    return f"{percent}%"
+
+
+def _uncategorized_bucket():
+    return {"name": "Uncategorized", "filter_value": "uncategorized", "spending_minor": 0}
+
+
+def _combine_category_spending(by_category_id, named):
+    combined = {}
+    for category_id, amount in by_category_id.items():
+        category = named.get(category_id)
+        if category is None or category.code == Category.Code.UNCATEGORIZED:
+            bucket = combined.setdefault("uncategorized", _uncategorized_bucket())
+        else:
+            bucket = combined.setdefault(
+                category.pk,
+                {"name": category.name, "filter_value": str(category.pk), "spending_minor": 0},
+            )
+        bucket["spending_minor"] += amount
+    combined.setdefault("uncategorized", _uncategorized_bucket())
+    return combined
+
+
+def _spending_row(item, *, total_spending, date_from, date_to, account, scope):
+    spending_minor = item["spending_minor"]
+    query = _filter_query(
+        date_from,
+        date_to,
+        account=account,
+        scope=scope,
+        category=item["filter_value"],
+    )
+    return SimpleNamespace(
+        name=item["name"],
+        spending_minor=spending_minor,
+        spending_display=format_minor(spending_minor),
+        percent_display=format_percent(spending_minor, total_spending),
+        is_net_refund=spending_minor < 0,
+        drilldown_url=f"{reverse('transaction-list')}?{urlencode(query)}",
+    )
+
+
+def spending_by_category_report(
+    principal,
+    *,
+    date_from,
+    date_to,
+    account=None,
+    scope="",
+):
+    accounts = selected_accounts(principal, account=account, scope=scope)
+    totals = income_and_spending_totals(
+        principal,
+        date_from=date_from,
+        date_to=date_to,
+        accounts=accounts,
+    )
+    named = {item.pk: item for item in Category.objects.visible_to(principal)}
+    combined = _combine_category_spending(totals.spending_by_category_id, named)
+    rows = [
+        _spending_row(
+            item,
+            total_spending=totals.spending_minor,
+            date_from=date_from,
+            date_to=date_to,
+            account=account,
+            scope=scope,
+        )
+        for item in combined.values()
+    ]
+    rows.sort(key=lambda row: (-row.spending_minor, row.name))
+    visible_transactions = (
+        Transaction.objects.visible_to(principal)
+        .filter(status=Transaction.Status.ACTIVE, account__in=accounts)
+        .exists()
+        if accounts
+        else False
+    )
+    return SimpleNamespace(
+        accounts=accounts,
+        rows=rows,
+        total_spending_minor=totals.spending_minor,
+        total_spending_display=format_minor(totals.spending_minor),
+        has_visible_transactions=visible_transactions,
+        includes_investment=any(item.account_type == Account.Type.INVESTMENT for item in accounts),
+        investment_notice=INVESTMENT_NOTICE,
+    )
 
 
 def cash_flow_report(

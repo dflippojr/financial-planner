@@ -1,7 +1,7 @@
 {% extends "finance/base.html" %}
 {% block content %}
 <h1>Transactions</h1>
-<p><a href="{% url 'home' %}">Cash flow</a> · <a href="{% url 'transfer-review' %}">Transfers</a> · <a href="{% url 'category-list' %}">Categories</a></p>
+<p><a href="{% url 'home' %}">Cash flow</a> · <a href="{% url 'spending-by-category' %}">Spending</a> · <a href="{% url 'transfer-review' %}">Transfers</a> · <a href="{% url 'category-list' %}">Categories</a></p>
 <form method="get">
   {{ filter_form.as_p }}
   <button type="submit">Filter</button>

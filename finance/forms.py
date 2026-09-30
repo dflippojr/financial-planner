@@ -14,6 +14,8 @@ from .models import Account, Category, Transaction, TransactionCorrectionHistory
 
 MIN_SIGNED_BIGINT = -(2**63)
 MAX_SIGNED_BIGINT = 2**63 - 1
+ALL_VISIBLE_ACCOUNTS = "All visible accounts"
+END_DATE_ORDER_ERROR = "End date must be on or after start date."
 
 
 class PasswordPairForm(forms.Form):
@@ -73,7 +75,7 @@ class TransactionFilterForm(forms.Form):
     scope = forms.ChoiceField(
         required=False,
         choices=(
-            ("", "All visible accounts"),
+            ("", ALL_VISIBLE_ACCOUNTS),
             (Account.Scope.PRIVATE, "Private"),
             (Account.Scope.HOUSEHOLD, "Household"),
         ),
@@ -95,7 +97,7 @@ class TransactionFilterForm(forms.Form):
         date_from = cleaned.get("date_from")
         date_to = cleaned.get("date_to")
         if date_from and date_to and date_from > date_to:
-            self.add_error("date_to", "End date must be on or after start date.")
+            self.add_error("date_to", END_DATE_ORDER_ERROR)
         return cleaned
 
 
@@ -122,7 +124,7 @@ class CashFlowFilterForm(forms.Form):
     scope = forms.ChoiceField(
         required=False,
         choices=(
-            ("", "All visible accounts"),
+            ("", ALL_VISIBLE_ACCOUNTS),
             (Account.Scope.PRIVATE, "Private"),
             (Account.Scope.HOUSEHOLD, "Household"),
         ),
@@ -141,13 +143,50 @@ class CashFlowFilterForm(forms.Form):
         cleaned["date_to"] = date_to
         grouping = cleaned.get("grouping")
         if date_from > date_to:
-            self.add_error("date_to", "End date must be on or after start date.")
+            self.add_error("date_to", END_DATE_ORDER_ERROR)
         elif grouping and period_count(date_from, date_to, grouping) > MAX_REPORT_PERIODS:
             self.add_error(
                 None,
                 f"That range has more than {MAX_REPORT_PERIODS} periods. "
                 "Choose a shorter range or a longer grouping.",
             )
+        return cleaned
+
+
+class SpendingFilterForm(forms.Form):
+    date_from = forms.DateField(
+        required=False,
+        widget=forms.DateInput(attrs={"type": "date"}),
+        validators=[MaxValueValidator(MAX_REPORT_DATE)],
+    )
+    date_to = forms.DateField(
+        required=False,
+        widget=forms.DateInput(attrs={"type": "date"}),
+        validators=[MaxValueValidator(MAX_REPORT_DATE)],
+    )
+    account = forms.ModelChoiceField(queryset=Account.objects.none(), required=False)
+    scope = forms.ChoiceField(
+        required=False,
+        choices=(
+            ("", ALL_VISIBLE_ACCOUNTS),
+            (Account.Scope.PRIVATE, "Private"),
+            (Account.Scope.HOUSEHOLD, "Household"),
+        ),
+    )
+
+    def __init__(self, *args, principal=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["account"].queryset = Account.objects.visible_to(principal).order_by("name", "pk")
+
+    def clean(self):
+        cleaned = super().clean()
+        default_from, default_to = default_date_range()
+        date_from = cleaned.get("date_from") or default_from
+        date_to = cleaned.get("date_to") or default_to
+        cleaned["date_from"] = date_from
+        cleaned["date_to"] = date_to
+        if date_from > date_to:
+            self.add_error("date_to", END_DATE_ORDER_ERROR)
         return cleaned
 
 

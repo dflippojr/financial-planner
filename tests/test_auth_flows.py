@@ -28,7 +28,7 @@ def make_member(username="member"):
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("url_name", ["home", "invite", "logout"])
+@pytest.mark.parametrize("url_name", ["home", "spending-by-category", "invite", "logout"])
 def test_protected_pages_reject_anonymous_requests(url_name):
     response = Client().get(reverse(url_name))
 
