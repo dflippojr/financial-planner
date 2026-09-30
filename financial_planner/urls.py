@@ -10,6 +10,7 @@ urlpatterns = [
     path("spending/", views.spending_by_category, name="spending-by-category"),
     path("sign-in/", views.sign_in, name="login"),
     path("sign-out/", views.sign_out, name="logout"),
+    path("setup/", views.setup, name="setup"),
     path("invite/", views.invite, name="invite"),
     path("join/", views.join, name="join"),
     path("recover/", views.recover, name="recover"),

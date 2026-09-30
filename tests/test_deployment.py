@@ -125,5 +125,6 @@ def test_compose_stages_csv_uploads_on_a_memory_backed_mount():
     compose = (Path(__file__).resolve().parent.parent / "compose.yml").read_text()
 
     assert "CSV_IMPORT_STAGING_DIR: /run/csv-staging/uploads" in compose
+    assert "SETUP_CODE: ${SETUP_CODE:-}" in compose
     assert "tmpfs:" in compose
     assert "- /run/csv-staging:size=128m,mode=1777" in compose
