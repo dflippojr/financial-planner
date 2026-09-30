@@ -260,6 +260,24 @@ def _pick_cadence_chain(cluster):
     return best_cadence, best
 
 
+def _farthest_from_chain_median(chain):
+    median = Decimal(_median_minor(item.amount_minor for item in chain))
+    return max(chain, key=lambda item: (abs(Decimal(abs(item.amount_minor)) - median), -item.pk))
+
+
+def _pick_tolerant_cadence_chain(candidates):
+    pick_candidates = list(candidates)
+    while len(pick_candidates) >= 2:
+        cadence, chain = _pick_cadence_chain(pick_candidates)
+        if cadence is None:
+            return None, []
+        if amounts_within_tolerance(item.amount_minor for item in chain):
+            return cadence, chain
+        outlier = _farthest_from_chain_median(chain)
+        pick_candidates = [item for item in pick_candidates if item.pk != outlier.pk]
+    return None, []
+
+
 def _used_transaction_ids(series_list):
     used = set()
     for series in series_list:
@@ -297,14 +315,15 @@ def _detect_for_merchant(key, group, detected):
         candidates = [item for item in group if item.pk not in used]
         if len(candidates) < 2:
             return
+        cadence, chain = _pick_tolerant_cadence_chain(candidates)
+        if cadence is not None:
+            _accept_chain(key, cadence, chain, detected, used)
+            continue
+        # Outlier exclusion could not form a tolerant chain; split remaining
+        # charges by amount the way mixed-chain fallback already did.
         cadence, chain = _pick_cadence_chain(candidates)
         if cadence is None:
             return
-        if amounts_within_tolerance(item.amount_minor for item in chain):
-            _accept_chain(key, cadence, chain, detected, used)
-            continue
-        # A mixed chain can interleave a one-off charge with a real series, so
-        # split every remaining charge by amount, not only the chosen chain.
         if not _split_chain_by_amount(key, candidates, detected, used):
             used.update(item.pk for item in chain)
 
