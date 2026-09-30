@@ -144,6 +144,21 @@ def _lock_accounts_and_transactions(person, transactions):
     return locked
 
 
+def _lock_owned_transactions(transactions):
+    account_ids = sorted({item.account_id for item in transactions})
+    list(Account.objects.select_for_update().filter(pk__in=account_ids).order_by("pk"))
+    ids = sorted(item.pk for item in transactions)
+    locked = list(
+        Transaction.objects.select_for_update(of=("self",))
+        .select_related("account", "category")
+        .filter(pk__in=ids, status=Transaction.Status.ACTIVE)
+        .order_by("pk")
+    )
+    if len(locked) != len(ids):
+        raise PermissionDenied(_DENIED)
+    return locked
+
+
 @transaction.atomic
 def assign_category(principal, transaction_id, category_id):
     person = _person_for(principal)
@@ -160,8 +175,16 @@ def assign_category(principal, transaction_id, category_id):
         category = assignable_categories(person).filter(pk=category_id).first()
         if category is None:
             raise PermissionDenied(_DENIED)
-    locked = _lock_accounts_and_transactions(person, [financial_transaction])
-    financial_transaction = locked[0]
+    linked_refunds = list(
+        Transaction.objects.filter(
+            refund_link__original=financial_transaction,
+            status=Transaction.Status.ACTIVE,
+        ).select_related("account", "category")
+    )
+    lock_actor_household(person)
+    locked = _lock_owned_transactions([financial_transaction, *linked_refunds])
+    by_id = {item.pk: item for item in locked}
+    financial_transaction = by_id[financial_transaction.pk]
     previous = financial_transaction.category
     financial_transaction.category = category
     financial_transaction.save(update_fields=("category", "updated_at"))
@@ -172,6 +195,18 @@ def assign_category(principal, transaction_id, category_id):
         _history_label(previous),
         _history_label(category),
     )
+    for refund in linked_refunds:
+        locked_refund = by_id[refund.pk]
+        previous_refund_category = locked_refund.category
+        locked_refund.category = category
+        locked_refund.save(update_fields=("category", "updated_at"))
+        _record_text_history(
+            locked_refund,
+            person,
+            TransactionCorrectionHistory.Field.CATEGORY,
+            _history_label(previous_refund_category),
+            _history_label(category),
+        )
     return financial_transaction
 
 
@@ -222,6 +257,7 @@ def set_transfer_window_days(principal, days):
         raise ValidationError("Choose a match window between 0 and 366 days.")
     household.transfer_match_window_days = days
     household.save(update_fields=("transfer_match_window_days", "updated_at"))
+    refresh_transfer_pairs(person)
     return household
 
 
@@ -275,15 +311,19 @@ def _ordered_legs(tx_a, tx_b):
     return (tx_a, tx_b) if tx_a.pk < tx_b.pk else (tx_b, tx_a)
 
 
-def _is_candidate(tx_a, tx_b):
+def _amounts_and_accounts_can_pair(tx_a, tx_b):
     if tx_a.pk == tx_b.pk or tx_a.account_id == tx_b.account_id:
         return False
     if tx_a.amount_minor == 0 or tx_a.amount_minor + tx_b.amount_minor != 0:
         return False
-    window = _window_days(tx_a.account, tx_b.account)
-    if abs((tx_a.transaction_date - tx_b.transaction_date).days) > window:
-        return False
     return _accounts_share_a_viewer(tx_a.account, tx_b.account)
+
+
+def _is_candidate(tx_a, tx_b):
+    if not _amounts_and_accounts_can_pair(tx_a, tx_b):
+        return False
+    window = _window_days(tx_a.account, tx_b.account)
+    return abs((tx_a.transaction_date - tx_b.transaction_date).days) <= window
 
 
 def _candidate_pairs(transactions):
@@ -448,7 +488,16 @@ def _revalidate_marked_pairs(existing, locked_by_id, person):
         ):
             continue
         left, right = _pair_legs(pair, locked_by_id)
-        if _legs_still_cancel(left, right):
+        if pair.status == TransferPair.Status.CONFIRMED:
+            both_active = (
+                left is not None
+                and right is not None
+                and left.status == Transaction.Status.ACTIVE
+                and right.status == Transaction.Status.ACTIVE
+            )
+            if both_active and _amounts_and_accounts_can_pair(left, right):
+                continue
+        elif _legs_still_cancel(left, right):
             continue
         if pair.status == TransferPair.Status.SUGGESTED:
             _invalidate_suggestion(pair)
@@ -620,7 +669,8 @@ def income_and_spending_totals(principal, *, date_from=None, date_to=None):
     """Access-filtered income and spending for later cash-flow views.
 
     Transfers are excluded only when both legs are visible. Linked refunds are
-    never income; they reduce spending in the inherited category. Unverified
+    never income; they reduce spending from the refund's own stored category and
+    amount even when the original purchase is no longer visible. Unverified
     investment activity is omitted.
     """
     person = _person_for(principal)
@@ -640,10 +690,9 @@ def income_and_spending_totals(principal, *, date_from=None, date_to=None):
         for tx_id in (pair.leg_a_id, pair.leg_b_id)
     }
     rows = list(transactions)
-    refunds = {
-        link.refund_id: link
-        for link in RefundLink.objects.visible_to(person).filter(refund_id__in=[item.pk for item in rows])
-    }
+    refunds = set(
+        RefundLink.objects.filter(refund_id__in=[item.pk for item in rows]).values_list("refund_id", flat=True)
+    )
 
     income = 0
     spending = 0

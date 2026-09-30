@@ -9,14 +9,17 @@ from django.urls import reverse
 from finance.category_services import (
     STARTER_CUSTOM_NAMES,
     assign_category,
+    confirm_transfer_pair,
     ensure_household_categories,
     exclusion_exists_for,
     income_and_spending_totals,
     link_refund,
     refresh_transfer_pairs,
     rename_category,
+    set_transfer_window_days,
     undo_transfer_pair,
 )
+from finance.lifecycle_services import share_account, unshare_account
 from finance.csv_import.services import undo_import_batch
 from finance.models import (
     Account,
@@ -616,4 +619,153 @@ def test_refund_link_rejects_same_sign_original():
     assert not RefundLink.objects.exists()
     assert totals.income_minor == 105000
     assert totals.spending_minor == 0
+
+
+@pytest.mark.django_db
+def test_linked_refund_reduces_spending_from_its_own_fields_when_original_is_hidden():
+    owner = make_person("owner")
+    member = make_person("member")
+    household = make_household(owner, member)
+    groceries = household.categories.get(name="Groceries")
+    purchase_account = make_account(owner, name="Synthetic Purchase Account")
+    share_account(owner, purchase_account.pk)
+    refund_account = make_account(
+        member,
+        name="Synthetic Refund Account",
+        scope=Account.Scope.HOUSEHOLD,
+        household=household,
+    )
+    original = make_transaction(owner, purchase_account, amount_minor=-4000, description="Synthetic store")
+    refund = make_transaction(member, refund_account, amount_minor=1500, description="Synthetic store refund")
+    assign_category(owner, original.pk, groceries.pk)
+    link_refund(member, refund.pk, original.pk)
+    unshare_account(owner, purchase_account.pk)
+
+    member_totals = income_and_spending_totals(member)
+    refund.refresh_from_db()
+    client = Client()
+    client.force_login(member.user)
+    edit = client.get(reverse("transaction-edit", args=(refund.pk,)))
+
+    assert refund.category_id == groceries.pk
+    assert member_totals.income_minor == 0
+    assert member_totals.spending_minor == -1500
+    assert member_totals.spending_by_category_id[groceries.pk] == -1500
+    assert not RefundLink.objects.visible_to(member).exists()
+    assert b"This refund is linked" not in edit.content
+    assert b"Synthetic Purchase Account" not in edit.content
+
+
+@pytest.mark.django_db
+def test_recategorizing_original_propagates_to_linked_refunds():
+    owner = make_person("owner")
+    household = make_household(owner)
+    groceries = household.categories.get(name="Groceries")
+    dining = household.categories.get(name="Dining")
+    account = make_account(owner)
+    original = make_transaction(owner, account, amount_minor=-4000, description="Synthetic store")
+    refund = make_transaction(owner, account, amount_minor=1500, description="Synthetic store refund")
+    assign_category(owner, original.pk, groceries.pk)
+    link_refund(owner, refund.pk, original.pk)
+    assign_category(owner, original.pk, dining.pk)
+    refund.refresh_from_db()
+    original.refresh_from_db()
+    totals = income_and_spending_totals(owner)
+
+    assert original.category_id == dining.pk
+    assert refund.category_id == dining.pk
+    assert totals.spending_minor == 2500
+    assert totals.spending_by_category_id[dining.pk] == 2500
+    assert groceries.pk not in totals.spending_by_category_id
+    assert TransactionCorrectionHistory.objects.filter(
+        transaction=refund,
+        field_name=TransactionCorrectionHistory.Field.CATEGORY,
+        previous_description="Groceries",
+        new_description="Dining",
+    ).exists()
+
+
+@pytest.mark.django_db
+def test_narrowing_transfer_window_revalidates_pairs_then_refreshes():
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner, name="Synthetic Checking")
+    savings = make_account(owner, name="Synthetic Savings", account_type=Account.Type.SAVINGS)
+    extra = make_account(owner, name="Synthetic Extra", account_type=Account.Type.SAVINGS)
+    auto_out = make_transaction(
+        owner,
+        checking,
+        amount_minor=-2100,
+        transaction_date=date(2026, 1, 1),
+        description="Synthetic auto out",
+    )
+    auto_in = make_transaction(
+        owner,
+        savings,
+        amount_minor=2100,
+        transaction_date=date(2026, 1, 4),
+        description="Synthetic auto in",
+    )
+    make_transaction(
+        owner,
+        checking,
+        amount_minor=-1100,
+        transaction_date=date(2026, 3, 1),
+        description="Synthetic suggested out",
+    )
+    make_transaction(
+        owner,
+        savings,
+        amount_minor=1100,
+        transaction_date=date(2026, 3, 4),
+        description="Synthetic suggested in a",
+    )
+    make_transaction(
+        owner,
+        extra,
+        amount_minor=1100,
+        transaction_date=date(2026, 3, 4),
+        description="Synthetic suggested in b",
+    )
+    make_transaction(
+        owner,
+        checking,
+        amount_minor=-1300,
+        transaction_date=date(2026, 4, 1),
+        description="Synthetic confirm out",
+    )
+    make_transaction(
+        owner,
+        savings,
+        amount_minor=1300,
+        transaction_date=date(2026, 4, 4),
+        description="Synthetic confirm in a",
+    )
+    make_transaction(
+        owner,
+        extra,
+        amount_minor=1300,
+        transaction_date=date(2026, 4, 4),
+        description="Synthetic confirm in b",
+    )
+    refresh_transfer_pairs(owner)
+    auto_pair = TransferPair.objects.get(leg_a_id__in=(auto_out.pk, auto_in.pk), leg_b_id__in=(auto_out.pk, auto_in.pk))
+    suggested_pairs = list(TransferPair.objects.filter(status=TransferPair.Status.SUGGESTED).order_by("pk"))
+    confirm_pair = suggested_pairs[0]
+    leftover_suggested = suggested_pairs[1]
+    confirm_transfer_pair(owner, confirm_pair.pk)
+
+    set_transfer_window_days(owner, 0)
+    auto_pair.refresh_from_db()
+    confirm_pair.refresh_from_db()
+    leftover_suggested.refresh_from_db()
+    auto_out.refresh_from_db()
+    totals = income_and_spending_totals(owner)
+
+    assert auto_pair.status == TransferPair.Status.UNDONE
+    assert confirm_pair.status == TransferPair.Status.CONFIRMED
+    assert leftover_suggested.status == TransferPair.Status.UNDONE
+    assert auto_out.category_id is None
+    assert totals.income_minor == 5800
+    assert totals.spending_minor == 3400
 
