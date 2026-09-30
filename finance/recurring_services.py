@@ -84,13 +84,14 @@ def _median_minor(values):
 
 
 def amounts_within_tolerance(minors):
-    if not minors:
+    values = list(minors)
+    if not values:
         return False
-    median = _median_minor(minors)
+    median = _median_minor(values)
     if median == 0:
         return False
     limit = Decimal(median) * MAX_AMOUNT_VARIANCE
-    return all(abs(Decimal(abs(value) - median)) <= limit for value in minors)
+    return all(abs(Decimal(abs(value) - median)) <= limit for value in values)
 
 
 def _collapse_same_day(transactions):
@@ -244,6 +245,8 @@ def detect_recurring_series(transactions):
         for cluster in _cluster_by_amount(group):
             cadence, chain = _pick_cadence_chain(cluster)
             if cadence is None:
+                continue
+            if not amounts_within_tolerance(item.amount_minor for item in chain):
                 continue
             confidence, reasons, status = _confidence_and_reasons(chain, cadence)
             typical = -_median_minor(item.amount_minor for item in chain)

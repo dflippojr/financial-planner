@@ -6,8 +6,15 @@ from django.test import Client
 from django.urls import reverse
 
 from finance.category_services import ensure_household_categories, refresh_transfer_pairs
+from finance.lifecycle_services import archive_account
 from finance.models import Account, Household, ImportBatch, Membership, Person, RecurringSeries, Transaction
-from finance.recurring_services import dismiss_recurring_series, refresh_recurring_series
+from finance.recurring_services import (
+    confirm_recurring_series,
+    confirmed_totals,
+    detect_recurring_series,
+    dismiss_recurring_series,
+    refresh_recurring_series,
+)
 
 
 PASSWORD = "Synthetic-passphrase-42!"
@@ -117,6 +124,25 @@ def test_two_occurrences_are_only_possible():
     assert series.status == RecurringSeries.Status.POSSIBLE
     assert series.confidence == RecurringSeries.Confidence.LOW
     assert "possible" in series.get_status_display().lower() or series.status == "possible"
+
+
+@pytest.mark.django_db
+def test_amount_tolerance_uses_selected_cadence_chain_median_not_cluster():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    make_transaction(owner, account, transaction_date=date(2026, 1, 10), amount_minor=-800, description="Synthetic Cluster Mix")
+    make_transaction(owner, account, transaction_date=date(2026, 2, 10), amount_minor=-800, description="Synthetic Cluster Mix")
+    make_transaction(owner, account, transaction_date=date(2026, 3, 10), amount_minor=-1200, description="Synthetic Cluster Mix")
+    make_transaction(owner, account, transaction_date=date(2026, 1, 16), amount_minor=-1000, description="Synthetic Cluster Mix")
+    make_transaction(owner, account, transaction_date=date(2026, 2, 22), amount_minor=-1000, description="Synthetic Cluster Mix")
+
+    refresh_recurring_series(owner)
+    series_rows = list(RecurringSeries.objects.filter(merchant_key="synthetic cluster mix"))
+
+    assert series_rows == []
+    detected = detect_recurring_series(list(Transaction.objects.filter(account=account)))
+    assert detected == []
 
 
 @pytest.mark.django_db
