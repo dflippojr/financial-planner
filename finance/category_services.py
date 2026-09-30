@@ -453,11 +453,36 @@ def _update_existing_pair(pair, scored, person):
         pair.save(update_fields=("confidence", "kind", "reasons", "updated_at"))
 
 
+def _restore_refund_categories(original, actor):
+    """Keep linked refunds in their original's category, as assign_category does."""
+    refunds = (
+        Transaction.objects.select_for_update(of=("self",))
+        .select_related("category")
+        .filter(refund_link__original=original, status=Transaction.Status.ACTIVE)
+        .exclude(category_id=original.category_id)
+        .order_by("pk")
+    )
+    new_category = None if original.category_id is None else Category.objects.get(pk=original.category_id)
+    for refund in refunds:
+        previous = refund.category
+        refund.category = new_category
+        refund.save(update_fields=("category", "updated_at"))
+        _record_text_history(
+            refund,
+            actor,
+            TransactionCorrectionHistory.Field.CATEGORY,
+            _history_label(previous),
+            _history_label(new_category),
+        )
+
+
 def _unmark_exclusion(pair, left, right, actor):
     left.category_id = pair.leg_a_category_id_at_mark
     right.category_id = pair.leg_b_category_id_at_mark
     left.save(update_fields=("category", "updated_at"))
     right.save(update_fields=("category", "updated_at"))
+    _restore_refund_categories(left, actor)
+    _restore_refund_categories(right, actor)
     pair.status = TransferPair.Status.UNDONE
     pair.save(update_fields=("status", "updated_at"))
     _record_text_history(left, actor, TransactionCorrectionHistory.Field.EXCLUSION, "excluded", "included")

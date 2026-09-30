@@ -874,3 +874,29 @@ def test_category_filter_leaves_out_excluded_transfers():
 
     assert response.status_code == 200
     assert list(response.context["transactions"]) == [kept]
+
+
+@pytest.mark.django_db
+def test_undoing_a_transfer_keeps_linked_refunds_with_the_restored_category():
+    owner = make_person("owner")
+    household = make_household(owner)
+    groceries = household.categories.get(name="Groceries")
+    dining = household.categories.get(name="Dining")
+    checking = make_account(owner, name="Synthetic Checking")
+    savings = make_account(owner, name="Synthetic Savings", account_type=Account.Type.SAVINGS)
+    purchase = make_transaction(owner, checking, amount_minor=-4200, description="Synthetic store")
+    refund = make_transaction(owner, checking, amount_minor=700, description="Synthetic store refund")
+    assign_category(owner, purchase.pk, groceries.pk)
+    link_refund(owner, refund.pk, purchase.pk)
+    make_transaction(owner, savings, amount_minor=4200, description="Synthetic matching credit")
+    refresh_transfer_pairs(owner)
+    pair = TransferPair.objects.get(status=TransferPair.Status.AUTO_MARKED)
+    assign_category(owner, purchase.pk, dining.pk)
+
+    undo_transfer_pair(owner, pair.pk)
+    purchase.refresh_from_db()
+    refund.refresh_from_db()
+
+    assert purchase.category_id == groceries.pk
+    assert refund.category_id == groceries.pk
+    assert dining.pk not in income_and_spending_totals(owner).spending_by_category_id
