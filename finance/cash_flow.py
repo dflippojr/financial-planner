@@ -224,6 +224,45 @@ def format_percent(amount_minor, total_minor):
     return f"{percent}%"
 
 
+def _uncategorized_bucket():
+    return {"name": "Uncategorized", "filter_value": "uncategorized", "spending_minor": 0}
+
+
+def _combine_category_spending(by_category_id, named):
+    combined = {}
+    for category_id, amount in by_category_id.items():
+        category = named.get(category_id)
+        if category is None or category.code == Category.Code.UNCATEGORIZED:
+            bucket = combined.setdefault("uncategorized", _uncategorized_bucket())
+        else:
+            bucket = combined.setdefault(
+                category.pk,
+                {"name": category.name, "filter_value": str(category.pk), "spending_minor": 0},
+            )
+        bucket["spending_minor"] += amount
+    combined.setdefault("uncategorized", _uncategorized_bucket())
+    return combined
+
+
+def _spending_row(item, *, total_spending, date_from, date_to, account, scope):
+    spending_minor = item["spending_minor"]
+    query = _filter_query(
+        date_from,
+        date_to,
+        account=account,
+        scope=scope,
+        category=item["filter_value"],
+    )
+    return SimpleNamespace(
+        name=item["name"],
+        spending_minor=spending_minor,
+        spending_display=format_minor(spending_minor),
+        percent_display=format_percent(spending_minor, total_spending),
+        is_net_refund=spending_minor < 0,
+        drilldown_url=f"{reverse('transaction-list')}?{urlencode(query)}",
+    )
+
+
 def spending_by_category_report(
     principal,
     *,
@@ -240,49 +279,18 @@ def spending_by_category_report(
         accounts=accounts,
     )
     named = {item.pk: item for item in Category.objects.visible_to(principal)}
-    combined = {}
-    for category_id, amount in totals.spending_by_category_id.items():
-        category = named.get(category_id)
-        if category is None or category.code == Category.Code.UNCATEGORIZED:
-            key = "uncategorized"
-            name = "Uncategorized"
-            filter_value = "uncategorized"
-        else:
-            key = category.pk
-            name = category.name
-            filter_value = str(category.pk)
-        row = combined.get(key)
-        if row is None:
-            combined[key] = {
-                "name": name,
-                "filter_value": filter_value,
-                "spending_minor": amount,
-            }
-        else:
-            row["spending_minor"] += amount
-    if "uncategorized" not in combined:
-        combined["uncategorized"] = {
-            "name": "Uncategorized",
-            "filter_value": "uncategorized",
-            "spending_minor": 0,
-        }
-    total_spending = totals.spending_minor
-    rows = []
-    for item in combined.values():
-        spending_minor = item["spending_minor"]
-        rows.append(
-            SimpleNamespace(
-                name=item["name"],
-                spending_minor=spending_minor,
-                spending_display=format_minor(spending_minor),
-                percent_display=format_percent(spending_minor, total_spending),
-                is_net_refund=spending_minor < 0,
-                drilldown_url=(
-                    f"{reverse('transaction-list')}?"
-                    f"{urlencode(_filter_query(date_from, date_to, account=account, scope=scope, category=item['filter_value']))}"
-                ),
-            )
+    combined = _combine_category_spending(totals.spending_by_category_id, named)
+    rows = [
+        _spending_row(
+            item,
+            total_spending=totals.spending_minor,
+            date_from=date_from,
+            date_to=date_to,
+            account=account,
+            scope=scope,
         )
+        for item in combined.values()
+    ]
     rows.sort(key=lambda row: (-row.spending_minor, row.name))
     visible_transactions = (
         Transaction.objects.visible_to(principal)
@@ -294,8 +302,8 @@ def spending_by_category_report(
     return SimpleNamespace(
         accounts=accounts,
         rows=rows,
-        total_spending_minor=total_spending,
-        total_spending_display=format_minor(total_spending),
+        total_spending_minor=totals.spending_minor,
+        total_spending_display=format_minor(totals.spending_minor),
         has_visible_transactions=visible_transactions,
         includes_investment=any(item.account_type == Account.Type.INVESTMENT for item in accounts),
         investment_notice=INVESTMENT_NOTICE,
