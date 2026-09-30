@@ -542,7 +542,8 @@ def test_two_concurrent_setup_submissions_create_exactly_one_member():
     second.join(timeout=30)
 
     assert errors == []
-    assert not first.is_alive() and not second.is_alive()
+    assert not first.is_alive()
+    assert not second.is_alive()
     assert get_user_model().objects.count() == 1
     assert Person.objects.count() == 1
     assert RecoveryCode.objects.count() == 8
