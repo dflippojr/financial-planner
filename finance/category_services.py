@@ -126,7 +126,7 @@ def _lock_accounts_and_transactions(person, transactions):
     list(Account.objects.select_for_update().filter(pk__in=account_ids).order_by("pk"))
     ids = sorted(item.pk for item in transactions)
     locked = list(
-        Transaction.objects.select_for_update()
+        Transaction.objects.select_for_update(of=("self",))
         .select_related("account", "category")
         .filter(pk__in=ids, status=Transaction.Status.ACTIVE)
         .order_by("pk")
@@ -281,40 +281,43 @@ def _is_candidate(tx_a, tx_b):
     return _accounts_share_a_viewer(tx_a.account, tx_b.account)
 
 
-def _score_pairs(transactions):
+def _candidate_pairs(transactions):
     by_abs = defaultdict(list)
     for item in transactions:
         by_abs[abs(item.amount_minor)].append(item)
     raw_pairs = []
     for group in by_abs.values():
         for index, left in enumerate(group):
-            for right in group[index + 1 :]:
-                if _is_candidate(left, right):
-                    raw_pairs.append(_ordered_legs(left, right))
-    counts = defaultdict(int)
-    for left, right in raw_pairs:
-        counts[left.pk] += 1
-        counts[right.pk] += 1
-    scored = []
-    for left, right in raw_pairs:
-        window = _window_days(left.account, right.account)
-        unique = counts[left.pk] == 1 and counts[right.pk] == 1
-        reasons = [
+            raw_pairs.extend(_ordered_legs(left, right) for right in group[index + 1 :] if _is_candidate(left, right))
+    return raw_pairs
+
+
+def _scored_pair(left, right, unique):
+    window = _window_days(left.account, right.account)
+    return {
+        "left": left,
+        "right": right,
+        "confidence": TransferPair.Confidence.HIGH if unique else TransferPair.Confidence.LOW,
+        "kind": _pair_kind(left, right),
+        "reasons": [
             "exact opposite amounts",
             f"dates within {window} days",
             "both accounts visible to the same person",
             HIGH_CONFIDENCE_UNIQUE_BOTH if unique else LOW_CONFIDENCE_MULTIPLE,
-        ]
-        scored.append(
-            {
-                "left": left,
-                "right": right,
-                "confidence": TransferPair.Confidence.HIGH if unique else TransferPair.Confidence.LOW,
-                "kind": _pair_kind(left, right),
-                "reasons": reasons,
-            }
-        )
-    return scored
+        ],
+    }
+
+
+def _score_pairs(transactions):
+    raw_pairs = _candidate_pairs(transactions)
+    counts = defaultdict(int)
+    for left, right in raw_pairs:
+        counts[left.pk] += 1
+        counts[right.pk] += 1
+    return [
+        _scored_pair(left, right, counts[left.pk] == 1 and counts[right.pk] == 1)
+        for left, right in raw_pairs
+    ]
 
 
 def _occupied_transaction_ids(pairs):
@@ -350,10 +353,15 @@ def _snapshot_and_mark(pair, left, right, status, actor):
     _record_text_history(right, actor, TransactionCorrectionHistory.Field.EXCLUSION, "included", f"excluded:{label}")
 
 
-@transaction.atomic
-def refresh_transfer_pairs(principal):
-    person = _person_for(principal)
-    lock_actor_household(person)
+_SETTLED_PAIR_STATUSES = (
+    TransferPair.Status.DISMISSED,
+    TransferPair.Status.UNDONE,
+    TransferPair.Status.CONFIRMED,
+    TransferPair.Status.AUTO_MARKED,
+)
+
+
+def _lock_visible_transactions(person):
     transactions = list(
         Transaction.objects.visible_to(person)
         .filter(status=Transaction.Status.ACTIVE)
@@ -364,12 +372,34 @@ def refresh_transfer_pairs(principal):
     account_ids = sorted({item.account_id for item in transactions})
     list(Account.objects.select_for_update().filter(pk__in=account_ids).order_by("pk"))
     tx_ids = sorted(item.pk for item in transactions)
-    locked = list(
-        Transaction.objects.select_for_update()
+    return list(
+        Transaction.objects.select_for_update(of=("self",))
         .select_related("account", "account__household", "account__owner", "category")
         .filter(pk__in=tx_ids)
         .order_by("pk")
     )
+
+
+def _update_existing_pair(pair, scored, person):
+    if pair.status in _SETTLED_PAIR_STATUSES:
+        return
+    pair.confidence = scored["confidence"]
+    pair.kind = scored["kind"]
+    pair.reasons = scored["reasons"]
+    if scored["confidence"] == TransferPair.Confidence.HIGH:
+        _snapshot_and_mark(pair, scored["left"], scored["right"], TransferPair.Status.AUTO_MARKED, person)
+    else:
+        pair.save(update_fields=("confidence", "kind", "reasons", "updated_at"))
+
+
+@transaction.atomic
+def refresh_transfer_pairs(principal):
+    person = _person_for(principal)
+    lock_actor_household(person)
+    locked = _lock_visible_transactions(person)
+    if not locked:
+        return []
+    tx_ids = [item.pk for item in locked]
     existing = {
         (pair.leg_a_id, pair.leg_b_id): pair
         for pair in TransferPair.objects.select_for_update().filter(
@@ -389,17 +419,8 @@ def refresh_transfer_pairs(principal):
     for scored in scored_pairs:
         left, right = scored["left"], scored["right"]
         key = (left.pk, right.pk)
-        pair = existing.get(key)
-        if pair is not None:
-            if pair.status in (TransferPair.Status.DISMISSED, TransferPair.Status.UNDONE, TransferPair.Status.CONFIRMED, TransferPair.Status.AUTO_MARKED):
-                continue
-            pair.confidence = scored["confidence"]
-            pair.kind = scored["kind"]
-            pair.reasons = scored["reasons"]
-            if scored["confidence"] == TransferPair.Confidence.HIGH:
-                _snapshot_and_mark(pair, left, right, TransferPair.Status.AUTO_MARKED, person)
-            else:
-                pair.save(update_fields=("confidence", "kind", "reasons", "updated_at"))
+        if key in existing:
+            _update_existing_pair(existing[key], scored, person)
             continue
         if left.pk in occupied or right.pk in occupied:
             continue

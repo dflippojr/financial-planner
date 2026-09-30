@@ -209,6 +209,59 @@ def transaction_link_refund(request, transaction_id):
     return redirect("transaction-edit", transaction_id=transaction_id)
 
 
+def _first_message(exc, fallback):
+    messages = getattr(exc, "messages", None)
+    return messages[0] if messages else fallback
+
+
+def _handle_add_category(request, add_form, window_form):
+    if not add_form.is_valid():
+        return False
+    try:
+        _service_or_404(lambda: add_category(request.user, add_form.cleaned_data["name"]))
+    except ValidationError as exc:
+        add_form.add_error("name", _first_message(exc, "The category could not be saved."))
+        return False
+    return True
+
+
+def _handle_transfer_window(request, add_form, window_form):
+    if not window_form.is_valid():
+        return False
+    days = window_form.cleaned_data["transfer_match_window_days"]
+    try:
+        _service_or_404(lambda: set_transfer_window_days(request.user, days))
+    except ValidationError as exc:
+        window_form.add_error("transfer_match_window_days", _first_message(exc, "The match window could not be saved."))
+        return False
+    return True
+
+
+def _handle_rename_category(request, add_form, window_form):
+    rename_form = CategoryNameForm(request.POST)
+    if not rename_form.is_valid():
+        return False
+    try:
+        _service_or_404(
+            lambda: rename_category(
+                request.user,
+                int(request.POST.get("category_id", "0")),
+                rename_form.cleaned_data["name"],
+            )
+        )
+    except (ValidationError, ValueError) as exc:
+        add_form.add_error(None, _first_message(exc, "The category could not be renamed."))
+        return False
+    return True
+
+
+_CATEGORY_ACTIONS = {
+    "add": _handle_add_category,
+    "window": _handle_transfer_window,
+    "rename": _handle_rename_category,
+}
+
+
 @require_http_methods(["GET", "POST"])
 @never_cache
 def category_list(request):
@@ -221,46 +274,15 @@ def category_list(request):
             {"household": None, "categories": [], "add_form": CategoryNameForm(), "window_form": None},
         )
     ensure_household_categories(household)
-    add_form = CategoryNameForm(request.POST if request.POST.get("action") == "add" else None)
+    action = request.POST.get("action") if request.method == "POST" else None
+    add_form = CategoryNameForm(request.POST if action == "add" else None)
     window_form = TransferWindowForm(
-        request.POST if request.POST.get("action") == "window" else None,
+        request.POST if action == "window" else None,
         initial={"transfer_match_window_days": household.transfer_match_window_days},
     )
-    if request.method == "POST" and request.POST.get("action") == "add" and add_form.is_valid():
-        try:
-            _service_or_404(lambda: add_category(request.user, add_form.cleaned_data["name"]))
-        except ValidationError as exc:
-            add_form.add_error("name", exc.messages[0] if exc.messages else "The category could not be saved.")
-        else:
-            return redirect("category-list")
-    if request.method == "POST" and request.POST.get("action") == "window" and window_form.is_valid():
-        try:
-            _service_or_404(
-                lambda: set_transfer_window_days(request.user, window_form.cleaned_data["transfer_match_window_days"])
-            )
-        except ValidationError as exc:
-            window_form.add_error(
-                "transfer_match_window_days",
-                exc.messages[0] if exc.messages else "The match window could not be saved.",
-            )
-        else:
-            return redirect("category-list")
-    if request.method == "POST" and request.POST.get("action") == "rename":
-        rename_form = CategoryNameForm(request.POST)
-        if rename_form.is_valid():
-            try:
-                _service_or_404(
-                    lambda: rename_category(
-                        request.user,
-                        int(request.POST.get("category_id", "0")),
-                        rename_form.cleaned_data["name"],
-                    )
-                )
-            except (ValidationError, ValueError) as exc:
-                messages = getattr(exc, "messages", None)
-                add_form.add_error(None, messages[0] if messages else "The category could not be renamed.")
-            else:
-                return redirect("category-list")
+    handler = _CATEGORY_ACTIONS.get(action)
+    if handler is not None and handler(request, add_form, window_form):
+        return redirect("category-list")
     categories = Category.objects.visible_to(request.user).order_by("name", "pk")
     return render(
         request,
@@ -268,7 +290,7 @@ def category_list(request):
         {
             "household": household,
             "categories": categories,
-            "add_form": add_form if add_form is not None else CategoryNameForm(),
+            "add_form": add_form,
             "window_form": window_form,
         },
     )
