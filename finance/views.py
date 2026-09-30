@@ -1,4 +1,5 @@
 from datetime import timedelta
+from decimal import Decimal
 
 from django.conf import settings
 from django.contrib.auth import authenticate, login, logout
@@ -38,7 +39,8 @@ from .forms import (
     TransferWindowForm,
 )
 from .lifecycle_services import lock_actor_household
-from .models import Account, Category, Person, RefundLink, Transaction, TransactionCorrectionHistory, TransferPair
+from .models import Account, Category, Person, RecurringSeries, RefundLink, Transaction, TransactionCorrectionHistory, TransferPair
+from .recurring_services import confirm_recurring_series, confirmed_totals, dismiss_recurring_series, refresh_recurring_series
 from .category_services import (
     add_category,
     assign_category,
@@ -347,6 +349,55 @@ def transfer_review(request):
         request,
         "finance/transfer_review.html",
         {"exclusions": exclusions, "suggestions": suggestions},
+    )
+
+
+@require_http_methods(["GET", "POST"])
+@never_cache
+def recurring_review(request):
+    if request.method == "POST":
+        try:
+            series_id = int(request.POST.get("series_id", "0"))
+        except (TypeError, ValueError) as exc:
+            raise Http404 from exc
+        action = request.POST.get("action")
+        actions = {
+            "confirm": confirm_recurring_series,
+            "dismiss": dismiss_recurring_series,
+        }
+        handler = actions.get(action)
+        if handler is None:
+            raise Http404
+        _service_or_404(lambda: handler(request.user, series_id))
+        _service_or_404(lambda: refresh_recurring_series(request.user))
+        return redirect("recurring-review")
+    _service_or_404(lambda: refresh_recurring_series(request.user))
+    visible = (
+        RecurringSeries.objects.visible_to(request.user)
+        .prefetch_related("members__transaction")
+        .order_by("display_name", "pk")
+    )
+    confirmed = [series for series in visible if series.status == RecurringSeries.Status.CONFIRMED]
+    suggestions = [
+        series
+        for series in visible
+        if series.status in (RecurringSeries.Status.POSSIBLE, RecurringSeries.Status.SUGGESTED)
+    ]
+    monthly_minor, annual_minor = confirmed_totals(confirmed)
+    currency = confirmed[0].currency if confirmed else "USD"
+    monthly_display = f"{Decimal(monthly_minor) / Decimal(100):,.2f} {currency}"
+    annual_display = f"{Decimal(annual_minor) / Decimal(100):,.2f} {currency}"
+    return render(
+        request,
+        "finance/recurring_review.html",
+        {
+            "suggestions": suggestions,
+            "confirmed": confirmed,
+            "monthly_display": monthly_display,
+            "annual_display": annual_display,
+            "monthly_minor": monthly_minor,
+            "annual_minor": annual_minor,
+        },
     )
 
 

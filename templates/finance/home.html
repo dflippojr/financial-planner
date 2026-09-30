@@ -4,6 +4,7 @@
 <ul>{% for account in accounts %}<li>{{ account.name }}{% if account.status == "active" and account.archived_at is None %} — <a href="{% url 'csv-import-preview' account.pk %}">Preview CSV import</a>{% endif %}</li>{% empty %}<li>No accounts yet.</li>{% endfor %}</ul>
 <p><a href="{% url 'transaction-list' %}">Review transactions</a></p>
 <p><a href="{% url 'transfer-review' %}">Review transfers</a></p>
+<p><a href="{% url 'recurring-review' %}">Recurring</a></p>
 <p><a href="{% url 'category-list' %}">Categories</a></p>
 <p><a href="{% url 'invite' %}">Invite a household member</a></p>
 <form method="post" action="{% url 'logout' %}">{% csrf_token %}<button type="submit">Sign out</button></form>

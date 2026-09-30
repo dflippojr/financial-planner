@@ -1,0 +1,420 @@
+from calendar import monthrange
+from collections import Counter, defaultdict
+from dataclasses import dataclass
+from datetime import date, timedelta
+from decimal import Decimal
+from hashlib import sha256
+import re
+
+from django.core.exceptions import PermissionDenied
+from django.db import transaction
+
+from .category_services import exclusion_exists_for
+from .lifecycle_services import lock_actor_household
+from .models import Person, RecurringSeries, RecurringSeriesMember, Transaction
+
+
+_DENIED = "Operation is not permitted."
+MAX_AMOUNT_VARIANCE = Decimal("0.25")
+CADENCE_DAYS = {
+    RecurringSeries.Cadence.WEEKLY: (7, 3),
+    RecurringSeries.Cadence.BIWEEKLY: (14, 3),
+    RecurringSeries.Cadence.MONTHLY: (30, 3),
+    RecurringSeries.Cadence.QUARTERLY: (91, 4),
+    RecurringSeries.Cadence.ANNUAL: (365, 5),
+}
+CADENCE_ORDER = (
+    RecurringSeries.Cadence.WEEKLY,
+    RecurringSeries.Cadence.BIWEEKLY,
+    RecurringSeries.Cadence.MONTHLY,
+    RecurringSeries.Cadence.QUARTERLY,
+    RecurringSeries.Cadence.ANNUAL,
+)
+
+
+def _person_for(principal):
+    if isinstance(principal, Person):
+        return principal
+    if getattr(principal, "is_authenticated", False):
+        try:
+            return principal.person
+        except Person.DoesNotExist:
+            pass
+    raise PermissionDenied(_DENIED)
+
+
+def merchant_key(description):
+    tokens = re.sub(r"[^a-z]+", " ", description.casefold()).split()
+    return " ".join(tokens)
+
+
+def _add_months(value: date, months: int) -> date:
+    month_index = value.month - 1 + months
+    year = value.year + month_index // 12
+    month = month_index % 12 + 1
+    day = min(value.day, monthrange(year, month)[1])
+    return date(year, month, day)
+
+
+def add_cadence(value: date, cadence: str) -> date:
+    if cadence == RecurringSeries.Cadence.WEEKLY:
+        return value + timedelta(days=7)
+    if cadence == RecurringSeries.Cadence.BIWEEKLY:
+        return value + timedelta(days=14)
+    if cadence == RecurringSeries.Cadence.MONTHLY:
+        return _add_months(value, 1)
+    if cadence == RecurringSeries.Cadence.QUARTERLY:
+        return _add_months(value, 3)
+    if cadence == RecurringSeries.Cadence.ANNUAL:
+        try:
+            return value.replace(year=value.year + 1)
+        except ValueError:
+            return value.replace(year=value.year + 1, day=28)
+    raise ValueError("Unknown cadence")
+
+
+def _within_tolerance(actual: date, expected: date, cadence: str) -> bool:
+    _interval, tolerance = CADENCE_DAYS[cadence]
+    return abs((actual - expected).days) <= tolerance
+
+
+def _median_minor(values):
+    ordered = sorted(abs(value) for value in values)
+    return ordered[len(ordered) // 2]
+
+
+def amounts_within_tolerance(minors):
+    if not minors:
+        return False
+    median = _median_minor(minors)
+    if median == 0:
+        return False
+    limit = Decimal(median) * MAX_AMOUNT_VARIANCE
+    return all(abs(Decimal(abs(value) - median)) <= limit for value in minors)
+
+
+def _collapse_same_day(transactions):
+    by_date = {}
+    for item in sorted(transactions, key=lambda row: (row.transaction_date, row.pk)):
+        by_date.setdefault(item.transaction_date, item)
+    return list(by_date.values())
+
+
+def _longest_chain(transactions, cadence):
+    ordered = sorted(transactions, key=lambda row: (row.transaction_date, row.pk))
+    length = [1] * len(ordered)
+    previous = [-1] * len(ordered)
+    for start, source in enumerate(ordered):
+        expected = add_cadence(source.transaction_date, cadence)
+        for end in range(start + 1, len(ordered)):
+            actual = ordered[end].transaction_date
+            if actual < expected - timedelta(days=CADENCE_DAYS[cadence][1]):
+                continue
+            if not _within_tolerance(actual, expected, cadence):
+                continue
+            candidate = length[start] + 1
+            if candidate > length[end]:
+                length[end] = candidate
+                previous[end] = start
+    if not length:
+        return []
+    end_index = max(range(len(length)), key=lambda index: (length[index], -index))
+    if length[end_index] < 2:
+        return []
+    chain = []
+    index = end_index
+    while index >= 0:
+        chain.append(ordered[index])
+        index = previous[index]
+    chain.reverse()
+    return chain
+
+
+def _amount_spread_ratio(minors):
+    median = Decimal(_median_minor(minors))
+    widest = max(abs(Decimal(abs(value)) - median) for value in minors)
+    if median == 0:
+        return Decimal("1")
+    return widest / median
+
+
+def _confidence_and_reasons(chain, cadence):
+    minors = [item.amount_minor for item in chain]
+    exact = len({abs(value) for value in minors}) == 1
+    spread = _amount_spread_ratio(minors)
+    date_slop = []
+    for left, right in zip(chain, chain[1:]):
+        expected = add_cadence(left.transaction_date, cadence)
+        date_slop.append(abs((right.transaction_date - expected).days))
+    max_slop = max(date_slop) if date_slop else 0
+    count = len(chain)
+    reasons = [
+        f"{count} occurrences at a {cadence} interval",
+        "amounts match exactly" if exact else f"amounts vary by {int(spread * 100)}% (within 25%)",
+        f"dates within {max_slop} day(s) of expected",
+    ]
+    if count < 3:
+        return RecurringSeries.Confidence.LOW, tuple(reasons), RecurringSeries.Status.POSSIBLE
+    if exact and max_slop <= 1:
+        confidence = RecurringSeries.Confidence.HIGH
+    elif exact or max_slop <= 2:
+        confidence = RecurringSeries.Confidence.MEDIUM
+    else:
+        confidence = RecurringSeries.Confidence.LOW
+    return confidence, tuple(reasons), RecurringSeries.Status.SUGGESTED
+
+
+def _display_name(chain):
+    counts = Counter(item.description.strip() or merchant_key(item.description) for item in chain)
+    return counts.most_common(1)[0][0]
+
+
+def _fingerprint(transaction_ids):
+    payload = ",".join(str(pk) for pk in sorted(transaction_ids))
+    return sha256(payload.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class DetectedSeries:
+    merchant_key: str
+    display_name: str
+    cadence: str
+    typical_amount_minor: int
+    currency: str
+    confidence: str
+    reasons: tuple
+    status: str
+    transaction_ids: tuple
+    fingerprint: str
+
+
+def _cluster_by_amount(transactions):
+    clusters = []
+    for item in sorted(transactions, key=lambda row: (abs(row.amount_minor), row.pk)):
+        placed = False
+        for cluster in clusters:
+            trial_amounts = [row.amount_minor for row in cluster] + [item.amount_minor]
+            if amounts_within_tolerance(trial_amounts):
+                cluster.append(item)
+                placed = True
+                break
+        if not placed:
+            clusters.append([item])
+    return clusters
+
+
+def _pick_cadence_chain(cluster):
+    collapsed = _collapse_same_day(cluster)
+    best = []
+    best_cadence = None
+    for cadence in CADENCE_ORDER:
+        chain = _longest_chain(collapsed, cadence)
+        if len(chain) < 2:
+            continue
+        if len(chain) > len(best):
+            best = chain
+            best_cadence = cadence
+            continue
+        if len(chain) == len(best) and best_cadence is not None:
+            current_interval, _ = CADENCE_DAYS[cadence]
+            best_interval, _ = CADENCE_DAYS[best_cadence]
+            if current_interval > best_interval:
+                best = chain
+                best_cadence = cadence
+    if best_cadence is None:
+        return None, []
+    return best_cadence, best
+
+
+def _used_transaction_ids(series_list):
+    used = set()
+    for series in series_list:
+        used.update(series.transaction_ids)
+    return used
+
+
+def detect_recurring_series(transactions):
+    grouped = defaultdict(list)
+    for item in transactions:
+        key = merchant_key(item.description)
+        if key:
+            grouped[key].append(item)
+    detected = []
+    for key, group in grouped.items():
+        for cluster in _cluster_by_amount(group):
+            cadence, chain = _pick_cadence_chain(cluster)
+            if cadence is None:
+                continue
+            confidence, reasons, status = _confidence_and_reasons(chain, cadence)
+            typical = -_median_minor(item.amount_minor for item in chain)
+            ids = tuple(item.pk for item in chain)
+            detected.append(
+                DetectedSeries(
+                    merchant_key=key,
+                    display_name=_display_name(chain),
+                    cadence=cadence,
+                    typical_amount_minor=typical,
+                    currency=chain[0].currency,
+                    confidence=confidence,
+                    reasons=reasons,
+                    status=status,
+                    transaction_ids=ids,
+                    fingerprint=_fingerprint(ids),
+                )
+            )
+    detected.sort(key=lambda item: (-len(item.transaction_ids), item.merchant_key, item.cadence))
+    chosen = []
+    for item in detected:
+        if set(item.transaction_ids) & _used_transaction_ids(chosen):
+            continue
+        chosen.append(item)
+    return chosen
+
+
+def candidate_transactions(principal):
+    person = _person_for(principal)
+    return list(
+        Transaction.objects.visible_to(person)
+        .filter(
+            status=Transaction.Status.ACTIVE,
+            kind=Transaction.Kind.CASH_FLOW,
+            amount_minor__lt=0,
+        )
+        .annotate(_excluded=exclusion_exists_for(person))
+        .filter(_excluded=False)
+        .select_related("account")
+        .order_by("transaction_date", "pk")
+    )
+
+
+def _apply_detection(series, detected):
+    series.merchant_key = detected.merchant_key
+    series.display_name = detected.display_name
+    series.cadence = detected.cadence
+    series.typical_amount_minor = detected.typical_amount_minor
+    series.currency = detected.currency
+    series.confidence = detected.confidence
+    series.reasons = list(detected.reasons)
+    series.fingerprint = detected.fingerprint
+    if series.status not in (RecurringSeries.Status.CONFIRMED, RecurringSeries.Status.DISMISSED):
+        series.status = detected.status
+    series.save()
+    RecurringSeriesMember.objects.filter(series=series).delete()
+    RecurringSeriesMember.objects.bulk_create(
+        RecurringSeriesMember(series=series, transaction_id=pk) for pk in detected.transaction_ids
+    )
+
+
+def _match_confirmed(confirmed, detected):
+    for series in confirmed:
+        if series.merchant_key != detected.merchant_key or series.cadence != detected.cadence:
+            continue
+        if amounts_within_tolerance([series.typical_amount_minor, detected.typical_amount_minor]):
+            return series
+    return None
+
+
+@transaction.atomic
+def refresh_recurring_series(principal):
+    person = _person_for(principal)
+    lock_actor_household(person)
+    detected = detect_recurring_series(candidate_transactions(person))
+    existing = list(RecurringSeries.objects.select_for_update(of=("self",)).filter(person=person).order_by("pk"))
+    dismissed_fingerprints = {
+        series.fingerprint for series in existing if series.status == RecurringSeries.Status.DISMISSED
+    }
+    confirmed = [series for series in existing if series.status == RecurringSeries.Status.CONFIRMED]
+    open_rows = [
+        series
+        for series in existing
+        if series.status in (RecurringSeries.Status.POSSIBLE, RecurringSeries.Status.SUGGESTED)
+    ]
+    kept_ids = {series.pk for series in existing if series.status == RecurringSeries.Status.DISMISSED}
+    open_by_fingerprint = {series.fingerprint: series for series in open_rows}
+
+    for item in detected:
+        if item.fingerprint in dismissed_fingerprints:
+            continue
+        confirmed_match = _match_confirmed(confirmed, item)
+        if confirmed_match is not None:
+            _apply_detection(confirmed_match, item)
+            kept_ids.add(confirmed_match.pk)
+            continue
+        open_match = open_by_fingerprint.get(item.fingerprint)
+        if open_match is None:
+            for series in open_rows:
+                if series.pk in kept_ids:
+                    continue
+                if series.merchant_key == item.merchant_key and series.cadence == item.cadence:
+                    open_match = series
+                    break
+        if open_match is not None:
+            _apply_detection(open_match, item)
+            kept_ids.add(open_match.pk)
+            continue
+        created = RecurringSeries.objects.create(
+            person=person,
+            merchant_key=item.merchant_key,
+            display_name=item.display_name,
+            cadence=item.cadence,
+            typical_amount_minor=item.typical_amount_minor,
+            currency=item.currency,
+            status=item.status,
+            confidence=item.confidence,
+            reasons=list(item.reasons),
+            fingerprint=item.fingerprint,
+        )
+        RecurringSeriesMember.objects.bulk_create(
+            RecurringSeriesMember(series=created, transaction_id=pk) for pk in item.transaction_ids
+        )
+        kept_ids.add(created.pk)
+
+    stale = [
+        series
+        for series in open_rows
+        if series.pk not in kept_ids
+    ]
+    RecurringSeriesMember.objects.filter(series__in=stale).delete()
+    RecurringSeries.objects.filter(pk__in=[series.pk for series in stale]).delete()
+    return RecurringSeries.objects.visible_to(person)
+
+
+def _visible_series(principal, series_id):
+    person = _person_for(principal)
+    series = RecurringSeries.objects.visible_to(person).filter(pk=series_id).first()
+    if series is None:
+        raise PermissionDenied(_DENIED)
+    return person, series
+
+
+@transaction.atomic
+def confirm_recurring_series(principal, series_id):
+    person, series = _visible_series(principal, series_id)
+    if series.status not in (RecurringSeries.Status.POSSIBLE, RecurringSeries.Status.SUGGESTED):
+        raise PermissionDenied(_DENIED)
+    lock_actor_household(person)
+    series = RecurringSeries.objects.select_for_update(of=("self",)).get(pk=series.pk)
+    series.status = RecurringSeries.Status.CONFIRMED
+    series.save(update_fields=("status", "updated_at"))
+    return series
+
+
+@transaction.atomic
+def dismiss_recurring_series(principal, series_id):
+    person, series = _visible_series(principal, series_id)
+    if series.status not in (RecurringSeries.Status.POSSIBLE, RecurringSeries.Status.SUGGESTED):
+        raise PermissionDenied(_DENIED)
+    lock_actor_household(person)
+    series = RecurringSeries.objects.select_for_update(of=("self",)).get(pk=series.pk)
+    series.status = RecurringSeries.Status.DISMISSED
+    series.save(update_fields=("status", "updated_at"))
+    return series
+
+
+def confirmed_totals(series_queryset):
+    monthly = 0
+    annual = 0
+    for series in series_queryset:
+        monthly += series.monthly_minor
+        annual += series.annual_minor
+    return monthly, annual

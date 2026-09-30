@@ -545,6 +545,120 @@ class RefundLink(models.Model):
         return f"Refund {self.refund_id} for {self.original_id}"
 
 
+class RecurringSeries(models.Model):
+    class Status(models.TextChoices):
+        POSSIBLE = "possible", "Possible"
+        SUGGESTED = "suggested", "Suggested"
+        CONFIRMED = "confirmed", "Confirmed"
+        DISMISSED = "dismissed", "Dismissed"
+
+    class Cadence(models.TextChoices):
+        WEEKLY = "weekly", "Weekly"
+        BIWEEKLY = "biweekly", "Biweekly"
+        MONTHLY = "monthly", "Monthly"
+        QUARTERLY = "quarterly", "Quarterly"
+        ANNUAL = "annual", "Annual"
+
+    class Confidence(models.TextChoices):
+        HIGH = "high", "High"
+        MEDIUM = "medium", "Medium"
+        LOW = "low", "Low"
+
+    person = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="recurring_series")
+    merchant_key = models.CharField(max_length=200)
+    display_name = models.CharField(max_length=200)
+    cadence = models.CharField(max_length=9, choices=Cadence)
+    typical_amount_minor = models.BigIntegerField()
+    currency = models.CharField(max_length=3, default="USD")
+    status = models.CharField(max_length=10, choices=Status)
+    confidence = models.CharField(max_length=6, choices=Confidence)
+    reasons = models.JSONField(validators=(validate_reason_list,))
+    fingerprint = models.CharField(max_length=64, validators=(sha256_validator,))
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            person = _person_for(principal)
+            if person is None:
+                return self.none()
+            visible_transactions = Transaction.objects.visible_to(person).values("pk")
+            hidden_members = RecurringSeriesMember.objects.filter(
+                series_id=models.OuterRef("pk"),
+            ).exclude(transaction_id__in=visible_transactions)
+            return self.filter(person=person).exclude(models.Exists(hidden_members))
+
+    objects = QuerySet.as_manager()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("person", "fingerprint"), name="recurring_series_person_fingerprint"),
+            models.CheckConstraint(condition=Q(currency="USD"), name="recurring_series_currency_usd"),
+            models.CheckConstraint(
+                condition=Q(status__in=("possible", "suggested", "confirmed", "dismissed")),
+                name="recurring_series_status_valid",
+            ),
+            models.CheckConstraint(
+                condition=Q(cadence__in=("weekly", "biweekly", "monthly", "quarterly", "annual")),
+                name="recurring_series_cadence_valid",
+            ),
+            models.CheckConstraint(
+                condition=Q(confidence__in=("high", "medium", "low")),
+                name="recurring_series_confidence_valid",
+            ),
+            models.CheckConstraint(
+                condition=Q(typical_amount_minor__lt=0),
+                name="recurring_series_amount_is_charge",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.display_name} {self.cadence}"
+
+    @property
+    def amount_display(self):
+        amount = Decimal(self.typical_amount_minor) / Decimal(100)
+        return f"{amount:,.2f} {self.currency}"
+
+    @property
+    def annual_minor(self):
+        per_year = {
+            self.Cadence.WEEKLY: 52,
+            self.Cadence.BIWEEKLY: 26,
+            self.Cadence.MONTHLY: 12,
+            self.Cadence.QUARTERLY: 4,
+            self.Cadence.ANNUAL: 1,
+        }[self.cadence]
+        return abs(self.typical_amount_minor) * per_year
+
+    @property
+    def monthly_minor(self):
+        return self.annual_minor // 12
+
+    @property
+    def monthly_display(self):
+        amount = Decimal(self.monthly_minor) / Decimal(100)
+        return f"{amount:,.2f} {self.currency}"
+
+    @property
+    def annual_display(self):
+        amount = Decimal(self.annual_minor) / Decimal(100)
+        return f"{amount:,.2f} {self.currency}"
+
+
+class RecurringSeriesMember(models.Model):
+    series = models.ForeignKey(RecurringSeries, on_delete=models.CASCADE, related_name="members")
+    transaction = models.ForeignKey(Transaction, on_delete=models.PROTECT, related_name="recurring_memberships")
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("series", "transaction"), name="recurring_member_unique"),
+        ]
+
+    def __str__(self):
+        return f"Series {self.series_id} txn {self.transaction_id}"
+
+
 class Invitation(models.Model):
     household = models.ForeignKey(Household, on_delete=models.CASCADE, related_name="invitations")
     invited_by = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="invitations_created")
