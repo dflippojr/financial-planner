@@ -469,14 +469,27 @@ def _pair_legs(pair, locked_by_id):
     )
 
 
-def _legs_still_cancel(left, right):
+def _both_legs_active(left, right):
     return (
         left is not None
         and right is not None
         and left.status == Transaction.Status.ACTIVE
         and right.status == Transaction.Status.ACTIVE
-        and _is_candidate(left, right)
     )
+
+
+def _legs_still_cancel(left, right):
+    return _both_legs_active(left, right) and _is_candidate(left, right)
+
+
+def _confirmed_pair_still_holds(left, right):
+    return _both_legs_active(left, right) and _amounts_and_accounts_can_pair(left, right)
+
+
+def _pair_survives_revalidation(pair, left, right):
+    if pair.status == TransferPair.Status.CONFIRMED:
+        return _confirmed_pair_still_holds(left, right)
+    return _legs_still_cancel(left, right)
 
 
 def _revalidate_marked_pairs(existing, locked_by_id, person):
@@ -488,16 +501,7 @@ def _revalidate_marked_pairs(existing, locked_by_id, person):
         ):
             continue
         left, right = _pair_legs(pair, locked_by_id)
-        if pair.status == TransferPair.Status.CONFIRMED:
-            both_active = (
-                left is not None
-                and right is not None
-                and left.status == Transaction.Status.ACTIVE
-                and right.status == Transaction.Status.ACTIVE
-            )
-            if both_active and _amounts_and_accounts_can_pair(left, right):
-                continue
-        elif _legs_still_cancel(left, right):
+        if _pair_survives_revalidation(pair, left, right):
             continue
         if pair.status == TransferPair.Status.SUGGESTED:
             _invalidate_suggestion(pair)
