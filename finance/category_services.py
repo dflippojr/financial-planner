@@ -67,16 +67,18 @@ def current_household(person):
 
 
 def ensure_household_categories(household):
-    existing = {category.name: category for category in household.categories.all()}
+    existing = list(household.categories.all())
+    by_name = {category.name: category for category in existing}
+    system_codes = {category.code for category in existing if category.code != Category.Code.CUSTOM}
     created = []
-    if "Uncategorized" not in existing:
+    if Category.Code.UNCATEGORIZED not in system_codes:
         created.append(
             Category(household=household, name="Uncategorized", code=Category.Code.UNCATEGORIZED)
         )
-    if "Transfer" not in existing:
+    if Category.Code.TRANSFER not in system_codes:
         created.append(Category(household=household, name="Transfer", code=Category.Code.TRANSFER))
     for name in STARTER_CUSTOM_NAMES:
-        if name not in existing:
+        if name not in by_name:
             created.append(Category(household=household, name=name, code=Category.Code.CUSTOM))
     if created:
         Category.objects.bulk_create(created)
@@ -392,6 +394,30 @@ def _update_existing_pair(pair, scored, person):
         pair.save(update_fields=("confidence", "kind", "reasons", "updated_at"))
 
 
+def _unmark_exclusion(pair, left, right, actor):
+    left.category_id = pair.leg_a_category_id_at_mark
+    right.category_id = pair.leg_b_category_id_at_mark
+    left.save(update_fields=("category", "updated_at"))
+    right.save(update_fields=("category", "updated_at"))
+    pair.status = TransferPair.Status.UNDONE
+    pair.save(update_fields=("status", "updated_at"))
+    _record_text_history(left, actor, TransactionCorrectionHistory.Field.EXCLUSION, "excluded", "included")
+    _record_text_history(right, actor, TransactionCorrectionHistory.Field.EXCLUSION, "excluded", "included")
+
+
+def _revalidate_marked_pairs(existing, locked_by_id, person):
+    for pair in existing.values():
+        if pair.status not in (TransferPair.Status.AUTO_MARKED, TransferPair.Status.CONFIRMED):
+            continue
+        left = locked_by_id.get(pair.leg_a_id)
+        right = locked_by_id.get(pair.leg_b_id)
+        if left is None or right is None:
+            continue
+        if _is_candidate(left, right):
+            continue
+        _unmark_exclusion(pair, left, right, person)
+
+
 @transaction.atomic
 def refresh_transfer_pairs(principal):
     person = _person_for(principal)
@@ -402,10 +428,12 @@ def refresh_transfer_pairs(principal):
     tx_ids = [item.pk for item in locked]
     existing = {
         (pair.leg_a_id, pair.leg_b_id): pair
-        for pair in TransferPair.objects.select_for_update().filter(
+        for pair in TransferPair.objects.select_for_update(of=("self",)).filter(
             Q(leg_a_id__in=tx_ids) | Q(leg_b_id__in=tx_ids)
         )
     }
+    locked_by_id = {item.pk: item for item in locked}
+    _revalidate_marked_pairs(existing, locked_by_id, person)
     occupied = _occupied_transaction_ids(existing.values())
     created = []
     scored_pairs = _score_pairs(locked)
@@ -464,7 +492,7 @@ def confirm_transfer_pair(principal, pair_id):
     left, right = locked[0], locked[1]
     if not _is_candidate(left, right):
         raise PermissionDenied(_DENIED)
-    pair = TransferPair.objects.select_for_update().get(pk=pair.pk)
+    pair = TransferPair.objects.select_for_update(of=("self",)).get(pk=pair.pk)
     _snapshot_and_mark(pair, left, right, TransferPair.Status.CONFIRMED, person)
     return pair
 
@@ -475,7 +503,7 @@ def dismiss_transfer_pair(principal, pair_id):
     if pair.status != TransferPair.Status.SUGGESTED:
         raise PermissionDenied(_DENIED)
     lock_actor_household(person)
-    pair = TransferPair.objects.select_for_update().get(pk=pair.pk)
+    pair = TransferPair.objects.select_for_update(of=("self",)).get(pk=pair.pk)
     pair.status = TransferPair.Status.DISMISSED
     pair.save(update_fields=("status", "updated_at"))
     return pair
@@ -490,15 +518,8 @@ def undo_transfer_pair(principal, pair_id):
     by_id = {item.pk: item for item in locked}
     left = by_id[pair.leg_a_id]
     right = by_id[pair.leg_b_id]
-    pair = TransferPair.objects.select_for_update().get(pk=pair.pk)
-    left.category_id = pair.leg_a_category_id_at_mark
-    right.category_id = pair.leg_b_category_id_at_mark
-    left.save(update_fields=("category", "updated_at"))
-    right.save(update_fields=("category", "updated_at"))
-    pair.status = TransferPair.Status.UNDONE
-    pair.save(update_fields=("status", "updated_at"))
-    _record_text_history(left, person, TransactionCorrectionHistory.Field.EXCLUSION, "excluded", "included")
-    _record_text_history(right, person, TransactionCorrectionHistory.Field.EXCLUSION, "excluded", "included")
+    pair = TransferPair.objects.select_for_update(of=("self",)).get(pk=pair.pk)
+    _unmark_exclusion(pair, left, right, person)
     return pair
 
 
@@ -566,24 +587,21 @@ def income_and_spending_totals(principal, *, date_from=None, date_to=None):
     if date_to:
         transactions = transactions.filter(transaction_date__lte=date_to)
 
-    visible_ids = list(transactions.values_list("pk", flat=True))
-    excluded = set()
-    for pair in TransferPair.objects.excluding_income_and_spending().visible_to(person).filter(
-        Q(leg_a_id__in=visible_ids) | Q(leg_b_id__in=visible_ids)
-    ):
-        if pair.leg_a_id in visible_ids and pair.leg_b_id in visible_ids:
-            excluded.add(pair.leg_a_id)
-            excluded.add(pair.leg_b_id)
-
+    excluded = {
+        tx_id
+        for pair in TransferPair.objects.excluding_income_and_spending().visible_to(person)
+        for tx_id in (pair.leg_a_id, pair.leg_b_id)
+    }
+    rows = list(transactions)
     refunds = {
         link.refund_id: link
-        for link in RefundLink.objects.visible_to(person).filter(refund_id__in=visible_ids)
+        for link in RefundLink.objects.visible_to(person).filter(refund_id__in=[item.pk for item in rows])
     }
 
     income = 0
     spending = 0
     by_category = defaultdict(int)
-    for item in transactions:
+    for item in rows:
         if item.pk in excluded:
             continue
         if item.pk in refunds:

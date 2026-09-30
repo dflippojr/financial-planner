@@ -333,6 +333,9 @@ class Transaction(ArchivableModel):
 
     @property
     def is_excluded_transfer(self):
+        annotated = getattr(self, "_excluded", None)
+        if annotated is not None:
+            return bool(annotated)
         pairs = getattr(self, "_prefetched_exclusion_pairs", None)
         if pairs is not None:
             return any(pair.is_active_exclusion for pair in pairs)

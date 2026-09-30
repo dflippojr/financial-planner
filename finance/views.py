@@ -150,6 +150,7 @@ def transaction_edit(request, transaction_id):
                     status=Transaction.Status.ACTIVE,
                 )
                 form.apply(financial_transaction, actor=person)
+            _service_or_404(lambda: refresh_transfer_pairs(request.user))
             return redirect("transaction-list")
     else:
         form = TransactionCorrectionForm.for_transaction(financial_transaction)
@@ -299,7 +300,6 @@ def category_list(request):
 @require_http_methods(["GET", "POST"])
 @never_cache
 def transfer_review(request):
-    _service_or_404(lambda: refresh_transfer_pairs(request.user))
     if request.method == "POST":
         try:
             pair_id = int(request.POST.get("pair_id", "0"))
@@ -315,6 +315,7 @@ def transfer_review(request):
         if handler is None:
             raise Http404
         _service_or_404(lambda: handler(request.user, pair_id))
+        _service_or_404(lambda: refresh_transfer_pairs(request.user))
         return redirect("transfer-review")
     visible = TransferPair.objects.visible_to(request.user).select_related(
         "leg_a",

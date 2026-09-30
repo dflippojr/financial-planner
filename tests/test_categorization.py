@@ -10,9 +10,11 @@ from finance.category_services import (
     STARTER_CUSTOM_NAMES,
     assign_category,
     ensure_household_categories,
+    exclusion_exists_for,
     income_and_spending_totals,
     link_refund,
     refresh_transfer_pairs,
+    rename_category,
     undo_transfer_pair,
 )
 from finance.models import (
@@ -134,6 +136,7 @@ def test_high_confidence_pair_is_auto_marked_with_reasons_and_can_be_undone():
     inflow = make_transaction(owner, savings, amount_minor=2500, description="Synthetic from checking")
     assign_category(owner, outflow.pk, groceries.pk)
 
+    refresh_transfer_pairs(owner)
     client = Client()
     client.force_login(owner.user)
     review = client.get(reverse("transfer-review"))
@@ -353,6 +356,14 @@ def test_exclusion_hidden_when_counterpart_is_not_visible():
     assert b"Undo exclusion" not in review.content
     assert b"Owner Private" not in listed.content
     assert shared_leg.description.encode() in listed.content
+    shared_on_list = (
+        Transaction.objects.visible_to(member)
+        .annotate(_excluded=exclusion_exists_for(member))
+        .get(pk=shared_leg.pk)
+    )
+    assert shared_on_list.category_display == "Uncategorized"
+    transfer_filter = client.get(reverse("transaction-list"), {"category": "transfer"})
+    assert shared_leg.description.encode() not in transfer_filter.content
 
 
 @pytest.mark.django_db
@@ -377,3 +388,132 @@ def test_outsider_cannot_categorize_or_see_private_errors():
     assert response.status_code == 404
     assert b"Owner Private" not in response.content
     assert b"Synthetic row" not in response.content
+
+
+@pytest.mark.django_db
+def test_renamed_system_category_is_not_reseeded():
+    owner = make_person("owner")
+    household = make_household(owner)
+    uncategorized = household.categories.get(code=Category.Code.UNCATEGORIZED)
+    rename_category(owner, uncategorized.pk, "Inbox")
+    client = Client()
+    client.force_login(owner.user)
+
+    categories = client.get(reverse("category-list"))
+    listed = client.get(reverse("transaction-list"))
+
+    assert categories.status_code == 200
+    assert listed.status_code == 200
+    assert household.categories.filter(code=Category.Code.UNCATEGORIZED).count() == 1
+    assert household.categories.filter(code=Category.Code.TRANSFER).count() == 1
+    uncategorized.refresh_from_db()
+    assert uncategorized.name == "Inbox"
+
+
+@pytest.mark.django_db
+def test_transfer_review_get_does_not_write_pairs():
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner, name="Synthetic Checking")
+    savings = make_account(owner, name="Synthetic Savings", account_type=Account.Type.SAVINGS)
+    make_transaction(owner, checking, amount_minor=-2500, description="Synthetic to savings")
+    make_transaction(owner, savings, amount_minor=2500, description="Synthetic from checking")
+    client = Client()
+    client.force_login(owner.user)
+
+    review = client.get(reverse("transfer-review"))
+
+    assert review.status_code == 200
+    assert TransferPair.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_cross_month_transfer_is_excluded_from_each_monthly_report():
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner, name="Synthetic Checking")
+    savings = make_account(owner, name="Synthetic Savings", account_type=Account.Type.SAVINGS)
+    make_transaction(
+        owner,
+        checking,
+        amount_minor=-2500,
+        transaction_date=date(2026, 1, 31),
+        description="Synthetic month-end transfer out",
+    )
+    make_transaction(
+        owner,
+        savings,
+        amount_minor=2500,
+        transaction_date=date(2026, 2, 1),
+        description="Synthetic month-start transfer in",
+    )
+    refresh_transfer_pairs(owner)
+
+    january = income_and_spending_totals(owner, date_from=date(2026, 1, 1), date_to=date(2026, 1, 31))
+    february = income_and_spending_totals(owner, date_from=date(2026, 2, 1), date_to=date(2026, 2, 28))
+
+    assert TransferPair.objects.get().status == TransferPair.Status.AUTO_MARKED
+    assert january.income_minor == 0
+    assert january.spending_minor == 0
+    assert february.income_minor == 0
+    assert february.spending_minor == 0
+
+
+@pytest.mark.django_db
+def test_visible_investment_transfer_does_not_count_as_spending():
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner, name="Synthetic Checking")
+    brokerage = make_account(owner, name="Synthetic Brokerage", account_type=Account.Type.INVESTMENT)
+    make_transaction(owner, checking, amount_minor=-4000, description="Synthetic contribution")
+    make_transaction(
+        owner,
+        brokerage,
+        amount_minor=4000,
+        kind=Transaction.Kind.INVESTMENT_ACTIVITY,
+        description="Synthetic investment activity",
+    )
+    refresh_transfer_pairs(owner)
+    totals = income_and_spending_totals(owner)
+
+    assert TransferPair.objects.get().status == TransferPair.Status.AUTO_MARKED
+    assert totals.income_minor == 0
+    assert totals.spending_minor == 0
+
+
+@pytest.mark.django_db
+def test_corrected_amounts_that_no_longer_cancel_restore_original_categories():
+    owner = make_person("owner")
+    household = make_household(owner)
+    checking = make_account(owner, name="Synthetic Checking")
+    savings = make_account(owner, name="Synthetic Savings", account_type=Account.Type.SAVINGS)
+    groceries = household.categories.get(name="Groceries")
+    outflow = make_transaction(owner, checking, amount_minor=-10000, description="Synthetic to savings")
+    inflow = make_transaction(owner, savings, amount_minor=10000, description="Synthetic from checking")
+    assign_category(owner, outflow.pk, groceries.pk)
+    refresh_transfer_pairs(owner)
+    pair = TransferPair.objects.get()
+    assert pair.status == TransferPair.Status.AUTO_MARKED
+
+    client = Client()
+    client.force_login(owner.user)
+    response = client.post(
+        reverse("transaction-edit", args=(inflow.pk,)),
+        {
+            "transaction_date": "2026-01-02",
+            "description": "Synthetic from checking",
+            "amount": "150.00",
+        },
+    )
+    pair.refresh_from_db()
+    outflow.refresh_from_db()
+    inflow.refresh_from_db()
+    totals = income_and_spending_totals(owner)
+
+    assert response.status_code == 302
+    assert pair.status == TransferPair.Status.UNDONE
+    assert outflow.category_id == groceries.pk
+    assert inflow.amount_minor == 15000
+    assert totals.spending_minor == 10000
+    assert totals.income_minor == 15000
+
