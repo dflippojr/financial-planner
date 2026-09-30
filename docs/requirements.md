@@ -144,3 +144,9 @@ Same 439 rows and 282 negative amounts as the native file, so the same transacti
 - Rows are sorted by spending, largest first, with a percent-of-total column. Uncategorized is always listed.
 - The first version is a totals table for the selected range with drilldown. Per-category trends over time come later.
 - Income is not part of this view.
+
+## Adjusting transaction dates (2026-09-30)
+
+- A person who can edit a transaction may change its date. For example, a bill that posts just after a month boundary can be moved into the month it belongs to, so month-to-month tracking stays consistent. This is an owner requirement: later work must keep it.
+- The corrected date is the one every report uses (cash flow, spending by category, transfer pairing, recurring detection). The previous date is kept in correction history, and the provider's original value stays in the stored source fields.
+- A date correction must never make a reimport count the transaction again. Reimport matching uses the fingerprint recorded at import, which a correction does not change. `tests/test_date_adjustment.py` guards both rules.
