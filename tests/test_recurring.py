@@ -522,6 +522,7 @@ def test_long_descriptions_are_truncated_to_the_stored_name_length():
     series = RecurringSeries.objects.get(person=owner)
 
     assert len(series.display_name) == RecurringSeries._meta.get_field("display_name").max_length
+    assert len(series.merchant_key) <= RecurringSeries._meta.get_field("merchant_key").max_length
 
 
 @pytest.mark.django_db

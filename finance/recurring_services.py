@@ -45,7 +45,8 @@ def _person_for(principal):
 
 def merchant_key(description):
     tokens = re.sub(r"[^a-z]+", " ", description.casefold()).split()
-    return " ".join(tokens)
+    # Cut here, not at save time, so grouping and the stored key always agree.
+    return " ".join(tokens)[: RecurringSeries._meta.get_field("merchant_key").max_length].rstrip()
 
 
 def _add_months(value: date, months: int) -> date:
