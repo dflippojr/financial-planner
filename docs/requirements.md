@@ -150,3 +150,19 @@ Same 439 rows and 282 negative amounts as the native file, so the same transacti
 - A person who can edit a transaction may change its date. For example, a bill that posts just after a month boundary can be moved into the month it belongs to, so month-to-month tracking stays consistent. This is an owner requirement: later work must keep it.
 - The corrected date is the one every report uses (cash flow, spending by category, transfer pairing, recurring detection). The previous date is kept in correction history, and the provider's original value stays in the stored source fields.
 - A date correction must never make a reimport count the transaction again. Reimport matching uses the fingerprint recorded at import, which a correction does not change. `tests/test_date_adjustment.py` guards both rules.
+
+## Sign-in methods (2026-09-30)
+
+Owner decisions:
+- **Invitations are required.** Google proves who someone is, not that they belong in the household. Any new member joins with a valid invitation, whatever the sign-in method. The only exception is first-run setup, below.
+- **Google and passwords both stay.** Google sign-in is added alongside password sign-in and is the preferred option in the interface. Password sign-in, recovery codes, and the existing session protections (absolute session expiry, login throttling) remain.
+- **An account is created with whichever method a person uses first.** Google is offered first. A member with a password account can connect Google from their settings and then use either method.
+- **First-run setup works in the browser, with either method.** While no user exists, a setup page creates the first member and household.
+
+Defaults recorded with the decisions (owner may change):
+- A Google identity is matched by Google's stable subject id (`sub`), never by email address, and only when Google reports the email as verified. An existing account is never linked automatically by email. Linking is an explicit "Connect Google" action by a signed-in member.
+- A member cannot remove their last sign-in method. Disconnecting Google requires a password, and removing a password requires Google to be connected.
+- Every new member gets one-time recovery codes, whatever the method. A Google-only member may add a password later.
+- First-run setup requires a one-time setup code from `production.env` (`SETUP_CODE`). This stops anyone else who can reach the URL first from claiming ownership. The code stops working once the first member exists, and a database lock prevents two concurrent setups.
+- Google sign-in is off unless `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are configured. With it off, the app behaves as it does today.
+- Only the `openid email profile` scopes are requested. The app stores the Google subject id and email for display, never tokens.
