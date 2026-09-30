@@ -20,4 +20,5 @@ urlpatterns = [
     path("transactions/<int:transaction_id>/refund/", views.transaction_link_refund, name="transaction-link-refund"),
     path("categories/", views.category_list, name="category-list"),
     path("transfers/", views.transfer_review, name="transfer-review"),
+    path("recurring/", views.recurring_review, name="recurring-review"),
 ]
