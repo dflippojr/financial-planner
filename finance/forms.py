@@ -151,6 +151,43 @@ class CashFlowFilterForm(forms.Form):
         return cleaned
 
 
+class SpendingFilterForm(forms.Form):
+    date_from = forms.DateField(
+        required=False,
+        widget=forms.DateInput(attrs={"type": "date"}),
+        validators=[MaxValueValidator(MAX_REPORT_DATE)],
+    )
+    date_to = forms.DateField(
+        required=False,
+        widget=forms.DateInput(attrs={"type": "date"}),
+        validators=[MaxValueValidator(MAX_REPORT_DATE)],
+    )
+    account = forms.ModelChoiceField(queryset=Account.objects.none(), required=False)
+    scope = forms.ChoiceField(
+        required=False,
+        choices=(
+            ("", "All visible accounts"),
+            (Account.Scope.PRIVATE, "Private"),
+            (Account.Scope.HOUSEHOLD, "Household"),
+        ),
+    )
+
+    def __init__(self, *args, principal=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["account"].queryset = Account.objects.visible_to(principal).order_by("name", "pk")
+
+    def clean(self):
+        cleaned = super().clean()
+        default_from, default_to = default_date_range()
+        date_from = cleaned.get("date_from") or default_from
+        date_to = cleaned.get("date_to") or default_to
+        cleaned["date_from"] = date_from
+        cleaned["date_to"] = date_to
+        if date_from > date_to:
+            self.add_error("date_to", "End date must be on or after start date.")
+        return cleaned
+
+
 def _correction_history_rows(transaction, actor, recorded_at, new_date, new_description, new_amount_minor):
     rows = []
     if new_date != transaction.transaction_date:

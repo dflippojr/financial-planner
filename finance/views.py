@@ -1,5 +1,7 @@
 from datetime import timedelta
 from decimal import Decimal
+from types import SimpleNamespace
+from urllib.parse import urlencode
 
 from django.conf import settings
 from django.contrib.auth import authenticate, login, logout
@@ -34,6 +36,7 @@ from .forms import (
     LoginForm,
     RecoveryForm,
     RefundLinkForm,
+    SpendingFilterForm,
     TransactionCategoryForm,
     TransactionCorrectionForm,
     TransactionFilterForm,
@@ -42,7 +45,7 @@ from .forms import (
 from .lifecycle_services import lock_actor_household
 from .models import Account, Category, Person, RecurringSeries, RefundLink, Transaction, TransactionCorrectionHistory, TransferPair
 from .recurring_services import confirm_recurring_series, confirmed_totals, dismiss_recurring_series, refresh_recurring_series
-from .cash_flow import cash_flow_report, default_date_range
+from .cash_flow import cash_flow_report, date_range_presets, default_date_range, spending_by_category_report
 from .category_services import (
     add_category,
     assign_category,
@@ -125,6 +128,70 @@ def home(request):
             "report": report,
             "import_account": import_account,
             "accounts": Account.objects.visible_to(request.user),
+        },
+    )
+
+
+def _preset_links(today, *, account=None, scope=""):
+    links = []
+    for preset in date_range_presets(today):
+        query = {"date_from": preset.date_from.isoformat(), "date_to": preset.date_to.isoformat()}
+        if account is not None:
+            query["account"] = str(account.pk)
+        if scope:
+            query["scope"] = scope
+        links.append(SimpleNamespace(label=preset.label, url=f"?{urlencode(query)}"))
+    return links
+
+
+@require_GET
+@never_cache
+def spending_by_category(request):
+    today = timezone.localdate()
+    default_from, default_to = default_date_range(today)
+    form = SpendingFilterForm(request.GET or None, principal=request.user)
+    if not form.is_bound:
+        form = SpendingFilterForm(
+            principal=request.user,
+            initial={
+                "date_from": default_from,
+                "date_to": default_to,
+            },
+        )
+        date_from, date_to, account, scope = default_from, default_to, None, ""
+    elif form.is_valid():
+        date_from = form.cleaned_data["date_from"] or default_from
+        date_to = form.cleaned_data["date_to"] or default_to
+        account = form.cleaned_data["account"]
+        scope = form.cleaned_data["scope"]
+    else:
+        date_from = date_to = account = scope = None
+    report = None
+    import_account = None
+    if date_from is not None:
+        report = spending_by_category_report(
+            request.user,
+            date_from=date_from,
+            date_to=date_to,
+            account=account,
+            scope=scope,
+        )
+        import_account = next(
+            (
+                item
+                for item in report.accounts
+                if item.status == Account.Status.ACTIVE and item.archived_at is None
+            ),
+            None,
+        )
+    return render(
+        request,
+        "finance/spending.html",
+        {
+            "filter_form": form,
+            "report": report,
+            "import_account": import_account,
+            "presets": _preset_links(today, account=account, scope=scope) if date_from is not None else (),
         },
     )
 

@@ -7,6 +7,7 @@ from finance.csv_import import views as csv_import_views
 urlpatterns = [
     path("health/", views.health, name="health"),
     path("", views.home, name="home"),
+    path("spending/", views.spending_by_category, name="spending-by-category"),
     path("sign-in/", views.sign_in, name="login"),
     path("sign-out/", views.sign_out, name="logout"),
     path("invite/", views.invite, name="invite"),

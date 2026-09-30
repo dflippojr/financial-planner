@@ -1,7 +1,7 @@
 {% extends "finance/base.html" %}
 {% block content %}
 <h1>Transfers and card payments</h1>
-<p><a href="{% url 'home' %}">Cash flow</a> · <a href="{% url 'transaction-list' %}">Transactions</a></p>
+<p><a href="{% url 'home' %}">Cash flow</a> · <a href="{% url 'spending-by-category' %}">Spending</a> · <a href="{% url 'transaction-list' %}">Transactions</a></p>
 <h2>Excluded (review and undo)</h2>
 <table>
   <thead><tr><th>Dates</th><th>Accounts</th><th>Kind</th><th>Confidence</th><th>Reasons</th><th></th></tr></thead>
