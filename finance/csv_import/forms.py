@@ -3,6 +3,7 @@ from django import forms
 from finance.models import ImportBatch
 
 from .parser import DATE_FORMATS, NUMBER_FORMATS, Mapping
+from .profiles import GENERIC, PROFILE_CHOICES, normalize_profile
 
 
 class CsvUploadForm(forms.Form):
@@ -10,6 +11,25 @@ class CsvUploadForm(forms.Form):
         label="CSV file",
         error_messages={"required": "Choose a CSV file of at most 5 MB."},
     )
+    import_profile = forms.ChoiceField(
+        label="Import profile",
+        choices=PROFILE_CHOICES,
+        required=False,
+        initial=GENERIC,
+    )
+
+    def clean_import_profile(self):
+        return normalize_profile(self.cleaned_data.get("import_profile"))
+
+
+class HuntingtonImportForm(forms.Form):
+    token = forms.CharField(widget=forms.HiddenInput)
+    source = forms.CharField(widget=forms.HiddenInput, required=False)
+    date_range_start = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
+    date_range_end = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
+
+    def clean_source(self):
+        return ImportBatch.Source.HUNTINGTON
 
 
 class CsvMappingForm(forms.Form):
