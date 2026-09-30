@@ -384,7 +384,11 @@ def recurring_review(request):
         .prefetch_related("members__transaction")
         .order_by("display_name", "pk")
     )
-    confirmed = [series for series in visible if series.status == RecurringSeries.Status.CONFIRMED]
+    confirmed = [
+        series
+        for series in visible
+        if series.status == RecurringSeries.Status.CONFIRMED and series.is_active
+    ]
     suggestions = [
         series
         for series in visible

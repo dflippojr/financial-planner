@@ -299,6 +299,7 @@ def _apply_detection(series, detected):
     series.confidence = detected.confidence
     series.reasons = list(detected.reasons)
     series.fingerprint = detected.fingerprint
+    series.is_active = True
     if series.status not in (RecurringSeries.Status.CONFIRMED, RecurringSeries.Status.DISMISSED):
         series.status = detected.status
     series.save()
@@ -370,6 +371,12 @@ def _drop_stale_open_rows(open_rows, kept_ids):
     RecurringSeries.objects.filter(pk__in=[series.pk for series in stale]).delete()
 
 
+def _deactivate_stale_confirmed(confirmed, kept_ids):
+    stale = [series for series in confirmed if series.pk not in kept_ids]
+    RecurringSeriesMember.objects.filter(series__in=stale).delete()
+    RecurringSeries.objects.filter(pk__in=[series.pk for series in stale]).update(is_active=False)
+
+
 @transaction.atomic
 def refresh_recurring_series(principal):
     person = _person_for(principal)
@@ -398,6 +405,7 @@ def refresh_recurring_series(principal):
             kept_ids=kept_ids,
         )
     _drop_stale_open_rows(open_rows, kept_ids)
+    _deactivate_stale_confirmed(confirmed, kept_ids)
     return RecurringSeries.objects.visible_to(person)
 
 
@@ -437,6 +445,8 @@ def confirmed_totals(series_queryset):
     monthly = 0
     annual = 0
     for series in series_queryset:
+        if series.status != RecurringSeries.Status.CONFIRMED or not series.is_active:
+            continue
         monthly += series.monthly_minor
         annual += series.annual_minor
     return monthly, annual

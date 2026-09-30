@@ -133,5 +133,5 @@ Same 439 rows and 282 negative amounts as the native file, so the same transacti
 
 - Call a series recurring only after at least 3 occurrences at a regular interval. With 2 occurrences it may be shown only as "possible".
 - Detect weekly, biweekly, monthly, quarterly, and annual cadences, each with a few days of date tolerance.
-- Amounts may vary by up to 25% within a series. Exact amounts get higher confidence than varying ones.
-- Confirmed series appear on their own Recurring page, with monthly and annual totals, linked from the dashboard.
+- Amounts may vary by up to 25% within a series, measured against the selected cadence chain's own median rather than the whole merchant cluster. Exact amounts get higher confidence than varying ones.
+- Confirmed series appear on their own Recurring page, with monthly and annual totals, linked from the dashboard. Refresh revalidates confirmed series: when every occurrence is no longer eligible (archived, excluded as a transfer, or not visible), the confirmation is kept but the series is marked inactive, members are cleared, and it drops from totals until eligible occurrences return.

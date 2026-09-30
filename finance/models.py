@@ -574,6 +574,7 @@ class RecurringSeries(models.Model):
     confidence = models.CharField(max_length=6, choices=Confidence)
     reasons = models.JSONField(validators=(validate_reason_list,))
     fingerprint = models.CharField(max_length=64, validators=(sha256_validator,))
+    is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

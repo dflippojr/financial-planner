@@ -261,6 +261,69 @@ def test_confirm_shows_exact_minor_unit_totals_on_recurring_page():
 
 
 @pytest.mark.django_db
+def test_refresh_deactivates_confirmed_series_when_occurrences_are_no_longer_eligible():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    add_monthly_charges(owner, account)
+    refresh_recurring_series(owner)
+    series = RecurringSeries.objects.get()
+    confirm_recurring_series(owner, series.pk)
+
+    archive_account(owner, account.pk)
+    refresh_recurring_series(owner)
+    series.refresh_from_db()
+
+    assert series.status == RecurringSeries.Status.CONFIRMED
+    assert series.is_active is False
+    assert series.members.count() == 0
+    assert confirmed_totals([series]) == (0, 0)
+
+    replacement = make_account(owner, name="Synthetic Replacement")
+    add_monthly_charges(owner, replacement)
+    refresh_recurring_series(owner)
+    series.refresh_from_db()
+
+    assert RecurringSeries.objects.filter(person=owner).count() == 1
+    assert series.is_active is True
+    assert series.members.count() == 3
+    assert confirmed_totals([series])[0] > 0
+
+
+@pytest.mark.django_db
+def test_refresh_deactivates_confirmed_series_when_occurrences_are_transfers():
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner, name="Synthetic Checking")
+    savings = make_account(owner, name="Synthetic Savings", account_type=Account.Type.SAVINGS)
+    add_monthly_charges(owner, checking, description="Synthetic to savings", amount_minor=-2500)
+    refresh_recurring_series(owner)
+    series = RecurringSeries.objects.get()
+    confirm_recurring_series(owner, series.pk)
+
+    start = date(2026, 1, 15)
+    for index in range(3):
+        month = start.month + index
+        year = start.year + (month - 1) // 12
+        month = ((month - 1) % 12) + 1
+        make_transaction(
+            owner,
+            savings,
+            transaction_date=date(year, month, start.day),
+            amount_minor=2500,
+            description="Synthetic from checking",
+        )
+    refresh_transfer_pairs(owner)
+    refresh_recurring_series(owner)
+    series.refresh_from_db()
+
+    assert series.status == RecurringSeries.Status.CONFIRMED
+    assert series.is_active is False
+    assert series.members.count() == 0
+    assert confirmed_totals([series]) == (0, 0)
+
+
+@pytest.mark.django_db
 def test_dismissed_series_is_not_resuggested_until_transactions_change():
     owner = make_person("owner")
     make_household(owner)
