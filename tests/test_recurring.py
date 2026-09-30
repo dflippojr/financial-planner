@@ -141,9 +141,12 @@ def test_amount_tolerance_uses_selected_cadence_chain_median_not_cluster():
     refresh_recurring_series(owner)
     series_rows = list(RecurringSeries.objects.filter(merchant_key="synthetic cluster mix"))
 
-    assert series_rows == []
+    # The $8/$8/$12 monthly chain varies by 50% from its own median, so it is
+    # never suggested. Two-occurrence clusters may still appear as "possible"
+    # (#17 decisions); none may hold all three chain charges.
+    assert all(row.status == RecurringSeries.Status.POSSIBLE for row in series_rows)
     detected = detect_recurring_series(list(Transaction.objects.filter(account=account)))
-    assert detected == []
+    assert all(len(item.transaction_ids) < 3 for item in detected)
 
 
 @pytest.mark.django_db
