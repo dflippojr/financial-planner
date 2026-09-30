@@ -128,3 +128,10 @@ Same 439 rows and 282 negative amounts as the native file, so the same transacti
 - Transfer match starting values (#8), all configurable: 5-day window between dates, exactly equal and opposite amounts, both accounts visible to the same person (including a shared household account). Changing the match window revalidates suggested and auto-marked pairs against the new window (auto-marked pairs now outside it are undone and their snapshot categories restored), leaves confirmed pairs in place, then refreshes pairing.
 - Undoing a wrong exclusion (#8) restores the transaction to income or spending with its original category.
 - Refunds (#8): a person links a refund to its original transaction manually. The refund must be positive and the original a negative purchase of the same kind. The refund stores the inherited category on itself. Totals treat a linked refund as negative spending in that stored category using only the refund's own fields, even if the original is no longer visible, and they must not reveal the original. Recategorizing the original copies the new category onto its linked refunds and records that change in correction history.
+
+## Recurring charges decisions (2026-09-30, #17)
+
+- Call a series recurring only after at least 3 occurrences at a regular interval. With 2 occurrences it may be shown only as "possible".
+- Detect weekly, biweekly, monthly, quarterly, and annual cadences, each with a few days of date tolerance.
+- Amounts may vary by up to 25% within a series. Exact amounts get higher confidence than varying ones.
+- Confirmed series appear on their own Recurring page, with monthly and annual totals, linked from the dashboard.
