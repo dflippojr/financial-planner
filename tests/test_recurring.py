@@ -6,6 +6,7 @@ from django.test import Client
 from django.urls import reverse
 
 from finance.category_services import ensure_household_categories, refresh_transfer_pairs
+from finance.csv_import.services import undo_import_batch
 from finance.lifecycle_services import archive_account
 from finance.models import Account, Household, ImportBatch, Membership, Person, RecurringSeries, Transaction
 from finance.recurring_services import (
@@ -321,6 +322,59 @@ def test_refresh_deactivates_confirmed_series_when_occurrences_are_transfers():
     assert series.is_active is False
     assert series.members.count() == 0
     assert confirmed_totals([series]) == (0, 0)
+
+
+@pytest.mark.django_db
+def test_confirmed_series_does_not_absorb_a_second_amount_cluster():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    add_monthly_charges(owner, account, description="Synthetic Stream", amount_minor=-1000)
+    add_monthly_charges(owner, account, description="Synthetic Stream", amount_minor=-1300)
+    client = Client()
+    client.force_login(owner.user)
+
+    listing = client.get(reverse("recurring-review"))
+    assert listing.status_code == 200
+    cheap = RecurringSeries.objects.get(typical_amount_minor=-1000)
+    costly = RecurringSeries.objects.get(typical_amount_minor=-1300)
+    assert cheap.pk != costly.pk
+
+    confirm = client.post(reverse("recurring-review"), {"series_id": cheap.pk, "action": "confirm"})
+    assert confirm.status_code == 302
+
+    cheap.refresh_from_db()
+    costly.refresh_from_db()
+    assert cheap.status == RecurringSeries.Status.CONFIRMED
+    assert cheap.typical_amount_minor == -1000
+    assert cheap.fingerprint != costly.fingerprint
+    assert RecurringSeries.objects.filter(person=owner).count() == 2
+    assert RecurringSeries.objects.filter(typical_amount_minor=-1300).exclude(status=RecurringSeries.Status.CONFIRMED).count() == 1
+
+    page = client.get(reverse("recurring-review"))
+    assert page.status_code == 200
+
+
+@pytest.mark.django_db
+def test_confirmed_series_stays_active_while_any_occurrence_is_eligible():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    rows = add_monthly_charges(owner, account)
+    refresh_recurring_series(owner)
+    series = RecurringSeries.objects.get()
+    confirm_recurring_series(owner, series.pk)
+
+    undo_import_batch(owner, account.pk, rows[0].import_batch_id)
+    undo_import_batch(owner, account.pk, rows[1].import_batch_id)
+    refresh_recurring_series(owner)
+    series.refresh_from_db()
+
+    assert series.status == RecurringSeries.Status.CONFIRMED
+    assert series.is_active is True
+    assert series.members.count() == 1
+    assert series.members.get().transaction_id == rows[2].pk
+    assert confirmed_totals([series])[0] > 0
 
 
 @pytest.mark.django_db

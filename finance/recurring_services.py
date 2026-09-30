@@ -94,6 +94,14 @@ def amounts_within_tolerance(minors):
     return all(abs(Decimal(abs(value) - median)) <= limit for value in values)
 
 
+def _in_confirmed_amount_band(confirmed_typical, detected_typical):
+    center = abs(confirmed_typical)
+    if center == 0:
+        return False
+    limit = Decimal(center) * MAX_AMOUNT_VARIANCE
+    return abs(Decimal(abs(detected_typical) - center)) <= limit
+
+
 def _collapse_same_day(transactions):
     by_date = {}
     for item in sorted(transactions, key=lambda row: (row.transaction_date, row.pk)):
@@ -309,11 +317,17 @@ def _apply_detection(series, detected):
     )
 
 
-def _match_confirmed(confirmed, detected):
+def _fingerprint_taken(person, fingerprint, *, exclude_pk):
+    return RecurringSeries.objects.filter(person=person, fingerprint=fingerprint).exclude(pk=exclude_pk).exists()
+
+
+def _match_confirmed(confirmed, detected, kept_ids):
     for series in confirmed:
+        if series.pk in kept_ids:
+            continue
         if series.merchant_key != detected.merchant_key or series.cadence != detected.cadence:
             continue
-        if amounts_within_tolerance([series.typical_amount_minor, detected.typical_amount_minor]):
+        if _in_confirmed_amount_band(series.typical_amount_minor, detected.typical_amount_minor):
             return series
     return None
 
@@ -352,7 +366,9 @@ def _create_series(person, detected):
 def _upsert_detected(person, item, *, dismissed_fingerprints, confirmed, open_rows, open_by_fingerprint, kept_ids):
     if item.fingerprint in dismissed_fingerprints:
         return
-    confirmed_match = _match_confirmed(confirmed, item)
+    confirmed_match = _match_confirmed(confirmed, item, kept_ids)
+    if confirmed_match is not None and _fingerprint_taken(person, item.fingerprint, exclude_pk=confirmed_match.pk):
+        confirmed_match = None
     if confirmed_match is not None:
         _apply_detection(confirmed_match, item)
         kept_ids.add(confirmed_match.pk)
@@ -371,17 +387,27 @@ def _drop_stale_open_rows(open_rows, kept_ids):
     RecurringSeries.objects.filter(pk__in=[series.pk for series in stale]).delete()
 
 
-def _deactivate_stale_confirmed(confirmed, kept_ids):
+def _reconcile_unmatched_confirmed(confirmed, kept_ids, eligible_ids):
     stale = [series for series in confirmed if series.pk not in kept_ids]
-    RecurringSeriesMember.objects.filter(series__in=stale).delete()
-    RecurringSeries.objects.filter(pk__in=[series.pk for series in stale]).update(is_active=False)
+    for series in stale:
+        remaining = [
+            member.transaction_id
+            for member in series.members.all()
+            if member.transaction_id in eligible_ids
+        ]
+        if remaining:
+            RecurringSeriesMember.objects.filter(series=series).exclude(transaction_id__in=remaining).delete()
+            continue
+        RecurringSeriesMember.objects.filter(series=series).delete()
+        RecurringSeries.objects.filter(pk=series.pk).update(is_active=False)
 
 
 @transaction.atomic
 def refresh_recurring_series(principal):
     person = _person_for(principal)
     lock_actor_household(person)
-    detected = detect_recurring_series(candidate_transactions(person))
+    candidates = candidate_transactions(person)
+    detected = detect_recurring_series(candidates)
     existing = list(RecurringSeries.objects.select_for_update(of=("self",)).filter(person=person).order_by("pk"))
     dismissed_fingerprints = {
         series.fingerprint for series in existing if series.status == RecurringSeries.Status.DISMISSED
@@ -405,7 +431,7 @@ def refresh_recurring_series(principal):
             kept_ids=kept_ids,
         )
     _drop_stale_open_rows(open_rows, kept_ids)
-    _deactivate_stale_confirmed(confirmed, kept_ids)
+    _reconcile_unmatched_confirmed(confirmed, kept_ids, {row.pk for row in candidates})
     return RecurringSeries.objects.visible_to(person)
 
 
