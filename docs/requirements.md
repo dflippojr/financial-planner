@@ -136,3 +136,11 @@ Same 439 rows and 282 negative amounts as the native file, so the same transacti
 - Detect weekly, biweekly, monthly, quarterly, and annual cadences, each with a few days of date tolerance.
 - Amounts may vary by up to 25% within a series, measured against the selected cadence chain's own median rather than the whole merchant cluster. Exact amounts get higher confidence than varying ones.
 - Confirmed series appear on their own Recurring page, with monthly and annual totals, linked from the dashboard. A confirmed series stays matched only to suggestions in its own amount cluster (within 25% of that series' typical amount, not a pairwise median with a second cluster) and is never reassigned onto another cluster or given a colliding fingerprint. Refresh keeps a confirmed series active while at least one of its occurrences is still eligible; it deactivates the series (clears members, drops it from totals, keeps the confirmation) only when none remain. An eligible leftover occurrence is enough even when detection can no longer form a chain. A later eligible chain of the same merchant, cadence, and amount band can reactivate it.
+
+## Spending by category decisions (2026-09-30, #10)
+
+- The default range and presets match the cash flow view: the last 12 full months plus the current month to date. Presets are this month, last month, last 3 months, last 12 months, and year to date.
+- A category whose refunds exceed its spending in the range shows a negative total, marked as a net refund, so totals reconcile exactly with the cash flow view.
+- Rows are sorted by spending, largest first, with a percent-of-total column. Uncategorized is always listed.
+- The first version is a totals table for the selected range with drilldown. Per-category trends over time come later.
+- Income is not part of this view.
