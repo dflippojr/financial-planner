@@ -352,25 +352,32 @@ def transfer_review(request):
     )
 
 
+def _money_display(minor, currency):
+    return f"{Decimal(minor) / Decimal(100):,.2f} {currency}"
+
+
+def _handle_recurring_post(request):
+    try:
+        series_id = int(request.POST.get("series_id", "0"))
+    except (TypeError, ValueError) as exc:
+        raise Http404 from exc
+    actions = {
+        "confirm": confirm_recurring_series,
+        "dismiss": dismiss_recurring_series,
+    }
+    handler = actions.get(request.POST.get("action"))
+    if handler is None:
+        raise Http404
+    _service_or_404(lambda: handler(request.user, series_id))
+    _service_or_404(lambda: refresh_recurring_series(request.user))
+    return redirect("recurring-review")
+
+
 @require_http_methods(["GET", "POST"])
 @never_cache
 def recurring_review(request):
     if request.method == "POST":
-        try:
-            series_id = int(request.POST.get("series_id", "0"))
-        except (TypeError, ValueError) as exc:
-            raise Http404 from exc
-        action = request.POST.get("action")
-        actions = {
-            "confirm": confirm_recurring_series,
-            "dismiss": dismiss_recurring_series,
-        }
-        handler = actions.get(action)
-        if handler is None:
-            raise Http404
-        _service_or_404(lambda: handler(request.user, series_id))
-        _service_or_404(lambda: refresh_recurring_series(request.user))
-        return redirect("recurring-review")
+        return _handle_recurring_post(request)
     _service_or_404(lambda: refresh_recurring_series(request.user))
     visible = (
         RecurringSeries.objects.visible_to(request.user)
@@ -385,16 +392,14 @@ def recurring_review(request):
     ]
     monthly_minor, annual_minor = confirmed_totals(confirmed)
     currency = confirmed[0].currency if confirmed else "USD"
-    monthly_display = f"{Decimal(monthly_minor) / Decimal(100):,.2f} {currency}"
-    annual_display = f"{Decimal(annual_minor) / Decimal(100):,.2f} {currency}"
     return render(
         request,
         "finance/recurring_review.html",
         {
             "suggestions": suggestions,
             "confirmed": confirmed,
-            "monthly_display": monthly_display,
-            "annual_display": annual_display,
+            "monthly_display": _money_display(monthly_minor, currency),
+            "annual_display": _money_display(annual_minor, currency),
             "monthly_minor": monthly_minor,
             "annual_minor": annual_minor,
         },

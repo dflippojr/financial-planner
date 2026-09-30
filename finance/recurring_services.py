@@ -314,6 +314,59 @@ def _match_confirmed(confirmed, detected):
     return None
 
 
+def _find_open_match(open_rows, open_by_fingerprint, kept_ids, item):
+    match = open_by_fingerprint.get(item.fingerprint)
+    if match is not None:
+        return match
+    for series in open_rows:
+        if series.pk in kept_ids:
+            continue
+        if series.merchant_key == item.merchant_key and series.cadence == item.cadence:
+            return series
+    return None
+
+
+def _create_series(person, detected):
+    created = RecurringSeries.objects.create(
+        person=person,
+        merchant_key=detected.merchant_key,
+        display_name=detected.display_name,
+        cadence=detected.cadence,
+        typical_amount_minor=detected.typical_amount_minor,
+        currency=detected.currency,
+        status=detected.status,
+        confidence=detected.confidence,
+        reasons=list(detected.reasons),
+        fingerprint=detected.fingerprint,
+    )
+    RecurringSeriesMember.objects.bulk_create(
+        RecurringSeriesMember(series=created, transaction_id=pk) for pk in detected.transaction_ids
+    )
+    return created
+
+
+def _upsert_detected(person, item, *, dismissed_fingerprints, confirmed, open_rows, open_by_fingerprint, kept_ids):
+    if item.fingerprint in dismissed_fingerprints:
+        return
+    confirmed_match = _match_confirmed(confirmed, item)
+    if confirmed_match is not None:
+        _apply_detection(confirmed_match, item)
+        kept_ids.add(confirmed_match.pk)
+        return
+    open_match = _find_open_match(open_rows, open_by_fingerprint, kept_ids, item)
+    if open_match is not None:
+        _apply_detection(open_match, item)
+        kept_ids.add(open_match.pk)
+        return
+    kept_ids.add(_create_series(person, item).pk)
+
+
+def _drop_stale_open_rows(open_rows, kept_ids):
+    stale = [series for series in open_rows if series.pk not in kept_ids]
+    RecurringSeriesMember.objects.filter(series__in=stale).delete()
+    RecurringSeries.objects.filter(pk__in=[series.pk for series in stale]).delete()
+
+
 @transaction.atomic
 def refresh_recurring_series(principal):
     person = _person_for(principal)
@@ -331,51 +384,17 @@ def refresh_recurring_series(principal):
     ]
     kept_ids = {series.pk for series in existing if series.status == RecurringSeries.Status.DISMISSED}
     open_by_fingerprint = {series.fingerprint: series for series in open_rows}
-
     for item in detected:
-        if item.fingerprint in dismissed_fingerprints:
-            continue
-        confirmed_match = _match_confirmed(confirmed, item)
-        if confirmed_match is not None:
-            _apply_detection(confirmed_match, item)
-            kept_ids.add(confirmed_match.pk)
-            continue
-        open_match = open_by_fingerprint.get(item.fingerprint)
-        if open_match is None:
-            for series in open_rows:
-                if series.pk in kept_ids:
-                    continue
-                if series.merchant_key == item.merchant_key and series.cadence == item.cadence:
-                    open_match = series
-                    break
-        if open_match is not None:
-            _apply_detection(open_match, item)
-            kept_ids.add(open_match.pk)
-            continue
-        created = RecurringSeries.objects.create(
-            person=person,
-            merchant_key=item.merchant_key,
-            display_name=item.display_name,
-            cadence=item.cadence,
-            typical_amount_minor=item.typical_amount_minor,
-            currency=item.currency,
-            status=item.status,
-            confidence=item.confidence,
-            reasons=list(item.reasons),
-            fingerprint=item.fingerprint,
+        _upsert_detected(
+            person,
+            item,
+            dismissed_fingerprints=dismissed_fingerprints,
+            confirmed=confirmed,
+            open_rows=open_rows,
+            open_by_fingerprint=open_by_fingerprint,
+            kept_ids=kept_ids,
         )
-        RecurringSeriesMember.objects.bulk_create(
-            RecurringSeriesMember(series=created, transaction_id=pk) for pk in item.transaction_ids
-        )
-        kept_ids.add(created.pk)
-
-    stale = [
-        series
-        for series in open_rows
-        if series.pk not in kept_ids
-    ]
-    RecurringSeriesMember.objects.filter(series__in=stale).delete()
-    RecurringSeries.objects.filter(pk__in=[series.pk for series in stale]).delete()
+    _drop_stale_open_rows(open_rows, kept_ids)
     return RecurringSeries.objects.visible_to(person)
 
 
