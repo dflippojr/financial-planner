@@ -363,18 +363,26 @@ def _create_series(person, detected):
     return created
 
 
-def _confirmed_owner(confirmed, fingerprint, kept_ids):
-    """The confirmed series that already holds this fingerprint (same transactions)."""
+def _confirmed_owner(confirmed, item, kept_ids):
+    """The confirmed series sharing the most transactions with a detected chain.
+
+    Shared transactions mean the same subscription, even after corrected
+    amounts or new occurrences change its fingerprint and amount band, so it
+    must never become a second, overlapping series.
+    """
+    detected_ids = set(item.transaction_ids)
+    best, best_overlap = None, 0
     for series in confirmed:
-        if series.pk not in kept_ids and series.fingerprint == fingerprint:
-            return series
-    return None
+        if series.pk in kept_ids:
+            continue
+        overlap = len(detected_ids & {member.transaction_id for member in series.members.all()})
+        if overlap > best_overlap:
+            best, best_overlap = series, overlap
+    return best
 
 
 def _confirmed_target(person, item, confirmed, kept_ids):
-    # The same transactions are the same series even when corrected amounts
-    # move it out of the confirmed amount band.
-    target = _confirmed_owner(confirmed, item.fingerprint, kept_ids) or _match_confirmed(confirmed, item, kept_ids)
+    target = _confirmed_owner(confirmed, item, kept_ids) or _match_confirmed(confirmed, item, kept_ids)
     if target is not None and _fingerprint_taken(person, item.fingerprint, exclude_pk=target.pk):
         return None
     return target

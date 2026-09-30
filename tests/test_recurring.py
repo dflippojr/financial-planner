@@ -466,3 +466,24 @@ def test_correcting_every_amount_of_a_confirmed_series_keeps_one_series():
     assert series.status == RecurringSeries.Status.CONFIRMED
     assert series.is_active
     assert series.typical_amount_minor == -2000
+
+
+@pytest.mark.django_db
+def test_corrected_confirmed_series_with_a_new_occurrence_is_not_counted_twice():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    charges = add_monthly_charges(owner, account, description="Synthetic Stream", amount_minor=-1000)
+    refresh_recurring_series(owner)
+    series = RecurringSeries.objects.get(person=owner)
+    confirm_recurring_series(owner, series.pk)
+    Transaction.objects.filter(pk__in=[charge.pk for charge in charges]).update(amount_minor=-2000)
+    add_monthly_charges(owner, account, description="Synthetic Stream", amount_minor=-2000, count=1, start=date(2026, 4, 15))
+
+    refresh_recurring_series(owner)
+    series.refresh_from_db()
+
+    assert RecurringSeries.objects.filter(person=owner).count() == 1
+    assert series.status == RecurringSeries.Status.CONFIRMED
+    assert series.typical_amount_minor == -2000
+    assert series.members.count() == 4
