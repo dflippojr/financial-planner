@@ -267,36 +267,45 @@ def _used_transaction_ids(series_list):
     return used
 
 
-def detect_recurring_series(transactions):
+def _group_by_merchant(transactions):
     grouped = defaultdict(list)
     for item in transactions:
         key = merchant_key(item.description)
         if key:
             grouped[key].append(item)
-    detected = []
-    for key, group in grouped.items():
-        used = set()
-        while True:
-            candidates = [item for item in group if item.pk not in used]
-            if len(candidates) < 2:
-                break
-            cadence, chain = _pick_cadence_chain(candidates)
-            if cadence is None:
-                break
-            if amounts_within_tolerance(item.amount_minor for item in chain):
-                _accept_chain(key, cadence, chain, detected, used)
-                continue
-            split_any = False
-            for cluster in _cluster_by_amount(chain):
-                sub_cadence, sub_chain = _pick_cadence_chain(cluster)
-                if sub_cadence is None or len(sub_chain) < 3:
-                    continue
-                if not amounts_within_tolerance(item.amount_minor for item in sub_chain):
-                    continue
-                _accept_chain(key, sub_cadence, sub_chain, detected, used)
-                split_any = True
-            if not split_any:
-                used.update(item.pk for item in chain)
+    return grouped
+
+
+def _split_chain_by_amount(key, chain, detected, used):
+    """Accept each amount cluster of a mixed chain that is itself a valid series."""
+    split_any = False
+    for cluster in _cluster_by_amount(chain):
+        sub_cadence, sub_chain = _pick_cadence_chain(cluster)
+        if sub_cadence is None or len(sub_chain) < 3:
+            continue
+        if not amounts_within_tolerance(item.amount_minor for item in sub_chain):
+            continue
+        _accept_chain(key, sub_cadence, sub_chain, detected, used)
+        split_any = True
+    return split_any
+
+
+def _detect_for_merchant(key, group, detected):
+    used = set()
+    while True:
+        candidates = [item for item in group if item.pk not in used]
+        if len(candidates) < 2:
+            return
+        cadence, chain = _pick_cadence_chain(candidates)
+        if cadence is None:
+            return
+        if amounts_within_tolerance(item.amount_minor for item in chain):
+            _accept_chain(key, cadence, chain, detected, used)
+        elif not _split_chain_by_amount(key, chain, detected, used):
+            used.update(item.pk for item in chain)
+
+
+def _drop_overlaps(detected):
     detected.sort(key=lambda item: (-len(item.transaction_ids), item.merchant_key, item.cadence))
     chosen = []
     for item in detected:
@@ -304,6 +313,13 @@ def detect_recurring_series(transactions):
             continue
         chosen.append(item)
     return chosen
+
+
+def detect_recurring_series(transactions):
+    detected = []
+    for key, group in _group_by_merchant(transactions).items():
+        _detect_for_merchant(key, group, detected)
+    return _drop_overlaps(detected)
 
 
 def candidate_transactions(principal):
