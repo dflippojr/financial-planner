@@ -302,7 +302,10 @@ def _detect_for_merchant(key, group, detected):
             return
         if amounts_within_tolerance(item.amount_minor for item in chain):
             _accept_chain(key, cadence, chain, detected, used)
-        elif not _split_chain_by_amount(key, chain, detected, used):
+            continue
+        # A mixed chain can interleave a one-off charge with a real series, so
+        # split every remaining charge by amount, not only the chosen chain.
+        if not _split_chain_by_amount(key, candidates, detected, used):
             used.update(item.pk for item in chain)
 
 

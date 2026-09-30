@@ -657,3 +657,20 @@ def test_two_occurrence_amount_clusters_in_a_mixed_chain_are_possible_series():
     found = sorted(RecurringSeries.objects.filter(person=owner).values_list("typical_amount_minor", "status"))
 
     assert found == [(-5000, RecurringSeries.Status.POSSIBLE), (-1000, RecurringSeries.Status.POSSIBLE)]
+
+
+@pytest.mark.django_db
+def test_one_off_charge_inside_a_chain_does_not_hide_the_real_series():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    make_transaction(owner, account, transaction_date=date(2026, 1, 1), amount_minor=-1000, description="Synthetic Stream")
+    make_transaction(owner, account, transaction_date=date(2026, 2, 1), amount_minor=-10000, description="Synthetic Stream")
+    make_transaction(owner, account, transaction_date=date(2026, 2, 1), amount_minor=-1000, description="Synthetic Stream")
+    make_transaction(owner, account, transaction_date=date(2026, 3, 1), amount_minor=-1000, description="Synthetic Stream")
+
+    refresh_recurring_series(owner)
+    series = RecurringSeries.objects.get(person=owner, typical_amount_minor=-1000)
+
+    assert series.status == RecurringSeries.Status.SUGGESTED
+    assert series.members.count() == 3
