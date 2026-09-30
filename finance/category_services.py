@@ -567,6 +567,62 @@ def _revalidate_marked_pairs(existing, locked_by_id, person):
             pair.save(update_fields=("status", "updated_at"))
 
 
+def _pair_rows_touching(leg_ids):
+    if not leg_ids:
+        return []
+    return list(
+        TransferPair.objects.filter(Q(leg_a_id__in=leg_ids) | Q(leg_b_id__in=leg_ids)).values_list(
+            "pk", "leg_a_id", "leg_b_id"
+        )
+    )
+
+
+def account_ids_in_pairs_touching_transactions(transaction_ids):
+    """Account pks for every leg of pairs that include any of these transactions."""
+    rows = _pair_rows_touching(transaction_ids)
+    if not rows:
+        return set()
+    all_legs = {leg_id for _pk, left_id, right_id in rows for leg_id in (left_id, right_id)}
+    return set(Transaction.objects.filter(pk__in=all_legs).values_list("account_id", flat=True))
+
+
+def _revalidate_pairs_for_leg_ids(person, seed_leg_ids):
+    rows = _pair_rows_touching(seed_leg_ids)
+    if not rows:
+        return
+    all_leg_ids = sorted({leg_id for _pk, left_id, right_id in rows for leg_id in (left_id, right_id)})
+    account_ids = sorted(set(Transaction.objects.filter(pk__in=all_leg_ids).values_list("account_id", flat=True)))
+    list(Account.objects.select_for_update().filter(pk__in=account_ids).order_by("pk"))
+    locked = list(
+        Transaction.objects.select_for_update(of=("self",))
+        .select_related("account", "account__household", "account__owner", "category")
+        .filter(pk__in=all_leg_ids)
+        .order_by("pk")
+    )
+    pair_ids = sorted(pk for pk, _left, _right in rows)
+    existing = {
+        (pair.leg_a_id, pair.leg_b_id): pair
+        for pair in TransferPair.objects.select_for_update(of=("self",)).filter(pk__in=pair_ids).order_by("pk")
+    }
+    _revalidate_marked_pairs(existing, {item.pk: item for item in locked}, person)
+
+
+@transaction.atomic
+def revalidate_pairs_touching_account(principal, account_id):
+    person = _person_for(principal)
+    lock_actor_household(person)
+    seed = list(Transaction.objects.filter(account_id=account_id).values_list("pk", flat=True))
+    _revalidate_pairs_for_leg_ids(person, seed)
+
+
+@transaction.atomic
+def revalidate_pairs_touching_import_batch(principal, batch_id):
+    person = _person_for(principal)
+    lock_actor_household(person)
+    seed = list(Transaction.objects.filter(import_batch_id=batch_id).values_list("pk", flat=True))
+    _revalidate_pairs_for_leg_ids(person, seed)
+
+
 @transaction.atomic
 def refresh_transfer_pairs(principal, *, actor=None):
     person = _person_for(principal)

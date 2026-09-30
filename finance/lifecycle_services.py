@@ -77,12 +77,26 @@ def share_account(principal, account_id):
     account.save(update_fields=("scope", "household", "updated_at"))
 
 
+def _lock_account_and_pair_counterparts(account_id, seed_leg_ids=None):
+    from finance.category_services import account_ids_in_pairs_touching_transactions
+
+    if seed_leg_ids is None:
+        seed_leg_ids = list(Transaction.objects.filter(account_id=account_id).values_list("pk", flat=True))
+    lock_ids = sorted(account_ids_in_pairs_touching_transactions(seed_leg_ids) | {account_id})
+    list(Account.objects.select_for_update().filter(pk__in=lock_ids).order_by("pk"))
+
+
 @transaction.atomic
 def unshare_account(principal, account_id):
     """Return a visible household account to its owner's private scope."""
     person = _person_for(principal)
     membership, _memberships = lock_actor_household(person)
-    account = _visible_account_for_update(person, account_id)
+    if not Account.objects.visible_to(person).filter(pk=account_id).exists():
+        raise PermissionDenied(_DENIED)
+    _lock_account_and_pair_counterparts(account_id)
+    account = Account.objects.visible_to(person).filter(pk=account_id).first()
+    if account is None:
+        raise PermissionDenied(_DENIED)
     if (
         account.scope != Account.Scope.HOUSEHOLD
         or membership is None
@@ -93,6 +107,9 @@ def unshare_account(principal, account_id):
     account.scope = Account.Scope.PRIVATE
     account.household = None
     account.save(update_fields=("scope", "household", "updated_at"))
+    from finance.category_services import revalidate_pairs_touching_account
+
+    revalidate_pairs_touching_account(person, account_id)
 
 
 @transaction.atomic
@@ -100,7 +117,12 @@ def archive_account(principal, account_id):
     """Soft-delete a visible account and every active provenance row beneath it."""
     person = _person_for(principal)
     lock_actor_household(person)
-    account = _visible_account_for_update(person, account_id)
+    if not Account.objects.visible_to(person).filter(pk=account_id).exists():
+        raise PermissionDenied(_DENIED)
+    _lock_account_and_pair_counterparts(account_id)
+    account = Account.objects.visible_to(person).filter(pk=account_id).first()
+    if account is None:
+        raise PermissionDenied(_DENIED)
     now = timezone.now()
 
     ImportBatch.objects.select_for_update().filter(
@@ -115,8 +137,9 @@ def archive_account(principal, account_id):
         account.status = Account.Status.ARCHIVED
         account.archived_at = now
         account.save(update_fields=("status", "archived_at", "updated_at"))
-    from finance.category_services import refresh_transfer_pairs
+    from finance.category_services import refresh_transfer_pairs, revalidate_pairs_touching_account
 
+    revalidate_pairs_touching_account(person, account_id)
     refresh_transfer_pairs(person)
 
 
