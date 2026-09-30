@@ -96,7 +96,8 @@ def period_label(window, *, today):
         base = f"{month_name[grouping_start.month]} {grouping_start.year}"
     else:
         base = f"{window.start.isoformat()} to {window.end.isoformat()}"
-    if window.end < window.calendar_end or (window.start <= today <= window.end and today < window.calendar_end):
+    clipped = window.start > window.calendar_start or window.end < window.calendar_end
+    if clipped or (window.start <= today <= window.end and today < window.calendar_end):
         return f"{base} (partial)"
     return base
 

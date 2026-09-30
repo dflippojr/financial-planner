@@ -17,6 +17,7 @@ from finance.cash_flow import (
     default_date_range,
     format_minor,
     iter_period_windows,
+    period_label,
 )
 from finance.category_services import (
     income_and_spending_totals,
@@ -414,3 +415,13 @@ def test_home_does_not_treat_missing_import_as_a_zero_amount():
     assert "Missing import" in content
     assert "<td>0.00 USD</td>" in content
     assert "Missing import</td>" not in content
+
+
+def test_period_clipped_at_the_range_start_is_labeled_partial():
+    windows = list(iter_period_windows(date(2025, 9, 1), date(2026, 9, 30), GROUPING_YEAR))
+    today = date(2026, 12, 31)
+
+    assert period_label(windows[0], today=today) == "2025 (partial)"
+    assert period_label(windows[1], today=today) == "2026 (partial)"
+    full_year = list(iter_period_windows(date(2024, 1, 1), date(2024, 12, 31), GROUPING_YEAR))
+    assert period_label(full_year[0], today=today) == "2024"
