@@ -194,10 +194,23 @@ class RefundLinkForm(forms.Form):
 
     def __init__(self, *args, principal=None, refund=None, **kwargs):
         super().__init__(*args, **kwargs)
+        self._refund = refund
         visible = Transaction.objects.visible_to(principal).filter(status=Transaction.Status.ACTIVE)
         if refund is not None:
             visible = visible.exclude(pk=refund.pk)
         self.fields["original"].queryset = visible.order_by("-transaction_date", "-pk")
+
+    def clean(self):
+        cleaned = super().clean()
+        from .category_services import REFUND_LINK_RULE
+
+        original = cleaned.get("original")
+        refund = self._refund
+        if refund is None or original is None:
+            return cleaned
+        if refund.amount_minor <= 0 or original.amount_minor >= 0 or refund.kind != original.kind:
+            raise ValidationError(REFUND_LINK_RULE)
+        return cleaned
 
 
 class CategoryNameForm(forms.Form):

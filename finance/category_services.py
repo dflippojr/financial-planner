@@ -21,6 +21,9 @@ from .models import (
 
 
 _DENIED = "Operation is not permitted."
+REFUND_LINK_RULE = (
+    "A refund must be a positive amount linked to a negative original purchase of the same kind."
+)
 
 STARTER_CUSTOM_NAMES = (
     "Income",
@@ -405,17 +408,55 @@ def _unmark_exclusion(pair, left, right, actor):
     _record_text_history(right, actor, TransactionCorrectionHistory.Field.EXCLUSION, "excluded", "included")
 
 
+def _invalidate_suggestion(pair):
+    pair.status = TransferPair.Status.UNDONE
+    pair.save(update_fields=("status", "updated_at"))
+
+
+def _pair_legs(pair, locked_by_id):
+    missing_ids = [pk for pk in (pair.leg_a_id, pair.leg_b_id) if pk not in locked_by_id]
+    extra = {}
+    if missing_ids:
+        extra = {
+            item.pk: item
+            for item in Transaction.objects.select_for_update(of=("self",))
+            .select_related("account", "category")
+            .filter(pk__in=missing_ids)
+            .order_by("pk")
+        }
+    return locked_by_id.get(pair.leg_a_id) or extra.get(pair.leg_a_id), locked_by_id.get(pair.leg_b_id) or extra.get(
+        pair.leg_b_id
+    )
+
+
+def _legs_still_cancel(left, right):
+    return (
+        left is not None
+        and right is not None
+        and left.status == Transaction.Status.ACTIVE
+        and right.status == Transaction.Status.ACTIVE
+        and _is_candidate(left, right)
+    )
+
+
 def _revalidate_marked_pairs(existing, locked_by_id, person):
     for pair in existing.values():
-        if pair.status not in (TransferPair.Status.AUTO_MARKED, TransferPair.Status.CONFIRMED):
+        if pair.status not in (
+            TransferPair.Status.AUTO_MARKED,
+            TransferPair.Status.CONFIRMED,
+            TransferPair.Status.SUGGESTED,
+        ):
             continue
-        left = locked_by_id.get(pair.leg_a_id)
-        right = locked_by_id.get(pair.leg_b_id)
-        if left is None or right is None:
+        left, right = _pair_legs(pair, locked_by_id)
+        if _legs_still_cancel(left, right):
             continue
-        if _is_candidate(left, right):
-            continue
-        _unmark_exclusion(pair, left, right, person)
+        if pair.status == TransferPair.Status.SUGGESTED:
+            _invalidate_suggestion(pair)
+        elif left is not None and right is not None:
+            _unmark_exclusion(pair, left, right, person)
+        else:
+            pair.status = TransferPair.Status.UNDONE
+            pair.save(update_fields=("status", "updated_at"))
 
 
 @transaction.atomic
@@ -548,6 +589,12 @@ def link_refund(principal, refund_id, original_id):
     original = by_id[original_id]
     if RefundLink.objects.filter(refund=refund).exists():
         raise PermissionDenied(_DENIED)
+    if (
+        refund.amount_minor <= 0
+        or original.amount_minor >= 0
+        or refund.kind != original.kind
+    ):
+        raise ValidationError(REFUND_LINK_RULE)
     previous_category = refund.category
     refund.category = original.category
     refund.save(update_fields=("category", "updated_at"))

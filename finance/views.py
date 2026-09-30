@@ -154,6 +154,12 @@ def transaction_edit(request, transaction_id):
             return redirect("transaction-list")
     else:
         form = TransactionCorrectionForm.for_transaction(financial_transaction)
+    return _render_transaction_edit(request, financial_transaction, form=form)
+
+
+def _render_transaction_edit(request, financial_transaction, *, form=None, refund_form=None):
+    if form is None:
+        form = TransactionCorrectionForm.for_transaction(financial_transaction)
     correction_history = (
         TransactionCorrectionHistory.objects.visible_to(request.user)
         .filter(transaction=financial_transaction)
@@ -169,7 +175,8 @@ def transaction_edit(request, transaction_id):
                 principal=request.user,
                 initial={"category": financial_transaction.category_id},
             ),
-            "refund_form": RefundLinkForm(principal=request.user, refund=financial_transaction),
+            "refund_form": refund_form
+            or RefundLinkForm(principal=request.user, refund=financial_transaction),
             "refund_link": RefundLink.objects.visible_to(request.user)
             .select_related("original")
             .filter(refund=financial_transaction)
@@ -203,11 +210,16 @@ def transaction_categorize(request, transaction_id):
 @require_POST
 @never_cache
 def transaction_link_refund(request, transaction_id):
-    _visible_active_transaction(request.user, transaction_id)
-    form = RefundLinkForm(request.POST, principal=request.user, refund=_visible_active_transaction(request.user, transaction_id))
+    financial_transaction = _visible_active_transaction(request.user, transaction_id)
+    form = RefundLinkForm(request.POST, principal=request.user, refund=financial_transaction)
     if form.is_valid():
-        _service_or_404(lambda: link_refund(request.user, transaction_id, form.cleaned_data["original"].pk))
-    return redirect("transaction-edit", transaction_id=transaction_id)
+        try:
+            _service_or_404(lambda: link_refund(request.user, transaction_id, form.cleaned_data["original"].pk))
+        except ValidationError as exc:
+            form.add_error(None, _first_message(exc, "The refund could not be linked."))
+        else:
+            return redirect("transaction-edit", transaction_id=transaction_id)
+    return _render_transaction_edit(request, financial_transaction, refund_form=form)
 
 
 def _first_message(exc, fallback):

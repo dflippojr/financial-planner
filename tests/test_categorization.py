@@ -2,7 +2,7 @@ from datetime import date, timedelta
 
 import pytest
 from django.contrib.auth import get_user_model
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.test import Client
 from django.urls import reverse
 
@@ -17,6 +17,7 @@ from finance.category_services import (
     rename_category,
     undo_transfer_pair,
 )
+from finance.csv_import.services import undo_import_batch
 from finance.models import (
     Account,
     Category,
@@ -24,6 +25,7 @@ from finance.models import (
     ImportBatch,
     Membership,
     Person,
+    RefundLink,
     Transaction,
     TransactionCorrectionHistory,
     TransferPair,
@@ -516,4 +518,102 @@ def test_corrected_amounts_that_no_longer_cancel_restore_original_categories():
     assert inflow.amount_minor == 15000
     assert totals.spending_minor == 10000
     assert totals.income_minor == 15000
+
+
+@pytest.mark.django_db
+def test_undoing_one_transfer_leg_restores_the_survivor():
+    owner = make_person("owner")
+    household = make_household(owner)
+    checking = make_account(owner, name="Synthetic Checking")
+    savings = make_account(owner, name="Synthetic Savings", account_type=Account.Type.SAVINGS)
+    groceries = household.categories.get(name="Groceries")
+    outflow = make_transaction(owner, checking, amount_minor=-2500, description="Synthetic to savings")
+    inflow = make_transaction(owner, savings, amount_minor=2500, description="Synthetic from checking")
+    assign_category(owner, outflow.pk, groceries.pk)
+    refresh_transfer_pairs(owner)
+    pair = TransferPair.objects.get()
+    assert pair.status == TransferPair.Status.AUTO_MARKED
+
+    undo_import_batch(owner, savings.pk, inflow.import_batch_id)
+    pair.refresh_from_db()
+    outflow.refresh_from_db()
+    totals = income_and_spending_totals(owner)
+    listed = (
+        Transaction.objects.visible_to(owner)
+        .filter(status=Transaction.Status.ACTIVE)
+        .annotate(_excluded=exclusion_exists_for(owner))
+        .get(pk=outflow.pk)
+    )
+
+    assert pair.status == TransferPair.Status.UNDONE
+    assert outflow.category_id == groceries.pk
+    assert listed.category_display == "Groceries"
+    assert totals.spending_minor == 2500
+    assert totals.income_minor == 0
+
+
+@pytest.mark.django_db
+def test_stale_suggestion_is_invalidated_so_remaining_unique_pair_can_match():
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner, name="Synthetic Checking")
+    savings = make_account(owner, name="Synthetic Savings", account_type=Account.Type.SAVINGS)
+    extra = make_account(owner, name="Synthetic Extra", account_type=Account.Type.SAVINGS)
+    outflow = make_transaction(owner, checking, amount_minor=-10000, description="Synthetic split out")
+    suggested_in = make_transaction(owner, savings, amount_minor=10000, description="Synthetic split in one")
+    remaining_in = make_transaction(owner, extra, amount_minor=10000, description="Synthetic split in two")
+    refresh_transfer_pairs(owner)
+    pair = TransferPair.objects.get()
+    assert pair.status == TransferPair.Status.SUGGESTED
+    counterpart_id = pair.leg_a_id if pair.leg_a_id != outflow.pk else pair.leg_b_id
+    counterpart = suggested_in if suggested_in.pk == counterpart_id else remaining_in
+    leftover = remaining_in if counterpart is suggested_in else suggested_in
+
+    client = Client()
+    client.force_login(owner.user)
+    response = client.post(
+        reverse("transaction-edit", args=(counterpart.pk,)),
+        {
+            "transaction_date": "2026-01-02",
+            "description": counterpart.description,
+            "amount": "200.00",
+        },
+    )
+    pair.refresh_from_db()
+    rematch = TransferPair.objects.exclude(pk=pair.pk).get()
+    leftover.refresh_from_db()
+    totals = income_and_spending_totals(owner)
+
+    assert response.status_code == 302
+    assert pair.status == TransferPair.Status.UNDONE
+    assert rematch.status == TransferPair.Status.AUTO_MARKED
+    assert {rematch.leg_a_id, rematch.leg_b_id} == {outflow.pk, leftover.pk}
+    assert totals.income_minor == 20000
+    assert totals.spending_minor == 0
+
+
+@pytest.mark.django_db
+def test_refund_link_rejects_same_sign_original():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    deposit = make_transaction(owner, account, amount_minor=100000, description="Synthetic deposit")
+    other_income = make_transaction(owner, account, amount_minor=5000, description="Synthetic other income")
+
+    with pytest.raises(ValidationError, match="positive amount"):
+        link_refund(owner, deposit.pk, other_income.pk)
+
+    client = Client()
+    client.force_login(owner.user)
+    response = client.post(
+        reverse("transaction-link-refund", args=(deposit.pk,)),
+        {"original": other_income.pk},
+    )
+    totals = income_and_spending_totals(owner)
+
+    assert response.status_code == 200
+    assert b"positive amount" in response.content
+    assert not RefundLink.objects.exists()
+    assert totals.income_minor == 105000
+    assert totals.spending_minor == 0
 

@@ -1,6 +1,6 @@
 # Requirements
 
-Updated: 2026-09-25. This is a working product brief; open questions are explicit.
+Updated: 2026-09-30. This is a working product brief; open questions are explicit.
 
 ## Goal
 
@@ -127,4 +127,4 @@ Same 439 rows and 282 negative amounts as the native file, so the same transacti
 - Transfers (#8): pairs above a high confidence threshold are marked as transfers automatically and listed for review with one-click undo; lower-confidence pairs are only suggested until confirmed.
 - Transfer match starting values (#8), all configurable: 5-day window between dates, exactly equal and opposite amounts, both accounts visible to the same person (including a shared household account).
 - Undoing a wrong exclusion (#8) restores the transaction to income or spending with its original category.
-- Refunds (#8): a person links a refund to its original transaction manually, and it inherits that transaction's category and reduces that category's spending.
+- Refunds (#8): a person links a refund to its original transaction manually. The refund must be positive and the original a negative purchase of the same kind. The refund inherits that transaction's category and reduces that category's spending.

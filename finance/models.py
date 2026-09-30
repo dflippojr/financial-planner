@@ -338,7 +338,12 @@ class Transaction(ArchivableModel):
             return bool(annotated)
         pairs = getattr(self, "_prefetched_exclusion_pairs", None)
         if pairs is not None:
-            return any(pair.is_active_exclusion for pair in pairs)
+            return any(
+                pair.is_active_exclusion
+                and pair.leg_a.status == Transaction.Status.ACTIVE
+                and pair.leg_b.status == Transaction.Status.ACTIVE
+                for pair in pairs
+            )
         return TransferPair.objects.excluding_income_and_spending().filter(
             Q(leg_a=self) | Q(leg_b=self)
         ).exists()
@@ -485,7 +490,11 @@ class TransferPair(models.Model):
             return self.filter(leg_a_id__in=visible_transactions, leg_b_id__in=visible_transactions)
 
         def excluding_income_and_spending(self):
-            return self.filter(status__in=(TransferPair.Status.AUTO_MARKED, TransferPair.Status.CONFIRMED))
+            return self.filter(
+                status__in=(TransferPair.Status.AUTO_MARKED, TransferPair.Status.CONFIRMED),
+                leg_a__status=Transaction.Status.ACTIVE,
+                leg_b__status=Transaction.Status.ACTIVE,
+            )
 
     objects = QuerySet.as_manager()
 
