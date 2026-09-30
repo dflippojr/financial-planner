@@ -196,7 +196,7 @@ def spending_by_category(request):
     )
 
 
-def _apply_transaction_filters(transactions, filters):
+def _apply_transaction_filters(transactions, filters, principal):
     if filters["date_from"]:
         transactions = transactions.filter(transaction_date__gte=filters["date_from"])
     if filters["date_to"]:
@@ -209,8 +209,12 @@ def _apply_transaction_filters(transactions, filters):
         transactions = transactions.filter(description__icontains=filters["q"])
     category = filters["category"]
     if category == "uncategorized":
+        # Match the spending view: a category the viewer can no longer see
+        # (for example after leaving a household) counts as uncategorized.
         return transactions.filter(
-            Q(category__isnull=True) | Q(category__code=Category.Code.UNCATEGORIZED)
+            Q(category__isnull=True)
+            | Q(category__code=Category.Code.UNCATEGORIZED)
+            | ~Q(category__in=Category.objects.visible_to(principal))
         ).exclude(_excluded=True)
     if category == "transfer":
         return transactions.filter(_excluded=True)
@@ -231,7 +235,7 @@ def transaction_list(request):
     )
     form = TransactionFilterForm(request.GET or None, principal=request.user)
     if form.is_valid():
-        transactions = _apply_transaction_filters(transactions, form.cleaned_data)
+        transactions = _apply_transaction_filters(transactions, form.cleaned_data, request.user)
     elif form.is_bound:
         transactions = transactions.none()
     return render(

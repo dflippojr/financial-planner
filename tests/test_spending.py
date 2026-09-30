@@ -299,3 +299,26 @@ def test_spending_page_empty_state_and_anonymous_redirect():
     anonymous = Client().get(reverse("spending-by-category"))
     assert anonymous.status_code == 302
     assert anonymous.url.startswith(reverse("login"))
+
+
+@pytest.mark.django_db
+def test_uncategorized_drilldown_lists_charges_whose_category_is_no_longer_visible():
+    from finance.lifecycle_services import leave_household
+
+    owner = make_person("owner")
+    member = make_person("member")
+    household = make_household(owner, member)
+    checking = make_account(owner)
+    groceries = household.categories.get(name="Groceries")
+    grocery_tx = make_transaction(owner, checking, amount_minor=-2200, description="Synthetic groceries")
+    assign_category(owner, grocery_tx.pk, groceries.pk)
+    leave_household(owner)
+
+    report = spending_by_category_report(owner, date_from=date(2026, 1, 1), date_to=date(2026, 1, 31))
+    uncategorized = next(row for row in report.rows if row.name == "Uncategorized")
+    client = Client()
+    client.force_login(owner.user)
+    listed = client.get(uncategorized.drilldown_url)
+
+    assert uncategorized.spending_minor == 2200
+    assert list(listed.context["transactions"]) == [grocery_tx]
