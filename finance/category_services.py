@@ -71,8 +71,10 @@ def current_household(person):
 
 def ensure_household_categories(household):
     existing = list(household.categories.all())
-    by_name = {category.name: category for category in existing}
     system_codes = {category.code for category in existing if category.code != Category.Code.CUSTOM}
+    # Starter names are seeded once. Categories can be renamed but not deleted,
+    # so any custom category means the household already has its own list.
+    starters_seeded = Category.Code.CUSTOM in {category.code for category in existing}
     created = []
     if Category.Code.UNCATEGORIZED not in system_codes:
         created.append(
@@ -80,9 +82,13 @@ def ensure_household_categories(household):
         )
     if Category.Code.TRANSFER not in system_codes:
         created.append(Category(household=household, name="Transfer", code=Category.Code.TRANSFER))
-    for name in STARTER_CUSTOM_NAMES:
-        if name not in by_name:
-            created.append(Category(household=household, name=name, code=Category.Code.CUSTOM))
+    if not starters_seeded:
+        taken = {category.name for category in existing}
+        created.extend(
+            Category(household=household, name=name, code=Category.Code.CUSTOM)
+            for name in STARTER_CUSTOM_NAMES
+            if name not in taken
+        )
     if created:
         Category.objects.bulk_create(created)
     return household.categories.order_by("name", "pk")
@@ -183,6 +189,10 @@ def assign_category(principal, transaction_id, category_id):
     )
     lock_actor_household(person)
     locked = _lock_owned_transactions([financial_transaction, *linked_refunds])
+    # Recheck after locking: the account may have been unshared between the
+    # first visibility query and the locks.
+    if not Transaction.objects.visible_to(person).filter(pk=financial_transaction.pk).exists():
+        raise PermissionDenied(_DENIED)
     by_id = {item.pk: item for item in locked}
     financial_transaction = by_id[financial_transaction.pk]
     previous = financial_transaction.category
@@ -257,7 +267,13 @@ def set_transfer_window_days(principal, days):
         raise ValidationError("Choose a match window between 0 and 366 days.")
     household.transfer_match_window_days = days
     household.save(update_fields=("transfer_match_window_days", "updated_at"))
-    refresh_transfer_pairs(person)
+    # The window applies to every member's pairs, including pairs between a
+    # member's private accounts that the actor cannot see.
+    member_ids = Membership.objects.filter(household=household, ended_at__isnull=True).values_list(
+        "person_id", flat=True
+    )
+    for member in Person.objects.filter(pk__in=list(member_ids)).order_by("pk"):
+        refresh_transfer_pairs(member, actor=person)
     return household
 
 
@@ -513,8 +529,9 @@ def _revalidate_marked_pairs(existing, locked_by_id, person):
 
 
 @transaction.atomic
-def refresh_transfer_pairs(principal):
+def refresh_transfer_pairs(principal, *, actor=None):
     person = _person_for(principal)
+    actor = person if actor is None else actor
     lock_actor_household(person)
     locked = _lock_visible_transactions(person)
     if not locked:
@@ -527,7 +544,7 @@ def refresh_transfer_pairs(principal):
         )
     }
     locked_by_id = {item.pk: item for item in locked}
-    _revalidate_marked_pairs(existing, locked_by_id, person)
+    _revalidate_marked_pairs(existing, locked_by_id, actor)
     occupied = _occupied_transaction_ids(existing.values())
     created = []
     scored_pairs = _score_pairs(locked)
@@ -542,7 +559,7 @@ def refresh_transfer_pairs(principal):
         left, right = scored["left"], scored["right"]
         key = (left.pk, right.pk)
         if key in existing:
-            _update_existing_pair(existing[key], scored, person)
+            _update_existing_pair(existing[key], scored, actor)
             continue
         if left.pk in occupied or right.pk in occupied:
             continue
@@ -559,7 +576,7 @@ def refresh_transfer_pairs(principal):
         occupied.add(left.pk)
         occupied.add(right.pk)
         if scored["confidence"] == TransferPair.Confidence.HIGH:
-            _snapshot_and_mark(pair, left, right, TransferPair.Status.AUTO_MARKED, person)
+            _snapshot_and_mark(pair, left, right, TransferPair.Status.AUTO_MARKED, actor)
         created.append(pair)
     return created
 

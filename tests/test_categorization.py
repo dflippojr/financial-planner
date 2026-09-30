@@ -769,3 +769,67 @@ def test_narrowing_transfer_window_revalidates_pairs_then_refreshes():
     assert totals.income_minor == 5800
     assert totals.spending_minor == 3400
 
+
+
+@pytest.mark.django_db
+def test_renamed_starter_category_is_not_reseeded():
+    owner = make_person("owner")
+    household = make_household(owner)
+    groceries = household.categories.get(name="Groceries")
+
+    rename_category(owner, groceries.pk, "Synthetic food")
+    ensure_household_categories(household)
+
+    assert not household.categories.filter(name="Groceries").exists()
+    assert household.categories.filter(pk=groceries.pk, name="Synthetic food").exists()
+
+
+@pytest.mark.django_db
+def test_narrowing_window_revalidates_other_members_private_pairs():
+    owner = make_person("owner")
+    member = make_person("member")
+    make_household(owner, member)
+    checking = make_account(member, name="Synthetic Member Checking")
+    savings = make_account(member, name="Synthetic Member Savings", account_type=Account.Type.SAVINGS)
+    outflow = make_transaction(member, checking, amount_minor=-2700, transaction_date=date(2026, 1, 1))
+    make_transaction(member, savings, amount_minor=2700, transaction_date=date(2026, 1, 4))
+    refresh_transfer_pairs(member)
+    pair = TransferPair.objects.get()
+    assert pair.status == TransferPair.Status.AUTO_MARKED
+
+    set_transfer_window_days(owner, 0)
+    pair.refresh_from_db()
+
+    assert pair.status == TransferPair.Status.UNDONE
+    assert income_and_spending_totals(member).spending_minor == 2700
+    assert TransactionCorrectionHistory.objects.filter(
+        transaction=outflow,
+        field_name=TransactionCorrectionHistory.Field.EXCLUSION,
+        new_description="included",
+        actor=owner,
+    ).exists()
+
+
+@pytest.mark.django_db
+def test_category_assignment_rechecks_visibility_after_locking(monkeypatch):
+    import finance.category_services as category_services
+
+    owner = make_person("owner")
+    member = make_person("member")
+    household = make_household(owner, member)
+    account = make_account(owner, scope=Account.Scope.HOUSEHOLD, household=household)
+    financial_transaction = make_transaction(owner, account)
+    groceries = household.categories.get(name="Groceries")
+    real_lock = category_services._lock_owned_transactions
+
+    def unshare_then_lock(transactions):
+        unshare_account(owner, account.pk)
+        return real_lock(transactions)
+
+    monkeypatch.setattr(category_services, "_lock_owned_transactions", unshare_then_lock)
+
+    with pytest.raises(PermissionDenied):
+        assign_category(member, financial_transaction.pk, groceries.pk)
+    financial_transaction.refresh_from_db()
+    assert financial_transaction.category_id is None
+    assert not TransactionCorrectionHistory.objects.filter(transaction=financial_transaction).exists()
