@@ -147,6 +147,33 @@ def test_amount_tolerance_uses_selected_cadence_chain_median_not_cluster():
 
 
 @pytest.mark.django_db
+def test_unrelated_same_merchant_charges_do_not_split_a_monthly_series():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    description = "Synthetic Cluster Mix"
+    make_transaction(owner, account, transaction_date=date(2026, 1, 1), amount_minor=-800, description=description)
+    make_transaction(owner, account, transaction_date=date(2026, 1, 2), amount_minor=-800, description=description)
+    make_transaction(owner, account, transaction_date=date(2026, 1, 3), amount_minor=-800, description=description)
+    make_transaction(owner, account, transaction_date=date(2026, 1, 15), amount_minor=-1000, description=description)
+    make_transaction(owner, account, transaction_date=date(2026, 2, 15), amount_minor=-1200, description=description)
+    make_transaction(owner, account, transaction_date=date(2026, 3, 15), amount_minor=-1200, description=description)
+
+    refresh_recurring_series(owner)
+    series = RecurringSeries.objects.get(merchant_key="synthetic cluster mix")
+
+    assert series.status == RecurringSeries.Status.SUGGESTED
+    assert series.cadence == RecurringSeries.Cadence.MONTHLY
+    assert series.typical_amount_minor == -1200
+    assert series.members.count() == 3
+    assert set(series.members.values_list("transaction__transaction_date", flat=True)) == {
+        date(2026, 1, 15),
+        date(2026, 2, 15),
+        date(2026, 3, 15),
+    }
+
+
+@pytest.mark.django_db
 def test_varying_amounts_within_25_percent_are_medium_confidence():
     owner = make_person("owner")
     make_household(owner)

@@ -104,10 +104,10 @@ def _in_confirmed_amount_band(confirmed_typical, detected_typical):
 
 
 def _collapse_same_day(transactions):
-    by_date = {}
-    for item in sorted(transactions, key=lambda row: (row.transaction_date, row.pk)):
-        by_date.setdefault(item.transaction_date, item)
-    return list(by_date.values())
+    by_key = {}
+    for item in sorted(transactions, key=lambda row: (row.transaction_date, abs(row.amount_minor), row.pk)):
+        by_key.setdefault((item.transaction_date, abs(item.amount_minor)), item)
+    return list(by_key.values())
 
 
 def _longest_chain(transactions, cadence):
@@ -214,6 +214,29 @@ def _cluster_by_amount(transactions):
     return clusters
 
 
+def _detected_series(key, cadence, chain):
+    confidence, reasons, status = _confidence_and_reasons(chain, cadence)
+    typical = -_median_minor(item.amount_minor for item in chain)
+    ids = tuple(item.pk for item in chain)
+    return DetectedSeries(
+        merchant_key=key,
+        display_name=_display_name(chain),
+        cadence=cadence,
+        typical_amount_minor=typical,
+        currency=chain[0].currency,
+        confidence=confidence,
+        reasons=reasons,
+        status=status,
+        transaction_ids=ids,
+        fingerprint=_fingerprint(ids),
+    )
+
+
+def _accept_chain(key, cadence, chain, detected, used):
+    detected.append(_detected_series(key, cadence, chain))
+    used.update(item.pk for item in chain)
+
+
 def _pick_cadence_chain(cluster):
     collapsed = _collapse_same_day(cluster)
     best = []
@@ -252,29 +275,28 @@ def detect_recurring_series(transactions):
             grouped[key].append(item)
     detected = []
     for key, group in grouped.items():
-        for cluster in _cluster_by_amount(group):
-            cadence, chain = _pick_cadence_chain(cluster)
+        used = set()
+        while True:
+            candidates = [item for item in group if item.pk not in used]
+            if len(candidates) < 2:
+                break
+            cadence, chain = _pick_cadence_chain(candidates)
             if cadence is None:
+                break
+            if amounts_within_tolerance(item.amount_minor for item in chain):
+                _accept_chain(key, cadence, chain, detected, used)
                 continue
-            if not amounts_within_tolerance(item.amount_minor for item in chain):
-                continue
-            confidence, reasons, status = _confidence_and_reasons(chain, cadence)
-            typical = -_median_minor(item.amount_minor for item in chain)
-            ids = tuple(item.pk for item in chain)
-            detected.append(
-                DetectedSeries(
-                    merchant_key=key,
-                    display_name=_display_name(chain),
-                    cadence=cadence,
-                    typical_amount_minor=typical,
-                    currency=chain[0].currency,
-                    confidence=confidence,
-                    reasons=reasons,
-                    status=status,
-                    transaction_ids=ids,
-                    fingerprint=_fingerprint(ids),
-                )
-            )
+            split_any = False
+            for cluster in _cluster_by_amount(chain):
+                sub_cadence, sub_chain = _pick_cadence_chain(cluster)
+                if sub_cadence is None or len(sub_chain) < 3:
+                    continue
+                if not amounts_within_tolerance(item.amount_minor for item in sub_chain):
+                    continue
+                _accept_chain(key, sub_cadence, sub_chain, detected, used)
+                split_any = True
+            if not split_any:
+                used.update(item.pk for item in chain)
     detected.sort(key=lambda item: (-len(item.transaction_ids), item.merchant_key, item.cadence))
     chosen = []
     for item in detected:
