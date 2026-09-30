@@ -419,7 +419,9 @@ def _reconcile_unmatched_confirmed(confirmed, kept_ids, eligible_ids):
     # A transaction belongs to one series: anything a refreshed series now
     # holds no longer counts toward an unmatched one.
     claimed = set(
-        RecurringSeriesMember.objects.filter(series_id__in=kept_ids).values_list("transaction_id", flat=True)
+        RecurringSeriesMember.objects.filter(series_id__in=kept_ids)
+        .exclude(series__status=RecurringSeries.Status.DISMISSED)
+        .values_list("transaction_id", flat=True)
     )
     for series in stale:
         remaining = [
@@ -479,28 +481,32 @@ def _visible_series(principal, series_id):
     return person, series
 
 
-@transaction.atomic
-def confirm_recurring_series(principal, series_id):
-    person, series = _visible_series(principal, series_id)
-    if series.status not in (RecurringSeries.Status.POSSIBLE, RecurringSeries.Status.SUGGESTED):
-        raise PermissionDenied(_DENIED)
+_OPEN_STATUSES = (RecurringSeries.Status.POSSIBLE, RecurringSeries.Status.SUGGESTED)
+
+
+def _set_open_series_status(principal, series_id, status):
+    # Take the household lock first, then check visibility and status on the
+    # locked row: a concurrent refresh may delete or change the suggestion
+    # while this request waits, and that must be a denial, not an error.
+    person = _person_for(principal)
     lock_actor_household(person)
-    series = RecurringSeries.objects.select_for_update(of=("self",)).get(pk=series.pk)
-    series.status = RecurringSeries.Status.CONFIRMED
+    _visible_series(person, series_id)
+    series = RecurringSeries.objects.select_for_update(of=("self",)).filter(pk=series_id).first()
+    if series is None or series.status not in _OPEN_STATUSES:
+        raise PermissionDenied(_DENIED)
+    series.status = status
     series.save(update_fields=("status", "updated_at"))
     return series
+
+
+@transaction.atomic
+def confirm_recurring_series(principal, series_id):
+    return _set_open_series_status(principal, series_id, RecurringSeries.Status.CONFIRMED)
 
 
 @transaction.atomic
 def dismiss_recurring_series(principal, series_id):
-    person, series = _visible_series(principal, series_id)
-    if series.status not in (RecurringSeries.Status.POSSIBLE, RecurringSeries.Status.SUGGESTED):
-        raise PermissionDenied(_DENIED)
-    lock_actor_household(person)
-    series = RecurringSeries.objects.select_for_update(of=("self",)).get(pk=series.pk)
-    series.status = RecurringSeries.Status.DISMISSED
-    series.save(update_fields=("status", "updated_at"))
-    return series
+    return _set_open_series_status(principal, series_id, RecurringSeries.Status.DISMISSED)
 
 
 def confirmed_totals(series_queryset):

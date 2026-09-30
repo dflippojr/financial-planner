@@ -565,3 +565,51 @@ def test_confirmed_series_is_renamed_when_named_transactions_become_private():
 
     assert series.is_active
     assert series.display_name == "Synthetic Gym 222222"
+
+
+@pytest.mark.django_db
+def test_dismissed_series_does_not_starve_a_confirmed_series():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    add_monthly_charges(owner, account, description="Synthetic Stream")
+    refresh_recurring_series(owner)
+    dismiss_recurring_series(owner, RecurringSeries.objects.get(person=owner).pk)
+    fourth = add_monthly_charges(owner, account, description="Synthetic Stream", count=1, start=date(2026, 4, 15))[0]
+    refresh_recurring_series(owner)
+    confirmed = RecurringSeries.objects.get(person=owner, status=RecurringSeries.Status.SUGGESTED)
+    confirm_recurring_series(owner, confirmed.pk)
+
+    undo_import_batch(owner, account.pk, fourth.import_batch_id)
+    refresh_recurring_series(owner)
+    confirmed.refresh_from_db()
+
+    assert confirmed.status == RecurringSeries.Status.CONFIRMED
+    assert confirmed.is_active
+    assert confirmed.members.count() == 3
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("action", [confirm_recurring_series, dismiss_recurring_series])
+def test_suggestion_deleted_while_waiting_for_the_lock_is_denied(monkeypatch, action):
+    import finance.recurring_services as recurring_services
+    from django.core.exceptions import PermissionDenied
+
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    add_monthly_charges(owner, account, description="Synthetic Stream")
+    refresh_recurring_series(owner)
+    series = RecurringSeries.objects.get(person=owner)
+    real_lock = recurring_services.lock_actor_household
+
+    def lock_after_a_concurrent_refresh(person):
+        result = real_lock(person)
+        series.members.all().delete()
+        RecurringSeries.objects.filter(pk=series.pk).delete()
+        return result
+
+    monkeypatch.setattr(recurring_services, "lock_actor_household", lock_after_a_concurrent_refresh)
+
+    with pytest.raises(PermissionDenied):
+        action(owner, series.pk)
