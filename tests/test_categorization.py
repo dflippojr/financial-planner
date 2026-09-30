@@ -833,3 +833,44 @@ def test_category_assignment_rechecks_visibility_after_locking(monkeypatch):
     financial_transaction.refresh_from_db()
     assert financial_transaction.category_id is None
     assert not TransactionCorrectionHistory.objects.filter(transaction=financial_transaction).exists()
+
+
+@pytest.mark.django_db
+def test_rename_to_existing_name_shows_a_message_instead_of_failing():
+    owner = make_person("owner")
+    household = make_household(owner)
+    groceries = household.categories.get(name="Groceries")
+    client = Client()
+    client.force_login(owner.user)
+
+    response = client.post(
+        reverse("category-list"),
+        {"action": "rename", "category_id": groceries.pk, "name": "Dining"},
+    )
+
+    assert response.status_code == 200
+    assert b"A category with that name already exists." in response.content
+    groceries.refresh_from_db()
+    assert groceries.name == "Groceries"
+
+
+@pytest.mark.django_db
+def test_category_filter_leaves_out_excluded_transfers():
+    owner = make_person("owner")
+    household = make_household(owner)
+    checking = make_account(owner, name="Synthetic Checking")
+    savings = make_account(owner, name="Synthetic Savings", account_type=Account.Type.SAVINGS)
+    groceries = household.categories.get(name="Groceries")
+    outflow = make_transaction(owner, checking, amount_minor=-3100, description="Synthetic moved out")
+    kept = make_transaction(owner, checking, amount_minor=-900, description="Synthetic market")
+    assign_category(owner, outflow.pk, groceries.pk)
+    assign_category(owner, kept.pk, groceries.pk)
+    make_transaction(owner, savings, amount_minor=3100, description="Synthetic moved in")
+    refresh_transfer_pairs(owner)
+    client = Client()
+    client.force_login(owner.user)
+
+    response = client.get(reverse("transaction-list"), {"category": groceries.pk})
+
+    assert response.status_code == 200
+    assert list(response.context["transactions"]) == [kept]

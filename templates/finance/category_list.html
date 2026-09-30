@@ -11,6 +11,7 @@
   {{ window_form.as_p }}
   <button type="submit">Save match window</button>
 </form>
+{% if rename_error %}<p class="errorlist" role="alert">{{ rename_error }}</p>{% endif %}
 <table>
   <thead><tr><th>Name</th><th></th></tr></thead>
   <tbody>

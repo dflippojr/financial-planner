@@ -104,7 +104,7 @@ def transaction_list(request):
         elif category == "transfer":
             transactions = transactions.filter(_excluded=True)
         elif category:
-            transactions = transactions.filter(category_id=category)
+            transactions = transactions.filter(category_id=category).exclude(_excluded=True)
     elif form.is_bound:
         transactions = transactions.none()
     return render(
@@ -227,7 +227,8 @@ def _first_message(exc, fallback):
     return messages[0] if messages else fallback
 
 
-def _handle_add_category(request, add_form, window_form):
+def _handle_add_category(request, forms):
+    add_form = forms["add_form"]
     if not add_form.is_valid():
         return False
     try:
@@ -238,7 +239,8 @@ def _handle_add_category(request, add_form, window_form):
     return True
 
 
-def _handle_transfer_window(request, add_form, window_form):
+def _handle_transfer_window(request, forms):
+    window_form = forms["window_form"]
     if not window_form.is_valid():
         return False
     days = window_form.cleaned_data["transfer_match_window_days"]
@@ -250,7 +252,7 @@ def _handle_transfer_window(request, add_form, window_form):
     return True
 
 
-def _handle_rename_category(request, add_form, window_form):
+def _handle_rename_category(request, forms):
     rename_form = CategoryNameForm(request.POST)
     if not rename_form.is_valid():
         return False
@@ -263,7 +265,7 @@ def _handle_rename_category(request, add_form, window_form):
             )
         )
     except (ValidationError, ValueError) as exc:
-        add_form.add_error(None, _first_message(exc, "The category could not be renamed."))
+        forms["rename_error"] = _first_message(exc, "The category could not be renamed.")
         return False
     return True
 
@@ -293,8 +295,9 @@ def category_list(request):
         request.POST if action == "window" else None,
         initial={"transfer_match_window_days": household.transfer_match_window_days},
     )
+    forms = {"add_form": add_form, "window_form": window_form, "rename_error": None}
     handler = _CATEGORY_ACTIONS.get(action)
-    if handler is not None and handler(request, add_form, window_form):
+    if handler is not None and handler(request, forms):
         return redirect("category-list")
     categories = Category.objects.visible_to(request.user).order_by("name", "pk")
     return render(
@@ -305,6 +308,7 @@ def category_list(request):
             "categories": categories,
             "add_form": add_form,
             "window_form": window_form,
+            "rename_error": forms["rename_error"],
         },
     )
 
