@@ -8,7 +8,13 @@ from django.utils import timezone
 
 from finance.csv_import.fingerprint import transaction_fingerprint
 from finance.csv_import.parser import Preview, preview_csv
-from finance.lifecycle_services import _DENIED, _person_for, _visible_account_for_update, lock_actor_household
+from finance.lifecycle_services import (
+    _DENIED,
+    _lock_visible_account_with_pair_counterparts,
+    _person_for,
+    _visible_account_for_update,
+    lock_actor_household,
+)
 from finance.models import Account, ImportBatch, Transaction
 
 
@@ -130,7 +136,14 @@ def undo_import_batch(principal, account_id, batch_id):
     """Archive one import batch and only its transactions."""
     person = _person_for(principal)
     lock_actor_household(person)
-    account = _active_account(person, account_id)
+    if not Account.objects.visible_to(person).filter(pk=account_id).exists():
+        raise PermissionDenied(_DENIED)
+    seed_leg_ids = list(
+        Transaction.objects.filter(import_batch_id=batch_id, account_id=account_id).values_list("pk", flat=True)
+    )
+    account = _lock_visible_account_with_pair_counterparts(person, account_id, seed_leg_ids=seed_leg_ids)
+    if account.status != Account.Status.ACTIVE or account.archived_at is not None:
+        raise PermissionDenied(_DENIED)
     batch = (
         ImportBatch.objects.select_for_update()
         .filter(
@@ -151,7 +164,8 @@ def undo_import_batch(principal, account_id, batch_id):
     batch.status = ImportBatch.Status.ARCHIVED
     batch.archived_at = now
     batch.save(update_fields=("status", "archived_at"))
-    from finance.category_services import refresh_transfer_pairs
+    from finance.category_services import refresh_transfer_pairs, revalidate_pairs_touching_import_batch
 
+    revalidate_pairs_touching_import_batch(person, batch_id)
     refresh_transfer_pairs(person)
     return batch
