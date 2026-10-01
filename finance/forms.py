@@ -23,6 +23,8 @@ class PasswordPairForm(forms.Form):
     password2 = forms.CharField(label="Confirm new password", widget=forms.PasswordInput)
 
     def password_user(self, cleaned):
+        if getattr(self, "existing_user", None) is not None:
+            return self.existing_user
         return get_user_model()(username=cleaned.get("username", ""))
 
     def clean(self):
@@ -70,6 +72,29 @@ class SetupForm(PasswordPairForm):
         "password1",
         "password2",
     )
+
+    def clean_username(self):
+        username = self.cleaned_data["username"]
+        validated_username(username)
+        return username
+
+
+class JoinGoogleForm(forms.Form):
+    invitation_code = forms.CharField(max_length=64)
+    username = forms.CharField(max_length=150)
+    display_name = forms.CharField(max_length=150)
+
+    def clean_username(self):
+        username = self.cleaned_data["username"]
+        validated_username(username)
+        return username
+
+
+class SetupGoogleForm(forms.Form):
+    setup_code = forms.CharField(max_length=128, widget=forms.PasswordInput)
+    username = forms.CharField(max_length=150)
+    display_name = forms.CharField(max_length=150)
+    household_name = forms.CharField(max_length=150, label="Household name")
 
     def clean_username(self):
         username = self.cleaned_data["username"]

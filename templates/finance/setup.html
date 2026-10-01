@@ -7,7 +7,10 @@
 {% elif not setup_configured %}
 <p>The operator must set <code>SETUP_CODE</code> in the environment before the first member can be created in the browser.</p>
 {% else %}
+{% if messages %}{% for message in messages %}<p>{{ message }}</p>{% endfor %}{% endif %}
+{% if google_signin_enabled %}
+<form method="post">{% csrf_token %}<input type="hidden" name="intent" value="google">{{ google_form.as_p }}<button type="submit">Set up with Google</button></form>
+{% endif %}
 <form method="post">{% csrf_token %}{{ form.as_p }}<button type="submit">Create account</button></form>
-{# Issue #54 may add a "Set up with Google" path here. #}
 {% endif %}
 {% endblock %}

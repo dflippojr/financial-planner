@@ -1,5 +1,11 @@
 {% extends "finance/base.html" %}
 {% block content %}
 <h1>Join household</h1>
-{% if recovery_codes %}{% include "finance/_recovery_codes.html" %}<p><a href="{% url 'login' %}">Continue to sign in</a></p>{% else %}<form method="post">{% csrf_token %}{{ form.as_p }}<button type="submit">Create account</button></form>{% endif %}
+{% if recovery_codes %}{% include "finance/_recovery_codes.html" %}<p><a href="{% url 'login' %}">Continue to sign in</a></p>{% else %}
+{% if messages %}{% for message in messages %}<p>{{ message }}</p>{% endfor %}{% endif %}
+{% if google_signin_enabled %}
+<form method="post">{% csrf_token %}<input type="hidden" name="intent" value="google">{{ google_form.as_p }}<button type="submit">Join with Google</button></form>
+{% endif %}
+<form method="post">{% csrf_token %}{{ form.as_p }}<button type="submit">Create account</button></form>
+{% endif %}
 {% endblock %}

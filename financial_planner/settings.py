@@ -31,7 +31,12 @@ INSTALLED_APPS = [
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
-    "finance",
+    "django.contrib.messages",
+    "allauth",
+    "allauth.account",
+    "allauth.socialaccount",
+    "allauth.socialaccount.providers.google",
+    "finance.apps.FinanceConfig",
 ]
 
 MIDDLEWARE = [
@@ -41,6 +46,8 @@ MIDDLEWARE = [
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django.contrib.messages.middleware.MessageMiddleware",
+    "allauth.account.middleware.AccountMiddleware",
     "django.contrib.auth.middleware.LoginRequiredMiddleware",
 ]
 ROOT_URLCONF = "financial_planner.urls"
@@ -53,6 +60,8 @@ TEMPLATES = [
             "context_processors": [
                 "django.template.context_processors.request",
                 "django.contrib.auth.context_processors.auth",
+                "django.contrib.messages.context_processors.messages",
+                "finance.context_processors.google_signin",
             ],
         },
     }
@@ -91,6 +100,10 @@ AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
 
+AUTHENTICATION_BACKENDS = [
+    "django.contrib.auth.backends.ModelBackend",
+    "allauth.account.auth_backends.AuthenticationBackend",
+]
 LOGIN_URL = "login"
 LOGIN_REDIRECT_URL = "home"
 SESSION_COOKIE_AGE = int(os.environ.get("DJANGO_SESSION_COOKIE_AGE", 60 * 60 * 24 * 28))
@@ -110,6 +123,38 @@ CSRF_TRUSTED_ORIGINS = [
 ]
 
 SETUP_CODE = os.environ.get("SETUP_CODE", "")
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
+
+ACCOUNT_ADAPTER = "finance.allauth_adapters.MemberAccountAdapter"
+SOCIALACCOUNT_ADAPTER = "finance.allauth_adapters.MemberSocialAccountAdapter"
+ACCOUNT_EMAIL_VERIFICATION = "none"
+ACCOUNT_LOGIN_METHODS = {"username"}
+ACCOUNT_DEFAULT_HTTP_PROTOCOL = "https" if SECURE_SSL_REDIRECT else "http"
+SOCIALACCOUNT_AUTO_SIGNUP = True
+SOCIALACCOUNT_EMAIL_AUTHENTICATION = False
+SOCIALACCOUNT_EMAIL_AUTHENTICATION_AUTO_CONNECT = False
+SOCIALACCOUNT_LOGIN_ON_GET = False
+SOCIALACCOUNT_QUERY_EMAIL = True
+SOCIALACCOUNT_STORE_TOKENS = False
+SOCIALACCOUNT_ONLY = False
+SOCIALACCOUNT_PROVIDERS = {
+    "google": {
+        "SCOPE": ["openid", "email", "profile"],
+        "AUTH_PARAMS": {"access_type": "online"},
+        "OAUTH_PKCE_ENABLED": True,
+        **(
+            {
+                "APP": {
+                    "client_id": GOOGLE_CLIENT_ID,
+                    "secret": GOOGLE_CLIENT_SECRET,
+                }
+            }
+            if GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET
+            else {}
+        ),
+    }
+}
 INVITATION_TTL_HOURS = int(os.environ.get("INVITATION_TTL_HOURS", "48"))
 LOGIN_FAILURE_LIMIT = int(os.environ.get("LOGIN_FAILURE_LIMIT", "5"))
 LOGIN_FAILURE_WINDOW_SECONDS = int(os.environ.get("LOGIN_FAILURE_WINDOW_SECONDS", "900"))

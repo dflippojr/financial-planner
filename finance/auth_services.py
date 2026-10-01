@@ -4,7 +4,7 @@ import secrets
 from datetime import timedelta
 
 from django.conf import settings
-from django.contrib.auth import get_user_model
+from django.contrib.auth import get_user_model, login
 from django.contrib.sessions.models import Session
 from django.core.exceptions import PermissionDenied
 from django.db import IntegrityError, connection, transaction
@@ -81,6 +81,21 @@ def create_invitation(inviter):
     return code
 
 
+def invitation_is_usable(code):
+    now = timezone.now()
+    return Invitation.objects.filter(
+        token_digest=_digest((code or "").strip()),
+        used_at__isnull=True,
+        expires_at__gt=now,
+    ).exists()
+
+
+def _create_member_user(username, password):
+    if password is None:
+        return get_user_model().objects.create_user(username=validated_username(username))
+    return get_user_model().objects.create_user(username=validated_username(username), password=password)
+
+
 @transaction.atomic
 def accept_invitation(code, username, display_name, password):
     now = timezone.now()
@@ -92,7 +107,7 @@ def accept_invitation(code, username, display_name, password):
     if invitation is None:
         raise InvalidOneTimeCode
     try:
-        user = get_user_model().objects.create_user(username=validated_username(username), password=password)
+        user = _create_member_user(username, password)
     except IntegrityError as exc:
         raise InvalidOneTimeCode from exc
     person = Person.objects.create(user=user, display_name=display_name)
@@ -211,13 +226,21 @@ def lock_first_member_creation():
     list(Person.objects.select_for_update())
 
 
+def complete_member_session(request, user):
+    # Sessions last a fixed period from sign-in. Django's default expiry is
+    # relative to the last time the session was saved, so any later write to
+    # it (such as CSV staging metadata) would push the expiry out again.
+    login(request, user, backend="django.contrib.auth.backends.ModelBackend")
+    request.session.set_expiry(timezone.now() + timedelta(seconds=settings.SESSION_COOKIE_AGE))
+
+
 @transaction.atomic
 def seed_first_household(username, display_name, household_name, password):
     lock_first_member_creation()
     if first_member_exists():
         raise ValueError("The first household member has already been created.")
     try:
-        user = get_user_model().objects.create_user(username=validated_username(username), password=password)
+        user = _create_member_user(username, password)
     except IntegrityError as exc:
         raise ValueError("The first household member could not be created.") from exc
     person = Person.objects.create(user=user, display_name=display_name)
