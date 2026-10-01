@@ -434,3 +434,25 @@ def test_delete_account_races_edit_and_transfer_refresh_without_deadlock():
     refresh_transfer_pairs(member)
 
     _run_delete_race(lambda: refresh_transfer_pairs(member), owner, shared)
+
+
+@pytest.mark.django_db
+def test_deleting_a_shared_account_keeps_another_members_series_with_private_charges():
+    alice = make_person("alice")
+    bob = make_person("bob")
+    household = make_household(alice, bob)
+    shared = make_account(alice, name="Synthetic Shared", scope=Account.Scope.HOUSEHOLD, household=household)
+    bob_card = make_account(bob, name="Synthetic Bob Card")
+    add_monthly_charges(alice, shared, description="Synthetic Gym", count=2, start=date(2026, 1, 15))
+    add_monthly_charges(bob, bob_card, description="Synthetic Gym", count=2, start=date(2026, 3, 15))
+    refresh_recurring_series(bob)
+    series = RecurringSeries.objects.get(person=bob, status=RecurringSeries.Status.SUGGESTED)
+    assert series.members.count() == 4
+    confirm_recurring_series(bob, series.pk)
+
+    delete_account(alice, shared.pk)
+    series.refresh_from_db()
+
+    assert series.status == RecurringSeries.Status.CONFIRMED
+    assert series.is_active
+    assert set(series.members.values_list("transaction__account_id", flat=True)) == {bob_card.pk}

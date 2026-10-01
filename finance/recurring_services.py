@@ -508,14 +508,22 @@ def revalidate_series_after_member_removal(principal, series_ids):
     left with none is deactivated. Open series with no remaining members are
     deactivated the same way.
     """
-    person = _person_for(principal)
+    _person_for(principal)
     ids = sorted({pk for pk in series_ids if pk is not None})
     if not ids:
         return
     locked = list(RecurringSeries.objects.select_for_update(of=("self",)).filter(pk__in=ids).order_by("pk"))
-    eligible_ids = {row.pk for row in candidate_transactions(person)}
     confirmed = [series for series in locked if series.status == RecurringSeries.Status.CONFIRMED]
-    _reconcile_unmatched_confirmed(confirmed, set(), eligible_ids)
+    # Each series belongs to one person: judge eligibility by what that owner
+    # can see, never by the acting person (for example someone deleting a
+    # shared account that another member's series also spans).
+    by_owner = {}
+    for series in confirmed:
+        by_owner.setdefault(series.person_id, []).append(series)
+    for owner_id, owned in by_owner.items():
+        owner = Person.objects.get(pk=owner_id)
+        eligible_ids = {row.pk for row in candidate_transactions(owner)}
+        _reconcile_unmatched_confirmed(owned, set(), eligible_ids)
     open_ids = [series.pk for series in locked if series.status != RecurringSeries.Status.CONFIRMED]
     if not open_ids:
         return
