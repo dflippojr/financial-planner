@@ -179,7 +179,7 @@ class Account(ArchivableModel):
     account_type = models.CharField(max_length=11, choices=Type)
     owner = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="owned_accounts")
     scope = models.CharField(max_length=9, choices=Scope, default=Scope.PRIVATE)
-    share_mode = models.CharField(max_length=8, choices=ShareMode, null=True, blank=True)
+    share_mode = models.CharField(max_length=8, choices=ShareMode, blank=True, default="")
     household = models.ForeignKey(
         Household,
         on_delete=models.PROTECT,
@@ -200,8 +200,8 @@ class Account(ArchivableModel):
             ),
             models.CheckConstraint(
                 condition=(
-                    Q(scope="private", share_mode__isnull=True)
-                    | Q(scope="household", share_mode__in=("co_owned", "lent"), share_mode__isnull=False)
+                    Q(scope="private", share_mode="")
+                    | Q(scope="household", share_mode__in=("co_owned", "lent"))
                 ),
                 name="account_share_mode_matches_scope",
             ),

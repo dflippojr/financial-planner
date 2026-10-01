@@ -3,7 +3,7 @@ from django.db import migrations, models
 
 def backfill_co_owned(apps, schema_editor):
     Account = apps.get_model("finance", "Account")
-    Account.objects.filter(scope="household", share_mode__isnull=True).update(share_mode="co_owned")
+    Account.objects.filter(scope="household").exclude(share_mode__in=("co_owned", "lent")).update(share_mode="co_owned")
 
 
 class Migration(migrations.Migration):
@@ -18,8 +18,8 @@ class Migration(migrations.Migration):
             field=models.CharField(
                 blank=True,
                 choices=[("co_owned", "Co-owned"), ("lent", "Lent")],
+                default="",
                 max_length=8,
-                null=True,
             ),
         ),
         migrations.RunPython(backfill_co_owned, migrations.RunPython.noop),
@@ -27,12 +27,8 @@ class Migration(migrations.Migration):
             model_name="account",
             constraint=models.CheckConstraint(
                 condition=(
-                    models.Q(("scope", "private"), ("share_mode__isnull", True))
-                    | models.Q(
-                        ("scope", "household"),
-                        ("share_mode__in", ("co_owned", "lent")),
-                        ("share_mode__isnull", False),
-                    )
+                    models.Q(("scope", "private"), ("share_mode", ""))
+                    | models.Q(("scope", "household"), ("share_mode__in", ("co_owned", "lent")))
                 ),
                 name="account_share_mode_matches_scope",
             ),

@@ -105,7 +105,7 @@ def test_current_member_unshares_full_history_to_owner_only_without_returning_it
     assert result is None
     assert account.scope == Account.Scope.PRIVATE
     assert account.household is None
-    assert account.share_mode is None
+    assert account.share_mode == ""
     assert not Account.objects.visible_to(member).filter(pk=account.pk).exists()
     assert not ImportBatch.objects.visible_to(member).filter(pk=batch.pk).exists()
     assert not Transaction.objects.visible_to(member).filter(pk=transaction.pk).exists()
@@ -354,7 +354,7 @@ def test_last_member_leaves_and_owned_shared_history_becomes_private():
     assert account.owner == owner
     assert account.scope == Account.Scope.PRIVATE
     assert account.household is None
-    assert account.share_mode is None
+    assert account.share_mode == ""
     assert Account.objects.visible_to(owner).filter(pk=account.pk).exists()
     assert ImportBatch.objects.visible_to(owner).filter(pk=batch.pk).exists()
     assert Transaction.objects.visible_to(owner).filter(pk=financial_transaction.pk).exists()
@@ -559,7 +559,7 @@ def test_share_requires_an_explicit_mode_and_rejects_unknown_modes():
     assert str(missing_mode.value) == str(invalid_mode.value) == str(missing_account.value)
     account.refresh_from_db()
     assert account.scope == Account.Scope.PRIVATE
-    assert account.share_mode is None
+    assert account.share_mode == ""
 
 
 @pytest.mark.django_db
@@ -574,7 +574,7 @@ def test_lent_owner_leave_returns_account_private_and_preserves_history():
     assert account.owner_id == owner.pk
     assert account.scope == Account.Scope.PRIVATE
     assert account.household is None
-    assert account.share_mode is None
+    assert account.share_mode == ""
     assert Account.objects.visible_to(owner).filter(pk=account.pk).exists()
     assert not Account.objects.visible_to(member).filter(pk=account.pk).exists()
     assert not Transaction.objects.visible_to(member).filter(pk=financial_transaction.pk).exists()
@@ -648,7 +648,7 @@ def test_lent_owner_unshares_and_archives_while_member_can_still_edit_visibility
     unshare_account(owner, account.pk)
     account.refresh_from_db()
     assert account.scope == Account.Scope.PRIVATE
-    assert account.share_mode is None
+    assert account.share_mode == ""
     assert not Account.objects.visible_to(member).filter(pk=account.pk).exists()
     assert not Transaction.objects.visible_to(member).filter(pk=financial_transaction.pk).exists()
     assert ImportBatch.objects.filter(pk=batch.pk).exists()
@@ -686,7 +686,7 @@ def test_private_account_never_becomes_visible_through_share_mode_paths():
     assert not Account.objects.visible_to(member).filter(pk=secret.pk).exists()
     secret.refresh_from_db()
     assert secret.scope == Account.Scope.PRIVATE
-    assert secret.share_mode is None
+    assert secret.share_mode == ""
 
 
 @pytest.mark.django_db(transaction=True)

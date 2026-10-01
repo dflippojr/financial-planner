@@ -26,8 +26,8 @@ def make_household(*people, name="Synthetic Household"):
 
 
 def make_account(owner, *, name="Synthetic Checking", account_type=Account.Type.CHECKING, scope=Account.Scope.PRIVATE, household=None, share_mode=None):
-    if share_mode is None and scope == Account.Scope.HOUSEHOLD:
-        share_mode = Account.ShareMode.CO_OWNED
+    if share_mode is None:
+        share_mode = Account.ShareMode.CO_OWNED if scope == Account.Scope.HOUSEHOLD else ""
     return Account.objects.create(
         name=name,
         account_type=account_type,
@@ -380,7 +380,7 @@ def test_rename_is_refused_when_the_account_is_unshared_mid_request(monkeypatch)
     def unshare_first(person):
         # The owner makes the account private after the member's lookup and
         # before the member's rename takes its locks.
-        Account.objects.filter(pk=account.pk).update(scope=Account.Scope.PRIVATE, household=None, share_mode=None)
+        Account.objects.filter(pk=account.pk).update(scope=Account.Scope.PRIVATE, household=None, share_mode="")
         return real_lock(person)
 
     monkeypatch.setattr(lifecycle, "lock_actor_household", unshare_first)

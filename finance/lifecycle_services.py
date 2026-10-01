@@ -89,7 +89,7 @@ def _lock_ledgers(account_ids):
 def _make_account_private(account):
     account.scope = Account.Scope.PRIVATE
     account.household = None
-    account.share_mode = None
+    account.share_mode = ""
     account.save(update_fields=("scope", "household", "share_mode", "updated_at"))
 
 
@@ -287,7 +287,7 @@ def _apply_shared_account_exit(person, household_accounts, remaining_memberships
                 owner_id=person.pk,
                 scope=Account.Scope.PRIVATE,
                 household=None,
-                share_mode=None,
+                share_mode="",
                 updated_at=transitioned_at,
             )
         return
@@ -306,7 +306,7 @@ def _apply_shared_account_exit(person, household_accounts, remaining_memberships
         Account.objects.filter(pk__in=lent_ids).update(
             scope=Account.Scope.PRIVATE,
             household=None,
-            share_mode=None,
+            share_mode="",
             updated_at=transitioned_at,
         )
     if co_owned_ids:
