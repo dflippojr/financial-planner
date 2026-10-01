@@ -370,7 +370,12 @@ def apply_enabled_rules_to_transactions(principal, transactions):
     if not transactions:
         return []
     person = _person_for(principal)
-    locked = _lock_transactions(person, transactions)
+    # Same eligibility as preview and manual apply: active cash-flow rows that
+    # are not excluded as transfers or card payments and are not refunds.
+    eligible_ids = set(
+        _candidate_queryset(person).filter(pk__in=[item.pk for item in transactions]).values_list("pk", flat=True)
+    )
+    locked = _lock_transactions(person, [item for item in transactions if item.pk in eligible_ids])
     applications = []
     by_rule = {}
     for txn in locked:
@@ -412,11 +417,22 @@ def reverse_application(principal, application_id):
     )
     locked = _lock_transactions(person, [entry.transaction for entry in entries])
     by_id = {item.pk: item for item in locked}
+    superseded_ids = set(
+        RuleApplicationEntry.objects.filter(
+            transaction_id__in=[entry.transaction_id for entry in entries],
+            application_id__gt=application.pk,
+        ).values_list("transaction_id", flat=True)
+    )
     restored = 0
     skipped_manual = 0
     for entry in entries:
         txn = by_id.get(entry.transaction_id)
         if txn is None:
+            continue
+        if txn.pk in superseded_ids:
+            # A later rule application changed this row; reversing this older
+            # one must not undo the newer category.
+            skipped_manual += 1
             continue
         if txn.category_source in (
             Transaction.CategorySource.MANUAL,

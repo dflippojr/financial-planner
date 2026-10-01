@@ -712,3 +712,55 @@ def test_preview_and_auto_apply_fold_case_the_same_way():
     apply_rule(owner, rule.pk)
     txn.refresh_from_db()
     assert txn.category_id == groceries(household).pk
+
+
+@pytest.mark.django_db
+def test_auto_apply_skips_investment_rows_and_excluded_transfers():
+    from finance.category_services import refresh_transfer_pairs
+
+    owner = make_person("owner")
+    household = make_household(owner)
+    checking = make_account(owner)
+    savings = make_account(owner, name="Synthetic Savings")
+    investment = make_transaction(owner, checking, description="SYNTHETIC KROGER FUND", fingerprint="d1".ljust(64, "0"))
+    Transaction.objects.filter(pk=investment.pk).update(kind=Transaction.Kind.INVESTMENT_ACTIVITY)
+    out_leg = make_transaction(owner, checking, amount_minor=-5000, description="SYNTHETIC KROGER MOVE", fingerprint="d2".ljust(64, "0"))
+    make_transaction(owner, savings, amount_minor=5000, description="SYNTHETIC MOVE IN", fingerprint="d3".ljust(64, "0"))
+    refresh_transfer_pairs(owner)
+    save_category_rule(
+        owner, owner_kind="personal", description_contains="kroger", account_id=None,
+        min_amount_minor=None, max_amount_minor=None, category_id=groceries(household).pk, priority=0,
+    )
+
+    apply_enabled_rules_to_transactions(owner, list(Transaction.objects.filter(pk__in=[investment.pk, out_leg.pk])))
+
+    investment.refresh_from_db()
+    out_leg.refresh_from_db()
+    assert investment.category_id is None
+    assert out_leg.category_id is None
+
+
+@pytest.mark.django_db
+def test_reversing_an_older_application_keeps_a_newer_rules_category():
+    owner = make_person("owner")
+    household = make_household(owner)
+    account = make_account(owner)
+    txn = make_transaction(owner, account, fingerprint="e1".ljust(64, "0"))
+    first = save_category_rule(
+        owner, owner_kind="personal", description_contains="kroger", account_id=None,
+        min_amount_minor=None, max_amount_minor=None, category_id=groceries(household).pk, priority=0,
+    )
+    first_application, _skipped = apply_rule(owner, first.pk)
+    set_rule_enabled(owner, first.pk, False)
+    second = save_category_rule(
+        owner, owner_kind="personal", description_contains="kroger", account_id=None,
+        min_amount_minor=None, max_amount_minor=None, category_id=dining(household).pk, priority=1,
+    )
+    apply_rule(owner, second.pk)
+    txn.refresh_from_db()
+    assert txn.category_id == dining(household).pk
+
+    reverse_application(owner, first_application.pk)
+
+    txn.refresh_from_db()
+    assert txn.category_id == dining(household).pk
