@@ -162,6 +162,28 @@ def test_vendored_chartjs_matches_recorded_checksum():
     assert recorded["chart.umd.min.js"] == hashlib.sha256(blob).hexdigest()
     assert b"Chart.js v4.5.1" in blob
     assert b"window.Chart" in blob
+    assert b"sourceMappingURL" not in blob
     assert (vendor / "LICENSE.md").read_text(encoding="utf-8").startswith("The MIT License")
+
+
+@pytest.mark.django_db
+def test_collectstatic_accepts_vendored_chartjs_without_a_source_map(tmp_path, settings):
+    root = Path(__file__).resolve().parent.parent
+    static_dir = tmp_path / "static"
+    vendor = static_dir / "vendor"
+    vendor.mkdir(parents=True)
+    (vendor / "chart.umd.min.js").write_bytes((root / "static" / "vendor" / "chart.umd.min.js").read_bytes())
+    collected = tmp_path / "staticfiles"
+    settings.STATICFILES_DIRS = [static_dir]
+    settings.STATIC_ROOT = collected
+    settings.STORAGES = {
+        "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+        "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
+    }
+    call_command("collectstatic", "--noinput", verbosity=0)
+
+    hashed = list(collected.rglob("chart.umd.min.js*"))
+    assert hashed
+    assert not any(path.name.endswith(".map") for path in collected.rglob("*"))
 
 

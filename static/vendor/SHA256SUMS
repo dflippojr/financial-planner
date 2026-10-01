@@ -1,3 +1,4 @@
 # Chart.js v4.5.1 UMD build from https://registry.npmjs.org/chart.js/-/chart.js-4.5.1.tgz
-# package/dist/chart.umd.min.js
-48444a82d4edcb5bec0f1965faacdde18d9c17db3063d042abada2f705c9f54a  chart.umd.min.js
+# package/dist/chart.umd.min.js with the sourceMappingURL comment removed so
+# WhiteNoise collectstatic does not require a sibling .map file.
+84d0e233daba702b8f77d669d8c137cad36d441a10f200b6f2d3ab553bdfcf6b  chart.umd.min.js
