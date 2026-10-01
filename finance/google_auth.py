@@ -2,7 +2,7 @@ import secrets
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.db import transaction
+from django.db import IntegrityError, transaction
 
 from allauth.socialaccount.models import SocialAccount
 
@@ -16,6 +16,10 @@ GOOGLE_PENDING_SESSION_KEY = "google_pending"
 GOOGLE_FLOW_BIND_KEY = "google_pending_bind"
 GOOGLE_FLOW_NONCE_STATE_KEY = "google_flow_nonce"
 GOOGLE_FAILED = "Google sign-in failed. Try again later, or use a password if you have one."
+
+
+class GoogleOnboardingConflict(Exception):
+    """Google identity is already linked, or linking raced another completion."""
 
 
 def google_signin_enabled():
@@ -44,13 +48,34 @@ def has_google_account(user):
     return SocialAccount.objects.filter(user=user, provider="google").exists()
 
 
+def has_usable_google_sign_in(user):
+    return google_signin_enabled() and has_google_account(user)
+
+
 def sign_in_method_count(user):
     count = 0
     if user.has_usable_password():
         count += 1
-    if has_google_account(user):
+    if has_usable_google_sign_in(user):
         count += 1
     return count
+
+
+def complete_google_onboarding(uid, create_member, link_account):
+    try:
+        with transaction.atomic():
+            existing = (
+                SocialAccount.objects.select_for_update()
+                .filter(provider="google", uid=str(uid))
+                .first()
+            )
+            if existing is not None:
+                raise GoogleOnboardingConflict
+            user, recovery_codes = create_member()
+            link_account(user)
+            return user, recovery_codes
+    except IntegrityError as exc:
+        raise GoogleOnboardingConflict from exc
 
 
 def google_uid(extra_data):
@@ -118,7 +143,9 @@ def lock_member_for_sign_in_change(user):
 @transaction.atomic
 def disconnect_google_account(user):
     locked = lock_member_for_sign_in_change(user)
-    if sign_in_method_count(locked) <= 1:
+    if not has_google_account(locked):
+        return False
+    if has_usable_google_sign_in(locked) and not locked.has_usable_password():
         return False
     SocialAccount.objects.filter(user=locked, provider="google").delete()
     return True
@@ -127,7 +154,7 @@ def disconnect_google_account(user):
 @transaction.atomic
 def remove_member_password(user):
     locked = lock_member_for_sign_in_change(user)
-    if not has_google_account(locked) or not locked.has_usable_password():
+    if not has_usable_google_sign_in(locked) or not locked.has_usable_password():
         return False
     locked.set_unusable_password()
     locked.save(update_fields=("password",))

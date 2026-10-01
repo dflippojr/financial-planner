@@ -16,9 +16,11 @@ from django.utils import timezone
 from allauth.socialaccount.models import SocialAccount, SocialToken
 
 from finance.allauth_adapters import MemberSocialAccountAdapter
-from finance.auth_services import create_invitation, create_recovery_codes
+from finance.auth_services import accept_invitation, create_invitation, create_recovery_codes
 from finance.google_auth import (
     GOOGLE_FLOW_NONCE_STATE_KEY,
+    GoogleOnboardingConflict,
+    complete_google_onboarding,
     consume_google_pending,
     disconnect_google_account,
     remove_member_password,
@@ -483,3 +485,138 @@ def test_disconnect_google_and_remove_password_race_keeps_one_method():
     assert sorted(outcomes) == [False, True]
     user.refresh_from_db()
     assert sign_in_method_count(user) == 1
+
+
+@pytest.mark.django_db
+@_google_settings()
+def test_remove_password_succeeds_when_google_is_enabled():
+    user, _person, _household = make_member("remove-pwd-enabled")
+    SocialAccount.objects.create(
+        user=user, provider="google", uid=GOOGLE_SUB, extra_data={"sub": GOOGLE_SUB}
+    )
+    client = Client()
+    client.post(reverse("login"), {"username": user.username, "password": PASSWORD})
+
+    removed = client.post(reverse("account-settings"), {"action": "remove-password"})
+
+    assert removed.status_code == 200
+    assert b"Keep at least one sign-in method" not in removed.content
+    user.refresh_from_db()
+    assert not user.has_usable_password()
+    assert sign_in_method_count(user) == 1
+
+
+@pytest.mark.django_db
+@override_settings(GOOGLE_CLIENT_ID="", GOOGLE_CLIENT_SECRET="")
+def test_remove_password_is_refused_when_google_is_disabled_even_if_linked():
+    user, _person, _household = make_member("remove-pwd-disabled")
+    SocialAccount.objects.create(
+        user=user, provider="google", uid=GOOGLE_SUB, extra_data={"sub": GOOGLE_SUB}
+    )
+    client = Client()
+    client.post(reverse("login"), {"username": user.username, "password": PASSWORD})
+
+    refused = client.post(reverse("account-settings"), {"action": "remove-password"})
+
+    assert refused.status_code == 200
+    assert b"Keep at least one sign-in method" in refused.content
+    user.refresh_from_db()
+    assert user.has_usable_password()
+    assert user.check_password(PASSWORD)
+    assert SocialAccount.objects.filter(user=user, uid=GOOGLE_SUB).exists()
+
+
+@pytest.mark.django_db
+def test_google_onboarding_rolls_back_when_identity_is_already_linked():
+    inviter, _person, household = make_member("inviter-linked-identity")
+    code_a = create_invitation(inviter.person)
+    code_b = create_invitation(inviter.person)
+
+    def link(user):
+        SocialAccount.objects.create(
+            user=user, provider="google", uid=GOOGLE_SUB, extra_data={"sub": GOOGLE_SUB}
+        )
+
+    complete_google_onboarding(
+        GOOGLE_SUB,
+        lambda: accept_invitation(code_a, "joined-linked-a", "Joined A", password=None),
+        link,
+    )
+    with pytest.raises(GoogleOnboardingConflict):
+        complete_google_onboarding(
+            GOOGLE_SUB,
+            lambda: accept_invitation(code_b, "joined-linked-b", "Joined B", password=None),
+            link,
+        )
+
+    assert get_user_model().objects.filter(username="joined-linked-a").exists()
+    assert not get_user_model().objects.filter(username="joined-linked-b").exists()
+    invitations = Invitation.objects.filter(household=household)
+    assert invitations.filter(used_at__isnull=False).count() == 1
+    assert invitations.filter(used_at__isnull=True).count() == 1
+    assert SocialAccount.objects.filter(uid=GOOGLE_SUB).count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+@_google_settings()
+def test_concurrent_google_joins_same_identity_keep_one_member():
+    if connection.vendor != "postgresql":
+        pytest.skip("concurrent Google identity linking uses PostgreSQL uniqueness and row locks")
+
+    inviter, _person, household = make_member("inviter-identity-race")
+    code_a = create_invitation(inviter.person)
+    code_b = create_invitation(inviter.person)
+    barrier = threading.Barrier(2)
+    outcomes = []
+    errors = []
+    statuses = []
+
+    def link(user):
+        SocialAccount.objects.create(
+            user=user, provider="google", uid=GOOGLE_SUB, extra_data={"sub": GOOGLE_SUB}
+        )
+
+    def join(username, code):
+        try:
+            barrier.wait(timeout=10)
+            try:
+                complete_google_onboarding(
+                    GOOGLE_SUB,
+                    lambda c=code, u=username: accept_invitation(c, u, u, password=None),
+                    link,
+                )
+                outcomes.append("created")
+                statuses.append(200)
+            except GoogleOnboardingConflict:
+                outcomes.append("conflict")
+                statuses.append(302)
+        except Exception as exc:  # noqa: BLE001 - reported to the main thread
+            errors.append(exc)
+            statuses.append(500)
+        finally:
+            connections.close_all()
+
+    first = threading.Thread(target=join, args=("joined-identity-a", code_a))
+    second = threading.Thread(target=join, args=("joined-identity-b", code_b))
+    first.start()
+    second.start()
+    first.join(timeout=30)
+    second.join(timeout=30)
+
+    assert errors == []
+    assert 500 not in statuses
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert sorted(outcomes) == ["conflict", "created"]
+    created = get_user_model().objects.filter(
+        username__in=("joined-identity-a", "joined-identity-b")
+    )
+    assert created.count() == 1
+    assert SocialAccount.objects.filter(uid=GOOGLE_SUB).count() == 1
+    invitations = Invitation.objects.filter(household=household)
+    assert invitations.filter(used_at__isnull=False).count() == 1
+    assert invitations.filter(used_at__isnull=True).count() == 1
+    unused = invitations.get(used_at__isnull=True)
+    used = invitations.get(used_at__isnull=False)
+    assert unused.pk != used.pk
+    assert RecoveryCode.objects.filter(user=created.get()).count() == 8

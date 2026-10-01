@@ -19,15 +19,16 @@ from .auth_services import (
 from .google_auth import (
     GOOGLE_FAILED,
     GOOGLE_FLOW_NONCE_STATE_KEY,
+    GoogleOnboardingConflict,
     bind_google_flow_nonce,
+    complete_google_onboarding,
     consume_google_pending,
     google_email_is_verified,
     google_signin_enabled,
     google_throttle_key,
     google_uid,
-    has_google_account,
+    has_usable_google_sign_in,
     peek_google_pending,
-    sign_in_method_count,
 )
 
 
@@ -110,23 +111,25 @@ class MemberSocialAccountAdapter(DefaultSocialAccountAdapter):
         raise ImmediateHttpResponse(self._failed_response(request, "login"))
 
     def validate_disconnect(self, account, accounts):
-        if sign_in_method_count(account.user) <= 1:
-            raise self.validation_error("disconnect_last")
-        if not account.user.has_usable_password() and not has_google_account(account.user):
+        if has_usable_google_sign_in(account.user) and not account.user.has_usable_password():
             raise self.validation_error("disconnect_last")
 
     def _complete_join(self, request, sociallogin, pending, key):
+        uid = google_uid(sociallogin.account.extra_data) or sociallogin.account.uid
         try:
-            user, recovery_codes = accept_invitation(
-                pending.get("invitation_code", ""),
-                pending.get("username", ""),
-                pending.get("display_name", ""),
-                password=None,
+            _user, recovery_codes = complete_google_onboarding(
+                uid,
+                lambda: accept_invitation(
+                    pending.get("invitation_code", ""),
+                    pending.get("username", ""),
+                    pending.get("display_name", ""),
+                    password=None,
+                ),
+                lambda user: sociallogin.connect(request, user),
             )
-        except InvalidOneTimeCode:
+        except (InvalidOneTimeCode, GoogleOnboardingConflict):
             record_login_failure(key)
             raise ImmediateHttpResponse(self._failed_response(request, "join"))
-        sociallogin.connect(request, user)
         clear_login_failures(key)
         raise ImmediateHttpResponse(
             render(
@@ -139,16 +142,20 @@ class MemberSocialAccountAdapter(DefaultSocialAccountAdapter):
     def _complete_setup(self, request, sociallogin, pending, key):
         if first_member_exists():
             raise ImmediateHttpResponse(self._failed_response(request, "setup"))
+        uid = google_uid(sociallogin.account.extra_data) or sociallogin.account.uid
         try:
-            user, recovery_codes = seed_first_household(
-                pending.get("username", ""),
-                pending.get("display_name", ""),
-                pending.get("household_name", ""),
-                password=None,
+            user, recovery_codes = complete_google_onboarding(
+                uid,
+                lambda: seed_first_household(
+                    pending.get("username", ""),
+                    pending.get("display_name", ""),
+                    pending.get("household_name", ""),
+                    password=None,
+                ),
+                lambda created: sociallogin.connect(request, created),
             )
-        except ValueError:
+        except (ValueError, GoogleOnboardingConflict):
             raise ImmediateHttpResponse(self._failed_response(request, "setup"))
-        sociallogin.connect(request, user)
         clear_login_failures(key)
         complete_member_session(request, user)
         raise ImmediateHttpResponse(
