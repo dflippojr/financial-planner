@@ -108,6 +108,7 @@ def test_gitattributes_forces_lf_for_container_files():
     assert "Dockerfile text eol=lf" in attributes
     assert "scripts/css_pins.env text eol=lf" in attributes
     assert "static/src/vendor/** text eol=lf" in attributes
+    assert "static/vendor/** text eol=lf" in attributes
 
 
 def test_gunicorn_access_log_never_records_query_strings_or_referrers():

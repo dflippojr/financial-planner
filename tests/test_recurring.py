@@ -16,6 +16,7 @@ from finance.recurring_services import (
     dismiss_recurring_series,
     refresh_recurring_series,
 )
+from tests.page_payload import json_script_payload
 
 
 PASSWORD = "Synthetic-passphrase-42!"
@@ -315,10 +316,44 @@ def test_confirm_shows_exact_minor_unit_totals_on_recurring_page():
 
     home = client.get(reverse("home"))
     confirmed_page = client.get(reverse("recurring-review"))
+    html = confirmed_page.content.decode()
+    payload = json_script_payload(html, "recurring-chart-data")
     assert b"Recurring" in home.content
     assert b"1,599.00 USD" in confirmed_page.content or b"15.99 USD" in confirmed_page.content
     assert b"19188" in confirmed_page.content
     assert b"1599" in confirmed_page.content
+    assert "Confirmed monthly total" in html
+    assert payload["monthly_minor"] == confirmed_page.context["monthly_minor"] == 1599
+    assert payload["annual_minor"] == confirmed_page.context["annual_minor"] == 19188
+    assert payload["series"][0]["monthly_minor"] == 1599
+    assert "cdn." not in html.lower()
+    assert "/static/vendor/chart.umd.min.js" not in html
+
+
+@pytest.mark.django_db
+def test_recurring_page_lists_the_largest_confirmed_series_first():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    add_monthly_charges(owner, account, description="Synthetic Small", amount_minor=-1000)
+    add_monthly_charges(owner, account, description="Synthetic Large", amount_minor=-5000)
+    refresh_recurring_series(owner)
+    by_name = {series.display_name: series for series in RecurringSeries.objects.all()}
+    confirm_recurring_series(owner, by_name["Synthetic Small"].pk)
+    confirm_recurring_series(owner, by_name["Synthetic Large"].pk)
+    client = Client()
+    client.force_login(owner.user)
+
+    page = client.get(reverse("recurring-review"))
+    html = page.content.decode()
+    payload = json_script_payload(html, "recurring-chart-data")
+    names = [series.display_name for series in page.context["confirmed"]]
+
+    assert names == ["Synthetic Large", "Synthetic Small"]
+    assert [row["name"] for row in payload["series"]] == names
+    assert payload["monthly_minor"] == page.context["monthly_minor"]
+    assert payload["series"][0]["monthly_minor"] > payload["series"][1]["monthly_minor"]
+    assert html.index("Synthetic Large") < html.index("Synthetic Small")
 
 
 @pytest.mark.django_db

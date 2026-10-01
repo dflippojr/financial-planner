@@ -24,44 +24,64 @@
 </div>
 {% endif %}
 {% if report %}
-<figure class="mb-4">
-  <figcaption class="mb-2 font-medium">Income, spending, and net cash flow by period</figcaption>
-  <svg width="{{ report.chart.width }}" height="{{ report.chart.height }}" role="img" aria-labelledby="cash-flow-chart-title">
-    <title id="cash-flow-chart-title">Income, spending, and net cash flow</title>
-    <line x1="36" y1="{{ report.chart.zero_y }}" x2="684" y2="{{ report.chart.zero_y }}" stroke="currentColor" />
-    {% for line in report.chart.lines %}
-    <polyline fill="none" stroke="{{ line.color }}" stroke-width="2" points="{{ line.points }}">
-      <title>{{ line.name }}</title>
-    </polyline>
-    {% endfor %}
-  </svg>
-</figure>
-<div class="overflow-x-auto">
-  <table class="table table-zebra">
-    <thead class="sticky top-0 z-10 bg-base-200">
-      <tr>
-        <th>Period</th>
-        <th class="text-right">Income</th>
-        <th class="text-right">Spending</th>
-        <th class="text-right">Net cash flow</th>
-        <th></th>
-      </tr>
-    </thead>
-    <tbody>
-    {% for period in report.periods %}
-      <tr>
-        <td>
-          {{ period.label }}
-          {% if period.missing_import %}<span class="badge badge-warning">Missing import</span>{% endif %}
-        </td>
-        <td class="text-right">{% include "finance/_amount.html" with value=period.income_display tone="in" %}</td>
-        <td class="text-right">{% include "finance/_amount.html" with value=period.spending_display tone="out" %}</td>
-        <td class="text-right">{% include "finance/_amount.html" with value=period.net_display tone="" %}</td>
-        <td><a class="link" href="{{ period.drilldown_url }}">Transactions</a></td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
+<div class="flex flex-col gap-4">
+  <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
+    <article class="stats bg-base-100 shadow">
+      <div class="stat">
+        <h2 class="stat-title">Income</h2>
+        <p class="stat-value text-2xl sm:text-3xl">{% include "finance/_amount.html" with value=report.summary.income_display tone="in" %}</p>
+        <p class="stat-desc">{{ report.summary.income_change.label }}</p>
+      </div>
+    </article>
+    <article class="stats bg-base-100 shadow">
+      <div class="stat">
+        <h2 class="stat-title">Spending</h2>
+        <p class="stat-value text-2xl sm:text-3xl">{% include "finance/_amount.html" with value=report.summary.spending_display tone="out" %}</p>
+        <p class="stat-desc">{{ report.summary.spending_change.label }}</p>
+      </div>
+    </article>
+    <article class="stats bg-base-100 shadow">
+      <div class="stat">
+        <h2 class="stat-title">Net cash flow</h2>
+        <p class="stat-value text-2xl sm:text-3xl">{% include "finance/_amount.html" with value=report.summary.net_display tone="" %}</p>
+        <p class="stat-desc">{{ report.summary.net_change.label }}</p>
+      </div>
+    </article>
+  </div>
+  {{ chart_data|json_script:"cash-flow-chart-data" }}
+  <figure>
+    <figcaption class="mb-2 font-medium">Income, spending, and net cash flow by period</figcaption>
+    <div class="h-72 w-full rounded-box bg-base-100 p-2 shadow">
+      <canvas id="cash-flow-chart" data-chart="cash-flow" data-chart-payload="cash-flow-chart-data" role="img" aria-label="Bar chart of income and spending by period with a net cash flow line. Periods missing an import are marked. The table below lists the same numbers."></canvas>
+    </div>
+  </figure>
+  <div class="overflow-x-auto">
+    <table class="table table-zebra">
+      <thead class="sticky top-0 z-10 bg-base-200">
+        <tr>
+          <th>Period</th>
+          <th class="text-right">Income</th>
+          <th class="text-right">Spending</th>
+          <th class="text-right">Net cash flow</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for period in report.periods %}
+        <tr>
+          <td>
+            {{ period.label }}
+            {% if period.missing_import %}<span class="badge badge-warning">Missing import</span>{% endif %}
+          </td>
+          <td class="text-right">{% include "finance/_amount.html" with value=period.income_display tone="in" %}</td>
+          <td class="text-right">{% include "finance/_amount.html" with value=period.spending_display tone="out" %}</td>
+          <td class="text-right">{% include "finance/_amount.html" with value=period.net_display tone="" %}</td>
+          <td><a class="link" href="{{ period.drilldown_url }}">Transactions</a></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
 </div>
 {% endif %}
 <h2 class="mt-8 mb-3 text-xl font-semibold">Accounts</h2>
@@ -77,4 +97,7 @@
   <li>No accounts yet.</li>
   {% endfor %}
 </ul>
+{% endblock %}
+{% block extra_js %}
+{% if chart_data %}{% include "finance/_chart_scripts.html" %}{% endif %}
 {% endblock %}

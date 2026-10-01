@@ -66,7 +66,14 @@ from .google_auth import (
 from .lifecycle_services import lock_actor_household
 from .models import Account, Category, Person, RecurringSeries, RefundLink, Transaction, TransactionCorrectionHistory, TransferPair
 from .recurring_services import confirm_recurring_series, confirmed_totals, dismiss_recurring_series, refresh_recurring_series
-from .cash_flow import cash_flow_report, date_range_presets, default_date_range, spending_by_category_report
+from .cash_flow import (
+    cash_flow_chart_data,
+    cash_flow_report,
+    date_range_presets,
+    default_date_range,
+    spending_by_category_report,
+    spending_chart_data,
+)
 from .category_services import (
     add_category,
     assign_category,
@@ -147,6 +154,7 @@ def home(request):
         {
             "filter_form": form,
             "report": report,
+            "chart_data": cash_flow_chart_data(report) if report is not None else None,
             "import_account": import_account,
             "accounts": Account.objects.visible_to(request.user),
         },
@@ -211,6 +219,7 @@ def spending_by_category(request):
         {
             "filter_form": form,
             "report": report,
+            "chart_data": spending_chart_data(report) if report is not None else None,
             "import_account": import_account,
             "presets": _preset_links(today, account=account, scope=scope) if date_from is not None else (),
         },
@@ -506,6 +515,25 @@ def _money_display(minor, currency):
     return f"{Decimal(minor) / Decimal(100):,.2f} {currency}"
 
 
+def _recurring_chart_data(confirmed, monthly_minor, annual_minor, monthly_display, annual_display):
+    return {
+        "monthly_minor": monthly_minor,
+        "annual_minor": annual_minor,
+        "monthly_display": monthly_display,
+        "annual_display": annual_display,
+        "series": [
+            {
+                "name": series.display_name,
+                "monthly_minor": series.monthly_minor,
+                "annual_minor": series.annual_minor,
+                "monthly_display": series.monthly_display,
+                "annual_display": series.annual_display,
+            }
+            for series in confirmed
+        ],
+    }
+
+
 def _handle_recurring_post(request):
     try:
         series_id = int(request.POST.get("series_id", "0"))
@@ -545,17 +573,27 @@ def recurring_review(request):
         if series.status in (RecurringSeries.Status.POSSIBLE, RecurringSeries.Status.SUGGESTED)
     ]
     monthly_minor, annual_minor = confirmed_totals(confirmed)
+    confirmed.sort(key=lambda series: (-series.monthly_minor, series.display_name, series.pk))
     currency = confirmed[0].currency if confirmed else "USD"
+    monthly_display = _money_display(monthly_minor, currency)
+    annual_display = _money_display(annual_minor, currency)
     return render(
         request,
         "finance/recurring_review.html",
         {
             "suggestions": suggestions,
             "confirmed": confirmed,
-            "monthly_display": _money_display(monthly_minor, currency),
-            "annual_display": _money_display(annual_minor, currency),
+            "monthly_display": monthly_display,
+            "annual_display": annual_display,
             "monthly_minor": monthly_minor,
             "annual_minor": annual_minor,
+            "chart_data": _recurring_chart_data(
+                confirmed,
+                monthly_minor,
+                annual_minor,
+                monthly_display,
+                annual_display,
+            ),
         },
     )
 

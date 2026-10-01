@@ -13,13 +13,16 @@ from finance.cash_flow import (
     GROUPING_QUARTER,
     GROUPING_WEEK,
     GROUPING_YEAR,
+    cash_flow_chart_data,
     cash_flow_report,
     default_date_range,
     format_minor,
     iter_period_windows,
     period_count,
     period_label,
+    previous_equal_range,
 )
+from tests.page_payload import json_script_payload
 from finance.category_services import (
     income_and_spending_totals,
     link_refund,
@@ -273,6 +276,25 @@ def test_private_account_never_appears_in_another_members_periods_or_flags():
     expected = income_and_spending_totals(member, date_from=date(2026, 1, 1), date_to=date(2026, 1, 31))
     assert january.spending_minor == expected.spending_minor
 
+    client = Client()
+    client.force_login(member.user)
+    page = client.get(
+        reverse("home"),
+        {"date_from": "2026-01-01", "date_to": "2026-02-28", "grouping": "month"},
+    )
+    html = page.content.decode()
+    payload = json_script_payload(html, "cash-flow-chart-data")
+    report_payload = cash_flow_chart_data(member_report)
+
+    assert payload == report_payload
+    assert [row["spending_minor"] for row in payload["periods"]] == [1000, 0]
+    assert payload["summary"]["spending_minor"] == 1000
+    assert "SECRET PRIVATE LEDGER" not in html
+    assert "99999" not in html
+    assert "999.99 USD" not in html
+    assert "cdn." not in html.lower()
+    assert "/static/vendor/chart.umd.min.js" in html
+
 
 @pytest.mark.django_db
 def test_archived_import_batch_does_not_cover_a_period():
@@ -331,6 +353,16 @@ def test_home_is_cash_flow_with_default_range_and_partial_current_month(_localda
     assert "12.00 USD" in content
     assert "Missing import" in content
     assert 'role="img"' in content
+    assert 'aria-label="' in content
+    assert "/static/vendor/chart.umd.min.js" in content
+    assert "/static/js/charts.js" in content
+    assert "cdn." not in content.lower()
+    payload = json_script_payload(content, "cash-flow-chart-data")
+    report = response.context["report"]
+    assert payload == cash_flow_chart_data(report)
+    assert payload["summary"]["spending_minor"] == report.summary.spending_minor == 1200
+    assert payload["summary"]["income_display"] == report.summary.income_display
+    assert "vs previous range" in content
     periods = response.context["report"].periods
     assert periods[0].start == date(2025, 9, 1)
     assert periods[-1].end == date(2026, 9, 15)
@@ -500,3 +532,8 @@ def test_report_refuses_too_many_periods_when_called_directly():
     date_from, date_to = date(2000, 1, 1), date(2020, 1, 1)
     with pytest.raises(ValueError):
         cash_flow_report(None, date_from=date_from, date_to=date_to, grouping=GROUPING_WEEK)
+
+
+def test_previous_equal_range_is_the_same_length_immediately_before():
+    assert previous_equal_range(date(2026, 2, 1), date(2026, 2, 28)) == (date(2026, 1, 4), date(2026, 1, 31))
+    assert previous_equal_range(date(2026, 1, 1), date(2026, 1, 31)) == (date(2025, 12, 1), date(2025, 12, 31))

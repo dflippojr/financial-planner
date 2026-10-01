@@ -89,6 +89,18 @@ def test_pages_do_not_request_third_party_hosts(client):
     assert "/static/js/theme.js" in content
 
 
+def test_theme_script_notifies_charts_and_charts_stay_self_hosted():
+    root = Path(__file__).resolve().parent.parent
+    theme = (root / "static" / "js" / "theme.js").read_text(encoding="utf-8")
+    charts = (root / "static" / "js" / "charts.js").read_text(encoding="utf-8")
+
+    assert "financial-planner:themechange" in theme
+    assert "financial-planner:themechange" in charts
+    assert "cssVarColor" in charts
+    assert "cdn." not in charts.lower()
+    assert "https://" not in charts
+
+
 @pytest.mark.django_db
 def test_signed_in_pages_use_shared_nav_and_signed_out_pages_use_a_card():
     user = _member()
@@ -111,6 +123,9 @@ def test_signed_in_pages_use_shared_nav_and_signed_out_pages_use_a_card():
         assert label in home
     assert 'aria-current="page"' in home
     assert 'id="theme-toggle"' in home
+    assert "/static/vendor/chart.umd.min.js" in home
+    assert "/static/js/charts.js" in home
+    assert "cdn." not in home.lower()
     assert "drawer" in home
     assert "card-body" in login
     assert "drawer" not in login

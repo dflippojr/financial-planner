@@ -13,6 +13,17 @@
     outline: 2px solid var(--color-primary);
     outline-offset: 2px;
   }
+
+  :root {
+    --chart-category-0: var(--color-neutral);
+    --chart-category-1: var(--color-primary);
+    --chart-category-2: var(--color-secondary);
+    --chart-category-3: var(--color-accent);
+    --chart-category-4: var(--color-info);
+    --chart-category-5: var(--color-success);
+    --chart-category-6: var(--color-warning);
+    --chart-category-7: var(--color-error);
+  }
 }
 
 @utility tabular-amount {
