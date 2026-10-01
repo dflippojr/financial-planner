@@ -129,7 +129,6 @@ def home(request):
     else:
         date_from = date_to = grouping = account = scope = None
     report = None
-    import_account = None
     if date_from is not None:
         report = cash_flow_report(
             request.user,
@@ -140,14 +139,6 @@ def home(request):
             scope=scope,
             today=today,
         )
-        import_account = next(
-            (
-                item
-                for item in report.accounts
-                if item.status == Account.Status.ACTIVE and item.archived_at is None
-            ),
-            None,
-        )
     return render(
         request,
         "finance/home.html",
@@ -155,7 +146,6 @@ def home(request):
             "filter_form": form,
             "report": report,
             "chart_data": cash_flow_chart_data(report) if report is not None else None,
-            "import_account": import_account,
             "accounts": Account.objects.visible_to(request.user),
         },
     )
@@ -196,7 +186,6 @@ def spending_by_category(request):
     else:
         date_from = date_to = account = scope = None
     report = None
-    import_account = None
     if date_from is not None:
         report = spending_by_category_report(
             request.user,
@@ -205,14 +194,6 @@ def spending_by_category(request):
             account=account,
             scope=scope,
         )
-        import_account = next(
-            (
-                item
-                for item in report.accounts
-                if item.status == Account.Status.ACTIVE and item.archived_at is None
-            ),
-            None,
-        )
     return render(
         request,
         "finance/spending.html",
@@ -220,7 +201,6 @@ def spending_by_category(request):
             "filter_form": form,
             "report": report,
             "chart_data": spending_chart_data(report) if report is not None else None,
-            "import_account": import_account,
             "presets": _preset_links(today, account=account, scope=scope) if date_from is not None else (),
         },
     )

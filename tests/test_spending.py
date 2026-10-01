@@ -310,7 +310,7 @@ def test_spending_page_empty_state_and_anonymous_redirect():
     )
 
     assert "No visible transactions yet." in response.content.decode()
-    assert reverse("csv-import-preview", args=(account.pk,)) in response.content.decode()
+    assert reverse("account-list") in response.content.decode()
     anonymous = Client().get(reverse("spending-by-category"))
     assert anonymous.status_code == 302
     assert anonymous.url.startswith(reverse("login"))

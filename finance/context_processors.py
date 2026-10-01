@@ -1,7 +1,6 @@
 from django.urls import reverse
 
 from .google_auth import google_signin_enabled
-from .models import Account
 
 
 def google_signin(_request):
@@ -22,13 +21,7 @@ def navigation(request):
     if not getattr(request.user, "is_authenticated", False):
         return {"nav_items": [], "nav_current": ""}
     current = _nav_current(request)
-    import_account = (
-        Account.objects.visible_to(request.user)
-        .filter(status=Account.Status.ACTIVE, archived_at=None)
-        .order_by("name", "pk")
-        .first()
-    )
-    import_url = reverse("csv-import-preview", args=(import_account.pk,)) if import_account else reverse("home")
+    accounts_url = reverse("account-list")
     items = (
         ("home", "Cash flow", reverse("home")),
         ("spending-by-category", "Spending", reverse("spending-by-category")),
@@ -36,7 +29,8 @@ def navigation(request):
         ("transfer-review", "Transfers", reverse("transfer-review")),
         ("recurring-review", "Recurring", reverse("recurring-review")),
         ("category-list", "Categories", reverse("category-list")),
-        ("csv-import", "Import", import_url),
+        ("account-list", "Accounts", accounts_url),
+        ("csv-import", "Import", accounts_url),
         ("invite", "Invite", reverse("invite")),
     )
     return {

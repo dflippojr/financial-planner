@@ -387,7 +387,7 @@ def test_home_empty_state_links_to_csv_import():
     content = response.content.decode()
 
     assert "No visible transactions yet." in content
-    assert reverse("csv-import-preview", args=(account.pk,)) in content
+    assert reverse("account-list") in content
     assert "Missing import" in content
 
 

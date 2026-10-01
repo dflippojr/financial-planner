@@ -361,6 +361,28 @@ class RefundLinkForm(forms.Form):
         return cleaned
 
 
+class AddAccountForm(forms.Form):
+    name = forms.CharField(max_length=150)
+    account_type = forms.ChoiceField(choices=Account.Type.choices, label="Type")
+    sharing = forms.ChoiceField(
+        choices=((Account.Scope.PRIVATE, "Private"),),
+        initial=Account.Scope.PRIVATE,
+        label="Sharing",
+    )
+
+    def __init__(self, *args, has_household=False, **kwargs):
+        super().__init__(*args, **kwargs)
+        if has_household:
+            self.fields["sharing"].choices = (
+                (Account.Scope.PRIVATE, "Private"),
+                (Account.Scope.HOUSEHOLD, "Shared with household"),
+            )
+
+
+class AccountRenameForm(forms.Form):
+    name = forms.CharField(max_length=150)
+
+
 class CategoryNameForm(forms.Form):
     name = forms.CharField(max_length=80)
 
