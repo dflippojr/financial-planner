@@ -92,6 +92,9 @@ class MemberSocialAccountAdapter(DefaultSocialAccountAdapter):
         if not google_uid(extra) or not google_email_is_verified(extra):
             record_login_failure(key)
             raise ImmediateHttpResponse(self._failed_response(request))
+        self._dispatch_social_login(request, sociallogin, key)
+
+    def _dispatch_social_login(self, request, sociallogin, key):
         process = sociallogin.state.get("process")
         pending = consume_google_pending(request, sociallogin)
         intent = (pending or {}).get("intent")
@@ -101,16 +104,22 @@ class MemberSocialAccountAdapter(DefaultSocialAccountAdapter):
             self._complete_reauth(request, sociallogin, pending, key)
             return
         if sociallogin.is_existing:
-            if not hasattr(sociallogin.user, "person"):
-                record_login_failure(key)
-                raise ImmediateHttpResponse(self._failed_response(request))
-            if process == "connect":
-                return
-            clear_login_failures(key)
-            stamp_recent_auth(request)
+            self._complete_existing_social_login(request, sociallogin, process, key)
             return
         if process == "connect":
             return
+        self._complete_onboarding_social_login(request, sociallogin, pending, intent, key)
+
+    def _complete_existing_social_login(self, request, sociallogin, process, key):
+        if not hasattr(sociallogin.user, "person"):
+            record_login_failure(key)
+            raise ImmediateHttpResponse(self._failed_response(request))
+        if process == "connect":
+            return
+        clear_login_failures(key)
+        stamp_recent_auth(request)
+
+    def _complete_onboarding_social_login(self, request, sociallogin, pending, intent, key):
         if not pending:
             record_login_failure(key)
             raise ImmediateHttpResponse(self._failed_response(request, "login"))
