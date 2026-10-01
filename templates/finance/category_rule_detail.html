@@ -1,0 +1,90 @@
+{% extends "finance/base.html" %}
+{% block title %}Rule preview · Financial Planner{% endblock %}
+{% block content %}
+<h1 class="mb-4 text-2xl font-bold">Rule: {{ rule.description_contains }}</h1>
+<p class="mb-4"><a class="link" href="{% url 'category-rule-list' %}">All rules</a></p>
+{% if apply_error %}<p class="errorlist text-error mb-4" role="alert">{{ apply_error }}</p>{% endif %}
+<form method="post" class="max-w-lg mb-8">
+  {% csrf_token %}
+  <input type="hidden" name="action" value="save">
+  {% include "finance/_form_fields.html" with form=form %}
+  <button type="submit" class="btn btn-primary">Save</button>
+</form>
+<div class="mb-6 flex flex-wrap gap-2">
+  {% if rule.enabled %}
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="disable">
+    <button type="submit" class="btn">Disable</button>
+  </form>
+  {% else %}
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="enable">
+    <button type="submit" class="btn">Enable</button>
+  </form>
+  {% endif %}
+</div>
+<h2 class="mb-3 text-xl font-semibold">Preview ({{ match_count }})</h2>
+<div class="overflow-x-auto mb-8">
+  <table class="table table-zebra">
+    <thead class="sticky top-0 z-10 bg-base-200">
+      <tr>
+        <th>Date</th>
+        <th>Account</th>
+        <th>Description</th>
+        <th class="text-right">Amount</th>
+        <th>Category</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for txn in matches %}
+      <tr>
+        <td>{{ txn.transaction_date }}</td>
+        <td>{{ txn.account.name }}</td>
+        <td>{{ txn.description }}</td>
+        <td class="text-right">{{ txn.amount_display }}</td>
+        <td>{{ txn.category_display }}</td>
+      </tr>
+    {% empty %}
+      <tr><td colspan="5">No matching transactions.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+<form method="post" class="mb-8">
+  {% csrf_token %}
+  <input type="hidden" name="action" value="apply">
+  <button type="submit" class="btn btn-primary"{% if not rule.enabled %} disabled{% endif %}>Apply to matching transactions</button>
+</form>
+<h2 class="mb-3 text-xl font-semibold">Application history</h2>
+<div class="overflow-x-auto">
+  <table class="table table-zebra">
+    <thead class="sticky top-0 z-10 bg-base-200">
+      <tr>
+        <th>When</th>
+        <th>By</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for application in applications %}
+      <tr>
+        <td>{{ application.applied_at }}</td>
+        <td>{{ application.applied_by.display_name }}</td>
+        <td>
+          <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="reverse">
+            <input type="hidden" name="application_id" value="{{ application.pk }}">
+            <button type="submit" class="btn btn-sm">Reverse</button>
+          </form>
+        </td>
+      </tr>
+    {% empty %}
+      <tr><td colspan="3">No applications yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

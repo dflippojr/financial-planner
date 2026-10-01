@@ -128,6 +128,12 @@ def commit_csv_import(principal, account_id, *, content, document, mapping, sour
                 for row in new_rows
             ]
         )
+        created = list(Transaction.objects.filter(import_batch=batch))
+        from finance.category_services import refresh_transfer_pairs
+        from finance.rule_services import apply_enabled_rules_to_transactions
+
+        refresh_transfer_pairs(person)
+        apply_enabled_rules_to_transactions(person, created)
     return ImportCommitResult(preview.new_count, preview.duplicate_count, preview.invalid_count, batch)
 
 

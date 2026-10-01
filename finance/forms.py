@@ -403,3 +403,56 @@ class CategoryNameForm(forms.Form):
 
 class TransferWindowForm(forms.Form):
     transfer_match_window_days = forms.IntegerField(min_value=0, max_value=366, label="Match window (days)")
+
+
+class CategoryRuleForm(forms.Form):
+    owner_kind = forms.ChoiceField(
+        choices=(("personal", "Personal"), ("household", "Household")),
+        label="Rule type",
+    )
+    description_contains = forms.CharField(max_length=200, label="Description contains")
+    account = forms.ModelChoiceField(queryset=Account.objects.none(), required=False, empty_label="Any accessible account")
+    min_amount = forms.DecimalField(
+        max_digits=19,
+        decimal_places=2,
+        required=False,
+        label="Minimum amount",
+        help_text="Optional. Negative is money out; positive is money in.",
+        widget=forms.TextInput(attrs={"inputmode": "decimal"}),
+    )
+    max_amount = forms.DecimalField(
+        max_digits=19,
+        decimal_places=2,
+        required=False,
+        label="Maximum amount",
+        help_text="Optional. Negative is money out; positive is money in.",
+        widget=forms.TextInput(attrs={"inputmode": "decimal"}),
+    )
+    category = forms.ModelChoiceField(queryset=Category.objects.none())
+    priority = forms.IntegerField(initial=0, help_text="Lower numbers run first within personal or household rules.")
+    enabled = forms.BooleanField(required=False, initial=True)
+
+    def __init__(self, *args, principal=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        from .category_services import assignable_categories
+
+        self.fields["account"].queryset = Account.objects.visible_to(principal).order_by("name", "pk")
+        self.fields["category"].queryset = assignable_categories(principal)
+
+    def clean_min_amount(self):
+        amount = self.cleaned_data.get("min_amount")
+        if amount is None:
+            return None
+        minor_units = int(amount * 100)
+        if not MIN_SIGNED_BIGINT <= minor_units <= MAX_SIGNED_BIGINT:
+            raise ValidationError("Amount is outside the supported range.")
+        return amount
+
+    def clean_max_amount(self):
+        amount = self.cleaned_data.get("max_amount")
+        if amount is None:
+            return None
+        minor_units = int(amount * 100)
+        if not MIN_SIGNED_BIGINT <= minor_units <= MAX_SIGNED_BIGINT:
+            raise ValidationError("Amount is outside the supported range.")
+        return amount

@@ -12,6 +12,8 @@ def _nav_current(request):
     name = getattr(match, "url_name", "") or ""
     if name in {"transaction-edit", "transaction-categorize", "transaction-link-refund"}:
         return "transaction-list"
+    if name.startswith("category-rule"):
+        return "category-list"
     if name.startswith("csv-import"):
         return "csv-import"
     return name

@@ -1,6 +1,6 @@
 from django.urls import path
 
-from finance import account_views, views
+from finance import account_views, rule_views, views
 from finance.csv_import import views as csv_import_views
 
 
@@ -32,6 +32,8 @@ urlpatterns = [
     path("transactions/<int:transaction_id>/category/", views.transaction_categorize, name="transaction-categorize"),
     path("transactions/<int:transaction_id>/refund/", views.transaction_link_refund, name="transaction-link-refund"),
     path("categories/", views.category_list, name="category-list"),
+    path("categories/rules/", rule_views.category_rule_list, name="category-rule-list"),
+    path("categories/rules/<int:rule_id>/", rule_views.category_rule_detail, name="category-rule-detail"),
     path("transfers/", views.transfer_review, name="transfer-review"),
     path("recurring/", views.recurring_review, name="recurring-review"),
 ]

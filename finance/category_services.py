@@ -197,7 +197,8 @@ def assign_category(principal, transaction_id, category_id):
     financial_transaction = by_id[financial_transaction.pk]
     previous = financial_transaction.category
     financial_transaction.category = category
-    financial_transaction.save(update_fields=("category", "updated_at"))
+    financial_transaction.category_source = Transaction.CategorySource.MANUAL
+    financial_transaction.save(update_fields=("category", "category_source", "updated_at"))
     _record_text_history(
         financial_transaction,
         person,
@@ -209,7 +210,8 @@ def assign_category(principal, transaction_id, category_id):
         locked_refund = by_id[refund.pk]
         previous_refund_category = locked_refund.category
         locked_refund.category = category
-        locked_refund.save(update_fields=("category", "updated_at"))
+        locked_refund.category_source = Transaction.CategorySource.INHERITED
+        locked_refund.save(update_fields=("category", "category_source", "updated_at"))
         _record_text_history(
             locked_refund,
             person,
@@ -466,7 +468,8 @@ def _restore_refund_categories(original, actor):
     for refund in refunds:
         previous = refund.category
         refund.category = new_category
-        refund.save(update_fields=("category", "updated_at"))
+        refund.category_source = Transaction.CategorySource.INHERITED
+        refund.save(update_fields=("category", "category_source", "updated_at"))
         _record_text_history(
             refund,
             actor,
@@ -797,7 +800,8 @@ def link_refund(principal, refund_id, original_id):
         raise ValidationError(REFUND_LINK_RULE)
     previous_category = refund.category
     refund.category = original.category
-    refund.save(update_fields=("category", "updated_at"))
+    refund.category_source = Transaction.CategorySource.INHERITED
+    refund.save(update_fields=("category", "category_source", "updated_at"))
     RefundLink.objects.create(refund=refund, original=original)
     _record_text_history(
         refund,
