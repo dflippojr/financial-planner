@@ -56,11 +56,11 @@ def step_occurrence(value, cadence):
 
 
 def occurrence_dates(start, end, cadence, window_start, window_end):
+    dates = []
     if cadence == CADENCE_ONE_TIME:
         if window_start <= start <= window_end and (end is None or start <= end):
-            return (start,)
-        return ()
-    dates = []
+            dates.append(start)
+        return dates
     current = start
     for _ in range(MAX_OCCURRENCE_STEPS):
         if current > window_end:
@@ -70,7 +70,7 @@ def occurrence_dates(start, end, cadence, window_start, window_end):
         if current >= window_start:
             dates.append(current)
         current = step_occurrence(current, cadence)
-    return tuple(dates)
+    return dates
 
 
 def _contribution(item, count):
