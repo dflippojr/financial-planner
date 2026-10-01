@@ -54,10 +54,9 @@ def account_list(request):
     person = _person(request)
     household = current_household(person)
     form = AddAccountForm(request.POST or None, has_household=household is not None)
-    if request.method == "POST":
-        if form.is_valid():
-            account = _create_account(person, form)
-            return redirect("csv-import-preview", account.pk)
+    if request.method == "POST" and form.is_valid():
+        account = _create_account(person, form)
+        return redirect("csv-import-preview", account.pk)
     accounts = list(_visible_accounts(request.user))
     return render(
         request,
