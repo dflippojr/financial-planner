@@ -501,6 +501,28 @@ def _reconcile_unmatched_confirmed(confirmed, kept_ids, eligible_ids):
         RecurringSeries.objects.filter(pk=series.pk).update(is_active=False)
 
 
+def revalidate_series_after_member_removal(principal, series_ids):
+    """Revalidate series after some members were removed. Caller holds locks.
+
+    A confirmed series with remaining eligible members stays active. A series
+    left with none is deactivated. Open series with no remaining members are
+    deactivated the same way.
+    """
+    person = _person_for(principal)
+    ids = sorted({pk for pk in series_ids if pk is not None})
+    if not ids:
+        return
+    locked = list(RecurringSeries.objects.select_for_update(of=("self",)).filter(pk__in=ids).order_by("pk"))
+    eligible_ids = {row.pk for row in candidate_transactions(person)}
+    confirmed = [series for series in locked if series.status == RecurringSeries.Status.CONFIRMED]
+    _reconcile_unmatched_confirmed(confirmed, set(), eligible_ids)
+    open_ids = [series.pk for series in locked if series.status != RecurringSeries.Status.CONFIRMED]
+    if not open_ids:
+        return
+    still_membered = set(RecurringSeriesMember.objects.filter(series_id__in=open_ids).values_list("series_id", flat=True))
+    RecurringSeries.objects.filter(pk__in=open_ids).exclude(pk__in=still_membered).update(is_active=False)
+
+
 @transaction.atomic
 def refresh_recurring_series(principal):
     person = _person_for(principal)

@@ -586,6 +586,41 @@ def account_ids_in_pairs_touching_transactions(transaction_ids):
     return set(Transaction.objects.filter(pk__in=all_legs).values_list("account_id", flat=True))
 
 
+def _refund_rows_touching(transaction_ids):
+    if not transaction_ids:
+        return []
+    return list(
+        RefundLink.objects.filter(Q(refund_id__in=transaction_ids) | Q(original_id__in=transaction_ids)).values_list(
+            "pk", "refund_id", "original_id"
+        )
+    )
+
+
+def account_ids_in_refunds_touching_transactions(transaction_ids):
+    """Account pks for every side of refund links that include any of these transactions."""
+    rows = _refund_rows_touching(transaction_ids)
+    if not rows:
+        return set()
+    all_ids = {tx_id for _pk, refund_id, original_id in rows for tx_id in (refund_id, original_id)}
+    return set(Transaction.objects.filter(pk__in=all_ids).values_list("account_id", flat=True))
+
+
+_MARKED_PAIR_STATUSES = (TransferPair.Status.AUTO_MARKED, TransferPair.Status.CONFIRMED)
+
+
+def unmark_locked_pairs(pairs, locked_by_id, person):
+    """Restore snapshot categories on marked pairs. Caller holds the row locks."""
+    for pair in pairs:
+        if pair.status not in _MARKED_PAIR_STATUSES:
+            continue
+        left, right = _pair_legs(pair, locked_by_id)
+        if left is not None and right is not None:
+            _unmark_exclusion(pair, left, right, person)
+        else:
+            pair.status = TransferPair.Status.UNDONE
+            pair.save(update_fields=("status", "updated_at"))
+
+
 def _revalidate_pairs_for_leg_ids(person, seed_leg_ids):
     rows = _pair_rows_touching(seed_leg_ids)
     if not rows:
