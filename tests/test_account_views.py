@@ -336,3 +336,29 @@ def test_share_is_owner_only_even_for_household_member():
     assert_same_404(member_share, missing)
     private.refresh_from_db()
     assert private.scope == Account.Scope.PRIVATE
+
+
+@pytest.mark.django_db
+def test_rename_is_refused_when_the_account_is_unshared_mid_request(monkeypatch):
+    import finance.lifecycle_services as lifecycle
+
+    owner = make_person("owner")
+    member = make_person("member")
+    household = make_household(owner, member)
+    account = make_account(owner, name="Synthetic Shared", scope=Account.Scope.HOUSEHOLD, household=household)
+    real_lock = lifecycle.lock_actor_household
+
+    def unshare_first(person):
+        # The owner makes the account private after the member's lookup and
+        # before the member's rename takes its locks.
+        Account.objects.filter(pk=account.pk).update(scope=Account.Scope.PRIVATE, household=None)
+        return real_lock(person)
+
+    monkeypatch.setattr(lifecycle, "lock_actor_household", unshare_first)
+    client = signed_in(member)
+
+    response = client.post(reverse("account-rename", args=(account.pk,)), {"name": "Synthetic Renamed"})
+
+    account.refresh_from_db()
+    assert response.status_code == 404
+    assert account.name == "Synthetic Shared"
