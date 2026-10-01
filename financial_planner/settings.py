@@ -190,6 +190,12 @@ CSV_IMPORT_STAGE_TTL_SECONDS = max(
     min(int(os.environ.get("CSV_IMPORT_STAGE_TTL_SECONDS", "3600")), 3600),
 )
 
+# Fernet key for SimpleFIN access URLs. Required to connect or sync; collectstatic
+# and other management commands can start without it.
+FIELD_ENCRYPTION_KEY = os.environ.get("FIELD_ENCRYPTION_KEY", "").strip()
+SIMPLEFIN_SYNC_CRON = os.environ.get("SIMPLEFIN_SYNC_CRON", "30 6 * * *").strip()
+SIMPLEFIN_SYNC_MIN_INTERVAL_SECONDS = int(os.environ.get("SIMPLEFIN_SYNC_MIN_INTERVAL_SECONDS", "900"))
+
 # Handle uploads in memory only. Django's default handlers write any upload over
 # 2.5 MB to a temporary file in /tmp before application code runs, which would put
 # a real bank export on disk even though staging itself is memory-backed, and it

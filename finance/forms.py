@@ -379,6 +379,13 @@ class AddAccountForm(forms.Form):
             )
 
 
+class SimpleFinSetupForm(forms.Form):
+    token = forms.CharField(
+        label="SimpleFIN setup token",
+        widget=forms.Textarea(attrs={"rows": 4, "autocomplete": "off"}),
+    )
+
+
 class AccountRenameForm(forms.Form):
     name = forms.CharField(max_length=150)
 

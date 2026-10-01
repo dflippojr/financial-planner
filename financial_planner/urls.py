@@ -1,6 +1,6 @@
 from django.urls import path
 
-from finance import account_views, views
+from finance import account_views, simplefin_views, views
 from finance.csv_import import views as csv_import_views
 
 
@@ -19,6 +19,9 @@ urlpatterns = [
     path("join/", views.join, name="join"),
     path("recover/", views.recover, name="recover"),
     path("accounts/", account_views.account_list, name="account-list"),
+    path("accounts/connections/", simplefin_views.connections, name="simplefin-connections"),
+    path("accounts/connections/sync/", simplefin_views.connections_sync, name="simplefin-sync"),
+    path("accounts/connections/disconnect/", simplefin_views.connections_disconnect, name="simplefin-disconnect"),
     path("accounts/<int:account_id>/rename/", account_views.account_rename, name="account-rename"),
     path("accounts/<int:account_id>/share/", account_views.account_share, name="account-share"),
     path("accounts/<int:account_id>/unshare/", account_views.account_unshare, name="account-unshare"),

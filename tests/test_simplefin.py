@@ -1,0 +1,451 @@
+from datetime import date, datetime, timedelta
+from datetime import timezone as dt_utc
+from io import BytesIO
+from unittest.mock import patch
+from urllib.error import HTTPError
+
+import pytest
+from django.contrib.auth import get_user_model
+from django.core.management import call_command
+from django.test import Client
+from django.urls import reverse
+from django.utils import timezone
+
+from finance.category_services import ensure_household_categories, exclusion_exists_for
+from finance.csv_import.services import undo_import_batch
+from finance.encryption import decrypt_access_url, encrypt_access_url
+from finance.models import (
+    Account,
+    AccountLink,
+    BalanceSnapshot,
+    Household,
+    ImportBatch,
+    Membership,
+    Person,
+    RecurringSeries,
+    SimpleFinConnection,
+    Transaction,
+    TransferPair,
+)
+from finance.recurring_services import refresh_recurring_series
+from finance.simplefin_errors import CLAIM_COMPROMISED, SimpleFinError
+from finance.simplefin_services import (
+    claim_connection,
+    save_account_links,
+    sync_all_connections,
+    sync_connection,
+)
+from finance.simplefin_client import claim_access_url
+
+PASSWORD = "Synthetic-passphrase-42!"
+ACCESS_URL = "https://demo:synthetic-access-secret@bridge.example.test/simplefin"
+CLAIM_URL = "https://bridge.example.test/simplefin/claim/synthetic-demo"
+
+
+def make_person(username):
+    user = get_user_model().objects.create_user(username=username, password=PASSWORD)
+    return Person.objects.create(user=user, display_name=f"{username.title()} Example")
+
+
+def make_household(*people, name="Synthetic Household"):
+    household = Household.objects.create(name=name)
+    for person in people:
+        Membership.objects.create(person=person, household=household)
+    ensure_household_categories(household)
+    return household
+
+
+def make_account(owner, *, name="Synthetic Checking", account_type=Account.Type.CHECKING, scope=Account.Scope.PRIVATE, household=None):
+    return Account.objects.create(
+        name=name,
+        account_type=account_type,
+        owner=owner,
+        scope=scope,
+        household=household,
+    )
+
+
+def setup_token():
+    import base64
+
+    return base64.b64encode(CLAIM_URL.encode("utf-8")).decode("ascii")
+
+
+def epoch(year, month, day, hour=15):
+    return int(datetime(year, month, day, hour, tzinfo=dt_utc.utc).timestamp())
+
+
+def account_payload(*, account_id="sf-checking", transactions=None, extra=None, currency="USD"):
+    return {
+        "errlist": [],
+        "connections": [
+            {
+                "conn_id": "CON-1",
+                "name": "Synthetic Bank - Pat",
+                "org_id": "ORG-1",
+                "sfin_url": "https://bank.example.test/simplefin",
+            }
+        ],
+        "accounts": [
+            {
+                "id": account_id,
+                "name": "Synthetic Checking",
+                "conn_id": "CON-1",
+                "currency": currency,
+                "balance": "100.23",
+                "balance-date": epoch(2026, 3, 20),
+                "transactions": transactions or [],
+                "extra": extra or {},
+            }
+        ],
+    }
+
+
+def posted_txn(*, txn_id, day, amount, pending=False, posted=None):
+    item = {
+        "id": txn_id,
+        "posted": posted if posted is not None else epoch(2026, 3, day),
+        "amount": amount,
+        "description": "Synthetic Stream",
+    }
+    if pending:
+        item["pending"] = True
+    return item
+
+
+def connect_owner(owner, monkeypatch, payload=None):
+    monkeypatch.setattr("finance.simplefin_services.claim_access_url", lambda url: ACCESS_URL)
+    payload = payload or account_payload()
+    monkeypatch.setattr("finance.simplefin_services.fetch_accounts", lambda *args, **kwargs: payload)
+    return claim_connection(owner, setup_token())
+
+
+def signed_in(person):
+    client = Client()
+    client.force_login(person.user)
+    return client
+
+
+@pytest.mark.django_db
+def test_claim_success_encrypts_access_url(monkeypatch, caplog):
+    import logging
+
+    caplog.set_level(logging.DEBUG)
+    owner = make_person("owner")
+    make_household(owner)
+    captured = []
+
+    def fake_claim(url):
+        captured.append(url)
+        return ACCESS_URL
+
+    monkeypatch.setattr("finance.simplefin_services.claim_access_url", fake_claim)
+    connection = claim_connection(owner, setup_token())
+
+    assert captured == [CLAIM_URL]
+    assert bytes(connection.encrypted_access_url) != ACCESS_URL.encode()
+    assert ACCESS_URL not in bytes(connection.encrypted_access_url).decode("latin1", errors="ignore")
+    assert decrypt_access_url(connection.encrypted_access_url) == ACCESS_URL
+    assert ACCESS_URL not in str(connection)
+    assert ACCESS_URL not in caplog.text
+
+
+@pytest.mark.django_db
+def test_claim_403_reports_compromise_without_token(monkeypatch):
+    owner = make_person("owner")
+    make_household(owner)
+
+    def fake_open(*args, **kwargs):
+        raise HTTPError(CLAIM_URL, 403, "Forbidden", hdrs=None, fp=BytesIO())
+
+    monkeypatch.setattr("finance.simplefin_client.urlopen", fake_open)
+    with pytest.raises(SimpleFinError) as raised:
+        claim_access_url(CLAIM_URL)
+    with pytest.raises(SimpleFinError) as wrapped:
+        claim_connection(owner, setup_token())
+
+    assert str(raised.value) == CLAIM_COMPROMISED
+    assert CLAIM_URL not in str(raised.value)
+    assert ACCESS_URL not in str(wrapped.value)
+    assert SimpleFinConnection.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_connections_page_never_shows_access_url(monkeypatch):
+    owner = make_person("owner")
+    make_household(owner)
+    connect_owner(owner, monkeypatch)
+    client = signed_in(owner)
+    response = client.get(reverse("simplefin-connections"))
+    body = response.content.decode()
+
+    assert response.status_code == 200
+    assert ACCESS_URL not in body
+    assert "synthetic-access-secret" not in body
+    assert "Synthetic Bank - Pat" in body
+
+
+@pytest.mark.django_db
+def test_sync_dedupes_repeated_runs_and_skips_pending_and_cutover(monkeypatch):
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner)
+    Transaction.objects.create(
+        account=checking,
+        import_batch=ImportBatch.objects.create(
+            account=checking,
+            imported_by=owner,
+            source=ImportBatch.Source.HUNTINGTON,
+            source_file_sha256="a" * 64,
+            date_range_start=date(2026, 1, 1),
+            date_range_end=date(2026, 1, 31),
+        ),
+        transaction_date=date(2026, 3, 10),
+        amount_minor=-500,
+        description="Synthetic prior CSV",
+        source_row_number=1,
+        fingerprint="c" * 64,
+        original_fields={"Synthetic Amount": "-5.00"},
+    )
+    payload = account_payload(
+        transactions=[
+            posted_txn(txn_id="old", day=9, amount="-1.00"),
+            posted_txn(txn_id="pending-1", day=16, amount="-2.00", pending=True, posted=0),
+            posted_txn(txn_id="new-1", day=16, amount="-3.00"),
+        ]
+    )
+    connection = connect_owner(owner, monkeypatch, payload)
+    save_account_links(
+        owner,
+        connection.pk,
+        [
+            {
+                "simplefin_account_id": "sf-checking",
+                "action": "link",
+                "account_id": checking.pk,
+                "cutover_date": date(2026, 3, 11),
+            }
+        ],
+    )
+    first = sync_connection(owner, connection.pk, ignore_rate_limit=True)
+    second = sync_connection(owner, connection.pk, ignore_rate_limit=True)
+
+    ids = list(
+        Transaction.objects.filter(account=checking, status=Transaction.Status.ACTIVE).values_list(
+            "source_transaction_id", flat=True
+        )
+    )
+    assert first["imported"] == 1
+    assert second["imported"] == 0
+    assert ids.count("new-1") == 1
+    assert "old" not in ids
+    assert "pending-1" not in ids
+    snapshot = BalanceSnapshot.objects.get(account=checking, source=BalanceSnapshot.Source.SIMPLEFIN)
+    assert snapshot.amount_minor == 10023
+    assert snapshot.currency == "USD"
+
+
+@pytest.mark.django_db
+def test_balances_only_ignores_transactions(monkeypatch):
+    owner = make_person("owner")
+    make_household(owner)
+    investment = make_account(owner, name="Synthetic Brokerage", account_type=Account.Type.INVESTMENT)
+    payload = account_payload(
+        account_id="sf-invest",
+        transactions=[posted_txn(txn_id="invest-1", day=16, amount="-99.00")],
+    )
+    payload["accounts"][0]["name"] = "Synthetic Brokerage"
+    connection = connect_owner(owner, monkeypatch, payload)
+    save_account_links(
+        owner,
+        connection.pk,
+        [
+            {
+                "simplefin_account_id": "sf-invest",
+                "action": "link",
+                "account_id": investment.pk,
+            }
+        ],
+    )
+    sync_connection(owner, connection.pk, ignore_rate_limit=True)
+
+    assert AccountLink.objects.get(account=investment).mode == AccountLink.Mode.BALANCES_ONLY
+    assert not Transaction.objects.filter(account=investment).exists()
+    assert BalanceSnapshot.objects.filter(account=investment).exists()
+
+
+@pytest.mark.django_db
+def test_sync_pairs_transfers_and_refreshes_recurring(monkeypatch):
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner)
+    savings = make_account(owner, name="Synthetic Savings", account_type=Account.Type.SAVINGS)
+    payload = {
+        "errlist": [],
+        "connections": [{"conn_id": "CON-1", "name": "Synthetic Bank - Pat", "org_id": "ORG-1", "sfin_url": "https://bank.example.test/simplefin"}],
+        "accounts": [
+            {
+                "id": "sf-checking",
+                "name": "Synthetic Checking",
+                "conn_id": "CON-1",
+                "currency": "USD",
+                "balance": "10.00",
+                "balance-date": epoch(2026, 4, 20),
+                "transactions": [
+                    {
+                        "id": "out-1",
+                        "posted": epoch(2026, 4, 10),
+                        "amount": "-25.00",
+                        "description": "Synthetic to savings",
+                    },
+                    posted_txn(txn_id="sub-1", day=None, amount="-15.99", posted=epoch(2026, 1, 15)),
+                    posted_txn(txn_id="sub-2", day=None, amount="-15.99", posted=epoch(2026, 2, 15)),
+                    posted_txn(txn_id="sub-3", day=None, amount="-15.99", posted=epoch(2026, 3, 15)),
+                ],
+            },
+            {
+                "id": "sf-savings",
+                "name": "Synthetic Savings",
+                "conn_id": "CON-1",
+                "currency": "USD",
+                "balance": "40.00",
+                "balance-date": epoch(2026, 4, 20),
+                "transactions": [
+                    {
+                        "id": "in-1",
+                        "posted": epoch(2026, 4, 10),
+                        "amount": "25.00",
+                        "description": "Synthetic from checking",
+                    }
+                ],
+            },
+        ],
+    }
+    connection = connect_owner(owner, monkeypatch, payload)
+    save_account_links(
+        owner,
+        connection.pk,
+        [
+            {"simplefin_account_id": "sf-checking", "action": "link", "account_id": checking.pk, "cutover_date": date(2026, 1, 1)},
+            {"simplefin_account_id": "sf-savings", "action": "link", "account_id": savings.pk, "cutover_date": date(2026, 1, 1)},
+        ],
+    )
+    sync_connection(owner, connection.pk, ignore_rate_limit=True)
+    outbound = Transaction.objects.get(source_transaction_id="out-1")
+    inbound = Transaction.objects.get(source_transaction_id="in-1")
+
+    assert exclusion_exists_for(outbound)
+    assert TransferPair.objects.filter(leg_a__in=(outbound, inbound)).exists() or TransferPair.objects.filter(
+        leg_b__in=(outbound, inbound)
+    ).exists()
+    refresh_recurring_series(owner)
+    assert RecurringSeries.objects.filter(person=owner, is_active=True).exists()
+
+
+@pytest.mark.django_db
+def test_undo_sync_batch_archives_transactions_and_removes_snapshot(monkeypatch):
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner)
+    payload = account_payload(transactions=[posted_txn(txn_id="new-1", day=16, amount="-3.00")])
+    connection = connect_owner(owner, monkeypatch, payload)
+    save_account_links(
+        owner,
+        connection.pk,
+        [{"simplefin_account_id": "sf-checking", "action": "link", "account_id": checking.pk, "cutover_date": date(2026, 3, 1)}],
+    )
+    sync_connection(owner, connection.pk, ignore_rate_limit=True)
+    batch = ImportBatch.objects.get(account=checking, source=ImportBatch.Source.SIMPLEFIN, status=ImportBatch.Status.ACTIVE)
+    undo_import_batch(owner, checking.pk, batch.pk)
+
+    assert not Transaction.objects.filter(account=checking, status=Transaction.Status.ACTIVE, source_transaction_id="new-1").exists()
+    assert not BalanceSnapshot.objects.filter(account=checking).exists()
+    batch.refresh_from_db()
+    assert batch.status == ImportBatch.Status.ARCHIVED
+
+
+@pytest.mark.django_db
+def test_scheduler_skips_when_no_connection(capsys):
+    call_command("sync_simplefin")
+    assert "No SimpleFIN connections." in capsys.readouterr().out
+    assert sync_all_connections() == 0
+
+
+@pytest.mark.django_db
+def test_sync_now_rate_limit(monkeypatch):
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner)
+    connection = connect_owner(owner, monkeypatch, account_payload(transactions=[]))
+    save_account_links(
+        owner,
+        connection.pk,
+        [{"simplefin_account_id": "sf-checking", "action": "link", "account_id": checking.pk}],
+    )
+    sync_connection(owner, connection.pk)
+    with pytest.raises(SimpleFinError, match="15 minutes"):
+        sync_connection(owner, connection.pk)
+
+
+@pytest.mark.django_db
+def test_access_rules_hide_another_members_connection(monkeypatch):
+    owner = make_person("owner")
+    member = make_person("member")
+    outsider = make_person("outsider")
+    make_household(owner, member)
+    make_household(outsider, name="Other Household")
+    connect_owner(owner, monkeypatch)
+    owner_page = signed_in(owner).get(reverse("simplefin-connections")).content.decode()
+    member_page = signed_in(member).get(reverse("simplefin-connections")).content.decode()
+    outsider_page = signed_in(outsider).get(reverse("simplefin-connections")).content.decode()
+    anonymous = Client().get(reverse("simplefin-connections"))
+
+    assert "Synthetic Bank - Pat" in owner_page
+    assert "Synthetic Bank - Pat" not in member_page
+    assert "Synthetic Bank - Pat" not in outsider_page
+    assert ACCESS_URL not in owner_page + member_page + outsider_page
+    assert anonymous.status_code == 302
+    assert SimpleFinConnection.objects.filter(owner=member).count() == 0
+
+
+@pytest.mark.django_db
+def test_rejects_custom_currency(monkeypatch):
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner)
+    payload = account_payload(currency="https://example.test/points")
+    connection = connect_owner(owner, monkeypatch, payload)
+    save_account_links(
+        owner,
+        connection.pk,
+        [{"simplefin_account_id": "sf-checking", "action": "link", "account_id": checking.pk}],
+    )
+    with pytest.raises(SimpleFinError, match="currency"):
+        sync_connection(owner, connection.pk, ignore_rate_limit=True)
+
+
+@pytest.mark.django_db
+def test_disconnect_keeps_imported_rows(monkeypatch):
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner)
+    payload = account_payload(transactions=[posted_txn(txn_id="keep-1", day=16, amount="-3.00")])
+    connection = connect_owner(owner, monkeypatch, payload)
+    save_account_links(
+        owner,
+        connection.pk,
+        [{"simplefin_account_id": "sf-checking", "action": "link", "account_id": checking.pk, "cutover_date": date(2026, 3, 1)}],
+    )
+    sync_connection(owner, connection.pk, ignore_rate_limit=True)
+    from finance.simplefin_services import disconnect_connection
+
+    disconnect_connection(owner, connection.pk)
+    assert not SimpleFinConnection.objects.filter(pk=connection.pk).exists()
+    assert Transaction.objects.filter(source_transaction_id="keep-1").exists()
+
+
+@pytest.mark.django_db
+def test_encrypt_roundtrip_does_not_embed_plaintext():
+    token = encrypt_access_url(ACCESS_URL)
+    assert ACCESS_URL.encode() not in token
+    assert decrypt_access_url(token) == ACCESS_URL

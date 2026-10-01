@@ -2,6 +2,7 @@
 {% block title %}Accounts · Financial Planner{% endblock %}
 {% block content %}
 <h1 class="mb-4 text-2xl font-bold">Accounts</h1>
+<p class="mb-4"><a class="link" href="{% url 'simplefin-connections' %}">Connections</a></p>
 {% include "finance/_messages.html" %}
 {% if not has_active_accounts %}
 <div role="status" class="alert mb-4">
