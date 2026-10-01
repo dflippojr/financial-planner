@@ -8,7 +8,13 @@ from django.views.decorators.http import require_http_methods, require_POST
 
 from .category_services import current_household
 from .forms import AccountRenameForm, AddAccountForm
-from .lifecycle_services import archive_account, lock_actor_household, share_account, unshare_account
+from .lifecycle_services import (
+    archive_account,
+    lock_actor_household,
+    rename_account,
+    share_account,
+    unshare_account,
+)
 from .models import Account, ImportBatch, Person, Transaction
 
 
@@ -102,11 +108,12 @@ def _create_account(person, form):
 @require_POST
 @never_cache
 def account_rename(request, account_id):
-    account = _active_visible_account(request.user, account_id)
+    _active_visible_account(request.user, account_id)
     form = AccountRenameForm(request.POST)
     if form.is_valid():
-        account.name = form.cleaned_data["name"]
-        account.save(update_fields=("name", "updated_at"))
+        # The service rechecks visibility under the household and account
+        # locks, so an account unshared mid-request cannot be renamed.
+        _service_or_404(lambda: rename_account(request.user, account_id, form.cleaned_data["name"]))
     return redirect("account-list")
 
 
