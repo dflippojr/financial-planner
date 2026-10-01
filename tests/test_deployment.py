@@ -106,6 +106,8 @@ def test_gitattributes_forces_lf_for_container_files():
 
     assert "*.sh text eol=lf" in attributes
     assert "Dockerfile text eol=lf" in attributes
+    assert "scripts/css_pins.env text eol=lf" in attributes
+    assert "static/src/vendor/** text eol=lf" in attributes
 
 
 def test_gunicorn_access_log_never_records_query_strings_or_referrers():
@@ -130,3 +132,19 @@ def test_compose_stages_csv_uploads_on_a_memory_backed_mount():
     assert "GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}" in compose
     assert "tmpfs:" in compose
     assert "- /run/csv-staging:size=128m,mode=1777" in compose
+
+
+def test_dockerfile_builds_css_with_a_pinned_checksum_and_collectstatic():
+    dockerfile = (Path(__file__).resolve().parent.parent / "Dockerfile").read_text()
+    pins = (Path(__file__).resolve().parent.parent / "scripts" / "css_pins.env").read_text()
+
+    assert "FROM debian:bookworm-slim AS css" in dockerfile
+    assert "sha256sum -c" in dockerfile
+    assert "collectstatic --noinput" in dockerfile
+    assert "tailwindcss" in dockerfile
+    assert "TAILWIND_VERSION=v4.3.3" in pins
+    assert "DAISYUI_VERSION=v5.7.47" in pins
+    assert "whitenoise.middleware.WhiteNoiseMiddleware" in (
+        Path(__file__).resolve().parent.parent / "financial_planner" / "settings.py"
+    ).read_text()
+

@@ -1,5 +1,15 @@
 {% extends "finance/base.html" %}
+{% block title %}Recover account · Financial Planner{% endblock %}
 {% block content %}
-<h1>Recover account</h1>
-{% if recovered %}<p>Password updated. All existing sessions were signed out.</p><p><a href="{% url 'login' %}">Sign in</a></p>{% else %}<form method="post">{% csrf_token %}{{ form.as_p }}<button type="submit">Update password</button></form>{% endif %}
+<h1 class="mb-4 text-2xl font-bold">Recover account</h1>
+{% if recovered %}
+<div role="status" class="alert alert-success mb-4">Password updated. All existing sessions were signed out.</div>
+<p><a class="btn btn-primary" href="{% url 'login' %}">Sign in</a></p>
+{% else %}
+<form method="post">
+  {% csrf_token %}
+  {% include "finance/_form_fields.html" %}
+  <button type="submit" class="btn btn-primary w-full">Update password</button>
+</form>
+{% endif %}
 {% endblock %}

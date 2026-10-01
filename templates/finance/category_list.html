@@ -1,43 +1,48 @@
 {% extends "finance/base.html" %}
+{% block title %}Categories · Financial Planner{% endblock %}
 {% block content %}
-<h1>Categories</h1>
-<p><a href="{% url 'home' %}">Cash flow</a> · <a href="{% url 'spending-by-category' %}">Spending</a> · <a href="{% url 'transaction-list' %}">Transactions</a></p>
+<h1 class="mb-4 text-2xl font-bold">Categories</h1>
 {% if not household %}
-<p>Join or create a household to edit the shared category list.</p>
+<div role="status" class="alert">Join or create a household to edit the shared category list.</div>
 {% else %}
-<form method="post">
+<form method="post" class="mb-6 max-w-lg">
   {% csrf_token %}
   <input type="hidden" name="action" value="window">
-  {{ window_form.as_p }}
-  <button type="submit">Save match window</button>
+  {% include "finance/_form_fields.html" with form=window_form %}
+  <button type="submit" class="btn btn-primary">Save match window</button>
 </form>
-{% if rename_error %}<p class="errorlist" role="alert">{{ rename_error }}</p>{% endif %}
-<table>
-  <thead><tr><th>Name</th><th></th></tr></thead>
-  <tbody>
-  {% for category in categories %}
-    <tr>
-      <td>{{ category.name }}{% if category.code == "transfer" %} (system, excluded from income and spending){% endif %}</td>
-      <td>
-        {% if category.code != "transfer" %}
-        <form method="post">
-          {% csrf_token %}
-          <input type="hidden" name="action" value="rename">
-          <input type="hidden" name="category_id" value="{{ category.pk }}">
-          <input type="text" name="name" value="{{ category.name }}" maxlength="80" required>
-          <button type="submit">Rename</button>
-        </form>
-        {% endif %}
-      </td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table>
-<form method="post">
+{% if rename_error %}<p class="errorlist text-error mb-4" role="alert">{{ rename_error }}</p>{% endif %}
+<div class="overflow-x-auto mb-6">
+  <table class="table table-zebra">
+    <thead class="sticky top-0 z-10 bg-base-200">
+      <tr><th>Name</th><th></th></tr>
+    </thead>
+    <tbody>
+    {% for category in categories %}
+      <tr>
+        <td>{{ category.name }}{% if category.code == "transfer" %} (system, excluded from income and spending){% endif %}</td>
+        <td>
+          {% if category.code != "transfer" %}
+          <form method="post" class="flex flex-wrap items-center gap-2">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="rename">
+            <input type="hidden" name="category_id" value="{{ category.pk }}">
+            <label class="sr-only" for="rename-{{ category.pk }}">Rename {{ category.name }}</label>
+            <input id="rename-{{ category.pk }}" class="input input-bordered input-sm" type="text" name="name" value="{{ category.name }}" maxlength="80" required>
+            <button type="submit" class="btn btn-sm">Rename</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+<form method="post" class="max-w-lg">
   {% csrf_token %}
   <input type="hidden" name="action" value="add">
-  {{ add_form.as_p }}
-  <button type="submit">Add category</button>
+  {% include "finance/_form_fields.html" with form=add_form %}
+  <button type="submit" class="btn btn-primary">Add category</button>
 </form>
 {% endif %}
 {% endblock %}

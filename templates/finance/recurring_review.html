@@ -1,71 +1,96 @@
 {% extends "finance/base.html" %}
+{% block title %}Recurring charges · Financial Planner{% endblock %}
 {% block content %}
-<h1>Recurring charges</h1>
-<p><a href="{% url 'home' %}">Accounts</a></p>
-<p>Monthly total: {{ monthly_display }} ({{ monthly_minor }} minor units)</p>
-<p>Annual total: {{ annual_display }} ({{ annual_minor }} minor units)</p>
-<h2>Confirmed</h2>
-<table>
-  <thead><tr><th>Name</th><th>Cadence</th><th>Typical amount</th><th>Monthly</th><th>Annual</th><th>Confidence</th><th>Reasons</th><th>Transactions</th></tr></thead>
-  <tbody>
-  {% for series in confirmed %}
-    <tr>
-      <td>{{ series.display_name }}</td>
-      <td>{{ series.get_cadence_display }}</td>
-      <td>{{ series.amount_display }}</td>
-      <td>{{ series.monthly_display }}</td>
-      <td>{{ series.annual_display }}</td>
-      <td>{{ series.get_confidence_display }}</td>
-      <td>{{ series.reasons|join:"; " }}</td>
-      <td>
-        <ul>
-          {% for member in series.members.all %}
-            <li>{{ member.transaction.transaction_date }} {{ member.transaction.description }} {{ member.transaction.amount_display }}</li>
-          {% endfor %}
-        </ul>
-      </td>
-    </tr>
-  {% empty %}
-    <tr><td colspan="8">No confirmed recurring charges.</td></tr>
-  {% endfor %}
-  </tbody>
-</table>
-<h2>Suggestions</h2>
-<table>
-  <thead><tr><th>Name</th><th>Cadence</th><th>Typical amount</th><th>Confidence</th><th>Reasons</th><th>Transactions</th><th></th></tr></thead>
-  <tbody>
-  {% for series in suggestions %}
-    <tr>
-      <td>{{ series.display_name }}{% if series.status == "possible" %} (possible){% endif %}</td>
-      <td>{{ series.get_cadence_display }}</td>
-      <td>{{ series.amount_display }}</td>
-      <td>{{ series.get_confidence_display }}</td>
-      <td>{{ series.reasons|join:"; " }}</td>
-      <td>
-        <ul>
-          {% for member in series.members.all %}
-            <li>{{ member.transaction.transaction_date }} {{ member.transaction.description }} {{ member.transaction.amount_display }}</li>
-          {% endfor %}
-        </ul>
-      </td>
-      <td>
-        <form method="post">
-          {% csrf_token %}
-          <input type="hidden" name="series_id" value="{{ series.pk }}">
-          <input type="hidden" name="action" value="confirm">
-          <button type="submit">Confirm</button>
-        </form>
-        <form method="post">
-          {% csrf_token %}
-          <input type="hidden" name="series_id" value="{{ series.pk }}">
-          <input type="hidden" name="action" value="dismiss">
-          <button type="submit">Dismiss</button>
-        </form>
-      </td>
-    </tr>
-  {% empty %}
-    <tr><td colspan="7">No suggestions.</td></tr>
-  {% endfor %}
-  </tbody>
-</table>
+<h1 class="mb-4 text-2xl font-bold">Recurring charges</h1>
+<p class="mb-2">Monthly total: {% include "finance/_amount.html" with value=monthly_display tone="out" %} ({{ monthly_minor }} minor units)</p>
+<p class="mb-6">Annual total: {% include "finance/_amount.html" with value=annual_display tone="out" %} ({{ annual_minor }} minor units)</p>
+<h2 class="mb-3 text-xl font-semibold">Confirmed</h2>
+<div class="overflow-x-auto mb-8">
+  <table class="table table-zebra">
+    <thead class="sticky top-0 z-10 bg-base-200">
+      <tr>
+        <th>Name</th>
+        <th>Cadence</th>
+        <th class="text-right">Typical amount</th>
+        <th class="text-right">Monthly</th>
+        <th class="text-right">Annual</th>
+        <th>Confidence</th>
+        <th>Reasons</th>
+        <th>Transactions</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for series in confirmed %}
+      <tr>
+        <td>{{ series.display_name }}</td>
+        <td>{{ series.get_cadence_display }}</td>
+        <td class="text-right">{% include "finance/_amount.html" with value=series.amount_display tone="out" %}</td>
+        <td class="text-right">{% include "finance/_amount.html" with value=series.monthly_display tone="out" %}</td>
+        <td class="text-right">{% include "finance/_amount.html" with value=series.annual_display tone="out" %}</td>
+        <td><span class="badge {% if series.confidence == 'high' %}badge-success{% elif series.confidence == 'medium' %}badge-warning{% else %}badge-ghost{% endif %}">{{ series.get_confidence_display }}</span></td>
+        <td>{{ series.reasons|join:"; " }}</td>
+        <td>
+          <ul class="list-disc pl-4">
+            {% for member in series.members.all %}
+              <li>{{ member.transaction.transaction_date }} {{ member.transaction.description }} {% include "finance/_amount.html" with value=member.transaction.amount_display tone="" %}</li>
+            {% endfor %}
+          </ul>
+        </td>
+      </tr>
+    {% empty %}
+      <tr><td colspan="8">No confirmed recurring charges.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+<h2 class="mb-3 text-xl font-semibold">Suggestions</h2>
+<div class="overflow-x-auto">
+  <table class="table table-zebra">
+    <thead class="sticky top-0 z-10 bg-base-200">
+      <tr>
+        <th>Name</th>
+        <th>Cadence</th>
+        <th class="text-right">Typical amount</th>
+        <th>Confidence</th>
+        <th>Reasons</th>
+        <th>Transactions</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for series in suggestions %}
+      <tr>
+        <td>{{ series.display_name }}{% if series.status == "possible" %} <span class="badge badge-ghost">possible</span>{% endif %}</td>
+        <td>{{ series.get_cadence_display }}</td>
+        <td class="text-right">{% include "finance/_amount.html" with value=series.amount_display tone="out" %}</td>
+        <td><span class="badge {% if series.confidence == 'high' %}badge-success{% elif series.confidence == 'medium' %}badge-warning{% else %}badge-ghost{% endif %}">{{ series.get_confidence_display }}</span></td>
+        <td>{{ series.reasons|join:"; " }}</td>
+        <td>
+          <ul class="list-disc pl-4">
+            {% for member in series.members.all %}
+              <li>{{ member.transaction.transaction_date }} {{ member.transaction.description }} {% include "finance/_amount.html" with value=member.transaction.amount_display tone="" %}</li>
+            {% endfor %}
+          </ul>
+        </td>
+        <td class="flex flex-wrap gap-2">
+          <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="series_id" value="{{ series.pk }}">
+            <input type="hidden" name="action" value="confirm">
+            <button type="submit" class="btn btn-sm btn-primary">Confirm</button>
+          </form>
+          <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="series_id" value="{{ series.pk }}">
+            <input type="hidden" name="action" value="dismiss">
+            <button type="submit" class="btn btn-sm">Dismiss</button>
+          </form>
+        </td>
+      </tr>
+    {% empty %}
+      <tr><td colspan="7">No suggestions.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
 {% endblock %}

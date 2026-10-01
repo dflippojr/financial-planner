@@ -324,7 +324,7 @@ def test_home_is_cash_flow_with_default_range_and_partial_current_month(_localda
     content = response.content.decode()
 
     assert response.status_code == 200
-    assert "<h1>Cash flow</h1>" in content
+    assert ">Cash flow</h1>" in content
     assert "August 2026" in content
     assert "August 2026 (partial)" not in content
     assert "September 2026 (partial)" in content
@@ -414,7 +414,7 @@ def test_home_does_not_treat_missing_import_as_a_zero_amount():
     )
     content = response.content.decode()
     assert "Missing import" in content
-    assert "<td>0.00 USD</td>" in content
+    assert "0.00 USD" in content
     assert "Missing import</td>" not in content
 
 

@@ -22,8 +22,11 @@ backups/
 __pycache__/
 .pytest_cache/
 node_modules/
-dist/
 build/
+.cache/
+staticfiles/
+# Compiled CSS; built by scripts/build_css.sh and the Docker css stage.
+static/dist/
 .DS_Store
 Thumbs.db
 # Python and Django

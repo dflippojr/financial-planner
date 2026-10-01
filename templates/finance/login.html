@@ -1,11 +1,26 @@
 {% extends "finance/base.html" %}
+{% block title %}Sign in · Financial Planner{% endblock %}
 {% block content %}
-<h1>Sign in</h1>
-{% if auth_error %}<p>{{ auth_error }}</p>{% endif %}
-{% if messages %}{% for message in messages %}<p>{{ message }}</p>{% endfor %}{% endif %}
+<h1 class="mb-4 text-2xl font-bold">Sign in</h1>
+{% if auth_error %}<div role="alert" class="alert alert-error mb-3">{{ auth_error }}</div>{% endif %}
+{% include "finance/_messages.html" %}
 {% if google_signin_enabled %}
-<form method="post" action="{% url 'google-sign-in' %}">{% csrf_token %}<input type="hidden" name="next" value="{{ next }}"><button type="submit">Sign in with Google</button></form>
+<form method="post" action="{% url 'google-sign-in' %}" class="mb-4">
+  {% csrf_token %}
+  <input type="hidden" name="next" value="{{ next }}">
+  <button type="submit" class="btn btn-primary w-full">Sign in with Google</button>
+</form>
+<div class="divider">or</div>
 {% endif %}
-<form method="post">{% csrf_token %}{{ form.as_p }}<input type="hidden" name="next" value="{{ next }}"><button type="submit">Sign in</button></form>
-<p><a href="{% url 'recover' %}">Recover account</a> · <a href="{% url 'join' %}">Use an invitation</a></p>
+<form method="post">
+  {% csrf_token %}
+  {% include "finance/_form_fields.html" %}
+  <input type="hidden" name="next" value="{{ next }}">
+  <button type="submit" class="btn btn-primary w-full">Sign in</button>
+</form>
+<p class="mt-4 text-sm">
+  <a class="link" href="{% url 'recover' %}">Recover account</a>
+  ·
+  <a class="link" href="{% url 'join' %}">Use an invitation</a>
+</p>
 {% endblock %}

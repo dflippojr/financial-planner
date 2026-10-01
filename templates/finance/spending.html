@@ -1,73 +1,68 @@
 {% extends "finance/base.html" %}
+{% block title %}Spending by category · Financial Planner{% endblock %}
 {% block content %}
-<h1>Spending by category</h1>
-<p>
-  <a href="{% url 'home' %}">Cash flow</a> ·
-  <a href="{% url 'spending-by-category' %}">Spending</a> ·
-  <a href="{% url 'transaction-list' %}">Transactions</a> ·
-  <a href="{% url 'transfer-review' %}">Transfers</a> ·
-  <a href="{% url 'recurring-review' %}">Recurring</a> ·
-  <a href="{% url 'category-list' %}">Categories</a>
-</p>
-<form method="get">
-  {{ filter_form.as_p }}
-  <button type="submit">Update</button>
-  <a href="{% url 'spending-by-category' %}">Reset to default range</a>
+<h1 class="mb-4 text-2xl font-bold">Spending by category</h1>
+<form method="get" class="mb-4 flex flex-wrap items-end gap-3">
+  {% include "finance/_form_fields.html" with form=filter_form %}
+  <button type="submit" class="btn btn-primary">Update</button>
+  <a class="btn btn-ghost" href="{% url 'spending-by-category' %}">Reset to default range</a>
 </form>
 {% if presets %}
-<p>
+<p class="mb-4 flex flex-wrap gap-2">
   {% for preset in presets %}
-  <a href="{{ preset.url }}">{{ preset.label }}</a>{% if not forloop.last %} · {% endif %}
+  <a class="btn btn-sm btn-outline" href="{{ preset.url }}">{{ preset.label }}</a>
   {% endfor %}
 </p>
 {% endif %}
 {% if report and report.includes_investment %}
-<p role="note">{{ report.investment_notice }}</p>
+<div role="note" class="alert alert-info mb-4">{{ report.investment_notice }}</div>
 {% endif %}
 {% if report and not report.has_visible_transactions %}
-<p>
-  No visible transactions yet.
-  {% if import_account %}
-  <a href="{% url 'csv-import-preview' import_account.pk %}">Import a CSV</a>
-  to see spending by category.
-  {% else %}
-  Add an account, then import a CSV to see spending by category.
-  {% endif %}
-</p>
+<div role="status" class="alert mb-4">
+  <span>
+    No visible transactions yet.
+    {% if import_account %}
+    <a class="link" href="{% url 'csv-import-preview' import_account.pk %}">Import a CSV</a>
+    to see spending by category.
+    {% else %}
+    Add an account, then import a CSV to see spending by category.
+    {% endif %}
+  </span>
+</div>
 {% endif %}
 {% if report %}
-<table>
-  <thead>
-    <tr>
-      <th>Category</th>
-      <th>Spending</th>
-      <th>Percent of total</th>
-      <th></th>
-    </tr>
-  </thead>
-  <tbody>
-  {% for row in report.rows %}
-    <tr>
-      <td>
-        {{ row.name }}
-        {% if row.is_net_refund %}<span>Net refund</span>{% endif %}
-      </td>
-      <td>{{ row.spending_display }}</td>
-      <td>{{ row.percent_display }}</td>
-      <td><a href="{{ row.drilldown_url }}">Transactions</a></td>
-    </tr>
-  {% endfor %}
-  </tbody>
-  <tfoot>
-    <tr>
-      <th>Total</th>
-      <td>{{ report.total_spending_display }}</td>
-      <td></td>
-      <td></td>
-    </tr>
-  </tfoot>
-</table>
+<div class="overflow-x-auto">
+  <table class="table table-zebra">
+    <thead class="sticky top-0 z-10 bg-base-200">
+      <tr>
+        <th>Category</th>
+        <th class="text-right">Spending</th>
+        <th class="text-right">Percent of total</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for row in report.rows %}
+      <tr>
+        <td>
+          {{ row.name }}
+          {% if row.is_net_refund %}<span class="badge badge-info">Net refund</span>{% endif %}
+        </td>
+        <td class="text-right">{% include "finance/_amount.html" with value=row.spending_display tone="out" %}</td>
+        <td class="text-right tabular-amount">{{ row.percent_display }}</td>
+        <td><a class="link" href="{{ row.drilldown_url }}">Transactions</a></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+    <tfoot>
+      <tr>
+        <th>Total</th>
+        <td class="text-right">{% include "finance/_amount.html" with value=report.total_spending_display tone="out" %}</td>
+        <td></td>
+        <td></td>
+      </tr>
+    </tfoot>
+  </table>
+</div>
 {% endif %}
-<p><a href="{% url 'invite' %}">Invite a household member</a></p>
-<form method="post" action="{% url 'logout' %}">{% csrf_token %}<button type="submit">Sign out</button></form>
 {% endblock %}

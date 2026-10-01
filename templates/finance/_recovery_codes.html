@@ -1,2 +1,8 @@
-<p>Save these one-time recovery codes now. They will not be shown again.</p>
-<ul>{% for code in recovery_codes %}<li><code>{{ code }}</code></li>{% endfor %}</ul>
+<div class="card bg-base-200">
+  <div class="card-body">
+    <p>Save these one-time recovery codes now. They will not be shown again.</p>
+    <pre id="recovery-codes" class="overflow-x-auto rounded-box bg-base-100 p-4 font-mono text-sm">{% for code in recovery_codes %}{{ code }}{% if not forloop.last %}
+{% endif %}{% endfor %}</pre>
+    <button type="button" class="btn btn-outline btn-sm w-fit" data-copy-target="recovery-codes">Copy codes</button>
+  </div>
+</div>

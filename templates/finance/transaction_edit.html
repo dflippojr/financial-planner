@@ -1,31 +1,34 @@
 {% extends "finance/base.html" %}
+{% block title %}Correct transaction · Financial Planner{% endblock %}
 {% block content %}
-<h1>Correct transaction</h1>
-<p>{{ transaction.account.name }} · {{ transaction.import_batch.get_source_display }} · {{ transaction.currency }}</p>
-<form method="post">
+<h1 class="mb-4 text-2xl font-bold">Correct transaction</h1>
+<p class="mb-4 opacity-80">{{ transaction.account.name }} · {{ transaction.import_batch.get_source_display }} · {{ transaction.currency }}</p>
+<form method="post" class="mb-8 max-w-lg">
   {% csrf_token %}
-  {{ form.as_p }}
-  <button type="submit">Save correction</button>
-  <a href="{% url 'transaction-list' %}">Cancel</a>
+  {% include "finance/_form_fields.html" %}
+  <div class="flex flex-wrap gap-2">
+    <button type="submit" class="btn btn-primary">Save correction</button>
+    <a class="btn btn-ghost" href="{% url 'transaction-list' %}">Cancel</a>
+  </div>
 </form>
-<p>The original imported fields and import batch provenance are retained.</p>
-<form method="post" action="{% url 'transaction-categorize' transaction.pk %}">
+<p class="mb-8 text-sm opacity-70">The original imported fields and import batch provenance are retained.</p>
+<form method="post" action="{% url 'transaction-categorize' transaction.pk %}" class="mb-8 max-w-lg">
   {% csrf_token %}
-  {{ category_form.as_p }}
-  <button type="submit">Save category</button>
+  {% include "finance/_form_fields.html" with form=category_form %}
+  <button type="submit" class="btn btn-primary">Save category</button>
 </form>
 {% if refund_link %}
-<p>This refund is linked to a purchase on {{ refund_link.original.transaction_date }} and inherits that category.</p>
+<div role="status" class="alert alert-info mb-8">This refund is linked to a purchase on {{ refund_link.original.transaction_date }} and inherits that category.</div>
 {% else %}
-<form method="post" action="{% url 'transaction-link-refund' transaction.pk %}">
+<form method="post" action="{% url 'transaction-link-refund' transaction.pk %}" class="mb-8 max-w-lg">
   {% csrf_token %}
-  {{ refund_form.as_p }}
-  <button type="submit">Link refund</button>
+  {% include "finance/_form_fields.html" with form=refund_form %}
+  <button type="submit" class="btn btn-primary">Link refund</button>
 </form>
 {% endif %}
 {% if correction_history %}
-<h2>Correction history</h2>
-<ol>
+<h2 class="mb-3 text-xl font-semibold">Correction history</h2>
+<ol class="list-decimal pl-6">
   {% for entry in correction_history %}
   <li>{{ entry.recorded_at }} · {{ entry.actor.display_name }} · {{ entry.get_field_name_display }}: {{ entry.previous_display }} → {{ entry.new_display }}</li>
   {% endfor %}

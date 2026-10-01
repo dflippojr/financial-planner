@@ -1,7 +1,75 @@
+{% load static %}
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Financial Planner</title></head>
-<body>
-  <main>{% block content %}{% endblock %}</main>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Financial Planner{% endblock %}</title>
+  <script src="{% static 'js/theme.js' %}"></script>
+  <link rel="stylesheet" href="{% static 'dist/app.css' %}">
+</head>
+<body class="min-h-screen bg-base-200 text-base-content">
+{% if user.is_authenticated %}
+<div class="drawer lg:drawer-open">
+  <input id="nav-drawer" type="checkbox" class="drawer-toggle">
+  <div class="drawer-content flex min-h-screen flex-col">
+    <header class="navbar bg-base-100 shadow-sm lg:hidden">
+      <div class="flex-none">
+        <label for="nav-drawer" class="btn btn-square btn-ghost" aria-label="Open menu">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </label>
+      </div>
+      <div class="flex-1 px-2 font-semibold">Financial Planner</div>
+    </header>
+    <main class="flex-1 p-4 lg:p-6">
+{% else %}
+<main class="flex min-h-screen items-center justify-center p-4">
+  <div class="card w-full max-w-md bg-base-100 shadow-xl">
+    <div class="card-body">
+{% endif %}
+      {% block content %}{% endblock %}
+{% if user.is_authenticated %}
+    </main>
+  </div>
+  <div class="drawer-side z-40">
+    <label for="nav-drawer" class="drawer-overlay" aria-label="Close menu"></label>
+    <div class="flex min-h-full w-72 flex-col bg-base-100">
+      <ul class="menu flex-1 p-4" aria-label="Main">
+        <li class="menu-title">Financial Planner</li>
+        {% for item in nav_items %}
+        <li>
+          <a href="{{ item.url }}"{% if item.active %} class="menu-active" aria-current="page"{% endif %}>{{ item.label }}</a>
+        </li>
+        {% endfor %}
+      </ul>
+      <div class="border-t border-base-200 p-4">
+        <p class="px-2 pb-2 text-sm opacity-80">{{ user.person.display_name|default:user.username }}</p>
+        <ul class="menu p-0">
+          <li>
+            <a href="{% url 'account-settings' %}"{% if nav_current == 'account-settings' %} class="menu-active" aria-current="page"{% endif %}>Account</a>
+          </li>
+          <li>
+            <button type="button" id="theme-toggle" class="btn btn-ghost justify-start font-normal" aria-pressed="false" aria-label="Switch to dark theme">
+              <span class="theme-toggle-label">Dark theme</span>
+            </button>
+          </li>
+          <li>
+            <form method="post" action="{% url 'logout' %}">
+              {% csrf_token %}
+              <button type="submit" class="btn btn-ghost justify-start w-full font-normal">Sign out</button>
+            </form>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+{% else %}
+    </div>
+  </div>
+</main>
+{% endif %}
 </body>
 </html>

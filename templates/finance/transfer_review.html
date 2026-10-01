@@ -1,61 +1,69 @@
 {% extends "finance/base.html" %}
+{% block title %}Transfers · Financial Planner{% endblock %}
 {% block content %}
-<h1>Transfers and card payments</h1>
-<p><a href="{% url 'home' %}">Cash flow</a> · <a href="{% url 'spending-by-category' %}">Spending</a> · <a href="{% url 'transaction-list' %}">Transactions</a></p>
-<h2>Excluded (review and undo)</h2>
-<table>
-  <thead><tr><th>Dates</th><th>Accounts</th><th>Kind</th><th>Confidence</th><th>Reasons</th><th></th></tr></thead>
-  <tbody>
-  {% for pair in exclusions %}
-    <tr>
-      <td>{{ pair.leg_a.transaction_date }} / {{ pair.leg_b.transaction_date }}</td>
-      <td>{{ pair.leg_a.account.name }} / {{ pair.leg_b.account.name }}</td>
-      <td>{{ pair.get_kind_display }}</td>
-      <td>{{ pair.get_confidence_display }}</td>
-      <td>{{ pair.reasons|join:"; " }}</td>
-      <td>
-        <form method="post">
-          {% csrf_token %}
-          <input type="hidden" name="pair_id" value="{{ pair.pk }}">
-          <input type="hidden" name="action" value="undo">
-          <button type="submit">Undo exclusion</button>
-        </form>
-      </td>
-    </tr>
-  {% empty %}
-    <tr><td colspan="6">No automatic or confirmed exclusions.</td></tr>
-  {% endfor %}
-  </tbody>
-</table>
-<h2>Suggestions</h2>
-<table>
-  <thead><tr><th>Dates</th><th>Accounts</th><th>Kind</th><th>Confidence</th><th>Reasons</th><th></th></tr></thead>
-  <tbody>
-  {% for pair in suggestions %}
-    <tr>
-      <td>{{ pair.leg_a.transaction_date }} / {{ pair.leg_b.transaction_date }}</td>
-      <td>{{ pair.leg_a.account.name }} / {{ pair.leg_b.account.name }}</td>
-      <td>{{ pair.get_kind_display }}</td>
-      <td>{{ pair.get_confidence_display }}</td>
-      <td>{{ pair.reasons|join:"; " }}</td>
-      <td>
-        <form method="post">
-          {% csrf_token %}
-          <input type="hidden" name="pair_id" value="{{ pair.pk }}">
-          <input type="hidden" name="action" value="confirm">
-          <button type="submit">Confirm</button>
-        </form>
-        <form method="post">
-          {% csrf_token %}
-          <input type="hidden" name="pair_id" value="{{ pair.pk }}">
-          <input type="hidden" name="action" value="dismiss">
-          <button type="submit">Dismiss</button>
-        </form>
-      </td>
-    </tr>
-  {% empty %}
-    <tr><td colspan="6">No suggestions.</td></tr>
-  {% endfor %}
-  </tbody>
-</table>
+<h1 class="mb-4 text-2xl font-bold">Transfers and card payments</h1>
+<h2 class="mb-3 text-xl font-semibold">Excluded (review and undo)</h2>
+<div class="overflow-x-auto mb-8">
+  <table class="table table-zebra">
+    <thead class="sticky top-0 z-10 bg-base-200">
+      <tr><th>Dates</th><th>Accounts</th><th>Kind</th><th>Confidence</th><th>Reasons</th><th></th></tr>
+    </thead>
+    <tbody>
+    {% for pair in exclusions %}
+      <tr>
+        <td>{{ pair.leg_a.transaction_date }} / {{ pair.leg_b.transaction_date }}</td>
+        <td>{{ pair.leg_a.account.name }} / {{ pair.leg_b.account.name }}</td>
+        <td>{{ pair.get_kind_display }}</td>
+        <td><span class="badge {% if pair.confidence == 'high' %}badge-success{% else %}badge-warning{% endif %}">{{ pair.get_confidence_display }}</span></td>
+        <td>{{ pair.reasons|join:"; " }}</td>
+        <td>
+          <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="pair_id" value="{{ pair.pk }}">
+            <input type="hidden" name="action" value="undo">
+            <button type="submit" class="btn btn-sm">Undo exclusion</button>
+          </form>
+        </td>
+      </tr>
+    {% empty %}
+      <tr><td colspan="6">No automatic or confirmed exclusions.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+<h2 class="mb-3 text-xl font-semibold">Suggestions</h2>
+<div class="overflow-x-auto">
+  <table class="table table-zebra">
+    <thead class="sticky top-0 z-10 bg-base-200">
+      <tr><th>Dates</th><th>Accounts</th><th>Kind</th><th>Confidence</th><th>Reasons</th><th></th></tr>
+    </thead>
+    <tbody>
+    {% for pair in suggestions %}
+      <tr>
+        <td>{{ pair.leg_a.transaction_date }} / {{ pair.leg_b.transaction_date }}</td>
+        <td>{{ pair.leg_a.account.name }} / {{ pair.leg_b.account.name }}</td>
+        <td>{{ pair.get_kind_display }}</td>
+        <td><span class="badge {% if pair.confidence == 'high' %}badge-success{% else %}badge-warning{% endif %}">{{ pair.get_confidence_display }}</span></td>
+        <td>{{ pair.reasons|join:"; " }}</td>
+        <td class="flex flex-wrap gap-2">
+          <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="pair_id" value="{{ pair.pk }}">
+            <input type="hidden" name="action" value="confirm">
+            <button type="submit" class="btn btn-sm btn-primary">Confirm</button>
+          </form>
+          <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="pair_id" value="{{ pair.pk }}">
+            <input type="hidden" name="action" value="dismiss">
+            <button type="submit" class="btn btn-sm">Dismiss</button>
+          </form>
+        </td>
+      </tr>
+    {% empty %}
+      <tr><td colspan="6">No suggestions.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
 {% endblock %}
