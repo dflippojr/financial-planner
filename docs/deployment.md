@@ -68,7 +68,13 @@ Prerequisites are Docker Desktop configured to use WSL2 and start when Windows s
    - With a non-default HTTPS port, `DJANGO_CSRF_TRUSTED_ORIGINS` must include it, for example `https://basement-pc.example-tailnet.ts.net:10443`, or every sign-in and form post fails the CSRF check. `DJANGO_ALLOWED_HOSTS` stays the bare MagicDNS name, without a port.
    - To remove only this app's route later, run `tailscale serve --https=10443 off`.
 
-5. Create the first account. Set `SETUP_CODE` in the env file, then open `/setup/` on the HTTPS MagicDNS URL, enter that code with a username, display name, household name, and password, and save the one-time recovery codes shown once. After that member exists, `/setup/` is a 404.
+5. Create the first account. Set `SETUP_CODE` in the env file to a long random value. The same generator as in step 2 works. A running container does not reread the env file, so recreate the app if the stack is already up:
+
+   ```powershell
+   docker compose --env-file $Config up -d --force-recreate app
+   ```
+
+   Then open `/setup/` on the HTTPS MagicDNS URL. Enter the code with a username, display name, household name, and password, and save the one-time recovery codes. They are shown only once. After the first member exists, `/setup/` returns 404. You can then remove `SETUP_CODE` from the env file. If you do, recreate the app the same way.
 
    The CLI still works if you prefer not to use the browser page:
 
