@@ -449,3 +449,154 @@ def test_encrypt_roundtrip_does_not_embed_plaintext():
     token = encrypt_access_url(ACCESS_URL)
     assert ACCESS_URL.encode() not in token
     assert decrypt_access_url(token) == ACCESS_URL
+
+
+class _FakeResponse:
+    def __init__(self, body):
+        self._body = body
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+def test_claim_and_fetch_http_paths(monkeypatch):
+    from finance.simplefin_client import fetch_accounts
+    from finance.simplefin_errors import provider_errors
+    from finance.simplefin_schedule import next_scheduled_sync, parse_five_field_cron
+    from urllib.error import URLError
+
+    monkeypatch.setattr(
+        "finance.simplefin_client.urlopen",
+        lambda *args, **kwargs: _FakeResponse(ACCESS_URL.encode()),
+    )
+    assert claim_access_url(CLAIM_URL) == ACCESS_URL
+
+    monkeypatch.setattr(
+        "finance.simplefin_client.urlopen",
+        lambda *args, **kwargs: _FakeResponse(b'{"accounts": []}'),
+    )
+    assert fetch_accounts(ACCESS_URL, start_date=1, end_date=2, balances_only=True) == {"accounts": []}
+
+    def boom(*args, **kwargs):
+        raise HTTPError(ACCESS_URL, 402, "Payment Required", hdrs=None, fp=BytesIO())
+
+    monkeypatch.setattr("finance.simplefin_client.urlopen", boom)
+    with pytest.raises(SimpleFinError, match="payment"):
+        fetch_accounts(ACCESS_URL)
+
+    def denied(*args, **kwargs):
+        raise HTTPError(ACCESS_URL, 403, "Forbidden", hdrs=None, fp=BytesIO())
+
+    monkeypatch.setattr("finance.simplefin_client.urlopen", denied)
+    with pytest.raises(SimpleFinError, match="denied"):
+        fetch_accounts(ACCESS_URL)
+
+    def other(*args, **kwargs):
+        raise HTTPError(ACCESS_URL, 500, "Error", hdrs=None, fp=BytesIO())
+
+    monkeypatch.setattr("finance.simplefin_client.urlopen", other)
+    with pytest.raises(SimpleFinError, match="could not return"):
+        fetch_accounts(ACCESS_URL)
+
+    monkeypatch.setattr("finance.simplefin_client.urlopen", lambda *a, **k: (_ for _ in ()).throw(URLError("offline")))
+    with pytest.raises(SimpleFinError, match="could not be reached"):
+        fetch_accounts(ACCESS_URL)
+
+    monkeypatch.setattr("finance.simplefin_client.urlopen", lambda *a, **k: _FakeResponse(b"not-json"))
+    with pytest.raises(SimpleFinError, match="could not be read"):
+        fetch_accounts(ACCESS_URL)
+
+    monkeypatch.setattr("finance.simplefin_client.urlopen", lambda *a, **k: _FakeResponse(b"[1]"))
+    with pytest.raises(SimpleFinError, match="could not be read"):
+        fetch_accounts(ACCESS_URL)
+
+    with pytest.raises(SimpleFinError, match="HTTPS"):
+        claim_access_url("http://bridge.example.test/claim")
+
+    msgs = provider_errors(
+        {
+            "errlist": [
+                {"code": "con.auth", "msg": 'Re-auth <b>Huntington</b> at https://secret.example/path'},
+                "plain errlist",
+            ],
+            "errors": ["deprecated https://also.example"],
+        }
+    )
+    assert msgs[0] == "Re-auth Huntington at [redacted]"
+    assert "secret" not in "".join(msgs)
+    parse_five_field_cron("30 6 * * *")
+    nxt = next_scheduled_sync("30 6 * * *", datetime(2026, 10, 1, 6, 0))
+    assert nxt.hour == 6 and nxt.minute == 30
+    with pytest.raises(ValueError):
+        parse_five_field_cron("not a cron")
+    from finance.simplefin_schedule import cron_matches
+
+    assert cron_matches("0 * * * *", datetime(2026, 10, 1, 6, 1)) is False
+    assert cron_matches("*/15 6-7 1,2 * *", datetime(2026, 10, 1, 6, 0))
+    assert cron_matches("0 * * * *", datetime(2026, 10, 1, 6, 0))
+
+
+@pytest.mark.django_db
+def test_connections_views_claim_sync_disconnect_and_create(monkeypatch):
+    owner = make_person("owner")
+    make_household(owner)
+    monkeypatch.setattr("finance.simplefin_services.claim_access_url", lambda url: ACCESS_URL)
+    monkeypatch.setattr("finance.simplefin_services.fetch_accounts", lambda *args, **kwargs: account_payload())
+    client = signed_in(owner)
+    claim = client.post(reverse("simplefin-connections"), {"intent": "claim", "token": setup_token()})
+    assert claim.status_code == 302
+    assert ACCESS_URL not in claim.content.decode()
+    page = client.get(reverse("simplefin-connections"))
+    assert b"Synthetic Bank - Pat" in page.content
+    assert ACCESS_URL.encode() not in page.content
+    saved = client.post(
+        reverse("simplefin-connections"),
+        {
+            "intent": "link",
+            "sf_id_0": "sf-checking",
+            "action_0": "create",
+            "name_0": "Linked Checking",
+            "account_type_0": Account.Type.CHECKING,
+            "sharing_0": Account.Scope.HOUSEHOLD,
+            "cutover_0": "2026-03-01",
+        },
+    )
+    assert saved.status_code == 302
+    assert Account.objects.filter(name="Linked Checking", scope=Account.Scope.HOUSEHOLD).exists()
+    limited = client.post(reverse("simplefin-sync"))
+    follow = client.get(limited.url)
+    assert b"15 minutes" in follow.content
+    gone = client.post(reverse("simplefin-disconnect"))
+    assert gone.status_code == 302
+    assert not SimpleFinConnection.objects.filter(owner=owner).exists()
+
+
+@pytest.mark.django_db
+def test_sync_all_and_claim_http_failure_on_page(monkeypatch):
+    owner = make_person("owner")
+    make_household(owner)
+
+    def fail_claim(*args, **kwargs):
+        raise HTTPError(CLAIM_URL, 500, "Error", hdrs=None, fp=BytesIO())
+
+    monkeypatch.setattr("finance.simplefin_client.urlopen", fail_claim)
+    client = signed_in(owner)
+    response = client.post(reverse("simplefin-connections"), {"intent": "claim", "token": setup_token()})
+    assert response.status_code == 200
+    assert b"could not claim" in response.content
+    assert CLAIM_URL.encode() not in response.content
+    payload = account_payload(transactions=[posted_txn(txn_id="n1", day=16, amount="-1.00")])
+    connection = connect_owner(owner, monkeypatch, payload)
+    checking = make_account(owner, name="Other Checking")
+    save_account_links(
+        owner,
+        connection.pk,
+        [{"simplefin_account_id": "sf-checking", "action": "link", "account_id": checking.pk, "cutover_date": date(2026, 3, 1)}],
+    )
+    assert sync_all_connections() == 1
