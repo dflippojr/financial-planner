@@ -6,6 +6,10 @@
 {% if error %}<div role="alert" class="alert alert-error mb-4">{{ error }}</div>{% endif %}
 <p class="mb-2">Google: {% if has_google %}<span class="badge badge-success">connected</span>{% else %}<span class="badge">not connected</span>{% endif %}</p>
 <p class="mb-4">Password: {% if has_password %}<span class="badge badge-success">set</span>{% else %}<span class="badge">not set</span>{% endif %}</p>
+<form method="post" action="{% url 'account-export' %}" class="mb-4">
+  {% csrf_token %}
+  <button type="submit" class="btn btn-outline">Export data</button>
+</form>
 {% if google_signin_enabled %}
 {% if has_google %}
 <form method="post" class="mb-4">

@@ -212,3 +212,30 @@ Owner decisions:
 - **Sync:** automatic once a day, plus a **Sync now** button.
 - **Investment accounts track balances only.** Vanguard and the Fidelity 401(k) (a new account, not in the original four) are tracked as dated balance snapshots for net worth over time. Their investment transactions are not imported. This matches how the owner uses Rocket Money today.
 - **Apple Card:** aggregators cannot reach it, so it stays on CSV for now. A later option is a small iOS companion app, using Apple's FinanceKit through TestFlight, that sends Apple Card transactions to the server over the tailnet.
+
+## Export, rules, and sharing-mode decisions (2026-10-01)
+
+**Data export (#19).**
+- One zip download holds CSV and JSON files for each entity: accounts, categories, transactions, import batches, and their provenance.
+- A member exports their own private accounts plus household accounts, never another member's private accounts.
+- The Google Sheet stays a comparison source. There is no Sheet import now.
+
+**Categorization rules (#16).**
+- A rule matches a case-insensitive "description contains" text. It can optionally be narrowed to one account and a minimum and maximum amount. Its only action is setting a category. There is no regex, and a rule never marks transfers.
+- **Personal and household rules:**
+  - A personal rule belongs to one member and evaluates transactions in accounts that member can access.
+  - A household rule belongs to the household. Any current member can edit it, and it evaluates only household-shared accounts.
+- **Precedence:**
+  - Personal rules are tried before household rules. Within each group, an explicit priority order applies and the first match wins.
+  - A rule never overwrites a category set by hand.
+- **Applying and reversing:**
+  - A new rule first previews the matches. It applies to existing transactions only after the member confirms.
+  - After that it applies automatically to new imports and SimpleFIN syncs.
+  - Each application can be reversed, which restores every affected transaction's previous category. Disabling a rule stops future application.
+- Saved CSV column mappings are a separate follow-up, after the other providers' shapes are known.
+
+**Sharing modes (#30): confirmed as proposed.**
+- Sharing is with the whole household only.
+- **Lent:** only the owner may unshare, archive, or change the mode. Other members may view and edit transactions.
+- **Co-owned:** any current member may unshare or archive.
+- The owner may switch modes either way. Switching from lent to co-owned shows a confirmation that the owner is giving up sole ownership.

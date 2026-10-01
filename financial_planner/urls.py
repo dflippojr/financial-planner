@@ -15,6 +15,7 @@ urlpatterns = [
     path("sign-out/", views.sign_out, name="logout"),
     path("setup/", views.setup, name="setup"),
     path("account/", views.account_settings, name="account-settings"),
+    path("account/export/", views.account_export, name="account-export"),
     path("invite/", views.invite, name="invite"),
     path("join/", views.join, name="join"),
     path("recover/", views.recover, name="recover"),
