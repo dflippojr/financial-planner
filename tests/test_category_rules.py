@@ -170,6 +170,7 @@ def test_household_rule_never_matches_private_account():
         category_id=dining(household).pk,
         priority=0,
     )
+    dining_id = dining(household).pk
     with pytest.raises(ValidationError):
         save_category_rule(
             owner,
@@ -178,7 +179,7 @@ def test_household_rule_never_matches_private_account():
             account_id=private.pk,
             min_amount_minor=None,
             max_amount_minor=None,
-            category_id=dining(household).pk,
+            category_id=dining_id,
             priority=0,
         )
 
@@ -424,6 +425,7 @@ def test_rules_pages_create_preview_apply_reverse_and_toggle():
 def test_save_category_rule_rejects_invalid_range_and_blank_match():
     owner = make_person("owner-validate")
     household = make_household(owner)
+    grocery_id = groceries(household).pk
     with pytest.raises(ValidationError):
         save_category_rule(
             owner,
@@ -432,7 +434,7 @@ def test_save_category_rule_rejects_invalid_range_and_blank_match():
             account_id=None,
             min_amount_minor=None,
             max_amount_minor=None,
-            category_id=groceries(household).pk,
+            category_id=grocery_id,
             priority=0,
         )
     with pytest.raises(ValidationError):
@@ -443,7 +445,7 @@ def test_save_category_rule_rejects_invalid_range_and_blank_match():
             account_id=None,
             min_amount_minor=-100,
             max_amount_minor=-200,
-            category_id=groceries(household).pk,
+            category_id=grocery_id,
             priority=0,
         )
 

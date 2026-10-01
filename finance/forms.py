@@ -16,6 +16,7 @@ MIN_SIGNED_BIGINT = -(2**63)
 MAX_SIGNED_BIGINT = 2**63 - 1
 ALL_VISIBLE_ACCOUNTS = "All visible accounts"
 END_DATE_ORDER_ERROR = "End date must be on or after start date."
+AMOUNT_RANGE_ERROR = "Amount is outside the supported range."
 
 
 class PasswordPairForm(forms.Form):
@@ -289,7 +290,7 @@ class TransactionCorrectionForm(forms.Form):
         amount = self.cleaned_data["amount"]
         minor_units = int(amount * 100)
         if not MIN_SIGNED_BIGINT <= minor_units <= MAX_SIGNED_BIGINT:
-            raise ValidationError("Amount is outside the supported range.")
+            raise ValidationError(AMOUNT_RANGE_ERROR)
         return amount
 
     @classmethod
@@ -445,7 +446,7 @@ class CategoryRuleForm(forms.Form):
             return None
         minor_units = int(amount * 100)
         if not MIN_SIGNED_BIGINT <= minor_units <= MAX_SIGNED_BIGINT:
-            raise ValidationError("Amount is outside the supported range.")
+            raise ValidationError(AMOUNT_RANGE_ERROR)
         return amount
 
     def clean_max_amount(self):
@@ -454,5 +455,5 @@ class CategoryRuleForm(forms.Form):
             return None
         minor_units = int(amount * 100)
         if not MIN_SIGNED_BIGINT <= minor_units <= MAX_SIGNED_BIGINT:
-            raise ValidationError("Amount is outside the supported range.")
+            raise ValidationError(AMOUNT_RANGE_ERROR)
         return amount

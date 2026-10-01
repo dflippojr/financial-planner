@@ -92,6 +92,54 @@ def category_rule_list(request):
     )
 
 
+def _toggle_rule(request, rule, enabled):
+    _service_or_404(lambda: set_rule_enabled(request.user, rule.pk, enabled))
+    return redirect("category-rule-detail", rule_id=rule.pk)
+
+
+def _post_save_rule(request, rule, form):
+    if not form.is_valid():
+        return None
+    try:
+        saved = _service_or_404(lambda: _save_from_form(request, form, rule_id=rule.pk))
+    except ValidationError as exc:
+        form.add_error(None, _first_message(exc, "The rule could not be saved."))
+        return None
+    return redirect("category-rule-detail", rule_id=saved.pk)
+
+
+def _post_apply_rule(request, rule, errors):
+    try:
+        _service_or_404(lambda: apply_rule(request.user, rule.pk))
+    except ValidationError as exc:
+        errors["apply"] = _first_message(exc, "The rule could not be applied.")
+        return None
+    return redirect("category-rule-detail", rule_id=rule.pk)
+
+
+def _post_reverse_rule(request):
+    try:
+        application_id = int(request.POST.get("application_id", "0"))
+    except (TypeError, ValueError) as exc:
+        raise Http404 from exc
+    _service_or_404(lambda: reverse_application(request.user, application_id))
+    return redirect("category-rule-detail", rule_id=int(request.resolver_match.kwargs["rule_id"]))
+
+
+def _posted_rule_detail(request, rule, form, action, errors):
+    if action == "save":
+        return _post_save_rule(request, rule, form)
+    if action == "disable":
+        return _toggle_rule(request, rule, False)
+    if action == "enable":
+        return _toggle_rule(request, rule, True)
+    if action == "apply":
+        return _post_apply_rule(request, rule, errors)
+    if action == "reverse":
+        return _post_reverse_rule(request)
+    return None
+
+
 @require_http_methods(["GET", "POST"])
 @never_cache
 def category_rule_detail(request, rule_id):
@@ -103,37 +151,11 @@ def category_rule_detail(request, rule_id):
         raise Http404
     action = request.POST.get("action") if request.method == "POST" else None
     form = _form_from_rule(rule, request.user, request.POST if action == "save" else None)
-    apply_error = None
-    reverse_result = None
-    if action == "save" and form.is_valid():
-        try:
-            rule = _service_or_404(lambda: _save_from_form(request, form, rule_id=rule.pk))
-        except ValidationError as exc:
-            form.add_error(None, _first_message(exc, "The rule could not be saved."))
-        else:
-            return redirect("category-rule-detail", rule_id=rule.pk)
-    if action == "disable":
-        _service_or_404(lambda: set_rule_enabled(request.user, rule.pk, False))
-        return redirect("category-rule-detail", rule_id=rule.pk)
-    if action == "enable":
-        _service_or_404(lambda: set_rule_enabled(request.user, rule.pk, True))
-        return redirect("category-rule-detail", rule_id=rule.pk)
-    if action == "apply":
-        try:
-            _service_or_404(lambda: apply_rule(request.user, rule.pk))
-        except ValidationError as exc:
-            apply_error = _first_message(exc, "The rule could not be applied.")
-        else:
-            return redirect("category-rule-detail", rule_id=rule.pk)
-    if action == "reverse":
-        try:
-            application_id = int(request.POST.get("application_id", "0"))
-        except (TypeError, ValueError) as exc:
-            raise Http404 from exc
-        reverse_result = _service_or_404(lambda: reverse_application(request.user, application_id))
-        return redirect("category-rule-detail", rule_id=rule.pk)
+    errors = {}
+    posted = _posted_rule_detail(request, rule, form, action, errors)
+    if posted is not None:
+        return posted
     rule, matches = _service_or_404(lambda: preview_rule(request.user, rule.pk))
-    applications = list_visible_applications(request.user, rule)
     return render(
         request,
         "finance/category_rule_detail.html",
@@ -142,8 +164,7 @@ def category_rule_detail(request, rule_id):
             "form": form,
             "matches": matches,
             "match_count": len(matches),
-            "applications": applications,
-            "apply_error": apply_error,
-            "reverse_result": reverse_result,
+            "applications": list_visible_applications(request.user, rule),
+            "apply_error": errors.get("apply"),
         },
     )

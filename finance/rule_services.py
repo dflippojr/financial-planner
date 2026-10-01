@@ -68,6 +68,38 @@ def _validate_rule_category(rule, household):
         raise ValidationError("Choose a household category.")
 
 
+def _visible_rule_account(person, account_id):
+    if not account_id:
+        return None
+    account = Account.objects.visible_to(person).filter(pk=account_id).first()
+    if account is None:
+        raise PermissionDenied(_DENIED)
+    return account
+
+
+def _rule_for_save(person, household, rule_id, owner_kind, enabled):
+    if rule_id is None:
+        return CategoryRule(enabled=enabled)
+    _, rule = _rule_or_404(person, rule_id)
+    if owner_kind == "personal" and rule.owner_person_id != person.pk:
+        raise PermissionDenied(_DENIED)
+    if owner_kind == "household" and rule.owner_household_id != household.pk:
+        raise PermissionDenied(_DENIED)
+    return rule
+
+
+def _set_rule_owner(rule, person, household, owner_kind):
+    if owner_kind == "personal":
+        rule.owner_person = person
+        rule.owner_household = None
+        return
+    if owner_kind == "household":
+        rule.owner_person = None
+        rule.owner_household = household
+        return
+    raise ValidationError("Choose personal or household.")
+
+
 @transaction.atomic
 def save_category_rule(
     principal,
@@ -96,29 +128,10 @@ def save_category_rule(
     category = assignable_categories(person).filter(pk=category_id).first()
     if category is None:
         raise PermissionDenied(_DENIED)
-    account = None
-    if account_id:
-        account = Account.objects.visible_to(person).filter(pk=account_id).first()
-        if account is None:
-            raise PermissionDenied(_DENIED)
-    if rule_id is None:
-        rule = CategoryRule(enabled=enabled)
-    else:
-        _, rule = _rule_or_404(person, rule_id)
-        if owner_kind == "personal" and rule.owner_person_id != person.pk:
-            raise PermissionDenied(_DENIED)
-        if owner_kind == "household" and rule.owner_household_id != household.pk:
-            raise PermissionDenied(_DENIED)
-    if owner_kind == "personal":
-        rule.owner_person = person
-        rule.owner_household = None
-    elif owner_kind == "household":
-        rule.owner_person = None
-        rule.owner_household = household
-    else:
-        raise ValidationError("Choose personal or household.")
+    rule = _rule_for_save(person, household, rule_id, owner_kind, enabled)
+    _set_rule_owner(rule, person, household, owner_kind)
     rule.description_contains = cleaned
-    rule.account = account
+    rule.account = _visible_rule_account(person, account_id)
     rule.min_amount_minor = min_amount_minor
     rule.max_amount_minor = max_amount_minor
     rule.category = category
