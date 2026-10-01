@@ -22,20 +22,27 @@ def sanitize_provider_message(message: str) -> str:
     return text[:300]
 
 
-def provider_errors(payload: dict) -> list[str]:
+def _from_errlist(errlist) -> list[str]:
     messages = []
-    errlist = payload.get("errlist") or []
-    if isinstance(errlist, list):
-        for item in errlist:
-            if isinstance(item, dict) and item.get("msg"):
-                messages.append(sanitize_provider_message(item["msg"]))
-            elif isinstance(item, str):
-                messages.append(sanitize_provider_message(item))
-    deprecated = payload.get("errors") or []
-    if isinstance(deprecated, list):
-        for item in deprecated:
-            if isinstance(item, str):
-                messages.append(sanitize_provider_message(item))
+    if not isinstance(errlist, list):
+        return messages
+    for item in errlist:
+        if isinstance(item, dict) and item.get("msg"):
+            messages.append(sanitize_provider_message(item["msg"]))
+        elif isinstance(item, str):
+            messages.append(sanitize_provider_message(item))
+    return messages
+
+
+def _from_deprecated_errors(errors) -> list[str]:
+    if not isinstance(errors, list):
+        return []
+    return [sanitize_provider_message(item) for item in errors if isinstance(item, str)]
+
+
+def provider_errors(payload: dict) -> list[str]:
+    messages = _from_errlist(payload.get("errlist") or [])
+    messages.extend(_from_deprecated_errors(payload.get("errors") or []))
     return [msg for msg in messages if msg]
 
 

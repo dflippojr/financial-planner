@@ -3,7 +3,7 @@ import os
 os.environ.setdefault("DJANGO_SECRET_KEY", "test-only-secret-key-with-enough-entropy-not-for-production-12345")
 os.environ.setdefault("FIELD_ENCRYPTION_KEY", "dGVzdC1maWVsZC1lbmNyeXB0aW9uLWtleS0zMmJ5dGU=")
 
-from .settings import *  # noqa: F403
+from .settings import *  # NOSONAR
 
 SESSION_COOKIE_SECURE = False
 CSRF_COOKIE_SECURE = False

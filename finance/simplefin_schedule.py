@@ -10,31 +10,30 @@ def parse_five_field_cron(expression: str) -> tuple[str, str, str, str, str]:
     return tuple(fields)
 
 
+def _match_step(part: str, value: int, minimum: int, maximum: int) -> bool:
+    base, step_text = part.split("/", 1)
+    step = int(step_text)
+    if step < 1:
+        return False
+    if base == "*":
+        return (value - minimum) % step == 0
+    start = int(base)
+    return start <= value <= maximum and (value - start) % step == 0
+
+
+def _match_one(part: str, value: int, minimum: int, maximum: int) -> bool:
+    if "/" in part:
+        return _match_step(part, value, minimum, maximum)
+    if "-" in part:
+        start_text, end_text = part.split("-", 1)
+        return int(start_text) <= value <= int(end_text)
+    return int(part) == value
+
+
 def _matches_field(field: str, value: int, minimum: int, maximum: int) -> bool:
     if field == "*":
         return True
-    for part in field.split(","):
-        if "/" in part:
-            base, step_text = part.split("/", 1)
-            step = int(step_text)
-            if step < 1:
-                return False
-            if base == "*":
-                if (value - minimum) % step == 0:
-                    return True
-                continue
-            start = int(base)
-            if start <= value <= maximum and (value - start) % step == 0:
-                return True
-            continue
-        if "-" in part:
-            start_text, end_text = part.split("-", 1)
-            if int(start_text) <= value <= int(end_text):
-                return True
-            continue
-        if int(part) == value:
-            return True
-    return False
+    return any(_match_one(part, value, minimum, maximum) for part in field.split(","))
 
 
 def cron_matches(expression: str, when: datetime) -> bool:
@@ -64,5 +63,4 @@ def next_scheduled_sync(expression: str, now=None):
     when = now or timezone.localtime()
     if timezone.is_naive(when):
         when = timezone.make_aware(when, timezone.get_current_timezone())
-    local = timezone.localtime(when)
-    return next_cron_datetime(expression, local)
+    return next_cron_datetime(expression, timezone.localtime(when))

@@ -161,11 +161,11 @@ def test_claim_403_reports_compromise_without_token(monkeypatch):
     monkeypatch.setattr("finance.simplefin_client.urlopen", fake_open)
     with pytest.raises(SimpleFinError) as raised:
         claim_access_url(CLAIM_URL)
-    with pytest.raises(SimpleFinError) as wrapped:
-        claim_connection(owner, setup_token())
-
     assert str(raised.value) == CLAIM_COMPROMISED
     assert CLAIM_URL not in str(raised.value)
+
+    with pytest.raises(SimpleFinError) as wrapped:
+        claim_connection(owner, setup_token())
     assert ACCESS_URL not in str(wrapped.value)
     assert SimpleFinConnection.objects.count() == 0
 
@@ -532,7 +532,8 @@ def test_claim_and_fetch_http_paths(monkeypatch):
     assert "secret" not in "".join(msgs)
     parse_five_field_cron("30 6 * * *")
     nxt = next_scheduled_sync("30 6 * * *", datetime(2026, 10, 1, 6, 0))
-    assert nxt.hour == 6 and nxt.minute == 30
+    assert nxt.hour == 6
+    assert nxt.minute == 30
     with pytest.raises(ValueError):
         parse_five_field_cron("not a cron")
     from finance.simplefin_schedule import cron_matches

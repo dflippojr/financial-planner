@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import binascii
 import hashlib
 from datetime import date, datetime, timedelta, timezone as dt_timezone
 from decimal import Decimal, InvalidOperation
@@ -28,6 +27,9 @@ from finance.simplefin_client import claim_access_url, fetch_accounts
 from finance.simplefin_errors import SimpleFinError, provider_errors
 
 MAX_BIGINT = 2**63 - 1
+UNSUPPORTED_CURRENCY = "That SimpleFIN account uses a currency this app does not store."
+UNSTORABLE_AMOUNT = "SimpleFIN sent an amount that could not be stored."
+INVALID_TOKEN = "That setup token is not a valid SimpleFIN token."
 
 
 def _owned_connection(person, connection_id):
@@ -56,11 +58,11 @@ def decode_setup_token(token: str) -> str:
     padding = "=" * ((4 - len(compact) % 4) % 4)
     try:
         decoded = base64.b64decode(compact + padding, validate=False).decode("utf-8").strip()
-    except (binascii.Error, UnicodeDecodeError, ValueError):
-        raise SimpleFinError("That setup token is not a valid SimpleFIN token.") from None
+    except ValueError:
+        raise SimpleFinError(INVALID_TOKEN) from None
     parts = urlsplit(decoded)
     if parts.scheme != "https" or not parts.netloc:
-        raise SimpleFinError("That setup token is not a valid SimpleFIN token.")
+        raise SimpleFinError(INVALID_TOKEN)
     return decoded
 
 
@@ -73,9 +75,9 @@ def _mode_for_account_type(account_type: str) -> str:
 def _iso4217_usd(value: str) -> str:
     code = (value or "").strip().upper()
     if "://" in (value or "") or len(code) != 3 or not code.isalpha():
-        raise SimpleFinError("That SimpleFIN account uses a currency this app does not store.")
+        raise SimpleFinError(UNSUPPORTED_CURRENCY)
     if code != "USD":
-        raise SimpleFinError("That SimpleFIN account uses a currency this app does not store.")
+        raise SimpleFinError(UNSUPPORTED_CURRENCY)
     return code
 
 
@@ -83,15 +85,15 @@ def decimal_to_minor(value: str) -> int:
     try:
         amount = Decimal(str(value).strip())
     except (InvalidOperation, AttributeError) as exc:
-        raise SimpleFinError("SimpleFIN sent an amount that could not be stored.") from exc
+        raise SimpleFinError(UNSTORABLE_AMOUNT) from exc
     if not amount.is_finite():
-        raise SimpleFinError("SimpleFIN sent an amount that could not be stored.")
+        raise SimpleFinError(UNSTORABLE_AMOUNT)
     minor = amount * 100
     if minor != minor.to_integral_value():
-        raise SimpleFinError("SimpleFIN sent an amount that could not be stored.")
+        raise SimpleFinError(UNSTORABLE_AMOUNT)
     minor_int = int(minor)
     if abs(minor_int) > MAX_BIGINT:
-        raise SimpleFinError("SimpleFIN sent an amount that could not be stored.")
+        raise SimpleFinError(UNSTORABLE_AMOUNT)
     return minor_int
 
 
@@ -114,26 +116,27 @@ def _connection_name_by_id(payload: dict) -> dict[str, str]:
     return names
 
 
+def _account_row(item: dict, names: dict[str, str]) -> dict:
+    conn_id = str(item.get("conn_id") or "")
+    extra = item.get("extra") if isinstance(item.get("extra"), dict) else {}
+    reported_type = extra.get("type") or extra.get("account-type") or ""
+    if not isinstance(reported_type, str):
+        reported_type = ""
+    return {
+        "id": str(item["id"]),
+        "name": str(item.get("name") or "Account"),
+        "institution": names.get(conn_id) or str(item.get("conn_name") or ""),
+        "type": reported_type[:80] or "Not provided by SimpleFIN",
+        "currency": str(item.get("currency") or ""),
+    }
+
+
 def listed_accounts(payload: dict) -> list[dict]:
     names = _connection_name_by_id(payload)
     rows = []
     for item in payload.get("accounts") or []:
-        if not isinstance(item, dict) or not item.get("id"):
-            continue
-        conn_id = str(item.get("conn_id") or "")
-        extra = item.get("extra") if isinstance(item.get("extra"), dict) else {}
-        reported_type = extra.get("type") or extra.get("account-type") or ""
-        if not isinstance(reported_type, str):
-            reported_type = ""
-        rows.append(
-            {
-                "id": str(item["id"]),
-                "name": str(item.get("name") or "Account"),
-                "institution": names.get(conn_id) or str(item.get("conn_name") or ""),
-                "type": reported_type[:80] or "Not provided by SimpleFIN",
-                "currency": str(item.get("currency") or ""),
-            }
-        )
+        if isinstance(item, dict) and item.get("id"):
+            rows.append(_account_row(item, names))
     return rows
 
 
@@ -191,6 +194,40 @@ def _create_linked_account(person, *, name, account_type, sharing):
     )
 
 
+def _link_existing(person, connection, choice, simplefin_account_id):
+    if not choice.get("account_id"):
+        raise SimpleFinError("Choose an account to link.")
+    account = _visible_linkable_account(person, choice["account_id"])
+    if AccountLink.objects.filter(account=account).exclude(connection=connection).exists():
+        raise SimpleFinError("That account is already linked.")
+    cutover = choice.get("cutover_date") or default_cutover_date(account)
+    mode = _mode_for_account_type(account.account_type)
+    link, _created = AccountLink.objects.update_or_create(
+        connection=connection,
+        simplefin_account_id=simplefin_account_id,
+        defaults={"account": account, "cutover_date": cutover, "mode": mode},
+    )
+    return link
+
+
+def _create_and_link(person, connection, choice, simplefin_account_id):
+    account_type = choice.get("account_type")
+    if account_type not in Account.Type.values:
+        raise SimpleFinError("Choose a valid account type.")
+    name = (choice.get("name") or "").strip()
+    if not name:
+        raise SimpleFinError("Name the new account.")
+    sharing = choice.get("sharing") or Account.Scope.PRIVATE
+    account = _create_linked_account(person, name=name, account_type=account_type, sharing=sharing)
+    return AccountLink.objects.create(
+        connection=connection,
+        account=account,
+        simplefin_account_id=simplefin_account_id,
+        cutover_date=choice.get("cutover_date") or timezone.localdate(),
+        mode=_mode_for_account_type(account_type),
+    )
+
+
 @transaction.atomic
 def save_account_links(principal, connection_id, choices: list[dict]) -> list[AccountLink]:
     person = _person_for(principal)
@@ -207,39 +244,10 @@ def save_account_links(principal, connection_id, choices: list[dict]) -> list[Ac
         if not simplefin_account_id or action == "ignore":
             continue
         if action == "link":
-            if not choice.get("account_id"):
-                raise SimpleFinError("Choose an account to link.")
-            account = _visible_linkable_account(person, choice["account_id"])
-            if AccountLink.objects.filter(account=account).exclude(connection=connection).exists():
-                raise SimpleFinError("That account is already linked.")
-            cutover = choice.get("cutover_date") or default_cutover_date(account)
-            mode = _mode_for_account_type(account.account_type)
-            link, _created = AccountLink.objects.update_or_create(
-                connection=connection,
-                simplefin_account_id=simplefin_account_id,
-                defaults={"account": account, "cutover_date": cutover, "mode": mode},
-            )
-            created.append(link)
+            created.append(_link_existing(person, connection, choice, simplefin_account_id))
             continue
         if action == "create":
-            account_type = choice.get("account_type")
-            if account_type not in Account.Type.values:
-                raise SimpleFinError("Choose a valid account type.")
-            name = (choice.get("name") or "").strip()
-            if not name:
-                raise SimpleFinError("Name the new account.")
-            sharing = choice.get("sharing") or Account.Scope.PRIVATE
-            account = _create_linked_account(
-                person, name=name, account_type=account_type, sharing=sharing
-            )
-            link = AccountLink.objects.create(
-                connection=connection,
-                account=account,
-                simplefin_account_id=simplefin_account_id,
-                cutover_date=choice.get("cutover_date") or timezone.localdate(),
-                mode=_mode_for_account_type(account_type),
-            )
-            created.append(link)
+            created.append(_create_and_link(person, connection, choice, simplefin_account_id))
             continue
         raise SimpleFinError("Choose how to use each SimpleFIN account.")
     return created
@@ -290,7 +298,7 @@ def _upsert_snapshot(account, *, snapshot_date, amount_minor, currency, batch):
     )
 
 
-def _import_transactions(person, account, link, remote, batch) -> int:
+def _import_transactions(account, link, remote, batch) -> int:
     existing_ids = set(
         Transaction.objects.filter(
             account=account,
@@ -366,7 +374,7 @@ def _sync_one_link(person, connection, link, remote, synced_at) -> int:
     batch = _ensure_batch(person, account, connection, synced_at, start, end)
     imported = 0
     if link.mode == AccountLink.Mode.TRANSACTIONS:
-        imported = _import_transactions(person, account, link, remote, batch)
+        imported = _import_transactions(account, link, remote, batch)
     _upsert_snapshot(
         account,
         snapshot_date=balance_date,

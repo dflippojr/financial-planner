@@ -60,81 +60,101 @@ def _choices_from_post(request, remotes):
     return choices
 
 
+def _safe_remote_accounts(connection):
+    if connection is None:
+        return [], [], ""
+    try:
+        remotes, provider_messages = load_remote_accounts(connection)
+        return remotes, provider_messages, ""
+    except SimpleFinError as exc:
+        return [], [], str(exc)
+
+
+def _handle_claim(request, connection, form):
+    if connection is not None:
+        messages.error(request, "Disconnect the existing SimpleFIN connection before adding another.")
+        return redirect("simplefin-connections")
+    if not form.is_valid():
+        return None
+    try:
+        claim_connection(request.user, form.cleaned_data["token"])
+    except SimpleFinError as exc:
+        form.add_error("token", str(exc))
+        return None
+    except PermissionDenied as exc:
+        raise Http404 from exc
+    messages.success(request, "SimpleFIN is connected. Link the accounts below.")
+    return redirect("simplefin-connections")
+
+
+def _handle_link(request, connection, remotes, load_error):
+    if not remotes:
+        messages.error(request, load_error or "SimpleFIN accounts could not be listed.")
+        return redirect("simplefin-connections")
+    try:
+        save_account_links(request.user, connection.pk, _choices_from_post(request, remotes))
+        sync_connection(request.user, connection.pk, ignore_rate_limit=True)
+    except SimpleFinError as exc:
+        messages.error(request, str(exc))
+        return None
+    except PermissionDenied as exc:
+        raise Http404 from exc
+    except ValueError:
+        messages.error(request, "Check the cut-over dates and try again.")
+        return None
+    messages.success(request, "Account links saved and synced.")
+    return redirect("simplefin-connections")
+
+
+def _cutover_for(remote, link_map, accounts, fallback):
+    link = link_map.get(remote["id"])
+    if link is not None:
+        return link, link.cutover_date.isoformat()
+    if accounts:
+        return None, default_cutover_date(accounts[0]).isoformat()
+    return None, fallback
+
+
+def _schedule_state(connection):
+    if connection is None:
+        return None, False
+    try:
+        next_sync = next_scheduled_sync(settings.SIMPLEFIN_SYNC_CRON)
+    except ValueError:
+        next_sync = None
+    can_sync_now = connection.last_sync_at is None or (
+        (timezone.now() - connection.last_sync_at).total_seconds()
+        >= settings.SIMPLEFIN_SYNC_MIN_INTERVAL_SECONDS
+    )
+    return next_sync, can_sync_now
+
+
 @require_http_methods(["GET", "POST"])
 @never_cache
 def connections(request):
     person = _person(request)
-    household = current_household(person)
     connection = SimpleFinConnection.objects.filter(owner=person).first()
     form = SimpleFinSetupForm(request.POST if request.POST.get("intent") == "claim" else None)
-    remotes = []
-    provider_messages = []
-    load_error = ""
-    if connection is not None:
-        try:
-            remotes, provider_messages = load_remote_accounts(connection)
-        except SimpleFinError as exc:
-            load_error = str(exc)
+    remotes, provider_messages, load_error = _safe_remote_accounts(connection)
     if request.method == "POST" and request.POST.get("intent") == "claim":
-        if connection is not None:
-            messages.error(request, "Disconnect the existing SimpleFIN connection before adding another.")
-            return redirect("simplefin-connections")
-        if form.is_valid():
-            try:
-                claim_connection(request.user, form.cleaned_data["token"])
-                messages.success(request, "SimpleFIN is connected. Link the accounts below.")
-                return redirect("simplefin-connections")
-            except SimpleFinError as exc:
-                form.add_error("token", str(exc))
-            except PermissionDenied as exc:
-                raise Http404 from exc
+        response = _handle_claim(request, connection, form)
+        if response is not None:
+            return response
     if request.method == "POST" and request.POST.get("intent") == "link" and connection is not None:
-        if not remotes:
-            messages.error(request, load_error or "SimpleFIN accounts could not be listed.")
-            return redirect("simplefin-connections")
-        try:
-            save_account_links(request.user, connection.pk, _choices_from_post(request, remotes))
-            sync_connection(request.user, connection.pk, ignore_rate_limit=True)
-            messages.success(request, "Account links saved and synced.")
-            return redirect("simplefin-connections")
-        except SimpleFinError as exc:
-            messages.error(request, str(exc))
-        except PermissionDenied as exc:
-            raise Http404 from exc
-        except ValueError:
-            messages.error(request, "Check the cut-over dates and try again.")
-
-    link_map = {}
-    if connection is not None:
-        link_map = {
-            link.simplefin_account_id: link
-            for link in AccountLink.objects.select_related("account").filter(connection=connection)
-        }
+        response = _handle_link(request, connection, remotes, load_error)
+        if response is not None:
+            return response
+    link_map = {
+        link.simplefin_account_id: link
+        for link in AccountLink.objects.select_related("account").filter(connection=connection)
+    } if connection is not None else {}
     accounts = _linkable_accounts(person)
-    fallback_cutover = timezone.localdate().isoformat()
+    fallback = timezone.localdate().isoformat()
     rows = []
     for remote in remotes:
-        link = link_map.get(remote["id"])
-        if link is not None:
-            cutover = link.cutover_date.isoformat()
-        elif accounts:
-            cutover = default_cutover_date(accounts[0]).isoformat()
-        else:
-            cutover = fallback_cutover
+        link, cutover = _cutover_for(remote, link_map, accounts, fallback)
         rows.append({**remote, "link": link, "default_cutover": cutover})
-
-    next_sync = None
-    can_sync_now = False
-    if connection is not None:
-        try:
-            next_sync = next_scheduled_sync(settings.SIMPLEFIN_SYNC_CRON)
-        except ValueError:
-            next_sync = None
-        can_sync_now = connection.last_sync_at is None or (
-            (timezone.now() - connection.last_sync_at).total_seconds()
-            >= settings.SIMPLEFIN_SYNC_MIN_INTERVAL_SECONDS
-        )
-
+    next_sync, can_sync_now = _schedule_state(connection)
     return render(
         request,
         "finance/connections.html",
@@ -143,7 +163,7 @@ def connections(request):
             "connection": connection,
             "rows": rows,
             "accounts": accounts,
-            "has_household": household is not None,
+            "has_household": current_household(person) is not None,
             "provider_messages": provider_messages,
             "load_error": load_error,
             "next_sync": next_sync,
