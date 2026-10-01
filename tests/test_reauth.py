@@ -196,3 +196,41 @@ def test_leave_household_requires_recent_auth():
     left = client.post(reverse("leave-household"))
     assert left.status_code == 302
     assert not Membership.objects.filter(person=person, household=household, ended_at__isnull=True).exists()
+
+
+def _expire_recent_auth(client):
+    session = client.session
+    session[RECENT_AUTH_SESSION_KEY] = (timezone.now() - timedelta(minutes=11)).timestamp()
+    session.save()
+
+
+@pytest.mark.django_db
+@_google_settings()
+def test_direct_google_connect_from_a_stale_session_is_refused():
+    user, _person, _household = make_member()
+    client = Client()
+    client.force_login(user)
+    _expire_recent_auth(client)
+
+    response = client.post(reverse("google_login"), {"process": "connect"})
+
+    assert response.status_code == 302
+    assert response.url.startswith(reverse("reauth"))
+    assert not SocialAccount.objects.filter(user=user).exists()
+
+
+@pytest.mark.django_db
+@_google_settings()
+def test_google_connect_callback_rechecks_recent_auth():
+    user, _person, _household = make_member()
+    client = Client()
+    client.force_login(user)
+    stamp_recent_auth(client)
+    start = client.post(reverse("google_login"), {"process": "connect"})
+    _expire_recent_auth(client)
+
+    finished = _finish_google(client, start)
+
+    assert finished.status_code == 302
+    assert finished.url.startswith(reverse("reauth"))
+    assert not SocialAccount.objects.filter(user=user).exists()

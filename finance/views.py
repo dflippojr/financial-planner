@@ -68,6 +68,8 @@ from .lifecycle_services import leave_household, lock_actor_household
 from .reauth import (
     ACCOUNT_SETTINGS_ACTIONS,
     action_label,
+    reauth_redirect,
+    recent_auth_is_fresh,
     requires_recent_auth,
     safe_next_url,
     stamp_recent_auth,
@@ -781,6 +783,13 @@ def start_google_sign_in(request):
 def google_oauth_login(request):
     if not google_signin_enabled():
         raise Http404()
+    if (
+        request.method == "POST"
+        and request.POST.get("process") == "connect"
+        and request.user.is_authenticated
+        and not recent_auth_is_fresh(request)
+    ):
+        return reauth_redirect(request, "connect-google", reverse("account-settings"))
     return _google_oauth_login(request)
 
 

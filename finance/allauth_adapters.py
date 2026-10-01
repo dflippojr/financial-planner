@@ -34,7 +34,7 @@ from .google_auth import (
     has_usable_google_sign_in,
     peek_google_pending,
 )
-from .reauth import safe_next_url, stamp_recent_auth
+from .reauth import reauth_redirect, recent_auth_is_fresh, safe_next_url, stamp_recent_auth
 
 
 class MemberAccountAdapter(DefaultAccountAdapter):
@@ -100,6 +100,13 @@ class MemberSocialAccountAdapter(DefaultSocialAccountAdapter):
         intent = (pending or {}).get("intent")
         if login_is_blocked(key):
             raise ImmediateHttpResponse(self._failed_response(request))
+        if process == "connect" and not recent_auth_is_fresh(request):
+            # Linking a new sign-in method is sensitive: refuse a connect that
+            # reached the callback without a fresh confirmation (for example a
+            # direct POST to the login URL from a stale session).
+            raise ImmediateHttpResponse(
+                reauth_redirect(request, "connect-google", reverse("account-settings"))
+            )
         if intent == "reauth":
             self._complete_reauth(request, sociallogin, pending, key)
             return
