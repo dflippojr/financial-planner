@@ -498,10 +498,34 @@ def cash_flow_chart_data(report):
     }
 
 
+def _donut_rows(rows):
+    """Rows a donut can draw: only categories with positive spending.
+
+    A net-refund category has a negative total, which a pie cannot show, so it
+    stays in the tiles and table and is left out of the chart. Shares are of
+    the charted (positive) total, not of net spending.
+    """
+    positive = [row for row in rows if row.spending_minor > 0]
+    charted_total = sum(row.spending_minor for row in positive)
+    return [
+        {
+            "name": row.name,
+            "color_index": row.color_index,
+            "spending_minor": row.spending_minor,
+            "spending_display": row.spending_display,
+            "share_display": format_percent(row.spending_minor, charted_total),
+            "drilldown_url": row.drilldown_url,
+        }
+        for row in positive
+    ]
+
+
 def spending_chart_data(report):
     return {
         "total_spending_minor": report.total_spending_minor,
         "total_spending_display": report.total_spending_display,
+        "has_net_refund": any(row.is_net_refund for row in report.rows),
+        "chart_rows": _donut_rows(report.rows),
         "rows": [
             {
                 "name": row.name,

@@ -48,8 +48,11 @@
   <figure>
     <figcaption class="mb-2 font-medium">Spending share by category</figcaption>
     <div class="h-72 w-full rounded-box bg-base-100 p-2 shadow">
-      <canvas id="spending-chart" data-chart="spending" data-chart-payload="spending-chart-data" role="img" aria-label="Donut chart of spending by category. Category tiles and the table below list the same amounts, percents, and net-refund labels."></canvas>
+      <canvas id="spending-chart" data-chart="spending" data-chart-payload="spending-chart-data" role="img" aria-label="Donut chart of spending by category, showing categories with positive spending. Category tiles and the table below list every category's amount, percent, and net-refund label."></canvas>
     </div>
+    {% if chart_data.has_net_refund %}
+    <p class="mt-2 text-sm opacity-80">Categories where refunds exceed spending are not drawn in the chart. They appear in the tiles and the table with their negative totals.</p>
+    {% endif %}
   </figure>
   <div class="overflow-x-auto">
     <table class="table table-zebra">

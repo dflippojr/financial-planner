@@ -337,3 +337,31 @@ def test_uncategorized_drilldown_lists_charges_whose_category_is_no_longer_visib
 
     assert uncategorized.spending_minor == 2200
     assert list(listed.context["transactions"]) == [grocery_tx]
+
+
+@pytest.mark.django_db
+def test_donut_draws_only_positive_spending_and_explains_net_refunds():
+    owner = make_person("owner")
+    household = make_household(owner)
+    checking = make_account(owner)
+    groceries = household.categories.get(name="Groceries")
+    dining = household.categories.get(name="Dining")
+    spend = make_transaction(owner, checking, amount_minor=-10000, description="Synthetic groceries")
+    original = make_transaction(owner, checking, amount_minor=-1000, description="Synthetic dinner", fingerprint="h" * 64)
+    refund = make_transaction(owner, checking, amount_minor=10000, description="Synthetic dinner refund", fingerprint="i" * 64)
+    assign_category(owner, spend.pk, groceries.pk)
+    assign_category(owner, original.pk, dining.pk)
+    link_refund(owner, refund.pk, original.pk)
+    report = spending_by_category_report(owner, date_from=date(2026, 1, 1), date_to=date(2026, 1, 31))
+
+    payload = spending_chart_data(report)
+
+    assert payload["has_net_refund"] is True
+    assert [row["name"] for row in payload["chart_rows"]] == ["Groceries"]
+    assert payload["chart_rows"][0]["spending_minor"] == 10000
+    assert payload["chart_rows"][0]["share_display"] == "100.0%"
+    assert any(row["is_net_refund"] for row in payload["rows"])
+    client = Client()
+    client.force_login(owner.user)
+    page = client.get(reverse("spending-by-category"), {"date_from": "2026-01-01", "date_to": "2026-01-31"})
+    assert b"Categories where refunds exceed spending are not drawn in the chart." in page.content

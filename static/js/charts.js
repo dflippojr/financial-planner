@@ -172,7 +172,9 @@
   }
 
   function spendingChart(canvas, data, palette) {
-    var rows = data.rows || [];
+    // Only positive spending can be drawn as a slice; net-refund categories
+    // stay in the tiles and table (see chart_rows in spending_chart_data).
+    var rows = data.chart_rows || [];
     var urls = rows.map(function (row) {
       return row.drilldown_url;
     });
@@ -186,14 +188,13 @@
           {
             label: "Spending",
             data: rows.map(function (row) {
-              return Math.abs(row.spending_minor);
+              return row.spending_minor;
             }),
             backgroundColor: rows.map(function (row) {
               return palette.categories[row.color_index] || palette.categories[0];
             }),
             displays: rows.map(function (row) {
-              var refund = row.is_net_refund ? " (net refund)" : "";
-              return row.spending_display + " (" + row.percent_display + ")" + refund;
+              return row.spending_display + " (" + row.share_display + " of charted spending)";
             }),
           },
         ],
