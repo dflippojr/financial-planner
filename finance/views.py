@@ -55,11 +55,12 @@ from .forms import (
     TransferWindowForm,
 )
 from .google_auth import (
-    GOOGLE_PENDING_SESSION_KEY,
+    disconnect_google_account,
     google_signin_enabled,
     google_throttle_key,
     has_google_account,
-    sign_in_method_count,
+    remove_member_password,
+    store_google_pending,
     username_is_taken,
 )
 from .lifecycle_services import lock_actor_household
@@ -627,12 +628,15 @@ def _start_google_join(request, google_form):
     if not invitation_is_usable(invitation_code) or username_is_taken(username):
         google_form.add_error(None, "The invitation could not be used.")
         return None
-    request.session[GOOGLE_PENDING_SESSION_KEY] = {
-        "intent": "join",
-        "invitation_code": invitation_code,
-        "username": google_form.cleaned_data["username"],
-        "display_name": google_form.cleaned_data["display_name"],
-    }
+    store_google_pending(
+        request,
+        {
+            "intent": "join",
+            "invitation_code": invitation_code,
+            "username": google_form.cleaned_data["username"],
+            "display_name": google_form.cleaned_data["display_name"],
+        },
+    )
     return _google_oauth_login(request)
 
 
@@ -653,12 +657,15 @@ def _start_google_setup(request, google_form):
     if username_is_taken(username):
         google_form.add_error(None, SETUP_FAILED)
         return None
-    request.session[GOOGLE_PENDING_SESSION_KEY] = {
-        "intent": "setup",
-        "username": google_form.cleaned_data["username"],
-        "display_name": google_form.cleaned_data["display_name"],
-        "household_name": google_form.cleaned_data["household_name"],
-    }
+    store_google_pending(
+        request,
+        {
+            "intent": "setup",
+            "username": google_form.cleaned_data["username"],
+            "display_name": google_form.cleaned_data["display_name"],
+            "household_name": google_form.cleaned_data["household_name"],
+        },
+    )
     return _google_oauth_login(request)
 
 
@@ -690,7 +697,6 @@ def _complete_password_setup(request, form):
 def _account_connect_google(request):
     if not google_signin_enabled():
         raise Http404()
-    request.session.pop(GOOGLE_PENDING_SESSION_KEY, None)
     post = request.POST.copy()
     post["process"] = "connect"
     request.POST = post
@@ -698,11 +704,8 @@ def _account_connect_google(request):
 
 
 def _account_disconnect_google(user):
-    from allauth.socialaccount.models import SocialAccount
-
-    if sign_in_method_count(user) <= 1:
+    if not disconnect_google_account(user):
         return LAST_SIGN_IN_METHOD
-    SocialAccount.objects.filter(user=user, provider="google").delete()
     return None
 
 
@@ -718,10 +721,9 @@ def _account_add_password(request, password_form):
 
 
 def _account_remove_password(request):
-    if not has_google_account(request.user) or not request.user.has_usable_password():
+    if not remove_member_password(request.user):
         return LAST_SIGN_IN_METHOD
-    request.user.set_unusable_password()
-    request.user.save(update_fields=("password",))
+    request.user.refresh_from_db()
     update_session_auth_hash(request, request.user)
     return None
 
@@ -745,7 +747,7 @@ def start_google_sign_in(request):
                 "auth_error": "Sign-in failed. Check your credentials and try again later.",
             },
         )
-    request.session[GOOGLE_PENDING_SESSION_KEY] = {"intent": "login"}
+    store_google_pending(request, {"intent": "login"})
     return _google_oauth_login(request)
 
 

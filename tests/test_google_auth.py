@@ -1,5 +1,7 @@
 import json
+import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
@@ -7,14 +9,23 @@ import jwt
 import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.sessions.models import Session
-from django.test import Client, override_settings
+from django.db import connection, connections
+from django.test import Client, RequestFactory, override_settings
 from django.urls import reverse
 from django.utils import timezone
 from allauth.socialaccount.models import SocialAccount, SocialToken
 
 from finance.allauth_adapters import MemberSocialAccountAdapter
 from finance.auth_services import create_invitation, create_recovery_codes
-from finance.models import RecoveryCode
+from finance.google_auth import (
+    GOOGLE_FLOW_NONCE_STATE_KEY,
+    consume_google_pending,
+    disconnect_google_account,
+    remove_member_password,
+    sign_in_method_count,
+    store_google_pending,
+)
+from finance.models import Invitation, RecoveryCode
 from tests.test_auth_flows import PASSWORD, SYNTHETIC_SETUP_CODE, make_member
 
 
@@ -327,3 +338,148 @@ def test_google_login_page_offers_google_first():
     assert google_at != -1
     assert password_at != -1
     assert google_at < password_at
+
+
+def _session_request():
+    from django.contrib.sessions.middleware import SessionMiddleware
+
+    request = RequestFactory().get("/")
+    SessionMiddleware(lambda response: response).process_request(request)
+    request.session.save()
+    return request
+
+
+@pytest.mark.django_db
+def test_google_pending_nonce_is_refused_when_missing_unknown_or_already_used():
+    request = _session_request()
+    nonce = store_google_pending(request, {"intent": "join", "invitation_code": "synthetic-a"})
+    sociallogin = SimpleNamespace(state={GOOGLE_FLOW_NONCE_STATE_KEY: nonce})
+
+    assert consume_google_pending(request, SimpleNamespace(state={})) is None
+    assert consume_google_pending(
+        request, SimpleNamespace(state={GOOGLE_FLOW_NONCE_STATE_KEY: "unknown-nonce"})
+    ) is None
+    first = consume_google_pending(request, sociallogin)
+    second = consume_google_pending(request, sociallogin)
+
+    assert first == {"intent": "join", "invitation_code": "synthetic-a"}
+    assert second is None
+
+
+@pytest.mark.django_db
+@_google_settings()
+def test_two_tab_google_joins_bind_each_invitation_to_its_own_oauth_callback():
+    inviter_a, _person_a, household_a = make_member("inviter-a")
+    inviter_b, _person_b, household_b = make_member("inviter-b")
+    code_a = create_invitation(inviter_a.person)
+    code_b = create_invitation(inviter_b.person)
+    client = Client()
+
+    start_a = client.post(
+        reverse("join"),
+        {
+            "intent": "google",
+            "invitation_code": code_a,
+            "username": "joined-a",
+            "display_name": "Joined A",
+        },
+    )
+    start_b = client.post(
+        reverse("join"),
+        {
+            "intent": "google",
+            "invitation_code": code_b,
+            "username": "joined-b",
+            "display_name": "Joined B",
+        },
+    )
+
+    finished_a = _finish_google(client, start_a, id_token=_id_token(sub="synthetic-google-sub-a"))
+    assert finished_a.status_code == 200
+    user_a = get_user_model().objects.get(username="joined-a")
+    assert not get_user_model().objects.filter(username="joined-b").exists()
+    assert user_a.person.memberships.get().household_id == household_a.pk
+    assert SocialAccount.objects.filter(user=user_a, uid="synthetic-google-sub-a").exists()
+    invitation_a = Invitation.objects.get(household=household_a, invited_by=inviter_a.person)
+    invitation_b = Invitation.objects.get(household=household_b, invited_by=inviter_b.person)
+    assert invitation_a.used_at is not None
+    assert invitation_b.used_at is None
+
+    finished_b = _finish_google(client, start_b, id_token=_id_token(sub="synthetic-google-sub-b"))
+    assert finished_b.status_code == 200
+    user_b = get_user_model().objects.get(username="joined-b")
+    assert user_b.person.memberships.get().household_id == household_b.pk
+    invitation_b.refresh_from_db()
+    assert invitation_b.used_at is not None
+
+
+@pytest.mark.django_db
+@_google_settings()
+def test_google_join_callback_is_refused_when_its_nonce_was_already_consumed():
+    inviter, _person, _household = make_member("inviter-nonce")
+    code = create_invitation(inviter.person)
+    client = Client()
+    start = client.post(
+        reverse("join"),
+        {
+            "intent": "google",
+            "invitation_code": code,
+            "username": "joined-nonce",
+            "display_name": "Joined Nonce",
+        },
+    )
+    session = client.session
+    session["google_pending"] = {}
+    session.save()
+
+    refused = _finish_google(client, start)
+    assert get_user_model().objects.filter(username="joined-nonce").count() == 0
+    assert SocialAccount.objects.count() == 0
+    assert refused.status_code == 302
+
+
+@pytest.mark.django_db(transaction=True)
+@_google_settings()
+def test_disconnect_google_and_remove_password_race_keeps_one_method():
+    if connection.vendor != "postgresql":
+        pytest.skip("concurrent sign-in method removal is serialized with PostgreSQL row locks")
+
+    user, _person, _household = make_member("both-methods")
+    SocialAccount.objects.create(
+        user=user, provider="google", uid=GOOGLE_SUB, extra_data={"sub": GOOGLE_SUB}
+    )
+    barrier = threading.Barrier(2)
+    outcomes = []
+    errors = []
+
+    def disconnect():
+        try:
+            barrier.wait(timeout=10)
+            outcomes.append(disconnect_google_account(user))
+        except Exception as exc:  # noqa: BLE001 - reported to the main thread
+            errors.append(exc)
+        finally:
+            connections.close_all()
+
+    def remove_password():
+        try:
+            barrier.wait(timeout=10)
+            outcomes.append(remove_member_password(user))
+        except Exception as exc:  # noqa: BLE001 - reported to the main thread
+            errors.append(exc)
+        finally:
+            connections.close_all()
+
+    first = threading.Thread(target=disconnect)
+    second = threading.Thread(target=remove_password)
+    first.start()
+    second.start()
+    first.join(timeout=30)
+    second.join(timeout=30)
+
+    assert errors == []
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert sorted(outcomes) == [False, True]
+    user.refresh_from_db()
+    assert sign_in_method_count(user) == 1

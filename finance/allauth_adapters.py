@@ -18,12 +18,15 @@ from .auth_services import (
 )
 from .google_auth import (
     GOOGLE_FAILED,
-    GOOGLE_PENDING_SESSION_KEY,
+    GOOGLE_FLOW_NONCE_STATE_KEY,
+    bind_google_flow_nonce,
+    consume_google_pending,
     google_email_is_verified,
     google_signin_enabled,
     google_throttle_key,
     google_uid,
     has_google_account,
+    peek_google_pending,
     sign_in_method_count,
 )
 
@@ -52,9 +55,20 @@ class MemberSocialAccountAdapter(DefaultSocialAccountAdapter):
     def get_connect_redirect_url(self, request, socialaccount):
         return reverse("account-settings")
 
+    def generate_state_param(self, state):
+        from allauth.core import context
+
+        request = self.request or context.request
+        if request is not None:
+            nonce = bind_google_flow_nonce(request, state)
+            if nonce:
+                return nonce
+        return super().generate_state_param(state)
+
     def is_open_for_signup(self, request, sociallogin):
-        pending = (request.session.get(GOOGLE_PENDING_SESSION_KEY) or {}).get("intent")
-        return pending in ("join", "setup")
+        nonce = (sociallogin.state or {}).get(GOOGLE_FLOW_NONCE_STATE_KEY)
+        pending = peek_google_pending(request, nonce)
+        return bool(pending and pending.get("intent") in ("join", "setup"))
 
     def on_authentication_error(
         self, request, provider, error=None, exception=None, extra_context=None
@@ -68,8 +82,8 @@ class MemberSocialAccountAdapter(DefaultSocialAccountAdapter):
         if not google_uid(extra) or not google_email_is_verified(extra):
             raise ImmediateHttpResponse(self._failed_response(request))
         process = sociallogin.state.get("process")
-        pending = request.session.get(GOOGLE_PENDING_SESSION_KEY) or {}
-        intent = pending.get("intent")
+        pending = consume_google_pending(request, sociallogin)
+        intent = (pending or {}).get("intent")
         key = google_throttle_key(request.META.get("REMOTE_ADDR"))
         if login_is_blocked(key):
             raise ImmediateHttpResponse(self._failed_response(request))
@@ -79,11 +93,13 @@ class MemberSocialAccountAdapter(DefaultSocialAccountAdapter):
                 raise ImmediateHttpResponse(self._failed_response(request))
             if process == "connect":
                 return
-            request.session.pop(GOOGLE_PENDING_SESSION_KEY, None)
             clear_login_failures(key)
             return
         if process == "connect":
             return
+        if not pending:
+            record_login_failure(key)
+            raise ImmediateHttpResponse(self._failed_response(request, "login"))
         if intent == "join":
             self._complete_join(request, sociallogin, pending, key)
             return
@@ -111,7 +127,6 @@ class MemberSocialAccountAdapter(DefaultSocialAccountAdapter):
             record_login_failure(key)
             raise ImmediateHttpResponse(self._failed_response(request, "join"))
         sociallogin.connect(request, user)
-        request.session.pop(GOOGLE_PENDING_SESSION_KEY, None)
         clear_login_failures(key)
         raise ImmediateHttpResponse(
             render(
@@ -134,7 +149,6 @@ class MemberSocialAccountAdapter(DefaultSocialAccountAdapter):
         except ValueError:
             raise ImmediateHttpResponse(self._failed_response(request, "setup"))
         sociallogin.connect(request, user)
-        request.session.pop(GOOGLE_PENDING_SESSION_KEY, None)
         clear_login_failures(key)
         complete_member_session(request, user)
         raise ImmediateHttpResponse(
