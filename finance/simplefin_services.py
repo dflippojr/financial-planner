@@ -209,7 +209,11 @@ def _link_existing(person, connection, choice, simplefin_account_id):
     if not choice.get("account_id"):
         raise SimpleFinError("Choose an account to link.")
     account = _visible_linkable_account(person, choice["account_id"])
-    if AccountLink.objects.filter(account=account).exclude(connection=connection).exists():
+    if (
+        AccountLink.objects.filter(account=account)
+        .exclude(connection=connection, simplefin_account_id=simplefin_account_id)
+        .exists()
+    ):
         raise SimpleFinError("That account is already linked.")
     cutover = choice.get("cutover_date") or default_cutover_date(account)
     mode = _mode_for_account_type(account.account_type)
@@ -444,23 +448,39 @@ def _sync_connection_locked(principal, connection_id, *, ignore_rate_limit=False
     errors = provider_errors(payload)
     remote_accounts = _accounts_by_simplefin_id(payload)
     imported = 0
+    syncable_ids = set(
+        Account.objects.visible_to(person)
+        .filter(pk__in=[link.account_id for link in links], status=Account.Status.ACTIVE, archived_at__isnull=True)
+        .values_list("pk", flat=True)
+    )
+    skipped = 0
     try:
-        for link in links:
-            remote = remote_accounts.get(link.simplefin_account_id)
-            if remote is None:
-                continue
-            imported += _sync_one_link(person, connection, link, remote, now)
+        # A savepoint: a failure part-way undoes this run's imports while the
+        # failure record below still commits.
+        with transaction.atomic():
+            for link in links:
+                if link.account_id not in syncable_ids:
+                    # Archived, or no longer visible to the connection owner
+                    # (for example a shared account made private by its owner).
+                    skipped += 1
+                    continue
+                remote = remote_accounts.get(link.simplefin_account_id)
+                if remote is None:
+                    continue
+                imported += _sync_one_link(person, connection, link, remote, now)
     except SimpleFinError as exc:
         connection.last_sync_at = now
         connection.last_sync_result = str(exc)
         connection.save(update_fields=("last_sync_at", "last_sync_result"))
-        raise
+        return None, exc
     from finance.category_services import refresh_transfer_pairs
     from finance.recurring_services import refresh_recurring_series
 
     refresh_transfer_pairs(person)
     refresh_recurring_series(person)
     summary = f"Synced {imported} new transaction(s)."
+    if skipped:
+        summary = f"{summary} Skipped {skipped} linked account(s) that are archived or no longer available to you."
     if errors:
         summary = f"{summary} {errors[0]}"
     connection.last_sync_at = now

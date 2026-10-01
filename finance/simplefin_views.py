@@ -16,7 +16,6 @@ from .simplefin_errors import SimpleFinError
 from .simplefin_schedule import next_scheduled_sync
 from .simplefin_services import (
     claim_connection,
-    default_cutover_date,
     disconnect_connection,
     load_remote_accounts,
     save_account_links,
@@ -110,9 +109,9 @@ def _cutover_for(remote, link_map, accounts, fallback):
     link = link_map.get(remote["id"])
     if link is not None:
         return link, link.cutover_date.isoformat()
-    if accounts:
-        return None, default_cutover_date(accounts[0]).isoformat()
-    return None, fallback
+    # Leave it blank for unlinked rows: the server defaults to the day after the
+    # *selected* account's latest transaction, which a prefill cannot know.
+    return None, ""
 
 
 def _schedule_state(connection):

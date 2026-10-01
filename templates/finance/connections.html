@@ -100,7 +100,8 @@
                   {% endfor %}
                 </select>
                 <label class="sr-only" for="cutover-{{ forloop.counter0 }}">Cut-over date for {{ row.name }}</label>
-                <input id="cutover-{{ forloop.counter0 }}" class="input input-bordered input-sm mb-2" type="date" name="cutover_{{ forloop.counter0 }}" value="{{ row.default_cutover }}">
+                <input id="cutover-{{ forloop.counter0 }}" class="input input-bordered input-sm mb-2" type="date" name="cutover_{{ forloop.counter0 }}" value="{{ row.default_cutover }}" aria-describedby="cutover-help-{{ forloop.counter0 }}">
+                <p id="cutover-help-{{ forloop.counter0 }}" class="text-xs opacity-70 mb-2">Leave blank to start the day after the chosen account's latest transaction.</p>
                 <label class="sr-only" for="name-{{ forloop.counter0 }}">New account name for {{ row.name }}</label>
                 <input id="name-{{ forloop.counter0 }}" class="input input-bordered input-sm mb-2" type="text" name="name_{{ forloop.counter0 }}" value="{{ row.name }}" maxlength="150">
                 <label class="sr-only" for="type-{{ forloop.counter0 }}">New account type for {{ row.name }}</label>

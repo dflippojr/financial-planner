@@ -696,3 +696,97 @@ def test_same_account_id_at_two_institutions_stays_separate(monkeypatch):
 
     assert list(Transaction.objects.filter(account=first).values_list("amount_minor", flat=True)) == [-1000]
     assert list(Transaction.objects.filter(account=second).values_list("amount_minor", flat=True)) == [-2000]
+
+
+def _linked_owner_and_checking(monkeypatch, *, scope=None, household=None, owner=None, payload=None):
+    owner = owner or make_person("owner")
+    checking = make_account(owner, scope=scope or Account.Scope.PRIVATE, household=household)
+    connection = connect_owner(owner, monkeypatch, payload=payload)
+    save_account_links(
+        owner,
+        connection.pk,
+        [{"simplefin_account_id": "CON-1:sf-checking", "action": "link", "account_id": checking.pk, "cutover_date": date(2026, 3, 1)}],
+    )
+    return owner, checking, connection
+
+
+@pytest.mark.django_db
+def test_unlinked_rows_have_no_cutover_prefill_and_server_defaults_per_account(monkeypatch):
+    owner = make_person("owner")
+    make_household(owner)
+    early = make_account(owner, name="Synthetic A Early")
+    late = make_account(owner, name="Synthetic B Late")
+    for account, day in ((early, date(2026, 6, 30)), (late, date(2026, 9, 30))):
+        batch = ImportBatch.objects.create(
+            account=account, imported_by=owner, source=ImportBatch.Source.HUNTINGTON,
+            source_file_sha256="c" * 64, date_range_start=date(2026, 1, 1), date_range_end=day,
+        )
+        Transaction.objects.create(
+            account=account, import_batch=batch, transaction_date=day, amount_minor=-100,
+            description="Synthetic", kind=Transaction.Kind.CASH_FLOW, source_row_number=2,
+            fingerprint=f"{account.pk}".ljust(64, "d"), original_fields={},
+        )
+    connection = connect_owner(owner, monkeypatch)
+    page = signed_in(owner).get(reverse("simplefin-connections"))
+    assert b'name="cutover_0" value=""' in page.content
+
+    save_account_links(
+        owner, connection.pk,
+        [{"simplefin_account_id": "CON-1:sf-checking", "action": "link", "account_id": late.pk, "cutover_date": None}],
+    )
+
+    assert AccountLink.objects.get(account=late).cutover_date == date(2026, 10, 1)
+
+
+@pytest.mark.django_db
+def test_sync_skips_archived_and_no_longer_visible_accounts(monkeypatch):
+    from finance.lifecycle_services import archive_account, unshare_account
+
+    payload = account_payload(transactions=[posted_txn(txn_id="t-1", day=10, amount="-5.00")])
+    owner, checking, connection = _linked_owner_and_checking(monkeypatch, payload=payload)
+    make_household(owner)
+    archive_account(owner, checking.pk)
+
+    result = sync_connection(owner, connection.pk, ignore_rate_limit=True)
+
+    assert result["imported"] == 0
+    assert not Transaction.objects.filter(account=checking, status=Transaction.Status.ACTIVE).exists()
+
+    member = make_person("member")
+    other_owner = make_person("sharer")
+    household = make_household(member, other_owner, name="Synthetic Household Two")
+    shared = make_account(other_owner, name="Synthetic Shared", scope=Account.Scope.HOUSEHOLD, household=household)
+    member_connection = connect_owner(member, monkeypatch, payload=payload)
+    save_account_links(
+        member, member_connection.pk,
+        [{"simplefin_account_id": "CON-1:sf-checking", "action": "link", "account_id": shared.pk, "cutover_date": date(2026, 3, 1)}],
+    )
+    Transaction.objects.filter(account=shared).delete()
+    unshare_account(other_owner, shared.pk)
+
+    result = sync_connection(member, member_connection.pk, ignore_rate_limit=True)
+
+    assert result["imported"] == 0
+    assert not Transaction.objects.filter(account=shared).exists()
+
+
+@pytest.mark.django_db
+def test_linking_one_account_to_two_remote_accounts_is_refused_without_500(monkeypatch):
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner)
+    payload = account_payload()
+    second = dict(payload["accounts"][0])
+    second["id"] = "sf-savings"
+    payload["accounts"].append(second)
+    connection = connect_owner(owner, monkeypatch, payload=payload)
+
+    with pytest.raises(SimpleFinError):
+        save_account_links(
+            owner, connection.pk,
+            [
+                {"simplefin_account_id": "CON-1:sf-checking", "action": "link", "account_id": checking.pk, "cutover_date": date(2026, 3, 1)},
+                {"simplefin_account_id": "CON-1:sf-savings", "action": "link", "account_id": checking.pk, "cutover_date": date(2026, 3, 1)},
+            ],
+        )
+    assert AccountLink.objects.filter(account=checking).count() <= 1
