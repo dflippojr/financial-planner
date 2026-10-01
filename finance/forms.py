@@ -7,9 +7,10 @@ from django.core.validators import MaxValueValidator
 from django.utils import timezone
 
 from .cash_flow import MAX_REPORT_DATE, MAX_REPORT_PERIODS, default_date_range, period_count
+from .projection import DEFAULT_HORIZON, HORIZONS
 
 from .auth_services import validated_username
-from .models import Account, Category, Transaction, TransactionCorrectionHistory
+from .models import Account, Category, PlannedItem, RecurringSeries, Transaction, TransactionCorrectionHistory
 
 
 MIN_SIGNED_BIGINT = -(2**63)
@@ -166,6 +167,13 @@ class CashFlowFilterForm(forms.Form):
             ("year", "Year"),
         )
     )
+    horizon = forms.TypedChoiceField(
+        required=False,
+        coerce=int,
+        choices=tuple((value, f"{value} months") for value in HORIZONS),
+        initial=DEFAULT_HORIZON,
+        label="Projection horizon",
+    )
     account = forms.ModelChoiceField(queryset=Account.objects.none(), required=False)
     scope = forms.ChoiceField(
         required=False,
@@ -188,6 +196,7 @@ class CashFlowFilterForm(forms.Form):
         cleaned["date_from"] = date_from
         cleaned["date_to"] = date_to
         grouping = cleaned.get("grouping")
+        cleaned["horizon"] = cleaned.get("horizon") or DEFAULT_HORIZON
         if date_from > date_to:
             self.add_error("date_to", END_DATE_ORDER_ERROR)
         elif grouping and period_count(date_from, date_to, grouping) > MAX_REPORT_PERIODS:
@@ -413,3 +422,65 @@ class CategoryNameForm(forms.Form):
 
 class TransferWindowForm(forms.Form):
     transfer_match_window_days = forms.IntegerField(min_value=0, max_value=366, label="Match window (days)")
+
+
+class PlannedItemForm(forms.Form):
+    name = forms.CharField(max_length=150)
+    kind = forms.ChoiceField(choices=PlannedItem.Kind.choices)
+    amount = forms.DecimalField(
+        min_value=Decimal("0.01"),
+        max_digits=19,
+        decimal_places=2,
+        help_text="Amount in dollars. The sign comes from income or expense.",
+        widget=forms.TextInput(attrs={"inputmode": "decimal"}),
+    )
+    start_date = forms.DateField(widget=forms.DateInput(attrs={"type": "date"}))
+    end_date = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
+    cadence = forms.ChoiceField(choices=PlannedItem.Cadence.choices)
+    scope = forms.ChoiceField(choices=((PlannedItem.Scope.PRIVATE, "Private"),))
+    category = forms.ModelChoiceField(queryset=Category.objects.none(), required=False)
+    replaces_series = forms.ModelChoiceField(
+        queryset=RecurringSeries.objects.none(),
+        required=False,
+        label="Replaces recurring series",
+    )
+
+    def __init__(self, *args, principal=None, has_household=False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["category"].queryset = Category.objects.visible_to(principal).order_by("name", "pk")
+        self.fields["replaces_series"].queryset = (
+            RecurringSeries.objects.visible_to(principal)
+            .filter(status=RecurringSeries.Status.CONFIRMED, is_active=True)
+            .order_by("display_name", "pk")
+        )
+        if has_household:
+            self.fields["scope"].choices = PlannedItem.Scope.choices
+
+    def clean_amount(self):
+        amount = self.cleaned_data["amount"]
+        minor_units = int(amount * 100)
+        if minor_units <= 0 or minor_units > MAX_SIGNED_BIGINT:
+            raise ValidationError("Amount is outside the supported range.")
+        return amount
+
+    def clean(self):
+        cleaned = super().clean()
+        start_date = cleaned.get("start_date")
+        end_date = cleaned.get("end_date")
+        if start_date and end_date and end_date < start_date:
+            self.add_error("end_date", END_DATE_ORDER_ERROR)
+        return cleaned
+
+    def save_payload(self):
+        amount = self.cleaned_data["amount"]
+        return {
+            "name": self.cleaned_data["name"],
+            "kind": self.cleaned_data["kind"],
+            "amount_minor": int(amount * 100),
+            "start_date": self.cleaned_data["start_date"],
+            "end_date": self.cleaned_data.get("end_date"),
+            "cadence": self.cleaned_data["cadence"],
+            "scope": self.cleaned_data["scope"],
+            "category": self.cleaned_data.get("category"),
+            "replaces_series": self.cleaned_data.get("replaces_series"),
+        }

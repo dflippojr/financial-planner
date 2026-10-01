@@ -48,7 +48,7 @@
   <figure>
     <figcaption class="mb-2 font-medium">Income, spending, and net cash flow by period</figcaption>
     <div class="h-72 w-full rounded-box bg-base-100 p-2 shadow">
-      <canvas id="cash-flow-chart" data-chart="cash-flow" data-chart-payload="cash-flow-chart-data" role="img" aria-label="Bar chart of income and spending by period with a net cash flow line. Periods missing an import are marked. The table below lists the same numbers."></canvas>
+      <canvas id="cash-flow-chart" data-chart="cash-flow" data-chart-payload="cash-flow-chart-data" role="img" aria-label="Bar chart of income and spending by period with a net cash flow line. Projected months use a dashed style. Periods missing an import are marked. The table below lists the same numbers."></canvas>
     </div>
   </figure>
   <div class="overflow-x-auto">
@@ -73,6 +73,31 @@
           <td class="text-right">{% include "finance/_amount.html" with value=period.spending_display tone="out" %}</td>
           <td class="text-right">{% include "finance/_amount.html" with value=period.net_display tone="" %}</td>
           <td><a class="link" href="{{ period.drilldown_url }}">Transactions</a></td>
+        </tr>
+      {% endfor %}
+      {% for period in report.projected_periods %}
+        <tr>
+          <td>
+            {{ period.label }}
+            <span class="badge badge-ghost">Projected</span>
+          </td>
+          <td class="text-right">{% include "finance/_amount.html" with value=period.income_display tone="in" %}</td>
+          <td class="text-right">{% include "finance/_amount.html" with value=period.spending_display tone="out" %}</td>
+          <td class="text-right">{% include "finance/_amount.html" with value=period.net_display tone="" %}</td>
+          <td>
+            {% if period.contributions %}
+            <details>
+              <summary class="link cursor-pointer">Items</summary>
+              <ul class="mt-2 list-disc pl-4">
+                {% for item in period.contributions %}
+                <li>{{ item.name }} · {{ item.occurrence_count }}× · {{ item.amount_display }}</li>
+                {% endfor %}
+              </ul>
+            </details>
+            {% else %}
+            —
+            {% endif %}
+          </td>
         </tr>
       {% endfor %}
       </tbody>

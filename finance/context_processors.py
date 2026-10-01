@@ -14,6 +14,8 @@ def _nav_current(request):
         return "transaction-list"
     if name.startswith("csv-import"):
         return "csv-import"
+    if name in {"planned-item-edit", "planned-item-disable", "planned-item-enable"}:
+        return "planned-items"
     return name
 
 
@@ -32,6 +34,7 @@ def navigation(request):
         ("account-list", "Accounts", accounts_url),
         ("csv-import", "Import", accounts_url),
         ("invite", "Invite", reverse("invite")),
+        ("planned-items", "Planned items", reverse("planned-items")),
     )
     return {
         "nav_items": [

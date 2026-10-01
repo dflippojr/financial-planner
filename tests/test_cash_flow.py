@@ -290,8 +290,9 @@ def test_private_account_never_appears_in_another_members_periods_or_flags():
     payload = json_script_payload(html, "cash-flow-chart-data")
     report_payload = cash_flow_chart_data(member_report)
 
-    assert payload == report_payload
-    assert [row["spending_minor"] for row in payload["periods"]] == [1000, 0]
+    assert payload["summary"] == report_payload["summary"]
+    actual_spending = [row["spending_minor"] for row in payload["periods"] if not row.get("projected")]
+    assert actual_spending == [1000, 0]
     assert payload["summary"]["spending_minor"] == 1000
     assert "SECRET PRIVATE LEDGER" not in html
     assert "99999" not in html

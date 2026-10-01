@@ -80,6 +80,10 @@
     },
   };
 
+  function withAlpha(color, alpha) {
+    return color.replace("rgb(", "rgba(").replace(")", ", " + alpha + ")");
+  }
+
   function cashFlowChart(canvas, data, palette) {
     var periods = data.periods || [];
     var incomeDisplays = periods.map(function (row) {
@@ -91,6 +95,14 @@
     var netDisplays = periods.map(function (row) {
       return row.net_display;
     });
+    function barColor(base) {
+      return periods.map(function (row) {
+        if (row.projected) {
+          return withAlpha(base, 0.35);
+        }
+        return base;
+      });
+    }
     return new window.Chart(canvas, {
       data: {
         labels: periods.map(function (row) {
@@ -103,7 +115,12 @@
             data: periods.map(function (row) {
               return row.income_minor;
             }),
-            backgroundColor: palette.income,
+            backgroundColor: barColor(palette.income),
+            borderColor: palette.income,
+            borderWidth: periods.map(function (row) {
+              return row.projected ? 1 : 0;
+            }),
+            borderDash: [6, 4],
             displays: incomeDisplays,
           },
           {
@@ -112,7 +129,12 @@
             data: periods.map(function (row) {
               return row.spending_minor;
             }),
-            backgroundColor: palette.spending,
+            backgroundColor: barColor(palette.spending),
+            borderColor: palette.spending,
+            borderWidth: periods.map(function (row) {
+              return row.projected ? 1 : 0;
+            }),
+            borderDash: [6, 4],
             displays: spendingDisplays,
           },
           {
@@ -125,6 +147,23 @@
             backgroundColor: palette.net,
             tension: 0.2,
             displays: netDisplays,
+            segment: {
+              borderDash: function (ctx) {
+                var row = periods[ctx.p1DataIndex];
+                return row && row.projected ? [6, 4] : [];
+              },
+            },
+          },
+          {
+            type: "line",
+            label: "Projected",
+            data: periods.map(function () {
+              return null;
+            }),
+            borderColor: palette.net,
+            backgroundColor: "transparent",
+            borderDash: [6, 4],
+            pointRadius: 0,
           },
         ],
       },
