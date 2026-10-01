@@ -187,3 +187,17 @@ Constraints carried from the existing requirements:
 - Cash flow summary cards show income, spending, and net for the selected range, each with an up or down change against the previous equal-length range.
 - Spending category colors are a stable index derived from the category id (or `uncategorized`), mapped onto daisyUI theme tokens. People do not assign colors.
 - Chart colors are read from the active theme's CSS variables and update when the theme toggle changes.
+
+## Deleting an account (2026-10-01)
+
+Owner decision: a single **Delete account and all its data** action covers both retiring CSV history (for example, when switching to linked accounts) and removing data permanently. There is no separate bulk-undo or purge feature. Per-import undo stays for correcting a single bad import.
+
+Defaults recorded with the decision (owner may change):
+- Only the account's current owner may delete it, including a household-shared account. Other members can still archive or make it private under the existing rules.
+- Deletion is permanent. It removes the account and every row that belongs to it: transactions, import batches, correction history, transfer pairs, refund links, and recurring-series memberships.
+- Rows in other accounts that referenced the deleted data are repaired, not deleted:
+  - A transfer partner returns to income or spending with its original category.
+  - A refund linked to a deleted original keeps its stored category but loses the link. A deleted refund is removed from its original.
+  - Recurring series are revalidated.
+- The confirmation requires typing the account name. It shows how many transactions and imports will be removed, and states that existing backups keep a copy until they rotate out (14 nightly and 8 weekly).
+- Logs and messages never contain the deleted data. A success message names only the account.
