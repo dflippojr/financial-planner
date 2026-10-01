@@ -1,6 +1,6 @@
 from django.urls import path
 
-from finance import views
+from finance import account_views, views
 from finance.csv_import import views as csv_import_views
 
 
@@ -18,6 +18,11 @@ urlpatterns = [
     path("invite/", views.invite, name="invite"),
     path("join/", views.join, name="join"),
     path("recover/", views.recover, name="recover"),
+    path("accounts/", account_views.account_list, name="account-list"),
+    path("accounts/<int:account_id>/rename/", account_views.account_rename, name="account-rename"),
+    path("accounts/<int:account_id>/share/", account_views.account_share, name="account-share"),
+    path("accounts/<int:account_id>/unshare/", account_views.account_unshare, name="account-unshare"),
+    path("accounts/<int:account_id>/archive/", account_views.account_archive, name="account-archive"),
     path("accounts/<int:account_id>/imports/preview/", csv_import_views.csv_preview, name="csv-import-preview"),
     path("accounts/<int:account_id>/imports/<int:batch_id>/undo/", csv_import_views.csv_undo_import, name="csv-import-undo"),
     path("transactions/", views.transaction_list, name="transaction-list"),

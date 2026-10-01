@@ -116,6 +116,7 @@ def test_signed_in_pages_use_shared_nav_and_signed_out_pages_use_a_card():
         "Transfers",
         "Recurring",
         "Categories",
+        "Accounts",
         "Import",
         "Invite",
         "Sign out",

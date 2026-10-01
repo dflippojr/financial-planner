@@ -14,12 +14,8 @@
 <div role="status" class="alert mb-4">
   <span>
     No visible transactions yet.
-    {% if import_account %}
-    <a class="link" href="{% url 'csv-import-preview' import_account.pk %}">Import a CSV</a>
-    to see income, spending, and net cash flow.
-    {% else %}
-    Add an account below, then import a CSV to see income, spending, and net cash flow.
-    {% endif %}
+    <a class="link" href="{% url 'account-list' %}">Add an account</a>
+    to import transactions and see income, spending, and net cash flow.
   </span>
 </div>
 {% endif %}

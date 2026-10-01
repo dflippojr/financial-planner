@@ -101,6 +101,19 @@ def _lock_visible_account_with_pair_counterparts(person, account_id, seed_leg_id
 
 
 @transaction.atomic
+def rename_account(principal, account_id, name):
+    """Rename an active account the actor can still see once the locks are held."""
+    person = _person_for(principal)
+    lock_actor_household(person)
+    account = _visible_account_for_update(person, account_id)
+    if account.status != Account.Status.ACTIVE or account.archived_at is not None:
+        raise PermissionDenied(_DENIED)
+    account.name = name
+    account.save(update_fields=("name", "updated_at"))
+    return account
+
+
+@transaction.atomic
 def unshare_account(principal, account_id):
     """Return a visible household account to its owner's private scope."""
     person = _person_for(principal)

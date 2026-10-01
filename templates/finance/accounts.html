@@ -1,0 +1,101 @@
+{% extends "finance/base.html" %}
+{% block title %}Accounts · Financial Planner{% endblock %}
+{% block content %}
+<h1 class="mb-4 text-2xl font-bold">Accounts</h1>
+{% if not has_active_accounts %}
+<div role="status" class="alert mb-4">
+  <span>Add your first account to import transactions</span>
+</div>
+{% endif %}
+<section class="card bg-base-100 shadow-sm mb-6 max-w-lg">
+  <div class="card-body">
+    <h2 class="card-title">Add account</h2>
+    <form method="post">
+      {% csrf_token %}
+      {% include "finance/_form_fields.html" with form=add_form %}
+      <button type="submit" class="btn btn-primary">Add account</button>
+    </form>
+  </div>
+</section>
+<div class="overflow-x-auto">
+  <table class="table table-zebra">
+    <thead class="sticky top-0 z-10 bg-base-200">
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Scope</th>
+        <th>Status</th>
+        <th>Last import</th>
+        <th>Transactions</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for account in accounts %}
+      <tr>
+        <td>{{ account.name }}</td>
+        <td>{{ account.get_account_type_display }}</td>
+        <td>
+          {% if account.scope == "household" %}
+          <span class="badge badge-info">Shared with household</span>
+          {% else %}
+          <span class="badge">Private</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if account.status == "active" %}
+          <span class="badge badge-success">Active</span>
+          {% else %}
+          <span class="badge badge-ghost">Archived</span>
+          {% endif %}
+        </td>
+        <td>{% if account.last_import_at %}{{ account.last_import_at|date:"Y-m-d" }}{% else %}—{% endif %}</td>
+        <td>{{ account.transaction_count }}</td>
+        <td>
+          {% if account.status == "active" and account.archived_at is None %}
+          <div class="flex flex-wrap items-center gap-2">
+            <a class="btn btn-sm btn-primary" href="{% url 'csv-import-preview' account.pk %}">Import CSV</a>
+            <form method="post" action="{% url 'account-rename' account.pk %}" class="flex flex-wrap items-center gap-2">
+              {% csrf_token %}
+              <label class="sr-only" for="rename-{{ account.pk }}">Rename {{ account.name }}</label>
+              <input id="rename-{{ account.pk }}" class="input input-bordered input-sm" type="text" name="name" value="{{ account.name }}" maxlength="150" required>
+              <button type="submit" class="btn btn-sm">Rename</button>
+            </form>
+            {% if account.scope == "private" and has_household %}
+            <form method="post" action="{% url 'account-share' account.pk %}">
+              {% csrf_token %}
+              <button type="submit" class="btn btn-sm btn-outline">Share with household</button>
+            </form>
+            {% elif account.scope == "household" %}
+            <form method="post" action="{% url 'account-unshare' account.pk %}">
+              {% csrf_token %}
+              <button type="submit" class="btn btn-sm btn-outline">Make private</button>
+            </form>
+            {% endif %}
+            <button type="button" class="btn btn-sm btn-error" onclick="document.getElementById('archive-{{ account.pk }}').showModal()">Archive</button>
+            <dialog id="archive-{{ account.pk }}" class="modal">
+              <div class="modal-box">
+                <h3 class="font-bold text-lg">Archive {{ account.name }}?</h3>
+                <p class="py-4">Transactions are kept. This does not erase the account or its history.</p>
+                <div class="modal-action">
+                  <form method="dialog">
+                    <button class="btn">Cancel</button>
+                  </form>
+                  <form method="post" action="{% url 'account-archive' account.pk %}">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-error">Archive</button>
+                  </form>
+                </div>
+              </div>
+            </dialog>
+          </div>
+          {% endif %}
+        </td>
+      </tr>
+    {% empty %}
+      <tr><td colspan="7">No accounts yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
