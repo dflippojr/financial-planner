@@ -2,7 +2,7 @@ import os
 
 os.environ.setdefault("DJANGO_SECRET_KEY", "test-only-secret-key-with-enough-entropy-not-for-production-12345")
 
-from .settings import *  # noqa: F403
+from .settings import *  # noqa: F403  # NOSONAR python:S2208 -- Django test overlay of production settings
 
 SESSION_COOKIE_SECURE = False
 CSRF_COOKIE_SECURE = False

@@ -64,6 +64,7 @@ from .google_auth import (
     username_is_taken,
 )
 from .lifecycle_services import lock_actor_household
+from .export import export_filename, write_export_zip
 from .models import Account, Category, Person, RecurringSeries, RefundLink, Transaction, TransactionCorrectionHistory, TransferPair
 from .recurring_services import confirm_recurring_series, confirmed_totals, dismiss_recurring_series, refresh_recurring_series
 from .cash_flow import (
@@ -892,6 +893,8 @@ def account_settings(request):
             password_form, error = _account_add_password(request, password_form)
         elif action == "remove-password":
             error = _account_remove_password(request)
+        elif action == "export":
+            return _account_export_zip(request)
     return render(
         request,
         "finance/account_settings.html",
@@ -902,6 +905,21 @@ def account_settings(request):
             "error": error,
         },
     )
+
+
+def _account_export_zip(request):
+    person = get_object_or_404(Person, user=request.user)
+    payload = write_export_zip(person)
+    filename = export_filename(timezone.localdate())
+    response = HttpResponse(payload, content_type="application/zip")
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return response
+
+
+@require_POST
+@never_cache
+def account_export(request):
+    return _account_export_zip(request)
 
 
 @login_not_required
