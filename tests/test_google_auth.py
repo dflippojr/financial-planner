@@ -620,3 +620,33 @@ def test_concurrent_google_joins_same_identity_keep_one_member():
     used = invitations.get(used_at__isnull=False)
     assert unused.pk != used.pk
     assert RecoveryCode.objects.filter(user=created.get()).count() == 8
+
+
+@pytest.mark.django_db
+@_google_settings(LOGIN_FAILURE_LIMIT=2, LOGIN_BLOCK_SECONDS=900)
+def test_unverified_email_callbacks_count_toward_the_login_throttle():
+    make_member()
+    client = Client()
+    for _ in range(2):
+        _finish_google(client, client.post(reverse("google-sign-in")), id_token=_id_token(verified=False))
+
+    blocked = client.post(reverse("google-sign-in"))
+
+    assert blocked.status_code == 200
+    assert b"Sign-in failed" in blocked.content
+
+
+@pytest.mark.django_db
+@_google_settings(LOGIN_FAILURE_LIMIT=2, LOGIN_BLOCK_SECONDS=900)
+def test_denied_google_callbacks_count_toward_the_login_throttle():
+    make_member()
+    client = Client()
+    for _ in range(2):
+        start = client.post(reverse("google-sign-in"))
+        state = parse_qs(urlparse(start["Location"]).query)["state"][0]
+        client.get(reverse("google_callback"), {"error": "access_denied", "state": state})
+
+    blocked = client.post(reverse("google-sign-in"))
+
+    assert blocked.status_code == 200
+    assert b"Sign-in failed" in blocked.content
