@@ -116,6 +116,17 @@ def _connection_name_by_id(payload: dict) -> dict[str, str]:
     return names
 
 
+def remote_account_key(item: dict) -> str:
+    """Stable key for a SimpleFIN account.
+
+    Account ids are unique only within one provider connection, so the key
+    includes the connection id when SimpleFIN reports one.
+    """
+    account_id = str(item["id"])
+    conn_id = str(item.get("conn_id") or "")
+    return f"{conn_id}:{account_id}" if conn_id else account_id
+
+
 def _account_row(item: dict, names: dict[str, str]) -> dict:
     conn_id = str(item.get("conn_id") or "")
     extra = item.get("extra") if isinstance(item.get("extra"), dict) else {}
@@ -123,7 +134,7 @@ def _account_row(item: dict, names: dict[str, str]) -> dict:
     if not isinstance(reported_type, str):
         reported_type = ""
     return {
-        "id": str(item["id"]),
+        "id": remote_account_key(item),
         "name": str(item.get("name") or "Account"),
         "institution": names.get(conn_id) or str(item.get("conn_name") or ""),
         "type": reported_type[:80] or "Not provided by SimpleFIN",
@@ -281,7 +292,7 @@ def _accounts_by_simplefin_id(payload: dict) -> dict[str, dict]:
     found = {}
     for item in payload.get("accounts") or []:
         if isinstance(item, dict) and item.get("id"):
-            found[str(item["id"])] = item
+            found[remote_account_key(item)] = item
     return found
 
 
@@ -385,8 +396,21 @@ def _sync_one_link(person, connection, link, remote, synced_at) -> int:
     return imported
 
 
-@transaction.atomic
 def sync_connection(principal, connection_id, *, ignore_rate_limit=False) -> dict:
+    """Sync one connection. A fetch failure is recorded, then raised.
+
+    The failure state is saved inside the sync transaction, which then commits
+    normally; raising only after the commit keeps that record (last sync time,
+    result, and the disabled flag for revoked access) instead of rolling it back.
+    """
+    result, failure = _sync_connection_locked(principal, connection_id, ignore_rate_limit=ignore_rate_limit)
+    if failure is not None:
+        raise failure
+    return result
+
+
+@transaction.atomic
+def _sync_connection_locked(principal, connection_id, *, ignore_rate_limit=False):
     person = _person_for(principal)
     lock_actor_household(person)
     connection = (
@@ -412,9 +436,11 @@ def sync_connection(principal, connection_id, *, ignore_rate_limit=False) -> dic
     except SimpleFinError as exc:
         connection.last_sync_at = now
         connection.last_sync_result = str(exc)
-        connection.disabled = True
+        # Only revoked access stops scheduled syncs; a transient failure is
+        # retried on the next run.
+        connection.disabled = exc.access_denied
         connection.save(update_fields=("last_sync_at", "last_sync_result", "disabled"))
-        raise
+        return None, exc
     errors = provider_errors(payload)
     remote_accounts = _accounts_by_simplefin_id(payload)
     imported = 0
@@ -441,7 +467,7 @@ def sync_connection(principal, connection_id, *, ignore_rate_limit=False) -> dic
     connection.last_sync_result = summary[:500]
     connection.disabled = False
     connection.save(update_fields=("last_sync_at", "last_sync_result", "disabled"))
-    return {"imported": imported, "errors": errors, "result": connection.last_sync_result}
+    return {"imported": imported, "errors": errors, "result": connection.last_sync_result}, None
 
 
 @transaction.atomic

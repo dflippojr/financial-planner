@@ -47,4 +47,12 @@ def provider_errors(payload: dict) -> list[str]:
 
 
 class SimpleFinError(Exception):
-    """User-facing SimpleFIN failure that must not contain tokens or access URLs."""
+    """User-facing SimpleFIN failure that must not contain tokens or access URLs.
+
+    access_denied is True only when SimpleFIN refused the credentials (HTTP
+    403), which is the one failure that should stop scheduled syncs.
+    """
+
+    def __init__(self, message="", *, access_denied=False):
+        super().__init__(message)
+        self.access_denied = access_denied

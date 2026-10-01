@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import ssl
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import unquote, urlencode, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 from finance.simplefin_errors import SimpleFinError, claim_compromised_message
@@ -19,6 +20,23 @@ def _require_https(url: str) -> None:
     parts = urlsplit(url)
     if parts.scheme != "https" or not parts.netloc:
         raise SimpleFinError("The SimpleFIN address must use HTTPS.")
+
+
+def _split_credentials(access_url: str):
+    """Return the Access URL without userinfo, plus a Basic Authorization header.
+
+    SimpleFIN Access URLs carry credentials as https://user:pass@host/path.
+    urllib does not send URL userinfo, so the credentials go in an explicit
+    header and are removed from the URL that is requested.
+    """
+    parts = urlsplit(access_url)
+    if parts.username is None:
+        return access_url, {}
+    host = parts.hostname or ""
+    netloc = f"{host}:{parts.port}" if parts.port else host
+    bare_url = urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+    credentials = f"{unquote(parts.username)}:{unquote(parts.password or '')}".encode("utf-8")
+    return bare_url, {"Authorization": "Basic " + base64.b64encode(credentials).decode("ascii")}
 
 
 def claim_access_url(claim_url: str) -> str:
@@ -48,15 +66,17 @@ def fetch_accounts(access_url: str, *, start_date=None, end_date=None, balances_
         params["end-date"] = str(int(end_date))
     if balances_only:
         params["balances-only"] = "1"
-    url = access_url.rstrip("/") + "/accounts?" + urlencode(params)
-    request = Request(url, method="GET")
+    bare_url, headers = _split_credentials(access_url)
+    url = bare_url.rstrip("/") + "/accounts?" + urlencode(params)
+    request = Request(url, method="GET", headers=headers)
     try:
         with urlopen(request, timeout=FETCH_TIMEOUT_SECONDS, context=_SSL) as response:
             raw = response.read().decode("utf-8")
     except HTTPError as exc:
         if exc.code == 403:
             raise SimpleFinError(
-                "SimpleFIN access was denied. Reconnect if access was revoked."
+                "SimpleFIN access was denied. Reconnect if access was revoked.",
+                access_denied=True,
             ) from None
         if exc.code == 402:
             raise SimpleFinError("SimpleFIN reported that payment is required.") from None

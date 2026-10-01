@@ -231,7 +231,7 @@ def test_sync_dedupes_repeated_runs_and_skips_pending_and_cutover(monkeypatch):
         connection.pk,
         [
             {
-                "simplefin_account_id": "sf-checking",
+                "simplefin_account_id": "CON-1:sf-checking",
                 "action": "link",
                 "account_id": checking.pk,
                 "cutover_date": date(2026, 3, 11),
@@ -272,7 +272,7 @@ def test_balances_only_ignores_transactions(monkeypatch):
         connection.pk,
         [
             {
-                "simplefin_account_id": "sf-invest",
+                "simplefin_account_id": "CON-1:sf-invest",
                 "action": "link",
                 "account_id": investment.pk,
             }
@@ -337,8 +337,8 @@ def test_sync_pairs_transfers_and_refreshes_recurring(monkeypatch):
         owner,
         connection.pk,
         [
-            {"simplefin_account_id": "sf-checking", "action": "link", "account_id": checking.pk, "cutover_date": date(2026, 1, 1)},
-            {"simplefin_account_id": "sf-savings", "action": "link", "account_id": savings.pk, "cutover_date": date(2026, 1, 1)},
+            {"simplefin_account_id": "CON-1:sf-checking", "action": "link", "account_id": checking.pk, "cutover_date": date(2026, 1, 1)},
+            {"simplefin_account_id": "CON-1:sf-savings", "action": "link", "account_id": savings.pk, "cutover_date": date(2026, 1, 1)},
         ],
     )
     sync_connection(owner, connection.pk, ignore_rate_limit=True)
@@ -363,7 +363,7 @@ def test_undo_sync_batch_archives_transactions_and_removes_snapshot(monkeypatch)
     save_account_links(
         owner,
         connection.pk,
-        [{"simplefin_account_id": "sf-checking", "action": "link", "account_id": checking.pk, "cutover_date": date(2026, 3, 1)}],
+        [{"simplefin_account_id": "CON-1:sf-checking", "action": "link", "account_id": checking.pk, "cutover_date": date(2026, 3, 1)}],
     )
     sync_connection(owner, connection.pk, ignore_rate_limit=True)
     batch = ImportBatch.objects.get(account=checking, source=ImportBatch.Source.SIMPLEFIN, status=ImportBatch.Status.ACTIVE)
@@ -391,7 +391,7 @@ def test_sync_now_rate_limit(monkeypatch):
     save_account_links(
         owner,
         connection.pk,
-        [{"simplefin_account_id": "sf-checking", "action": "link", "account_id": checking.pk}],
+        [{"simplefin_account_id": "CON-1:sf-checking", "action": "link", "account_id": checking.pk}],
     )
     sync_connection(owner, connection.pk)
     with pytest.raises(SimpleFinError, match="15 minutes"):
@@ -429,7 +429,7 @@ def test_rejects_custom_currency(monkeypatch):
     save_account_links(
         owner,
         connection.pk,
-        [{"simplefin_account_id": "sf-checking", "action": "link", "account_id": checking.pk}],
+        [{"simplefin_account_id": "CON-1:sf-checking", "action": "link", "account_id": checking.pk}],
     )
     with pytest.raises(SimpleFinError, match="currency"):
         sync_connection(owner, connection.pk, ignore_rate_limit=True)
@@ -445,7 +445,7 @@ def test_disconnect_keeps_imported_rows(monkeypatch):
     save_account_links(
         owner,
         connection.pk,
-        [{"simplefin_account_id": "sf-checking", "action": "link", "account_id": checking.pk, "cutover_date": date(2026, 3, 1)}],
+        [{"simplefin_account_id": "CON-1:sf-checking", "action": "link", "account_id": checking.pk, "cutover_date": date(2026, 3, 1)}],
     )
     sync_connection(owner, connection.pk, ignore_rate_limit=True)
     from finance.simplefin_services import disconnect_connection
@@ -571,7 +571,7 @@ def test_connections_views_claim_sync_disconnect_and_create(monkeypatch):
         reverse("simplefin-connections"),
         {
             "intent": "link",
-            "sf_id_0": "sf-checking",
+            "sf_id_0": "CON-1:sf-checking",
             "action_0": "create",
             "name_0": "Linked Checking",
             "account_type_0": Account.Type.CHECKING,
@@ -609,6 +609,90 @@ def test_sync_all_and_claim_http_failure_on_page(monkeypatch):
     save_account_links(
         owner,
         connection.pk,
-        [{"simplefin_account_id": "sf-checking", "action": "link", "account_id": checking.pk, "cutover_date": date(2026, 3, 1)}],
+        [{"simplefin_account_id": "CON-1:sf-checking", "action": "link", "account_id": checking.pk, "cutover_date": date(2026, 3, 1)}],
     )
     assert sync_all_connections() == 1
+
+
+def test_fetch_sends_access_url_credentials_as_basic_auth(monkeypatch):
+    import base64
+    import json as jsonlib
+
+    from finance.simplefin_client import fetch_accounts
+
+    seen = {}
+
+    class FakeResponse(BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_open(request, timeout=None, context=None):
+        seen["url"] = request.full_url
+        seen["auth"] = request.get_header("Authorization")
+        return FakeResponse(jsonlib.dumps({"accounts": [], "errlist": []}).encode())
+
+    monkeypatch.setattr("finance.simplefin_client.urlopen", fake_open)
+
+    fetch_accounts("https://syn%40user:s3cr%3At@bridge.example.test/simplefin")
+
+    assert seen["url"].startswith("https://bridge.example.test/simplefin/accounts?")
+    assert "syn" not in seen["url"]
+    assert "s3cr" not in seen["url"]
+    assert seen["auth"] == "Basic " + base64.b64encode(b"syn@user:s3cr:t").decode()
+
+
+@pytest.mark.django_db
+def test_failed_sync_state_is_saved_and_only_denied_access_disables(monkeypatch):
+    owner = make_person("owner")
+    make_household(owner)
+    connection = connect_owner(owner, monkeypatch)
+
+    def unreachable(*args, **kwargs):
+        raise SimpleFinError("SimpleFIN could not be reached.")
+
+    monkeypatch.setattr("finance.simplefin_services.fetch_accounts", unreachable)
+    with pytest.raises(SimpleFinError):
+        sync_connection(owner, connection.pk, ignore_rate_limit=True)
+    connection.refresh_from_db()
+    assert connection.last_sync_at is not None
+    assert connection.last_sync_result == "SimpleFIN could not be reached."
+    assert connection.disabled is False
+
+    def denied(*args, **kwargs):
+        raise SimpleFinError("SimpleFIN access was denied. Reconnect if access was revoked.", access_denied=True)
+
+    monkeypatch.setattr("finance.simplefin_services.fetch_accounts", denied)
+    with pytest.raises(SimpleFinError):
+        sync_connection(owner, connection.pk, ignore_rate_limit=True)
+    connection.refresh_from_db()
+    assert connection.disabled is True
+
+
+@pytest.mark.django_db
+def test_same_account_id_at_two_institutions_stays_separate(monkeypatch):
+    owner = make_person("owner")
+    make_household(owner)
+    first = make_account(owner, name="Synthetic First")
+    second = make_account(owner, name="Synthetic Second")
+    payload = account_payload(account_id="acct-1", transactions=[posted_txn(txn_id="t-a", day=10, amount="-10.00")])
+    other = dict(payload["accounts"][0])
+    other.update({"conn_id": "CON-2", "transactions": [posted_txn(txn_id="t-b", day=11, amount="-20.00")]})
+    payload["accounts"].append(other)
+    payload["connections"].append({"conn_id": "CON-2", "name": "Synthetic Bank Two", "org_id": "ORG-2"})
+    connection = connect_owner(owner, monkeypatch, payload=payload)
+    save_account_links(
+        owner,
+        connection.pk,
+        [
+            {"simplefin_account_id": "CON-1:acct-1", "action": "link", "account_id": first.pk, "cutover_date": date(2026, 3, 1)},
+            {"simplefin_account_id": "CON-2:acct-1", "action": "link", "account_id": second.pk, "cutover_date": date(2026, 3, 1)},
+        ],
+    )
+
+    sync_connection(owner, connection.pk, ignore_rate_limit=True)
+
+    assert list(Transaction.objects.filter(account=first).values_list("amount_minor", flat=True)) == [-1000]
+    assert list(Transaction.objects.filter(account=second).values_list("amount_minor", flat=True)) == [-2000]
