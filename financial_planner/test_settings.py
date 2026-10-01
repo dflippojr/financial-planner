@@ -8,7 +8,6 @@ SESSION_COOKIE_SECURE = False
 CSRF_COOKIE_SECURE = False
 SECURE_SSL_REDIRECT = False
 SECURE_HSTS_SECONDS = 0
-ACCOUNT_DEFAULT_HTTP_PROTOCOL = "http"
 
 
 # The default is a fast in-memory SQLite database. It is not the production
