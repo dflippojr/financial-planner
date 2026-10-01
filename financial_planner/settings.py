@@ -91,7 +91,8 @@ else:
     }
 
 LANGUAGE_CODE = "en-us"
-TIME_ZONE = "America/New_York"
+# Follow the deployment TZ (also used by the backup and SimpleFIN schedulers).
+TIME_ZONE = os.environ.get("TZ") or "America/New_York"
 USE_I18N = True
 USE_TZ = True
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"

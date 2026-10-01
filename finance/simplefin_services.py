@@ -256,7 +256,12 @@ def save_account_links(principal, connection_id, choices: list[dict]) -> list[Ac
     for choice in choices:
         action = choice.get("action")
         simplefin_account_id = str(choice.get("simplefin_account_id") or "")
-        if not simplefin_account_id or action == "ignore":
+        if not simplefin_account_id:
+            continue
+        if action == "ignore":
+            # Ignoring an account that is already linked unlinks it, so syncs
+            # stop. Data already imported into the app account stays.
+            AccountLink.objects.filter(connection=connection, simplefin_account_id=simplefin_account_id).delete()
             continue
         if action == "link":
             created.append(_link_existing(person, connection, choice, simplefin_account_id))

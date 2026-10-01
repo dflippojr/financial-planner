@@ -331,8 +331,8 @@ def test_snapshot_rows_keep_only_visible_accounts():
     visible = make_account(owner, name="Visible Snap")
     hidden = make_account(other, name="Hidden Snap")
     snaps = [
-        SimpleNamespace(pk=1, account_id=visible.pk, captured_at=date(2026, 2, 1), amount_minor=250, currency="USD"),
-        SimpleNamespace(pk=2, account_id=hidden.pk, captured_at=date(2026, 2, 1), amount_minor=999, currency="USD"),
+        SimpleNamespace(pk=1, account_id=visible.pk, snapshot_date=date(2026, 2, 1), amount_minor=250, currency="USD"),
+        SimpleNamespace(pk=2, account_id=hidden.pk, snapshot_date=date(2026, 2, 1), amount_minor=999, currency="USD"),
     ]
 
     class Query(list):

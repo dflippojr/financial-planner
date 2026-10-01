@@ -789,3 +789,49 @@ def test_linking_one_account_to_two_remote_accounts_is_refused_without_500(monke
     with pytest.raises(SimpleFinError):
         save_account_links(owner, connection.pk, choices)
     assert AccountLink.objects.filter(account=checking).count() <= 1
+
+
+@pytest.mark.django_db
+def test_export_after_a_sync_includes_the_snapshot(monkeypatch):
+    import io
+    import json as jsonlib
+    import zipfile
+
+    from finance.export import write_export_zip
+
+    owner, checking, connection = _linked_owner_and_checking(monkeypatch)
+    make_household(owner)
+    sync_connection(owner, connection.pk, ignore_rate_limit=True)
+    assert BalanceSnapshot.objects.filter(account=checking).exists()
+
+    archive = zipfile.ZipFile(io.BytesIO(write_export_zip(owner)))
+    snapshots = jsonlib.loads(archive.read("balance_snapshots.json"))
+
+    assert snapshots[0]["account_id"] == checking.pk
+    assert snapshots[0]["source"] == "simplefin"
+    assert snapshots[0]["snapshot_date"]
+
+
+@pytest.mark.django_db
+def test_ignoring_a_linked_account_unlinks_it(monkeypatch):
+    owner, checking, connection = _linked_owner_and_checking(monkeypatch)
+    make_household(owner)
+
+    save_account_links(owner, connection.pk, [{"simplefin_account_id": "CON-1:sf-checking", "action": "ignore"}])
+
+    assert not AccountLink.objects.filter(account=checking).exists()
+
+
+def test_time_zone_follows_the_tz_environment_variable(monkeypatch):
+    import importlib
+
+    import financial_planner.settings as settings_module
+
+    monkeypatch.setenv("TZ", "America/Los_Angeles")
+    monkeypatch.setenv("DJANGO_SECRET_KEY", "test-only-secret-key-with-enough-entropy-not-for-production-12345")
+    reloaded = importlib.reload(settings_module)
+    try:
+        assert reloaded.TIME_ZONE == "America/Los_Angeles"
+    finally:
+        monkeypatch.delenv("TZ")
+        importlib.reload(settings_module)
