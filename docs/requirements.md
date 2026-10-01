@@ -238,4 +238,5 @@ Owner decisions:
 - Sharing is with the whole household only.
 - **Lent:** only the owner may unshare, archive, or change the mode. Other members may view and edit transactions.
 - **Co-owned:** any current member may unshare or archive.
-- The owner may switch modes either way. Switching from lent to co-owned shows a confirmation that the owner is giving up sole ownership.
+- The owner may switch modes either way. Switching from lent to co-owned shows a confirmation that the owner is giving up sole ownership: if they leave, the account stays with the household. Switching from co-owned to lent is allowed only for the account's current owner.
+- Existing household accounts migrate as co-owned. The Accounts page (#61) offers Co-owned or Lent when sharing or creating a household account, and the owner can switch later.

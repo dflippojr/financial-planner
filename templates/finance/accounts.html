@@ -38,7 +38,11 @@
         <td>{{ account.get_account_type_display }}</td>
         <td>
           {% if account.scope == "household" %}
-          <span class="badge badge-info">Shared with household</span>
+            {% if account.share_mode == "lent" %}
+            <span class="badge badge-info">Lent</span>
+            {% else %}
+            <span class="badge badge-info">Co-owned</span>
+            {% endif %}
           {% else %}
           <span class="badge">Private</span>
           {% endif %}
@@ -63,16 +67,52 @@
               <button type="submit" class="btn btn-sm">Rename</button>
             </form>
             {% if account.scope == "private" and has_household %}
-            <form method="post" action="{% url 'account-share' account.pk %}">
+            <form method="post" action="{% url 'account-share' account.pk %}" class="flex flex-wrap items-center gap-2">
               {% csrf_token %}
+              <label class="sr-only" for="share-mode-{{ account.pk }}">Share as</label>
+              <select id="share-mode-{{ account.pk }}" class="select select-bordered select-sm" name="share_mode" required>
+                <option value="co_owned">Co-owned</option>
+                <option value="lent">Lent</option>
+              </select>
               <button type="submit" class="btn btn-sm btn-outline">Share with household</button>
             </form>
             {% elif account.scope == "household" %}
+              {% if account.share_mode != "lent" or account.owner_id == viewer_id %}
             <form method="post" action="{% url 'account-unshare' account.pk %}">
               {% csrf_token %}
               <button type="submit" class="btn btn-sm btn-outline">Make private</button>
             </form>
+              {% endif %}
+              {% if account.owner_id == viewer_id %}
+                {% if account.share_mode == "lent" %}
+            <button type="button" class="btn btn-sm btn-outline" onclick="document.getElementById('co-own-{{ account.pk }}').showModal()">Make co-owned</button>
+            <dialog id="co-own-{{ account.pk }}" class="modal">
+              <div class="modal-box">
+                <h3 class="font-bold text-lg">Give up sole ownership of {{ account.name }}?</h3>
+                <p class="py-4">You give up sole ownership: if you leave, the account stays with the household.</p>
+                <div class="modal-action">
+                  <form method="dialog">
+                    <button class="btn">Cancel</button>
+                  </form>
+                  <form method="post" action="{% url 'account-share-mode' account.pk %}">
+                    {% csrf_token %}
+                    <input type="hidden" name="share_mode" value="co_owned">
+                    <input type="hidden" name="confirm_give_up_ownership" value="on">
+                    <button type="submit" class="btn btn-primary">Make co-owned</button>
+                  </form>
+                </div>
+              </div>
+            </dialog>
+                {% else %}
+            <form method="post" action="{% url 'account-share-mode' account.pk %}">
+              {% csrf_token %}
+              <input type="hidden" name="share_mode" value="lent">
+              <button type="submit" class="btn btn-sm btn-outline">Make lent</button>
+            </form>
+                {% endif %}
+              {% endif %}
             {% endif %}
+            {% if account.scope != "household" or account.share_mode != "lent" or account.owner_id == viewer_id %}
             <button type="button" class="btn btn-sm btn-error" onclick="document.getElementById('archive-{{ account.pk }}').showModal()">Archive</button>
             <dialog id="archive-{{ account.pk }}" class="modal">
               <div class="modal-box">
@@ -89,6 +129,7 @@
                 </div>
               </div>
             </dialog>
+            {% endif %}
           {% endif %}
           {% if account.owner_id == viewer_id %}
             <a class="btn btn-sm btn-ghost text-error" href="{% url 'account-delete' account.pk %}">Delete account</a>

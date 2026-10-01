@@ -375,8 +375,18 @@ class AddAccountForm(forms.Form):
         if has_household:
             self.fields["sharing"].choices = (
                 (Account.Scope.PRIVATE, "Private"),
-                (Account.Scope.HOUSEHOLD, "Shared with household"),
+                (Account.ShareMode.CO_OWNED, "Co-owned (household)"),
+                (Account.ShareMode.LENT, "Lent (household)"),
             )
+
+
+class ShareAccountForm(forms.Form):
+    share_mode = forms.ChoiceField(choices=Account.ShareMode.choices, label="Share as")
+
+
+class ChangeShareModeForm(forms.Form):
+    share_mode = forms.ChoiceField(choices=Account.ShareMode.choices)
+    confirm_give_up_ownership = forms.BooleanField(required=False)
 
 
 class AccountRenameForm(forms.Form):

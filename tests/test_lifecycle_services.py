@@ -10,11 +10,15 @@ from django.core.exceptions import PermissionDenied
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db import connection, connections
+from django.test import Client
+from django.urls import reverse
 from django.utils import timezone
 
 from finance import lifecycle_services
+from finance.forms import TransactionCorrectionForm
 from finance.lifecycle_services import (
     archive_account,
+    change_account_share_mode,
     leave_household,
     share_account,
     unshare_account,
@@ -66,11 +70,12 @@ def test_owner_shares_full_account_history_with_current_household():
     )
     batch, transaction = add_history(account, owner)
 
-    share_account(owner.user, account.pk)
+    share_account(owner.user, account.pk, Account.ShareMode.CO_OWNED)
 
     account.refresh_from_db()
     assert account.scope == Account.Scope.HOUSEHOLD
     assert account.household == household
+    assert account.share_mode == Account.ShareMode.CO_OWNED
     assert ImportBatch.objects.visible_to(member).filter(pk=batch.pk).exists()
     assert Transaction.objects.visible_to(member.user).filter(pk=transaction.pk).exists()
     assert ImportBatch.objects.filter(account=account).count() == 1
@@ -90,6 +95,7 @@ def test_current_member_unshares_full_history_to_owner_only_without_returning_it
         owner=owner,
         scope=Account.Scope.HOUSEHOLD,
         household=household,
+        share_mode=Account.ShareMode.CO_OWNED,
     )
     batch, transaction = add_history(account, owner)
 
@@ -99,6 +105,7 @@ def test_current_member_unshares_full_history_to_owner_only_without_returning_it
     assert result is None
     assert account.scope == Account.Scope.PRIVATE
     assert account.household is None
+    assert account.share_mode is None
     assert not Account.objects.visible_to(member).filter(pk=account.pk).exists()
     assert not ImportBatch.objects.visible_to(member).filter(pk=batch.pk).exists()
     assert not Transaction.objects.visible_to(member).filter(pk=transaction.pk).exists()
@@ -119,9 +126,9 @@ def test_share_rejects_other_members_private_account_like_a_missing_account():
     )
 
     with pytest.raises(PermissionDenied) as private_error:
-        share_account(member, private.pk)
+        share_account(member, private.pk, Account.ShareMode.CO_OWNED)
     with pytest.raises(PermissionDenied) as missing_error:
-        share_account(member, private.pk + 1000)
+        share_account(member, private.pk + 1000, Account.ShareMode.CO_OWNED)
 
     assert str(private_error.value) == str(missing_error.value)
     private.refresh_from_db()
@@ -141,6 +148,7 @@ def test_unshare_rejects_former_member_without_disclosing_account_state():
         owner=owner,
         scope=Account.Scope.HOUSEHOLD,
         household=household,
+        share_mode=Account.ShareMode.CO_OWNED,
     )
     membership.ended_at = membership.joined_at
     membership.save(update_fields=("ended_at",))
@@ -164,6 +172,7 @@ def test_ended_owner_membership_does_not_bypass_household_scope():
         owner=owner,
         scope=Account.Scope.HOUSEHOLD,
         household=household,
+        share_mode=Account.ShareMode.CO_OWNED,
     )
     membership.ended_at = membership.joined_at
     membership.save(update_fields=("ended_at",))
@@ -185,6 +194,7 @@ def test_current_member_archives_shared_account_and_all_history(actor_kind):
         owner=owner,
         scope=Account.Scope.HOUSEHOLD,
         household=household,
+        share_mode=Account.ShareMode.CO_OWNED,
     )
     batch, financial_transaction = add_history(account, owner)
 
@@ -263,6 +273,7 @@ def test_leaving_revokes_shared_history_access_and_allows_joining_another_househ
         owner=owner,
         scope=Account.Scope.HOUSEHOLD,
         household=household,
+        share_mode=Account.ShareMode.CO_OWNED,
     )
     batch, financial_transaction = add_history(account, owner)
 
@@ -302,6 +313,7 @@ def test_owner_leaving_transfers_shared_accounts_to_longest_serving_member():
         owner=owner,
         scope=Account.Scope.HOUSEHOLD,
         household=household,
+        share_mode=Account.ShareMode.CO_OWNED,
     )
     batch, financial_transaction = add_history(account, owner)
 
@@ -330,6 +342,7 @@ def test_last_member_leaves_and_owned_shared_history_becomes_private():
         owner=owner,
         scope=Account.Scope.HOUSEHOLD,
         household=household,
+        share_mode=Account.ShareMode.CO_OWNED,
     )
     batch, financial_transaction = add_history(account, owner)
 
@@ -341,6 +354,7 @@ def test_last_member_leaves_and_owned_shared_history_becomes_private():
     assert account.owner == owner
     assert account.scope == Account.Scope.PRIVATE
     assert account.household is None
+    assert account.share_mode is None
     assert Account.objects.visible_to(owner).filter(pk=account.pk).exists()
     assert ImportBatch.objects.visible_to(owner).filter(pk=batch.pk).exists()
     assert Transaction.objects.visible_to(owner).filter(pk=financial_transaction.pk).exists()
@@ -359,6 +373,7 @@ def test_eviction_command_transfers_shared_accounts_like_leaving():
         owner=owner,
         scope=Account.Scope.HOUSEHOLD,
         household=household,
+        share_mode=Account.ShareMode.CO_OWNED,
     )
     batch, financial_transaction = add_history(account, owner)
     output = StringIO()
@@ -427,6 +442,7 @@ def test_visible_accounts_query_is_lockable_and_never_duplicates_rows():
         owner=owner,
         scope=Account.Scope.HOUSEHOLD,
         household=household,
+        share_mode=Account.ShareMode.CO_OWNED,
     )
 
     visible = Account.objects.visible_to(owner)
@@ -458,6 +474,7 @@ def test_unshare_and_membership_exit_concurrently_do_not_deadlock(exit_kind):
         owner=owner,
         scope=Account.Scope.HOUSEHOLD,
         household=household,
+        share_mode=Account.ShareMode.CO_OWNED,
     )
 
     first_lock_held = threading.Event()
@@ -499,3 +516,241 @@ def test_unshare_and_membership_exit_concurrently_do_not_deadlock(exit_kind):
     assert not unsharing.is_alive()
     assert not exiting.is_alive()
     assert errors == []
+
+
+def _household_with_shared_account(*, share_mode, with_history=True):
+    owner = make_person("owner")
+    member = make_person("member")
+    household = Household.objects.create(name="Synthetic Household")
+    Membership.objects.create(person=owner, household=household)
+    Membership.objects.create(person=member, household=household)
+    account = Account.objects.create(
+        name="Synthetic Shared",
+        account_type=Account.Type.CHECKING,
+        owner=owner,
+        scope=Account.Scope.HOUSEHOLD,
+        household=household,
+        share_mode=share_mode,
+    )
+    history = add_history(account, owner) if with_history else (None, None)
+    return owner, member, household, account, history
+
+
+@pytest.mark.django_db
+def test_share_requires_an_explicit_mode_and_rejects_unknown_modes():
+    owner = make_person("owner")
+    member = make_person("member")
+    household = Household.objects.create(name="Synthetic Household")
+    Membership.objects.create(person=owner, household=household)
+    Membership.objects.create(person=member, household=household)
+    account = Account.objects.create(
+        name="Synthetic Private",
+        account_type=Account.Type.CHECKING,
+        owner=owner,
+    )
+
+    with pytest.raises(PermissionDenied) as missing_mode:
+        share_account(owner, account.pk, None)
+    with pytest.raises(PermissionDenied) as invalid_mode:
+        share_account(owner, account.pk, "secret")
+    with pytest.raises(PermissionDenied) as missing_account:
+        share_account(owner, account.pk + 1000, Account.ShareMode.LENT)
+
+    assert str(missing_mode.value) == str(invalid_mode.value) == str(missing_account.value)
+    account.refresh_from_db()
+    assert account.scope == Account.Scope.PRIVATE
+    assert account.share_mode is None
+
+
+@pytest.mark.django_db
+def test_lent_owner_leave_returns_account_private_and_preserves_history():
+    owner, member, _household, account, (batch, financial_transaction) = _household_with_shared_account(
+        share_mode=Account.ShareMode.LENT
+    )
+
+    leave_household(owner.user)
+
+    account.refresh_from_db()
+    assert account.owner_id == owner.pk
+    assert account.scope == Account.Scope.PRIVATE
+    assert account.household is None
+    assert account.share_mode is None
+    assert Account.objects.visible_to(owner).filter(pk=account.pk).exists()
+    assert not Account.objects.visible_to(member).filter(pk=account.pk).exists()
+    assert not Transaction.objects.visible_to(member).filter(pk=financial_transaction.pk).exists()
+    assert Transaction.objects.visible_to(owner).filter(pk=financial_transaction.pk).exists()
+    assert ImportBatch.objects.filter(pk=batch.pk).count() == 1
+    assert Transaction.objects.filter(pk=financial_transaction.pk).count() == 1
+
+
+@pytest.mark.django_db
+def test_borrower_leaving_a_lent_account_loses_access_only():
+    owner, member, household, account, (batch, financial_transaction) = _household_with_shared_account(
+        share_mode=Account.ShareMode.LENT
+    )
+
+    leave_household(member)
+
+    account.refresh_from_db()
+    assert account.owner_id == owner.pk
+    assert account.scope == Account.Scope.HOUSEHOLD
+    assert account.household_id == household.pk
+    assert account.share_mode == Account.ShareMode.LENT
+    assert not Account.objects.visible_to(member).filter(pk=account.pk).exists()
+    assert Account.objects.visible_to(owner).filter(pk=account.pk).exists()
+    assert Transaction.objects.visible_to(owner).filter(pk=financial_transaction.pk).exists()
+    assert ImportBatch.objects.filter(pk=batch.pk).exists()
+
+
+@pytest.mark.django_db
+def test_lent_borrower_cannot_unshare_archive_or_change_mode():
+    owner, member, _household, account, _history = _household_with_shared_account(share_mode=Account.ShareMode.LENT)
+
+    with pytest.raises(PermissionDenied) as unshare_error:
+        unshare_account(member, account.pk)
+    with pytest.raises(PermissionDenied) as archive_error:
+        archive_account(member, account.pk)
+    with pytest.raises(PermissionDenied) as mode_error:
+        change_account_share_mode(member, account.pk, Account.ShareMode.CO_OWNED, confirm_give_up_ownership=True)
+    with pytest.raises(PermissionDenied) as missing_error:
+        unshare_account(member, account.pk + 1000)
+
+    assert str(unshare_error.value) == str(archive_error.value) == str(mode_error.value) == str(missing_error.value)
+    account.refresh_from_db()
+    assert account.scope == Account.Scope.HOUSEHOLD
+    assert account.share_mode == Account.ShareMode.LENT
+    assert account.status == Account.Status.ACTIVE
+
+
+@pytest.mark.django_db
+def test_owner_switches_share_modes_with_lent_to_co_owned_confirmation():
+    owner, member, _household, account, _history = _household_with_shared_account(share_mode=Account.ShareMode.LENT)
+
+    with pytest.raises(PermissionDenied):
+        change_account_share_mode(owner, account.pk, Account.ShareMode.CO_OWNED)
+    change_account_share_mode(owner, account.pk, Account.ShareMode.CO_OWNED, confirm_give_up_ownership=True)
+    account.refresh_from_db()
+    assert account.share_mode == Account.ShareMode.CO_OWNED
+    assert Account.objects.visible_to(member).filter(pk=account.pk).exists()
+
+    change_account_share_mode(owner, account.pk, Account.ShareMode.LENT)
+    account.refresh_from_db()
+    assert account.share_mode == Account.ShareMode.LENT
+
+
+@pytest.mark.django_db
+def test_lent_owner_unshares_and_archives_while_member_can_still_edit_visibility():
+    owner, member, _household, account, (batch, financial_transaction) = _household_with_shared_account(
+        share_mode=Account.ShareMode.LENT
+    )
+    assert Transaction.objects.visible_to(member).filter(pk=financial_transaction.pk).exists()
+
+    unshare_account(owner, account.pk)
+    account.refresh_from_db()
+    assert account.scope == Account.Scope.PRIVATE
+    assert account.share_mode is None
+    assert not Account.objects.visible_to(member).filter(pk=account.pk).exists()
+    assert not Transaction.objects.visible_to(member).filter(pk=financial_transaction.pk).exists()
+    assert ImportBatch.objects.filter(pk=batch.pk).exists()
+
+    share_account(owner, account.pk, Account.ShareMode.LENT)
+    archive_account(owner, account.pk)
+    account.refresh_from_db()
+    assert account.status == Account.Status.ARCHIVED
+    assert Account.objects.visible_to(member).filter(pk=account.pk).exists()
+
+
+@pytest.mark.django_db
+def test_private_account_never_becomes_visible_through_share_mode_paths():
+    owner = make_person("owner")
+    member = make_person("member")
+    household = Household.objects.create(name="Synthetic Household")
+    Membership.objects.create(person=owner, household=household)
+    Membership.objects.create(person=member, household=household)
+    secret = Account.objects.create(
+        name="Owner Private",
+        account_type=Account.Type.CHECKING,
+        owner=owner,
+    )
+    add_history(secret, owner)
+
+    with pytest.raises(PermissionDenied):
+        change_account_share_mode(member, secret.pk, Account.ShareMode.LENT)
+    with pytest.raises(PermissionDenied):
+        unshare_account(member, secret.pk)
+    with pytest.raises(PermissionDenied):
+        archive_account(member, secret.pk)
+    with pytest.raises(PermissionDenied):
+        share_account(member, secret.pk, Account.ShareMode.LENT)
+
+    assert not Account.objects.visible_to(member).filter(pk=secret.pk).exists()
+    secret.refresh_from_db()
+    assert secret.scope == Account.Scope.PRIVATE
+    assert secret.share_mode is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_share_mode_change_and_transaction_edit_do_not_deadlock():
+    if connection.vendor != "postgresql":
+        pytest.skip("row-lock ordering can only be exercised on PostgreSQL")
+
+    owner, member, _household, account, (_batch, financial_transaction) = _household_with_shared_account(
+        share_mode=Account.ShareMode.LENT
+    )
+
+    editing_paused = threading.Event()
+    mode_change_committed = threading.Event()
+    observed = {}
+    errors = []
+    original_apply = TransactionCorrectionForm.apply
+
+    def pause_before_saving(form, target, **kwargs):
+        editing_paused.set()
+        mode_change_committed.wait(timeout=3)
+        observed["mode_changed_before_save"] = mode_change_committed.is_set()
+        return original_apply(form, target, **kwargs)
+
+    def edit():
+        try:
+            client = Client()
+            client.force_login(member.user)
+            client.post(
+                reverse("transaction-edit", args=(financial_transaction.pk,)),
+                {"transaction_date": "2026-01-05", "description": "Late correction", "amount": "-1.00"},
+            )
+        except Exception as exc:  # noqa: BLE001 - reported to the main thread
+            errors.append(exc)
+        finally:
+            connections.close_all()
+
+    def change_mode():
+        try:
+            change_account_share_mode(
+                owner,
+                account.pk,
+                Account.ShareMode.CO_OWNED,
+                confirm_give_up_ownership=True,
+            )
+            mode_change_committed.set()
+        except Exception as exc:  # noqa: BLE001 - reported to the main thread
+            errors.append(exc)
+        finally:
+            connections.close_all()
+
+    with patch.object(TransactionCorrectionForm, "apply", pause_before_saving):
+        editing = threading.Thread(target=edit)
+        editing.start()
+        assert editing_paused.wait(timeout=10)
+        changing = threading.Thread(target=change_mode)
+        changing.start()
+        editing.join(timeout=30)
+        changing.join(timeout=30)
+
+    assert errors == []
+    assert not editing.is_alive()
+    assert not changing.is_alive()
+    assert observed["mode_changed_before_save"] is False
+    account.refresh_from_db()
+    financial_transaction.refresh_from_db()
+    assert account.share_mode == Account.ShareMode.CO_OWNED
+    assert financial_transaction.description == "Late correction"

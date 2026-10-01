@@ -21,6 +21,7 @@ urlpatterns = [
     path("accounts/", account_views.account_list, name="account-list"),
     path("accounts/<int:account_id>/rename/", account_views.account_rename, name="account-rename"),
     path("accounts/<int:account_id>/share/", account_views.account_share, name="account-share"),
+    path("accounts/<int:account_id>/share-mode/", account_views.account_change_share_mode, name="account-share-mode"),
     path("accounts/<int:account_id>/unshare/", account_views.account_unshare, name="account-unshare"),
     path("accounts/<int:account_id>/archive/", account_views.account_archive, name="account-archive"),
     path("accounts/<int:account_id>/delete/", account_views.account_delete, name="account-delete"),

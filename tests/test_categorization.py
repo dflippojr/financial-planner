@@ -51,13 +51,16 @@ def make_household(*people, name="Synthetic Household"):
     return household
 
 
-def make_account(owner, *, name="Synthetic Checking", account_type=Account.Type.CHECKING, scope=Account.Scope.PRIVATE, household=None):
+def make_account(owner, *, name="Synthetic Checking", account_type=Account.Type.CHECKING, scope=Account.Scope.PRIVATE, household=None, share_mode=None):
+    if share_mode is None and scope == Account.Scope.HOUSEHOLD:
+        share_mode = Account.ShareMode.CO_OWNED
     return Account.objects.create(
         name=name,
         account_type=account_type,
         owner=owner,
         scope=scope,
         household=household,
+        share_mode=share_mode,
     )
 
 
@@ -628,12 +631,13 @@ def test_linked_refund_reduces_spending_from_its_own_fields_when_original_is_hid
     household = make_household(owner, member)
     groceries = household.categories.get(name="Groceries")
     purchase_account = make_account(owner, name="Synthetic Purchase Account")
-    share_account(owner, purchase_account.pk)
+    share_account(owner, purchase_account.pk, Account.ShareMode.CO_OWNED)
     refund_account = make_account(
         member,
         name="Synthetic Refund Account",
         scope=Account.Scope.HOUSEHOLD,
         household=household,
+        share_mode=Account.ShareMode.CO_OWNED,
     )
     original = make_transaction(owner, purchase_account, amount_minor=-4000, description="Synthetic store")
     refund = make_transaction(member, refund_account, amount_minor=1500, description="Synthetic store refund")
