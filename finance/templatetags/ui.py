@@ -45,6 +45,6 @@ def _tone_from_display(display):
     text = str(display).lstrip()
     if text.startswith("-"):
         return "out"
-    if text.startswith("0.00") or text.startswith("0,00"):
+    if text.startswith(("0.00", "0,00")):
         return ""
     return "in"
