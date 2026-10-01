@@ -317,7 +317,10 @@ def test_money_decimal_helpers():
     assert money_decimal(-1234) == "-12.34"
     assert money_decimal(50) == "0.50"
     assert minor_from_decimal_string("-12.34") == -1234
-    assert _balance_snapshot_model() is None
+    # SimpleFIN (#67) adds BalanceSnapshot, so the export now includes snapshots.
+    from finance.models import BalanceSnapshot
+
+    assert _balance_snapshot_model() is BalanceSnapshot
 
 
 @pytest.mark.django_db
