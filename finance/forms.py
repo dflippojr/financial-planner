@@ -383,6 +383,20 @@ class AccountRenameForm(forms.Form):
     name = forms.CharField(max_length=150)
 
 
+class AccountDeleteForm(forms.Form):
+    confirm_name = forms.CharField(label="Type the exact account name to confirm", max_length=150)
+
+    def __init__(self, *args, account_name, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.account_name = account_name
+
+    def clean_confirm_name(self):
+        confirm_name = self.cleaned_data["confirm_name"]
+        if confirm_name != self.account_name:
+            raise ValidationError("Type the exact account name to confirm.")
+        return confirm_name
+
+
 class CategoryNameForm(forms.Form):
     name = forms.CharField(max_length=80)
 

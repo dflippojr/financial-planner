@@ -218,6 +218,7 @@ def test_rename_rejects_empty_and_too_long_names():
         ("share", "account-share"),
         ("unshare", "account-unshare"),
         ("archive", "account-archive"),
+        ("delete", "account-delete"),
     ),
 )
 @pytest.mark.django_db
@@ -228,7 +229,7 @@ def test_unauthorized_account_actions_return_identical_404(action, url_name):
     household = make_household(owner, member)
     private = make_account(owner, name="Owner Private")
     shared = make_account(owner, name="Shared", scope=Account.Scope.HOUSEHOLD, household=household)
-    payload = {"name": "Hacked"} if action == "rename" else {}
+    payload = {"name": "Hacked"} if action == "rename" else {"confirm_name": "Shared"} if action == "delete" else {}
 
     member_private = signed_in(member).post(reverse(url_name, args=(private.pk,)), payload)
     outsider_private = signed_in(outsider).post(reverse(url_name, args=(private.pk,)), payload)
@@ -288,6 +289,7 @@ def test_archived_accounts_have_no_row_actions_and_reject_posts():
 
     assert "Old Ledger" in page
     assert reverse("csv-import-preview", args=(account.pk,)) not in page
+    assert reverse("account-delete", args=(account.pk,)) in page
     assert_same_404(rename, missing)
     account.refresh_from_db()
     assert account.name == "Old Ledger"

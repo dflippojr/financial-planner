@@ -1,0 +1,25 @@
+{% extends "finance/base.html" %}
+{% block title %}Delete {{ account.name }} · Financial Planner{% endblock %}
+{% block content %}
+<h1 class="mb-4 text-2xl font-bold">Delete {{ account.name }}?</h1>
+<div role="alert" class="alert alert-warning mb-4 max-w-lg">
+  <span>
+    This permanently deletes the account and all of its data, including
+    {{ transaction_count }} transaction{{ transaction_count|pluralize }} and
+    {{ import_count }} import{{ import_count|pluralize }}. Existing backups keep a copy
+    until they rotate out (14 nightly and 8 weekly, up to 8 weeks).
+  </span>
+</div>
+<section class="card bg-base-100 shadow-sm max-w-lg">
+  <div class="card-body">
+    <form method="post">
+      {% csrf_token %}
+      {% include "finance/_form_fields.html" with form=form %}
+      <div class="flex flex-wrap items-center gap-2">
+        <a class="btn" href="{% url 'account-list' %}">Cancel</a>
+        <button type="submit" class="btn btn-error">Delete account</button>
+      </div>
+    </form>
+  </div>
+</section>
+{% endblock %}
