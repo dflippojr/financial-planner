@@ -10,6 +10,7 @@ from .category_services import (
     _history_label,
     _person_for,
     _record_text_history,
+    _restore_refund_categories,
     assignable_categories,
     current_household,
     ensure_household_categories,
@@ -262,11 +263,24 @@ def _history_new_label(category, rule):
     return f"{_history_label(category)} (rule: {rule.description_contains})"
 
 
+def _linked_refunds(transactions):
+    original_ids = [txn.pk for txn in transactions]
+    if not original_ids:
+        return []
+    return list(
+        Transaction.objects.filter(
+            refund_link__original_id__in=original_ids,
+            status=Transaction.Status.ACTIVE,
+        )
+    )
+
+
 def _lock_transactions(person, transactions):
     lock_actor_household(person)
-    account_ids = sorted({item.account_id for item in transactions})
+    to_lock = list(transactions) + _linked_refunds(transactions)
+    account_ids = sorted({item.account_id for item in to_lock})
     list(Account.objects.select_for_update().filter(pk__in=account_ids).order_by("pk"))
-    ids = sorted(item.pk for item in transactions)
+    ids = sorted({item.pk for item in to_lock})
     return list(
         Transaction.objects.select_for_update(of=("self",))
         .select_related("account", "category", "account__owner", "account__household")
@@ -312,6 +326,7 @@ def _apply_to_locked(person, rule, locked, *, require_first_match=True):
             _history_label(previous),
             _history_new_label(rule.category, rule),
         )
+        _restore_refund_categories(txn, person)
         changed.append((txn, previous, previous_source))
     if not changed:
         return None, skipped_manual
@@ -399,7 +414,10 @@ def reverse_application(principal, application_id):
         txn = by_id.get(entry.transaction_id)
         if txn is None:
             continue
-        if txn.category_source == Transaction.CategorySource.MANUAL:
+        if txn.category_source in (
+            Transaction.CategorySource.MANUAL,
+            Transaction.CategorySource.INHERITED,
+        ):
             skipped_manual += 1
             continue
         previous = txn.category
@@ -414,6 +432,7 @@ def reverse_application(principal, application_id):
             _history_label(previous),
             _history_label(restored_category),
         )
+        _restore_refund_categories(txn, person)
         restored += 1
     return ReverseResult(restored=restored, skipped_manual=skipped_manual)
 

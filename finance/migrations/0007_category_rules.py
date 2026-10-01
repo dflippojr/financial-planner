@@ -5,6 +5,20 @@ import django.utils.timezone
 from django.db import migrations, models
 
 
+def backfill_category_source(apps, schema_editor):
+    Transaction = apps.get_model("finance", "Transaction")
+    RefundLink = apps.get_model("finance", "RefundLink")
+    refund_ids = list(RefundLink.objects.values_list("refund_id", flat=True))
+    categorized = Transaction.objects.filter(category_id__isnull=False)
+    categorized.filter(pk__in=refund_ids).update(category_source="inherited")
+    categorized.exclude(pk__in=refund_ids).update(category_source="manual")
+
+
+def unfill_category_source(apps, schema_editor):
+    Transaction = apps.get_model("finance", "Transaction")
+    Transaction.objects.filter(category_source__in=("manual", "inherited")).update(category_source="")
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -44,6 +58,7 @@ class Migration(migrations.Migration):
             name='category_source',
             field=models.CharField(blank=True, choices=[('', 'Unset'), ('manual', 'Manual'), ('rule', 'Rule'), ('inherited', 'Inherited')], default='', max_length=9),
         ),
+        migrations.RunPython(backfill_category_source, unfill_category_source),
         migrations.AddConstraint(
             model_name='transaction',
             constraint=models.CheckConstraint(condition=models.Q(('category_source__in', ('', 'manual', 'rule', 'inherited'))), name='transaction_category_source_valid'),

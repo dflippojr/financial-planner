@@ -21,6 +21,7 @@ from finance.models import (
     Person,
     RuleApplication,
     Transaction,
+    TransactionCorrectionHistory,
 )
 from finance.rule_services import (
     apply_enabled_rules_to_transactions,
@@ -290,7 +291,7 @@ def test_rules_skip_refunds_and_honor_amount_bounds():
     too_small.refresh_from_db()
     assert original.category_id == groceries(household).pk
     assert refund.category_source == Transaction.CategorySource.INHERITED
-    assert refund.category_id is None
+    assert refund.category_id == groceries(household).pk
     assert too_small.category_id is None
 
 
@@ -503,3 +504,162 @@ def test_hand_edit_wins_when_a_rule_applies_concurrently():
     txn.refresh_from_db()
     assert txn.category_id == groceries(household).pk
     assert txn.category_source == Transaction.CategorySource.MANUAL
+
+
+@pytest.mark.django_db
+def test_0007_backfill_marks_existing_categories_manual_or_inherited():
+    import importlib
+
+    from django.apps import apps
+
+    backfill_category_source = importlib.import_module(
+        "finance.migrations.0007_category_rules"
+    ).backfill_category_source
+
+    owner = make_person("owner")
+    household = make_household(owner)
+    account = make_account(owner)
+    grocery = groceries(household)
+    hand = make_transaction(owner, account, fingerprint="3" * 64)
+    assign_category(owner, hand.pk, grocery.pk)
+    original = make_transaction(owner, account, fingerprint="4" * 64)
+    refund = make_transaction(
+        owner,
+        account,
+        amount_minor=1000,
+        description="SYNTHETIC KROGER REFUND",
+        fingerprint="5" * 64,
+    )
+    assign_category(owner, original.pk, grocery.pk)
+    link_refund(owner, refund.pk, original.pk)
+    uncategorized = make_transaction(
+        owner,
+        account,
+        description="SYNTHETIC UNCATEGORIZED",
+        fingerprint="6" * 64,
+    )
+    Transaction.objects.filter(pk__in=[hand.pk, original.pk, refund.pk]).update(
+        category_source=Transaction.CategorySource.UNSET
+    )
+
+    backfill_category_source(apps, None)
+
+    hand.refresh_from_db()
+    original.refresh_from_db()
+    refund.refresh_from_db()
+    uncategorized.refresh_from_db()
+    assert hand.category_source == Transaction.CategorySource.MANUAL
+    assert original.category_source == Transaction.CategorySource.MANUAL
+    assert refund.category_source == Transaction.CategorySource.INHERITED
+    assert uncategorized.category_source == Transaction.CategorySource.UNSET
+
+    save_category_rule(
+        owner,
+        owner_kind="personal",
+        description_contains="kroger",
+        account_id=None,
+        min_amount_minor=None,
+        max_amount_minor=None,
+        category_id=dining(household).pk,
+        priority=0,
+    )
+    apply_rule(owner, CategoryRule.objects.get(owner_person=owner).pk)
+    hand.refresh_from_db()
+    original.refresh_from_db()
+    refund.refresh_from_db()
+    assert hand.category_id == grocery.pk
+    assert hand.category_source == Transaction.CategorySource.MANUAL
+    assert original.category_id == grocery.pk
+    assert original.category_source == Transaction.CategorySource.MANUAL
+    assert refund.category_id == grocery.pk
+    assert refund.category_source == Transaction.CategorySource.INHERITED
+
+
+@pytest.mark.django_db
+def test_apply_rule_propagates_to_linked_refunds_and_reverse_restores_them():
+    owner = make_person("owner")
+    household = make_household(owner)
+    account = make_account(owner)
+    grocery = groceries(household)
+    dining_cat = dining(household)
+    original = make_transaction(owner, account, fingerprint="7" * 64)
+    refund = make_transaction(
+        owner,
+        account,
+        amount_minor=1000,
+        description="SYNTHETIC KROGER REFUND",
+        fingerprint="8" * 64,
+    )
+    Transaction.objects.filter(pk=original.pk).update(category=dining_cat)
+    original.refresh_from_db()
+    link_refund(owner, refund.pk, original.pk)
+    rule = save_category_rule(
+        owner,
+        owner_kind="personal",
+        description_contains="kroger",
+        account_id=None,
+        min_amount_minor=None,
+        max_amount_minor=None,
+        category_id=grocery.pk,
+        priority=0,
+    )
+    application, skipped = apply_rule(owner, rule.pk)
+    assert skipped == 0
+    original.refresh_from_db()
+    refund.refresh_from_db()
+    assert original.category_id == grocery.pk
+    assert original.category_source == Transaction.CategorySource.RULE
+    assert refund.category_id == grocery.pk
+    assert refund.category_source == Transaction.CategorySource.INHERITED
+    assert refund.correction_history.filter(
+        field_name=TransactionCorrectionHistory.Field.CATEGORY
+    ).exists()
+    result = reverse_application(owner, application.pk)
+    original.refresh_from_db()
+    refund.refresh_from_db()
+    assert result.restored == 1
+    assert original.category_id == dining_cat.pk
+    assert original.category_source == Transaction.CategorySource.UNSET
+    assert refund.category_id == dining_cat.pk
+    assert refund.category_source == Transaction.CategorySource.INHERITED
+
+
+@pytest.mark.django_db
+def test_reverse_skips_refund_later_inherited_from_linked_original():
+    owner = make_person("owner")
+    household = make_household(owner)
+    account = make_account(owner)
+    grocery = groceries(household)
+    dining_cat = dining(household)
+    refund = make_transaction(
+        owner,
+        account,
+        amount_minor=1000,
+        description="SYNTHETIC KROGER REFUND",
+        fingerprint="9" * 64,
+    )
+    rule = save_category_rule(
+        owner,
+        owner_kind="personal",
+        description_contains="kroger",
+        account_id=None,
+        min_amount_minor=None,
+        max_amount_minor=None,
+        category_id=grocery.pk,
+        priority=0,
+    )
+    application, skipped = apply_rule(owner, rule.pk)
+    assert skipped == 0
+    refund.refresh_from_db()
+    assert refund.category_source == Transaction.CategorySource.RULE
+    original = make_transaction(owner, account, fingerprint="0" * 64)
+    assign_category(owner, original.pk, dining_cat.pk)
+    link_refund(owner, refund.pk, original.pk)
+    result = reverse_application(owner, application.pk)
+    refund.refresh_from_db()
+    original.refresh_from_db()
+    assert result.restored == 0
+    assert result.skipped_manual == 1
+    assert refund.category_id == dining_cat.pk
+    assert refund.category_source == Transaction.CategorySource.INHERITED
+    assert original.category_id == dining_cat.pk
