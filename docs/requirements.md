@@ -240,3 +240,24 @@ Owner decisions:
 - **Co-owned:** any current member may unshare or archive.
 - The owner may switch modes either way. Switching from lent to co-owned shows a confirmation that the owner is giving up sole ownership: if they leave, the account stays with the household. Switching from co-owned to lent is allowed only for the account's current owner.
 - Existing household accounts migrate as co-owned. The Accounts page (#61) offers Co-owned or Lent when sharing or creating a household account, and the owner can switch later.
+
+## Re-authentication for sensitive actions (2026-10-01)
+
+Owner decision: sensitive actions require a fresh confirmation of identity. One confirmation covers further sensitive actions for **10 minutes** in the same session.
+
+Sensitive actions:
+- **Household access:** inviting a member, leaving the household.
+- **Sign-in methods:** connecting or disconnecting Google, adding or removing a password.
+- **Sharing:** sharing an account, making it private, changing co-owned or lent.
+- **Destructive or data-exporting:** deleting an account, downloading the data export.
+- **Connections:** connecting or disconnecting SimpleFIN.
+
+Defaults recorded with the decision (owner may change):
+- **Ways to re-authenticate:**
+  - A member with a password re-enters it.
+  - A member with Google re-signs in with Google, forced to a fresh login (`prompt=login`, with the ID token's `auth_time` checked).
+  - A member with both may use either.
+  - Recovery codes are not accepted here.
+- **Where the timestamp lives:** the session, never a cookie the client can set. Signing out clears it.
+- **Failed attempts** count toward the existing login throttle.
+- **Flow:** a sensitive POST without a fresh confirmation is not performed. The member is sent to a re-authentication page, then back to the page they came from, and submits the action again. Requests are never replayed automatically.
