@@ -8,7 +8,7 @@ from django.db import connection, connections
 from django.test import Client
 from django.urls import reverse
 
-from finance.category_services import assign_category, ensure_household_categories
+from finance.category_services import assign_category, ensure_household_categories, link_refund
 from finance.csv_import.parser import Mapping, read_csv
 from finance.csv_import.services import commit_csv_import
 from finance.models import (
@@ -247,6 +247,49 @@ def test_rules_auto_apply_on_csv_import_and_disable_stops_them():
     imported = Transaction.objects.get(account=account)
     assert imported.category_id == groceries(household).pk
     assert imported.category_source == Transaction.CategorySource.RULE
+
+
+@pytest.mark.django_db
+def test_rules_skip_refunds_and_honor_amount_bounds():
+    owner = make_person("owner")
+    household = make_household(owner)
+    account = make_account(owner)
+    original = make_transaction(owner, account, fingerprint="f" * 64)
+    refund = make_transaction(
+        owner,
+        account,
+        amount_minor=1000,
+        description="SYNTHETIC KROGER REFUND",
+        fingerprint="1" * 64,
+    )
+    link_refund(owner, refund.pk, original.pk)
+    bounded = save_category_rule(
+        owner,
+        owner_kind="personal",
+        description_contains="kroger",
+        account_id=None,
+        min_amount_minor=-1500,
+        max_amount_minor=-500,
+        category_id=groceries(household).pk,
+        priority=0,
+    )
+    too_small = make_transaction(
+        owner,
+        account,
+        amount_minor=-2000,
+        description="SYNTHETIC KROGER SMALL",
+        fingerprint="2" * 64,
+    )
+    _, matches = preview_rule(owner, bounded.pk)
+    assert {item.pk for item in matches} == {original.pk}
+    apply_rule(owner, bounded.pk)
+    original.refresh_from_db()
+    refund.refresh_from_db()
+    too_small.refresh_from_db()
+    assert original.category_id == groceries(household).pk
+    assert refund.category_source == Transaction.CategorySource.INHERITED
+    assert refund.category_id is None
+    assert too_small.category_id is None
 
 
 @pytest.mark.django_db
