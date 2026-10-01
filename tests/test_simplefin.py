@@ -781,12 +781,11 @@ def test_linking_one_account_to_two_remote_accounts_is_refused_without_500(monke
     payload["accounts"].append(second)
     connection = connect_owner(owner, monkeypatch, payload=payload)
 
+    cutover = date(2026, 3, 1)
+    choices = [
+        {"simplefin_account_id": "CON-1:sf-checking", "action": "link", "account_id": checking.pk, "cutover_date": cutover},
+        {"simplefin_account_id": "CON-1:sf-savings", "action": "link", "account_id": checking.pk, "cutover_date": cutover},
+    ]
     with pytest.raises(SimpleFinError):
-        save_account_links(
-            owner, connection.pk,
-            [
-                {"simplefin_account_id": "CON-1:sf-checking", "action": "link", "account_id": checking.pk, "cutover_date": date(2026, 3, 1)},
-                {"simplefin_account_id": "CON-1:sf-savings", "action": "link", "account_id": checking.pk, "cutover_date": date(2026, 3, 1)},
-            ],
-        )
+        save_account_links(owner, connection.pk, choices)
     assert AccountLink.objects.filter(account=checking).count() <= 1

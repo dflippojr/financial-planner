@@ -105,7 +105,7 @@ def _handle_link(request, connection, remotes, load_error):
     return redirect("simplefin-connections")
 
 
-def _cutover_for(remote, link_map, accounts, fallback):
+def _cutover_for(remote, link_map):
     link = link_map.get(remote["id"])
     if link is not None:
         return link, link.cutover_date.isoformat()
@@ -148,10 +148,9 @@ def connections(request):
         for link in AccountLink.objects.select_related("account").filter(connection=connection)
     } if connection is not None else {}
     accounts = _linkable_accounts(person)
-    fallback = timezone.localdate().isoformat()
     rows = []
     for remote in remotes:
-        link, cutover = _cutover_for(remote, link_map, accounts, fallback)
+        link, cutover = _cutover_for(remote, link_map)
         rows.append({**remote, "link": link, "default_cutover": cutover})
     next_sync, can_sync_now = _schedule_state(connection)
     return render(
