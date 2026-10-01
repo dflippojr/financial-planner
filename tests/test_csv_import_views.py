@@ -120,7 +120,7 @@ def test_current_household_member_can_preview_shared_account(staging_settings):
     Membership.objects.create(person=viewer, household=household)
     account = Account.objects.create(
         name="Shared Card", account_type="credit_card", owner=owner,
-        scope="household", household=household,
+        scope="household", household=household, share_mode="co_owned",
     )
     client = Client()
     client.force_login(viewer_user)

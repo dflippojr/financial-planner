@@ -36,6 +36,7 @@ CSV_FIELDS = {
         "account_type",
         "owner_username",
         "scope",
+        "share_mode",
         "household_id",
         "currency",
         "status",
@@ -119,7 +120,8 @@ column is "archived" when the row is not active.
 Files
 -----
 accounts.csv / accounts.json
-  id, name, account_type, owner_username, scope, household_id, currency,
+  id, name, account_type, owner_username, scope, share_mode (co_owned or lent
+  for household accounts, empty for private), household_id, currency,
   status, archived_at, created_at
 
 categories.csv / categories.json
@@ -218,6 +220,7 @@ def _account_rows(person):
                 "account_type": account.account_type,
                 "owner_username": account.owner.user.username,
                 "scope": account.scope,
+                "share_mode": account.share_mode,
                 "household_id": account.household_id,
                 "currency": account.currency,
                 "status": account.status,

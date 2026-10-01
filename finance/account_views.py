@@ -8,9 +8,10 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods, require_POST
 
 from .category_services import current_household
-from .forms import AccountDeleteForm, AccountRenameForm, AddAccountForm
+from .forms import AccountDeleteForm, AccountRenameForm, AddAccountForm, ChangeShareModeForm, ShareAccountForm
 from .lifecycle_services import (
     archive_account,
+    change_account_share_mode,
     delete_account,
     lock_actor_household,
     rename_account,
@@ -87,7 +88,7 @@ def _create_account(person, form):
     sharing = form.cleaned_data["sharing"]
     with transaction.atomic():
         membership, _memberships = lock_actor_household(person)
-        if sharing == Account.Scope.HOUSEHOLD:
+        if sharing in Account.ShareMode.values:
             if membership is None:
                 raise Http404
             return Account.objects.create(
@@ -95,6 +96,7 @@ def _create_account(person, form):
                 account_type=account_type,
                 owner=person,
                 scope=Account.Scope.HOUSEHOLD,
+                share_mode=sharing,
                 household=membership.household,
                 currency="USD",
             )
@@ -124,7 +126,31 @@ def account_rename(request, account_id):
 @never_cache
 def account_share(request, account_id):
     _active_visible_account(request.user, account_id)
-    _service_or_404(lambda: share_account(request.user, account_id))
+    form = ShareAccountForm(request.POST)
+    if not form.is_valid():
+        return redirect("account-list")
+    share_mode = form.cleaned_data["share_mode"]
+    _service_or_404(lambda: share_account(request.user, account_id, share_mode))
+    return redirect("account-list")
+
+
+@require_POST
+@never_cache
+def account_change_share_mode(request, account_id):
+    _active_visible_account(request.user, account_id)
+    form = ChangeShareModeForm(request.POST)
+    if not form.is_valid():
+        return redirect("account-list")
+    share_mode = form.cleaned_data["share_mode"]
+    confirm = form.cleaned_data["confirm_give_up_ownership"]
+    _service_or_404(
+        lambda: change_account_share_mode(
+            request.user,
+            account_id,
+            share_mode,
+            confirm_give_up_ownership=confirm,
+        )
+    )
     return redirect("account-list")
 
 
