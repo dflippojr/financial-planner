@@ -1,12 +1,13 @@
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
-from django.db.models import Count, Max, Q
+from django.db.models import Count, Max, OuterRef, Q, Subquery
 from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods, require_POST
 
+from .cash_flow import format_minor
 from .category_services import current_household
 from .forms import AccountDeleteForm, AccountRenameForm, AddAccountForm
 from .lifecycle_services import (
@@ -17,7 +18,7 @@ from .lifecycle_services import (
     share_account,
     unshare_account,
 )
-from .models import Account, ImportBatch, Person, Transaction
+from .models import Account, BalanceSnapshot, ImportBatch, Person, Transaction
 
 
 def _person(request):
@@ -39,6 +40,11 @@ def _service_or_404(action):
 
 
 def _visible_accounts(user):
+    latest = BalanceSnapshot.objects.filter(account_id=OuterRef("pk")).order_by(
+        "-snapshot_date",
+        "-source",
+        "-pk",
+    )
     return (
         Account.objects.visible_to(user)
         .annotate(
@@ -51,6 +57,9 @@ def _visible_accounts(user):
                 distinct=True,
                 filter=Q(transactions__status=Transaction.Status.ACTIVE),
             ),
+            last_snapshot_date=Subquery(latest.values("snapshot_date")[:1]),
+            last_snapshot_amount=Subquery(latest.values("amount_minor")[:1]),
+            last_snapshot_source=Subquery(latest.values("source")[:1]),
         )
         .order_by("name", "pk")
     )
@@ -66,6 +75,11 @@ def account_list(request):
         account = _create_account(person, form)
         return redirect("csv-import-preview", account.pk)
     accounts = list(_visible_accounts(request.user))
+    for account in accounts:
+        if account.last_snapshot_date is None:
+            account.last_snapshot_display = ""
+        else:
+            account.last_snapshot_display = format_minor(account.last_snapshot_amount)
     return render(
         request,
         "finance/accounts.html",
