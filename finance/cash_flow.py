@@ -36,8 +36,15 @@ def format_minor(amount_minor, currency="USD"):
 
 
 def previous_equal_range(date_from, date_to):
-    """The range of the same length that ends the day before date_from."""
+    """The range of the same length that ends the day before date_from.
+
+    Returns (None, None) when that range would start before the earliest date
+    Python can represent, so a report starting near year 1 has nothing to
+    compare against instead of failing.
+    """
     span_days = (date_to - date_from).days + 1
+    if date_from.toordinal() - span_days < date.min.toordinal():
+        return None, None
     previous_to = date_from - timedelta(days=1)
     previous_from = previous_to - timedelta(days=span_days - 1)
     return previous_from, previous_to
@@ -71,10 +78,18 @@ def _change_from_previous(current_minor, previous_minor):
     )
 
 
+def _no_previous_change():
+    return SimpleNamespace(minor=None, display="—", direction="none", label="No earlier range to compare")
+
+
 def _range_summary(current, previous, previous_from, previous_to):
-    income_change = _change_from_previous(current.income_minor, previous.income_minor)
-    spending_change = _change_from_previous(current.spending_minor, previous.spending_minor)
-    net_change = _change_from_previous(current.net_minor, previous.net_minor)
+    if previous is None:
+        income_change = spending_change = net_change = _no_previous_change()
+        previous = SimpleNamespace(income_minor=None, spending_minor=None, net_minor=None)
+    else:
+        income_change = _change_from_previous(current.income_minor, previous.income_minor)
+        spending_change = _change_from_previous(current.spending_minor, previous.spending_minor)
+        net_change = _change_from_previous(current.net_minor, previous.net_minor)
     return SimpleNamespace(
         income_minor=current.income_minor,
         spending_minor=current.spending_minor,
@@ -436,12 +451,14 @@ def cash_flow_report(
         accounts=account_filter,
     )
     previous_from, previous_to = previous_equal_range(date_from, date_to)
-    previous = income_and_spending_totals(
-        principal,
-        date_from=previous_from,
-        date_to=previous_to,
-        accounts=account_filter,
-    )
+    previous = None
+    if previous_from is not None:
+        previous = income_and_spending_totals(
+            principal,
+            date_from=previous_from,
+            date_to=previous_to,
+            accounts=account_filter,
+        )
     return SimpleNamespace(
         accounts=accounts,
         periods=periods,
@@ -486,8 +503,8 @@ def cash_flow_chart_data(report):
             "income_display": summary.income_display,
             "spending_display": summary.spending_display,
             "net_display": summary.net_display,
-            "previous_from": summary.previous_from.isoformat(),
-            "previous_to": summary.previous_to.isoformat(),
+            "previous_from": summary.previous_from.isoformat() if summary.previous_from else None,
+            "previous_to": summary.previous_to.isoformat() if summary.previous_to else None,
             "previous_income_minor": summary.previous_income_minor,
             "previous_spending_minor": summary.previous_spending_minor,
             "previous_net_minor": summary.previous_net_minor,

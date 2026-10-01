@@ -537,3 +537,23 @@ def test_report_refuses_too_many_periods_when_called_directly():
 def test_previous_equal_range_is_the_same_length_immediately_before():
     assert previous_equal_range(date(2026, 2, 1), date(2026, 2, 28)) == (date(2026, 1, 4), date(2026, 1, 31))
     assert previous_equal_range(date(2026, 1, 1), date(2026, 1, 31)) == (date(2025, 12, 1), date(2025, 12, 31))
+
+
+def test_previous_equal_range_is_none_before_the_earliest_date():
+    assert previous_equal_range(date(1, 1, 1), date(1, 1, 31)) == (None, None)
+    assert previous_equal_range(date(1, 2, 1), date(1, 2, 28)) == (date(1, 1, 4), date(1, 1, 31))
+
+
+@pytest.mark.django_db
+def test_home_with_a_range_at_year_one_has_no_comparison_instead_of_failing():
+    owner = make_person("owner")
+    make_household(owner)
+    make_account(owner)
+    client = Client()
+    client.force_login(owner.user)
+
+    response = client.get(reverse("home"), {"date_from": "0001-01-01", "date_to": "0001-01-31", "grouping": "month"})
+
+    assert response.status_code == 200
+    assert response.context["report"].summary.income_change.label == "No earlier range to compare"
+    assert b"No earlier range to compare" in response.content
