@@ -174,8 +174,9 @@ def test_claim_403_does_not_store_a_connection(monkeypatch):
         raise HTTPError(CLAIM_URL, 403, "Forbidden", hdrs=None, fp=BytesIO())
 
     monkeypatch.setattr("finance.simplefin_client.urlopen", fake_open)
+    token = setup_token()
     with pytest.raises(SimpleFinError) as wrapped:
-        claim_connection(owner, setup_token())
+        claim_connection(owner, token)
     assert ACCESS_URL not in str(wrapped.value)
     assert SimpleFinConnection.objects.count() == 0
 
