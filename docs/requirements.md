@@ -166,3 +166,17 @@ Defaults recorded with the decisions (owner may change):
 - First-run setup requires a one-time setup code from `production.env` (`SETUP_CODE`). This stops anyone else who can reach the URL first from claiming ownership. The code stops working once the first member exists, and a database lock prevents two concurrent setups.
 - Google sign-in is off unless `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are configured. With it off, the app behaves as it does today.
 - Only the `openid email profile` scopes are requested. The app stores the Google subject id and email for display, never tokens.
+
+## Interface styling decisions (2026-10-01)
+
+Owner decisions:
+- **Framework:** Tailwind CSS v4 with daisyUI 5 components. Pages stay server-rendered Django templates. No SPA.
+- **Look:** bold and visual. Charts and color-coded summary cards come first, with tables as the detail behind them.
+- **Theme:** light or dark following the device setting, plus a manual toggle that the browser remembers.
+- **Devices:** desktop and iPhone matter equally. The layout is responsive, with a sidebar on desktop and a compact menu on the phone. Wide tables stay usable on a narrow screen.
+
+Constraints carried from the existing requirements:
+- **Self-hosted assets only.** No CDN, web fonts, or other third-party requests. The app is private and must work without reaching outside services.
+- **No Node in the repository.** The CSS is built with Tailwind's standalone binary (pinned version, verified checksum), both in the Docker build and in a local script. JavaScript libraries (Chart.js, and Alpine.js if needed) are vendored at pinned versions with checksums.
+- **Money is never shown by color alone.** In and out amounts keep their signs and labels, and colors meet contrast requirements in both themes.
+- **Every chart has an accessible table** of the same numbers. Chart data comes from the page (`json_script`), never from a separate endpoint that could widen access.
