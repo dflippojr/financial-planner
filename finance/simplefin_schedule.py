@@ -48,8 +48,15 @@ def cron_matches(expression: str, when: datetime) -> bool:
         and _matches_field(hour, when.hour, 0, 23)
         and _matches_field(day, when.day, 1, 31)
         and _matches_field(month, when.month, 1, 12)
-        and _matches_field(weekday, cron_weekday, 0, 6)
+        and _weekday_matches(weekday, cron_weekday)
     )
+
+
+def _weekday_matches(field: str, cron_weekday: int) -> bool:
+    # Cron accepts both 0 and 7 for Sunday.
+    if _matches_field(field, cron_weekday, 0, 7):
+        return True
+    return cron_weekday == 0 and _matches_field(field, 7, 0, 7)
 
 
 def next_cron_datetime(expression: str, after: datetime) -> datetime:

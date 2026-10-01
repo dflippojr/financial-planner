@@ -7,7 +7,7 @@ from decimal import Decimal, InvalidOperation
 from urllib.parse import urlsplit
 
 from django.conf import settings
-from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.db import transaction
 from django.utils import timezone
 
@@ -108,6 +108,20 @@ def posted_date(posted) -> date | None:
     return timezone.localtime(moment).date()
 
 
+UNREADABLE_CONNECTION = (
+    "This connection can no longer be read with the current encryption key. "
+    "Disconnect it and connect SimpleFIN again."
+)
+
+
+def _readable_access_url(connection) -> str:
+    """Decrypt the access URL, turning a key mismatch into a safe, actionable error."""
+    try:
+        return decrypt_access_url(connection.encrypted_access_url)
+    except ImproperlyConfigured:
+        raise SimpleFinError(UNREADABLE_CONNECTION) from None
+
+
 def _connection_name_by_id(payload: dict) -> dict[str, str]:
     names = {}
     for item in payload.get("connections") or []:
@@ -166,7 +180,7 @@ def claim_connection(principal, setup_token: str) -> SimpleFinConnection:
 
 
 def load_remote_accounts(connection: SimpleFinConnection) -> tuple[list[dict], list[str]]:
-    access_url = decrypt_access_url(connection.encrypted_access_url)
+    access_url = _readable_access_url(connection)
     payload = fetch_accounts(access_url, balances_only=True)
     return listed_accounts(payload), provider_errors(payload)
 
@@ -435,7 +449,7 @@ def _sync_connection_locked(principal, connection_id, *, ignore_rate_limit=False
     if _rate_limited(connection, ignore_rate_limit=ignore_rate_limit):
         raise SimpleFinError("Wait 15 minutes between Sync now requests.")
     now = timezone.now()
-    access_url = decrypt_access_url(connection.encrypted_access_url)
+    access_url = _readable_access_url(connection)
     links = list(AccountLink.objects.select_related("account").filter(connection=connection))
     start_epoch = None
     if links:

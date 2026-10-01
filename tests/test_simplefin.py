@@ -880,3 +880,32 @@ def test_cron_range_with_step_matches():
     assert cron_matches("0 6-18/6 * * *", datetime(2026, 10, 1, 18, 0, tzinfo=tz))
     assert not cron_matches("0 6-18/6 * * *", datetime(2026, 10, 1, 9, 0, tzinfo=tz))
     assert not cron_matches("0 6-18/6 * * *", datetime(2026, 10, 1, 0, 0, tzinfo=tz))
+
+
+def test_cron_accepts_seven_as_sunday():
+    from finance.simplefin_schedule import cron_matches, next_cron_datetime
+
+    sunday = datetime(2026, 10, 4, 6, 30, tzinfo=dt_utc.utc)
+    assert cron_matches("30 6 * * 7", sunday)
+    assert cron_matches("30 6 * * 0", sunday)
+    assert not cron_matches("30 6 * * 7", sunday + timedelta(days=1))
+    assert next_cron_datetime("30 6 * * 7", sunday - timedelta(days=1)) == sunday
+
+
+@pytest.mark.django_db
+def test_unreadable_connection_shows_a_safe_message_instead_of_500(monkeypatch):
+    from django.core.exceptions import ImproperlyConfigured
+
+    owner, _checking, connection = _linked_owner_and_checking(monkeypatch)
+    make_household(owner)
+
+    def wrong_key(token):
+        raise ImproperlyConfigured("FIELD_ENCRYPTION_KEY cannot decrypt this connection.")
+
+    monkeypatch.setattr("finance.simplefin_services.decrypt_access_url", wrong_key)
+    page = signed_in(owner).get(reverse("simplefin-connections"))
+
+    assert page.status_code == 200
+    assert b"can no longer be read with the current encryption key" in page.content
+    with pytest.raises(SimpleFinError):
+        sync_connection(owner, connection.pk, ignore_rate_limit=True)
