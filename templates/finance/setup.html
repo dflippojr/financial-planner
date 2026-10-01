@@ -1,0 +1,13 @@
+{% extends "finance/base.html" %}
+{% block content %}
+<h1>Set up the first household</h1>
+{% if recovery_codes %}
+{% include "finance/_recovery_codes.html" %}
+<p><a href="{% url 'home' %}">Continue</a></p>
+{% elif not setup_configured %}
+<p>The operator must set <code>SETUP_CODE</code> in the environment before the first member can be created in the browser.</p>
+{% else %}
+<form method="post">{% csrf_token %}{{ form.as_p }}<button type="submit">Create account</button></form>
+{# Issue #54 may add a "Set up with Google" path here. #}
+{% endif %}
+{% endblock %}

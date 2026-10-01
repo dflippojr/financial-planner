@@ -1,3 +1,5 @@
+import logging
+import threading
 import time
 from io import StringIO
 from unittest.mock import patch
@@ -7,16 +9,27 @@ from django.contrib.auth import get_user_model
 from django.contrib.sessions.models import Session
 from django.core.management import call_command
 from django.core.management.base import CommandError
+from django.db import connection, connections
 from django.test import Client, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
 from finance.auth_services import create_recovery_codes
-from finance.models import Account, Household, Invitation, LoginThrottle, Membership, Person, RecoveryCode
+from finance.models import (
+    Account,
+    Category,
+    Household,
+    Invitation,
+    LoginThrottle,
+    Membership,
+    Person,
+    RecoveryCode,
+)
 
 
 PASSWORD = "Synthetic-passphrase-42!"
 NEW_PASSWORD = "Another-synthetic-passphrase-84!"
+SYNTHETIC_SETUP_CODE = "synthetic-setup-code-53"
 
 
 def make_member(username="member"):
@@ -392,3 +405,146 @@ def test_session_expiry_is_fixed_at_sign_in_and_later_writes_do_not_extend_it():
 
     assert after_write == at_sign_in
     assert abs((at_sign_in - timezone.now()).total_seconds() - 60 * 60 * 24 * 28) < 30
+
+
+def _setup_form(username="first-member", setup_code=SYNTHETIC_SETUP_CODE, **overrides):
+    data = {
+        "setup_code": setup_code,
+        "username": username,
+        "display_name": "First Example",
+        "household_name": "Synthetic Household",
+        "password1": PASSWORD,
+        "password2": PASSWORD,
+    }
+    data.update(overrides)
+    return data
+
+
+@pytest.mark.django_db
+def test_sign_in_redirects_to_setup_while_no_member_exists():
+    response = Client().get(reverse("login"))
+
+    assert response.status_code == 302
+    assert response.url == reverse("setup")
+
+
+@pytest.mark.django_db
+@override_settings(SETUP_CODE=SYNTHETIC_SETUP_CODE)
+def test_setup_creates_member_household_categories_codes_and_signs_in():
+    client = Client()
+    response = client.post(reverse("setup"), _setup_form())
+
+    user = get_user_model().objects.get()
+    household = Membership.objects.get().household
+    assert response.status_code == 200
+    assert len(response.context["recovery_codes"]) == 8
+    assert response["Cache-Control"] == "max-age=0, no-cache, no-store, must-revalidate, private"
+    assert user.check_password(PASSWORD)
+    assert user.person.display_name == "First Example"
+    assert household.name == "Synthetic Household"
+    assert Category.objects.filter(household=household, name="Income").exists()
+    assert RecoveryCode.objects.filter(user=user).count() == 8
+    assert client.session.get("_auth_user_id") == str(user.pk)
+
+    assert Client().get(reverse("setup")).status_code == 404
+    assert Client().post(reverse("setup"), _setup_form(username="second")).status_code == 404
+    assert get_user_model().objects.count() == 1
+
+
+@pytest.mark.django_db
+@override_settings(SETUP_CODE="")
+def test_unset_setup_code_explains_and_creates_nothing():
+    response = Client().post(reverse("setup"), _setup_form())
+
+    assert response.status_code == 200
+    assert b"SETUP_CODE" in response.content
+    assert get_user_model().objects.count() == 0
+    assert Person.objects.count() == 0
+
+
+@pytest.mark.django_db
+@override_settings(SETUP_CODE=SYNTHETIC_SETUP_CODE)
+def test_wrong_or_missing_setup_code_creates_nothing():
+    secret = SYNTHETIC_SETUP_CODE
+    wrong = Client().post(reverse("setup"), _setup_form(setup_code="not-the-setup-code"))
+    missing = Client().post(reverse("setup"), _setup_form(setup_code=""))
+
+    assert get_user_model().objects.count() == 0
+    assert b"not-the-setup-code" not in wrong.content
+    assert secret.encode() not in wrong.content
+    assert secret.encode() not in missing.content
+    assert b"Setup could not be completed" in wrong.content
+    assert b"Setup could not be completed" in missing.content
+
+
+@pytest.mark.django_db
+@override_settings(SETUP_CODE=SYNTHETIC_SETUP_CODE)
+def test_setup_is_404_once_a_user_or_person_exists():
+    get_user_model().objects.create_user(username="orphan", password=PASSWORD)
+
+    assert Client().get(reverse("setup")).status_code == 404
+    assert Client().post(reverse("setup"), _setup_form()).status_code == 404
+    assert get_user_model().objects.count() == 1
+    assert Person.objects.count() == 0
+
+
+@pytest.mark.django_db
+@override_settings(SETUP_CODE=SYNTHETIC_SETUP_CODE, LOGIN_FAILURE_LIMIT=2, LOGIN_BLOCK_SECONDS=900)
+def test_setup_failures_use_the_login_throttle():
+    client = Client()
+    for _ in range(2):
+        client.post(reverse("setup"), _setup_form(setup_code="wrong"))
+
+    blocked = client.post(reverse("setup"), _setup_form())
+
+    assert get_user_model().objects.count() == 0
+    assert b"Setup could not be completed" in blocked.content
+    assert LoginThrottle.objects.count() == 1
+    assert LoginThrottle.objects.get().blocked_until is not None
+
+
+@pytest.mark.django_db
+@override_settings(SETUP_CODE=SYNTHETIC_SETUP_CODE)
+def test_setup_code_is_absent_from_logs(caplog):
+    caplog.set_level(logging.DEBUG)
+    Client().post(reverse("setup"), _setup_form(setup_code="wrong-synthetic-code"))
+
+    assert SYNTHETIC_SETUP_CODE not in caplog.text
+    assert "wrong-synthetic-code" not in caplog.text
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(SETUP_CODE=SYNTHETIC_SETUP_CODE)
+def test_two_concurrent_setup_submissions_create_exactly_one_member():
+    if connection.vendor != "postgresql":
+        pytest.skip("concurrent first-member creation is serialized with a PostgreSQL advisory lock")
+
+    barrier = threading.Barrier(2)
+    statuses = []
+    errors = []
+
+    def submit(username):
+        try:
+            barrier.wait(timeout=10)
+            client = Client()
+            response = client.post(reverse("setup"), _setup_form(username=username))
+            statuses.append(response.status_code)
+        except Exception as exc:  # noqa: BLE001 - reported to the main thread
+            errors.append(exc)
+        finally:
+            connections.close_all()
+
+    first = threading.Thread(target=submit, args=("first-a",))
+    second = threading.Thread(target=submit, args=("first-b",))
+    first.start()
+    second.start()
+    first.join(timeout=30)
+    second.join(timeout=30)
+
+    assert errors == []
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert get_user_model().objects.count() == 1
+    assert Person.objects.count() == 1
+    assert RecoveryCode.objects.count() == 8
+    assert sorted(statuses) == [200, 404]

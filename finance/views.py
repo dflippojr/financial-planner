@@ -20,13 +20,18 @@ from django.views.decorators.http import require_GET, require_http_methods, requ
 
 from .auth_services import (
     InvalidOneTimeCode,
+    SETUP_THROTTLE_USERNAME,
     accept_invitation,
     clear_login_failures,
     create_invitation,
+    first_member_exists,
     login_is_blocked,
     normalize_username,
     recover_account,
     record_login_failure,
+    seed_first_household,
+    setup_code_configured,
+    setup_code_matches,
     throttle_key,
 )
 from .forms import (
@@ -36,6 +41,7 @@ from .forms import (
     LoginForm,
     RecoveryForm,
     RefundLinkForm,
+    SetupForm,
     SpendingFilterForm,
     TransactionCategoryForm,
     TransactionCorrectionForm,
@@ -564,9 +570,19 @@ def _redirect_target(request):
     return target
 
 
+def _complete_member_session(request, user):
+    # Sessions last a fixed period from sign-in. Django's default expiry is
+    # relative to the last time the session was saved, so any later write to
+    # it (such as CSV staging metadata) would push the expiry out again.
+    login(request, user)
+    request.session.set_expiry(timezone.now() + timedelta(seconds=settings.SESSION_COOKIE_AGE))
+
+
 @login_not_required
 @never_cache
 def sign_in(request):
+    if not first_member_exists():
+        return redirect("setup")
     form = LoginForm(request.POST or None)
     if request.method == "POST" and form.is_valid():
         username = normalize_username(form.cleaned_data["username"])
@@ -576,13 +592,7 @@ def sign_in(request):
             form.add_error(None, "Sign-in failed. Check your credentials and try again later.")
         else:
             clear_login_failures(key)
-            login(request, user)
-            # Sessions last a fixed period from sign-in. Django's default expiry is
-            # relative to the last time the session was saved, so any later write to
-            # it (such as CSV staging metadata) would push the expiry out again, and
-            # repeated activity would keep the session alive indefinitely. An
-            # absolute expiry is stored once and never moves.
-            request.session.set_expiry(timezone.now() + timedelta(seconds=settings.SESSION_COOKIE_AGE))
+            _complete_member_session(request, user)
             return redirect(_redirect_target(request))
     return render(request, "finance/login.html", {"form": form, "next": request.GET.get("next", "")})
 
@@ -621,6 +631,50 @@ def join(request):
         except InvalidOneTimeCode:
             form.add_error(None, "The invitation could not be used.")
     return render(request, "finance/join.html", {"form": form, "recovery_codes": recovery_codes})
+
+
+SETUP_FAILED = "Setup could not be completed. Check the setup code and try again later."
+
+
+@login_not_required
+@never_cache
+@require_http_methods(["GET", "POST"])
+def setup(request):
+    if first_member_exists():
+        raise Http404()
+    configured = setup_code_configured()
+    form = SetupForm(request.POST or None)
+    recovery_codes = None
+    if not configured:
+        return render(
+            request,
+            "finance/setup.html",
+            {"form": None, "recovery_codes": None, "setup_configured": False},
+        )
+    if request.method == "POST":
+        key = throttle_key(SETUP_THROTTLE_USERNAME, request.META.get("REMOTE_ADDR"))
+        if login_is_blocked(key):
+            form.add_error(None, SETUP_FAILED)
+        elif not setup_code_matches(request.POST.get("setup_code", "")):
+            record_login_failure(key)
+            form.add_error(None, SETUP_FAILED)
+        elif form.is_valid():
+            try:
+                user, recovery_codes = seed_first_household(
+                    form.cleaned_data["username"],
+                    form.cleaned_data["display_name"],
+                    form.cleaned_data["household_name"],
+                    form.cleaned_data["password1"],
+                )
+            except ValueError:
+                raise Http404() from None
+            clear_login_failures(key)
+            _complete_member_session(request, user)
+    return render(
+        request,
+        "finance/setup.html",
+        {"form": form, "recovery_codes": recovery_codes, "setup_configured": True},
+    )
 
 
 @login_not_required

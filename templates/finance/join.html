@@ -1,5 +1,5 @@
 {% extends "finance/base.html" %}
 {% block content %}
 <h1>Join household</h1>
-{% if recovery_codes %}<p>Save these one-time recovery codes now. They will not be shown again.</p><ul>{% for code in recovery_codes %}<li><code>{{ code }}</code></li>{% endfor %}</ul><p><a href="{% url 'login' %}">Continue to sign in</a></p>{% else %}<form method="post">{% csrf_token %}{{ form.as_p }}<button type="submit">Create account</button></form>{% endif %}
+{% if recovery_codes %}{% include "finance/_recovery_codes.html" %}<p><a href="{% url 'login' %}">Continue to sign in</a></p>{% else %}<form method="post">{% csrf_token %}{{ form.as_p }}<button type="submit">Create account</button></form>{% endif %}
 {% endblock %}

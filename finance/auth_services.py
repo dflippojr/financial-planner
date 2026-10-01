@@ -7,7 +7,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.sessions.models import Session
 from django.core.exceptions import PermissionDenied
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, connection, transaction
 from django.utils import timezone
 
 from .models import Household, Invitation, LoginThrottle, Membership, Person, RecoveryCode
@@ -163,9 +163,58 @@ def clear_login_failures(key):
     LoginThrottle.objects.filter(key_digest=key).delete()
 
 
+# Stable PostgreSQL advisory-lock key for first-member creation (issue #53).
+FIRST_MEMBER_ADVISORY_LOCK = int.from_bytes(
+    hashlib.sha256(b"finance.seed_first_household").digest()[:8],
+    "big",
+    signed=True,
+)
+
+SETUP_THROTTLE_USERNAME = "\0setup"
+
+
+def first_member_exists():
+    return get_user_model().objects.exists() or Person.objects.exists()
+
+
+def setup_code_configured():
+    return bool((getattr(settings, "SETUP_CODE", None) or "").strip())
+
+
+def setup_code_matches(submitted):
+    """Compare a submitted setup code to SETUP_CODE in constant time.
+
+    Both values are HMAC-SHA256 digested so compare_digest always sees equal
+    lengths. Callers must not log or echo `submitted` or the configured code.
+    """
+    expected = (getattr(settings, "SETUP_CODE", None) or "").strip()
+    given = (submitted or "").strip()
+    key = settings.SECRET_KEY.encode()
+
+    def keyed_digest(value):
+        return hmac.new(key, value.encode(), hashlib.sha256).digest()
+
+    return hmac.compare_digest(keyed_digest(given), keyed_digest(expected))
+
+
+def lock_first_member_creation():
+    """Serialize first-member existence check and create on one database.
+
+    PostgreSQL uses a transaction-scoped advisory lock. SQLite has no
+    equivalent, so tests that need two concurrent writers skip it.
+    """
+    if connection.vendor == "postgresql":
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT pg_advisory_xact_lock(%s)", [FIRST_MEMBER_ADVISORY_LOCK])
+        return
+    list(get_user_model().objects.select_for_update())
+    list(Person.objects.select_for_update())
+
+
 @transaction.atomic
 def seed_first_household(username, display_name, household_name, password):
-    if get_user_model().objects.exists() or Person.objects.exists():
+    lock_first_member_creation()
+    if first_member_exists():
         raise ValueError("The first household member has already been created.")
     try:
         user = get_user_model().objects.create_user(username=validated_username(username), password=password)

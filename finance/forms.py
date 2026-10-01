@@ -56,6 +56,27 @@ class JoinForm(PasswordPairForm):
         return username
 
 
+class SetupForm(PasswordPairForm):
+    setup_code = forms.CharField(max_length=128, widget=forms.PasswordInput)
+    username = forms.CharField(max_length=150)
+    display_name = forms.CharField(max_length=150)
+    household_name = forms.CharField(max_length=150, label="Household name")
+
+    field_order = (
+        "setup_code",
+        "username",
+        "display_name",
+        "household_name",
+        "password1",
+        "password2",
+    )
+
+    def clean_username(self):
+        username = self.cleaned_data["username"]
+        validated_username(username)
+        return username
+
+
 class RecoveryForm(PasswordPairForm):
     username = forms.CharField(max_length=150)
     recovery_code = forms.CharField(max_length=32)

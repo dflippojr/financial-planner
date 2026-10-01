@@ -1,10 +1,14 @@
 # Authentication, onboarding, and recovery
 
-The app uses Django usernames and passwords with database-backed sessions. Authentication is required by default for every view; only sign-in, invitation acceptance, and account recovery are public. Financial records must be queried through the model `visible_to()` methods so private records do not appear in pages, aggregates, searches, errors, or exports.
+The app uses Django usernames and passwords with database-backed sessions. Authentication is required by default for every view; only sign-in, first-run setup, invitation acceptance, and account recovery are public. Financial records must be queried through the model `visible_to()` methods so private records do not appear in pages, aggregates, searches, errors, or exports.
 
 ## First member
 
-Set `DJANGO_SECRET_KEY` to a long random value, apply migrations, then run:
+Set `DJANGO_SECRET_KEY` to a long random value and apply migrations. While no `User` or `Person` exists, open `/setup/` in the browser. That page requires `SETUP_CODE` from the environment (compared in constant time, never logged or shown again). Submit the code, a username, display name, household name, and a password twice. Django's password validators apply, and surrounding whitespace is stripped the same way as on the other password forms. Success creates the household, starter categories, and eight one-time recovery codes, then signs the member in. After the first member exists, `/setup/` returns 404. Sign-in redirects to setup while no member exists.
+
+If `SETUP_CODE` is unset, the page tells the operator to set it and does not create a user. Failed setup-code attempts use the same login throttle as sign-in. Concurrent submissions are serialized with a database lock so only one first member can be created.
+
+The management command remains available and does not require `SETUP_CODE`:
 
 ```console
 python manage.py seed_first_user --username USERNAME --display-name "DISPLAY NAME" --household "HOUSEHOLD NAME"
