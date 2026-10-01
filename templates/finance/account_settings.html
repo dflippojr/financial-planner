@@ -1,0 +1,21 @@
+{% extends "finance/base.html" %}
+{% block content %}
+<h1>Account</h1>
+{% if messages %}{% for message in messages %}<p>{{ message }}</p>{% endfor %}{% endif %}
+{% if error %}<p>{{ error }}</p>{% endif %}
+<p>Google: {% if has_google %}connected{% else %}not connected{% endif %}</p>
+<p>Password: {% if has_password %}set{% else %}not set{% endif %}</p>
+{% if google_signin_enabled %}
+{% if has_google %}
+<form method="post">{% csrf_token %}<input type="hidden" name="action" value="disconnect-google"><button type="submit">Disconnect Google</button></form>
+{% else %}
+<form method="post">{% csrf_token %}<input type="hidden" name="action" value="connect-google"><button type="submit">Connect Google</button></form>
+{% endif %}
+{% endif %}
+{% if has_password %}
+<form method="post">{% csrf_token %}<input type="hidden" name="action" value="remove-password"><button type="submit">Remove password</button></form>
+{% else %}
+<form method="post">{% csrf_token %}<input type="hidden" name="action" value="add-password">{{ password_form.as_p }}<button type="submit">Add password</button></form>
+{% endif %}
+<p><a href="{% url 'home' %}">Back to cash flow</a></p>
+{% endblock %}

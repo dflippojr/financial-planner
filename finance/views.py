@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from urllib.parse import urlencode
 
 from django.conf import settings
-from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth import authenticate, logout, update_session_auth_hash
 from django.contrib.auth.decorators import login_not_required
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import DatabaseError, connections
@@ -23,8 +23,10 @@ from .auth_services import (
     SETUP_THROTTLE_USERNAME,
     accept_invitation,
     clear_login_failures,
+    complete_member_session,
     create_invitation,
     first_member_exists,
+    invitation_is_usable,
     login_is_blocked,
     normalize_username,
     recover_account,
@@ -33,20 +35,33 @@ from .auth_services import (
     setup_code_configured,
     setup_code_matches,
     throttle_key,
+    validated_username,
 )
 from .forms import (
     CashFlowFilterForm,
     CategoryNameForm,
     JoinForm,
+    JoinGoogleForm,
     LoginForm,
+    PasswordPairForm,
     RecoveryForm,
     RefundLinkForm,
     SetupForm,
+    SetupGoogleForm,
     SpendingFilterForm,
     TransactionCategoryForm,
     TransactionCorrectionForm,
     TransactionFilterForm,
     TransferWindowForm,
+)
+from .google_auth import (
+    disconnect_google_account,
+    google_signin_enabled,
+    google_throttle_key,
+    has_google_account,
+    remove_member_password,
+    store_google_pending,
+    username_is_taken,
 )
 from .lifecycle_services import lock_actor_household
 from .models import Account, Category, Person, RecurringSeries, RefundLink, Transaction, TransactionCorrectionHistory, TransferPair
@@ -571,11 +586,11 @@ def _redirect_target(request):
 
 
 def _complete_member_session(request, user):
-    # Sessions last a fixed period from sign-in. Django's default expiry is
-    # relative to the last time the session was saved, so any later write to
-    # it (such as CSV staging metadata) would push the expiry out again.
-    login(request, user)
-    request.session.set_expiry(timezone.now() + timedelta(seconds=settings.SESSION_COOKIE_AGE))
+    complete_member_session(request, user)
+
+
+SETUP_FAILED = "Setup could not be completed. Check the setup code and try again later."
+LAST_SIGN_IN_METHOD = "Keep at least one sign-in method."
 
 
 @login_not_required
@@ -595,6 +610,165 @@ def sign_in(request):
             _complete_member_session(request, user)
             return redirect(_redirect_target(request))
     return render(request, "finance/login.html", {"form": form, "next": request.GET.get("next", "")})
+
+
+def _google_oauth_login(request):
+    from allauth.socialaccount.providers.google.views import oauth2_login
+
+    return oauth2_login(request)
+
+
+def _start_google_join(request, google_form):
+    if not google_signin_enabled():
+        raise Http404()
+    if not google_form.is_valid():
+        return None
+    invitation_code = google_form.cleaned_data["invitation_code"]
+    username = validated_username(google_form.cleaned_data["username"])
+    if not invitation_is_usable(invitation_code) or username_is_taken(username):
+        google_form.add_error(None, "The invitation could not be used.")
+        return None
+    store_google_pending(
+        request,
+        {
+            "intent": "join",
+            "invitation_code": invitation_code,
+            "username": google_form.cleaned_data["username"],
+            "display_name": google_form.cleaned_data["display_name"],
+        },
+    )
+    return _google_oauth_login(request)
+
+
+def _start_google_setup(request, google_form):
+    if not google_signin_enabled():
+        raise Http404()
+    key = throttle_key(SETUP_THROTTLE_USERNAME, request.META.get("REMOTE_ADDR"))
+    if login_is_blocked(key):
+        google_form.add_error(None, SETUP_FAILED)
+        return None
+    if not setup_code_matches(request.POST.get("setup_code", "")):
+        record_login_failure(key)
+        google_form.add_error(None, SETUP_FAILED)
+        return None
+    if not google_form.is_valid():
+        return None
+    username = validated_username(google_form.cleaned_data["username"])
+    if username_is_taken(username):
+        google_form.add_error(None, SETUP_FAILED)
+        return None
+    store_google_pending(
+        request,
+        {
+            "intent": "setup",
+            "username": google_form.cleaned_data["username"],
+            "display_name": google_form.cleaned_data["display_name"],
+            "household_name": google_form.cleaned_data["household_name"],
+        },
+    )
+    return _google_oauth_login(request)
+
+
+def _complete_password_setup(request, form):
+    key = throttle_key(SETUP_THROTTLE_USERNAME, request.META.get("REMOTE_ADDR"))
+    if login_is_blocked(key):
+        form.add_error(None, SETUP_FAILED)
+        return None
+    if not setup_code_matches(request.POST.get("setup_code", "")):
+        record_login_failure(key)
+        form.add_error(None, SETUP_FAILED)
+        return None
+    if not form.is_valid():
+        return None
+    try:
+        user, recovery_codes = seed_first_household(
+            form.cleaned_data["username"],
+            form.cleaned_data["display_name"],
+            form.cleaned_data["household_name"],
+            form.cleaned_data["password1"],
+        )
+    except ValueError:
+        raise Http404() from None
+    clear_login_failures(key)
+    _complete_member_session(request, user)
+    return recovery_codes
+
+
+def _account_connect_google(request):
+    if not google_signin_enabled():
+        raise Http404()
+    post = request.POST.copy()
+    post["process"] = "connect"
+    request.POST = post
+    return _google_oauth_login(request)
+
+
+def _account_disconnect_google(user):
+    if not disconnect_google_account(user):
+        return LAST_SIGN_IN_METHOD
+    return None
+
+
+def _account_add_password(request, password_form):
+    if not password_form.is_valid():
+        return password_form, None
+    request.user.set_password(password_form.cleaned_data["password1"])
+    request.user.save(update_fields=("password",))
+    update_session_auth_hash(request, request.user)
+    password_form = PasswordPairForm()
+    password_form.existing_user = request.user
+    return password_form, None
+
+
+def _account_remove_password(request):
+    if not remove_member_password(request.user):
+        return LAST_SIGN_IN_METHOD
+    request.user.refresh_from_db()
+    update_session_auth_hash(request, request.user)
+    return None
+
+
+@login_not_required
+@never_cache
+@require_POST
+def start_google_sign_in(request):
+    if not google_signin_enabled():
+        raise Http404()
+    if not first_member_exists():
+        return redirect("setup")
+    key = google_throttle_key(request.META.get("REMOTE_ADDR"))
+    if login_is_blocked(key):
+        return render(
+            request,
+            "finance/login.html",
+            {
+                "form": LoginForm(),
+                "next": request.POST.get("next", ""),
+                "auth_error": "Sign-in failed. Check your credentials and try again later.",
+            },
+        )
+    store_google_pending(request, {"intent": "login"})
+    return _google_oauth_login(request)
+
+
+@login_not_required
+@never_cache
+@require_http_methods(["GET", "POST"])
+def google_oauth_login(request):
+    if not google_signin_enabled():
+        raise Http404()
+    return _google_oauth_login(request)
+
+
+@login_not_required
+@never_cache
+@require_GET
+def google_oauth_callback(request):
+    if not google_signin_enabled():
+        raise Http404()
+    from allauth.socialaccount.providers.google.views import oauth2_callback
+
+    return oauth2_callback(request)
 
 
 @require_POST
@@ -618,22 +792,31 @@ def invite(request):
 @login_not_required
 @never_cache
 def join(request):
-    form = JoinForm(request.POST or None)
+    form = JoinForm()
+    google_form = JoinGoogleForm()
     recovery_codes = None
-    if request.method == "POST" and form.is_valid():
-        try:
-            _user, recovery_codes = accept_invitation(
-                form.cleaned_data["invitation_code"],
-                form.cleaned_data["username"],
-                form.cleaned_data["display_name"],
-                form.cleaned_data["password1"],
-            )
-        except InvalidOneTimeCode:
-            form.add_error(None, "The invitation could not be used.")
-    return render(request, "finance/join.html", {"form": form, "recovery_codes": recovery_codes})
-
-
-SETUP_FAILED = "Setup could not be completed. Check the setup code and try again later."
+    if request.method == "POST" and request.POST.get("intent") == "google":
+        google_form = JoinGoogleForm(request.POST)
+        started = _start_google_join(request, google_form)
+        if started is not None:
+            return started
+    elif request.method == "POST":
+        form = JoinForm(request.POST)
+        if form.is_valid():
+            try:
+                _user, recovery_codes = accept_invitation(
+                    form.cleaned_data["invitation_code"],
+                    form.cleaned_data["username"],
+                    form.cleaned_data["display_name"],
+                    form.cleaned_data["password1"],
+                )
+            except InvalidOneTimeCode:
+                form.add_error(None, "The invitation could not be used.")
+    return render(
+        request,
+        "finance/join.html",
+        {"form": form, "google_form": google_form, "recovery_codes": recovery_codes},
+    )
 
 
 @login_not_required
@@ -643,37 +826,63 @@ def setup(request):
     if first_member_exists():
         raise Http404()
     configured = setup_code_configured()
-    form = SetupForm(request.POST or None)
+    form = SetupForm()
+    google_form = SetupGoogleForm()
     recovery_codes = None
     if not configured:
         return render(
             request,
             "finance/setup.html",
-            {"form": None, "recovery_codes": None, "setup_configured": False},
+            {"form": None, "google_form": None, "recovery_codes": None, "setup_configured": False},
         )
-    if request.method == "POST":
-        key = throttle_key(SETUP_THROTTLE_USERNAME, request.META.get("REMOTE_ADDR"))
-        if login_is_blocked(key):
-            form.add_error(None, SETUP_FAILED)
-        elif not setup_code_matches(request.POST.get("setup_code", "")):
-            record_login_failure(key)
-            form.add_error(None, SETUP_FAILED)
-        elif form.is_valid():
-            try:
-                user, recovery_codes = seed_first_household(
-                    form.cleaned_data["username"],
-                    form.cleaned_data["display_name"],
-                    form.cleaned_data["household_name"],
-                    form.cleaned_data["password1"],
-                )
-            except ValueError:
-                raise Http404() from None
-            clear_login_failures(key)
-            _complete_member_session(request, user)
+    if request.method == "POST" and request.POST.get("intent") == "google":
+        google_form = SetupGoogleForm(request.POST)
+        started = _start_google_setup(request, google_form)
+        if started is not None:
+            return started
+    elif request.method == "POST":
+        form = SetupForm(request.POST)
+        created_codes = _complete_password_setup(request, form)
+        if created_codes is not None:
+            recovery_codes = created_codes
     return render(
         request,
         "finance/setup.html",
-        {"form": form, "recovery_codes": recovery_codes, "setup_configured": True},
+        {
+            "form": form,
+            "google_form": google_form,
+            "recovery_codes": recovery_codes,
+            "setup_configured": True,
+        },
+    )
+
+
+@never_cache
+def account_settings(request):
+    password_form = PasswordPairForm()
+    password_form.existing_user = request.user
+    error = None
+    if request.method == "POST":
+        action = request.POST.get("action")
+        if action == "connect-google":
+            return _account_connect_google(request)
+        if action == "disconnect-google":
+            error = _account_disconnect_google(request.user)
+        elif action == "add-password":
+            password_form = PasswordPairForm(request.POST)
+            password_form.existing_user = request.user
+            password_form, error = _account_add_password(request, password_form)
+        elif action == "remove-password":
+            error = _account_remove_password(request)
+    return render(
+        request,
+        "finance/account_settings.html",
+        {
+            "password_form": password_form,
+            "has_google": has_google_account(request.user),
+            "has_password": request.user.has_usable_password(),
+            "error": error,
+        },
     )
 
 

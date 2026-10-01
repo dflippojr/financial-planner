@@ -34,7 +34,7 @@ Prerequisites are Docker Desktop configured to use WSL2 and start when Windows s
    [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(48))
    ```
 
-   Do not reuse the example values. Keep `DJANGO_SECURE_COOKIES` and redirect behavior at their production defaults in `compose.yml`.
+   Do not reuse the example values. Keep `DJANGO_SECURE_COOKIES` and redirect behavior at their production defaults in `compose.yml`. Leave `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` empty until you finish the Google Cloud Console steps below; password-only sign-in works without them.
 
 3. Validate, build, migrate, and start the stack:
 
@@ -74,13 +74,23 @@ Prerequisites are Docker Desktop configured to use WSL2 and start when Windows s
    docker compose --env-file $Config up -d --force-recreate app
    ```
 
-   Then open `/setup/` on the HTTPS MagicDNS URL. Enter the code with a username, display name, household name, and password, and save the one-time recovery codes. They are shown only once. After the first member exists, `/setup/` returns 404. You can then remove `SETUP_CODE` from the env file. If you do, recreate the app the same way.
+   Then open `/setup/` on the HTTPS MagicDNS URL. Enter the code with a username, display name, household name, and password, and save the one-time recovery codes. They are shown only once. After the first member exists, `/setup/` returns 404. You can then remove `SETUP_CODE` from the env file. If you do, recreate the app the same way. When Google sign-in is configured, the page also offers **Set up with Google**; the setup code is still required before the redirect to Google.
 
    The CLI still works if you prefer not to use the browser page:
 
    ```powershell
    docker compose --env-file $Config exec app python manage.py seed_first_user --username USERNAME --display-name "DISPLAY NAME" --household "HOUSEHOLD NAME"
    ```
+
+## Google Cloud Console (optional sign-in)
+
+Google sign-in stays off until both `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are set in `production.env`. Recreate the app container after changing them, the same way as for `SETUP_CODE`.
+
+1. In [Google Cloud Console](https://console.cloud.google.com/), create or select a project. Open **APIs & Services** → **OAuth consent screen**. Choose **External** and **Testing**. Add the household members who will sign in as **Test users**. Do not publish the app for the first release; testing mode is enough for a household. Request only the `openid`, `email`, and `profile` scopes.
+2. Open **APIs & Services** → **Credentials** → **Create credentials** → **OAuth client ID**. Application type is **Web application**.
+3. Authorized JavaScript origins: the HTTPS MagicDNS origin, including a non-default Serve port when you use one, for example `https://basement-pc.example-tailnet.ts.net` or `https://basement-pc.example-tailnet.ts.net:10443`.
+4. Authorized redirect URIs: the same origin plus `/accounts/google/login/callback/`, for example `https://basement-pc.example-tailnet.ts.net/accounts/google/login/callback/` or `https://basement-pc.example-tailnet.ts.net:10443/accounts/google/login/callback/`. The path is exact; a missing Serve port or a trailing-path mismatch fails the Google handshake.
+5. Copy the client id and secret into `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. They are secrets; keep them in the protected env file, not in Git. Recreate the app container so it reads the new values.
 
 ## Health and operations
 
