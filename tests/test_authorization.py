@@ -26,6 +26,7 @@ def test_account_visibility_includes_own_private_and_current_household_accounts(
         owner=other,
         scope=Account.Scope.HOUSEHOLD,
         household=household,
+        share_mode=Account.ShareMode.CO_OWNED,
     )
 
     visible = set(Account.objects.visible_to(viewer.user))
@@ -48,6 +49,7 @@ def test_account_visibility_excludes_ended_household_membership():
         owner=owner,
         scope=Account.Scope.HOUSEHOLD,
         household=household,
+        share_mode=Account.ShareMode.CO_OWNED,
     )
 
     assert not Account.objects.visible_to(viewer).filter(pk=shared.pk).exists()

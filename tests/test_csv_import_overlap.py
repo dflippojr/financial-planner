@@ -121,6 +121,7 @@ def test_household_member_sees_shared_overlap_and_cannot_touch_private():
         owner=owner,
         scope="household",
         household=household,
+        share_mode="co_owned",
     )
     private = Account.objects.create(name="Owner Private", account_type="checking", owner=owner)
 
