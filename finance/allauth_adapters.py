@@ -24,12 +24,15 @@ from .google_auth import (
     complete_google_onboarding,
     consume_google_pending,
     google_email_is_verified,
+    google_reauth_identity_matches,
+    google_reauth_is_recent,
     google_signin_enabled,
     google_throttle_key,
     google_uid,
     has_usable_google_sign_in,
     peek_google_pending,
 )
+from .reauth import safe_next_url, stamp_recent_auth
 
 
 class MemberAccountAdapter(DefaultAccountAdapter):
@@ -92,6 +95,9 @@ class MemberSocialAccountAdapter(DefaultSocialAccountAdapter):
         intent = (pending or {}).get("intent")
         if login_is_blocked(key):
             raise ImmediateHttpResponse(self._failed_response(request))
+        if intent == "reauth":
+            self._complete_reauth(request, sociallogin, pending, key)
+            return
         if sociallogin.is_existing:
             if not hasattr(sociallogin.user, "person"):
                 record_login_failure(key)
@@ -99,6 +105,7 @@ class MemberSocialAccountAdapter(DefaultSocialAccountAdapter):
             if process == "connect":
                 return
             clear_login_failures(key)
+            stamp_recent_auth(request)
             return
         if process == "connect":
             return
@@ -175,8 +182,24 @@ class MemberSocialAccountAdapter(DefaultSocialAccountAdapter):
             )
         )
 
+    def _complete_reauth(self, request, sociallogin, pending, key):
+        extra = sociallogin.account.extra_data or {}
+        if (
+            not request.user.is_authenticated
+            or not google_reauth_identity_matches(request.user, extra)
+            or not google_reauth_is_recent(extra)
+        ):
+            record_login_failure(key)
+            raise ImmediateHttpResponse(self._failed_response(request, "reauth"))
+        clear_login_failures(key)
+        stamp_recent_auth(request)
+        raise ImmediateHttpResponse(
+            HttpResponseRedirect(safe_next_url(request, (pending or {}).get("next", "")))
+        )
+
     def _failed_response(self, request, page="login"):
         from django.contrib import messages
+        from urllib.parse import urlencode
 
         messages.error(request, GOOGLE_FAILED)
         if page == "join":
@@ -185,4 +208,7 @@ class MemberSocialAccountAdapter(DefaultSocialAccountAdapter):
             return HttpResponseRedirect(reverse("setup"))
         if page == "settings":
             return HttpResponseRedirect(reverse("account-settings"))
+        if page == "reauth":
+            next_url = safe_next_url(request, request.session.get("reauth_next", ""))
+            return HttpResponseRedirect(f"{reverse('reauth')}?{urlencode({'next': next_url})}")
         return HttpResponseRedirect(reverse("login"))

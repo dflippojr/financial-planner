@@ -18,6 +18,7 @@ from .lifecycle_services import (
     share_account,
     unshare_account,
 )
+from .reauth import requires_recent_auth
 from .models import Account, ImportBatch, Person, Transaction
 
 
@@ -124,6 +125,7 @@ def account_rename(request, account_id):
 
 @require_POST
 @never_cache
+@requires_recent_auth("share-account", form_url_name="account-list")
 def account_share(request, account_id):
     _active_visible_account(request.user, account_id)
     form = ShareAccountForm(request.POST)
@@ -136,6 +138,7 @@ def account_share(request, account_id):
 
 @require_POST
 @never_cache
+@requires_recent_auth("change-share-mode", form_url_name="account-list")
 def account_change_share_mode(request, account_id):
     _active_visible_account(request.user, account_id)
     form = ChangeShareModeForm(request.POST)
@@ -156,6 +159,7 @@ def account_change_share_mode(request, account_id):
 
 @require_POST
 @never_cache
+@requires_recent_auth("unshare-account", form_url_name="account-list")
 def account_unshare(request, account_id):
     _active_visible_account(request.user, account_id)
     _service_or_404(lambda: unshare_account(request.user, account_id))
@@ -192,6 +196,7 @@ def _render_account_delete(request, account, form):
 
 @require_http_methods(["GET", "POST"])
 @never_cache
+@requires_recent_auth("delete-account")
 def account_delete(request, account_id):
     account = _owned_visible_account(request.user, account_id)
     form = AccountDeleteForm(request.POST or None, account_name=account.name)

@@ -12,6 +12,7 @@ from django.contrib.auth import get_user_model
 from django.test import Client
 from django.urls import reverse
 from django.utils import timezone
+from tests.helpers import stamp_recent_auth
 
 from finance.category_services import (
     assign_category,
@@ -272,6 +273,7 @@ def test_export_view_streams_zip_without_storing_cache_or_logging_content(caplog
     make_transaction(owner, make_account(owner), amount_minor=-4321, description="Logged-secret-should-not-appear")
     client = Client()
     client.force_login(owner.user)
+    stamp_recent_auth(client)
     caplog.set_level(logging.DEBUG)
     with patch("finance.views.timezone.localdate", return_value=date(2026, 10, 1)):
         response = client.post(reverse("account-export"))
@@ -300,9 +302,11 @@ def test_export_requires_auth_post_and_csrf():
     anonymous = Client().post(reverse("account-export"))
     logged = Client()
     logged.force_login(owner.user)
+    stamp_recent_auth(logged)
     get_denied = logged.get(reverse("account-export"))
     csrf_client = Client(enforce_csrf_checks=True)
     csrf_client.force_login(owner.user)
+    stamp_recent_auth(csrf_client)
     csrf_client.get(reverse("account-settings"))
     token = csrf_client.cookies["csrftoken"].value
     denied = csrf_client.post(reverse("account-export"))

@@ -54,7 +54,7 @@ def _google_settings(**extra):
     )
 
 
-def _id_token(sub=GOOGLE_SUB, email=GOOGLE_EMAIL, verified=True):
+def _id_token(sub=GOOGLE_SUB, email=GOOGLE_EMAIL, verified=True, auth_time=None):
     now = int(time.time())
     payload = {
         "iss": "https://accounts.google.com",
@@ -66,6 +66,8 @@ def _id_token(sub=GOOGLE_SUB, email=GOOGLE_EMAIL, verified=True):
         "iat": now,
         "name": "Synthetic Google User",
     }
+    if auth_time is not None:
+        payload["auth_time"] = auth_time
     return jwt.encode(payload, "synthetic-hs256-key-with-enough-bytes", algorithm="HS256")
 
 
