@@ -234,13 +234,18 @@ def _create_and_link(person, connection, choice, simplefin_account_id):
         raise SimpleFinError("Name the new account.")
     sharing = choice.get("sharing") or Account.Scope.PRIVATE
     account = _create_linked_account(person, name=name, account_type=account_type, sharing=sharing)
-    return AccountLink.objects.create(
+    # A row that is already linked is re-pointed at the new account. The
+    # previously linked account keeps the data it already imported.
+    link, _created = AccountLink.objects.update_or_create(
         connection=connection,
-        account=account,
         simplefin_account_id=simplefin_account_id,
-        cutover_date=choice.get("cutover_date") or timezone.localdate(),
-        mode=_mode_for_account_type(account_type),
+        defaults={
+            "account": account,
+            "cutover_date": choice.get("cutover_date") or timezone.localdate(),
+            "mode": _mode_for_account_type(account_type),
+        },
     )
+    return link
 
 
 @transaction.atomic

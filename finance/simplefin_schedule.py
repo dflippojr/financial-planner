@@ -17,8 +17,12 @@ def _match_step(part: str, value: int, minimum: int, maximum: int) -> bool:
         return False
     if base == "*":
         return (value - minimum) % step == 0
-    start = int(base)
-    return start <= value <= maximum and (value - start) % step == 0
+    if "-" in base:
+        start_text, end_text = base.split("-", 1)
+        start, end = int(start_text), int(end_text)
+    else:
+        start, end = int(base), maximum
+    return start <= value <= end and (value - start) % step == 0
 
 
 def _match_one(part: str, value: int, minimum: int, maximum: int) -> bool:
