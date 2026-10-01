@@ -1,8 +1,12 @@
 name: Automated Code Review
 
-# Adapted from agent-harness's review.yml. Trigger only on PR open (not every
-# push) to keep this bounded to one pass per PR by default; use
-# workflow_dispatch for an on-demand re-review after later commits. Runs on
+# Adapted from agent-harness's review.yml. Dispatch only: a review starts when
+# someone with write access runs it (open-pr follow-up or a re-review), never
+# automatically from a pull_request event. This matters once the repository is
+# public: a fork's pull_request run would execute the fork's own copy of this
+# workflow on the self-hosted runner, and the review agent reads untrusted PR
+# content with shell access on that machine. workflow_dispatch always runs the
+# default branch's copy, and the job refuses pull requests from forks. Runs on
 # the self-hosted review runner for this repo (financial-planner-review, a
 # single runner -- unlike agent-harness's 3-way pool, this repo's PR volume
 # doesn't need parallel review capacity yet) so it can reuse the runner
@@ -12,11 +16,9 @@ name: Automated Code Review
 # The optional mode input is auto (incremental when a prior review marker
 # makes that safe) or full. Pre-merge reviews should dispatch mode=full.
 #
-# pull_request runs already appear in the PR Checks tab. workflow_dispatch
-# does not, so those re-reviews publish a Check Run on the PR head SHA.
+# workflow_dispatch runs do not appear in the PR Checks tab on their own, so
+# the job publishes a Check Run on the PR head SHA.
 on:
-  pull_request:
-    types: [opened]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -72,9 +74,14 @@ jobs:
         env:
           EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
           INPUT_PR_NUMBER: ${{ github.event.inputs.pr_number }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $num = $env:EVENT_PR_NUMBER
           if ([string]::IsNullOrEmpty($num)) { $num = $env:INPUT_PR_NUMBER }
+          if ($num -notmatch '^\d+$') { throw "PR number must be numeric." }
+          # Never check out or review a fork's pull request on this machine.
+          $crossRepo = gh pr view $num --repo $env:GITHUB_REPOSITORY --json isCrossRepository --jq .isCrossRepository
+          if ($LASTEXITCODE -ne 0 -or $crossRepo -ne 'false') { throw "Refusing to review PR #${num}: it is not a branch of this repository." }
           $workspace = Join-Path $env:GITHUB_WORKSPACE 'pr'
           "number=$num" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "workspace=$workspace" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
