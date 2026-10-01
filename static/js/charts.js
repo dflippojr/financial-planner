@@ -1,0 +1,273 @@
+(function () {
+  var charts = [];
+
+  function payloadFrom(id) {
+    var node = document.getElementById(id);
+    if (!node) {
+      return null;
+    }
+    return JSON.parse(node.textContent);
+  }
+
+  function cssVarColor(name) {
+    var probe = cssVarColor.probe;
+    if (!probe) {
+      probe = document.createElement("span");
+      probe.setAttribute("aria-hidden", "true");
+      probe.style.position = "absolute";
+      probe.style.pointerEvents = "none";
+      probe.style.visibility = "hidden";
+      document.body.appendChild(probe);
+      cssVarColor.probe = probe;
+    }
+    probe.style.color = "var(" + name + ")";
+    return window.getComputedStyle(probe).color;
+  }
+
+  function themePalette() {
+    var categories = [];
+    var index;
+    for (index = 0; index < 8; index += 1) {
+      categories.push(cssVarColor("--chart-category-" + index));
+    }
+    return {
+      text: cssVarColor("--color-base-content"),
+      grid: cssVarColor("--color-base-300"),
+      income: cssVarColor("--color-success"),
+      spending: cssVarColor("--color-error"),
+      net: cssVarColor("--color-primary"),
+      warning: cssVarColor("--color-warning"),
+      categories: categories,
+    };
+  }
+
+  // Chart data is in minor units (cents) so values stay exact; axis labels show
+  // the same currency amounts as the tooltips and tables.
+  function formatAxisMinor(value) {
+    return (value / 100).toLocaleString(undefined, { maximumFractionDigits: 2 });
+  }
+
+  function goTo(url) {
+    if (url) {
+      window.location.assign(url);
+    }
+  }
+
+  var missingImportMarker = {
+    id: "missingImportMarker",
+    afterDatasetsDraw: function (chart) {
+      var flags = (chart.options.plugins.financialPlanner || {}).missingImport || [];
+      var meta = chart.getDatasetMeta(0);
+      var color = themePalette().warning;
+      var ctx = chart.ctx;
+      flags.forEach(function (missing, index) {
+        var point = meta.data[index];
+        if (!missing || !point) {
+          return;
+        }
+        var x = point.x;
+        var y = chart.chartArea.top + 8;
+        ctx.save();
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x - 6, y + 10);
+        ctx.lineTo(x + 6, y + 10);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      });
+    },
+  };
+
+  function cashFlowChart(canvas, data, palette) {
+    var periods = data.periods || [];
+    var incomeDisplays = periods.map(function (row) {
+      return row.income_display;
+    });
+    var spendingDisplays = periods.map(function (row) {
+      return row.spending_display;
+    });
+    var netDisplays = periods.map(function (row) {
+      return row.net_display;
+    });
+    return new window.Chart(canvas, {
+      data: {
+        labels: periods.map(function (row) {
+          return row.label;
+        }),
+        datasets: [
+          {
+            type: "bar",
+            label: "Income",
+            data: periods.map(function (row) {
+              return row.income_minor;
+            }),
+            backgroundColor: palette.income,
+            displays: incomeDisplays,
+          },
+          {
+            type: "bar",
+            label: "Spending",
+            data: periods.map(function (row) {
+              return row.spending_minor;
+            }),
+            backgroundColor: palette.spending,
+            displays: spendingDisplays,
+          },
+          {
+            type: "line",
+            label: "Net cash flow",
+            data: periods.map(function (row) {
+              return row.net_minor;
+            }),
+            borderColor: palette.net,
+            backgroundColor: palette.net,
+            tension: 0.2,
+            displays: netDisplays,
+          },
+        ],
+      },
+      plugins: [missingImportMarker],
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        onClick: function (event, elements) {
+          if (elements.length) {
+            goTo(periods[elements[0].index].drilldown_url);
+          }
+        },
+        onHover: function (event, elements) {
+          var native = event.native || event;
+          if (native && native.target) {
+            native.target.style.cursor = elements.length ? "pointer" : "default";
+          }
+        },
+        plugins: {
+          legend: { labels: { color: palette.text } },
+          tooltip: {
+            callbacks: {
+              label: function (context) {
+                var displays = context.dataset.displays || [];
+                var display = displays[context.dataIndex];
+                if (display) {
+                  return context.dataset.label + ": " + display;
+                }
+                return context.dataset.label + ": " + context.formattedValue;
+              },
+            },
+          },
+          financialPlanner: {
+            missingImport: periods.map(function (row) {
+              return row.missing_import;
+            }),
+          },
+        },
+        scales: {
+          x: {
+            ticks: { color: palette.text, maxRotation: 45, minRotation: 0 },
+            grid: { color: palette.grid },
+          },
+          y: {
+            ticks: { color: palette.text, callback: formatAxisMinor },
+            title: { display: true, text: "USD", color: palette.text },
+            grid: { color: palette.grid },
+          },
+        },
+      },
+    });
+  }
+
+  function spendingChart(canvas, data, palette) {
+    // Only positive spending can be drawn as a slice; net-refund categories
+    // stay in the tiles and table (see chart_rows in spending_chart_data).
+    var rows = data.chart_rows || [];
+    var urls = rows.map(function (row) {
+      return row.drilldown_url;
+    });
+    return new window.Chart(canvas, {
+      type: "doughnut",
+      data: {
+        labels: rows.map(function (row) {
+          return row.name;
+        }),
+        datasets: [
+          {
+            label: "Spending",
+            data: rows.map(function (row) {
+              return row.spending_minor;
+            }),
+            backgroundColor: rows.map(function (row) {
+              return palette.categories[row.color_index] || palette.categories[0];
+            }),
+            displays: rows.map(function (row) {
+              return row.spending_display + " (" + row.share_display + " of charted spending)";
+            }),
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        onClick: function (event, elements) {
+          if (elements.length) {
+            goTo(urls[elements[0].index]);
+          }
+        },
+        onHover: function (event, elements) {
+          var native = event.native || event;
+          if (native && native.target) {
+            native.target.style.cursor = elements.length ? "pointer" : "default";
+          }
+        },
+        plugins: {
+          legend: { position: "bottom", labels: { color: palette.text } },
+          tooltip: {
+            callbacks: {
+              label: function (context) {
+                var displays = context.dataset.displays || [];
+                var display = displays[context.dataIndex];
+                if (display) {
+                  return context.label + ": " + display;
+                }
+                return context.label + ": " + context.formattedValue;
+              },
+            },
+          },
+        },
+      },
+    });
+  }
+
+  function destroyCharts() {
+    charts.forEach(function (chart) {
+      chart.destroy();
+    });
+    charts = [];
+  }
+
+  function renderCharts() {
+    if (!window.Chart) {
+      return;
+    }
+    destroyCharts();
+    var palette = themePalette();
+    window.Chart.defaults.color = palette.text;
+    window.Chart.defaults.borderColor = palette.grid;
+    document.querySelectorAll("canvas[data-chart]").forEach(function (canvas) {
+      var data = payloadFrom(canvas.getAttribute("data-chart-payload"));
+      var kind = canvas.getAttribute("data-chart");
+      if (!data) {
+        return;
+      }
+      if (kind === "cash-flow") {
+        charts.push(cashFlowChart(canvas, data, palette));
+      } else if (kind === "spending") {
+        charts.push(spendingChart(canvas, data, palette));
+      }
+    });
+  }
+
+  document.addEventListener("DOMContentLoaded", renderCharts);
+  window.addEventListener("financial-planner:themechange", renderCharts);
+})();

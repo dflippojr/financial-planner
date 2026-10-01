@@ -2,8 +2,23 @@
 {% block title %}Recurring charges · Financial Planner{% endblock %}
 {% block content %}
 <h1 class="mb-4 text-2xl font-bold">Recurring charges</h1>
-<p class="mb-2">Monthly total: {% include "finance/_amount.html" with value=monthly_display tone="out" %} ({{ monthly_minor }} minor units)</p>
-<p class="mb-6">Annual total: {% include "finance/_amount.html" with value=annual_display tone="out" %} ({{ annual_minor }} minor units)</p>
+{{ chart_data|json_script:"recurring-chart-data" }}
+<div class="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2">
+  <article class="stats bg-base-100 shadow">
+    <div class="stat">
+      <h2 class="stat-title">Confirmed monthly total</h2>
+      <p class="stat-value text-2xl sm:text-3xl">{% include "finance/_amount.html" with value=monthly_display tone="out" %}</p>
+      <p class="stat-desc">{{ monthly_minor }} minor units</p>
+    </div>
+  </article>
+  <article class="stats bg-base-100 shadow">
+    <div class="stat">
+      <h2 class="stat-title">Confirmed annual total</h2>
+      <p class="stat-value text-2xl sm:text-3xl">{% include "finance/_amount.html" with value=annual_display tone="out" %}</p>
+      <p class="stat-desc">{{ annual_minor }} minor units</p>
+    </div>
+  </article>
+</div>
 <h2 class="mb-3 text-xl font-semibold">Confirmed</h2>
 <div class="overflow-x-auto mb-8">
   <table class="table table-zebra">

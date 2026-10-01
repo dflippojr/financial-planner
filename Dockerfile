@@ -46,7 +46,7 @@ RUN chmod +x /app/scripts/start-production.sh /app/scripts/build_css.sh
 RUN DJANGO_SECRET_KEY=build-collectstatic-only \
     DJANGO_SECURE_SSL_REDIRECT=false \
     DJANGO_SECURE_COOKIES=false \
-    python manage.py collectstatic --noinput --ignore src --ignore vendor --ignore *.mjs --ignore SHA256SUMS \
+    python manage.py collectstatic --noinput --ignore src --ignore *.mjs --ignore SHA256SUMS \
     && chown -R app:app /app/staticfiles
 
 USER app

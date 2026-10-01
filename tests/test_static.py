@@ -1,3 +1,6 @@
+import hashlib
+from pathlib import Path
+
 import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
@@ -86,6 +89,18 @@ def test_pages_do_not_request_third_party_hosts(client):
     assert "/static/js/theme.js" in content
 
 
+def test_theme_script_notifies_charts_and_charts_stay_self_hosted():
+    root = Path(__file__).resolve().parent.parent
+    theme = (root / "static" / "js" / "theme.js").read_text(encoding="utf-8")
+    charts = (root / "static" / "js" / "charts.js").read_text(encoding="utf-8")
+
+    assert "financial-planner:themechange" in theme
+    assert "financial-planner:themechange" in charts
+    assert "cssVarColor" in charts
+    assert "cdn." not in charts.lower()
+    assert "https://" not in charts
+
+
 @pytest.mark.django_db
 def test_signed_in_pages_use_shared_nav_and_signed_out_pages_use_a_card():
     user = _member()
@@ -108,6 +123,9 @@ def test_signed_in_pages_use_shared_nav_and_signed_out_pages_use_a_card():
         assert label in home
     assert 'aria-current="page"' in home
     assert 'id="theme-toggle"' in home
+    assert "/static/vendor/chart.umd.min.js" in home
+    assert "/static/js/charts.js" in home
+    assert "cdn." not in home.lower()
     assert "drawer" in home
     assert "card-body" in login
     assert "drawer" not in login
@@ -129,5 +147,43 @@ def test_login_required_middleware_skips_static_paths(settings):
     request = RequestFactory().get("/static/dist/app.css")
     request.user = AnonymousUser()
     assert middleware.process_view(request, lambda: None, (), {}) is None
+
+
+def test_vendored_chartjs_matches_recorded_checksum():
+    vendor = Path(__file__).resolve().parent.parent / "static" / "vendor"
+    recorded = {}
+    for line in (vendor / "SHA256SUMS").read_text(encoding="utf-8").splitlines():
+        if not line or line.startswith("#"):
+            continue
+        digest, name = line.split()
+        recorded[name] = digest
+    blob = (vendor / "chart.umd.min.js").read_bytes()
+
+    assert recorded["chart.umd.min.js"] == hashlib.sha256(blob).hexdigest()
+    assert b"Chart.js v4.5.1" in blob
+    assert b"window.Chart" in blob
+    assert b"sourceMappingURL" not in blob
+    assert (vendor / "LICENSE.md").read_text(encoding="utf-8").startswith("The MIT License")
+
+
+@pytest.mark.django_db
+def test_collectstatic_accepts_vendored_chartjs_without_a_source_map(tmp_path, settings):
+    root = Path(__file__).resolve().parent.parent
+    static_dir = tmp_path / "static"
+    vendor = static_dir / "vendor"
+    vendor.mkdir(parents=True)
+    (vendor / "chart.umd.min.js").write_bytes((root / "static" / "vendor" / "chart.umd.min.js").read_bytes())
+    collected = tmp_path / "staticfiles"
+    settings.STATICFILES_DIRS = [static_dir]
+    settings.STATIC_ROOT = collected
+    settings.STORAGES = {
+        "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+        "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
+    }
+    call_command("collectstatic", "--noinput", verbosity=0)
+
+    hashed = list(collected.rglob("chart.umd.min.js*"))
+    assert hashed
+    assert not any(path.name.endswith(".map") for path in collected.rglob("*"))
 
 

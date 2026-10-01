@@ -31,38 +31,65 @@
 </div>
 {% endif %}
 {% if report %}
-<div class="overflow-x-auto">
-  <table class="table table-zebra">
-    <thead class="sticky top-0 z-10 bg-base-200">
-      <tr>
-        <th>Category</th>
-        <th class="text-right">Spending</th>
-        <th class="text-right">Percent of total</th>
-        <th></th>
-      </tr>
-    </thead>
-    <tbody>
+<div class="flex flex-col gap-4">
+  {{ chart_data|json_script:"spending-chart-data" }}
+  <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
     {% for row in report.rows %}
-      <tr>
-        <td>
-          {{ row.name }}
-          {% if row.is_net_refund %}<span class="badge badge-info">Net refund</span>{% endif %}
-        </td>
-        <td class="text-right">{% include "finance/_amount.html" with value=row.spending_display tone="out" %}</td>
-        <td class="text-right tabular-amount">{{ row.percent_display }}</td>
-        <td><a class="link" href="{{ row.drilldown_url }}">Transactions</a></td>
-      </tr>
+    <a href="{{ row.drilldown_url }}" class="card bg-base-100 shadow-sm" style="border-left-width: 0.5rem; border-left-color: var(--chart-category-{{ row.color_index }});">
+      <div class="card-body gap-1 p-4">
+        <h2 class="card-title text-base">{{ row.name }}</h2>
+        <p class="text-lg font-semibold">{% include "finance/_amount.html" with value=row.spending_display tone="out" %}</p>
+        <p class="tabular-amount text-sm opacity-80">{{ row.percent_display }} of total</p>
+        {% if row.is_net_refund %}<span class="badge badge-info">Net refund</span>{% endif %}
+      </div>
+    </a>
     {% endfor %}
-    </tbody>
-    <tfoot>
-      <tr>
-        <th>Total</th>
-        <td class="text-right">{% include "finance/_amount.html" with value=report.total_spending_display tone="out" %}</td>
-        <td></td>
-        <td></td>
-      </tr>
-    </tfoot>
-  </table>
+  </div>
+  <figure>
+    <figcaption class="mb-2 font-medium">Spending share by category</figcaption>
+    <div class="h-72 w-full rounded-box bg-base-100 p-2 shadow">
+      <canvas id="spending-chart" data-chart="spending" data-chart-payload="spending-chart-data" role="img" aria-label="Donut chart of spending by category, showing categories with positive spending. Category tiles and the table below list every category's amount, percent, and net-refund label."></canvas>
+    </div>
+    {% if chart_data.has_net_refund %}
+    <p class="mt-2 text-sm opacity-80">Categories where refunds exceed spending are not drawn in the chart. They appear in the tiles and the table with their negative totals.</p>
+    {% endif %}
+  </figure>
+  <div class="overflow-x-auto">
+    <table class="table table-zebra">
+      <thead class="sticky top-0 z-10 bg-base-200">
+        <tr>
+          <th>Category</th>
+          <th class="text-right">Spending</th>
+          <th class="text-right">Percent of total</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for row in report.rows %}
+        <tr>
+          <td>
+            {{ row.name }}
+            {% if row.is_net_refund %}<span class="badge badge-info">Net refund</span>{% endif %}
+          </td>
+          <td class="text-right">{% include "finance/_amount.html" with value=row.spending_display tone="out" %}</td>
+          <td class="text-right tabular-amount">{{ row.percent_display }}</td>
+          <td><a class="link" href="{{ row.drilldown_url }}">Transactions</a></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr>
+          <th>Total</th>
+          <td class="text-right">{% include "finance/_amount.html" with value=report.total_spending_display tone="out" %}</td>
+          <td></td>
+          <td></td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
 </div>
 {% endif %}
+{% endblock %}
+{% block extra_js %}
+{% if chart_data %}{% include "finance/_chart_scripts.html" %}{% endif %}
 {% endblock %}

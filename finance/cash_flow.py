@@ -27,9 +27,85 @@ INVESTMENT_NOTICE = (
 )
 
 
+CATEGORY_PALETTE_SIZE = 8
+
+
 def format_minor(amount_minor, currency="USD"):
     amount = Decimal(amount_minor) / Decimal(100)
     return f"{amount:,.2f} {currency}"
+
+
+def previous_equal_range(date_from, date_to):
+    """The range of the same length that ends the day before date_from.
+
+    Returns (None, None) when that range would start before the earliest date
+    Python can represent, so a report starting near year 1 has nothing to
+    compare against instead of failing.
+    """
+    span_days = (date_to - date_from).days + 1
+    if date_from.toordinal() - span_days < date.min.toordinal():
+        return None, None
+    previous_to = date_from - timedelta(days=1)
+    previous_from = previous_to - timedelta(days=span_days - 1)
+    return previous_from, previous_to
+
+
+def category_color_index(color_key):
+    """Stable 0-7 palette index derived from a category id. No extra schema."""
+    raw = 2166136261
+    for char in str(color_key):
+        raw ^= ord(char)
+        raw = (raw * 16777619) & 0xFFFFFFFF
+    return raw % CATEGORY_PALETTE_SIZE
+
+
+def _change_from_previous(current_minor, previous_minor):
+    delta = current_minor - previous_minor
+    if delta > 0:
+        direction = "up"
+        label = f"up {format_minor(delta)} vs previous range"
+    elif delta < 0:
+        direction = "down"
+        label = f"down {format_minor(-delta)} vs previous range"
+    else:
+        direction = "flat"
+        label = "no change vs previous range"
+    return SimpleNamespace(
+        minor=delta,
+        display=format_minor(delta),
+        direction=direction,
+        label=label,
+    )
+
+
+def _no_previous_change():
+    return SimpleNamespace(minor=None, display="—", direction="none", label="No earlier range to compare")
+
+
+def _range_summary(current, previous, previous_from, previous_to):
+    if previous is None:
+        income_change = spending_change = net_change = _no_previous_change()
+        previous = SimpleNamespace(income_minor=None, spending_minor=None, net_minor=None)
+    else:
+        income_change = _change_from_previous(current.income_minor, previous.income_minor)
+        spending_change = _change_from_previous(current.spending_minor, previous.spending_minor)
+        net_change = _change_from_previous(current.net_minor, previous.net_minor)
+    return SimpleNamespace(
+        income_minor=current.income_minor,
+        spending_minor=current.spending_minor,
+        net_minor=current.net_minor,
+        income_display=format_minor(current.income_minor),
+        spending_display=format_minor(current.spending_minor),
+        net_display=format_minor(current.net_minor),
+        previous_from=previous_from,
+        previous_to=previous_to,
+        previous_income_minor=previous.income_minor,
+        previous_spending_minor=previous.spending_minor,
+        previous_net_minor=previous.net_minor,
+        income_change=income_change,
+        spending_change=spending_change,
+        net_change=net_change,
+    )
 
 
 def _shift_month_start(value, months):
@@ -225,7 +301,12 @@ def format_percent(amount_minor, total_minor):
 
 
 def _uncategorized_bucket():
-    return {"name": "Uncategorized", "filter_value": "uncategorized", "spending_minor": 0}
+    return {
+        "name": "Uncategorized",
+        "filter_value": "uncategorized",
+        "color_key": "uncategorized",
+        "spending_minor": 0,
+    }
 
 
 def _combine_category_spending(by_category_id, named):
@@ -237,7 +318,12 @@ def _combine_category_spending(by_category_id, named):
         else:
             bucket = combined.setdefault(
                 category.pk,
-                {"name": category.name, "filter_value": str(category.pk), "spending_minor": 0},
+                {
+                    "name": category.name,
+                    "filter_value": str(category.pk),
+                    "color_key": category.pk,
+                    "spending_minor": 0,
+                },
             )
         bucket["spending_minor"] += amount
     combined.setdefault("uncategorized", _uncategorized_bucket())
@@ -259,6 +345,7 @@ def _spending_row(item, *, total_spending, date_from, date_to, account, scope):
         spending_display=format_minor(spending_minor),
         percent_display=format_percent(spending_minor, total_spending),
         is_net_refund=spending_minor < 0,
+        color_index=category_color_index(item["color_key"]),
         drilldown_url=f"{reverse('transaction-list')}?{urlencode(query)}",
     )
 
@@ -357,47 +444,115 @@ def cash_flow_report(
         if accounts
         else False
     )
+    current = income_and_spending_totals(
+        principal,
+        date_from=date_from,
+        date_to=date_to,
+        accounts=account_filter,
+    )
+    previous_from, previous_to = previous_equal_range(date_from, date_to)
+    previous = None
+    if previous_from is not None:
+        previous = income_and_spending_totals(
+            principal,
+            date_from=previous_from,
+            date_to=previous_to,
+            accounts=account_filter,
+        )
     return SimpleNamespace(
         accounts=accounts,
         periods=periods,
+        summary=_range_summary(current, previous, previous_from, previous_to),
         has_visible_transactions=visible_transactions,
         includes_investment=any(item.account_type == Account.Type.INVESTMENT for item in accounts),
         investment_notice=INVESTMENT_NOTICE,
-        chart=chart_points(periods),
     )
 
 
-def chart_points(periods, *, width=720, height=220, pad=36):
-    if not periods:
-        return SimpleNamespace(width=width, height=height, lines=(), zero_y=height // 2, labels=())
-    peak = max(max(row.income_minor, row.spending_minor, abs(row.net_minor)) for row in periods)
-    peak = peak or 1
-    inner_width = width - 2 * pad
-    inner_height = height - 2 * pad
-    zero_y = pad + inner_height // 2
-    count = len(periods)
-    step = inner_width / max(count - 1, 1)
+def _period_chart_row(period):
+    return {
+        "label": period.label,
+        "income_minor": period.income_minor,
+        "spending_minor": period.spending_minor,
+        "net_minor": period.net_minor,
+        "income_display": period.income_display,
+        "spending_display": period.spending_display,
+        "net_display": period.net_display,
+        "missing_import": period.missing_import,
+        "drilldown_url": period.drilldown_url,
+    }
 
-    def series(attr):
-        points = []
-        for index, row in enumerate(periods):
-            x = pad if count == 1 else pad + index * step
-            y = zero_y - (getattr(row, attr) / peak) * (inner_height / 2)
-            points.append(f"{x:.1f},{y:.1f}")
-        return " ".join(points)
 
-    labels = []
-    for index, row in enumerate(periods):
-        x = pad if count == 1 else pad + index * step
-        labels.append(SimpleNamespace(x=f"{x:.1f}", y=str(height - 8), text=row.label))
-    return SimpleNamespace(
-        width=width,
-        height=height,
-        zero_y=zero_y,
-        lines=(
-            SimpleNamespace(name="Income", points=series("income_minor"), color="#0b6e4f"),
-            SimpleNamespace(name="Spending", points=series("spending_minor"), color="#9b2226"),
-            SimpleNamespace(name="Net", points=series("net_minor"), color="#1d3557"),
-        ),
-        labels=labels,
-    )
+def _change_chart_row(change):
+    return {
+        "minor": change.minor,
+        "display": change.display,
+        "direction": change.direction,
+        "label": change.label,
+    }
+
+
+def cash_flow_chart_data(report):
+    summary = report.summary
+    return {
+        "periods": [_period_chart_row(period) for period in report.periods],
+        "summary": {
+            "income_minor": summary.income_minor,
+            "spending_minor": summary.spending_minor,
+            "net_minor": summary.net_minor,
+            "income_display": summary.income_display,
+            "spending_display": summary.spending_display,
+            "net_display": summary.net_display,
+            "previous_from": summary.previous_from.isoformat() if summary.previous_from else None,
+            "previous_to": summary.previous_to.isoformat() if summary.previous_to else None,
+            "previous_income_minor": summary.previous_income_minor,
+            "previous_spending_minor": summary.previous_spending_minor,
+            "previous_net_minor": summary.previous_net_minor,
+            "income_change": _change_chart_row(summary.income_change),
+            "spending_change": _change_chart_row(summary.spending_change),
+            "net_change": _change_chart_row(summary.net_change),
+        },
+    }
+
+
+def _donut_rows(rows):
+    """Rows a donut can draw: only categories with positive spending.
+
+    A net-refund category has a negative total, which a pie cannot show, so it
+    stays in the tiles and table and is left out of the chart. Shares are of
+    the charted (positive) total, not of net spending.
+    """
+    positive = [row for row in rows if row.spending_minor > 0]
+    charted_total = sum(row.spending_minor for row in positive)
+    return [
+        {
+            "name": row.name,
+            "color_index": row.color_index,
+            "spending_minor": row.spending_minor,
+            "spending_display": row.spending_display,
+            "share_display": format_percent(row.spending_minor, charted_total),
+            "drilldown_url": row.drilldown_url,
+        }
+        for row in positive
+    ]
+
+
+def spending_chart_data(report):
+    return {
+        "total_spending_minor": report.total_spending_minor,
+        "total_spending_display": report.total_spending_display,
+        "has_net_refund": any(row.is_net_refund for row in report.rows),
+        "chart_rows": _donut_rows(report.rows),
+        "rows": [
+            {
+                "name": row.name,
+                "color_index": row.color_index,
+                "spending_minor": row.spending_minor,
+                "spending_display": row.spending_display,
+                "percent_display": row.percent_display,
+                "is_net_refund": row.is_net_refund,
+                "drilldown_url": row.drilldown_url,
+            }
+            for row in report.rows
+        ],
+    }

@@ -12,7 +12,9 @@ from finance.cash_flow import (
     date_range_presets,
     default_date_range,
     spending_by_category_report,
+    spending_chart_data,
 )
+from tests.page_payload import json_script_payload
 from finance.category_services import (
     assign_category,
     income_and_spending_totals,
@@ -250,6 +252,14 @@ def test_member_does_not_see_private_account_in_spending_or_drilldown():
     assert "SECRET PRIVATE LEDGER" not in page.content.decode()
     assert "8800" not in page.content.decode()
     assert "88.00 USD" not in page.content.decode()
+    html = page.content.decode()
+    payload = json_script_payload(html, "spending-chart-data")
+    assert payload == spending_chart_data(report)
+    assert payload["rows"][0]["spending_minor"] == 1100
+    assert payload["total_spending_minor"] == 1100
+    assert all(row["spending_minor"] != 8800 for row in payload["rows"])
+    assert "/static/vendor/chart.umd.min.js" in html
+    assert "cdn." not in html.lower()
     assert list(listed.context["transactions"]) == [shared_tx]
     assert private_tx not in listed.context["transactions"]
 
@@ -277,6 +287,11 @@ def test_spending_page_default_range_presets_and_nav(_cash_today, _view_today):
     assert "Last 3 months" in content
     assert "Last 12 months" in content
     assert "Year to date" in content
+    payload = json_script_payload(content, "spending-chart-data")
+    assert payload == spending_chart_data(response.context["report"])
+    assert 'data-chart="spending"' in content
+    assert "/static/vendor/chart.umd.min.js" in content
+    assert "cdn." not in content.lower()
     assert response.context["filter_form"]["date_from"].value() == date(2025, 9, 1)
     assert response.context["filter_form"]["date_to"].value() == date(2026, 9, 15)
     assert "Uncategorized" in content
@@ -322,3 +337,31 @@ def test_uncategorized_drilldown_lists_charges_whose_category_is_no_longer_visib
 
     assert uncategorized.spending_minor == 2200
     assert list(listed.context["transactions"]) == [grocery_tx]
+
+
+@pytest.mark.django_db
+def test_donut_draws_only_positive_spending_and_explains_net_refunds():
+    owner = make_person("owner")
+    household = make_household(owner)
+    checking = make_account(owner)
+    groceries = household.categories.get(name="Groceries")
+    dining = household.categories.get(name="Dining")
+    spend = make_transaction(owner, checking, amount_minor=-10000, description="Synthetic groceries")
+    original = make_transaction(owner, checking, amount_minor=-1000, description="Synthetic dinner", fingerprint="h" * 64)
+    refund = make_transaction(owner, checking, amount_minor=10000, description="Synthetic dinner refund", fingerprint="i" * 64)
+    assign_category(owner, spend.pk, groceries.pk)
+    assign_category(owner, original.pk, dining.pk)
+    link_refund(owner, refund.pk, original.pk)
+    report = spending_by_category_report(owner, date_from=date(2026, 1, 1), date_to=date(2026, 1, 31))
+
+    payload = spending_chart_data(report)
+
+    assert payload["has_net_refund"] is True
+    assert [row["name"] for row in payload["chart_rows"]] == ["Groceries"]
+    assert payload["chart_rows"][0]["spending_minor"] == 10000
+    assert payload["chart_rows"][0]["share_display"] == "100.0%"
+    assert any(row["is_net_refund"] for row in payload["rows"])
+    client = Client()
+    client.force_login(owner.user)
+    page = client.get(reverse("spending-by-category"), {"date_from": "2026-01-01", "date_to": "2026-01-31"})
+    assert b"Categories where refunds exceed spending are not drawn in the chart." in page.content

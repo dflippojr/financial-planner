@@ -31,6 +31,9 @@
         /* ignore quota / private-mode failures */
       }
       apply(next);
+      window.dispatchEvent(
+        new CustomEvent("financial-planner:themechange", { detail: { theme: next } }),
+      );
       return next;
     },
   };
