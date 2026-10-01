@@ -41,6 +41,12 @@
     };
   }
 
+  // Chart data is in minor units (cents) so values stay exact; axis labels show
+  // the same currency amounts as the tooltips and tables.
+  function formatAxisMinor(value) {
+    return (value / 100).toLocaleString(undefined, { maximumFractionDigits: 2 });
+  }
+
   function goTo(url) {
     if (url) {
       window.location.assign(url);
@@ -163,7 +169,8 @@
             grid: { color: palette.grid },
           },
           y: {
-            ticks: { color: palette.text },
+            ticks: { color: palette.text, callback: formatAxisMinor },
+            title: { display: true, text: "USD", color: palette.text },
             grid: { color: palette.grid },
           },
         },
