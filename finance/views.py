@@ -902,6 +902,7 @@ def account_settings(request):
             error = _account_remove_password(request)
         elif action == "export":
             return _account_export_zip(request)
+    person = getattr(request.user, "person", None)
     return render(
         request,
         "finance/account_settings.html",
@@ -910,7 +911,7 @@ def account_settings(request):
             "has_google": has_google_account(request.user),
             "has_password": request.user.has_usable_password(),
             "error": error,
-            "household": current_household(getattr(request.user, "person", None)) if getattr(request.user, "person", None) else None,
+            "household": current_household(person) if person is not None else None,
         },
     )
 

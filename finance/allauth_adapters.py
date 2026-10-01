@@ -1,3 +1,5 @@
+from urllib.parse import urlencode
+
 from django.http import HttpResponseRedirect
 from django.shortcuts import render
 from django.urls import reverse
@@ -199,7 +201,6 @@ class MemberSocialAccountAdapter(DefaultSocialAccountAdapter):
 
     def _failed_response(self, request, page="login"):
         from django.contrib import messages
-        from urllib.parse import urlencode
 
         messages.error(request, GOOGLE_FAILED)
         if page == "join":
