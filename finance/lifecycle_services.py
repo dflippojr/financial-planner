@@ -308,11 +308,30 @@ def _repair_then_delete_account_rows(person, account):
     if members:
         RecurringSeriesMember.objects.filter(pk__in=[member.pk for member in members]).delete()
     revalidate_series_after_member_removal(person, series_ids)
+    _delete_rule_history_for_account(account, tx_ids)
     if tx_ids:
         TransactionCorrectionHistory.objects.filter(transaction_id__in=tx_ids).delete()
         Transaction.objects.filter(pk__in=tx_ids).delete()
     ImportBatch.objects.filter(account_id=account.pk).delete()
     account.delete()
+
+
+def _delete_rule_history_for_account(account, tx_ids):
+    """Remove rule rows that would block deleting the account.
+
+    Rule-application entries for the account's transactions go with them, and
+    rules limited to this account (with their applications) are removed too.
+    Rules and applications for other accounts are untouched.
+    """
+    from finance.models import CategoryRule, RuleApplication, RuleApplicationEntry
+
+    if tx_ids:
+        RuleApplicationEntry.objects.filter(transaction_id__in=tx_ids).delete()
+    account_rule_ids = list(CategoryRule.objects.filter(account_id=account.pk).values_list("pk", flat=True))
+    if account_rule_ids:
+        RuleApplicationEntry.objects.filter(application__rule_id__in=account_rule_ids).delete()
+        RuleApplication.objects.filter(rule_id__in=account_rule_ids).delete()
+        CategoryRule.objects.filter(pk__in=account_rule_ids).delete()
 
 
 @transaction.atomic

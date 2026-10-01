@@ -235,7 +235,6 @@ def _candidate_queryset(person):
 
 def _matching_queryset(person, rule):
     qs = _candidate_queryset(person)
-    qs = qs.filter(description__icontains=rule.description_contains)
     if rule.account_id:
         qs = qs.filter(account_id=rule.account_id)
     if rule.min_amount_minor is not None:
@@ -246,7 +245,12 @@ def _matching_queryset(person, rule):
         qs = qs.filter(account__scope=Account.Scope.HOUSEHOLD, account__household_id=rule.owner_household_id)
     elif rule.owner_person_id:
         qs = qs.filter(account_id__in=_personal_account_ids(rule.owner_person))
-    return qs
+    # Match descriptions in Python with casefold, exactly like automatic
+    # application, so preview, manual apply, and auto-apply agree (database
+    # icontains folds case differently, for example STRASSE versus Straße).
+    needle = rule.description_contains.casefold()
+    matching_ids = [pk for pk, description in qs.values_list("pk", "description") if needle in description.casefold()]
+    return qs.filter(pk__in=matching_ids)
 
 
 def preview_rule(principal, rule_id):

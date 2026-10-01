@@ -663,3 +663,52 @@ def test_reverse_skips_refund_later_inherited_from_linked_original():
     assert refund.category_id == dining_cat.pk
     assert refund.category_source == Transaction.CategorySource.INHERITED
     assert original.category_id == dining_cat.pk
+
+
+@pytest.mark.django_db
+def test_deleting_an_account_removes_its_rule_history_and_account_rules():
+    from finance.lifecycle_services import delete_account
+    from finance.models import CategoryRule, RuleApplication, RuleApplicationEntry
+
+    owner = make_person("owner")
+    household = make_household(owner)
+    account = make_account(owner)
+    other = make_account(owner, name="Synthetic Other")
+    make_transaction(owner, account, fingerprint="a1".ljust(64, "0"))
+    kept = make_transaction(owner, other, fingerprint="b1".ljust(64, "0"))
+    general = save_category_rule(
+        owner, owner_kind="personal", description_contains="kroger", account_id=None,
+        min_amount_minor=None, max_amount_minor=None, category_id=groceries(household).pk, priority=0,
+    )
+    only_this = save_category_rule(
+        owner, owner_kind="personal", description_contains="kroger", account_id=account.pk,
+        min_amount_minor=None, max_amount_minor=None, category_id=dining(household).pk, priority=1,
+    )
+    apply_rule(owner, only_this.pk)
+    apply_rule(owner, general.pk)
+
+    delete_account(owner, account.pk)
+
+    assert not CategoryRule.objects.filter(pk=only_this.pk).exists()
+    assert CategoryRule.objects.filter(pk=general.pk).exists()
+    assert not RuleApplicationEntry.objects.filter(transaction__account_id=account.pk).exists()
+    assert RuleApplicationEntry.objects.filter(transaction=kept).exists()
+    assert RuleApplication.objects.filter(rule=general).exists()
+
+
+@pytest.mark.django_db
+def test_preview_and_auto_apply_fold_case_the_same_way():
+    owner = make_person("owner")
+    household = make_household(owner)
+    account = make_account(owner)
+    txn = make_transaction(owner, account, description="SYNTHETIC GROSSE Straße MARKT", fingerprint="c1".ljust(64, "0"))
+    rule = save_category_rule(
+        owner, owner_kind="personal", description_contains="STRASSE", account_id=None,
+        min_amount_minor=None, max_amount_minor=None, category_id=groceries(household).pk, priority=0,
+    )
+
+    _, matches = preview_rule(owner, rule.pk)
+    assert [item.pk for item in matches] == [txn.pk]
+    apply_rule(owner, rule.pk)
+    txn.refresh_from_db()
+    assert txn.category_id == groceries(household).pk
