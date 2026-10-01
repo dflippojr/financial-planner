@@ -19,6 +19,7 @@ from finance.models import (
     ImportBatch,
     Membership,
     Person,
+    RuleApplication,
     Transaction,
 )
 from finance.rule_services import (
@@ -364,6 +365,87 @@ def test_rule_access_owner_member_and_outsider():
     assert outsider_client.get(household_url).status_code == 404
     page = owner_client.get(personal_url).content.decode()
     assert "Private Kroger Leak" not in page
+
+
+@pytest.mark.django_db
+def test_rules_pages_create_preview_apply_reverse_and_toggle():
+    owner = make_person("owner-ui")
+    loner = make_person("loner-ui")
+    household = make_household(owner)
+    account = make_account(owner)
+    make_transaction(owner, account)
+    client = Client()
+    client.force_login(owner.user)
+    loner_client = Client()
+    loner_client.force_login(loner.user)
+    list_url = reverse("category-rule-list")
+    assert b"Join or create a household" in loner_client.get(list_url).content
+    listed = client.get(list_url)
+    assert listed.status_code == 200
+    created = client.post(
+        list_url,
+        {
+            "owner_kind": "personal",
+            "description_contains": "kroger",
+            "category": str(groceries(household).pk),
+            "priority": "0",
+            "enabled": "on",
+        },
+    )
+    assert created.status_code == 302
+    rule = CategoryRule.objects.get()
+    detail = reverse("category-rule-detail", args=(rule.pk,))
+    assert client.get(detail).status_code == 200
+    assert client.post(detail, {"action": "apply"}).status_code == 302
+    application = RuleApplication.objects.get()
+    assert client.post(detail, {"action": "reverse", "application_id": str(application.pk)}).status_code == 302
+    assert client.post(detail, {"action": "disable"}).status_code == 302
+    disabled_apply = client.post(detail, {"action": "apply"})
+    assert disabled_apply.status_code == 200
+    assert b"Enable the rule" in disabled_apply.content
+    assert client.post(detail, {"action": "enable"}).status_code == 302
+    saved = client.post(
+        detail,
+        {
+            "action": "save",
+            "owner_kind": "personal",
+            "description_contains": "kroger",
+            "category": str(groceries(household).pk),
+            "priority": "5",
+            "enabled": "on",
+        },
+    )
+    assert saved.status_code == 302
+    rule.refresh_from_db()
+    assert rule.priority == 5
+
+
+@pytest.mark.django_db
+def test_save_category_rule_rejects_invalid_range_and_blank_match():
+    owner = make_person("owner-validate")
+    household = make_household(owner)
+    with pytest.raises(ValidationError):
+        save_category_rule(
+            owner,
+            owner_kind="personal",
+            description_contains="   ",
+            account_id=None,
+            min_amount_minor=None,
+            max_amount_minor=None,
+            category_id=groceries(household).pk,
+            priority=0,
+        )
+    with pytest.raises(ValidationError):
+        save_category_rule(
+            owner,
+            owner_kind="personal",
+            description_contains="kroger",
+            account_id=None,
+            min_amount_minor=-100,
+            max_amount_minor=-200,
+            category_id=groceries(household).pk,
+            priority=0,
+        )
 
 
 @pytest.mark.django_db(transaction=True)
