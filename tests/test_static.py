@@ -1,3 +1,6 @@
+import hashlib
+from pathlib import Path
+
 import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
@@ -129,5 +132,21 @@ def test_login_required_middleware_skips_static_paths(settings):
     request = RequestFactory().get("/static/dist/app.css")
     request.user = AnonymousUser()
     assert middleware.process_view(request, lambda: None, (), {}) is None
+
+
+def test_vendored_chartjs_matches_recorded_checksum():
+    vendor = Path(__file__).resolve().parent.parent / "static" / "vendor"
+    recorded = {}
+    for line in (vendor / "SHA256SUMS").read_text(encoding="utf-8").splitlines():
+        if not line or line.startswith("#"):
+            continue
+        digest, name = line.split()
+        recorded[name] = digest
+    blob = (vendor / "chart.umd.min.js").read_bytes()
+
+    assert recorded["chart.umd.min.js"] == hashlib.sha256(blob).hexdigest()
+    assert b"Chart.js v4.5.1" in blob
+    assert b"window.Chart" in blob
+    assert (vendor / "LICENSE.md").read_text(encoding="utf-8").startswith("The MIT License")
 
 
