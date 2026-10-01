@@ -261,3 +261,20 @@ Defaults recorded with the decision (owner may change):
 - **Where the timestamp lives:** the session, never a cookie the client can set. Signing out clears it.
 - **Failed attempts** count toward the existing login throttle.
 - **Flow:** a sensitive POST without a fresh confirmation is not performed. The member is sent to a re-authentication page, then back to the page they came from, and submits the action again. Requests are never replayed automatically.
+
+## Planning v1: projected cash flow and savings goals (2026-10-01)
+
+Owner decision: build a projected cash-flow view **and** savings goals. #68 (Apple Card iOS app) stays research only for now. Saved CSV column mappings wait until the other providers' export shapes are known.
+
+Projected cash flow:
+- Answers "will expected income cover recurring bills and planned expenses over the next N months?"
+- **Inputs:**
+  - Confirmed recurring series (#17) become projected expenses automatically, at their cadence and typical amount.
+  - Members add planned items: recurring or one-time income or expense, with a name, amount, start date, optional end date, cadence (weekly, biweekly, monthly, quarterly, or annual), and an optional category. Each item is private or household-shared, following the account visibility rules.
+- **Horizon:** 12 months by default, with 3, 6, 12, and 24 available, grouped by month. The projection starts after the current month's actuals.
+- **Display:** projected months continue the cash-flow chart in a dashed, hatched style labeled **Projected**. They are never added into actual totals. There is no uncertainty modeling or scenarios in v1.
+
+Savings goals:
+- A goal has a name, target amount, target date, an optional linked account, and private or household visibility.
+- **Progress** is informational. It is the linked account's latest balance (#67/#69 balance snapshots) or a manually entered current amount, compared against the target. It shows the monthly amount needed to reach the target by the target date.
+- Goals do not change the projection in v1.
