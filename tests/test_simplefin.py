@@ -151,7 +151,7 @@ def test_claim_success_encrypts_access_url(monkeypatch, caplog):
 
 
 @pytest.mark.django_db
-def test_claim_403_reports_compromise_without_token(monkeypatch):
+def test_claim_403_on_client_reports_compromise(monkeypatch):
     owner = make_person("owner")
     make_household(owner)
 
@@ -164,6 +164,16 @@ def test_claim_403_reports_compromise_without_token(monkeypatch):
     assert str(raised.value) == CLAIM_COMPROMISED
     assert CLAIM_URL not in str(raised.value)
 
+
+@pytest.mark.django_db
+def test_claim_403_does_not_store_a_connection(monkeypatch):
+    owner = make_person("owner")
+    make_household(owner)
+
+    def fake_open(*args, **kwargs):
+        raise HTTPError(CLAIM_URL, 403, "Forbidden", hdrs=None, fp=BytesIO())
+
+    monkeypatch.setattr("finance.simplefin_client.urlopen", fake_open)
     with pytest.raises(SimpleFinError) as wrapped:
         claim_connection(owner, setup_token())
     assert ACCESS_URL not in str(wrapped.value)
