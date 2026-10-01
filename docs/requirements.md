@@ -202,3 +202,13 @@ Defaults recorded with the decision (owner may change):
   - Recurring series are revalidated.
 - The confirmation requires typing the account name. It shows how many transactions and imports will be removed, and states that existing backups keep a copy until they rotate out (14 nightly and 8 weekly).
 - Logs and messages never contain the deleted data. A success message names only the account.
+
+## Account connections and investment tracking (2026-10-01)
+
+Owner decisions:
+- **SimpleFIN Bridge** is the first automatic connection provider ($15/year), worth trying at its price. Plaid is not pursued: it is built for businesses, needs onboarding and public webhooks, and personal use is unclear. CSV import stays available for everything.
+- **The SimpleFIN access URL is stored encrypted in the database.** The key lives in `production.env`. Each connection belongs to one member. The URL is never displayed or logged, and backups hold only ciphertext.
+- **Linking uses a cut-over date.** When an existing account is linked, linked data starts at a cut-over date the member picks. The default is the day after the account's latest imported transaction. CSV history before the cut-over stays. Linked transactions before it are ignored, so nothing is counted twice. To drop CSV history entirely, delete the account (#62) and link a new one.
+- **Sync:** automatic once a day, plus a **Sync now** button.
+- **Investment accounts track balances only.** Vanguard and the Fidelity 401(k) (a new account, not in the original four) are tracked as dated balance snapshots for net worth over time. Their investment transactions are not imported. This matches how the owner uses Rocket Money today.
+- **Apple Card:** aggregators cannot reach it, so it stays on CSV for now. A later option is a small iOS companion app, using Apple's FinanceKit through TestFlight, that sends Apple Card transactions to the server over the tailnet.
