@@ -1,0 +1,30 @@
+@import "tailwindcss";
+
+@source "../../templates";
+@source "../js";
+@source not "./vendor";
+
+@plugin "./vendor/daisyui.mjs" {
+  themes: light --default, dark --prefersdark;
+}
+
+@layer base {
+  *:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+  }
+}
+
+@utility tabular-amount {
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+}
+
+@utility amount-in {
+  color: var(--color-success);
+}
+
+@utility amount-out {
+  color: var(--color-error);
+}

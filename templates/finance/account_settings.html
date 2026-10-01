@@ -1,21 +1,38 @@
 {% extends "finance/base.html" %}
+{% block title %}Account · Financial Planner{% endblock %}
 {% block content %}
-<h1>Account</h1>
-{% if messages %}{% for message in messages %}<p>{{ message }}</p>{% endfor %}{% endif %}
-{% if error %}<p>{{ error }}</p>{% endif %}
-<p>Google: {% if has_google %}connected{% else %}not connected{% endif %}</p>
-<p>Password: {% if has_password %}set{% else %}not set{% endif %}</p>
+<h1 class="mb-4 text-2xl font-bold">Account</h1>
+{% include "finance/_messages.html" %}
+{% if error %}<div role="alert" class="alert alert-error mb-4">{{ error }}</div>{% endif %}
+<p class="mb-2">Google: {% if has_google %}<span class="badge badge-success">connected</span>{% else %}<span class="badge">not connected</span>{% endif %}</p>
+<p class="mb-4">Password: {% if has_password %}<span class="badge badge-success">set</span>{% else %}<span class="badge">not set</span>{% endif %}</p>
 {% if google_signin_enabled %}
 {% if has_google %}
-<form method="post">{% csrf_token %}<input type="hidden" name="action" value="disconnect-google"><button type="submit">Disconnect Google</button></form>
+<form method="post" class="mb-4">
+  {% csrf_token %}
+  <input type="hidden" name="action" value="disconnect-google">
+  <button type="submit" class="btn">Disconnect Google</button>
+</form>
 {% else %}
-<form method="post">{% csrf_token %}<input type="hidden" name="action" value="connect-google"><button type="submit">Connect Google</button></form>
+<form method="post" class="mb-4">
+  {% csrf_token %}
+  <input type="hidden" name="action" value="connect-google">
+  <button type="submit" class="btn btn-primary">Connect Google</button>
+</form>
 {% endif %}
 {% endif %}
 {% if has_password %}
-<form method="post">{% csrf_token %}<input type="hidden" name="action" value="remove-password"><button type="submit">Remove password</button></form>
+<form method="post">
+  {% csrf_token %}
+  <input type="hidden" name="action" value="remove-password">
+  <button type="submit" class="btn btn-outline">Remove password</button>
+</form>
 {% else %}
-<form method="post">{% csrf_token %}<input type="hidden" name="action" value="add-password">{{ password_form.as_p }}<button type="submit">Add password</button></form>
+<form method="post" class="max-w-lg">
+  {% csrf_token %}
+  <input type="hidden" name="action" value="add-password">
+  {% include "finance/_form_fields.html" with form=password_form %}
+  <button type="submit" class="btn btn-primary">Add password</button>
+</form>
 {% endif %}
-<p><a href="{% url 'home' %}">Back to cash flow</a></p>
 {% endblock %}

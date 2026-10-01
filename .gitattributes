@@ -4,3 +4,5 @@
 *.sh text eol=lf
 Dockerfile text eol=lf
 ops/backup/Dockerfile text eol=lf
+scripts/css_pins.env text eol=lf
+static/src/vendor/** text eol=lf

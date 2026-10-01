@@ -83,7 +83,7 @@ def test_transaction_list_shows_columns_provenance_and_newest_first():
     assert list(response.context["transactions"]) == [newer, older]
     content = response.content.decode()
     for heading in ("Date", "Account", "Description", "Amount", "Category", "Source", "Scope"):
-        assert f"<th>{heading}</th>" in content
+        assert f">{heading}</th>" in content
     assert "-12.34 USD" in content
     assert "Uncategorized" in content
     assert "Huntington Bank" in content

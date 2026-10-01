@@ -1,9 +1,10 @@
 {% extends "finance/base.html" %}
+{% block title %}Import CSV · Financial Planner{% endblock %}
 {% block content %}
-<h1>Preview CSV import for {{ account.name }}</h1>
-<p>This tool previews data only. It does not import transactions until you confirm an import.</p>
+<h1 class="mb-4 text-2xl font-bold">Preview CSV import for {{ account.name }}</h1>
+<p class="mb-4">This tool previews data only. It does not import transactions until you confirm an import.</p>
 {% if import_result %}
-<p>
+<div role="status" class="alert {% if import_result.undone %}alert-info{% else %}alert-success{% endif %} mb-4">
   {% if import_result.undone %}
   The selected import was undone. Earlier imports were left in place.
   {% else %}
@@ -11,65 +12,78 @@
   <strong>{{ import_result.duplicate_count }}</strong> duplicate,
   <strong>{{ import_result.invalid_count }}</strong> invalid.
   {% endif %}
-</p>
+</div>
 {% endif %}
 {% if not mapping_form %}
-<form method="post" enctype="multipart/form-data">
+<form method="post" enctype="multipart/form-data" class="mb-6 max-w-lg">
   {% csrf_token %}
-  {{ upload_form.as_p }}
-  <button type="submit" name="action" value="upload">Upload and map</button>
+  {% include "finance/_form_fields.html" with form=upload_form %}
+  <button type="submit" name="action" value="upload" class="btn btn-primary">Upload and map</button>
 </form>
 {% else %}
 {% if import_profile == "huntington" %}
-<p>Huntington checking columns are mapped automatically. Stored amounts use negative for money out and positive for money in.</p>
+<p class="mb-4">Huntington checking columns are mapped automatically. Stored amounts use negative for money out and positive for money in.</p>
 {% else %}
-<p>Map the uploaded columns. Stored amounts use negative for money out and positive for money in.</p>
+<p class="mb-4">Map the uploaded columns. Stored amounts use negative for money out and positive for money in.</p>
 {% endif %}
-<form method="post">
+<form method="post" class="mb-6 max-w-lg">
   {% csrf_token %}
-  {{ mapping_form.as_p }}
-  <button type="submit" name="action" value="preview">Preview rows</button>
-  {% if commit_available %}<button type="submit" name="action" value="commit">Import new rows</button>{% endif %}
-  <button type="submit" name="action" value="cancel" formnovalidate>Cancel and delete upload</button>
+  {% include "finance/_form_fields.html" with form=mapping_form %}
+  <div class="flex flex-wrap gap-2">
+    <button type="submit" name="action" value="preview" class="btn btn-primary">Preview rows</button>
+    {% if commit_available %}<button type="submit" name="action" value="commit" class="btn btn-success">Import new rows</button>{% endif %}
+    <button type="submit" name="action" value="cancel" formnovalidate class="btn btn-ghost">Cancel and delete upload</button>
+  </div>
 </form>
 {% endif %}
 {% if preview %}
-<h2>Preview results</h2>
-<p>
+<h2 class="mb-3 text-xl font-semibold">Preview results</h2>
+<p class="mb-4">
   <strong>{{ preview.new_count }}</strong> new;
   <strong>{{ preview.duplicate_count }}</strong> duplicate;
   <strong>{{ preview.invalid_count }}</strong> invalid.
 </p>
-<table>
-  <thead><tr><th>Row</th><th>Date</th><th>Description</th><th>Amount</th><th>Currency</th><th>Status</th><th>Errors</th></tr></thead>
-  <tbody>
-  {% for row in preview.rows %}
-    <tr>
-      <td>{{ row.row_number }}</td>
-      <td>{{ row.transaction_date|default:"—" }}</td>
-      <td>{{ row.description }}</td>
-      <td>{{ row.amount_display|default:"—" }}</td>
-      <td>{{ row.currency }}</td>
-      <td>{{ row.overlap_status|default:"—" }}</td>
-      <td>{% for error in row.errors %}<div>{{ error }}</div>{% empty %}Valid{% endfor %}</td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table>
+<div class="overflow-x-auto mb-8">
+  <table class="table table-zebra">
+    <thead class="sticky top-0 z-10 bg-base-200">
+      <tr>
+        <th>Row</th>
+        <th>Date</th>
+        <th>Description</th>
+        <th class="text-right">Amount</th>
+        <th>Currency</th>
+        <th>Status</th>
+        <th>Errors</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for row in preview.rows %}
+      <tr>
+        <td>{{ row.row_number }}</td>
+        <td>{{ row.transaction_date|default:"—" }}</td>
+        <td>{{ row.description }}</td>
+        <td class="text-right">{% if row.amount_display %}{% include "finance/_amount.html" with value=row.amount_display tone="" %}{% else %}—{% endif %}</td>
+        <td>{{ row.currency }}</td>
+        <td>{{ row.overlap_status|default:"—" }}</td>
+        <td>{% for error in row.errors %}<div class="text-error">{{ error }}</div>{% empty %}Valid{% endfor %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
 {% endif %}
 {% if import_batches %}
-<h2>Active imports</h2>
-<ul>
+<h2 class="mb-3 text-xl font-semibold">Active imports</h2>
+<ul class="mb-6 space-y-3">
   {% for batch in import_batches %}
-    <li>
-      {{ batch.get_source_display }} {{ batch.date_range_start }}–{{ batch.date_range_end }}
+    <li class="flex flex-wrap items-center gap-3">
+      <span>{{ batch.get_source_display }} {{ batch.date_range_start }}–{{ batch.date_range_end }}</span>
       <form method="post" action="{% url 'csv-import-undo' account.pk batch.pk %}">
         {% csrf_token %}
-        <button type="submit">Undo this import</button>
+        <button type="submit" class="btn btn-sm btn-outline">Undo this import</button>
       </form>
     </li>
   {% endfor %}
 </ul>
 {% endif %}
-<p><a href="{% url 'home' %}">Back to cash flow</a></p>
 {% endblock %}

@@ -1,31 +1,42 @@
 {% extends "finance/base.html" %}
+{% block title %}Transactions · Financial Planner{% endblock %}
 {% block content %}
-<h1>Transactions</h1>
-<p><a href="{% url 'home' %}">Cash flow</a> · <a href="{% url 'spending-by-category' %}">Spending</a> · <a href="{% url 'transfer-review' %}">Transfers</a> · <a href="{% url 'category-list' %}">Categories</a></p>
-<form method="get">
-  {{ filter_form.as_p }}
-  <button type="submit">Filter</button>
-  <a href="{% url 'transaction-list' %}">Clear</a>
+<h1 class="mb-4 text-2xl font-bold">Transactions</h1>
+<form method="get" class="mb-4 flex flex-wrap items-end gap-3">
+  {% include "finance/_form_fields.html" with form=filter_form %}
+  <button type="submit" class="btn btn-primary">Filter</button>
+  <a class="btn btn-ghost" href="{% url 'transaction-list' %}">Clear</a>
 </form>
-<table>
-  <thead>
-    <tr><th>Date</th><th>Account</th><th>Description</th><th>Amount</th><th>Category</th><th>Source</th><th>Scope</th><th></th></tr>
-  </thead>
-  <tbody>
-  {% for transaction in transactions %}
-    <tr>
-      <td>{{ transaction.transaction_date }}</td>
-      <td>{{ transaction.account.name }}</td>
-      <td>{{ transaction.description }}</td>
-      <td>{{ transaction.amount_display }}</td>
-      <td>{{ transaction.category_display }}</td>
-      <td>{{ transaction.import_batch.get_source_display }}<br><small>Imported {{ transaction.import_batch.imported_at }}</small></td>
-      <td>{{ transaction.account.get_scope_display }}</td>
-      <td><a href="{% url 'transaction-edit' transaction.pk %}">Correct</a></td>
-    </tr>
-  {% empty %}
-    <tr><td colspan="8">No matching transactions.</td></tr>
-  {% endfor %}
-  </tbody>
-</table>
+<div class="overflow-x-auto">
+  <table class="table table-zebra">
+    <thead class="sticky top-0 z-10 bg-base-200">
+      <tr>
+        <th>Date</th>
+        <th>Account</th>
+        <th>Description</th>
+        <th class="text-right">Amount</th>
+        <th>Category</th>
+        <th>Source</th>
+        <th>Scope</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for transaction in transactions %}
+      <tr>
+        <td>{{ transaction.transaction_date }}</td>
+        <td>{{ transaction.account.name }}</td>
+        <td>{{ transaction.description }}</td>
+        <td class="text-right">{% include "finance/_amount.html" with value=transaction.amount_display tone="" %}</td>
+        <td>{{ transaction.category_display }}</td>
+        <td>{{ transaction.import_batch.get_source_display }}<br><small>Imported {{ transaction.import_batch.imported_at }}</small></td>
+        <td>{{ transaction.account.get_scope_display }}</td>
+        <td><a class="link" href="{% url 'transaction-edit' transaction.pk %}">Correct</a></td>
+      </tr>
+    {% empty %}
+      <tr><td colspan="8">No matching transactions.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
 {% endblock %}

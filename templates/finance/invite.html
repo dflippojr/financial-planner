@@ -1,5 +1,19 @@
 {% extends "finance/base.html" %}
+{% block title %}Invite · Financial Planner{% endblock %}
 {% block content %}
-<h1>Invite a household member</h1>
-{% if invitation_code %}<p>Share this one-time code securely. It expires in {{ invitation_ttl_hours }} hours and will not be shown again.</p><pre>{{ invitation_code }}</pre>{% else %}<form method="post">{% csrf_token %}<button type="submit">Create invitation code</button></form>{% endif %}
+<h1 class="mb-4 text-2xl font-bold">Invite a household member</h1>
+{% if invitation_code %}
+<div role="status" class="alert alert-info mb-4">Share this one-time code securely. It expires in {{ invitation_ttl_hours }} hours and will not be shown again.</div>
+<div class="card bg-base-200">
+  <div class="card-body">
+    <pre id="invitation-code" class="font-mono text-lg">{{ invitation_code }}</pre>
+    <button type="button" class="btn btn-outline btn-sm w-fit" data-copy-target="invitation-code">Copy code</button>
+  </div>
+</div>
+{% else %}
+<form method="post">
+  {% csrf_token %}
+  <button type="submit" class="btn btn-primary">Create invitation code</button>
+</form>
+{% endif %}
 {% endblock %}

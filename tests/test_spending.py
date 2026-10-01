@@ -270,7 +270,7 @@ def test_spending_page_default_range_presets_and_nav(_cash_today, _view_today):
 
     assert response.status_code == 200
     assert "no-store" in response["Cache-Control"]
-    assert "<h1>Spending by category</h1>" in content
+    assert ">Spending by category</h1>" in content
     assert reverse("spending-by-category") in home.content.decode()
     assert "This month" in content
     assert "Last month" in content

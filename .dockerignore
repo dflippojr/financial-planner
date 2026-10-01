@@ -15,5 +15,7 @@ backups/
 *.csv
 *.db
 *.sqlite*
+.cache/
+staticfiles/
 tests/
 ops/

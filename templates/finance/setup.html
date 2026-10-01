@@ -1,16 +1,27 @@
 {% extends "finance/base.html" %}
+{% block title %}Set up · Financial Planner{% endblock %}
 {% block content %}
-<h1>Set up the first household</h1>
+<h1 class="mb-4 text-2xl font-bold">Set up the first household</h1>
 {% if recovery_codes %}
 {% include "finance/_recovery_codes.html" %}
-<p><a href="{% url 'home' %}">Continue</a></p>
+<p class="mt-4"><a class="btn btn-primary" href="{% url 'home' %}">Continue</a></p>
 {% elif not setup_configured %}
-<p>The operator must set <code>SETUP_CODE</code> in the environment before the first member can be created in the browser.</p>
+<div role="status" class="alert">The operator must set <code>SETUP_CODE</code> in the environment before the first member can be created in the browser.</div>
 {% else %}
-{% if messages %}{% for message in messages %}<p>{{ message }}</p>{% endfor %}{% endif %}
+{% include "finance/_messages.html" %}
 {% if google_signin_enabled %}
-<form method="post">{% csrf_token %}<input type="hidden" name="intent" value="google">{{ google_form.as_p }}<button type="submit">Set up with Google</button></form>
+<form method="post" class="mb-4">
+  {% csrf_token %}
+  <input type="hidden" name="intent" value="google">
+  {% include "finance/_form_fields.html" with form=google_form %}
+  <button type="submit" class="btn btn-primary w-full">Set up with Google</button>
+</form>
+<div class="divider">or</div>
 {% endif %}
-<form method="post">{% csrf_token %}{{ form.as_p }}<button type="submit">Create account</button></form>
+<form method="post">
+  {% csrf_token %}
+  {% include "finance/_form_fields.html" %}
+  <button type="submit" class="btn btn-primary w-full">Create account</button>
+</form>
 {% endif %}
 {% endblock %}
