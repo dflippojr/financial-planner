@@ -68,6 +68,7 @@ def _validate_rule_category(rule, household):
         raise ValidationError("Choose a household category.")
 
 
+@transaction.atomic
 def save_category_rule(
     principal,
     *,
@@ -129,6 +130,7 @@ def save_category_rule(
     return rule
 
 
+@transaction.atomic
 def set_rule_enabled(principal, rule_id, enabled):
     person, rule = _rule_or_404(principal, rule_id)
     lock_actor_household(person)
