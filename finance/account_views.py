@@ -1,3 +1,4 @@
+from django.contrib import messages
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.db.models import Count, Max, Q
@@ -7,9 +8,10 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods, require_POST
 
 from .category_services import current_household
-from .forms import AccountRenameForm, AddAccountForm
+from .forms import AccountDeleteForm, AccountRenameForm, AddAccountForm
 from .lifecycle_services import (
     archive_account,
+    delete_account,
     lock_actor_household,
     rename_account,
     share_account,
@@ -74,6 +76,7 @@ def account_list(request):
             "has_active_accounts": any(
                 account.status == Account.Status.ACTIVE and account.archived_at is None for account in accounts
             ),
+            "viewer_id": person.pk,
         },
     )
 
@@ -139,3 +142,35 @@ def account_archive(request, account_id):
     _active_visible_account(request.user, account_id)
     _service_or_404(lambda: archive_account(request.user, account_id))
     return redirect("account-list")
+
+
+def _owned_visible_account(user, account_id):
+    person = get_object_or_404(Person, user=user)
+    return get_object_or_404(Account.objects.visible_to(user).filter(owner=person), pk=account_id)
+
+
+def _account_delete_counts(account):
+    return {
+        "transaction_count": Transaction.objects.filter(account=account).count(),
+        "import_count": ImportBatch.objects.filter(account=account).count(),
+    }
+
+
+def _render_account_delete(request, account, form):
+    return render(
+        request,
+        "finance/account_delete.html",
+        {"account": account, "form": form, **_account_delete_counts(account)},
+    )
+
+
+@require_http_methods(["GET", "POST"])
+@never_cache
+def account_delete(request, account_id):
+    account = _owned_visible_account(request.user, account_id)
+    form = AccountDeleteForm(request.POST or None, account_name=account.name)
+    if request.method == "POST" and form.is_valid():
+        account_name = _service_or_404(lambda: delete_account(request.user, account.pk))
+        messages.success(request, f"Deleted {account_name}.")
+        return redirect("account-list")
+    return _render_account_delete(request, account, form)

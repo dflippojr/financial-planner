@@ -2,6 +2,7 @@
 {% block title %}Accounts · Financial Planner{% endblock %}
 {% block content %}
 <h1 class="mb-4 text-2xl font-bold">Accounts</h1>
+{% include "finance/_messages.html" %}
 {% if not has_active_accounts %}
 <div role="status" class="alert mb-4">
   <span>Add your first account to import transactions</span>
@@ -52,8 +53,8 @@
         <td>{% if account.last_import_at %}{{ account.last_import_at|date:"Y-m-d" }}{% else %}—{% endif %}</td>
         <td>{{ account.transaction_count }}</td>
         <td>
-          {% if account.status == "active" and account.archived_at is None %}
           <div class="flex flex-wrap items-center gap-2">
+          {% if account.status == "active" and account.archived_at is None %}
             <a class="btn btn-sm btn-primary" href="{% url 'csv-import-preview' account.pk %}">Import CSV</a>
             <form method="post" action="{% url 'account-rename' account.pk %}" class="flex flex-wrap items-center gap-2">
               {% csrf_token %}
@@ -88,8 +89,11 @@
                 </div>
               </div>
             </dialog>
-          </div>
           {% endif %}
+          {% if account.owner_id == viewer_id %}
+            <a class="btn btn-sm btn-ghost text-error" href="{% url 'account-delete' account.pk %}">Delete account</a>
+          {% endif %}
+          </div>
         </td>
       </tr>
     {% empty %}

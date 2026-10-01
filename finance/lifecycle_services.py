@@ -1,8 +1,20 @@
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
-from .models import Account, ImportBatch, Membership, Person, Transaction
+from .models import (
+    Account,
+    ImportBatch,
+    Membership,
+    Person,
+    RecurringSeries,
+    RecurringSeriesMember,
+    RefundLink,
+    Transaction,
+    TransactionCorrectionHistory,
+    TransferPair,
+)
 
 
 _DENIED = "Operation is not permitted."
@@ -20,10 +32,12 @@ def _person_for(principal):
 
 
 # Lock order, for every operation in this module: the household's current
-# memberships (in primary-key order), then accounts, then import batches, then
-# transactions. Two transactions that take the same locks in a different order
-# can each hold what the other awaits, and PostgreSQL then aborts one of them
-# with a deadlock error. Always call lock_actor_household() first.
+# memberships (in primary-key order), then accounts in primary-key order
+# (including counterpart accounts of transfer pairs and refund links), then
+# the rows being changed or deleted. Two transactions that take the same locks
+# in a different order can each hold what the other awaits, and PostgreSQL then
+# aborts one of them with a deadlock error. Always call lock_actor_household()
+# first.
 def lock_actor_household(person):
     """Lock every current membership of the person's household, in pk order.
 
@@ -209,3 +223,109 @@ def end_current_membership(person):
 def leave_household(principal):
     """End the actor's current membership and apply shared-account exit rules."""
     end_current_membership(_person_for(principal))
+
+
+def _delete_counterpart_account_ids(account_id):
+    from finance.category_services import (
+        account_ids_in_pairs_touching_transactions,
+        account_ids_in_refunds_touching_transactions,
+    )
+
+    seed = list(Transaction.objects.filter(account_id=account_id).values_list("pk", flat=True))
+    counterparts = account_ids_in_pairs_touching_transactions(seed)
+    counterparts |= account_ids_in_refunds_touching_transactions(seed)
+    return counterparts - {account_id}
+
+
+def _lock_visible_account_for_delete(person, account_id):
+    extras = _delete_counterpart_account_ids(account_id)
+    _lock_accounts_in_pk_order(pk for pk in extras if pk < account_id)
+    account = _visible_account_for_update(person, account_id)
+    _lock_accounts_in_pk_order(pk for pk in extras if pk > account_id)
+    return account
+
+
+def _related_ids_for_account_delete(tx_ids):
+    from finance.category_services import _pair_rows_touching, _refund_rows_touching
+
+    pair_rows = _pair_rows_touching(tx_ids)
+    refund_rows = _refund_rows_touching(tx_ids)
+    pair_ids = [pk for pk, _left, _right in pair_rows]
+    refund_ids = [pk for pk, _refund, _original in refund_rows]
+    related_tx_ids = set(tx_ids)
+    related_tx_ids.update(leg_id for _pk, left_id, right_id in pair_rows for leg_id in (left_id, right_id))
+    related_tx_ids.update(tx_id for _pk, refund_id, original_id in refund_rows for tx_id in (refund_id, original_id))
+    return pair_ids, refund_ids, related_tx_ids
+
+
+def _lock_rows_for_account_delete(account):
+    tx_ids = list(Transaction.objects.filter(account_id=account.pk).order_by("pk").values_list("pk", flat=True))
+    pair_ids, refund_ids, related_tx_ids = _related_ids_for_account_delete(tx_ids)
+    locked_txs = []
+    if related_tx_ids:
+        locked_txs = list(
+            Transaction.objects.select_for_update(of=("self",))
+            .select_related("account", "category")
+            .filter(pk__in=related_tx_ids)
+            .order_by("pk")
+        )
+    pairs = []
+    if pair_ids:
+        pairs = list(
+            TransferPair.objects.select_for_update(of=("self",)).filter(pk__in=sorted(pair_ids)).order_by("pk")
+        )
+    refunds = []
+    if refund_ids:
+        refunds = list(RefundLink.objects.select_for_update().filter(pk__in=sorted(refund_ids)).order_by("pk"))
+    members = []
+    if tx_ids:
+        members = list(
+            RecurringSeriesMember.objects.select_for_update().filter(transaction_id__in=tx_ids).order_by("pk")
+        )
+    series_ids = sorted({member.series_id for member in members})
+    if series_ids:
+        list(RecurringSeries.objects.select_for_update(of=("self",)).filter(pk__in=series_ids).order_by("pk"))
+    if tx_ids:
+        list(
+            TransactionCorrectionHistory.objects.select_for_update()
+            .filter(transaction_id__in=tx_ids)
+            .order_by("pk")
+        )
+    list(ImportBatch.objects.select_for_update().filter(account_id=account.pk).order_by("pk"))
+    return locked_txs, pairs, refunds, members, series_ids, tx_ids
+
+
+def _repair_then_delete_account_rows(person, account):
+    from finance.category_services import unmark_locked_pairs
+    from finance.recurring_services import revalidate_series_after_member_removal
+
+    locked_txs, pairs, refunds, members, series_ids, tx_ids = _lock_rows_for_account_delete(account)
+    unmark_locked_pairs(pairs, {item.pk: item for item in locked_txs}, person)
+    if pairs:
+        TransferPair.objects.filter(pk__in=[pair.pk for pair in pairs]).delete()
+    if refunds:
+        RefundLink.objects.filter(pk__in=[link.pk for link in refunds]).delete()
+    if members:
+        RecurringSeriesMember.objects.filter(pk__in=[member.pk for member in members]).delete()
+    revalidate_series_after_member_removal(person, series_ids)
+    if tx_ids:
+        TransactionCorrectionHistory.objects.filter(transaction_id__in=tx_ids).delete()
+        Transaction.objects.filter(pk__in=tx_ids).delete()
+    ImportBatch.objects.filter(account_id=account.pk).delete()
+    account.delete()
+
+
+@transaction.atomic
+def delete_account(principal, account_id):
+    """Permanently delete an account and every row that belongs to it."""
+    person = _person_for(principal)
+    lock_actor_household(person)
+    if not Account.objects.visible_to(person).filter(pk=account_id).exists():
+        raise PermissionDenied(_DENIED)
+    account = _lock_visible_account_for_delete(person, account_id)
+    if account.owner_id != person.pk:
+        raise PermissionDenied(_DENIED)
+    if not Account.objects.visible_to(person).filter(pk=account.pk).exists():
+        raise PermissionDenied(_DENIED)
+    _repair_then_delete_account_rows(person, account)
+    return account.name
