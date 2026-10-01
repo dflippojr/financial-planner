@@ -14,16 +14,16 @@
 .EXAMPLE
   $token = gh api -X POST repos/dflippojr/agent-harness/actions/runners/registration-token --jq .token
   .\ops\github\install-runner.ps1 -Token $token
-  .\ops\github\install-runner.ps1 -Token $token -InstallDir D:\Agents\github-runner-ci -Name dflippotower-agent-harness-ci -TaskName AgentHarness-GitHubRunner-CI -Labels agent-harness-ci
-  .\ops\github\install-runner.ps1 -Token $token -InstallDir D:\Agents\github-runner-ci-2 -Name dflippotower-agent-harness-ci-2 -TaskName AgentHarness-GitHubRunner-CI-2 -Labels agent-harness-ci
-  .\ops\github\install-runner.ps1 -Token $token -InstallDir D:\Agents\github-runner-ci-3 -Name dflippotower-agent-harness-ci-3 -TaskName AgentHarness-GitHubRunner-CI-3 -Labels agent-harness-ci
+  .\ops\github\install-runner.ps1 -Token $token -InstallDir D:\Agents\github-runner-ci -Name example-pc-agent-harness-ci -TaskName AgentHarness-GitHubRunner-CI -Labels agent-harness-ci
+  .\ops\github\install-runner.ps1 -Token $token -InstallDir D:\Agents\github-runner-ci-2 -Name example-pc-agent-harness-ci-2 -TaskName AgentHarness-GitHubRunner-CI-2 -Labels agent-harness-ci
+  .\ops\github\install-runner.ps1 -Token $token -InstallDir D:\Agents\github-runner-ci-3 -Name example-pc-agent-harness-ci-3 -TaskName AgentHarness-GitHubRunner-CI-3 -Labels agent-harness-ci
 #>
 param(
     [Parameter(Mandatory)][string]$Token,
     [string]$Repo = 'dflippojr/agent-harness',
     [string]$InstallDir = 'D:\Agents\github-runner',
     [string]$WorkDir = '_work',
-    [string]$Name = 'dflippotower-agent-harness',
+    [string]$Name = 'example-pc-agent-harness',
     [string]$TaskName = 'AgentHarness-GitHubRunner',
     [string]$Labels = 'agent-harness-tower',
     [string]$Version = '2.337.0',
