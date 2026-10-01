@@ -8,6 +8,7 @@ class _SampleForm(forms.Form):
     name = forms.CharField()
     kind = forms.ChoiceField(choices=(("a", "A"), ("b", "B")))
     notes = forms.CharField(widget=forms.Textarea)
+    csv_file = forms.FileField(required=False)
 
 
 def test_amount_tone_class_uses_sign_or_explicit_tone():
@@ -23,6 +24,9 @@ def test_daisy_widget_adds_control_classes_and_error_state():
     assert "input-error" in daisy_widget(bound["name"])
     assert "select select-bordered" in daisy_widget(bound["kind"])
     assert "textarea" in daisy_widget(bound["notes"])
+    errored = _SampleForm({"name": "x", "kind": "a", "notes": ""})
+    assert "textarea-error" in daisy_widget(errored["notes"])
+    assert "file-input" in daisy_widget(bound["csv_file"])
 
 
 def test_form_include_keeps_field_names():

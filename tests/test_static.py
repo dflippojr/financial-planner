@@ -1,8 +1,11 @@
 import pytest
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import AnonymousUser
 from django.core.management import call_command
-from django.test import Client
+from django.test import Client, RequestFactory
 from django.urls import reverse
+
+from finance.middleware import LoginRequiredExceptStaticMiddleware, _static_prefix
 
 from finance.models import Household, Membership, Person
 
@@ -109,4 +112,22 @@ def test_signed_in_pages_use_shared_nav_and_signed_out_pages_use_a_card():
     assert "card-body" in login
     assert "drawer" not in login
     assert "<p><a href=" not in home
+
+
+def test_static_url_prefix_is_normalized(settings):
+    settings.STATIC_URL = "static"
+    assert _static_prefix() == "/static/"
+    settings.STATIC_URL = "/static"
+    assert _static_prefix() == "/static/"
+    settings.STATIC_URL = None
+    assert _static_prefix() == "/static/"
+
+
+def test_login_required_middleware_skips_static_paths(settings):
+    settings.STATIC_URL = "/static/"
+    middleware = LoginRequiredExceptStaticMiddleware(lambda request: None)
+    request = RequestFactory().get("/static/dist/app.css")
+    request.user = AnonymousUser()
+    assert middleware.process_view(request, lambda: None, (), {}) is None
+
 
