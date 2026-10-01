@@ -52,6 +52,8 @@ def claim_access_url(claim_url: str) -> str:
         raise SimpleFinError("SimpleFIN could not claim that setup token.") from None
     except URLError:
         raise SimpleFinError("SimpleFIN could not be reached.") from None
+    except (TimeoutError, OSError, UnicodeDecodeError):
+        raise SimpleFinError("SimpleFIN did not finish responding. Try again later.") from None
     _require_https(body)
     return body
 
@@ -83,6 +85,9 @@ def fetch_accounts(access_url: str, *, start_date=None, end_date=None, balances_
         raise SimpleFinError("SimpleFIN could not return accounts.") from None
     except URLError:
         raise SimpleFinError("SimpleFIN could not be reached.") from None
+    except (TimeoutError, OSError, UnicodeDecodeError):
+        # Headers arrived but the body stalled or broke off.
+        raise SimpleFinError("SimpleFIN did not finish responding. Try again later.") from None
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError:

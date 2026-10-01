@@ -835,3 +835,48 @@ def test_time_zone_follows_the_tz_environment_variable(monkeypatch):
     finally:
         monkeypatch.delenv("TZ")
         importlib.reload(settings_module)
+
+
+def test_stalled_response_body_becomes_a_safe_error(monkeypatch):
+    from finance.simplefin_client import fetch_accounts
+
+    class StallingResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            raise TimeoutError("read timed out")
+
+    monkeypatch.setattr("finance.simplefin_client.urlopen", lambda *a, **k: StallingResponse())
+
+    with pytest.raises(SimpleFinError) as caught:
+        fetch_accounts(ACCESS_URL)
+    assert "did not finish responding" in str(caught.value)
+
+
+@pytest.mark.django_db
+def test_create_new_account_on_a_linked_row_repoints_the_link(monkeypatch):
+    owner, checking, connection = _linked_owner_and_checking(monkeypatch)
+    make_household(owner)
+
+    save_account_links(
+        owner, connection.pk,
+        [{"simplefin_account_id": "CON-1:sf-checking", "action": "create", "name": "Synthetic New", "account_type": Account.Type.CHECKING}],
+    )
+
+    link = AccountLink.objects.get(connection=connection, simplefin_account_id="CON-1:sf-checking")
+    assert link.account.name == "Synthetic New"
+    assert Account.objects.filter(pk=checking.pk).exists()
+
+
+def test_cron_range_with_step_matches():
+    from finance.simplefin_schedule import cron_matches
+
+    tz = dt_utc.utc
+    assert cron_matches("0 6-18/6 * * *", datetime(2026, 10, 1, 12, 0, tzinfo=tz))
+    assert cron_matches("0 6-18/6 * * *", datetime(2026, 10, 1, 18, 0, tzinfo=tz))
+    assert not cron_matches("0 6-18/6 * * *", datetime(2026, 10, 1, 9, 0, tzinfo=tz))
+    assert not cron_matches("0 6-18/6 * * *", datetime(2026, 10, 1, 0, 0, tzinfo=tz))
