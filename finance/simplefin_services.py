@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.db import transaction
+from django.db.models import Max
 from django.utils import timezone
 
 from finance.csv_import.fingerprint import transaction_fingerprint
@@ -328,16 +329,14 @@ def _accounts_by_simplefin_id(payload: dict) -> dict[str, dict]:
 
 
 def _upsert_snapshot(account, *, snapshot_date, amount_minor, currency, batch):
-    defaults = {"amount_minor": amount_minor, "currency": currency}
-    if batch is not None:
-        # Without a new batch, keep the snapshot tied to the batch that first
-        # recorded it, so undoing that batch still removes it.
-        defaults["import_batch"] = batch
+    # A snapshot stays tied to the sync that first recorded its date, so
+    # undoing a later batch never deletes an earlier day's balance.
     BalanceSnapshot.objects.update_or_create(
         account=account,
         snapshot_date=snapshot_date,
         source=BalanceSnapshot.Source.SIMPLEFIN,
-        defaults=defaults,
+        defaults={"amount_minor": amount_minor, "currency": currency},
+        create_defaults={"amount_minor": amount_minor, "currency": currency, "import_batch": batch},
     )
 
 
@@ -375,7 +374,7 @@ def _new_transaction(account, link, item, source_id, *, row_number):
     )
 
 
-def _import_transactions(account, link, remote, make_batch, *, needs_coverage):
+def _import_transactions(account, link, remote, make_batch, *, coverage_start, needs_coverage):
     """Import new posted rows; return (count, batch or None).
 
     A batch is created when there are new rows, or when the sync covers dates
@@ -396,18 +395,57 @@ def _import_transactions(account, link, remote, make_batch, *, needs_coverage):
         source_id = _posted_source_id(item)
         if not source_id or source_id in existing_ids:
             continue
-        txn = _new_transaction(account, link, item, source_id, row_number=len(created) + 1)
+        txn = _new_transaction(account, link, item, source_id, row_number=1)
         if txn is not None:
             created.append(txn)
             existing_ids.add(source_id)
-    if not created and not needs_coverage:
-        return 0, None
-    batch = make_batch(min((txn.transaction_date for txn in created), default=None))
-    for txn in created:
+    late = [txn for txn in created if txn.transaction_date < coverage_start]
+    current = [txn for txn in created if txn.transaction_date >= coverage_start]
+    _attach_late_rows(account, link, late)
+    batch = make_batch() if current or needs_coverage else None
+    for row_number, txn in enumerate(current, start=1):
         txn.import_batch = batch
-    if created:
-        Transaction.objects.bulk_create(created)
+        txn.source_row_number = row_number
+    if current:
+        Transaction.objects.bulk_create(current)
     return len(created), batch
+
+
+def _attach_late_rows(account, link, late):
+    """Store late-posted rows in the batch already covering their date.
+
+    Every date before the new batch's start is covered by an active batch, so
+    a late row joins that batch rather than stretching the new batch's range
+    back over it: undoing the earlier batch then removes its whole period.
+    """
+    if not late:
+        return
+    batches = list(_active_link_batches(account, link).order_by("-date_range_start", "-pk"))
+    next_row = {}
+    for txn in late:
+        owner = next(
+            (batch for batch in batches if batch.date_range_start <= txn.transaction_date <= batch.date_range_end),
+            None,
+        )
+        if owner is None:  # pragma: no cover - dates before the first gap are always covered
+            raise SimpleFinError("A SimpleFIN transaction falls outside every import.")
+        if owner.pk not in next_row:
+            last = owner.transactions.aggregate(Max("source_row_number"))["source_row_number__max"] or 0
+            next_row[owner.pk] = last + 1
+        txn.import_batch = owner
+        txn.source_row_number = next_row[owner.pk]
+        next_row[owner.pk] += 1
+    Transaction.objects.bulk_create(late)
+
+
+def _active_link_batches(account, link):
+    return ImportBatch.objects.filter(
+        account=account,
+        source=ImportBatch.Source.SIMPLEFIN,
+        simplefin_account_id=link.simplefin_account_id,
+        status=ImportBatch.Status.ACTIVE,
+        archived_at__isnull=True,
+    )
 
 
 def _first_uncovered_date(account, link, end):
@@ -419,15 +457,8 @@ def _first_uncovered_date(account, link, end):
     """
     cursor = link.cutover_date
     ranges = (
-        ImportBatch.objects.filter(
-            account=account,
-            source=ImportBatch.Source.SIMPLEFIN,
-            simplefin_account_id=link.simplefin_account_id,
-            status=ImportBatch.Status.ACTIVE,
-            archived_at__isnull=True,
-            date_range_end__gte=cursor,
-            date_range_start__lte=end,
-        )
+        _active_link_batches(account, link)
+        .filter(date_range_end__gte=cursor, date_range_start__lte=end)
         .order_by("date_range_start")
         .values_list("date_range_start", "date_range_end")
     )
@@ -493,14 +524,16 @@ def _sync_one_link(person, connection, link, remote, synced_at, payload) -> int:
     start = _first_uncovered_date(account, link, end)
     needs_coverage = start <= end
 
-    def make_batch(earliest_new):
-        range_start = min(start, earliest_new) if earliest_new else start
-        return _ensure_batch(person, account, connection, link, synced_at, range_start, end)
+    def make_batch():
+        # The range never reaches back before start: those dates are covered.
+        return _ensure_batch(person, account, connection, link, synced_at, start, max(start, end))
 
     if link.mode == AccountLink.Mode.TRANSACTIONS:
-        imported, batch = _import_transactions(account, link, remote, make_batch, needs_coverage=needs_coverage)
+        imported, batch = _import_transactions(
+            account, link, remote, make_batch, coverage_start=start, needs_coverage=needs_coverage
+        )
     else:
-        imported, batch = 0, (make_batch(None) if needs_coverage else None)
+        imported, batch = 0, (make_batch() if needs_coverage else None)
     _upsert_snapshot(
         account,
         snapshot_date=balance_date,
