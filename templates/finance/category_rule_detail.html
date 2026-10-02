@@ -3,6 +3,9 @@
 {% block content %}
 <h1 class="mb-4 text-2xl font-bold">Rule: {{ rule.description_contains }}</h1>
 <p class="mb-4"><a class="link" href="{% url 'category-rule-list' %}">All rules</a></p>
+{% if rule.inactive %}
+<p role="status" class="alert mb-4" data-rule-inactive="true">Inactive: this personal rule's category belongs to a household you are no longer a member of.</p>
+{% endif %}
 {% if apply_error %}<p class="errorlist text-error mb-4" role="alert">{{ apply_error }}</p>{% endif %}
 <form method="post" class="max-w-lg mb-8">
   {% csrf_token %}
@@ -55,7 +58,7 @@
 <form method="post" class="mb-8">
   {% csrf_token %}
   <input type="hidden" name="action" value="apply">
-  <button type="submit" class="btn btn-primary"{% if not rule.enabled %} disabled{% endif %}>Apply to matching transactions</button>
+  <button type="submit" class="btn btn-primary"{% if not rule.enabled or rule.inactive %} disabled{% endif %}>Apply to matching transactions</button>
 </form>
 <h2 class="mb-3 text-xl font-semibold">Application history</h2>
 <div class="overflow-x-auto">
@@ -73,12 +76,16 @@
         <td>{{ application.applied_at }}</td>
         <td>{{ application.applied_by.display_name }}</td>
         <td>
+          {% if application.reversed_at %}
+          Reversed
+          {% else %}
           <form method="post">
             {% csrf_token %}
             <input type="hidden" name="action" value="reverse">
             <input type="hidden" name="application_id" value="{{ application.pk }}">
             <button type="submit" class="btn btn-sm">Reverse</button>
           </form>
+          {% endif %}
         </td>
       </tr>
     {% empty %}

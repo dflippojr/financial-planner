@@ -765,3 +765,78 @@ def test_reversing_an_older_application_keeps_a_newer_rules_category():
 
     txn.refresh_from_db()
     assert txn.category_id == dining(household).pk
+
+
+@pytest.mark.django_db
+def test_reversing_later_then_earlier_application_restores_original_category():
+    owner = make_person("owner-chain")
+    household = make_household(owner)
+    account = make_account(owner)
+    txn = make_transaction(owner, account, fingerprint="e2".ljust(64, "0"))
+    first = save_category_rule(
+        owner, owner_kind="personal", description_contains="kroger", account_id=None,
+        min_amount_minor=None, max_amount_minor=None, category_id=groceries(household).pk, priority=0,
+    )
+    first_application, _skipped = apply_rule(owner, first.pk)
+    set_rule_enabled(owner, first.pk, False)
+    second = save_category_rule(
+        owner, owner_kind="personal", description_contains="kroger", account_id=None,
+        min_amount_minor=None, max_amount_minor=None, category_id=dining(household).pk, priority=1,
+    )
+    second_application, _skipped = apply_rule(owner, second.pk)
+    txn.refresh_from_db()
+    assert txn.category_id == dining(household).pk
+
+    reverse_application(owner, second_application.pk)
+    txn.refresh_from_db()
+    assert txn.category_id == groceries(household).pk
+
+    reverse_application(owner, first_application.pk)
+    txn.refresh_from_db()
+    assert txn.category_id is None
+
+
+@pytest.mark.django_db
+def test_personal_rule_does_not_apply_former_household_category_after_move():
+    from finance.lifecycle_services import leave_household
+
+    owner = make_person("owner-move")
+    stayer = make_person("stayer-move")
+    household_a = make_household(owner, stayer, name="Synthetic Household A")
+    save_category_rule(
+        owner, owner_kind="personal", description_contains="kroger", account_id=None,
+        min_amount_minor=None, max_amount_minor=None, category_id=groceries(household_a).pk, priority=0,
+    )
+    leave_household(owner)
+    household_b = make_household(owner, name="Synthetic Household B")
+    shared_b = make_account(owner, name="Shared B", scope=Account.Scope.HOUSEHOLD, household=household_b)
+    txn = make_transaction(owner, shared_b, fingerprint="e3".ljust(64, "0"))
+
+    apply_enabled_rules_to_transactions(owner, [txn])
+
+    txn.refresh_from_db()
+    assert txn.category_id is None
+    assert groceries(household_a).household_id != household_b.pk
+
+
+@pytest.mark.django_db
+def test_rules_list_flags_personal_rule_inactive_after_household_change():
+    from finance.lifecycle_services import leave_household
+
+    owner = make_person("owner-inactive")
+    stayer = make_person("stayer-inactive")
+    household_a = make_household(owner, stayer, name="Synthetic Household A")
+    save_category_rule(
+        owner, owner_kind="personal", description_contains="kroger", account_id=None,
+        min_amount_minor=None, max_amount_minor=None, category_id=groceries(household_a).pk, priority=0,
+    )
+    leave_household(owner)
+    make_household(owner, name="Synthetic Household B")
+    client = Client()
+    client.force_login(owner.user)
+
+    page = client.get(reverse("category-rule-list")).content.decode()
+
+    assert 'data-rule-inactive="true"' in page
+    assert "Inactive" in page
+    assert "kroger" in page

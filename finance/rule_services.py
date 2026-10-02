@@ -163,15 +163,31 @@ def _people_who_can_see(account):
     )
 
 
+def personal_rule_is_inactive(rule):
+    if not rule.owner_person_id:
+        return False
+    cached = getattr(rule, "_cached_inactive", None)
+    if cached is None:
+        cached = not Membership.objects.filter(
+            person_id=rule.owner_person_id,
+            household_id=rule.category.household_id,
+            ended_at__isnull=True,
+        ).exists()
+        rule._cached_inactive = cached
+    return cached
+
+
 def ordered_rules_for_account(account):
-    personal = list(
-        CategoryRule.objects.filter(
+    personal = [
+        rule
+        for rule in CategoryRule.objects.filter(
             enabled=True,
             owner_household__isnull=True,
             owner_person_id__in=_people_who_can_see(account),
         ).select_related("category", "account")
         .order_by("priority", "pk")
-    )
+        if not personal_rule_is_inactive(rule)
+    ]
     if account.scope != Account.Scope.HOUSEHOLD:
         return personal
     household = list(
@@ -202,8 +218,16 @@ def rule_matches_transaction(rule, txn):
     if rule.owner_household_id:
         if txn.account.scope != Account.Scope.HOUSEHOLD or txn.account.household_id != rule.owner_household_id:
             return False
-    elif rule.owner_person_id and txn.account_id not in _owner_account_ids(rule):
-        return False
+    elif rule.owner_person_id:
+        if personal_rule_is_inactive(rule):
+            return False
+        if txn.account_id not in _owner_account_ids(rule):
+            return False
+        if (
+            txn.account.scope == Account.Scope.HOUSEHOLD
+            and txn.account.household_id != rule.category.household_id
+        ):
+            return False
     return True
 
 
@@ -244,7 +268,12 @@ def _matching_queryset(person, rule):
     if rule.owner_household_id:
         qs = qs.filter(account__scope=Account.Scope.HOUSEHOLD, account__household_id=rule.owner_household_id)
     elif rule.owner_person_id:
-        qs = qs.filter(account_id__in=_personal_account_ids(rule.owner_person))
+        if personal_rule_is_inactive(rule):
+            return qs.none()
+        qs = qs.filter(account_id__in=_personal_account_ids(rule.owner_person)).filter(
+            Q(account__scope=Account.Scope.PRIVATE)
+            | Q(account__scope=Account.Scope.HOUSEHOLD, account__household_id=rule.category.household_id)
+        )
     # Match descriptions in Python with casefold, exactly like automatic
     # application, so preview, manual apply, and auto-apply agree (database
     # icontains folds case differently, for example STRASSE versus Straße).
@@ -409,6 +438,8 @@ def reverse_application(principal, application_id):
     )
     if application is None:
         raise PermissionDenied(_DENIED)
+    if application.reversed_at is not None:
+        return ReverseResult(restored=0, skipped_manual=0)
     entries = list(
         RuleApplicationEntry.objects.visible_to(person)
         .select_related("transaction", "previous_category")
@@ -421,6 +452,7 @@ def reverse_application(principal, application_id):
         RuleApplicationEntry.objects.filter(
             transaction_id__in=[entry.transaction_id for entry in entries],
             application_id__gt=application.pk,
+            application__reversed_at__isnull=True,
         ).values_list("transaction_id", flat=True)
     )
     restored = 0
@@ -454,16 +486,21 @@ def reverse_application(principal, application_id):
         )
         _restore_refund_categories(txn, person)
         restored += 1
+    application.reversed_at = timezone.now()
+    application.save(update_fields=("reversed_at",))
     return ReverseResult(restored=restored, skipped_manual=skipped_manual)
 
 
 def list_visible_rules(principal):
     person = _person_for(principal)
-    return list(
+    rules = list(
         CategoryRule.objects.visible_to(person)
         .select_related("category", "account", "owner_person", "owner_household")
         .order_by("owner_household_id", "priority", "pk")
     )
+    for rule in rules:
+        rule.inactive = personal_rule_is_inactive(rule)
+    return rules
 
 
 def list_visible_applications(principal, rule):

@@ -770,6 +770,7 @@ class RuleApplication(models.Model):
     rule = models.ForeignKey(CategoryRule, on_delete=models.PROTECT, related_name="applications")
     applied_by = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="rule_applications")
     applied_at = models.DateTimeField(default=timezone.now)
+    reversed_at = models.DateTimeField(null=True, blank=True)
 
     class QuerySet(models.QuerySet):
         def visible_to(self, principal):

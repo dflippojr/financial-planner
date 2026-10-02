@@ -13,6 +13,7 @@ from .rule_services import (
     apply_rule,
     list_visible_applications,
     list_visible_rules,
+    personal_rule_is_inactive,
     preview_rule,
     reverse_application,
     save_category_rule,
@@ -149,6 +150,7 @@ def category_rule_detail(request, rule_id):
     rule = CategoryRule.objects.visible_to(request.user).select_related("category", "account").filter(pk=rule_id).first()
     if rule is None:
         raise Http404
+    rule.inactive = personal_rule_is_inactive(rule)
     action = request.POST.get("action") if request.method == "POST" else None
     form = _form_from_rule(rule, request.user, request.POST if action == "save" else None)
     errors = {}
@@ -156,6 +158,7 @@ def category_rule_detail(request, rule_id):
     if posted is not None:
         return posted
     rule, matches = _service_or_404(lambda: preview_rule(request.user, rule.pk))
+    rule.inactive = personal_rule_is_inactive(rule)
     return render(
         request,
         "finance/category_rule_detail.html",
