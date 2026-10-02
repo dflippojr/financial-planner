@@ -1413,3 +1413,46 @@ def test_a_truncated_response_is_a_simplefin_error(monkeypatch):
         fetch_accounts(ACCESS_URL)
     with pytest.raises(SimpleFinError):
         claim_access_url(CLAIM_URL)
+
+
+def test_account_keys_cannot_collide_through_colons():
+    from finance.simplefin_services import remote_account_key
+
+    first = remote_account_key({"conn_id": "a:b", "id": "c"})
+    second = remote_account_key({"conn_id": "a", "id": "b:c"})
+    bare = remote_account_key({"id": "a:b:c"})
+
+    assert len({first, second, bare}) == 3
+
+
+@pytest.mark.django_db
+def test_saving_links_keeps_a_link_to_an_archived_account(monkeypatch):
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner)
+    connection = connect_owner(owner, monkeypatch)
+    save_account_links(
+        owner,
+        connection.pk,
+        [
+            {
+                "simplefin_account_id": "CON-1:sf-checking",
+                "action": "link",
+                "account_id": checking.pk,
+                "cutover_date": date(2026, 3, 1),
+            }
+        ],
+    )
+    Account.objects.filter(pk=checking.pk).update(status=Account.Status.ARCHIVED, archived_at=timezone.now())
+    client = signed_in(owner)
+
+    page = client.get(reverse("simplefin-connections")).content.decode()
+    assert '<option value="keep" selected>Keep current link</option>' in page
+    saved = client.post(
+        reverse("simplefin-connections"),
+        {"intent": "link", "sf_id_0": "CON-1:sf-checking", "action_0": "keep", "account_id_0": "", "cutover_0": ""},
+        follow=True,
+    )
+
+    assert b"Choose an account to link" not in saved.content
+    assert AccountLink.objects.filter(connection=connection, account=checking).exists()

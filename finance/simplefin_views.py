@@ -163,10 +163,14 @@ def connections(request):
         for link in AccountLink.objects.select_related("account").filter(connection=connection)
     } if connection is not None else {}
     accounts = _linkable_accounts(person)
+    listed_ids = {account.pk for account in accounts}
     rows = []
     for remote in remotes:
         link, cutover = _cutover_for(remote, link_map)
-        rows.append({**remote, "link": link, "default_cutover": cutover})
+        # A link to an archived or hidden account cannot be shown in the
+        # account list; keep it unchanged unless the member picks another action.
+        unlisted = link is not None and link.account_id not in listed_ids
+        rows.append({**remote, "link": link, "link_unlisted": unlisted, "default_cutover": cutover})
     next_sync, can_sync_now = _schedule_state(connection)
     return render(
         request,

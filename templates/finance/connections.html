@@ -88,8 +88,9 @@
                 <input type="hidden" name="sf_id_{{ forloop.counter0 }}" value="{{ row.id }}">
                 <label class="sr-only" for="action-{{ forloop.counter0 }}">Action for {{ row.name }}</label>
                 <select id="action-{{ forloop.counter0 }}" class="select select-bordered select-sm mb-2" name="action_{{ forloop.counter0 }}">
+                  {% if row.link_unlisted %}<option value="keep" selected>Keep current link</option>{% endif %}
                   <option value="ignore"{% if not row.link %} selected{% endif %}>Ignore</option>
-                  <option value="link"{% if row.link %} selected{% endif %}>Link existing account</option>
+                  <option value="link"{% if row.link and not row.link_unlisted %} selected{% endif %}>Link existing account</option>
                   <option value="create">Create new account</option>
                 </select>
                 <label class="sr-only" for="account-{{ forloop.counter0 }}">Existing account for {{ row.name }}</label>
