@@ -328,15 +328,16 @@ def _accounts_by_simplefin_id(payload: dict) -> dict[str, dict]:
 
 
 def _upsert_snapshot(account, *, snapshot_date, amount_minor, currency, batch):
+    defaults = {"amount_minor": amount_minor, "currency": currency}
+    if batch is not None:
+        # Without a new batch, keep the snapshot tied to the batch that first
+        # recorded it, so undoing that batch still removes it.
+        defaults["import_batch"] = batch
     BalanceSnapshot.objects.update_or_create(
         account=account,
         snapshot_date=snapshot_date,
         source=BalanceSnapshot.Source.SIMPLEFIN,
-        defaults={
-            "amount_minor": amount_minor,
-            "currency": currency,
-            "import_batch": batch,
-        },
+        defaults=defaults,
     )
 
 
@@ -374,13 +375,11 @@ def _new_transaction(account, link, item, source_id, *, row_number):
     )
 
 
-def _import_transactions(account, link, remote, make_batch):
-    """Import new posted rows; return (count, batch).
+def _import_transactions(account, link, remote, make_batch, *, needs_coverage):
+    """Import new posted rows; return (count, batch or None).
 
-    A batch marks its date range as imported, so one is only created when
-    rows are new or the window genuinely has none. A sync whose rows are all
-    already stored adds no batch: the earlier batches cover them, and undoing
-    one of those must bring back its missing-import warning.
+    A batch is created when there are new rows, or when the sync covers dates
+    no active batch covers yet (needs_coverage).
     """
     existing_ids = set(
         Transaction.objects.filter(
@@ -393,26 +392,50 @@ def _import_transactions(account, link, remote, make_batch):
         .values_list("source_transaction_id", flat=True)
     )
     created = []
-    saw_stored = False
     for item in remote.get("transactions") or []:
         source_id = _posted_source_id(item)
-        if not source_id:
-            continue
-        if source_id in existing_ids:
-            saw_stored = True
+        if not source_id or source_id in existing_ids:
             continue
         txn = _new_transaction(account, link, item, source_id, row_number=len(created) + 1)
         if txn is not None:
             created.append(txn)
             existing_ids.add(source_id)
-    if not created and saw_stored:
+    if not created and not needs_coverage:
         return 0, None
-    batch = make_batch()
+    batch = make_batch(min((txn.transaction_date for txn in created), default=None))
     for txn in created:
         txn.import_batch = batch
     if created:
         Transaction.objects.bulk_create(created)
     return len(created), batch
+
+
+def _first_uncovered_date(account, link, end):
+    """First date from the cut-over that no active batch for this link covers.
+
+    Each sync's batch covers only dates not already covered, so undoing one
+    batch uncovers its own dates and brings back the missing-import warning
+    instead of being hidden by a later batch's range.
+    """
+    cursor = link.cutover_date
+    ranges = (
+        ImportBatch.objects.filter(
+            account=account,
+            source=ImportBatch.Source.SIMPLEFIN,
+            simplefin_account_id=link.simplefin_account_id,
+            status=ImportBatch.Status.ACTIVE,
+            archived_at__isnull=True,
+            date_range_end__gte=cursor,
+            date_range_start__lte=end,
+        )
+        .order_by("date_range_start")
+        .values_list("date_range_start", "date_range_end")
+    )
+    for range_start, range_end in ranges:
+        if range_start > cursor:
+            break
+        cursor = max(cursor, range_end + timedelta(days=1))
+    return cursor
 
 
 def _ensure_batch(person, account, connection, link, synced_at, start, end):
@@ -466,15 +489,18 @@ def _sync_one_link(person, connection, link, remote, synced_at, payload) -> int:
                 batch=None,
             )
         return 0
-    start = link.cutover_date
-    end = max(start, balance_date, timezone.localdate())
-    def make_batch():
-        return _ensure_batch(person, account, connection, link, synced_at, start, end)
+    end = max(link.cutover_date, balance_date, timezone.localdate())
+    start = _first_uncovered_date(account, link, end)
+    needs_coverage = start <= end
+
+    def make_batch(earliest_new):
+        range_start = min(start, earliest_new) if earliest_new else start
+        return _ensure_batch(person, account, connection, link, synced_at, range_start, end)
 
     if link.mode == AccountLink.Mode.TRANSACTIONS:
-        imported, batch = _import_transactions(account, link, remote, make_batch)
+        imported, batch = _import_transactions(account, link, remote, make_batch, needs_coverage=needs_coverage)
     else:
-        imported, batch = 0, make_batch()
+        imported, batch = 0, (make_batch(None) if needs_coverage else None)
     _upsert_snapshot(
         account,
         snapshot_date=balance_date,

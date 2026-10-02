@@ -1208,3 +1208,86 @@ def test_a_sync_with_only_stored_rows_does_not_hide_an_undone_import(monkeypatch
         today=date(2026, 4, 1),
     )
     assert report.periods[0].missing_import is True
+
+
+def _link_checking(owner, monkeypatch, payloads):
+    """Connect and link a checking account; each sync returns the next payload."""
+    checking = make_account(owner)
+    connection = connect_owner(owner, monkeypatch, payloads[0])
+    queue = list(payloads)
+    monkeypatch.setattr(
+        "finance.simplefin_services.fetch_accounts", lambda *args, **kwargs: queue.pop(0) if len(queue) > 1 else queue[0]
+    )
+    save_account_links(
+        owner,
+        connection.pk,
+        [
+            {
+                "simplefin_account_id": "CON-1:sf-checking",
+                "action": "link",
+                "account_id": checking.pk,
+                "cutover_date": date(2026, 3, 1),
+            }
+        ],
+    )
+    return checking, connection
+
+
+def _sync_on(owner, connection, monkeypatch, day):
+    monkeypatch.setattr("django.utils.timezone.localdate", lambda *args, **kwargs: day)
+    sync_connection(owner, connection.pk, ignore_rate_limit=True)
+
+
+def _month_missing(owner, account, first, last):
+    from finance.cash_flow import GROUPING_MONTH, cash_flow_report
+
+    report = cash_flow_report(
+        owner, date_from=first, date_to=last, grouping=GROUPING_MONTH, account=account, today=date(2026, 5, 1)
+    )
+    return report.periods[0].missing_import
+
+
+@pytest.mark.django_db
+def test_a_later_sync_covers_only_dates_not_already_imported(monkeypatch):
+    owner = make_person("owner")
+    make_household(owner)
+    march = posted_txn(txn_id="t-1", day=12, amount="-25.00")
+    april = posted_txn(txn_id="t-2", day=1, amount="-30.00", posted=epoch(2026, 4, 10))
+    checking, connection = _link_checking(
+        owner, monkeypatch, [account_payload(transactions=[march]), account_payload(transactions=[march, april])]
+    )
+    _sync_on(owner, connection, monkeypatch, date(2026, 3, 31))
+    first = ImportBatch.objects.get(account=checking, source=ImportBatch.Source.SIMPLEFIN)
+    _sync_on(owner, connection, monkeypatch, date(2026, 4, 30))
+
+    undo_import_batch(owner, checking.pk, first.pk)
+
+    assert _month_missing(owner, checking, date(2026, 3, 1), date(2026, 3, 31)) is True
+    assert _month_missing(owner, checking, date(2026, 4, 1), date(2026, 4, 30)) is False
+
+
+@pytest.mark.django_db
+def test_a_sync_with_only_stored_rows_still_covers_newly_elapsed_dates(monkeypatch):
+    owner = make_person("owner")
+    make_household(owner)
+    march = posted_txn(txn_id="t-1", day=12, amount="-25.00")
+    checking, connection = _link_checking(owner, monkeypatch, [account_payload(transactions=[march])])
+    _sync_on(owner, connection, monkeypatch, date(2026, 3, 31))
+    _sync_on(owner, connection, monkeypatch, date(2026, 4, 30))
+
+    assert _month_missing(owner, checking, date(2026, 4, 1), date(2026, 4, 30)) is False
+
+
+@pytest.mark.django_db
+def test_a_repeat_sync_keeps_the_balance_snapshots_original_batch(monkeypatch):
+    owner = make_person("owner")
+    make_household(owner)
+    march = posted_txn(txn_id="t-1", day=12, amount="-25.00")
+    checking, connection = _link_checking(owner, monkeypatch, [account_payload(transactions=[march])])
+    _sync_on(owner, connection, monkeypatch, date(2026, 3, 31))
+    first = ImportBatch.objects.get(account=checking, source=ImportBatch.Source.SIMPLEFIN)
+    _sync_on(owner, connection, monkeypatch, date(2026, 3, 31))
+
+    undo_import_batch(owner, checking.pk, first.pk)
+
+    assert not BalanceSnapshot.objects.filter(account=checking, source=BalanceSnapshot.Source.SIMPLEFIN).exists()
