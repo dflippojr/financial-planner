@@ -1,0 +1,26 @@
+{% extends "finance/base.html" %}
+{% block title %}Confirm it's you · Financial Planner{% endblock %}
+{% block content %}
+<h1 class="mb-2 text-2xl font-bold">Confirm it's you</h1>
+<p class="mb-4">Confirm your identity to {{ action_label }}.</p>
+{% if auth_error %}<div role="alert" class="alert alert-error mb-3">{{ auth_error }}</div>{% endif %}
+{% include "finance/_messages.html" %}
+{% if show_google %}
+<form method="post" action="{% url 'reauth-google' %}" class="mb-4">
+  {% csrf_token %}
+  <input type="hidden" name="next" value="{{ next }}">
+  <input type="hidden" name="action" value="{{ action }}">
+  <button type="submit" class="btn btn-primary w-full">Confirm with Google</button>
+</form>
+{% if show_password %}<div class="divider">or</div>{% endif %}
+{% endif %}
+{% if show_password %}
+<form method="post">
+  {% csrf_token %}
+  {% include "finance/_form_fields.html" %}
+  <input type="hidden" name="next" value="{{ next }}">
+  <input type="hidden" name="action" value="{{ action }}">
+  <button type="submit" class="btn btn-primary w-full">Confirm</button>
+</form>
+{% endif %}
+{% endblock %}

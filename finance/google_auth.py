@@ -83,6 +83,34 @@ def google_uid(extra_data):
     return extra_data.get("sub") or extra_data.get("id")
 
 
+def google_reauth_identity_matches(user, extra_data):
+    uid = str(google_uid(extra_data) or "")
+    if not uid or user is None or not getattr(user, "is_authenticated", False):
+        return False
+    return SocialAccount.objects.filter(user=user, provider="google", uid=uid).exists()
+
+
+def google_reauth_is_recent(extra_data):
+    """Whether a Google confirmation round trip is fresh enough.
+
+    Google sends auth_time only to published, verified apps, so a household
+    app in testing mode normally gets just iat: proof of a fresh round trip
+    through the account chooser, not of a fresh password entry (an owner
+    decision recorded in docs/requirements.md). When auth_time is present,
+    it is the stricter check and is used instead.
+    """
+    extra_data = extra_data or {}
+    claim = "auth_time" if extra_data.get("auth_time") is not None else "iat"
+    try:
+        moment = int(extra_data.get(claim))
+    except (TypeError, ValueError):
+        return False
+    from django.utils import timezone
+
+    age = timezone.now().timestamp() - moment
+    return 0 <= age <= settings.GOOGLE_REAUTH_MAX_AGE_SECONDS
+
+
 def username_is_taken(username):
     return get_user_model().objects.filter(username=username).exists()
 

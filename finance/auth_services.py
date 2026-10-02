@@ -232,6 +232,9 @@ def complete_member_session(request, user):
     # it (such as CSV staging metadata) would push the expiry out again.
     login(request, user, backend="django.contrib.auth.backends.ModelBackend")
     request.session.set_expiry(timezone.now() + timedelta(seconds=settings.SESSION_COOKIE_AGE))
+    from .reauth import stamp_recent_auth
+
+    stamp_recent_auth(request)
 
 
 @transaction.atomic

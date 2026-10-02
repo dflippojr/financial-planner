@@ -516,7 +516,7 @@ def test_0008_backfill_marks_existing_categories_manual_or_inherited():
     from django.apps import apps
 
     backfill_category_source = importlib.import_module(
-        "finance.migrations.0008_category_rules"
+        "finance.migrations.0010_category_rules"
     ).backfill_category_source
 
     owner = make_person("owner")

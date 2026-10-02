@@ -255,7 +255,7 @@ Sensitive actions:
 Defaults recorded with the decision (owner may change):
 - **Ways to re-authenticate:**
   - A member with a password re-enters it.
-  - A member with Google re-signs in with Google, forced to a fresh login (`prompt=login`, with the ID token's `auth_time` checked).
+  - A member with Google confirms with a fresh Google round trip through the account chooser (`prompt=select_account`). Google sends `auth_time` only to published, verified apps, so a household app in testing mode cannot prove a fresh Google password entry. Owner decision (2026-10-01): accept the round trip for every member with Google, checking that the Google account matches and the ID token was just issued (`iat`). This is weaker than a password: someone at an unlocked browser that is still signed in to Google can pass it. If Google ever sends `auth_time`, the app checks that instead.
   - A member with both may use either.
   - Recovery codes are not accepted here.
 - **Where the timestamp lives:** the session, never a cookie the client can set. Signing out clears it.

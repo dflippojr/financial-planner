@@ -1,6 +1,6 @@
 # Core financial data model
 
-Updated: 2026-10-01. This document records the storage contract introduced by issue #4, the reimport rules from issue #6, correction history from issue #31, category/transfer/refund rules from issue #8, cash-flow reporting from issue #9, recurring-charge series from issue #17, and household share modes from issue #30. Provider parsing and Vanguard-specific activity meaning remain separate issues.
+Updated: 2026-10-01. This document records the storage contract introduced by issue #4, the reimport rules from issue #6, correction history from issue #31, category/transfer/refund rules from issue #8, cash-flow reporting from issue #9, recurring-charge series from issue #17, household share modes from issue #30, and SimpleFIN Bridge connections from issue #67. Provider parsing and Vanguard-specific activity meaning remain separate issues.
 
 ## People and sharing
 
@@ -57,4 +57,20 @@ The committed `synthetic_demo` fixture contains invented names, hashes, descript
 - Period totals call `income_and_spending_totals` for each window so transfer, refund, and investment rules are not re-derived. Optional account lists are intersected with `Account.objects.visible_to`.
 - Missing-import flags use active `ImportBatch` date ranges on those same visible selected accounts. A period is flagged when any selected account has no overlapping active batch; the flag is separate from the zero amounts.
 - Unverified `investment_activity` rows remain omitted from income and spending; the home view states that when an investment account is included in the selection.
+
+## SimpleFIN Bridge (verified from https://www.simplefin.org/protocol.html, 2026-10-01)
+
+Facts below are from the published protocol. They are not inferred from a live bank export.
+
+**Claim.** The setup token the member pastes is Base64 of a claim URL. The app POSTs to that URL once and stores the Access URL from a 200 response. The Access URL includes HTTP Basic credentials. Only `https` claim and access URLs are used. A 403 on claim means the token does not exist or was already claimed and may indicate compromise; the UI says so without echoing the token or URL.
+
+**Fetch.** Account data is `GET {access_url}/accounts` with optional `start-date` and `end-date` (Unix epoch; start inclusive, end exclusive). `pending=1` would include pending transactions; the default omits them. `balances-only=1` omits transaction arrays. `version=2` selects this protocol version. A 403 on `/accounts` means authentication failed or access was revoked. A 402 means payment is required.
+
+**Account Set.** `errlist` is the structured error list (required in v2). `errors` is a deprecated array of display strings. `connections` and `accounts` are required. Each Error has `code`, `msg` (user-facing), and optional `conn_id` / `account_id`. Prefixes are `gen`, `con`, and `act`. Unknown subcodes fall back to the prefix. `msg` values are sanitized before display and never logged with access URLs.
+
+**Account.** `id` is unique within a Connection (not globally). `name` is the account label. `conn_id` ties it to a Connection. `currency` is an ISO 4217 code, or a URL for a custom currency (points, miles). This app rejects any currency that is not ISO 4217 `USD`. `balance` and optional `available-balance` are numeric strings as of `balance-date` (Unix epoch). The protocol Account object has no account-type field; institution comes from the matching Connection `name`. The member chooses the app account type when linking or creating.
+
+**Transaction.** `id` is unique within that SimpleFIN account. `posted` is a Unix epoch; it may be `0` when pending. `amount` is a numeric string: **positive means money deposited into the account** (same sign as this app). `description` is required. Optional `pending` is true when not yet posted (default false/absent). This app imports only posted transactions (`pending` not true and `posted` not 0), using the local calendar date of `posted` as `transaction_date`, and stores `id` in `source_transaction_id`.
+
+**Storage.** `SimpleFinConnection` belongs to one `Person`. The Access URL is Fernet-encrypted (`FIELD_ENCRYPTION_KEY`) and is never rendered, logged, or placed in errors. `AccountLink` maps one app `Account` to one SimpleFIN account id on that connection, with a cut-over date and mode `transactions` (checking, savings, credit card) or `balances_only` (investment). `BalanceSnapshot` stores one dated balance in minor units per (`account`, `date`, `source`) where source is `simplefin` or `manual`, with optional `ImportBatch` provenance. Each linked account that receives new rows in a sync gets an `ImportBatch` with source `simplefin` and the remote `simplefin_account_id` of that link. If SimpleFIN reports an error tied to that account (`errlist` `account_id` or `conn_id`) or omits the transaction list, the app records the error and may store a balance snapshot, but it does not create an active import batch covering cut-over through today, so missing-import warnings stay meaningful. Re-syncs skip an active transaction only when it came from a SimpleFIN batch for the same remote account id; CSV and other-source ids, and ids from a previous remote account after a relink, are not treated as duplicates. Disconnect deletes the connection and ciphertext and keeps imported rows. Only the owner can see or manage the connection.
 
