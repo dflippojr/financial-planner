@@ -11,7 +11,15 @@ from .cash_flow import MAX_REPORT_DATE, MAX_REPORT_PERIODS, default_date_range, 
 from .projection import DEFAULT_HORIZON, HORIZONS
 
 from .auth_services import validated_username
-from .models import Account, Category, PlannedItem, RecurringSeries, Transaction, TransactionCorrectionHistory
+from .models import (
+    Account,
+    Category,
+    PlannedItem,
+    RecurringSeries,
+    SavingsGoal,
+    Transaction,
+    TransactionCorrectionHistory,
+)
 
 
 MIN_SIGNED_BIGINT = -(2**63)
@@ -575,6 +583,88 @@ class PlannedItemForm(forms.Form):
             "scope": self.cleaned_data["scope"],
             "category": self.cleaned_data.get("category"),
             "replaces_series": self.cleaned_data.get("replaces_series"),
+        }
+
+
+class SavingsGoalForm(forms.Form):
+    name = forms.CharField(max_length=150)
+    target_amount = forms.DecimalField(
+        min_value=Decimal("0.01"),
+        max_digits=19,
+        decimal_places=2,
+        label="Target amount",
+        widget=forms.TextInput(attrs={"inputmode": "decimal"}),
+    )
+    target_date = forms.DateField(widget=forms.DateInput(attrs={"type": "date"}))
+    scope = forms.ChoiceField(choices=((SavingsGoal.Scope.PRIVATE, "Private"),))
+    linked_account = forms.ModelChoiceField(
+        queryset=Account.objects.none(),
+        required=False,
+        empty_label="No linked account",
+    )
+    manual_amount = forms.DecimalField(
+        required=False,
+        max_digits=19,
+        decimal_places=2,
+        label="Manual current amount",
+        help_text="Used when there is no linked account, or it has no balance yet.",
+        widget=forms.TextInput(attrs={"inputmode": "decimal"}),
+    )
+    manual_amount_date = forms.DateField(
+        required=False,
+        label="Manual amount as of",
+        widget=forms.DateInput(attrs={"type": "date"}),
+    )
+
+    def __init__(self, *args, principal=None, has_household=False, household_only=False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["linked_account"].queryset = Account.objects.visible_to(principal).order_by("name", "pk")
+        if household_only:
+            # Only a goal's owner can take a household goal private.
+            self.fields["scope"].choices = ((SavingsGoal.Scope.HOUSEHOLD, SavingsGoal.Scope.HOUSEHOLD.label),)
+        elif has_household:
+            self.fields["scope"].choices = SavingsGoal.Scope.choices
+
+    def clean_target_amount(self):
+        amount = self.cleaned_data["target_amount"]
+        minor_units = int(amount * 100)
+        if minor_units <= 0 or minor_units > MAX_SIGNED_BIGINT:
+            raise ValidationError(AMOUNT_RANGE_ERROR)
+        return amount
+
+    def clean_manual_amount(self):
+        amount = self.cleaned_data.get("manual_amount")
+        if amount is None:
+            return amount
+        minor_units = int(amount * 100)
+        if not MIN_SIGNED_BIGINT <= minor_units <= MAX_SIGNED_BIGINT:
+            raise ValidationError(AMOUNT_RANGE_ERROR)
+        return amount
+
+    def clean_manual_amount_date(self):
+        value = self.cleaned_data.get("manual_amount_date")
+        if value is not None and value > timezone.localdate():
+            raise ValidationError("Manual amount date cannot be in the future.")
+        return value
+
+    def clean(self):
+        cleaned = super().clean()
+        manual_amount = cleaned.get("manual_amount")
+        manual_amount_date = cleaned.get("manual_amount_date")
+        if (manual_amount is None) != (manual_amount_date is None):
+            self.add_error("manual_amount_date", "Enter both a manual amount and its date, or neither.")
+        return cleaned
+
+    def save_payload(self):
+        manual_amount = self.cleaned_data.get("manual_amount")
+        return {
+            "name": self.cleaned_data["name"],
+            "target_amount_minor": int(self.cleaned_data["target_amount"] * 100),
+            "target_date": self.cleaned_data["target_date"],
+            "scope": self.cleaned_data["scope"],
+            "linked_account": self.cleaned_data.get("linked_account"),
+            "manual_amount_minor": int(manual_amount * 100) if manual_amount is not None else None,
+            "manual_amount_date": self.cleaned_data.get("manual_amount_date"),
         }
 
 
