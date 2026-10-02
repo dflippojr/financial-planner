@@ -1291,3 +1291,45 @@ def test_a_repeat_sync_keeps_the_balance_snapshots_original_batch(monkeypatch):
     undo_import_batch(owner, checking.pk, first.pk)
 
     assert not BalanceSnapshot.objects.filter(account=checking, source=BalanceSnapshot.Source.SIMPLEFIN).exists()
+
+
+@pytest.mark.django_db
+def test_a_late_posted_row_joins_the_batch_covering_its_date(monkeypatch):
+    owner = make_person("owner")
+    make_household(owner)
+    march = posted_txn(txn_id="t-1", day=12, amount="-25.00")
+    late = posted_txn(txn_id="t-late", day=31, amount="-40.00")
+    april = posted_txn(txn_id="t-2", day=1, amount="-30.00", posted=epoch(2026, 4, 10))
+    checking, connection = _link_checking(
+        owner, monkeypatch, [account_payload(transactions=[march]), account_payload(transactions=[march, late, april])]
+    )
+    _sync_on(owner, connection, monkeypatch, date(2026, 3, 31))
+    first = ImportBatch.objects.get(account=checking, source=ImportBatch.Source.SIMPLEFIN)
+    _sync_on(owner, connection, monkeypatch, date(2026, 4, 30))
+
+    assert Transaction.objects.get(source_transaction_id="t-late").import_batch_id == first.pk
+    undo_import_batch(owner, checking.pk, first.pk)
+
+    assert _month_missing(owner, checking, date(2026, 3, 1), date(2026, 3, 31)) is True
+    assert _month_missing(owner, checking, date(2026, 4, 1), date(2026, 4, 30)) is False
+
+
+@pytest.mark.django_db
+def test_undoing_a_later_batch_keeps_an_earlier_days_balance(monkeypatch):
+    owner = make_person("owner")
+    make_household(owner)
+    march = posted_txn(txn_id="t-1", day=12, amount="-25.00")
+    april = posted_txn(txn_id="t-2", day=1, amount="-30.00", posted=epoch(2026, 4, 10))
+    checking, connection = _link_checking(
+        owner, monkeypatch, [account_payload(transactions=[march]), account_payload(transactions=[march, april])]
+    )
+    _sync_on(owner, connection, monkeypatch, date(2026, 3, 31))
+    first = ImportBatch.objects.get(account=checking, source=ImportBatch.Source.SIMPLEFIN)
+    # The provider still reports the March 20 balance date during April's sync.
+    _sync_on(owner, connection, monkeypatch, date(2026, 4, 30))
+    later = ImportBatch.objects.filter(account=checking, source=ImportBatch.Source.SIMPLEFIN).exclude(pk=first.pk).get()
+
+    undo_import_batch(owner, checking.pk, later.pk)
+
+    snapshot = BalanceSnapshot.objects.get(account=checking, source=BalanceSnapshot.Source.SIMPLEFIN)
+    assert snapshot.import_batch_id == first.pk
