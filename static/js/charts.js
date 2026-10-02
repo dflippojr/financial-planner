@@ -80,8 +80,21 @@
     },
   };
 
+  // Theme colors arrive in whatever syntax the browser computes (rgb() or
+  // oklch() for daisyUI themes). Paint one pixel to read them back as RGB, so
+  // any CSS color can take a new alpha.
   function withAlpha(color, alpha) {
-    return color.replace("rgb(", "rgba(").replace(")", ", " + alpha + ")");
+    var probe = document.createElement("canvas");
+    probe.width = 1;
+    probe.height = 1;
+    var context = probe.getContext("2d", { willReadFrequently: true });
+    if (!context) {
+      return color;
+    }
+    context.fillStyle = color;
+    context.fillRect(0, 0, 1, 1);
+    var pixel = context.getImageData(0, 0, 1, 1).data;
+    return "rgba(" + pixel[0] + ", " + pixel[1] + ", " + pixel[2] + ", " + alpha + ")";
   }
 
   function cashFlowChart(canvas, data, palette) {
