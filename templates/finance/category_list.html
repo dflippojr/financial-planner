@@ -2,6 +2,9 @@
 {% block title %}Categories · Financial Planner{% endblock %}
 {% block content %}
 <h1 class="mb-4 text-2xl font-bold">Categories</h1>
+{% if household %}
+<p class="mb-4"><a class="link" href="{% url 'category-rule-list' %}">Categorization rules</a></p>
+{% endif %}
 {% if not household %}
 <div role="status" class="alert">Join or create a household to edit the shared category list.</div>
 {% else %}

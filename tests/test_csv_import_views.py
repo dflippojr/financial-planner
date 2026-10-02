@@ -501,3 +501,31 @@ def test_undo_archives_one_batch_and_foreign_accounts_are_404(staging_settings):
     assert private_undo.content == missing_undo.content
     assert ImportBatch.objects.get(pk=earlier_id).status == ImportBatch.Status.ACTIVE
 
+
+
+@pytest.mark.django_db
+def test_committing_an_import_applies_enabled_category_rules(staging_settings):
+    from finance.category_services import ensure_household_categories
+    from finance.models import Category
+    from finance.rule_services import apply_rule, save_category_rule
+
+    user, person = make_person("owner")
+    household = Household.objects.create(name="Synthetic Household")
+    Membership.objects.create(person=person, household=household)
+    ensure_household_categories(household)
+    groceries = Category.objects.get(household=household, name="Groceries")
+    rule = save_category_rule(
+        person, owner_kind="personal", description_contains="grocer", account_id=None,
+        min_amount_minor=None, max_amount_minor=None, category_id=groceries.pk, priority=0,
+    )
+    apply_rule(person, rule.pk)
+    account = Account.objects.create(name="Synthetic Checking", account_type="checking", owner=person)
+    client = Client()
+    client.force_login(user)
+    token = upload(client, account).context["mapping_form"].initial["token"]
+
+    client.post(reverse("csv-import-preview", args=(account.pk,)), commit_data(token))
+
+    imported = Transaction.objects.get(account=account)
+    assert imported.category_id == groceries.pk
+    assert imported.category_source == Transaction.CategorySource.RULE

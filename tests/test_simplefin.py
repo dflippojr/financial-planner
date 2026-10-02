@@ -1462,6 +1462,30 @@ def test_saving_links_keeps_a_link_to_an_archived_account(monkeypatch):
 
 
 @pytest.mark.django_db
+def test_a_confirmed_rule_categorizes_newly_synced_transactions(monkeypatch):
+    from finance.models import Category
+    from finance.rule_services import apply_rule, save_category_rule
+
+    owner = make_person("owner")
+    household = make_household(owner)
+    groceries = Category.objects.get(household=household, name="Groceries")
+    rule = save_category_rule(
+        owner, owner_kind="personal", description_contains="stream", account_id=None,
+        min_amount_minor=None, max_amount_minor=None, category_id=groceries.pk, priority=0,
+    )
+    apply_rule(owner, rule.pk)
+    checking, connection = _link_checking(
+        owner, monkeypatch, [account_payload(transactions=[posted_txn(txn_id="t-1", day=12, amount="-25.00")])]
+    )
+
+    _sync_on(owner, connection, monkeypatch, date(2026, 3, 31))
+
+    synced = Transaction.objects.get(account=checking, source_transaction_id="t-1")
+    assert synced.category_id == groceries.pk
+    assert synced.category_source == Transaction.CategorySource.RULE
+
+
+@pytest.mark.django_db
 def test_connecting_simplefin_needs_a_fresh_confirmation(monkeypatch):
     owner = make_person("owner")
     make_household(owner)

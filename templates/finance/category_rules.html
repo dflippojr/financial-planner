@@ -1,0 +1,68 @@
+{% extends "finance/base.html" %}
+{% block title %}Categorization rules · Financial Planner{% endblock %}
+{% block content %}
+<h1 class="mb-4 text-2xl font-bold">Categorization rules</h1>
+<p class="mb-4"><a class="link" href="{% url 'category-list' %}">Back to categories</a></p>
+{% if unreachable_applications %}
+<h2 class="mb-3 text-xl font-semibold">Changes from rules you can no longer open</h2>
+<p class="mb-3 max-w-2xl opacity-80">These rules belong to a household you left. You can still undo what they changed on your accounts.</p>
+<div class="overflow-x-auto mb-8">
+  <table class="table table-zebra">
+    <thead class="sticky top-0 z-10 bg-base-200">
+      <tr><th>Applied</th><th>Your transactions</th><th></th></tr>
+    </thead>
+    <tbody>
+    {% for application in unreachable_applications %}
+      <tr>
+        <td>{{ application.applied_at }}</td>
+        <td>{{ application.your_row_count }}</td>
+        <td>
+          <form method="post" action="{% url 'category-rule-application-reverse' application.pk %}">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-sm">Undo</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% if not household %}
+<div role="status" class="alert">Join or create a household to create categorization rules.</div>
+{% else %}
+<h2 class="mb-3 text-xl font-semibold">Rules</h2>
+<div class="overflow-x-auto mb-8">
+  <table class="table table-zebra">
+    <thead class="sticky top-0 z-10 bg-base-200">
+      <tr>
+        <th>Match</th>
+        <th>Type</th>
+        <th>Category</th>
+        <th>Priority</th>
+        <th>Enabled</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for item in rules %}
+      <tr{% if item.inactive %} data-rule-inactive="true"{% endif %}>
+        <td><a class="link" href="{% url 'category-rule-detail' item.pk %}">{{ item.description_contains }}</a></td>
+        <td>{% if item.owner_household_id %}Household{% else %}Personal{% endif %}</td>
+        <td>{{ item.category.name }}</td>
+        <td>{{ item.priority }}</td>
+        <td>{% if item.inactive %}Inactive{% elif not item.enabled %}No{% elif not item.confirmed_at %}Not applied yet{% else %}Yes{% endif %}</td>
+      </tr>
+    {% empty %}
+      <tr><td colspan="5">No rules yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+<h2 class="mb-3 text-xl font-semibold">New rule</h2>
+<form method="post" class="max-w-lg">
+  {% csrf_token %}
+  {% include "finance/_form_fields.html" with form=form %}
+  <button type="submit" class="btn btn-primary">Save and preview</button>
+</form>
+{% endif %}
+{% endblock %}

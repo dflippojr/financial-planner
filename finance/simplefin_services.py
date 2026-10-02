@@ -607,8 +607,17 @@ def _sync_connection_locked(principal, connection_id, *, ignore_rate_limit=False
         return None, exc
     from finance.category_services import refresh_transfer_pairs
     from finance.recurring_services import refresh_recurring_series
+    from finance.rule_services import apply_enabled_rules_to_transactions
 
     refresh_transfer_pairs(person)
+    synced = list(
+        Transaction.objects.filter(
+            account_id__in=syncable_ids,
+            import_batch__source=ImportBatch.Source.SIMPLEFIN,
+            created_at__gte=now,
+        )
+    )
+    apply_enabled_rules_to_transactions(person, synced)
     refresh_recurring_series(person)
     summary = f"Synced {imported} new transaction(s)."
     if skipped:
