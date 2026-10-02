@@ -4,6 +4,7 @@ from django import forms
 from django.contrib.auth import get_user_model, password_validation
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator
+from django.db.models import Q
 from django.utils import timezone
 
 from .cash_flow import MAX_REPORT_DATE, MAX_REPORT_PERIODS, default_date_range, period_count
@@ -445,13 +446,18 @@ class PlannedItemForm(forms.Form):
         label="Replaces recurring series",
     )
 
-    def __init__(self, *args, principal=None, has_household=False, household_only=False, **kwargs):
+    def __init__(
+        self, *args, principal=None, has_household=False, household_only=False, current_series_id=None, **kwargs
+    ):
         super().__init__(*args, **kwargs)
         self.fields["category"].queryset = Category.objects.visible_to(principal).order_by("name", "pk")
+        # Keep the item's current series selectable even if it has since gone
+        # inactive, so saving the form does not silently drop the link.
+        offered = Q(status=RecurringSeries.Status.CONFIRMED, is_active=True)
+        if current_series_id is not None:
+            offered |= Q(pk=current_series_id)
         self.fields["replaces_series"].queryset = (
-            RecurringSeries.objects.visible_to(principal)
-            .filter(status=RecurringSeries.Status.CONFIRMED, is_active=True)
-            .order_by("display_name", "pk")
+            RecurringSeries.objects.visible_to(principal).filter(offered).order_by("display_name", "pk")
         )
         if household_only:
             # Only an item's owner can take a household item private.

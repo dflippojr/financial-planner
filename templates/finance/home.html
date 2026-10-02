@@ -10,6 +10,9 @@
 {% if report and report.includes_investment %}
 <div role="note" class="alert alert-info mb-4">{{ report.investment_notice }}</div>
 {% endif %}
+{% if report and report.projection_excludes_planned_items and report.projected_periods %}
+<div role="note" class="alert alert-info mb-4">Planned items are not tied to an account, so projected months for one account show only its confirmed recurring charges.</div>
+{% endif %}
 {% if report and not report.has_visible_transactions %}
 <div role="status" class="alert mb-4">
   <span>

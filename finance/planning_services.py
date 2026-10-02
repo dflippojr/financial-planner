@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db.models import Max
 
-from .cash_flow import cash_flow_report
+from .cash_flow import cash_flow_report, selected_accounts
 from .category_services import current_household
 from .models import PlannedItem, RecurringSeries
 from .projection import (
@@ -46,19 +46,27 @@ def _series_input(series, last_on):
     )
 
 
-def visible_projection_inputs(principal):
-    planned_rows = list(
-        PlannedItem.objects.visible_to(principal)
-        .filter(enabled=True)
-        .select_related("replaces_series")
-        .order_by("start_date", "pk")
-    )
+def visible_projection_inputs(principal, *, account=None, scope=""):
+    """Planned items and confirmed series behind the projection.
+
+    Filters match the actual report: a scope keeps planned items and series
+    of that scope; one account keeps only that account's series, because
+    planned items are not tied to an account.
+    """
+    planned = PlannedItem.objects.visible_to(principal).filter(enabled=True)
+    if scope:
+        planned = planned.filter(scope=scope)
+    planned_rows = list(planned.select_related("replaces_series").order_by("start_date", "pk"))
     replaced = {item.replaces_series_id for item in planned_rows if item.replaces_series_id}
-    inputs = [_planned_input(item) for item in planned_rows]
+    inputs = [] if account is not None else [_planned_input(item) for item in planned_rows]
+    series = RecurringSeries.objects.visible_to(principal).filter(
+        status=RecurringSeries.Status.CONFIRMED, is_active=True
+    )
+    if account is not None or scope:
+        accounts = selected_accounts(principal, account=account, scope=scope)
+        series = series.filter(members__transaction__account__in=accounts)
     series_rows = (
-        RecurringSeries.objects.visible_to(principal)
-        .filter(status=RecurringSeries.Status.CONFIRMED, is_active=True)
-        .exclude(pk__in=replaced)
+        series.exclude(pk__in=replaced)
         .annotate(last_on=Max("members__transaction__transaction_date"))
         .order_by("display_name", "pk")
     )
@@ -69,8 +77,9 @@ def visible_projection_inputs(principal):
     return inputs
 
 
-def projected_months_for(principal, *, today, horizon=DEFAULT_HORIZON):
-    return project_cash_flow(visible_projection_inputs(principal), today=today, horizon=horizon)
+def projected_months_for(principal, *, today, horizon=DEFAULT_HORIZON, account=None, scope=""):
+    inputs = visible_projection_inputs(principal, account=account, scope=scope)
+    return project_cash_flow(inputs, today=today, horizon=horizon)
 
 
 def cash_flow_with_projection(
@@ -93,7 +102,10 @@ def cash_flow_with_projection(
         scope=scope,
         today=today,
     )
-    report.projected_periods = projected_months_for(principal, today=today, horizon=horizon)
+    report.projected_periods = projected_months_for(
+        principal, today=today, horizon=horizon, account=account, scope=scope
+    )
+    report.projection_excludes_planned_items = account is not None
     report.horizon = horizon
     return report
 

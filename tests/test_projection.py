@@ -566,3 +566,80 @@ def test_member_edit_keeps_the_owners_replaced_series():
     item.refresh_from_db()
     assert item.name == "Synthetic rent edited"
     assert item.replaces_series_id == series.pk
+
+
+def _confirmed_series(person, account, name, amount_minor, fingerprint):
+    series = RecurringSeries.objects.create(
+        person=person,
+        merchant_key=name.lower(),
+        display_name=name,
+        cadence=RecurringSeries.Cadence.MONTHLY,
+        typical_amount_minor=amount_minor,
+        status=RecurringSeries.Status.CONFIRMED,
+        confidence=RecurringSeries.Confidence.HIGH,
+        reasons=["synthetic"],
+        fingerprint=fingerprint * 64,
+    )
+    RecurringSeriesMember.objects.create(
+        series=series,
+        transaction=make_transaction(person, account, amount_minor=amount_minor, fingerprint=fingerprint.upper() * 64),
+    )
+    return series
+
+
+@pytest.mark.django_db
+def test_projection_follows_the_account_and_scope_filters():
+    owner = make_person("owner")
+    household = make_household(owner)
+    private = make_account(owner, name="Owner Private")
+    shared = make_account(owner, name="Shared", scope=Account.Scope.HOUSEHOLD, household=household)
+    _confirmed_series(owner, private, "Private bill", -1111, "a")
+    _confirmed_series(owner, shared, "Shared bill", -500, "b")
+    PlannedItem.objects.create(
+        owner=owner,
+        name="Private plan",
+        kind=PlannedItem.Kind.EXPENSE,
+        amount_minor=700,
+        start_date=date(2026, 11, 1),
+        cadence=PlannedItem.Cadence.MONTHLY,
+    )
+
+    def names(**filters):
+        months = projected_months_for(owner, today=date(2026, 10, 1), horizon=3, **filters)
+        return {item.name for month in months for item in month.contributions}
+
+    assert names(account=shared) == {"Shared bill"}
+    assert names(scope=Account.Scope.HOUSEHOLD) == {"Shared bill"}
+    assert names(scope=Account.Scope.PRIVATE) == {"Private bill", "Private plan"}
+    assert names() == {"Private bill", "Shared bill", "Private plan"}
+
+
+@pytest.mark.django_db
+def test_editing_keeps_a_link_to_a_series_that_went_inactive():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    series = _confirmed_series(owner, account, "Synthetic landlord", -4000, "c")
+    item = PlannedItem.objects.create(
+        owner=owner,
+        name="Synthetic rent",
+        kind=PlannedItem.Kind.EXPENSE,
+        amount_minor=4000,
+        start_date=date(2026, 11, 1),
+        cadence=PlannedItem.Cadence.MONTHLY,
+        replaces_series=series,
+    )
+    RecurringSeries.objects.filter(pk=series.pk).update(is_active=False)
+    client = Client()
+    client.force_login(owner.user)
+
+    form = client.get(reverse("planned-item-edit", args=[item.pk])).content.decode()
+    assert "Synthetic landlord" in form
+    client.post(
+        reverse("planned-item-edit", args=[item.pk]),
+        _household_item_form("Synthetic rent edited", PlannedItem.Scope.PRIVATE, replaces_series=str(series.pk)),
+    )
+
+    item.refresh_from_db()
+    assert item.name == "Synthetic rent edited"
+    assert item.replaces_series_id == series.pk
