@@ -942,6 +942,16 @@ def account_export(request):
 
 
 REAUTH_FAILED = "Confirmation failed. Try again later."
+# Google accepts only none, consent, and select_account for prompt. It sends
+# auth_time only when the claims parameter asks for it (and the OAuth client
+# allows it); the callback refuses a confirmation without a recent auth_time.
+GOOGLE_REAUTH_AUTH_PARAMS = urlencode(
+    {
+        "prompt": "select_account",
+        "max_age": "0",
+        "claims": '{"id_token":{"auth_time":{"essential":true}}}',
+    }
+)
 
 
 def _reauth_context(request, form, auth_error=None):
@@ -995,9 +1005,7 @@ def start_google_reauth(request):
     store_google_pending(request, {"intent": "reauth", "next": next_url})
     request.session["reauth_next"] = next_url
     query = request.GET.copy()
-    # Google accepts only none, consent, and select_account for prompt; max_age=0
-    # asks it to re-authenticate, and the callback checks auth_time either way.
-    query["auth_params"] = "prompt=select_account&max_age=0"
+    query["auth_params"] = GOOGLE_REAUTH_AUTH_PARAMS
     request.GET = query
     return _google_oauth_login(request)
 

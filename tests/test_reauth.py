@@ -1,3 +1,4 @@
+import json
 import time
 from datetime import timedelta
 from urllib.parse import parse_qs, urlparse
@@ -157,6 +158,7 @@ def test_google_reauth_accepts_fresh_matching_sub_and_refuses_stale_or_wrong_ide
     params = parse_qs(urlparse(location).query)
     assert params.get("prompt") == ["select_account"]
     assert params.get("max_age") == ["0"]
+    assert json.loads(params["claims"][0]) == {"id_token": {"auth_time": {"essential": True}}}
 
     stale = _finish_google(client, start, id_token=_id_token(auth_time=int(time.time()) - 3600))
     assert stale.status_code == 302
