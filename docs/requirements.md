@@ -311,3 +311,15 @@ Savings goals:
 - A goal has a name, target amount, target date, an optional linked account, and private or household visibility.
 - **Progress** is informational. It is the linked account's latest balance (#67/#69 balance snapshots) or a manually entered current amount, compared against the target. It shows the monthly amount needed to reach the target by the target date.
 - Goals do not change the projection in v1.
+
+## Investment performance (2026-10-02, #18)
+
+Owner decisions:
+- **Measure:** growth versus contributions. Investment transactions are still not imported (balances only). The member enters each statement's ending balance and, optionally, that period's **net contributions** (contributions minus withdrawals). The app then separates market growth from money put in.
+- **Cadence:** from each statement, monthly or quarterly. A "statement entry" is a manual balance snapshot with net contributions recorded (zero is a valid value). Performance periods run between consecutive statement entries. Other snapshots, such as daily SimpleFIN balances, still drive Net worth but do not split performance periods.
+
+Calculation (recorded defaults; the owner may change them):
+- For consecutive statement entries with start value `V0`, end value `V1`, and net contributions `C` recorded on the later entry: **growth** = `V1 - V0 - C`, and the **period return** = `growth / (V0 + C/2)`. This is the Modified Dietz method, which assumes contributions arrive mid-period. A period with `V0 + C/2 <= 0` has no return.
+- **YTD, 1-year and all-time** link the period returns: `product(1 + r) - 1` over periods whose end date falls in the range. Each range also shows total contributions and total growth in dollars. A range starts at the latest statement entry on or before its start date. Without one, it starts at the earliest entry inside the range and is labelled partial.
+- A range with any period that lacks a return shows value change only, plus a note. Accounts with fewer than two statement entries show value change only.
+- Every return is labelled an **estimate**, with the method named. Amounts are exact minor units; returns are percentages rounded to one decimal.
