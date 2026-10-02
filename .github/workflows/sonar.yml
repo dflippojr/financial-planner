@@ -1,16 +1,9 @@
 name: SonarCloud
 
-# Disabled manually (owner decision 2026-09-27): this repo is private, and
-# we don't want a misconfigured token or unresolved SonarCloud project
-# silently burning GitHub Actions minutes on every push/PR while that gets
-# sorted out. Scanning happens locally via SonarQube for now. Re-enable with
-# `gh workflow enable "SonarCloud"` once the SonarCloud project/token are
-# confirmed working and the owner wants this running in CI again.
-#
-# The repo has since been made public. Standard GitHub-hosted runners are
-# free for public repos and SonarCloud is free for public projects, so the
-# cost reason above no longer applies; the workflow stays disabled until the
-# owner decides to re-enable it.
+# Briefly disabled on 2026-09-27 while the repo was private and the
+# SonarCloud project/token were unconfirmed; enabled again once the repo
+# went public. Local SonarQube remains a pre-push check, but it lacks some
+# SonarCloud security rules, so this gate is the authoritative one.
 #
 # Adapted from agent-harness's sonar.yml for this repo's stack (Django +
 # pytest, GitHub-hosted Linux runner -- no Windows-native test dependency

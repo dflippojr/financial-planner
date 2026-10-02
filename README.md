@@ -265,7 +265,7 @@ erDiagram
 **Testing and quality**
 - 555 pytest tests across importers, authorization, reporting, deployment scripts, and UI.
 - The suite runs on in-memory SQLite for speed and on a throwaway PostgreSQL 16 container ([`scripts/test_postgres.sh`](scripts/test_postgres.sh)) before every pull request.
-- Static analysis with a local SonarQube server; on-demand automated code review on a self-hosted GitHub Actions runner.
+- SonarCloud quality gate in CI on every pull request and push to `main` (coverage, security, maintainability), plus on-demand automated code review on a self-hosted GitHub Actions runner.
 - Supply-chain care: pinned Python dependencies, a checksum-verified Tailwind binary, and vendored front-end assets with recorded SHA-256 sums.
 
 ---
@@ -286,7 +286,7 @@ flowchart LR
     Ready --> Worker["Agent worker<br/>isolated git worktree"]
     Worker --> Tests["Full test suite<br/>SQLite + PostgreSQL"]
     Tests --> PR["Pull request<br/>Closes #N"]
-    PR --> Review["Automated review<br/>+ SonarQube"]
+    PR --> Review["Automated review<br/>+ SonarCloud gate"]
     Review -->|findings| Worker
     Review -->|clean| Owner["Owner review<br/>and merge"]
 ```
@@ -370,8 +370,11 @@ It refuses pull requests from forks, so untrusted code never reaches the dedicat
 (`financial-planner-review`, registered with `ops/github/install-runner.ps1`). See
 `ops/review/run-review.ps1` for the review logic.
 
-`.github/workflows/sonar.yml` (SonarCloud with coverage) is currently disabled; static analysis runs
-against a local SonarQube server (`localhost:9000`) as a pre-push check instead.
+`.github/workflows/sonar.yml` runs the test suite with coverage and reports it to SonarCloud on every
+push to `main`, on pull requests from branches of this repository, and on demand (`gh workflow run sonar.yml`).
+It uses the `SONARCLOUD_TOKEN` repository secret, is skipped for pull requests from forks, and fails the
+check when the SonarCloud quality gate fails (including 80% coverage on new code). A local SonarQube server
+(`localhost:9000`) remains available as a pre-push check.
 
 </details>
 
