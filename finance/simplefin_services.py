@@ -306,8 +306,8 @@ def _rate_limited(connection: SimpleFinConnection, *, ignore_rate_limit: bool) -
     return timezone.now() < connection.last_sync_at + _sync_interval()
 
 
-def _batch_hash(connection_id, account_id, synced_at) -> str:
-    payload = f"simplefin\n{connection_id}\n{account_id}\n{synced_at.isoformat()}"
+def _batch_hash(connection_id, account_id, synced_at, start) -> str:
+    payload = f"simplefin\n{connection_id}\n{account_id}\n{synced_at.isoformat()}\n{start.isoformat()}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -374,12 +374,8 @@ def _new_transaction(account, link, item, source_id, *, row_number):
     )
 
 
-def _import_transactions(account, link, remote, make_batch, *, coverage_start, needs_coverage):
-    """Import new posted rows; return (count, batch or None).
-
-    A batch is created when there are new rows, or when the sync covers dates
-    no active batch covers yet (needs_coverage).
-    """
+def _import_transactions(account, link, remote, batches) -> int:
+    """Import new posted rows, each into the batch whose range covers its date."""
     existing_ids = set(
         Transaction.objects.filter(
             account=account,
@@ -391,51 +387,34 @@ def _import_transactions(account, link, remote, make_batch, *, coverage_start, n
         .values_list("source_transaction_id", flat=True)
     )
     created = []
+    next_row = {}
     for item in remote.get("transactions") or []:
         source_id = _posted_source_id(item)
         if not source_id or source_id in existing_ids:
             continue
         txn = _new_transaction(account, link, item, source_id, row_number=1)
-        if txn is not None:
-            created.append(txn)
-            existing_ids.add(source_id)
-    late = [txn for txn in created if txn.transaction_date < coverage_start]
-    current = [txn for txn in created if txn.transaction_date >= coverage_start]
-    _attach_late_rows(account, link, late)
-    batch = make_batch() if current or needs_coverage else None
-    for row_number, txn in enumerate(current, start=1):
+        if txn is None:
+            continue
+        batch = _batch_covering(batches, txn.transaction_date)
+        if batch.pk not in next_row:
+            last = batch.transactions.aggregate(Max("source_row_number"))["source_row_number__max"] or 0
+            next_row[batch.pk] = last + 1
         txn.import_batch = batch
-        txn.source_row_number = row_number
-    if current:
-        Transaction.objects.bulk_create(current)
-    return len(created), batch
+        txn.source_row_number = next_row[batch.pk]
+        next_row[batch.pk] += 1
+        created.append(txn)
+        existing_ids.add(source_id)
+    if created:
+        Transaction.objects.bulk_create(created)
+    return len(created)
 
 
-def _attach_late_rows(account, link, late):
-    """Store late-posted rows in the batch already covering their date.
-
-    Every date before the new batch's start is covered by an active batch, so
-    a late row joins that batch rather than stretching the new batch's range
-    back over it: undoing the earlier batch then removes its whole period.
-    """
-    if not late:
-        return
-    batches = list(_active_link_batches(account, link).order_by("-date_range_start", "-pk"))
-    next_row = {}
-    for txn in late:
-        owner = next(
-            (batch for batch in batches if batch.date_range_start <= txn.transaction_date <= batch.date_range_end),
-            None,
-        )
-        if owner is None:  # pragma: no cover - dates before the first gap are always covered
-            raise SimpleFinError("A SimpleFIN transaction falls outside every import.")
-        if owner.pk not in next_row:
-            last = owner.transactions.aggregate(Max("source_row_number"))["source_row_number__max"] or 0
-            next_row[owner.pk] = last + 1
-        txn.import_batch = owner
-        txn.source_row_number = next_row[owner.pk]
-        next_row[owner.pk] += 1
-    Transaction.objects.bulk_create(late)
+def _batch_covering(batches, day):
+    """The batch whose range holds day; a later day falls to the newest range."""
+    for batch in batches:
+        if batch.date_range_start <= day <= batch.date_range_end:
+            return batch
+    return max(batches, key=lambda batch: (batch.date_range_end, batch.pk))
 
 
 def _active_link_batches(account, link):
@@ -448,13 +427,14 @@ def _active_link_batches(account, link):
     )
 
 
-def _first_uncovered_date(account, link, end):
-    """First date from the cut-over that no active batch for this link covers.
+def _uncovered_ranges(account, link, end):
+    """Date ranges from the cut-over through end that no active batch covers.
 
-    Each sync's batch covers only dates not already covered, so undoing one
-    batch uncovers its own dates and brings back the missing-import warning
-    instead of being hidden by a later batch's range.
+    A sync creates one batch per gap, so batches never overlap: undoing any
+    one of them uncovers exactly its own dates and brings back the
+    missing-import warning there.
     """
+    gaps = []
     cursor = link.cutover_date
     ranges = (
         _active_link_batches(account, link)
@@ -464,9 +444,11 @@ def _first_uncovered_date(account, link, end):
     )
     for range_start, range_end in ranges:
         if range_start > cursor:
-            break
+            gaps.append((cursor, range_start - timedelta(days=1)))
         cursor = max(cursor, range_end + timedelta(days=1))
-    return cursor
+    if cursor <= end:
+        gaps.append((cursor, end))
+    return gaps
 
 
 def _ensure_batch(person, account, connection, link, synced_at, start, end):
@@ -474,7 +456,7 @@ def _ensure_batch(person, account, connection, link, synced_at, start, end):
         account=account,
         imported_by=person,
         source=ImportBatch.Source.SIMPLEFIN,
-        source_file_sha256=_batch_hash(connection.pk, account.pk, synced_at),
+        source_file_sha256=_batch_hash(connection.pk, account.pk, synced_at, start),
         simplefin_account_id=link.simplefin_account_id,
         date_range_start=start,
         date_range_end=end,
@@ -521,19 +503,16 @@ def _sync_one_link(person, connection, link, remote, synced_at, payload) -> int:
             )
         return 0
     end = max(link.cutover_date, balance_date, timezone.localdate())
-    start = _first_uncovered_date(account, link, end)
-    needs_coverage = start <= end
-
-    def make_batch():
-        # The range never reaches back before start: those dates are covered.
-        return _ensure_batch(person, account, connection, link, synced_at, start, max(start, end))
-
+    new_batches = [
+        _ensure_batch(person, account, connection, link, synced_at, gap_start, gap_end)
+        for gap_start, gap_end in _uncovered_ranges(account, link, end)
+    ]
+    new_ids = [batch.pk for batch in new_batches]
+    batches = new_batches + list(_active_link_batches(account, link).exclude(pk__in=new_ids))
+    imported = 0
     if link.mode == AccountLink.Mode.TRANSACTIONS:
-        imported, batch = _import_transactions(
-            account, link, remote, make_batch, coverage_start=start, needs_coverage=needs_coverage
-        )
-    else:
-        imported, batch = 0, (make_batch() if needs_coverage else None)
+        imported = _import_transactions(account, link, remote, batches)
+    batch = _batch_covering(batches, balance_date) if batches else None
     _upsert_snapshot(
         account,
         snapshot_date=balance_date,
