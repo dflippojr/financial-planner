@@ -794,6 +794,7 @@ class RuleApplicationEntry(models.Model):
         related_name="+",
     )
     previous_category_source = models.CharField(max_length=9, blank=True, default="")
+    reversed_at = models.DateTimeField(null=True, blank=True)
 
     class QuerySet(models.QuerySet):
         def visible_to(self, principal):

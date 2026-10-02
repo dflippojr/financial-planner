@@ -442,10 +442,12 @@ def reverse_application(principal, application_id):
         raise PermissionDenied(_DENIED)
     if application.reversed_at is not None:
         return ReverseResult(restored=0, skipped_manual=0)
+    # Only rows this person can see are reversed now. Rows hidden from them
+    # (for example an account made private since) stay pending for their owner.
     entries = list(
         RuleApplicationEntry.objects.visible_to(person)
         .select_related("transaction", "previous_category")
-        .filter(application=application)
+        .filter(application=application, reversed_at__isnull=True)
         .order_by("transaction_id")
     )
     locked = _lock_transactions(person, [entry.transaction for entry in entries])
@@ -454,15 +456,18 @@ def reverse_application(principal, application_id):
         RuleApplicationEntry.objects.filter(
             transaction_id__in=[entry.transaction_id for entry in entries],
             application_id__gt=application.pk,
-            application__reversed_at__isnull=True,
+            reversed_at__isnull=True,
         ).values_list("transaction_id", flat=True)
     )
+    now = timezone.now()
     restored = 0
     skipped_manual = 0
     for entry in entries:
         txn = by_id.get(entry.transaction_id)
         if txn is None:
             continue
+        entry.reversed_at = now
+        entry.save(update_fields=("reversed_at",))
         if txn.pk in superseded_ids:
             # A later rule application changed this row; reversing this older
             # one must not undo the newer category.
@@ -475,9 +480,9 @@ def reverse_application(principal, application_id):
             skipped_manual += 1
             continue
         previous = txn.category
-        restored_category = entry.previous_category
+        restored_category, restored_source = _category_before(entry, application)
         txn.category = restored_category
-        txn.category_source = entry.previous_category_source
+        txn.category_source = restored_source
         txn.save(update_fields=("category", "category_source", "updated_at"))
         _record_text_history(
             txn,
@@ -488,9 +493,34 @@ def reverse_application(principal, application_id):
         )
         _restore_refund_categories(txn, person)
         restored += 1
-    application.reversed_at = timezone.now()
-    application.save(update_fields=("reversed_at",))
+    if not RuleApplicationEntry.objects.filter(application=application, reversed_at__isnull=True).exists():
+        application.reversed_at = now
+        application.save(update_fields=("reversed_at",))
     return ReverseResult(restored=restored, skipped_manual=skipped_manual)
+
+
+def _category_before(entry, application):
+    """The category this row had before the chain of rules now being undone.
+
+    An earlier application reversed while this one was in place could not
+    restore its row then (this one superseded it), so its snapshot is the
+    one to return to. Walk back through such reversals.
+    """
+    category = entry.previous_category
+    source = entry.previous_category_source
+    later_applied_at = application.applied_at
+    earlier = (
+        RuleApplicationEntry.objects.filter(transaction_id=entry.transaction_id, application_id__lt=application.pk)
+        .select_related("application", "previous_category")
+        .order_by("-application_id")
+    )
+    for older in earlier:
+        if older.reversed_at is None or older.reversed_at <= later_applied_at:
+            break
+        category = older.previous_category
+        source = older.previous_category_source
+        later_applied_at = older.application.applied_at
+    return category, source
 
 
 def list_visible_rules(principal):

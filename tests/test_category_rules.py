@@ -840,3 +840,59 @@ def test_rules_list_flags_personal_rule_inactive_after_household_change():
     assert 'data-rule-inactive="true"' in page
     assert "Inactive" in page
     assert "kroger" in page
+
+
+@pytest.mark.django_db
+def test_reversing_earlier_then_later_application_restores_original_category():
+    owner = make_person("owner-out-of-order")
+    household = make_household(owner)
+    account = make_account(owner)
+    txn = make_transaction(owner, account, fingerprint="e3".ljust(64, "0"))
+    first = save_category_rule(
+        owner, owner_kind="personal", description_contains="kroger", account_id=None,
+        min_amount_minor=None, max_amount_minor=None, category_id=groceries(household).pk, priority=0,
+    )
+    first_application, _skipped = apply_rule(owner, first.pk)
+    set_rule_enabled(owner, first.pk, False)
+    second = save_category_rule(
+        owner, owner_kind="personal", description_contains="kroger", account_id=None,
+        min_amount_minor=None, max_amount_minor=None, category_id=dining(household).pk, priority=1,
+    )
+    second_application, _skipped = apply_rule(owner, second.pk)
+
+    reverse_application(owner, first_application.pk)
+    txn.refresh_from_db()
+    assert txn.category_id == dining(household).pk
+
+    # The first application is already reversed, so undoing the second must
+    # not bring its Groceries category back.
+    reverse_application(owner, second_application.pk)
+    txn.refresh_from_db()
+    assert txn.category_id is None
+
+
+@pytest.mark.django_db
+def test_rows_hidden_from_the_reverser_stay_reversible_by_their_owner():
+    owner = make_person("owner-hidden")
+    member = make_person("member-hidden")
+    household = make_household(owner, member)
+    shared = make_account(owner, scope=Account.Scope.HOUSEHOLD, household=household)
+    later_private = make_account(owner, name="Synthetic Savings", scope=Account.Scope.HOUSEHOLD, household=household)
+    visible = make_transaction(owner, shared, fingerprint="e4".ljust(64, "0"))
+    hidden = make_transaction(owner, later_private, fingerprint="e5".ljust(64, "0"))
+    rule = save_category_rule(
+        owner, owner_kind="household", description_contains="kroger", account_id=None,
+        min_amount_minor=None, max_amount_minor=None, category_id=groceries(household).pk, priority=0,
+    )
+    application, _skipped = apply_rule(owner, rule.pk)
+    Account.objects.filter(pk=later_private.pk).update(scope=Account.Scope.PRIVATE, household=None, share_mode="")
+
+    reverse_application(member, application.pk)
+    visible.refresh_from_db()
+    hidden.refresh_from_db()
+    assert visible.category_id is None
+    assert hidden.category_id == groceries(household).pk
+
+    reverse_application(owner, application.pk)
+    hidden.refresh_from_db()
+    assert hidden.category_id is None
