@@ -1,0 +1,133 @@
+{% extends "finance/base.html" %}
+{% block title %}Connections · Financial Planner{% endblock %}
+{% block content %}
+<h1 class="mb-4 text-2xl font-bold">Connections</h1>
+{% include "finance/_messages.html" %}
+<p class="mb-4 max-w-2xl">
+  Create a setup token at
+  <a class="link" href="https://bridge.simplefin.org/simplefin/create" rel="noopener noreferrer">SimpleFIN Bridge</a>,
+  paste it once, then link each SimpleFIN account. Checking, savings, and credit cards import posted transactions.
+  Investment accounts store balances only.
+</p>
+
+{% if not connection %}
+<section class="card bg-base-100 shadow-sm mb-6 max-w-lg">
+  <div class="card-body">
+    <h2 class="card-title">Connect SimpleFIN</h2>
+    <form method="post">
+      {% csrf_token %}
+      <input type="hidden" name="intent" value="claim">
+      {% include "finance/_form_fields.html" with form=form %}
+      <button type="submit" class="btn btn-primary">Connect</button>
+    </form>
+  </div>
+</section>
+{% else %}
+<section class="card bg-base-100 shadow-sm mb-6">
+  <div class="card-body">
+    <h2 class="card-title">SimpleFIN</h2>
+    {% if connection.last_sync_result %}
+    <p>Last sync: {{ connection.last_sync_result }}</p>
+    {% endif %}
+    {% if connection.last_sync_at %}
+    <p>Last sync time: {{ connection.last_sync_at|date:"Y-m-d H:i" }}</p>
+    {% endif %}
+    {% if next_sync %}
+    <p>Next scheduled sync: {{ next_sync|date:"Y-m-d H:i" }}</p>
+    {% endif %}
+    {% if load_error %}
+    <div role="alert" class="alert alert-warning"><span>{{ load_error }}</span></div>
+    {% endif %}
+    {% for message in provider_messages %}
+    <div role="alert" class="alert"><span>{{ message }}</span></div>
+    {% endfor %}
+    <div class="flex flex-wrap gap-2">
+      <form method="post" action="{% url 'simplefin-sync' %}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-primary" {% if not can_sync_now %}disabled{% endif %}>Sync now</button>
+      </form>
+      <form method="post" action="{% url 'simplefin-disconnect' %}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-outline btn-error">Disconnect</button>
+      </form>
+    </div>
+    {% if not can_sync_now %}
+    <p class="text-sm opacity-80">Sync now is limited to once every 15 minutes.</p>
+    {% endif %}
+  </div>
+</section>
+
+{% if rows %}
+<section class="card bg-base-100 shadow-sm mb-6">
+  <div class="card-body">
+    <h2 class="card-title">SimpleFIN accounts</h2>
+    <p class="text-sm opacity-80 mb-4">
+      For an existing account, the cut-over date defaults to the day after its latest transaction if you leave the
+      date blank. History before that date stays on CSV imports.
+    </p>
+    <form method="post">
+      {% csrf_token %}
+      <input type="hidden" name="intent" value="link">
+      <div class="overflow-x-auto">
+        <table class="table table-zebra">
+          <thead class="sticky top-0 z-10 bg-base-200">
+            <tr>
+              <th>Name</th>
+              <th>Institution</th>
+              <th>Type</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for row in rows %}
+            <tr>
+              <td>{{ row.name }}</td>
+              <td>{{ row.institution }}</td>
+              <td>{{ row.type }}</td>
+              <td>
+                <input type="hidden" name="sf_id_{{ forloop.counter0 }}" value="{{ row.id }}">
+                <label class="sr-only" for="action-{{ forloop.counter0 }}">Action for {{ row.name }}</label>
+                <select id="action-{{ forloop.counter0 }}" class="select select-bordered select-sm mb-2" name="action_{{ forloop.counter0 }}">
+                  {% if row.link_unlisted %}<option value="keep" selected>Keep current link</option>{% endif %}
+                  <option value="ignore"{% if not row.link %} selected{% endif %}>Ignore</option>
+                  <option value="link"{% if row.link and not row.link_unlisted %} selected{% endif %}>Link existing account</option>
+                  <option value="create">Create new account</option>
+                </select>
+                <label class="sr-only" for="account-{{ forloop.counter0 }}">Existing account for {{ row.name }}</label>
+                <select id="account-{{ forloop.counter0 }}" class="select select-bordered select-sm mb-2" name="account_id_{{ forloop.counter0 }}">
+                  <option value="">Choose account</option>
+                  {% for account in accounts %}
+                  <option value="{{ account.pk }}"{% if row.link and row.link.account_id == account.pk %} selected{% endif %}>{{ account.name }}</option>
+                  {% endfor %}
+                </select>
+                <label class="sr-only" for="cutover-{{ forloop.counter0 }}">Cut-over date for {{ row.name }}</label>
+                <input id="cutover-{{ forloop.counter0 }}" class="input input-bordered input-sm mb-2" type="date" name="cutover_{{ forloop.counter0 }}" value="{{ row.default_cutover }}" aria-describedby="cutover-help-{{ forloop.counter0 }}">
+                <p id="cutover-help-{{ forloop.counter0 }}" class="text-xs opacity-70 mb-2">Leave blank to start the day after the chosen account's latest transaction.</p>
+                <label class="sr-only" for="name-{{ forloop.counter0 }}">New account name for {{ row.name }}</label>
+                <input id="name-{{ forloop.counter0 }}" class="input input-bordered input-sm mb-2" type="text" name="name_{{ forloop.counter0 }}" value="{{ row.name }}" maxlength="150">
+                <label class="sr-only" for="type-{{ forloop.counter0 }}">New account type for {{ row.name }}</label>
+                <select id="type-{{ forloop.counter0 }}" class="select select-bordered select-sm mb-2" name="account_type_{{ forloop.counter0 }}">
+                  {% for value, label in account_types %}
+                  <option value="{{ value }}">{{ label }}</option>
+                  {% endfor %}
+                </select>
+                <label class="sr-only" for="sharing-{{ forloop.counter0 }}">Sharing for {{ row.name }}</label>
+                <select id="sharing-{{ forloop.counter0 }}" class="select select-bordered select-sm" name="sharing_{{ forloop.counter0 }}">
+                  <option value="private">Private</option>
+                  {% if has_household %}
+                  <option value="household">Shared with household</option>
+                  {% endif %}
+                </select>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <button type="submit" class="btn btn-primary mt-4">Save links</button>
+    </form>
+  </div>
+</section>
+{% endif %}
+{% endif %}
+{% endblock %}

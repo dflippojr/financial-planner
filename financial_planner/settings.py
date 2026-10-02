@@ -91,7 +91,8 @@ else:
     }
 
 LANGUAGE_CODE = "en-us"
-TIME_ZONE = "America/New_York"
+# Follow the deployment TZ (also used by the backup and SimpleFIN schedulers).
+TIME_ZONE = os.environ.get("TZ") or "America/New_York"
 USE_I18N = True
 USE_TZ = True
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
@@ -191,6 +192,12 @@ CSV_IMPORT_STAGE_TTL_SECONDS = max(
     1,
     min(int(os.environ.get("CSV_IMPORT_STAGE_TTL_SECONDS", "3600")), 3600),
 )
+
+# Fernet key for SimpleFIN access URLs. Required to connect or sync; collectstatic
+# and other management commands can start without it.
+FIELD_ENCRYPTION_KEY = os.environ.get("FIELD_ENCRYPTION_KEY", "").strip()
+SIMPLEFIN_SYNC_CRON = os.environ.get("SIMPLEFIN_SYNC_CRON", "30 6 * * *").strip()
+SIMPLEFIN_SYNC_MIN_INTERVAL_SECONDS = int(os.environ.get("SIMPLEFIN_SYNC_MIN_INTERVAL_SECONDS", "900"))
 
 # Handle uploads in memory only. Django's default handlers write any upload over
 # 2.5 MB to a temporary file in /tmp before application code runs, which would put

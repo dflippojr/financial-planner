@@ -384,6 +384,13 @@ class AddAccountForm(forms.Form):
             )
 
 
+class SimpleFinSetupForm(forms.Form):
+    token = forms.CharField(
+        label="SimpleFIN setup token",
+        widget=forms.Textarea(attrs={"rows": 4, "autocomplete": "off"}),
+    )
+
+
 class ShareAccountForm(forms.Form):
     share_mode = forms.ChoiceField(choices=Account.ShareMode.choices, label="Share as")
 

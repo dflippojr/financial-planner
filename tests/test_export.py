@@ -322,7 +322,10 @@ def test_money_decimal_helpers():
     assert money_decimal(-1234) == "-12.34"
     assert money_decimal(50) == "0.50"
     assert minor_from_decimal_string("-12.34") == -1234
-    assert _balance_snapshot_model() is None
+    # SimpleFIN (#67) adds BalanceSnapshot, so the export now includes snapshots.
+    from finance.models import BalanceSnapshot
+
+    assert _balance_snapshot_model() is BalanceSnapshot
 
 
 @pytest.mark.django_db
@@ -333,8 +336,8 @@ def test_snapshot_rows_keep_only_visible_accounts():
     visible = make_account(owner, name="Visible Snap")
     hidden = make_account(other, name="Hidden Snap")
     snaps = [
-        SimpleNamespace(pk=1, account_id=visible.pk, captured_at=date(2026, 2, 1), amount_minor=250, currency="USD"),
-        SimpleNamespace(pk=2, account_id=hidden.pk, captured_at=date(2026, 2, 1), amount_minor=999, currency="USD"),
+        SimpleNamespace(pk=1, account_id=visible.pk, snapshot_date=date(2026, 2, 1), amount_minor=250, currency="USD"),
+        SimpleNamespace(pk=2, account_id=hidden.pk, snapshot_date=date(2026, 2, 1), amount_minor=999, currency="USD"),
     ]
 
     class Query(list):

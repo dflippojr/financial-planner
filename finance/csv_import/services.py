@@ -161,6 +161,9 @@ def undo_import_batch(principal, account_id, batch_id):
         import_batch=batch,
         status=Transaction.Status.ACTIVE,
     ).update(status=Transaction.Status.ARCHIVED, archived_at=now)
+    from finance.models import BalanceSnapshot
+
+    BalanceSnapshot.objects.filter(import_batch=batch).delete()
     batch.status = ImportBatch.Status.ARCHIVED
     batch.archived_at = now
     batch.save(update_fields=("status", "archived_at"))

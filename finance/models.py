@@ -229,11 +229,14 @@ class ImportBatch(ArchivableModel):
         CAPITAL_ONE = "capital_one", "Capital One"
         APPLE_CARD = "apple_card", "Apple Card"
         VANGUARD = "vanguard", "Vanguard"
+        SIMPLEFIN = "simplefin", "SimpleFIN"
 
     account = models.ForeignKey(Account, on_delete=models.PROTECT, related_name="import_batches")
     imported_by = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="import_batches")
     source = models.CharField(max_length=32, choices=Source)
     source_file_sha256 = models.CharField(max_length=64, validators=(sha256_validator,))
+    # Set for SimpleFIN sync batches so IDs are unique per remote account, not globally.
+    simplefin_account_id = models.CharField(max_length=255, blank=True, default="")
     date_range_start = models.DateField()
     date_range_end = models.DateField()
     imported_at = models.DateTimeField(auto_now_add=True)
@@ -248,7 +251,9 @@ class ImportBatch(ArchivableModel):
     class Meta:
         constraints = [
             models.CheckConstraint(
-                condition=Q(source__in=("huntington", "capital_one", "apple_card", "vanguard")),
+                condition=Q(
+                    source__in=("huntington", "capital_one", "apple_card", "vanguard", "simplefin")
+                ),
                 name="import_source_valid",
             ),
             models.CheckConstraint(
@@ -670,6 +675,96 @@ class RecurringSeriesMember(models.Model):
 
     def __str__(self):
         return f"Series {self.series_id} txn {self.transaction_id}"
+
+
+class SimpleFinConnection(models.Model):
+    owner = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="simplefin_connections")
+    encrypted_access_url = models.BinaryField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_sync_at = models.DateTimeField(null=True, blank=True)
+    last_sync_result = models.CharField(max_length=500, blank=True)
+    disabled = models.BooleanField(default=False)
+
+    class QuerySet(models.QuerySet):
+        def owned_by(self, principal):
+            person = _person_for(principal)
+            if person is None:
+                return self.none()
+            return self.filter(owner=person)
+
+    objects = QuerySet.as_manager()
+
+    def __str__(self):
+        return f"SimpleFIN connection {self.pk}"
+
+
+class AccountLink(models.Model):
+    class Mode(models.TextChoices):
+        TRANSACTIONS = "transactions", "Transactions"
+        BALANCES_ONLY = "balances_only", "Balances only"
+
+    connection = models.ForeignKey(SimpleFinConnection, on_delete=models.CASCADE, related_name="links")
+    account = models.OneToOneField(Account, on_delete=models.CASCADE, related_name="simplefin_link")
+    simplefin_account_id = models.CharField(max_length=255)
+    cutover_date = models.DateField()
+    mode = models.CharField(max_length=15, choices=Mode)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("connection", "simplefin_account_id"),
+                name="account_link_unique_simplefin_account",
+            ),
+            models.CheckConstraint(
+                condition=Q(mode__in=("transactions", "balances_only")),
+                name="account_link_mode_valid",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Link {self.pk}"
+
+
+class BalanceSnapshot(models.Model):
+    class Source(models.TextChoices):
+        SIMPLEFIN = "simplefin", "SimpleFIN"
+        MANUAL = "manual", "Manual"
+
+    account = models.ForeignKey(Account, on_delete=models.CASCADE, related_name="balance_snapshots")
+    snapshot_date = models.DateField()
+    amount_minor = models.BigIntegerField()
+    currency = models.CharField(max_length=3, default="USD")
+    source = models.CharField(max_length=16, choices=Source)
+    import_batch = models.ForeignKey(
+        ImportBatch,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="balance_snapshots",
+    )
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            visible_accounts = Account.objects.visible_to(principal).values("pk")
+            return self.filter(account_id__in=visible_accounts)
+
+    objects = QuerySet.as_manager()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("account", "snapshot_date", "source"),
+                name="balance_snapshot_unique_account_date_source",
+            ),
+            models.CheckConstraint(condition=Q(currency="USD"), name="balance_snapshot_currency_usd"),
+            models.CheckConstraint(
+                condition=Q(source__in=("simplefin", "manual")),
+                name="balance_snapshot_source_valid",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Balance {self.snapshot_date} account {self.account_id}"
 
 
 class Invitation(models.Model):

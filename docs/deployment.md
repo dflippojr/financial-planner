@@ -36,6 +36,14 @@ Prerequisites are Docker Desktop configured to use WSL2 and start when Windows s
 
    Do not reuse the example values. Keep `DJANGO_SECURE_COOKIES` and redirect behavior at their production defaults in `compose.yml`. Leave `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` empty until you finish the Google Cloud Console steps below; password-only sign-in works without them.
 
+   Set `FIELD_ENCRYPTION_KEY` to a Fernet key. Losing it means every member must reconnect SimpleFIN; backups keep only ciphertext. Generate one:
+
+   ```powershell
+   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+   ```
+
+   `SIMPLEFIN_SYNC_CRON` defaults to `30 6 * * *` (06:30 in `TZ`). It uses the same five-field cron shape as `BACKUP_CRON`.
+
 3. Validate, build, migrate, and start the stack:
 
    ```powershell
@@ -45,7 +53,7 @@ Prerequisites are Docker Desktop configured to use WSL2 and start when Windows s
    docker compose --env-file $Config ps
    ```
 
-   The app entrypoint runs `python manage.py migrate --noinput` before Gunicorn starts. Both the application and PostgreSQL should report `healthy`; the backup scheduler should report `Up`.
+   The app entrypoint runs `python manage.py migrate --noinput` before Gunicorn starts. Both the application and PostgreSQL should report `healthy`; the backup and SimpleFIN sync schedulers should report `Up`.
 
 4. Configure persistent tailnet-only HTTPS using the current Tailscale CLI syntax:
 
@@ -99,7 +107,7 @@ Google sign-in stays off until both `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET
 ```powershell
 Invoke-WebRequest https://BASEMENT-PC.MAGICDNS-NAME/health/
 docker compose --env-file $Config ps
-docker compose --env-file $Config logs --tail 50 app backup db
+docker compose --env-file $Config logs --tail 50 app backup simplefin-sync db
 ```
 
 The container health check (`python -m financial_planner.healthcheck`) probes the app on loopback using the first concrete entry of `DJANGO_ALLOWED_HOSTS` as its `Host` header, because Django rejects any host that is not allowed. Put the MagicDNS name first and do not start the list with `*`; otherwise the container can be reported unhealthy while the app works.
@@ -139,7 +147,7 @@ Use a fresh named volume so the old database remains available for investigation
    ```powershell
    $Config = 'D:\financial-planner-config\production.env'
    $Dump = 'financial_planner_YYYYMMDDTHHMMSSZ.dump'
-   docker compose --env-file $Config stop app backup db
+   docker compose --env-file $Config stop app backup simplefin-sync db
    ```
 
 2. In `production.env`, change `POSTGRES_VOLUME_NAME` to a new name such as `financial-planner-postgres-data-restored-YYYYMMDD`. Do not delete or reuse the old volume.
@@ -149,7 +157,7 @@ Use a fresh named volume so the old database remains available for investigation
    ```powershell
    docker compose --env-file $Config up -d db
    docker compose --env-file $Config run --rm backup /opt/financial-planner/restore.sh "/backups/nightly/$Dump"
-   docker compose --env-file $Config up -d app backup
+   docker compose --env-file $Config up -d app backup simplefin-sync
    docker compose --env-file $Config ps
    Invoke-WebRequest https://BASEMENT-PC.MAGICDNS-NAME/health/
    ```
@@ -161,7 +169,7 @@ Use a fresh named volume so the old database remains available for investigation
 Review release notes and take a verified manual backup first. Then fetch the approved revision and run:
 
 ```powershell
-docker compose --env-file $Config build --pull app backup
+docker compose --env-file $Config build --pull app backup simplefin-sync
 docker compose --env-file $Config up -d
 docker compose --env-file $Config ps
 Invoke-WebRequest https://BASEMENT-PC.MAGICDNS-NAME/health/
