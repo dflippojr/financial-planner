@@ -403,13 +403,15 @@ def apply_rule(principal, rule_id):
     person, rule = _rule_or_404(principal, rule_id)
     if not rule.enabled:
         raise ValidationError("Enable the rule before applying it.")
+    # Household lock first, as saving and toggling rules do, so a concurrent
+    # save cannot deadlock against this confirmation write.
+    lock_actor_household(person)
     # Applying confirms the preview, so the rule now applies automatically.
     CategoryRule.objects.filter(pk=rule.pk).update(confirmed_at=timezone.now())
     preview = [
         txn for txn in _matching_queryset(person, rule).order_by("pk") if _is_winning_rule(txn, rule)
     ]
     if not preview:
-        lock_actor_household(person)
         return None, 0
     locked = _still_eligible(person, _lock_transactions(person, preview))
     # Re-read the rule once rows are locked: a save that committed meanwhile

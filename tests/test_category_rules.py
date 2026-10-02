@@ -1129,3 +1129,28 @@ def test_a_rule_applies_automatically_only_after_its_preview_is_confirmed():
     apply_enabled_rules_to_transactions(owner, [third])
     third.refresh_from_db()
     assert third.category_id is None
+
+
+@pytest.mark.django_db
+def test_apply_locks_the_household_before_writing_the_rule():
+    from django.db import connection as db_connection
+    from django.test.utils import CaptureQueriesContext
+
+    if db_connection.vendor != "postgresql":
+        pytest.skip("SQLite does not emit row locks")
+    owner = make_person("owner-lock-order")
+    household = make_household(owner)
+    make_account(owner)
+    rule = save_category_rule(
+        owner, owner_kind="personal", description_contains="kroger", account_id=None,
+        min_amount_minor=None, max_amount_minor=None, category_id=groceries(household).pk, priority=0,
+    )
+
+    with CaptureQueriesContext(db_connection) as queries:
+        apply_rule(owner, rule.pk)
+
+    statements = [query["sql"].lower() for query in queries.captured_queries]
+    membership_lock = next(i for i, sql in enumerate(statements) if "finance_membership" in sql and "for update" in sql)
+    rule_write = next(i for i, sql in enumerate(statements) if sql.startswith("update") and "finance_categoryrule" in sql)
+    # Saving a rule locks the household first; Apply must use the same order.
+    assert membership_lock < rule_write
