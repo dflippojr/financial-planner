@@ -7,6 +7,11 @@ name: SonarCloud
 # `gh workflow enable "SonarCloud"` once the SonarCloud project/token are
 # confirmed working and the owner wants this running in CI again.
 #
+# The repo has since been made public. Standard GitHub-hosted runners are
+# free for public repos and SonarCloud is free for public projects, so the
+# cost reason above no longer applies; the workflow stays disabled until the
+# owner decides to re-enable it.
+#
 # Adapted from agent-harness's sonar.yml for this repo's stack (Django +
 # pytest, GitHub-hosted Linux runner -- no Windows-native test dependency
 # here, so ubuntu-latest instead of windows-latest, and no self-hosted
