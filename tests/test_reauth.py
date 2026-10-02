@@ -234,3 +234,26 @@ def test_google_connect_callback_rechecks_recent_auth():
     assert finished.status_code == 302
     assert finished.url.startswith(reverse("reauth"))
     assert not SocialAccount.objects.filter(user=user).exists()
+
+
+@pytest.mark.django_db
+@_google_settings()
+def test_another_members_google_login_never_confirms_this_session():
+    victim, _person, _household = make_member("victim")
+    attacker, _attacker_person, _attacker_household = make_member("attacker")
+    SocialAccount.objects.create(user=attacker, provider="google", uid=GOOGLE_SUB, extra_data={"sub": GOOGLE_SUB})
+    client = Client()
+    client.force_login(victim)
+    _expire_recent_auth(client)
+
+    start = client.post(reverse("google_login"), {"process": "redirect"})
+    _finish_google(client, start)
+
+    # Whatever happened, the victim's session must not be freshly confirmed.
+    session = client.session
+    if str(session.get("_auth_user_id")) == str(victim.pk):
+        fresh = session.get(RECENT_AUTH_SESSION_KEY)
+        assert not (fresh and fresh > (timezone.now() - timedelta(minutes=10)).timestamp())
+    refused = client.post(reverse("invite"))
+    assert refused.status_code == 302
+    assert Invitation.objects.count() == 0
