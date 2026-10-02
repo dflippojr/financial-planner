@@ -248,24 +248,37 @@ def shared_description_contains(descriptions):
 
 
 def _enqueue_ids(person, ids):
+    if not ids:
+        return []
+    in_flight = list(
+        AiJob.objects.filter(
+            member=person,
+            feature=FEATURE,
+            status__in=(AiJob.Status.QUEUED, AiJob.Status.WAITING_MODEL, AiJob.Status.RUNNING),
+        ).order_by("pk")
+    )
+    already = set()
+    for job in in_flight:
+        already.update(_ids_from_refs(job.input_refs))
+    remaining = [pk for pk in dict.fromkeys(ids) if pk not in already]
+    if not remaining:
+        return []
     jobs = []
-    for chunk in _chunks(ids, BATCH_SIZE):
-        existing = (
-            AiJob.objects.filter(
-                member=person,
-                feature=FEATURE,
-                status__in=(AiJob.Status.QUEUED, AiJob.Status.WAITING_MODEL),
-            )
-            .order_by("pk")
-            .first()
-        )
-        if existing is not None:
-            merged = list(dict.fromkeys(_ids_from_refs(existing.input_refs) + chunk))
-            existing.input_refs = {"transaction_ids": merged}
-            existing.save(update_fields=("input_refs", "updated_at"))
-            jobs.append(existing)
+    for job in in_flight:
+        if job.status != AiJob.Status.QUEUED:
             continue
-        jobs.append(enqueue_job(person, feature=FEATURE, input_refs={"transaction_ids": chunk}))
+        current = _ids_from_refs(job.input_refs)
+        room = BATCH_SIZE - len(current)
+        if room <= 0:
+            continue
+        added, remaining = remaining[:room], remaining[room:]
+        job.input_refs = {"transaction_ids": current + added}
+        job.save(update_fields=("input_refs", "updated_at"))
+        jobs.append(job)
+        if not remaining:
+            return jobs
+    for chunk in _chunks(remaining, BATCH_SIZE):
+        jobs.append(enqueue_job(person, feature=FEATURE, input_refs={"transaction_ids": list(chunk)}))
     return jobs
 
 
