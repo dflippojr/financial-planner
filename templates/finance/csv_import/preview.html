@@ -23,6 +23,8 @@
 {% else %}
 {% if import_profile == "huntington" %}
 <p class="mb-4">Huntington checking columns are mapped automatically. Stored amounts use negative for money out and positive for money in.</p>
+{% elif import_profile == "capital_one" %}
+<p class="mb-4">Capital One columns are mapped automatically. The card number is never stored. Stored amounts use negative for money out and positive for money in.</p>
 {% else %}
 <p class="mb-4">Map the uploaded columns. Stored amounts use negative for money out and positive for money in.</p>
 {% endif %}
