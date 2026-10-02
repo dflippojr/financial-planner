@@ -1,10 +1,10 @@
 # Authentication, onboarding, and recovery
 
-The app uses Django usernames and passwords with database-backed sessions, and optional Google sign-in through `django-allauth`. Authentication is required by default for every view; only sign-in, first-run setup, invitation acceptance, account recovery, and (when Google is configured) the Google OAuth start and callback paths are public. Financial records must be queried through the model `visible_to()` methods so private records do not appear in pages, aggregates, searches, errors, or exports.
+The app uses Django usernames and passwords with database-backed sessions, and optional Google sign-in through `django-allauth`. Authentication is required by default for every view; only sign-in, first-run setup, invitation acceptance, account recovery, the privacy and data policy page, and (when Google is configured) the Google OAuth start and callback paths are public. Financial records must be queried through the model `visible_to()` methods so private records do not appear in pages, aggregates, searches, errors, or exports.
 
 ## First member
 
-Set `DJANGO_SECRET_KEY` to a long random value and apply migrations. While no `User` or `Person` exists, open `/setup/` in the browser. That page requires `SETUP_CODE` from the environment (compared in constant time, never logged or shown again). Submit the code, a username, display name, household name, and a password twice. Django's password validators apply, and surrounding whitespace is stripped the same way as on the other password forms. Success creates the household, starter categories, and eight one-time recovery codes, then signs the member in. After the first member exists, `/setup/` returns 404. Sign-in redirects to setup while no member exists. When Google sign-in is configured, the same page offers **Set up with Google**. The setup code is checked before the browser is redirected to Google.
+Set `DJANGO_SECRET_KEY` to a long random value and apply migrations. While no `User` or `Person` exists, open `/setup/` in the browser. That page requires `SETUP_CODE` from the environment (compared in constant time, never logged or shown again). Submit the code, a username, display name, household name, and a password twice. Django's password validators apply, and surrounding whitespace is stripped the same way as on the other password forms. The page also shows the current privacy and data policy; accepting it is optional at setup. Success creates the household, starter categories, and eight one-time recovery codes, then signs the member in. After the first member exists, `/setup/` returns 404. Sign-in redirects to setup while no member exists. When Google sign-in is configured, the same page offers **Set up with Google**. The setup code is checked before the browser is redirected to Google.
 
 If `SETUP_CODE` is unset, the page tells the operator to set it and does not create a user. Failed setup-code attempts use the same login throttle as sign-in. Concurrent submissions are serialized with a database lock so only one first member can be created.
 
@@ -18,7 +18,7 @@ The command works only while no `Person` exists. It prompts twice for a password
 
 ## Inviting another member
 
-Any person with a current household membership can open **Invite a household member** and create a code. The raw code is shown only in that response. Share it outside the app using a trusted channel. The recipient enters it on **Use an invitation**, chooses a username and either a password or **Join with Google**, and receives their own eight recovery codes.
+Any person with a current household membership can open **Invite a household member** and create a code. The raw code is shown only in that response. Share it outside the app using a trusted channel. The recipient enters it on **Use an invitation**, chooses a username and either a password or **Join with Google**, sees the current privacy and data policy, and receives their own eight recovery codes. Accepting the policy is optional; without it the member can use the app but cannot use an AI backend.
 
 An invitation can be used once and expires after 48 hours. Creating a new invitation does not invalidate older unused invitations. `INVITATION_TTL_HOURS` can change the duration for future codes.
 
@@ -51,3 +51,10 @@ The deployment must terminate HTTPS with `tailscale serve` and forward `X-Forwar
 - `DJANGO_CSRF_TRUSTED_ORIGINS`: comma-separated HTTPS origins, including the scheme, used to access the app.
 
 Secure session and CSRF cookies, HTTPS redirects, and one-year HSTS are enabled by default. `DJANGO_SECURE_COOKIES`, `DJANGO_SECURE_SSL_REDIRECT`, and `DJANGO_SECURE_HSTS_SECONDS` exist for isolated local development and tests; do not weaken them on the deployed app.
+
+## Privacy and data policy
+
+`/privacy-policy/` is public. It shows the current version number, published date, and stored text. First-run setup, invitation join, and Google sign-up present the same text and an optional acceptance checkbox. Existing members who are not in acceptance see a persistent prompt until they accept or dismiss it. A member who is not in acceptance can use the app but cannot use an AI backend. Household-shared data may reach a member's AI backend only while every current member is in acceptance (`may_use_ai` / `household_ai_allowed`). Account settings shows that state and records a new acceptance of the current version.
+
+Operators replace the default text with `PRIVACY_POLICY_PATH` (a file, or a directory containing `privacy-policy.md`) and publish with `python manage.py publish_privacy_policy` (add `--material` when members must accept again). The first published version is always material. Acceptance rows are included in that member's data export.
+

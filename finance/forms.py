@@ -64,8 +64,20 @@ class JoinForm(PasswordPairForm):
     invitation_code = forms.CharField(max_length=64)
     username = forms.CharField(max_length=150)
     display_name = forms.CharField(max_length=150)
+    accept_privacy_policy = forms.BooleanField(
+        required=False,
+        label="I accept the privacy and data policy",
+        help_text="You can finish without accepting. AI backends stay off until you accept.",
+    )
 
-    field_order = ("invitation_code", "username", "display_name", "password1", "password2")
+    field_order = (
+        "invitation_code",
+        "username",
+        "display_name",
+        "password1",
+        "password2",
+        "accept_privacy_policy",
+    )
 
     def clean_username(self):
         username = self.cleaned_data["username"]
@@ -78,6 +90,11 @@ class SetupForm(PasswordPairForm):
     username = forms.CharField(max_length=150)
     display_name = forms.CharField(max_length=150)
     household_name = forms.CharField(max_length=150, label="Household name")
+    accept_privacy_policy = forms.BooleanField(
+        required=False,
+        label="I accept the privacy and data policy",
+        help_text="You can finish without accepting. AI backends stay off until you accept.",
+    )
 
     field_order = (
         "setup_code",
@@ -86,6 +103,7 @@ class SetupForm(PasswordPairForm):
         "household_name",
         "password1",
         "password2",
+        "accept_privacy_policy",
     )
 
     def clean_username(self):
@@ -98,6 +116,11 @@ class JoinGoogleForm(forms.Form):
     invitation_code = forms.CharField(max_length=64)
     username = forms.CharField(max_length=150)
     display_name = forms.CharField(max_length=150)
+    accept_privacy_policy = forms.BooleanField(
+        required=False,
+        label="I accept the privacy and data policy",
+        help_text="You can finish without accepting. AI backends stay off until you accept.",
+    )
 
     def clean_username(self):
         username = self.cleaned_data["username"]
@@ -110,6 +133,11 @@ class SetupGoogleForm(forms.Form):
     username = forms.CharField(max_length=150)
     display_name = forms.CharField(max_length=150)
     household_name = forms.CharField(max_length=150, label="Household name")
+    accept_privacy_policy = forms.BooleanField(
+        required=False,
+        label="I accept the privacy and data policy",
+        help_text="You can finish without accepting. AI backends stay off until you accept.",
+    )
 
     def clean_username(self):
         username = self.cleaned_data["username"]

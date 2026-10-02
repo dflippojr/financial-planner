@@ -24,9 +24,35 @@
       <div class="flex-1 px-2 font-semibold">Financial Planner</div>
     </header>
     <main class="flex-1 p-4 lg:p-6">
+      {% if privacy_policy_prompt %}
+      <div role="status" class="alert mb-4">
+        <div>
+          <p class="font-semibold">Privacy and data policy</p>
+          <p class="text-sm">
+            Version {{ privacy_policy_prompt.version }} ({{ privacy_policy_prompt.published_at|date:"Y-m-d" }})
+            needs a response before you can use AI.
+            <a class="link" href="{% url 'privacy-policy' %}">Read the policy</a>
+          </p>
+          <div class="mt-2 flex flex-wrap gap-2">
+            <form method="post" action="{% url 'privacy-policy-respond' %}">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="accept">
+              <input type="hidden" name="next" value="{{ request.path }}">
+              <button type="submit" class="btn btn-primary btn-sm">Accept</button>
+            </form>
+            <form method="post" action="{% url 'privacy-policy-respond' %}">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="decline">
+              <input type="hidden" name="next" value="{{ request.path }}">
+              <button type="submit" class="btn btn-sm">Not now</button>
+            </form>
+          </div>
+        </div>
+      </div>
+      {% endif %}
 {% else %}
 <main class="flex min-h-screen items-center justify-center p-4">
-  <div class="card w-full max-w-md bg-base-100 shadow-xl">
+  <div class="card w-full {% if wide_card %}max-w-3xl{% else %}max-w-md{% endif %} bg-base-100 shadow-xl">
     <div class="card-body">
 {% endif %}
       {% block content %}{% endblock %}

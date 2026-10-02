@@ -7,6 +7,20 @@ def google_signin(_request):
     return {"google_signin_enabled": google_signin_enabled()}
 
 
+def privacy_policy_prompt(request):
+    user = getattr(request, "user", None)
+    if not getattr(user, "is_authenticated", False):
+        return {"privacy_policy_prompt": None}
+    person = getattr(user, "person", None)
+    if person is None:
+        return {"privacy_policy_prompt": None}
+    from .policy_services import current_policy, should_prompt_privacy_policy
+
+    if not should_prompt_privacy_policy(person):
+        return {"privacy_policy_prompt": None}
+    return {"privacy_policy_prompt": current_policy()}
+
+
 def _nav_current(request):
     match = getattr(request, "resolver_match", None)
     name = getattr(match, "url_name", "") or ""

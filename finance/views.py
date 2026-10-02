@@ -75,7 +75,15 @@ from .reauth import (
     stamp_recent_auth,
 )
 from .export import export_filename, write_export_zip
-from .models import Account, Category, Person, RecurringSeries, RefundLink, Transaction, TransactionCorrectionHistory, TransferPair
+from .models import Account, Category, Person, PrivacyPolicyVersion, RecurringSeries, RefundLink, Transaction, TransactionCorrectionHistory, TransferPair
+from .policy_services import (
+    accept_policy,
+    current_policy,
+    in_acceptance,
+    latest_acceptance,
+    decline_policy,
+    record_onboarding_acceptance,
+)
 from .recurring_services import confirm_recurring_series, confirmed_totals, dismiss_recurring_series, refresh_recurring_series
 from .cash_flow import (
     cash_flow_chart_data,
@@ -625,6 +633,10 @@ SETUP_FAILED = "Setup could not be completed. Check the setup code and try again
 LAST_SIGN_IN_METHOD = "Keep at least one sign-in method."
 
 
+def _privacy_policy_page_context(*, wide=True):
+    return {"privacy_policy": current_policy(), "wide_card": wide}
+
+
 @login_not_required
 @never_cache
 def sign_in(request):
@@ -641,7 +653,11 @@ def sign_in(request):
             clear_login_failures(key)
             _complete_member_session(request, user)
             return redirect(_redirect_target(request))
-    return render(request, "finance/login.html", {"form": form, "next": request.GET.get("next", "")})
+    return render(
+        request,
+        "finance/login.html",
+        {"form": form, "next": request.GET.get("next", ""), **_privacy_policy_page_context(wide=False)},
+    )
 
 
 def _google_oauth_login(request):
@@ -667,6 +683,7 @@ def _start_google_join(request, google_form):
             "invitation_code": invitation_code,
             "username": google_form.cleaned_data["username"],
             "display_name": google_form.cleaned_data["display_name"],
+            "accept_privacy_policy": google_form.cleaned_data.get("accept_privacy_policy", False),
         },
     )
     return _google_oauth_login(request)
@@ -696,6 +713,7 @@ def _start_google_setup(request, google_form):
             "username": google_form.cleaned_data["username"],
             "display_name": google_form.cleaned_data["display_name"],
             "household_name": google_form.cleaned_data["household_name"],
+            "accept_privacy_policy": google_form.cleaned_data.get("accept_privacy_policy", False),
         },
     )
     return _google_oauth_login(request)
@@ -723,6 +741,7 @@ def _complete_password_setup(request, form):
         raise Http404() from None
     clear_login_failures(key)
     _complete_member_session(request, user)
+    record_onboarding_acceptance(user.person, form.cleaned_data.get("accept_privacy_policy", False))
     return recovery_codes
 
 
@@ -777,6 +796,7 @@ def start_google_sign_in(request):
                 "form": LoginForm(),
                 "next": request.POST.get("next", ""),
                 "auth_error": "Sign-in failed. Check your credentials and try again later.",
+                **_privacy_policy_page_context(wide=False),
             },
         )
     store_google_pending(request, {"intent": "login"})
@@ -852,10 +872,19 @@ def join(request):
                 )
             except InvalidOneTimeCode:
                 form.add_error(None, "The invitation could not be used.")
+            else:
+                record_onboarding_acceptance(
+                    _user.person, form.cleaned_data.get("accept_privacy_policy", False)
+                )
     return render(
         request,
         "finance/join.html",
-        {"form": form, "google_form": google_form, "recovery_codes": recovery_codes},
+        {
+            "form": form,
+            "google_form": google_form,
+            "recovery_codes": recovery_codes,
+            **_privacy_policy_page_context(),
+        },
     )
 
 
@@ -873,7 +902,13 @@ def setup(request):
         return render(
             request,
             "finance/setup.html",
-            {"form": None, "google_form": None, "recovery_codes": None, "setup_configured": False},
+            {
+                "form": None,
+                "google_form": None,
+                "recovery_codes": None,
+                "setup_configured": False,
+                **_privacy_policy_page_context(),
+            },
         )
     if request.method == "POST" and request.POST.get("intent") == "google":
         google_form = SetupGoogleForm(request.POST)
@@ -893,6 +928,7 @@ def setup(request):
             "google_form": google_form,
             "recovery_codes": recovery_codes,
             "setup_configured": True,
+            **_privacy_policy_page_context(),
         },
     )
 
@@ -917,7 +953,12 @@ def account_settings(request):
             error = _account_remove_password(request)
         elif action == "export":
             return _account_export_zip(request)
+        elif action == "accept-privacy-policy":
+            if person_for_accept := getattr(request.user, "person", None):
+                accept_policy(person_for_accept)
     person = getattr(request.user, "person", None)
+    policy = current_policy()
+    acceptance = latest_acceptance(person) if person is not None else None
     return render(
         request,
         "finance/account_settings.html",
@@ -927,6 +968,9 @@ def account_settings(request):
             "has_password": request.user.has_usable_password(),
             "error": error,
             "household": current_household(person) if person is not None else None,
+            "privacy_policy": policy,
+            "privacy_in_acceptance": in_acceptance(person) if person is not None else False,
+            "privacy_acceptance": acceptance,
         },
     )
 
@@ -1025,6 +1069,37 @@ def leave_household_view(request):
     except PermissionDenied:
         raise Http404() from None
     return redirect("home")
+
+
+@login_not_required
+@never_cache
+def privacy_policy(request, version=None):
+    if version is None:
+        policy = current_policy()
+    else:
+        policy = get_object_or_404(PrivacyPolicyVersion, version=version)
+    current = current_policy()
+    return render(
+        request,
+        "finance/privacy_policy.html",
+        {
+            "privacy_policy": policy,
+            "wide_card": True,
+            "is_current_policy": policy.pk == current.pk,
+        },
+    )
+
+
+@require_POST
+@never_cache
+def privacy_policy_respond(request):
+    person = get_object_or_404(Person, user=request.user)
+    action = request.POST.get("action")
+    if action == "accept":
+        accept_policy(person)
+    elif action == "decline":
+        decline_policy(person)
+    return redirect(safe_next_url(request, request.POST.get("next", "")))
 
 
 @login_not_required

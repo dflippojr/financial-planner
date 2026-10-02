@@ -65,6 +65,7 @@ TEMPLATES = [
                 "django.contrib.messages.context_processors.messages",
                 "finance.context_processors.google_signin",
                 "finance.context_processors.navigation",
+                "finance.context_processors.privacy_policy_prompt",
             ],
         },
     }

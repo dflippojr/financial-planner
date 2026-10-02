@@ -154,3 +154,8 @@ def latest_acceptance(person):
         .order_by("-policy_version__version", "-accepted_at")
         .first()
     )
+
+
+def record_onboarding_acceptance(person, accepted):
+    if accepted:
+        accept_policy(person)

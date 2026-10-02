@@ -323,3 +323,13 @@ Calculation (recorded defaults; the owner may change them):
 - **YTD, 1-year and all-time** link the period returns: `product(1 + r) - 1` over periods whose end date falls in the range. Each range also shows total contributions and total growth in dollars. A range starts at the latest statement entry on or before its start date. Without one, it starts at the earliest entry inside the range and is labelled partial.
 - A range with any period that lacks a return shows value change only, plus a note. Accounts with fewer than two statement entries show value change only.
 - Every return is labelled an **estimate**, with the method named. Amounts are exact minor units; returns are percentages rounded to one decimal.
+
+## Privacy and data policy (2026-10-02, #106)
+
+Owner decisions:
+
+- Every member is asked to accept a privacy and data policy that discloses how data is stored and that a member who connects an outside AI provider may send household-shared data visible to them to that provider, once every current member is in acceptance. Other members' private data is never sent.
+- The default text lives in `finance/policy/default.md` for the owner to edit in the PR. Operators replace it without changing code via `PRIVACY_POLICY_PATH` and `python manage.py publish_privacy_policy` (`--material` when members must accept again). Versions are kept so the text someone accepted can be shown later.
+- A member is in acceptance when they have accepted the latest material version, or any later version. A non-material version never takes anyone out of acceptance.
+- Setup, join, and Google sign-up present the policy but do not block. Existing members see a prompt until they respond. Without acceptance the app works; AI backends do not. While any current household member is not in acceptance, no member's AI backend may receive household-shared data.
+- Acceptance rows are per member and version and are included in that member's export. The policy page is public.

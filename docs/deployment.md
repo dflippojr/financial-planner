@@ -82,7 +82,15 @@ Prerequisites are Docker Desktop configured to use WSL2 and start when Windows s
    docker compose --env-file $Config up -d --force-recreate app
    ```
 
-   Then open `/setup/` on the HTTPS MagicDNS URL. Enter the code with a username, display name, household name, and password, and save the one-time recovery codes. They are shown only once. After the first member exists, `/setup/` returns 404. You can then remove `SETUP_CODE` from the env file. If you do, recreate the app the same way. When Google sign-in is configured, the page also offers **Set up with Google**; the setup code is still required before the redirect to Google.
+   Then open `/setup/` on the HTTPS MagicDNS URL. Enter the code with a username, display name, household name, and password, read the privacy and data policy, and save the one-time recovery codes. Accepting the policy is optional at setup. They are shown only once. After the first member exists, `/setup/` returns 404. You can then remove `SETUP_CODE` from the env file. If you do, recreate the app the same way. When Google sign-in is configured, the page also offers **Set up with Google**; the setup code is still required before the redirect to Google.
+
+   To use your own policy text, set `PRIVACY_POLICY_PATH` to a file (or a directory that contains `privacy-policy.md`) that is visible inside the app container, then publish:
+
+   ```powershell
+   docker compose --env-file $Config exec app python manage.py publish_privacy_policy --material
+   ```
+
+   Omit `--material` for typo-fix versions that should not ask members to accept again. `/privacy-policy/` is public and shows the current version and date.
 
    The CLI still works if you prefer not to use the browser page:
 

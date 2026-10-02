@@ -7,6 +7,7 @@
 <p class="mt-4"><a class="btn btn-primary" href="{% url 'login' %}">Continue to sign in</a></p>
 {% else %}
 {% include "finance/_messages.html" %}
+{% include "finance/_privacy_policy_text.html" %}
 {% if google_signin_enabled %}
 <form method="post" class="mb-4">
   {% csrf_token %}

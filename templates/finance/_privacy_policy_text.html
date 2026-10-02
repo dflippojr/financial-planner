@@ -1,0 +1,13 @@
+{% if privacy_policy %}
+<section class="mb-4 rounded-box border border-base-300 p-3" aria-labelledby="privacy-policy-heading">
+  <h2 id="privacy-policy-heading" class="mb-2 font-semibold">Privacy and data policy</h2>
+  <p class="mb-2 text-sm opacity-80">
+    Version {{ privacy_policy.version }}
+    ·
+    {{ privacy_policy.published_at|date:"Y-m-d" }}
+    ·
+    <a class="link" href="{% url 'privacy-policy' %}">Open full page</a>
+  </p>
+  <div class="max-h-48 overflow-y-auto whitespace-pre-wrap rounded-box bg-base-200 p-3 text-sm">{{ privacy_policy.body }}</div>
+</section>
+{% endif %}

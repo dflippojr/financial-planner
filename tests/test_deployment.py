@@ -129,6 +129,7 @@ def test_compose_stages_csv_uploads_on_a_memory_backed_mount():
 
     assert "CSV_IMPORT_STAGING_DIR: /run/csv-staging/uploads" in compose
     assert "SETUP_CODE: ${SETUP_CODE:-}" in compose
+    assert "PRIVACY_POLICY_PATH: ${PRIVACY_POLICY_PATH:-}" in compose
     assert "GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}" in compose
     assert "GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}" in compose
     assert "FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:?FIELD_ENCRYPTION_KEY must be set}" in compose
