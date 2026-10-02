@@ -24,6 +24,9 @@ ACTION_LABELS = {
     "export-data": "Download the data export",
     "connect-simplefin": "Connect SimpleFIN",
     "disconnect-simplefin": "Disconnect SimpleFIN",
+    "connect-ai": "Connect an AI backend",
+    "disconnect-ai": "Disconnect the AI backend",
+    "ai-defaults": "Change AI backend defaults",
 }
 
 ACCOUNT_SETTINGS_ACTIONS = {

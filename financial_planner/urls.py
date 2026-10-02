@@ -2,6 +2,7 @@ from django.urls import path
 
 from finance import (
     account_views,
+    ai_views,
     net_worth_views,
     planning_views,
     rule_views,
@@ -27,6 +28,9 @@ urlpatterns = [
     path("sign-out/", views.sign_out, name="logout"),
     path("setup/", views.setup, name="setup"),
     path("account/", views.account_settings, name="account-settings"),
+    path("account/ai/connect/", ai_views.ai_connect, name="ai-connect"),
+    path("account/ai/disconnect/", ai_views.ai_disconnect, name="ai-disconnect"),
+    path("account/ai/defaults/", ai_views.ai_save_defaults, name="ai-defaults"),
     path("account/export/", views.account_export, name="account-export"),
     path("reauth/", views.reauth, name="reauth"),
     path("reauth/google/", views.start_google_reauth, name="reauth-google"),

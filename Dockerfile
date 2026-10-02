@@ -41,7 +41,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY --chown=app:app . .
 COPY --from=css --chown=app:app /src/static/dist/app.css /app/static/dist/app.css
-RUN chmod +x /app/scripts/start-production.sh /app/scripts/build_css.sh /app/scripts/run-simplefin-sync.sh
+RUN chmod +x /app/scripts/start-production.sh /app/scripts/build_css.sh /app/scripts/run-simplefin-sync.sh /app/scripts/run-ai-jobs.sh
 
 RUN DJANGO_SECRET_KEY=build-collectstatic-only \
     DJANGO_SECURE_SSL_REDIRECT=false \

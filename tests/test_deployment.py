@@ -136,6 +136,9 @@ def test_compose_stages_csv_uploads_on_a_memory_backed_mount():
     assert "SIMPLEFIN_SYNC_CRON: ${SIMPLEFIN_SYNC_CRON:-30 6 * * *}" in compose
     assert "simplefin-sync:" in compose
     assert 'entrypoint: ["/app/scripts/run-simplefin-sync.sh"]' in compose
+    assert "ai-jobs:" in compose
+    assert 'entrypoint: ["/app/scripts/run-ai-jobs.sh"]' in compose
+    assert "AI_LOCAL_QUIET_WINDOW: ${AI_LOCAL_QUIET_WINDOW:-22:00-06:00}" in compose
     assert "tmpfs:" in compose
     assert "- /run/csv-staging:size=128m,mode=1777" in compose
 
@@ -147,6 +150,7 @@ def test_dockerfile_builds_css_with_a_pinned_checksum_and_collectstatic():
     assert "FROM debian:bookworm-slim AS css" in dockerfile
     assert "sha256sum -c" in dockerfile
     assert "collectstatic --noinput" in dockerfile
+    assert "run-ai-jobs.sh" in dockerfile
     assert "--ignore src" in dockerfile
     assert "--ignore vendor" not in dockerfile
     assert "tailwindcss" in dockerfile

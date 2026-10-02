@@ -66,6 +66,7 @@ TEMPLATES = [
                 "finance.context_processors.google_signin",
                 "finance.context_processors.navigation",
                 "finance.context_processors.privacy_policy_prompt",
+                "finance.context_processors.ai_features",
             ],
         },
     }
@@ -197,11 +198,18 @@ CSV_IMPORT_STAGE_TTL_SECONDS = max(
     min(int(os.environ.get("CSV_IMPORT_STAGE_TTL_SECONDS", "3600")), 3600),
 )
 
-# Fernet key for SimpleFIN access URLs. Required to connect or sync; collectstatic
-# and other management commands can start without it.
+# Fernet key for SimpleFIN access URLs and AI App tokens. Required to connect
+# or sync; collectstatic and other management commands can start without it.
 FIELD_ENCRYPTION_KEY = os.environ.get("FIELD_ENCRYPTION_KEY", "").strip()
 SIMPLEFIN_SYNC_CRON = os.environ.get("SIMPLEFIN_SYNC_CRON", "30 6 * * *").strip()
 SIMPLEFIN_SYNC_MIN_INTERVAL_SECONDS = int(os.environ.get("SIMPLEFIN_SYNC_MIN_INTERVAL_SECONDS", "900"))
+
+AGENT_HARNESS_PROJECT = os.environ.get("AGENT_HARNESS_PROJECT", "financial-planner").strip() or "financial-planner"
+AGENT_HARNESS_HOSTED_SESSIONS = os.environ.get("AGENT_HARNESS_HOSTED_SESSIONS", "false").lower() == "true"
+AGENT_HARNESS_SESSION_POLL_LIMIT = int(os.environ.get("AGENT_HARNESS_SESSION_POLL_LIMIT", "40"))
+AI_LOCAL_QUIET_WINDOW = os.environ.get("AI_LOCAL_QUIET_WINDOW", "22:00-06:00").strip()
+AI_JOB_POLL_SECONDS = int(os.environ.get("AI_JOB_POLL_SECONDS", "15"))
+AI_JOB_MAX_ATTEMPTS = int(os.environ.get("AI_JOB_MAX_ATTEMPTS", "5"))
 
 # Handle uploads in memory only. Django's default handlers write any upload over
 # 2.5 MB to a temporary file in /tmp before application code runs, which would put

@@ -534,6 +534,33 @@ class SimpleFinSetupForm(forms.Form):
     )
 
 
+class HarnessConnectForm(forms.Form):
+    base_url = forms.CharField(
+        label="Agent Harness Server URL",
+        max_length=255,
+        widget=forms.URLInput(attrs={"autocomplete": "off"}),
+    )
+    token = forms.CharField(
+        label="App token",
+        widget=forms.PasswordInput(attrs={"autocomplete": "off"}),
+    )
+
+
+class AiDefaultsForm(forms.Form):
+    chat_backend = forms.ChoiceField(label="Chat backend")
+    background_backend = forms.ChoiceField(label="Background jobs backend")
+    chat_model = forms.CharField(label="Chat model", required=False, max_length=80)
+    background_model = forms.CharField(label="Background model", required=False, max_length=80)
+
+    def __init__(self, *args, backends=(), **kwargs):
+        super().__init__(*args, **kwargs)
+        choices = [(item.id, item.label) for item in backends if item.available]
+        if not choices:
+            choices = [("", "No available backend")]
+        self.fields["chat_backend"].choices = choices
+        self.fields["background_backend"].choices = choices
+
+
 class ShareAccountForm(forms.Form):
     share_mode = forms.ChoiceField(choices=Account.ShareMode.choices, label="Share as")
 

@@ -1158,3 +1158,108 @@ class PrivacyPolicyAcceptance(models.Model):
 
     def __str__(self):
         return f"{self.person} accepted v{self.policy_version.version}"
+
+
+class AiProviderConnection(models.Model):
+    class Kind(models.TextChoices):
+        AGENT_HARNESS = "agent_harness", "Agent Harness"
+
+    owner = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="ai_connections")
+    kind = models.CharField(max_length=32, choices=Kind, default=Kind.AGENT_HARNESS)
+    base_url = models.CharField(max_length=255)
+    encrypted_token = models.BinaryField()
+    harness_project = models.CharField(max_length=80, blank=True, default="")
+    chat_backend = models.CharField(max_length=32, blank=True, default="")
+    background_backend = models.CharField(max_length=32, blank=True, default="")
+    chat_model = models.CharField(max_length=80, blank=True, default="")
+    background_model = models.CharField(max_length=80, blank=True, default="")
+    connected_at = models.DateTimeField(default=timezone.now)
+    last_status = models.CharField(max_length=80, blank=True, default="")
+
+    class QuerySet(models.QuerySet):
+        def owned_by(self, principal):
+            person = _person_for(principal)
+            if person is None:
+                return self.none()
+            return self.filter(owner=person)
+
+    objects = QuerySet.as_manager()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("owner", "kind"), name="ai_connection_unique_owner_kind"),
+            models.CheckConstraint(
+                condition=Q(kind__in=("agent_harness",)),
+                name="ai_connection_kind_valid",
+            ),
+        ]
+
+    def __str__(self):
+        return f"AI connection {self.pk}"
+
+
+class AiJob(models.Model):
+    class Status(models.TextChoices):
+        QUEUED = "queued", "Queued"
+        WAITING_MODEL = "waiting_model", "Waiting for model"
+        RUNNING = "running", "Running"
+        SUCCEEDED = "succeeded", "Succeeded"
+        FAILED = "failed", "Failed"
+
+    member = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="ai_jobs")
+    feature = models.CharField(max_length=40)
+    backend = models.CharField(max_length=32, blank=True, default="")
+    input_refs = models.JSONField(default=dict)
+    status = models.CharField(max_length=16, choices=Status, default=Status.QUEUED)
+    attempts = models.PositiveIntegerField(default=0)
+    next_attempt_at = models.DateTimeField(default=timezone.now)
+    result_ref = models.CharField(max_length=120, blank=True, default="")
+    failure_code = models.CharField(max_length=40, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            person = _person_for(principal)
+            if person is None:
+                return self.none()
+            return self.filter(member=person)
+
+    objects = QuerySet.as_manager()
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(
+                    status__in=("queued", "waiting_model", "running", "succeeded", "failed")
+                ),
+                name="ai_job_status_valid",
+            ),
+        ]
+
+    def __str__(self):
+        return f"AI job {self.pk}"
+
+
+class AiUsageEvent(models.Model):
+    member = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="ai_usage_events")
+    provider = models.CharField(max_length=32)
+    backend = models.CharField(max_length=32)
+    feature = models.CharField(max_length=40)
+    prompt_tokens = models.PositiveIntegerField(null=True, blank=True)
+    completion_tokens = models.PositiveIntegerField(null=True, blank=True)
+    outcome = models.CharField(max_length=40)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            person = _person_for(principal)
+            if person is None:
+                return self.none()
+            return self.filter(member=person)
+
+    objects = QuerySet.as_manager()
+
+    def __str__(self):
+        return f"AI usage {self.pk}"

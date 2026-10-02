@@ -1,0 +1,68 @@
+{% if show_ai_settings %}
+<section class="mb-6 rounded-box border border-base-300 p-4" aria-labelledby="ai-backends-heading">
+  <h2 id="ai-backends-heading" class="mb-2 font-semibold">AI backends</h2>
+  {% if ai_error %}<div role="alert" class="alert alert-error mb-4">{{ ai_error }}</div>{% endif %}
+  {% if not ai_connected %}
+  <p class="mb-4 text-sm">Connect an Agent Harness Server on this computer or the tailnet. The App token is stored encrypted and is never shown again.</p>
+  <form method="post" action="{% url 'ai-connect' %}" class="max-w-lg space-y-3">
+    {% csrf_token %}
+    {% include "finance/_form_fields.html" with form=ai_connect_form %}
+    <button type="submit" class="btn btn-primary">Connect Agent Harness</button>
+  </form>
+  {% else %}
+  <div{% if show_ai_features %} data-ai-ui="connected"{% endif %}>
+    <p class="mb-2 text-sm">Connected to {{ ai_connection.base_url }}.</p>
+    <p class="mb-4 text-sm">Hosted backends stay listed but unavailable until Agent Harness app-tools-only sessions land. Chat defaults to a hosted backend when one is selectable; background jobs default to the local model when it is available.</p>
+    {% if ai_backends %}
+    <table class="table table-sm mb-4">
+      <thead>
+        <tr><th>Backend</th><th>Status</th><th>Live</th><th>Background</th></tr>
+      </thead>
+      <tbody>
+        {% for backend in ai_backends %}
+        <tr>
+          <td>{{ backend.label }}{% if backend.slow_to_start %} <span class="badge">slow to start</span>{% endif %}</td>
+          <td>{{ backend.status }}</td>
+          <td>{% if backend.available and backend.suits_live %}yes{% else %}no{% endif %}</td>
+          <td>{% if backend.available and backend.suits_background %}yes{% else %}no{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+    {% if ai_defaults_form %}
+    <form method="post" action="{% url 'ai-defaults' %}" class="max-w-lg space-y-3 mb-4">
+      {% csrf_token %}
+      {% include "finance/_form_fields.html" with form=ai_defaults_form %}
+      <button type="submit" class="btn btn-primary">Save defaults</button>
+    </form>
+    {% endif %}
+    <form method="post" action="{% url 'ai-disconnect' %}" class="mb-6">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-outline">Disconnect</button>
+    </form>
+    <h3 class="mb-2 font-semibold">Usage</h3>
+    {% if ai_usage %}
+    <table class="table table-sm">
+      <thead>
+        <tr><th>When</th><th>Backend</th><th>Feature</th><th>Tokens</th><th>Outcome</th></tr>
+      </thead>
+      <tbody>
+        {% for row in ai_usage %}
+        <tr>
+          <td>{{ row.created_at|date:"Y-m-d H:i" }}</td>
+          <td>{{ row.backend }}</td>
+          <td>{{ row.feature }}</td>
+          <td>{{ row.prompt_tokens|default:"—" }} / {{ row.completion_tokens|default:"—" }}</td>
+          <td>{{ row.outcome }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="text-sm">No AI usage yet.</p>
+    {% endif %}
+  </div>
+  {% endif %}
+</section>
+{% endif %}

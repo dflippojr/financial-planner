@@ -1,6 +1,21 @@
 from django.urls import reverse
 
 from .google_auth import google_signin_enabled
+from .ai_services import member_has_ai
+
+
+def google_signin(_request):
+    return {"google_signin_enabled": google_signin_enabled()}
+
+
+def ai_features(request):
+    user = getattr(request, "user", None)
+    if not getattr(user, "is_authenticated", False):
+        return {"show_ai_features": False}
+    person = getattr(user, "person", None)
+    if person is None:
+        return {"show_ai_features": False}
+    return {"show_ai_features": member_has_ai(person)}
 
 
 def google_signin(_request):

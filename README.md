@@ -352,7 +352,7 @@ pinned compile in a throwaway image stage, then `collectstatic` so WhiteNoise ca
 <details>
 <summary><b>Production deployment</b></summary>
 
-`docker compose up -d` starts four services: `db`, `app`, `simplefin-sync`, and `backup`. The app binds
+`docker compose up -d` starts five services: `db`, `app`, `simplefin-sync`, `ai-jobs`, and `backup`. The app binds
 to localhost only and is published to the tailnet with `tailscale serve`. See
 [docs/deployment.md](docs/deployment.md) for first deployment, health checks, backups, restore into a
 fresh volume, and upgrades.
