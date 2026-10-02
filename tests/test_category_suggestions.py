@@ -12,6 +12,7 @@ from finance.ai_jobs import process_due_jobs
 from finance.ai_services import connect_harness, set_defaults
 from finance.category_services import assign_category, ensure_household_categories
 from finance.category_suggestion_services import (
+    BATCH_SIZE,
     FEATURE,
     accept_suggestion,
     queue_category_suggestions_for,
@@ -453,3 +454,62 @@ def test_snapshot_changes_with_description():
     first = snapshot_hash(txn)
     txn.description = "Two"
     assert snapshot_hash(txn) != first
+
+
+def _uncategorized_rows(owner, account, count, start=0):
+    return [
+        make_transaction(
+            owner,
+            account,
+            description=f"Synthetic uncategorized {index}",
+            amount_minor=-(100 + index),
+            fingerprint=f"{index:064d}",
+        )
+        for index in range(start, start + count)
+    ]
+
+
+def _job_id_lists(person):
+    jobs = list(AiJob.objects.filter(member=person, feature=FEATURE).order_by("pk"))
+    return jobs, [job.input_refs["transaction_ids"] for job in jobs]
+
+
+@pytest.mark.django_db
+def test_eighty_five_uncategorized_rows_split_into_three_jobs(harness):
+    _state, url = harness
+    _user, person, _household = make_member("owner")
+    connect_ai(person, url)
+    account = make_account(person)
+    _uncategorized_rows(person, account, 85)
+    queue_remaining_uncategorized(person)
+    jobs, id_lists = _job_id_lists(person)
+    assert [len(ids) for ids in id_lists] == [BATCH_SIZE, BATCH_SIZE, 5]
+    queued_ids = [pk for ids in id_lists for pk in ids]
+    assert len(queued_ids) == 85
+    assert len(set(queued_ids)) == 85
+    queue_remaining_uncategorized(person)
+    jobs_again, id_lists_again = _job_id_lists(person)
+    assert len(jobs_again) == 3
+    assert id_lists_again == id_lists
+    assert jobs_again == jobs
+
+
+@pytest.mark.django_db
+def test_partly_filled_queued_job_tops_up_only_to_batch_size(harness):
+    _state, url = harness
+    _user, person, _household = make_member("owner")
+    connect_ai(person, url)
+    account = make_account(person)
+    _uncategorized_rows(person, account, BATCH_SIZE - 2)
+    queue_remaining_uncategorized(person)
+    jobs, id_lists = _job_id_lists(person)
+    assert len(jobs) == 1
+    assert len(id_lists[0]) == BATCH_SIZE - 2
+    _uncategorized_rows(person, account, 10, start=BATCH_SIZE - 2)
+    queue_remaining_uncategorized(person)
+    jobs, id_lists = _job_id_lists(person)
+    assert [len(ids) for ids in id_lists] == [BATCH_SIZE, 8]
+    assert jobs[0].status == AiJob.Status.QUEUED
+    queued_ids = [pk for ids in id_lists for pk in ids]
+    assert len(queued_ids) == BATCH_SIZE + 8
+    assert len(set(queued_ids)) == len(queued_ids)
