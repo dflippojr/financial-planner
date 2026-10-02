@@ -1,6 +1,6 @@
 # Requirements
 
-Updated: 2026-09-30. This is a working product brief; open questions are explicit.
+Updated: 2026-10-02. This is a working product brief; open questions are explicit.
 
 ## Goal
 
@@ -323,3 +323,12 @@ Calculation (recorded defaults; the owner may change them):
 - **YTD, 1-year and all-time** link the period returns: `product(1 + r) - 1` over periods whose end date falls in the range. Each range also shows total contributions and total growth in dollars. A range starts at the latest statement entry on or before its start date. Without one, it starts at the earliest entry inside the range and is labelled partial.
 - A range with any period that lacks a return shows value change only, plus a note. Accounts with fewer than two statement entries show value change only.
 - Every return is labelled an **estimate**, with the method named. Amounts are exact minor units; returns are percentages rounded to one decimal.
+
+## Sign in with ChatGPT as an AI backend (2026-10-02, #92)
+
+Owner decisions from the research note (`docs/research/sign-in-with-chatgpt.md`; sources checked 2026-10-02):
+
+- **Do not build now.** Wait. No follow-up implementation issue. Revisit only if OpenAI documents a non-loopback HTTPS callback that a tailnet household server can use, plan usage for that hosting shape, and token storage on a user-controlled home server used by more than one member.
+- **Not a sign-in method.** Sign in with ChatGPT is not added next to Google. Google and passwords stay as decided above. ChatGPT would only ever be an AI provider connection for a member who already joined with an invitation.
+- **Why wait:** the self-serve OSS flow registers a dynamic public client and accepts only `http://127.0.0.1` callbacks, while this app is used at `https://<host>.<tailnet>.ts.net`. OpenAI’s SIWC Terms require tokens to stay local and under that user’s control, and forbid using one person’s plan for another person’s requests. That does not match storing tokens in the household database for every member. Function/custom tools exist on plan-usage Responses (needed for chat, #94), but that is not enough to build. The hosting member’s Claude/Codex/Cursor path remains Agent Harness (#91).
+- **Data use:** OpenAI does not give the app ChatGPT conversations or memories; plan-usage Responses must use `store: false`. Whether those request bodies are used to train models was not established (help and training-policy pages were not retrieved). Household financial data in an inference call would still leave this machine; #106 still applies before sending shared data.
