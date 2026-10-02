@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import timedelta
 
 from django.conf import settings
+from django.db import connection, transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from .ai_harness import failure_from_http, local_model_ready, model_status
@@ -22,8 +24,8 @@ FEATURE_PROMPTS = {
 
 
 def enqueue_job(person, *, feature, input_refs=None, backend=""):
-    connection = connection_for(person)
-    chosen = backend or (connection.background_backend if connection else "")
+    connection_row = connection_for(person)
+    chosen = backend or (connection_row.background_backend if connection_row else "")
     return AiJob.objects.create(
         member=person,
         feature=feature,
@@ -36,10 +38,11 @@ def enqueue_job(person, *, feature, input_refs=None, backend=""):
 
 def process_due_jobs(*, now=None):
     moment = now or timezone.now()
+    cutoff = _stale_running_cutoff(moment)
     jobs = list(
         AiJob.objects.filter(
-            status__in=(AiJob.Status.QUEUED, AiJob.Status.WAITING_MODEL),
-            next_attempt_at__lte=moment,
+            Q(status__in=(AiJob.Status.QUEUED, AiJob.Status.WAITING_MODEL), next_attempt_at__lte=moment)
+            | Q(status=AiJob.Status.RUNNING, updated_at__lte=cutoff)
         ).order_by("pk")
     )
     processed = 0
@@ -68,23 +71,43 @@ def in_quiet_window(moment=None):
     return current_minutes >= start or current_minutes < end
 
 
+def _stale_running_cutoff(moment):
+    timeout = int(getattr(settings, "AGENT_HARNESS_SESSION_TIMEOUT_SECONDS", 600))
+    margin = int(getattr(settings, "AGENT_HARNESS_STALE_JOB_MARGIN_SECONDS", 120))
+    return moment - timedelta(seconds=timeout + margin)
+
+
+def _lock_qs(qs):
+    if not connection.features.has_select_for_update:
+        return qs
+    kwargs = {}
+    if connection.features.has_select_for_update_skip_locked:
+        kwargs["skip_locked"] = True
+    return qs.select_for_update(**kwargs)
+
+
 def _process_one(job, moment):
+    cutoff = _stale_running_cutoff(moment)
+    if job.status == AiJob.Status.RUNNING and not (job.harness_session_id or "").strip():
+        return _requeue_stale_running(job, moment, cutoff)
     if not may_use_ai(job.member):
         _fail(job, UNAVAILABLE)
         return True
-    connection = connection_for(job.member)
-    if connection is None:
+    member_connection = connection_for(job.member)
+    if member_connection is None:
         _fail(job, UNAVAILABLE)
         return True
-    backend = job.backend or connection.background_backend
-    if backend == LOCAL_BACKEND and not _local_may_run(connection):
+    backend = job.backend or member_connection.background_backend
+    resuming = job.status == AiJob.Status.RUNNING and bool((job.harness_session_id or "").strip())
+    if not resuming and backend == LOCAL_BACKEND and not _local_may_run(member_connection):
         job.status = AiJob.Status.WAITING_MODEL
         job.next_attempt_at = moment
         job.save(update_fields=("status", "next_attempt_at", "updated_at"))
         return False
-    job.status = AiJob.Status.RUNNING
-    job.attempts += 1
-    job.save(update_fields=("status", "attempts", "updated_at"))
+    claimed = _claim_for_run(job, moment, cutoff)
+    if claimed is None:
+        return False
+    job = claimed
 
     def remember_session(session_id):
         job.harness_session_id = session_id
@@ -125,9 +148,38 @@ def _process_one(job, moment):
     return _retry_or_fail(job, moment, result.failure_code or UNAVAILABLE)
 
 
-def _local_may_run(connection):
+def _claim_for_run(job, moment, cutoff):
+    due = Q(status__in=(AiJob.Status.QUEUED, AiJob.Status.WAITING_MODEL))
+    stale_resume = Q(status=AiJob.Status.RUNNING, updated_at__lte=cutoff) & ~Q(harness_session_id="")
+    with transaction.atomic():
+        locked = _lock_qs(AiJob.objects.filter(pk=job.pk).filter(due | stale_resume)).first()
+        if locked is None:
+            return None
+        if locked.status != AiJob.Status.RUNNING:
+            locked.status = AiJob.Status.RUNNING
+            locked.attempts += 1
+        locked.save(update_fields=("status", "attempts", "updated_at"))
+        return locked
+
+
+def _requeue_stale_running(job, moment, cutoff):
+    with transaction.atomic():
+        locked = _lock_qs(
+            AiJob.objects.filter(
+                pk=job.pk,
+                status=AiJob.Status.RUNNING,
+                harness_session_id="",
+                updated_at__lte=cutoff,
+            )
+        ).first()
+        if locked is None:
+            return False
+        return _retry_or_fail(locked, moment, locked.failure_code or UNAVAILABLE)
+
+
+def _local_may_run(member_connection):
     try:
-        statuses = model_status(connection.base_url, _token(connection))
+        statuses = model_status(member_connection.base_url, _token(member_connection))
     except HarnessHttpError:
         return in_quiet_window()
     if local_model_ready(statuses):
