@@ -317,3 +317,55 @@ def test_acceptance_rows_are_exported():
     ]
     assert rows[0]["accepted_at"]
 
+
+@pytest.mark.django_db
+def test_stale_versioned_page_does_not_accept_current_policy():
+    user, person, _household = make_member("owner")
+    first = publish_policy(material=True, body="Synthetic policy v1")
+    accept_policy(person, first)
+    current = publish_policy(material=True, body="Synthetic policy v2")
+    client = Client()
+    client.force_login(user)
+
+    shown = client.get(reverse("privacy-policy-version", args=(first.version,)))
+    assert shown.status_code == 200
+    assert b"Accept this version" not in shown.content
+    assert b"Read the current version" in shown.content
+
+    posted = client.post(
+        reverse("privacy-policy-respond"),
+        {
+            "action": "accept",
+            "version": str(first.version),
+            "next": reverse("account-settings"),
+        },
+    )
+
+    assert not PrivacyPolicyAcceptance.objects.filter(person=person, policy_version=current).exists()
+    assert posted.status_code == 302
+    assert posted.url == reverse("privacy-policy")
+
+
+@pytest.mark.django_db
+def test_accept_from_current_policy_page_records_the_shown_version():
+    user, person, _household = make_member("owner")
+    current = publish_policy(material=True, body="Synthetic policy v1")
+    client = Client()
+    client.force_login(user)
+
+    shown = client.get(reverse("privacy-policy"))
+    assert b"Accept this version" in shown.content
+    assert f'name="version" value="{current.version}"'.encode() in shown.content
+
+    posted = client.post(
+        reverse("privacy-policy-respond"),
+        {
+            "action": "accept",
+            "version": str(current.version),
+            "next": reverse("account-settings"),
+        },
+    )
+
+    assert posted.status_code == 302
+    assert PrivacyPolicyAcceptance.objects.filter(person=person, policy_version=current).exists()
+

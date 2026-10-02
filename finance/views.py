@@ -1095,10 +1095,17 @@ def privacy_policy(request, version=None):
 def privacy_policy_respond(request):
     person = get_object_or_404(Person, user=request.user)
     action = request.POST.get("action")
+    current = current_policy()
+    try:
+        shown_version = int(request.POST.get("version"))
+    except (TypeError, ValueError):
+        shown_version = None
     if action == "accept":
-        accept_policy(person)
+        if shown_version != current.version:
+            return redirect("privacy-policy")
+        accept_policy(person, current)
     elif action == "decline":
-        decline_policy(person)
+        decline_policy(person, current)
     return redirect(safe_next_url(request, request.POST.get("next", "")))
 
 
