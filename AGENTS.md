@@ -2,7 +2,7 @@
 
 ## Start here
 
-This private repository is a self hosted personal finance app. Read docs/requirements.md and docs/backlog.md before changing code. In a whole-issue run, read the live GitHub issue and every comment. In an agent-loop task-file run, follow that scoped task file as the complete instruction and do not expand into the parent issue. The current user request and recorded product decisions take priority over older issue or document text. Record new decisions in the requirements and issue before building on them.
+This public repository is a self hosted personal finance app; anything committed, and any issue or PR text, is visible to anyone. Read docs/requirements.md and docs/backlog.md before changing code. In a whole-issue run, read the live GitHub issue and every comment. In an agent-loop task-file run, follow that scoped task file as the complete instruction and do not expand into the parent issue. The current user request and recorded product decisions take priority over older issue or document text. Record new decisions in the requirements and issue before building on them.
 
 The first release imports CSV exports from Huntington Bank, Capital One, Apple Card, and Vanguard. Its lead view shows income, spending, and net cash flow over time. People have private accounts and explicitly shared household accounts; every household member may edit shared accounts and transactions. The app will run on the basement PC through the home network and Tailscale. Plaid is a later research item and must not become a paid dependency for the first release. See issue #1 for unresolved provider formats and account lifecycle rules; issue #2 chooses the stack.
 
