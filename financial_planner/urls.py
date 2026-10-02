@@ -1,6 +1,6 @@
 from django.urls import path
 
-from finance import account_views, net_worth_views, simplefin_views, views
+from finance import account_views, net_worth_views, planning_views, simplefin_views, views
 from finance.csv_import import views as csv_import_views
 
 
@@ -53,4 +53,8 @@ urlpatterns = [
     path("categories/", views.category_list, name="category-list"),
     path("transfers/", views.transfer_review, name="transfer-review"),
     path("recurring/", views.recurring_review, name="recurring-review"),
+    path("planning/items/", planning_views.planned_item_list, name="planned-items"),
+    path("planning/items/<int:item_id>/edit/", planning_views.planned_item_edit, name="planned-item-edit"),
+    path("planning/items/<int:item_id>/disable/", planning_views.planned_item_disable, name="planned-item-disable"),
+    path("planning/items/<int:item_id>/enable/", planning_views.planned_item_enable, name="planned-item-enable"),
 ]

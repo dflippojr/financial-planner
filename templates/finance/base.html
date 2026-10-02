@@ -39,6 +39,9 @@
       <ul class="menu flex-1 p-4" aria-label="Main">
         <li class="menu-title">Financial Planner</li>
         {% for item in nav_items %}
+        {% if item.key == "planned-items" %}
+        <li class="menu-title">Planning</li>
+        {% endif %}
         <li>
           <a href="{{ item.url }}"{% if item.active %} class="menu-active" aria-current="page"{% endif %}>{{ item.label }}</a>
         </li>

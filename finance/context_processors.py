@@ -14,6 +14,8 @@ def _nav_current(request):
         return "transaction-list"
     if name.startswith("csv-import"):
         return "csv-import"
+    if name in {"planned-item-edit", "planned-item-disable", "planned-item-enable"}:
+        return "planned-items"
     if name.startswith("simplefin"):
         return "simplefin-connections"
     if name in {"account-balances", "account-snapshot-edit", "account-snapshot-delete"}:
@@ -38,6 +40,7 @@ def navigation(request):
         ("simplefin-connections", "Connections", reverse("simplefin-connections")),
         ("csv-import", "Import", accounts_url),
         ("invite", "Invite", reverse("invite")),
+        ("planned-items", "Planned items", reverse("planned-items")),
     )
     return {
         "nav_items": [
