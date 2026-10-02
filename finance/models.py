@@ -735,6 +735,7 @@ class BalanceSnapshot(models.Model):
     amount_minor = models.BigIntegerField()
     currency = models.CharField(max_length=3, default="USD")
     source = models.CharField(max_length=16, choices=Source)
+    note = models.CharField(max_length=200, blank=True, default="")
     import_batch = models.ForeignKey(
         ImportBatch,
         on_delete=models.SET_NULL,

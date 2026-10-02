@@ -1,0 +1,103 @@
+{% extends "finance/base.html" %}
+{% block title %}Net worth · Financial Planner{% endblock %}
+{% block content %}
+<h1 class="mb-4 text-2xl font-bold">Net worth</h1>
+<form method="get" class="mb-4 flex flex-wrap items-end gap-3">
+  {% include "finance/_form_fields.html" with form=filter_form %}
+  <button type="submit" class="btn btn-primary">Update</button>
+  <a class="btn btn-ghost" href="{% url 'net-worth' %}">Reset to default range</a>
+</form>
+{% if presets %}
+<p class="mb-4 flex flex-wrap gap-2">
+  {% for preset in presets %}
+  <a class="btn btn-sm btn-outline" href="{{ preset.url }}">{{ preset.label }}</a>
+  {% endfor %}
+</p>
+{% endif %}
+{% if report and not report.has_snapshots %}
+<div role="status" class="alert mb-4">
+  <span>
+    No balances yet.
+    <a class="link" href="{% url 'account-list' %}">Record a balance</a>
+    or connect SimpleFIN to see net worth over time.
+  </span>
+</div>
+{% endif %}
+{% if report %}
+<div class="flex flex-col gap-4">
+  <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
+    <article class="stats bg-base-100 shadow">
+      <div class="stat">
+        <h2 class="stat-title">Current net worth</h2>
+        <p class="stat-value text-2xl sm:text-3xl">{% include "finance/_amount.html" with value=report.summary.net_display tone="" %}</p>
+      </div>
+    </article>
+    <article class="stats bg-base-100 shadow">
+      <div class="stat">
+        <h2 class="stat-title">Change vs previous month</h2>
+        <p class="stat-value text-2xl sm:text-3xl">{% include "finance/_amount.html" with value=report.summary.month_change.display tone="" %}</p>
+        <p class="stat-desc">{{ report.summary.month_change.label }}</p>
+      </div>
+    </article>
+    <article class="stats bg-base-100 shadow">
+      <div class="stat">
+        <h2 class="stat-title">Change over range</h2>
+        <p class="stat-value text-2xl sm:text-3xl">{% include "finance/_amount.html" with value=report.summary.range_change.display tone="" %}</p>
+        <p class="stat-desc">{{ report.summary.range_change.label }}</p>
+      </div>
+    </article>
+  </div>
+  {{ chart_data|json_script:"net-worth-chart-data" }}
+  <figure>
+    <figcaption class="mb-2 font-medium">Net worth with assets and liabilities by month</figcaption>
+    <div class="h-72 w-full rounded-box bg-base-100 p-2 shadow">
+      <canvas id="net-worth-chart" data-chart="net-worth" data-chart-payload="net-worth-chart-data" role="img" aria-label="Line chart of net worth with stacked assets and liabilities. The table below lists the same numbers."></canvas>
+    </div>
+  </figure>
+  {% for period in report.periods %}
+  <section class="card bg-base-100 shadow-sm">
+    <div class="card-body">
+      <h2 class="card-title">
+        {{ period.label }}
+        {% if period.omitted_untracked %}
+        <span class="badge badge-ghost">{{ period.omitted_untracked }} not yet tracked</span>
+        {% endif %}
+      </h2>
+      <p>
+        Assets {% include "finance/_amount.html" with value=period.assets_display tone="in" %}
+        · Liabilities {% include "finance/_amount.html" with value=period.liabilities_display tone="out" %}
+        · Net worth {% include "finance/_amount.html" with value=period.net_display tone="" %}
+      </p>
+      <div class="overflow-x-auto">
+        <table class="table table-zebra">
+          <thead class="sticky top-0 z-10 bg-base-200">
+            <tr>
+              <th>Account</th>
+              <th class="text-right">Balance</th>
+              <th>As of</th>
+              <th>Source</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for row in period.accounts %}
+            <tr>
+              <td>{{ row.account_name }}</td>
+              <td class="text-right">{% include "finance/_amount.html" with value=row.amount_display tone="" %}</td>
+              <td>{{ row.snapshot_date|date:"Y-m-d" }}</td>
+              <td><span class="badge">{{ row.source_badge }}</span></td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="4">No balances on or before this month.</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}
+{% block extra_js %}
+{% if chart_data %}{% include "finance/_chart_scripts.html" %}{% endif %}
+{% endblock %}

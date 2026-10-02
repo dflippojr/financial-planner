@@ -1,6 +1,6 @@
 from django.urls import path
 
-from finance import account_views, simplefin_views, views
+from finance import account_views, net_worth_views, simplefin_views, views
 from finance.csv_import import views as csv_import_views
 
 
@@ -8,6 +8,7 @@ urlpatterns = [
     path("health/", views.health, name="health"),
     path("", views.home, name="home"),
     path("spending/", views.spending_by_category, name="spending-by-category"),
+    path("net-worth/", net_worth_views.net_worth, name="net-worth"),
     path("sign-in/", views.sign_in, name="login"),
     path("sign-in/google/", views.start_google_sign_in, name="google-sign-in"),
     path("accounts/google/login/", views.google_oauth_login, name="google_login"),
@@ -32,6 +33,17 @@ urlpatterns = [
     path("accounts/<int:account_id>/unshare/", account_views.account_unshare, name="account-unshare"),
     path("accounts/<int:account_id>/archive/", account_views.account_archive, name="account-archive"),
     path("accounts/<int:account_id>/delete/", account_views.account_delete, name="account-delete"),
+    path("accounts/<int:account_id>/balances/", net_worth_views.account_balances, name="account-balances"),
+    path(
+        "accounts/<int:account_id>/balances/<int:snapshot_id>/edit/",
+        net_worth_views.account_snapshot_edit,
+        name="account-snapshot-edit",
+    ),
+    path(
+        "accounts/<int:account_id>/balances/<int:snapshot_id>/delete/",
+        net_worth_views.account_snapshot_delete,
+        name="account-snapshot-delete",
+    ),
     path("accounts/<int:account_id>/imports/preview/", csv_import_views.csv_preview, name="csv-import-preview"),
     path("accounts/<int:account_id>/imports/<int:batch_id>/undo/", csv_import_views.csv_undo_import, name="csv-import-undo"),
     path("transactions/", views.transaction_list, name="transaction-list"),

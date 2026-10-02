@@ -111,6 +111,7 @@ def test_signed_in_pages_use_shared_nav_and_signed_out_pages_use_a_card():
 
     for label in (
         "Cash flow",
+        "Net worth",
         "Spending",
         "Transactions",
         "Transfers",
