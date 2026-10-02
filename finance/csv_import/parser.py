@@ -58,6 +58,7 @@ class Mapping:
     payee_column: str = ""
     memo_column: str = ""
     source_id_column: str = ""
+    excluded_original_columns: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

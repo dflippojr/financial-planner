@@ -8,14 +8,17 @@ from django.views.decorators.http import require_http_methods, require_POST
 
 from finance.models import Account, ImportBatch
 
-from .forms import AppleCardImportForm, CsvMappingForm, CsvUploadForm, HuntingtonImportForm
+from .forms import AppleCardImportForm, CapitalOneImportForm, CsvMappingForm, CsvUploadForm, HuntingtonImportForm
 from .parser import CsvInputError, preview_csv, read_csv
 from .profiles import (
     APPLE_CARD,
     APPLE_CARD_MAPPING,
+    CAPITAL_ONE,
+    CAPITAL_ONE_MAPPING,
     HUNTINGTON,
     HUNTINGTON_MAPPING,
     require_apple_card_headers,
+    require_capital_one_headers,
     require_huntington_headers,
 )
 from .services import categorize_imported_batch, classify_overlap, commit_csv_import, undo_import_batch
@@ -29,6 +32,7 @@ FixedProfile = namedtuple("FixedProfile", ("require_headers", "mapping", "source
 
 FIXED_PROFILES = {
     HUNTINGTON: FixedProfile(require_huntington_headers, HUNTINGTON_MAPPING, ImportBatch.Source.HUNTINGTON, HuntingtonImportForm),
+    CAPITAL_ONE: FixedProfile(require_capital_one_headers, CAPITAL_ONE_MAPPING, ImportBatch.Source.CAPITAL_ONE, CapitalOneImportForm),
     APPLE_CARD: FixedProfile(require_apple_card_headers, APPLE_CARD_MAPPING, ImportBatch.Source.APPLE_CARD, AppleCardImportForm),
 }
 
