@@ -879,6 +879,82 @@ class PlannedItem(models.Model):
         return f"{amount:,.2f} {self.currency}"
 
 
+class SavingsGoalQuerySet(models.QuerySet):
+    def visible_to(self, principal):
+        person = _person_for(principal)
+        if person is None:
+            return self.none()
+        current_households = Membership.objects.filter(
+            person=person,
+            ended_at__isnull=True,
+        ).values("household_id")
+        return self.filter(
+            Q(owner=person, scope="private")
+            | Q(scope="household", household_id__in=current_households)
+        )
+
+
+class SavingsGoal(ArchivableModel):
+    class Scope(models.TextChoices):
+        PRIVATE = "private", "Private"
+        HOUSEHOLD = "household", "Household"
+
+    owner = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="savings_goals")
+    scope = models.CharField(max_length=9, choices=Scope, default=Scope.PRIVATE)
+    household = models.ForeignKey(
+        Household,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="savings_goals",
+    )
+    name = models.CharField(max_length=150)
+    target_amount_minor = models.BigIntegerField()
+    currency = models.CharField(max_length=3, default="USD")
+    target_date = models.DateField()
+    linked_account = models.ForeignKey(
+        Account,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="savings_goals",
+    )
+    manual_amount_minor = models.BigIntegerField(null=True, blank=True)
+    manual_amount_date = models.DateField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    objects = SavingsGoalQuerySet.as_manager()
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=(Q(scope="private", household__isnull=True) | Q(scope="household", household__isnull=False)),
+                name="savings_goal_scope_matches_household",
+            ),
+            models.CheckConstraint(condition=Q(currency="USD"), name="savings_goal_currency_usd"),
+            models.CheckConstraint(condition=Q(target_amount_minor__gt=0), name="savings_goal_target_positive"),
+            models.CheckConstraint(
+                condition=(
+                    Q(manual_amount_minor__isnull=True, manual_amount_date__isnull=True)
+                    | Q(manual_amount_minor__isnull=False, manual_amount_date__isnull=False)
+                ),
+                name="savings_goal_manual_amount_paired_with_date",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(status="active", archived_at__isnull=True)
+                    | Q(status="archived", archived_at__isnull=False)
+                ),
+                name="savings_goal_archive_state_consistent",
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
 class CategoryRule(models.Model):
     owner_person = models.ForeignKey(
         Person,

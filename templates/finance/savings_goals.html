@@ -1,0 +1,87 @@
+{% extends "finance/base.html" %}
+{% block title %}Savings goals · Financial Planner{% endblock %}
+{% block content %}
+<h1 class="mb-4 text-2xl font-bold">Savings goals</h1>
+<p class="mb-4 max-w-2xl opacity-80">Progress toward a target amount by a target date. This is informational and never changes the projection.</p>
+<section class="card bg-base-100 shadow-sm mb-6 max-w-lg">
+  <div class="card-body">
+    <h2 class="card-title">Add savings goal</h2>
+    <form method="post">
+      {% csrf_token %}
+      {% include "finance/_form_fields.html" with form=add_form %}
+      <button type="submit" class="btn btn-primary">Add goal</button>
+    </form>
+  </div>
+</section>
+<div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+{% for card in cards %}
+  <div class="card bg-base-100 shadow-sm">
+    <div class="card-body">
+      <div class="flex items-start justify-between gap-2">
+        <h2 class="card-title">{{ card.goal.name }}</h2>
+        <div class="flex flex-wrap gap-1">
+          {% if card.goal.scope == "household" %}
+          <span class="badge badge-info">Household</span>
+          {% else %}
+          <span class="badge">Private</span>
+          {% endif %}
+          {% if card.archived %}
+          <span class="badge badge-ghost">Archived</span>
+          {% endif %}
+          {% if card.completed %}
+          <span class="badge badge-success">Complete</span>
+          {% elif card.reached %}
+          <span class="badge badge-success">Reached</span>
+          {% elif card.past_due %}
+          <span class="badge badge-error">Past due</span>
+          {% endif %}
+        </div>
+      </div>
+      <progress class="progress {% if card.reached or card.completed %}progress-success{% elif card.past_due %}progress-error{% else %}progress-primary{% endif %} w-full" value="{{ card.percent }}" max="100"></progress>
+      <p class="text-sm opacity-80">{{ card.percent }}% complete · {{ card.current_amount_display }} of {{ card.target_amount_display }}</p>
+      <p class="text-sm opacity-80">
+        Target date {{ card.goal.target_date|date:"Y-m-d" }}
+        ·
+        {% if card.source == "snapshot" %}
+        from linked account{% if card.linked_account %} {{ card.linked_account.name }}{% endif %} as of {{ card.as_of|date:"Y-m-d" }}
+        {% elif card.source == "manual" %}
+        manual amount as of {{ card.as_of|date:"Y-m-d" }}
+        {% else %}
+        no current amount recorded yet
+        {% endif %}
+      </p>
+      {% if not card.reached and not card.past_due %}
+      <p class="text-sm opacity-80">{{ card.remaining_display }} remaining · {{ card.monthly_needed_display }}/month needed</p>
+      {% endif %}
+      <div class="card-actions mt-2 flex flex-wrap gap-2">
+        <a class="btn btn-sm" href="{% url 'savings-goal-edit' card.goal.pk %}">Edit</a>
+        {% if card.completed %}
+        <form method="post" action="{% url 'savings-goal-reopen' card.goal.pk %}">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-sm btn-outline">Reopen</button>
+        </form>
+        {% else %}
+        <form method="post" action="{% url 'savings-goal-complete' card.goal.pk %}">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-sm btn-outline">Mark complete</button>
+        </form>
+        {% endif %}
+        {% if card.archived %}
+        <form method="post" action="{% url 'savings-goal-unarchive' card.goal.pk %}">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-sm btn-outline">Unarchive</button>
+        </form>
+        {% else %}
+        <form method="post" action="{% url 'savings-goal-archive' card.goal.pk %}">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-sm btn-outline">Archive</button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+{% empty %}
+  <p>No savings goals yet.</p>
+{% endfor %}
+</div>
+{% endblock %}

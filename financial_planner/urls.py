@@ -1,6 +1,14 @@
 from django.urls import path
 
-from finance import account_views, net_worth_views, planning_views, rule_views, simplefin_views, views
+from finance import (
+    account_views,
+    net_worth_views,
+    planning_views,
+    rule_views,
+    savings_goal_views,
+    simplefin_views,
+    views,
+)
 from finance.csv_import import views as csv_import_views
 
 
@@ -64,4 +72,14 @@ urlpatterns = [
     path("planning/items/<int:item_id>/edit/", planning_views.planned_item_edit, name="planned-item-edit"),
     path("planning/items/<int:item_id>/disable/", planning_views.planned_item_disable, name="planned-item-disable"),
     path("planning/items/<int:item_id>/enable/", planning_views.planned_item_enable, name="planned-item-enable"),
+    path("planning/goals/", savings_goal_views.savings_goal_list, name="savings-goals"),
+    path("planning/goals/<int:goal_id>/edit/", savings_goal_views.savings_goal_edit, name="savings-goal-edit"),
+    path("planning/goals/<int:goal_id>/complete/", savings_goal_views.savings_goal_complete, name="savings-goal-complete"),
+    path("planning/goals/<int:goal_id>/reopen/", savings_goal_views.savings_goal_reopen, name="savings-goal-reopen"),
+    path("planning/goals/<int:goal_id>/archive/", savings_goal_views.savings_goal_archive, name="savings-goal-archive"),
+    path(
+        "planning/goals/<int:goal_id>/unarchive/",
+        savings_goal_views.savings_goal_unarchive,
+        name="savings-goal-unarchive",
+    ),
 ]
