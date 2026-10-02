@@ -56,3 +56,7 @@ class SimpleFinError(Exception):
     def __init__(self, message="", *, access_denied=False):
         super().__init__(message)
         self.access_denied = access_denied
+
+
+class SimpleFinRateLimited(SimpleFinError):
+    """A manual sync was refused because the last one was too recent."""
