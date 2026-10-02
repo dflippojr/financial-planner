@@ -14,6 +14,7 @@ from django.test import Client, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
+from tests.helpers import stamp_recent_auth
 from finance.auth_services import create_recovery_codes
 from finance.models import (
     Account,
@@ -137,6 +138,7 @@ def test_invitation_is_hashed_one_time_and_joins_same_household():
     user, _person, household = make_member()
     client = Client()
     client.force_login(user)
+    stamp_recent_auth(client)
     response = client.post(reverse("invite"))
     code = response.context["invitation_code"]
 
@@ -175,6 +177,7 @@ def test_username_normalization_is_consistent_between_join_and_sign_in():
     user, _person, _household = make_member()
     client = Client()
     client.force_login(user)
+    stamp_recent_auth(client)
     code = client.post(reverse("invite")).context["invitation_code"]
 
     join_data = {
@@ -203,6 +206,7 @@ def test_username_normalization_survives_a_casefold_that_decomposes():
     user, _person, _household = make_member()
     client = Client()
     client.force_login(user)
+    stamp_recent_auth(client)
     code = client.post(reverse("invite")).context["invitation_code"]
 
     join_data = {
@@ -223,6 +227,7 @@ def test_expired_invitation_cannot_be_used():
     user, _person, _household = make_member()
     client = Client()
     client.force_login(user)
+    stamp_recent_auth(client)
     created = client.post(reverse("invite"))
     code = created.context["invitation_code"]
     Invitation.objects.update(expires_at=timezone.now())
@@ -275,6 +280,7 @@ def test_recovery_succeeds_with_the_original_unnormalized_username():
     user, _person, _household = make_member()
     client = Client()
     client.force_login(user)
+    stamp_recent_auth(client)
     code = client.post(reverse("invite")).context["invitation_code"]
 
     join_data = {
@@ -344,6 +350,7 @@ def test_join_rejects_usernames_that_are_invalid_once_normalized(bad_username):
     user, _person, _household = make_member()
     client = Client()
     client.force_login(user)
+    stamp_recent_auth(client)
     code = client.post(reverse("invite")).context["invitation_code"]
 
     response = Client().post(
