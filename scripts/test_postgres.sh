@@ -9,8 +9,10 @@
 # Usage: scripts/test_postgres.sh [pytest args...]
 set -euo pipefail
 
-name="financial-planner-test-pg"
 port="${TEST_PG_PORT:-55432}"
+# One container per port, so parallel runs (each with its own TEST_PG_PORT)
+# never remove each other's database.
+name="${TEST_PG_NAME:-financial-planner-test-pg-${port}}"
 python_bin="${PYTHON:-python}"
 
 cleanup() { docker rm -f "$name" >/dev/null 2>&1 || true; }
