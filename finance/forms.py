@@ -266,6 +266,17 @@ class ManualBalanceForm(forms.Form):
         decimal_places=2,
         widget=forms.TextInput(attrs={"inputmode": "decimal"}),
     )
+    net_contribution = forms.DecimalField(
+        label="Net contributions this period",
+        max_digits=19,
+        decimal_places=2,
+        required=False,
+        widget=forms.TextInput(attrs={"inputmode": "decimal"}),
+        help_text=(
+            "From your statement: contributions minus withdrawals since the "
+            "previous statement. Leave blank if unknown."
+        ),
+    )
     note = forms.CharField(required=False, max_length=200)
 
     def __init__(self, *args, account=None, **kwargs):
@@ -275,6 +286,8 @@ class ManualBalanceForm(forms.Form):
             self.fields["amount"].help_text = "Amount owed. An overpayment is negative."
         elif account is not None:
             self.fields["amount"].help_text = "Current balance."
+        if account is None or account.account_type != Account.Type.INVESTMENT:
+            del self.fields["net_contribution"]
 
     def clean_snapshot_date(self):
         value = self.cleaned_data["snapshot_date"]
@@ -289,8 +302,23 @@ class ManualBalanceForm(forms.Form):
             raise ValidationError(AMOUNT_RANGE_ERROR)
         return amount
 
+    def clean_net_contribution(self):
+        amount = self.cleaned_data.get("net_contribution")
+        if amount is None:
+            return None
+        minor_units = int(amount * 100)
+        if not MIN_SIGNED_BIGINT <= minor_units <= MAX_SIGNED_BIGINT:
+            raise ValidationError(AMOUNT_RANGE_ERROR)
+        return amount
+
     def amount_minor(self):
         return int(self.cleaned_data["amount"] * 100)
+
+    def net_contribution_minor(self):
+        amount = self.cleaned_data.get("net_contribution")
+        if amount is None:
+            return None
+        return int(amount * 100)
 
 
 class SpendingFilterForm(forms.Form):

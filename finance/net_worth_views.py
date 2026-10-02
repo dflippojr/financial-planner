@@ -11,8 +11,9 @@ from django.views.decorators.http import require_GET, require_http_methods, requ
 from .account_views import _active_visible_account, _service_or_404
 from .cash_flow import default_date_range, format_minor
 from .forms import ManualBalanceForm, NetWorthFilterForm
-from .models import BalanceSnapshot
+from .models import Account, BalanceSnapshot
 from .net_worth import net_worth_chart_data, net_worth_preset_links, net_worth_report
+from .performance import account_performance
 from .snapshot_services import SnapshotError, delete_manual_snapshot, record_manual_snapshot, update_manual_snapshot
 
 
@@ -42,6 +43,7 @@ def net_worth(request):
     else:
         date_from = date_to = scope = None
     report = None
+    performance_rows = []
     if date_from is not None:
         report = net_worth_report(
             request.user,
@@ -50,6 +52,11 @@ def net_worth(request):
             scope=scope,
             today=today,
         )
+        performance_rows = [
+            account_performance(account, today)
+            for account in report.accounts
+            if account.account_type == Account.Type.INVESTMENT
+        ]
     return render(
         request,
         "finance/net_worth.html",
@@ -58,6 +65,7 @@ def net_worth(request):
             "report": report,
             "chart_data": net_worth_chart_data(report) if report is not None else None,
             "presets": net_worth_preset_links(today, scope=scope or "") if date_from is not None else (),
+            "performance_rows": performance_rows,
         },
     )
 
@@ -70,6 +78,8 @@ def _manual_form(account, data=None, snapshot=None):
             "amount": Decimal(snapshot.amount_minor) / Decimal(100),
             "note": snapshot.note,
         }
+        if snapshot.net_contribution_minor is not None:
+            initial["net_contribution"] = Decimal(snapshot.net_contribution_minor) / Decimal(100)
     return ManualBalanceForm(data, account=account, initial=initial)
 
 
@@ -87,6 +97,7 @@ def account_balances(request, account_id):
                 snapshot_date=form.cleaned_data["snapshot_date"],
                 amount_minor=form.amount_minor(),
                 note=form.cleaned_data["note"],
+                net_contribution_minor=form.net_contribution_minor(),
             ),
         )
         if saved is not None:
@@ -95,10 +106,15 @@ def account_balances(request, account_id):
     snapshots = list(account.balance_snapshots.order_by("-snapshot_date", "-source", "-pk"))
     for snapshot in snapshots:
         snapshot.amount_display = format_minor(snapshot.amount_minor, snapshot.currency)
+        if snapshot.net_contribution_minor is not None:
+            snapshot.net_contribution_display = format_minor(snapshot.net_contribution_minor)
+    performance = None
+    if account.account_type == Account.Type.INVESTMENT:
+        performance = account_performance(account, timezone.localdate())
     return render(
         request,
         "finance/account_balances.html",
-        {"account": account, "form": form, "snapshots": snapshots},
+        {"account": account, "form": form, "snapshots": snapshots, "performance": performance},
     )
 
 
@@ -129,6 +145,7 @@ def account_snapshot_edit(request, account_id, snapshot_id):
                 snapshot_date=form.cleaned_data["snapshot_date"],
                 amount_minor=form.amount_minor(),
                 note=form.cleaned_data["note"],
+                net_contribution_minor=form.net_contribution_minor(),
             ),
         )
         if saved is not None:

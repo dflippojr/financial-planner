@@ -158,7 +158,9 @@ recurring_series.csv / recurring_series.json
 
 balance_snapshots.csv / balance_snapshots.json
   Dated account balances (SimpleFIN or manual) for visible accounts:
-  id, account_id, snapshot_date, amount_minor, amount_decimal, currency, source, note.
+  id, account_id, snapshot_date, amount_minor, amount_decimal, currency, source, note,
+  net_contribution_minor, net_contribution_decimal.
+  net_contribution_minor is null except on manual statement entries.
   Present only when the balance snapshot model exists in this installation.
 
 JSON files are arrays of objects. CSV uses UTF-8. Nested lists in CSV are JSON
@@ -399,6 +401,7 @@ def _snapshot_rows(person, model):
     rows = []
     for snap in query:
         minor = snap.amount_minor
+        contribution_minor = getattr(snap, "net_contribution_minor", None)
         rows.append(
             {
                 "id": snap.pk,
@@ -409,6 +412,8 @@ def _snapshot_rows(person, model):
                 "currency": snap.currency,
                 "source": getattr(snap, "source", ""),
                 "note": getattr(snap, "note", ""),
+                "net_contribution_minor": contribution_minor,
+                "net_contribution_decimal": money_decimal(contribution_minor) if contribution_minor is not None else None,
             }
         )
     return rows

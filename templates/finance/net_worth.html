@@ -95,6 +95,45 @@
     </div>
   </section>
   {% endfor %}
+  {% if performance_rows %}
+  <section class="card bg-base-100 shadow-sm">
+    <div class="card-body">
+      <h2 class="card-title">Investment performance (all time)</h2>
+      <div class="overflow-x-auto">
+        <table class="table table-zebra">
+          <thead class="sticky top-0 z-10 bg-base-200">
+            <tr>
+              <th>Account</th>
+              <th class="text-right">Growth</th>
+              <th class="text-right">Return</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for performance in performance_rows %}
+            <tr>
+              <td><a class="link" href="{% url 'account-balances' performance.account.pk %}">{{ performance.account.name }}</a></td>
+              <td class="text-right">
+                {% if performance.summaries.all_time.has_data %}
+                {% include "finance/_amount.html" with value=performance.summaries.all_time.growth_display tone="" %}
+                {% else %}
+                {{ performance.summaries.all_time.note }}
+                {% endif %}
+              </td>
+              <td class="text-right">
+                {% if performance.summaries.all_time.return_display %}
+                <span class="tooltip" data-tip="{{ performance.estimate_note }}">{{ performance.summaries.all_time.return_display }} <span class="badge badge-ghost">Estimate</span></span>
+                {% else %}
+                —
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+  {% endif %}
 </div>
 {% endif %}
 {% endblock %}
