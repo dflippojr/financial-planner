@@ -155,7 +155,7 @@ def test_google_reauth_accepts_fresh_matching_sub_and_refuses_stale_or_wrong_ide
     start = client.post(reverse("reauth-google"), {"next": reverse("invite"), "action": "invite"})
     location = start["Location"]
     params = parse_qs(urlparse(location).query)
-    assert "login" in params.get("prompt", [""])[0]
+    assert params.get("prompt") == ["select_account"]
     assert params.get("max_age") == ["0"]
 
     stale = _finish_google(client, start, id_token=_id_token(auth_time=int(time.time()) - 3600))

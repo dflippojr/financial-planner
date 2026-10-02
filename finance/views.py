@@ -995,7 +995,9 @@ def start_google_reauth(request):
     store_google_pending(request, {"intent": "reauth", "next": next_url})
     request.session["reauth_next"] = next_url
     query = request.GET.copy()
-    query["auth_params"] = "prompt=login&max_age=0"
+    # Google accepts only none, consent, and select_account for prompt; max_age=0
+    # asks it to re-authenticate, and the callback checks auth_time either way.
+    query["auth_params"] = "prompt=select_account&max_age=0"
     request.GET = query
     return _google_oauth_login(request)
 
