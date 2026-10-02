@@ -398,14 +398,27 @@ def _apply_to_locked(person, rule, locked, *, require_first_match=True):
     return application, skipped_manual
 
 
+RULE_CHANGED_SINCE_PREVIEW = "This rule changed since its preview. Check the preview and apply again."
+
+
 @transaction.atomic
-def apply_rule(principal, rule_id):
+def apply_rule(principal, rule_id, *, previewed_version=None):
+    """Apply a rule to its preview matches and confirm it for automatic use.
+
+    previewed_version is the rule's updated_at (ISO format) from the page that
+    showed the preview. Only that exact version is confirmed: an edit saved
+    since then must be previewed again before it applies on its own.
+    """
     person, rule = _rule_or_404(principal, rule_id)
     if not rule.enabled:
         raise ValidationError("Enable the rule before applying it.")
-    # Household lock first, as saving and toggling rules do, so a concurrent
-    # save cannot deadlock against this confirmation write.
+    expected_version = previewed_version or rule.updated_at.isoformat()
+    # Household lock first, as saving and toggling rules do. Saves take the
+    # same lock, so the rule cannot change between this check and the write.
     lock_actor_household(person)
+    person, rule = _rule_or_404(principal, rule_id)
+    if not rule.enabled or rule.updated_at.isoformat() != expected_version:
+        raise ValidationError(RULE_CHANGED_SINCE_PREVIEW)
     # Applying confirms the preview, so the rule now applies automatically.
     CategoryRule.objects.filter(pk=rule.pk).update(confirmed_at=timezone.now())
     preview = [

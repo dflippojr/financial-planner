@@ -58,6 +58,7 @@
 <form method="post" class="mb-8">
   {% csrf_token %}
   <input type="hidden" name="action" value="apply">
+  <input type="hidden" name="rule_version" value="{{ rule.updated_at.isoformat }}">
   <button type="submit" class="btn btn-primary"{% if not rule.enabled or rule.inactive %} disabled{% endif %}>Apply to matching transactions</button>
 </form>
 <h2 class="mb-3 text-xl font-semibold">Application history</h2>

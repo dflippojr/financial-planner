@@ -1154,3 +1154,64 @@ def test_apply_locks_the_household_before_writing_the_rule():
     rule_write = next(i for i, sql in enumerate(statements) if sql.startswith("update") and "finance_categoryrule" in sql)
     # Saving a rule locks the household first; Apply must use the same order.
     assert membership_lock < rule_write
+
+
+@pytest.mark.django_db
+def test_apply_never_confirms_an_edit_saved_after_the_preview(monkeypatch):
+    import finance.rule_services as rule_services
+
+    owner = make_person("owner-edit-race")
+    household = make_household(owner)
+    account = make_account(owner)
+    rule = save_category_rule(
+        owner, owner_kind="personal", description_contains="kroger", account_id=None,
+        min_amount_minor=None, max_amount_minor=None, category_id=groceries(household).pk, priority=0,
+    )
+    original_lock = rule_services.lock_actor_household
+
+    def edited_before_lock(person):
+        # Another request saves an edit after Apply read the rule.
+        monkeypatch.setattr(rule_services, "lock_actor_household", original_lock)
+        save_category_rule(
+            owner, rule_id=rule.pk, owner_kind="personal", description_contains="synthetic", account_id=None,
+            min_amount_minor=None, max_amount_minor=None, category_id=dining(household).pk, priority=0,
+        )
+        return original_lock(person)
+
+    monkeypatch.setattr(rule_services, "lock_actor_household", edited_before_lock)
+    with pytest.raises(ValidationError, match="changed since its preview"):
+        apply_rule(owner, rule.pk)
+
+    rule.refresh_from_db()
+    assert rule.confirmed_at is None
+    later = make_transaction(owner, account, description="SYNTHETIC SHOP", fingerprint="f2".ljust(64, "0"))
+    apply_enabled_rules_to_transactions(owner, [later])
+    later.refresh_from_db()
+    assert later.category_id is None
+
+
+@pytest.mark.django_db
+def test_apply_from_a_stale_preview_page_is_refused():
+    owner = make_person("owner-stale-page")
+    household = make_household(owner)
+    make_account(owner)
+    rule = save_category_rule(
+        owner, owner_kind="personal", description_contains="kroger", account_id=None,
+        min_amount_minor=None, max_amount_minor=None, category_id=groceries(household).pk, priority=0,
+    )
+    client = Client()
+    client.force_login(owner.user)
+    page = client.get(reverse("category-rule-detail", args=[rule.pk])).content.decode()
+    shown_version = page.split('name="rule_version" value="', 1)[1].split('"', 1)[0]
+    save_category_rule(
+        owner, rule_id=rule.pk, owner_kind="personal", description_contains="kroger", account_id=None,
+        min_amount_minor=None, max_amount_minor=None, category_id=dining(household).pk, priority=0,
+    )
+
+    response = client.post(
+        reverse("category-rule-detail", args=[rule.pk]), {"action": "apply", "rule_version": shown_version}
+    )
+
+    assert "changed since its preview" in response.content.decode()
+    rule.refresh_from_db()
+    assert rule.confirmed_at is None

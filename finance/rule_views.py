@@ -130,7 +130,8 @@ def _post_save_rule(request, rule, form):
 
 def _post_apply_rule(request, rule, errors):
     try:
-        _service_or_404(lambda: apply_rule(request.user, rule.pk))
+        version = request.POST.get("rule_version") or None
+        _service_or_404(lambda: apply_rule(request.user, rule.pk, previewed_version=version))
     except ValidationError as exc:
         errors["apply"] = _first_message(exc, "The rule could not be applied.")
         return None
