@@ -52,6 +52,9 @@ class ProviderResult:
     usage: Usage = field(default_factory=Usage)
     failure_code: str | None = None
     session_id: str | None = None
+    # True only when the harness session may still be running (a client-side
+    # timeout), so a retry should resume it instead of starting a new one.
+    session_open: bool = False
 
 
 @dataclass(frozen=True)

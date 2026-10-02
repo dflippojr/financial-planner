@@ -718,3 +718,28 @@ def test_stale_runner_copy_does_not_overwrite_a_finished_job(harness, monkeypatc
 
     job.refresh_from_db()
     assert job.status == job.Status.SUCCEEDED
+
+
+@pytest.mark.django_db
+def test_failed_session_is_not_resumed_on_retry(harness):
+    state, url = harness
+    state.model_state = "ready"
+    _user, person, _household = make_member("owner")
+    connect_harness(person, base_url=url, token=TOKEN)
+    set_defaults(person, chat_backend="local", background_backend="local")
+    job = enqueue_job(person, feature="structured")
+    state.session_failure = "provider_unavailable"
+
+    process_due_jobs()
+
+    job.refresh_from_db()
+    assert job.status == job.Status.QUEUED
+    assert job.failure_code == UNAVAILABLE
+    assert job.harness_session_id == ""
+    AiJob.objects.filter(pk=job.pk).update(next_attempt_at=timezone.now())
+
+    process_due_jobs()
+
+    job.refresh_from_db()
+    assert job.status == job.Status.SUCCEEDED
+    assert state.requests.count(("POST", "/api/v1/sessions")) == 2
