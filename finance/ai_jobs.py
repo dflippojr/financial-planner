@@ -180,7 +180,9 @@ def _requeue_stale_running(job, moment, cutoff):
 def _local_may_run(member_connection):
     try:
         statuses = model_status(member_connection.base_url, _token(member_connection))
-    except HarnessHttpError:
+    except HarnessHttpError as exc:
+        if failure_from_http(exc) == AUTHORIZATION_REQUIRED:
+            raise
         return in_quiet_window()
     if local_model_ready(statuses):
         return True
