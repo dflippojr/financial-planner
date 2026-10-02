@@ -91,18 +91,14 @@ def _process_one(job, moment):
     if job.status == AiJob.Status.RUNNING and not (job.harness_session_id or "").strip():
         return _requeue_stale_running(job, moment, cutoff)
     if not may_use_ai(job.member):
-        _fail(job, UNAVAILABLE)
-        return True
+        return _fail_if_unchanged(job, UNAVAILABLE)
     member_connection = connection_for(job.member)
     if member_connection is None:
-        _fail(job, UNAVAILABLE)
-        return True
+        return _fail_if_unchanged(job, UNAVAILABLE)
     backend = job.backend or member_connection.background_backend
     resuming = job.status == AiJob.Status.RUNNING and bool((job.harness_session_id or "").strip())
     if not resuming and backend == LOCAL_BACKEND and not _local_may_run(member_connection):
-        job.status = AiJob.Status.WAITING_MODEL
-        job.next_attempt_at = moment
-        job.save(update_fields=("status", "next_attempt_at", "updated_at"))
+        _write_if_unchanged(job, status=AiJob.Status.WAITING_MODEL, next_attempt_at=moment)
         return False
     claimed = _claim_for_run(job, moment, cutoff)
     if claimed is None:
@@ -194,6 +190,8 @@ def _isolate_job_failure(job, moment, exc):
         job.refresh_from_db()
     except Exception:
         return
+    if job.status in (AiJob.Status.SUCCEEDED, AiJob.Status.FAILED):
+        return
     if isinstance(exc, AiError):
         code = exc.failure_code or PROVIDER_ERROR
     elif isinstance(exc, HarnessHttpError):
@@ -227,6 +225,23 @@ def _retry_or_fail(job, moment, code):
         return False
     _fail(job, code)
     return True
+
+
+def _write_if_unchanged(job, **fields):
+    """Update a job this runner has not claimed, only if nobody changed it since it was read."""
+    fields["updated_at"] = timezone.now()
+    return bool(
+        AiJob.objects.filter(pk=job.pk, status=job.status, updated_at=job.updated_at).update(**fields)
+    )
+
+
+def _fail_if_unchanged(job, code):
+    return _write_if_unchanged(
+        job,
+        status=AiJob.Status.FAILED,
+        failure_code=code,
+        finished_at=timezone.now(),
+    )
 
 
 def _fail(job, code):

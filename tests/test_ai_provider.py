@@ -695,3 +695,26 @@ def test_revoked_token_fails_a_local_job_outside_the_quiet_window(harness, monke
     job.refresh_from_db()
     assert job.status == job.Status.FAILED
     assert job.failure_code == AUTHORIZATION_REQUIRED
+
+
+@pytest.mark.django_db
+def test_stale_runner_copy_does_not_overwrite_a_finished_job(harness, monkeypatch):
+    from finance.ai_jobs import _process_one
+
+    state, url = harness
+    _user, person, _household = make_member("owner")
+    connect_harness(person, base_url=url, token=TOKEN)
+    set_defaults(person, chat_backend="local", background_backend="local")
+    job = enqueue_job(person, feature="structured")
+    stale = AiJob.objects.get(pk=job.pk)
+    state.model_state = "ready"
+    process_due_jobs()
+    job.refresh_from_db()
+    assert job.status == job.Status.SUCCEEDED
+
+    state.model_state = "sleeping"
+    monkeypatch.setattr("finance.ai_jobs.in_quiet_window", lambda moment=None: False)
+    _process_one(stale, timezone.now())
+
+    job.refresh_from_db()
+    assert job.status == job.Status.SUCCEEDED
