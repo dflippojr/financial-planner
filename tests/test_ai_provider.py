@@ -788,3 +788,35 @@ def test_tool_calls_stop_when_a_new_material_policy_is_published(harness):
     output, ok = run_tool(person, tools, "list_accounts", {})
     assert not ok
     assert "privacy and data policy" in output
+
+
+@pytest.mark.django_db
+def test_resuming_an_open_session_spends_no_attempts_until_the_age_cap(harness, settings):
+    from datetime import timedelta
+
+    state, url = harness
+    state.model_state = "ready"
+    state.running_polls = 1000
+    settings.AGENT_HARNESS_SESSION_TIMEOUT_SECONDS = 0
+    settings.AI_JOB_MAX_ATTEMPTS = 2
+    _user, person, _household = make_member("owner")
+    connect_harness(person, base_url=url, token=TOKEN)
+    set_defaults(person, chat_backend="local", background_backend="local")
+    job = enqueue_job(person, feature="structured")
+
+    for _ in range(4):
+        AiJob.objects.filter(pk=job.pk).update(next_attempt_at=timezone.now())
+        process_due_jobs()
+        job.refresh_from_db()
+        assert job.status == job.Status.QUEUED
+        assert job.harness_session_id
+    assert job.attempts == 1
+    assert state.requests.count(("POST", "/api/v1/sessions")) == 1
+
+    AiJob.objects.filter(pk=job.pk).update(
+        next_attempt_at=timezone.now(), created_at=timezone.now() - timedelta(days=2)
+    )
+    process_due_jobs()
+    job.refresh_from_db()
+    assert job.status == job.Status.FAILED
+    assert job.harness_session_id == ""

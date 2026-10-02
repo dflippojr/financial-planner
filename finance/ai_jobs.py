@@ -141,9 +141,28 @@ def _process_one(job, moment):
     if result.failure_code == AUTHORIZATION_REQUIRED:
         _fail(job, AUTHORIZATION_REQUIRED)
         return True
-    if not result.session_open:
-        job.harness_session_id = ""
+    if result.session_open:
+        return _wait_for_open_session(job, moment, result.failure_code or UNAVAILABLE)
+    job.harness_session_id = ""
     return _retry_or_fail(job, moment, result.failure_code or UNAVAILABLE)
+
+
+def _wait_for_open_session(job, moment, code):
+    """Check the open session again later without spending an attempt, up to a maximum job age."""
+    max_age = int(getattr(settings, "AI_JOB_RESUME_MAX_AGE_SECONDS", 24 * 60 * 60))
+    if job.created_at <= moment - timedelta(seconds=max_age):
+        job.harness_session_id = ""
+        _fail(job, code)
+        return True
+    job.status = AiJob.Status.QUEUED
+    job.failure_code = code
+    job.next_attempt_at = moment + timedelta(
+        seconds=int(getattr(settings, "AI_JOB_RESUME_DELAY_SECONDS", 300))
+    )
+    job.save(
+        update_fields=("status", "failure_code", "next_attempt_at", "harness_session_id", "updated_at")
+    )
+    return False
 
 
 def _claim_for_run(job, moment, cutoff):
@@ -155,7 +174,9 @@ def _claim_for_run(job, moment, cutoff):
             return None
         if locked.status != AiJob.Status.RUNNING:
             locked.status = AiJob.Status.RUNNING
-            locked.attempts += 1
+            # Attempts count new harness sessions; resuming an open one is not a new try.
+            if not (locked.harness_session_id or "").strip():
+                locked.attempts += 1
         locked.save(update_fields=("status", "attempts", "updated_at"))
         return locked
 
