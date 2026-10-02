@@ -7,6 +7,7 @@ from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.test import Client, override_settings
 from django.urls import reverse
+from django.utils import timezone
 from tests.helpers import stamp_recent_auth
 
 from finance.lifecycle_services import leave_household
@@ -34,6 +35,35 @@ def make_member(username, household=None):
         household = Household.objects.create(name="Synthetic Household")
     Membership.objects.create(person=person, household=household)
     return user, person, household
+
+
+@pytest.mark.django_db
+def test_publish_policy_collision_returns_the_winner(monkeypatch):
+    winner = PrivacyPolicyVersion.objects.create(
+        version=1,
+        body="Synthetic concurrent first publish",
+        is_material=True,
+        published_at=timezone.now(),
+    )
+
+    class EmptyLock:
+        def order_by(self, *_args, **_kwargs):
+            return self
+
+        def first(self):
+            return None
+
+    monkeypatch.setattr(
+        PrivacyPolicyVersion.objects,
+        "select_for_update",
+        lambda *args, **kwargs: EmptyLock(),
+    )
+
+    result = publish_policy(material=True, body="Synthetic losing first publish")
+
+    assert result.pk == winner.pk
+    assert result.body == "Synthetic concurrent first publish"
+    assert PrivacyPolicyVersion.objects.count() == 1
 
 
 @pytest.mark.django_db

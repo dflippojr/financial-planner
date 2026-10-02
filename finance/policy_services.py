@@ -75,12 +75,13 @@ def publish_policy(*, material, body=None):
         next_version = 1 if last is None else last.version + 1
         is_material = bool(material) or last is None
         try:
-            return PrivacyPolicyVersion.objects.create(
-                version=next_version,
-                body=text,
-                is_material=is_material,
-                published_at=timezone.now(),
-            )
+            with transaction.atomic():
+                return PrivacyPolicyVersion.objects.create(
+                    version=next_version,
+                    body=text,
+                    is_material=is_material,
+                    published_at=timezone.now(),
+                )
         except IntegrityError:
             return PrivacyPolicyVersion.objects.order_by("-version").first()
 
