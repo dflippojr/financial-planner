@@ -4,7 +4,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db.models import Max
 
 from .cash_flow import cash_flow_report, selected_accounts
-from .category_services import current_household
+from .category_services import current_household, exclusion_exists_for
 from .models import Account, PlannedItem, RecurringSeries, Transaction
 from .projection import (
     DEFAULT_HORIZON,
@@ -65,10 +65,17 @@ def visible_projection_inputs(principal, *, account=None, scope=""):
     inputs = [_planned_input(item) for item in planned_rows]
     # Only members still counted in actual cash flow keep a series going: an
     # archived account or transaction must not keep projecting charges.
-    eligible = Transaction.objects.visible_to(principal).filter(
-        status=Transaction.Status.ACTIVE,
-        account__status=Account.Status.ACTIVE,
-        account__archived_at__isnull=True,
+    eligible = (
+        Transaction.objects.visible_to(principal)
+        .filter(
+            status=Transaction.Status.ACTIVE,
+            kind=Transaction.Kind.CASH_FLOW,
+            account__status=Account.Status.ACTIVE,
+            account__archived_at__isnull=True,
+        )
+        .annotate(_excluded=exclusion_exists_for(principal))
+        .filter(_excluded=False)
+        .values("pk")
     )
     if account is not None or scope:
         eligible = eligible.filter(account__in=selected_accounts(principal, account=account, scope=scope))

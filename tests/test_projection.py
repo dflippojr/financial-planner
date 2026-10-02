@@ -679,3 +679,28 @@ def test_an_archived_accounts_series_stops_projecting():
     months = projected_months_for(owner, today=date(2026, 10, 1), horizon=3)
 
     assert all(month.spending_minor == 0 for month in months)
+
+
+@pytest.mark.django_db
+def test_a_series_whose_charges_are_confirmed_transfers_stops_projecting():
+    from finance.models import TransferPair
+
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner)
+    savings = make_account(owner, name="Synthetic Savings")
+    series = _confirmed_series(owner, checking, "Synthetic savings move", -5000, "g")
+    out_leg = series.members.get().transaction
+    in_leg = make_transaction(owner, savings, amount_minor=5000, fingerprint="G" * 63 + "h")
+    TransferPair.objects.create(
+        leg_a=out_leg,
+        leg_b=in_leg,
+        status=TransferPair.Status.CONFIRMED,
+        kind=TransferPair.Kind.TRANSFER,
+        confidence=TransferPair.Confidence.HIGH,
+        reasons=["synthetic"],
+    )
+
+    months = projected_months_for(owner, today=date(2026, 10, 1), horizon=3)
+
+    assert all(month.spending_minor == 0 for month in months)
