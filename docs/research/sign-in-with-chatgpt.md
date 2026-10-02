@@ -133,9 +133,11 @@ Revisit if OpenAI documents (a) HTTPS MagicDNS or other non-loopback callbacks f
    On this deployment, the hosting member can open the connect flow in a browser **on the basement PC itself**, so the loopback callback lands on the same machine that runs the app. No transfer step is needed. The app's container must receive that callback, for example through a port published only on host loopback while connecting, or through a small host-side helper. Open points:
    - whether an encrypted token in the app database meets [TERMS §1];
    - that host-specific attribution and revocation are "not yet available" [VM].
-2. **Other members: interest form.** [OSS] directs paid or remotely hosted apps to https://openai.com/form/sign-in-with-chatgpt-interest/. Ask for:
-   - a registered client with an HTTPS callback on the tailnet hostname;
-   - per-member plan usage on a self-hosted, open-source household server.
+2. **Other members: no documented route.** The interest form linked from [OSS] (https://openai.com/form/sign-in-with-chatgpt-interest/) is for commercial integrations. It sends open-source developers to the developer docs, so it is not a path for this app (owner check, 2026-10-02).
+   - The self-serve flow needs a `127.0.0.1` callback on the device running the browser.
+   - The [VM] transfer assumes a server that only that user controls. Per [TERMS §2] as quoted above, one person's server must not run requests for another person's plan.
+
+   Revisit if OpenAI documents a self-serve pattern for small multi-user self-hosted apps.
 3. **Existing alternative.** The hosting member's ChatGPT plan already works through Agent Harness's `codex` backend (#91), with no Sign in with ChatGPT.
 
 ## Open follow-ups (only if revisited)
