@@ -1,8 +1,10 @@
+import threading
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.db import connection, connections
 from django.test import Client
 from django.urls import reverse
 from django.utils import timezone
@@ -34,7 +36,7 @@ from finance.ai_types import (
 )
 from finance.ai_urls import HarnessUrlError, parse_harness_url
 from finance.encryption import decrypt_secret
-from finance.models import AiProviderConnection, AiUsageEvent, Household, Membership, Person
+from finance.models import AiJob, AiProviderConnection, AiUsageEvent, Household, Membership, Person
 from finance.policy_services import accept_policy, publish_policy
 
 
@@ -329,6 +331,122 @@ def test_background_job_resumes_the_same_harness_session(harness, monkeypatch, s
     assert state.requests.count(("POST", "/api/v1/sessions")) == 1
 
 
+def _mark_running(job, *, session_id, updated_at, attempts=1):
+    AiJob.objects.filter(pk=job.pk).update(
+        status=AiJob.Status.RUNNING,
+        attempts=attempts,
+        harness_session_id=session_id,
+        updated_at=updated_at,
+    )
+
+
+@pytest.mark.django_db
+def test_stale_running_job_resumes_without_creating_a_session(harness, settings):
+    state, url = harness
+    state.model_state = "ready"
+    settings.AGENT_HARNESS_SESSION_TIMEOUT_SECONDS = 2
+    settings.AGENT_HARNESS_STALE_JOB_MARGIN_SECONDS = 1
+    _user, person, _household = make_member("owner")
+    connect_harness(person, base_url=url, token=TOKEN)
+    set_defaults(person, chat_backend="local", background_backend="local")
+    session_id = "ses-stale-resume"
+    state.sessions[session_id] = {
+        "id": session_id,
+        "status": "running",
+        "prompt_tokens": 3,
+        "completion_tokens": 0,
+    }
+    state.session_polls_left[session_id] = 1
+    job = enqueue_job(person, feature="structured")
+    _mark_running(job, session_id=session_id, updated_at=timezone.now() - timedelta(seconds=60))
+    process_due_jobs()
+    job.refresh_from_db()
+    assert job.status == job.Status.SUCCEEDED
+    assert job.harness_session_id == session_id
+    assert state.requests.count(("POST", "/api/v1/sessions")) == 0
+    assert ("GET", f"/api/v1/sessions/{session_id}") in state.requests
+
+
+@pytest.mark.django_db
+def test_fresh_running_job_is_left_alone(harness, settings):
+    state, url = harness
+    state.model_state = "ready"
+    settings.AGENT_HARNESS_SESSION_TIMEOUT_SECONDS = 600
+    settings.AGENT_HARNESS_STALE_JOB_MARGIN_SECONDS = 120
+    _user, person, _household = make_member("owner")
+    connect_harness(person, base_url=url, token=TOKEN)
+    set_defaults(person, chat_backend="local", background_backend="local")
+    session_id = "ses-fresh-running"
+    state.sessions[session_id] = {
+        "id": session_id,
+        "status": "running",
+        "prompt_tokens": 3,
+        "completion_tokens": 0,
+    }
+    job = enqueue_job(person, feature="structured")
+    _mark_running(job, session_id=session_id, updated_at=timezone.now())
+    process_due_jobs()
+    job.refresh_from_db()
+    assert job.status == job.Status.RUNNING
+    assert job.harness_session_id == session_id
+    assert state.requests.count(("POST", "/api/v1/sessions")) == 0
+    assert ("GET", f"/api/v1/sessions/{session_id}") not in state.requests
+
+
+@pytest.mark.django_db
+def test_stale_running_job_without_session_is_requeued(harness, settings):
+    state, url = harness
+    state.model_state = "ready"
+    settings.AGENT_HARNESS_SESSION_TIMEOUT_SECONDS = 2
+    settings.AGENT_HARNESS_STALE_JOB_MARGIN_SECONDS = 1
+    _user, person, _household = make_member("owner")
+    connect_harness(person, base_url=url, token=TOKEN)
+    set_defaults(person, chat_backend="local", background_backend="local")
+    job = enqueue_job(person, feature="structured")
+    moment = timezone.now()
+    _mark_running(job, session_id="", updated_at=moment - timedelta(seconds=60), attempts=1)
+    process_due_jobs(now=moment)
+    job.refresh_from_db()
+    assert job.status == job.Status.QUEUED
+    assert job.attempts == 1
+    assert job.next_attempt_at == moment + timedelta(seconds=120)
+    assert state.requests.count(("POST", "/api/v1/sessions")) == 0
+
+
+@pytest.mark.django_db(transaction=True)
+def test_two_runners_claim_the_same_job_once(harness):
+    if connection.vendor != "postgresql":
+        pytest.skip("atomic job claims need PostgreSQL row locks")
+    state, url = harness
+    state.model_state = "ready"
+    _user, person, _household = make_member("owner")
+    connect_harness(person, base_url=url, token=TOKEN)
+    set_defaults(person, chat_backend="local", background_backend="local")
+    job = enqueue_job(person, feature="structured")
+    barrier = threading.Barrier(2)
+    errors = []
+
+    def run():
+        try:
+            barrier.wait(timeout=10)
+            process_due_jobs()
+        except Exception as exc:  # noqa: BLE001 - reported to the main thread
+            errors.append(exc)
+        finally:
+            connections.close_all()
+
+    first = threading.Thread(target=run)
+    second = threading.Thread(target=run)
+    first.start()
+    second.start()
+    first.join(timeout=30)
+    second.join(timeout=30)
+    assert errors == []
+    job.refresh_from_db()
+    assert job.status == job.Status.SUCCEEDED
+    assert state.requests.count(("POST", "/api/v1/sessions")) == 1
+
+
 @pytest.mark.django_db
 def test_undecryptable_token_fails_only_that_members_job(harness):
     state, url = harness
@@ -503,3 +621,60 @@ def test_job_without_connection_fails_unavailable():
     job.refresh_from_db()
     assert job.status == job.Status.FAILED
     assert job.failure_code == UNAVAILABLE
+
+
+@pytest.mark.django_db
+def test_waiting_app_without_pending_calls_still_times_out(harness, settings):
+    state, url = harness
+    state.stuck_waiting_app = True
+    settings.AGENT_HARNESS_SESSION_TIMEOUT_SECONDS = 3
+    clock = _FakeClock()
+    calls = []
+
+    def tool_runner(name, args):
+        calls.append(name)
+        return "unused", True
+
+    result = run_session(
+        url,
+        TOKEN,
+        prompt="synthetic",
+        backend="local",
+        project="financial-planner",
+        tool_runner=tool_runner,
+        sleep=clock.sleep,
+        monotonic=clock.monotonic,
+    )
+
+    assert not result.ok
+    assert result.failure_code == UNAVAILABLE
+    assert calls == []
+    assert clock.sleeps
+    assert state.requests.count(("POST", "/api/v1/sessions")) == 1
+
+
+@pytest.mark.django_db
+def test_answering_a_tool_call_finishes_the_session(harness):
+    state, url = harness
+    state.need_tool = True
+    clock = _FakeClock()
+    calls = []
+
+    def tool_runner(name, args):
+        calls.append(name)
+        return "synthetic-accounts", True
+
+    result = run_session(
+        url,
+        TOKEN,
+        prompt="synthetic",
+        backend="local",
+        project="financial-planner",
+        tool_runner=tool_runner,
+        sleep=clock.sleep,
+        monotonic=clock.monotonic,
+    )
+
+    assert result.ok
+    assert calls == ["list_accounts"]
+    assert result.answer.startswith("tool:synthetic-accounts")

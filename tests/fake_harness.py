@@ -24,6 +24,7 @@ class FakeHarnessState:
         self.session_answer = None
         self.session_prompts = []
         self.running_polls = 0
+        self.stuck_waiting_app = False
         self.initial_session_status = "running"
         self.session_polls_left = {}
 
@@ -152,7 +153,7 @@ def start_fake_harness(state=None):
                     self._json(404, {"detail": "not found"})
                     return
                 pending = []
-                if session.get("status") == "waiting_app" and not harness.tool_answered:
+                if session.get("status") == "waiting_app" and not harness.tool_answered and not harness.stuck_waiting_app:
                     pending = [
                         {
                             "call_id": "call-1",
@@ -206,6 +207,13 @@ def start_fake_harness(state=None):
                         "completion_tokens": 0,
                     }
                     harness.session_failure = None
+                elif harness.stuck_waiting_app:
+                    session = {
+                        "id": session_id,
+                        "status": "waiting_app",
+                        "prompt_tokens": 2,
+                        "completion_tokens": 0,
+                    }
                 elif harness.need_tool and not harness.tool_answered:
                     session = {
                         "id": session_id,

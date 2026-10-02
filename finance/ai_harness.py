@@ -187,12 +187,11 @@ def wait_for_session(
     current = session if session is not None else json_request(urljoin(base_url + "/", path), token=token)
     while True:
         status = str(current.get("status") or "")
-        if status == "waiting_app" and tool_runner is not None:
-            _answer_tool_calls(base_url, token, session_id, tool_runner)
-            current = json_request(urljoin(base_url + "/", path), token=token)
-            continue
         if status in {"done", "failed", "cancelled"}:
             return _result_from_session(current)
+        if status == "waiting_app" and tool_runner is not None:
+            if _answer_tool_calls(base_url, token, session_id, tool_runner):
+                delay = _POLL_INITIAL_DELAY_SECONDS
         if clock() >= deadline:
             return ProviderResult(ok=False, failure_code=UNAVAILABLE, session_id=session_id)
         sleeper(delay)
@@ -201,11 +200,13 @@ def wait_for_session(
 
 
 def _answer_tool_calls(base_url, token, session_id, tool_runner):
-    pending = json_request(
-        urljoin(base_url + "/", f"api/v1/sessions/{session_id}/tool_calls?status=pending"),
-        token=token,
+    pending = _as_list(
+        json_request(
+            urljoin(base_url + "/", f"api/v1/sessions/{session_id}/tool_calls?status=pending"),
+            token=token,
+        )
     )
-    for call in _as_list(pending):
+    for call in pending:
         call_id = str(call.get("call_id") or call.get("id") or "")
         name = str(call.get("name") or "")
         args = call.get("args") if isinstance(call.get("args"), dict) else {}
@@ -216,6 +217,7 @@ def _answer_tool_calls(base_url, token, session_id, tool_runner):
             method="POST",
             body={"output": output, "ok": ok},
         )
+    return len(pending)
 
 
 def _result_from_session(session):
