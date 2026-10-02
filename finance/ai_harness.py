@@ -193,7 +193,7 @@ def wait_for_session(
             if _answer_tool_calls(base_url, token, session_id, tool_runner):
                 delay = _POLL_INITIAL_DELAY_SECONDS
         if clock() >= deadline:
-            return ProviderResult(ok=False, failure_code=UNAVAILABLE, session_id=session_id)
+            return ProviderResult(ok=False, failure_code=UNAVAILABLE, session_id=session_id, session_open=True)
         sleeper(delay)
         delay = min(delay * 2, _POLL_MAX_DELAY_SECONDS)
         current = json_request(urljoin(base_url + "/", path), token=token)

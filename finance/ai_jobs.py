@@ -150,7 +150,7 @@ def _process_one(job, moment):
     if result.failure_code == AUTHORIZATION_REQUIRED:
         _fail(job, AUTHORIZATION_REQUIRED)
         return True
-    if result.failure_code != UNAVAILABLE:
+    if not result.session_open:
         job.harness_session_id = ""
     return _retry_or_fail(job, moment, result.failure_code or UNAVAILABLE)
 
