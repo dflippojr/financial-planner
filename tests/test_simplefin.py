@@ -1145,3 +1145,28 @@ def test_missing_transaction_list_does_not_create_covering_import_batch(monkeypa
     ).exists()
     assert BalanceSnapshot.objects.filter(account=checking).exists()
     assert not Transaction.objects.filter(account=checking, source_transaction_id="hidden-1").exists()
+
+
+def test_account_error_only_applies_to_its_own_connection():
+    from finance.simplefin_services import _error_applies_to_remote
+
+    error = {"conn_id": "CON-1", "account_id": "acct-1", "msg": "Failed to get all transactions."}
+    failing = {"id": "acct-1", "conn_id": "CON-1"}
+    healthy = {"id": "acct-1", "conn_id": "CON-2"}
+
+    assert _error_applies_to_remote(error, failing)
+    assert not _error_applies_to_remote(error, healthy)
+
+
+def test_scheduler_waits_real_time_across_a_daylight_saving_change():
+    from zoneinfo import ZoneInfo
+
+    from finance.simplefin_schedule import next_cron_datetime, seconds_until
+
+    new_york = ZoneInfo("America/New_York")
+    synced = datetime(2027, 3, 13, 6, 30, tzinfo=new_york)
+    due = next_cron_datetime("30 6 * * *", synced)
+
+    # Clocks spring forward overnight, so 06:30 the next day is 23 real hours away.
+    assert due.hour == 6
+    assert seconds_until(due, synced) == 23 * 3600

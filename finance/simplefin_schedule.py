@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from datetime import timezone as dt_timezone
 
 from django.utils import timezone
 
@@ -87,7 +88,9 @@ def next_scheduled_sync(expression: str, now=None):
 
 
 def seconds_until(due, now) -> float:
-    return max(0.0, (due - now).total_seconds())
+    # Compare in UTC: subtracting two times in the same zone measures wall-clock
+    # time, which is an hour off across a daylight-saving change.
+    return max(0.0, (due.astimezone(dt_timezone.utc) - now.astimezone(dt_timezone.utc)).total_seconds())
 
 
 def schedule_after_sync(expression: str, last_due, now):
