@@ -407,3 +407,47 @@ def test_add_goal_via_the_page():
     goal = SavingsGoal.objects.get(name="Emergency fund")
     assert goal.target_amount_minor == 50_000
     assert goal.manual_amount_minor == 10_000
+
+
+@pytest.mark.django_db
+def test_progress_prefers_simplefin_over_manual_on_the_same_day():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    add_snapshot(account, date(2026, 2, 1), 60_000, source=BalanceSnapshot.Source.SIMPLEFIN)
+    # Entered by hand later the same day; Accounts and Net worth still use SimpleFIN.
+    add_snapshot(account, date(2026, 2, 1), 10_000)
+    goal = make_goal(owner, target_amount_minor=100_000, linked_account=account)
+
+    progress = goal_progress(owner.user, goal, today=date(2026, 2, 15))
+
+    assert progress.current_amount_minor == 60_000
+
+
+@pytest.mark.django_db
+def test_a_member_edit_keeps_the_owners_private_linked_account():
+    owner = make_person("owner")
+    member = make_person("member")
+    household = make_household(owner, member)
+    private = make_account(owner, name="Owner Private Savings")
+    goal = make_goal(
+        owner, scope=SavingsGoal.Scope.HOUSEHOLD, household=household, linked_account=private,
+    )
+
+    response = signed_in(member).post(
+        reverse("savings-goal-edit", args=[goal.pk]),
+        {
+            "name": "Vacation renamed",
+            "target_amount": "1000.00",
+            "target_date": "2026-12-31",
+            "scope": "household",
+            "linked_account": "",
+            "manual_amount": "",
+            "manual_amount_date": "",
+        },
+    )
+
+    assert response.status_code == 302
+    goal.refresh_from_db()
+    assert goal.name == "Vacation renamed"
+    assert goal.linked_account_id == private.pk

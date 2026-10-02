@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.db.models import Case, Value, When
 from django.utils import timezone
 
 from .cash_flow import format_minor
@@ -44,9 +45,17 @@ def _current_amount(principal, goal):
     if goal.linked_account_id is not None:
         visible_account = Account.objects.visible_to(principal).filter(pk=goal.linked_account_id).first()
         if visible_account is not None:
+            # Same precedence as Accounts and Net worth: the latest date, and on
+            # one date a SimpleFIN snapshot outranks a manual one.
             snapshot = (
                 BalanceSnapshot.objects.filter(account_id=goal.linked_account_id)
-                .order_by("-snapshot_date", "-pk")
+                .annotate(
+                    _source_rank=Case(
+                        When(source=BalanceSnapshot.Source.SIMPLEFIN, then=Value(1)),
+                        default=Value(0),
+                    )
+                )
+                .order_by("-snapshot_date", "-_source_rank", "-pk")
                 .first()
             )
             if snapshot is not None:
@@ -123,6 +132,12 @@ def save_savings_goal(principal, payload, *, goal=None):
     linked_account = payload.get("linked_account")
     if linked_account is not None and not Account.objects.visible_to(principal).filter(pk=linked_account.pk).exists():
         raise PermissionDenied(_DENIED)
+    if linked_account is None and goal.linked_account_id is not None:
+        # The edit form cannot offer an account the editor cannot see (for
+        # example the owner's private account), so a blank choice there means
+        # "unchanged", not "unlink".
+        if not Account.objects.visible_to(principal).filter(pk=goal.linked_account_id).exists():
+            linked_account = goal.linked_account
     goal.scope = scope
     goal.household = assigned_household
     goal.name = payload["name"]
