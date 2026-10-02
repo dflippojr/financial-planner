@@ -414,7 +414,10 @@ def _error_applies_to_remote(item: dict, remote: dict) -> bool:
     err_conn = str(item.get("conn_id") or "")
     conn_id = str(remote.get("conn_id") or "")
     if err_acct:
-        return err_acct in {account_id, keyed}
+        if err_acct == keyed:
+            return True
+        # A bare account id is only unique within its connection.
+        return err_acct == account_id and (not err_conn or err_conn == conn_id)
     return bool(err_conn and conn_id and err_conn == conn_id)
 
 
