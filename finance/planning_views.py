@@ -46,6 +46,7 @@ def _form(request, person, data=None, instance=None):
         data,
         principal=request.user,
         has_household=household is not None,
+        household_only=instance is not None and instance.owner_id != person.pk,
         initial=initial,
     )
 

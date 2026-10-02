@@ -127,6 +127,8 @@ def save_planned_item(principal, payload, *, item=None):
         household is None or item.household_id != household.pk
     ):
         raise PermissionDenied(_DENIED)
+    if item.pk is not None and item.owner_id != person.pk and scope != PlannedItem.Scope.HOUSEHOLD:
+        raise PermissionDenied(_DENIED)
     item.scope = scope
     item.household = assigned_household
     item.name = payload["name"]
@@ -137,11 +139,20 @@ def save_planned_item(principal, payload, *, item=None):
     item.end_date = payload.get("end_date")
     item.cadence = payload["cadence"]
     item.category = payload.get("category")
-    item.replaces_series = payload.get("replaces_series")
+    item.replaces_series = _replacement_series(person, item, payload.get("replaces_series"))
     if "enabled" in payload:
         item.enabled = payload["enabled"]
     item.save()
     return item
+
+
+def _replacement_series(person, item, chosen):
+    """Keep a series the editor cannot see; they could not have meant to clear it."""
+    if chosen is not None or item.replaces_series_id is None:
+        return chosen
+    if RecurringSeries.objects.visible_to(person).filter(pk=item.replaces_series_id).exists():
+        return None
+    return item.replaces_series
 
 
 def set_planned_item_enabled(principal, item, enabled):

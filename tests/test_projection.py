@@ -485,3 +485,84 @@ def test_planned_items_page_add_edit_disable_and_hides_private_items():
     assert item.enabled is False
     months = projected_months_for(owner, today=date(2026, 10, 1), horizon=3)
     assert all(month.spending_minor == 0 for month in months)
+
+
+def _household_item_form(name, scope, **extra):
+    return {
+        "name": name,
+        "kind": PlannedItem.Kind.EXPENSE,
+        "amount": "40.00",
+        "start_date": "2026-11-01",
+        "cadence": PlannedItem.Cadence.MONTHLY,
+        "scope": scope,
+        **extra,
+    }
+
+
+@pytest.mark.django_db
+def test_member_cannot_make_another_owners_household_item_private():
+    owner = make_person("owner")
+    member = make_person("member")
+    household = make_household(owner, member)
+    item = PlannedItem.objects.create(
+        owner=owner,
+        scope=PlannedItem.Scope.HOUSEHOLD,
+        household=household,
+        name="Synthetic rent",
+        kind=PlannedItem.Kind.EXPENSE,
+        amount_minor=4000,
+        start_date=date(2026, 11, 1),
+        cadence=PlannedItem.Cadence.MONTHLY,
+    )
+    member_client = Client()
+    member_client.force_login(member.user)
+
+    member_client.post(
+        reverse("planned-item-edit", args=[item.pk]),
+        _household_item_form("Synthetic rent edited", PlannedItem.Scope.PRIVATE),
+    )
+
+    item.refresh_from_db()
+    assert item.scope == PlannedItem.Scope.HOUSEHOLD
+    assert item.name == "Synthetic rent"
+
+
+@pytest.mark.django_db
+def test_member_edit_keeps_the_owners_replaced_series():
+    owner = make_person("owner")
+    member = make_person("member")
+    household = make_household(owner, member)
+    series = RecurringSeries.objects.create(
+        person=owner,
+        merchant_key="synthetic landlord",
+        display_name="Synthetic landlord",
+        cadence=RecurringSeries.Cadence.MONTHLY,
+        typical_amount_minor=-4000,
+        status=RecurringSeries.Status.CONFIRMED,
+        confidence=RecurringSeries.Confidence.HIGH,
+        reasons=["synthetic"],
+        fingerprint="e" * 64,
+    )
+    item = PlannedItem.objects.create(
+        owner=owner,
+        scope=PlannedItem.Scope.HOUSEHOLD,
+        household=household,
+        name="Synthetic rent",
+        kind=PlannedItem.Kind.EXPENSE,
+        amount_minor=4000,
+        start_date=date(2026, 11, 1),
+        cadence=PlannedItem.Cadence.MONTHLY,
+        replaces_series=series,
+    )
+    member_client = Client()
+    member_client.force_login(member.user)
+
+    response = member_client.post(
+        reverse("planned-item-edit", args=[item.pk]),
+        _household_item_form("Synthetic rent edited", PlannedItem.Scope.HOUSEHOLD),
+    )
+
+    assert response.status_code == 302
+    item.refresh_from_db()
+    assert item.name == "Synthetic rent edited"
+    assert item.replaces_series_id == series.pk

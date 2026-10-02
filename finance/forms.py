@@ -445,7 +445,7 @@ class PlannedItemForm(forms.Form):
         label="Replaces recurring series",
     )
 
-    def __init__(self, *args, principal=None, has_household=False, **kwargs):
+    def __init__(self, *args, principal=None, has_household=False, household_only=False, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["category"].queryset = Category.objects.visible_to(principal).order_by("name", "pk")
         self.fields["replaces_series"].queryset = (
@@ -453,7 +453,10 @@ class PlannedItemForm(forms.Form):
             .filter(status=RecurringSeries.Status.CONFIRMED, is_active=True)
             .order_by("display_name", "pk")
         )
-        if has_household:
+        if household_only:
+            # Only an item's owner can take a household item private.
+            self.fields["scope"].choices = ((PlannedItem.Scope.HOUSEHOLD, PlannedItem.Scope.HOUSEHOLD.label),)
+        elif has_household:
             self.fields["scope"].choices = PlannedItem.Scope.choices
 
     def clean_amount(self):
