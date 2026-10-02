@@ -16,6 +16,8 @@ def _nav_current(request):
         return "csv-import"
     if name in {"planned-item-edit", "planned-item-disable", "planned-item-enable"}:
         return "planned-items"
+    if name.startswith("simplefin"):
+        return "simplefin-connections"
     return name
 
 
@@ -32,6 +34,7 @@ def navigation(request):
         ("recurring-review", "Recurring", reverse("recurring-review")),
         ("category-list", "Categories", reverse("category-list")),
         ("account-list", "Accounts", accounts_url),
+        ("simplefin-connections", "Connections", reverse("simplefin-connections")),
         ("csv-import", "Import", accounts_url),
         ("invite", "Invite", reverse("invite")),
         ("planned-items", "Planned items", reverse("planned-items")),

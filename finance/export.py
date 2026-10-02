@@ -94,10 +94,11 @@ CSV_FIELDS = {
     "balance_snapshots": (
         "id",
         "account_id",
-        "captured_at",
+        "snapshot_date",
         "amount_minor",
         "amount_decimal",
         "currency",
+        "source",
     ),
 }
 
@@ -155,6 +156,8 @@ recurring_series.csv / recurring_series.json
   member_transaction_ids, fingerprint
 
 balance_snapshots.csv / balance_snapshots.json
+  Dated account balances (SimpleFIN or manual) for visible accounts:
+  id, account_id, snapshot_date, amount_minor, amount_decimal, currency, source.
   Present only when the balance snapshot model exists in this installation.
 
 JSON files are arrays of objects. CSV uses UTF-8. Nested lists in CSV are JSON
@@ -399,10 +402,11 @@ def _snapshot_rows(person, model):
             {
                 "id": snap.pk,
                 "account_id": snap.account_id,
-                "captured_at": snap.captured_at,
+                "snapshot_date": snap.snapshot_date,
                 "amount_minor": minor,
                 "amount_decimal": money_decimal(minor),
                 "currency": snap.currency,
+                "source": getattr(snap, "source", ""),
             }
         )
     return rows

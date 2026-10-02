@@ -47,6 +47,10 @@ class LoginForm(forms.Form):
     password = forms.CharField(widget=forms.PasswordInput)
 
 
+class ReauthPasswordForm(forms.Form):
+    password = forms.CharField(widget=forms.PasswordInput)
+
+
 class JoinForm(PasswordPairForm):
     invitation_code = forms.CharField(max_length=64)
     username = forms.CharField(max_length=150)
@@ -388,6 +392,13 @@ class AddAccountForm(forms.Form):
                 (Account.ShareMode.CO_OWNED, "Co-owned (household)"),
                 (Account.ShareMode.LENT, "Lent (household)"),
             )
+
+
+class SimpleFinSetupForm(forms.Form):
+    token = forms.CharField(
+        label="SimpleFIN setup token",
+        widget=forms.Textarea(attrs={"rows": 4, "autocomplete": "off"}),
+    )
 
 
 class ShareAccountForm(forms.Form):

@@ -27,6 +27,7 @@ from finance.models import (
     TransactionCorrectionHistory,
     TransferPair,
 )
+from tests.helpers import stamp_recent_auth
 from finance.recurring_services import confirm_recurring_series, refresh_recurring_series
 
 
@@ -113,6 +114,10 @@ def signed_in(person):
     client = Client()
     client.force_login(person.user)
     return client
+
+
+def recent(person):
+    return stamp_recent_auth(signed_in(person))
 
 
 def missing_id(account):
@@ -270,7 +275,7 @@ def test_wrong_typed_name_deletes_nothing():
     owner = make_person("owner")
     account = make_account(owner, name="Synthetic Checking")
     make_transaction(owner, account)
-    client = signed_in(owner)
+    client = recent(owner)
 
     response = client.post(reverse("account-delete", args=(account.pk,)), {"confirm_name": "Wrong Name"})
 
@@ -309,7 +314,7 @@ def test_owner_delete_button_and_success_message():
     assert "csrfmiddlewaretoken" in confirm_page
     assert "Synthetic secret grocery" not in confirm_page
 
-    deleted = signed_in(owner).post(reverse("account-delete", args=(shared.pk,)), {"confirm_name": "Synthetic Shared"}, follow=True)
+    deleted = recent(owner).post(reverse("account-delete", args=(shared.pk,)), {"confirm_name": "Synthetic Shared"}, follow=True)
     assert deleted.redirect_chain[0][0] == reverse("account-list")
     assert "Deleted Synthetic Shared." in deleted.content.decode()
     assert_no_rows_reference(shared.pk)
@@ -327,9 +332,10 @@ def test_non_owner_delete_views_return_identical_404(method):
     private = make_account(owner, name="Owner Private")
     shared = make_account(owner, name="Shared", scope=Account.Scope.HOUSEHOLD, household=household)
     payload = {"confirm_name": "Shared"}
-    caller = getattr(signed_in(member), method)
-    outsider_client = getattr(signed_in(outsider), method)
-    owner_missing = getattr(signed_in(owner), method)
+    signed = recent if method == "post" else signed_in
+    caller = getattr(signed(member), method)
+    outsider_client = getattr(signed(outsider), method)
+    owner_missing = getattr(signed(owner), method)
 
     member_private = caller(reverse("account-delete", args=(private.pk,)), data=payload)
     outsider_private = outsider_client(reverse("account-delete", args=(private.pk,)), data=payload)
@@ -351,6 +357,7 @@ def test_delete_enforces_csrf():
     account = make_account(owner, name="Synthetic Checking")
     client = Client(enforce_csrf_checks=True)
     client.force_login(owner.user)
+    stamp_recent_auth(client)
 
     denied = client.post(reverse("account-delete", args=(account.pk,)), {"confirm_name": "Synthetic Checking"})
     page = client.get(reverse("account-delete", args=(account.pk,)))

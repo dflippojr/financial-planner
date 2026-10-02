@@ -1,3 +1,5 @@
+from urllib.parse import urlencode
+
 from django.http import HttpResponseRedirect
 from django.shortcuts import render
 from django.urls import reverse
@@ -24,12 +26,15 @@ from .google_auth import (
     complete_google_onboarding,
     consume_google_pending,
     google_email_is_verified,
+    google_reauth_identity_matches,
+    google_reauth_is_recent,
     google_signin_enabled,
     google_throttle_key,
     google_uid,
     has_usable_google_sign_in,
     peek_google_pending,
 )
+from .reauth import reauth_redirect, recent_auth_is_fresh, safe_next_url, stamp_recent_auth
 
 
 class MemberAccountAdapter(DefaultAccountAdapter):
@@ -87,21 +92,52 @@ class MemberSocialAccountAdapter(DefaultSocialAccountAdapter):
         if not google_uid(extra) or not google_email_is_verified(extra):
             record_login_failure(key)
             raise ImmediateHttpResponse(self._failed_response(request))
+        self._dispatch_social_login(request, sociallogin, key)
+
+    def _dispatch_social_login(self, request, sociallogin, key):
         process = sociallogin.state.get("process")
         pending = consume_google_pending(request, sociallogin)
         intent = (pending or {}).get("intent")
         if login_is_blocked(key):
             raise ImmediateHttpResponse(self._failed_response(request))
+        if process == "connect" and not recent_auth_is_fresh(request):
+            # Linking a new sign-in method is sensitive: refuse a connect that
+            # reached the callback without a fresh confirmation (for example a
+            # direct POST to the login URL from a stale session).
+            raise ImmediateHttpResponse(
+                reauth_redirect(request, "connect-google", reverse("account-settings"))
+            )
+        if intent == "reauth":
+            self._complete_reauth(request, sociallogin, pending, key)
+            return
         if sociallogin.is_existing:
-            if not hasattr(sociallogin.user, "person"):
-                record_login_failure(key)
-                raise ImmediateHttpResponse(self._failed_response(request))
-            if process == "connect":
-                return
-            clear_login_failures(key)
+            self._complete_existing_social_login(request, sociallogin, process, key)
             return
         if process == "connect":
             return
+        self._complete_onboarding_social_login(request, sociallogin, pending, intent, key)
+
+    def _complete_existing_social_login(self, request, sociallogin, process, key):
+        if not hasattr(sociallogin.user, "person"):
+            record_login_failure(key)
+            raise ImmediateHttpResponse(self._failed_response(request))
+        if process == "connect":
+            return
+        current = getattr(request, "user", None)
+        if current is not None and current.is_authenticated:
+            if current.pk != sociallogin.user.pk:
+                # A Google identity belonging to another member must never
+                # confirm (or take over) the signed-in member's session.
+                record_login_failure(key)
+                raise ImmediateHttpResponse(self._failed_response(request))
+            # Re-signing into an existing session is not a confirmation: that
+            # goes through /reauth/google/, which checks Google's auth_time.
+            clear_login_failures(key)
+            return
+        clear_login_failures(key)
+        stamp_recent_auth(request)
+
+    def _complete_onboarding_social_login(self, request, sociallogin, pending, intent, key):
         if not pending:
             record_login_failure(key)
             raise ImmediateHttpResponse(self._failed_response(request, "login"))
@@ -175,6 +211,21 @@ class MemberSocialAccountAdapter(DefaultSocialAccountAdapter):
             )
         )
 
+    def _complete_reauth(self, request, sociallogin, pending, key):
+        extra = sociallogin.account.extra_data or {}
+        if (
+            not request.user.is_authenticated
+            or not google_reauth_identity_matches(request.user, extra)
+            or not google_reauth_is_recent(extra)
+        ):
+            record_login_failure(key)
+            raise ImmediateHttpResponse(self._failed_response(request, "reauth"))
+        clear_login_failures(key)
+        stamp_recent_auth(request)
+        raise ImmediateHttpResponse(
+            HttpResponseRedirect(safe_next_url(request, (pending or {}).get("next", "")))
+        )
+
     def _failed_response(self, request, page="login"):
         from django.contrib import messages
 
@@ -185,4 +236,7 @@ class MemberSocialAccountAdapter(DefaultSocialAccountAdapter):
             return HttpResponseRedirect(reverse("setup"))
         if page == "settings":
             return HttpResponseRedirect(reverse("account-settings"))
+        if page == "reauth":
+            next_url = safe_next_url(request, request.session.get("reauth_next", ""))
+            return HttpResponseRedirect(f"{reverse('reauth')}?{urlencode({'next': next_url})}")
         return HttpResponseRedirect(reverse("login"))
