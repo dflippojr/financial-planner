@@ -155,3 +155,11 @@ def test_dockerfile_builds_css_with_a_pinned_checksum_and_collectstatic():
         Path(__file__).resolve().parent.parent / "financial_planner" / "settings.py"
     ).read_text()
 
+
+
+def test_the_simplefin_scheduler_does_not_inherit_the_web_health_check():
+    compose = (Path(__file__).resolve().parents[1] / "compose.yml").read_text(encoding="utf-8")
+    scheduler = compose.split("  simplefin-sync:", 1)[1].split("\nvolumes:", 1)[0]
+
+    # It runs no web server, so the image's HTTP probe would always fail.
+    assert "healthcheck:\n      disable: true" in scheduler
