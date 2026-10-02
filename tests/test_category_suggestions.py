@@ -536,3 +536,72 @@ def test_top_up_skips_a_job_the_runner_already_claimed(harness):
     assert rest == [999001, 999002]
     claimed.refresh_from_db()
     assert claimed.input_refs["transaction_ids"] == id_lists[0]
+
+
+@pytest.mark.django_db
+def test_accept_rechecks_after_locking_and_keeps_a_concurrent_manual_category(harness, monkeypatch):
+    import finance.category_suggestion_services as suggestions
+
+    state, url = harness
+    _user, person, household = make_member("owner")
+    connect_ai(person, url)
+    monkeypatch.setattr("finance.ai_jobs.in_quiet_window", lambda moment=None: True)
+    account = make_account(person)
+    groceries_cat = groceries(household)
+    dining = Category.objects.get(household=household, name="Dining")
+    txn = make_transaction(person, account, description="Synthetic race", fingerprint="6" * 64)
+    state.session_answer = suggestion_json({txn.pk: groceries_cat.pk})
+    queue_category_suggestions_for(person, [txn])
+    process_due_jobs()
+    suggestion = CategorySuggestion.objects.get(transaction=txn)
+    original = suggestions._locked_pending
+
+    def read_then_someone_else_categorizes(principal, suggestion_id):
+        result = original(principal, suggestion_id)
+        Transaction.objects.filter(pk=txn.pk).update(
+            category=dining, category_source=Transaction.CategorySource.MANUAL
+        )
+        return result
+
+    monkeypatch.setattr(suggestions, "_locked_pending", read_then_someone_else_categorizes)
+    accept_suggestion(person, suggestion.pk)
+
+    txn.refresh_from_db()
+    assert txn.category_id == dining.pk
+    assert txn.category_source == Transaction.CategorySource.MANUAL
+
+
+@pytest.mark.django_db
+def test_resumed_answer_is_dropped_for_a_transaction_changed_since_the_prompt(harness, monkeypatch):
+    import finance.category_suggestion_services as suggestions
+    from finance.ai_types import ProviderResult
+
+    _state, url = harness
+    _user, person, household = make_member("owner")
+    connect_ai(person, url)
+    account = make_account(person)
+    groceries_cat = groceries(household)
+    kept = make_transaction(person, account, description="Synthetic kept", fingerprint="7" * 64)
+    edited = make_transaction(person, account, description="Synthetic before", fingerprint="8" * 64)
+    queue_category_suggestions_for(person, [kept, edited])
+    job = AiJob.objects.get(member=person, feature=FEATURE)
+    answer = suggestion_json({kept.pk: groceries_cat.pk, edited.pk: groceries_cat.pk})
+    monkeypatch.setattr(
+        suggestions,
+        "run_structured",
+        lambda *args, **kwargs: ProviderResult(ok=False, failure_code="unavailable", session_id="sess-1"),
+    )
+    suggestions.run_category_suggestion_job(person, job, backend="local")
+    job.refresh_from_db()
+    assert set(job.input_refs["snapshots"]) == {str(kept.pk), str(edited.pk)}
+
+    Transaction.objects.filter(pk=edited.pk).update(description="Synthetic after")
+    monkeypatch.setattr(
+        suggestions,
+        "run_structured",
+        lambda *args, **kwargs: ProviderResult(ok=True, answer=answer, session_id="sess-1"),
+    )
+    suggestions.run_category_suggestion_job(person, job, backend="local", session_id="sess-1")
+
+    assert CategorySuggestion.objects.filter(transaction=kept).exists()
+    assert not CategorySuggestion.objects.filter(transaction=edited).exists()

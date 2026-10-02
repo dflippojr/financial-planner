@@ -16,6 +16,7 @@ from .ai_jobs import enqueue_job
 from .ai_services import connection_for, member_has_ai, run_structured
 from .ai_tools import visible_accounts
 from .ai_types import ProviderResult
+from .lifecycle_services import lock_actor_household
 from .category_services import (
     _DENIED,
     _person_for,
@@ -167,6 +168,18 @@ def proposed_rule_from_accepts(person):
 @transaction.atomic
 def accept_suggestion(principal, suggestion_id):
     person, suggestion, txn = _locked_pending(principal, suggestion_id)
+    # Lock in the codebase's order (household, then transaction) and re-read,
+    # so a category set by someone else since the first read is never overwritten.
+    lock_actor_household(person)
+    txn = Transaction.objects.select_for_update().filter(pk=txn.pk).first()
+    suggestion = CategorySuggestion.objects.select_for_update().filter(pk=suggestion.pk).first()
+    if (
+        txn is None
+        or suggestion is None
+        or suggestion.status != CategorySuggestion.Status.PENDING
+        or not suggestion_is_current(suggestion, txn)
+    ):
+        raise PermissionDenied(_DENIED)
     if not _may_apply(person, txn):
         suggestion.status = CategorySuggestion.Status.REJECTED
         suggestion.resolved_at = timezone.now()
@@ -205,6 +218,13 @@ def run_category_suggestion_job(person, job, *, backend, session_id="", on_sessi
     categories = list(_suggestable_categories(person))
     if not categories:
         return ProviderResult(ok=True, answer="", session_id="skipped")
+    if session_id:
+        # Resuming: the answer was generated from the transactions as they were then.
+        sent = (job.input_refs or {}).get("snapshots") or {}
+    else:
+        sent = {str(txn.pk): snapshot_hash(txn) for txn in txns}
+        job.input_refs = {**(job.input_refs or {}), "snapshots": sent}
+        job.save(update_fields=("input_refs", "updated_at"))
     prompt = _build_prompt(txns, categories)
     result = run_structured(
         person,
@@ -224,6 +244,8 @@ def run_category_suggestion_job(person, job, *, backend, session_id="", on_sessi
     for txn_id, category_id in _parse_suggestions(result.answer):
         txn = by_id.get(txn_id)
         if txn is None or category_id not in allowed:
+            continue
+        if sent.get(str(txn.pk)) != snapshot_hash(txn):
             continue
         _store_suggestion(person, txn, category_id, provider=provider, backend=chosen)
     return result
