@@ -371,6 +371,130 @@
     });
   }
 
+  function spendingTrendChart(canvas, data, palette) {
+    var periods = data.periods || [];
+    var series = data.chart_series || [];
+    return new window.Chart(canvas, {
+      type: "bar",
+      data: {
+        labels: periods.map(function (row) {
+          return row.label;
+        }),
+        datasets: series.map(function (item) {
+          return {
+            label: item.name,
+            data: item.values,
+            backgroundColor: palette.categories[item.color_index] || palette.categories[0],
+            stack: "spending",
+            displays: item.displays,
+            detailUrl: item.detail_url,
+          };
+        }),
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        onClick: function (event, elements) {
+          if (!elements.length) {
+            return;
+          }
+          var dataset = series[elements[0].datasetIndex];
+          if (dataset && dataset.detail_url) {
+            goTo(dataset.detail_url);
+          }
+        },
+        onHover: function (event, elements) {
+          var native = event.native || event;
+          if (native && native.target) {
+            native.target.style.cursor = elements.length ? "pointer" : "default";
+          }
+        },
+        plugins: {
+          legend: { position: "bottom", labels: { color: palette.text } },
+          tooltip: {
+            callbacks: {
+              label: function (context) {
+                var displays = context.dataset.displays || [];
+                var display = displays[context.dataIndex];
+                if (display) {
+                  return context.dataset.label + ": " + display;
+                }
+                return context.dataset.label + ": " + context.formattedValue;
+              },
+            },
+          },
+        },
+        scales: {
+          x: {
+            stacked: true,
+            ticks: { color: palette.text, maxRotation: 45, minRotation: 0 },
+            grid: { color: palette.grid },
+          },
+          y: {
+            stacked: true,
+            ticks: { color: palette.text, callback: formatAxisMinor },
+            title: { display: true, text: "USD", color: palette.text },
+            grid: { color: palette.grid },
+          },
+        },
+      },
+    });
+  }
+
+  function categoryTrendChart(canvas, data, palette) {
+    var periods = data.periods || [];
+    return new window.Chart(canvas, {
+      type: "bar",
+      data: {
+        labels: periods.map(function (row) {
+          return row.label;
+        }),
+        datasets: [
+          {
+            label: data.name,
+            data: periods.map(function (row) {
+              return row.spending_minor;
+            }),
+            backgroundColor: palette.categories[data.color_index] || palette.categories[0],
+            displays: periods.map(function (row) {
+              return row.spending_display;
+            }),
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: function (context) {
+                var displays = context.dataset.displays || [];
+                var display = displays[context.dataIndex];
+                if (display) {
+                  return context.dataset.label + ": " + display;
+                }
+                return context.dataset.label + ": " + context.formattedValue;
+              },
+            },
+          },
+        },
+        scales: {
+          x: {
+            ticks: { color: palette.text, maxRotation: 45, minRotation: 0 },
+            grid: { color: palette.grid },
+          },
+          y: {
+            ticks: { color: palette.text, callback: formatAxisMinor },
+            title: { display: true, text: "USD", color: palette.text },
+            grid: { color: palette.grid },
+          },
+        },
+      },
+    });
+  }
+
   function destroyCharts() {
     charts.forEach(function (chart) {
       chart.destroy();
@@ -396,6 +520,10 @@
         charts.push(cashFlowChart(canvas, data, palette));
       } else if (kind === "spending") {
         charts.push(spendingChart(canvas, data, palette));
+      } else if (kind === "spending-trend") {
+        charts.push(spendingTrendChart(canvas, data, palette));
+      } else if (kind === "category-trend") {
+        charts.push(categoryTrendChart(canvas, data, palette));
       } else if (kind === "net-worth") {
         charts.push(netWorthChart(canvas, data, palette));
       }

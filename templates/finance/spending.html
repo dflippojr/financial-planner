@@ -4,6 +4,9 @@
 <h1 class="mb-4 text-2xl font-bold">Spending by category</h1>
 <form method="get" class="mb-4 flex flex-wrap items-end gap-3">
   {% include "finance/_form_fields.html" with form=filter_form %}
+  {% if active_tab == "trends" %}
+  <input type="hidden" name="tab" value="trends">
+  {% endif %}
   <button type="submit" class="btn btn-primary">Update</button>
   <a class="btn btn-ghost" href="{% url 'spending-by-category' %}">Reset to default range</a>
 </form>
@@ -14,6 +17,10 @@
   {% endfor %}
 </p>
 {% endif %}
+<div role="tablist" class="tabs tabs-border mb-4">
+  <a role="tab" class="tab{% if active_tab != 'trends' %} tab-active{% endif %}" href="{{ overview_url }}">Overview</a>
+  <a role="tab" class="tab{% if active_tab == 'trends' %} tab-active{% endif %}" href="{{ trends_url }}">Trends</a>
+</div>
 {% if report and report.includes_investment %}
 <div role="note" class="alert alert-info mb-4">{{ report.investment_notice }}</div>
 {% endif %}
@@ -26,12 +33,47 @@
   </span>
 </div>
 {% endif %}
-{% if report %}
+{% if active_tab == "trends" and trend_report %}
+<div class="flex flex-col gap-4">
+  {{ chart_data|json_script:"spending-trend-chart-data" }}
+  <figure>
+    <figcaption class="mb-2 font-medium">Spending by category over time</figcaption>
+    <div class="h-72 w-full rounded-box bg-base-100 p-2 shadow">
+      <canvas id="spending-trend-chart" data-chart="spending-trend" data-chart-payload="spending-trend-chart-data" role="img" aria-label="Stacked bar chart of spending by category for each period. The top eight categories in the range are drawn separately; remaining categories are grouped as Other. The table below lists every category's amount for each period."></canvas>
+    </div>
+    <p class="mt-2 text-sm opacity-80">The chart shows the top 8 categories by spending in this range, plus Other. The table lists every category, including Uncategorized.</p>
+  </figure>
+  <div class="overflow-x-auto">
+    <table class="table table-zebra">
+      <thead class="sticky top-0 z-10 bg-base-200">
+        <tr>
+          <th>Period</th>
+          {% for category in trend_report.categories %}
+          <th class="text-right">{{ category.name }}</th>
+          {% endfor %}
+          <th class="text-right">Total</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for period in trend_report.periods %}
+        <tr>
+          <td>{{ period.label }}</td>
+          {% for display in period.displays %}
+          <td class="text-right">{% include "finance/_amount.html" with value=display tone="out" %}</td>
+          {% endfor %}
+          <td class="text-right">{% include "finance/_amount.html" with value=period.total_spending_display tone="out" %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% elif report %}
 <div class="flex flex-col gap-4">
   {{ chart_data|json_script:"spending-chart-data" }}
   <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
     {% for row in report.rows %}
-    <a href="{{ row.drilldown_url }}" class="card bg-base-100 shadow-sm" style="border-left-width: 0.5rem; border-left-color: var(--chart-category-{{ row.color_index }});">
+    <a href="{{ row.detail_url }}" class="card bg-base-100 shadow-sm" style="border-left-width: 0.5rem; border-left-color: var(--chart-category-{{ row.color_index }});">
       <div class="card-body gap-1 p-4">
         <h2 class="card-title text-base">{{ row.name }}</h2>
         <p class="text-lg font-semibold">{% include "finance/_amount.html" with value=row.spending_display tone="out" %}</p>
@@ -64,7 +106,7 @@
       {% for row in report.rows %}
         <tr>
           <td>
-            {{ row.name }}
+            <a class="link" href="{{ row.detail_url }}">{{ row.name }}</a>
             {% if row.is_net_refund %}<span class="badge badge-info">Net refund</span>{% endif %}
           </td>
           <td class="text-right">{% include "finance/_amount.html" with value=row.spending_display tone="out" %}</td>
