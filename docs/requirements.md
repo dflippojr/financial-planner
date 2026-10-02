@@ -131,6 +131,38 @@ Same 439 rows and 282 negative amounts as the native file, so the same transacti
 - Undoing a wrong exclusion (#8) restores the transaction to income or spending with its original category.
 - Refunds (#8): a person links a refund to its original transaction manually. The refund must be positive and the original a negative purchase of the same kind. The refund stores the inherited category on itself. Totals treat a linked refund as negative spending in that stored category using only the refund's own fields, even if the original is no longer visible, and they must not reveal the original. Recategorizing the original copies the new category onto its linked refunds and records that change in correction history.
 
+### Capital One credit card (`*_transaction_download.csv`, 173 data rows, recorded 2026-10-02)
+
+- UTF-8, LF line endings, comma delimiter, header on line 1, no rows before the header, seven columns on every row.
+- Columns in order: `Transaction Date`, `Posted Date`, `Card No.`, `Description`, `Category`, `Debit`, `Credit`.
+- Both dates are ISO `YYYY-MM-DD`.
+- Amounts are two unsigned columns with a decimal point and no thousands separator or currency symbol. Each row fills exactly one of them: `Debit` in 158 rows, `Credit` in 15. No value is negative.
+- `Debit` is a charge (money out). `Credit` is a payment or refund (money in). 13 of the 15 credits are categorized `Payment/Credit`; the other 2 carry a spending category, consistent with refunds.
+- `Card No.` is four digits (the card's last four). `Description` is always filled (53 distinct values).
+- `Category` has 9 source-assigned values: Dining; Entertainment; Gas/Automotive; Health Care; Merchandise; Other; Other Services; Other Travel; Payment/Credit.
+- No transaction ID, no running balance, no account identifier.
+
+### Apple Card (`Apple Card Transactions <start> - <end>.csv`, 375 data rows, recorded 2026-10-02)
+
+- UTF-8, LF line endings, comma delimiter, header on line 1, no rows before the header, eight columns on every row. One file can cover a long range (this one spans about 21 months).
+- Columns in order: `Transaction Date`, `Clearing Date`, `Description`, `Merchant`, `Category`, `Type`, `Amount (USD)`, `Purchased By`.
+- Both dates are month first, `MM/DD/YYYY`, four-digit year.
+- `Amount (USD)` is one signed column with a decimal point and no thousands separator or currency symbol. Positive is a charge (money out). Negative is a payment or credit (money in): 17 rows.
+- `Type` has 4 values: `Purchase` (356 rows), `Payment` (15), `Credit` (2), `Debit` (2). The 17 negative amounts are exactly the 15 `Payment` and 2 `Credit` rows. `Debit` rows are positive charges that are not purchases (for example interest, a fee, or an adjustment).
+- `Description` is the long raw text (always filled, 221 distinct). `Merchant` is the short name (always filled, 195 distinct).
+- `Category` has 16 source-assigned values. `Purchased By` has one value in this file (the cardholder; Apple Card Family can add more).
+- No transaction ID, no running balance, no account identifier.
+
+### Owner decisions on the card profiles (2026-10-02)
+
+- **Date:** a card transaction is dated by its `Transaction Date` (the purchase day). `Posted Date` and `Clearing Date` are kept only in the original fields.
+- **Signs:** the stored sign stays negative = money out, positive = money in. Capital One stores `-Debit` or `+Credit`. Apple Card stores `-Amount (USD)`, so a purchase is negative and a payment or credit is positive. Payments then pair with the checking withdrawal through transfer matching as card payments (#8).
+- **Apple Card description:** `Merchant`. The raw `Description` is kept in the original fields. The description feeds the reimport fingerprint, so the rule is fixed once shipped. Capital One uses its single `Description` column.
+- **Provider categories:** stored in the original fields only, never applied. The app's own categories and rules (#16) decide categorization. A provider-to-app category mapping may come later.
+- **Stored columns:** `Card No.` is dropped and not kept in the original fields. `Purchased By` is kept in the original fields.
+- **Profile choice:** as for Huntington, the user picks "Capital One" or "Apple Card" at upload. Profiles are not auto-detected.
+- **Vanguard:** no CSV importer. Investment accounts track balances only (2026-10-01 decision), and statement balances are entered as manual snapshots. This supersedes #15.
+
 ## Recurring charges decisions (2026-09-30, #17)
 
 - Call a series recurring only after at least 3 occurrences at a regular interval. With 2 occurrences it may be shown only as "possible".
