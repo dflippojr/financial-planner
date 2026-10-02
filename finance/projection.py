@@ -18,7 +18,12 @@ KIND_INCOME = "income"
 KIND_EXPENSE = "expense"
 SOURCE_PLANNED = "planned"
 SOURCE_SERIES = "series"
-MAX_OCCURRENCE_STEPS = 4000
+_WEEK_DAYS = {CADENCE_WEEKLY: 7, CADENCE_BIWEEKLY: 14}
+_CALENDAR_MONTHS = {
+    CADENCE_MONTHLY: 1,
+    CADENCE_QUARTERLY: 3,
+    CADENCE_ANNUAL: 12,
+}
 
 
 def add_calendar_months(value, months):
@@ -42,17 +47,44 @@ def month_end(value):
 
 
 def step_occurrence(value, cadence):
-    if cadence == CADENCE_WEEKLY:
-        return value + timedelta(days=7)
-    if cadence == CADENCE_BIWEEKLY:
-        return value + timedelta(days=14)
-    if cadence == CADENCE_MONTHLY:
-        return add_calendar_months(value, 1)
-    if cadence == CADENCE_QUARTERLY:
-        return add_calendar_months(value, 3)
-    if cadence == CADENCE_ANNUAL:
-        return add_calendar_months(value, 12)
+    days = _WEEK_DAYS.get(cadence)
+    if days is not None:
+        return value + timedelta(days=days)
+    months = _CALENDAR_MONTHS.get(cadence)
+    if months is not None:
+        return add_calendar_months(value, months)
     raise ValueError(f"Unknown cadence {cadence}.")
+
+
+def _first_on_or_after(start, cadence, window_start):
+    if start >= window_start:
+        return start
+    days = _WEEK_DAYS.get(cadence)
+    if days is not None:
+        delta = (window_start - start).days
+        steps = (delta + days - 1) // days
+        return start + timedelta(days=steps * days)
+    months = _CALENDAR_MONTHS.get(cadence)
+    if months is None:
+        raise ValueError(f"Unknown cadence {cadence}.")
+    total_months = (window_start.year - start.year) * 12 + (window_start.month - start.month)
+    n = max(total_months // months, 0)
+    candidate = add_calendar_months(start, n * months)
+    while candidate < window_start:
+        n += 1
+        candidate = add_calendar_months(start, n * months)
+    return candidate
+
+
+def _advance_from_start(start, current, cadence):
+    days = _WEEK_DAYS.get(cadence)
+    if days is not None:
+        return current + timedelta(days=days)
+    months = _CALENDAR_MONTHS.get(cadence)
+    if months is None:
+        raise ValueError(f"Unknown cadence {cadence}.")
+    elapsed = (current.year - start.year) * 12 + (current.month - start.month)
+    return add_calendar_months(start, elapsed + months)
 
 
 def occurrence_dates(start, end, cadence, window_start, window_end):
@@ -61,15 +93,15 @@ def occurrence_dates(start, end, cadence, window_start, window_end):
         if window_start <= start <= window_end and (end is None or start <= end):
             dates.append(start)
         return dates
-    current = start
-    for _ in range(MAX_OCCURRENCE_STEPS):
-        if current > window_end:
-            break
+    if start > window_end or (end is not None and end < window_start):
+        return dates
+    current = _first_on_or_after(start, cadence, window_start)
+    while current <= window_end:
         if end is not None and current > end:
             break
         if current >= window_start:
             dates.append(current)
-        current = step_occurrence(current, cadence)
+        current = _advance_from_start(start, current, cadence)
     return dates
 
 

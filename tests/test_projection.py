@@ -20,7 +20,13 @@ from finance.models import (
     Transaction,
 )
 from finance.planning_services import cash_flow_with_projection, projected_months_for
-from finance.projection import KIND_EXPENSE, KIND_INCOME, SOURCE_PLANNED, project_cash_flow
+from finance.projection import (
+    KIND_EXPENSE,
+    KIND_INCOME,
+    SOURCE_PLANNED,
+    occurrence_dates,
+    project_cash_flow,
+)
 from tests.page_payload import json_script_payload
 
 
@@ -146,6 +152,41 @@ def test_month_boundary_clamps_january_31_and_skips_ended_days():
     assert [item.label for item in rows] == ["January 2026", "February 2026", "March 2026"]
     assert [item.spending_minor for item in rows] == [100, 100, 100]
     assert [item.contributions[0].occurrence_count for item in rows] == [1, 1, 1]
+
+
+def test_monthly_occurrences_keep_original_day_after_short_months():
+    start = date(2026, 1, 31)
+    assert occurrence_dates(start, None, "monthly", date(2026, 1, 1), date(2026, 4, 30)) == [
+        date(2026, 1, 31),
+        date(2026, 2, 28),
+        date(2026, 3, 31),
+        date(2026, 4, 30),
+    ]
+    rows = project_cash_flow(
+        (planned_row(start=start, end=date(2026, 3, 30), amount_minor=100, cadence="monthly"),),
+        today=date(2025, 12, 15),
+        horizon=3,
+    )
+    assert [item.spending_minor for item in rows] == [100, 100, 0]
+
+
+def test_old_weekly_item_still_projects_inside_the_window():
+    start = date(1940, 1, 1)
+    assert occurrence_dates(start, None, "weekly", date(2026, 11, 1), date(2026, 11, 30)) == [
+        date(2026, 11, 2),
+        date(2026, 11, 9),
+        date(2026, 11, 16),
+        date(2026, 11, 23),
+        date(2026, 11, 30),
+    ]
+    rows = project_cash_flow(
+        (planned_row(start=start, amount_minor=1000, cadence="weekly"),),
+        today=date(2026, 10, 1),
+        horizon=3,
+    )
+    assert rows[0].label == "November 2026"
+    assert rows[0].spending_minor == 5000
+    assert rows[0].contributions[0].occurrence_count == 5
 
 
 def test_annual_item_hits_two_novembers_across_24_months():
