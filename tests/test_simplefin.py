@@ -1050,3 +1050,83 @@ def test_link_rows_match_by_id_when_simplefin_reorders_accounts():
     choices = _choices_from_post(request, refetched)
 
     assert sorted(choice["simplefin_account_id"] for choice in choices) == ["CON-1:a", "CON-1:b"]
+
+
+@pytest.mark.django_db
+def test_provider_account_errors_do_not_create_covering_import_batch(monkeypatch):
+    from finance.cash_flow import GROUPING_MONTH, cash_flow_report
+
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner)
+    payload = account_payload()
+    payload["accounts"][0]["transactions"] = []
+    payload["errlist"] = [
+        {
+            "code": "act.missingdata",
+            "msg": "Failed to get all transactions. Try again later.",
+            "account_id": "sf-checking",
+        }
+    ]
+    connection = connect_owner(owner, monkeypatch, payload)
+    save_account_links(
+        owner,
+        connection.pk,
+        [
+            {
+                "simplefin_account_id": "CON-1:sf-checking",
+                "action": "link",
+                "account_id": checking.pk,
+                "cutover_date": date(2026, 3, 11),
+            }
+        ],
+    )
+
+    result = sync_connection(owner, connection.pk, ignore_rate_limit=True)
+
+    assert not ImportBatch.objects.filter(
+        account=checking, source=ImportBatch.Source.SIMPLEFIN, status=ImportBatch.Status.ACTIVE
+    ).exists()
+    snapshot = BalanceSnapshot.objects.get(account=checking, source=BalanceSnapshot.Source.SIMPLEFIN)
+    assert snapshot.amount_minor == 10023
+    assert snapshot.import_batch_id is None
+    assert "Failed to get all transactions" in result["result"]
+    report = cash_flow_report(
+        owner,
+        date_from=date(2026, 3, 1),
+        date_to=date(2026, 3, 31),
+        grouping=GROUPING_MONTH,
+        account=checking,
+        today=date(2026, 4, 1),
+    )
+    assert report.periods[0].missing_import is True
+
+
+@pytest.mark.django_db
+def test_missing_transaction_list_does_not_create_covering_import_batch(monkeypatch):
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner)
+    payload = account_payload(transactions=[posted_txn(txn_id="hidden-1", day=16, amount="-3.00")])
+    del payload["accounts"][0]["transactions"]
+    connection = connect_owner(owner, monkeypatch, payload)
+    save_account_links(
+        owner,
+        connection.pk,
+        [
+            {
+                "simplefin_account_id": "CON-1:sf-checking",
+                "action": "link",
+                "account_id": checking.pk,
+                "cutover_date": date(2026, 3, 11),
+            }
+        ],
+    )
+
+    sync_connection(owner, connection.pk, ignore_rate_limit=True)
+
+    assert not ImportBatch.objects.filter(
+        account=checking, source=ImportBatch.Source.SIMPLEFIN, status=ImportBatch.Status.ACTIVE
+    ).exists()
+    assert BalanceSnapshot.objects.filter(account=checking).exists()
+    assert not Transaction.objects.filter(account=checking, source_transaction_id="hidden-1").exists()

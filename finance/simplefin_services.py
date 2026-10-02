@@ -407,13 +407,42 @@ def _ensure_batch(person, account, connection, link, synced_at, start, end):
     )
 
 
-def _sync_one_link(person, connection, link, remote, synced_at) -> int:
+def _error_applies_to_remote(item: dict, remote: dict) -> bool:
+    account_id = str(remote.get("id") or "")
+    keyed = remote_account_key(remote)
+    err_acct = str(item.get("account_id") or "")
+    err_conn = str(item.get("conn_id") or "")
+    conn_id = str(remote.get("conn_id") or "")
+    if err_acct:
+        return err_acct in {account_id, keyed}
+    return bool(err_conn and conn_id and err_conn == conn_id)
+
+
+def _transactions_unreliable(remote: dict, payload: dict) -> bool:
+    if "transactions" not in remote or remote.get("transactions") is None:
+        return True
+    for item in payload.get("errlist") or []:
+        if isinstance(item, dict) and _error_applies_to_remote(item, remote):
+            return True
+    return False
+
+
+def _sync_one_link(person, connection, link, remote, synced_at, payload) -> int:
     account = link.account
     currency = _iso4217_usd(str(remote.get("currency") or ""))
     if account.currency != currency:
         raise SimpleFinError("That SimpleFIN account uses a currency this app does not store.")
     balance_date = posted_date(remote.get("balance-date")) or timezone.localdate()
-    amount_minor = decimal_to_minor(str(remote.get("balance")))
+    if link.mode == AccountLink.Mode.TRANSACTIONS and _transactions_unreliable(remote, payload):
+        if remote.get("balance") not in (None, ""):
+            _upsert_snapshot(
+                account,
+                snapshot_date=balance_date,
+                amount_minor=decimal_to_minor(str(remote.get("balance"))),
+                currency=currency,
+                batch=None,
+            )
+        return 0
     start = link.cutover_date
     end = max(start, balance_date, timezone.localdate())
     batch = _ensure_batch(person, account, connection, link, synced_at, start, end)
@@ -423,7 +452,7 @@ def _sync_one_link(person, connection, link, remote, synced_at) -> int:
     _upsert_snapshot(
         account,
         snapshot_date=balance_date,
-        amount_minor=amount_minor,
+        amount_minor=decimal_to_minor(str(remote.get("balance"))),
         currency=currency,
         batch=batch,
     )
@@ -497,7 +526,7 @@ def _sync_connection_locked(principal, connection_id, *, ignore_rate_limit=False
                 remote = remote_accounts.get(link.simplefin_account_id)
                 if remote is None:
                     continue
-                imported += _sync_one_link(person, connection, link, remote, now)
+                imported += _sync_one_link(person, connection, link, remote, now, payload)
     except SimpleFinError as exc:
         connection.last_sync_at = now
         connection.last_sync_result = str(exc)
