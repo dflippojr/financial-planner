@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Financial Planner">
-  <rect width="512" height="512" rx="96" fill="#422ad5"/>
+  <rect width="512" height="512" fill="#422ad5"/>
   <rect x="96" y="288" width="80" height="128" rx="16" fill="#ffffff"/>
   <rect x="216" y="208" width="80" height="208" rx="16" fill="#ffffff"/>
   <rect x="336" y="112" width="80" height="304" rx="16" fill="#ffffff"/>

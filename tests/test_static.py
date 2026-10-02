@@ -1,5 +1,6 @@
 import hashlib
 import struct
+import zlib
 from pathlib import Path
 
 import pytest
@@ -199,6 +200,64 @@ def _png_size(path):
     return width, height
 
 
+def _paeth_predictor(left, up, up_left):
+    estimate = left + up - up_left
+    distances = (abs(estimate - left), abs(estimate - up), abs(estimate - up_left))
+    return (left, up, up_left)[distances.index(min(distances))]
+
+
+def _png_corner_pixels(path):
+    data = path.read_bytes()
+    assert data[:8] == b"\x89PNG\r\n\x1a\n"
+    width, height, bit_depth, color_type = struct.unpack(">IIBB", data[16:26])
+    assert bit_depth == 8
+    assert color_type in (2, 6)
+    channels = 3 if color_type == 2 else 4
+    offset = 8
+    compressed = b""
+    while offset < len(data):
+        length = struct.unpack(">I", data[offset : offset + 4])[0]
+        chunk_type = data[offset + 4 : offset + 8]
+        chunk = data[offset + 8 : offset + 8 + length]
+        if chunk_type == b"IDAT":
+            compressed += chunk
+        offset += 12 + length
+    raw = zlib.decompress(compressed)
+    stride = width * channels
+    previous = bytearray(stride)
+    rows = []
+    cursor = 0
+    for _ in range(height):
+        filter_type = raw[cursor]
+        cursor += 1
+        filtered = bytearray(raw[cursor : cursor + stride])
+        cursor += stride
+        reconstructed = bytearray(stride)
+        for index, value in enumerate(filtered):
+            left = reconstructed[index - channels] if index >= channels else 0
+            up = previous[index]
+            up_left = previous[index - channels] if index >= channels else 0
+            if filter_type == 0:
+                reconstructed[index] = value
+            elif filter_type == 1:
+                reconstructed[index] = (value + left) % 256
+            elif filter_type == 2:
+                reconstructed[index] = (value + up) % 256
+            elif filter_type == 3:
+                reconstructed[index] = (value + (left + up) // 2) % 256
+            elif filter_type == 4:
+                reconstructed[index] = (value + _paeth_predictor(left, up, up_left)) % 256
+            else:
+                raise AssertionError(f"unsupported PNG filter {filter_type}")
+        rows.append(bytes(reconstructed))
+        previous = reconstructed
+    def pixel(x, y):
+        start = x * channels
+        return tuple(rows[y][start : start + channels])
+
+    return pixel(0, 0), pixel(width - 1, 0), pixel(0, height - 1), pixel(width - 1, height - 1)
+
+
 def _repo_root():
     return Path(__file__).resolve().parent.parent
 
@@ -212,12 +271,24 @@ def test_committed_icons_and_manifest_are_install_sized():
     manifest = (root / "static" / "manifest.webmanifest").read_text(encoding="utf-8")
 
     assert 'fill="#422ad5"' in svg
+    assert '<rect width="512" height="512" fill="#422ad5"/>' in svg
+    assert 'rx="96"' not in svg
     assert '"name": "Financial Planner"' in manifest
     assert '"short_name": "Finances"' in manifest
     assert '"display": "standalone"' in manifest
     assert "/static/icons/icon-192.png" in manifest
     assert "/static/icons/icon-512.png" in manifest
+    assert "maskable" in manifest
     assert "serviceWorker" not in manifest
+
+
+def test_home_screen_icons_are_full_bleed_background():
+    background = (0x42, 0x2A, 0xD5)
+    root = _repo_root() / "static" / "icons"
+    for name in ("apple-touch-icon.png", "icon-192.png", "icon-512.png"):
+        corners = _png_corner_pixels(root / name)
+        assert all(pixel[:3] == background for pixel in corners)
+        assert all(len(pixel) < 4 or pixel[3] == 255 for pixel in corners)
 
 
 @pytest.mark.django_db
