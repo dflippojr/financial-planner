@@ -49,13 +49,16 @@ def make_household(*people, name="Synthetic Household"):
     return household
 
 
-def make_account(owner, *, name="Synthetic Checking", account_type=Account.Type.CHECKING, scope=Account.Scope.PRIVATE, household=None):
+def make_account(owner, *, name="Synthetic Checking", account_type=Account.Type.CHECKING, scope=Account.Scope.PRIVATE, household=None, share_mode=None):
+    if share_mode is None:
+        share_mode = Account.ShareMode.CO_OWNED if scope == Account.Scope.HOUSEHOLD else ""
     return Account.objects.create(
         name=name,
         account_type=account_type,
         owner=owner,
         scope=scope,
         household=household,
+        share_mode=share_mode,
     )
 
 
@@ -230,6 +233,7 @@ def test_private_account_never_appears_in_another_members_periods_or_flags():
         name="Synthetic Shared",
         scope=Account.Scope.HOUSEHOLD,
         household=household,
+        share_mode=Account.ShareMode.CO_OWNED,
     )
     private = make_account(owner, name="SECRET PRIVATE LEDGER")
     make_transaction(
@@ -401,6 +405,7 @@ def test_home_filters_and_drilldown_keep_account_and_scope():
         name="Synthetic Shared",
         scope=Account.Scope.HOUSEHOLD,
         household=household,
+        share_mode=Account.ShareMode.CO_OWNED,
     )
     private = make_account(owner, name="SECRET PRIVATE LEDGER")
     make_transaction(owner, shared, amount_minor=-1100)

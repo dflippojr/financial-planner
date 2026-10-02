@@ -62,6 +62,7 @@ def make_account(owner, *, name="Synthetic Checking", account_type=Account.Type.
         owner=owner,
         scope=scope,
         household=household,
+        share_mode=Account.ShareMode.CO_OWNED if scope == Account.Scope.HOUSEHOLD else "",
     )
 
 
@@ -909,3 +910,44 @@ def test_unreadable_connection_shows_a_safe_message_instead_of_500(monkeypatch):
     assert b"can no longer be read with the current encryption key" in page.content
     with pytest.raises(SimpleFinError):
         sync_connection(owner, connection.pk, ignore_rate_limit=True)
+
+
+def test_redirects_are_refused_and_reported_safely(monkeypatch):
+    from email.message import Message
+
+    from finance.simplefin_client import _RefuseRedirects, fetch_accounts
+
+    assert _RefuseRedirects().redirect_request(None, None, 302, "Found", Message(), "https://elsewhere.example.test/") is None
+
+    def redirected(*args, **kwargs):
+        raise HTTPError("https://bridge.example.test/simplefin/accounts", 302, "Found", Message(), None)
+
+    monkeypatch.setattr("finance.simplefin_client.urlopen", redirected)
+    with pytest.raises(SimpleFinError) as caught:
+        fetch_accounts(ACCESS_URL)
+    assert "unexpected redirect" in str(caught.value)
+
+
+def test_cron_day_of_month_or_weekday_when_both_restricted():
+    from finance.simplefin_schedule import cron_matches
+
+    tz = dt_utc.utc
+    assert cron_matches("30 6 1 * 1", datetime(2026, 10, 5, 6, 30, tzinfo=tz))  # a Monday, not the 1st
+    assert cron_matches("30 6 1 * 1", datetime(2026, 10, 1, 6, 30, tzinfo=tz))  # the 1st, a Thursday
+    assert not cron_matches("30 6 1 * 1", datetime(2026, 10, 6, 6, 30, tzinfo=tz))  # Tuesday the 6th
+    assert cron_matches("30 6 * * 1", datetime(2026, 10, 5, 6, 30, tzinfo=tz))
+    assert not cron_matches("30 6 * * 1", datetime(2026, 10, 1, 6, 30, tzinfo=tz))
+
+
+def test_link_rows_match_by_id_when_simplefin_reorders_accounts():
+    from django.test import RequestFactory
+
+    from finance.simplefin_views import _choices_from_post
+
+    rendered = [{"id": "CON-1:a", "name": "A"}, {"id": "CON-1:b", "name": "B"}]
+    refetched = list(reversed(rendered))
+    request = RequestFactory().post("/", {"sf_id_0": "CON-1:a", "action_0": "ignore", "sf_id_1": "CON-1:b", "action_1": "ignore"})
+
+    choices = _choices_from_post(request, refetched)
+
+    assert sorted(choice["simplefin_account_id"] for choice in choices) == ["CON-1:a", "CON-1:b"]

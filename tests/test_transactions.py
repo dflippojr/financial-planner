@@ -122,6 +122,7 @@ def test_transaction_list_includes_shared_data_for_current_member_but_not_former
         owner=owner,
         scope=Account.Scope.HOUSEHOLD,
         household=household,
+        share_mode=Account.ShareMode.CO_OWNED,
     )
     make_transaction(owner, account=account, description="Synthetic shared transaction")
     client = Client()
@@ -213,6 +214,7 @@ def test_current_household_member_can_correct_shared_transaction():
         owner=owner,
         scope=Account.Scope.HOUSEHOLD,
         household=household,
+        share_mode=Account.ShareMode.CO_OWNED,
     )
     financial_transaction = make_transaction(owner, account=account)
     client = Client()
@@ -241,6 +243,7 @@ def test_former_household_member_cannot_correct_shared_transaction():
         owner=owner,
         scope=Account.Scope.HOUSEHOLD,
         household=household,
+        share_mode=Account.ShareMode.CO_OWNED,
     )
     financial_transaction = make_transaction(owner, account=account)
     membership.ended_at = membership.joined_at
@@ -364,6 +367,7 @@ def test_correction_cannot_be_saved_after_the_editor_is_evicted_from_the_househo
         owner=owner,
         scope=Account.Scope.HOUSEHOLD,
         household=household,
+        share_mode=Account.ShareMode.CO_OWNED,
     )
     financial_transaction = make_transaction(owner, account=account)
 
@@ -490,6 +494,7 @@ def test_edit_page_shows_history_only_to_people_who_can_see_the_transaction():
         owner=owner,
         scope=Account.Scope.HOUSEHOLD,
         household=household,
+        share_mode=Account.ShareMode.CO_OWNED,
     )
     financial_transaction = make_transaction(owner, account=account)
     client = Client()

@@ -7,7 +7,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('finance', '0006_recurring_series_is_active'),
+        ('finance', '0007_account_share_mode'),
     ]
 
     operations = [

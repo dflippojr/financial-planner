@@ -46,10 +46,19 @@ def cron_matches(expression: str, when: datetime) -> bool:
     return (
         _matches_field(minute, when.minute, 0, 59)
         and _matches_field(hour, when.hour, 0, 23)
-        and _matches_field(day, when.day, 1, 31)
+        and _day_matches(day, weekday, when.day, cron_weekday)
         and _matches_field(month, when.month, 1, 12)
-        and _weekday_matches(weekday, cron_weekday)
     )
+
+
+def _day_matches(day: str, weekday: str, day_of_month: int, cron_weekday: int) -> bool:
+    # Standard cron: when both day-of-month and day-of-week are restricted, a
+    # time matches if EITHER does; otherwise both must match.
+    day_ok = _matches_field(day, day_of_month, 1, 31)
+    weekday_ok = _weekday_matches(weekday, cron_weekday)
+    if day != "*" and weekday != "*":
+        return day_ok or weekday_ok
+    return day_ok and weekday_ok
 
 
 def _weekday_matches(field: str, cron_weekday: int) -> bool:

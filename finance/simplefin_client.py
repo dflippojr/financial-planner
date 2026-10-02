@@ -7,13 +7,26 @@ import json
 import ssl
 from urllib.error import HTTPError, URLError
 from urllib.parse import unquote, urlencode, urlsplit, urlunsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener
 
 from finance.simplefin_errors import SimpleFinError, claim_compromised_message
 
 CLAIM_TIMEOUT_SECONDS = 30
 FETCH_TIMEOUT_SECONDS = 60
 _SSL = ssl.create_default_context()
+
+
+class _RefuseRedirects(HTTPRedirectHandler):
+    """Never follow redirects: the request carries SimpleFIN credentials."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def urlopen(request, timeout=None, context=None):
+    """Open a request without following redirects (a 3xx becomes HTTPError)."""
+    opener = build_opener(HTTPSHandler(context=context or _SSL), _RefuseRedirects())
+    return opener.open(request, timeout=timeout)
 
 
 def _require_https(url: str) -> None:
@@ -47,6 +60,8 @@ def claim_access_url(claim_url: str) -> str:
         with urlopen(request, timeout=CLAIM_TIMEOUT_SECONDS, context=_SSL) as response:
             body = response.read().decode("utf-8").strip()
     except HTTPError as exc:
+        if 300 <= exc.code < 400:
+            raise SimpleFinError("SimpleFIN returned an unexpected redirect. Nothing was sent elsewhere.") from None
         if exc.code == 403:
             raise SimpleFinError(claim_compromised_message()) from None
         raise SimpleFinError("SimpleFIN could not claim that setup token.") from None
@@ -75,6 +90,8 @@ def fetch_accounts(access_url: str, *, start_date=None, end_date=None, balances_
         with urlopen(request, timeout=FETCH_TIMEOUT_SECONDS, context=_SSL) as response:
             raw = response.read().decode("utf-8")
     except HTTPError as exc:
+        if 300 <= exc.code < 400:
+            raise SimpleFinError("SimpleFIN returned an unexpected redirect. Nothing was sent elsewhere.") from None
         if exc.code == 403:
             raise SimpleFinError(
                 "SimpleFIN access was denied. Reconnect if access was revoked.",

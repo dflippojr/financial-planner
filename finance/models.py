@@ -171,10 +171,15 @@ class Account(ArchivableModel):
         PRIVATE = "private", "Private"
         HOUSEHOLD = "household", "Household"
 
+    class ShareMode(models.TextChoices):
+        CO_OWNED = "co_owned", "Co-owned"
+        LENT = "lent", "Lent"
+
     name = models.CharField(max_length=150)
     account_type = models.CharField(max_length=11, choices=Type)
     owner = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="owned_accounts")
     scope = models.CharField(max_length=9, choices=Scope, default=Scope.PRIVATE)
+    share_mode = models.CharField(max_length=8, choices=ShareMode, blank=True, default="")
     household = models.ForeignKey(
         Household,
         on_delete=models.PROTECT,
@@ -192,6 +197,13 @@ class Account(ArchivableModel):
             models.CheckConstraint(
                 condition=(Q(scope="private", household__isnull=True) | Q(scope="household", household__isnull=False)),
                 name="account_scope_matches_household",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(scope="private", share_mode="")
+                    | Q(scope="household", share_mode__in=("co_owned", "lent"))
+                ),
+                name="account_share_mode_matches_scope",
             ),
             models.CheckConstraint(condition=Q(currency="USD"), name="account_currency_usd"),
             models.CheckConstraint(

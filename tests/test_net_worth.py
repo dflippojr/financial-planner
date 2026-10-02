@@ -41,6 +41,7 @@ def make_account(
         owner=owner,
         scope=scope,
         household=household,
+        share_mode=Account.ShareMode.CO_OWNED if scope == Account.Scope.HOUSEHOLD else "",
     )
 
 

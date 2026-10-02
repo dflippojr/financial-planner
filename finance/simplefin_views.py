@@ -35,11 +35,22 @@ def _linkable_accounts(person):
     )
 
 
+def _posted_indexes(request):
+    indexes = []
+    for key in request.POST:
+        if key.startswith("sf_id_") and key[len("sf_id_"):].isdigit():
+            indexes.append(int(key[len("sf_id_"):]))
+    return sorted(indexes)
+
+
 def _choices_from_post(request, remotes):
+    # Match each posted row to a remote account by its id, never by position:
+    # SimpleFIN may list accounts in a different order on the next fetch.
+    remotes_by_id = {remote["id"]: remote for remote in remotes}
     choices = []
-    for index, remote in enumerate(remotes):
-        posted_id = request.POST.get(f"sf_id_{index}", "")
-        if posted_id != remote["id"]:
+    for index in _posted_indexes(request):
+        remote = remotes_by_id.get(request.POST.get(f"sf_id_{index}", ""))
+        if remote is None:
             continue
         action = request.POST.get(f"action_{index}", "ignore")
         cutover_raw = request.POST.get(f"cutover_{index}", "")
