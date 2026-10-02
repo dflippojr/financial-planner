@@ -340,6 +340,40 @@ def _upsert_snapshot(account, *, snapshot_date, amount_minor, currency, batch):
     )
 
 
+def _posted_source_id(item) -> str:
+    """The id of a posted (not pending) transaction item, or "" to skip it."""
+    if not isinstance(item, dict) or _is_pending(item):
+        return ""
+    return str(item.get("id") or "")
+
+
+def _new_transaction(account, link, item, source_id, *, row_number):
+    txn_date = posted_date(item.get("posted"))
+    if txn_date is None or txn_date < link.cutover_date:
+        return None
+    amount_minor = decimal_to_minor(str(item.get("amount")))
+    description = str(item.get("description") or "SimpleFIN transaction")
+    original = {
+        "id": source_id,
+        "posted": item.get("posted"),
+        "amount": str(item.get("amount")),
+        "description": description,
+        "pending": item.get("pending"),
+    }
+    return Transaction(
+        account=account,
+        transaction_date=txn_date,
+        amount_minor=amount_minor,
+        currency="USD",
+        description=description,
+        kind=Transaction.Kind.CASH_FLOW,
+        source_row_number=row_number,
+        source_transaction_id=source_id,
+        fingerprint=transaction_fingerprint(account.pk, txn_date, amount_minor, description),
+        original_fields=original,
+    )
+
+
 def _import_transactions(account, link, remote, make_batch):
     """Import new posted rows; return (count, batch).
 
@@ -360,46 +394,17 @@ def _import_transactions(account, link, remote, make_batch):
     )
     created = []
     saw_stored = False
-    row_number = 1
     for item in remote.get("transactions") or []:
-        if not isinstance(item, dict):
-            continue
-        if _is_pending(item):
-            continue
-        source_id = str(item.get("id") or "")
+        source_id = _posted_source_id(item)
         if not source_id:
             continue
         if source_id in existing_ids:
             saw_stored = True
             continue
-        txn_date = posted_date(item.get("posted"))
-        if txn_date is None or txn_date < link.cutover_date:
-            continue
-        amount_minor = decimal_to_minor(str(item.get("amount")))
-        description = str(item.get("description") or "SimpleFIN transaction")
-        original = {
-            "id": source_id,
-            "posted": item.get("posted"),
-            "amount": str(item.get("amount")),
-            "description": description,
-            "pending": item.get("pending"),
-        }
-        created.append(
-            Transaction(
-                account=account,
-                transaction_date=txn_date,
-                amount_minor=amount_minor,
-                currency="USD",
-                description=description,
-                kind=Transaction.Kind.CASH_FLOW,
-                source_row_number=row_number,
-                source_transaction_id=source_id,
-                fingerprint=transaction_fingerprint(account.pk, txn_date, amount_minor, description),
-                original_fields=original,
-            )
-        )
-        existing_ids.add(source_id)
-        row_number += 1
+        txn = _new_transaction(account, link, item, source_id, row_number=len(created) + 1)
+        if txn is not None:
+            created.append(txn)
+            existing_ids.add(source_id)
     if not created and saw_stored:
         return 0, None
     batch = make_batch()
