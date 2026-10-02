@@ -357,3 +357,10 @@ Owner decisions:
 - **Records.** Acceptance is recorded per member and per policy version, and included in that member's export.
 - **New versions.** Only a version an operator marks as material requires members to accept again.
 - **The text.** The repository ships a default policy that each install's operator can replace without changing code. Claude drafts the default, and the owner edits and approves it.
+
+AI refinements (owner, 2026-10-02, #91 and #94):
+- **Harness address.** A member may connect only an Agent Harness on the same host or on the tailnet. HTTPS is required except on loopback.
+- **Chat history.** Conversations are kept only for the member who started them, can be deleted, and expire after 30 days (configurable). They are included in that member's export.
+- **Advice.** The chat bot answers factual and explanatory questions. Its suggestions are labeled as opinion and never presented as financial advice.
+- **Chat UI.** A Chat page, plus a drawer on every page that continues the same conversation. The drawer passes only the current route and its query parameters, never page data.
+- **Local model in chat.** Offered only after a synthetic-data evaluation shows reliable tool calling.
