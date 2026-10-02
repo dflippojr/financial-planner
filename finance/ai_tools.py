@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from .ai_types import ToolSpec
 from .models import Account, Transaction
-from .policy_services import household_ai_allowed
+from .policy_services import household_ai_allowed, may_use_ai
 from .category_services import current_household
 
 MAX_TOOL_ROWS = 50
@@ -35,6 +35,9 @@ def default_tools():
 
 
 def run_tool(person, tools, name, args):
+    # Re-check on every call: a material policy version can be published mid-conversation.
+    if not may_use_ai(person):
+        return "AI is off until the current privacy and data policy is accepted.", False
     spec = next((item for item in tools if item.name == name), None)
     if spec is None:
         return "Unknown tool.", False

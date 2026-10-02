@@ -96,7 +96,9 @@ def _process_one(job, moment):
     if member_connection is None:
         return _fail_if_unchanged(job, UNAVAILABLE)
     backend = job.backend or member_connection.background_backend
-    resuming = job.status == AiJob.Status.RUNNING and bool((job.harness_session_id or "").strip())
+    # A job with a session id resumes that session (it may already be done), so it
+    # skips the local-model readiness gate whether it is queued or stale-running.
+    resuming = bool((job.harness_session_id or "").strip())
     if not resuming and backend == LOCAL_BACKEND and not _local_may_run(member_connection):
         _write_if_unchanged(job, status=AiJob.Status.WAITING_MODEL, next_attempt_at=moment)
         return False
