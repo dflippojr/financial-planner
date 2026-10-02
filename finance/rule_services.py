@@ -206,6 +206,21 @@ def _owner_account_ids(rule):
     return cached
 
 
+def _rule_owner_matches_transaction(rule, txn):
+    if rule.owner_household_id:
+        return (
+            txn.account.scope == Account.Scope.HOUSEHOLD
+            and txn.account.household_id == rule.owner_household_id
+        )
+    if not rule.owner_person_id:
+        return True
+    if personal_rule_is_inactive(rule) or txn.account_id not in _owner_account_ids(rule):
+        return False
+    if txn.account.scope != Account.Scope.HOUSEHOLD:
+        return True
+    return txn.account.household_id == rule.category.household_id
+
+
 def rule_matches_transaction(rule, txn):
     if rule.description_contains.casefold() not in txn.description.casefold():
         return False
@@ -215,20 +230,7 @@ def rule_matches_transaction(rule, txn):
         return False
     if rule.max_amount_minor is not None and txn.amount_minor > rule.max_amount_minor:
         return False
-    if rule.owner_household_id:
-        if txn.account.scope != Account.Scope.HOUSEHOLD or txn.account.household_id != rule.owner_household_id:
-            return False
-    elif rule.owner_person_id:
-        if personal_rule_is_inactive(rule):
-            return False
-        if txn.account_id not in _owner_account_ids(rule):
-            return False
-        if (
-            txn.account.scope == Account.Scope.HOUSEHOLD
-            and txn.account.household_id != rule.category.household_id
-        ):
-            return False
-    return True
+    return _rule_owner_matches_transaction(rule, txn)
 
 
 def first_matching_rule(txn, rules=None):
