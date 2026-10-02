@@ -235,6 +235,8 @@ class ImportBatch(ArchivableModel):
     imported_by = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="import_batches")
     source = models.CharField(max_length=32, choices=Source)
     source_file_sha256 = models.CharField(max_length=64, validators=(sha256_validator,))
+    # Set for SimpleFIN sync batches so IDs are unique per remote account, not globally.
+    simplefin_account_id = models.CharField(max_length=255, blank=True, default="")
     date_range_start = models.DateField()
     date_range_end = models.DateField()
     imported_at = models.DateTimeField(auto_now_add=True)

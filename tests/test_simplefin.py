@@ -928,6 +928,105 @@ def test_redirects_are_refused_and_reported_safely(monkeypatch):
     assert "unexpected redirect" in str(caught.value)
 
 
+@pytest.mark.django_db
+def test_sync_does_not_treat_csv_ids_as_simplefin_duplicates(monkeypatch):
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner)
+    Transaction.objects.create(
+        account=checking,
+        import_batch=ImportBatch.objects.create(
+            account=checking,
+            imported_by=owner,
+            source=ImportBatch.Source.HUNTINGTON,
+            source_file_sha256="b" * 64,
+            date_range_start=date(2026, 1, 1),
+            date_range_end=date(2026, 1, 31),
+        ),
+        transaction_date=date(2026, 3, 10),
+        amount_minor=-500,
+        description="Synthetic prior CSV",
+        source_row_number=1,
+        source_transaction_id="123",
+        fingerprint="d" * 64,
+        original_fields={"Synthetic Amount": "-5.00"},
+    )
+    payload = account_payload(transactions=[posted_txn(txn_id="123", day=16, amount="-3.00")])
+    connection = connect_owner(owner, monkeypatch, payload)
+    save_account_links(
+        owner,
+        connection.pk,
+        [
+            {
+                "simplefin_account_id": "CON-1:sf-checking",
+                "action": "link",
+                "account_id": checking.pk,
+                "cutover_date": date(2026, 3, 11),
+            }
+        ],
+    )
+
+    result = sync_connection(owner, connection.pk, ignore_rate_limit=True)
+
+    assert result["imported"] == 1
+    assert Transaction.objects.filter(
+        account=checking, status=Transaction.Status.ACTIVE, source_transaction_id="123"
+    ).count() == 2
+
+
+@pytest.mark.django_db
+def test_sync_does_not_dedupe_against_a_previous_remote_account_after_relink(monkeypatch):
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner)
+    first = account_payload(
+        account_id="sf-a",
+        transactions=[posted_txn(txn_id="123", day=16, amount="-3.00")],
+    )
+    connection = connect_owner(owner, monkeypatch, first)
+    save_account_links(
+        owner,
+        connection.pk,
+        [
+            {
+                "simplefin_account_id": "CON-1:sf-a",
+                "action": "link",
+                "account_id": checking.pk,
+                "cutover_date": date(2026, 3, 11),
+            }
+        ],
+    )
+    assert sync_connection(owner, connection.pk, ignore_rate_limit=True)["imported"] == 1
+
+    second = account_payload(
+        account_id="sf-b",
+        transactions=[posted_txn(txn_id="123", day=17, amount="-4.00")],
+    )
+    monkeypatch.setattr("finance.simplefin_services.fetch_accounts", lambda *args, **kwargs: second)
+    save_account_links(
+        owner,
+        connection.pk,
+        [
+            {"simplefin_account_id": "CON-1:sf-a", "action": "ignore"},
+            {
+                "simplefin_account_id": "CON-1:sf-b",
+                "action": "link",
+                "account_id": checking.pk,
+                "cutover_date": date(2026, 3, 11),
+            },
+        ],
+    )
+    result = sync_connection(owner, connection.pk, ignore_rate_limit=True)
+
+    assert result["imported"] == 1
+    amounts = list(
+        Transaction.objects.filter(
+            account=checking, status=Transaction.Status.ACTIVE, source_transaction_id="123"
+        ).values_list("amount_minor", flat=True)
+    )
+    assert sorted(amounts) == [-400, -300]
+
+
 def test_cron_day_of_month_or_weekday_when_both_restricted():
     from finance.simplefin_schedule import cron_matches
 

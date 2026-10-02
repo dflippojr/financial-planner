@@ -345,6 +345,8 @@ def _import_transactions(account, link, remote, batch) -> int:
         Transaction.objects.filter(
             account=account,
             status=Transaction.Status.ACTIVE,
+            import_batch__source=ImportBatch.Source.SIMPLEFIN,
+            import_batch__simplefin_account_id=link.simplefin_account_id,
         )
         .exclude(source_transaction_id="")
         .values_list("source_transaction_id", flat=True)
@@ -393,12 +395,13 @@ def _import_transactions(account, link, remote, batch) -> int:
     return len(created)
 
 
-def _ensure_batch(person, account, connection, synced_at, start, end):
+def _ensure_batch(person, account, connection, link, synced_at, start, end):
     return ImportBatch.objects.create(
         account=account,
         imported_by=person,
         source=ImportBatch.Source.SIMPLEFIN,
         source_file_sha256=_batch_hash(connection.pk, account.pk, synced_at),
+        simplefin_account_id=link.simplefin_account_id,
         date_range_start=start,
         date_range_end=end,
     )
@@ -413,7 +416,7 @@ def _sync_one_link(person, connection, link, remote, synced_at) -> int:
     amount_minor = decimal_to_minor(str(remote.get("balance")))
     start = link.cutover_date
     end = max(start, balance_date, timezone.localdate())
-    batch = _ensure_batch(person, account, connection, synced_at, start, end)
+    batch = _ensure_batch(person, account, connection, link, synced_at, start, end)
     imported = 0
     if link.mode == AccountLink.Mode.TRANSACTIONS:
         imported = _import_transactions(account, link, remote, batch)
