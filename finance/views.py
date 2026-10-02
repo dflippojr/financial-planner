@@ -262,6 +262,14 @@ def _apply_transaction_filters(transactions, filters, principal):
 @require_GET
 @never_cache
 def transaction_list(request):
+    from .ai_services import member_has_ai
+    from .category_suggestion_services import (
+        pending_suggestions_for,
+        proposed_rule_from_accepts,
+        suggestions_pending,
+    )
+
+    person = Person.objects.filter(user=request.user).first()
     transactions = (
         Transaction.objects.visible_to(request.user)
         .filter(status=Transaction.Status.ACTIVE)
@@ -274,10 +282,33 @@ def transaction_list(request):
         transactions = _apply_transaction_filters(transactions, form.cleaned_data, request.user)
     elif form.is_bound:
         transactions = transactions.none()
+    show_ai = bool(person and member_has_ai(person))
+    uncategorized_filter = form.is_valid() and form.cleaned_data.get("category") == "uncategorized"
+    suggestions = pending_suggestions_for(person, transactions) if show_ai else {}
+    filter_hidden = []
+    if form.is_valid():
+        for name, value in form.cleaned_data.items():
+            if value in (None, ""):
+                continue
+            if name == "account":
+                filter_hidden.append((name, str(value.pk)))
+            else:
+                filter_hidden.append((name, str(value)))
     return render(
         request,
         "finance/transaction_list.html",
-        {"filter_form": form, "transactions": transactions},
+        {
+            "filter_form": form,
+            "transactions": transactions,
+            "show_ai_suggestions": show_ai,
+            "uncategorized_filter": uncategorized_filter,
+            "suggestions_pending": show_ai and suggestions_pending(person),
+            "shown_suggestions": list(suggestions.values()),
+            "suggestions": suggestions,
+            "proposed_rule": proposed_rule_from_accepts(person) if show_ai else None,
+            "list_query": request.get_full_path(),
+            "filter_hidden": filter_hidden,
+        },
     )
 
 

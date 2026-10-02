@@ -3,6 +3,7 @@ from django.urls import path
 from finance import (
     account_views,
     ai_views,
+    category_suggestion_views,
     net_worth_views,
     planning_views,
     rule_views,
@@ -62,6 +63,22 @@ urlpatterns = [
     path("accounts/<int:account_id>/imports/preview/", csv_import_views.csv_preview, name="csv-import-preview"),
     path("accounts/<int:account_id>/imports/<int:batch_id>/undo/", csv_import_views.csv_undo_import, name="csv-import-undo"),
     path("transactions/", views.transaction_list, name="transaction-list"),
+    path("transactions/suggest-categories/", category_suggestion_views.suggest_categories, name="suggest-categories"),
+    path(
+        "transactions/suggestions/accept-all/",
+        category_suggestion_views.suggestion_accept_all,
+        name="suggestion-accept-all",
+    ),
+    path(
+        "transactions/suggestions/<int:suggestion_id>/accept/",
+        category_suggestion_views.suggestion_accept,
+        name="suggestion-accept",
+    ),
+    path(
+        "transactions/suggestions/<int:suggestion_id>/reject/",
+        category_suggestion_views.suggestion_reject,
+        name="suggestion-reject",
+    ),
     path("transactions/<int:transaction_id>/edit/", views.transaction_edit, name="transaction-edit"),
     path("transactions/<int:transaction_id>/category/", views.transaction_categorize, name="transaction-categorize"),
     path("transactions/<int:transaction_id>/refund/", views.transaction_link_refund, name="transaction-link-refund"),

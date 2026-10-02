@@ -151,7 +151,11 @@ def categorize_imported_batch(principal, batch):
     if batch is None:
         return []
     created = list(Transaction.objects.filter(import_batch=batch, status=Transaction.Status.ACTIVE))
-    return apply_enabled_rules_to_transactions(principal, created)
+    applied = apply_enabled_rules_to_transactions(principal, created)
+    from finance.category_suggestion_services import queue_category_suggestions_for
+
+    queue_category_suggestions_for(principal, created)
+    return applied
 
 
 @transaction.atomic

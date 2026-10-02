@@ -1,4 +1,5 @@
 {% extends "finance/base.html" %}
+{% load ui %}
 {% block title %}Transactions · Financial Planner{% endblock %}
 {% block content %}
 <h1 class="mb-4 text-2xl font-bold">Transactions</h1>
@@ -7,6 +8,35 @@
   <button type="submit" class="btn btn-primary">Filter</button>
   <a class="btn btn-ghost" href="{% url 'transaction-list' %}">Clear</a>
 </form>
+{% if show_ai_suggestions and uncategorized_filter %}
+<form method="post" action="{% url 'suggest-categories' %}" class="mb-4">
+  {% csrf_token %}
+  <input type="hidden" name="next" value="{{ list_query }}">
+  {% for name, value in filter_hidden %}
+    <input type="hidden" name="{{ name }}" value="{{ value }}">
+  {% endfor %}
+  <button type="submit" class="btn btn-secondary">Suggest categories</button>
+</form>
+{% endif %}
+{% if suggestions_pending %}
+<div role="status" class="alert mb-4">Suggestions pending</div>
+{% endif %}
+{% if proposed_rule %}
+<div role="status" class="alert mb-4">
+  <span>Create a categorization rule for descriptions containing “{{ proposed_rule.description_contains }}” assigned to {{ proposed_rule.category_name }} ({{ proposed_rule.count }} accepted suggestions).</span>
+  <a class="btn btn-sm" href="{{ proposed_rule.url }}">Preview rule</a>
+</div>
+{% endif %}
+{% if shown_suggestions %}
+<form method="post" action="{% url 'suggestion-accept-all' %}" class="mb-4">
+  {% csrf_token %}
+  <input type="hidden" name="next" value="{{ list_query }}">
+  {% for suggestion in shown_suggestions %}
+    <input type="hidden" name="suggestion_id" value="{{ suggestion.pk }}">
+  {% endfor %}
+  <button type="submit" class="btn btn-primary">Accept all shown</button>
+</form>
+{% endif %}
 <div class="overflow-x-auto">
   <table class="table table-zebra">
     <thead class="sticky top-0 z-10 bg-base-200">
@@ -28,7 +58,26 @@
         <td>{{ transaction.account.name }}</td>
         <td>{{ transaction.description }}</td>
         <td class="text-right">{% include "finance/_amount.html" with value=transaction.amount_display tone="" %}</td>
-        <td>{{ transaction.category_display }}</td>
+        <td>
+          {{ transaction.category_display }}
+          {% with suggestion=suggestions|lookup:transaction.pk %}
+          {% if suggestion %}
+          <div class="mt-2">
+            <span>{{ suggestion.display_label }}: {{ suggestion.category.name }}</span>
+            <form method="post" action="{% url 'suggestion-accept' suggestion.pk %}" class="inline">
+              {% csrf_token %}
+              <input type="hidden" name="next" value="{{ list_query }}">
+              <button type="submit" class="btn btn-xs btn-primary">Accept</button>
+            </form>
+            <form method="post" action="{% url 'suggestion-reject' suggestion.pk %}" class="inline">
+              {% csrf_token %}
+              <input type="hidden" name="next" value="{{ list_query }}">
+              <button type="submit" class="btn btn-xs">Reject</button>
+            </form>
+          </div>
+          {% endif %}
+          {% endwith %}
+        </td>
         <td>{{ transaction.import_batch.get_source_display }}<br><small>Imported {{ transaction.import_batch.imported_at }}</small></td>
         <td>{{ transaction.account.get_scope_display }}</td>
         <td><a class="link" href="{% url 'transaction-edit' transaction.pk %}">Correct</a></td>

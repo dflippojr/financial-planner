@@ -41,6 +41,13 @@ def amount_tone_class(display, tone=""):
     return "tabular-amount text-right"
 
 
+@register.filter
+def lookup(mapping, key):
+    if not mapping:
+        return None
+    return mapping.get(key)
+
+
 def _tone_from_display(display):
     text = str(display).lstrip()
     if text.startswith("-"):

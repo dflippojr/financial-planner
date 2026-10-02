@@ -21,6 +21,8 @@ class FakeHarnessState:
         self.need_tool = False
         self.tool_answered = False
         self.hosted_logged_in = True
+        self.session_answer = None
+        self.session_prompts = []
 
     def backends(self):
         return [
@@ -181,6 +183,7 @@ def start_fake_harness(state=None):
             if parsed.path == "/api/v1/sessions":
                 if not self._auth():
                     return
+                harness.session_prompts.append(str(body.get("prompt") or ""))
                 session_id = f"ses-{harness._next_id}"
                 harness._next_id += 1
                 if harness.session_failure:
@@ -203,7 +206,7 @@ def start_fake_harness(state=None):
                     session = {
                         "id": session_id,
                         "status": "done",
-                        "answer": "synthetic-ok",
+                        "answer": harness.session_answer if harness.session_answer is not None else "synthetic-ok",
                         "prompt_tokens": 3,
                         "completion_tokens": 4,
                     }

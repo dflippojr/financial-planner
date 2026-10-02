@@ -1263,3 +1263,54 @@ class AiUsageEvent(models.Model):
 
     def __str__(self):
         return f"AI usage {self.pk}"
+
+
+class CategorySuggestion(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        ACCEPTED = "accepted", "Accepted"
+        REJECTED = "rejected", "Rejected"
+
+    member = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="ai_category_suggestions")
+    transaction = models.ForeignKey(Transaction, on_delete=models.CASCADE, related_name="ai_suggestions")
+    category = models.ForeignKey(Category, on_delete=models.CASCADE, related_name="ai_suggestions")
+    provider = models.CharField(max_length=32)
+    backend = models.CharField(max_length=32)
+    status = models.CharField(max_length=8, choices=Status, default=Status.PENDING)
+    snapshot_hash = models.CharField(max_length=64)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            person = _person_for(principal)
+            if person is None:
+                return self.none()
+            visible = Transaction.objects.visible_to(person).values("pk")
+            return self.filter(member=person, transaction_id__in=visible)
+
+    objects = QuerySet.as_manager()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("member", "transaction"), name="category_suggestion_unique_member_txn"),
+            models.CheckConstraint(
+                condition=Q(status__in=("pending", "accepted", "rejected")),
+                name="category_suggestion_status_valid",
+            ),
+        ]
+
+    def __str__(self):
+        return f"AI category suggestion {self.pk}"
+
+    @property
+    def display_label(self):
+        kind = "Agent Harness" if self.provider == "agent_harness" else (self.provider or "AI")
+        labels = {
+            "local": "Local model",
+            "claude": "Claude",
+            "codex": "Codex",
+            "cursor": "Cursor",
+        }
+        return f"AI · {kind} · {labels.get(self.backend, self.backend or 'Unknown backend')}"

@@ -82,8 +82,13 @@ def _process_one(job, moment):
     job.status = AiJob.Status.RUNNING
     job.attempts += 1
     job.save(update_fields=("status", "attempts", "updated_at"))
-    prompt = FEATURE_PROMPTS.get(job.feature, FEATURE_PROMPTS["structured"])
-    result = run_structured(job.member, prompt, feature=job.feature, backend=backend)
+    if job.feature == "category_suggestions":
+        from .category_suggestion_services import run_category_suggestion_job
+
+        result = run_category_suggestion_job(job.member, job, backend=backend)
+    else:
+        prompt = FEATURE_PROMPTS.get(job.feature, FEATURE_PROMPTS["structured"])
+        result = run_structured(job.member, prompt, feature=job.feature, backend=backend)
     if result.ok:
         job.status = AiJob.Status.SUCCEEDED
         job.result_ref = result.session_id or "ok"

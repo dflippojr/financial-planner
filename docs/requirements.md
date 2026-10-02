@@ -338,6 +338,7 @@ Owner decisions:
 - **Output.**
   - AI output is labeled as AI-generated, with the backend named.
   - Suggestions never overwrite a category set by hand or by a rule, and never change transfer or refund semantics.
+  - Category suggestions (#93) run as background jobs after import and SimpleFIN sync, or from Suggest categories on the Uncategorized filter. The model must answer with an existing category id or "unsure". Stored suggestions expire when the transaction changes. After several accepted suggestions share a description-contains string, the app offers the existing categorization-rule preview.
   - Answers are not presented as verified facts or as financial advice.
   - Figures shown come from the app's tools and link to the page that shows them.
 - **Re-authentication.** Connecting, changing, or disconnecting an AI backend is a sensitive action under the 10-minute re-authentication rule.
