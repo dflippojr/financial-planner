@@ -258,6 +258,20 @@ def test_templates_and_scripts_do_not_register_a_service_worker():
     assert scanned > 0
 
 
+def _css_layer_block(css, layer_name):
+    marker = f"@layer {layer_name} {{"
+    start = css.index(marker)
+    depth = 0
+    for index, char in enumerate(css[start:], start=start):
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return css[start : index + 1]
+    raise AssertionError(f"unclosed @layer {layer_name}")
+
+
 def test_compact_layout_css_uses_safe_area_insets():
     css = (_repo_root() / "static" / "src" / "app.css").read_text(encoding="utf-8")
 
@@ -268,6 +282,18 @@ def test_compact_layout_css_uses_safe_area_insets():
         "env(safe-area-inset-left)",
     ):
         assert inset in css
+
+
+def test_navbar_safe_area_padding_is_outside_base_layer():
+    css = (_repo_root() / "static" / "src" / "app.css").read_text(encoding="utf-8")
+    base = _css_layer_block(css, "base")
+    navbar_top = "padding-top: max(0.5rem, env(safe-area-inset-top))"
+    outside_base = css.replace(base, "", 1)
+
+    assert navbar_top not in base
+    assert navbar_top in outside_base
+    assert "body:not(:has(.navbar))" in css
+    assert "padding-top: env(safe-area-inset-top)" in base
 
 
 @pytest.mark.django_db

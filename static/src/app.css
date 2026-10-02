@@ -24,10 +24,6 @@
     padding-top: env(safe-area-inset-top);
   }
 
-  .navbar {
-    padding-top: max(0.5rem, env(safe-area-inset-top));
-  }
-
   .drawer-side > div {
     padding-top: env(safe-area-inset-top);
     padding-bottom: env(safe-area-inset-bottom);
@@ -43,6 +39,11 @@
     --chart-category-6: var(--color-warning);
     --chart-category-7: var(--color-error);
   }
+}
+
+/* Unlayered so this beats daisyUI's later .navbar { padding: 0.5rem } component rule. */
+.navbar {
+  padding-top: max(0.5rem, env(safe-area-inset-top));
 }
 
 @utility tabular-amount {
