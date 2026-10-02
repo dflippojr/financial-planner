@@ -365,8 +365,9 @@ fresh volume, and upgrades.
 `.github/workflows/review.yml` posts an automated code-bug review as a PR comment. It runs only when a
 maintainer dispatches it (`gh workflow run review.yml -f pr_number=N -f mode=full`), never automatically.
 It refuses pull requests from forks, so untrusted code never reaches the dedicated self-hosted runner
-(`financial-planner-review`, registered with `ops/github/install-runner.ps1`). See
-`ops/review/run-review.ps1` for the review logic.
+(`financial-planner-review`, registered with `ops/github/install-runner.ps1`). The workflow is a thin caller of
+the shared reviewer in `dflippojr/agent-harness` (`.github/workflows/review.yml@review-v1`), which holds the review
+logic and posts an `Automated Code Review` check that passes on a clean review and fails on findings.
 
 `.github/workflows/sonar.yml` runs the test suite with coverage and reports it to SonarCloud on every
 push to `main`, on pull requests from branches of this repository, and on demand (`gh workflow run sonar.yml`).
