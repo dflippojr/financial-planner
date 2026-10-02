@@ -139,6 +139,9 @@ CSRF_TRUSTED_ORIGINS = [
 ]
 
 SETUP_CODE = os.environ.get("SETUP_CODE", "")
+# File or directory. A directory must contain privacy-policy.md. Empty uses the
+# default template shipped in finance/policy/default.md.
+PRIVACY_POLICY_PATH = os.environ.get("PRIVACY_POLICY_PATH", "").strip()
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
 

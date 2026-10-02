@@ -43,6 +43,13 @@ class Person(models.Model):
         related_name="person",
     )
     display_name = models.CharField(max_length=150)
+    privacy_policy_declined_version = models.ForeignKey(
+        "PrivacyPolicyVersion",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="declined_by",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -1112,3 +1119,42 @@ class LoginThrottle(models.Model):
     failure_count = models.PositiveIntegerField(default=0)
     window_started_at = models.DateTimeField()
     blocked_until = models.DateTimeField(null=True, blank=True)
+
+
+class PrivacyPolicyVersion(models.Model):
+    version = models.PositiveIntegerField(unique=True)
+    body = models.TextField()
+    is_material = models.BooleanField()
+    published_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ("-version",)
+
+    def __str__(self):
+        kind = "material" if self.is_material else "non-material"
+        return f"Privacy policy v{self.version} ({kind})"
+
+
+class PrivacyPolicyAcceptance(models.Model):
+    person = models.ForeignKey(
+        Person,
+        on_delete=models.CASCADE,
+        related_name="privacy_policy_acceptances",
+    )
+    policy_version = models.ForeignKey(
+        PrivacyPolicyVersion,
+        on_delete=models.PROTECT,
+        related_name="acceptances",
+    )
+    accepted_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("person", "policy_version"),
+                name="privacy_acceptance_unique_person_version",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.person} accepted v{self.policy_version.version}"
