@@ -1,6 +1,8 @@
 from .parser import CsvInputError, Mapping
 
 GENERIC = "generic"
+# Both card exports date rows by this column (owner decision 2026-10-02).
+TRANSACTION_DATE = "Transaction Date"
 HUNTINGTON = "huntington"
 CAPITAL_ONE = "capital_one"
 APPLE_CARD = "apple_card"
@@ -42,7 +44,7 @@ HUNTINGTON_HEADER_ERROR = (
 )
 
 APPLE_CARD_HEADERS = (
-    "Transaction Date",
+    TRANSACTION_DATE,
     "Clearing Date",
     "Description",
     "Merchant",
@@ -53,7 +55,7 @@ APPLE_CARD_HEADERS = (
 )
 
 APPLE_CARD_MAPPING = Mapping(
-    date_column="Transaction Date",
+    date_column=TRANSACTION_DATE,
     description_column="Merchant",
     date_format="mdy_slash_4",
     number_format="dot_none",
@@ -70,7 +72,7 @@ APPLE_CARD_HEADER_ERROR = (
 
 
 CAPITAL_ONE_HEADERS = (
-    "Transaction Date",
+    TRANSACTION_DATE,
     "Posted Date",
     "Card No.",
     "Description",
@@ -80,7 +82,7 @@ CAPITAL_ONE_HEADERS = (
 )
 
 CAPITAL_ONE_MAPPING = Mapping(
-    date_column="Transaction Date",
+    date_column=TRANSACTION_DATE,
     description_column="Description",
     date_format="iso",
     number_format="dot_none",
