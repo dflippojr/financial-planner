@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from http.client import HTTPException
 import json
 import ssl
 from urllib.error import HTTPError, URLError
@@ -67,7 +68,7 @@ def claim_access_url(claim_url: str) -> str:
         raise SimpleFinError("SimpleFIN could not claim that setup token.") from None
     except URLError:
         raise SimpleFinError("SimpleFIN could not be reached.") from None
-    except (OSError, UnicodeDecodeError):  # includes TimeoutError
+    except (OSError, HTTPException, UnicodeDecodeError):  # TimeoutError, IncompleteRead
         raise SimpleFinError("SimpleFIN did not finish responding. Try again later.") from None
     _require_https(body)
     return body
@@ -102,7 +103,7 @@ def fetch_accounts(access_url: str, *, start_date=None, end_date=None, balances_
         raise SimpleFinError("SimpleFIN could not return accounts.") from None
     except URLError:
         raise SimpleFinError("SimpleFIN could not be reached.") from None
-    except (OSError, UnicodeDecodeError):  # includes TimeoutError
+    except (OSError, HTTPException, UnicodeDecodeError):  # TimeoutError, IncompleteRead
         # Headers arrived but the body stalled or broke off.
         raise SimpleFinError("SimpleFIN did not finish responding. Try again later.") from None
     try:
