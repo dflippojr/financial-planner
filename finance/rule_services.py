@@ -27,6 +27,7 @@ from .models import (
     RuleApplicationEntry,
     Transaction,
     TransactionCorrectionHistory,
+    TransferPair,
 )
 
 
@@ -508,12 +509,29 @@ def reverse_application(principal, application_id):
             _history_label(previous),
             _history_label(restored_category),
         )
+        _carry_into_transfer_snapshots(txn, previous, restored_category)
         _restore_refund_categories(txn, person)
         restored += 1
     if not RuleApplicationEntry.objects.filter(application=application, reversed_at__isnull=True).exists():
         application.reversed_at = now
         application.save(update_fields=("reversed_at",))
     return ReverseResult(restored=restored, skipped_manual=skipped_manual)
+
+
+def _carry_into_transfer_snapshots(txn, removed, restored):
+    """Keep a marked transfer's category snapshot in step with a reversal.
+
+    Marking a transfer records each leg's category so undoing the transfer can
+    put it back. If a rule's category is reversed while the leg is marked,
+    that snapshot must not bring the reversed category back later.
+    """
+    removed_id = None if removed is None else removed.pk
+    restored_id = None if restored is None else restored.pk
+    for leg_field in ("leg_a", "leg_b"):
+        snapshot_field = f"{leg_field}_category_id_at_mark"
+        TransferPair.objects.excluding_income_and_spending().filter(
+            **{leg_field: txn, snapshot_field: removed_id}
+        ).update(**{snapshot_field: restored_id})
 
 
 def _category_before(entry, application):

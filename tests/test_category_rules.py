@@ -1039,3 +1039,60 @@ def test_former_member_can_undo_a_household_rule_on_their_lent_account():
 
     txn.refresh_from_db()
     assert txn.category_id is None
+
+
+@pytest.mark.django_db
+def test_deleting_an_account_keeps_rule_history_for_other_accounts():
+    from finance.lifecycle_services import delete_account
+
+    owner = make_person("owner-delete")
+    household = make_household(owner)
+    first = make_account(owner)
+    second = make_account(owner, name="Synthetic Savings")
+    make_transaction(owner, first, fingerprint="eb".ljust(64, "0"))
+    kept = make_transaction(owner, second, fingerprint="ec".ljust(64, "0"))
+    rule = save_category_rule(
+        owner, owner_kind="personal", description_contains="kroger", account_id=None,
+        min_amount_minor=None, max_amount_minor=None, category_id=groceries(household).pk, priority=0,
+    )
+    application, _skipped = apply_rule(owner, rule.pk)
+    save_category_rule(
+        owner, rule_id=rule.pk, owner_kind="personal", description_contains="kroger", account_id=first.pk,
+        min_amount_minor=None, max_amount_minor=None, category_id=groceries(household).pk, priority=0,
+    )
+
+    delete_account(owner, first.pk)
+
+    assert RuleApplicationEntry.objects.filter(application=application, transaction=kept).exists()
+    reverse_application(owner, application.pk)
+    kept.refresh_from_db()
+    assert kept.category_id is None
+
+
+@pytest.mark.django_db
+def test_reversing_a_rule_on_a_marked_transfer_updates_its_snapshot():
+    from finance.category_services import confirm_transfer_pair, undo_transfer_pair
+    from finance.models import TransferPair
+
+    owner = make_person("owner-transfer")
+    household = make_household(owner)
+    checking = make_account(owner)
+    savings = make_account(owner, name="Synthetic Savings")
+    out_leg = make_transaction(owner, checking, fingerprint="ed".ljust(64, "0"))
+    in_leg = make_transaction(owner, savings, amount_minor=1000, description="SYNTHETIC MOVE IN", fingerprint="ee".ljust(64, "0"))
+    rule = save_category_rule(
+        owner, owner_kind="personal", description_contains="kroger", account_id=checking.pk,
+        min_amount_minor=None, max_amount_minor=None, category_id=groceries(household).pk, priority=0,
+    )
+    application, _skipped = apply_rule(owner, rule.pk)
+    pair = TransferPair.objects.create(
+        leg_a=out_leg, leg_b=in_leg, status=TransferPair.Status.SUGGESTED,
+        kind=TransferPair.Kind.TRANSFER, confidence=TransferPair.Confidence.HIGH, reasons=["synthetic"],
+    )
+    confirm_transfer_pair(owner, pair.pk)
+
+    reverse_application(owner, application.pk)
+    undo_transfer_pair(owner, pair.pk)
+
+    out_leg.refresh_from_db()
+    assert out_leg.category_id is None

@@ -415,19 +415,28 @@ def _repair_then_delete_account_rows(person, account):
 def _delete_rule_history_for_account(account, tx_ids):
     """Remove rule rows that would block deleting the account.
 
-    Rule-application entries for the account's transactions go with them, and
-    rules limited to this account (with their applications) are removed too.
-    Rules and applications for other accounts are untouched.
+    Rule-application entries for the account's transactions go with them.
+    A rule limited to this account is deleted with its applications, unless
+    an application still holds entries for other accounts (the rule once
+    applied more widely): then the rule is kept, disabled, and no longer
+    limited to an account, so those rows stay reversible.
     """
     from finance.models import CategoryRule, RuleApplication, RuleApplicationEntry
 
     if tx_ids:
         RuleApplicationEntry.objects.filter(transaction_id__in=tx_ids).delete()
-    account_rule_ids = list(CategoryRule.objects.filter(account_id=account.pk).values_list("pk", flat=True))
-    if account_rule_ids:
-        RuleApplicationEntry.objects.filter(application__rule_id__in=account_rule_ids).delete()
-        RuleApplication.objects.filter(rule_id__in=account_rule_ids).delete()
-        CategoryRule.objects.filter(pk__in=account_rule_ids).delete()
+    account_rule_ids = set(CategoryRule.objects.filter(account_id=account.pk).values_list("pk", flat=True))
+    if not account_rule_ids:
+        return
+    still_used = set(
+        RuleApplicationEntry.objects.filter(application__rule_id__in=account_rule_ids).values_list(
+            "application__rule_id", flat=True
+        )
+    )
+    CategoryRule.objects.filter(pk__in=still_used).update(account=None, enabled=False)
+    unused = account_rule_ids - still_used
+    RuleApplication.objects.filter(rule_id__in=unused).delete()
+    CategoryRule.objects.filter(pk__in=unused).delete()
 
 
 @transaction.atomic
