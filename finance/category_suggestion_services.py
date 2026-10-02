@@ -267,19 +267,30 @@ def _enqueue_ids(person, ids):
     for job in in_flight:
         if job.status != AiJob.Status.QUEUED:
             continue
-        current = _ids_from_refs(job.input_refs)
-        room = BATCH_SIZE - len(current)
-        if room <= 0:
-            continue
-        added, remaining = remaining[:room], remaining[room:]
-        job.input_refs = {"transaction_ids": current + added}
-        job.save(update_fields=("input_refs", "updated_at"))
-        jobs.append(job)
+        remaining, topped = _top_up_queued_job(job.pk, remaining)
+        if topped is not None:
+            jobs.append(topped)
         if not remaining:
             return jobs
     for chunk in _chunks(remaining, BATCH_SIZE):
         jobs.append(enqueue_job(person, feature=FEATURE, input_refs={"transaction_ids": list(chunk)}))
     return jobs
+
+
+def _top_up_queued_job(job_pk, remaining):
+    """Add ids to a job only while it is still queued, so the runner never misses them."""
+    with transaction.atomic():
+        job = AiJob.objects.select_for_update().filter(pk=job_pk, status=AiJob.Status.QUEUED).first()
+        if job is None:
+            return remaining, None
+        current = _ids_from_refs(job.input_refs)
+        room = BATCH_SIZE - len(current)
+        if room <= 0:
+            return remaining, None
+        added, rest = remaining[:room], remaining[room:]
+        job.input_refs = {"transaction_ids": current + added}
+        job.save(update_fields=("input_refs", "updated_at"))
+        return rest, job
 
 
 def _current_suggestion_txn_ids(person):

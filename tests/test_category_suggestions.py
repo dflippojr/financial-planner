@@ -513,3 +513,26 @@ def test_partly_filled_queued_job_tops_up_only_to_batch_size(harness):
     queued_ids = [pk for ids in id_lists for pk in ids]
     assert len(queued_ids) == BATCH_SIZE + 8
     assert len(set(queued_ids)) == len(queued_ids)
+
+
+@pytest.mark.django_db
+def test_top_up_skips_a_job_the_runner_already_claimed(harness):
+    from finance.category_suggestion_services import _top_up_queued_job
+
+    _state, url = harness
+    _user, person, _household = make_member("owner")
+    connect_ai(person, url)
+    account = make_account(person)
+    _uncategorized_rows(person, account, 3)
+    queue_remaining_uncategorized(person)
+    jobs, id_lists = _job_id_lists(person)
+    claimed = jobs[0]
+    claimed.status = AiJob.Status.RUNNING
+    claimed.save(update_fields=("status", "updated_at"))
+
+    rest, topped = _top_up_queued_job(claimed.pk, [999001, 999002])
+
+    assert topped is None
+    assert rest == [999001, 999002]
+    claimed.refresh_from_db()
+    assert claimed.input_refs["transaction_ids"] == id_lists[0]
