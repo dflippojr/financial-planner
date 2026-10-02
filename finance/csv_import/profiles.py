@@ -1,13 +1,17 @@
 from .parser import CsvInputError, Mapping
 
 GENERIC = "generic"
+# Both card exports date rows by this column (owner decision 2026-10-02).
+TRANSACTION_DATE = "Transaction Date"
 HUNTINGTON = "huntington"
 CAPITAL_ONE = "capital_one"
+APPLE_CARD = "apple_card"
 
 PROFILE_CHOICES = (
     (GENERIC, "Generic mapper"),
     (HUNTINGTON, "Huntington"),
     (CAPITAL_ONE, "Capital One"),
+    (APPLE_CARD, "Apple Card"),
 )
 
 HUNTINGTON_HEADERS = (
@@ -39,9 +43,36 @@ HUNTINGTON_HEADER_ERROR = (
     "Category Name, and Transaction Number."
 )
 
+APPLE_CARD_HEADERS = (
+    TRANSACTION_DATE,
+    "Clearing Date",
+    "Description",
+    "Merchant",
+    "Category",
+    "Type",
+    "Amount (USD)",
+    "Purchased By",
+)
+
+APPLE_CARD_MAPPING = Mapping(
+    date_column=TRANSACTION_DATE,
+    description_column="Merchant",
+    date_format="mdy_slash_4",
+    number_format="dot_none",
+    amount_mode="signed",
+    amount_column="Amount (USD)",
+    invert_sign=True,
+)
+
+APPLE_CARD_HEADER_ERROR = (
+    "This file does not match the Apple Card export. "
+    "Expected columns Transaction Date, Clearing Date, Description, Merchant, "
+    "Category, Type, Amount (USD), and Purchased By."
+)
+
 
 CAPITAL_ONE_HEADERS = (
-    "Transaction Date",
+    TRANSACTION_DATE,
     "Posted Date",
     "Card No.",
     "Description",
@@ -51,7 +82,7 @@ CAPITAL_ONE_HEADERS = (
 )
 
 CAPITAL_ONE_MAPPING = Mapping(
-    date_column="Transaction Date",
+    date_column=TRANSACTION_DATE,
     description_column="Description",
     date_format="iso",
     number_format="dot_none",
@@ -69,10 +100,8 @@ CAPITAL_ONE_HEADER_ERROR = (
 
 
 def normalize_profile(value):
-    if value == HUNTINGTON:
-        return HUNTINGTON
-    if value == CAPITAL_ONE:
-        return CAPITAL_ONE
+    if value in (HUNTINGTON, CAPITAL_ONE, APPLE_CARD):
+        return value
     return GENERIC
 
 
@@ -86,3 +115,9 @@ def require_capital_one_headers(headers):
     present = set(headers)
     if any(name not in present for name in CAPITAL_ONE_HEADERS):
         raise CsvInputError(CAPITAL_ONE_HEADER_ERROR)
+
+
+def require_apple_card_headers(headers):
+    present = set(headers)
+    if any(name not in present for name in APPLE_CARD_HEADERS):
+        raise CsvInputError(APPLE_CARD_HEADER_ERROR)

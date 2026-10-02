@@ -1,3 +1,5 @@
+from collections import namedtuple
+
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
@@ -6,13 +8,16 @@ from django.views.decorators.http import require_http_methods, require_POST
 
 from finance.models import Account, ImportBatch
 
-from .forms import CapitalOneImportForm, CsvMappingForm, CsvUploadForm, HuntingtonImportForm
+from .forms import AppleCardImportForm, CapitalOneImportForm, CsvMappingForm, CsvUploadForm, HuntingtonImportForm
 from .parser import CsvInputError, preview_csv, read_csv
 from .profiles import (
+    APPLE_CARD,
+    APPLE_CARD_MAPPING,
     CAPITAL_ONE,
     CAPITAL_ONE_MAPPING,
     HUNTINGTON,
     HUNTINGTON_MAPPING,
+    require_apple_card_headers,
     require_capital_one_headers,
     require_huntington_headers,
 )
@@ -22,6 +27,14 @@ from .staging import StageUnavailable, create_stage, delete_stage, find_live_sta
 
 PREVIEW_TEMPLATE = "finance/csv_import/preview.html"
 RESULT_SESSION_KEY = "csv_import_result"
+
+FixedProfile = namedtuple("FixedProfile", ("require_headers", "mapping", "source", "form_class"))
+
+FIXED_PROFILES = {
+    HUNTINGTON: FixedProfile(require_huntington_headers, HUNTINGTON_MAPPING, ImportBatch.Source.HUNTINGTON, HuntingtonImportForm),
+    CAPITAL_ONE: FixedProfile(require_capital_one_headers, CAPITAL_ONE_MAPPING, ImportBatch.Source.CAPITAL_ONE, CapitalOneImportForm),
+    APPLE_CARD: FixedProfile(require_apple_card_headers, APPLE_CARD_MAPPING, ImportBatch.Source.APPLE_CARD, AppleCardImportForm),
+}
 
 
 def _visible_account(request, account_id):
@@ -53,24 +66,14 @@ def _restore_live_stage(request, account, context):
     except (CsvInputError, StageUnavailable):
         return
     profile = stage_profile(request, token, account.pk)
-    if profile == HUNTINGTON:
+    if profile in FIXED_PROFILES:
         try:
-            _huntington_preview(
+            _fixed_profile_preview(
                 context,
                 document,
                 account,
-                {"token": token, "source": ImportBatch.Source.HUNTINGTON},
-            )
-        except CsvInputError:
-            return
-        return
-    if profile == CAPITAL_ONE:
-        try:
-            _capital_one_preview(
-                context,
-                document,
-                account,
-                {"token": token, "source": ImportBatch.Source.CAPITAL_ONE},
+                {"token": token, "source": FIXED_PROFILES[profile].source},
+                profile,
             )
         except CsvInputError:
             return
@@ -119,35 +122,18 @@ def _store_result(request, account_id, *, new_count=0, duplicate_count=0, invali
     }
 
 
-def _huntington_preview(context, document, account, post_data):
-    require_huntington_headers(document.headers)
-    preview = classify_overlap(account, preview_csv(document, HUNTINGTON_MAPPING))
+def _fixed_profile_preview(context, document, account, post_data, profile):
+    spec = FIXED_PROFILES[profile]
+    spec.require_headers(document.headers)
+    preview = classify_overlap(account, preview_csv(document, spec.mapping))
     filled = _prefill_date_range(post_data, preview)
-    mapping_form = HuntingtonImportForm(filled)
+    mapping_form = spec.form_class(filled)
     mapping_form.is_valid()
     context.update(
         {
             "mapping_form": mapping_form,
             "headers": document.headers,
-            "import_profile": HUNTINGTON,
-            "preview": preview,
-            "commit_available": True,
-        }
-    )
-    return preview, mapping_form
-
-
-def _capital_one_preview(context, document, account, post_data):
-    require_capital_one_headers(document.headers)
-    preview = classify_overlap(account, preview_csv(document, CAPITAL_ONE_MAPPING))
-    filled = _prefill_date_range(post_data, preview)
-    mapping_form = CapitalOneImportForm(filled)
-    mapping_form.is_valid()
-    context.update(
-        {
-            "mapping_form": mapping_form,
-            "headers": document.headers,
-            "import_profile": CAPITAL_ONE,
+            "import_profile": profile,
             "preview": preview,
             "commit_available": True,
         }
@@ -185,19 +171,13 @@ def _handle_upload(request, account, context):
             import_profile=profile,
         )
         document = read_csv(content)
-        if profile == HUNTINGTON:
-            _huntington_preview(
+        if profile in FIXED_PROFILES:
+            _fixed_profile_preview(
                 context,
                 document,
                 account,
-                {"token": token, "source": ImportBatch.Source.HUNTINGTON},
-            )
-        elif profile == CAPITAL_ONE:
-            _capital_one_preview(
-                context,
-                document,
-                account,
-                {"token": token, "source": ImportBatch.Source.CAPITAL_ONE},
+                {"token": token, "source": FIXED_PROFILES[profile].source},
+                profile,
             )
         else:
             _mapping_context(context, token, document, profile)
@@ -209,30 +189,19 @@ def _handle_upload(request, account, context):
 
 
 def _prepare_staged_preview(request, account, document, profile, context):
-    if profile == HUNTINGTON:
-        mapping_form = HuntingtonImportForm(request.POST)
+    if profile in FIXED_PROFILES:
+        spec = FIXED_PROFILES[profile]
+        mapping_form = spec.form_class(request.POST)
         context.update(
-            {"mapping_form": mapping_form, "headers": document.headers, "import_profile": HUNTINGTON}
+            {"mapping_form": mapping_form, "headers": document.headers, "import_profile": profile}
         )
         if not mapping_form.is_valid():
             return None
         try:
-            preview, mapping_form = _huntington_preview(context, document, account, request.POST)
+            preview, mapping_form = _fixed_profile_preview(context, document, account, request.POST, profile)
         except CsvInputError:
             raise Http404 from None
-        return preview, mapping_form, HUNTINGTON_MAPPING, False
-    if profile == CAPITAL_ONE:
-        mapping_form = CapitalOneImportForm(request.POST)
-        context.update(
-            {"mapping_form": mapping_form, "headers": document.headers, "import_profile": CAPITAL_ONE}
-        )
-        if not mapping_form.is_valid():
-            return None
-        try:
-            preview, mapping_form = _capital_one_preview(context, document, account, request.POST)
-        except CsvInputError:
-            raise Http404 from None
-        return preview, mapping_form, CAPITAL_ONE_MAPPING, False
+        return preview, mapping_form, spec.mapping, False
     mapping_form = CsvMappingForm(request.POST, headers=document.headers)
     context.update({"mapping_form": mapping_form, "headers": document.headers, "import_profile": profile})
     if not mapping_form.is_valid():
@@ -322,7 +291,7 @@ def csv_preview(request, account_id):
     preview, mapping_form, mapping, source_required = prepared
 
     if action == "preview":
-        if profile not in (HUNTINGTON, CAPITAL_ONE):
+        if profile not in FIXED_PROFILES:
             return _render_generic_preview(request, account, context, document, preview)
         return _render_preview(request, account, context)
     if action != "commit":
