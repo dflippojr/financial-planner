@@ -77,7 +77,7 @@ from .reauth import (
 from .export import export_filename, write_export_zip
 from .models import Account, Category, Person, PrivacyPolicyVersion, RecurringSeries, RefundLink, Transaction, TransactionCorrectionHistory, TransferPair
 from .policy_services import (
-    accept_policy,
+    accept_shown_version,
     current_policy,
     in_acceptance,
     latest_acceptance,
@@ -684,6 +684,7 @@ def _start_google_join(request, google_form):
             "username": google_form.cleaned_data["username"],
             "display_name": google_form.cleaned_data["display_name"],
             "accept_privacy_policy": google_form.cleaned_data.get("accept_privacy_policy", False),
+            "privacy_policy_version": google_form.cleaned_data.get("privacy_policy_version"),
         },
     )
     return _google_oauth_login(request)
@@ -714,6 +715,7 @@ def _start_google_setup(request, google_form):
             "display_name": google_form.cleaned_data["display_name"],
             "household_name": google_form.cleaned_data["household_name"],
             "accept_privacy_policy": google_form.cleaned_data.get("accept_privacy_policy", False),
+            "privacy_policy_version": google_form.cleaned_data.get("privacy_policy_version"),
         },
     )
     return _google_oauth_login(request)
@@ -741,7 +743,11 @@ def _complete_password_setup(request, form):
         raise Http404() from None
     clear_login_failures(key)
     _complete_member_session(request, user)
-    record_onboarding_acceptance(user.person, form.cleaned_data.get("accept_privacy_policy", False))
+    record_onboarding_acceptance(
+        user.person,
+        form.cleaned_data.get("accept_privacy_policy", False),
+        form.cleaned_data.get("privacy_policy_version"),
+    )
     return recovery_codes
 
 
@@ -874,7 +880,9 @@ def join(request):
                 form.add_error(None, "The invitation could not be used.")
             else:
                 record_onboarding_acceptance(
-                    _user.person, form.cleaned_data.get("accept_privacy_policy", False)
+                    _user.person,
+                    form.cleaned_data.get("accept_privacy_policy", False),
+                    form.cleaned_data.get("privacy_policy_version"),
                 )
     return render(
         request,
@@ -955,7 +963,7 @@ def account_settings(request):
             return _account_export_zip(request)
         elif action == "accept-privacy-policy":
             if person_for_accept := getattr(request.user, "person", None):
-                accept_policy(person_for_accept)
+                accept_shown_version(person_for_accept, request.POST.get("version"))
     person = getattr(request.user, "person", None)
     policy = current_policy()
     acceptance = latest_acceptance(person) if person is not None else None
@@ -1096,14 +1104,9 @@ def privacy_policy_respond(request):
     person = get_object_or_404(Person, user=request.user)
     action = request.POST.get("action")
     current = current_policy()
-    try:
-        shown_version = int(request.POST.get("version"))
-    except (TypeError, ValueError):
-        shown_version = None
     if action == "accept":
-        if shown_version != current.version:
+        if not accept_shown_version(person, request.POST.get("version")):
             return redirect("privacy-policy")
-        accept_policy(person, current)
     elif action == "decline":
         decline_policy(person, current)
     return redirect(safe_next_url(request, request.POST.get("next", "")))

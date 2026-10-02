@@ -29,6 +29,7 @@
   <form method="post">
     {% csrf_token %}
     <input type="hidden" name="action" value="accept-privacy-policy">
+    <input type="hidden" name="version" value="{{ privacy_policy.version }}">
     <button type="submit" class="btn btn-primary">Accept version {{ privacy_policy.version }}</button>
   </form>
   {% endif %}

@@ -355,7 +355,7 @@ Owner decisions:
 - A member is in acceptance when they have accepted the latest material version, or any later version. A non-material version never takes anyone out of acceptance.
 - Setup, join, and Google sign-up present the policy but do not block. Existing members see a prompt until they respond. Without acceptance the app works; AI backends do not. While any current household member is not in acceptance, no member's AI backend may receive household-shared data.
 - Acceptance rows are per member and version and are included in that member's export. The policy page is public.
-- Accepting records the version that was shown. If that version is no longer current, no acceptance is recorded and the member is sent to the current text. Historical versions do not offer Accept.
+- Accepting records the version that was shown. If that version is no longer current, no acceptance is recorded: the policy page and account settings re-show the current text, and setup, join, and Google sign-up still finish so the persistent prompt can ask again. Historical versions do not offer Accept.
 - Only a version an operator marks as material requires members to accept again.
 
 AI refinements (owner, 2026-10-02, #91 and #94):

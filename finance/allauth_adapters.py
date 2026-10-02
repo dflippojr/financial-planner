@@ -171,7 +171,11 @@ class MemberSocialAccountAdapter(DefaultSocialAccountAdapter):
         except (InvalidOneTimeCode, GoogleOnboardingConflict):
             record_login_failure(key)
             raise ImmediateHttpResponse(self._failed_response(request, "join"))
-        record_onboarding_acceptance(_user.person, pending.get("accept_privacy_policy", False))
+        record_onboarding_acceptance(
+            _user.person,
+            pending.get("accept_privacy_policy", False),
+            pending.get("privacy_policy_version"),
+        )
         clear_login_failures(key)
         raise ImmediateHttpResponse(
             render(
@@ -204,7 +208,11 @@ class MemberSocialAccountAdapter(DefaultSocialAccountAdapter):
             )
         except (ValueError, GoogleOnboardingConflict):
             raise ImmediateHttpResponse(self._failed_response(request, "setup"))
-        record_onboarding_acceptance(user.person, pending.get("accept_privacy_policy", False))
+        record_onboarding_acceptance(
+            user.person,
+            pending.get("accept_privacy_policy", False),
+            pending.get("privacy_policy_version"),
+        )
         clear_login_failures(key)
         complete_member_session(request, user)
         raise ImmediateHttpResponse(

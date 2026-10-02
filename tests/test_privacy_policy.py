@@ -14,6 +14,7 @@ from finance.lifecycle_services import leave_household
 from finance.models import Household, Membership, Person, PrivacyPolicyAcceptance, PrivacyPolicyVersion
 from finance.policy_services import (
     accept_policy,
+    accept_shown_version,
     current_policy,
     household_ai_allowed,
     in_acceptance,
@@ -92,7 +93,7 @@ def test_material_publish_takes_members_out_of_acceptance_until_they_accept():
     assert not may_use_ai(person)
     assert not household_ai_allowed(household)
 
-    accept_policy(person)
+    accept_policy(person, current_policy())
 
     assert in_acceptance(person)
     assert may_use_ai(person)
@@ -240,7 +241,13 @@ def test_setup_without_accepting_still_finishes():
 @override_settings(SETUP_CODE=SYNTHETIC_SETUP_CODE)
 def test_setup_with_acceptance_records_a_row():
     client = Client()
-    client.post(reverse("setup"), _setup_form(accept_privacy_policy="on"))
+    client.post(
+        reverse("setup"),
+        _setup_form(
+            accept_privacy_policy="on",
+            privacy_policy_version=str(current_policy().version),
+        ),
+    )
     user = get_user_model().objects.get()
     row = PrivacyPolicyAcceptance.objects.get(person=user.person)
     assert row.policy_version == current_policy()
@@ -263,6 +270,7 @@ def test_join_records_optional_acceptance():
             "password1": PASSWORD,
             "password2": PASSWORD,
             "accept_privacy_policy": "on",
+            "privacy_policy_version": str(current_policy().version),
         },
     )
     new_user = get_user_model().objects.get(username="new-member")
@@ -280,7 +288,10 @@ def test_settings_shows_state_and_accepts_current_version():
     stamp_recent_auth(client)
     page = client.get(reverse("account-settings"))
     assert b"not in acceptance" in page.content
-    accepted = client.post(reverse("account-settings"), {"action": "accept-privacy-policy"})
+    accepted = client.post(
+        reverse("account-settings"),
+        {"action": "accept-privacy-policy", "version": str(current_policy().version)},
+    )
     assert accepted.status_code == 200
     assert in_acceptance(person)
     assert b"You are in acceptance" in accepted.content
@@ -368,4 +379,152 @@ def test_accept_from_current_policy_page_records_the_shown_version():
 
     assert posted.status_code == 302
     assert PrivacyPolicyAcceptance.objects.filter(person=person, policy_version=current).exists()
+
+
+def _hidden_version(content, name="privacy_policy_version"):
+    marker = f'name="{name}" value="'.encode()
+    assert marker in content
+    start = content.index(marker) + len(marker)
+    return content[start : content.index(b'"', start)].decode()
+
+
+@pytest.mark.django_db
+def test_accept_shown_version_ignores_a_stale_render():
+    _user, person, _household = make_member("owner")
+    shown = publish_policy(material=True, body="Synthetic policy v1")
+    later = publish_policy(material=True, body="Synthetic policy v2")
+
+    assert not accept_shown_version(person, shown.version)
+    assert not PrivacyPolicyAcceptance.objects.filter(person=person).exists()
+    assert accept_shown_version(person, later.version)
+    assert PrivacyPolicyAcceptance.objects.filter(person=person, policy_version=later).exists()
+
+
+@pytest.mark.django_db
+def test_settings_stale_shown_version_is_not_accepted():
+    user, person, _household = make_member("owner")
+    publish_policy(material=True, body="Synthetic policy v1")
+    client = Client()
+    client.force_login(user)
+    stamp_recent_auth(client)
+    shown = _hidden_version(client.get(reverse("account-settings")).content, "version")
+    later = publish_policy(material=True, body="Synthetic policy v2")
+
+    posted = client.post(
+        reverse("account-settings"),
+        {"action": "accept-privacy-policy", "version": shown},
+    )
+
+    assert posted.status_code == 200
+    assert not PrivacyPolicyAcceptance.objects.filter(person=person).exists()
+    assert f"Current version {later.version}".encode() in posted.content
+    assert f'name="version" value="{later.version}"'.encode() in posted.content
+
+
+@pytest.mark.django_db
+@override_settings(SETUP_CODE=SYNTHETIC_SETUP_CODE)
+def test_setup_stale_shown_version_finishes_without_acceptance():
+    client = Client()
+    shown = _hidden_version(client.get(reverse("setup")).content)
+    publish_policy(material=True, body="Synthetic policy v2")
+
+    created = client.post(
+        reverse("setup"),
+        _setup_form(accept_privacy_policy="on", privacy_policy_version=shown),
+    )
+
+    user = get_user_model().objects.get()
+    assert created.status_code == 200
+    assert PrivacyPolicyAcceptance.objects.filter(person=user.person).count() == 0
+    assert client.get(reverse("home")).status_code == 200
+    assert not in_acceptance(user.person)
+
+
+@pytest.mark.django_db
+def test_join_stale_shown_version_finishes_without_acceptance():
+    inviter, person, household = make_member("owner")
+    client = Client()
+    client.force_login(inviter)
+    stamp_recent_auth(client)
+    code = create_invitation(person)
+    join_client = Client()
+    shown = _hidden_version(join_client.get(reverse("join")).content)
+    publish_policy(material=True, body="Synthetic policy v2")
+
+    joined = join_client.post(
+        reverse("join"),
+        {
+            "invitation_code": code,
+            "username": "new-member",
+            "display_name": "New Example",
+            "password1": PASSWORD,
+            "password2": PASSWORD,
+            "accept_privacy_policy": "on",
+            "privacy_policy_version": shown,
+        },
+    )
+
+    new_user = get_user_model().objects.get(username="new-member")
+    assert joined.status_code == 200
+    assert PrivacyPolicyAcceptance.objects.filter(person=new_user.person).count() == 0
+    assert Membership.objects.filter(person=new_user.person, household=household, ended_at__isnull=True).exists()
+
+
+@pytest.mark.django_db
+def test_google_join_stale_shown_version_finishes_without_acceptance():
+    from tests.test_google_auth import _finish_google, _google_settings
+
+    inviter, person, _household = make_member("owner")
+    code = create_invitation(person)
+    client = Client()
+    shown = _hidden_version(client.get(reverse("join")).content)
+    publish_policy(material=True, body="Synthetic policy v2")
+
+    with _google_settings():
+        start = client.post(
+            reverse("join"),
+            {
+                "intent": "google",
+                "invitation_code": code,
+                "username": "joined-google",
+                "display_name": "Joined Google",
+                "accept_privacy_policy": "on",
+                "privacy_policy_version": shown,
+            },
+        )
+        joined = _finish_google(client, start)
+
+    new_user = get_user_model().objects.get(username="joined-google")
+    assert joined.status_code == 200
+    assert PrivacyPolicyAcceptance.objects.filter(person=new_user.person).count() == 0
+
+
+@pytest.mark.django_db
+@override_settings(SETUP_CODE=SYNTHETIC_SETUP_CODE)
+def test_google_setup_stale_shown_version_finishes_without_acceptance():
+    from tests.test_google_auth import _finish_google, _google_settings
+
+    client = Client()
+    shown = _hidden_version(client.get(reverse("setup")).content)
+    publish_policy(material=True, body="Synthetic policy v2")
+
+    with _google_settings(SETUP_CODE=SYNTHETIC_SETUP_CODE):
+        start = client.post(
+            reverse("setup"),
+            {
+                "intent": "google",
+                "setup_code": SYNTHETIC_SETUP_CODE,
+                "username": "first-google",
+                "display_name": "First Google",
+                "household_name": "Synthetic Household",
+                "accept_privacy_policy": "on",
+                "privacy_policy_version": shown,
+            },
+        )
+        created = _finish_google(client, start)
+
+    user = get_user_model().objects.get(username="first-google")
+    assert created.status_code == 200
+    assert PrivacyPolicyAcceptance.objects.filter(person=user.person).count() == 0
+    assert client.session.get("_auth_user_id")
 

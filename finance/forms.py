@@ -11,6 +11,7 @@ from .cash_flow import MAX_REPORT_DATE, MAX_REPORT_PERIODS, default_date_range, 
 from .projection import DEFAULT_HORIZON, HORIZONS
 
 from .auth_services import validated_username
+from .policy_services import current_policy
 from .models import (
     Account,
     Category,
@@ -60,15 +61,24 @@ class ReauthPasswordForm(forms.Form):
     password = forms.CharField(widget=forms.PasswordInput)
 
 
-class JoinForm(PasswordPairForm):
-    invitation_code = forms.CharField(max_length=64)
-    username = forms.CharField(max_length=150)
-    display_name = forms.CharField(max_length=150)
+class PrivacyPolicyOnboardingMixin(forms.Form):
+    privacy_policy_version = forms.IntegerField(widget=forms.HiddenInput, required=False)
     accept_privacy_policy = forms.BooleanField(
         required=False,
         label="I accept the privacy and data policy",
         help_text="You can finish without accepting. AI backends stay off until you accept.",
     )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if not self.is_bound:
+            self.initial.setdefault("privacy_policy_version", current_policy().version)
+
+
+class JoinForm(PrivacyPolicyOnboardingMixin, PasswordPairForm):
+    invitation_code = forms.CharField(max_length=64)
+    username = forms.CharField(max_length=150)
+    display_name = forms.CharField(max_length=150)
 
     field_order = (
         "invitation_code",
@@ -76,6 +86,7 @@ class JoinForm(PasswordPairForm):
         "display_name",
         "password1",
         "password2",
+        "privacy_policy_version",
         "accept_privacy_policy",
     )
 
@@ -85,16 +96,11 @@ class JoinForm(PasswordPairForm):
         return username
 
 
-class SetupForm(PasswordPairForm):
+class SetupForm(PrivacyPolicyOnboardingMixin, PasswordPairForm):
     setup_code = forms.CharField(max_length=128, widget=forms.PasswordInput)
     username = forms.CharField(max_length=150)
     display_name = forms.CharField(max_length=150)
     household_name = forms.CharField(max_length=150, label="Household name")
-    accept_privacy_policy = forms.BooleanField(
-        required=False,
-        label="I accept the privacy and data policy",
-        help_text="You can finish without accepting. AI backends stay off until you accept.",
-    )
 
     field_order = (
         "setup_code",
@@ -103,6 +109,7 @@ class SetupForm(PasswordPairForm):
         "household_name",
         "password1",
         "password2",
+        "privacy_policy_version",
         "accept_privacy_policy",
     )
 
@@ -112,15 +119,10 @@ class SetupForm(PasswordPairForm):
         return username
 
 
-class JoinGoogleForm(forms.Form):
+class JoinGoogleForm(PrivacyPolicyOnboardingMixin):
     invitation_code = forms.CharField(max_length=64)
     username = forms.CharField(max_length=150)
     display_name = forms.CharField(max_length=150)
-    accept_privacy_policy = forms.BooleanField(
-        required=False,
-        label="I accept the privacy and data policy",
-        help_text="You can finish without accepting. AI backends stay off until you accept.",
-    )
 
     def clean_username(self):
         username = self.cleaned_data["username"]
@@ -128,16 +130,11 @@ class JoinGoogleForm(forms.Form):
         return username
 
 
-class SetupGoogleForm(forms.Form):
+class SetupGoogleForm(PrivacyPolicyOnboardingMixin):
     setup_code = forms.CharField(max_length=128, widget=forms.PasswordInput)
     username = forms.CharField(max_length=150)
     display_name = forms.CharField(max_length=150)
     household_name = forms.CharField(max_length=150, label="Household name")
-    accept_privacy_policy = forms.BooleanField(
-        required=False,
-        label="I accept the privacy and data policy",
-        help_text="You can finish without accepting. AI backends stay off until you accept.",
-    )
 
     def clean_username(self):
         username = self.cleaned_data["username"]
