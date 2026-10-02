@@ -238,4 +238,43 @@ Owner decisions:
 - Sharing is with the whole household only.
 - **Lent:** only the owner may unshare, archive, or change the mode. Other members may view and edit transactions.
 - **Co-owned:** any current member may unshare or archive.
-- The owner may switch modes either way. Switching from lent to co-owned shows a confirmation that the owner is giving up sole ownership.
+- The owner may switch modes either way. Switching from lent to co-owned shows a confirmation that the owner is giving up sole ownership: if they leave, the account stays with the household. Switching from co-owned to lent is allowed only for the account's current owner.
+- Existing household accounts migrate as co-owned. The Accounts page (#61) offers Co-owned or Lent when sharing or creating a household account, and the owner can switch later.
+
+## Re-authentication for sensitive actions (2026-10-01)
+
+Owner decision: sensitive actions require a fresh confirmation of identity. One confirmation covers further sensitive actions for **10 minutes** in the same session.
+
+Sensitive actions:
+- **Household access:** inviting a member, leaving the household.
+- **Sign-in methods:** connecting or disconnecting Google, adding or removing a password.
+- **Sharing:** sharing an account, making it private, changing co-owned or lent.
+- **Destructive or data-exporting:** deleting an account, downloading the data export.
+- **Connections:** connecting or disconnecting SimpleFIN.
+
+Defaults recorded with the decision (owner may change):
+- **Ways to re-authenticate:**
+  - A member with a password re-enters it.
+  - A member with Google re-signs in with Google, forced to a fresh login (`prompt=login`, with the ID token's `auth_time` checked).
+  - A member with both may use either.
+  - Recovery codes are not accepted here.
+- **Where the timestamp lives:** the session, never a cookie the client can set. Signing out clears it.
+- **Failed attempts** count toward the existing login throttle.
+- **Flow:** a sensitive POST without a fresh confirmation is not performed. The member is sent to a re-authentication page, then back to the page they came from, and submits the action again. Requests are never replayed automatically.
+
+## Planning v1: projected cash flow and savings goals (2026-10-01)
+
+Owner decision: build a projected cash-flow view **and** savings goals. #68 (Apple Card iOS app) stays research only for now. Saved CSV column mappings wait until the other providers' export shapes are known.
+
+Projected cash flow:
+- Answers "will expected income cover recurring bills and planned expenses over the next N months?"
+- **Inputs:**
+  - Confirmed recurring series (#17) become projected expenses automatically, at their cadence and typical amount.
+  - Members add planned items: recurring or one-time income or expense, with a name, amount, start date, optional end date, cadence (weekly, biweekly, monthly, quarterly, or annual), and an optional category. Each item is private or household-shared, following the account visibility rules.
+- **Horizon:** 12 months by default, with 3, 6, 12, and 24 available, grouped by month. The projection starts after the current month's actuals.
+- **Display:** projected months continue the cash-flow chart in a dashed, hatched style labeled **Projected**. They are never added into actual totals. There is no uncertainty modeling or scenarios in v1.
+
+Savings goals:
+- A goal has a name, target amount, target date, an optional linked account, and private or household visibility.
+- **Progress** is informational. It is the linked account's latest balance (#67/#69 balance snapshots) or a manually entered current amount, compared against the target. It shows the monthly amount needed to reach the target by the target date.
+- Goals do not change the projection in v1.

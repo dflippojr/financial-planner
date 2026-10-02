@@ -1,12 +1,13 @@
 # Core financial data model
 
-Updated: 2026-10-01. This document records the storage contract introduced by issue #4, the reimport rules from issue #6, correction history from issue #31, category/transfer/refund rules from issue #8, cash-flow reporting from issue #9, recurring-charge series from issue #17, and SimpleFIN Bridge connections from issue #67. Provider parsing and Vanguard-specific activity meaning remain separate issues.
+Updated: 2026-10-01. This document records the storage contract introduced by issue #4, the reimport rules from issue #6, correction history from issue #31, category/transfer/refund rules from issue #8, cash-flow reporting from issue #9, recurring-charge series from issue #17, household share modes from issue #30, and SimpleFIN Bridge connections from issue #67. Provider parsing and Vanguard-specific activity meaning remain separate issues.
 
 ## People and sharing
 
 - `Person` is the financial-domain profile for one Django user.
 - `Household` groups people through dated `Membership` rows. A database constraint allows at most one membership without an end date for each person. Ended rows remain as history.
-- Every `Account` always has one owner. Its scope is either `private`, with no household, or `household`, with exactly one household. Transactions and import batches inherit their visibility from their account instead of copying a scope that could drift.
+- Every `Account` always has one owner. Its scope is either `private`, with no household and an empty share mode, or `household`, with exactly one household and a share mode of `co_owned` or `lent`. A database constraint rejects any other combination. Transactions and import batches inherit their visibility from their account instead of copying a scope that could drift. `Account.objects.visible_to` still follows current household membership, so a lent account that reverts to private is immediately invisible to other members.
+- Share modes (issue #30): co-owned accounts belong to the household; any current member may unshare or archive them, and if the owner leaves, ownership moves to the longest-standing remaining member (or the last member takes them private). Lent accounts stay owned by the lender; other members may view and edit transactions while they belong to the household, but only the owner may unshare, archive, or change the mode. If that owner leaves, the account becomes private to them and history is preserved. Existing household rows migrate as co-owned.
 - Account ownership and membership use protected foreign keys. The lifecycle actions in issue #3 must transfer ownership or change scope before removing related records. Issue #3 also owns access-filtered query APIs and authorization enforcement.
 - Accounts, transactions, and import batches use `active` or `archived` status. Archiving requires an archive timestamp and preserves provenance and transaction history.
 

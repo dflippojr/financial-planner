@@ -1,6 +1,5 @@
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
-from django.db.models import Q
 from django.utils import timezone
 
 from .models import (
@@ -73,12 +72,43 @@ def _visible_account_for_update(principal, account_id):
     return account
 
 
+def _parsed_share_mode(share_mode):
+    if share_mode in (Account.ShareMode.CO_OWNED, Account.ShareMode.LENT):
+        return share_mode
+    raise PermissionDenied(_DENIED)
+
+
+def _lock_ledgers(account_ids):
+    ids = sorted({account_id for account_id in account_ids if account_id is not None})
+    if not ids:
+        return
+    list(ImportBatch.objects.select_for_update().filter(account_id__in=ids).order_by("pk"))
+    list(Transaction.objects.select_for_update().filter(account_id__in=ids).order_by("pk"))
+
+
+def _make_account_private(account):
+    account.scope = Account.Scope.PRIVATE
+    account.household = None
+    account.share_mode = ""
+    account.save(update_fields=("scope", "household", "share_mode", "updated_at"))
+
+
+def _actor_may_manage_sharing(person, account):
+    if account.scope != Account.Scope.HOUSEHOLD:
+        return False
+    if account.share_mode == Account.ShareMode.LENT:
+        return account.owner_id == person.pk
+    return True
+
+
 @transaction.atomic
-def share_account(principal, account_id):
+def share_account(principal, account_id, share_mode):
     """Share the actor's private account with their current household."""
     person = _person_for(principal)
     membership, _memberships = lock_actor_household(person)
     account = _visible_account_for_update(person, account_id)
+    _lock_ledgers((account.pk,))
+    mode = _parsed_share_mode(share_mode)
     if (
         membership is None
         or account.owner_id != person.pk
@@ -88,7 +118,34 @@ def share_account(principal, account_id):
 
     account.scope = Account.Scope.HOUSEHOLD
     account.household = membership.household
-    account.save(update_fields=("scope", "household", "updated_at"))
+    account.share_mode = mode
+    account.save(update_fields=("scope", "household", "share_mode", "updated_at"))
+
+
+@transaction.atomic
+def change_account_share_mode(principal, account_id, share_mode, *, confirm_give_up_ownership=False):
+    """Switch a household account between co-owned and lent. Owner only."""
+    person = _person_for(principal)
+    membership, _memberships = lock_actor_household(person)
+    account = _visible_account_for_update(person, account_id)
+    _lock_ledgers((account.pk,))
+    mode = _parsed_share_mode(share_mode)
+    if (
+        membership is None
+        or account.scope != Account.Scope.HOUSEHOLD
+        or account.household_id != membership.household_id
+        or account.owner_id != person.pk
+    ):
+        raise PermissionDenied(_DENIED)
+    if account.share_mode == mode:
+        return account
+    if account.share_mode == Account.ShareMode.LENT and mode == Account.ShareMode.CO_OWNED:
+        if not confirm_give_up_ownership:
+            raise PermissionDenied(_DENIED)
+
+    account.share_mode = mode
+    account.save(update_fields=("share_mode", "updated_at"))
+    return account
 
 
 def _pair_counterpart_account_ids(account_id, seed_leg_ids=None):
@@ -135,16 +192,16 @@ def unshare_account(principal, account_id):
     if not Account.objects.visible_to(person).filter(pk=account_id).exists():
         raise PermissionDenied(_DENIED)
     account = _lock_visible_account_with_pair_counterparts(person, account_id)
+    _lock_ledgers((account.pk,))
     if (
         account.scope != Account.Scope.HOUSEHOLD
         or membership is None
         or account.household_id != membership.household_id
+        or not _actor_may_manage_sharing(person, account)
     ):
         raise PermissionDenied(_DENIED)
 
-    account.scope = Account.Scope.PRIVATE
-    account.household = None
-    account.save(update_fields=("scope", "household", "updated_at"))
+    _make_account_private(account)
     from finance.category_services import revalidate_pairs_touching_account
 
     revalidate_pairs_touching_account(person, account_id)
@@ -158,6 +215,9 @@ def archive_account(principal, account_id):
     if not Account.objects.visible_to(person).filter(pk=account_id).exists():
         raise PermissionDenied(_DENIED)
     account = _lock_visible_account_with_pair_counterparts(person, account_id)
+    _lock_ledgers((account.pk,))
+    if account.scope == Account.Scope.HOUSEHOLD and not _actor_may_manage_sharing(person, account):
+        raise PermissionDenied(_DENIED)
     now = timezone.now()
 
     ImportBatch.objects.select_for_update().filter(
@@ -198,26 +258,62 @@ def end_current_membership(person):
         ),
         key=lambda membership: (membership.joined_at, membership.pk),
     )
-    owned_shared_accounts = Account.objects.select_for_update().filter(
-        owner_id=person.pk,
-        scope=Account.Scope.HOUSEHOLD,
-        household_id=own_membership.household_id,
+    household_accounts = list(
+        Account.objects.select_for_update()
+        .filter(
+            scope=Account.Scope.HOUSEHOLD,
+            household_id=own_membership.household_id,
+        )
+        .order_by("pk")
     )
+    _lock_ledgers(account.pk for account in household_accounts)
     transitioned_at = timezone.now()
-    if remaining_memberships:
-        owned_shared_accounts.update(
-            owner_id=remaining_memberships[0].person_id,
-            updated_at=transitioned_at,
-        )
-    else:
-        owned_shared_accounts.update(
-            scope=Account.Scope.PRIVATE,
-            household=None,
-            updated_at=transitioned_at,
-        )
+    _apply_shared_account_exit(
+        person,
+        household_accounts,
+        remaining_memberships,
+        transitioned_at,
+    )
 
     own_membership.ended_at = transitioned_at
     own_membership.save(update_fields=("ended_at",))
+
+
+def _apply_shared_account_exit(person, household_accounts, remaining_memberships, transitioned_at):
+    account_ids = [account.pk for account in household_accounts]
+    if not remaining_memberships:
+        if account_ids:
+            Account.objects.filter(pk__in=account_ids).update(
+                owner_id=person.pk,
+                scope=Account.Scope.PRIVATE,
+                household=None,
+                share_mode="",
+                updated_at=transitioned_at,
+            )
+        return
+    successor_id = remaining_memberships[0].person_id
+    lent_ids = [
+        account.pk
+        for account in household_accounts
+        if account.owner_id == person.pk and account.share_mode == Account.ShareMode.LENT
+    ]
+    co_owned_ids = [
+        account.pk
+        for account in household_accounts
+        if account.owner_id == person.pk and account.share_mode == Account.ShareMode.CO_OWNED
+    ]
+    if lent_ids:
+        Account.objects.filter(pk__in=lent_ids).update(
+            scope=Account.Scope.PRIVATE,
+            household=None,
+            share_mode="",
+            updated_at=transitioned_at,
+        )
+    if co_owned_ids:
+        Account.objects.filter(pk__in=co_owned_ids).update(
+            owner_id=successor_id,
+            updated_at=transitioned_at,
+        )
 
 
 def leave_household(principal):

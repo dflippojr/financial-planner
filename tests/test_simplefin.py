@@ -62,6 +62,7 @@ def make_account(owner, *, name="Synthetic Checking", account_type=Account.Type.
         owner=owner,
         scope=scope,
         household=household,
+        share_mode=Account.ShareMode.CO_OWNED if scope == Account.Scope.HOUSEHOLD else "",
     )
 
 

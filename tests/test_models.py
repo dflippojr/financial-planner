@@ -59,6 +59,7 @@ def test_private_and_household_account_shapes_are_persisted(person, household):
         owner=person,
         scope=Account.Scope.HOUSEHOLD,
         household=household,
+        share_mode=Account.ShareMode.CO_OWNED,
     )
 
     assert private.household is None
@@ -72,6 +73,9 @@ def test_private_and_household_account_shapes_are_persisted(person, household):
     [(Account.Scope.PRIVATE, True), (Account.Scope.HOUSEHOLD, False)],
 )
 def test_database_rejects_scope_household_mismatches(person, household, scope, with_household):
+    kwargs = {}
+    if scope == Account.Scope.HOUSEHOLD:
+        kwargs["share_mode"] = Account.ShareMode.CO_OWNED
     with pytest.raises(IntegrityError), transaction.atomic():
         Account.objects.create(
             name="Invalid Scope",
@@ -79,6 +83,28 @@ def test_database_rejects_scope_household_mismatches(person, household, scope, w
             owner=person,
             scope=scope,
             household=household if with_household else None,
+            **kwargs,
+        )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("scope", "share_mode", "household_set"),
+    [
+        (Account.Scope.PRIVATE, Account.ShareMode.CO_OWNED, False),
+        (Account.Scope.HOUSEHOLD, None, True),
+        (Account.Scope.HOUSEHOLD, "secret", True),
+    ],
+)
+def test_database_rejects_share_mode_scope_mismatches(person, household, scope, share_mode, household_set):
+    with pytest.raises(IntegrityError), transaction.atomic():
+        Account.objects.create(
+            name="Invalid Share Mode",
+            account_type=Account.Type.CHECKING,
+            owner=person,
+            scope=scope,
+            household=household if household_set else None,
+            share_mode=share_mode,
         )
 
 

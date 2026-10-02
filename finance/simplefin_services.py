@@ -207,6 +207,9 @@ def _create_linked_account(person, *, name, account_type, sharing):
             owner=person,
             scope=Account.Scope.HOUSEHOLD,
             household=membership.household,
+            # Shared accounts need a mode (#30); co-owned matches how sharing
+            # behaved before modes existed.
+            share_mode=Account.ShareMode.CO_OWNED,
             currency="USD",
         )
     return Account.objects.create(

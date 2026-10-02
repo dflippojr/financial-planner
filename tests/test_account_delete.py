@@ -46,13 +46,16 @@ def make_household(*people, name="Synthetic Household"):
     return household
 
 
-def make_account(owner, *, name="Synthetic Checking", account_type=Account.Type.CHECKING, scope=Account.Scope.PRIVATE, household=None):
+def make_account(owner, *, name="Synthetic Checking", account_type=Account.Type.CHECKING, scope=Account.Scope.PRIVATE, household=None, share_mode=None):
+    if share_mode is None:
+        share_mode = Account.ShareMode.CO_OWNED if scope == Account.Scope.HOUSEHOLD else ""
     return Account.objects.create(
         name=name,
         account_type=account_type,
         owner=owner,
         scope=scope,
         household=household,
+        share_mode=share_mode,
     )
 
 
