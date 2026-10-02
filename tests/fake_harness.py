@@ -25,6 +25,7 @@ class FakeHarnessState:
         self.session_prompts = []
         self.running_polls = 0
         self.stuck_waiting_app = False
+        self.session_get_errors = 0
         self.initial_session_status = "running"
         self.session_polls_left = {}
 
@@ -170,6 +171,10 @@ def start_fake_harness(state=None):
                 session = harness.sessions.get(session_id)
                 if session is None:
                     self._json(404, {"detail": "not found"})
+                    return
+                if harness.session_get_errors > 0:
+                    harness.session_get_errors -= 1
+                    self._json(502, {"detail": "bad gateway"})
                     return
                 left = harness.session_polls_left.get(session_id, 0)
                 if left > 0:

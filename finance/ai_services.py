@@ -244,6 +244,13 @@ def _run(
 
         def runner(name, args):
             return _invoke_tool(person, tools, name, args)
+    known_session = {"id": session_id or ""}
+
+    def track_session(new_id):
+        known_session["id"] = new_id
+        if on_session is not None:
+            on_session(new_id)
+
     try:
         if session_id:
             result = wait_for_session(
@@ -264,12 +271,21 @@ def _run(
                 model=model,
                 tools=tools,
                 tool_runner=runner,
-                on_session=on_session,
+                on_session=track_session,
                 sleep=sleep,
                 monotonic=monotonic,
             )
     except HarnessHttpError as exc:
-        result = ProviderResult(ok=False, failure_code=failure_from_http(exc), usage=Usage(), session_id=session_id or None)
+        # A transport or server error while polling says nothing about the session
+        # itself, so keep it open for the retry to resume instead of starting a duplicate.
+        transient = exc.status == 0 or exc.status == 429 or exc.status >= 500
+        result = ProviderResult(
+            ok=False,
+            failure_code=failure_from_http(exc),
+            usage=Usage(),
+            session_id=known_session["id"] or None,
+            session_open=bool(known_session["id"]) and transient,
+        )
     record_usage(
         person,
         provider=connection.kind,

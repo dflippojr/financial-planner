@@ -743,3 +743,48 @@ def test_failed_session_is_not_resumed_on_retry(harness):
     job.refresh_from_db()
     assert job.status == job.Status.SUCCEEDED
     assert state.requests.count(("POST", "/api/v1/sessions")) == 2
+
+
+@pytest.mark.django_db
+def test_poll_error_keeps_the_session_and_the_retry_resumes_it(harness, monkeypatch):
+    state, url = harness
+    state.model_state = "ready"
+    state.running_polls = 2
+    state.session_get_errors = 1
+    _user, person, _household = make_member("owner")
+    connect_harness(person, base_url=url, token=TOKEN)
+    set_defaults(person, chat_backend="local", background_backend="local")
+    job = enqueue_job(person, feature="structured")
+    monkeypatch.setattr("finance.ai_harness.time.sleep", lambda seconds: None)
+
+    process_due_jobs()
+
+    job.refresh_from_db()
+    assert job.status == job.Status.QUEUED
+    assert job.harness_session_id
+    state.model_state = "sleeping"
+    monkeypatch.setattr("finance.ai_jobs.in_quiet_window", lambda moment=None: False)
+    AiJob.objects.filter(pk=job.pk).update(next_attempt_at=timezone.now())
+
+    process_due_jobs()
+
+    job.refresh_from_db()
+    assert job.status == job.Status.SUCCEEDED
+    assert state.requests.count(("POST", "/api/v1/sessions")) == 1
+
+
+@pytest.mark.django_db
+def test_tool_calls_stop_when_a_new_material_policy_is_published(harness):
+    from finance.ai_tools import run_tool
+
+    _state, _url = harness
+    _user, person, _household = make_member("owner")
+    tools = default_tools()
+    output, ok = run_tool(person, tools, "list_accounts", {})
+    assert ok
+
+    publish_policy(material=True, body="Synthetic policy, second material version")
+
+    output, ok = run_tool(person, tools, "list_accounts", {})
+    assert not ok
+    assert "privacy and data policy" in output
