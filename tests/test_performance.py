@@ -79,15 +79,17 @@ def test_database_rejects_net_contribution_on_simplefin_snapshot():
     make_household(owner)
     account = make_account(owner)
 
+    snapshot = BalanceSnapshot(
+        account=account,
+        snapshot_date=date(2026, 1, 31),
+        amount_minor=10_000,
+        currency="USD",
+        source=BalanceSnapshot.Source.SIMPLEFIN,
+        net_contribution_minor=0,
+    )
+
     with pytest.raises(IntegrityError), transaction.atomic():
-        BalanceSnapshot.objects.create(
-            account=account,
-            snapshot_date=date(2026, 1, 31),
-            amount_minor=10_000,
-            currency="USD",
-            source=BalanceSnapshot.Source.SIMPLEFIN,
-            net_contribution_minor=0,
-        )
+        snapshot.save()
 
 
 @pytest.mark.django_db
