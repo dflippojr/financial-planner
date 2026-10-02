@@ -1333,3 +1333,25 @@ def test_undoing_a_later_batch_keeps_an_earlier_days_balance(monkeypatch):
 
     snapshot = BalanceSnapshot.objects.get(account=checking, source=BalanceSnapshot.Source.SIMPLEFIN)
     assert snapshot.import_batch_id == first.pk
+
+
+@pytest.mark.django_db
+def test_refilling_an_undone_period_does_not_cover_later_imports(monkeypatch):
+    owner = make_person("owner")
+    make_household(owner)
+    march = posted_txn(txn_id="t-1", day=12, amount="-25.00")
+    april = posted_txn(txn_id="t-2", day=1, amount="-30.00", posted=epoch(2026, 4, 10))
+    checking, connection = _link_checking(
+        owner, monkeypatch, [account_payload(transactions=[march]), account_payload(transactions=[march, april])]
+    )
+    _sync_on(owner, connection, monkeypatch, date(2026, 3, 31))
+    march_batch = ImportBatch.objects.get(account=checking, source=ImportBatch.Source.SIMPLEFIN)
+    _sync_on(owner, connection, monkeypatch, date(2026, 4, 30))
+    april_batch = Transaction.objects.get(source_transaction_id="t-2").import_batch
+    undo_import_batch(owner, checking.pk, march_batch.pk)
+    _sync_on(owner, connection, monkeypatch, date(2026, 4, 30))
+
+    undo_import_batch(owner, checking.pk, april_batch.pk)
+
+    assert _month_missing(owner, checking, date(2026, 3, 1), date(2026, 3, 31)) is False
+    assert _month_missing(owner, checking, date(2026, 4, 1), date(2026, 4, 30)) is True
