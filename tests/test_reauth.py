@@ -257,3 +257,22 @@ def test_another_members_google_login_never_confirms_this_session():
     refused = client.post(reverse("invite"))
     assert refused.status_code == 302
     assert Invitation.objects.count() == 0
+
+
+@pytest.mark.django_db
+@_google_settings()
+def test_own_google_login_from_a_stale_session_does_not_confirm_it():
+    member, _person, _household = make_member("member")
+    SocialAccount.objects.create(user=member, provider="google", uid=GOOGLE_SUB, extra_data={"sub": GOOGLE_SUB})
+    client = Client()
+    client.force_login(member)
+    _expire_recent_auth(client)
+
+    # A silent Google sign-in through the ordinary login flow must not stand in
+    # for the confirmation step, which checks how recently Google authenticated.
+    start = client.post(reverse("google_login"), {"process": "redirect"})
+    _finish_google(client, start)
+
+    refused = client.post(reverse("invite"))
+    assert refused.status_code == 302
+    assert Invitation.objects.count() == 0

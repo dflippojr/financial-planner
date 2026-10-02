@@ -124,11 +124,16 @@ class MemberSocialAccountAdapter(DefaultSocialAccountAdapter):
         if process == "connect":
             return
         current = getattr(request, "user", None)
-        if current is not None and current.is_authenticated and current.pk != sociallogin.user.pk:
-            # A Google identity belonging to another member must never confirm
-            # (or take over) the signed-in member's session.
-            record_login_failure(key)
-            raise ImmediateHttpResponse(self._failed_response(request))
+        if current is not None and current.is_authenticated:
+            if current.pk != sociallogin.user.pk:
+                # A Google identity belonging to another member must never
+                # confirm (or take over) the signed-in member's session.
+                record_login_failure(key)
+                raise ImmediateHttpResponse(self._failed_response(request))
+            # Re-signing into an existing session is not a confirmation: that
+            # goes through /reauth/google/, which checks Google's auth_time.
+            clear_login_failures(key)
+            return
         clear_login_failures(key)
         stamp_recent_auth(request)
 
