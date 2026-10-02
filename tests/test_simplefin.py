@@ -1397,3 +1397,19 @@ def test_an_error_naming_no_account_makes_every_account_unreliable():
     assert _transactions_unreliable(remote, {"errlist": [{"code": "gen.partial", "msg": "Incomplete data."}]})
     assert _transactions_unreliable(remote, {"errlist": ["Incomplete data."]})
     assert not _transactions_unreliable(remote, {"errlist": [{"conn_id": "CON-2", "msg": "Other bank."}]})
+
+
+def test_a_truncated_response_is_a_simplefin_error(monkeypatch):
+    from http.client import IncompleteRead
+
+    from finance.simplefin_client import fetch_accounts
+
+    class _TruncatedResponse(_FakeResponse):
+        def read(self):
+            raise IncompleteRead(b"{\"accounts\"", 100)
+
+    monkeypatch.setattr("finance.simplefin_client.urlopen", lambda *a, **k: _TruncatedResponse(b""))
+    with pytest.raises(SimpleFinError, match="did not finish responding"):
+        fetch_accounts(ACCESS_URL)
+    with pytest.raises(SimpleFinError):
+        claim_access_url(CLAIM_URL)
