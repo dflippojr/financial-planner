@@ -34,4 +34,22 @@ A release is usable when people can sign in, keep private accounts private, view
 - [#20 Research optional account connections](https://github.com/dflippojr/financial-planner/issues/20) (findings: [docs/research/account-connections.md](research/account-connections.md)), including Plaid without a paid requirement now.
 - [#21 Savings goals and future cash flow](https://github.com/dflippojr/financial-planner/issues/21).
 
+## Milestone 4: AI and deeper insight
+
+AI decisions are in [requirements](requirements.md#ai-features-2026-10-02-90).
+
+- [#90 AI data policy](https://github.com/dflippojr/financial-planner/issues/90) and [#106 privacy and data policy that every member accepts](https://github.com/dflippojr/financial-planner/issues/106).
+- [#91 AI provider layer with per-member backends](https://github.com/dflippojr/financial-planner/issues/91). Research: [#92 Sign in with ChatGPT](https://github.com/dflippojr/financial-planner/issues/92).
+- [#94 Chat with your data](https://github.com/dflippojr/financial-planner/issues/94), [#93 category suggestions](https://github.com/dflippojr/financial-planner/issues/93), and [#95 monthly review](https://github.com/dflippojr/financial-planner/issues/95).
+- Remaining Rocket Money gaps:
+  - [#96 budgets](https://github.com/dflippojr/financial-planner/issues/96)
+  - [#97 split transactions](https://github.com/dflippojr/financial-planner/issues/97)
+  - [#98 notes and tags](https://github.com/dflippojr/financial-planner/issues/98)
+  - [#99 alerts](https://github.com/dflippojr/financial-planner/issues/99)
+  - [#100 category trends](https://github.com/dflippojr/financial-planner/issues/100)
+  - [#101 saved CSV mappings](https://github.com/dflippojr/financial-planner/issues/101)
+  - [#102 recurring review](https://github.com/dflippojr/financial-planner/issues/102)
+  - [#103 installable phone app](https://github.com/dflippojr/financial-planner/issues/103)
+- Open question: [#104 deleting a person's data](https://github.com/dflippojr/financial-planner/issues/104).
+
 Work from an issue to a pull request and link it with `Closes #<issue>`. The owner reviews merges.

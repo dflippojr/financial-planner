@@ -324,12 +324,42 @@ Calculation (recorded defaults; the owner may change them):
 - A range with any period that lacks a return shows value change only, plus a note. Accounts with fewer than two statement entries show value change only.
 - Every return is labelled an **estimate**, with the method named. Amounts are exact minor units; returns are percentages rounded to one decimal.
 
+## AI features (2026-10-02, #90)
+
+Owner decisions:
+- **Backends are chosen per member.** Each member picks from the AI backends they have connected in their own settings: one for live chat and one for background jobs (#91). A request uses only the requesting member's own connection. For now it is acceptable that only the hosting member can connect one.
+- **The first backends come through Agent Harness.** The hosting member's own Claude, Codex, or Cursor subscription, or the tower's local model. This is intended personal use: the member asks their own subscription about their own data, through the harness's unmodified CLI in non-interactive mode. It never serves other people through that member's subscription. The app talks to the harness only through its documented HTTP App API. Sign in with ChatGPT is research only (#92). No paid API key is required.
+- **The goal is a read-only bot** that answers a member's questions about their data (#94), plus background helpers: category suggestions (#93) and a monthly review (#95). Full agent sessions are not needed. The transfer scorer stays deterministic (#8).
+- **Live and background work are separate.** Loading the tower's local model is slow and takes GPU and RAM from other work. Background features run as stored jobs and never wake the local model just because a job is queued: they run when it is already loaded, or in a configured quiet window. Chat defaults to a hosted backend. Chat on the local model warms it on the member's first keystroke and shows its loading state.
+- **Provider-side use of data is accepted.** Minimizing fields and controlling provider retention are not goals for a member's own data. Nothing is sent until a member connects a backend, so each member, and each other install of this public project, chooses for themselves.
+- **Household-shared data** may be sent to a member's AI backend only while every current household member is in acceptance of the privacy and data policy (#106). Other members' private data is never sent.
+- **Tools.** The model reaches data only through the app's read-only tools. Each tool runs as the requesting member against `visible_to` and may return anything that member can already see in the app. Tools never return secrets, whatever the provider: credentials, the SimpleFIN access URL, AI connection tokens, recovery codes, and session material. Tool output, model output, and errors never contain data the member cannot see.
+- **Logging.** The app records provider, backend, feature, member, time, token counts, and outcome. It never records prompts or responses, and error messages never contain raw model text.
+- **Output.**
+  - AI output is labeled as AI-generated, with the backend named.
+  - Suggestions never overwrite a category set by hand or by a rule, and never change transfer or refund semantics.
+  - Answers are not presented as verified facts or as financial advice.
+  - Figures shown come from the app's tools and link to the page that shows them.
+- **Re-authentication.** Connecting, changing, or disconnecting an AI backend is a sensitive action under the 10-minute re-authentication rule.
+- **Agent Harness work this depends on.**
+  - [agent-harness #329](https://github.com/dflippojr/agent-harness/issues/329): sessions limited to the app's own tools.
+  - [agent-harness #300](https://github.com/dflippojr/agent-harness/issues/300): app tools reachable from hosted Claude Code.
+  - Wanted but not blocking: [agent-harness #330](https://github.com/dflippojr/agent-harness/issues/330), isolated per-app data in the harness.
+
 ## Privacy and data policy (2026-10-02, #106)
 
 Owner decisions:
 
-- Every member is asked to accept a privacy and data policy that discloses how data is stored and that a member who connects an outside AI provider may send household-shared data visible to them to that provider, once every current member is in acceptance. Other members' private data is never sent.
+- Every member is asked to accept a privacy and data policy that discloses how data is stored and that a member who connects an outside AI provider may send household-shared data visible to them to that provider, once every current member is in acceptance. Other members' private data is never sent. It covers where data is stored, SimpleFIN, Google sign-in, sending data to outside AI providers (including household-shared data), what other members can see, export, and deletion.
 - The default text lives in `finance/policy/default.md` for the owner to edit in the PR. Operators replace it without changing code via `PRIVACY_POLICY_PATH` and `python manage.py publish_privacy_policy` (`--material` when members must accept again). Versions are kept so the text someone accepted can be shown later.
 - A member is in acceptance when they have accepted the latest material version, or any later version. A non-material version never takes anyone out of acceptance.
 - Setup, join, and Google sign-up present the policy but do not block. Existing members see a prompt until they respond. Without acceptance the app works; AI backends do not. While any current household member is not in acceptance, no member's AI backend may receive household-shared data.
 - Acceptance rows are per member and version and are included in that member's export. The policy page is public.
+- Only a version an operator marks as material requires members to accept again.
+
+AI refinements (owner, 2026-10-02, #91 and #94):
+- **Harness address.** A member may connect only an Agent Harness on the same host or on the tailnet. HTTPS is required except on loopback.
+- **Chat history.** Conversations are kept only for the member who started them, can be deleted, and expire after 30 days (configurable). They are included in that member's export.
+- **Advice.** The chat bot answers factual and explanatory questions. Its suggestions are labeled as opinion and never presented as financial advice.
+- **Chat UI.** A Chat page, plus a drawer on every page that continues the same conversation. The drawer passes only the current route and its query parameters, never page data.
+- **Local model in chat.** Offered only after a synthetic-data evaluation shows reliable tool calling.
