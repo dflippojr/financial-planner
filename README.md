@@ -14,11 +14,9 @@ accounts private inside a shared household.
 ![Tests](https://img.shields.io/badge/tests-555_pytest-0A9EDC?logo=pytest&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-| | |
-|---|---|
-| **Status** | In production on a home server, used daily by a two-person household |
-| **Scope** | ~11.8k lines of application code, ~15k lines of tests, 15 schema migrations |
-| **Process** | 45+ merged pull requests, each tied to a specified GitHub issue and reviewed before merge |
+| Status | Scope | Process |
+|---|---|---|
+| In production on a home server, used daily by a two-person household | ~11.8k lines of application code, ~15k lines of tests, 15 schema migrations | 45+ merged pull requests, each tied to a specified GitHub issue and reviewed before merge |
 
 ---
 
