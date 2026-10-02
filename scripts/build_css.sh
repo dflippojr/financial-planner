@@ -25,7 +25,7 @@ case "$(uname -s)" in
     binary="$cache_dir/$asset"
     ;;
   Darwin*)
-    if [ "$(uname -m)" = "arm64" ]; then
+    if [[ "$(uname -m)" == "arm64" ]]; then
       asset="tailwindcss-macos-arm64"
       expected="$TAILWIND_SHA256_MACOS_ARM64"
     else
@@ -54,7 +54,7 @@ verify_file() {
 verify_file "$DAISYUI_SHA256" "$root/static/src/vendor/daisyui.mjs"
 verify_file "$DAISYUI_THEME_SHA256" "$root/static/src/vendor/daisyui-theme.mjs"
 
-if [ ! -x "$binary" ] && [ ! -f "$binary" ]; then
+if [[ ! -x "$binary" && ! -f "$binary" ]]; then
   url="https://github.com/tailwindlabs/tailwindcss/releases/download/${TAILWIND_VERSION}/${asset}"
   echo "Downloading $url"
   # HTTPS only, including every redirect GitHub sends to its download host.
@@ -79,10 +79,10 @@ for arg in "$@"; do
 done
 
 cmd=("$binary" -i "$root/static/src/app.css" -o "$root/static/dist/app.css")
-if [ "$minify" -eq 1 ] && [ "$watch" -eq 0 ]; then
+if [[ "$minify" -eq 1 && "$watch" -eq 0 ]]; then
   cmd+=(--minify)
 fi
-if [ "$watch" -eq 1 ]; then
+if [[ "$watch" -eq 1 ]]; then
   cmd+=(--watch)
 fi
 
