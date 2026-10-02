@@ -289,21 +289,18 @@ def test_non_owner_cannot_edit_a_private_goal():
     make_household(owner)
     make_household(other, name="Other Household")
     goal = make_goal(owner)
+    payload = {
+        "scope": SavingsGoal.Scope.PRIVATE,
+        "name": "Hijacked",
+        "target_amount_minor": 1,
+        "target_date": date(2026, 1, 1),
+        "linked_account": None,
+        "manual_amount_minor": None,
+        "manual_amount_date": None,
+    }
 
     with pytest.raises(PermissionDenied):
-        save_savings_goal(
-            other.user,
-            {
-                "scope": SavingsGoal.Scope.PRIVATE,
-                "name": "Hijacked",
-                "target_amount_minor": 1,
-                "target_date": date(2026, 1, 1),
-                "linked_account": None,
-                "manual_amount_minor": None,
-                "manual_amount_date": None,
-            },
-            goal=goal,
-        )
+        save_savings_goal(other.user, payload, goal=goal)
 
 
 @pytest.mark.django_db
@@ -346,20 +343,18 @@ def test_cannot_link_an_account_the_actor_cannot_see():
     make_household(owner)
     make_household(other, name="Other Household")
     other_private_account = make_account(other, name="Other Private")
+    payload = {
+        "scope": SavingsGoal.Scope.PRIVATE,
+        "name": "Bad link",
+        "target_amount_minor": 1_000,
+        "target_date": date(2026, 1, 1),
+        "linked_account": other_private_account,
+        "manual_amount_minor": None,
+        "manual_amount_date": None,
+    }
 
     with pytest.raises(PermissionDenied):
-        save_savings_goal(
-            owner.user,
-            {
-                "scope": SavingsGoal.Scope.PRIVATE,
-                "name": "Bad link",
-                "target_amount_minor": 1_000,
-                "target_date": date(2026, 1, 1),
-                "linked_account": other_private_account,
-                "manual_amount_minor": None,
-                "manual_amount_date": None,
-            },
-        )
+        save_savings_goal(owner.user, payload)
 
 
 # -- view-level smoke tests --
