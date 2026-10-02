@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('finance', '0008_simplefin_connections'),
+        ('finance', '0009_importbatch_simplefin_account_id'),
     ]
 
     operations = [
