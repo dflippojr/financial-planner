@@ -4,7 +4,7 @@ import base64
 import hashlib
 from datetime import date, datetime, timedelta, timezone as dt_timezone
 from decimal import Decimal, InvalidOperation
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
@@ -137,8 +137,10 @@ def remote_account_key(item: dict) -> str:
     Account ids are unique only within one provider connection, so the key
     includes the connection id when SimpleFIN reports one.
     """
-    account_id = str(item["id"])
-    conn_id = str(item.get("conn_id") or "")
+    # Percent-encode each part so a ':' inside an id can never make two
+    # different accounts share one key.
+    account_id = quote(str(item["id"]), safe="")
+    conn_id = quote(str(item.get("conn_id") or ""), safe="")
     return f"{conn_id}:{account_id}" if conn_id else account_id
 
 
@@ -280,6 +282,10 @@ def save_account_links(principal, connection_id, choices: list[dict]) -> list[Ac
         action = choice.get("action")
         simplefin_account_id = str(choice.get("simplefin_account_id") or "")
         if not simplefin_account_id:
+            continue
+        if action == "keep":
+            # The linked account is archived or no longer visible to this
+            # person, so the form cannot show it; leave the link as it is.
             continue
         if action == "ignore":
             # Ignoring an account that is already linked unlinks it, so syncs
