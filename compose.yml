@@ -100,6 +100,11 @@ services:
       db:
         condition: service_healthy
     entrypoint: ["/app/scripts/run-simplefin-sync.sh"]
+    # The image's HTTP health check probes Gunicorn, which this container does
+    # not run. The scheduler loop is the main process, so the container stops
+    # (and restarts) if it dies; like the backup scheduler, it reports only Up.
+    healthcheck:
+      disable: true
 
 volumes:
   postgres_data:
