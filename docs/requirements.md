@@ -332,7 +332,7 @@ Owner decisions:
 - **The goal is a read-only bot** that answers a member's questions about their data (#94), plus background helpers: category suggestions (#93) and a monthly review (#95). Full agent sessions are not needed. The transfer scorer stays deterministic (#8).
 - **Live and background work are separate.** Loading the tower's local model is slow and takes GPU and RAM from other work. Background features run as stored jobs and never wake the local model just because a job is queued: they run when it is already loaded, or in a configured quiet window. Chat defaults to a hosted backend. Chat on the local model warms it on the member's first keystroke and shows its loading state.
 - **Provider-side use of data is accepted.** Minimizing fields and controlling provider retention are not goals for a member's own data. Nothing is sent until a member connects a backend, so each member, and each other install of this public project, chooses for themselves.
-- **Household-shared data** may be sent to a member's AI backend only while every current household member has accepted the current privacy and data policy (#106). Other members' private data is never sent.
+- **Household-shared data** may be sent to a member's AI backend only while every current household member is in acceptance of the privacy and data policy (#106). Other members' private data is never sent.
 - **Tools.** The model reaches data only through the app's read-only tools. Each tool runs as the requesting member against `visible_to` and may return anything that member can already see in the app. Tools never return secrets, whatever the provider: credentials, the SimpleFIN access URL, AI connection tokens, recovery codes, and session material. Tool output, model output, and errors never contain data the member cannot see.
 - **Logging.** The app records provider, backend, feature, member, time, token counts, and outcome. It never records prompts or responses, and error messages never contain raw model text.
 - **Output.**
@@ -351,9 +351,10 @@ Owner decisions:
 Owner decisions:
 - **Every member is asked to accept** the app's privacy and data policy. It covers where data is stored, SimpleFIN, Google sign-in, sending data to outside AI providers (including household-shared data), what other members can see, export, and deletion.
 - **Where it is asked.** First-run setup, joining by invitation, and Google sign-up present the policy. Existing members are prompted on their next visit.
-- **Declining.** A member who has not accepted the current version can still use the app, but:
+- **Being in acceptance.** A member is in acceptance when they have accepted the latest material version, or any later version. A non-material version never takes anyone out of acceptance.
+- **Declining.** A member who is not in acceptance can still use the app, but:
   - they cannot connect or use AI;
-  - no member's AI backend may receive household-shared data until every current member has accepted.
+  - no member's AI backend may receive household-shared data until every current member is in acceptance.
 - **Records.** Acceptance is recorded per member and per policy version, and included in that member's export.
 - **New versions.** Only a version an operator marks as material requires members to accept again.
 - **The text.** The repository ships a default policy that each install's operator can replace without changing code. Claude drafts the default, and the owner edits and approves it.
