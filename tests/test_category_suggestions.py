@@ -605,3 +605,28 @@ def test_resumed_answer_is_dropped_for_a_transaction_changed_since_the_prompt(ha
 
     assert CategorySuggestion.objects.filter(transaction=kept).exists()
     assert not CategorySuggestion.objects.filter(transaction=edited).exists()
+
+
+@pytest.mark.django_db
+def test_top_up_skips_a_retry_that_will_resume_its_session(harness):
+    from finance.category_suggestion_services import _top_up_queued_job
+
+    _state, url = harness
+    _user, person, _household = make_member("owner")
+    connect_ai(person, url)
+    account = make_account(person)
+    _uncategorized_rows(person, account, 3)
+    queue_remaining_uncategorized(person)
+    jobs, id_lists = _job_id_lists(person)
+    retry = jobs[0]
+    retry.harness_session_id = "sess-timed-out"
+    retry.input_refs = {**retry.input_refs, "snapshots": {"1": "synthetic"}}
+    retry.save(update_fields=("harness_session_id", "input_refs", "updated_at"))
+
+    rest, topped = _top_up_queued_job(retry.pk, [999001])
+
+    assert topped is None
+    assert rest == [999001]
+    retry.refresh_from_db()
+    assert retry.input_refs["transaction_ids"] == id_lists[0]
+    assert retry.input_refs["snapshots"] == {"1": "synthetic"}

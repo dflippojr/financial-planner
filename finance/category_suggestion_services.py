@@ -302,15 +302,20 @@ def _enqueue_ids(person, ids):
 def _top_up_queued_job(job_pk, remaining):
     """Add ids to a job only while it is still queued, so the runner never misses them."""
     with transaction.atomic():
-        job = AiJob.objects.select_for_update().filter(pk=job_pk, status=AiJob.Status.QUEUED).first()
+        job = (
+            AiJob.objects.select_for_update()
+            .filter(pk=job_pk, status=AiJob.Status.QUEUED, harness_session_id="")
+            .first()
+        )
         if job is None:
+            # Claimed, or a retry that will resume a session whose prompt is fixed.
             return remaining, None
         current = _ids_from_refs(job.input_refs)
         room = BATCH_SIZE - len(current)
         if room <= 0:
             return remaining, None
         added, rest = remaining[:room], remaining[room:]
-        job.input_refs = {"transaction_ids": current + added}
+        job.input_refs = {**(job.input_refs or {}), "transaction_ids": current + added}
         job.save(update_fields=("input_refs", "updated_at"))
         return rest, job
 
