@@ -4,13 +4,14 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.http import Http404
 from django.shortcuts import redirect, render
 from django.views.decorators.cache import never_cache
-from django.views.decorators.http import require_http_methods
+from django.views.decorators.http import require_http_methods, require_POST
 
 from .category_services import current_household, ensure_household_categories
 from .forms import CategoryRuleForm
 from .models import CategoryRule, Person
 from .rule_services import (
     apply_rule,
+    list_unreachable_applications,
     list_visible_applications,
     list_visible_rules,
     personal_rule_is_inactive,
@@ -75,8 +76,13 @@ def category_rule_list(request):
     if person is None:
         raise Http404
     household = current_household(person)
+    unreachable = list_unreachable_applications(request.user)
     if household is None:
-        return render(request, "finance/category_rules.html", {"household": None, "rules": [], "form": None})
+        return render(
+            request,
+            "finance/category_rules.html",
+            {"household": None, "rules": [], "form": None, "unreachable_applications": unreachable},
+        )
     ensure_household_categories(household)
     form = CategoryRuleForm(request.POST if request.method == "POST" else None, principal=request.user)
     if request.method == "POST" and form.is_valid():
@@ -89,8 +95,21 @@ def category_rule_list(request):
     return render(
         request,
         "finance/category_rules.html",
-        {"household": household, "rules": list_visible_rules(request.user), "form": form},
+        {
+            "household": household,
+            "rules": list_visible_rules(request.user),
+            "form": form,
+            "unreachable_applications": unreachable,
+        },
     )
+
+
+@require_POST
+@never_cache
+def category_rule_application_reverse(request, application_id):
+    """Undo an application whose rule this person can no longer open."""
+    _service_or_404(lambda: reverse_application(request.user, application_id))
+    return redirect("category-rule-list")
 
 
 def _toggle_rule(request, rule, enabled):

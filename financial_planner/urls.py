@@ -41,6 +41,11 @@ urlpatterns = [
     path("categories/", views.category_list, name="category-list"),
     path("categories/rules/", rule_views.category_rule_list, name="category-rule-list"),
     path("categories/rules/<int:rule_id>/", rule_views.category_rule_detail, name="category-rule-detail"),
+    path(
+        "categories/rules/applications/<int:application_id>/reverse/",
+        rule_views.category_rule_application_reverse,
+        name="category-rule-application-reverse",
+    ),
     path("transfers/", views.transfer_review, name="transfer-review"),
     path("recurring/", views.recurring_review, name="recurring-review"),
 ]

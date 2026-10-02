@@ -449,12 +449,7 @@ def apply_enabled_rules_to_transactions(principal, transactions):
 @transaction.atomic
 def reverse_application(principal, application_id):
     person = _person_for(principal)
-    application = (
-        RuleApplication.objects.visible_to(person)
-        .select_related("rule")
-        .filter(pk=application_id)
-        .first()
-    )
+    application = _reversible_applications(person).select_related("rule").filter(pk=application_id).first()
     if application is None:
         raise PermissionDenied(_DENIED)
     if application.reversed_at is not None:
@@ -558,6 +553,44 @@ def list_visible_rules(principal):
     for rule in rules:
         rule.inactive = personal_rule_is_inactive(rule)
     return rules
+
+
+def _pending_entries_visible_to(person):
+    return RuleApplicationEntry.objects.visible_to(person).filter(reversed_at__isnull=True)
+
+
+def _reversible_applications(person):
+    """Applications this person may reverse.
+
+    Any visible rule's applications, plus applications of rules they can no
+    longer see that still have unreversed rows they can see: after leaving a
+    household, its rule is hidden, yet only the former member can see (and so
+    undo) its changes to their now-private account.
+    """
+    pending_ids = _pending_entries_visible_to(person).values("application_id")
+    return RuleApplication.objects.filter(
+        Q(pk__in=RuleApplication.objects.visible_to(person).values("pk")) | Q(pk__in=pending_ids)
+    )
+
+
+def list_unreachable_applications(principal):
+    """Applications of rules this person cannot see that still changed their rows.
+
+    Each item carries only the date and the number of this person's rows, never
+    the hidden rule's text or category.
+    """
+    person = _person_for(principal)
+    visible_rules = CategoryRule.objects.visible_to(person).values("pk")
+    pending = _pending_entries_visible_to(person).exclude(application__rule_id__in=visible_rules)
+    counts = {}
+    for application_id in pending.values_list("application_id", flat=True):
+        counts[application_id] = counts.get(application_id, 0) + 1
+    applications = list(
+        RuleApplication.objects.filter(pk__in=counts, reversed_at__isnull=True).order_by("-applied_at", "-pk")
+    )
+    for application in applications:
+        application.your_row_count = counts[application.pk]
+    return applications
 
 
 def list_visible_applications(principal, rule):

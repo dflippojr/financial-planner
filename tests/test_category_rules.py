@@ -1008,3 +1008,34 @@ def test_apply_uses_the_rule_as_saved_when_rows_are_locked(monkeypatch):
 
     txn.refresh_from_db()
     assert txn.category_id == dining(household).pk
+
+
+@pytest.mark.django_db
+def test_former_member_can_undo_a_household_rule_on_their_lent_account():
+    from finance.lifecycle_services import leave_household
+
+    owner = make_person("owner-leaves")
+    member = make_person("member-stays")
+    household = make_household(owner, member)
+    lent = make_account(owner, scope=Account.Scope.HOUSEHOLD, household=household)
+    Account.objects.filter(pk=lent.pk).update(share_mode=Account.ShareMode.LENT)
+    txn = make_transaction(owner, lent, fingerprint="ea".ljust(64, "0"))
+    rule = save_category_rule(
+        member, owner_kind="household", description_contains="kroger", account_id=None,
+        min_amount_minor=None, max_amount_minor=None, category_id=groceries(household).pk, priority=0,
+    )
+    apply_rule(member, rule.pk)
+    leave_household(owner)
+    lent.refresh_from_db()
+    assert lent.scope == Account.Scope.PRIVATE
+
+    client = Client()
+    client.force_login(owner.user)
+    page = client.get(reverse("category-rule-list")).content.decode()
+    assert "Changes from rules you can no longer open" in page
+    assert "kroger" not in page.lower()
+    application = RuleApplication.objects.get(rule=rule)
+    client.post(reverse("category-rule-application-reverse", args=[application.pk]))
+
+    txn.refresh_from_db()
+    assert txn.category_id is None

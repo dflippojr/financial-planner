@@ -3,6 +3,31 @@
 {% block content %}
 <h1 class="mb-4 text-2xl font-bold">Categorization rules</h1>
 <p class="mb-4"><a class="link" href="{% url 'category-list' %}">Back to categories</a></p>
+{% if unreachable_applications %}
+<h2 class="mb-3 text-xl font-semibold">Changes from rules you can no longer open</h2>
+<p class="mb-3 max-w-2xl opacity-80">These rules belong to a household you left. You can still undo what they changed on your accounts.</p>
+<div class="overflow-x-auto mb-8">
+  <table class="table table-zebra">
+    <thead class="sticky top-0 z-10 bg-base-200">
+      <tr><th>Applied</th><th>Your transactions</th><th></th></tr>
+    </thead>
+    <tbody>
+    {% for application in unreachable_applications %}
+      <tr>
+        <td>{{ application.applied_at }}</td>
+        <td>{{ application.your_row_count }}</td>
+        <td>
+          <form method="post" action="{% url 'category-rule-application-reverse' application.pk %}">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-sm">Undo</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
 {% if not household %}
 <div role="status" class="alert">Join or create a household to create categorization rules.</div>
 {% else %}
