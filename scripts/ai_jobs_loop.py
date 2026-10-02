@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 """Poll and run due AI background jobs. Does not serve HTTP."""
 
+import logging
 import os
 import sys
 import time
@@ -16,11 +17,20 @@ from django.conf import settings
 
 from finance.ai_jobs import process_due_jobs
 
+logger = logging.getLogger(__name__)
+
+
+def tick():
+    try:
+        process_due_jobs()
+    except Exception:
+        logger.exception("AI job poll failed")
+
 
 def main():
     poll = max(1, int(getattr(settings, "AI_JOB_POLL_SECONDS", 15)))
     while True:
-        process_due_jobs()
+        tick()
         time.sleep(poll)
 
 

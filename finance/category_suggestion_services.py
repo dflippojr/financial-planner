@@ -197,7 +197,7 @@ def accept_suggestions(principal, suggestion_ids):
     return accepted
 
 
-def run_category_suggestion_job(person, job, *, backend):
+def run_category_suggestion_job(person, job, *, backend, session_id="", on_session=None):
     ids = _ids_from_refs(job.input_refs)
     txns = list(eligible_uncategorized(person, ids).select_related("account"))
     if not txns:
@@ -206,7 +206,14 @@ def run_category_suggestion_job(person, job, *, backend):
     if not categories:
         return ProviderResult(ok=True, answer="", session_id="skipped")
     prompt = _build_prompt(txns, categories)
-    result = run_structured(person, prompt, feature=FEATURE, backend=backend)
+    result = run_structured(
+        person,
+        prompt,
+        feature=FEATURE,
+        backend=backend,
+        session_id=session_id,
+        on_session=on_session,
+    )
     if not result.ok:
         return result
     allowed = {item.pk for item in categories}

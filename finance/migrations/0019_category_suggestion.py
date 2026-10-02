@@ -7,7 +7,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("finance", "0017_ai_provider"),
+        ("finance", "0018_aijob_harness_session_id"),
     ]
 
     operations = [

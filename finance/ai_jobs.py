@@ -7,10 +7,10 @@ from datetime import timedelta
 from django.conf import settings
 from django.utils import timezone
 
-from .ai_harness import local_model_ready, model_status
+from .ai_harness import failure_from_http, local_model_ready, model_status
 from .ai_http import HarnessHttpError
-from .ai_services import _token, connection_for, run_structured
-from .ai_types import LOCAL_BACKEND, UNAVAILABLE
+from .ai_services import AiError, _token, connection_for, run_structured
+from .ai_types import AUTHORIZATION_REQUIRED, LOCAL_BACKEND, PROVIDER_ERROR, UNAVAILABLE
 from .models import AiJob
 from .policy_services import may_use_ai
 
@@ -44,8 +44,11 @@ def process_due_jobs(*, now=None):
     )
     processed = 0
     for job in jobs:
-        if _process_one(job, moment):
-            processed += 1
+        try:
+            if _process_one(job, moment):
+                processed += 1
+        except Exception as exc:
+            _isolate_job_failure(job, moment, exc)
     return processed
 
 
@@ -82,29 +85,55 @@ def _process_one(job, moment):
     job.status = AiJob.Status.RUNNING
     job.attempts += 1
     job.save(update_fields=("status", "attempts", "updated_at"))
+
+    def remember_session(session_id):
+        job.harness_session_id = session_id
+        job.save(update_fields=("harness_session_id", "updated_at"))
+
     if job.feature == "category_suggestions":
         from .category_suggestion_services import run_category_suggestion_job
 
-        result = run_category_suggestion_job(job.member, job, backend=backend)
+        result = run_category_suggestion_job(
+            job.member,
+            job,
+            backend=backend,
+            session_id=job.harness_session_id,
+            on_session=remember_session,
+        )
     else:
         prompt = FEATURE_PROMPTS.get(job.feature, FEATURE_PROMPTS["structured"])
-        result = run_structured(job.member, prompt, feature=job.feature, backend=backend)
+        result = run_structured(
+            job.member,
+            prompt,
+            feature=job.feature,
+            backend=backend,
+            session_id=job.harness_session_id,
+            on_session=remember_session,
+        )
+    if result.session_id:
+        job.harness_session_id = result.session_id
     if result.ok:
         job.status = AiJob.Status.SUCCEEDED
         job.result_ref = result.session_id or "ok"
         job.failure_code = ""
         job.finished_at = timezone.now()
-        job.save(update_fields=("status", "result_ref", "failure_code", "finished_at", "updated_at"))
+        job.save(
+            update_fields=(
+                "status",
+                "result_ref",
+                "failure_code",
+                "finished_at",
+                "harness_session_id",
+                "updated_at",
+            )
+        )
         return True
-    if job.attempts < int(getattr(settings, "AI_JOB_MAX_ATTEMPTS", 5)):
-        delay = min(2 ** job.attempts, 32) * 60
-        job.status = AiJob.Status.QUEUED
-        job.failure_code = result.failure_code or UNAVAILABLE
-        job.next_attempt_at = moment + timedelta(seconds=delay)
-        job.save(update_fields=("status", "failure_code", "next_attempt_at", "updated_at"))
-        return False
-    _fail(job, result.failure_code or UNAVAILABLE)
-    return True
+    if result.failure_code == AUTHORIZATION_REQUIRED:
+        _fail(job, AUTHORIZATION_REQUIRED)
+        return True
+    if result.failure_code != UNAVAILABLE:
+        job.harness_session_id = ""
+    return _retry_or_fail(job, moment, result.failure_code or UNAVAILABLE)
 
 
 def _local_may_run(connection):
@@ -117,11 +146,51 @@ def _local_may_run(connection):
     return in_quiet_window()
 
 
+def _isolate_job_failure(job, moment, exc):
+    try:
+        job.refresh_from_db()
+    except Exception:
+        return
+    if isinstance(exc, AiError):
+        code = exc.failure_code or PROVIDER_ERROR
+    elif isinstance(exc, HarnessHttpError):
+        code = failure_from_http(exc)
+    else:
+        code = PROVIDER_ERROR
+    if code == AUTHORIZATION_REQUIRED:
+        _fail(job, AUTHORIZATION_REQUIRED)
+        return
+    _retry_or_fail(job, moment, code)
+
+
+def _retry_or_fail(job, moment, code):
+    if job.attempts == 0:
+        job.attempts = 1
+    if job.attempts < int(getattr(settings, "AI_JOB_MAX_ATTEMPTS", 5)):
+        delay = min(2 ** job.attempts, 32) * 60
+        job.status = AiJob.Status.QUEUED
+        job.failure_code = code
+        job.next_attempt_at = moment + timedelta(seconds=delay)
+        job.save(
+            update_fields=(
+                "status",
+                "attempts",
+                "failure_code",
+                "next_attempt_at",
+                "harness_session_id",
+                "updated_at",
+            )
+        )
+        return False
+    _fail(job, code)
+    return True
+
+
 def _fail(job, code):
     job.status = AiJob.Status.FAILED
     job.failure_code = code
     job.finished_at = timezone.now()
-    job.save(update_fields=("status", "failure_code", "finished_at", "updated_at"))
+    job.save(update_fields=("status", "failure_code", "finished_at", "harness_session_id", "updated_at"))
 
 
 def _parse_hhmm(text):

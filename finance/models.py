@@ -1212,6 +1212,7 @@ class AiJob(models.Model):
     input_refs = models.JSONField(default=dict)
     status = models.CharField(max_length=16, choices=Status, default=Status.QUEUED)
     attempts = models.PositiveIntegerField(default=0)
+    harness_session_id = models.CharField(max_length=120, blank=True, default="")
     next_attempt_at = models.DateTimeField(default=timezone.now)
     result_ref = models.CharField(max_length=120, blank=True, default="")
     failure_code = models.CharField(max_length=40, blank=True, default="")

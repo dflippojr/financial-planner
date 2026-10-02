@@ -23,6 +23,9 @@ class FakeHarnessState:
         self.hosted_logged_in = True
         self.session_answer = None
         self.session_prompts = []
+        self.running_polls = 0
+        self.initial_session_status = "running"
+        self.session_polls_left = {}
 
     def backends(self):
         return [
@@ -167,6 +170,14 @@ def start_fake_harness(state=None):
                 if session is None:
                     self._json(404, {"detail": "not found"})
                     return
+                left = harness.session_polls_left.get(session_id, 0)
+                if left > 0:
+                    harness.session_polls_left[session_id] = left - 1
+                    if left == 1 and session.get("status") in {"running", "queued"}:
+                        session["status"] = "done"
+                        session["answer"] = "synthetic-ok"
+                        session["prompt_tokens"] = 3
+                        session["completion_tokens"] = 4
                 self._json(200, session)
                 return
             self._json(404, {"detail": "not found"})
@@ -202,6 +213,14 @@ def start_fake_harness(state=None):
                         "prompt_tokens": 2,
                         "completion_tokens": 0,
                     }
+                elif harness.running_polls:
+                    session = {
+                        "id": session_id,
+                        "status": harness.initial_session_status,
+                        "prompt_tokens": 3,
+                        "completion_tokens": 0,
+                    }
+                    harness.session_polls_left[session_id] = harness.running_polls
                 else:
                     session = {
                         "id": session_id,

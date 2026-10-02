@@ -14,6 +14,7 @@ from .ai_harness import (
     list_backends,
     model_status,
     run_session,
+    wait_for_session,
     warm_local_model,
 )
 from .ai_http import HarnessHttpError
@@ -146,12 +147,56 @@ def warm_for_chat(principal):
         raise AiError("The local model could not be warmed.", failure_from_http(exc)) from None
 
 
-def run_structured(principal, prompt, *, feature, backend=None, tools=None):
-    return _run(principal, prompt, feature=feature, backend=backend, tools=tools, use_chat=False)
+def run_structured(
+    principal,
+    prompt,
+    *,
+    feature,
+    backend=None,
+    tools=None,
+    session_id="",
+    on_session=None,
+    sleep=None,
+    monotonic=None,
+):
+    return _run(
+        principal,
+        prompt,
+        feature=feature,
+        backend=backend,
+        tools=tools,
+        use_chat=False,
+        session_id=session_id,
+        on_session=on_session,
+        sleep=sleep,
+        monotonic=monotonic,
+    )
 
 
-def run_conversation(principal, prompt, *, feature, backend=None, tools=None):
-    return _run(principal, prompt, feature=feature, backend=backend, tools=tools, use_chat=True)
+def run_conversation(
+    principal,
+    prompt,
+    *,
+    feature,
+    backend=None,
+    tools=None,
+    session_id="",
+    on_session=None,
+    sleep=None,
+    monotonic=None,
+):
+    return _run(
+        principal,
+        prompt,
+        feature=feature,
+        backend=backend,
+        tools=tools,
+        use_chat=True,
+        session_id=session_id,
+        on_session=on_session,
+        sleep=sleep,
+        monotonic=monotonic,
+    )
 
 
 def record_usage(person, *, provider, backend, feature, result: ProviderResult):
@@ -166,7 +211,19 @@ def record_usage(person, *, provider, backend, feature, result: ProviderResult):
     )
 
 
-def _run(principal, prompt, *, feature, backend, tools, use_chat):
+def _run(
+    principal,
+    prompt,
+    *,
+    feature,
+    backend,
+    tools,
+    use_chat,
+    session_id="",
+    on_session=None,
+    sleep=None,
+    monotonic=None,
+):
     person = _person_for(principal)
     if not may_use_ai(person):
         return ProviderResult(ok=False, failure_code=AUTHORIZATION_REQUIRED)
@@ -176,7 +233,10 @@ def _run(principal, prompt, *, feature, backend, tools, use_chat):
     chosen = (backend or (connection.chat_backend if use_chat else connection.background_backend) or "").strip()
     if not chosen:
         return ProviderResult(ok=False, failure_code=AUTHORIZATION_REQUIRED)
-    token = _token(connection)
+    try:
+        token = _token(connection)
+    except AiError as exc:
+        return ProviderResult(ok=False, failure_code=exc.failure_code)
     project = connection.harness_project or getattr(settings, "AGENT_HARNESS_PROJECT", "financial-planner")
     model = connection.chat_model if use_chat else connection.background_model
     runner = None
@@ -185,18 +245,31 @@ def _run(principal, prompt, *, feature, backend, tools, use_chat):
         def runner(name, args):
             return _invoke_tool(person, tools, name, args)
     try:
-        result = run_session(
-            connection.base_url,
-            token,
-            prompt=prompt,
-            backend=chosen,
-            project=project,
-            model=model,
-            tools=tools,
-            tool_runner=runner,
-        )
+        if session_id:
+            result = wait_for_session(
+                connection.base_url,
+                token,
+                session_id,
+                tool_runner=runner,
+                sleep=sleep,
+                monotonic=monotonic,
+            )
+        else:
+            result = run_session(
+                connection.base_url,
+                token,
+                prompt=prompt,
+                backend=chosen,
+                project=project,
+                model=model,
+                tools=tools,
+                tool_runner=runner,
+                on_session=on_session,
+                sleep=sleep,
+                monotonic=monotonic,
+            )
     except HarnessHttpError as exc:
-        result = ProviderResult(ok=False, failure_code=failure_from_http(exc), usage=Usage())
+        result = ProviderResult(ok=False, failure_code=failure_from_http(exc), usage=Usage(), session_id=session_id or None)
     record_usage(
         person,
         provider=connection.kind,
@@ -230,7 +303,10 @@ def _token(connection):
     try:
         return decrypt_secret(connection.encrypted_token)
     except Exception as exc:
-        raise AiError("This AI connection can no longer be read. Disconnect it and connect again.") from exc
+        raise AiError(
+            "This AI connection can no longer be read. Disconnect it and connect again.",
+            AUTHORIZATION_REQUIRED,
+        ) from exc
 
 
 def _choose_project(projects):
