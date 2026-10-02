@@ -300,12 +300,15 @@ def test_settings_shows_state_and_accepts_current_version():
 @pytest.mark.django_db
 def test_existing_member_prompt_until_respond_then_ai_still_off_if_declined():
     user, person, _household = make_member("owner")
-    publish_policy(material=True, body="Synthetic policy v1")
+    current = publish_policy(material=True, body="Synthetic policy v1")
     client = Client()
     client.force_login(user)
     home = client.get(reverse("home"))
     assert b"needs a response before you can use AI" in home.content
-    client.post(reverse("privacy-policy-respond"), {"action": "decline", "next": reverse("home")})
+    client.post(
+        reverse("privacy-policy-respond"),
+        {"action": "decline", "version": str(current.version), "next": reverse("home")},
+    )
     home_after = client.get(reverse("home"))
     assert b"needs a response before you can use AI" not in home_after.content
     assert not may_use_ai(person)
@@ -528,3 +531,49 @@ def test_google_setup_stale_shown_version_finishes_without_acceptance():
     assert PrivacyPolicyAcceptance.objects.filter(person=user.person).count() == 0
     assert client.session.get("_auth_user_id")
 
+
+
+@pytest.mark.django_db
+def test_not_now_on_a_stale_prompt_does_not_decline_the_new_version():
+    user, person, _household = make_member("owner")
+    shown = publish_policy(material=True, body="Synthetic policy v1")
+    later = publish_policy(material=True, body="Synthetic policy v2")
+    client = Client()
+    client.force_login(user)
+
+    posted = client.post(
+        reverse("privacy-policy-respond"),
+        {"action": "decline", "version": str(shown.version), "next": reverse("home")},
+    )
+
+    assert posted.status_code == 302
+    person.refresh_from_db()
+    assert person.privacy_policy_declined_version_id != later.pk
+
+
+@pytest.mark.django_db
+def test_not_now_on_the_current_prompt_declines_that_version():
+    user, person, _household = make_member("owner")
+    current = publish_policy(material=True, body="Synthetic policy v1")
+    client = Client()
+    client.force_login(user)
+
+    home = client.get(reverse("home"))
+    assert _hidden_version(home.content, name="version") == str(current.version)
+
+    client.post(
+        reverse("privacy-policy-respond"),
+        {"action": "decline", "version": str(current.version), "next": reverse("home")},
+    )
+
+    person.refresh_from_db()
+    assert person.privacy_policy_declined_version_id == current.pk
+
+
+@pytest.mark.django_db
+def test_policy_page_rejects_post():
+    publish_policy(material=True, body="Synthetic policy v1")
+
+    response = Client().post(reverse("privacy-policy"))
+
+    assert response.status_code == 405

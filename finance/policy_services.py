@@ -147,6 +147,18 @@ def decline_policy(person, version=None):
     return policy
 
 
+def decline_shown_version(person, shown_version):
+    try:
+        shown = int(shown_version)
+    except (TypeError, ValueError):
+        return False
+    current = current_policy()
+    if shown != current.version:
+        return False
+    decline_policy(person, current)
+    return True
+
+
 def should_prompt_privacy_policy(person):
     person = _as_person(person)
     if in_acceptance(person):

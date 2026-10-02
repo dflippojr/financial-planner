@@ -15,7 +15,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
-from django.views.decorators.http import require_GET, require_http_methods, require_POST
+from django.views.decorators.http import require_GET, require_http_methods, require_POST, require_safe
 
 from .auth_services import (
     InvalidOneTimeCode,
@@ -82,7 +82,7 @@ from .policy_services import (
     current_policy,
     in_acceptance,
     latest_acceptance,
-    decline_policy,
+    decline_shown_version,
     record_onboarding_acceptance,
 )
 from .recurring_services import confirm_recurring_series, confirmed_totals, dismiss_recurring_series, refresh_recurring_series
@@ -1082,6 +1082,7 @@ def leave_household_view(request):
 
 
 @login_not_required
+@require_safe
 @never_cache
 def privacy_policy(request, version=None):
     if version is None:
@@ -1105,12 +1106,11 @@ def privacy_policy(request, version=None):
 def privacy_policy_respond(request):
     person = get_object_or_404(Person, user=request.user)
     action = request.POST.get("action")
-    current = current_policy()
     if action == "accept":
         if not accept_shown_version(person, request.POST.get("version")):
             return redirect("privacy-policy")
     elif action == "decline":
-        decline_policy(person, current)
+        decline_shown_version(person, request.POST.get("version"))
     return redirect(safe_next_url(request, request.POST.get("next", "")))
 
 
