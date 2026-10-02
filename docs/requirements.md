@@ -324,11 +324,61 @@ Calculation (recorded defaults; the owner may change them):
 - A range with any period that lacks a return shows value change only, plus a note. Accounts with fewer than two statement entries show value change only.
 - Every return is labelled an **estimate**, with the method named. Amounts are exact minor units; returns are percentages rounded to one decimal.
 
+## AI features (2026-10-02, #90)
+
+Owner decisions:
+- **Backends are chosen per member.** Each member picks from the AI backends they have connected in their own settings: one for live chat and one for background jobs (#91). A request uses only the requesting member's own connection. For now it is acceptable that only the hosting member can connect one.
+- **The first backends come through Agent Harness.** The hosting member's own Claude, Codex, or Cursor subscription, or the tower's local model. This is intended personal use: the member asks their own subscription about their own data, through the harness's unmodified CLI in non-interactive mode. It never serves other people through that member's subscription. The app talks to the harness only through its documented HTTP App API. Sign in with ChatGPT is research only (#92). No paid API key is required.
+- **The goal is a read-only bot** that answers a member's questions about their data (#94), plus background helpers: category suggestions (#93) and a monthly review (#95). Full agent sessions are not needed. The transfer scorer stays deterministic (#8).
+- **Live and background work are separate.** Loading the tower's local model is slow and takes GPU and RAM from other work. Background features run as stored jobs and never wake the local model just because a job is queued: they run when it is already loaded, or in a configured quiet window. Chat defaults to a hosted backend. Chat on the local model warms it on the member's first keystroke and shows its loading state.
+- **Provider-side use of data is accepted.** Minimizing fields and controlling provider retention are not goals for a member's own data. Nothing is sent until a member connects a backend, so each member, and each other install of this public project, chooses for themselves.
+- **Household-shared data** may be sent to a member's AI backend only while every current household member is in acceptance of the privacy and data policy (#106). Other members' private data is never sent.
+- **Tools.** The model reaches data only through the app's read-only tools. Each tool runs as the requesting member against `visible_to` and may return anything that member can already see in the app. Tools never return secrets, whatever the provider: credentials, the SimpleFIN access URL, AI connection tokens, recovery codes, and session material. Tool output, model output, and errors never contain data the member cannot see.
+- **Logging.** The app records provider, backend, feature, member, time, token counts, and outcome. It never records prompts or responses, and error messages never contain raw model text.
+- **Output.**
+  - AI output is labeled as AI-generated, with the backend named.
+  - Suggestions never overwrite a category set by hand or by a rule, and never change transfer or refund semantics.
+  - Answers are not presented as verified facts or as financial advice.
+  - Figures shown come from the app's tools and link to the page that shows them.
+- **Re-authentication.** Connecting, changing, or disconnecting an AI backend is a sensitive action under the 10-minute re-authentication rule.
+- **Agent Harness work this depends on.**
+  - [agent-harness #329](https://github.com/dflippojr/agent-harness/issues/329): sessions limited to the app's own tools.
+  - [agent-harness #300](https://github.com/dflippojr/agent-harness/issues/300): app tools reachable from hosted Claude Code.
+  - Wanted but not blocking: [agent-harness #330](https://github.com/dflippojr/agent-harness/issues/330), isolated per-app data in the harness.
+
+## Privacy and data policy (2026-10-02, #106)
+
+Owner decisions:
+- **Every member is asked to accept** the app's privacy and data policy. It covers where data is stored, SimpleFIN, Google sign-in, sending data to outside AI providers (including household-shared data), what other members can see, export, and deletion.
+- **Where it is asked.** First-run setup, joining by invitation, and Google sign-up present the policy. Existing members are prompted on their next visit.
+- **Being in acceptance.** A member is in acceptance when they have accepted the latest material version, or any later version. A non-material version never takes anyone out of acceptance.
+- **Declining.** A member who is not in acceptance can still use the app, but:
+  - they cannot connect or use AI;
+  - no member's AI backend may receive household-shared data until every current member is in acceptance.
+- **Records.** Acceptance is recorded per member and per policy version, and included in that member's export.
+- **New versions.** Only a version an operator marks as material requires members to accept again.
+- **The text.** The repository ships a default policy that each install's operator can replace without changing code. Claude drafts the default, and the owner edits and approves it.
+
+AI refinements (owner, 2026-10-02, #91 and #94):
+- **Harness address.** A member may connect only an Agent Harness on the same host or on the tailnet. HTTPS is required except on loopback.
+- **Chat history.** Conversations are kept only for the member who started them, can be deleted, and expire after 30 days (configurable). They are included in that member's export.
+- **Advice.** The chat bot answers factual and explanatory questions. Its suggestions are labeled as opinion and never presented as financial advice.
+- **Chat UI.** A Chat page, plus a drawer on every page that continues the same conversation. The drawer passes only the current route and its query parameters, never page data.
+- **Local model in chat.** Offered only after a synthetic-data evaluation shows reliable tool calling.
+
 ## Sign in with ChatGPT as an AI backend (2026-10-02, #92)
 
-Owner decisions from the research note (`docs/research/sign-in-with-chatgpt.md`; sources checked 2026-10-02):
+Research is in `docs/research/sign-in-with-chatgpt.md` (sources checked 2026-10-02).
 
-- **Do not build now.** Wait. No follow-up implementation issue. Revisit only if OpenAI documents a non-loopback HTTPS callback that a tailnet household server can use, plan usage for that hosting shape, and token storage on a user-controlled home server used by more than one member.
-- **Not a sign-in method.** Sign in with ChatGPT is not added next to Google. Google and passwords stay as decided above. ChatGPT would only ever be an AI provider connection for a member who already joined with an invitation.
-- **Why wait:** the self-serve OSS flow registers a dynamic public client and accepts only `http://127.0.0.1` callbacks, while this app is used at `https://<host>.<tailnet>.ts.net`. OpenAI’s SIWC Terms require tokens to stay local and under that user’s control, and forbid using one person’s plan for another person’s requests. That does not match storing tokens in the household database for every member. Function/custom tools exist on plan-usage Responses (needed for chat, #94), but that is not enough to build. The hosting member’s Claude/Codex/Cursor path remains Agent Harness (#91).
-- **Data use:** OpenAI does not give the app ChatGPT conversations or memories; plan-usage Responses must use `store: false`. Whether those request bodies are used to train models was not established (help and training-policy pages were not retrieved). Household financial data in an inference call would still leave this machine; #106 still applies before sending shared data.
+**Owner decision: pursue access.** The research found that a household web connect button doesn't fit OpenAI's self-serve flow today:
+- callbacks go only to `http://127.0.0.1`;
+- the Sign in with ChatGPT Terms, as quoted in the research, say tokens must stay local and under the user's control, and one person's plan must not serve another person's requests.
+
+The owner wants to find out what access is possible rather than wait. Two routes:
+- **The hosting member, self-serve (to prototype).** OpenAI documents a self-hosted procedure: complete sign-in on a machine with a browser through the `127.0.0.1` callback, then move the credentials to a server the same user controls. Here the server is the hosting member's own basement PC. Signing in from a browser on that PC lets the loopback callback reach it directly. The connection is the hosting member's only, which matches #91's "only the hosting member for now". Whether storing that member's token encrypted in this app's database counts as "local and under the user's control" is unverified, and the prototype must record the reading it relies on.
+- **Other members: OpenAI's interest form** for paid or remotely hosted apps (https://openai.com/form/sign-in-with-chatgpt-interest/). It asks for a registered client with an HTTPS callback on the tailnet hostname, for a self-hosted, open-source household app. The owner submits it.
+- **Also available now:** the hosting member's ChatGPT plan already works through Agent Harness's `codex` backend (#91), without Sign in with ChatGPT.
+
+**Proposed, not yet decided:** Sign in with ChatGPT is an AI connection only, not a sign-in method next to Google. Invitations still apply.
+
+**Data use:** plan-usage Responses must use `store: false`. Whether request bodies are used for training was not established. #106 applies before household-shared data is sent.

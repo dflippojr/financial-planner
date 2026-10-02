@@ -123,6 +123,21 @@ Technically, plan usage can drive Responses with **function/custom tools**, whic
 
 Revisit if OpenAI documents (a) HTTPS MagicDNS or other non-loopback callbacks for self-hosted web apps, (b) plan usage for a registered confidential client, and (c) token storage on a user-controlled home server that several household members use. Until then, drop is also defensible; wait keeps the door open without a build.
 
+## Routes to access (added 2026-10-02 after the owner chose to pursue access)
+
+1. **Hosting member, self-serve.** [VM] documents the procedure for a self-hosted server:
+   - complete OAuth locally with the same client for the same user, through the `127.0.0.1` callback;
+   - transfer the protected credential file to the server over a secure channel;
+   - persist a stable `ext_agent_host_id` for that server, and let the server own later refreshes.
+
+   On this deployment, the hosting member can open the connect flow in a browser **on the basement PC itself**, so the loopback callback lands on the same machine that runs the app. No transfer step is needed. The app's container must receive that callback, for example through a port published only on host loopback while connecting, or through a small host-side helper. Open points:
+   - whether an encrypted token in the app database meets [TERMS §1];
+   - that host-specific attribution and revocation are "not yet available" [VM].
+2. **Other members: interest form.** [OSS] directs paid or remotely hosted apps to https://openai.com/form/sign-in-with-chatgpt-interest/. Ask for:
+   - a registered client with an HTTPS callback on the tailnet hostname;
+   - per-member plan usage on a self-hosted, open-source household server.
+3. **Existing alternative.** The hosting member's ChatGPT plan already works through Agent Harness's `codex` backend (#91), with no Sign in with ChatGPT.
+
 ## Open follow-ups (only if revisited)
 
 1. Does a basement-PC Docker app count as “local runtime” or “remote/managed” under [TERMS]? Needs OpenAI clarification; do not guess in code.
