@@ -54,8 +54,8 @@ def _google_settings(**extra):
     )
 
 
-def _id_token(sub=GOOGLE_SUB, email=GOOGLE_EMAIL, verified=True, auth_time=None):
-    now = int(time.time())
+def _id_token(sub=GOOGLE_SUB, email=GOOGLE_EMAIL, verified=True, auth_time=None, issued_at=None):
+    now = int(time.time()) if issued_at is None else issued_at
     payload = {
         "iss": "https://accounts.google.com",
         "aud": GOOGLE_CLIENT_ID,

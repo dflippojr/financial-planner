@@ -278,3 +278,30 @@ def test_own_google_login_from_a_stale_session_does_not_confirm_it():
     refused = client.post(reverse("invite"))
     assert refused.status_code == 302
     assert Invitation.objects.count() == 0
+
+
+@pytest.mark.django_db
+@_google_settings()
+def test_google_reauth_without_auth_time_needs_a_freshly_issued_token():
+    user, _person, _household = make_member()
+    SocialAccount.objects.create(user=user, provider="google", uid=GOOGLE_SUB, extra_data={"sub": GOOGLE_SUB})
+    client = Client()
+    client.force_login(user)
+
+    # A token issued well before this round trip never confirms.
+    old = _finish_google(
+        client,
+        client.post(reverse("reauth-google"), {"next": reverse("invite")}),
+        id_token=_id_token(issued_at=int(time.time()) - 900),
+    )
+    assert old.url.startswith(reverse("reauth"))
+    assert RECENT_AUTH_SESSION_KEY not in client.session
+
+    # Unpublished apps get no auth_time from Google; a fresh round trip counts.
+    fresh = _finish_google(
+        client,
+        client.post(reverse("reauth-google"), {"next": reverse("invite")}),
+        id_token=_id_token(),
+    )
+    assert fresh.url == reverse("invite")
+    assert RECENT_AUTH_SESSION_KEY in client.session

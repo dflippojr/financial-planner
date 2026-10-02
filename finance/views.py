@@ -943,8 +943,8 @@ def account_export(request):
 
 REAUTH_FAILED = "Confirmation failed. Try again later."
 # Google accepts only none, consent, and select_account for prompt. It sends
-# auth_time only when the claims parameter asks for it (and the OAuth client
-# allows it); the callback refuses a confirmation without a recent auth_time.
+# auth_time only to published, verified apps that ask for it through claims;
+# without it the callback checks that the ID token was just issued (iat).
 GOOGLE_REAUTH_AUTH_PARAMS = urlencode(
     {
         "prompt": "select_account",

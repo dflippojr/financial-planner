@@ -91,14 +91,23 @@ def google_reauth_identity_matches(user, extra_data):
 
 
 def google_reauth_is_recent(extra_data):
+    """Whether a Google confirmation round trip is fresh enough.
+
+    Google sends auth_time only to published, verified apps, so a household
+    app in testing mode normally gets just iat: proof of a fresh round trip
+    through the account chooser, not of a fresh password entry (an owner
+    decision recorded in docs/requirements.md). When auth_time is present,
+    it is the stricter check and is used instead.
+    """
     extra_data = extra_data or {}
+    claim = "auth_time" if extra_data.get("auth_time") is not None else "iat"
     try:
-        auth_time = int(extra_data.get("auth_time"))
+        moment = int(extra_data.get(claim))
     except (TypeError, ValueError):
         return False
     from django.utils import timezone
 
-    age = timezone.now().timestamp() - auth_time
+    age = timezone.now().timestamp() - moment
     return 0 <= age <= settings.GOOGLE_REAUTH_MAX_AGE_SECONDS
 
 

@@ -91,7 +91,6 @@ Google sign-in stays off until both `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET
 3. Authorized JavaScript origins: the HTTPS MagicDNS origin, including a non-default Serve port when you use one, for example `https://basement-pc.example-tailnet.ts.net` or `https://basement-pc.example-tailnet.ts.net:10443`.
 4. Authorized redirect URIs: the same origin plus `/accounts/google/login/callback/`, for example `https://basement-pc.example-tailnet.ts.net/accounts/google/login/callback/` or `https://basement-pc.example-tailnet.ts.net:10443/accounts/google/login/callback/`. The path is exact; a missing Serve port or a trailing-path mismatch fails the Google handshake.
 5. Copy the client id and secret into `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. They are secrets; keep them in the protected env file, not in Git. Recreate the app container so it reads the new values.
-6. Confirming a sensitive action with Google needs the ID token's `auth_time` claim. The app asks for it with the OIDC `claims` parameter, but Google returns it only when the OAuth client allows it. If Google Auth Platform shows an `auth_time` option for the client, turn it on. Then test it: wait more than ten minutes after signing in, start an invitation, and choose **Confirm with Google**. If the confirmation always fails, the claim is not being sent; members can still confirm with their password.
 
 ## Health and operations
 
