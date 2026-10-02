@@ -404,6 +404,11 @@ def apply_rule(principal, rule_id):
         lock_actor_household(person)
         return None, 0
     locked = _still_eligible(person, _lock_transactions(person, preview))
+    # Re-read the rule once rows are locked: a save that committed meanwhile
+    # must not leave the old category applied under the updated rule.
+    person, rule = _rule_or_404(principal, rule_id)
+    if not rule.enabled:
+        return None, 0
     return _apply_to_locked(person, rule, locked)
 
 
@@ -463,7 +468,12 @@ def reverse_application(principal, application_id):
         .order_by("transaction_id")
     )
     locked = _lock_transactions(person, [entry.transaction for entry in entries])
-    by_id = {item.pk: item for item in locked}
+    # Recheck visibility once locked: an account made private meanwhile keeps
+    # its rows and their entries pending for the owner.
+    visible_ids = set(
+        Transaction.objects.visible_to(person).filter(pk__in=[item.pk for item in locked]).values_list("pk", flat=True)
+    )
+    by_id = {item.pk: item for item in locked if item.pk in visible_ids}
     superseded_ids = set(
         RuleApplicationEntry.objects.filter(
             transaction_id__in=[entry.transaction_id for entry in entries],

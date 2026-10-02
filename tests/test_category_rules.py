@@ -20,6 +20,7 @@ from finance.models import (
     Membership,
     Person,
     RuleApplication,
+    RuleApplicationEntry,
     Transaction,
     TransactionCorrectionHistory,
 )
@@ -954,3 +955,56 @@ def test_apply_rechecks_eligibility_after_locking(monkeypatch):
 
     txn.refresh_from_db()
     assert txn.category_id is None
+
+
+@pytest.mark.django_db
+def test_reversal_rechecks_visibility_after_locking(monkeypatch):
+    import finance.rule_services as rule_services
+
+    owner = make_person("owner-unshare")
+    member = make_person("member-unshare")
+    household = make_household(owner, member)
+    shared = make_account(owner, scope=Account.Scope.HOUSEHOLD, household=household)
+    txn = make_transaction(owner, shared, fingerprint="e8".ljust(64, "0"))
+    rule = save_category_rule(
+        owner, owner_kind="household", description_contains="kroger", account_id=None,
+        min_amount_minor=None, max_amount_minor=None, category_id=groceries(household).pk, priority=0,
+    )
+    application, _skipped = apply_rule(owner, rule.pk)
+    original_lock = rule_services._lock_transactions
+
+    def unshared_before_lock(person, transactions):
+        Account.objects.filter(pk=shared.pk).update(scope=Account.Scope.PRIVATE, household=None, share_mode="")
+        return original_lock(person, transactions)
+
+    monkeypatch.setattr(rule_services, "_lock_transactions", unshared_before_lock)
+    reverse_application(member, application.pk)
+
+    txn.refresh_from_db()
+    assert txn.category_id == groceries(household).pk
+    assert RuleApplicationEntry.objects.get(application=application).reversed_at is None
+
+
+@pytest.mark.django_db
+def test_apply_uses_the_rule_as_saved_when_rows_are_locked(monkeypatch):
+    import finance.rule_services as rule_services
+
+    owner = make_person("owner-rule-edit")
+    household = make_household(owner)
+    account = make_account(owner)
+    txn = make_transaction(owner, account, fingerprint="e9".ljust(64, "0"))
+    rule = save_category_rule(
+        owner, owner_kind="personal", description_contains="kroger", account_id=None,
+        min_amount_minor=None, max_amount_minor=None, category_id=groceries(household).pk, priority=0,
+    )
+    original_lock = rule_services._lock_transactions
+
+    def edited_before_lock(person, transactions):
+        CategoryRule.objects.filter(pk=rule.pk).update(category=dining(household))
+        return original_lock(person, transactions)
+
+    monkeypatch.setattr(rule_services, "_lock_transactions", edited_before_lock)
+    apply_rule(owner, rule.pk)
+
+    txn.refresh_from_db()
+    assert txn.category_id == dining(household).pk
