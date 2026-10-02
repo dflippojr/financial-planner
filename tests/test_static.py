@@ -1,4 +1,5 @@
 import hashlib
+import struct
 from pathlib import Path
 
 import pytest
@@ -189,5 +190,119 @@ def test_collectstatic_accepts_vendored_chartjs_without_a_source_map(tmp_path, s
     hashed = list(collected.rglob("chart.umd.min.js*"))
     assert hashed
     assert not any(path.name.endswith(".map") for path in collected.rglob("*"))
+
+
+def _png_size(path):
+    data = path.read_bytes()
+    assert data[:8] == b"\x89PNG\r\n\x1a\n"
+    width, height = struct.unpack(">II", data[16:24])
+    return width, height
+
+
+def _repo_root():
+    return Path(__file__).resolve().parent.parent
+
+
+def test_committed_icons_and_manifest_are_install_sized():
+    root = _repo_root()
+    assert _png_size(root / "static" / "icons" / "apple-touch-icon.png") == (180, 180)
+    assert _png_size(root / "static" / "icons" / "icon-192.png") == (192, 192)
+    assert _png_size(root / "static" / "icons" / "icon-512.png") == (512, 512)
+    svg = (root / "static" / "icons" / "icon.svg").read_text(encoding="utf-8")
+    manifest = (root / "static" / "manifest.webmanifest").read_text(encoding="utf-8")
+
+    assert 'fill="#422ad5"' in svg
+    assert '"name": "Financial Planner"' in manifest
+    assert '"short_name": "Finances"' in manifest
+    assert '"display": "standalone"' in manifest
+    assert "/static/icons/icon-192.png" in manifest
+    assert "/static/icons/icon-512.png" in manifest
+    assert "serviceWorker" not in manifest
+
+
+@pytest.mark.django_db
+def test_pages_link_install_metadata_and_do_not_register_a_service_worker():
+    user = _member()
+    login = Client().get(reverse("login")).content.decode()
+    signed_in = Client()
+    signed_in.force_login(user)
+    home = signed_in.get(reverse("home")).content.decode()
+
+    for content in (login, home):
+        assert 'rel="manifest"' in content
+        assert "/static/manifest.webmanifest" in content
+        assert "/static/icons/apple-touch-icon.png" in content
+        assert 'name="theme-color"' in content
+        assert "(prefers-color-scheme: light)" in content
+        assert "(prefers-color-scheme: dark)" in content
+        assert 'content="#ffffff"' in content
+        assert 'content="#1d232a"' in content
+        assert "viewport-fit=cover" in content
+        assert "apple-mobile-web-app-capable" in content
+        assert "serviceWorker.register" not in content
+        assert "navigator.serviceWorker" not in content
+        assert "cdn." not in content.lower()
+
+
+def test_templates_and_scripts_do_not_register_a_service_worker():
+    root = _repo_root()
+    scanned = 0
+    for directory in (root / "templates", root / "static" / "js"):
+        for path in directory.rglob("*"):
+            if not path.is_file() or path.suffix.lower() in {".png"}:
+                continue
+            text = path.read_text(encoding="utf-8")
+            scanned += 1
+            assert "serviceWorker.register" not in text
+            assert "navigator.serviceWorker" not in text
+    assert scanned > 0
+
+
+def test_compact_layout_css_uses_safe_area_insets():
+    css = (_repo_root() / "static" / "src" / "app.css").read_text(encoding="utf-8")
+
+    for inset in (
+        "env(safe-area-inset-top)",
+        "env(safe-area-inset-right)",
+        "env(safe-area-inset-bottom)",
+        "env(safe-area-inset-left)",
+    ):
+        assert inset in css
+
+
+@pytest.mark.django_db
+def test_manifest_and_icons_are_public_static_files(tmp_path, settings):
+    root = _repo_root()
+    static_dir = tmp_path / "static"
+    icons = static_dir / "icons"
+    icons.mkdir(parents=True)
+    (static_dir / "manifest.webmanifest").write_bytes(
+        (root / "static" / "manifest.webmanifest").read_bytes()
+    )
+    for name in ("apple-touch-icon.png", "icon-192.png", "icon-512.png"):
+        (icons / name).write_bytes((root / "static" / "icons" / name).read_bytes())
+    collected = tmp_path / "staticfiles"
+    settings.STATICFILES_DIRS = [static_dir]
+    settings.STATIC_ROOT = collected
+    settings.STORAGES = {
+        "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+        "staticfiles": {"BACKEND": "whitenoise.storage.CompressedStaticFilesStorage"},
+    }
+    settings.WHITENOISE_AUTOREFRESH = True
+    call_command("collectstatic", "--noinput", verbosity=0)
+
+    client = Client()
+    manifest = client.get("/static/manifest.webmanifest")
+    icon = client.get("/static/icons/icon-192.png")
+    apple = client.get("/static/icons/apple-touch-icon.png")
+    manifest_body = b"".join(manifest.streaming_content)
+    icon_body = b"".join(icon.streaming_content)
+
+    assert manifest.status_code == 200
+    assert "application/manifest+json" in manifest["Content-Type"]
+    assert b'"display": "standalone"' in manifest_body
+    assert icon.status_code == 200
+    assert apple.status_code == 200
+    assert icon_body[:8] == b"\x89PNG\r\n\x1a\n"
 
 
