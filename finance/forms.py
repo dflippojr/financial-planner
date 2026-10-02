@@ -213,6 +213,77 @@ class CashFlowFilterForm(forms.Form):
         return cleaned
 
 
+class NetWorthFilterForm(forms.Form):
+    date_from = forms.DateField(
+        required=False,
+        widget=forms.DateInput(attrs={"type": "date"}),
+        validators=[MaxValueValidator(MAX_REPORT_DATE)],
+    )
+    date_to = forms.DateField(
+        required=False,
+        widget=forms.DateInput(attrs={"type": "date"}),
+        validators=[MaxValueValidator(MAX_REPORT_DATE)],
+    )
+    scope = forms.ChoiceField(
+        required=False,
+        label="Household",
+        choices=(
+            ("", ALL_VISIBLE_ACCOUNTS),
+            (Account.Scope.HOUSEHOLD, "Household"),
+        ),
+    )
+
+    def clean(self):
+        cleaned = super().clean()
+        default_from, default_to = default_date_range()
+        date_from = cleaned.get("date_from") or default_from
+        date_to = cleaned.get("date_to") or default_to
+        cleaned["date_from"] = date_from
+        cleaned["date_to"] = date_to
+        if date_from > date_to:
+            self.add_error("date_to", END_DATE_ORDER_ERROR)
+        elif period_count(date_from, date_to, "month") > MAX_REPORT_PERIODS:
+            self.add_error(
+                None,
+                f"That range has more than {MAX_REPORT_PERIODS} periods. Choose a shorter range.",
+            )
+        return cleaned
+
+
+class ManualBalanceForm(forms.Form):
+    snapshot_date = forms.DateField(label="Date", widget=forms.DateInput(attrs={"type": "date"}))
+    amount = forms.DecimalField(
+        max_digits=19,
+        decimal_places=2,
+        widget=forms.TextInput(attrs={"inputmode": "decimal"}),
+    )
+    note = forms.CharField(required=False, max_length=200)
+
+    def __init__(self, *args, account=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.account = account
+        if account is not None and account.account_type == Account.Type.CREDIT_CARD:
+            self.fields["amount"].help_text = "Amount owed. An overpayment is negative."
+        elif account is not None:
+            self.fields["amount"].help_text = "Current balance."
+
+    def clean_snapshot_date(self):
+        value = self.cleaned_data["snapshot_date"]
+        if value > timezone.localdate():
+            raise ValidationError("Balance date cannot be in the future.")
+        return value
+
+    def clean_amount(self):
+        amount = self.cleaned_data["amount"]
+        minor_units = int(amount * 100)
+        if not MIN_SIGNED_BIGINT <= minor_units <= MAX_SIGNED_BIGINT:
+            raise ValidationError("Amount is outside the supported range.")
+        return amount
+
+    def amount_minor(self):
+        return int(self.cleaned_data["amount"] * 100)
+
+
 class SpendingFilterForm(forms.Form):
     date_from = forms.DateField(
         required=False,

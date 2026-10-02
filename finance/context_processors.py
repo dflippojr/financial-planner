@@ -18,6 +18,8 @@ def _nav_current(request):
         return "planned-items"
     if name.startswith("simplefin"):
         return "simplefin-connections"
+    if name in {"account-balances", "account-snapshot-edit", "account-snapshot-delete"}:
+        return "account-list"
     return name
 
 
@@ -28,6 +30,7 @@ def navigation(request):
     accounts_url = reverse("account-list")
     items = (
         ("home", "Cash flow", reverse("home")),
+        ("net-worth", "Net worth", reverse("net-worth")),
         ("spending-by-category", "Spending", reverse("spending-by-category")),
         ("transaction-list", "Transactions", reverse("transaction-list")),
         ("transfer-review", "Transfers", reverse("transfer-review")),

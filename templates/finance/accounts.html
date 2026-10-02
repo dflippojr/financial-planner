@@ -29,6 +29,7 @@
         <th>Status</th>
         <th>Last import</th>
         <th>Transactions</th>
+        <th>Latest balance</th>
         <th></th>
       </tr>
     </thead>
@@ -58,8 +59,18 @@
         <td>{% if account.last_import_at %}{{ account.last_import_at|date:"Y-m-d" }}{% else %}—{% endif %}</td>
         <td>{{ account.transaction_count }}</td>
         <td>
+          {% if account.last_snapshot_date %}
+          {% include "finance/_amount.html" with value=account.last_snapshot_display tone="" %}
+          on {{ account.last_snapshot_date|date:"Y-m-d" }}
+          <span class="badge">{{ account.last_snapshot_source }}</span>
+          {% else %}
+          —
+          {% endif %}
+        </td>
+        <td>
           <div class="flex flex-wrap items-center gap-2">
           {% if account.status == "active" and account.archived_at is None %}
+            <a class="btn btn-sm" href="{% url 'account-balances' account.pk %}">Record balance</a>
             <a class="btn btn-sm btn-primary" href="{% url 'csv-import-preview' account.pk %}">Import CSV</a>
             <form method="post" action="{% url 'account-rename' account.pk %}" class="flex flex-wrap items-center gap-2">
               {% csrf_token %}
@@ -139,7 +150,7 @@
         </td>
       </tr>
     {% empty %}
-      <tr><td colspan="7">No accounts yet.</td></tr>
+      <tr><td colspan="8">No accounts yet.</td></tr>
     {% endfor %}
     </tbody>
   </table>

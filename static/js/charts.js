@@ -230,6 +230,86 @@
     });
   }
 
+  function netWorthChart(canvas, data, palette) {
+    var periods = data.periods || [];
+    return new window.Chart(canvas, {
+      data: {
+        labels: periods.map(function (row) {
+          return row.label;
+        }),
+        datasets: [
+          {
+            type: "bar",
+            label: "Assets",
+            data: periods.map(function (row) {
+              return row.assets_minor;
+            }),
+            backgroundColor: palette.income,
+            stack: "balances",
+            displays: periods.map(function (row) {
+              return row.assets_display;
+            }),
+          },
+          {
+            type: "bar",
+            label: "Liabilities",
+            data: periods.map(function (row) {
+              return -row.liabilities_minor;
+            }),
+            backgroundColor: palette.spending,
+            stack: "balances",
+            displays: periods.map(function (row) {
+              return row.liabilities_display;
+            }),
+          },
+          {
+            type: "line",
+            label: "Net worth",
+            data: periods.map(function (row) {
+              return row.net_minor;
+            }),
+            borderColor: palette.net,
+            backgroundColor: palette.net,
+            tension: 0.2,
+            displays: periods.map(function (row) {
+              return row.net_display;
+            }),
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { labels: { color: palette.text } },
+          tooltip: {
+            callbacks: {
+              label: function (context) {
+                var displays = context.dataset.displays || [];
+                var display = displays[context.dataIndex];
+                if (display) {
+                  return context.dataset.label + ": " + display;
+                }
+                return context.dataset.label + ": " + context.formattedValue;
+              },
+            },
+          },
+        },
+        scales: {
+          x: {
+            ticks: { color: palette.text, maxRotation: 45, minRotation: 0 },
+            grid: { color: palette.grid },
+          },
+          y: {
+            ticks: { color: palette.text, callback: formatAxisMinor },
+            title: { display: true, text: "USD", color: palette.text },
+            grid: { color: palette.grid },
+          },
+        },
+      },
+    });
+  }
+
   function spendingChart(canvas, data, palette) {
     // Only positive spending can be drawn as a slice; net-refund categories
     // stay in the tiles and table (see chart_rows in spending_chart_data).
@@ -316,6 +396,8 @@
         charts.push(cashFlowChart(canvas, data, palette));
       } else if (kind === "spending") {
         charts.push(spendingChart(canvas, data, palette));
+      } else if (kind === "net-worth") {
+        charts.push(netWorthChart(canvas, data, palette));
       }
     });
   }

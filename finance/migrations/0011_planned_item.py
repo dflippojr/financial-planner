@@ -7,7 +7,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('finance', '0009_importbatch_simplefin_account_id'),
+        ('finance', '0010_balance_snapshot_note'),
     ]
 
     operations = [
