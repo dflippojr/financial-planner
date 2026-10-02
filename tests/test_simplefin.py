@@ -1170,3 +1170,41 @@ def test_scheduler_waits_real_time_across_a_daylight_saving_change():
     # Clocks spring forward overnight, so 06:30 the next day is 23 real hours away.
     assert due.hour == 6
     assert seconds_until(due, synced) == 23 * 3600
+
+
+@pytest.mark.django_db
+def test_a_sync_with_only_stored_rows_does_not_hide_an_undone_import(monkeypatch):
+    from finance.cash_flow import GROUPING_MONTH, cash_flow_report
+
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner)
+    payload = account_payload(transactions=[posted_txn(txn_id="t-1", day=12, amount="-25.00")])
+    connection = connect_owner(owner, monkeypatch, payload)
+    save_account_links(
+        owner,
+        connection.pk,
+        [
+            {
+                "simplefin_account_id": "CON-1:sf-checking",
+                "action": "link",
+                "account_id": checking.pk,
+                "cutover_date": date(2026, 3, 1),
+            }
+        ],
+    )
+    sync_connection(owner, connection.pk, ignore_rate_limit=True)
+    first = ImportBatch.objects.get(account=checking, source=ImportBatch.Source.SIMPLEFIN)
+    sync_connection(owner, connection.pk, ignore_rate_limit=True)
+
+    undo_import_batch(owner, checking.pk, first.pk)
+
+    report = cash_flow_report(
+        owner,
+        date_from=date(2026, 3, 1),
+        date_to=date(2026, 3, 31),
+        grouping=GROUPING_MONTH,
+        account=checking,
+        today=date(2026, 4, 1),
+    )
+    assert report.periods[0].missing_import is True

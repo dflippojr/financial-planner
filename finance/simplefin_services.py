@@ -340,7 +340,48 @@ def _upsert_snapshot(account, *, snapshot_date, amount_minor, currency, batch):
     )
 
 
-def _import_transactions(account, link, remote, batch) -> int:
+def _posted_source_id(item) -> str:
+    """The id of a posted (not pending) transaction item, or "" to skip it."""
+    if not isinstance(item, dict) or _is_pending(item):
+        return ""
+    return str(item.get("id") or "")
+
+
+def _new_transaction(account, link, item, source_id, *, row_number):
+    txn_date = posted_date(item.get("posted"))
+    if txn_date is None or txn_date < link.cutover_date:
+        return None
+    amount_minor = decimal_to_minor(str(item.get("amount")))
+    description = str(item.get("description") or "SimpleFIN transaction")
+    original = {
+        "id": source_id,
+        "posted": item.get("posted"),
+        "amount": str(item.get("amount")),
+        "description": description,
+        "pending": item.get("pending"),
+    }
+    return Transaction(
+        account=account,
+        transaction_date=txn_date,
+        amount_minor=amount_minor,
+        currency="USD",
+        description=description,
+        kind=Transaction.Kind.CASH_FLOW,
+        source_row_number=row_number,
+        source_transaction_id=source_id,
+        fingerprint=transaction_fingerprint(account.pk, txn_date, amount_minor, description),
+        original_fields=original,
+    )
+
+
+def _import_transactions(account, link, remote, make_batch):
+    """Import new posted rows; return (count, batch).
+
+    A batch marks its date range as imported, so one is only created when
+    rows are new or the window genuinely has none. A sync whose rows are all
+    already stored adds no batch: the earlier batches cover them, and undoing
+    one of those must bring back its missing-import warning.
+    """
     existing_ids = set(
         Transaction.objects.filter(
             account=account,
@@ -352,47 +393,26 @@ def _import_transactions(account, link, remote, batch) -> int:
         .values_list("source_transaction_id", flat=True)
     )
     created = []
-    row_number = 1
+    saw_stored = False
     for item in remote.get("transactions") or []:
-        if not isinstance(item, dict):
+        source_id = _posted_source_id(item)
+        if not source_id:
             continue
-        if _is_pending(item):
+        if source_id in existing_ids:
+            saw_stored = True
             continue
-        source_id = str(item.get("id") or "")
-        if not source_id or source_id in existing_ids:
-            continue
-        txn_date = posted_date(item.get("posted"))
-        if txn_date is None or txn_date < link.cutover_date:
-            continue
-        amount_minor = decimal_to_minor(str(item.get("amount")))
-        description = str(item.get("description") or "SimpleFIN transaction")
-        original = {
-            "id": source_id,
-            "posted": item.get("posted"),
-            "amount": str(item.get("amount")),
-            "description": description,
-            "pending": item.get("pending"),
-        }
-        created.append(
-            Transaction(
-                account=account,
-                import_batch=batch,
-                transaction_date=txn_date,
-                amount_minor=amount_minor,
-                currency="USD",
-                description=description,
-                kind=Transaction.Kind.CASH_FLOW,
-                source_row_number=row_number,
-                source_transaction_id=source_id,
-                fingerprint=transaction_fingerprint(account.pk, txn_date, amount_minor, description),
-                original_fields=original,
-            )
-        )
-        existing_ids.add(source_id)
-        row_number += 1
+        txn = _new_transaction(account, link, item, source_id, row_number=len(created) + 1)
+        if txn is not None:
+            created.append(txn)
+            existing_ids.add(source_id)
+    if not created and saw_stored:
+        return 0, None
+    batch = make_batch()
+    for txn in created:
+        txn.import_batch = batch
     if created:
         Transaction.objects.bulk_create(created)
-    return len(created)
+    return len(created), batch
 
 
 def _ensure_batch(person, account, connection, link, synced_at, start, end):
@@ -448,10 +468,13 @@ def _sync_one_link(person, connection, link, remote, synced_at, payload) -> int:
         return 0
     start = link.cutover_date
     end = max(start, balance_date, timezone.localdate())
-    batch = _ensure_batch(person, account, connection, link, synced_at, start, end)
-    imported = 0
+    def make_batch():
+        return _ensure_batch(person, account, connection, link, synced_at, start, end)
+
     if link.mode == AccountLink.Mode.TRANSACTIONS:
-        imported = _import_transactions(account, link, remote, batch)
+        imported, batch = _import_transactions(account, link, remote, make_batch)
+    else:
+        imported, batch = 0, make_batch()
     _upsert_snapshot(
         account,
         snapshot_date=balance_date,
