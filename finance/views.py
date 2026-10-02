@@ -14,7 +14,6 @@ from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
-from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
@@ -44,6 +43,7 @@ from .forms import (
     JoinGoogleForm,
     LoginForm,
     PasswordPairForm,
+    ReauthPasswordForm,
     RecoveryForm,
     RefundLinkForm,
     SetupForm,
@@ -59,11 +59,21 @@ from .google_auth import (
     google_signin_enabled,
     google_throttle_key,
     has_google_account,
+    has_usable_google_sign_in,
     remove_member_password,
     store_google_pending,
     username_is_taken,
 )
-from .lifecycle_services import lock_actor_household
+from .lifecycle_services import leave_household, lock_actor_household
+from .reauth import (
+    ACCOUNT_SETTINGS_ACTIONS,
+    action_label,
+    reauth_redirect,
+    recent_auth_is_fresh,
+    requires_recent_auth,
+    safe_next_url,
+    stamp_recent_auth,
+)
 from .export import export_filename, write_export_zip
 from .models import Account, Category, Person, RecurringSeries, RefundLink, Transaction, TransactionCorrectionHistory, TransferPair
 from .recurring_services import confirm_recurring_series, confirmed_totals, dismiss_recurring_series, refresh_recurring_series
@@ -598,10 +608,7 @@ def _authenticate_member(request, username, password, key):
 
 
 def _redirect_target(request):
-    target = request.POST.get("next", "")
-    if not url_has_allowed_host_and_scheme(target, allowed_hosts={request.get_host()}):
-        target = reverse("home")
-    return target
+    return safe_next_url(request, request.POST.get("next", ""))
 
 
 def _complete_member_session(request, user):
@@ -776,6 +783,13 @@ def start_google_sign_in(request):
 def google_oauth_login(request):
     if not google_signin_enabled():
         raise Http404()
+    if (
+        request.method == "POST"
+        and request.POST.get("process") == "connect"
+        and request.user.is_authenticated
+        and not recent_auth_is_fresh(request)
+    ):
+        return reauth_redirect(request, "connect-google", reverse("account-settings"))
     return _google_oauth_login(request)
 
 
@@ -797,6 +811,7 @@ def sign_out(request):
 
 
 @never_cache
+@requires_recent_auth("invite")
 def invite(request):
     code = None
     if request.method == "POST":
@@ -877,6 +892,7 @@ def setup(request):
 
 
 @never_cache
+@requires_recent_auth("account-settings", action_from_post=ACCOUNT_SETTINGS_ACTIONS, form_url_name="account-settings")
 def account_settings(request):
     password_form = PasswordPairForm()
     password_form.existing_user = request.user
@@ -895,6 +911,7 @@ def account_settings(request):
             error = _account_remove_password(request)
         elif action == "export":
             return _account_export_zip(request)
+    person = getattr(request.user, "person", None)
     return render(
         request,
         "finance/account_settings.html",
@@ -903,6 +920,7 @@ def account_settings(request):
             "has_google": has_google_account(request.user),
             "has_password": request.user.has_usable_password(),
             "error": error,
+            "household": current_household(person) if person is not None else None,
         },
     )
 
@@ -918,8 +936,89 @@ def _account_export_zip(request):
 
 @require_POST
 @never_cache
+@requires_recent_auth("export-data", form_url_name="account-settings")
 def account_export(request):
     return _account_export_zip(request)
+
+
+REAUTH_FAILED = "Confirmation failed. Try again later."
+# Google accepts only none, consent, and select_account for prompt. It sends
+# auth_time only to published, verified apps that ask for it through claims;
+# without it the callback checks that the ID token was just issued (iat).
+GOOGLE_REAUTH_AUTH_PARAMS = urlencode(
+    {
+        "prompt": "select_account",
+        "max_age": "0",
+        "claims": '{"id_token":{"auth_time":{"essential":true}}}',
+    }
+)
+
+
+def _reauth_context(request, form, auth_error=None):
+    next_url = safe_next_url(request, request.POST.get("next") or request.GET.get("next", ""))
+    action = request.POST.get("action") or request.GET.get("action", "")
+    return {
+        "form": form,
+        "next": next_url,
+        "action": action,
+        "action_label": action_label(action),
+        "show_password": request.user.has_usable_password(),
+        "show_google": has_usable_google_sign_in(request.user),
+        "auth_error": auth_error,
+        "auth_card_layout": True,
+    }
+
+
+def _render_reauth(request, form=None, auth_error=None):
+    if form is None:
+        form = ReauthPasswordForm()
+    return render(request, "finance/reauth.html", _reauth_context(request, form, auth_error))
+
+
+@never_cache
+@require_http_methods(["GET", "POST"])
+def reauth(request):
+    form = ReauthPasswordForm(request.POST or None)
+    if request.method != "POST":
+        return _render_reauth(request, form)
+    if not request.user.has_usable_password():
+        return _render_reauth(request, ReauthPasswordForm(), REAUTH_FAILED)
+    key = throttle_key(request.user.username, request.META.get("REMOTE_ADDR"))
+    user = _authenticate_member(request, request.user.username, request.POST.get("password", ""), key)
+    if user is None or user.pk != request.user.pk:
+        form.add_error(None, REAUTH_FAILED)
+        return _render_reauth(request, form)
+    clear_login_failures(key)
+    stamp_recent_auth(request)
+    return redirect(safe_next_url(request, request.POST.get("next", "")))
+
+
+@require_POST
+@never_cache
+def start_google_reauth(request):
+    if not has_usable_google_sign_in(request.user):
+        raise Http404()
+    key = google_throttle_key(request.META.get("REMOTE_ADDR"))
+    if login_is_blocked(key):
+        return _render_reauth(request, auth_error=REAUTH_FAILED)
+    next_url = safe_next_url(request, request.POST.get("next", ""))
+    store_google_pending(request, {"intent": "reauth", "next": next_url})
+    request.session["reauth_next"] = next_url
+    query = request.GET.copy()
+    query["auth_params"] = GOOGLE_REAUTH_AUTH_PARAMS
+    request.GET = query
+    return _google_oauth_login(request)
+
+
+@require_POST
+@never_cache
+@requires_recent_auth("leave-household", form_url_name="account-settings")
+def leave_household_view(request):
+    try:
+        leave_household(request.user)
+    except PermissionDenied:
+        raise Http404() from None
+    return redirect("home")
 
 
 @login_not_required

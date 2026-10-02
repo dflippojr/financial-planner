@@ -175,6 +175,8 @@ INVITATION_TTL_HOURS = int(os.environ.get("INVITATION_TTL_HOURS", "48"))
 LOGIN_FAILURE_LIMIT = int(os.environ.get("LOGIN_FAILURE_LIMIT", "5"))
 LOGIN_FAILURE_WINDOW_SECONDS = int(os.environ.get("LOGIN_FAILURE_WINDOW_SECONDS", "900"))
 LOGIN_BLOCK_SECONDS = int(os.environ.get("LOGIN_BLOCK_SECONDS", "900"))
+REAUTH_WINDOW_SECONDS = int(os.environ.get("REAUTH_WINDOW_SECONDS", "600"))
+GOOGLE_REAUTH_MAX_AGE_SECONDS = int(os.environ.get("GOOGLE_REAUTH_MAX_AGE_SECONDS", "300"))
 
 # Transfer pairing (issue #8). High confidence means each leg has exactly one
 # counterpart in the window. Override per household when a window is stored there.

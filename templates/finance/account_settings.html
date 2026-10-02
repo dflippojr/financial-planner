@@ -39,4 +39,10 @@
   <button type="submit" class="btn btn-primary">Add password</button>
 </form>
 {% endif %}
+{% if household %}
+<form method="post" action="{% url 'leave-household' %}" class="mt-8">
+  {% csrf_token %}
+  <button type="submit" class="btn btn-outline btn-error">Leave household</button>
+</form>
+{% endif %}
 {% endblock %}

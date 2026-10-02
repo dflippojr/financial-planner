@@ -6,6 +6,7 @@ from django.test import Client
 from django.urls import reverse
 from django.utils import timezone
 
+from tests.helpers import stamp_recent_auth
 from finance.lifecycle_services import archive_account, share_account
 from finance.models import Account, Household, ImportBatch, Membership, Person, Transaction
 
@@ -42,6 +43,10 @@ def signed_in(person):
     client = Client()
     client.force_login(person.user)
     return client
+
+
+def recent(person):
+    return stamp_recent_auth(signed_in(person))
 
 
 def missing_id(account):
@@ -242,11 +247,12 @@ def test_unauthorized_account_actions_return_identical_404(action, url_name):
         "share-mode": {"share_mode": Account.ShareMode.LENT},
     }
     payload = payloads.get(action, {})
+    caller = recent if action in {"share", "share-mode", "unshare", "delete"} else signed_in
 
-    member_private = signed_in(member).post(reverse(url_name, args=(private.pk,)), payload)
-    outsider_private = signed_in(outsider).post(reverse(url_name, args=(private.pk,)), payload)
-    outsider_shared = signed_in(outsider).post(reverse(url_name, args=(shared.pk,)), payload)
-    missing = signed_in(owner).post(reverse(url_name, args=(missing_id(private),)), payload)
+    member_private = caller(member).post(reverse(url_name, args=(private.pk,)), payload)
+    outsider_private = caller(outsider).post(reverse(url_name, args=(private.pk,)), payload)
+    outsider_shared = caller(outsider).post(reverse(url_name, args=(shared.pk,)), payload)
+    missing = caller(owner).post(reverse(url_name, args=(missing_id(private),)), payload)
 
     assert_same_404(member_private, missing)
     assert_same_404(outsider_private, missing)
@@ -268,7 +274,7 @@ def test_share_unshare_and_archive_use_lifecycle_rules():
     private = make_account(owner, name="To Share")
     already_shared = make_account(owner, name="Already Shared", scope=Account.Scope.HOUSEHOLD, household=household)
 
-    share = signed_in(owner).post(
+    share = recent(owner).post(
         reverse("account-share", args=(private.pk,)),
         {"share_mode": Account.ShareMode.CO_OWNED},
     )
@@ -278,15 +284,15 @@ def test_share_unshare_and_archive_use_lifecycle_rules():
     assert private.household_id == household.pk
     assert private.share_mode == Account.ShareMode.CO_OWNED
 
-    member_unshare = signed_in(member).post(reverse("account-unshare", args=(private.pk,)))
+    member_unshare = recent(member).post(reverse("account-unshare", args=(private.pk,)))
     private.refresh_from_db()
-    member_share_others = signed_in(member).post(
+    member_share_others = recent(member).post(
         reverse("account-share", args=(already_shared.pk,)),
         {"share_mode": Account.ShareMode.CO_OWNED},
     )
     archive = signed_in(member).post(reverse("account-archive", args=(already_shared.pk,)))
     already_shared.refresh_from_db()
-    missing = signed_in(owner).post(
+    missing = recent(owner).post(
         reverse("account-share", args=(missing_id(private),)),
         {"share_mode": Account.ShareMode.CO_OWNED},
     )
@@ -349,13 +355,13 @@ def test_share_is_owner_only_even_for_household_member():
     make_household(owner, member)
     private = make_account(owner)
     share_account(owner.user, private.pk, Account.ShareMode.CO_OWNED)
-    unshare = signed_in(owner).post(reverse("account-unshare", args=(private.pk,)))
+    unshare = recent(owner).post(reverse("account-unshare", args=(private.pk,)))
     private.refresh_from_db()
-    member_share = signed_in(member).post(
+    member_share = recent(member).post(
         reverse("account-share", args=(private.pk,)),
         {"share_mode": Account.ShareMode.CO_OWNED},
     )
-    missing = signed_in(owner).post(
+    missing = recent(owner).post(
         reverse("account-share", args=(missing_id(private),)),
         {"share_mode": Account.ShareMode.CO_OWNED},
     )
@@ -407,7 +413,7 @@ def test_lent_share_controls_and_mode_switch_on_accounts_page():
         share_mode=Account.ShareMode.LENT,
     )
 
-    share = signed_in(owner).post(
+    share = recent(owner).post(
         reverse("account-share", args=(private.pk,)),
         {"share_mode": Account.ShareMode.LENT},
     )
@@ -426,18 +432,18 @@ def test_lent_share_controls_and_mode_switch_on_accounts_page():
     assert "Make co-owned" not in member_page
     assert "Make lent" not in member_page
 
-    denied_unshare = signed_in(member).post(reverse("account-unshare", args=(lent.pk,)))
+    denied_unshare = recent(member).post(reverse("account-unshare", args=(lent.pk,)))
     denied_archive = signed_in(member).post(reverse("account-archive", args=(lent.pk,)))
-    denied_mode = signed_in(member).post(
+    denied_mode = recent(member).post(
         reverse("account-share-mode", args=(lent.pk,)),
         {"share_mode": Account.ShareMode.CO_OWNED, "confirm_give_up_ownership": "on"},
     )
-    missing = signed_in(owner).post(reverse("account-unshare", args=(missing_id(lent),)))
+    missing = recent(owner).post(reverse("account-unshare", args=(missing_id(lent),)))
     assert_same_404(denied_unshare, missing)
     assert_same_404(denied_archive, missing)
     assert_same_404(denied_mode, missing)
 
-    unconfirmed = signed_in(owner).post(
+    unconfirmed = recent(owner).post(
         reverse("account-share-mode", args=(lent.pk,)),
         {"share_mode": Account.ShareMode.CO_OWNED},
     )
@@ -445,7 +451,7 @@ def test_lent_share_controls_and_mode_switch_on_accounts_page():
     assert_same_404(unconfirmed, missing)
     assert lent.share_mode == Account.ShareMode.LENT
 
-    confirmed = signed_in(owner).post(
+    confirmed = recent(owner).post(
         reverse("account-share-mode", args=(lent.pk,)),
         {"share_mode": Account.ShareMode.CO_OWNED, "confirm_give_up_ownership": "on"},
     )
@@ -453,7 +459,7 @@ def test_lent_share_controls_and_mode_switch_on_accounts_page():
     assert confirmed.status_code == 302
     assert lent.share_mode == Account.ShareMode.CO_OWNED
 
-    to_lent = signed_in(owner).post(
+    to_lent = recent(owner).post(
         reverse("account-share-mode", args=(lent.pk,)),
         {"share_mode": Account.ShareMode.LENT},
     )

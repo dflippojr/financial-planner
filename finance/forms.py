@@ -45,6 +45,10 @@ class LoginForm(forms.Form):
     password = forms.CharField(widget=forms.PasswordInput)
 
 
+class ReauthPasswordForm(forms.Form):
+    password = forms.CharField(widget=forms.PasswordInput)
+
+
 class JoinForm(PasswordPairForm):
     invitation_code = forms.CharField(max_length=64)
     username = forms.CharField(max_length=150)
