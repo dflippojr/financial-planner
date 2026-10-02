@@ -897,3 +897,60 @@ def test_rows_hidden_from_the_reverser_stay_reversible_by_their_owner():
     reverse_application(owner, application.pk)
     hidden.refresh_from_db()
     assert hidden.category_id is None
+
+
+@pytest.mark.django_db
+def test_reversal_skips_an_application_undone_before_the_later_one_ran():
+    owner = make_person("owner-interleaved")
+    household = make_household(owner)
+    account = make_account(owner)
+    txn = make_transaction(owner, account, fingerprint="e6".ljust(64, "0"))
+    other = Category.objects.create(household=household, name="Synthetic Other")
+
+    def rule_for(category, priority):
+        return save_category_rule(
+            owner, owner_kind="personal", description_contains="kroger", account_id=None,
+            min_amount_minor=None, max_amount_minor=None, category_id=category.pk, priority=priority,
+        )
+
+    first = rule_for(groceries(household), 0)
+    first_application, _skipped = apply_rule(owner, first.pk)
+    set_rule_enabled(owner, first.pk, False)
+    second = rule_for(dining(household), 1)
+    second_application, _skipped = apply_rule(owner, second.pk)
+    reverse_application(owner, second_application.pk)
+    set_rule_enabled(owner, second.pk, False)
+    third = rule_for(other, 2)
+    third_application, _skipped = apply_rule(owner, third.pk)
+
+    reverse_application(owner, first_application.pk)
+    reverse_application(owner, third_application.pk)
+
+    txn.refresh_from_db()
+    assert txn.category_id is None
+
+
+@pytest.mark.django_db
+def test_apply_rechecks_eligibility_after_locking(monkeypatch):
+    import finance.rule_services as rule_services
+
+    owner = make_person("owner-race")
+    household = make_household(owner)
+    account = make_account(owner)
+    txn = make_transaction(owner, account, fingerprint="e7".ljust(64, "0"))
+    rule = save_category_rule(
+        owner, owner_kind="personal", description_contains="kroger", account_id=None,
+        min_amount_minor=None, max_amount_minor=None, category_id=groceries(household).pk, priority=0,
+    )
+    original_lock = rule_services._lock_transactions
+
+    def reclassified_before_lock(person, transactions):
+        # Another request changes the row after the preview query ran.
+        Transaction.objects.filter(pk=txn.pk).update(kind=Transaction.Kind.INVESTMENT_ACTIVITY)
+        return original_lock(person, transactions)
+
+    monkeypatch.setattr(rule_services, "_lock_transactions", reclassified_before_lock)
+    apply_rule(owner, rule.pk)
+
+    txn.refresh_from_db()
+    assert txn.category_id is None

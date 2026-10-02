@@ -324,6 +324,18 @@ def _lock_transactions(person, transactions):
     )
 
 
+def _still_eligible(person, locked):
+    """Recheck eligibility once rows are locked.
+
+    A transfer confirmed (or a row reclassified) between the preview query and
+    the lock must not be categorized by the rule.
+    """
+    eligible_ids = set(
+        _candidate_queryset(person).filter(pk__in=[item.pk for item in locked]).values_list("pk", flat=True)
+    )
+    return [item for item in locked if item.pk in eligible_ids]
+
+
 def _protected_source(txn):
     return txn.category_source in (
         Transaction.CategorySource.MANUAL,
@@ -391,7 +403,7 @@ def apply_rule(principal, rule_id):
     if not preview:
         lock_actor_household(person)
         return None, 0
-    locked = _lock_transactions(person, preview)
+    locked = _still_eligible(person, _lock_transactions(person, preview))
     return _apply_to_locked(person, rule, locked)
 
 
@@ -403,10 +415,10 @@ def apply_enabled_rules_to_transactions(principal, transactions):
     person = _person_for(principal)
     # Same eligibility as preview and manual apply: active cash-flow rows that
     # are not excluded as transfers or card payments and are not refunds.
-    eligible_ids = set(
-        _candidate_queryset(person).filter(pk__in=[item.pk for item in transactions]).values_list("pk", flat=True)
-    )
-    locked = _lock_transactions(person, [item for item in transactions if item.pk in eligible_ids])
+    requested_ids = {item.pk for item in transactions}
+    locked = [
+        item for item in _still_eligible(person, _lock_transactions(person, transactions)) if item.pk in requested_ids
+    ]
     applications = []
     by_rule = {}
     for txn in locked:
@@ -515,8 +527,11 @@ def _category_before(entry, application):
         .order_by("-application_id")
     )
     for older in earlier:
-        if older.reversed_at is None or older.reversed_at <= later_applied_at:
+        if older.reversed_at is None:
             break
+        if older.reversed_at <= later_applied_at:
+            # Undone before the later application ran, so it was not in effect.
+            continue
         category = older.previous_category
         source = older.previous_category_source
         later_applied_at = older.application.applied_at
