@@ -68,9 +68,14 @@ def classify_overlap(account, preview: Preview) -> Preview:
     return Preview(tuple(classified))
 
 
-def _original_fields(document, row_number):
+def _original_fields(document, row_number, mapping):
     source_row = next(row for row in document.rows if row.number == row_number)
-    return dict(zip(document.headers, source_row.cells))
+    excluded = set(mapping.excluded_original_columns)
+    return {
+        header: cell
+        for header, cell in zip(document.headers, source_row.cells)
+        if header not in excluded
+    }
 
 
 def _kind_for(source):
@@ -123,7 +128,7 @@ def commit_csv_import(principal, account_id, *, content, document, mapping, sour
                     source_row_number=row.row_number,
                     source_transaction_id=row.source_transaction_id,
                     fingerprint=_fingerprint_for(account, row),
-                    original_fields=_original_fields(document, row.row_number),
+                    original_fields=_original_fields(document, row.row_number, mapping),
                 )
                 for row in new_rows
             ]

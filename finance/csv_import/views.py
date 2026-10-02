@@ -6,9 +6,16 @@ from django.views.decorators.http import require_http_methods, require_POST
 
 from finance.models import Account, ImportBatch
 
-from .forms import CsvMappingForm, CsvUploadForm, HuntingtonImportForm
+from .forms import CapitalOneImportForm, CsvMappingForm, CsvUploadForm, HuntingtonImportForm
 from .parser import CsvInputError, preview_csv, read_csv
-from .profiles import HUNTINGTON, HUNTINGTON_MAPPING, require_huntington_headers
+from .profiles import (
+    CAPITAL_ONE,
+    CAPITAL_ONE_MAPPING,
+    HUNTINGTON,
+    HUNTINGTON_MAPPING,
+    require_capital_one_headers,
+    require_huntington_headers,
+)
 from .services import categorize_imported_batch, classify_overlap, commit_csv_import, undo_import_batch
 from .staging import StageUnavailable, create_stage, delete_stage, find_live_stage, load_stage, stage_profile
 
@@ -53,6 +60,17 @@ def _restore_live_stage(request, account, context):
                 document,
                 account,
                 {"token": token, "source": ImportBatch.Source.HUNTINGTON},
+            )
+        except CsvInputError:
+            return
+        return
+    if profile == CAPITAL_ONE:
+        try:
+            _capital_one_preview(
+                context,
+                document,
+                account,
+                {"token": token, "source": ImportBatch.Source.CAPITAL_ONE},
             )
         except CsvInputError:
             return
@@ -119,6 +137,24 @@ def _huntington_preview(context, document, account, post_data):
     return preview, mapping_form
 
 
+def _capital_one_preview(context, document, account, post_data):
+    require_capital_one_headers(document.headers)
+    preview = classify_overlap(account, preview_csv(document, CAPITAL_ONE_MAPPING))
+    filled = _prefill_date_range(post_data, preview)
+    mapping_form = CapitalOneImportForm(filled)
+    mapping_form.is_valid()
+    context.update(
+        {
+            "mapping_form": mapping_form,
+            "headers": document.headers,
+            "import_profile": CAPITAL_ONE,
+            "preview": preview,
+            "commit_available": True,
+        }
+    )
+    return preview, mapping_form
+
+
 def _require_import_range(mapping_form, *, source_required):
     source = mapping_form.cleaned_data.get("source")
     start = mapping_form.cleaned_data.get("date_range_start")
@@ -156,6 +192,13 @@ def _handle_upload(request, account, context):
                 account,
                 {"token": token, "source": ImportBatch.Source.HUNTINGTON},
             )
+        elif profile == CAPITAL_ONE:
+            _capital_one_preview(
+                context,
+                document,
+                account,
+                {"token": token, "source": ImportBatch.Source.CAPITAL_ONE},
+            )
         else:
             _mapping_context(context, token, document, profile)
     except CsvInputError as exc:
@@ -178,6 +221,18 @@ def _prepare_staged_preview(request, account, document, profile, context):
         except CsvInputError:
             raise Http404 from None
         return preview, mapping_form, HUNTINGTON_MAPPING, False
+    if profile == CAPITAL_ONE:
+        mapping_form = CapitalOneImportForm(request.POST)
+        context.update(
+            {"mapping_form": mapping_form, "headers": document.headers, "import_profile": CAPITAL_ONE}
+        )
+        if not mapping_form.is_valid():
+            return None
+        try:
+            preview, mapping_form = _capital_one_preview(context, document, account, request.POST)
+        except CsvInputError:
+            raise Http404 from None
+        return preview, mapping_form, CAPITAL_ONE_MAPPING, False
     mapping_form = CsvMappingForm(request.POST, headers=document.headers)
     context.update({"mapping_form": mapping_form, "headers": document.headers, "import_profile": profile})
     if not mapping_form.is_valid():
@@ -267,7 +322,7 @@ def csv_preview(request, account_id):
     preview, mapping_form, mapping, source_required = prepared
 
     if action == "preview":
-        if profile != HUNTINGTON:
+        if profile not in (HUNTINGTON, CAPITAL_ONE):
             return _render_generic_preview(request, account, context, document, preview)
         return _render_preview(request, account, context)
     if action != "commit":
