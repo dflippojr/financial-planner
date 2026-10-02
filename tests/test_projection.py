@@ -664,3 +664,18 @@ def test_single_account_projection_keeps_a_series_whose_replacement_is_hidden():
     months = projected_months_for(owner, today=date(2026, 10, 1), horizon=3, account=account)
 
     assert [month.spending_minor for month in months] == [10000, 10000, 10000]
+
+
+@pytest.mark.django_db
+def test_an_archived_accounts_series_stops_projecting():
+    from django.utils import timezone
+
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    _confirmed_series(owner, account, "Synthetic streamer", -1500, "f")
+    Account.objects.filter(pk=account.pk).update(status=Account.Status.ARCHIVED, archived_at=timezone.now())
+
+    months = projected_months_for(owner, today=date(2026, 10, 1), horizon=3)
+
+    assert all(month.spending_minor == 0 for month in months)

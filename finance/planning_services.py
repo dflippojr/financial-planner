@@ -5,7 +5,7 @@ from django.db.models import Max
 
 from .cash_flow import cash_flow_report, selected_accounts
 from .category_services import current_household
-from .models import PlannedItem, RecurringSeries
+from .models import Account, PlannedItem, RecurringSeries, Transaction
 from .projection import (
     DEFAULT_HORIZON,
     KIND_EXPENSE,
@@ -63,12 +63,20 @@ def visible_projection_inputs(principal, *, account=None, scope=""):
         planned_rows = []
     replaced = {item.replaces_series_id for item in planned_rows if item.replaces_series_id}
     inputs = [_planned_input(item) for item in planned_rows]
-    series = RecurringSeries.objects.visible_to(principal).filter(
-        status=RecurringSeries.Status.CONFIRMED, is_active=True
+    # Only members still counted in actual cash flow keep a series going: an
+    # archived account or transaction must not keep projecting charges.
+    eligible = Transaction.objects.visible_to(principal).filter(
+        status=Transaction.Status.ACTIVE,
+        account__status=Account.Status.ACTIVE,
+        account__archived_at__isnull=True,
     )
     if account is not None or scope:
-        accounts = selected_accounts(principal, account=account, scope=scope)
-        series = series.filter(members__transaction__account__in=accounts)
+        eligible = eligible.filter(account__in=selected_accounts(principal, account=account, scope=scope))
+    series = RecurringSeries.objects.visible_to(principal).filter(
+        status=RecurringSeries.Status.CONFIRMED,
+        is_active=True,
+        members__transaction__in=eligible,
+    )
     series_rows = (
         series.exclude(pk__in=replaced)
         .annotate(last_on=Max("members__transaction__transaction_date"))
