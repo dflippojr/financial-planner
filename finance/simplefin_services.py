@@ -25,7 +25,7 @@ from finance.models import (
     Transaction,
 )
 from finance.simplefin_client import claim_access_url, fetch_accounts
-from finance.simplefin_errors import SimpleFinError, provider_errors
+from finance.simplefin_errors import SimpleFinError, SimpleFinRateLimited, provider_errors
 
 MAX_BIGINT = 2**63 - 1
 UNSUPPORTED_CURRENCY = "That SimpleFIN account uses a currency this app does not store."
@@ -481,7 +481,10 @@ def _transactions_unreliable(remote: dict, payload: dict) -> bool:
     if "transactions" not in remote or remote.get("transactions") is None:
         return True
     for item in payload.get("errlist") or []:
-        if isinstance(item, dict) and _error_applies_to_remote(item, remote):
+        if not isinstance(item, dict) or not (item.get("account_id") or item.get("conn_id")):
+            # An error naming no account or connection may affect any of them.
+            return True
+        if _error_applies_to_remote(item, remote):
             return True
     return False
 
@@ -546,7 +549,7 @@ def _sync_connection_locked(principal, connection_id, *, ignore_rate_limit=False
     if connection is None:
         raise PermissionDenied(_DENIED)
     if _rate_limited(connection, ignore_rate_limit=ignore_rate_limit):
-        raise SimpleFinError("Wait 15 minutes between Sync now requests.")
+        raise SimpleFinRateLimited("Wait 15 minutes between Sync now requests.")
     now = timezone.now()
     access_url = _readable_access_url(connection)
     links = list(AccountLink.objects.select_related("account").filter(connection=connection))

@@ -1355,3 +1355,45 @@ def test_refilling_an_undone_period_does_not_cover_later_imports(monkeypatch):
 
     assert _month_missing(owner, checking, date(2026, 3, 1), date(2026, 3, 31)) is False
     assert _month_missing(owner, checking, date(2026, 4, 1), date(2026, 4, 30)) is True
+
+
+@pytest.mark.django_db
+def test_saving_links_does_not_bypass_the_sync_limit(monkeypatch):
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner)
+    connection = connect_owner(owner, monkeypatch)
+    fetches = []
+
+    def counted_fetch(*args, **kwargs):
+        fetches.append(1)
+        return account_payload()
+
+    monkeypatch.setattr("finance.simplefin_services.fetch_accounts", counted_fetch)
+    monkeypatch.setattr("finance.simplefin_views.fetch_accounts", counted_fetch, raising=False)
+    client = signed_in(owner)
+    form = {
+        "intent": "link",
+        "sf_id_0": "CON-1:sf-checking",
+        "action_0": "link",
+        "account_id_0": str(checking.pk),
+        "cutover_0": "2026-03-01",
+    }
+    client.post(reverse("simplefin-connections"), form)
+    synced_at = SimpleFinConnection.objects.get(pk=connection.pk).last_sync_at
+    assert synced_at is not None
+
+    again = client.post(reverse("simplefin-connections"), form, follow=True)
+
+    assert SimpleFinConnection.objects.get(pk=connection.pk).last_sync_at == synced_at
+    assert b"Account links saved" in again.content
+
+
+def test_an_error_naming_no_account_makes_every_account_unreliable():
+    from finance.simplefin_services import _transactions_unreliable
+
+    remote = {"id": "acct-1", "conn_id": "CON-1", "transactions": []}
+
+    assert _transactions_unreliable(remote, {"errlist": [{"code": "gen.partial", "msg": "Incomplete data."}]})
+    assert _transactions_unreliable(remote, {"errlist": ["Incomplete data."]})
+    assert not _transactions_unreliable(remote, {"errlist": [{"conn_id": "CON-2", "msg": "Other bank."}]})

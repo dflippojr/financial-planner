@@ -12,7 +12,7 @@ from django.views.decorators.http import require_http_methods, require_POST
 from .category_services import current_household
 from .forms import SimpleFinSetupForm
 from .models import Account, AccountLink, Person, SimpleFinConnection
-from .simplefin_errors import SimpleFinError
+from .simplefin_errors import SimpleFinError, SimpleFinRateLimited
 from .simplefin_schedule import next_scheduled_sync
 from .simplefin_services import (
     claim_connection,
@@ -103,7 +103,11 @@ def _handle_link(request, connection, remotes, load_error):
         return redirect("simplefin-connections")
     try:
         save_account_links(request.user, connection.pk, _choices_from_post(request, remotes))
-        sync_connection(request.user, connection.pk, ignore_rate_limit=True)
+        sync_connection(request.user, connection.pk)
+    except SimpleFinRateLimited:
+        # Saving links never bypasses the manual sync limit.
+        messages.success(request, "Account links saved. They sync on the next scheduled run, or with Sync now once the 15-minute wait is over.")
+        return redirect("simplefin-connections")
     except SimpleFinError as exc:
         messages.error(request, str(exc))
         return None
