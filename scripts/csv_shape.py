@@ -33,6 +33,7 @@ import io
 import re
 import sys
 from collections import Counter
+from pathlib import Path
 
 MAX_ROWS = 200_000
 MAX_LISTED_PATTERNS = 4
@@ -609,6 +610,19 @@ def check_no_leak(report, rows, allowed, dynamic_only=False):
         raise LeakError(f"{len(leaked)} value(s) from the file would appear in the output; nothing printed")
 
 
+def _csv_export_path(raw_path):
+    """Resolve the argument to an existing regular .csv file, or None.
+
+    The tool reads exports from anywhere on the owner's disk, so it cannot be
+    limited to one folder; it is limited to CSV files instead, so it is never
+    pointed at keys, configuration, or other files by mistake.
+    """
+    path = Path(raw_path).expanduser().resolve()
+    if path.suffix.lower() != ".csv" or (path.exists() and not path.is_file()):
+        return None
+    return path
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Describe a CSV's shape without printing its values.")
     parser.add_argument("path", help="CSV export to describe")
@@ -618,8 +632,12 @@ def main(argv=None):
     parser.add_argument("--show-headers", action="store_true",
                         help="print the header labels as written; use only after checking that the first lines of the file are just column names")
     args = parser.parse_args(argv)
+    path = _csv_export_path(args.path)
+    if path is None:
+        print("give the path of a .csv export file", file=sys.stderr)
+        return 1
     try:
-        with open(args.path, "rb") as handle:
+        with open(path, "rb") as handle:
             raw = handle.read()
         print(describe_csv(raw, args.label, args.show_values, args.show_headers))
     except OSError as error:
