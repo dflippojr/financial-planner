@@ -22,6 +22,8 @@ ACTION_LABELS = {
     "change-share-mode": "Change co-owned or lent",
     "delete-account": "Delete an account",
     "export-data": "Download the data export",
+    "connect-simplefin": "Connect SimpleFIN",
+    "disconnect-simplefin": "Disconnect SimpleFIN",
 }
 
 ACCOUNT_SETTINGS_ACTIONS = {
@@ -66,7 +68,7 @@ def reauth_redirect(request, action, form_url):
     return redirect(f"{reverse('reauth')}?{query}")
 
 
-def requires_recent_auth(action, *, form_url_name=None, action_from_post=None):
+def requires_recent_auth(action, *, form_url_name=None, action_from_post=None, post_field="action"):
     """Refuse a stale POST and send the member to /reauth/ instead.
 
     GET requests pass through. The member returns to the form page and
@@ -80,7 +82,7 @@ def requires_recent_auth(action, *, form_url_name=None, action_from_post=None):
                 return view_func(request, *args, **kwargs)
             resolved_action = action
             if action_from_post is not None:
-                posted = request.POST.get("action")
+                posted = request.POST.get(post_field)
                 if posted not in action_from_post:
                     return view_func(request, *args, **kwargs)
                 resolved_action = action_from_post[posted]
