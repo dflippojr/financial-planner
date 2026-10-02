@@ -32,6 +32,16 @@ class HuntingtonImportForm(forms.Form):
         return ImportBatch.Source.HUNTINGTON
 
 
+class AppleCardImportForm(forms.Form):
+    token = forms.CharField(widget=forms.HiddenInput)
+    source = forms.CharField(widget=forms.HiddenInput, required=False)
+    date_range_start = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
+    date_range_end = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
+
+    def clean_source(self):
+        return ImportBatch.Source.APPLE_CARD
+
+
 class CsvMappingForm(forms.Form):
     token = forms.CharField(widget=forms.HiddenInput)
     date_column = forms.ChoiceField()
