@@ -3,7 +3,6 @@
 import os
 import sys
 import time
-from datetime import timedelta
 from pathlib import Path
 
 import django
@@ -16,20 +15,21 @@ from django.conf import settings
 from django.core.management import call_command
 from django.utils import timezone
 
-from finance.simplefin_schedule import next_scheduled_sync, parse_five_field_cron
+from finance.simplefin_schedule import next_scheduled_sync, parse_five_field_cron, seconds_until
 
 
 def main():
-    parse_five_field_cron(settings.SIMPLEFIN_SYNC_CRON)
+    expression = settings.SIMPLEFIN_SYNC_CRON
+    parse_five_field_cron(expression)
+    due = next_scheduled_sync(expression)
     while True:
         now = timezone.localtime()
-        nxt = next_scheduled_sync(settings.SIMPLEFIN_SYNC_CRON, now)
-        delay = max(1, int((nxt - now).total_seconds()))
-        time.sleep(min(delay, 60))
-        now = timezone.localtime()
-        if now + timedelta(seconds=1) >= nxt:
-            call_command("sync_simplefin")
-            time.sleep(60)
+        wait = seconds_until(due, now)
+        if wait > 0:
+            time.sleep(wait)
+            continue
+        call_command("sync_simplefin")
+        due = next_scheduled_sync(expression, due)
 
 
 if __name__ == "__main__":
