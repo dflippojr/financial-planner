@@ -84,3 +84,18 @@ def next_scheduled_sync(expression: str, now=None):
     if timezone.is_naive(when):
         when = timezone.make_aware(when, timezone.get_current_timezone())
     return next_cron_datetime(expression, timezone.localtime(when))
+
+
+def seconds_until(due, now) -> float:
+    return max(0.0, (due - now).total_seconds())
+
+
+def schedule_after_sync(expression: str, last_due, now):
+    """Next run after a sync that was due at last_due, given the current time.
+
+    Uses the scheduled due time, not 'now plus a minute of sleep', so a sync
+    that ends after a minute boundary still runs that next minute. If that
+    time is already due, wait is 0.
+    """
+    due = next_scheduled_sync(expression, last_due)
+    return due, seconds_until(due, now)

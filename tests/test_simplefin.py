@@ -1038,6 +1038,21 @@ def test_cron_day_of_month_or_weekday_when_both_restricted():
     assert not cron_matches("30 6 * * 1", datetime(2026, 10, 1, 6, 30, tzinfo=tz))
 
 
+def test_sync_loop_schedules_from_due_time_and_runs_immediately_if_already_due():
+    from finance.simplefin_schedule import schedule_after_sync
+
+    due = timezone.make_aware(datetime(2026, 10, 1, 10, 1))
+    finished = due + timedelta(seconds=2)
+    nxt, wait = schedule_after_sync("* * * * *", due, finished)
+    assert nxt == timezone.make_aware(datetime(2026, 10, 1, 10, 2))
+    assert wait == 58
+
+    late = due + timedelta(seconds=70)
+    late_due, late_wait = schedule_after_sync("* * * * *", due, late)
+    assert late_due == timezone.make_aware(datetime(2026, 10, 1, 10, 2))
+    assert late_wait == 0
+
+
 def test_link_rows_match_by_id_when_simplefin_reorders_accounts():
     from django.test import RequestFactory
 
