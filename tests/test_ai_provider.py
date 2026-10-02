@@ -503,3 +503,60 @@ def test_job_without_connection_fails_unavailable():
     job.refresh_from_db()
     assert job.status == job.Status.FAILED
     assert job.failure_code == UNAVAILABLE
+
+
+@pytest.mark.django_db
+def test_waiting_app_without_pending_calls_still_times_out(harness, settings):
+    state, url = harness
+    state.stuck_waiting_app = True
+    settings.AGENT_HARNESS_SESSION_TIMEOUT_SECONDS = 3
+    clock = _FakeClock()
+    calls = []
+
+    def tool_runner(name, args):
+        calls.append(name)
+        return "unused", True
+
+    result = run_session(
+        url,
+        TOKEN,
+        prompt="synthetic",
+        backend="local",
+        project="financial-planner",
+        tool_runner=tool_runner,
+        sleep=clock.sleep,
+        monotonic=clock.monotonic,
+    )
+
+    assert not result.ok
+    assert result.failure_code == UNAVAILABLE
+    assert calls == []
+    assert clock.sleeps
+    assert state.requests.count(("POST", "/api/v1/sessions")) == 1
+
+
+@pytest.mark.django_db
+def test_answering_a_tool_call_finishes_the_session(harness):
+    state, url = harness
+    state.need_tool = True
+    clock = _FakeClock()
+    calls = []
+
+    def tool_runner(name, args):
+        calls.append(name)
+        return "synthetic-accounts", True
+
+    result = run_session(
+        url,
+        TOKEN,
+        prompt="synthetic",
+        backend="local",
+        project="financial-planner",
+        tool_runner=tool_runner,
+        sleep=clock.sleep,
+        monotonic=clock.monotonic,
+    )
+
+    assert result.ok
+    assert calls == ["list_accounts"]
+    assert result.answer.startswith("tool:synthetic-accounts")
