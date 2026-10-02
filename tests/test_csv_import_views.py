@@ -507,17 +507,18 @@ def test_undo_archives_one_batch_and_foreign_accounts_are_404(staging_settings):
 def test_committing_an_import_applies_enabled_category_rules(staging_settings):
     from finance.category_services import ensure_household_categories
     from finance.models import Category
-    from finance.rule_services import save_category_rule
+    from finance.rule_services import apply_rule, save_category_rule
 
     user, person = make_person("owner")
     household = Household.objects.create(name="Synthetic Household")
     Membership.objects.create(person=person, household=household)
     ensure_household_categories(household)
     groceries = Category.objects.get(household=household, name="Groceries")
-    save_category_rule(
+    rule = save_category_rule(
         person, owner_kind="personal", description_contains="grocer", account_id=None,
         min_amount_minor=None, max_amount_minor=None, category_id=groceries.pk, priority=0,
     )
+    apply_rule(person, rule.pk)
     account = Account.objects.create(name="Synthetic Checking", account_type="checking", owner=person)
     client = Client()
     client.force_login(user)

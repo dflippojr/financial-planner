@@ -811,6 +811,9 @@ class CategoryRule(models.Model):
     category = models.ForeignKey(Category, on_delete=models.PROTECT, related_name="category_rules")
     priority = models.IntegerField(default=0)
     enabled = models.BooleanField(default=True)
+    # Set when the member confirms the preview with "Apply"; cleared on edit.
+    # Only confirmed rules apply automatically to imports and syncs.
+    confirmed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

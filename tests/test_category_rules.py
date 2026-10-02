@@ -228,7 +228,7 @@ def test_rules_auto_apply_on_csv_import_and_disable_stops_them():
     owner = make_person("owner")
     household = make_household(owner)
     account = make_account(owner)
-    save_category_rule(
+    rule = save_category_rule(
         owner,
         owner_kind="personal",
         description_contains="kroger",
@@ -238,6 +238,7 @@ def test_rules_auto_apply_on_csv_import_and_disable_stops_them():
         category_id=groceries(household).pk,
         priority=0,
     )
+    apply_rule(owner, rule.pk)  # confirming the preview turns on automatic use
     document = read_csv(CSV)
     result = commit_csv_import(
         owner.user,
@@ -1096,3 +1097,35 @@ def test_reversing_a_rule_on_a_marked_transfer_updates_its_snapshot():
 
     out_leg.refresh_from_db()
     assert out_leg.category_id is None
+
+
+@pytest.mark.django_db
+def test_a_rule_applies_automatically_only_after_its_preview_is_confirmed():
+    owner = make_person("owner-confirm")
+    household = make_household(owner)
+    account = make_account(owner)
+    rule = save_category_rule(
+        owner, owner_kind="personal", description_contains="kroger", account_id=None,
+        min_amount_minor=None, max_amount_minor=None, category_id=groceries(household).pk, priority=0,
+    )
+    first = make_transaction(owner, account, fingerprint="ef".ljust(64, "0"))
+
+    apply_enabled_rules_to_transactions(owner, [first])
+    first.refresh_from_db()
+    assert first.category_id is None
+
+    apply_rule(owner, rule.pk)
+    second = make_transaction(owner, account, fingerprint="f0".ljust(64, "0"))
+    apply_enabled_rules_to_transactions(owner, [second])
+    second.refresh_from_db()
+    assert second.category_id == groceries(household).pk
+
+    # Editing the rule needs a fresh confirmation before it applies on its own.
+    save_category_rule(
+        owner, rule_id=rule.pk, owner_kind="personal", description_contains="kroger", account_id=None,
+        min_amount_minor=None, max_amount_minor=None, category_id=dining(household).pk, priority=0,
+    )
+    third = make_transaction(owner, account, fingerprint="f1".ljust(64, "0"))
+    apply_enabled_rules_to_transactions(owner, [third])
+    third.refresh_from_db()
+    assert third.category_id is None

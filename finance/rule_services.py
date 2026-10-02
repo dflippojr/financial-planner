@@ -139,6 +139,9 @@ def save_category_rule(
     rule.category = category
     rule.priority = priority
     rule.enabled = enabled
+    # A new or edited rule must be previewed and applied again before it
+    # categorizes imports and syncs on its own.
+    rule.confirmed_at = None
     _validate_rule_account(rule, person, household)
     _validate_rule_category(rule, household)
     rule.save()
@@ -178,11 +181,13 @@ def personal_rule_is_inactive(rule):
     return cached
 
 
-def ordered_rules_for_account(account):
+def ordered_rules_for_account(account, *, confirmed_only=False):
+    enabled = CategoryRule.objects.filter(enabled=True)
+    if confirmed_only:
+        enabled = enabled.filter(confirmed_at__isnull=False)
     personal = [
         rule
-        for rule in CategoryRule.objects.filter(
-            enabled=True,
+        for rule in enabled.filter(
             owner_household__isnull=True,
             owner_person_id__in=_people_who_can_see(account),
         ).select_related("category", "account")
@@ -192,7 +197,7 @@ def ordered_rules_for_account(account):
     if account.scope != Account.Scope.HOUSEHOLD:
         return personal
     household = list(
-        CategoryRule.objects.filter(enabled=True, owner_household_id=account.household_id)
+        enabled.filter(owner_household_id=account.household_id)
         .select_related("category", "account")
         .order_by("priority", "pk")
     )
@@ -398,6 +403,8 @@ def apply_rule(principal, rule_id):
     person, rule = _rule_or_404(principal, rule_id)
     if not rule.enabled:
         raise ValidationError("Enable the rule before applying it.")
+    # Applying confirms the preview, so the rule now applies automatically.
+    CategoryRule.objects.filter(pk=rule.pk).update(confirmed_at=timezone.now())
     preview = [
         txn for txn in _matching_queryset(person, rule).order_by("pk") if _is_winning_rule(txn, rule)
     ]
@@ -430,7 +437,8 @@ def apply_enabled_rules_to_transactions(principal, transactions):
     for txn in locked:
         if _protected_source(txn):
             continue
-        winner = first_matching_rule(txn)
+        # Automatic application only uses rules whose preview was confirmed.
+        winner = first_matching_rule(txn, ordered_rules_for_account(txn.account, confirmed_only=True))
         if winner is None:
             continue
         bucket = by_rule.setdefault(winner.pk, {"rule": winner, "rows": []})

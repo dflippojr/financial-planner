@@ -18,4 +18,9 @@ class Migration(migrations.Migration):
             name="reversed_at",
             field=models.DateTimeField(blank=True, null=True),
         ),
+        migrations.AddField(
+            model_name="categoryrule",
+            name="confirmed_at",
+            field=models.DateTimeField(blank=True, null=True),
+        ),
     ]

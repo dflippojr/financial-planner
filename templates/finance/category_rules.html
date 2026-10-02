@@ -50,7 +50,7 @@
         <td>{% if item.owner_household_id %}Household{% else %}Personal{% endif %}</td>
         <td>{{ item.category.name }}</td>
         <td>{{ item.priority }}</td>
-        <td>{% if item.inactive %}Inactive{% elif item.enabled %}Yes{% else %}No{% endif %}</td>
+        <td>{% if item.inactive %}Inactive{% elif not item.enabled %}No{% elif not item.confirmed_at %}Not applied yet{% else %}Yes{% endif %}</td>
       </tr>
     {% empty %}
       <tr><td colspan="5">No rules yet.</td></tr>
