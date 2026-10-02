@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from urllib.parse import urljoin
 
 from django.conf import settings
@@ -22,6 +23,9 @@ from .ai_types import (
 )
 
 HOSTED_UNAVAILABLE_REASON = "Hosted backends stay unavailable until Agent Harness app-tools-only sessions land."
+_POLL_INITIAL_DELAY_SECONDS = 0.5
+_POLL_MAX_DELAY_SECONDS = 5.0
+_DEFAULT_SESSION_TIMEOUT_SECONDS = 600
 
 
 def hosted_sessions_enabled():
@@ -120,7 +124,20 @@ def warm_local_model(base_url, token):
     return model_status(base_url, token)
 
 
-def run_session(base_url, token, *, prompt, backend, project, model="", tools=None, tool_runner=None):
+def run_session(
+    base_url,
+    token,
+    *,
+    prompt,
+    backend,
+    project,
+    model="",
+    tools=None,
+    tool_runner=None,
+    on_session=None,
+    sleep=None,
+    monotonic=None,
+):
     payload = {
         "prompt": prompt,
         "backend": backend,
@@ -138,26 +155,49 @@ def run_session(base_url, token, *, prompt, backend, project, model="", tools=No
     session_id = str(created.get("id") or "")
     if not session_id:
         return _failed(created)
-    return _wait_for_session(
+    if on_session is not None:
+        on_session(session_id)
+    return wait_for_session(
         base_url,
         token,
         session_id,
         created,
         tool_runner=tool_runner,
+        sleep=sleep,
+        monotonic=monotonic,
     )
 
 
-def _wait_for_session(base_url, token, session_id, session, *, tool_runner):
+def wait_for_session(
+    base_url,
+    token,
+    session_id,
+    session=None,
+    *,
+    tool_runner=None,
+    sleep=None,
+    monotonic=None,
+):
+    sleeper = time.sleep if sleep is None else sleep
+    clock = time.monotonic if monotonic is None else monotonic
+    timeout = int(getattr(settings, "AGENT_HARNESS_SESSION_TIMEOUT_SECONDS", _DEFAULT_SESSION_TIMEOUT_SECONDS))
+    deadline = clock() + timeout
+    delay = _POLL_INITIAL_DELAY_SECONDS
     path = f"api/v1/sessions/{session_id}"
-    current = session
-    for _ in range(int(getattr(settings, "AGENT_HARNESS_SESSION_POLL_LIMIT", 40))):
+    current = session if session is not None else json_request(urljoin(base_url + "/", path), token=token)
+    while True:
         status = str(current.get("status") or "")
         if status == "waiting_app" and tool_runner is not None:
             _answer_tool_calls(base_url, token, session_id, tool_runner)
+            current = json_request(urljoin(base_url + "/", path), token=token)
+            continue
         if status in {"done", "failed", "cancelled"}:
             return _result_from_session(current)
+        if clock() >= deadline:
+            return ProviderResult(ok=False, failure_code=UNAVAILABLE, session_id=session_id)
+        sleeper(delay)
+        delay = min(delay * 2, _POLL_MAX_DELAY_SECONDS)
         current = json_request(urljoin(base_url + "/", path), token=token)
-    return ProviderResult(ok=False, failure_code=UNAVAILABLE, session_id=session_id)
 
 
 def _answer_tool_calls(base_url, token, session_id, tool_runner):
