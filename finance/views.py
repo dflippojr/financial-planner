@@ -79,12 +79,13 @@ from .models import Account, Category, Person, RecurringSeries, RefundLink, Tran
 from .recurring_services import confirm_recurring_series, confirmed_totals, dismiss_recurring_series, refresh_recurring_series
 from .cash_flow import (
     cash_flow_chart_data,
-    cash_flow_report,
     date_range_presets,
     default_date_range,
     spending_by_category_report,
     spending_chart_data,
 )
+from .planning_services import cash_flow_with_projection
+from .projection import DEFAULT_HORIZON
 from .category_services import (
     add_category,
     assign_category,
@@ -128,20 +129,24 @@ def home(request):
                 "date_from": default_from,
                 "date_to": default_to,
                 "grouping": "month",
+                "horizon": DEFAULT_HORIZON,
             },
         )
         date_from, date_to, grouping, account, scope = default_from, default_to, "month", None, ""
+        horizon = DEFAULT_HORIZON
     elif form.is_valid():
         date_from = form.cleaned_data["date_from"] or default_from
         date_to = form.cleaned_data["date_to"] or default_to
         grouping = form.cleaned_data["grouping"]
         account = form.cleaned_data["account"]
         scope = form.cleaned_data["scope"]
+        horizon = form.cleaned_data["horizon"] or DEFAULT_HORIZON
     else:
         date_from = date_to = grouping = account = scope = None
+        horizon = DEFAULT_HORIZON
     report = None
     if date_from is not None:
-        report = cash_flow_report(
+        report = cash_flow_with_projection(
             request.user,
             date_from=date_from,
             date_to=date_to,
@@ -149,6 +154,7 @@ def home(request):
             account=account,
             scope=scope,
             today=today,
+            horizon=horizon,
         )
     return render(
         request,

@@ -22,7 +22,7 @@ def unfill_category_source(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('finance', '0009_importbatch_simplefin_account_id'),
+        ('finance', '0011_planned_item'),
     ]
 
     operations = [

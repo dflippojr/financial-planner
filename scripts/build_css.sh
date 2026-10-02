@@ -57,7 +57,8 @@ verify_file "$DAISYUI_THEME_SHA256" "$root/static/src/vendor/daisyui-theme.mjs"
 if [ ! -x "$binary" ] && [ ! -f "$binary" ]; then
   url="https://github.com/tailwindlabs/tailwindcss/releases/download/${TAILWIND_VERSION}/${asset}"
   echo "Downloading $url"
-  if ! curl -fsSL --retry 3 -o "$binary" "$url"; then
+  # HTTPS only, including every redirect GitHub sends to its download host.
+  if ! curl -fsSL --proto '=https' --proto-redir '=https' --retry 3 -o "$binary" "$url"; then
     rm -f "$binary"
     echo "Failed to download the pinned Tailwind standalone binary from GitHub." >&2
     echo "Do not fall back to a CDN. Retry when GitHub releases are reachable." >&2

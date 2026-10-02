@@ -492,10 +492,36 @@ def _change_chart_row(change):
     }
 
 
+def _projected_chart_row(period):
+    row = _period_chart_row(period)
+    row["projected"] = True
+    row["contributions"] = [
+        {
+            "source": item.source,
+            "source_id": item.source_id,
+            "name": item.name,
+            "kind": item.kind,
+            "cadence": item.cadence,
+            "occurrence_count": item.occurrence_count,
+            "amount_minor": item.amount_minor,
+            "amount_display": item.amount_display,
+        }
+        for item in period.contributions
+    ]
+    return row
+
+
 def cash_flow_chart_data(report):
     summary = report.summary
+    periods = []
+    for period in report.periods:
+        row = _period_chart_row(period)
+        row["projected"] = False
+        periods.append(row)
+    for period in getattr(report, "projected_periods", ()) or ():
+        periods.append(_projected_chart_row(period))
     return {
-        "periods": [_period_chart_row(period) for period in report.periods],
+        "periods": periods,
         "summary": {
             "income_minor": summary.income_minor,
             "spending_minor": summary.spending_minor,

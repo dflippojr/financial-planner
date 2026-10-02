@@ -4,7 +4,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("finance", "0010_category_rules"),
+        ("finance", "0012_category_rules"),
     ]
 
     operations = [

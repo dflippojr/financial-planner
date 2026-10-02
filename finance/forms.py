@@ -4,12 +4,14 @@ from django import forms
 from django.contrib.auth import get_user_model, password_validation
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator
+from django.db.models import Q
 from django.utils import timezone
 
 from .cash_flow import MAX_REPORT_DATE, MAX_REPORT_PERIODS, default_date_range, period_count
+from .projection import DEFAULT_HORIZON, HORIZONS
 
 from .auth_services import validated_username
-from .models import Account, Category, Transaction, TransactionCorrectionHistory
+from .models import Account, Category, PlannedItem, RecurringSeries, Transaction, TransactionCorrectionHistory
 
 
 MIN_SIGNED_BIGINT = -(2**63)
@@ -171,6 +173,13 @@ class CashFlowFilterForm(forms.Form):
             ("year", "Year"),
         )
     )
+    horizon = forms.TypedChoiceField(
+        required=False,
+        coerce=int,
+        choices=tuple((value, f"{value} months") for value in HORIZONS),
+        initial=DEFAULT_HORIZON,
+        label="Projection horizon",
+    )
     account = forms.ModelChoiceField(queryset=Account.objects.none(), required=False)
     scope = forms.ChoiceField(
         required=False,
@@ -193,6 +202,7 @@ class CashFlowFilterForm(forms.Form):
         cleaned["date_from"] = date_from
         cleaned["date_to"] = date_to
         grouping = cleaned.get("grouping")
+        cleaned["horizon"] = cleaned.get("horizon") or DEFAULT_HORIZON
         if date_from > date_to:
             self.add_error("date_to", END_DATE_ORDER_ERROR)
         elif grouping and period_count(date_from, date_to, grouping) > MAX_REPORT_PERIODS:
@@ -202,6 +212,77 @@ class CashFlowFilterForm(forms.Form):
                 "Choose a shorter range or a longer grouping.",
             )
         return cleaned
+
+
+class NetWorthFilterForm(forms.Form):
+    date_from = forms.DateField(
+        required=False,
+        widget=forms.DateInput(attrs={"type": "date"}),
+        validators=[MaxValueValidator(MAX_REPORT_DATE)],
+    )
+    date_to = forms.DateField(
+        required=False,
+        widget=forms.DateInput(attrs={"type": "date"}),
+        validators=[MaxValueValidator(MAX_REPORT_DATE)],
+    )
+    scope = forms.ChoiceField(
+        required=False,
+        label="Household",
+        choices=(
+            ("", ALL_VISIBLE_ACCOUNTS),
+            (Account.Scope.HOUSEHOLD, "Household"),
+        ),
+    )
+
+    def clean(self):
+        cleaned = super().clean()
+        default_from, default_to = default_date_range()
+        date_from = cleaned.get("date_from") or default_from
+        date_to = cleaned.get("date_to") or default_to
+        cleaned["date_from"] = date_from
+        cleaned["date_to"] = date_to
+        if date_from > date_to:
+            self.add_error("date_to", END_DATE_ORDER_ERROR)
+        elif period_count(date_from, date_to, "month") > MAX_REPORT_PERIODS:
+            self.add_error(
+                None,
+                f"That range has more than {MAX_REPORT_PERIODS} periods. Choose a shorter range.",
+            )
+        return cleaned
+
+
+class ManualBalanceForm(forms.Form):
+    snapshot_date = forms.DateField(label="Date", widget=forms.DateInput(attrs={"type": "date"}))
+    amount = forms.DecimalField(
+        max_digits=19,
+        decimal_places=2,
+        widget=forms.TextInput(attrs={"inputmode": "decimal"}),
+    )
+    note = forms.CharField(required=False, max_length=200)
+
+    def __init__(self, *args, account=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.account = account
+        if account is not None and account.account_type == Account.Type.CREDIT_CARD:
+            self.fields["amount"].help_text = "Amount owed. An overpayment is negative."
+        elif account is not None:
+            self.fields["amount"].help_text = "Current balance."
+
+    def clean_snapshot_date(self):
+        value = self.cleaned_data["snapshot_date"]
+        if value > timezone.localdate():
+            raise ValidationError("Balance date cannot be in the future.")
+        return value
+
+    def clean_amount(self):
+        amount = self.cleaned_data["amount"]
+        minor_units = int(amount * 100)
+        if not MIN_SIGNED_BIGINT <= minor_units <= MAX_SIGNED_BIGINT:
+            raise ValidationError(AMOUNT_RANGE_ERROR)
+        return amount
+
+    def amount_minor(self):
+        return int(self.cleaned_data["amount"] * 100)
 
 
 class SpendingFilterForm(forms.Form):
@@ -425,6 +506,76 @@ class CategoryNameForm(forms.Form):
 
 class TransferWindowForm(forms.Form):
     transfer_match_window_days = forms.IntegerField(min_value=0, max_value=366, label="Match window (days)")
+
+
+class PlannedItemForm(forms.Form):
+    name = forms.CharField(max_length=150)
+    kind = forms.ChoiceField(choices=PlannedItem.Kind.choices)
+    amount = forms.DecimalField(
+        min_value=Decimal("0.01"),
+        max_digits=19,
+        decimal_places=2,
+        help_text="Amount in dollars. The sign comes from income or expense.",
+        widget=forms.TextInput(attrs={"inputmode": "decimal"}),
+    )
+    start_date = forms.DateField(widget=forms.DateInput(attrs={"type": "date"}))
+    end_date = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
+    cadence = forms.ChoiceField(choices=PlannedItem.Cadence.choices)
+    scope = forms.ChoiceField(choices=((PlannedItem.Scope.PRIVATE, "Private"),))
+    category = forms.ModelChoiceField(queryset=Category.objects.none(), required=False)
+    replaces_series = forms.ModelChoiceField(
+        queryset=RecurringSeries.objects.none(),
+        required=False,
+        label="Replaces recurring series",
+    )
+
+    def __init__(
+        self, *args, principal=None, has_household=False, household_only=False, current_series_id=None, **kwargs
+    ):
+        super().__init__(*args, **kwargs)
+        self.fields["category"].queryset = Category.objects.visible_to(principal).order_by("name", "pk")
+        # Keep the item's current series selectable even if it has since gone
+        # inactive, so saving the form does not silently drop the link.
+        offered = Q(status=RecurringSeries.Status.CONFIRMED, is_active=True)
+        if current_series_id is not None:
+            offered |= Q(pk=current_series_id)
+        self.fields["replaces_series"].queryset = (
+            RecurringSeries.objects.visible_to(principal).filter(offered).order_by("display_name", "pk")
+        )
+        if household_only:
+            # Only an item's owner can take a household item private.
+            self.fields["scope"].choices = ((PlannedItem.Scope.HOUSEHOLD, PlannedItem.Scope.HOUSEHOLD.label),)
+        elif has_household:
+            self.fields["scope"].choices = PlannedItem.Scope.choices
+
+    def clean_amount(self):
+        amount = self.cleaned_data["amount"]
+        minor_units = int(amount * 100)
+        if minor_units <= 0 or minor_units > MAX_SIGNED_BIGINT:
+            raise ValidationError(AMOUNT_RANGE_ERROR)
+        return amount
+
+    def clean(self):
+        cleaned = super().clean()
+        start_date = cleaned.get("start_date")
+        end_date = cleaned.get("end_date")
+        if start_date and end_date and end_date < start_date:
+            self.add_error("end_date", END_DATE_ORDER_ERROR)
+        return cleaned
+
+    def save_payload(self):
+        amount = self.cleaned_data["amount"]
+        return {
+            "name": self.cleaned_data["name"],
+            "kind": self.cleaned_data["kind"],
+            "amount_minor": int(amount * 100),
+            "start_date": self.cleaned_data["start_date"],
+            "end_date": self.cleaned_data.get("end_date"),
+            "cadence": self.cleaned_data["cadence"],
+            "scope": self.cleaned_data["scope"],
+            "category": self.cleaned_data.get("category"),
+            "replaces_series": self.cleaned_data.get("replaces_series"),
+        }
 
 
 class CategoryRuleForm(forms.Form):

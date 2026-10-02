@@ -1,0 +1,51 @@
+{% extends "finance/base.html" %}
+{% block title %}Record balance · {{ account.name }} · Financial Planner{% endblock %}
+{% block content %}
+<h1 class="mb-4 text-2xl font-bold">Record balance</h1>
+<p class="mb-4"><a class="link" href="{% url 'account-list' %}">Accounts</a> · {{ account.name }}</p>
+{% include "finance/_messages.html" %}
+<section class="card bg-base-100 shadow-sm mb-6 max-w-lg">
+  <div class="card-body">
+    <h2 class="card-title">New manual balance</h2>
+    <form method="post">
+      {% csrf_token %}
+      {% include "finance/_form_fields.html" with form=form %}
+      <button type="submit" class="btn btn-primary">Record balance</button>
+    </form>
+  </div>
+</section>
+<div class="overflow-x-auto">
+  <table class="table table-zebra">
+    <thead class="sticky top-0 z-10 bg-base-200">
+      <tr>
+        <th>Date</th>
+        <th class="text-right">Amount</th>
+        <th>Source</th>
+        <th>Note</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for snapshot in snapshots %}
+      <tr>
+        <td>{{ snapshot.snapshot_date|date:"Y-m-d" }}</td>
+        <td class="text-right">{% include "finance/_amount.html" with value=snapshot.amount_display tone="" %}</td>
+        <td><span class="badge">{{ snapshot.source }}</span></td>
+        <td>{{ snapshot.note }}</td>
+        <td>
+          {% if snapshot.source == "manual" %}
+          <a class="btn btn-sm" href="{% url 'account-snapshot-edit' account.pk snapshot.pk %}">Edit</a>
+          <form method="post" action="{% url 'account-snapshot-delete' account.pk snapshot.pk %}" class="inline">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-sm btn-error">Delete</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+    {% empty %}
+      <tr><td colspan="5">No balances recorded yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

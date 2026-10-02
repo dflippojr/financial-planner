@@ -1,0 +1,77 @@
+{% extends "finance/base.html" %}
+{% block title %}Planned items · Financial Planner{% endblock %}
+{% block content %}
+<h1 class="mb-4 text-2xl font-bold">Planned items</h1>
+<p class="mb-4 max-w-2xl opacity-80">These income and expense items feed the projected months on Cash flow. They never change actual totals.</p>
+<section class="card bg-base-100 shadow-sm mb-6 max-w-lg">
+  <div class="card-body">
+    <h2 class="card-title">Add planned item</h2>
+    <form method="post">
+      {% csrf_token %}
+      {% include "finance/_form_fields.html" with form=add_form %}
+      <button type="submit" class="btn btn-primary">Add item</button>
+    </form>
+  </div>
+</section>
+<div class="overflow-x-auto">
+  <table class="table table-zebra">
+    <thead class="sticky top-0 z-10 bg-base-200">
+      <tr>
+        <th>Name</th>
+        <th>Kind</th>
+        <th class="text-right">Amount</th>
+        <th>Cadence</th>
+        <th>Start</th>
+        <th>End</th>
+        <th>Scope</th>
+        <th>Status</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for item in items %}
+      <tr>
+        <td>{{ item.name }}</td>
+        <td>{{ item.get_kind_display }}</td>
+        <td class="text-right">{{ item.amount_display }}</td>
+        <td>{{ item.get_cadence_display }}</td>
+        <td>{{ item.start_date|date:"Y-m-d" }}</td>
+        <td>{% if item.end_date %}{{ item.end_date|date:"Y-m-d" }}{% else %}—{% endif %}</td>
+        <td>
+          {% if item.scope == "household" %}
+          <span class="badge badge-info">Household</span>
+          {% else %}
+          <span class="badge">Private</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if item.enabled %}
+          <span class="badge badge-success">Enabled</span>
+          {% else %}
+          <span class="badge badge-ghost">Disabled</span>
+          {% endif %}
+        </td>
+        <td>
+          <div class="flex flex-wrap items-center gap-2">
+            <a class="btn btn-sm" href="{% url 'planned-item-edit' item.pk %}">Edit</a>
+            {% if item.enabled %}
+            <form method="post" action="{% url 'planned-item-disable' item.pk %}">
+              {% csrf_token %}
+              <button type="submit" class="btn btn-sm btn-outline">Disable</button>
+            </form>
+            {% else %}
+            <form method="post" action="{% url 'planned-item-enable' item.pk %}">
+              {% csrf_token %}
+              <button type="submit" class="btn btn-sm btn-outline">Enable</button>
+            </form>
+            {% endif %}
+          </div>
+        </td>
+      </tr>
+    {% empty %}
+      <tr><td colspan="9">No planned items yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

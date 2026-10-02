@@ -99,6 +99,7 @@ CSV_FIELDS = {
         "amount_decimal",
         "currency",
         "source",
+        "note",
     ),
 }
 
@@ -157,7 +158,7 @@ recurring_series.csv / recurring_series.json
 
 balance_snapshots.csv / balance_snapshots.json
   Dated account balances (SimpleFIN or manual) for visible accounts:
-  id, account_id, snapshot_date, amount_minor, amount_decimal, currency, source.
+  id, account_id, snapshot_date, amount_minor, amount_decimal, currency, source, note.
   Present only when the balance snapshot model exists in this installation.
 
 JSON files are arrays of objects. CSV uses UTF-8. Nested lists in CSV are JSON
@@ -407,6 +408,7 @@ def _snapshot_rows(person, model):
                 "amount_decimal": money_decimal(minor),
                 "currency": snap.currency,
                 "source": getattr(snap, "source", ""),
+                "note": getattr(snap, "note", ""),
             }
         )
     return rows

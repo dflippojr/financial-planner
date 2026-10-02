@@ -751,6 +751,7 @@ class BalanceSnapshot(models.Model):
     amount_minor = models.BigIntegerField()
     currency = models.CharField(max_length=3, default="USD")
     source = models.CharField(max_length=16, choices=Source)
+    note = models.CharField(max_length=200, blank=True, default="")
     import_batch = models.ForeignKey(
         ImportBatch,
         on_delete=models.SET_NULL,
@@ -781,6 +782,101 @@ class BalanceSnapshot(models.Model):
 
     def __str__(self):
         return f"Balance {self.snapshot_date} account {self.account_id}"
+
+
+class PlannedItem(models.Model):
+    class Scope(models.TextChoices):
+        PRIVATE = "private", "Private"
+        HOUSEHOLD = "household", "Household"
+
+    class Kind(models.TextChoices):
+        INCOME = "income", "Income"
+        EXPENSE = "expense", "Expense"
+
+    class Cadence(models.TextChoices):
+        ONE_TIME = "one_time", "One-time"
+        WEEKLY = "weekly", "Weekly"
+        BIWEEKLY = "biweekly", "Biweekly"
+        MONTHLY = "monthly", "Monthly"
+        QUARTERLY = "quarterly", "Quarterly"
+        ANNUAL = "annual", "Annual"
+
+    owner = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="planned_items")
+    scope = models.CharField(max_length=9, choices=Scope, default=Scope.PRIVATE)
+    household = models.ForeignKey(
+        Household,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="planned_items",
+    )
+    name = models.CharField(max_length=150)
+    kind = models.CharField(max_length=7, choices=Kind)
+    amount_minor = models.BigIntegerField()
+    currency = models.CharField(max_length=3, default="USD")
+    start_date = models.DateField()
+    end_date = models.DateField(null=True, blank=True)
+    cadence = models.CharField(max_length=9, choices=Cadence)
+    category = models.ForeignKey(
+        Category,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="planned_items",
+    )
+    replaces_series = models.ForeignKey(
+        RecurringSeries,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="replaced_by_planned_items",
+    )
+    enabled = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            person = _person_for(principal)
+            if person is None:
+                return self.none()
+            current_households = Membership.objects.filter(
+                person=person,
+                ended_at__isnull=True,
+            ).values("household_id")
+            return self.filter(
+                Q(owner=person, scope="private")
+                | Q(scope="household", household_id__in=current_households)
+            )
+
+    objects = QuerySet.as_manager()
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=(Q(scope="private", household__isnull=True) | Q(scope="household", household__isnull=False)),
+                name="planned_item_scope_matches_household",
+            ),
+            models.CheckConstraint(condition=Q(currency="USD"), name="planned_item_currency_usd"),
+            models.CheckConstraint(condition=Q(kind__in=("income", "expense")), name="planned_item_kind_valid"),
+            models.CheckConstraint(
+                condition=Q(cadence__in=("one_time", "weekly", "biweekly", "monthly", "quarterly", "annual")),
+                name="planned_item_cadence_valid",
+            ),
+            models.CheckConstraint(condition=Q(amount_minor__gt=0), name="planned_item_amount_positive"),
+            models.CheckConstraint(
+                condition=Q(end_date__isnull=True) | Q(end_date__gte=F("start_date")),
+                name="planned_item_end_on_or_after_start",
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
+
+    @property
+    def amount_display(self):
+        amount = Decimal(self.amount_minor) / Decimal(100)
+        return f"{amount:,.2f} {self.currency}"
 
 
 class CategoryRule(models.Model):

@@ -12,6 +12,7 @@ from django.views.decorators.http import require_http_methods, require_POST
 from .category_services import current_household
 from .forms import SimpleFinSetupForm
 from .models import Account, AccountLink, Person, SimpleFinConnection
+from .reauth import requires_recent_auth
 from .simplefin_errors import SimpleFinError, SimpleFinRateLimited
 from .simplefin_schedule import next_scheduled_sync
 from .simplefin_services import (
@@ -145,6 +146,12 @@ def _schedule_state(connection):
 
 @require_http_methods(["GET", "POST"])
 @never_cache
+@requires_recent_auth(
+    "connect-simplefin",
+    form_url_name="simplefin-connections",
+    action_from_post={"claim": "connect-simplefin"},
+    post_field="intent",
+)
 def connections(request):
     person = _person(request)
     connection = SimpleFinConnection.objects.filter(owner=person).first()
@@ -209,6 +216,7 @@ def connections_sync(request):
 
 @require_POST
 @never_cache
+@requires_recent_auth("disconnect-simplefin", form_url_name="simplefin-connections")
 def connections_disconnect(request):
     person = _person(request)
     connection = SimpleFinConnection.objects.filter(owner=person).first()

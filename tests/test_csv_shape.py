@@ -869,3 +869,14 @@ def test_unicode_minus_amounts_are_money_and_negative():
     assert "- Amount: money" in report
     assert "negative values: 2 of 2" in report
 
+
+
+def test_command_line_reads_only_csv_files(tmp_path, capsys):
+    secret = tmp_path / "id_synthetic"
+    secret.write_text("not,a,csv\n", encoding="utf-8")
+    folder = tmp_path / "looks-like.csv"
+    folder.mkdir()
+
+    assert csv_shape.main([str(secret)]) == 1
+    assert csv_shape.main([str(folder)]) == 1
+    assert "give the path of a .csv export file" in capsys.readouterr().err
