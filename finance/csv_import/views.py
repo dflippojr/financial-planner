@@ -9,7 +9,7 @@ from finance.models import Account, ImportBatch
 from .forms import CsvMappingForm, CsvUploadForm, HuntingtonImportForm
 from .parser import CsvInputError, preview_csv, read_csv
 from .profiles import HUNTINGTON, HUNTINGTON_MAPPING, require_huntington_headers
-from .services import classify_overlap, commit_csv_import, undo_import_batch
+from .services import categorize_imported_batch, classify_overlap, commit_csv_import, undo_import_batch
 from .staging import StageUnavailable, create_stage, delete_stage, find_live_stage, load_stage, stage_profile
 
 
@@ -222,9 +222,7 @@ def _commit_staged_import(request, account, context, *, token, content, document
         context["commit_available"] = True
         return _render_preview(request, account, context)
 
-    from finance.category_services import refresh_transfer_pairs
-
-    refresh_transfer_pairs(request.user)
+    categorize_imported_batch(request.user, result.batch)
 
     delete_stage(request, token)
     _store_result(

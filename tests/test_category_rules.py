@@ -10,7 +10,7 @@ from django.urls import reverse
 
 from finance.category_services import assign_category, ensure_household_categories, link_refund
 from finance.csv_import.parser import Mapping, read_csv
-from finance.csv_import.services import commit_csv_import
+from finance.csv_import.services import categorize_imported_batch, commit_csv_import
 from finance.models import (
     Account,
     Category,
@@ -238,7 +238,7 @@ def test_rules_auto_apply_on_csv_import_and_disable_stops_them():
         priority=0,
     )
     document = read_csv(CSV)
-    commit_csv_import(
+    result = commit_csv_import(
         owner.user,
         account.pk,
         content=CSV,
@@ -248,6 +248,7 @@ def test_rules_auto_apply_on_csv_import_and_disable_stops_them():
         date_range_start=date(2026, 9, 1),
         date_range_end=date(2026, 9, 30),
     )
+    categorize_imported_batch(owner.user, result.batch)
     imported = Transaction.objects.get(account=account)
     assert imported.category_id == groceries(household).pk
     assert imported.category_source == Transaction.CategorySource.RULE
