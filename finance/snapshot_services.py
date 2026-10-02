@@ -37,19 +37,20 @@ def _lock_manual_snapshot(account, snapshot_id):
     return snapshot
 
 
-def _apply_manual_fields(snapshot, *, snapshot_date, amount_minor, note):
+def _apply_manual_fields(snapshot, *, snapshot_date, amount_minor, note, net_contribution_minor):
     snapshot.snapshot_date = snapshot_date
     snapshot.amount_minor = amount_minor
     snapshot.note = note
+    snapshot.net_contribution_minor = net_contribution_minor
     try:
-        snapshot.save(update_fields=("snapshot_date", "amount_minor", "note"))
+        snapshot.save(update_fields=("snapshot_date", "amount_minor", "note", "net_contribution_minor"))
     except IntegrityError as exc:
         raise SnapshotError(DUPLICATE_MANUAL) from exc
     return snapshot
 
 
 @transaction.atomic
-def record_manual_snapshot(principal, account_id, *, snapshot_date, amount_minor, note=""):
+def record_manual_snapshot(principal, account_id, *, snapshot_date, amount_minor, note="", net_contribution_minor=None):
     account = _lock_editable_account(principal, account_id)
     existing = (
         BalanceSnapshot.objects.select_for_update(of=("self",))
@@ -62,6 +63,7 @@ def record_manual_snapshot(principal, account_id, *, snapshot_date, amount_minor
             snapshot_date=snapshot_date,
             amount_minor=amount_minor,
             note=note,
+            net_contribution_minor=net_contribution_minor,
         )
     try:
         return BalanceSnapshot.objects.create(
@@ -71,13 +73,14 @@ def record_manual_snapshot(principal, account_id, *, snapshot_date, amount_minor
             currency=account.currency,
             source=BalanceSnapshot.Source.MANUAL,
             note=note,
+            net_contribution_minor=net_contribution_minor,
         )
     except IntegrityError as exc:
         raise SnapshotError(DUPLICATE_MANUAL) from exc
 
 
 @transaction.atomic
-def update_manual_snapshot(principal, account_id, snapshot_id, *, snapshot_date, amount_minor, note=""):
+def update_manual_snapshot(principal, account_id, snapshot_id, *, snapshot_date, amount_minor, note="", net_contribution_minor=None):
     account = _lock_editable_account(principal, account_id)
     snapshot = _lock_manual_snapshot(account, snapshot_id)
     return _apply_manual_fields(
@@ -85,6 +88,7 @@ def update_manual_snapshot(principal, account_id, snapshot_id, *, snapshot_date,
         snapshot_date=snapshot_date,
         amount_minor=amount_minor,
         note=note,
+        net_contribution_minor=net_contribution_minor,
     )
 
 

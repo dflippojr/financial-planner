@@ -1,0 +1,48 @@
+<section class="card bg-base-100 shadow-sm mb-6">
+  <div class="card-body">
+    <h2 class="card-title">Performance</h2>
+    {% if performance.statement_count < 2 %}
+    <p class="text-sm opacity-70">Record at least two statement entries (ending balance plus net contributions) to see performance.</p>
+    {% endif %}
+    <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
+      {% include "finance/_performance_summary_card.html" with summary=performance.summaries.ytd %}
+      {% include "finance/_performance_summary_card.html" with summary=performance.summaries.one_year %}
+      {% include "finance/_performance_summary_card.html" with summary=performance.summaries.all_time %}
+    </div>
+    {% if performance.periods %}
+    <div class="overflow-x-auto mt-4">
+      <table class="table table-zebra">
+        <thead class="sticky top-0 z-10 bg-base-200">
+          <tr>
+            <th>Period</th>
+            <th class="text-right">Start value</th>
+            <th class="text-right">End value</th>
+            <th class="text-right">Contributions</th>
+            <th class="text-right">Growth</th>
+            <th class="text-right">Return</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for period in performance.periods %}
+          <tr>
+            <td>{{ period.start_date|date:"Y-m-d" }} – {{ period.end_date|date:"Y-m-d" }}</td>
+            <td class="text-right">{% include "finance/_amount.html" with value=period.start_value_display tone="" %}</td>
+            <td class="text-right">{% include "finance/_amount.html" with value=period.end_value_display tone="" %}</td>
+            <td class="text-right">{% include "finance/_amount.html" with value=period.contribution_display tone="" %}</td>
+            <td class="text-right">{% include "finance/_amount.html" with value=period.growth_display tone="" %}</td>
+            <td class="text-right">
+              {% if period.return_display %}
+              <span class="tooltip" data-tip="{{ performance.estimate_note }}">{{ period.return_display }} <span class="badge badge-ghost">Estimate</span></span>
+              {% else %}
+              <span class="tooltip" data-tip="{{ period.return_reason }}">—</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+    <p class="text-xs opacity-70 mt-2">{{ performance.estimate_note }}</p>
+  </div>
+</section>

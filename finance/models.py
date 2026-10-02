@@ -752,6 +752,7 @@ class BalanceSnapshot(models.Model):
     currency = models.CharField(max_length=3, default="USD")
     source = models.CharField(max_length=16, choices=Source)
     note = models.CharField(max_length=200, blank=True, default="")
+    net_contribution_minor = models.BigIntegerField(null=True, blank=True)
     import_batch = models.ForeignKey(
         ImportBatch,
         on_delete=models.SET_NULL,
@@ -777,6 +778,10 @@ class BalanceSnapshot(models.Model):
             models.CheckConstraint(
                 condition=Q(source__in=("simplefin", "manual")),
                 name="balance_snapshot_source_valid",
+            ),
+            models.CheckConstraint(
+                condition=Q(net_contribution_minor__isnull=True) | Q(source="manual"),
+                name="balance_snapshot_contribution_requires_manual",
             ),
         ]
 

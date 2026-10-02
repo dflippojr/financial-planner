@@ -20,6 +20,7 @@
       <tr>
         <th>Date</th>
         <th class="text-right">Amount</th>
+        {% if account.account_type == "investment" %}<th class="text-right">Net contributions</th>{% endif %}
         <th>Source</th>
         <th>Note</th>
         <th></th>
@@ -30,6 +31,9 @@
       <tr>
         <td>{{ snapshot.snapshot_date|date:"Y-m-d" }}</td>
         <td class="text-right">{% include "finance/_amount.html" with value=snapshot.amount_display tone="" %}</td>
+        {% if account.account_type == "investment" %}
+        <td class="text-right">{% if snapshot.net_contribution_display %}{% include "finance/_amount.html" with value=snapshot.net_contribution_display tone="" %}{% else %}—{% endif %}</td>
+        {% endif %}
         <td><span class="badge">{{ snapshot.source }}</span></td>
         <td>{{ snapshot.note }}</td>
         <td>
@@ -43,9 +47,12 @@
         </td>
       </tr>
     {% empty %}
-      <tr><td colspan="5">No balances recorded yet.</td></tr>
+      <tr><td colspan="{% if account.account_type == "investment" %}6{% else %}5{% endif %}">No balances recorded yet.</td></tr>
     {% endfor %}
     </tbody>
   </table>
 </div>
+{% if performance %}
+{% include "finance/_investment_performance.html" with performance=performance %}
+{% endif %}
 {% endblock %}
