@@ -643,3 +643,24 @@ def test_editing_keeps_a_link_to_a_series_that_went_inactive():
     item.refresh_from_db()
     assert item.name == "Synthetic rent edited"
     assert item.replaces_series_id == series.pk
+
+
+@pytest.mark.django_db
+def test_single_account_projection_keeps_a_series_whose_replacement_is_hidden():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    series = _confirmed_series(owner, account, "Synthetic gym", -10000, "d")
+    PlannedItem.objects.create(
+        owner=owner,
+        name="Synthetic new gym",
+        kind=PlannedItem.Kind.EXPENSE,
+        amount_minor=8000,
+        start_date=date(2026, 11, 1),
+        cadence=PlannedItem.Cadence.MONTHLY,
+        replaces_series=series,
+    )
+
+    months = projected_months_for(owner, today=date(2026, 10, 1), horizon=3, account=account)
+
+    assert [month.spending_minor for month in months] == [10000, 10000, 10000]

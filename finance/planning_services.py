@@ -57,8 +57,12 @@ def visible_projection_inputs(principal, *, account=None, scope=""):
     if scope:
         planned = planned.filter(scope=scope)
     planned_rows = list(planned.select_related("replaces_series").order_by("start_date", "pk"))
+    if account is not None:
+        # Planned items are left out for one account, so the series they
+        # replace must stay in; otherwise the charge vanishes from both.
+        planned_rows = []
     replaced = {item.replaces_series_id for item in planned_rows if item.replaces_series_id}
-    inputs = [] if account is not None else [_planned_input(item) for item in planned_rows]
+    inputs = [_planned_input(item) for item in planned_rows]
     series = RecurringSeries.objects.visible_to(principal).filter(
         status=RecurringSeries.Status.CONFIRMED, is_active=True
     )
