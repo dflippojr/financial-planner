@@ -57,6 +57,7 @@ def make_account(owner, *, name="Synthetic Checking", scope=Account.Scope.PRIVAT
         owner=owner,
         scope=scope,
         household=household,
+        share_mode=Account.ShareMode.CO_OWNED if scope == Account.Scope.HOUSEHOLD else "",
     )
 
 
@@ -507,13 +508,13 @@ def test_hand_edit_wins_when_a_rule_applies_concurrently():
 
 
 @pytest.mark.django_db
-def test_0007_backfill_marks_existing_categories_manual_or_inherited():
+def test_0008_backfill_marks_existing_categories_manual_or_inherited():
     import importlib
 
     from django.apps import apps
 
     backfill_category_source = importlib.import_module(
-        "finance.migrations.0007_category_rules"
+        "finance.migrations.0008_category_rules"
     ).backfill_category_source
 
     owner = make_person("owner")
