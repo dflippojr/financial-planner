@@ -1,4 +1,5 @@
 from datetime import date
+from decimal import Decimal
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -20,6 +21,7 @@ from finance.export import collect_export_tables
 from finance.models import (
     Account,
     Budget,
+    BudgetRolloverReset,
     Household,
     ImportBatch,
     Membership,
@@ -183,6 +185,31 @@ def test_amount_change_leaves_past_months_unchanged():
 
 
 @pytest.mark.django_db
+def test_edit_prefill_uses_amount_in_effect_for_viewed_month():
+    owner = make_person("owner")
+    household = make_household(owner)
+    groceries = household.categories.get(name="Groceries")
+    budget = add_budget(owner, category=groceries, amount_minor=10_000, month=date(2026, 3, 1))
+    client = signed_in(owner)
+    page = client.get(reverse("budget-edit", args=[budget.pk]) + "?month=2026-01")
+    assert page.status_code == 200
+    prefill = page.context["form"].initial.get("amount")
+    assert prefill not in (Decimal("100"), Decimal("100.00"), Decimal("100.0"))
+    posted_amount = "" if prefill in (None, Decimal("0"), Decimal("0.00")) else str(prefill)
+    client.post(
+        reverse("budget-edit", args=[budget.pk]) + "?month=2026-01",
+        {
+            "amount": posted_amount,
+            "effective_month": "2026-01",
+            "month": "2026-01",
+        },
+    )
+    assert amount_for(budget, date(2026, 1, 1)) == 0
+    assert amount_for(budget, date(2026, 2, 1)) == 0
+    assert amount_for(budget, date(2026, 3, 1)) == 10_000
+
+
+@pytest.mark.django_db
 def test_rollover_reset_zeroes_carry_from_that_month():
     owner = make_person("owner")
     household = make_household(owner)
@@ -213,6 +240,23 @@ def test_turning_rollover_on_starts_carry_that_month():
     assert cards[budget.pk].carry_minor == 0
     cards = {card.budget.pk: card for card in month_budget_cards(owner.user, date(2026, 3, 1))}
     assert cards[budget.pk].carry_minor == 10_000
+
+
+@pytest.mark.django_db
+def test_rollover_resets_from_earlier_period_do_not_affect_later_period():
+    owner = make_person("owner")
+    household = make_household(owner)
+    groceries = household.categories.get(name="Groceries")
+    budget = add_budget(owner, category=groceries, amount_minor=10_000, month=date(2026, 1, 1), rollover=True)
+    reset_budget_rollover(owner.user, budget, month=date(2026, 6, 1))
+    assert BudgetRolloverReset.objects.filter(budget=budget, month=date(2026, 6, 1)).exists()
+    set_budget_rollover(owner.user, budget, False, month=date(2026, 6, 1))
+    set_budget_rollover(owner.user, budget, True, month=date(2026, 3, 1))
+    budget.refresh_from_db()
+    cards = {card.budget.pk: card for card in month_budget_cards(owner.user, date(2026, 7, 1))}
+    # March through June leftover at 100.00 each; the June reset belongs to the prior period.
+    assert cards[budget.pk].carry_minor == 40_000
+    assert BudgetRolloverReset.objects.filter(budget=budget, month=date(2026, 6, 1)).exists()
 
 
 @pytest.mark.django_db
