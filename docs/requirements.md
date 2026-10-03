@@ -1,6 +1,6 @@
 # Requirements
 
-Updated: 2026-09-30. This is a working product brief; open questions are explicit.
+Updated: 2026-10-02. This is a working product brief; open questions are explicit.
 
 ## Goal
 
@@ -365,3 +365,20 @@ AI refinements (owner, 2026-10-02, #91 and #94):
 - **Advice.** The chat bot answers factual and explanatory questions. Its suggestions are labeled as opinion and never presented as financial advice.
 - **Chat UI.** A Chat page, plus a drawer on every page that continues the same conversation. The drawer passes only the current route and its query parameters, never page data.
 - **Local model in chat.** Offered only after a synthetic-data evaluation shows reliable tool calling.
+
+## Sign in with ChatGPT as an AI backend (2026-10-02, #92)
+
+Research is in `docs/research/sign-in-with-chatgpt.md` (sources checked 2026-10-02).
+
+**Owner decision: pursue access.** The research found that a household web connect button doesn't fit OpenAI's self-serve flow today:
+- callbacks go only to `http://127.0.0.1`;
+- the Sign in with ChatGPT Terms, as quoted in the research, say tokens must stay local and under the user's control, and one person's plan must not serve another person's requests.
+
+The owner wants to find out what access is possible rather than wait. Two routes:
+- **The hosting member, self-serve (to prototype).** OpenAI documents a self-hosted procedure: complete sign-in on a machine with a browser through the `127.0.0.1` callback, then move the credentials to a server the same user controls. Here the server is the hosting member's own basement PC. Signing in from a browser on that PC lets the loopback callback reach it directly. The connection is the hosting member's only, which matches #91's "only the hosting member for now". Whether storing that member's token encrypted in this app's database counts as "local and under the user's control" is unverified, and the prototype must record the reading it relies on.
+- **Other members: no documented route today.** OpenAI's interest form is for commercial integrations. Open-source developers are directed to the self-serve docs, whose flow needs a `127.0.0.1` callback on the member's own device. OpenAI's documented credential transfer assumes a server that only that member controls, which a household server is not. Revisit when OpenAI documents a self-serve pattern for small multi-user self-hosted apps.
+- **Also available now:** the hosting member's ChatGPT plan already works through Agent Harness's `codex` backend (#91), without Sign in with ChatGPT.
+
+**Proposed, not yet decided:** Sign in with ChatGPT is an AI connection only, not a sign-in method next to Google. Invitations still apply.
+
+**Data use:** plan-usage Responses must use `store: false`. Whether request bodies are used for training was not established. #106 applies before household-shared data is sent.
