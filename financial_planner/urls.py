@@ -16,6 +16,16 @@ urlpatterns = [
     path("health/", views.health, name="health"),
     path("", views.home, name="home"),
     path("spending/", views.spending_by_category, name="spending-by-category"),
+    path(
+        "spending/category/uncategorized/",
+        views.spending_category_detail,
+        name="spending-category-uncategorized",
+    ),
+    path(
+        "spending/category/<int:category_id>/",
+        views.spending_category_detail,
+        name="spending-category-detail",
+    ),
     path("net-worth/", net_worth_views.net_worth, name="net-worth"),
     path("sign-in/", views.sign_in, name="login"),
     path("sign-in/google/", views.start_google_sign_in, name="google-sign-in"),

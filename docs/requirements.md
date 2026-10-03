@@ -175,8 +175,16 @@ Same 439 rows and 282 negative amounts as the native file, so the same transacti
 - The default range and presets match the cash flow view: the last 12 full months plus the current month to date. Presets are this month, last month, last 3 months, last 12 months, and year to date.
 - A category whose refunds exceed its spending in the range shows a negative total, marked as a net refund, so totals reconcile exactly with the cash flow view.
 - Rows are sorted by spending, largest first, with a percent-of-total column. Uncategorized is always listed.
-- Category tiles and a donut chart of the same shares come first (issue #57); the totals table remains the accessible detail, with drilldown from tiles, slices, and rows. Per-category trends over time come later.
+- Category tiles and a donut chart of the same shares come first (issue #57); the totals table remains the accessible detail, with drilldown from tiles, slices, and rows. Per-category trends over time are issue #100.
 - Income is not part of this view.
+
+## Spending by category over time (2026-10-02, #100)
+
+- A Trends tab on the spending-by-category page uses the same range presets, account and private/household filters, and default range as the overview. Grouping matches cash flow: month by default, with week, quarter, and year available.
+- Each period's per-category totals come from `spending_by_category_report`, so they reconcile with the overview and with cash flow spending for that period, including refunds and excluded transfers.
+- The stacked bar chart shows the top 8 categories by spending in the selected range plus an Other group. The accessible table lists every category, including Uncategorized. Chart data is on the page (`json_script`).
+- Category tiles and table names link to `/spending/category/<id>/` (or `uncategorized`). That page shows the category's trend for the selected grouping, its average per period, its change against the previous equal-length range, and a link to the transaction list.
+- Colors use the existing stable category color mapping.
 
 ## Adjusting transaction dates (2026-09-30)
 

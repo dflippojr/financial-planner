@@ -86,6 +86,12 @@ from .cash_flow import (
 )
 from .planning_services import cash_flow_with_projection
 from .projection import DEFAULT_HORIZON
+from .spending_trends import (
+    category_spending_trend_report,
+    category_trend_chart_data,
+    spending_category_trend_report,
+    spending_trend_chart_data,
+)
 from .category_services import (
     add_category,
     assign_category,
@@ -168,7 +174,7 @@ def home(request):
     )
 
 
-def _preset_links(today, *, account=None, scope=""):
+def _preset_links(today, *, account=None, scope="", grouping=None, tab=None, extra_query=None):
     links = []
     for preset in date_range_presets(today):
         query = {"date_from": preset.date_from.isoformat(), "date_to": preset.date_to.isoformat()}
@@ -176,49 +182,174 @@ def _preset_links(today, *, account=None, scope=""):
             query["account"] = str(account.pk)
         if scope:
             query["scope"] = scope
+        if grouping:
+            query["grouping"] = grouping
+        if tab:
+            query["tab"] = tab
+        if extra_query:
+            query.update(extra_query)
         links.append(SimpleNamespace(label=preset.label, url=f"?{urlencode(query)}"))
     return links
 
 
-@require_GET
-@never_cache
-def spending_by_category(request):
+def _spending_query(*, date_from, date_to, grouping="month", account=None, scope="", tab=""):
+    query = {
+        "date_from": date_from.isoformat(),
+        "date_to": date_to.isoformat(),
+        "grouping": grouping,
+    }
+    if account is not None:
+        query["account"] = str(account.pk)
+    if scope:
+        query["scope"] = scope
+    if tab:
+        query["tab"] = tab
+    return query
+
+
+def _spending_filter_state(request):
     today = timezone.localdate()
     default_from, default_to = default_date_range(today)
     form = SpendingFilterForm(request.GET or None, principal=request.user)
+    tab = "trends" if request.GET.get("tab") == "trends" else "overview"
     if not form.is_bound:
         form = SpendingFilterForm(
             principal=request.user,
             initial={
                 "date_from": default_from,
                 "date_to": default_to,
+                "grouping": "month",
             },
         )
-        date_from, date_to, account, scope = default_from, default_to, None, ""
-    elif form.is_valid():
-        date_from = form.cleaned_data["date_from"] or default_from
-        date_to = form.cleaned_data["date_to"] or default_to
-        account = form.cleaned_data["account"]
-        scope = form.cleaned_data["scope"]
-    else:
-        date_from = date_to = account = scope = None
+        return form, default_from, default_to, "month", None, "", tab, today
+    if form.is_valid():
+        return (
+            form,
+            form.cleaned_data["date_from"] or default_from,
+            form.cleaned_data["date_to"] or default_to,
+            form.cleaned_data.get("grouping") or "month",
+            form.cleaned_data["account"],
+            form.cleaned_data["scope"],
+            tab,
+            today,
+        )
+    return form, None, None, None, None, None, tab, today
+
+
+@require_GET
+@never_cache
+def spending_by_category(request):
+    form, date_from, date_to, grouping, account, scope, tab, today = _spending_filter_state(request)
     report = None
+    trend_report = None
+    chart_data = None
     if date_from is not None:
-        report = spending_by_category_report(
-            request.user,
+        if tab == "trends":
+            trend_report = spending_category_trend_report(
+                request.user,
+                date_from=date_from,
+                date_to=date_to,
+                grouping=grouping,
+                account=account,
+                scope=scope,
+                today=today,
+            )
+            report = trend_report
+            chart_data = spending_trend_chart_data(trend_report)
+        else:
+            report = spending_by_category_report(
+                request.user,
+                date_from=date_from,
+                date_to=date_to,
+                account=account,
+                scope=scope,
+                grouping=grouping,
+            )
+            chart_data = spending_chart_data(report)
+    query = (
+        _spending_query(
             date_from=date_from,
             date_to=date_to,
+            grouping=grouping,
             account=account,
             scope=scope,
         )
+        if date_from is not None
+        else {}
+    )
     return render(
         request,
         "finance/spending.html",
         {
             "filter_form": form,
             "report": report,
-            "chart_data": spending_chart_data(report) if report is not None else None,
-            "presets": _preset_links(today, account=account, scope=scope) if date_from is not None else (),
+            "trend_report": trend_report,
+            "chart_data": chart_data,
+            "active_tab": tab,
+            "overview_url": f"{reverse('spending-by-category')}?{urlencode(query)}" if query else reverse("spending-by-category"),
+            "trends_url": (
+                f"{reverse('spending-by-category')}?{urlencode({**query, 'tab': 'trends'})}"
+                if query
+                else f"{reverse('spending-by-category')}?tab=trends"
+            ),
+            "presets": (
+                _preset_links(today, account=account, scope=scope, grouping=grouping, tab=tab if tab == "trends" else None)
+                if date_from is not None
+                else ()
+            ),
+        },
+    )
+
+
+def _visible_spending_category(principal, category_id):
+    if category_id is None:
+        return SimpleNamespace(key="uncategorized", name="Uncategorized")
+    category = (
+        Category.objects.visible_to(principal)
+        .exclude(code=Category.Code.TRANSFER)
+        .filter(pk=category_id)
+        .first()
+    )
+    if category is None:
+        raise Http404()
+    if category.code == Category.Code.UNCATEGORIZED:
+        return SimpleNamespace(key="uncategorized", name="Uncategorized")
+    return SimpleNamespace(key=str(category.pk), name=category.name)
+
+
+@require_GET
+@never_cache
+def spending_category_detail(request, category_id=None):
+    category = _visible_spending_category(request.user, category_id)
+    form, date_from, date_to, grouping, account, scope, _tab, today = _spending_filter_state(request)
+    report = None
+    chart_data = None
+    if date_from is not None:
+        report = category_spending_trend_report(
+            request.user,
+            category_key=category.key,
+            category_name=category.name,
+            date_from=date_from,
+            date_to=date_to,
+            grouping=grouping,
+            account=account,
+            scope=scope,
+            today=today,
+        )
+        chart_data = category_trend_chart_data(report)
+    return render(
+        request,
+        "finance/spending_category.html",
+        {
+            "filter_form": form,
+            "report": report,
+            "chart_data": chart_data,
+            "category": category,
+            "presets": (
+                _preset_links(today, account=account, scope=scope, grouping=grouping)
+                if date_from is not None
+                else ()
+            ),
         },
     )
 

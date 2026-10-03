@@ -332,6 +332,15 @@ class SpendingFilterForm(forms.Form):
         widget=forms.DateInput(attrs={"type": "date"}),
         validators=[MaxValueValidator(MAX_REPORT_DATE)],
     )
+    grouping = forms.ChoiceField(
+        choices=(
+            ("month", "Month"),
+            ("week", "Week"),
+            ("quarter", "Quarter"),
+            ("year", "Year"),
+        ),
+        initial="month",
+    )
     account = forms.ModelChoiceField(queryset=Account.objects.none(), required=False)
     scope = forms.ChoiceField(
         required=False,
@@ -342,8 +351,11 @@ class SpendingFilterForm(forms.Form):
         ),
     )
 
-    def __init__(self, *args, principal=None, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, data=None, *args, principal=None, **kwargs):
+        if data is not None and "grouping" not in data:
+            data = data.copy()
+            data["grouping"] = "month"
+        super().__init__(data, *args, **kwargs)
         self.fields["account"].queryset = Account.objects.visible_to(principal).order_by("name", "pk")
 
     def clean(self):
@@ -353,8 +365,16 @@ class SpendingFilterForm(forms.Form):
         date_to = cleaned.get("date_to") or default_to
         cleaned["date_from"] = date_from
         cleaned["date_to"] = date_to
+        grouping = cleaned.get("grouping") or "month"
+        cleaned["grouping"] = grouping
         if date_from > date_to:
             self.add_error("date_to", END_DATE_ORDER_ERROR)
+        elif period_count(date_from, date_to, grouping) > MAX_REPORT_PERIODS:
+            self.add_error(
+                None,
+                f"That range has more than {MAX_REPORT_PERIODS} periods. "
+                "Choose a shorter range or a longer grouping.",
+            )
         return cleaned
 
 
