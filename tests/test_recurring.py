@@ -10,7 +10,9 @@ from finance.csv_import.services import undo_import_batch
 from finance.lifecycle_services import archive_account
 from finance.models import Account, Household, ImportBatch, Membership, Person, RecurringExclusion, RecurringSeries, RecurringSeriesMember, Transaction
 from finance.recurring_services import (
+    _in_confirmed_amount_band,
     add_recurring_members,
+    amounts_within_tolerance,
     confirm_recurring_series,
     confirmed_totals,
     detect_recurring_series,
@@ -857,6 +859,119 @@ def test_confirmed_step_chain_and_amount_outlier_follow_the_rolling_band():
     assert set(steps.members.values_list("transaction__amount_minor", flat=True)) == {-10000, -12000, -14400}
     assert outlier_bill.members.count() == 3
     assert set(outlier_bill.members.values_list("transaction__amount_minor", flat=True)) == {-2000}
+
+
+def test_rolling_band_uses_twenty_five_percent_of_the_level_not_the_larger_amount():
+    # Cluster median for two values is the larger one, so $100 and $130
+    # (30% apart) still pass amounts_within_tolerance. The rolling band is
+    # 25% of the current level, so $130 is outside a $100 level.
+    assert amounts_within_tolerance([-10000, -13000]) is True
+    assert _in_confirmed_amount_band(10000, 13000) is False
+    assert _in_confirmed_amount_band(13000, 10000) is True
+
+
+@pytest.mark.django_db
+def test_interleaved_hundred_and_one_thirty_plans_stay_two_series():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    add_monthly_charges(owner, account, description="Synthetic Twin Plan", amount_minor=-10000, count=6)
+    add_monthly_charges(
+        owner,
+        account,
+        description="Synthetic Twin Plan",
+        amount_minor=-13000,
+        count=6,
+        start=date(2026, 1, 20),
+    )
+
+    refresh_recurring_series(owner)
+    found = sorted(RecurringSeries.objects.filter(person=owner).values_list("typical_amount_minor", flat=True))
+
+    assert found == [-13000, -10000]
+    assert all(series.members.count() == 6 for series in RecurringSeries.objects.filter(person=owner))
+
+
+@pytest.mark.django_db
+def test_six_twenties_then_two_twenty_sevens_is_one_series_at_the_new_price():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    add_monthly_charges(owner, account, description="Synthetic Drift Bill", amount_minor=-2000, count=6)
+    add_monthly_charges(
+        owner,
+        account,
+        description="Synthetic Drift Bill",
+        amount_minor=-2700,
+        count=2,
+        start=date(2026, 7, 15),
+    )
+
+    refresh_recurring_series(owner)
+    series = RecurringSeries.objects.get(person=owner)
+
+    assert series.members.count() == 8
+    assert series.typical_amount_minor == -2700
+
+
+@pytest.mark.django_db
+def test_unconfirmed_final_twenty_seven_stays_out_until_a_second_confirms_it():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    add_monthly_charges(owner, account, description="Synthetic Drift Bill", amount_minor=-2000, count=6)
+    add_monthly_charges(
+        owner,
+        account,
+        description="Synthetic Drift Bill",
+        amount_minor=-2700,
+        count=1,
+        start=date(2026, 7, 15),
+    )
+
+    refresh_recurring_series(owner)
+    series = RecurringSeries.objects.get(person=owner)
+
+    assert series.members.count() == 6
+    assert series.typical_amount_minor == -2000
+    assert not RecurringSeriesMember.objects.filter(transaction__amount_minor=-2700).exists()
+
+    add_monthly_charges(
+        owner,
+        account,
+        description="Synthetic Drift Bill",
+        amount_minor=-2700,
+        count=1,
+        start=date(2026, 8, 15),
+    )
+    refresh_recurring_series(owner)
+    series.refresh_from_db()
+
+    assert RecurringSeries.objects.filter(person=owner, is_active=True).count() == 1
+    assert series.members.count() == 8
+    assert series.typical_amount_minor == -2700
+
+
+@pytest.mark.django_db
+def test_hundred_one_twenty_one_forty_four_confirmed_step_is_one_series():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    amounts = (-10000, -12000, -14400, -14400)
+    for index, amount in enumerate(amounts):
+        make_transaction(
+            owner,
+            account,
+            transaction_date=date(2026, index + 1, 10),
+            amount_minor=amount,
+            description="Synthetic Steps",
+        )
+
+    refresh_recurring_series(owner)
+    series = RecurringSeries.objects.get(person=owner)
+
+    assert series.members.count() == 4
+    assert set(series.members.values_list("transaction__amount_minor", flat=True)) == {-10000, -12000, -14400}
 
 
 @pytest.mark.django_db

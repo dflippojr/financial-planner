@@ -97,6 +97,12 @@ def amounts_within_tolerance(minors):
 
 
 def _in_confirmed_amount_band(confirmed_typical, detected_typical):
+    """True when detected_typical is within 25% of confirmed_typical (the level).
+
+    The limit is always 25% of that level, not 25% of the larger of the two
+    amounts. Pairwise clustering via amounts_within_tolerance still uses the
+    cluster median, which for two values is the larger one.
+    """
     center = abs(confirmed_typical)
     if center == 0:
         return False
