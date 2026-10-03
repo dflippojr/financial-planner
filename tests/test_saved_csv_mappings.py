@@ -13,6 +13,7 @@ from finance.csv_import.saved_mappings import (
     save_csv_mapping,
     update_csv_mapping,
 )
+from finance.csv_import.staging import SESSION_KEY
 from finance.models import Account, Household, ImportBatch, Membership, Person, SavedCsvMapping, Transaction
 
 
@@ -330,3 +331,137 @@ def test_used_mapping_is_archived_instead_of_deleted(staging_settings):
     mapping.refresh_from_db()
     assert mapping.status == SavedCsvMapping.Status.ARCHIVED
     assert mapping.archived_at is not None
+
+
+def _stage_profile(client, token):
+    return client.session[SESSION_KEY][token]["import_profile"]
+
+
+@pytest.mark.django_db
+def test_restore_and_preview_fall_back_when_staged_saved_mapping_is_gone(staging_settings):
+    user, person = make_person("owner")
+    household_for(person)
+    account = Account.objects.create(name="Synthetic Checking", account_type="checking", owner=person)
+    client = Client()
+    client.force_login(user)
+    preview_url = reverse("csv-import-preview", args=(account.pk,))
+    mapping = save_csv_mapping(
+        user,
+        name="Soon deleted",
+        headers=("When", "Memo", "Amount", "Currency"),
+        mapping=HAND_MAPPING,
+    )
+    uploaded = client.post(
+        preview_url,
+        {
+            "action": "upload",
+            "import_profile": f"saved:{mapping.pk}",
+            "csv_file": SimpleUploadedFile("synthetic.csv", CSV, "text/csv"),
+        },
+    )
+    token = uploaded.context["mapping_form"]["token"].value()
+    assert _stage_profile(client, token) == f"saved:{mapping.pk}"
+
+    client.post(reverse("csv-mapping-list"), {"action": "delete", "mapping_id": str(mapping.pk)})
+    assert not SavedCsvMapping.objects.filter(pk=mapping.pk).exists()
+
+    restored = client.get(preview_url)
+    assert restored.status_code == 200
+    assert restored.context["import_profile"] == "generic"
+    assert restored.context.get("saved_mapping") is None
+    assert b"Map the uploaded columns" in restored.content
+    assert _stage_profile(client, token) == "generic"
+
+    previewed = client.post(preview_url, mapping_post(token))
+    assert previewed.status_code == 200
+    assert previewed.context["preview"].valid_count == 1
+    assert previewed.context["commit_available"] is True
+    assert b"Save mapping" in previewed.content
+
+    saved_again = client.post(
+        preview_url,
+        mapping_post(token, action="save_mapping", save_mapping_as="Generic after delete"),
+    )
+    assert saved_again.status_code == 200
+    assert SavedCsvMapping.objects.filter(name="Generic after delete").exists()
+
+    imported = client.post(
+        preview_url,
+        mapping_post(
+            token,
+            action="commit",
+            source="huntington",
+            date_range_start="2026-09-01",
+            date_range_end="2026-09-30",
+        ),
+        follow=True,
+    )
+    assert imported.status_code == 200
+    assert Transaction.objects.count() == 1
+
+
+@pytest.mark.django_db
+def test_restore_and_preview_fall_back_when_staged_saved_mapping_is_archived(staging_settings):
+    user, person = make_person("owner")
+    household_for(person)
+    account = Account.objects.create(name="Synthetic Checking", account_type="checking", owner=person)
+    client = Client()
+    client.force_login(user)
+    preview_url = reverse("csv-import-preview", args=(account.pk,))
+    used = save_csv_mapping(
+        user,
+        name="Used then archived",
+        headers=("When", "Memo", "Amount", "Currency"),
+        mapping=HAND_MAPPING,
+    )
+    first_token = client.post(
+        preview_url,
+        {
+            "action": "upload",
+            "import_profile": f"saved:{used.pk}",
+            "csv_file": SimpleUploadedFile("synthetic.csv", CSV, "text/csv"),
+        },
+    ).context["mapping_form"]["token"].value()
+    client.post(
+        preview_url,
+        {
+            "action": "commit",
+            "token": first_token,
+            "source": "huntington",
+            "date_range_start": "2026-09-01",
+            "date_range_end": "2026-09-30",
+        },
+    )
+    staged = client.post(
+        preview_url,
+        {
+            "action": "upload",
+            "import_profile": f"saved:{used.pk}",
+            "csv_file": SimpleUploadedFile("synthetic.csv", CSV, "text/csv"),
+        },
+    )
+    token = staged.context["mapping_form"]["token"].value()
+    client.post(reverse("csv-mapping-list"), {"action": "delete", "mapping_id": str(used.pk)})
+    used.refresh_from_db()
+    assert used.status == SavedCsvMapping.Status.ARCHIVED
+
+    restored = client.get(preview_url)
+    assert restored.context["import_profile"] == "generic"
+    assert restored.context.get("saved_mapping") is None
+    assert _stage_profile(client, token) == "generic"
+
+    previewed = client.post(preview_url, mapping_post(token))
+    assert previewed.context["preview"].valid_count == 1
+    imported = client.post(
+        preview_url,
+        mapping_post(
+            token,
+            action="commit",
+            source="huntington",
+            date_range_start="2026-09-01",
+            date_range_end="2026-09-30",
+        ),
+        follow=True,
+    )
+    assert imported.status_code == 200
+    assert Transaction.objects.count() == 1

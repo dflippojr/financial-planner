@@ -38,7 +38,6 @@ from .saved_mappings import (
     parse_saved_profile,
     save_csv_mapping,
     saved_profile_key,
-    visible_saved_mapping,
 )
 from .services import categorize_imported_batch, classify_overlap, commit_csv_import, undo_import_batch
 from .staging import StageUnavailable, create_stage, delete_stage, find_live_stage, load_stage, set_stage_profile, stage_profile
@@ -88,6 +87,38 @@ def _mapping_context(context, token, document, profile):
     return context
 
 
+def _usable_saved_mapping(user, profile):
+    saved_id = parse_saved_profile(profile)
+    if saved_id is None:
+        return None
+    return active_saved_mappings(user).filter(pk=saved_id).first()
+
+
+def _reset_stage_to_generic(request, token, account, document, context, *, header_mismatch=False):
+    set_stage_profile(request, token, account.pk, GENERIC)
+    if header_mismatch:
+        context["header_mismatch_message"] = HEADERS_DO_NOT_MATCH
+    _mapping_context(context, token, document, GENERIC)
+    return GENERIC, None
+
+
+def _resolve_saved_stage(request, token, account, document, profile, context):
+    saved_id = parse_saved_profile(profile)
+    if saved_id is None:
+        return profile, None
+    saved = _usable_saved_mapping(request.user, profile)
+    if saved is not None and headers_match(saved, document.headers):
+        return profile, saved
+    return _reset_stage_to_generic(
+        request,
+        token,
+        account,
+        document,
+        context,
+        header_mismatch=saved is not None,
+    )
+
+
 def _restore_live_stage(request, account, context):
     token = find_live_stage(request, account.pk)
     if not token:
@@ -97,21 +128,15 @@ def _restore_live_stage(request, account, context):
     except (CsvInputError, StageUnavailable):
         return
     profile = stage_profile(request, token, account.pk)
-    saved_id = parse_saved_profile(profile)
-    if saved_id is not None:
-        saved = visible_saved_mapping(request.user, saved_id)
-        if saved is not None and headers_match(saved, document.headers):
-            _saved_mapping_preview(
-                context,
-                document,
-                account,
-                {"token": token},
-                saved,
-            )
-        else:
-            if saved is not None:
-                context["header_mismatch_message"] = HEADERS_DO_NOT_MATCH
-            _mapping_context(context, token, document, GENERIC)
+    profile, saved = _resolve_saved_stage(request, token, account, document, profile, context)
+    if saved is not None:
+        _saved_mapping_preview(
+            context,
+            document,
+            account,
+            {"token": token},
+            saved,
+        )
         return
     if profile in FIXED_PROFILES:
         try:
@@ -237,18 +262,9 @@ def _handle_upload(request, account, context):
             import_profile=profile,
         )
         document = read_csv(content)
-        saved_id = parse_saved_profile(profile)
-        if saved_id is not None:
-            saved = visible_saved_mapping(request.user, saved_id)
-            if saved is None:
-                set_stage_profile(request, token, account.pk, GENERIC)
-                _mapping_context(context, token, document, GENERIC)
-            elif not headers_match(saved, document.headers):
-                set_stage_profile(request, token, account.pk, GENERIC)
-                context["header_mismatch_message"] = HEADERS_DO_NOT_MATCH
-                _mapping_context(context, token, document, GENERIC)
-            else:
-                _saved_mapping_preview(context, document, account, {"token": token}, saved)
+        profile, saved = _resolve_saved_stage(request, token, account, document, profile, context)
+        if saved is not None:
+            _saved_mapping_preview(context, document, account, {"token": token}, saved)
         elif profile in FIXED_PROFILES:
             _fixed_profile_preview(
                 context,
@@ -267,6 +283,7 @@ def _handle_upload(request, account, context):
 
 
 def _prepare_staged_preview(request, account, document, profile, context):
+    token = request.POST.get("token", "")
     if profile in FIXED_PROFILES:
         spec = FIXED_PROFILES[profile]
         mapping_form = spec.form_class(request.POST)
@@ -280,9 +297,8 @@ def _prepare_staged_preview(request, account, document, profile, context):
         except CsvInputError:
             raise Http404 from None
         return preview, mapping_form, spec.mapping, False, None
-    saved_id = parse_saved_profile(profile)
-    if saved_id is not None:
-        saved = visible_saved_mapping(request.user, saved_id)
+    profile, saved = _resolve_saved_stage(request, token, account, document, profile, context)
+    if saved is not None:
         mapping_form = SavedMappingImportForm(request.POST)
         context.update(
             {
@@ -292,7 +308,7 @@ def _prepare_staged_preview(request, account, document, profile, context):
                 "saved_mapping": saved,
             }
         )
-        if saved is None or not headers_match(saved, document.headers) or not mapping_form.is_valid():
+        if not mapping_form.is_valid():
             return None
         mapping = mapping_from_saved(saved)
         preview = classify_overlap(account, preview_csv(document, mapping))
@@ -424,6 +440,7 @@ def csv_preview(request, account_id):
     if prepared is None:
         return _render_preview(request, account, context)
     preview, mapping_form, mapping, source_required, saved_mapping = prepared
+    profile = stage_profile(request, token, account.pk)
 
     if action == "save_mapping":
         return _save_mapping_from_preview(
