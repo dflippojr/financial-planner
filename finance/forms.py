@@ -911,7 +911,7 @@ class PlannedItemForm(forms.Form):
         self.fields["category"].queryset = Category.objects.visible_to(principal).order_by("name", "pk")
         # Keep the item's current series selectable even if it has since gone
         # inactive, so saving the form does not silently drop the link.
-        offered = Q(status=RecurringSeries.Status.CONFIRMED, is_active=True)
+        offered = Q(status=RecurringSeries.Status.CONFIRMED, is_active=True, cancelled_at__isnull=True)
         if current_series_id is not None:
             offered |= Q(pk=current_series_id)
         self.fields["replaces_series"].queryset = (

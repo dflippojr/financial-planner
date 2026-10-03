@@ -114,14 +114,20 @@ from .policy_services import (
 )
 from .recurring_services import (
     add_recurring_members,
+    cancel_recurring_series,
+    confirm_resume_recurring_series,
     confirm_recurring_series,
     confirmed_totals,
+    dismiss_price_change,
     dismiss_recurring_series,
+    keep_cancelled_recurring_series,
     list_addable_transactions,
     merge_recurring_series,
     refresh_recurring_series,
     remove_recurring_member,
+    undo_cancel_recurring_series,
 )
+from .recurring_review import build_recurring_review
 from .cash_flow import (
     cash_flow_chart_data,
     date_range_presets,
@@ -1018,6 +1024,16 @@ def _handle_recurring_post(request):
             except (TypeError, ValueError) as exc:
                 raise Http404 from exc
         _service_or_404(lambda: add_recurring_members(request.user, series_id, transaction_ids))
+    elif action == "cancel":
+        _service_or_404(lambda: cancel_recurring_series(request.user, series_id))
+    elif action == "undo_cancel":
+        _service_or_404(lambda: undo_cancel_recurring_series(request.user, series_id))
+    elif action == "confirm_resume":
+        _service_or_404(lambda: confirm_resume_recurring_series(request.user, series_id))
+    elif action == "keep_cancelled":
+        _service_or_404(lambda: keep_cancelled_recurring_series(request.user, series_id))
+    elif action == "dismiss_price":
+        _service_or_404(lambda: dismiss_price_change(request.user, series_id))
     else:
         raise Http404
     _service_or_404(lambda: refresh_recurring_series(request.user))
@@ -1032,13 +1048,13 @@ def recurring_review(request):
     _service_or_404(lambda: refresh_recurring_series(request.user))
     visible = (
         RecurringSeries.objects.visible_to(request.user)
-        .prefetch_related("members__transaction")
+        .prefetch_related("members__transaction__account")
         .order_by("display_name", "pk")
     )
     confirmed = [
         series
         for series in visible
-        if series.status == RecurringSeries.Status.CONFIRMED and series.is_active
+        if series.status == RecurringSeries.Status.CONFIRMED and series.is_active and series.cancelled_at is None
     ]
     suggestions = [
         series
@@ -1053,7 +1069,9 @@ def recurring_review(request):
     grouping_series = [
         series
         for series in visible
-        if series.is_active and series.status != RecurringSeries.Status.DISMISSED
+        if series.is_active
+        and series.status != RecurringSeries.Status.DISMISSED
+        and series.cancelled_at is None
     ]
     for series in visible:
         series.merge_targets = [target for target in grouping_series if target.pk != series.pk]
@@ -1071,12 +1089,20 @@ def recurring_review(request):
             add_candidates = list_addable_transactions(request.user, add_row, add_query)
         else:
             add_series_id = None
+    today = timezone.localdate()
+    upcoming, price_change_rows, missed, cancelled = build_recurring_review(
+        request.user, list(visible), today=today
+    )
     return render(
         request,
         "finance/recurring_review.html",
         {
             "suggestions": suggestions,
             "confirmed": confirmed,
+            "upcoming": upcoming,
+            "price_changes": price_change_rows,
+            "missed_charges": missed,
+            "cancelled_series": cancelled,
             "monthly_display": monthly_display,
             "annual_display": annual_display,
             "monthly_minor": monthly_minor,
