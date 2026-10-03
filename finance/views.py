@@ -37,6 +37,7 @@ from .auth_services import (
     validated_username,
 )
 from .forms import (
+    AlertSettingsForm,
     CashFlowFilterForm,
     CategoryNameForm,
     DeleteMyDataForm,
@@ -132,6 +133,7 @@ from .cash_flow import (
 )
 from .planning_services import cash_flow_with_projection
 from .budget_services import dashboard_budget_summary
+from .alert_services import save_alert_settings, settings_for
 from .projection import DEFAULT_HORIZON
 from .spending_trends import (
     category_spending_trend_report,
@@ -1445,6 +1447,25 @@ def setup(request):
     )
 
 
+def _alert_settings_form(person, data=None):
+    prefs = settings_for(person)
+    amount = None
+    if prefs.large_transaction_minor:
+        amount = Decimal(prefs.large_transaction_minor) / Decimal(100)
+    return AlertSettingsForm(
+        data,
+        initial={
+            "sync_enabled": prefs.sync_enabled,
+            "recurring_price_enabled": prefs.recurring_price_enabled,
+            "recurring_missed_enabled": prefs.recurring_missed_enabled,
+            "budget_enabled": prefs.budget_enabled,
+            "large_transaction_enabled": prefs.large_transaction_enabled,
+            "monthly_review_enabled": prefs.monthly_review_enabled,
+            "large_transaction_amount": amount,
+        },
+    )
+
+
 @never_cache
 @requires_recent_auth("account-settings", action_from_post=ACCOUNT_SETTINGS_ACTIONS, form_url_name="account-settings")
 def account_settings(request):
@@ -1473,6 +1494,19 @@ def account_settings(request):
             "error": error,
         },
     )
+
+
+@require_http_methods(["GET", "HEAD", "POST"])
+@never_cache
+def settings_alerts(request):
+    person = get_object_or_404(Person, user=request.user)
+    form = _alert_settings_form(person)
+    if request.method == "POST":
+        form = _alert_settings_form(person, request.POST)
+        if form.is_valid():
+            save_alert_settings(person, **form.save_payload())
+            return redirect("settings-alerts")
+    return render(request, "finance/settings_alerts.html", {"alert_settings_form": form})
 
 
 @require_safe

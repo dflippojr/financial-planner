@@ -4,6 +4,7 @@ from django.utils import timezone
 
 from .models import (
     Account,
+    Alert,
     ImportBatch,
     Membership,
     Person,
@@ -430,6 +431,7 @@ def _repair_then_delete_account_rows(person, account):
         TransactionCorrectionHistory.objects.filter(transaction_id__in=tx_ids).delete()
         Transaction.objects.filter(pk__in=tx_ids).delete()
     ImportBatch.objects.filter(account_id=account.pk).delete()
+    Alert.objects.filter(account_id=account.pk).delete()
     account.delete()
 
 
@@ -577,6 +579,8 @@ def _transfer_household_owned_rows(person, successor_person):
 
 def _delete_personal_records(person):
     from .models import (
+        Alert,
+        AlertSettings,
         AiJob,
         AiProviderConnection,
         AiUsageEvent,
@@ -585,6 +589,7 @@ def _delete_personal_records(person):
         CategorySuggestion,
         PlannedItem,
         PrivacyPolicyAcceptance,
+        RecurringExclusion,
         RecurringSeries,
         RecurringSeriesMember,
         RuleApplication,
@@ -611,6 +616,9 @@ def _delete_personal_records(person):
     AiUsageEvent.objects.filter(member=person).delete()
     AiProviderConnection.objects.filter(owner=person).delete()
     PrivacyPolicyAcceptance.objects.filter(person=person).delete()
+    RecurringExclusion.objects.filter(person=person).delete()
+    Alert.objects.filter(recipient=person).delete()
+    AlertSettings.objects.filter(person=person).delete()
     person.privacy_policy_declined_version = None
     person.save(update_fields=("privacy_policy_declined_version", "updated_at"))
 

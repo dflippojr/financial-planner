@@ -370,3 +370,36 @@ def test_last_member_is_warned_that_the_household_is_deleted_too():
 
     assert b"last member of your household" in page.content
     assert b"Shared household data stays" not in page.content
+
+
+@pytest.mark.django_db
+def test_member_with_exclusions_and_alerts_can_delete_their_data():
+    from finance.alert_services import raise_alert, save_alert_settings
+    from finance.lifecycle_services import delete_member_data
+    from finance.models import Alert, AlertSettings, RecurringExclusion
+
+    owner = make_person("owner")
+    member = make_person("member")
+    household = make_household(owner, member)
+    shared = make_account(owner, name="Synthetic Shared", scope=Account.Scope.HOUSEHOLD, household=household)
+    charge = make_transaction(owner, shared, description="Synthetic streaming")
+    RecurringExclusion.objects.create(person=member, transaction=charge)
+    raise_alert([member], Alert.Kind.SYNC, "Synthetic sync failed", "/accounts/", "sync:synthetic")
+    save_alert_settings(
+        member,
+        sync_enabled=True,
+        recurring_price_enabled=True,
+        recurring_missed_enabled=True,
+        budget_enabled=True,
+        large_transaction_enabled=False,
+        monthly_review_enabled=True,
+        large_transaction_minor=None,
+    )
+
+    delete_member_data(member)
+
+    assert not Person.objects.filter(pk=member.pk).exists()
+    assert not RecurringExclusion.objects.filter(transaction=charge).exists()
+    assert not Alert.objects.filter(dedupe_key="sync:synthetic").exists()
+    assert not AlertSettings.objects.exists()
+    charge.refresh_from_db()

@@ -48,6 +48,7 @@ SETTINGS_TAB_BY_NAME = {
     "category-rule-detail": "categories",
     "category-rule-application-reverse": "categories",
     "tag-list": "tags",
+    "settings-alerts": "alerts",
     "settings-data": "data",
     "account-export": "data",
     "delete-my-data": "data",
@@ -63,6 +64,7 @@ SETTINGS_TABS = (
     ("household", "Household", "invite"),
     ("categories", "Categories", "category-list"),
     ("tags", "Tags", "tag-list"),
+    ("alerts", "Alerts", "settings-alerts"),
     ("data", "Data", "settings-data"),
     ("ai", "AI", "settings-ai"),
 )
@@ -97,6 +99,8 @@ def _nav_current(request):
         "savings-goal-unarchive",
     }:
         return "savings-goals"
+    if name.startswith("alert"):
+        return "alert-list"
     if name in {"account-balances", "account-snapshot-edit", "account-snapshot-delete"}:
         return "account-list"
     return name
@@ -130,12 +134,20 @@ def navigation(request):
         ("csv-import", "Import", reverse("csv-import")),
         ("planned-items", "Planned items", reverse("planned-items")),
         ("budgets", "Budgets", reverse("budgets")),
+        ("alert-list", "Alerts", reverse("alert-list")),
         ("savings-goals", "Goals", reverse("savings-goals")),
     )
+    from .alert_services import unread_alert_count
+
+    unread = unread_alert_count(request.user)
+    nav_items = []
+    for key, label, url in items:
+        item = {"key": key, "label": label, "url": url, "active": key == current}
+        if key == "alert-list":
+            item["unread"] = unread
+        nav_items.append(item)
     return {
-        "nav_items": [
-            {"key": key, "label": label, "url": url, "active": key == current} for key, label, url in items
-        ],
+        "nav_items": nav_items,
         "nav_current": current,
         "settings_current": settings_current,
         "settings_tabs": [

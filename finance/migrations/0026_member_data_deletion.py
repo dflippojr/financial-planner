@@ -5,7 +5,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("finance", "0024_recurring_grouping"),
+        ("finance", "0025_alert"),
     ]
 
     operations = [
