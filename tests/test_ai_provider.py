@@ -976,3 +976,27 @@ def test_reconnecting_forgets_session_ids_from_the_old_harness(harness):
 
     job.refresh_from_db()
     assert job.harness_session_id == ""
+
+
+@pytest.mark.django_db
+def test_reconnecting_also_forgets_the_session_of_a_crashed_running_job(harness, settings):
+    from datetime import timedelta
+
+    state, url = harness
+    state.model_state = "ready"
+    _user, person, _household = make_member("owner")
+    connect_harness(person, base_url=url, token=TOKEN)
+    set_defaults(person, chat_backend="local", background_backend="local")
+    job = enqueue_job(person, feature="structured")
+    _mark_running(job, session_id="old-harness-session", updated_at=timezone.now() - timedelta(hours=1), attempts=1)
+
+    connect_harness(person, base_url=url, token=TOKEN)
+    job.refresh_from_db()
+    assert job.harness_session_id == ""
+    # Stale-job recovery picks it up once the stale cutoff passes again.
+    AiJob.objects.filter(pk=job.pk).update(updated_at=timezone.now() - timedelta(hours=1))
+
+    process_due_jobs()
+    job.refresh_from_db()
+    assert job.status == job.Status.QUEUED
+    assert ("GET", "/api/v1/sessions/old-harness-session") not in state.requests

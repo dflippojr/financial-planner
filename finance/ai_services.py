@@ -92,10 +92,14 @@ def disconnect_harness(principal):
 
 
 def _forget_saved_sessions(person):
-    """Saved session ids belong to the old harness; never resume them on a new connection."""
+    """Saved session ids belong to the old harness; never resume them on a new connection.
+
+    A running job that is still alive saves its id again when it finishes; one left
+    behind by a crashed runner is requeued by stale-job recovery as a fresh session.
+    """
     AiJob.objects.filter(
         member=person,
-        status__in=(AiJob.Status.QUEUED, AiJob.Status.WAITING_MODEL),
+        status__in=(AiJob.Status.QUEUED, AiJob.Status.WAITING_MODEL, AiJob.Status.RUNNING),
     ).exclude(harness_session_id="").update(harness_session_id="", updated_at=timezone.now())
 
 
