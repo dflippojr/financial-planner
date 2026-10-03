@@ -242,8 +242,10 @@ def period_label(window, *, today):
     return base
 
 
-def selected_accounts(principal, *, account=None, scope=""):
+def selected_accounts(principal, *, account=None, scope="", cash_flow_only=False):
     accounts = Account.objects.visible_to(principal).order_by("name", "pk")
+    if cash_flow_only:
+        accounts = accounts.for_cash_flow()
     if scope:
         accounts = accounts.filter(scope=scope)
     if account is not None:
@@ -392,7 +394,7 @@ def spending_by_category_report(
     grouping=GROUPING_MONTH,
     tag=None,
 ):
-    accounts = selected_accounts(principal, account=account, scope=scope)
+    accounts = selected_accounts(principal, account=account, scope=scope, cash_flow_only=True)
     totals = income_and_spending_totals(
         principal,
         date_from=date_from,
@@ -448,7 +450,7 @@ def cash_flow_report(
     if period_count(date_from, date_to, grouping) > MAX_REPORT_PERIODS:
         raise ValueError("Too many periods for one report.")
     today = today or timezone.localdate()
-    accounts = selected_accounts(principal, account=account, scope=scope)
+    accounts = selected_accounts(principal, account=account, scope=scope, cash_flow_only=True)
     batches_by_account = _batches_by_account(principal, accounts)
     account_filter = accounts
     periods = []

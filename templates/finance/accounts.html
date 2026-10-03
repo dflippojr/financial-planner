@@ -70,8 +70,10 @@
         <td>
           <div class="flex flex-wrap items-center gap-2">
           {% if account.status == "active" and account.archived_at is None %}
-            <a class="btn btn-sm" href="{% url 'account-balances' account.pk %}">Record balance</a>
+            <a class="btn btn-sm" href="{% url 'account-balances' account.pk %}">{% if account.is_physical_asset %}Record valuation{% else %}Record balance{% endif %}</a>
+            {% if account.accepts_csv_import %}
             <a class="btn btn-sm btn-primary" href="{% url 'csv-import-preview' account.pk %}">Import CSV</a>
+            {% endif %}
             <form method="post" action="{% url 'account-rename' account.pk %}" class="flex flex-wrap items-center gap-2">
               {% csrf_token %}
               <label class="sr-only" for="rename-{{ account.pk }}">Rename {{ account.name }}</label>
