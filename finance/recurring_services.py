@@ -11,10 +11,11 @@ from django.db import transaction
 
 from .category_services import exclusion_exists_for
 from .lifecycle_services import lock_actor_household
-from .models import Person, RecurringSeries, RecurringSeriesMember, Transaction
+from .models import Person, RecurringExclusion, RecurringSeries, RecurringSeriesMember, Transaction
 
 
 _DENIED = "Operation is not permitted."
+MANUAL_REASON = "grouping edited manually"
 MAX_AMOUNT_VARIANCE = Decimal("0.25")
 CADENCE_DAYS = {
     RecurringSeries.Cadence.WEEKLY: (7, 3),
@@ -96,11 +97,83 @@ def amounts_within_tolerance(minors):
 
 
 def _in_confirmed_amount_band(confirmed_typical, detected_typical):
+    """True when detected_typical is within 25% of confirmed_typical (the level).
+
+    The limit is always 25% of that level, not 25% of the larger of the two
+    amounts. Pairwise clustering via amounts_within_tolerance still uses the
+    cluster median, which for two values is the larger one.
+    """
     center = abs(confirmed_typical)
     if center == 0:
         return False
     limit = Decimal(center) * MAX_AMOUNT_VARIANCE
     return abs(Decimal(abs(detected_typical) - center)) <= limit
+
+
+def typical_amount_minor_from(transactions):
+    ordered = sorted(transactions, key=lambda row: (row.transaction_date, row.pk))
+    window = ordered[-3:] if len(ordered) > 3 else ordered
+    return -_median_minor(item.amount_minor for item in window)
+
+
+def _step_ratio(left_minor, right_minor):
+    center = Decimal(abs(left_minor))
+    if center == 0:
+        return Decimal("1")
+    return abs(Decimal(abs(right_minor)) - center) / center
+
+
+def _largest_consecutive_step(chain):
+    if len(chain) < 2:
+        return Decimal("0")
+    return max(_step_ratio(left.amount_minor, right.amount_minor) for left, right in zip(chain, chain[1:]))
+
+
+def _current_level(accepted):
+    return _median_minor(item.amount_minor for item in accepted[-2:])
+
+
+def _evaluate_rolling_chain(chain):
+    ordered = sorted(chain, key=lambda row: (row.transaction_date, row.pk))
+    accepted = []
+    breakers = []
+    for index, item in enumerate(ordered):
+        if not accepted:
+            accepted.append(item)
+            continue
+        level = _current_level(accepted)
+        if _in_confirmed_amount_band(level, item.amount_minor):
+            accepted.append(item)
+            continue
+        nxt = ordered[index + 1] if index + 1 < len(ordered) else None
+        if (
+            len(accepted) >= 2
+            and nxt is not None
+            and _in_confirmed_amount_band(item.amount_minor, nxt.amount_minor)
+            and not _in_confirmed_amount_band(level, nxt.amount_minor)
+        ):
+            accepted = [item]
+            continue
+        center = Decimal(abs(level)) or Decimal(1)
+        score = abs(Decimal(abs(item.amount_minor)) - Decimal(abs(level))) / center
+        breakers.append((score, item.pk, item))
+    return not breakers, breakers
+
+
+def _chain_passes_rolling_band(chain):
+    passed, _breakers = _evaluate_rolling_chain(chain)
+    return passed
+
+
+def _worst_rolling_band_breaker(chain):
+    _passed, breakers = _evaluate_rolling_chain(chain)
+    farthest = _farthest_from_chain_median(chain)
+    remaining = [item for item in chain if item.pk != farthest.pk]
+    if len(remaining) >= 2 and _chain_passes_rolling_band(remaining):
+        return farthest
+    if breakers:
+        return max(breakers)[2]
+    return farthest
 
 
 def _collapse_same_day(transactions):
@@ -140,29 +213,31 @@ def _longest_chain(transactions, cadence):
     return chain
 
 
-def _amount_spread_ratio(minors):
-    median = Decimal(_median_minor(minors))
-    widest = max(abs(Decimal(abs(value)) - median) for value in minors)
-    if median == 0:
-        return Decimal("1")
-    return widest / median
-
-
 def _confidence_and_reasons(chain, cadence):
     minors = [item.amount_minor for item in chain]
     exact = len({abs(value) for value in minors}) == 1
-    spread = _amount_spread_ratio(minors)
+    step = _largest_consecutive_step(chain)
     date_slop = []
     for left, right in zip(chain, chain[1:]):
         expected = add_cadence(left.transaction_date, cadence)
         date_slop.append(abs((right.transaction_date - expected).days))
     max_slop = max(date_slop) if date_slop else 0
     count = len(chain)
+    if exact:
+        amount_reason = "amounts match exactly"
+    else:
+        amount_reason = f"amounts change by up to {int(step * 100)}% between charges (within 25%)"
     reasons = [
         f"{count} occurrences at a {cadence} interval",
-        "amounts match exactly" if exact else f"amounts vary by {int(spread * 100)}% (within 25%)",
+        amount_reason,
         f"dates within {max_slop} day(s) of expected",
     ]
+    first_abs = abs(chain[0].amount_minor)
+    last_abs = abs(chain[-1].amount_minor)
+    if first_abs and _step_ratio(chain[0].amount_minor, chain[-1].amount_minor) > MAX_AMOUNT_VARIANCE:
+        direction = "rose" if last_abs >= first_abs else "fell"
+        overall = int(_step_ratio(chain[0].amount_minor, chain[-1].amount_minor) * 100)
+        reasons.append(f"price {direction} {overall}% overall")
     if count < 3:
         return RecurringSeries.Confidence.LOW, tuple(reasons), RecurringSeries.Status.POSSIBLE
     if exact and max_slop <= 1:
@@ -215,9 +290,10 @@ def _cluster_by_amount(transactions):
 
 
 def _detected_series(key, cadence, chain):
-    confidence, reasons, status = _confidence_and_reasons(chain, cadence)
-    typical = -_median_minor(item.amount_minor for item in chain)
-    ids = tuple(item.pk for item in chain)
+    ordered = sorted(chain, key=lambda row: (row.transaction_date, row.pk))
+    confidence, reasons, status = _confidence_and_reasons(ordered, cadence)
+    typical = typical_amount_minor_from(ordered)
+    ids = tuple(item.pk for item in ordered)
     return DetectedSeries(
         merchant_key=key,
         display_name=_display_name(chain),
@@ -271,9 +347,9 @@ def _pick_tolerant_cadence_chain(candidates):
         cadence, chain = _pick_cadence_chain(pick_candidates)
         if cadence is None:
             return None, []
-        if amounts_within_tolerance(item.amount_minor for item in chain):
+        if _chain_passes_rolling_band(chain):
             return cadence, chain
-        outlier = _farthest_from_chain_median(chain)
+        outlier = _worst_rolling_band_breaker(chain)
         pick_candidates = [item for item in pick_candidates if item.pk != outlier.pk]
     return None, []
 
@@ -347,6 +423,25 @@ def detect_recurring_series(transactions):
 
 def candidate_transactions(principal):
     person = _person_for(principal)
+    excluded_ids = RecurringExclusion.objects.filter(person=person).values("transaction_id")
+    return list(
+        Transaction.objects.visible_to(person)
+        .filter(
+            status=Transaction.Status.ACTIVE,
+            kind=Transaction.Kind.CASH_FLOW,
+            amount_minor__lt=0,
+        )
+        .exclude(pk__in=excluded_ids)
+        .annotate(_excluded=exclusion_exists_for(person))
+        .filter(_excluded=False)
+        .select_related("account")
+        .order_by("transaction_date", "pk")
+    )
+
+
+def grouping_candidate_transactions(principal):
+    """Eligible charges for add, including rows excluded only from detection."""
+    person = _person_for(principal)
     return list(
         Transaction.objects.visible_to(person)
         .filter(
@@ -361,23 +456,95 @@ def candidate_transactions(principal):
     )
 
 
-def _apply_detection(series, detected):
-    series.merchant_key = detected.merchant_key
-    series.display_name = detected.display_name
-    series.cadence = detected.cadence
-    series.typical_amount_minor = detected.typical_amount_minor
-    series.currency = detected.currency
-    series.confidence = detected.confidence
-    series.reasons = list(detected.reasons)
-    series.fingerprint = detected.fingerprint
+def _active_member_transaction_ids(person, *, exclude_series_id=None):
+    query = RecurringSeriesMember.objects.filter(series__person=person, series__is_active=True).exclude(
+        series__status=RecurringSeries.Status.DISMISSED
+    )
+    if exclude_series_id is not None:
+        query = query.exclude(series_id=exclude_series_id)
+    return set(query.values_list("transaction_id", flat=True))
+
+
+def _assign_fingerprint(series, member_ids):
+    fingerprint = _fingerprint(member_ids)
+    if _fingerprint_taken(series.person, fingerprint, exclude_pk=series.pk):
+        return
+    series.fingerprint = fingerprint
+
+
+def _member_transactions(series):
+    return [
+        member.transaction
+        for member in series.members.select_related("transaction").order_by(
+            "transaction__transaction_date", "transaction_id"
+        )
+    ]
+
+
+def _recompute_series_from_members(series, *, extra_reasons=()):
+    transactions = _member_transactions(series)
+    if not transactions:
+        series.is_active = False
+        series.save(update_fields=("is_active", "updated_at"))
+        return series
+    ordered = sorted(transactions, key=lambda row: (row.transaction_date, row.pk))
+    confidence, reasons, status = _confidence_and_reasons(ordered, series.cadence)
+    reason_list = list(reasons)
+    for reason in extra_reasons:
+        if reason not in reason_list:
+            reason_list.append(reason)
+    if (
+        series.members.filter(source=RecurringSeriesMember.Source.MANUAL).exists()
+        and MANUAL_REASON not in reason_list
+    ):
+        reason_list.append(MANUAL_REASON)
+    series.typical_amount_minor = typical_amount_minor_from(ordered)
+    series.confidence = confidence
+    series.reasons = reason_list
+    series.currency = ordered[0].currency
     series.is_active = True
     if series.status not in (RecurringSeries.Status.CONFIRMED, RecurringSeries.Status.DISMISSED):
-        series.status = detected.status
+        series.status = status
+    _assign_fingerprint(series, [row.pk for row in ordered])
     series.save()
-    RecurringSeriesMember.objects.filter(series=series).delete()
+    return series
+
+
+def _detected_items(detected):
+    if isinstance(detected, DetectedSeries):
+        return (detected,)
+    return tuple(detected)
+
+
+def _apply_detection(series, detected, *, eligible_ids, preserve_identity=False):
+    items = _detected_items(detected)
+    primary = items[0]
+    if not preserve_identity:
+        series.merchant_key = primary.merchant_key
+        series.display_name = primary.display_name
+        series.cadence = primary.cadence
+    series.currency = primary.currency
+    chain_ids = {pk for item in items for pk in item.transaction_ids}
+    RecurringSeriesMember.objects.filter(series=series).exclude(transaction_id__in=eligible_ids).delete()
+    RecurringSeriesMember.objects.filter(
+        series=series,
+        source=RecurringSeriesMember.Source.DETECTED,
+    ).exclude(transaction_id__in=chain_ids).delete()
+    claimed_elsewhere = _active_member_transaction_ids(series.person, exclude_series_id=series.pk)
+    existing_ids = set(series.members.values_list("transaction_id", flat=True))
     RecurringSeriesMember.objects.bulk_create(
-        RecurringSeriesMember(series=series, transaction_id=pk) for pk in detected.transaction_ids
+        RecurringSeriesMember(
+            series=series,
+            transaction_id=pk,
+            source=RecurringSeriesMember.Source.DETECTED,
+        )
+        for pk in chain_ids
+        if pk in eligible_ids and pk not in claimed_elsewhere and pk not in existing_ids
     )
+    extra = []
+    if series.members.filter(source=RecurringSeriesMember.Source.MANUAL).exists():
+        extra.append(MANUAL_REASON)
+    _recompute_series_from_members(series, extra_reasons=extra)
 
 
 def _fingerprint_taken(person, fingerprint, *, exclude_pk):
@@ -422,13 +589,18 @@ def _create_series(person, detected):
         fingerprint=detected.fingerprint,
     )
     RecurringSeriesMember.objects.bulk_create(
-        RecurringSeriesMember(series=created, transaction_id=pk) for pk in detected.transaction_ids
+        RecurringSeriesMember(
+            series=created,
+            transaction_id=pk,
+            source=RecurringSeriesMember.Source.DETECTED,
+        )
+        for pk in detected.transaction_ids
     )
     return created
 
 
-def _confirmed_owner(confirmed, item, kept_ids):
-    """The confirmed series sharing the most transactions with a detected chain.
+def _overlapping_owner(series_list, item):
+    """The active series sharing the most transactions with a detected chain.
 
     Shared transactions mean the same subscription, even after corrected
     amounts or new occurrences change its fingerprint and amount band, so it
@@ -436,8 +608,8 @@ def _confirmed_owner(confirmed, item, kept_ids):
     """
     detected_ids = set(item.transaction_ids)
     best, best_overlap = None, 0
-    for series in confirmed:
-        if series.pk in kept_ids:
+    for series in series_list:
+        if series.status == RecurringSeries.Status.DISMISSED:
             continue
         overlap = len(detected_ids & {member.transaction_id for member in series.members.all()})
         if overlap > best_overlap:
@@ -446,22 +618,70 @@ def _confirmed_owner(confirmed, item, kept_ids):
 
 
 def _confirmed_target(person, item, confirmed, kept_ids):
-    target = _confirmed_owner(confirmed, item, kept_ids) or _match_confirmed(confirmed, item, kept_ids)
+    target = _overlapping_owner(confirmed, item) or _match_confirmed(confirmed, item, kept_ids)
     if target is not None and _fingerprint_taken(person, item.fingerprint, exclude_pk=target.pk):
         return None
     return target
 
 
-def _upsert_detected(person, item, *, dismissed_fingerprints, confirmed, open_rows, open_by_fingerprint, kept_ids):
+def _apply_overlapping_detections(confirmed, open_rows, detected, *, dismissed_fingerprints, kept_ids, eligible_ids):
+    """Attach every overlapping chain for a series before pruning detected members.
+
+    Refresh detects $100 and $130 as two clusters. After a merge both still
+    overlap the surviving series; applying either cluster with deletion would
+    drop the other amount's detected members and undo the merge.
+    """
+    pending = defaultdict(list)
+    unmatched = []
+    owners = confirmed + open_rows
+    for item in detected:
+        if item.fingerprint in dismissed_fingerprints:
+            continue
+        overlap = _overlapping_owner(owners, item)
+        if overlap is None:
+            unmatched.append(item)
+            continue
+        pending[overlap.pk].append(item)
+    by_pk = {series.pk: series for series in owners}
+    for series_pk, items in pending.items():
+        series = by_pk[series_pk]
+        preserve_identity = any(
+            series.merchant_key != item.merchant_key or series.cadence != item.cadence for item in items
+        )
+        _apply_detection(series, items, eligible_ids=eligible_ids, preserve_identity=preserve_identity)
+        kept_ids.add(series.pk)
+    return unmatched
+
+
+def _upsert_detected(
+    person,
+    item,
+    *,
+    dismissed_fingerprints,
+    confirmed,
+    open_rows,
+    open_by_fingerprint,
+    kept_ids,
+    eligible_ids,
+):
     if item.fingerprint in dismissed_fingerprints:
+        return
+    overlap = _overlapping_owner(confirmed + open_rows, item)
+    if overlap is not None:
+        preserve_identity = overlap.merchant_key != item.merchant_key or overlap.cadence != item.cadence
+        _apply_detection(overlap, item, eligible_ids=eligible_ids, preserve_identity=preserve_identity)
+        kept_ids.add(overlap.pk)
         return
     target = _confirmed_target(person, item, confirmed, kept_ids)
     if target is None:
         target = _find_open_match(open_rows, open_by_fingerprint, kept_ids, item)
     if target is not None:
         if not _fingerprint_taken(person, item.fingerprint, exclude_pk=target.pk):
-            _apply_detection(target, item)
+            _apply_detection(target, item, eligible_ids=eligible_ids)
             kept_ids.add(target.pk)
+        return
+    claimed = _active_member_transaction_ids(person)
+    if claimed & set(item.transaction_ids):
         return
     # Another row (for example a confirmed series already refreshed this
     # pass) owns the fingerprint: never create a duplicate.
@@ -471,8 +691,21 @@ def _upsert_detected(person, item, *, dismissed_fingerprints, confirmed, open_ro
 
 def _drop_stale_open_rows(open_rows, kept_ids):
     stale = [series for series in open_rows if series.pk not in kept_ids]
-    RecurringSeriesMember.objects.filter(series__in=stale).delete()
-    RecurringSeries.objects.filter(pk__in=[series.pk for series in stale]).delete()
+    if not stale:
+        return
+    manual_ids = set(
+        RecurringSeriesMember.objects.filter(
+            series__in=stale,
+            source=RecurringSeriesMember.Source.MANUAL,
+        ).values_list("series_id", flat=True)
+    )
+    drop = [series for series in stale if series.pk not in manual_ids]
+    for series in stale:
+        if series.pk in manual_ids:
+            _recompute_series_from_members(series, extra_reasons=(MANUAL_REASON,))
+            kept_ids.add(series.pk)
+    RecurringSeriesMember.objects.filter(series__in=drop).delete()
+    RecurringSeries.objects.filter(pk__in=[series.pk for series in drop]).delete()
 
 
 def _reconcile_unmatched_confirmed(confirmed, kept_ids, eligible_ids):
@@ -513,17 +746,15 @@ def revalidate_series_after_member_removal(principal, series_ids):
     if not ids:
         return
     locked = list(RecurringSeries.objects.select_for_update(of=("self",)).filter(pk__in=ids).order_by("pk"))
-    confirmed = [series for series in locked if series.status == RecurringSeries.Status.CONFIRMED]
-    # Each series belongs to one person: judge eligibility by what that owner
-    # can see, never by the acting person (for example someone deleting a
-    # shared account that another member's series also spans).
     by_owner = {}
-    for series in confirmed:
+    for series in locked:
         by_owner.setdefault(series.person_id, []).append(series)
     for owner_id, owned in by_owner.items():
         owner = Person.objects.get(pk=owner_id)
         eligible_ids = {row.pk for row in candidate_transactions(owner)}
-        _reconcile_unmatched_confirmed(owned, set(), eligible_ids)
+        RecurringSeriesMember.objects.filter(series__in=owned).exclude(transaction_id__in=eligible_ids).delete()
+        confirmed = [series for series in owned if series.status == RecurringSeries.Status.CONFIRMED]
+        _reconcile_unmatched_confirmed(confirmed, set(), eligible_ids)
     open_ids = [series.pk for series in locked if series.status != RecurringSeries.Status.CONFIRMED]
     if not open_ids:
         return
@@ -549,7 +780,16 @@ def refresh_recurring_series(principal):
     ]
     kept_ids = {series.pk for series in existing if series.status == RecurringSeries.Status.DISMISSED}
     open_by_fingerprint = {series.fingerprint: series for series in open_rows}
-    for item in detected:
+    eligible_ids = {row.pk for row in candidates}
+    unmatched = _apply_overlapping_detections(
+        confirmed,
+        open_rows,
+        detected,
+        dismissed_fingerprints=dismissed_fingerprints,
+        kept_ids=kept_ids,
+        eligible_ids=eligible_ids,
+    )
+    for item in unmatched:
         _upsert_detected(
             person,
             item,
@@ -558,9 +798,10 @@ def refresh_recurring_series(principal):
             open_rows=open_rows,
             open_by_fingerprint=open_by_fingerprint,
             kept_ids=kept_ids,
+            eligible_ids=eligible_ids,
         )
     _drop_stale_open_rows(open_rows, kept_ids)
-    _reconcile_unmatched_confirmed(confirmed, kept_ids, {row.pk for row in candidates})
+    _reconcile_unmatched_confirmed(confirmed, kept_ids, eligible_ids)
     return RecurringSeries.objects.visible_to(person)
 
 
@@ -609,3 +850,138 @@ def confirmed_totals(series_queryset):
         monthly += series.monthly_minor
         annual += series.annual_minor
     return monthly, annual
+
+
+def _is_grouping_series(series):
+    return series.is_active and series.status != RecurringSeries.Status.DISMISSED
+
+
+def _lock_visible_series_rows(person, series_ids):
+    unique_ids = []
+    for pk in series_ids:
+        if pk not in unique_ids:
+            unique_ids.append(pk)
+    for pk in unique_ids:
+        if RecurringSeries.objects.visible_to(person).filter(pk=pk).first() is None:
+            raise PermissionDenied(_DENIED)
+    locked = {
+        row.pk: row
+        for row in RecurringSeries.objects.select_for_update(of=("self",)).filter(pk__in=unique_ids).order_by("pk")
+    }
+    if len(locked) != len(unique_ids):
+        raise PermissionDenied(_DENIED)
+    visible = set(RecurringSeries.objects.visible_to(person).filter(pk__in=unique_ids).values_list("pk", flat=True))
+    if visible != set(unique_ids):
+        raise PermissionDenied(_DENIED)
+    rows = [locked[pk] for pk in unique_ids]
+    for series in rows:
+        if series.person_id != person.pk:
+            raise PermissionDenied(_DENIED)
+    return rows
+
+
+def list_addable_transactions(principal, series, query=""):
+    person = _person_for(principal)
+    claimed = _active_member_transaction_ids(person)
+    needle = query.casefold().strip()
+    rows = []
+    for txn in grouping_candidate_transactions(person):
+        if txn.pk in claimed:
+            continue
+        if needle and needle not in txn.description.casefold():
+            continue
+        rows.append(txn)
+    rows.sort(
+        key=lambda txn: (
+            merchant_key(txn.description) != series.merchant_key,
+            txn.transaction_date,
+            txn.pk,
+        )
+    )
+    return rows
+
+
+@transaction.atomic
+def merge_recurring_series(principal, source_id, target_id):
+    person = _person_for(principal)
+    lock_actor_household(person)
+    if source_id == target_id:
+        raise PermissionDenied(_DENIED)
+    source, target = _lock_visible_series_rows(person, (source_id, target_id))
+    if not _is_grouping_series(source) or not _is_grouping_series(target):
+        raise PermissionDenied(_DENIED)
+    source_txn_ids = list(source.members.values_list("transaction_id", flat=True))
+    existing_ids = set(target.members.values_list("transaction_id", flat=True))
+    RecurringSeriesMember.objects.bulk_create(
+        RecurringSeriesMember(
+            series=target,
+            transaction_id=pk,
+            source=RecurringSeriesMember.Source.MANUAL,
+        )
+        for pk in source_txn_ids
+        if pk not in existing_ids
+    )
+    RecurringSeriesMember.objects.filter(series=target, transaction_id__in=source_txn_ids).update(
+        source=RecurringSeriesMember.Source.MANUAL
+    )
+    if source.status == RecurringSeries.Status.CONFIRMED or target.status == RecurringSeries.Status.CONFIRMED:
+        target.status = RecurringSeries.Status.CONFIRMED
+        target.save(update_fields=("status", "updated_at"))
+    source.delete()
+    return _recompute_series_from_members(target, extra_reasons=(MANUAL_REASON,))
+
+
+@transaction.atomic
+def remove_recurring_member(principal, series_id, transaction_id):
+    person = _person_for(principal)
+    lock_actor_household(person)
+    (series,) = _lock_visible_series_rows(person, (series_id,))
+    if not _is_grouping_series(series):
+        raise PermissionDenied(_DENIED)
+    member = (
+        RecurringSeriesMember.objects.select_for_update()
+        .filter(series=series, transaction_id=transaction_id)
+        .first()
+    )
+    if member is None:
+        raise PermissionDenied(_DENIED)
+    if Transaction.objects.visible_to(person).filter(pk=transaction_id).first() is None:
+        raise PermissionDenied(_DENIED)
+    RecurringExclusion.objects.get_or_create(person=person, transaction_id=transaction_id)
+    member.delete()
+    if not series.members.exists():
+        revalidate_series_after_member_removal(person, [series.pk])
+        return RecurringSeries.objects.filter(pk=series.pk).first()
+    return _recompute_series_from_members(series, extra_reasons=(MANUAL_REASON,))
+
+
+@transaction.atomic
+def add_recurring_members(principal, series_id, transaction_ids):
+    person = _person_for(principal)
+    lock_actor_household(person)
+    (series,) = _lock_visible_series_rows(person, (series_id,))
+    if not _is_grouping_series(series):
+        raise PermissionDenied(_DENIED)
+    requested = []
+    for pk in transaction_ids:
+        if pk not in requested:
+            requested.append(pk)
+    if not requested:
+        raise PermissionDenied(_DENIED)
+    eligible = {txn.pk for txn in grouping_candidate_transactions(person)}
+    claimed = _active_member_transaction_ids(person, exclude_series_id=series.pk)
+    already = set(series.members.values_list("transaction_id", flat=True))
+    for pk in requested:
+        if pk not in eligible or pk in claimed:
+            raise PermissionDenied(_DENIED)
+    RecurringExclusion.objects.filter(person=person, transaction_id__in=requested).delete()
+    RecurringSeriesMember.objects.bulk_create(
+        RecurringSeriesMember(
+            series=series,
+            transaction_id=pk,
+            source=RecurringSeriesMember.Source.MANUAL,
+        )
+        for pk in requested
+        if pk not in already
+    )
+    return _recompute_series_from_members(series, extra_reasons=(MANUAL_REASON,))
