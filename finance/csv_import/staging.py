@@ -8,6 +8,7 @@ from django.conf import settings
 
 from .parser import MAX_FILE_BYTES, CsvInputError
 from .profiles import normalize_profile
+from .saved_mappings import parse_saved_profile
 
 
 SESSION_KEY = "csv_import_stages"
@@ -123,8 +124,22 @@ def load_stage(request, token, account_id):
         raise StageUnavailable from exc
 
 
+def _stored_profile(value):
+    if parse_saved_profile(value) is not None:
+        return value
+    return normalize_profile(value)
+
+
 def stage_profile(request, token, account_id):
-    return normalize_profile(_live_metadata(request, token, account_id).get("import_profile"))
+    return _stored_profile(_live_metadata(request, token, account_id).get("import_profile"))
+
+
+def set_stage_profile(request, token, account_id, import_profile):
+    metadata = dict(_live_metadata(request, token, account_id))
+    metadata["import_profile"] = import_profile
+    stages = _session_stages(request)
+    stages[token] = metadata
+    request.session[SESSION_KEY] = stages
 
 
 def delete_stage(request, token):
