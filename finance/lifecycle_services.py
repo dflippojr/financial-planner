@@ -672,7 +672,7 @@ def _anonymize_shared_actor_refs(person):
     Membership.objects.filter(person=person).update(person=None)
 
 
-def _delete_empty_household(household_id):
+def _tear_down_household(household_id):
     from .models import (
         Budget,
         Category,
@@ -697,33 +697,31 @@ def _delete_empty_household(household_id):
     PlannedItem.objects.filter(household_id=household_id).delete()
     SavingsGoal.objects.filter(household_id=household_id).delete()
     Budget.objects.filter(household_id=household_id).delete()
-    kept = _delete_unless_referenced(Tag.objects.filter(household_id=household_id))
+    Tag.objects.filter(household_id=household_id).delete()
     mapping_ids = list(SavedCsvMapping.objects.filter(household_id=household_id).values_list("pk", flat=True))
     if mapping_ids:
         ImportBatch.objects.filter(saved_csv_mapping_id__in=mapping_ids).update(saved_csv_mapping=None)
         Account.objects.filter(default_saved_csv_mapping_id__in=mapping_ids).update(default_saved_csv_mapping=None)
         SavedCsvMapping.objects.filter(pk__in=mapping_ids).delete()
-    kept += _delete_unless_referenced(Category.objects.filter(household_id=household_id))
+    Category.objects.filter(household_id=household_id).delete()
     Invitation.objects.filter(household_id=household_id).delete()
-    if kept:
-        # Former members' private transactions, splits, rules, or budgets still use
-        # some of these categories or tags. Keep them, and the empty household that
-        # holds them, rather than change another person's private data.
-        return
     Membership.objects.filter(household_id=household_id).delete()
     Household.objects.filter(pk=household_id).delete()
 
 
-def _delete_unless_referenced(queryset):
-    """Delete each row unless a PROTECT reference still points at it; return how many were kept."""
-    kept = 0
-    for row in queryset.order_by("pk"):
-        try:
-            with transaction.atomic():
-                row.delete()
-        except ProtectedError:
-            kept += 1
-    return kept
+def _delete_empty_household(household_id):
+    """Remove a household with no current members, all at once or not at all.
+
+    Former members' private transactions, splits, rules, or budgets may still use
+    its categories or tags (PROTECT). Then the whole teardown rolls back and the
+    household keeps every row, rather than changing another person's private data
+    or deleting only part of the household.
+    """
+    try:
+        with transaction.atomic():
+            _tear_down_household(household_id)
+    except ProtectedError:
+        pass
 
 
 def _delete_login_user(user):

@@ -552,6 +552,16 @@ def test_last_member_can_delete_data_while_a_former_member_still_uses_household_
     txn = make_transaction(former, private, description="Synthetic grocer")
     assign_category(former, txn.pk, groceries.pk)
     TransactionTag.objects.create(transaction=txn, tag=tag)
+    former_plan = PlannedItem.objects.create(
+        owner=former,
+        scope=PlannedItem.Scope.HOUSEHOLD,
+        household=household,
+        name="Synthetic former plan",
+        kind=PlannedItem.Kind.EXPENSE,
+        amount_minor=5000,
+        start_date=date(2026, 1, 1),
+        cadence=PlannedItem.Cadence.MONTHLY,
+    )
     leave_household(former.user)
 
     delete_member_data(last)
@@ -560,3 +570,6 @@ def test_last_member_can_delete_data_while_a_former_member_still_uses_household_
     txn.refresh_from_db()
     assert txn.category_id == groceries.pk
     assert TransactionTag.objects.filter(transaction=txn, tag=tag).exists()
+    # The household is kept whole: none of its other rows are partly deleted.
+    assert Household.objects.filter(pk=household.pk).exists()
+    assert PlannedItem.objects.filter(pk=former_plan.pk).exists()
