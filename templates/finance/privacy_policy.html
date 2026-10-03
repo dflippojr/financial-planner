@@ -1,0 +1,31 @@
+{% extends "finance/base.html" %}
+{% block title %}Privacy and data policy · Financial Planner{% endblock %}
+{% block content %}
+<h1 class="mb-2 text-2xl font-bold">Privacy and data policy</h1>
+<p class="mb-4 text-sm opacity-80">
+  Version {{ privacy_policy.version }}
+  ·
+  {{ privacy_policy.published_at|date:"Y-m-d" }}
+  ·
+  {% if privacy_policy.is_material %}Material{% else %}Non-material{% endif %}
+  {% if not is_current_policy %}
+  ·
+  <a class="link" href="{% url 'privacy-policy' %}">Current version</a>
+  {% endif %}
+</p>
+<article class="max-w-none whitespace-pre-wrap text-sm leading-relaxed">{{ privacy_policy.body }}</article>
+{% if user.is_authenticated %}
+  {% if is_current_policy %}
+<form method="post" action="{% url 'privacy-policy-respond' %}" class="mt-6 flex flex-wrap gap-2">
+  {% csrf_token %}
+  <input type="hidden" name="next" value="{% url 'account-settings' %}">
+  <input type="hidden" name="action" value="accept">
+  <input type="hidden" name="version" value="{{ privacy_policy.version }}">
+  <button type="submit" class="btn btn-primary">Accept this version</button>
+</form>
+  {% else %}
+<p class="mt-6 text-sm opacity-80">This is not the current policy. Accepting is only offered on the current version.</p>
+<a class="btn btn-primary mt-2" href="{% url 'privacy-policy' %}">Read the current version</a>
+  {% endif %}
+{% endif %}
+{% endblock %}

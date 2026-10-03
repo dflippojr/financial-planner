@@ -18,6 +18,7 @@ from .auth_services import (
     record_login_failure,
     seed_first_household,
 )
+from .policy_services import current_policy, record_onboarding_acceptance
 from .google_auth import (
     GOOGLE_FAILED,
     GOOGLE_FLOW_NONCE_STATE_KEY,
@@ -170,12 +171,23 @@ class MemberSocialAccountAdapter(DefaultSocialAccountAdapter):
         except (InvalidOneTimeCode, GoogleOnboardingConflict):
             record_login_failure(key)
             raise ImmediateHttpResponse(self._failed_response(request, "join"))
+        record_onboarding_acceptance(
+            _user.person,
+            pending.get("accept_privacy_policy", False),
+            pending.get("privacy_policy_version"),
+        )
         clear_login_failures(key)
         raise ImmediateHttpResponse(
             render(
                 request,
                 "finance/join.html",
-                {"form": None, "google_form": None, "recovery_codes": recovery_codes},
+                {
+                    "form": None,
+                    "google_form": None,
+                    "recovery_codes": recovery_codes,
+                    "privacy_policy": current_policy(),
+                    "wide_card": True,
+                },
             )
         )
 
@@ -196,6 +208,11 @@ class MemberSocialAccountAdapter(DefaultSocialAccountAdapter):
             )
         except (ValueError, GoogleOnboardingConflict):
             raise ImmediateHttpResponse(self._failed_response(request, "setup"))
+        record_onboarding_acceptance(
+            user.person,
+            pending.get("accept_privacy_policy", False),
+            pending.get("privacy_policy_version"),
+        )
         clear_login_failures(key)
         complete_member_session(request, user)
         raise ImmediateHttpResponse(
@@ -207,6 +224,8 @@ class MemberSocialAccountAdapter(DefaultSocialAccountAdapter):
                     "google_form": None,
                     "recovery_codes": recovery_codes,
                     "setup_configured": True,
+                    "privacy_policy": current_policy(),
+                    "wide_card": True,
                 },
             )
         )

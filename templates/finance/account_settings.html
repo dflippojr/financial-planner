@@ -6,6 +6,34 @@
 {% if error %}<div role="alert" class="alert alert-error mb-4">{{ error }}</div>{% endif %}
 <p class="mb-2">Google: {% if has_google %}<span class="badge badge-success">connected</span>{% else %}<span class="badge">not connected</span>{% endif %}</p>
 <p class="mb-4">Password: {% if has_password %}<span class="badge badge-success">set</span>{% else %}<span class="badge">not set</span>{% endif %}</p>
+<section class="mb-6 rounded-box border border-base-300 p-4" aria-labelledby="privacy-acceptance-heading">
+  <h2 id="privacy-acceptance-heading" class="mb-2 font-semibold">Privacy and data policy</h2>
+  <p class="mb-2 text-sm">
+    Current version {{ privacy_policy.version }}
+    ({{ privacy_policy.published_at|date:"Y-m-d" }}).
+    <a class="link" href="{% url 'privacy-policy' %}">Read the policy</a>
+  </p>
+  {% if privacy_in_acceptance %}
+  <p class="mb-2">You are in acceptance.</p>
+  {% else %}
+  <p class="mb-2">You are not in acceptance. You can use the app, but AI backends stay off.</p>
+  {% endif %}
+  {% if privacy_acceptance %}
+  <p class="mb-2 text-sm opacity-80">
+    Last accepted version {{ privacy_acceptance.policy_version.version }}
+    on {{ privacy_acceptance.accepted_at|date:"Y-m-d" }}.
+    <a class="link" href="{% url 'privacy-policy-version' privacy_acceptance.policy_version.version %}">Show that text</a>
+  </p>
+  {% endif %}
+  {% if not privacy_acceptance or privacy_acceptance.policy_version.version != privacy_policy.version %}
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="accept-privacy-policy">
+    <input type="hidden" name="version" value="{{ privacy_policy.version }}">
+    <button type="submit" class="btn btn-primary">Accept version {{ privacy_policy.version }}</button>
+  </form>
+  {% endif %}
+</section>
 <form method="post" action="{% url 'account-export' %}" class="mb-4">
   {% csrf_token %}
   <button type="submit" class="btn btn-outline">Export data</button>

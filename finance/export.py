@@ -14,6 +14,7 @@ from .models import (
     Account,
     Category,
     ImportBatch,
+    PrivacyPolicyAcceptance,
     RecurringSeries,
     RefundLink,
     Transaction,
@@ -28,6 +29,7 @@ ENTITY_FILES = (
     "import_batches",
     "transfer_pairs",
     "recurring_series",
+    "privacy_policy_acceptances",
 )
 CSV_FIELDS = {
     "accounts": (
@@ -91,6 +93,12 @@ CSV_FIELDS = {
         "member_transaction_ids",
         "fingerprint",
     ),
+    "privacy_policy_acceptances": (
+        "id",
+        "policy_version",
+        "is_material",
+        "accepted_at",
+    ),
     "balance_snapshots": (
         "id",
         "account_id",
@@ -118,6 +126,10 @@ or link that touches those private records are omitted.
 
 Archived (undone) transactions and import batches are included. The status
 column is "archived" when the row is not active.
+
+privacy_policy_acceptances.csv records each time this member accepted a
+privacy-policy version, including the version number and whether that version
+was material.
 
 Files
 -----
@@ -162,6 +174,10 @@ balance_snapshots.csv / balance_snapshots.json
   net_contribution_minor, net_contribution_decimal.
   net_contribution_minor is null except on manual statement entries.
   Present only when the balance snapshot model exists in this installation.
+
+privacy_policy_acceptances.csv / privacy_policy_acceptances.json
+  This member's policy-acceptance rows: id, policy_version, is_material,
+  accepted_at.
 
 JSON files are arrays of objects. CSV uses UTF-8. Nested lists in CSV are JSON
 arrays. Date and datetime values are ISO-8601.
@@ -372,6 +388,25 @@ def _recurring_series_rows(person):
     return rows
 
 
+def _privacy_acceptance_rows(person):
+    rows = []
+    query = (
+        PrivacyPolicyAcceptance.objects.filter(person=person)
+        .select_related("policy_version")
+        .order_by("pk")
+    )
+    for row in query:
+        rows.append(
+            {
+                "id": row.pk,
+                "policy_version": row.policy_version.version,
+                "is_material": row.policy_version.is_material,
+                "accepted_at": row.accepted_at,
+            }
+        )
+    return rows
+
+
 def _balance_snapshot_model():
     try:
         return apps.get_model("finance", "BalanceSnapshot")
@@ -388,6 +423,7 @@ def collect_export_tables(person) -> dict[str, list[dict]]:
         "import_batches": _import_batch_rows(person),
         "transfer_pairs": _transfer_pair_rows(person),
         "recurring_series": _recurring_series_rows(person),
+        "privacy_policy_acceptances": _privacy_acceptance_rows(person),
     }
     snapshot_model = _balance_snapshot_model()
     if snapshot_model is not None:

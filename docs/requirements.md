@@ -368,15 +368,14 @@ Owner decisions:
 ## Privacy and data policy (2026-10-02, #106)
 
 Owner decisions:
-- **Every member is asked to accept** the app's privacy and data policy. It covers where data is stored, SimpleFIN, Google sign-in, sending data to outside AI providers (including household-shared data), what other members can see, export, and deletion.
-- **Where it is asked.** First-run setup, joining by invitation, and Google sign-up present the policy. Existing members are prompted on their next visit.
-- **Being in acceptance.** A member is in acceptance when they have accepted the latest material version, or any later version. A non-material version never takes anyone out of acceptance.
-- **Declining.** A member who is not in acceptance can still use the app, but:
-  - they cannot connect or use AI;
-  - no member's AI backend may receive household-shared data until every current member is in acceptance.
-- **Records.** Acceptance is recorded per member and per policy version, and included in that member's export.
-- **New versions.** Only a version an operator marks as material requires members to accept again.
-- **The text.** The repository ships a default policy that each install's operator can replace without changing code. Claude drafts the default, and the owner edits and approves it.
+
+- Every member is asked to accept a privacy and data policy that discloses how data is stored and that a member who connects an outside AI provider may send household-shared data visible to them to that provider, once every current member is in acceptance. Other members' private data is never sent. It covers where data is stored, SimpleFIN, Google sign-in, sending data to outside AI providers (including household-shared data), what other members can see, export, and deletion.
+- The default text lives in `finance/policy/default.md` for the owner to edit in the PR. Operators replace it without changing code via `PRIVACY_POLICY_PATH` and `python manage.py publish_privacy_policy` (`--material` when members must accept again). Versions are kept so the text someone accepted can be shown later.
+- A member is in acceptance when they have accepted the latest material version, or any later version. A non-material version never takes anyone out of acceptance.
+- Setup, join, and Google sign-up present the policy but do not block. Existing members see a prompt until they respond. Without acceptance the app works; AI backends do not. While any current household member is not in acceptance, no member's AI backend may receive household-shared data.
+- Acceptance rows are per member and version and are included in that member's export. The policy page is public.
+- Accepting records the version that was shown. If that version is no longer current, no acceptance is recorded: the policy page and account settings re-show the current text, and setup, join, and Google sign-up still finish so the persistent prompt can ask again. Historical versions do not offer Accept.
+- Only a version an operator marks as material requires members to accept again.
 
 AI refinements (owner, 2026-10-02, #91 and #94):
 - **Harness address.** A member may connect only an Agent Harness on the same host or on the tailnet. HTTPS is required except on loopback.

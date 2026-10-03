@@ -9,6 +9,7 @@
 <div role="status" class="alert">The operator must set <code>SETUP_CODE</code> in the environment before the first member can be created in the browser.</div>
 {% else %}
 {% include "finance/_messages.html" %}
+{% include "finance/_privacy_policy_text.html" %}
 {% if google_signin_enabled %}
 <form method="post" class="mb-4">
   {% csrf_token %}
