@@ -517,10 +517,11 @@ def _apply_detection(series, detected, *, eligible_ids, preserve_identity=False)
         series.cadence = detected.cadence
     series.currency = detected.currency
     RecurringSeriesMember.objects.filter(series=series).exclude(transaction_id__in=eligible_ids).delete()
-    RecurringSeriesMember.objects.filter(
-        series=series,
-        source=RecurringSeriesMember.Source.DETECTED,
-    ).exclude(transaction_id__in=detected.transaction_ids).delete()
+    if not preserve_identity:
+        RecurringSeriesMember.objects.filter(
+            series=series,
+            source=RecurringSeriesMember.Source.DETECTED,
+        ).exclude(transaction_id__in=detected.transaction_ids).delete()
     claimed_elsewhere = _active_member_transaction_ids(series.person, exclude_series_id=series.pk)
     existing_ids = set(series.members.values_list("transaction_id", flat=True))
     RecurringSeriesMember.objects.bulk_create(

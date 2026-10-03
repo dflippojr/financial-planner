@@ -1144,11 +1144,119 @@ def test_grouping_actions_deny_another_members_series_and_private_transactions()
 
     client = Client()
     client.force_login(member.user)
+    url = reverse("recurring-review")
+    secret_txn_id = secret.members.first().transaction_id
     merge_page = client.post(
-        reverse("recurring-review"),
+        url,
         {"series_id": secret.pk, "target_id": shared_series.pk, "action": "merge"},
     )
+    merge_into_hidden = client.post(
+        url,
+        {"series_id": member_series.pk, "target_id": secret.pk, "action": "merge"},
+    )
+    merge_into_visible_foreign = client.post(
+        url,
+        {"series_id": member_series.pk, "target_id": shared_series.pk, "action": "merge"},
+    )
+    remove_hidden = client.post(
+        url,
+        {"series_id": secret.pk, "transaction_id": secret_txn_id, "action": "remove"},
+    )
+    add_hidden_series = client.post(
+        url,
+        {"series_id": secret.pk, "transaction_id": member_txn.pk, "action": "add"},
+    )
+    add_hidden_txn = client.post(
+        url,
+        {"series_id": member_series.pk, "transaction_id": secret_txn_id, "action": "add"},
+    )
+    add_empty = client.post(url, {"series_id": member_series.pk, "action": "add"})
+    bad_ids = client.post(url, {"series_id": "x", "action": "merge", "target_id": "y"})
+    unknown_action = client.post(url, {"series_id": member_series.pk, "action": "rename"})
+
     assert merge_page.status_code == 404
+    assert merge_into_hidden.status_code == 404
+    assert merge_into_visible_foreign.status_code == 404
+    assert remove_hidden.status_code == 404
+    assert add_hidden_series.status_code == 404
+    assert add_hidden_txn.status_code == 404
+    assert add_empty.status_code == 404
+    assert bad_ids.status_code == 404
+    assert unknown_action.status_code == 404
     assert b"Synthetic Secret" not in merge_page.content
     assert RecurringSeries.objects.filter(pk=secret.pk).exists()
     assert RecurringSeries.objects.filter(pk=shared_series.pk).exists()
+    assert RecurringSeries.objects.filter(pk=member_series.pk).exists()
+    assert RecurringSeriesMember.objects.filter(series=secret, transaction_id=secret_txn_id).exists()
+    assert not RecurringSeriesMember.objects.filter(series=member_series, transaction_id=secret_txn_id).exists()
+    assert RecurringSeriesMember.objects.filter(series=member_series, transaction=member_txn).exists()
+    hidden_picker = client.get(url, {"add_series": secret.pk, "q": "secret"})
+    assert hidden_picker.status_code == 200
+    assert hidden_picker.context["add_series_id"] is None
+    assert hidden_picker.context["add_candidates"] == []
+    assert b"Synthetic Secret" not in hidden_picker.content
+
+
+@pytest.mark.django_db
+def test_review_page_posts_merge_remove_and_add_for_the_signed_in_member():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    add_monthly_charges(owner, account, description="Synthetic Old Name", amount_minor=-1500)
+    add_monthly_charges(owner, account, description="Synthetic New Name", amount_minor=-1500, start=date(2026, 4, 15))
+    extra = make_transaction(
+        owner,
+        account,
+        transaction_date=date(2026, 7, 20),
+        amount_minor=-1499,
+        description="Synthetic other shop",
+    )
+    refresh_recurring_series(owner)
+    source = RecurringSeries.objects.get(merchant_key="synthetic old name")
+    target = RecurringSeries.objects.get(merchant_key="synthetic new name")
+    client = Client()
+    client.force_login(owner.user)
+    url = reverse("recurring-review")
+
+    merge = client.post(url, {"series_id": source.pk, "target_id": target.pk, "action": "merge"})
+    assert merge.status_code == 302
+    remaining = RecurringSeries.objects.get(person=owner, is_active=True)
+    assert remaining.pk == target.pk
+    assert remaining.members.count() == 6
+    assert not RecurringSeries.objects.filter(pk=source.pk).exists()
+
+    dropped = remaining.members.order_by("transaction__transaction_date").first().transaction
+    remove = client.post(
+        url,
+        {"series_id": remaining.pk, "transaction_id": dropped.pk, "action": "remove"},
+    )
+    assert remove.status_code == 302
+    remaining.refresh_from_db()
+    assert not remaining.members.filter(transaction_id=dropped.pk).exists()
+    assert RecurringExclusion.objects.filter(person=owner, transaction=dropped).exists()
+
+    add = client.post(
+        url,
+        {"series_id": remaining.pk, "transaction_id": extra.pk, "action": "add"},
+    )
+    assert add.status_code == 302
+    remaining.refresh_from_db()
+    assert remaining.members.filter(transaction_id=extra.pk, source=RecurringSeriesMember.Source.MANUAL).exists()
+    assert not RecurringExclusion.objects.filter(person=owner, transaction=extra).exists()
+
+    listing = client.get(url, {"add_series": remaining.pk, "q": "old name"})
+    assert listing.status_code == 200
+    assert listing.context["add_series_id"] == remaining.pk
+    candidate_ids = {txn.pk for txn in listing.context["add_candidates"]}
+    assert dropped.pk in candidate_ids
+    assert extra.pk not in candidate_ids
+
+    hidden_add = client.get(url, {"add_series": source.pk})
+    assert hidden_add.status_code == 200
+    assert hidden_add.context["add_series_id"] is None
+    assert hidden_add.context["add_candidates"] == []
+
+    bad_target = client.post(url, {"series_id": remaining.pk, "target_id": "nope", "action": "merge"})
+    bad_remove = client.post(url, {"series_id": remaining.pk, "transaction_id": "nope", "action": "remove"})
+    bad_add = client.post(url, {"series_id": remaining.pk, "transaction_id": "nope", "action": "add"})
+    assert bad_target.status_code == bad_remove.status_code == bad_add.status_code == 404
