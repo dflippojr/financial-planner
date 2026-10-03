@@ -167,8 +167,33 @@ Same 439 rows and 282 negative amounts as the native file, so the same transacti
 
 - Call a series recurring only after at least 3 occurrences at a regular interval. With 2 occurrences it may be shown only as "possible".
 - Detect weekly, biweekly, monthly, quarterly, and annual cadences, each with a few days of date tolerance.
-- Amounts may vary by up to 25% within a series, measured against the selected cadence chain's own median rather than the whole merchant cluster. Detection picks a cadence chain for a merchant first, then applies that 25% band. When the chosen chain fails the band, the member farthest from that chain's median is left out of this pick (not marked used) and the chain is picked again, repeating until a chain passes or fewer than two candidates remain; only then does detection fall back to clustering remaining charges by amount. Exact amounts get higher confidence than varying ones.
+- Amounts may vary by up to 25% within a series. The band follows drift rather than the whole chain's median; see Recurring series grouping below. Detection still picks a cadence chain for a merchant first. When the chosen chain fails the rolling band, the charge that breaks that band by the most is left out of this pick (ties: the later pk) and the chain is picked again, repeating until a chain passes or fewer than two candidates remain; only then does detection fall back to clustering remaining charges by amount. Exact amounts get higher confidence than varying ones.
 - Confirmed series appear on their own Recurring page, with monthly and annual totals, linked from the dashboard. Summary cards show those totals and the largest confirmed series is listed first (issue #57). A confirmed series stays matched only to suggestions in its own amount cluster (within 25% of that series' typical amount, not a pairwise median with a second cluster) and is never reassigned onto another cluster or given a colliding fingerprint. Refresh keeps a confirmed series active while at least one of its occurrences is still eligible; it deactivates the series (clears members, drops it from totals, keeps the confirmation) only when none remain. An eligible leftover occurrence is enough even when detection can no longer form a chain. A later eligible chain of the same merchant, cadence, and amount band can reactivate it.
+
+## Recurring series grouping (2026-10-03, #124)
+
+These rules replace the whole-chain median band above. Prices drift with inflation, and a fixed 25% band around one median splits a single bill into several series over time. This also answers #102: a confirmed series follows a single step change once the new price is confirmed, and gradual drift too.
+
+- **The 25% band follows drift.** Each charge after the first must be within 25% of the chain's current level: the median of the up to two accepted charges before it, in date order.
+  - **Confirmed price change.** A charge outside that band still belongs to the chain when the next charge is within 25% of it and outside the band of the old level. The level then resets to the new price.
+    - A charge that returns to the old price confirms nothing.
+    - A lone out-of-band charge that the next charge does not confirm is an outlier, including the latest charge when nothing follows it yet.
+  - **Outliers.** Outlier removal and the amount-clustering fallback (#50) apply as before: drop the charge that breaks the rolling band by the most (ties: the later pk), then pick again.
+  - **Result.**
+    - Gradual drift stays in one series (for example $150 rising to $230 over 24 months).
+    - A single step change stays in one series once confirmed: $20 for 12 months then $27, $27.
+    - Consecutive confirmed steps stay in one series: $100, $120, $144 (each +20%).
+    - $20 every month with a single $60 month is one series; $60 is the outlier.
+    - Two concurrent plans at clearly different prices from one merchant stay separate. Interleaved charges are never confirmed price changes, because the next charge in date order returns toward the other level.
+- A series' typical amount is its recent price: the median of its latest three occurrences, or of all of them if there are fewer. Monthly and annual totals, matching a confirmed series to new suggestions, the projection, and export all use it.
+- Confidence still scores exact amounts higher. The amount reason reports the largest step between consecutive charges (for example "amounts change by up to 8% between charges (within 25%)"). If the first and latest amounts differ by more than 25%, it also says so (for example "price rose 53% overall").
+- Members correct grouping on the Recurring page, on their own series, whether confirmed or suggested:
+  - **Merge** one series into another, even across merchant keys. The target keeps its cadence, display name, and merchant key, and becomes confirmed if either series was confirmed. Source members become manual members of the target. The source series is deleted.
+  - **Remove** a charge from a series. The charge is then excluded from recurring detection for that person until it is added back by hand.
+  - **Add** an eligible charge that is not in another active series. Added charges are manual members; adding clears any exclusion on that charge.
+  - After any edit, recompute typical amount and confidence, and add the reason "grouping edited manually".
+- Manual edits survive refresh. Members are marked as detected or manual. Refresh adds a detected chain to a series rather than replacing members, and never drops manual members. A detected chain that shares any charge with an existing active series (confirmed or open) attaches to that series and must never create a second overlapping series. Detection never considers excluded transactions. Manual members follow the same eligibility and revalidation rules as detected ones, including account deletion and sharing changes.
+- Export includes each member's source and the person's excluded charges.
 
 ## Spending by category decisions (2026-09-30, #10)
 
@@ -246,7 +271,7 @@ Owner decision: a single **Delete account and all its data** action covers both 
 
 Defaults recorded with the decision (owner may change):
 - Only the account's current owner may delete it, including a household-shared account. Other members can still archive or make it private under the existing rules.
-- Deletion is permanent. It removes the account and every row that belongs to it: transactions, import batches, correction history, transfer pairs, refund links, and recurring-series memberships.
+- Deletion is permanent. It removes the account and every row that belongs to it: transactions, import batches, correction history, transfer pairs, refund links, recurring-series memberships, and recurring exclusions for those transactions.
 - Rows in other accounts that referenced the deleted data are repaired, not deleted:
   - A transfer partner returns to income or spending with its original category.
   - A refund linked to a deleted original keeps its stored category but loses the link. A deleted refund is removed from its original.
