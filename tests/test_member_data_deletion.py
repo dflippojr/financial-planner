@@ -472,3 +472,35 @@ def test_member_who_already_left_can_delete_data_and_their_household_rows_pass_o
     assert item.owner_id == owner.pk
     assert mapping.created_by_id == owner.pk
     assert not Person.objects.filter(pk=member.pk).exists()
+
+
+@pytest.mark.django_db
+def test_deleting_data_never_removes_another_former_members_rows_in_an_empty_household():
+    from finance.lifecycle_services import delete_member_data, leave_household
+
+    member_a = make_person("member_a")
+    member_b = make_person("member_b")
+    household = make_household(member_a, member_b)
+
+    def plan(owner, name):
+        return PlannedItem.objects.create(
+            owner=owner,
+            scope=PlannedItem.Scope.HOUSEHOLD,
+            household=household,
+            name=name,
+            kind=PlannedItem.Kind.EXPENSE,
+            amount_minor=5000,
+            start_date=date(2026, 1, 1),
+            cadence=PlannedItem.Cadence.MONTHLY,
+        )
+
+    plan_a = plan(member_a, "Synthetic plan A")
+    plan_b = plan(member_b, "Synthetic plan B")
+    leave_household(member_a.user)
+    leave_household(member_b.user)
+
+    delete_member_data(member_a)
+
+    assert not PlannedItem.objects.filter(pk=plan_a.pk).exists()
+    assert PlannedItem.objects.filter(pk=plan_b.pk).exists()
+    assert Household.objects.filter(pk=household.pk).exists()
