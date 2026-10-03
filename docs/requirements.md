@@ -401,3 +401,17 @@ The owner wants to find out what access is possible rather than wait. Two routes
 **Proposed, not yet decided:** Sign in with ChatGPT is an AI connection only, not a sign-in method next to Google. Invitations still apply.
 
 **Data use:** plan-usage Responses must use `store: false`. Whether request bodies are used for training was not established. #106 applies before household-shared data is sent.
+
+## Split transactions (2026-10-02, #97)
+
+Owner decisions:
+- **Splitting.** A transaction can be split into two or more parts, each with a category. The parts must add up exactly to the transaction amount in minor units, and every part has the transaction's sign.
+- **Transfers and refunds.**
+  - A transfer leg or a linked refund cannot be split. It must be unpaired or unlinked first.
+  - A refund linked to a split purchase is attached to one part chosen by the member, and inherits that part's category.
+  - Splitting a purchase that already has linked refunds asks which part each refund belongs to.
+- **Categorization rules** skip split transactions: a split counts as categorized by hand.
+- **Recurring detection** uses the whole transaction.
+- **History.** Splitting and unsplitting are recorded in correction history.
+- **Reports.** Spending by category, trends, and budgets count each part in its own category. Cash flow totals are unchanged, because the parts add up to the transaction.
+- **Amount edits.** Editing the amount of a split transaction is refused with "Unsplit to change the amount".
