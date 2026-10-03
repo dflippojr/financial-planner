@@ -433,3 +433,52 @@ Owner decisions:
 - **Recurring detection** uses the whole transaction.
 - **History.** Splitting and unsplitting are recorded in correction history.
 - **Reports.** Spending by category, trends, and budgets count each part in its own category. Cash flow totals are unchanged, because the parts add up to the transaction.
+
+## Notes and tags (2026-10-03, #98)
+
+Owner decisions:
+- **Notes.** A transaction can have one free-text note. Notes follow the transaction's visibility, so anyone who can see a household transaction sees its note. Editing a note is not recorded in correction history.
+- **Tags** are household-scoped, like categories. A transaction can have many.
+- **Filtering.** A tag filter is available on the transaction list, spending by category, and cash flow, so a trip total is one filter away.
+- **Reimports and export.** Notes and tags are never changed by a reimport, and both are included in the export.
+
+## Alerts (2026-10-03, #99)
+
+Owner decisions:
+- **Delivery in v1** is an in-app inbox only: an unread count in the nav and an Alerts page. No outside service.
+- **Alerts in v1:**
+  - a SimpleFIN sync failed, or a connection needs re-linking;
+  - a recurring charge's price changed or an expected charge is missing (raised by #102);
+  - a budget reached 90% or went over;
+  - a transaction was above a threshold the member sets.
+- **Who gets an alert.** One about a household account goes to every current member. One about a private account goes only to its owner. A member who leaves no longer sees household alerts.
+
+## Saved CSV mappings (2026-10-03, #101)
+
+Owner decisions:
+- **Scope.** Saved mappings are household-wide: any current member can use and edit them, like categories.
+- **Locked after the first import.** Once a mapping has imported a batch, its description rule cannot change, because that rule feeds the reimport fingerprint. A member makes a new mapping instead.
+
+## Recurring review (2026-10-03, #102)
+
+Owner decisions:
+- **Price changes.** A change is flagged when the latest charge differs from the series' recent typical amount (#124) by 10% or more.
+- **Cancelling.** A member can mark a series cancelled. It leaves totals and the projection, and its history stays. If a new matching charge arrives, it shows as "resumed?" for the member to confirm.
+- **Step changes** are covered by #124: a confirmed series follows step changes and gradual drift.
+
+## Monthly review (2026-10-03, #95)
+
+Owner decisions:
+- **Facts first.** A plain monthly review of computed facts ships first and works with AI off. AI phrasing follows as a later step.
+- **Alert.** Each month's review also arrives as an inbox alert (#99): "Your September review is ready".
+
+## Deleting a member's data (2026-10-03, #104)
+
+Owner decision: a member can delete their own data, self-service from settings.
+- **Before deleting:**
+  - It needs re-authentication and typing a confirmation.
+  - The member is offered an export first.
+- **What is deleted:** the member's private accounts and personal records.
+- **What stays:**
+  - Shared household data stays.
+  - The member appears as "former member" in shared history.
