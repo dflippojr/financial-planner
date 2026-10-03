@@ -1,5 +1,5 @@
 from calendar import monthrange
-from datetime import date
+from datetime import date, timedelta
 from types import SimpleNamespace
 from urllib.parse import urlencode
 
@@ -350,6 +350,24 @@ def set_budget_archived(principal, budget, archived):
     return budget
 
 
+def _new_rollover_period_start(budget):
+    """Start a rollover period strictly after every existing reset.
+
+    A reset and re-enabling can share a clock tick, so "now" alone would let
+    an old reset count in the new period.
+    """
+    started = timezone.now()
+    latest = (
+        BudgetRolloverReset.objects.filter(budget=budget)
+        .order_by("-created_at")
+        .values_list("created_at", flat=True)
+        .first()
+    )
+    if latest is not None and latest >= started:
+        started = latest + timedelta(microseconds=1)
+    return started
+
+
 def set_budget_rollover(principal, budget, enabled, *, month):
     person = _person(principal)
     _check_can_edit(person, budget)
@@ -360,7 +378,7 @@ def set_budget_rollover(principal, budget, enabled, *, month):
         if budget.rollover_started_month is None:
             budget.rollover_started_month = month
         if turning_on:
-            budget.rollover_enabled_at = timezone.now()
+            budget.rollover_enabled_at = _new_rollover_period_start(budget)
     else:
         budget.rollover_enabled = False
         budget.rollover_started_month = None

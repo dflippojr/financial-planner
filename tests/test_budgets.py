@@ -453,3 +453,24 @@ def test_resetting_the_same_month_again_counts_in_the_new_rollover_period():
     # The June reset is part of the current period again: only June's leftover carries.
     assert cards[budget.pk].carry_minor == 10_000
     assert BudgetRolloverReset.objects.filter(budget=budget, month=date(2026, 6, 1)).count() == 1
+
+
+@pytest.mark.django_db
+def test_reset_and_re_enabling_in_the_same_clock_tick_starts_a_clean_period(monkeypatch):
+    from django.utils import timezone as django_timezone
+
+    owner = make_person("owner")
+    household = make_household(owner)
+    groceries = household.categories.get(name="Groceries")
+    budget = add_budget(owner, category=groceries, amount_minor=10_000, month=date(2026, 1, 1), rollover=True)
+    frozen = django_timezone.now()
+    monkeypatch.setattr("finance.budget_services.timezone.now", lambda: frozen)
+    monkeypatch.setattr("django.utils.timezone.now", lambda: frozen)
+    reset_budget_rollover(owner.user, budget, month=date(2026, 6, 1))
+    set_budget_rollover(owner.user, budget, False, month=date(2026, 6, 1))
+    set_budget_rollover(owner.user, budget, True, month=date(2026, 3, 1))
+    budget.refresh_from_db()
+
+    cards = {card.budget.pk: card for card in month_budget_cards(owner.user, date(2026, 7, 1))}
+
+    assert cards[budget.pk].carry_minor == 40_000
