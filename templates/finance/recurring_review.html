@@ -19,6 +19,142 @@
     </div>
   </article>
 </div>
+<h2 class="mb-3 text-xl font-semibold">Upcoming</h2>
+<div class="overflow-x-auto mb-8">
+  <table class="table table-zebra">
+    <thead class="sticky top-0 z-10 bg-base-200">
+      <tr>
+        <th>Name</th>
+        <th>Expected</th>
+        <th>Cadence</th>
+        <th class="text-right">Typical amount</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for item in upcoming %}
+      <tr>
+        <td>{{ item.series.display_name }}</td>
+        <td>{{ item.expected_on }}</td>
+        <td>{{ item.series.get_cadence_display }}</td>
+        <td class="text-right">{% include "finance/_amount.html" with value=item.amount_display tone="out" %}</td>
+      </tr>
+    {% empty %}
+      <tr><td colspan="4">No upcoming charges in the next 30 days.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+<h2 class="mb-3 text-xl font-semibold">Price changes</h2>
+<div class="overflow-x-auto mb-8">
+  <table class="table table-zebra">
+    <thead class="sticky top-0 z-10 bg-base-200">
+      <tr>
+        <th>Name</th>
+        <th>Charge date</th>
+        <th class="text-right">Previous typical</th>
+        <th class="text-right">New amount</th>
+        <th>Change</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for item in price_changes %}
+      <tr>
+        <td>{{ item.series.display_name }}</td>
+        <td>{{ item.charge_date }}</td>
+        <td class="text-right">{% include "finance/_amount.html" with value=item.previous_display tone="out" %}</td>
+        <td class="text-right">{% include "finance/_amount.html" with value=item.new_display tone="out" %}</td>
+        <td>{{ item.percent_display }}</td>
+        <td>
+          <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="series_id" value="{{ item.series.pk }}">
+            <input type="hidden" name="action" value="dismiss_price">
+            <button type="submit" class="btn btn-sm">Dismiss</button>
+          </form>
+        </td>
+      </tr>
+    {% empty %}
+      <tr><td colspan="6">No price changes of 10% or more.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+<h2 class="mb-3 text-xl font-semibold">Missed charges</h2>
+<div class="overflow-x-auto mb-8">
+  <table class="table table-zebra">
+    <thead class="sticky top-0 z-10 bg-base-200">
+      <tr>
+        <th>Name</th>
+        <th>Expected</th>
+        <th class="text-right">Typical amount</th>
+        <th>Status</th>
+        <th>Import</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for item in missed_charges %}
+      <tr>
+        <td>{{ item.series.display_name }}</td>
+        <td>{{ item.expected_on }}</td>
+        <td class="text-right">{% include "finance/_amount.html" with value=item.amount_display tone="out" %}</td>
+        <td>expected, not seen</td>
+        <td>{% if item.missing_import %}<span class="badge badge-warning">Missing import</span>{% else %}<span class="badge badge-ghost">Import present</span>{% endif %}</td>
+      </tr>
+    {% empty %}
+      <tr><td colspan="5">No missed charges.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+<h2 class="mb-3 text-xl font-semibold">Cancelled</h2>
+<div class="overflow-x-auto mb-8">
+  <table class="table table-zebra">
+    <thead class="sticky top-0 z-10 bg-base-200">
+      <tr>
+        <th>Name</th>
+        <th>Cadence</th>
+        <th class="text-right">Typical amount</th>
+        <th>Status</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for item in cancelled_series %}
+      <tr>
+        <td>{{ item.series.display_name }}</td>
+        <td>{{ item.series.get_cadence_display }}</td>
+        <td class="text-right">{% include "finance/_amount.html" with value=item.series.amount_display tone="out" %}</td>
+        <td>{% if item.resumed %}resumed?{% else %}Cancelled{% endif %}</td>
+        <td>
+          {% if item.resumed %}
+            <form method="post" class="mb-1">
+              {% csrf_token %}
+              <input type="hidden" name="series_id" value="{{ item.series.pk }}">
+              <input type="hidden" name="action" value="confirm_resume">
+              <button type="submit" class="btn btn-sm btn-primary">Confirm resume</button>
+            </form>
+            <form method="post" class="mb-1">
+              {% csrf_token %}
+              <input type="hidden" name="series_id" value="{{ item.series.pk }}">
+              <input type="hidden" name="action" value="keep_cancelled">
+              <button type="submit" class="btn btn-sm">Keep cancelled</button>
+            </form>
+          {% endif %}
+          <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="series_id" value="{{ item.series.pk }}">
+            <input type="hidden" name="action" value="undo_cancel">
+            <button type="submit" class="btn btn-sm">Undo cancel</button>
+          </form>
+        </td>
+      </tr>
+    {% empty %}
+      <tr><td colspan="5">No cancelled series.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
 <h2 class="mb-3 text-xl font-semibold">Confirmed</h2>
 <div class="overflow-x-auto mb-8">
   <table class="table table-zebra">
@@ -32,6 +168,7 @@
         <th>Confidence</th>
         <th>Reasons</th>
         <th>Transactions</th>
+        <th></th>
       </tr>
     </thead>
     <tbody>
@@ -50,9 +187,17 @@
           </ul>
           {% include "finance/_recurring_grouping.html" %}
         </td>
+        <td>
+          <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="series_id" value="{{ series.pk }}">
+            <input type="hidden" name="action" value="cancel">
+            <button type="submit" class="btn btn-sm">Mark cancelled</button>
+          </form>
+        </td>
       </tr>
     {% empty %}
-      <tr><td colspan="8">No confirmed recurring charges.</td></tr>
+      <tr><td colspan="9">No confirmed recurring charges.</td></tr>
     {% endfor %}
     </tbody>
   </table>

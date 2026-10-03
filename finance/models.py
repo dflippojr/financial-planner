@@ -810,6 +810,8 @@ class RecurringSeries(models.Model):
     reasons = models.JSONField(validators=(validate_reason_list,))
     fingerprint = models.CharField(max_length=64, validators=(sha256_validator,))
     is_active = models.BooleanField(default=True)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    acknowledged_amount_minor = models.BigIntegerField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

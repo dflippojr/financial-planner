@@ -8,6 +8,7 @@ import re
 
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
+from django.utils import timezone
 
 from .category_services import exclusion_exists_for
 from .lifecycle_services import lock_actor_household
@@ -802,7 +803,11 @@ def refresh_recurring_series(principal):
         )
     _drop_stale_open_rows(open_rows, kept_ids)
     _reconcile_unmatched_confirmed(confirmed, kept_ids, eligible_ids)
-    return RecurringSeries.objects.visible_to(person)
+    visible = RecurringSeries.objects.visible_to(person).prefetch_related("members__transaction__account")
+    from .recurring_review import raise_recurring_review_alerts
+
+    raise_recurring_review_alerts(person, list(visible), today=timezone.localdate())
+    return visible
 
 
 def _visible_series(principal, series_id):
@@ -847,13 +852,15 @@ def confirmed_totals(series_queryset):
     for series in series_queryset:
         if series.status != RecurringSeries.Status.CONFIRMED or not series.is_active:
             continue
+        if series.cancelled_at is not None:
+            continue
         monthly += series.monthly_minor
         annual += series.annual_minor
     return monthly, annual
 
 
 def _is_grouping_series(series):
-    return series.is_active and series.status != RecurringSeries.Status.DISMISSED
+    return series.is_active and series.status != RecurringSeries.Status.DISMISSED and series.cancelled_at is None
 
 
 def _lock_visible_series_rows(person, series_ids):
@@ -985,3 +992,76 @@ def add_recurring_members(principal, series_id, transaction_ids):
         if pk not in already
     )
     return _recompute_series_from_members(series, extra_reasons=(MANUAL_REASON,))
+
+
+def _lock_confirmed_series(principal, series_id):
+    person = _person_for(principal)
+    lock_actor_household(person)
+    _visible_series(person, series_id)
+    series = RecurringSeries.objects.select_for_update(of=("self",)).filter(pk=series_id).first()
+    if series is None or series.status != RecurringSeries.Status.CONFIRMED or not series.is_active:
+        raise PermissionDenied(_DENIED)
+    return person, series
+
+
+@transaction.atomic
+def cancel_recurring_series(principal, series_id):
+    _person, series = _lock_confirmed_series(principal, series_id)
+    if series.cancelled_at is not None:
+        return series
+    series.cancelled_at = timezone.now()
+    series.save(update_fields=("cancelled_at", "updated_at"))
+    return series
+
+
+@transaction.atomic
+def undo_cancel_recurring_series(principal, series_id):
+    _person, series = _lock_confirmed_series(principal, series_id)
+    if series.cancelled_at is None:
+        return series
+    series.cancelled_at = None
+    series.save(update_fields=("cancelled_at", "updated_at"))
+    return series
+
+
+@transaction.atomic
+def confirm_resume_recurring_series(principal, series_id):
+    return undo_cancel_recurring_series(principal, series_id)
+
+
+@transaction.atomic
+def keep_cancelled_recurring_series(principal, series_id):
+    person, series = _lock_confirmed_series(principal, series_id)
+    if series.cancelled_at is None:
+        raise PermissionDenied(_DENIED)
+    cutoff = timezone.localdate(series.cancelled_at)
+    later_ids = list(
+        RecurringSeriesMember.objects.filter(series=series, transaction__transaction_date__gt=cutoff).values_list(
+            "transaction_id", flat=True
+        )
+    )
+    if not later_ids:
+        return series
+    for pk in later_ids:
+        RecurringExclusion.objects.get_or_create(person=person, transaction_id=pk)
+    RecurringSeriesMember.objects.filter(series=series, transaction_id__in=later_ids).delete()
+    if not series.members.exists():
+        revalidate_series_after_member_removal(person, [series.pk])
+        return RecurringSeries.objects.filter(pk=series.pk).first()
+    return _recompute_series_from_members(series, extra_reasons=(MANUAL_REASON,))
+
+
+@transaction.atomic
+def dismiss_price_change(principal, series_id):
+    _person, series = _lock_confirmed_series(principal, series_id)
+    latest = (
+        RecurringSeriesMember.objects.filter(series=series)
+        .select_related("transaction")
+        .order_by("-transaction__transaction_date", "-transaction_id")
+        .first()
+    )
+    if latest is None:
+        raise PermissionDenied(_DENIED)
+    series.acknowledged_amount_minor = latest.transaction.amount_minor
+    series.save(update_fields=("acknowledged_amount_minor", "updated_at"))
+    return series

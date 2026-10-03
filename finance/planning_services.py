@@ -84,6 +84,7 @@ def visible_projection_inputs(principal, *, account=None, scope=""):
     series = RecurringSeries.objects.visible_to(principal).filter(
         status=RecurringSeries.Status.CONFIRMED,
         is_active=True,
+        cancelled_at__isnull=True,
         members__transaction__in=eligible,
     )
     series_rows = (
