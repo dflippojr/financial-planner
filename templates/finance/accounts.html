@@ -70,7 +70,7 @@
         <td>
           <div class="flex flex-wrap items-center gap-2">
           {% if account.status == "active" and account.archived_at is None %}
-            <a class="btn btn-sm" href="{% url 'account-balances' account.pk %}">{% if account.is_physical_asset %}Record valuation{% else %}Record balance{% endif %}</a>
+            <a class="btn btn-sm btn-outline" href="{% url 'account-balances' account.pk %}">{% if account.is_physical_asset %}Record valuation{% else %}Record balance{% endif %}</a>
             {% if account.accepts_csv_import %}
             <a class="btn btn-sm btn-primary" href="{% url 'csv-import-preview' account.pk %}">Import CSV</a>
             {% endif %}
@@ -146,7 +146,7 @@
             {% endif %}
           {% endif %}
           {% if account.owner_id == viewer_id %}
-            <a class="btn btn-sm btn-ghost text-error" href="{% url 'account-delete' account.pk %}">Delete account</a>
+            <a class="btn btn-sm btn-outline btn-error ms-auto" href="{% url 'account-delete' account.pk %}">Delete account</a>
           {% endif %}
           </div>
         </td>

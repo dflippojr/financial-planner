@@ -2,12 +2,13 @@ from collections import namedtuple
 
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.db.models import OuterRef, Subquery
 from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods, require_POST
 
-from finance.models import Account, ImportBatch
+from finance.models import Account, AccountLink, ImportBatch
 
 from .forms import (
     AppleCardImportForm,
@@ -43,8 +44,10 @@ from .services import categorize_imported_batch, classify_overlap, commit_csv_im
 from .staging import StageUnavailable, create_stage, delete_stage, find_live_stage, load_stage, set_stage_profile, stage_profile
 
 
+HUB_TEMPLATE = "finance/csv_import/hub.html"
 PREVIEW_TEMPLATE = "finance/csv_import/preview.html"
 RESULT_SESSION_KEY = "csv_import_result"
+RECENT_BATCH_LIMIT = 25
 
 FixedProfile = namedtuple("FixedProfile", ("require_headers", "mapping", "source", "form_class"))
 
@@ -74,6 +77,41 @@ def _visible_account(request, account_id):
             archived_at__isnull=True,
         ),
         pk=account_id,
+    )
+
+
+def _importable_accounts(principal):
+    cutover = AccountLink.objects.filter(account_id=OuterRef("pk")).values("cutover_date")[:1]
+    return (
+        Account.objects.visible_to(principal)
+        .filter(status=Account.Status.ACTIVE, archived_at__isnull=True)
+        .exclude(account_type__in=Account.NON_CASH_FLOW_TYPES)
+        .annotate(simplefin_cutover=Subquery(cutover))
+        .order_by("name", "pk")
+    )
+
+
+def _recent_import_batches(principal):
+    return (
+        ImportBatch.objects.visible_to(principal)
+        .filter(status=ImportBatch.Status.ACTIVE)
+        .select_related("account")
+        .order_by("-imported_at", "-pk")[:RECENT_BATCH_LIMIT]
+    )
+
+
+def _render_hub(request, *, upload_form=None, selected_account_id=""):
+    accounts = list(_importable_accounts(request.user))
+    return render(
+        request,
+        HUB_TEMPLATE,
+        {
+            "accounts": accounts,
+            "upload_form": upload_form or CsvUploadForm(),
+            "recent_batches": _recent_import_batches(request.user),
+            "selected_account_id": str(selected_account_id or ""),
+            "has_linked_accounts": any(account.simplefin_cutover for account in accounts),
+        },
     )
 
 
@@ -247,11 +285,11 @@ def _require_import_range(mapping_form, *, source_required):
     return source, start, end
 
 
-def _handle_upload(request, account, context):
+def _stage_upload(request, account, context):
     upload_form = _upload_form(request, account, request.POST, request.FILES)
     context["upload_form"] = upload_form
     if not upload_form.is_valid():
-        return _render_preview(request, account, context)
+        return False
     token = None
     try:
         profile = upload_form.cleaned_data["import_profile"]
@@ -279,6 +317,12 @@ def _handle_upload(request, account, context):
         if token:
             delete_stage(request, token)
         upload_form.add_error("csv_file", str(exc))
+        return False
+    return True
+
+
+def _handle_upload(request, account, context):
+    _stage_upload(request, account, context)
     return _render_preview(request, account, context)
 
 
@@ -405,6 +449,29 @@ def _save_mapping_from_preview(request, account, context, document, mapping_form
     context["preview"] = preview
     context["commit_available"] = True
     return _render_preview(request, account, context)
+
+
+@never_cache
+@require_http_methods(["GET", "POST"])
+def csv_import_page(request):
+    if request.method == "GET":
+        return _render_hub(request)
+    try:
+        account_id = int(request.POST.get("account_id") or 0)
+    except (TypeError, ValueError):
+        raise Http404
+    account = _visible_account(request, account_id)
+    if not account.accepts_csv_import():
+        messages.info(request, "This account has no transactions. Record a valuation or balance instead.")
+        return redirect("account-balances", account.pk)
+    context = {}
+    if _stage_upload(request, account, context):
+        return redirect("csv-import-preview", account_id=account.pk)
+    return _render_hub(
+        request,
+        upload_form=context.get("upload_form"),
+        selected_account_id=account.pk,
+    )
 
 
 @never_cache

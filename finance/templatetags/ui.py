@@ -18,7 +18,7 @@ def daisy_widget(field):
         if field.errors:
             classes += " textarea-error"
     elif isinstance(widget, FileInput):
-        classes = "file-input file-input-bordered w-full"
+        classes = "file-input file-input-bordered file-input-primary w-full"
         if field.errors:
             classes += " file-input-error"
     elif isinstance(widget, CheckboxInput):

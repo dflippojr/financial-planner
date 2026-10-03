@@ -20,6 +20,7 @@ from finance.models import (
     ImportBatch,
     Membership,
     Person,
+    RecurringExclusion,
     RecurringSeries,
     RecurringSeriesMember,
     RefundLink,
@@ -146,6 +147,7 @@ def related_counts(account_id):
         ).count(),
         "TransactionSplit": TransactionSplit.objects.filter(transaction__account_id=account_id).count(),
         "RecurringSeriesMember": RecurringSeriesMember.objects.filter(transaction__account_id=account_id).count(),
+        "RecurringExclusion": RecurringExclusion.objects.filter(transaction__account_id=account_id).count(),
     }
 
 
@@ -270,6 +272,39 @@ def test_delete_repairs_transfer_partner_refunds_and_recurring_series():
     assert mixed_series.members.get().transaction.account_id == kept.pk
     assert not TransferPair.objects.filter(pk=pair.pk).exists()
     assert shared_leg.pk not in Transaction.objects.values_list("pk", flat=True)
+
+
+@pytest.mark.django_db
+def test_deleting_an_account_removes_recurring_exclusions_and_manual_members():
+    owner = make_person("owner")
+    make_household(owner)
+    doomed = make_account(owner, name="Synthetic Doomed")
+    kept = make_account(owner, name="Synthetic Kept")
+    add_monthly_charges(owner, doomed, description="Synthetic Doomed Sub")
+    add_monthly_charges(owner, kept, description="Synthetic Kept Sub")
+    extra = make_transaction(
+        owner,
+        doomed,
+        transaction_date=date(2026, 4, 20),
+        amount_minor=-1599,
+        description="Synthetic extra",
+    )
+    refresh_recurring_series(owner)
+    kept_series = RecurringSeries.objects.get(merchant_key="synthetic kept sub")
+    RecurringSeriesMember.objects.create(
+        series=kept_series,
+        transaction=extra,
+        source=RecurringSeriesMember.Source.MANUAL,
+    )
+    RecurringExclusion.objects.create(person=owner, transaction=extra)
+    doomed_id = doomed.pk
+
+    delete_account(owner, doomed_id)
+
+    assert_no_rows_reference(doomed_id)
+    kept_series.refresh_from_db()
+    assert not RecurringExclusion.objects.filter(person=owner).exists()
+    assert not kept_series.members.filter(transaction_id=extra.pk).exists()
 
 
 @pytest.mark.django_db

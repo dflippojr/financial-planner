@@ -981,16 +981,39 @@ class RecurringSeries(models.Model):
 
 
 class RecurringSeriesMember(models.Model):
+    class Source(models.TextChoices):
+        DETECTED = "detected", "Detected"
+        MANUAL = "manual", "Manual"
+
     series = models.ForeignKey(RecurringSeries, on_delete=models.CASCADE, related_name="members")
     transaction = models.ForeignKey(Transaction, on_delete=models.PROTECT, related_name="recurring_memberships")
+    source = models.CharField(max_length=8, choices=Source, default=Source.DETECTED)
 
     class Meta:
         constraints = [
             models.UniqueConstraint(fields=("series", "transaction"), name="recurring_member_unique"),
+            models.CheckConstraint(
+                condition=Q(source__in=("detected", "manual")),
+                name="recurring_member_source_valid",
+            ),
         ]
 
     def __str__(self):
         return f"Series {self.series_id} txn {self.transaction_id}"
+
+
+class RecurringExclusion(models.Model):
+    person = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="recurring_exclusions")
+    transaction = models.ForeignKey(Transaction, on_delete=models.CASCADE, related_name="recurring_exclusions")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("person", "transaction"), name="recurring_exclusion_person_transaction"),
+        ]
+
+    def __str__(self):
+        return f"Exclusion person {self.person_id} txn {self.transaction_id}"
 
 
 class SimpleFinConnection(models.Model):
