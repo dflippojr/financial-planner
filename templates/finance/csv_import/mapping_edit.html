@@ -1,7 +1,7 @@
-{% extends "finance/base.html" %}
+{% extends "finance/settings_base.html" %}
 {% block title %}Edit CSV mapping · Financial Planner{% endblock %}
-{% block content %}
-<h1 class="mb-4 text-2xl font-bold">{{ saved_mapping.name }}</h1>
+{% block settings_content %}
+<h2 class="mb-4 text-xl font-semibold">{{ saved_mapping.name }}</h2>
 <p class="mb-4"><a class="link" href="{% url 'csv-mapping-list' %}">Back to CSV mappings</a></p>
 {% if locked %}
 <div role="status" class="alert mb-4">

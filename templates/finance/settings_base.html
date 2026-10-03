@@ -1,0 +1,12 @@
+{% extends "finance/base.html" %}
+{% block content %}
+<h1 class="mb-4 text-2xl font-bold">Settings</h1>
+<div class="overflow-x-auto mb-4">
+  <div role="tablist" class="tabs tabs-border min-w-max">
+    {% for tab in settings_tabs %}
+    <a role="tab" class="tab{% if tab.active %} tab-active{% endif %}" href="{{ tab.url }}"{% if tab.active %} aria-current="page"{% endif %}>{{ tab.label }}</a>
+    {% endfor %}
+  </div>
+</div>
+{% block settings_content %}{% endblock %}
+{% endblock %}

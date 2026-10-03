@@ -1,6 +1,6 @@
 # Requirements
 
-Updated: 2026-10-02. This is a working product brief; open questions are explicit.
+Updated: 2026-10-03. This is a working product brief; open questions are explicit.
 
 ## Goal
 
@@ -252,6 +252,13 @@ Constraints carried from the existing requirements:
 - **No Node in the repository.** The CSS is built with Tailwind's standalone binary (pinned version, verified checksum), both in the Docker build and in a local script. JavaScript libraries (Chart.js, and Alpine.js if needed) are vendored at pinned versions with checksums.
 - **Money is never shown by color alone.** In and out amounts keep their signs and labels, and colors meet contrast requirements in both themes.
 - **Every chart has an accessible table** of the same numbers. Chart data comes from the page (`json_script`), never from a separate endpoint that could widen access.
+
+## Settings navigation (2026-10-03, #111)
+
+Owner decisions:
+- The footer **Account** link is **Settings** (gear icon from #112). Setup and administration live on Settings tabs, each with its own URL that works without JavaScript: Sign-in & security (`/settings/security/`), Connections (`/settings/connections/`), Household (`/settings/household/`), Categories (`/settings/categories/`), Data (`/settings/data/`), and AI (`/settings/ai/`).
+- The main menu is day-to-day views: Cash flow, Net worth, Spending, Transactions, Transfers, Recurring, Accounts, Import, Planned items, Budgets, Goals. Import still goes to `/accounts/` until #108 gives it its own page. Budgets stays in the main menu as a day-to-day view (the issue's enumerated list omitted it).
+- Old URLs permanently redirect to the matching Settings tab, including category-rule and SimpleFIN sub-pages. Access checks and re-authentication are unchanged.
 
 ## Visual dashboard decisions (2026-10-01, #57)
 

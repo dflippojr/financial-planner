@@ -1,7 +1,7 @@
-{% extends "finance/base.html" %}
+{% extends "finance/settings_base.html" %}
 {% block title %}CSV mappings · Financial Planner{% endblock %}
-{% block content %}
-<h1 class="mb-4 text-2xl font-bold">Saved CSV mappings</h1>
+{% block settings_content %}
+<h2 class="mb-4 text-xl font-semibold">Saved CSV mappings</h2>
 {% if not household %}
 <div role="status" class="alert">Join a household to save and reuse CSV column mappings.</div>
 {% else %}
