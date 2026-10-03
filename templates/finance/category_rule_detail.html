@@ -1,7 +1,7 @@
-{% extends "finance/base.html" %}
+{% extends "finance/settings_base.html" %}
 {% block title %}Rule preview · Financial Planner{% endblock %}
-{% block content %}
-<h1 class="mb-4 text-2xl font-bold">Rule: {{ rule.description_contains }}</h1>
+{% block settings_content %}
+<h2 class="mb-4 text-xl font-semibold">Rule: {{ rule.description_contains }}</h2>
 <p class="mb-4"><a class="link" href="{% url 'category-rule-list' %}">All rules</a></p>
 {% if rule.inactive %}
 <p role="status" class="alert mb-4" data-rule-inactive="true">Inactive: this personal rule's category belongs to a household you are no longer a member of.</p>
