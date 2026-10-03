@@ -39,7 +39,14 @@ def privacy_policy_prompt(request):
 def _nav_current(request):
     match = getattr(request, "resolver_match", None)
     name = getattr(match, "url_name", "") or ""
-    if name in {"transaction-edit", "transaction-categorize", "transaction-link-refund"}:
+    if name in {
+        "transaction-edit",
+        "transaction-categorize",
+        "transaction-link-refund",
+        "transaction-split",
+        "transaction-unsplit",
+        "transaction-split-part-category",
+    }:
         return "transaction-list"
     if name.startswith("category-rule"):
         return "category-list"

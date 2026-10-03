@@ -7,7 +7,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('finance', '0019_category_suggestion'),
+        ('finance', '0020_transaction_splits'),
     ]
 
     operations = [

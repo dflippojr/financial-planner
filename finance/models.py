@@ -308,6 +308,7 @@ class Transaction(ArchivableModel):
         MANUAL = "manual", "Manual"
         RULE = "rule", "Rule"
         INHERITED = "inherited", "Inherited"
+        SPLIT = "split", "Split"
 
     category_source = models.CharField(
         max_length=9,
@@ -338,7 +339,7 @@ class Transaction(ArchivableModel):
             ),
             models.CheckConstraint(condition=Q(source_row_number__gt=0), name="transaction_source_row_positive"),
             models.CheckConstraint(
-                condition=Q(category_source__in=("", "manual", "rule", "inherited")),
+                condition=Q(category_source__in=("", "manual", "rule", "inherited", "split")),
                 name="transaction_category_source_valid",
             ),
             models.CheckConstraint(
@@ -367,6 +368,9 @@ class Transaction(ArchivableModel):
     def category_display(self):
         if self.is_excluded_transfer:
             return "Transfer"
+        if self.category_source == self.CategorySource.SPLIT:
+            count = len(self.splits.all())
+            return f"Split ({count})"
         if self.category_id is None:
             return "Uncategorized"
         return self.category.name
@@ -564,9 +568,40 @@ class TransferPair(models.Model):
         return self.status in (self.Status.AUTO_MARKED, self.Status.CONFIRMED)
 
 
+class TransactionSplit(models.Model):
+    transaction = models.ForeignKey(Transaction, on_delete=models.CASCADE, related_name="splits")
+    category = models.ForeignKey(Category, on_delete=models.PROTECT, related_name="transaction_splits")
+    amount_minor = models.BigIntegerField()
+    position = models.PositiveSmallIntegerField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("position", "pk")
+        constraints = [
+            models.UniqueConstraint(fields=("transaction", "position"), name="transaction_split_unique_position"),
+            models.CheckConstraint(condition=~Q(amount_minor=0), name="transaction_split_amount_nonzero"),
+        ]
+
+    def __str__(self):
+        return f"{self.category.name} {self.amount_display}"
+
+    @property
+    def amount_display(self):
+        amount = Decimal(self.amount_minor) / Decimal(100)
+        return f"{amount:,.2f} {self.transaction.currency}"
+
+
 class RefundLink(models.Model):
     refund = models.OneToOneField(Transaction, on_delete=models.PROTECT, related_name="refund_link")
     original = models.ForeignKey(Transaction, on_delete=models.PROTECT, related_name="refunds")
+    original_part = models.ForeignKey(
+        TransactionSplit,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="refund_links",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class QuerySet(models.QuerySet):
@@ -1089,7 +1124,7 @@ class RuleApplicationEntry(models.Model):
         constraints = [
             models.UniqueConstraint(fields=("application", "transaction"), name="rule_application_entry_unique_txn"),
             models.CheckConstraint(
-                condition=Q(previous_category_source__in=("", "manual", "rule", "inherited")),
+                condition=Q(previous_category_source__in=("", "manual", "rule", "inherited", "split")),
                 name="rule_application_prev_source_valid",
             ),
         ]

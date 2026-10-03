@@ -92,6 +92,13 @@ urlpatterns = [
     ),
     path("transactions/<int:transaction_id>/edit/", views.transaction_edit, name="transaction-edit"),
     path("transactions/<int:transaction_id>/category/", views.transaction_categorize, name="transaction-categorize"),
+    path("transactions/<int:transaction_id>/split/", views.transaction_split, name="transaction-split"),
+    path("transactions/<int:transaction_id>/unsplit/", views.transaction_unsplit, name="transaction-unsplit"),
+    path(
+        "transactions/<int:transaction_id>/splits/<int:part_id>/category/",
+        views.transaction_split_part_category,
+        name="transaction-split-part-category",
+    ),
     path("transactions/<int:transaction_id>/refund/", views.transaction_link_refund, name="transaction-link-refund"),
     path("categories/", views.category_list, name="category-list"),
     path("categories/rules/", rule_views.category_rule_list, name="category-rule-list"),
