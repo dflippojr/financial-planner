@@ -504,3 +504,34 @@ def test_deleting_data_never_removes_another_former_members_rows_in_an_empty_hou
     assert not PlannedItem.objects.filter(pk=plan_a.pk).exists()
     assert PlannedItem.objects.filter(pk=plan_b.pk).exists()
     assert Household.objects.filter(pk=household.pk).exists()
+
+
+def test_every_protect_link_to_person_is_handled_by_member_data_deletion():
+    """A new PROTECT foreign key to Person would block Delete my data.
+
+    When this fails, teach delete_member_data (finance/lifecycle_services.py)
+    to delete, hand over, or detach the new rows, then add the model here.
+    """
+    from django.db import models as django_models
+
+    from finance.models import Person
+
+    handled = {
+        ("Account", "owner"),
+        ("SavedCsvMapping", "created_by"),
+        ("RecurringSeries", "person"),
+        ("RecurringExclusion", "person"),
+        ("SimpleFinConnection", "owner"),
+        ("PlannedItem", "owner"),
+        ("SavingsGoal", "owner"),
+        ("CategoryRule", "owner_person"),
+        ("Budget", "owner"),
+        ("Alert", "recipient"),
+        ("AlertSettings", "person"),
+    }
+    protected = {
+        (rel.related_model.__name__, rel.field.name)
+        for rel in Person._meta.related_objects
+        if rel.on_delete is django_models.PROTECT
+    }
+    assert protected - handled == set()

@@ -5,7 +5,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("finance", "0026_saved_csv_mapping"),
+        ("finance", "0027_recurring_review"),
     ]
 
     operations = [
