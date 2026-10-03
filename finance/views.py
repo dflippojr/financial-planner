@@ -52,9 +52,11 @@ from .forms import (
     SpendingFilterForm,
     SplitPartCategoryForm,
     SplitTransactionForm,
+    TagNameForm,
     TransactionCategoryForm,
     TransactionCorrectionForm,
     TransactionFilterForm,
+    TransactionNoteTagsForm,
     TransferWindowForm,
     UnsplitTransactionForm,
 )
@@ -86,6 +88,7 @@ from .models import (
     PrivacyPolicyVersion,
     RecurringSeries,
     RefundLink,
+    Tag,
     Transaction,
     TransactionCorrectionHistory,
     TransactionSplit,
@@ -105,6 +108,8 @@ from .cash_flow import (
     cash_flow_chart_data,
     date_range_presets,
     default_date_range,
+    format_minor,
+    selected_accounts,
     spending_by_category_report,
     spending_chart_data,
 )
@@ -118,6 +123,14 @@ from .spending_trends import (
     spending_category_trend_report,
     spending_trend_chart_data,
 )
+from .tag_services import (
+    add_tag,
+    apply_tag_filter,
+    archive_tag,
+    rename_tag,
+    selected_tag,
+    set_transaction_note_and_tags,
+)
 from .category_services import (
     add_category,
     assign_category,
@@ -126,6 +139,7 @@ from .category_services import (
     dismiss_transfer_pair,
     ensure_household_categories,
     exclusion_exists_for,
+    income_and_spending_totals,
     link_refund,
     refresh_transfer_pairs,
     rename_category,
@@ -169,6 +183,7 @@ def home(request):
         )
         date_from, date_to, grouping, account, scope = default_from, default_to, "month", None, ""
         horizon = DEFAULT_HORIZON
+        tag = None
     elif form.is_valid():
         date_from = form.cleaned_data["date_from"] or default_from
         date_to = form.cleaned_data["date_to"] or default_to
@@ -176,9 +191,11 @@ def home(request):
         account = form.cleaned_data["account"]
         scope = form.cleaned_data["scope"]
         horizon = form.cleaned_data["horizon"] or DEFAULT_HORIZON
+        tag = form.cleaned_data.get("tag")
     else:
         date_from = date_to = grouping = account = scope = None
         horizon = DEFAULT_HORIZON
+        tag = None
     report = None
     if date_from is not None:
         report = cash_flow_with_projection(
@@ -190,6 +207,7 @@ def home(request):
             scope=scope,
             today=today,
             horizon=horizon,
+            tag=tag,
         )
     return render(
         request,
@@ -204,7 +222,7 @@ def home(request):
     )
 
 
-def _preset_links(today, *, account=None, scope="", grouping=None, tab=None, extra_query=None):
+def _preset_links(today, *, account=None, scope="", grouping=None, tab=None, extra_query=None, tag=None):
     links = []
     for preset in date_range_presets(today):
         query = {"date_from": preset.date_from.isoformat(), "date_to": preset.date_to.isoformat()}
@@ -216,13 +234,15 @@ def _preset_links(today, *, account=None, scope="", grouping=None, tab=None, ext
             query["grouping"] = grouping
         if tab:
             query["tab"] = tab
+        if tag is not None:
+            query["tag"] = str(tag.pk)
         if extra_query:
             query.update(extra_query)
         links.append(SimpleNamespace(label=preset.label, url=f"?{urlencode(query)}"))
     return links
 
 
-def _spending_query(*, date_from, date_to, grouping="month", account=None, scope="", tab=""):
+def _spending_query(*, date_from, date_to, grouping="month", account=None, scope="", tab="", tag=None):
     query = {
         "date_from": date_from.isoformat(),
         "date_to": date_to.isoformat(),
@@ -234,6 +254,8 @@ def _spending_query(*, date_from, date_to, grouping="month", account=None, scope
         query["scope"] = scope
     if tab:
         query["tab"] = tab
+    if tag is not None:
+        query["tag"] = str(tag.pk)
     return query
 
 
@@ -270,6 +292,7 @@ def _spending_filter_state(request):
 @never_cache
 def spending_by_category(request):
     form, date_from, date_to, grouping, account, scope, tab, today = _spending_filter_state(request)
+    tag = selected_tag(form)
     report = None
     trend_report = None
     chart_data = None
@@ -283,6 +306,7 @@ def spending_by_category(request):
                 account=account,
                 scope=scope,
                 today=today,
+                tag=tag,
             )
             report = trend_report
             chart_data = spending_trend_chart_data(trend_report)
@@ -294,6 +318,7 @@ def spending_by_category(request):
                 account=account,
                 scope=scope,
                 grouping=grouping,
+                tag=tag,
             )
             chart_data = spending_chart_data(report)
     query = (
@@ -303,6 +328,7 @@ def spending_by_category(request):
             grouping=grouping,
             account=account,
             scope=scope,
+            tag=tag,
         )
         if date_from is not None
         else {}
@@ -323,7 +349,14 @@ def spending_by_category(request):
                 else f"{reverse('spending-by-category')}?tab=trends"
             ),
             "presets": (
-                _preset_links(today, account=account, scope=scope, grouping=grouping, tab=tab if tab == "trends" else None)
+                _preset_links(
+                    today,
+                    account=account,
+                    scope=scope,
+                    grouping=grouping,
+                    tab=tab if tab == "trends" else None,
+                    tag=tag,
+                )
                 if date_from is not None
                 else ()
             ),
@@ -352,6 +385,7 @@ def _visible_spending_category(principal, category_id):
 def spending_category_detail(request, category_id=None):
     category = _visible_spending_category(request.user, category_id)
     form, date_from, date_to, grouping, account, scope, _tab, today = _spending_filter_state(request)
+    tag = selected_tag(form)
     report = None
     chart_data = None
     if date_from is not None:
@@ -365,6 +399,7 @@ def spending_category_detail(request, category_id=None):
             account=account,
             scope=scope,
             today=today,
+            tag=tag,
         )
         chart_data = category_trend_chart_data(report)
     return render(
@@ -376,7 +411,7 @@ def spending_category_detail(request, category_id=None):
             "chart_data": chart_data,
             "category": category,
             "presets": (
-                _preset_links(today, account=account, scope=scope, grouping=grouping)
+                _preset_links(today, account=account, scope=scope, grouping=grouping, tag=tag)
                 if date_from is not None
                 else ()
             ),
@@ -395,6 +430,8 @@ def _apply_transaction_filters(transactions, filters, principal):
         transactions = transactions.filter(account__scope=filters["scope"])
     if filters["q"]:
         transactions = transactions.filter(description__icontains=filters["q"])
+    if filters.get("tag"):
+        transactions = apply_tag_filter(transactions, filters["tag"])
     category = filters["category"]
     if category == "uncategorized":
         # Match the spending view: a category the viewer can no longer see
@@ -428,13 +465,33 @@ def transaction_list(request):
         Transaction.objects.visible_to(request.user)
         .filter(status=Transaction.Status.ACTIVE)
         .select_related("account", "import_batch", "category")
-        .prefetch_related("splits__category")
+        .prefetch_related("splits__category", "tags")
         .annotate(_excluded=exclusion_exists_for(request.user))
         .order_by("-transaction_date", "-pk")
     )
     form = TransactionFilterForm(request.GET or None, principal=request.user)
+    list_totals = None
     if form.is_valid():
         transactions = _apply_transaction_filters(transactions, form.cleaned_data, request.user)
+        list_totals = income_and_spending_totals(
+            request.user,
+            date_from=form.cleaned_data.get("date_from"),
+            date_to=form.cleaned_data.get("date_to"),
+            accounts=selected_accounts(
+                request.user,
+                account=form.cleaned_data.get("account"),
+                scope=form.cleaned_data.get("scope") or "",
+            ),
+            tag=form.cleaned_data.get("tag"),
+        )
+        list_totals = SimpleNamespace(
+            income_minor=list_totals.income_minor,
+            spending_minor=list_totals.spending_minor,
+            net_minor=list_totals.net_minor,
+            income_display=format_minor(list_totals.income_minor),
+            spending_display=format_minor(list_totals.spending_minor),
+            net_display=format_minor(list_totals.net_minor),
+        )
     elif form.is_bound:
         transactions = transactions.none()
     show_ai = bool(person and member_has_ai(person))
@@ -445,7 +502,7 @@ def transaction_list(request):
         for name, value in form.cleaned_data.items():
             if value in (None, ""):
                 continue
-            if name == "account":
+            if name in {"account", "tag"}:
                 filter_hidden.append((name, str(value.pk)))
             else:
                 filter_hidden.append((name, str(value)))
@@ -455,6 +512,7 @@ def transaction_list(request):
         {
             "filter_form": form,
             "transactions": transactions,
+            "list_totals": list_totals,
             "show_ai_suggestions": show_ai,
             "uncategorized_filter": uncategorized_filter,
             "suggestions_pending": show_ai and suggestions_pending(person),
@@ -514,9 +572,11 @@ def transaction_edit(request, transaction_id):
     return _render_transaction_edit(request, financial_transaction, form=form)
 
 
-def _render_transaction_edit(request, financial_transaction, *, form=None, refund_form=None, split_form=None):
+def _render_transaction_edit(request, financial_transaction, *, form=None, refund_form=None, split_form=None, note_form=None):
     if form is None:
         form = TransactionCorrectionForm.for_transaction(financial_transaction)
+    if note_form is None:
+        note_form = TransactionNoteTagsForm.for_transaction(financial_transaction, request.user)
     correction_history = (
         TransactionCorrectionHistory.objects.visible_to(request.user)
         .filter(transaction=financial_transaction)
@@ -541,6 +601,7 @@ def _render_transaction_edit(request, financial_transaction, *, form=None, refun
         "finance/transaction_edit.html",
         {
             "form": form,
+            "note_form": note_form,
             "category_form": TransactionCategoryForm(
                 principal=request.user,
                 initial={"category": financial_transaction.category_id},
@@ -560,6 +621,29 @@ def _render_transaction_edit(request, financial_transaction, *, form=None, refun
             "correction_history": correction_history,
         },
     )
+
+
+@require_POST
+@never_cache
+def transaction_note_tags(request, transaction_id):
+    financial_transaction = _visible_active_transaction(request.user, transaction_id)
+    form = TransactionNoteTagsForm(request.POST, principal=request.user)
+    if form.is_valid():
+        try:
+            _service_or_404(
+                lambda: set_transaction_note_and_tags(
+                    request.user,
+                    transaction_id,
+                    note=form.cleaned_data.get("note") or "",
+                    tag_ids=[tag.pk for tag in form.cleaned_data.get("tags") or []],
+                    new_tag_name=form.cleaned_data.get("new_tag") or "",
+                )
+            )
+        except ValidationError as exc:
+            form.add_error(None, _first_message(exc, "The note and tags could not be saved."))
+            return _render_transaction_edit(request, financial_transaction, note_form=form)
+        return redirect("transaction-edit", transaction_id=transaction_id)
+    return _render_transaction_edit(request, financial_transaction, note_form=form)
 
 
 def _service_or_404(action):
@@ -712,6 +796,82 @@ _CATEGORY_ACTIONS = {
     "window": _handle_transfer_window,
     "rename": _handle_rename_category,
 }
+
+
+def _handle_add_tag(request, forms):
+    add_form = forms["add_form"]
+    if not add_form.is_valid():
+        return False
+    try:
+        _service_or_404(lambda: add_tag(request.user, add_form.cleaned_data["name"]))
+    except ValidationError as exc:
+        add_form.add_error("name", _first_message(exc, "The tag could not be added."))
+        return False
+    return True
+
+
+def _handle_rename_tag(request, forms):
+    rename_form = TagNameForm(request.POST)
+    if not rename_form.is_valid():
+        return False
+    try:
+        _service_or_404(
+            lambda: rename_tag(
+                request.user,
+                int(request.POST.get("tag_id", "0")),
+                rename_form.cleaned_data["name"],
+            )
+        )
+    except (ValidationError, ValueError) as exc:
+        forms["rename_error"] = _first_message(exc, "The tag could not be renamed.")
+        return False
+    return True
+
+
+def _handle_archive_tag(request, forms):
+    try:
+        _service_or_404(lambda: archive_tag(request.user, int(request.POST.get("tag_id", "0"))))
+    except (ValidationError, ValueError) as exc:
+        forms["rename_error"] = _first_message(exc, "The tag could not be archived.")
+        return False
+    return True
+
+
+_TAG_ACTIONS = {
+    "add": _handle_add_tag,
+    "rename": _handle_rename_tag,
+    "archive": _handle_archive_tag,
+}
+
+
+@require_http_methods(["GET", "POST"])
+@never_cache
+def tag_list(request):
+    person = get_object_or_404(Person, user=request.user)
+    household = current_household(person)
+    if household is None:
+        return render(
+            request,
+            "finance/tag_list.html",
+            {"household": None, "tags": [], "add_form": TagNameForm(), "rename_error": None},
+        )
+    action = request.POST.get("action") if request.method == "POST" else None
+    add_form = TagNameForm(request.POST if action == "add" else None)
+    forms = {"add_form": add_form, "rename_error": None}
+    handler = _TAG_ACTIONS.get(action)
+    if handler is not None and handler(request, forms):
+        return redirect("tag-list")
+    tags = Tag.objects.visible_to(request.user).order_by("is_archived", "name", "pk")
+    return render(
+        request,
+        "finance/tag_list.html",
+        {
+            "household": household,
+            "tags": tags,
+            "add_form": add_form,
+            "rename_error": forms["rename_error"],
+        },
+    )
 
 
 @require_http_methods(["GET", "POST"])

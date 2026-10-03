@@ -111,6 +111,7 @@ def cash_flow_with_projection(
     scope="",
     today,
     horizon=DEFAULT_HORIZON,
+    tag=None,
 ):
     report = cash_flow_report(
         principal,
@@ -120,6 +121,7 @@ def cash_flow_with_projection(
         account=account,
         scope=scope,
         today=today,
+        tag=tag,
     )
     report.projected_periods = projected_months_for(
         principal, today=today, horizon=horizon, account=account, scope=scope

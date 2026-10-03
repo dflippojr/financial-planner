@@ -95,6 +95,7 @@ urlpatterns = [
         name="suggestion-reject",
     ),
     path("transactions/<int:transaction_id>/edit/", views.transaction_edit, name="transaction-edit"),
+    path("transactions/<int:transaction_id>/note-tags/", views.transaction_note_tags, name="transaction-note-tags"),
     path("transactions/<int:transaction_id>/category/", views.transaction_categorize, name="transaction-categorize"),
     path("transactions/<int:transaction_id>/split/", views.transaction_split, name="transaction-split"),
     path("transactions/<int:transaction_id>/unsplit/", views.transaction_unsplit, name="transaction-unsplit"),
@@ -105,6 +106,7 @@ urlpatterns = [
     ),
     path("transactions/<int:transaction_id>/refund/", views.transaction_link_refund, name="transaction-link-refund"),
     path("categories/", views.category_list, name="category-list"),
+    path("tags/", views.tag_list, name="tag-list"),
     path("categories/rules/", rule_views.category_rule_list, name="category-rule-list"),
     path("categories/rules/<int:rule_id>/", rule_views.category_rule_detail, name="category-rule-detail"),
     path(

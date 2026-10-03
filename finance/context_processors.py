@@ -46,6 +46,7 @@ def _nav_current(request):
         "transaction-split",
         "transaction-unsplit",
         "transaction-split-part-category",
+        "transaction-note-tags",
     }:
         return "transaction-list"
     if name.startswith("category-rule"):
@@ -86,6 +87,7 @@ def navigation(request):
         ("transfer-review", "Transfers", reverse("transfer-review")),
         ("recurring-review", "Recurring", reverse("recurring-review")),
         ("category-list", "Categories", reverse("category-list")),
+        ("tag-list", "Tags", reverse("tag-list")),
         ("account-list", "Accounts", accounts_url),
         ("simplefin-connections", "Connections", reverse("simplefin-connections")),
         ("csv-import", "Import", accounts_url),
