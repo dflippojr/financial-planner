@@ -11,6 +11,7 @@ from decimal import Decimal
 from django.apps import apps
 
 from .models import (
+    FORMER_MEMBER_LABEL,
     Account,
     AiJob,
     AiProviderConnection,
@@ -489,7 +490,9 @@ def _import_batch_rows(person):
                 "status": batch.status,
                 "archived_at": batch.archived_at,
                 "imported_at": batch.imported_at,
-                "imported_by_username": batch.imported_by.user.username,
+                "imported_by_username": (
+                    batch.imported_by.user.username if batch.imported_by_id else FORMER_MEMBER_LABEL
+                ),
             }
         )
     return rows
@@ -701,7 +704,9 @@ def _budget_reset_rows(person):
                 "id": reset.pk,
                 "budget_id": reset.budget_id,
                 "month": reset.month,
-                "actor_username": reset.actor.user.username,
+                "actor_username": (
+                    reset.actor.user.username if reset.actor_id else FORMER_MEMBER_LABEL
+                ),
                 "created_at": reset.created_at,
             }
         )

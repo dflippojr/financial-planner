@@ -39,6 +39,7 @@ from .auth_services import (
 from .forms import (
     CashFlowFilterForm,
     CategoryNameForm,
+    DeleteMyDataForm,
     JoinForm,
     JoinGoogleForm,
     LoginForm,
@@ -69,7 +70,14 @@ from .google_auth import (
     store_google_pending,
     username_is_taken,
 )
-from .lifecycle_services import leave_household, lock_actor_household
+from .lifecycle_services import (
+    delete_member_data,
+    last_household_member,
+    leave_household,
+    lent_household_accounts,
+    lock_actor_household,
+    member_deletion_counts,
+)
 from .reauth import (
     ACCOUNT_SETTINGS_ACTIONS,
     action_label,
@@ -1507,6 +1515,58 @@ def leave_household_view(request):
     except PermissionDenied:
         raise Http404() from None
     return redirect("home")
+
+
+def _delete_my_data_context(request, person, form):
+    last_member = last_household_member(person)
+    lent_accounts = lent_household_accounts(person)
+    if form is None:
+        form = DeleteMyDataForm(
+            username=request.user.username,
+            lent_accounts=lent_accounts,
+            last_member=last_member,
+        )
+    return {
+        "form": form,
+        "lent_accounts": lent_accounts,
+        "last_member": last_member,
+        **member_deletion_counts(person),
+    }
+
+
+@require_http_methods(["GET", "POST"])
+@never_cache
+@requires_recent_auth("delete-my-data", form_url_name="delete-my-data")
+def delete_my_data(request):
+    person = get_object_or_404(Person, user=request.user)
+    last_member = last_household_member(person)
+    lent_accounts = lent_household_accounts(person)
+    form = DeleteMyDataForm(
+        request.POST or None,
+        username=request.user.username,
+        lent_accounts=lent_accounts,
+        last_member=last_member,
+    )
+    if request.method == "POST" and form.is_valid():
+        try:
+            delete_member_data(request.user, form.lent_choices())
+        except ValidationError as exc:
+            form.add_error(None, "; ".join(exc.messages))
+        else:
+            logout(request)
+            return redirect("member-data-deleted")
+    return render(request, "finance/delete_my_data.html", _delete_my_data_context(request, person, form))
+
+
+@login_not_required
+@require_safe
+@never_cache
+def member_data_deleted(request):
+    return render(
+        request,
+        "finance/member_data_deleted.html",
+        {"auth_card_layout": True},
+    )
 
 
 @login_not_required
