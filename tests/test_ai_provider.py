@@ -409,7 +409,7 @@ def test_stale_running_job_without_session_is_requeued(harness, settings):
     job.refresh_from_db()
     assert job.status == job.Status.QUEUED
     assert job.attempts == 1
-    assert job.next_attempt_at == moment + timedelta(seconds=120)
+    assert moment + timedelta(seconds=120) <= job.next_attempt_at <= timezone.now() + timedelta(seconds=120)
     assert state.requests.count(("POST", "/api/v1/sessions")) == 0
 
 
@@ -880,3 +880,49 @@ def test_hosted_backend_is_refused_at_run_time_once_the_operator_turns_it_off(ha
     assert not result.ok
     assert result.failure_code == UNAVAILABLE
     assert ("POST", "/api/v1/sessions") not in state.requests
+
+
+@pytest.mark.django_db
+def test_claim_respects_a_backoff_set_by_another_runner(harness):
+    from datetime import timedelta
+
+    from finance.ai_jobs import _process_one
+
+    state, url = harness
+    state.model_state = "ready"
+    _user, person, _household = make_member("owner")
+    connect_harness(person, base_url=url, token=TOKEN)
+    set_defaults(person, chat_backend="local", background_backend="local")
+    job = enqueue_job(person, feature="structured")
+    stale = AiJob.objects.get(pk=job.pk)
+    AiJob.objects.filter(pk=job.pk).update(next_attempt_at=timezone.now() + timedelta(minutes=10))
+
+    _process_one(stale, timezone.now())
+
+    job.refresh_from_db()
+    assert job.status == job.Status.QUEUED
+    assert job.attempts == 0
+    assert ("POST", "/api/v1/sessions") not in state.requests
+
+
+@pytest.mark.django_db
+def test_resume_delay_counts_from_when_the_wait_ended(harness, settings):
+    from datetime import timedelta
+
+    state, url = harness
+    state.model_state = "ready"
+    state.running_polls = 1000
+    settings.AGENT_HARNESS_SESSION_TIMEOUT_SECONDS = 0
+    settings.AI_JOB_RESUME_DELAY_SECONDS = 300
+    _user, person, _household = make_member("owner")
+    connect_harness(person, base_url=url, token=TOKEN)
+    set_defaults(person, chat_backend="local", background_backend="local")
+    job = enqueue_job(person, feature="structured")
+    started = timezone.now() - timedelta(minutes=20)
+    AiJob.objects.filter(pk=job.pk).update(next_attempt_at=started)
+
+    process_due_jobs(now=started)
+
+    job.refresh_from_db()
+    assert job.status == job.Status.QUEUED
+    assert job.next_attempt_at >= timezone.now() + timedelta(seconds=290)
