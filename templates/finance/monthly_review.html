@@ -1,0 +1,178 @@
+{% extends "finance/base.html" %}
+{% block title %}{{ month_label }} review · Financial Planner{% endblock %}
+{% block content %}
+<h1 class="mb-4 text-2xl font-bold">Monthly review</h1>
+<p class="mb-4 max-w-2xl opacity-80">Computed facts for a closed month, using the same totals as Cash flow, Spending, Budgets, Recurring, Goals, and Net worth. This is not advice.</p>
+<nav class="mb-6 flex flex-wrap items-center gap-3" aria-label="Month">
+  <a class="btn btn-ghost" href="{{ previous_url }}">Previous month</a>
+  <h2 class="text-lg font-semibold">{{ month_label }}</h2>
+  {% if next_url %}
+  <a class="btn btn-ghost" href="{{ next_url }}">Next month</a>
+  {% endif %}
+</nav>
+<form method="post" action="{{ regenerate_url }}" class="mb-6">
+  {% csrf_token %}
+  <input type="hidden" name="month" value="{{ month|date:'Y-m' }}">
+  <button type="submit" class="btn btn-outline">Regenerate</button>
+</form>
+
+<section class="card bg-base-100 shadow-sm mb-6">
+  <div class="card-body">
+    <h2 class="card-title">Income, spending, and net</h2>
+    <p><a class="link" href="{{ facts.cash_flow_url }}">Open cash flow for {{ month_label }}</a></p>
+    <dl class="mt-4 grid gap-3 sm:grid-cols-3">
+      <div>
+        <dt class="opacity-80">Income</dt>
+        <dd class="text-lg font-semibold">{% include "finance/_amount.html" with value=facts.income_display tone="" %}</dd>
+        <dd class="text-sm opacity-80">vs prior month {{ facts.prior.income_delta_display }}; vs same month last year {{ facts.year_ago.income_delta_display }}</dd>
+      </div>
+      <div>
+        <dt class="opacity-80">Spending</dt>
+        <dd class="text-lg font-semibold">{% include "finance/_amount.html" with value=facts.spending_display tone="" %}</dd>
+        <dd class="text-sm opacity-80">vs prior month {{ facts.prior.spending_delta_display }}; vs last year {{ facts.year_ago.spending_delta_display }}</dd>
+      </div>
+      <div>
+        <dt class="opacity-80">Net</dt>
+        <dd class="text-lg font-semibold">{% include "finance/_amount.html" with value=facts.net_display tone="" %}</dd>
+        <dd class="text-sm opacity-80">vs prior month {{ facts.prior.net_delta_display }}; vs last year {{ facts.year_ago.net_delta_display }}</dd>
+      </div>
+    </dl>
+    {% if facts.missing_import %}
+    <p class="mt-4"><a class="link" href="{{ facts.missing_import_url }}">Missing import</a> for at least one visible account this month.</p>
+    {% endif %}
+  </div>
+</section>
+
+<section class="card bg-base-100 shadow-sm mb-6">
+  <div class="card-body">
+    <h2 class="card-title">Category changes</h2>
+    <p class="mb-2"><a class="link" href="{{ facts.spending_url }}">Open spending</a></p>
+    <h3 class="font-semibold">Largest increases</h3>
+    {% if facts.category_increases %}
+    <ul class="list-disc pl-6 mb-4">
+      {% for item in facts.category_increases %}
+      <li><a class="link" href="{{ item.url }}">{{ item.name }}</a> {{ item.delta_display }} ({{ item.previous_display }} → {{ item.current_display }})</li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="mb-4 opacity-80">No category increases this month.</p>
+    {% endif %}
+    <h3 class="font-semibold">Largest decreases</h3>
+    {% if facts.category_decreases %}
+    <ul class="list-disc pl-6">
+      {% for item in facts.category_decreases %}
+      <li><a class="link" href="{{ item.url }}">{{ item.name }}</a> {{ item.delta_display }} ({{ item.previous_display }} → {{ item.current_display }})</li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="opacity-80">No category decreases this month.</p>
+    {% endif %}
+  </div>
+</section>
+
+<section class="card bg-base-100 shadow-sm mb-6">
+  <div class="card-body">
+    <h2 class="card-title">Recurring</h2>
+    <p class="mb-2"><a class="link" href="{{ facts.recurring_url }}">Open recurring</a></p>
+    <h3 class="font-semibold">Price changes</h3>
+    {% if facts.price_changes %}
+    <ul class="list-disc pl-6 mb-4">
+      {% for item in facts.price_changes %}
+      <li><a class="link" href="{{ item.url }}">{{ item.name }}</a> {{ item.previous_display }} → {{ item.new_display }} ({{ item.percent_display }})</li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="mb-4 opacity-80">No price changes this month.</p>
+    {% endif %}
+    <h3 class="font-semibold">Missed charges</h3>
+    {% if facts.missed_charges %}
+    <ul class="list-disc pl-6 mb-4">
+      {% for item in facts.missed_charges %}
+      <li><a class="link" href="{{ item.url }}">{{ item.name }}</a> expected {{ item.expected_on }}{% if item.missing_import %} (missing import){% endif %}</li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="mb-4 opacity-80">No missed charges this month.</p>
+    {% endif %}
+    <h3 class="font-semibold">Cancellations</h3>
+    {% if facts.cancellations %}
+    <ul class="list-disc pl-6 mb-4">
+      {% for item in facts.cancellations %}
+      <li><a class="link" href="{{ item.url }}">{{ item.name }}</a> cancelled {{ item.cancelled_on }}</li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="mb-4 opacity-80">No cancellations this month.</p>
+    {% endif %}
+    <h3 class="font-semibold">Newly confirmed</h3>
+    {% if facts.new_recurring %}
+    <ul class="list-disc pl-6">
+      {% for item in facts.new_recurring %}
+      <li><a class="link" href="{{ item.url }}">{{ item.name }}</a> {{ item.amount_display }}</li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="opacity-80">No series confirmed this month.</p>
+    {% endif %}
+  </div>
+</section>
+
+<section class="card bg-base-100 shadow-sm mb-6">
+  <div class="card-body">
+    <h2 class="card-title">Budgets</h2>
+    <p class="mb-2"><a class="link" href="{{ facts.budgets_url }}">Open budgets</a></p>
+    {% if facts.budgets_over %}
+    <h3 class="font-semibold">Over limit</h3>
+    <ul class="list-disc pl-6 mb-4">
+      {% for item in facts.budgets_over %}
+      <li><a class="link" href="{{ item.url }}">{{ item.name }}</a> over by {{ item.over_by_display }}</li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="mb-4 opacity-80">No budgets over their limit.</p>
+    {% endif %}
+    {% if facts.largest_remaining %}
+    <p>Largest remaining: <a class="link" href="{{ facts.largest_remaining.url }}">{{ facts.largest_remaining.name }}</a> {{ facts.largest_remaining.remaining_display }}</p>
+    {% endif %}
+  </div>
+</section>
+
+<section class="card bg-base-100 shadow-sm mb-6">
+  <div class="card-body">
+    <h2 class="card-title">Savings goals</h2>
+    <p class="mb-2"><a class="link" href="{{ facts.goals_url }}">Open goals</a></p>
+    {% if facts.savings_goals %}
+    <ul class="list-disc pl-6">
+      {% for item in facts.savings_goals %}
+      <li><a class="link" href="{{ item.url }}">{{ item.name }}</a> {{ item.percent }}% ({{ item.current_display }} of {{ item.target_display }}, {{ item.remaining_display }} remaining)</li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="opacity-80">No active savings goals.</p>
+    {% endif %}
+  </div>
+</section>
+
+<section class="card bg-base-100 shadow-sm mb-6">
+  <div class="card-body">
+    <h2 class="card-title">Net worth</h2>
+    <p><a class="link" href="{{ facts.net_worth_url }}">Open net worth</a></p>
+    <p class="mt-2">{% include "finance/_amount.html" with value=facts.net_worth_display tone="" %} ({{ facts.net_worth_change_display }} vs prior month)</p>
+  </div>
+</section>
+
+<section class="card bg-base-100 shadow-sm mb-6">
+  <div class="card-body">
+    <h2 class="card-title">Unusually large transactions</h2>
+    {% if facts.large_transactions %}
+    <ul class="list-disc pl-6">
+      {% for item in facts.large_transactions %}
+      <li><a class="link" href="{{ item.url }}">{{ item.description }}</a> {{ item.amount_display }} on {{ item.date }}</li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="opacity-80">No unusually large transactions this month.</p>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

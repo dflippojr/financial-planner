@@ -832,7 +832,11 @@ def _set_open_series_status(principal, series_id, status):
     if series is None or series.status not in _OPEN_STATUSES:
         raise PermissionDenied(_DENIED)
     series.status = status
-    series.save(update_fields=("status", "updated_at"))
+    fields = ["status", "updated_at"]
+    if status == RecurringSeries.Status.CONFIRMED and series.confirmed_at is None:
+        series.confirmed_at = timezone.now()
+        fields.append("confirmed_at")
+    series.save(update_fields=fields)
     return series
 
 
@@ -932,8 +936,13 @@ def merge_recurring_series(principal, source_id, target_id):
         source=RecurringSeriesMember.Source.MANUAL
     )
     if source.status == RecurringSeries.Status.CONFIRMED or target.status == RecurringSeries.Status.CONFIRMED:
+        became_confirmed = target.status != RecurringSeries.Status.CONFIRMED
         target.status = RecurringSeries.Status.CONFIRMED
-        target.save(update_fields=("status", "updated_at"))
+        fields = ["status", "updated_at"]
+        if became_confirmed and target.confirmed_at is None:
+            target.confirmed_at = timezone.now()
+            fields.append("confirmed_at")
+        target.save(update_fields=fields)
     source.delete()
     return _recompute_series_from_members(target, extra_reasons=(MANUAL_REASON,))
 
