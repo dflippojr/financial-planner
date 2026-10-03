@@ -66,6 +66,22 @@ def test_preview_requires_authentication(staging_settings):
 
 
 @pytest.mark.django_db
+def test_upload_form_renders_shared_file_input_classes(staging_settings):
+    user, person = make_person("owner")
+    account = Account.objects.create(name="Synthetic Checking", account_type="checking", owner=person)
+    client = Client()
+    client.force_login(user)
+    response = client.get(reverse("csv-import-preview", args=(account.pk,)))
+    html = response.content.decode()
+
+    assert response.status_code == 200
+    assert "file-input" in html
+    assert "file-input-bordered" in html
+    assert "file-input-primary" in html
+    assert 'name="csv_file"' in html
+
+
+@pytest.mark.django_db
 def test_missing_and_private_unauthorized_accounts_are_indistinguishable(staging_settings):
     owner_user, owner = make_person("owner")
     viewer_user, _viewer = make_person("viewer")

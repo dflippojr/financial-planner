@@ -122,7 +122,6 @@ def navigation(request):
         return {"nav_items": [], "nav_current": "", "settings_tabs": [], "settings_current": ""}
     current = _nav_current(request)
     settings_current = _settings_current(request)
-    accounts_url = reverse("account-list")
     items = (
         ("home", "Cash flow", reverse("home")),
         ("net-worth", "Net worth", reverse("net-worth")),
@@ -130,8 +129,8 @@ def navigation(request):
         ("transaction-list", "Transactions", reverse("transaction-list")),
         ("transfer-review", "Transfers", reverse("transfer-review")),
         ("recurring-review", "Recurring", reverse("recurring-review")),
-        ("account-list", "Accounts", accounts_url),
-        ("csv-import", "Import", accounts_url),
+        ("account-list", "Accounts", reverse("account-list")),
+        ("csv-import", "Import", reverse("csv-import")),
         ("planned-items", "Planned items", reverse("planned-items")),
         ("budgets", "Budgets", reverse("budgets")),
         ("alert-list", "Alerts", reverse("alert-list")),
