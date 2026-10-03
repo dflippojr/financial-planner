@@ -457,7 +457,7 @@ Owner decisions:
 
 Owner decisions:
 - **Scope.** Saved mappings are household-wide: any current member can use and edit them, like categories.
-- **Locked after the first import.** Once a mapping has imported a batch, its description rule cannot change, because that rule feeds the reimport fingerprint. A member makes a new mapping instead.
+- **Locked after the first import.** Once a mapping has imported a batch, none of its parsing fields can change: date, amount, sign, and description columns and formats. They all feed the reimport fingerprint (account, date, amount, description). Only the name and account default stay editable. A member makes a new mapping instead.
 
 ## Recurring review (2026-10-03, #102)
 
@@ -482,3 +482,8 @@ Owner decision: a member can delete their own data, self-service from settings.
 - **What stays:**
   - Shared household data stays.
   - The member appears as "former member" in shared history.
+- **Lent accounts.** For each household account the member has lent, they choose:
+  - hand it over to the household, so it becomes co-owned and stays; or
+  - delete it with their data.
+
+  Deletion can't proceed until each lent account has a choice.
