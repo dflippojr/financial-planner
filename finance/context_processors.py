@@ -36,9 +36,40 @@ def privacy_policy_prompt(request):
     return {"privacy_policy_prompt": current_policy()}
 
 
+SETTINGS_TAB_BY_NAME = {
+    "account-settings": "security",
+    "simplefin-connections": "connections",
+    "simplefin-sync": "connections",
+    "simplefin-disconnect": "connections",
+    "invite": "household",
+    "leave-household": "household",
+    "category-list": "categories",
+    "category-rule-list": "categories",
+    "category-rule-detail": "categories",
+    "category-rule-application-reverse": "categories",
+    "settings-data": "data",
+    "account-export": "data",
+    "settings-ai": "ai",
+    "ai-connect": "ai",
+    "ai-disconnect": "ai",
+    "ai-defaults": "ai",
+}
+
+SETTINGS_TABS = (
+    ("security", "Sign-in & security", "account-settings"),
+    ("connections", "Connections", "simplefin-connections"),
+    ("household", "Household", "invite"),
+    ("categories", "Categories", "category-list"),
+    ("data", "Data", "settings-data"),
+    ("ai", "AI", "settings-ai"),
+)
+
+
 def _nav_current(request):
     match = getattr(request, "resolver_match", None)
     name = getattr(match, "url_name", "") or ""
+    if name in SETTINGS_TAB_BY_NAME or name.startswith("category-rule") or name.startswith("simplefin"):
+        return "settings"
     if name in {
         "transaction-edit",
         "transaction-categorize",
@@ -48,8 +79,6 @@ def _nav_current(request):
         "transaction-split-part-category",
     }:
         return "transaction-list"
-    if name.startswith("category-rule"):
-        return "category-list"
     if name.startswith("csv-import"):
         return "csv-import"
     if name in {"planned-item-edit", "planned-item-disable", "planned-item-enable"}:
@@ -64,17 +93,28 @@ def _nav_current(request):
         "savings-goal-unarchive",
     }:
         return "savings-goals"
-    if name.startswith("simplefin"):
-        return "simplefin-connections"
     if name in {"account-balances", "account-snapshot-edit", "account-snapshot-delete"}:
         return "account-list"
     return name
 
 
+def _settings_current(request):
+    match = getattr(request, "resolver_match", None)
+    name = getattr(match, "url_name", "") or ""
+    if name in SETTINGS_TAB_BY_NAME:
+        return SETTINGS_TAB_BY_NAME[name]
+    if name.startswith("category-rule"):
+        return "categories"
+    if name.startswith("simplefin"):
+        return "connections"
+    return ""
+
+
 def navigation(request):
     if not getattr(request.user, "is_authenticated", False):
-        return {"nav_items": [], "nav_current": ""}
+        return {"nav_items": [], "nav_current": "", "settings_tabs": [], "settings_current": ""}
     current = _nav_current(request)
+    settings_current = _settings_current(request)
     accounts_url = reverse("account-list")
     items = (
         ("home", "Cash flow", reverse("home")),
@@ -83,11 +123,8 @@ def navigation(request):
         ("transaction-list", "Transactions", reverse("transaction-list")),
         ("transfer-review", "Transfers", reverse("transfer-review")),
         ("recurring-review", "Recurring", reverse("recurring-review")),
-        ("category-list", "Categories", reverse("category-list")),
         ("account-list", "Accounts", accounts_url),
-        ("simplefin-connections", "Connections", reverse("simplefin-connections")),
         ("csv-import", "Import", accounts_url),
-        ("invite", "Invite", reverse("invite")),
         ("planned-items", "Planned items", reverse("planned-items")),
         ("budgets", "Budgets", reverse("budgets")),
         ("savings-goals", "Goals", reverse("savings-goals")),
@@ -97,4 +134,14 @@ def navigation(request):
             {"key": key, "label": label, "url": url, "active": key == current} for key, label, url in items
         ],
         "nav_current": current,
+        "settings_current": settings_current,
+        "settings_tabs": [
+            {
+                "key": key,
+                "label": label,
+                "url": reverse(url_name),
+                "active": key == settings_current,
+            }
+            for key, label, url_name in SETTINGS_TABS
+        ],
     }

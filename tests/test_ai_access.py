@@ -155,7 +155,7 @@ def test_token_never_appears_in_pages_logs_export_or_errors(harness, caplog):
     client = Client()
     client.force_login(user)
     stamp_recent_auth(client)
-    page = client.get(reverse("account-settings"))
+    page = client.get(reverse("settings-ai"))
     html = page.content.decode()
     assert TOKEN not in html
     export = write_export_zip(person)

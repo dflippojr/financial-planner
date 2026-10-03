@@ -81,6 +81,7 @@ from .export import export_filename, write_export_zip
 from .models import (
     Account,
     Category,
+    Membership,
     Person,
     PrivacyPolicyVersion,
     RecurringSeries,
@@ -1114,13 +1115,27 @@ def sign_out(request):
 @never_cache
 @requires_recent_auth("invite")
 def invite(request):
+    person = get_object_or_404(Person, user=request.user)
+    household = current_household(person)
     code = None
     if request.method == "POST":
-        code = create_invitation(request.user.person)
+        code = create_invitation(person)
+    members = []
+    if household is not None:
+        members = list(
+            Membership.objects.filter(household=household, ended_at__isnull=True)
+            .select_related("person")
+            .order_by("person__display_name", "pk")
+        )
     return render(
         request,
         "finance/invite.html",
-        {"invitation_code": code, "invitation_ttl_hours": settings.INVITATION_TTL_HOURS},
+        {
+            "invitation_code": code,
+            "invitation_ttl_hours": settings.INVITATION_TTL_HOURS,
+            "household": household,
+            "members": members,
+        },
     )
 
 
@@ -1228,14 +1243,6 @@ def account_settings(request):
             password_form, error = _account_add_password(request, password_form)
         elif action == "remove-password":
             error = _account_remove_password(request)
-        elif action == "export":
-            return _account_export_zip(request)
-        elif action == "accept-privacy-policy":
-            if person_for_accept := getattr(request.user, "person", None):
-                accept_shown_version(person_for_accept, request.POST.get("version"))
-    person = getattr(request.user, "person", None)
-    policy = current_policy()
-    acceptance = latest_acceptance(person) if person is not None else None
     return render(
         request,
         "finance/account_settings.html",
@@ -1244,7 +1251,27 @@ def account_settings(request):
             "has_google": has_google_account(request.user),
             "has_password": request.user.has_usable_password(),
             "error": error,
-            "household": current_household(person) if person is not None else None,
+        },
+    )
+
+
+@never_cache
+def settings_data(request):
+    return render(request, "finance/settings_data.html")
+
+
+@never_cache
+def settings_ai(request):
+    person = getattr(request.user, "person", None)
+    if request.method == "POST" and request.POST.get("action") == "accept-privacy-policy":
+        if person is not None:
+            accept_shown_version(person, request.POST.get("version"))
+    policy = current_policy()
+    acceptance = latest_acceptance(person) if person is not None else None
+    return render(
+        request,
+        "finance/settings_ai.html",
+        {
             "privacy_policy": policy,
             "privacy_in_acceptance": in_acceptance(person) if person is not None else False,
             "privacy_acceptance": acceptance,
@@ -1264,7 +1291,7 @@ def _account_export_zip(request):
 
 @require_POST
 @never_cache
-@requires_recent_auth("export-data", form_url_name="account-settings")
+@requires_recent_auth("export-data", form_url_name="settings-data")
 def account_export(request):
     return _account_export_zip(request)
 
@@ -1340,7 +1367,7 @@ def start_google_reauth(request):
 
 @require_POST
 @never_cache
-@requires_recent_auth("leave-household", form_url_name="account-settings")
+@requires_recent_auth("leave-household", form_url_name="invite")
 def leave_household_view(request):
     try:
         leave_household(request.user)
