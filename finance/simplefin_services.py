@@ -618,6 +618,9 @@ def _sync_connection_locked(principal, connection_id, *, ignore_rate_limit=False
         )
     )
     apply_enabled_rules_to_transactions(person, synced)
+    from finance.category_suggestion_services import queue_category_suggestions_for
+
+    queue_category_suggestions_for(person, synced)
     refresh_recurring_series(person)
     summary = f"Synced {imported} new transaction(s)."
     if skipped:

@@ -88,17 +88,22 @@ def _lock_qs(qs):
 
 def _process_one(job, moment):
     cutoff = _stale_running_cutoff(moment)
-    if job.status == AiJob.Status.RUNNING and not (job.harness_session_id or "").strip():
+    member_connection = connection_for(job.member)
+    session_id = _session_for(job, member_connection)
+    if job.harness_session_id and not session_id:
+        # Saved on an earlier connection: never resume it on this one.
+        _write_if_unchanged(job, harness_session_id="")
+        return False
+    if job.status == AiJob.Status.RUNNING and not session_id:
         return _requeue_stale_running(job, moment, cutoff)
     if not may_use_ai(job.member):
         return _fail_if_unchanged(job, UNAVAILABLE)
-    member_connection = connection_for(job.member)
     if member_connection is None:
         return _fail_if_unchanged(job, UNAVAILABLE)
     backend = job.backend or member_connection.background_backend
     # A job with a session id resumes that session (it may already be done), so it
     # skips the local-model readiness gate whether it is queued or stale-running.
-    resuming = bool((job.harness_session_id or "").strip())
+    resuming = bool(session_id)
     if not resuming and backend == LOCAL_BACKEND and not _local_may_run(member_connection):
         _write_if_unchanged(job, status=AiJob.Status.WAITING_MODEL, next_attempt_at=moment)
         return False
@@ -106,22 +111,37 @@ def _process_one(job, moment):
     if claimed is None:
         return False
     job = claimed
+    marker = _connection_marker(member_connection)
 
-    def remember_session(session_id):
-        job.harness_session_id = session_id
-        job.save(update_fields=("harness_session_id", "updated_at"))
+    def remember_session(new_id):
+        job.harness_session_id = new_id
+        job.input_refs = {**(job.input_refs or {}), SESSION_CONNECTION_KEY: marker}
+        job.save(update_fields=("harness_session_id", "input_refs", "updated_at"))
 
-    prompt = FEATURE_PROMPTS.get(job.feature, FEATURE_PROMPTS["structured"])
-    result = run_structured(
-        job.member,
-        prompt,
-        feature=job.feature,
-        backend=backend,
-        session_id=job.harness_session_id,
-        on_session=remember_session,
-    )
+    if job.feature == "category_suggestions":
+        from .category_suggestion_services import run_category_suggestion_job
+
+        result = run_category_suggestion_job(
+            job.member,
+            job,
+            backend=backend,
+            session_id=session_id,
+            on_session=remember_session,
+        )
+    else:
+        prompt = FEATURE_PROMPTS.get(job.feature, FEATURE_PROMPTS["structured"])
+        result = run_structured(
+            job.member,
+            prompt,
+            feature=job.feature,
+            backend=backend,
+            session_id=session_id,
+            on_session=remember_session,
+        )
     if result.session_id:
         job.harness_session_id = result.session_id
+        job.input_refs = {**(job.input_refs or {}), SESSION_CONNECTION_KEY: marker}
+        job.save(update_fields=("harness_session_id", "input_refs", "updated_at"))
     if result.ok:
         job.status = AiJob.Status.SUCCEEDED
         job.result_ref = result.session_id or "ok"
@@ -145,6 +165,26 @@ def _process_one(job, moment):
         return _wait_for_open_session(job, moment, result.failure_code or UNAVAILABLE)
     job.harness_session_id = ""
     return _retry_or_fail(job, moment, result.failure_code or UNAVAILABLE)
+
+
+SESSION_CONNECTION_KEY = "harness_connection"
+
+
+def _connection_marker(connection):
+    """Identifies one connect: a reconnect, even to the same URL, gets a new marker."""
+    if connection is None:
+        return ""
+    return f"{connection.pk}:{connection.connected_at.isoformat() if connection.connected_at else ''}"
+
+
+def _session_for(job, connection):
+    """The saved session id, only if it was created on the member's current connection."""
+    saved = (job.harness_session_id or "").strip()
+    if not saved or connection is None:
+        return ""
+    if (job.input_refs or {}).get(SESSION_CONNECTION_KEY) != _connection_marker(connection):
+        return ""
+    return saved
 
 
 def _wait_for_open_session(job, moment, code):

@@ -84,7 +84,16 @@ def category_rule_list(request):
             {"household": None, "rules": [], "form": None, "unreachable_applications": unreachable},
         )
     ensure_household_categories(household)
-    form = CategoryRuleForm(request.POST if request.method == "POST" else None, principal=request.user)
+    initial = None
+    if request.method != "POST":
+        initial = {}
+        contains = (request.GET.get("description_contains") or "").strip()
+        if contains:
+            initial["description_contains"] = contains
+        category = request.GET.get("category")
+        if category:
+            initial["category"] = category
+    form = CategoryRuleForm(request.POST if request.method == "POST" else None, principal=request.user, initial=initial)
     if request.method == "POST" and form.is_valid():
         try:
             rule = _service_or_404(lambda: _save_from_form(request, form))
