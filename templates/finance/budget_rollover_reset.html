@@ -1,0 +1,18 @@
+{% extends "finance/base.html" %}
+{% block title %}Reset rollover · Financial Planner{% endblock %}
+{% block content %}
+<h1 class="mb-4 text-2xl font-bold">Reset rollover</h1>
+<p class="mb-4 max-w-2xl">Reset carried leftover and overspending for {{ budget }} starting {{ month_label }}. This month starts with no carry. Earlier months are unchanged.</p>
+<section class="card bg-base-100 shadow-sm max-w-lg">
+  <div class="card-body">
+    <form method="post">
+      {% csrf_token %}
+      <input type="hidden" name="month" value="{{ month|date:'Y-m' }}">
+      <div class="flex flex-wrap gap-2">
+        <button type="submit" class="btn btn-primary">Reset rollover</button>
+        <a class="btn btn-ghost" href="{{ cancel_url }}">Cancel</a>
+      </div>
+    </form>
+  </div>
+</section>
+{% endblock %}

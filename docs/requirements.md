@@ -331,6 +331,15 @@ Savings goals:
 - **Progress** is informational. It is the linked account's latest balance (#67/#69 balance snapshots) or a manually entered current amount, compared against the target. It shows the monthly amount needed to reach the target by the target date.
 - Goals do not change the projection in v1.
 
+## Budgets (2026-10-02, #96)
+
+Owner decisions:
+- Separate scopes: a household budget counts only household-shared accounts; a private budget counts the owner's visible accounts.
+- An optional overall monthly total alongside the category budgets.
+- Amount changes apply from a chosen month onward.
+- Optional rollover per budget, in both directions, starting the month it's turned on, with a manual reset.
+- Budgets do not feed the projection in v1.
+
 ## Investment performance (2026-10-02, #18)
 
 Owner decisions:

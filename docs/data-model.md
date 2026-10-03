@@ -1,6 +1,6 @@
 # Core financial data model
 
-Updated: 2026-10-01. This document records the storage contract introduced by issue #4, the reimport rules from issue #6, correction history from issue #31, category/transfer/refund rules from issue #8, cash-flow reporting from issue #9, recurring-charge series from issue #17, household share modes from issue #30, SimpleFIN Bridge connections from issue #67, net worth from balance snapshots from issue #69, and planned items with projected cash flow from issue #21. Provider parsing and Vanguard-specific activity meaning remain separate issues.
+Updated: 2026-10-02. This document records the storage contract introduced by issue #4, the reimport rules from issue #6, correction history from issue #31, category/transfer/refund rules from issue #8, cash-flow reporting from issue #9, recurring-charge series from issue #17, household share modes from issue #30, SimpleFIN Bridge connections from issue #67, net worth from balance snapshots from issue #69, and planned items with projected cash flow from issue #21. Provider parsing and Vanguard-specific activity meaning remain separate issues.
 
 ## People and sharing
 
@@ -61,6 +61,14 @@ The committed `synthetic_demo` fixture contains invented names, hashes, descript
 - Amounts are stored as a positive minor-unit integer in USD. Income versus expense comes from `kind`. Cadence is one-time, weekly, biweekly, monthly, quarterly, or annual. An optional end date must fall on or after the start date. An optional `replaces_series` link skips that confirmed recurring series in the projection.
 - The projection engine is a pure month-by-month function. It starts the month after `today`, runs for 3, 6, 12, or 24 months (default 12), and counts discrete occurrences in each calendar month. Confirmed, active recurring series that remain `visible_to` the viewer are expenses at typical amount and cadence, starting after the latest member transaction date. Disabled items, another member's private items, and private-account series the viewer cannot see are omitted.
 - Projected months are appended to the cash-flow chart and table with a Projected label. They are not added into actual summary cards, exports, or historical reports.
+
+## Budgets
+
+- `Budget` is private (owner only, no household) or household (exactly one household). Current members can see and edit household budgets. Private budgets are owner-only; a former member loses household budget access immediately.
+- Optional `category` is a household category; null means the overall monthly spending total. One active budget per private owner and category (or total), and one active budget per household and category (or total).
+- `BudgetAmount` stores `effective_month` (first of a month) and `amount_minor` in USD. The amount for month M is the latest `effective_month` on or before M.
+- Optional rollover starts the month it is turned on. `BudgetRolloverReset` records a month, actor, and time; carry from that month is zero. Carry is `amount − spent` summed from the later of the rollover start and the last reset through the prior month, and may be negative.
+- Spent amounts come from `spending_by_category_report` for the month and scope so they match the Spending page.
 
 ## Cash flow over time
 

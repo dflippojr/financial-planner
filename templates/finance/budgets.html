@@ -1,0 +1,99 @@
+{% extends "finance/base.html" %}
+{% block title %}Budgets · Financial Planner{% endblock %}
+{% block content %}
+<h1 class="mb-4 text-2xl font-bold">Budgets</h1>
+<p class="mb-4 max-w-2xl opacity-80">Monthly spending limits by category, with an optional overall total. Progress uses the same spending totals as the Spending page. Budgets do not change the cash-flow projection.</p>
+<nav class="mb-6 flex flex-wrap items-center gap-3" aria-label="Month">
+  <a class="btn btn-ghost" href="{{ previous_url }}">Previous month</a>
+  <h2 class="text-lg font-semibold">{{ month_label }}</h2>
+  <a class="btn btn-ghost" href="{{ next_url }}">Next month</a>
+</nav>
+<section class="card bg-base-100 shadow-sm mb-6 max-w-lg">
+  <div class="card-body">
+    <h2 class="card-title">Add budget</h2>
+    <form method="post">
+      {% csrf_token %}
+      <input type="hidden" name="month" value="{{ month|date:'Y-m' }}">
+      {% include "finance/_form_fields.html" with form=add_form %}
+      <button type="submit" class="btn btn-primary">Add budget</button>
+    </form>
+  </div>
+</section>
+<div class="overflow-x-auto">
+  <table class="table table-zebra">
+    <thead class="sticky top-0 z-10 bg-base-200">
+      <tr>
+        <th>Category</th>
+        <th class="text-right">Budgeted</th>
+        <th class="text-right">Carried</th>
+        <th class="text-right">Spent</th>
+        <th class="text-right">Remaining</th>
+        <th>Progress</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for card in cards %}
+      <tr>
+        <td>
+          <a class="link" href="{{ card.drilldown_url }}">{{ card.name }}</a>
+          {% if card.budget.scope == "household" %}
+          <span class="badge badge-info">Household</span>
+          {% else %}
+          <span class="badge">Private</span>
+          {% endif %}
+        </td>
+        <td class="text-right">{% include "finance/_amount.html" with value=card.amount_display tone="" %}</td>
+        <td class="text-right">
+          {% if card.rollover_enabled %}
+          {% include "finance/_amount.html" with value=card.carry_display tone="" %}
+          {% else %}
+          —
+          {% endif %}
+        </td>
+        <td class="text-right">{% include "finance/_amount.html" with value=card.spent_display tone="out" %}</td>
+        <td class="text-right">
+          {% if card.over_budget %}
+          <span>Over by {{ card.over_by_display }}</span>
+          {% else %}
+          {% include "finance/_amount.html" with value=card.remaining_display tone="" %}
+          {% endif %}
+        </td>
+        <td>
+          <progress class="progress w-28 {% if card.over_budget %}progress-error{% else %}progress-primary{% endif %}" value="{{ card.percent }}" max="100" aria-label="{{ card.percent }} percent of budget spent{% if card.over_budget %}, over by {{ card.over_by_display }}{% endif %}"></progress>
+          <span class="text-sm">{{ card.percent }}%</span>
+        </td>
+        <td>
+          <div class="flex flex-wrap gap-2">
+            <a class="btn btn-sm" href="{% url 'budget-edit' card.budget.pk %}?month={{ month|date:'Y-m' }}">Edit</a>
+            <form method="post" action="{% url 'budget-rollover-toggle' card.budget.pk %}">
+              {% csrf_token %}
+              <input type="hidden" name="month" value="{{ month|date:'Y-m' }}">
+              {% if card.rollover_enabled %}
+              <input type="hidden" name="enabled" value="0">
+              <button type="submit" class="btn btn-sm btn-outline">Turn rollover off</button>
+              {% else %}
+              <input type="hidden" name="enabled" value="1">
+              <button type="submit" class="btn btn-sm btn-outline">Turn rollover on</button>
+              {% endif %}
+            </form>
+            {% if card.rollover_enabled %}
+            <a class="btn btn-sm btn-outline" href="{% url 'budget-rollover-reset' card.budget.pk %}?month={{ month|date:'Y-m' }}">Reset rollover</a>
+            {% endif %}
+            <form method="post" action="{% url 'budget-archive' card.budget.pk %}">
+              {% csrf_token %}
+              <input type="hidden" name="month" value="{{ month|date:'Y-m' }}">
+              <button type="submit" class="btn btn-sm btn-outline">Archive</button>
+            </form>
+          </div>
+        </td>
+      </tr>
+    {% empty %}
+      <tr>
+        <td colspan="7">No budgets for this month yet.</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

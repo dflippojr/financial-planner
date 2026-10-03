@@ -47,6 +47,31 @@
       </div>
     </article>
   </div>
+  {% if budget_summary %}
+  <article class="card bg-base-100 shadow">
+    <div class="card-body">
+      <h2 class="card-title">Budgets</h2>
+      <p class="stat-desc">{{ budget_summary.month|date:"F Y" }}</p>
+      {% if budget_summary.count == 0 %}
+      <p>No budgets yet. <a class="link" href="{% url 'budgets' %}">Add a monthly budget</a>.</p>
+      {% else %}
+      {% for card in budget_summary.cards %}
+        {% if card.budget.category_id is None %}
+        <p>
+          {{ card.budget.get_scope_display }} overall:
+          {{ card.spent_display }} spent of {{ card.amount_display }}
+          {% if card.over_budget %}
+          · Over by {{ card.over_by_display }}
+          {% endif %}
+        </p>
+        {% endif %}
+      {% endfor %}
+      <p>{{ budget_summary.remaining_count }} on track · {{ budget_summary.over_count }} over budget</p>
+      <a class="link" href="{% url 'budgets' %}">Open budgets</a>
+      {% endif %}
+    </div>
+  </article>
+  {% endif %}
   {{ chart_data|json_script:"cash-flow-chart-data" }}
   <figure>
     <figcaption class="mb-2 font-medium">Income, spending, and net cash flow by period</figcaption>
