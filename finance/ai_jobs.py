@@ -182,14 +182,7 @@ def _session_for(job, connection):
     saved = (job.harness_session_id or "").strip()
     if not saved or connection is None:
         return ""
-    recorded = (job.input_refs or {}).get(SESSION_CONNECTION_KEY)
-    if recorded is None:
-        # Saved before sessions recorded their connection: keep it only if it was
-        # saved after the current connection was made.
-        if connection.connected_at and job.updated_at and job.updated_at >= connection.connected_at:
-            return saved
-        return ""
-    if recorded != _connection_marker(connection):
+    if (job.input_refs or {}).get(SESSION_CONNECTION_KEY) != _connection_marker(connection):
         return ""
     return saved
 

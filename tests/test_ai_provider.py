@@ -1031,37 +1031,3 @@ def test_a_session_saved_on_an_earlier_connection_is_never_resumed(harness):
     assert job.status == job.Status.SUCCEEDED
     assert ("GET", "/api/v1/sessions/old-harness-session") not in state.requests
     assert state.requests.count(("POST", "/api/v1/sessions")) == 1
-
-
-@pytest.mark.django_db
-def test_a_session_saved_before_markers_existed_resumes_on_the_same_connection(harness):
-    from datetime import timedelta
-
-    state, url = harness
-    state.model_state = "ready"
-    state.running_polls = 1
-    _user, person, _household = make_member("owner")
-    connect_harness(person, base_url=url, token=TOKEN)
-    set_defaults(person, chat_backend="local", background_backend="local")
-    session = run_session(url, TOKEN, prompt="synthetic", backend="local", project="financial-planner",
-                          sleep=lambda seconds: None)
-    assert session.ok
-    legacy = enqueue_job(person, feature="structured")
-    AiJob.objects.filter(pk=legacy.pk).update(harness_session_id=session.session_id)
-    older = enqueue_job(person, feature="structured")
-    AiJob.objects.filter(pk=older.pk).update(
-        harness_session_id="before-this-connection",
-        updated_at=connection_for(person).connected_at - timedelta(minutes=5),
-    )
-    posts_before = state.requests.count(("POST", "/api/v1/sessions"))
-
-    process_due_jobs()
-    process_due_jobs()
-
-    legacy.refresh_from_db()
-    older.refresh_from_db()
-    assert legacy.status == legacy.Status.SUCCEEDED
-    assert legacy.result_ref == session.session_id
-    assert ("GET", "/api/v1/sessions/before-this-connection") not in state.requests
-    assert older.status == older.Status.SUCCEEDED
-    assert state.requests.count(("POST", "/api/v1/sessions")) == posts_before + 1
