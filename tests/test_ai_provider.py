@@ -788,3 +788,95 @@ def test_tool_calls_stop_when_a_new_material_policy_is_published(harness):
     output, ok = run_tool(person, tools, "list_accounts", {})
     assert not ok
     assert "privacy and data policy" in output
+
+
+@pytest.mark.django_db
+def test_resuming_an_open_session_spends_no_attempts_until_the_age_cap(harness, settings):
+    from datetime import timedelta
+
+    state, url = harness
+    state.model_state = "ready"
+    state.running_polls = 1000
+    settings.AGENT_HARNESS_SESSION_TIMEOUT_SECONDS = 0
+    settings.AI_JOB_MAX_ATTEMPTS = 2
+    _user, person, _household = make_member("owner")
+    connect_harness(person, base_url=url, token=TOKEN)
+    set_defaults(person, chat_backend="local", background_backend="local")
+    job = enqueue_job(person, feature="structured")
+
+    for _ in range(4):
+        AiJob.objects.filter(pk=job.pk).update(next_attempt_at=timezone.now())
+        process_due_jobs()
+        job.refresh_from_db()
+        assert job.status == job.Status.QUEUED
+        assert job.harness_session_id
+    assert job.attempts == 1
+    assert state.requests.count(("POST", "/api/v1/sessions")) == 1
+
+    AiJob.objects.filter(pk=job.pk).update(
+        next_attempt_at=timezone.now(), created_at=timezone.now() - timedelta(days=2)
+    )
+    process_due_jobs()
+    job.refresh_from_db()
+    assert job.status == job.Status.FAILED
+    assert job.harness_session_id == ""
+
+
+def test_redirects_are_not_followed_so_the_token_stays_put():
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    from finance.ai_http import HarnessHttpError, json_request
+
+    received = []
+
+    class Elsewhere(BaseHTTPRequestHandler):
+        def log_message(self, format, *args):
+            return
+
+        def do_GET(self):
+            received.append(self.headers.get("Authorization"))
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+    elsewhere = HTTPServer(("127.0.0.1", 0), Elsewhere)
+    target = f"http://127.0.0.1:{elsewhere.server_port}/steal"
+
+    class Redirector(BaseHTTPRequestHandler):
+        def log_message(self, format, *args):
+            return
+
+        def do_GET(self):
+            self.send_response(302)
+            self.send_header("Location", target)
+            self.end_headers()
+
+    redirector = HTTPServer(("127.0.0.1", 0), Redirector)
+    for server in (elsewhere, redirector):
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        with pytest.raises(HarnessHttpError) as caught:
+            json_request(f"http://127.0.0.1:{redirector.server_port}/api/v1", token=TOKEN)
+        assert caught.value.status == 302
+        assert received == []
+    finally:
+        for server in (elsewhere, redirector):
+            server.shutdown()
+            server.server_close()
+
+
+@pytest.mark.django_db
+def test_hosted_backend_is_refused_at_run_time_once_the_operator_turns_it_off(harness, settings):
+    state, url = harness
+    settings.AGENT_HARNESS_HOSTED_SESSIONS = True
+    _user, person, _household = make_member("owner")
+    connect_harness(person, base_url=url, token=TOKEN)
+    set_defaults(person, chat_backend="claude", background_backend="claude")
+    settings.AGENT_HARNESS_HOSTED_SESSIONS = False
+
+    result = run_structured(person, "synthetic", feature="structured")
+
+    assert not result.ok
+    assert result.failure_code == UNAVAILABLE
+    assert ("POST", "/api/v1/sessions") not in state.requests

@@ -7,6 +7,16 @@ import urllib.error
 import urllib.request
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follow redirects: they would carry the App token past the URL allowlist."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 class HarnessHttpError(Exception):
     def __init__(self, status, payload=None):
         self.status = status
@@ -25,7 +35,7 @@ def json_request(url, *, token, method="GET", body=None, timeout=30):
         headers["Content-Type"] = "application/json"
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with _OPENER.open(request, timeout=timeout) as response:
             raw = response.read()
             if not raw:
                 return {}

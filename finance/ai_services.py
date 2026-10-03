@@ -8,6 +8,7 @@ from django.utils import timezone
 
 from .ai_harness import (
     default_backends,
+    hosted_sessions_enabled,
     describe_backend,
     discover,
     failure_from_http,
@@ -18,7 +19,7 @@ from .ai_harness import (
     warm_local_model,
 )
 from .ai_http import HarnessHttpError
-from .ai_types import AUTHORIZATION_REQUIRED, LOCAL_BACKEND, PROVIDER_ERROR, ProviderResult, Usage
+from .ai_types import AUTHORIZATION_REQUIRED, LOCAL_BACKEND, PROVIDER_ERROR, UNAVAILABLE, ProviderResult, Usage
 from .ai_urls import HarnessUrlError, parse_harness_url
 from .encryption import decrypt_secret, encrypt_secret
 from .lifecycle_services import _DENIED, _person_for
@@ -233,6 +234,10 @@ def _run(
     chosen = (backend or (connection.chat_backend if use_chat else connection.background_backend) or "").strip()
     if not chosen:
         return ProviderResult(ok=False, failure_code=AUTHORIZATION_REQUIRED)
+    # Enforced at run time, not only in settings: the operator may turn hosted
+    # sessions off after a member chose one, and queued work must not go out.
+    if chosen != LOCAL_BACKEND and not hosted_sessions_enabled():
+        return ProviderResult(ok=False, failure_code=UNAVAILABLE)
     try:
         token = _token(connection)
     except AiError as exc:
