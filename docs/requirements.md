@@ -175,11 +175,13 @@ Same 439 rows and 282 negative amounts as the native file, so the same transacti
 These rules replace the whole-chain median band above. Prices drift with inflation, and a fixed 25% band around one median splits a single bill into several series over time.
 
 - **The 25% band is measured between neighbouring charges.** Each charge after the first must be within 25% of the chain's current level: the median of the up to two accepted charges before it, in date order.
-  - **Confirmed price change.** A charge outside that band still belongs to the chain when the next charge is within 25% of it. The level then resets to the new price.
+  - **Confirmed price change.** A charge outside that band still belongs to the chain when the next charge is within 25% of it *and* outside the band of the old level. The level then resets to the new price.
+    - A charge that returns to the old price confirms nothing.
+    - The latest out-of-band charge, with no next charge yet, is treated as an outlier until a later charge confirms it.
   - **Outliers.** A lone out-of-band charge that the next charge doesn't confirm is an outlier. Outlier removal and the amount-clustering fallback (#50) apply as before.
   - **Result.**
-    - Gradual drift stays in one series. So do single step changes: $20 to $27, or $100, $120, $144.
-    - Two concurrent plans at clearly different prices from one merchant stay separate, because their interleaved charges never confirm each other.
+    - Gradual drift stays in one series. So do single step changes once confirmed: $20 then $27, $27; or $100, $120, $144, $144.
+    - Two concurrent plans at clearly different prices from one merchant stay separate, even when they are less than 50% apart. For example, $100 and $130 interleaved: each $100 that follows a $130 is back in the old band, so it never confirms the $130.
 - A series' typical amount is its recent price: the median of its latest three occurrences, or of all of them if there are fewer. Monthly and annual totals, matching a confirmed series to new suggestions, the projection, and export all use it.
 - Members correct grouping on the Recurring page, on their own series, whether confirmed or suggested:
   - **Merge** one series into another, even across merchant keys. The target keeps its cadence and name, and becomes confirmed if either series was confirmed. The source series is deleted.
