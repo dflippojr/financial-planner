@@ -10,10 +10,11 @@ from django.views.decorators.http import require_GET, require_http_methods, requ
 
 from .account_views import _active_visible_account, _service_or_404
 from .cash_flow import default_date_range, format_minor
-from .forms import ManualBalanceForm, NetWorthFilterForm
+from .forms import ManualBalanceForm, NetWorthFilterForm, PairLoanForm
 from .models import Account, BalanceSnapshot
 from .net_worth import net_worth_chart_data, net_worth_preset_links, net_worth_report
 from .performance import account_performance
+from .pairing_services import PairingError, set_loan_secured_asset
 from .snapshot_services import SnapshotError, delete_manual_snapshot, record_manual_snapshot, update_manual_snapshot
 
 
@@ -101,7 +102,10 @@ def account_balances(request, account_id):
             ),
         )
         if saved is not None:
-            messages.success(request, "Recorded balance.")
+            messages.success(
+                request,
+                "Recorded estimate." if account.is_physical_asset() else "Recorded balance.",
+            )
             return redirect("account-balances", account.pk)
     snapshots = list(account.balance_snapshots.order_by("-snapshot_date", "-source", "-pk"))
     for snapshot in snapshots:
@@ -111,10 +115,19 @@ def account_balances(request, account_id):
     performance = None
     if account.account_type == Account.Type.INVESTMENT:
         performance = account_performance(account, timezone.localdate())
+    pair_form = None
+    if account.account_type == Account.Type.LOAN:
+        pair_form = PairLoanForm(loan=account, principal=request.user)
     return render(
         request,
         "finance/account_balances.html",
-        {"account": account, "form": form, "snapshots": snapshots, "performance": performance},
+        {
+            "account": account,
+            "form": form,
+            "snapshots": snapshots,
+            "performance": performance,
+            "pair_form": pair_form,
+        },
     )
 
 
@@ -149,7 +162,10 @@ def account_snapshot_edit(request, account_id, snapshot_id):
             ),
         )
         if saved is not None:
-            messages.success(request, "Updated balance.")
+            messages.success(
+                request,
+                "Updated estimate." if account.is_physical_asset() else "Updated balance.",
+            )
             return redirect("account-balances", account.pk)
     return render(
         request,
@@ -161,7 +177,24 @@ def account_snapshot_edit(request, account_id, snapshot_id):
 @require_POST
 @never_cache
 def account_snapshot_delete(request, account_id, snapshot_id):
-    _visible_manual_snapshot(request.user, account_id, snapshot_id)
+    account, _snapshot = _visible_manual_snapshot(request.user, account_id, snapshot_id)
     _service_or_404(lambda: delete_manual_snapshot(request.user, account_id, snapshot_id))
-    messages.success(request, "Deleted balance.")
+    messages.success(request, "Deleted estimate." if account.is_physical_asset() else "Deleted balance.")
     return redirect("account-balances", account_id)
+
+
+@require_POST
+@never_cache
+def account_pair_loan(request, account_id):
+    account = _active_visible_account(request.user, account_id)
+    form = PairLoanForm(request.POST, loan=account, principal=request.user)
+    if form.is_valid():
+        asset = form.cleaned_data["secured_asset"]
+        try:
+            set_loan_secured_asset(request.user, account.pk, asset.pk if asset is not None else None)
+            messages.success(request, "Updated loan pairing.")
+        except PairingError as exc:
+            messages.error(request, str(exc))
+        except PermissionDenied as exc:
+            raise Http404 from exc
+    return redirect("account-balances", account.pk)
