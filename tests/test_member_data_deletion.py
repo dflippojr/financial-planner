@@ -331,3 +331,42 @@ def test_remaining_member_sees_former_member_on_shared_history():
     page = client.get(reverse("transaction-edit", args=(shared_txn.pk,)))
     assert FORMER_MEMBER_LABEL.encode() in page.content
     assert b"Owner Example" not in page.content
+
+
+@pytest.mark.django_db
+def test_rule_history_shows_former_member_after_the_applier_deletes_their_data():
+    from finance.lifecycle_services import delete_member_data
+    from finance.models import CategoryRule, RuleApplication
+
+    owner = make_person("owner")
+    member = make_person("member")
+    household = make_household(owner, member)
+    groceries = household.categories.get(name="Groceries")
+    rule = CategoryRule.objects.create(
+        owner_household=household,
+        description_contains="Synthetic grocer",
+        category=groceries,
+    )
+    RuleApplication.objects.create(rule=rule, applied_by=member)
+
+    delete_member_data(member)
+
+    client = Client()
+    client.force_login(owner.user)
+    page = client.get(reverse("category-rule-detail", args=(rule.pk,)))
+    assert page.status_code == 200
+    assert FORMER_MEMBER_LABEL.encode() in page.content
+
+
+@pytest.mark.django_db
+def test_last_member_is_warned_that_the_household_is_deleted_too():
+    owner = make_person("owner")
+    make_household(owner)
+    client = Client()
+    client.force_login(owner.user)
+    stamp_recent_auth(client)
+
+    page = client.get(reverse("delete-my-data"))
+
+    assert b"last member of your household" in page.content
+    assert b"Shared household data stays" not in page.content

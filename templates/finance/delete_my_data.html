@@ -5,7 +5,11 @@
 <div role="alert" class="alert alert-warning mb-4 max-w-lg">
   <span>
     This permanently deletes your private accounts and personal records.
+    {% if last_member %}
+    You are the last member of your household, so the household, its categories, and its shared accounts are deleted too.
+    {% else %}
     Shared household data stays. You appear as former member in shared history.
+    {% endif %}
     Existing backups keep a copy until they rotate out (14 nightly and 8 weekly).
   </span>
 </div>

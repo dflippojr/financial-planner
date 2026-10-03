@@ -1290,6 +1290,10 @@ class RuleApplication(models.Model):
     applied_at = models.DateTimeField(default=timezone.now)
     reversed_at = models.DateTimeField(null=True, blank=True)
 
+    @property
+    def applied_by_label(self):
+        return actor_display_name(self.applied_by)
+
     class QuerySet(models.QuerySet):
         def visible_to(self, principal):
             visible_rules = CategoryRule.objects.visible_to(principal).values("pk")
