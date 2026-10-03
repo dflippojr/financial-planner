@@ -124,11 +124,17 @@ def test_signed_in_pages_use_shared_nav_and_signed_out_pages_use_a_card():
         "Invite",
         "Planning",
         "Planned items",
-        "Sign out",
     ):
         assert label in home
     assert 'aria-current="page"' in home
+    assert 'aria-label="Settings"' in home
+    assert 'data-tip="Settings"' in home
     assert 'id="theme-toggle"' in home
+    assert 'aria-label="Switch to dark theme"' in home
+    assert 'aria-pressed="false"' in home
+    assert 'aria-label="Sign out"' in home
+    assert reverse("logout") in home
+    assert "csrfmiddlewaretoken" in home
     assert "/static/vendor/chart.umd.min.js" in home
     assert "/static/js/charts.js" in home
     assert "cdn." not in home.lower()
