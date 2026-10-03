@@ -111,7 +111,16 @@ from .policy_services import (
     decline_shown_version,
     record_onboarding_acceptance,
 )
-from .recurring_services import confirm_recurring_series, confirmed_totals, dismiss_recurring_series, refresh_recurring_series
+from .recurring_services import (
+    add_recurring_members,
+    confirm_recurring_series,
+    confirmed_totals,
+    dismiss_recurring_series,
+    list_addable_transactions,
+    merge_recurring_series,
+    refresh_recurring_series,
+    remove_recurring_member,
+)
 from .cash_flow import (
     cash_flow_chart_data,
     date_range_presets,
@@ -982,14 +991,33 @@ def _handle_recurring_post(request):
         series_id = int(request.POST.get("series_id", "0"))
     except (TypeError, ValueError) as exc:
         raise Http404 from exc
-    actions = {
-        "confirm": confirm_recurring_series,
-        "dismiss": dismiss_recurring_series,
-    }
-    handler = actions.get(request.POST.get("action"))
-    if handler is None:
+    action = request.POST.get("action")
+    if action == "confirm":
+        _service_or_404(lambda: confirm_recurring_series(request.user, series_id))
+    elif action == "dismiss":
+        _service_or_404(lambda: dismiss_recurring_series(request.user, series_id))
+    elif action == "merge":
+        try:
+            target_id = int(request.POST.get("target_id", "0"))
+        except (TypeError, ValueError) as exc:
+            raise Http404 from exc
+        _service_or_404(lambda: merge_recurring_series(request.user, series_id, target_id))
+    elif action == "remove":
+        try:
+            transaction_id = int(request.POST.get("transaction_id", "0"))
+        except (TypeError, ValueError) as exc:
+            raise Http404 from exc
+        _service_or_404(lambda: remove_recurring_member(request.user, series_id, transaction_id))
+    elif action == "add":
+        transaction_ids = []
+        for raw in request.POST.getlist("transaction_id"):
+            try:
+                transaction_ids.append(int(raw))
+            except (TypeError, ValueError) as exc:
+                raise Http404 from exc
+        _service_or_404(lambda: add_recurring_members(request.user, series_id, transaction_ids))
+    else:
         raise Http404
-    _service_or_404(lambda: handler(request.user, series_id))
     _service_or_404(lambda: refresh_recurring_series(request.user))
     return redirect("recurring-review")
 
@@ -1020,6 +1048,27 @@ def recurring_review(request):
     currency = confirmed[0].currency if confirmed else "USD"
     monthly_display = _money_display(monthly_minor, currency)
     annual_display = _money_display(annual_minor, currency)
+    grouping_series = [
+        series
+        for series in visible
+        if series.is_active and series.status != RecurringSeries.Status.DISMISSED
+    ]
+    for series in visible:
+        series.merge_targets = [target for target in grouping_series if target.pk != series.pk]
+    add_series_id = None
+    add_query = request.GET.get("q", "")
+    add_candidates = []
+    raw_add = request.GET.get("add_series")
+    if raw_add:
+        try:
+            add_series_id = int(raw_add)
+        except (TypeError, ValueError):
+            add_series_id = None
+        add_row = next((series for series in grouping_series if series.pk == add_series_id), None)
+        if add_row is not None:
+            add_candidates = list_addable_transactions(request.user, add_row, add_query)
+        else:
+            add_series_id = None
     return render(
         request,
         "finance/recurring_review.html",
@@ -1030,6 +1079,9 @@ def recurring_review(request):
             "annual_display": annual_display,
             "monthly_minor": monthly_minor,
             "annual_minor": annual_minor,
+            "add_series_id": add_series_id,
+            "add_query": add_query,
+            "add_candidates": add_candidates,
             "chart_data": _recurring_chart_data(
                 confirmed,
                 monthly_minor,

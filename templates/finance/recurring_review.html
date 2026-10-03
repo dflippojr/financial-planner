@@ -46,10 +46,9 @@
         <td>{{ series.reasons|join:"; " }}</td>
         <td>
           <ul class="list-disc pl-4">
-            {% for member in series.members.all %}
-              <li>{{ member.transaction.transaction_date }} {{ member.transaction.description }} {% include "finance/_amount.html" with value=member.transaction.amount_display tone="" %}</li>
-            {% endfor %}
+            {% include "finance/_recurring_members.html" %}
           </ul>
+          {% include "finance/_recurring_grouping.html" %}
         </td>
       </tr>
     {% empty %}
@@ -82,10 +81,9 @@
         <td>{{ series.reasons|join:"; " }}</td>
         <td>
           <ul class="list-disc pl-4">
-            {% for member in series.members.all %}
-              <li>{{ member.transaction.transaction_date }} {{ member.transaction.description }} {% include "finance/_amount.html" with value=member.transaction.amount_display tone="" %}</li>
-            {% endfor %}
+            {% include "finance/_recurring_members.html" %}
           </ul>
+          {% include "finance/_recurring_grouping.html" %}
         </td>
         <td class="flex flex-wrap gap-2">
           <form method="post">
