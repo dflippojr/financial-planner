@@ -1255,6 +1255,7 @@ def account_settings(request):
     )
 
 
+@require_safe
 @never_cache
 def settings_data(request):
     return render(request, "finance/settings_data.html")

@@ -87,3 +87,12 @@ def test_household_tab_lists_members():
     assert reverse("invite") == "/settings/household/"
     assert reverse("category-list") == "/settings/categories/"
     assert reverse("simplefin-connections") == "/settings/connections/"
+
+
+@pytest.mark.django_db
+def test_settings_data_tab_is_read_only():
+    user = _member()
+    client = Client()
+    client.force_login(user)
+
+    assert client.post(reverse("settings-data")).status_code == 405
