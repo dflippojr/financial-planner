@@ -8,13 +8,17 @@ from django.urls import reverse
 from finance.category_services import ensure_household_categories, refresh_transfer_pairs
 from finance.csv_import.services import undo_import_batch
 from finance.lifecycle_services import archive_account
-from finance.models import Account, Household, ImportBatch, Membership, Person, RecurringSeries, Transaction
+from finance.models import Account, Household, ImportBatch, Membership, Person, RecurringExclusion, RecurringSeries, RecurringSeriesMember, Transaction
 from finance.recurring_services import (
+    add_recurring_members,
     confirm_recurring_series,
     confirmed_totals,
     detect_recurring_series,
     dismiss_recurring_series,
+    merge_recurring_series,
     refresh_recurring_series,
+    remove_recurring_member,
+    typical_amount_minor_from,
 )
 from tests.page_payload import json_script_payload
 
@@ -145,8 +149,9 @@ def test_amount_tolerance_uses_selected_cadence_chain_median_not_cluster():
     refresh_recurring_series(owner)
     series_rows = list(RecurringSeries.objects.filter(merchant_key="synthetic cluster mix"))
 
-    # The $8/$8/$12 monthly chain varies by 50% from its own median, so it is
-    # never suggested. Two-occurrence clusters may still appear as "possible"
+    # The $8/$8/$12 monthly chain's last charge is 50% above the rolling level,
+    # with no following charge to confirm a price change, so it is never one
+    # series. Two-occurrence clusters may still appear as "possible"
     # (#17 decisions); none may hold all three chain charges.
     assert all(row.status == RecurringSeries.Status.POSSIBLE for row in series_rows)
     detected = detect_recurring_series(list(Transaction.objects.filter(account=account)))
@@ -714,7 +719,7 @@ def test_suggestion_deleted_while_waiting_for_the_lock_is_denied(monkeypatch, ac
 
 
 @pytest.mark.django_db
-def test_two_occurrence_amount_clusters_in_a_mixed_chain_are_possible_series():
+def test_sequential_price_step_in_one_cadence_chain_is_one_series():
     owner = make_person("owner")
     make_household(owner)
     account = make_account(owner)
@@ -722,9 +727,10 @@ def test_two_occurrence_amount_clusters_in_a_mixed_chain_are_possible_series():
     add_monthly_charges(owner, account, description="Synthetic Stream", amount_minor=-5000, count=2, start=date(2026, 3, 1))
 
     refresh_recurring_series(owner)
-    found = sorted(RecurringSeries.objects.filter(person=owner).values_list("typical_amount_minor", "status"))
-
-    assert found == [(-5000, RecurringSeries.Status.POSSIBLE), (-1000, RecurringSeries.Status.POSSIBLE)]
+    series = RecurringSeries.objects.get(person=owner)
+    assert series.status == RecurringSeries.Status.SUGGESTED
+    assert series.members.count() == 4
+    assert series.typical_amount_minor == -5000
 
 
 @pytest.mark.django_db
@@ -742,3 +748,226 @@ def test_one_off_charge_inside_a_chain_does_not_hide_the_real_series():
 
     assert series.status == RecurringSeries.Status.SUGGESTED
     assert series.members.count() == 3
+
+
+def drifting_phone_amounts():
+    return [-(15000 + round(index * 8000 / 23)) for index in range(24)]
+
+
+@pytest.mark.django_db
+def test_gradual_price_drift_stays_one_series_with_recent_typical_amount():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    amounts = drifting_phone_amounts()
+    rows = []
+    for index, amount in enumerate(amounts):
+        month = 1 + index
+        year = 2024 + (month - 1) // 12
+        month = (month - 1) % 12 + 1
+        rows.append(
+            make_transaction(
+                owner,
+                account,
+                transaction_date=date(year, month, 15),
+                amount_minor=amount,
+                description="Synthetic Phone Bill",
+            )
+        )
+
+    refresh_recurring_series(owner)
+    series = RecurringSeries.objects.get(person=owner)
+
+    assert series.members.count() == 24
+    assert series.typical_amount_minor == typical_amount_minor_from(rows)
+    assert series.typical_amount_minor == typical_amount_minor_from(rows[-3:])
+    assert any("overall" in reason for reason in series.reasons)
+
+
+@pytest.mark.django_db
+def test_confirmed_series_follows_a_single_step_change_instead_of_a_new_suggestion():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    add_monthly_charges(owner, account, description="Synthetic Step Bill", amount_minor=-2000, count=12)
+    refresh_recurring_series(owner)
+    series = RecurringSeries.objects.get()
+    confirm_recurring_series(owner, series.pk)
+    add_monthly_charges(
+        owner,
+        account,
+        description="Synthetic Step Bill",
+        amount_minor=-2700,
+        count=2,
+        start=date(2027, 1, 15),
+    )
+
+    refresh_recurring_series(owner)
+    series.refresh_from_db()
+
+    assert RecurringSeries.objects.filter(person=owner, is_active=True).count() == 1
+    assert series.status == RecurringSeries.Status.CONFIRMED
+    assert series.members.count() == 14
+    assert series.typical_amount_minor == -2700
+
+
+@pytest.mark.django_db
+def test_concurrent_plans_at_different_prices_stay_two_series():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    add_monthly_charges(owner, account, description="Synthetic Dual Plan", amount_minor=-1000, count=6)
+    add_monthly_charges(
+        owner,
+        account,
+        description="Synthetic Dual Plan",
+        amount_minor=-2500,
+        count=6,
+        start=date(2026, 1, 20),
+    )
+
+    refresh_recurring_series(owner)
+    found = sorted(RecurringSeries.objects.filter(person=owner).values_list("typical_amount_minor", flat=True))
+
+    assert found == [-2500, -1000]
+
+
+@pytest.mark.django_db
+def test_confirmed_step_chain_and_amount_outlier_follow_the_rolling_band():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    make_transaction(owner, account, transaction_date=date(2026, 1, 10), amount_minor=-10000, description="Synthetic Steps")
+    make_transaction(owner, account, transaction_date=date(2026, 2, 10), amount_minor=-12000, description="Synthetic Steps")
+    make_transaction(owner, account, transaction_date=date(2026, 3, 10), amount_minor=-14400, description="Synthetic Steps")
+    add_monthly_charges(owner, account, description="Synthetic Outlier Bill", amount_minor=-2000, count=3)
+    make_transaction(
+        owner,
+        account,
+        transaction_date=date(2026, 2, 15),
+        amount_minor=-6000,
+        description="Synthetic Outlier Bill",
+    )
+
+    refresh_recurring_series(owner)
+    steps = RecurringSeries.objects.get(merchant_key="synthetic steps")
+    outlier_bill = RecurringSeries.objects.get(merchant_key="synthetic outlier bill")
+
+    assert steps.members.count() == 3
+    assert set(steps.members.values_list("transaction__amount_minor", flat=True)) == {-10000, -12000, -14400}
+    assert outlier_bill.members.count() == 3
+    assert set(outlier_bill.members.values_list("transaction__amount_minor", flat=True)) == {-2000}
+
+
+@pytest.mark.django_db
+def test_merge_moves_members_and_refresh_does_not_split_them():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    add_monthly_charges(owner, account, description="Synthetic Old Name", amount_minor=-1500)
+    add_monthly_charges(owner, account, description="Synthetic New Name", amount_minor=-1500, start=date(2026, 4, 15))
+    refresh_recurring_series(owner)
+    source = RecurringSeries.objects.get(merchant_key="synthetic old name")
+    target = RecurringSeries.objects.get(merchant_key="synthetic new name")
+    confirm_recurring_series(owner, source.pk)
+
+    merge_recurring_series(owner, source.pk, target.pk)
+    refresh_recurring_series(owner)
+
+    remaining = RecurringSeries.objects.get(person=owner, is_active=True)
+    assert remaining.pk == target.pk
+    assert remaining.status == RecurringSeries.Status.CONFIRMED
+    assert remaining.merchant_key == "synthetic new name"
+    assert remaining.members.count() == 6
+    assert remaining.members.filter(source=RecurringSeriesMember.Source.MANUAL).count() == 3
+    assert MANUAL_REASON_PRESENT(remaining)
+    assert not RecurringSeries.objects.filter(pk=source.pk).exists()
+
+
+def MANUAL_REASON_PRESENT(series):
+    return "grouping edited manually" in series.reasons
+
+
+@pytest.mark.django_db
+def test_remove_excludes_a_charge_from_detection_and_other_series():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    rows = add_monthly_charges(owner, account, description="Synthetic Stream", count=4)
+    refresh_recurring_series(owner)
+    series = RecurringSeries.objects.get()
+    dropped = rows[1]
+
+    remove_recurring_member(owner, series.pk, dropped.pk)
+    refresh_recurring_series(owner)
+
+    series.refresh_from_db()
+    assert not series.members.filter(transaction_id=dropped.pk).exists()
+    assert RecurringExclusion.objects.filter(person=owner, transaction=dropped).exists()
+    assert not RecurringSeriesMember.objects.filter(transaction=dropped).exists()
+
+
+@pytest.mark.django_db
+def test_add_joins_a_charge_clears_exclusion_and_survives_refresh():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    rows = add_monthly_charges(owner, account, description="Synthetic Stream", count=3)
+    extra = make_transaction(
+        owner,
+        account,
+        transaction_date=date(2026, 4, 20),
+        amount_minor=-1599,
+        description="Synthetic other shop",
+    )
+    refresh_recurring_series(owner)
+    series = RecurringSeries.objects.get(merchant_key="synthetic stream")
+    RecurringExclusion.objects.create(person=owner, transaction=extra)
+
+    add_recurring_members(owner, series.pk, [extra.pk])
+    refresh_recurring_series(owner)
+
+    series.refresh_from_db()
+    member = series.members.get(transaction_id=extra.pk)
+    assert member.source == RecurringSeriesMember.Source.MANUAL
+    assert not RecurringExclusion.objects.filter(person=owner, transaction=extra).exists()
+    assert "grouping edited manually" in series.reasons
+    assert {row.pk for row in rows} <= set(series.members.values_list("transaction_id", flat=True))
+
+
+@pytest.mark.django_db
+def test_grouping_actions_deny_another_members_series_and_private_transactions():
+    owner = make_person("owner")
+    member = make_person("member")
+    household = make_household(owner, member)
+    private = make_account(owner)
+    member_private = make_account(member, name="Member Private")
+    shared = make_account(owner, name="Shared", scope=Account.Scope.HOUSEHOLD, household=household)
+    add_monthly_charges(owner, private, description="Synthetic Secret")
+    add_monthly_charges(member, member_private, description="Synthetic Member Sub")
+    add_monthly_charges(owner, shared, description="Synthetic Shared Sub", amount_minor=-899)
+    refresh_recurring_series(owner)
+    refresh_recurring_series(member)
+    secret = RecurringSeries.objects.get(person=owner, merchant_key="synthetic secret")
+    shared_series = RecurringSeries.objects.get(person=owner, merchant_key="synthetic shared sub")
+    member_series = RecurringSeries.objects.get(person=member, merchant_key="synthetic member sub")
+    member_txn = member_series.members.first().transaction
+    from django.core.exceptions import PermissionDenied
+
+    with pytest.raises(PermissionDenied):
+        merge_recurring_series(member, secret.pk, shared_series.pk)
+    with pytest.raises(PermissionDenied):
+        remove_recurring_member(member, secret.pk, secret.members.first().transaction_id)
+    with pytest.raises(PermissionDenied):
+        add_recurring_members(member, shared_series.pk, [member_txn.pk])
+
+    client = Client()
+    client.force_login(member.user)
+    merge_page = client.post(
+        reverse("recurring-review"),
+        {"series_id": secret.pk, "target_id": shared_series.pk, "action": "merge"},
+    )
+    assert merge_page.status_code == 404
+    assert b"Synthetic Secret" not in merge_page.content
+    assert RecurringSeries.objects.filter(pk=secret.pk).exists()
+    assert RecurringSeries.objects.filter(pk=shared_series.pk).exists()

@@ -7,6 +7,7 @@ from .models import (
     ImportBatch,
     Membership,
     Person,
+    RecurringExclusion,
     RecurringSeries,
     RecurringSeriesMember,
     RefundLink,
@@ -374,9 +375,13 @@ def _lock_rows_for_account_delete(account):
     if refund_ids:
         refunds = list(RefundLink.objects.select_for_update().filter(pk__in=sorted(refund_ids)).order_by("pk"))
     members = []
+    exclusions = []
     if tx_ids:
         members = list(
             RecurringSeriesMember.objects.select_for_update().filter(transaction_id__in=tx_ids).order_by("pk")
+        )
+        exclusions = list(
+            RecurringExclusion.objects.select_for_update().filter(transaction_id__in=tx_ids).order_by("pk")
         )
     series_ids = sorted({member.series_id for member in members})
     if series_ids:
@@ -388,14 +393,14 @@ def _lock_rows_for_account_delete(account):
             .order_by("pk")
         )
     list(ImportBatch.objects.select_for_update().filter(account_id=account.pk).order_by("pk"))
-    return locked_txs, pairs, refunds, members, series_ids, tx_ids
+    return locked_txs, pairs, refunds, members, exclusions, series_ids, tx_ids
 
 
 def _repair_then_delete_account_rows(person, account):
     from finance.category_services import unmark_locked_pairs
     from finance.recurring_services import revalidate_series_after_member_removal
 
-    locked_txs, pairs, refunds, members, series_ids, tx_ids = _lock_rows_for_account_delete(account)
+    locked_txs, pairs, refunds, members, exclusions, series_ids, tx_ids = _lock_rows_for_account_delete(account)
     unmark_locked_pairs(pairs, {item.pk: item for item in locked_txs}, person)
     if pairs:
         TransferPair.objects.filter(pk__in=[pair.pk for pair in pairs]).delete()
@@ -403,6 +408,8 @@ def _repair_then_delete_account_rows(person, account):
         RefundLink.objects.filter(pk__in=[link.pk for link in refunds]).delete()
     if members:
         RecurringSeriesMember.objects.filter(pk__in=[member.pk for member in members]).delete()
+    if exclusions:
+        RecurringExclusion.objects.filter(pk__in=[row.pk for row in exclusions]).delete()
     revalidate_series_after_member_removal(person, series_ids)
     _delete_rule_history_for_account(account, tx_ids)
     if tx_ids:
