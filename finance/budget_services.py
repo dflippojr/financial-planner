@@ -194,6 +194,12 @@ def progress_for(budget, month, reports):
     )
 
 
+def progress_snapshot(budget, month, principal):
+    month = month_start(month)
+    reports = _reports_for_months(principal, _needed_months([budget], month), report_scope_for(budget))
+    return progress_for(budget, month, reports)
+
+
 def _needed_months(budgets, month):
     needed = {month_start(month)}
     for budget in budgets:

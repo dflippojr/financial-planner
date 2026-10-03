@@ -155,6 +155,9 @@ def categorize_imported_batch(principal, batch):
     from finance.category_suggestion_services import queue_category_suggestions_for
 
     queue_category_suggestions_for(principal, created)
+    from finance.alert_services import after_new_transactions
+
+    after_new_transactions(created)
     return applied
 
 

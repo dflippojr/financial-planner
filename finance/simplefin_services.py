@@ -576,6 +576,9 @@ def _sync_connection_locked(principal, connection_id, *, ignore_rate_limit=False
         # retried on the next run.
         connection.disabled = exc.access_denied
         connection.save(update_fields=("last_sync_at", "last_sync_result", "disabled"))
+        from finance.alert_services import raise_sync_alert
+
+        raise_sync_alert(connection)
         return None, exc
     errors = provider_errors(payload)
     remote_accounts = _accounts_by_simplefin_id(payload)
@@ -604,6 +607,9 @@ def _sync_connection_locked(principal, connection_id, *, ignore_rate_limit=False
         connection.last_sync_at = now
         connection.last_sync_result = str(exc)
         connection.save(update_fields=("last_sync_at", "last_sync_result"))
+        from finance.alert_services import raise_sync_alert
+
+        raise_sync_alert(connection)
         return None, exc
     from finance.category_services import refresh_transfer_pairs
     from finance.recurring_services import refresh_recurring_series
@@ -631,6 +637,9 @@ def _sync_connection_locked(principal, connection_id, *, ignore_rate_limit=False
     connection.last_sync_result = summary[:500]
     connection.disabled = False
     connection.save(update_fields=("last_sync_at", "last_sync_result", "disabled"))
+    from finance.alert_services import after_new_transactions
+
+    after_new_transactions(synced)
     return {"imported": imported, "errors": errors, "result": connection.last_sync_result}, None
 
 

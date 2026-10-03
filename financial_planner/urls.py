@@ -3,6 +3,7 @@ from django.urls import path
 from finance import (
     account_views,
     ai_views,
+    alert_views,
     budget_views,
     category_suggestion_views,
     net_worth_views,
@@ -40,6 +41,9 @@ urlpatterns = [
     path("sign-out/", views.sign_out, name="logout"),
     path("setup/", views.setup, name="setup"),
     path("account/", views.account_settings, name="account-settings"),
+    path("alerts/", alert_views.alert_list, name="alert-list"),
+    path("alerts/read-all/", alert_views.alert_mark_all_read, name="alert-mark-all-read"),
+    path("alerts/<int:alert_id>/read/", alert_views.alert_mark_read, name="alert-mark-read"),
     path("account/ai/connect/", ai_views.ai_connect, name="ai-connect"),
     path("account/ai/disconnect/", ai_views.ai_disconnect, name="ai-disconnect"),
     path("account/ai/defaults/", ai_views.ai_save_defaults, name="ai-defaults"),

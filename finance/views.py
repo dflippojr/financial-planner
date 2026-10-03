@@ -37,6 +37,7 @@ from .auth_services import (
     validated_username,
 )
 from .forms import (
+    AlertSettingsForm,
     CashFlowFilterForm,
     CategoryNameForm,
     JoinForm,
@@ -109,6 +110,7 @@ from .cash_flow import (
 )
 from .planning_services import cash_flow_with_projection
 from .budget_services import dashboard_budget_summary
+from .alert_services import save_alert_settings, settings_for
 from .projection import DEFAULT_HORIZON
 from .spending_trends import (
     category_spending_trend_report,
@@ -1210,12 +1212,33 @@ def setup(request):
     )
 
 
+def _alert_settings_form(person, data=None):
+    prefs = settings_for(person)
+    amount = None
+    if prefs.large_transaction_minor:
+        amount = Decimal(prefs.large_transaction_minor) / Decimal(100)
+    return AlertSettingsForm(
+        data,
+        initial={
+            "sync_enabled": prefs.sync_enabled,
+            "recurring_price_enabled": prefs.recurring_price_enabled,
+            "recurring_missed_enabled": prefs.recurring_missed_enabled,
+            "budget_enabled": prefs.budget_enabled,
+            "large_transaction_enabled": prefs.large_transaction_enabled,
+            "monthly_review_enabled": prefs.monthly_review_enabled,
+            "large_transaction_amount": amount,
+        },
+    )
+
+
 @never_cache
 @requires_recent_auth("account-settings", action_from_post=ACCOUNT_SETTINGS_ACTIONS, form_url_name="account-settings")
 def account_settings(request):
     password_form = PasswordPairForm()
     password_form.existing_user = request.user
     error = None
+    person = getattr(request.user, "person", None)
+    alert_settings_form = _alert_settings_form(person) if person is not None else None
     if request.method == "POST":
         action = request.POST.get("action")
         if action == "connect-google":
@@ -1233,7 +1256,11 @@ def account_settings(request):
         elif action == "accept-privacy-policy":
             if person_for_accept := getattr(request.user, "person", None):
                 accept_shown_version(person_for_accept, request.POST.get("version"))
-    person = getattr(request.user, "person", None)
+        elif action == "save-alert-settings" and person is not None:
+            alert_settings_form = _alert_settings_form(person, request.POST)
+            if alert_settings_form.is_valid():
+                save_alert_settings(person, **alert_settings_form.save_payload())
+                return redirect("account-settings")
     policy = current_policy()
     acceptance = latest_acceptance(person) if person is not None else None
     return render(
@@ -1248,6 +1275,7 @@ def account_settings(request):
             "privacy_policy": policy,
             "privacy_in_acceptance": in_acceptance(person) if person is not None else False,
             "privacy_acceptance": acceptance,
+            "alert_settings_form": alert_settings_form,
             **ai_settings_context(person),
         },
     )
