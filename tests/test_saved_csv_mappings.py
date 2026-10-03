@@ -786,3 +786,33 @@ def test_mapping_list_and_edit_cover_empty_household_and_name_conflicts():
             mapping=replace(HAND_MAPPING, date_format="not-a-format"),
         )
     assert client.get(reverse("csv-mapping-edit", args=(999999,))).status_code == 404
+
+
+@pytest.mark.django_db
+def test_archiving_clears_defaults_and_an_archived_mapping_cannot_become_one(staging_settings):
+    from finance.csv_import.saved_mappings import ARCHIVED_DEFAULT_MESSAGE
+
+    user, person, account = _owner_account()
+    client = Client()
+    client.force_login(user)
+    mapping = save_csv_mapping(
+        user,
+        name="Synthetic store",
+        headers=("When", "Memo", "Amount", "Currency"),
+        mapping=HAND_MAPPING,
+    )
+    mapping = _lock_mapping(user, account, mapping, client)
+    set_account_default_mapping(user, account.pk, mapping.pk)
+    account.refresh_from_db()
+    assert account.default_saved_csv_mapping_id == mapping.pk
+
+    delete_or_archive_csv_mapping(user, mapping.pk)
+
+    mapping.refresh_from_db()
+    account.refresh_from_db()
+    assert mapping.status == SavedCsvMapping.Status.ARCHIVED
+    assert account.default_saved_csv_mapping_id is None
+    with pytest.raises(ValidationError, match=ARCHIVED_DEFAULT_MESSAGE):
+        update_csv_mapping(user, mapping.pk, name=mapping.name, default_account_ids=[account.pk])
+    account.refresh_from_db()
+    assert account.default_saved_csv_mapping_id is None

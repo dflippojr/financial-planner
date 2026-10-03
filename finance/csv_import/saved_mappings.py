@@ -14,6 +14,7 @@ SAVED_PROFILE_PREFIX = "saved:"
 HEADERS_DO_NOT_MATCH = (
     "This file's headers don't match the saved mapping. Map the columns by hand."
 )
+ARCHIVED_DEFAULT_MESSAGE = "An archived mapping can't be an account default."
 LOCKED_PARSING_MESSAGE = (
     "This mapping is locked after an import. Make a new mapping to change how files are parsed."
 )
@@ -208,6 +209,8 @@ def update_csv_mapping(principal, mapping_id, *, name, mapping=None, default_acc
         if saved.locked_at is None:
             for field, value in _fields_from_mapping(mapping).items():
                 setattr(saved, field, value)
+    if default_account_ids and saved.status != SavedCsvMapping.Status.ACTIVE:
+        raise ValidationError(ARCHIVED_DEFAULT_MESSAGE)
     saved.save()
     if default_account_ids is not None:
         replace_mapping_account_defaults(person, saved, default_account_ids)
@@ -274,6 +277,10 @@ def delete_or_archive_csv_mapping(principal, mapping_id):
             saved.status = SavedCsvMapping.Status.ARCHIVED
             saved.archived_at = timezone.now()
             saved.save(update_fields=("status", "archived_at", "updated_at"))
+            # An archived mapping is never offered at import, so it can't stay a default.
+            Account.objects.filter(default_saved_csv_mapping=saved).update(
+                default_saved_csv_mapping=None, updated_at=timezone.now()
+            )
         return saved
     saved.delete()
     return None

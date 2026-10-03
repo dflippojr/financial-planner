@@ -1,0 +1,12 @@
+{% extends "finance/settings_base.html" %}
+{% block title %}Alerts · Financial Planner{% endblock %}
+{% block settings_content %}
+<h2 class="mb-4 text-xl font-semibold">Alerts</h2>
+<p class="mb-4 text-sm">Choose which in-app alerts you receive. Large-transaction alerts stay off until you set a USD threshold.</p>
+<form method="post" class="max-w-lg space-y-3">
+  {% csrf_token %}
+  {% include "finance/_form_fields.html" with form=alert_settings_form %}
+  <button type="submit" class="btn btn-primary">Save alert settings</button>
+</form>
+<p class="mt-6"><a class="link" href="{% url 'alert-list' %}">Open the alerts inbox</a></p>
+{% endblock %}
