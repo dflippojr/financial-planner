@@ -25,6 +25,7 @@ from finance.models import (
     RefundLink,
     Transaction,
     TransactionCorrectionHistory,
+    TransactionSplit,
     TransferPair,
 )
 from tests.helpers import stamp_recent_auth
@@ -143,6 +144,7 @@ def related_counts(account_id):
         "RefundLink": RefundLink.objects.filter(
             Q(refund__account_id=account_id) | Q(original__account_id=account_id)
         ).count(),
+        "TransactionSplit": TransactionSplit.objects.filter(transaction__account_id=account_id).count(),
         "RecurringSeriesMember": RecurringSeriesMember.objects.filter(transaction__account_id=account_id).count(),
     }
 

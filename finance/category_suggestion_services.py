@@ -454,6 +454,7 @@ def _may_apply(person, txn):
         Transaction.CategorySource.MANUAL,
         Transaction.CategorySource.RULE,
         Transaction.CategorySource.INHERITED,
+        Transaction.CategorySource.SPLIT,
     ):
         return False
     if txn.category_id is not None:
