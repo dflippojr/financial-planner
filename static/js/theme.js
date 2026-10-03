@@ -41,11 +41,21 @@
   function syncToggle(button) {
     var theme = preferred();
     var dark = theme === "dark";
+    var label = dark ? "Switch to light theme" : "Switch to dark theme";
     button.setAttribute("aria-pressed", dark ? "true" : "false");
-    button.setAttribute("aria-label", dark ? "Switch to light theme" : "Switch to dark theme");
-    var label = button.querySelector(".theme-toggle-label");
-    if (label) {
-      label.textContent = dark ? "Light theme" : "Dark theme";
+    button.setAttribute("aria-label", label);
+    button.setAttribute("title", label);
+    var tipHost = button.closest("[data-tip]");
+    if (tipHost) {
+      tipHost.setAttribute("data-tip", label);
+    }
+    var sun = button.querySelector(".theme-icon-sun");
+    var moon = button.querySelector(".theme-icon-moon");
+    if (sun) {
+      sun.hidden = dark;
+    }
+    if (moon) {
+      moon.hidden = !dark;
     }
   }
 
