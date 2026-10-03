@@ -11,7 +11,7 @@ from django.utils import timezone
 from tests.fake_harness import start_fake_harness
 from tests.helpers import stamp_recent_auth
 
-from finance.ai_harness import failure_from_http, run_session
+from finance.ai_harness import default_backends, describe_backend, failure_from_http, run_session
 from finance.ai_http import HarnessHttpError
 from finance.ai_jobs import enqueue_job, in_quiet_window, process_due_jobs
 from finance.ai_services import (
@@ -116,6 +116,36 @@ def test_discovery_lists_backends_and_marks_hosted_unavailable(harness):
     assert connection.harness_project == "financial-planner"
     assert decrypt_secret(connection.encrypted_token) == TOKEN
     assert TOKEN.encode() not in bytes(connection.encrypted_token)
+
+
+@pytest.mark.django_db
+def test_background_default_skips_tools_only_hosted_chat(settings):
+    settings.AGENT_HARNESS_HOSTED_SESSIONS = False
+    local = describe_backend(
+        {
+            "name": "local",
+            "available": False,
+            "logged_in": False,
+            "app_tools_only": True,
+            "provider_policy": {"allowed": True},
+        }
+    )
+    claude = describe_backend(
+        {
+            "name": "claude",
+            "available": True,
+            "logged_in": True,
+            "app_tools_only": True,
+            "provider_policy": {"allowed": True},
+        }
+    )
+    assert claude.suits_live
+    assert not claude.suits_background
+    assert not local.suits_background
+    chat, background = default_backends([local, claude])
+    assert chat == "claude"
+    assert background != "claude"
+    assert background == ""
 
 
 @pytest.mark.django_db

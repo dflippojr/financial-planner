@@ -22,6 +22,7 @@ from .chat_services import (
     start_conversation,
 )
 from .models import AiConversationMessage, Person
+from .reauth import safe_next_url
 
 
 def _person(request):
@@ -56,7 +57,7 @@ def chat_send(request):
             "query": request.POST.get("page_query") or "",
         }
     )
-    next_url = request.POST.get("next") or reverse("chat")
+    next_url = safe_next_url(request, request.POST.get("next"), default=reverse("chat"))
     if conversation_id:
         try:
             conversation_id = int(conversation_id)

@@ -766,3 +766,76 @@ def test_chat_warm_and_status_surface_provider_errors(harness, settings, monkeyp
     assert status.status_code == 400
     assert b"synthetic provider failure" in status.content
 
+
+@pytest.mark.django_db
+def test_chat_send_rejects_external_next_url(harness):
+    state, url = harness
+    user, person, _household = make_member("owner")
+    connect_harness(person, base_url=url, token=TOKEN)
+    client = Client()
+    client.force_login(user)
+    response = client.post(
+        reverse("chat-send"),
+        {"prompt": "How much did I spend?", "next": "https://evil.example/"},
+    )
+    assert response.status_code == 302
+    assert "evil.example" not in response.url
+    assert response.url.startswith(reverse("chat"))
+
+
+@pytest.mark.django_db
+def test_cash_flow_totals_tracks_accounts_beyond_tool_row_limit(harness):
+    state, url = harness
+    _user, person, household = make_member("owner")
+    accounts = []
+    for index in range(51):
+        account = checking(person, household, f"Shared Checking {index:02d}")
+        add_txn(account, person, date(2026, 1, 4), -100 - index, f"Synthetic spend {index:02d}")
+        accounts.append(account)
+    extra = accounts[-1]
+    connect_harness(person, base_url=url, token=TOKEN)
+    state.need_tool = True
+    state.pending_tool_calls = [
+        [{"call_id": "c1", "name": "cash_flow_totals", "args": {"date_from": "2026-01-01", "date_to": "2026-01-31"}}]
+    ]
+    conversation = send_message(person, "Spending across every account?", sleep=lambda _s: None)
+    conversation.refresh_from_db()
+    assert extra.pk in conversation.used_account_ids
+    assert len(conversation.used_account_ids) >= 51
+    delete_account(person, extra.pk)
+    assert not AiConversation.objects.filter(pk=conversation.pk).exists()
+
+
+@pytest.mark.django_db
+def test_followup_starts_a_new_session_after_chat_backend_switch(harness, settings):
+    from finance.models import AiUsageEvent
+
+    state, url = harness
+    _user, person, _household = make_member("owner")
+    connect_harness(person, base_url=url, token=TOKEN)
+    conversation = send_message(person, "First question on Claude", sleep=lambda _s: None)
+    conversation.refresh_from_db()
+    old_session = conversation.harness_session_id
+    assert conversation.backend == "claude"
+    assert old_session
+    creates_before = len(state.session_creates)
+    settings.AI_CHAT_LOCAL_ENABLED = True
+    set_defaults(person, chat_backend="local", background_backend="local")
+    state.need_tool = False
+    send_message(
+        person,
+        "Follow up after switching to local",
+        conversation_id=conversation.pk,
+        sleep=lambda _s: None,
+    )
+    assert ("POST", f"/api/v1/sessions/{old_session}/messages") not in state.requests
+    assert len(state.session_creates) == creates_before + 1
+    assert state.session_creates[-1].get("backend") == "local"
+    conversation.refresh_from_db()
+    assert conversation.backend == "local"
+    assert conversation.harness_session_id
+    assert conversation.harness_session_id != old_session
+    latest = AiUsageEvent.objects.filter(member=person, feature="chat").order_by("-pk").first()
+    assert latest is not None
+    assert latest.backend == "local"
+

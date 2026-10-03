@@ -198,7 +198,11 @@ def send_message(principal, text, *, conversation_id=None, page_context=None, sl
     harness_context = _harness_context(context_payload)
     marker = _connection_marker(connection)
     saved_session = (conversation.harness_session_id or "").strip()
-    follow_up = bool(saved_session) and (conversation.harness_connection or "") == marker
+    follow_up = (
+        bool(saved_session)
+        and (conversation.harness_connection or "") == marker
+        and (conversation.backend or "") == backend
+    )
     session_id = saved_session if follow_up else ""
 
     def on_session(new_id):

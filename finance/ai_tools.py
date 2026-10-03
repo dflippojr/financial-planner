@@ -595,7 +595,7 @@ def _figure(label, amount_minor, url, currency="USD"):
 def _account_ids(account, accounts):
     if account is not None:
         return (account.pk,)
-    return tuple(item.pk for item in list(accounts)[:MAX_TOOL_ROWS])
+    return tuple(item.pk for item in accounts)
 
 
 def _limit(value):

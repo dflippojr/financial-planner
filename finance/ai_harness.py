@@ -92,7 +92,10 @@ def default_backends(backends):
     hosted_live = [item for item in live if item.id in HOSTED_BACKENDS]
     local_bg = next((item for item in backends if item.id == LOCAL_BACKEND and item.suits_background), None)
     chat = hosted_live[0].id if hosted_live else (live[0].id if live else "")
-    background = local_bg.id if local_bg else (chat if chat else "")
+    background = local_bg.id if local_bg else next(
+        (item.id for item in backends if item.suits_background),
+        "",
+    )
     return chat, background
 
 
