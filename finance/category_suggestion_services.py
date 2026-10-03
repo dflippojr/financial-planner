@@ -194,9 +194,14 @@ def accept_suggestion(principal, suggestion_id):
 
 def reject_suggestion(principal, suggestion_id):
     _person, suggestion, _txn = _locked_pending(principal, suggestion_id)
-    suggestion.status = CategorySuggestion.Status.REJECTED
-    suggestion.resolved_at = timezone.now()
-    suggestion.save(update_fields=("status", "resolved_at", "updated_at"))
+    now = timezone.now()
+    # Conditional on still pending, so a concurrent accept is never overwritten.
+    changed = CategorySuggestion.objects.filter(
+        pk=suggestion.pk, status=CategorySuggestion.Status.PENDING
+    ).update(status=CategorySuggestion.Status.REJECTED, resolved_at=now, updated_at=now)
+    if not changed:
+        raise PermissionDenied(_DENIED)
+    suggestion.refresh_from_db()
     return suggestion
 
 

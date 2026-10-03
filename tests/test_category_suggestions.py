@@ -3,6 +3,7 @@ from datetime import date
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.core.exceptions import PermissionDenied
 from django.test import Client
 from django.urls import reverse
 from tests.fake_harness import start_fake_harness
@@ -630,3 +631,33 @@ def test_top_up_skips_a_retry_that_will_resume_its_session(harness):
     retry.refresh_from_db()
     assert retry.input_refs["transaction_ids"] == id_lists[0]
     assert retry.input_refs["snapshots"] == {"1": "synthetic"}
+
+
+@pytest.mark.django_db
+def test_reject_does_not_overwrite_a_concurrent_accept(harness, monkeypatch):
+    import finance.category_suggestion_services as suggestions
+
+    state, url = harness
+    _user, person, household = make_member("owner")
+    connect_ai(person, url)
+    monkeypatch.setattr("finance.ai_jobs.in_quiet_window", lambda moment=None: True)
+    account = make_account(person)
+    groceries_cat = groceries(household)
+    txn = make_transaction(person, account, description="Synthetic reject race", fingerprint="9" * 64)
+    state.session_answer = suggestion_json({txn.pk: groceries_cat.pk})
+    queue_category_suggestions_for(person, [txn])
+    process_due_jobs()
+    suggestion = CategorySuggestion.objects.get(transaction=txn)
+    original = suggestions._locked_pending
+
+    def read_then_accepted_elsewhere(principal, suggestion_id):
+        result = original(principal, suggestion_id)
+        CategorySuggestion.objects.filter(pk=suggestion.pk).update(status=CategorySuggestion.Status.ACCEPTED)
+        return result
+
+    monkeypatch.setattr(suggestions, "_locked_pending", read_then_accepted_elsewhere)
+    with pytest.raises(PermissionDenied):
+        suggestions.reject_suggestion(person, suggestion.pk)
+
+    suggestion.refresh_from_db()
+    assert suggestion.status == CategorySuggestion.Status.ACCEPTED
