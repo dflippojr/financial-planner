@@ -15,7 +15,8 @@ from finance.lifecycle_services import (
     _visible_account_for_update,
     lock_actor_household,
 )
-from finance.models import Account, ImportBatch, Transaction
+from finance.csv_import.saved_mappings import lock_saved_mapping
+from finance.models import Account, ImportBatch, SavedCsvMapping, Transaction
 
 
 @dataclass(frozen=True)
@@ -85,10 +86,33 @@ def _kind_for(source):
 
 
 @transaction.atomic
-def commit_csv_import(principal, account_id, *, content, document, mapping, source, date_range_start, date_range_end):
+def commit_csv_import(
+    principal,
+    account_id,
+    *,
+    content,
+    document,
+    mapping,
+    source,
+    date_range_start,
+    date_range_end,
+    saved_csv_mapping=None,
+):
     person = _person_for(principal)
     lock_actor_household(person)
     account = _active_account(person, account_id)
+    if saved_csv_mapping is not None:
+        saved_csv_mapping = (
+            SavedCsvMapping.objects.visible_to(person)
+            .filter(
+                pk=saved_csv_mapping.pk,
+                status=SavedCsvMapping.Status.ACTIVE,
+                archived_at__isnull=True,
+            )
+            .first()
+        )
+        if saved_csv_mapping is None:
+            raise PermissionDenied(_DENIED)
     list(
         Transaction.objects.select_for_update().filter(
             account=account,
@@ -113,7 +137,9 @@ def commit_csv_import(principal, account_id, *, content, document, mapping, sour
             source_file_sha256=source_file_sha256,
             date_range_start=date_range_start,
             date_range_end=date_range_end,
+            saved_csv_mapping=saved_csv_mapping,
         )
+        lock_saved_mapping(saved_csv_mapping)
         kind = _kind_for(source)
         Transaction.objects.bulk_create(
             [

@@ -1,0 +1,46 @@
+{% extends "finance/base.html" %}
+{% block title %}CSV mappings · Financial Planner{% endblock %}
+{% block content %}
+<h1 class="mb-4 text-2xl font-bold">Saved CSV mappings</h1>
+{% if not household %}
+<div role="status" class="alert">Join a household to save and reuse CSV column mappings.</div>
+{% else %}
+<p class="mb-4">Mappings are shared with the household. Headers are stored; cell values are never stored.</p>
+{% if mappings %}
+<div class="overflow-x-auto mb-6">
+  <table class="table table-zebra">
+    <thead class="sticky top-0 z-10 bg-base-200">
+      <tr><th>Name</th><th>Status</th><th></th></tr>
+    </thead>
+    <tbody>
+    {% for mapping in mappings %}
+      <tr>
+        <td>{{ mapping.name }}</td>
+        <td>
+          {% if mapping.status == "archived" %}Archived
+          {% elif mapping.locked_at %}Locked after import
+          {% else %}Unlocked{% endif %}
+        </td>
+        <td class="flex flex-wrap gap-2">
+          <a class="btn btn-sm" href="{% url 'csv-mapping-edit' mapping.pk %}">Edit</a>
+          <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="delete">
+            <input type="hidden" name="mapping_id" value="{{ mapping.pk }}">
+            {% if mapping.pk in used_ids %}
+            <button type="submit" class="btn btn-sm btn-outline">Archive</button>
+            {% else %}
+            <button type="submit" class="btn btn-sm btn-outline">Delete</button>
+            {% endif %}
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p>No saved mappings yet. Save one from the generic mapper on an account import page.</p>
+{% endif %}
+{% endif %}
+{% endblock %}

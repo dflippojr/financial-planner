@@ -50,8 +50,8 @@ def _nav_current(request):
         return "transaction-list"
     if name.startswith("category-rule"):
         return "category-list"
-    if name.startswith("csv-import"):
-        return "csv-import"
+    if name.startswith("csv-import") or name.startswith("csv-mapping"):
+        return "csv-mapping-list" if name.startswith("csv-mapping") else "csv-import"
     if name in {"planned-item-edit", "planned-item-disable", "planned-item-enable"}:
         return "planned-items"
     if name.startswith("budget"):
@@ -84,6 +84,7 @@ def navigation(request):
         ("transfer-review", "Transfers", reverse("transfer-review")),
         ("recurring-review", "Recurring", reverse("recurring-review")),
         ("category-list", "Categories", reverse("category-list")),
+        ("csv-mapping-list", "CSV mappings", reverse("csv-mapping-list")),
         ("account-list", "Accounts", accounts_url),
         ("simplefin-connections", "Connections", reverse("simplefin-connections")),
         ("csv-import", "Import", accounts_url),

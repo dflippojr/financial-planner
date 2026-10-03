@@ -24,6 +24,17 @@ def validate_reason_list(value):
         raise ValidationError("Reasons must be a list of strings.")
 
 
+def validate_header_name_list(value):
+    if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
+        raise ValidationError("Column names must be a list of non-empty strings.")
+
+
+def validate_stored_csv_headers(value):
+    validate_header_name_list(value)
+    if not value:
+        raise ValidationError("A saved mapping must store the file's header list.")
+
+
 class ArchivableModel(models.Model):
     class Status(models.TextChoices):
         ACTIVE = "active", "Active"
@@ -141,6 +152,79 @@ class Category(models.Model):
         return self.name
 
 
+class SavedCsvMapping(ArchivableModel):
+    household = models.ForeignKey(Household, on_delete=models.PROTECT, related_name="saved_csv_mappings")
+    name = models.CharField(max_length=80)
+    headers = models.JSONField(validators=(validate_stored_csv_headers,))
+    date_column = models.CharField(max_length=255)
+    description_column = models.CharField(max_length=255)
+    date_format = models.CharField(max_length=16)
+    number_format = models.CharField(max_length=16)
+    amount_mode = models.CharField(max_length=8)
+    amount_column = models.CharField(max_length=255, blank=True, default="")
+    debit_column = models.CharField(max_length=255, blank=True, default="")
+    credit_column = models.CharField(max_length=255, blank=True, default="")
+    currency_column = models.CharField(max_length=255, blank=True, default="")
+    invert_sign = models.BooleanField(default=False)
+    description_mode = models.CharField(max_length=12, default="column")
+    payee_column = models.CharField(max_length=255, blank=True, default="")
+    memo_column = models.CharField(max_length=255, blank=True, default="")
+    source_id_column = models.CharField(max_length=255, blank=True, default="")
+    excluded_original_columns = models.JSONField(default=list, validators=(validate_header_name_list,))
+    created_by = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="created_csv_mappings")
+    locked_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            person = _person_for(principal)
+            if person is None:
+                return self.none()
+            current_households = Membership.objects.filter(
+                person=person,
+                ended_at__isnull=True,
+            ).values("household_id")
+            return self.filter(household_id__in=current_households)
+
+    objects = QuerySet.as_manager()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("household", "name"),
+                condition=Q(status="active"),
+                name="saved_csv_mapping_unique_active_name_per_household",
+            ),
+            models.CheckConstraint(
+                condition=Q(amount_mode__in=("signed", "separate")),
+                name="saved_csv_mapping_amount_mode_valid",
+            ),
+            models.CheckConstraint(
+                condition=Q(description_mode__in=("column", "payee_memo")),
+                name="saved_csv_mapping_description_mode_valid",
+            ),
+            models.CheckConstraint(
+                condition=Q(date_format__in=("mdy_slash_4", "mdy_slash_2", "dmy_slash_4", "iso")),
+                name="saved_csv_mapping_date_format_valid",
+            ),
+            models.CheckConstraint(
+                condition=Q(number_format__in=("dot_comma", "comma_dot", "dot_none", "comma_none")),
+                name="saved_csv_mapping_number_format_valid",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(status="active", archived_at__isnull=True)
+                    | Q(status="archived", archived_at__isnull=False)
+                ),
+                name="saved_csv_mapping_archive_state_consistent",
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
 def _person_for(principal):
     if isinstance(principal, Person):
         return principal
@@ -195,6 +279,13 @@ class Account(ArchivableModel):
         related_name="accounts",
     )
     currency = models.CharField(max_length=3, default="USD")
+    default_saved_csv_mapping = models.ForeignKey(
+        SavedCsvMapping,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="default_for_accounts",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     objects = AccountQuerySet.as_manager()
@@ -247,6 +338,13 @@ class ImportBatch(ArchivableModel):
     date_range_start = models.DateField()
     date_range_end = models.DateField()
     imported_at = models.DateTimeField(auto_now_add=True)
+    saved_csv_mapping = models.ForeignKey(
+        SavedCsvMapping,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="import_batches",
+    )
 
     class QuerySet(models.QuerySet):
         def visible_to(self, principal):
