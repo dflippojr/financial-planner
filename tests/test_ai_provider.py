@@ -332,10 +332,16 @@ def test_background_job_resumes_the_same_harness_session(harness, monkeypatch, s
 
 
 def _mark_running(job, *, session_id, updated_at, attempts=1):
+    from finance.ai_jobs import SESSION_CONNECTION_KEY, _connection_marker
+
+    refs = dict(job.input_refs or {})
+    if session_id:
+        refs[SESSION_CONNECTION_KEY] = _connection_marker(connection_for(job.member))
     AiJob.objects.filter(pk=job.pk).update(
         status=AiJob.Status.RUNNING,
         attempts=attempts,
         harness_session_id=session_id,
+        input_refs=refs,
         updated_at=updated_at,
     )
 
@@ -1000,3 +1006,28 @@ def test_reconnecting_also_forgets_the_session_of_a_crashed_running_job(harness,
     job.refresh_from_db()
     assert job.status == job.Status.QUEUED
     assert ("GET", "/api/v1/sessions/old-harness-session") not in state.requests
+
+
+@pytest.mark.django_db
+def test_a_session_saved_on_an_earlier_connection_is_never_resumed(harness):
+    from finance.ai_jobs import SESSION_CONNECTION_KEY
+
+    state, url = harness
+    state.model_state = "ready"
+    _user, person, _household = make_member("owner")
+    connect_harness(person, base_url=url, token=TOKEN)
+    set_defaults(person, chat_backend="local", background_backend="local")
+    job = enqueue_job(person, feature="structured")
+    # As if a still-running runner wrote back its old id after the member reconnected.
+    AiJob.objects.filter(pk=job.pk).update(
+        harness_session_id="old-harness-session",
+        input_refs={**job.input_refs, SESSION_CONNECTION_KEY: "1:earlier-connection"},
+    )
+
+    process_due_jobs()
+    process_due_jobs()
+
+    job.refresh_from_db()
+    assert job.status == job.Status.SUCCEEDED
+    assert ("GET", "/api/v1/sessions/old-harness-session") not in state.requests
+    assert state.requests.count(("POST", "/api/v1/sessions")) == 1
