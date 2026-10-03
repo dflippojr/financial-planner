@@ -49,10 +49,13 @@ from .forms import (
     SetupForm,
     SetupGoogleForm,
     SpendingFilterForm,
+    SplitPartCategoryForm,
+    SplitTransactionForm,
     TransactionCategoryForm,
     TransactionCorrectionForm,
     TransactionFilterForm,
     TransferWindowForm,
+    UnsplitTransactionForm,
 )
 from .google_auth import (
     disconnect_google_account,
@@ -75,7 +78,18 @@ from .reauth import (
     stamp_recent_auth,
 )
 from .export import export_filename, write_export_zip
-from .models import Account, Category, Person, PrivacyPolicyVersion, RecurringSeries, RefundLink, Transaction, TransactionCorrectionHistory, TransferPair
+from .models import (
+    Account,
+    Category,
+    Person,
+    PrivacyPolicyVersion,
+    RecurringSeries,
+    RefundLink,
+    Transaction,
+    TransactionCorrectionHistory,
+    TransactionSplit,
+    TransferPair,
+)
 from .ai_views import ai_settings_context
 from .policy_services import (
     accept_shown_version,
@@ -113,6 +127,9 @@ from .category_services import (
     refresh_transfer_pairs,
     rename_category,
     set_transfer_window_days,
+    split_transaction,
+    assign_split_part_category,
+    unsplit_transaction,
     undo_transfer_pair,
 )
 
@@ -382,11 +399,13 @@ def _apply_transaction_filters(transactions, filters, principal):
             Q(category__isnull=True)
             | Q(category__code=Category.Code.UNCATEGORIZED)
             | ~Q(category__in=Category.objects.visible_to(principal))
-        ).exclude(_excluded=True)
+        ).exclude(_excluded=True).exclude(category_source=Transaction.CategorySource.SPLIT)
     if category == "transfer":
         return transactions.filter(_excluded=True)
     if category:
-        return transactions.filter(category_id=category).exclude(_excluded=True)
+        return transactions.filter(
+            Q(category_id=category) | Q(splits__category_id=category)
+        ).exclude(_excluded=True).distinct()
     return transactions
 
 
@@ -405,6 +424,7 @@ def transaction_list(request):
         Transaction.objects.visible_to(request.user)
         .filter(status=Transaction.Status.ACTIVE)
         .select_related("account", "import_batch", "category")
+        .prefetch_related("splits__category")
         .annotate(_excluded=exclusion_exists_for(request.user))
         .order_by("-transaction_date", "-pk")
     )
@@ -478,7 +498,11 @@ def transaction_edit(request, transaction_id):
                     account=account,
                     status=Transaction.Status.ACTIVE,
                 )
-                form.apply(financial_transaction, actor=person)
+                try:
+                    form.apply(financial_transaction, actor=person)
+                except ValidationError as exc:
+                    form.add_error("amount", _first_message(exc, "The amount could not be saved."))
+                    return _render_transaction_edit(request, financial_transaction, form=form)
             _service_or_404(lambda: refresh_transfer_pairs(request.user))
             return redirect("transaction-list")
     else:
@@ -486,7 +510,7 @@ def transaction_edit(request, transaction_id):
     return _render_transaction_edit(request, financial_transaction, form=form)
 
 
-def _render_transaction_edit(request, financial_transaction, *, form=None, refund_form=None):
+def _render_transaction_edit(request, financial_transaction, *, form=None, refund_form=None, split_form=None):
     if form is None:
         form = TransactionCorrectionForm.for_transaction(financial_transaction)
     correction_history = (
@@ -495,6 +519,19 @@ def _render_transaction_edit(request, financial_transaction, *, form=None, refun
         .select_related("actor")
         .order_by("-recorded_at", "-pk")
     )
+    splits = list(financial_transaction.splits.select_related("category").order_by("position"))
+    part_forms = []
+    for part in splits:
+        part_forms.append(
+            (
+                part,
+                SplitPartCategoryForm(
+                    principal=request.user,
+                    prefix=f"part{part.pk}",
+                    initial={"category": part.category_id},
+                ),
+            )
+        )
     return render(
         request,
         "finance/transaction_edit.html",
@@ -510,6 +547,11 @@ def _render_transaction_edit(request, financial_transaction, *, form=None, refun
             .select_related("original")
             .filter(refund=financial_transaction)
             .first(),
+            "split_form": split_form
+            or SplitTransactionForm(principal=request.user, transaction=financial_transaction),
+            "unsplit_form": UnsplitTransactionForm(principal=request.user),
+            "part_forms": part_forms,
+            "is_split": financial_transaction.category_source == Transaction.CategorySource.SPLIT,
             "transaction": financial_transaction,
             "correction_history": correction_history,
         },
@@ -530,9 +572,12 @@ def transaction_categorize(request, transaction_id):
     form = TransactionCategoryForm(request.POST, principal=request.user)
     if form.is_valid():
         category = form.cleaned_data["category"]
-        _service_or_404(
-            lambda: assign_category(request.user, transaction_id, None if category is None else category.pk)
-        )
+        try:
+            _service_or_404(
+                lambda: assign_category(request.user, transaction_id, None if category is None else category.pk)
+            )
+        except ValidationError:
+            pass
     return redirect("transaction-edit", transaction_id=transaction_id)
 
 
@@ -543,12 +588,71 @@ def transaction_link_refund(request, transaction_id):
     form = RefundLinkForm(request.POST, principal=request.user, refund=financial_transaction)
     if form.is_valid():
         try:
-            _service_or_404(lambda: link_refund(request.user, transaction_id, form.cleaned_data["original"].pk))
+            _service_or_404(
+                lambda: link_refund(
+                    request.user,
+                    transaction_id,
+                    form.cleaned_data["original"].pk,
+                    None if form.cleaned_data.get("original_part") is None else form.cleaned_data["original_part"].pk,
+                )
+            )
         except ValidationError as exc:
             form.add_error(None, _first_message(exc, "The refund could not be linked."))
         else:
             return redirect("transaction-edit", transaction_id=transaction_id)
     return _render_transaction_edit(request, financial_transaction, refund_form=form)
+
+
+@require_POST
+@never_cache
+def transaction_split(request, transaction_id):
+    financial_transaction = _visible_active_transaction(request.user, transaction_id)
+    form = SplitTransactionForm(request.POST, principal=request.user, transaction=financial_transaction)
+    if form.is_valid():
+        try:
+            _service_or_404(
+                lambda: split_transaction(
+                    request.user,
+                    transaction_id,
+                    form.parts_payload(),
+                    form.refund_assignments(),
+                )
+            )
+        except ValidationError as exc:
+            form.add_error(None, _first_message(exc, "The transaction could not be split."))
+        else:
+            return redirect("transaction-edit", transaction_id=transaction_id)
+    return _render_transaction_edit(request, financial_transaction, split_form=form)
+
+
+@require_POST
+@never_cache
+def transaction_unsplit(request, transaction_id):
+    _visible_active_transaction(request.user, transaction_id)
+    form = UnsplitTransactionForm(request.POST, principal=request.user)
+    if form.is_valid():
+        category = form.cleaned_data["category"]
+        _service_or_404(
+            lambda: unsplit_transaction(
+                request.user,
+                transaction_id,
+                None if category is None else category.pk,
+            )
+        )
+    return redirect("transaction-edit", transaction_id=transaction_id)
+
+
+@require_POST
+@never_cache
+def transaction_split_part_category(request, transaction_id, part_id):
+    financial_transaction = _visible_active_transaction(request.user, transaction_id)
+    part = get_object_or_404(TransactionSplit, pk=part_id, transaction=financial_transaction)
+    form = SplitPartCategoryForm(request.POST, principal=request.user, prefix=f"part{part.pk}")
+    if form.is_valid():
+        _service_or_404(
+            lambda: assign_split_part_category(request.user, part.pk, form.cleaned_data["category"].pk)
+        )
+    return redirect("transaction-edit", transaction_id=transaction_id)
 
 
 def _first_message(exc, fallback):

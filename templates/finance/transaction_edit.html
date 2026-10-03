@@ -12,11 +12,66 @@
   </div>
 </form>
 <p class="mb-8 text-sm opacity-70">The original imported fields and import batch provenance are retained.</p>
+{% if is_split %}
+<h2 class="mb-3 text-xl font-semibold">Split parts</h2>
+<ul class="mb-6 space-y-3">
+  {% for part, part_form in part_forms %}
+  <li>
+    <form method="post" action="{% url 'transaction-split-part-category' transaction.pk part.pk %}" class="flex flex-wrap items-end gap-3">
+      {% csrf_token %}
+      <p class="mb-0">{{ part.amount_display }}</p>
+      {% include "finance/_form_fields.html" with form=part_form %}
+      <button type="submit" class="btn btn-primary">Save part category</button>
+    </form>
+  </li>
+  {% endfor %}
+</ul>
+<form method="post" action="{% url 'transaction-unsplit' transaction.pk %}" class="mb-8 max-w-lg">
+  {% csrf_token %}
+  {% include "finance/_form_fields.html" with form=unsplit_form %}
+  <button type="submit" class="btn btn-primary">Unsplit</button>
+</form>
+{% else %}
 <form method="post" action="{% url 'transaction-categorize' transaction.pk %}" class="mb-8 max-w-lg">
   {% csrf_token %}
   {% include "finance/_form_fields.html" with form=category_form %}
   <button type="submit" class="btn btn-primary">Save category</button>
 </form>
+{% endif %}
+{% if not refund_link and not transaction.is_excluded_transfer %}
+<form method="post" action="{% url 'transaction-split' transaction.pk %}" class="mb-8 max-w-lg" id="split-form" data-parent-amount="{{ transaction.amount_minor }}">
+  <h2 class="mb-3 text-xl font-semibold">Split</h2>
+  {% csrf_token %}
+  {% include "finance/_form_fields.html" with form=split_form %}
+  <p class="mb-3 text-sm" id="split-remaining">Remaining: —</p>
+  <div class="flex flex-wrap gap-2">
+    <button type="submit" class="btn btn-primary">Save split</button>
+  </div>
+</form>
+<script>
+(function () {
+  const form = document.getElementById("split-form");
+  if (!form) return;
+  const parent = Number(form.dataset.parentAmount || "0");
+  const remaining = document.getElementById("split-remaining");
+  function cents(value) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return 0;
+    return Math.round(parsed * 100);
+  }
+  function update() {
+    let total = 0;
+    form.querySelectorAll(".split-part-amount").forEach(function (input) {
+      total += cents(input.value);
+    });
+    const left = parent - total;
+    remaining.textContent = "Remaining: " + (left / 100).toFixed(2);
+  }
+  form.addEventListener("input", update);
+  update();
+})();
+</script>
+{% endif %}
 {% if refund_link %}
 <div role="status" class="alert alert-info mb-8">This refund is linked to a purchase on {{ refund_link.original.transaction_date }} and inherits that category.</div>
 {% else %}

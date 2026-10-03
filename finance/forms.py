@@ -17,9 +17,11 @@ from .models import (
     Category,
     PlannedItem,
     RecurringSeries,
+    RefundLink,
     SavingsGoal,
     Transaction,
     TransactionCorrectionHistory,
+    TransactionSplit,
 )
 
 
@@ -486,6 +488,13 @@ class TransactionCorrectionForm(forms.Form):
         )
         if not history_rows:
             return transaction
+        from .category_services import SPLIT_AMOUNT_ERROR
+
+        if (
+            transaction.category_source == Transaction.CategorySource.SPLIT
+            and new_amount_minor != transaction.amount_minor
+        ):
+            raise ValidationError(SPLIT_AMOUNT_ERROR)
         transaction.transaction_date = new_date
         transaction.description = new_description
         transaction.amount_minor = new_amount_minor
@@ -506,6 +515,11 @@ class TransactionCategoryForm(forms.Form):
 
 class RefundLinkForm(forms.Form):
     original = forms.ModelChoiceField(queryset=Transaction.objects.none(), required=True, label="Original purchase")
+    original_part = forms.ModelChoiceField(
+        queryset=TransactionSplit.objects.none(),
+        required=False,
+        label="Split part",
+    )
 
     def __init__(self, *args, principal=None, refund=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -514,10 +528,15 @@ class RefundLinkForm(forms.Form):
         if refund is not None:
             visible = visible.exclude(pk=refund.pk)
         self.fields["original"].queryset = visible.order_by("-transaction_date", "-pk")
+        self.fields["original_part"].queryset = (
+            TransactionSplit.objects.filter(transaction__in=visible)
+            .select_related("category", "transaction")
+            .order_by("transaction_id", "position")
+        )
 
     def clean(self):
         cleaned = super().clean()
-        from .category_services import REFUND_LINK_RULE
+        from .category_services import REFUND_LINK_RULE, SPLIT_PART_MISMATCH, SPLIT_PART_REQUIRED
 
         original = cleaned.get("original")
         refund = self._refund
@@ -525,7 +544,122 @@ class RefundLinkForm(forms.Form):
             return cleaned
         if refund.amount_minor <= 0 or original.amount_minor >= 0 or refund.kind != original.kind:
             raise ValidationError(REFUND_LINK_RULE)
+        part = cleaned.get("original_part")
+        if original.category_source == Transaction.CategorySource.SPLIT:
+            if part is None:
+                raise ValidationError(SPLIT_PART_REQUIRED)
+            if part.transaction_id != original.pk:
+                raise ValidationError(SPLIT_PART_MISMATCH)
+        elif part is not None:
+            raise ValidationError(SPLIT_PART_MISMATCH)
         return cleaned
+
+
+class SplitTransactionForm(forms.Form):
+    part_count = forms.IntegerField(min_value=2, max_value=20, widget=forms.HiddenInput)
+
+    def __init__(self, *args, principal=None, transaction=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._transaction = transaction
+        self._refunds = []
+        categories = Category.objects.none()
+        if principal is not None:
+            from .category_services import assignable_categories
+
+            categories = assignable_categories(principal)
+        existing = []
+        if transaction is not None:
+            existing = list(transaction.splits.select_related("category").order_by("position"))
+            if principal is not None:
+                self._refunds = list(
+                    Transaction.objects.visible_to(principal)
+                    .filter(
+                        refund_link__original=transaction,
+                        status=Transaction.Status.ACTIVE,
+                        pk__in=RefundLink.objects.visible_to(principal).values("refund_id"),
+                    )
+                    .select_related("refund_link")
+                    .order_by("pk")
+                )
+        count = max(2, len(existing))
+        if self.data:
+            try:
+                count = max(2, int(self.data.get("part_count", count)))
+            except (TypeError, ValueError):
+                count = 2
+        self.part_indexes = list(range(count))
+        self.fields["part_count"].initial = count
+        for index in self.part_indexes:
+            initial_category = existing[index].category_id if index < len(existing) else None
+            initial_amount = None
+            if index < len(existing):
+                initial_amount = Decimal(existing[index].amount_minor) / Decimal(100)
+            self.fields[f"part_{index}_category"] = forms.ModelChoiceField(
+                queryset=categories,
+                label=f"Part {index + 1} category",
+                initial=initial_category,
+            )
+            self.fields[f"part_{index}_amount"] = forms.DecimalField(
+                max_digits=19,
+                decimal_places=2,
+                label=f"Part {index + 1} amount",
+                initial=initial_amount,
+                widget=forms.TextInput(attrs={"inputmode": "decimal", "class": "split-part-amount"}),
+            )
+        self.refund_fields = []
+        choices = [(str(index), f"Part {index + 1}") for index in self.part_indexes]
+        for refund in self._refunds:
+            name = f"refund_{refund.pk}_part"
+            initial = ""
+            link = getattr(refund, "refund_link", None)
+            if link is not None and link.original_part_id:
+                for index, part in enumerate(existing):
+                    if part.pk == link.original_part_id:
+                        initial = str(index)
+                        break
+            self.fields[name] = forms.ChoiceField(
+                choices=choices,
+                label=f"Refund on {refund.transaction_date} ({refund.amount_display})",
+                initial=initial,
+            )
+            self.refund_fields.append(name)
+
+    def parts_payload(self):
+        parts = []
+        for index in self.part_indexes:
+            category = self.cleaned_data[f"part_{index}_category"]
+            amount = self.cleaned_data[f"part_{index}_amount"]
+            parts.append({"category_id": category.pk, "amount_minor": int(amount * 100)})
+        return parts
+
+    def refund_assignments(self):
+        if not self.refund_fields:
+            return None
+        assigned = {}
+        for name in self.refund_fields:
+            refund_id = int(name.split("_")[1])
+            assigned[refund_id] = int(self.cleaned_data[name])
+        return assigned
+
+
+class UnsplitTransactionForm(forms.Form):
+    category = forms.ModelChoiceField(queryset=Category.objects.none(), required=False, empty_label="Uncategorized")
+
+    def __init__(self, *args, principal=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        from .category_services import assignable_categories
+
+        self.fields["category"].queryset = assignable_categories(principal)
+
+
+class SplitPartCategoryForm(forms.Form):
+    category = forms.ModelChoiceField(queryset=Category.objects.none(), required=True)
+
+    def __init__(self, *args, principal=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        from .category_services import assignable_categories
+
+        self.fields["category"].queryset = assignable_categories(principal)
 
 
 class AddAccountForm(forms.Form):

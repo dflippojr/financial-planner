@@ -60,6 +60,13 @@
         <td class="text-right">{% include "finance/_amount.html" with value=transaction.amount_display tone="" %}</td>
         <td>
           {{ transaction.category_display }}
+          {% if transaction.category_source == "split" %}
+          <ul class="mt-1 text-sm opacity-80">
+            {% for part in transaction.splits.all %}
+            <li>{{ part.category.name }} · {{ part.amount_display }}</li>
+            {% endfor %}
+          </ul>
+          {% endif %}
           {% with suggestion=suggestions|lookup:transaction.pk %}
           {% if suggestion %}
           <div class="mt-2">

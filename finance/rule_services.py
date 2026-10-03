@@ -258,6 +258,7 @@ def _candidate_queryset(person):
         .filter(status=Transaction.Status.ACTIVE, kind=Transaction.Kind.CASH_FLOW)
         .exclude(category_source=Transaction.CategorySource.MANUAL)
         .exclude(category_source=Transaction.CategorySource.INHERITED)
+        .exclude(category_source=Transaction.CategorySource.SPLIT)
         .filter(Q(refund_link__isnull=True))
         .annotate(_excluded=exclusion_exists_for(person))
         .filter(_excluded=False)
@@ -346,6 +347,7 @@ def _protected_source(txn):
     return txn.category_source in (
         Transaction.CategorySource.MANUAL,
         Transaction.CategorySource.INHERITED,
+        Transaction.CategorySource.SPLIT,
     )
 
 
@@ -357,6 +359,9 @@ def _apply_to_locked(person, rule, locked, *, require_first_match=True):
     )
     for txn in locked:
         if txn.category_source == Transaction.CategorySource.MANUAL:
+            skipped_manual += 1
+            continue
+        if txn.category_source == Transaction.CategorySource.SPLIT:
             skipped_manual += 1
             continue
         if txn.category_source == Transaction.CategorySource.INHERITED or txn.pk in refund_ids:
@@ -517,6 +522,7 @@ def reverse_application(principal, application_id):
         if txn.category_source in (
             Transaction.CategorySource.MANUAL,
             Transaction.CategorySource.INHERITED,
+            Transaction.CategorySource.SPLIT,
         ):
             skipped_manual += 1
             continue

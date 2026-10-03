@@ -21,6 +21,7 @@ from .models import (
     RecurringSeries,
     RefundLink,
     Transaction,
+    TransactionSplit,
     TransferPair,
 )
 
@@ -31,6 +32,7 @@ ENTITY_FILES = (
     "transactions",
     "import_batches",
     "transfer_pairs",
+    "transaction_splits",
     "recurring_series",
     "privacy_policy_acceptances",
     "ai_connections",
@@ -68,6 +70,7 @@ CSV_FIELDS = {
         "category_name",
         "excluded_from_income_and_spending",
         "refund_original_id",
+        "refund_original_part_id",
         "status",
         "archived_at",
         "fingerprint",
@@ -85,6 +88,15 @@ CSV_FIELDS = {
         "imported_by_username",
     ),
     "transfer_pairs": ("id", "leg_a_id", "leg_b_id", "status", "kind", "confidence", "reasons", "created_at"),
+    "transaction_splits": (
+        "id",
+        "transaction_id",
+        "position",
+        "category_id",
+        "category_name",
+        "amount_minor",
+        "amount_decimal",
+    ),
     "recurring_series": (
         "id",
         "merchant_key",
@@ -182,11 +194,12 @@ transactions.csv / transactions.json
   id, account_id, import_batch_id, transaction_date, amount_minor,
   amount_decimal, currency, description, kind, source_row_number,
   source_transaction_id, category_id, category_name,
-  excluded_from_income_and_spending, refund_original_id, status, archived_at,
+  excluded_from_income_and_spending, refund_original_id, refund_original_part_id, status, archived_at,
   fingerprint
   excluded_from_income_and_spending is true only when both legs of an
   excluding transfer pair are visible. refund_original_id is set only when the
-  original transaction is also visible.
+  original transaction is also visible. refund_original_part_id is set when that
+  original is split and the chosen part is on a visible transaction.
 
 import_batches.csv / import_batches.json
   Provenance for imports on visible accounts.
@@ -196,6 +209,10 @@ import_batches.csv / import_batches.json
 transfer_pairs.csv / transfer_pairs.json
   Pairs whose legs are both visible.
   id, leg_a_id, leg_b_id, status, kind, confidence, reasons, created_at
+
+transaction_splits.csv / transaction_splits.json
+  Parts of visible split transactions.
+  id, transaction_id, position, category_id, category_name, amount_minor, amount_decimal
 
 recurring_series.csv / recurring_series.json
   Series belonging to the exporting member that do not include hidden
@@ -334,7 +351,7 @@ def _visible_refund_originals(visible_txn_ids):
         refund_id__in=visible_txn_ids,
         original_id__in=visible_txn_ids,
     )
-    return {link.refund_id: link.original_id for link in links}
+    return {link.refund_id: (link.original_id, link.original_part_id) for link in links}
 
 
 def _transaction_rows(person, visible_txn_ids):
@@ -347,6 +364,7 @@ def _transaction_rows(person, visible_txn_ids):
         .order_by("pk")
     )
     for txn in transactions:
+        original_id, original_part_id = refunds.get(txn.pk, (None, None))
         rows.append(
             {
                 "id": txn.pk,
@@ -363,7 +381,8 @@ def _transaction_rows(person, visible_txn_ids):
                 "category_id": txn.category_id,
                 "category_name": txn.category.name if txn.category_id else "",
                 "excluded_from_income_and_spending": txn.pk in excluded,
-                "refund_original_id": refunds.get(txn.pk),
+                "refund_original_id": original_id,
+                "refund_original_part_id": original_part_id,
                 "status": txn.status,
                 "archived_at": txn.archived_at,
                 "fingerprint": txn.fingerprint,
@@ -407,6 +426,28 @@ def _transfer_pair_rows(person):
                 "confidence": pair.confidence,
                 "reasons": list(pair.reasons),
                 "created_at": pair.created_at,
+            }
+        )
+    return rows
+
+
+def _split_rows(person):
+    rows = []
+    parts = (
+        TransactionSplit.objects.filter(transaction__in=Transaction.objects.visible_to(person))
+        .select_related("category")
+        .order_by("transaction_id", "position", "pk")
+    )
+    for part in parts:
+        rows.append(
+            {
+                "id": part.pk,
+                "transaction_id": part.transaction_id,
+                "position": part.position,
+                "category_id": part.category_id,
+                "category_name": part.category.name,
+                "amount_minor": part.amount_minor,
+                "amount_decimal": money_decimal(part.amount_minor),
             }
         )
     return rows
@@ -525,6 +566,7 @@ def collect_export_tables(person) -> dict[str, list[dict]]:
         "transactions": _transaction_rows(person, visible_txn_ids),
         "import_batches": _import_batch_rows(person),
         "transfer_pairs": _transfer_pair_rows(person),
+        "transaction_splits": _split_rows(person),
         "recurring_series": _recurring_series_rows(person),
         "privacy_policy_acceptances": _privacy_acceptance_rows(person),
         "ai_connections": _ai_connection_rows(person),
