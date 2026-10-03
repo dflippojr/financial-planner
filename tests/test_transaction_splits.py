@@ -572,3 +572,114 @@ def test_splitting_suggested_transfer_leg_drops_pair_and_allows_rematch():
     assert rematch.status in (TransferPair.Status.SUGGESTED, TransferPair.Status.AUTO_MARKED)
     assert rematch_ids == {inflow.pk, leftover.pk}
 
+
+
+@pytest.mark.django_db
+def test_link_refund_page_requires_a_part_of_the_split_purchase():
+    from finance.category_services import SPLIT_PART_MISMATCH
+
+    owner = make_person("owner")
+    household = make_household(owner)
+    groceries = household.categories.get(name="Groceries")
+    housing = household.categories.get(name="Housing")
+    account = make_account(owner)
+    purchase = make_transaction(owner, account, amount_minor=-9000, description="Synthetic split purchase")
+    other = make_transaction(owner, account, amount_minor=-4000, description="Synthetic other purchase")
+    refund = make_transaction(owner, account, amount_minor=1000, description="Synthetic refund")
+    parts = ({"category_id": groceries.pk, "amount_minor": -4000}, {"category_id": housing.pk, "amount_minor": -5000})
+    split_transaction(owner, purchase.pk, parts)
+    split_transaction(
+        owner,
+        other.pk,
+        ({"category_id": groceries.pk, "amount_minor": -1000}, {"category_id": housing.pk, "amount_minor": -3000}),
+    )
+    client = Client()
+    client.force_login(owner.user)
+    url = reverse("transaction-link-refund", args=(refund.pk,))
+
+    missing = client.post(url, {"original": str(purchase.pk)})
+    assert missing.status_code == 200
+    assert SPLIT_PART_REQUIRED.encode() in missing.content
+    wrong = client.post(url, {"original": str(purchase.pk), "original_part": str(other.splits.first().pk)})
+    assert wrong.status_code == 200
+    assert SPLIT_PART_MISMATCH.encode() in wrong.content
+    assert not RefundLink.objects.filter(refund=refund).exists()
+
+    housing_part = purchase.splits.get(category=housing)
+    linked = client.post(url, {"original": str(purchase.pk), "original_part": str(housing_part.pk)})
+    assert linked.status_code == 302
+    refund.refresh_from_db()
+    assert refund.category_id == housing.pk
+    assert RefundLink.objects.get(refund=refund).original_part_id == housing_part.pk
+
+
+@pytest.mark.django_db
+def test_split_page_assigns_a_visible_refund_to_the_chosen_part():
+    owner = make_person("owner")
+    household = make_household(owner)
+    groceries = household.categories.get(name="Groceries")
+    housing = household.categories.get(name="Housing")
+    account = make_account(owner)
+    purchase = make_transaction(owner, account, amount_minor=-8000, description="Synthetic purchase")
+    refund = make_transaction(owner, account, amount_minor=2000, description="Synthetic refund")
+    assign_category(owner, purchase.pk, groceries.pk)
+    link_refund(owner, refund.pk, purchase.pk)
+    client = Client()
+    client.force_login(owner.user)
+
+    edit = client.get(reverse("transaction-edit", args=(purchase.pk,)))
+    assert f'name="refund_{refund.pk}_part"'.encode() in edit.content
+
+    response = client.post(
+        reverse("transaction-split", args=(purchase.pk,)),
+        {
+            "part_count": "2",
+            "part_0_category": str(groceries.pk),
+            "part_0_amount": "-50.00",
+            "part_1_category": str(housing.pk),
+            "part_1_amount": "-30.00",
+            f"refund_{refund.pk}_part": "1",
+        },
+    )
+    assert response.status_code == 302
+    refund.refresh_from_db()
+    assert refund.category_id == housing.pk
+    assert RefundLink.objects.get(refund=refund).original_part.category_id == housing.pk
+
+
+@pytest.mark.django_db
+def test_part_category_page_recategorizes_one_part_and_its_refund():
+    owner = make_person("owner")
+    household = make_household(owner)
+    groceries = household.categories.get(name="Groceries")
+    housing = household.categories.get(name="Housing")
+    dining = household.categories.get(name="Dining")
+    account = make_account(owner)
+    purchase = make_transaction(owner, account, amount_minor=-9000)
+    refund = make_transaction(owner, account, amount_minor=1000, description="Synthetic refund")
+    split_transaction(
+        owner,
+        purchase.pk,
+        ({"category_id": groceries.pk, "amount_minor": -4000}, {"category_id": housing.pk, "amount_minor": -5000}),
+    )
+    groceries_part = purchase.splits.get(category=groceries)
+    link_refund(owner, refund.pk, purchase.pk, original_part_id=groceries_part.pk)
+    client = Client()
+    client.force_login(owner.user)
+
+    field = f"part{groceries_part.pk}-category"
+    edit = client.get(reverse("transaction-edit", args=(purchase.pk,)))
+    assert f'name="{field}"'.encode() in edit.content
+    response = client.post(
+        reverse("transaction-split-part-category", args=(purchase.pk, groceries_part.pk)),
+        {field: str(dining.pk)},
+    )
+
+    assert response.status_code == 302
+    groceries_part.refresh_from_db()
+    refund.refresh_from_db()
+    assert groceries_part.category_id == dining.pk
+    assert refund.category_id == dining.pk
+    totals = income_and_spending_totals(owner)
+    assert totals.spending_by_category_id[dining.pk] == 3000
+    assert totals.spending_by_category_id[housing.pk] == 5000
