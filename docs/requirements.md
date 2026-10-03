@@ -216,6 +216,17 @@ Owner decisions:
 - **Theme:** light or dark following the device setting, plus a manual toggle that the browser remembers.
 - **Devices:** desktop and iPhone matter equally. The layout is responsive, with a sidebar on desktop and a compact menu on the phone. Wide tables stay usable on a narrow screen.
 
+## Installable home-screen app (2026-10-02, #103)
+
+Defaults recorded so backlog work can continue (the owner may change them):
+
+- There is **no service worker in v1**, so the browser does not cache HTML or financial data on the device. Web push for alerts (#99) would add a service worker under its own decision.
+- The web app manifest name is **Financial Planner**, short name **Finances**, `display: standalone`.
+- Icons are an original rising-bar SVG in the repository, with committed PNG sizes 180 (Apple touch icon), 192, and 512. No third-party artwork or CDN.
+- Theme-color meta tags follow daisyUI light and dark base backgrounds (`#ffffff` / `#1d232a`); the manifest `theme_color` is daisyUI light primary (`#422ad5`).
+- Compact phone layout uses `viewport-fit=cover` and `env(safe-area-inset-*)` padding for the notch and home indicator.
+- Adding the app to an iPhone home screen, password and Google sign-in in standalone mode, and safe-area spacing are an owner device check after merge, not an automated test.
+
 Constraints carried from the existing requirements:
 - **Self-hosted assets only.** No CDN, web fonts, or other third-party requests. The app is private and must work without reaching outside services.
 - **No Node in the repository.** The CSS is built with Tailwind's standalone binary (pinned version, verified checksum), both in the Docker build and in a local script. JavaScript libraries (Chart.js, and Alpine.js if needed) are vendored at pinned versions with checksums.
