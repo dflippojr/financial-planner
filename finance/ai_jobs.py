@@ -156,7 +156,7 @@ def _wait_for_open_session(job, moment, code):
         return True
     job.status = AiJob.Status.QUEUED
     job.failure_code = code
-    job.next_attempt_at = moment + timedelta(
+    job.next_attempt_at = max(moment, timezone.now()) + timedelta(
         seconds=int(getattr(settings, "AI_JOB_RESUME_DELAY_SECONDS", 300))
     )
     job.save(
@@ -166,7 +166,7 @@ def _wait_for_open_session(job, moment, code):
 
 
 def _claim_for_run(job, moment, cutoff):
-    due = Q(status__in=(AiJob.Status.QUEUED, AiJob.Status.WAITING_MODEL))
+    due = Q(status__in=(AiJob.Status.QUEUED, AiJob.Status.WAITING_MODEL), next_attempt_at__lte=moment)
     stale_resume = Q(status=AiJob.Status.RUNNING, updated_at__lte=cutoff) & ~Q(harness_session_id="")
     with transaction.atomic():
         locked = _lock_qs(AiJob.objects.filter(pk=job.pk).filter(due | stale_resume)).first()
@@ -234,7 +234,8 @@ def _retry_or_fail(job, moment, code):
         delay = min(2 ** job.attempts, 32) * 60
         job.status = AiJob.Status.QUEUED
         job.failure_code = code
-        job.next_attempt_at = moment + timedelta(seconds=delay)
+        # Measured from now: a session wait can outlast the poll that started it.
+        job.next_attempt_at = max(moment, timezone.now()) + timedelta(seconds=delay)
         job.save(
             update_fields=(
                 "status",
