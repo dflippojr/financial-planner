@@ -108,6 +108,7 @@ from .cash_flow import (
     spending_chart_data,
 )
 from .planning_services import cash_flow_with_projection
+from .budget_services import dashboard_budget_summary
 from .projection import DEFAULT_HORIZON
 from .spending_trends import (
     category_spending_trend_report,
@@ -196,6 +197,7 @@ def home(request):
             "report": report,
             "chart_data": cash_flow_chart_data(report) if report is not None else None,
             "accounts": Account.objects.visible_to(request.user),
+            "budget_summary": dashboard_budget_summary(request.user, today=today),
         },
     )
 

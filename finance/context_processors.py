@@ -54,6 +54,8 @@ def _nav_current(request):
         return "csv-import"
     if name in {"planned-item-edit", "planned-item-disable", "planned-item-enable"}:
         return "planned-items"
+    if name.startswith("budget"):
+        return "budgets"
     if name in {
         "savings-goal-edit",
         "savings-goal-complete",
@@ -87,6 +89,7 @@ def navigation(request):
         ("csv-import", "Import", accounts_url),
         ("invite", "Invite", reverse("invite")),
         ("planned-items", "Planned items", reverse("planned-items")),
+        ("budgets", "Budgets", reverse("budgets")),
         ("savings-goals", "Goals", reverse("savings-goals")),
     )
     return {

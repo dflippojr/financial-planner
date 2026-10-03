@@ -1350,3 +1350,131 @@ class CategorySuggestion(models.Model):
             "cursor": "Cursor",
         }
         return f"AI · {kind} · {labels.get(self.backend, self.backend or 'Unknown backend')}"
+
+
+class BudgetQuerySet(models.QuerySet):
+    def visible_to(self, principal):
+        person = _person_for(principal)
+        if person is None:
+            return self.none()
+        current_households = Membership.objects.filter(
+            person=person,
+            ended_at__isnull=True,
+        ).values("household_id")
+        return self.filter(
+            Q(owner=person, scope="private")
+            | Q(scope="household", household_id__in=current_households)
+        )
+
+
+class Budget(ArchivableModel):
+    class Scope(models.TextChoices):
+        PRIVATE = "private", "Private"
+        HOUSEHOLD = "household", "Household"
+
+    owner = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="budgets")
+    scope = models.CharField(max_length=9, choices=Scope, default=Scope.PRIVATE)
+    household = models.ForeignKey(
+        Household,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="budgets",
+    )
+    category = models.ForeignKey(
+        Category,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="budgets",
+    )
+    rollover_enabled = models.BooleanField(default=False)
+    rollover_started_month = models.DateField(null=True, blank=True)
+    rollover_enabled_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    objects = BudgetQuerySet.as_manager()
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=(Q(scope="private", household__isnull=True) | Q(scope="household", household__isnull=False)),
+                name="budget_scope_matches_household",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(rollover_enabled=False, rollover_started_month__isnull=True)
+                    | Q(rollover_enabled=True, rollover_started_month__isnull=False)
+                ),
+                name="budget_rollover_start_when_enabled",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(status="active", archived_at__isnull=True)
+                    | Q(status="archived", archived_at__isnull=False)
+                ),
+                name="budget_archive_state_consistent",
+            ),
+            models.UniqueConstraint(
+                fields=("owner", "category"),
+                condition=Q(scope="private", status="active", category__isnull=False),
+                name="budget_one_active_private_category",
+            ),
+            models.UniqueConstraint(
+                fields=("owner",),
+                condition=Q(scope="private", status="active", category__isnull=True),
+                name="budget_one_active_private_total",
+            ),
+            models.UniqueConstraint(
+                fields=("household", "category"),
+                condition=Q(scope="household", status="active", category__isnull=False),
+                name="budget_one_active_household_category",
+            ),
+            models.UniqueConstraint(
+                fields=("household",),
+                condition=Q(scope="household", status="active", category__isnull=True),
+                name="budget_one_active_household_total",
+            ),
+        ]
+
+    def __str__(self):
+        if self.category_id is None:
+            return "Overall spending"
+        return self.category.name
+
+
+class BudgetAmount(models.Model):
+    budget = models.ForeignKey(Budget, on_delete=models.CASCADE, related_name="amounts")
+    effective_month = models.DateField()
+    amount_minor = models.BigIntegerField()
+    currency = models.CharField(max_length=3, default="USD")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("budget", "effective_month"), name="budget_amount_unique_month"),
+            models.CheckConstraint(condition=Q(currency="USD"), name="budget_amount_currency_usd"),
+            models.CheckConstraint(condition=Q(amount_minor__gt=0), name="budget_amount_positive"),
+            models.CheckConstraint(condition=Q(effective_month__day=1), name="budget_amount_month_start"),
+        ]
+
+    def __str__(self):
+        return f"Budget {self.budget_id} from {self.effective_month}"
+
+
+class BudgetRolloverReset(models.Model):
+    budget = models.ForeignKey(Budget, on_delete=models.CASCADE, related_name="rollover_resets")
+    month = models.DateField()
+    actor = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="budget_rollover_resets")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("budget", "month"), name="budget_rollover_reset_unique_month"),
+            models.CheckConstraint(condition=Q(month__day=1), name="budget_rollover_reset_month_start"),
+        ]
+
+    def __str__(self):
+        return f"Rollover reset {self.budget_id} {self.month}"

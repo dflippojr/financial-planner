@@ -3,6 +3,7 @@ from django.urls import path
 from finance import (
     account_views,
     ai_views,
+    budget_views,
     category_suggestion_views,
     net_worth_views,
     planning_views,
@@ -113,6 +114,19 @@ urlpatterns = [
     path("planning/items/<int:item_id>/edit/", planning_views.planned_item_edit, name="planned-item-edit"),
     path("planning/items/<int:item_id>/disable/", planning_views.planned_item_disable, name="planned-item-disable"),
     path("planning/items/<int:item_id>/enable/", planning_views.planned_item_enable, name="planned-item-enable"),
+    path("planning/budgets/", budget_views.budget_list, name="budgets"),
+    path("planning/budgets/<int:budget_id>/edit/", budget_views.budget_edit, name="budget-edit"),
+    path("planning/budgets/<int:budget_id>/archive/", budget_views.budget_archive, name="budget-archive"),
+    path(
+        "planning/budgets/<int:budget_id>/rollover/",
+        budget_views.budget_rollover_toggle,
+        name="budget-rollover-toggle",
+    ),
+    path(
+        "planning/budgets/<int:budget_id>/rollover/reset/",
+        budget_views.budget_rollover_reset,
+        name="budget-rollover-reset",
+    ),
     path("planning/goals/", savings_goal_views.savings_goal_list, name="savings-goals"),
     path("planning/goals/<int:goal_id>/edit/", savings_goal_views.savings_goal_edit, name="savings-goal-edit"),
     path("planning/goals/<int:goal_id>/complete/", savings_goal_views.savings_goal_complete, name="savings-goal-complete"),

@@ -15,6 +15,9 @@ from .models import (
     AiJob,
     AiProviderConnection,
     AiUsageEvent,
+    Budget,
+    BudgetAmount,
+    BudgetRolloverReset,
     Category,
     ImportBatch,
     PrivacyPolicyAcceptance,
@@ -38,6 +41,9 @@ ENTITY_FILES = (
     "ai_connections",
     "ai_jobs",
     "ai_usage",
+    "budgets",
+    "budget_amounts",
+    "budget_rollover_resets",
 )
 CSV_FIELDS = {
     "accounts": (
@@ -147,6 +153,34 @@ CSV_FIELDS = {
         "outcome",
         "created_at",
     ),
+    "budgets": (
+        "id",
+        "scope",
+        "owner_username",
+        "household_id",
+        "category_id",
+        "category_name",
+        "rollover_enabled",
+        "rollover_started_month",
+        "status",
+        "archived_at",
+        "created_at",
+    ),
+    "budget_amounts": (
+        "id",
+        "budget_id",
+        "effective_month",
+        "amount_minor",
+        "amount_decimal",
+        "currency",
+    ),
+    "budget_rollover_resets": (
+        "id",
+        "budget_id",
+        "month",
+        "actor_username",
+        "created_at",
+    ),
     "balance_snapshots": (
         "id",
         "account_id",
@@ -243,6 +277,18 @@ ai_jobs.csv / ai_jobs.json
 ai_usage.csv / ai_usage.json
   This member's AI usage: provider, backend, feature, token counts, outcome.
   Prompts and responses are omitted.
+
+budgets.csv / budgets.json
+  Monthly spending budgets visible to this member: private budgets they own
+  and household budgets for a household they currently belong to. Another
+  member's private budgets are omitted.
+
+budget_amounts.csv / budget_amounts.json
+  Amount history for those budgets. The amount for a month is the latest
+  effective_month on or before that month.
+
+budget_rollover_resets.csv / budget_rollover_resets.json
+  Manual rollover resets for those budgets.
 
 JSON files are arrays of objects. CSV uses UTF-8. Nested lists in CSV are JSON
 arrays. Date and datetime values are ISO-8601.
@@ -551,6 +597,61 @@ def _ai_usage_rows(person):
     return rows
 
 
+def _budget_rows(person):
+    rows = []
+    budgets = Budget.objects.visible_to(person).select_related("owner__user", "category").order_by("pk")
+    for budget in budgets:
+        rows.append(
+            {
+                "id": budget.pk,
+                "scope": budget.scope,
+                "owner_username": budget.owner.user.username,
+                "household_id": budget.household_id,
+                "category_id": budget.category_id,
+                "category_name": budget.category.name if budget.category_id is not None else "",
+                "rollover_enabled": budget.rollover_enabled,
+                "rollover_started_month": budget.rollover_started_month,
+                "status": budget.status,
+                "archived_at": budget.archived_at,
+                "created_at": budget.created_at,
+            }
+        )
+    return rows
+
+
+def _budget_amount_rows(person):
+    visible = Budget.objects.visible_to(person).values("pk")
+    rows = []
+    for amount in BudgetAmount.objects.filter(budget_id__in=visible).order_by("pk"):
+        rows.append(
+            {
+                "id": amount.pk,
+                "budget_id": amount.budget_id,
+                "effective_month": amount.effective_month,
+                "amount_minor": amount.amount_minor,
+                "amount_decimal": money_decimal(amount.amount_minor),
+                "currency": amount.currency,
+            }
+        )
+    return rows
+
+
+def _budget_reset_rows(person):
+    visible = Budget.objects.visible_to(person).values("pk")
+    rows = []
+    for reset in BudgetRolloverReset.objects.filter(budget_id__in=visible).select_related("actor__user").order_by("pk"):
+        rows.append(
+            {
+                "id": reset.pk,
+                "budget_id": reset.budget_id,
+                "month": reset.month,
+                "actor_username": reset.actor.user.username,
+                "created_at": reset.created_at,
+            }
+        )
+    return rows
+
+
 def _balance_snapshot_model():
     try:
         return apps.get_model("finance", "BalanceSnapshot")
@@ -572,6 +673,9 @@ def collect_export_tables(person) -> dict[str, list[dict]]:
         "ai_connections": _ai_connection_rows(person),
         "ai_jobs": _ai_job_rows(person),
         "ai_usage": _ai_usage_rows(person),
+        "budgets": _budget_rows(person),
+        "budget_amounts": _budget_amount_rows(person),
+        "budget_rollover_resets": _budget_reset_rows(person),
     }
     snapshot_model = _balance_snapshot_model()
     if snapshot_model is not None:
