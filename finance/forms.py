@@ -17,6 +17,7 @@ from .models import (
     Category,
     PlannedItem,
     RecurringSeries,
+    RefundLink,
     SavingsGoal,
     Transaction,
     TransactionCorrectionHistory,
@@ -569,14 +570,17 @@ class SplitTransactionForm(forms.Form):
         existing = []
         if transaction is not None:
             existing = list(transaction.splits.select_related("category").order_by("position"))
-            self._refunds = list(
-                Transaction.objects.filter(
-                    refund_link__original=transaction,
-                    status=Transaction.Status.ACTIVE,
+            if principal is not None:
+                self._refunds = list(
+                    Transaction.objects.visible_to(principal)
+                    .filter(
+                        refund_link__original=transaction,
+                        status=Transaction.Status.ACTIVE,
+                        pk__in=RefundLink.objects.visible_to(principal).values("refund_id"),
+                    )
+                    .select_related("refund_link")
+                    .order_by("pk")
                 )
-                .select_related("refund_link")
-                .order_by("pk")
-            )
         count = max(2, len(existing))
         if self.data:
             try:

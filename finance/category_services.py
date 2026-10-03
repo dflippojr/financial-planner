@@ -292,6 +292,18 @@ def set_transfer_window_days(principal, days):
     return household
 
 
+def _refresh_household_transfer_pairs(person):
+    household = current_household(person)
+    if household is None:
+        refresh_transfer_pairs(person, actor=person)
+        return
+    member_ids = Membership.objects.filter(household=household, ended_at__isnull=True).values_list(
+        "person_id", flat=True
+    )
+    for member in Person.objects.filter(pk__in=list(member_ids)).order_by("pk"):
+        refresh_transfer_pairs(member, actor=person)
+
+
 def _accounts_share_a_viewer(account_a, account_b):
     if account_a.pk == account_b.pk:
         return False
@@ -831,43 +843,74 @@ def _linked_original_refunds(parent):
         Transaction.objects.filter(
             refund_link__original=parent,
             status=Transaction.Status.ACTIVE,
-        ).select_related("account", "category", "refund_link")
+        )
+        .select_related("account", "category", "refund_link")
+        .order_by("pk")
     )
 
 
-def _apply_refund_assignments(person, refunds, created_parts, refund_assignments):
-    if not refunds:
-        return
-    if refund_assignments is None:
-        raise ValidationError(SPLIT_PART_REQUIRED)
-    assigned = {}
-    for refund in refunds:
-        raw = refund_assignments.get(refund.pk, refund_assignments.get(str(refund.pk)))
-        if raw is None:
-            raise ValidationError(SPLIT_PART_REQUIRED)
-        try:
-            index = int(raw)
-        except (TypeError, ValueError) as exc:
-            raise ValidationError(SPLIT_PART_REQUIRED) from exc
-        if index not in created_parts:
-            raise ValidationError(SPLIT_PART_REQUIRED)
-        assigned[refund.pk] = created_parts[index]
-    for refund in refunds:
-        part = assigned[refund.pk]
-        previous = refund.category
-        refund.category = part.category
-        refund.category_source = Transaction.CategorySource.INHERITED
-        refund.save(update_fields=("category", "category_source", "updated_at"))
-        link = refund.refund_link
-        link.original_part = part
-        link.save(update_fields=("original_part",))
-        _record_text_history(
-            refund,
-            person,
-            TransactionCorrectionHistory.Field.CATEGORY,
-            _history_label(previous),
-            _history_label(part.category),
+def _visible_linked_original_refund_ids(person, parent):
+    return set(
+        RefundLink.objects.visible_to(person)
+        .filter(
+            original=parent,
+            refund_id__in=Transaction.objects.visible_to(person)
+            .filter(status=Transaction.Status.ACTIVE)
+            .values("pk"),
         )
+        .values_list("refund_id", flat=True)
+    )
+
+
+def _partition_linked_refunds(person, refunds, parent):
+    visible_ids = _visible_linked_original_refund_ids(person, parent)
+    visible = [item for item in refunds if item.pk in visible_ids]
+    hidden = [item for item in refunds if item.pk not in visible_ids]
+    return visible, hidden
+
+
+def _default_part_for_hidden_refunds(created_parts):
+    return min(created_parts.values(), key=lambda part: (-abs(part.amount_minor), part.position))
+
+
+def _inherit_refund_part(person, refund, part):
+    previous = refund.category
+    refund.category = part.category
+    refund.category_source = Transaction.CategorySource.INHERITED
+    refund.save(update_fields=("category", "category_source", "updated_at"))
+    link = refund.refund_link
+    link.original_part = part
+    link.save(update_fields=("original_part",))
+    _record_text_history(
+        refund,
+        person,
+        TransactionCorrectionHistory.Field.CATEGORY,
+        _history_label(previous),
+        _history_label(part.category),
+    )
+
+
+def _apply_refund_assignments(person, visible_refunds, hidden_refunds, created_parts, refund_assignments):
+    assigned = {}
+    if visible_refunds:
+        if refund_assignments is None:
+            raise ValidationError(SPLIT_PART_REQUIRED)
+        for refund in visible_refunds:
+            raw = refund_assignments.get(refund.pk, refund_assignments.get(str(refund.pk)))
+            if raw is None:
+                raise ValidationError(SPLIT_PART_REQUIRED)
+            try:
+                index = int(raw)
+            except (TypeError, ValueError) as exc:
+                raise ValidationError(SPLIT_PART_REQUIRED) from exc
+            if index not in created_parts:
+                raise ValidationError(SPLIT_PART_REQUIRED)
+            assigned[refund.pk] = created_parts[index]
+    default_part = _default_part_for_hidden_refunds(created_parts) if hidden_refunds else None
+    for refund in visible_refunds:
+        _inherit_refund_part(person, refund, assigned[refund.pk])
+    for refund in hidden_refunds:
+        _inherit_refund_part(person, refund, default_part)
 
 
 def _replace_splits(parent, normalized):
@@ -903,6 +946,7 @@ def split_transaction(principal, txn_id, parts, refund_assignments=None):
     by_id = {item.pk: item for item in locked}
     financial_transaction = by_id[financial_transaction.pk]
     refunds = [by_id[item.pk] for item in refunds]
+    visible_refunds, hidden_refunds = _partition_linked_refunds(person, refunds, financial_transaction)
     if financial_transaction.is_excluded_transfer:
         raise ValidationError(SPLIT_TRANSFER_ERROR)
     if RefundLink.objects.filter(refund=financial_transaction).exists():
@@ -917,7 +961,7 @@ def split_transaction(principal, txn_id, parts, refund_assignments=None):
     financial_transaction.category = None
     financial_transaction.category_source = Transaction.CategorySource.SPLIT
     financial_transaction.save(update_fields=("category", "category_source", "updated_at"))
-    _apply_refund_assignments(person, refunds, created_parts, refund_assignments)
+    _apply_refund_assignments(person, visible_refunds, hidden_refunds, created_parts, refund_assignments)
     new_label = _split_history_label([created_parts[index] for index, _, _ in normalized])
     _record_text_history(
         financial_transaction,
@@ -926,6 +970,7 @@ def split_transaction(principal, txn_id, parts, refund_assignments=None):
         previous_label,
         new_label,
     )
+    _refresh_household_transfer_pairs(person)
     return financial_transaction
 
 
@@ -980,6 +1025,7 @@ def unsplit_transaction(principal, txn_id, category_id):
             _history_label(previous),
             _history_label(category),
         )
+    _refresh_household_transfer_pairs(person)
     return financial_transaction
 
 

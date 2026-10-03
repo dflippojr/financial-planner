@@ -469,3 +469,106 @@ def test_deleting_account_removes_splits_and_repairs_refund_links():
     refund.refresh_from_db()
     assert refund.category_id == groceries.pk
 
+
+@pytest.mark.django_db
+def test_split_hides_other_member_private_refund_and_assigns_largest_part():
+    from finance.forms import SplitTransactionForm
+
+    member_a = make_person("member_a")
+    member_b = make_person("member_b")
+    household = make_household(member_a, member_b)
+    groceries = household.categories.get(name="Groceries")
+    housing = household.categories.get(name="Housing")
+    shared = make_account(
+        member_a,
+        name="Synthetic Shared Checking",
+        scope=Account.Scope.HOUSEHOLD,
+        household=household,
+    )
+    private_a = make_account(member_a, name="Synthetic A Private")
+    purchase = make_transaction(
+        member_a,
+        shared,
+        amount_minor=-9000,
+        description="Synthetic shared warehouse",
+    )
+    refund = make_transaction(
+        member_a,
+        private_a,
+        transaction_date=date(2026, 3, 17),
+        amount_minor=1234,
+        description="Synthetic A private refund XYZ",
+    )
+    assign_category(member_a, purchase.pk, groceries.pk)
+    link_refund(member_a, refund.pk, purchase.pk)
+
+    form = SplitTransactionForm(principal=member_b, transaction=purchase)
+    assert form.refund_fields == []
+    form_text = " ".join(str(field.label) for field in form.fields.values())
+    assert "Synthetic A private refund XYZ" not in form_text
+    assert "2026-03-17" not in form_text
+    assert "12.34" not in form_text
+
+    client = Client()
+    client.force_login(member_b.user)
+    page = client.get(reverse("transaction-edit", args=(purchase.pk,)))
+    assert page.status_code == 200
+    body = page.content.decode()
+    assert "Synthetic A private refund XYZ" not in body
+    assert "2026-03-17" not in body
+    assert "12.34" not in body
+
+    response = client.post(
+        reverse("transaction-split", args=(purchase.pk,)),
+        {
+            "part_count": "2",
+            "part_0_category": str(groceries.pk),
+            "part_0_amount": "-60.00",
+            "part_1_category": str(housing.pk),
+            "part_1_amount": "-30.00",
+        },
+    )
+    assert response.status_code == 302
+    assert "Synthetic A private refund XYZ" not in response.content.decode()
+    purchase.refresh_from_db()
+    refund.refresh_from_db()
+    link = RefundLink.objects.get(refund=refund)
+    assert purchase.category_source == Transaction.CategorySource.SPLIT
+    assert refund.category_id == groceries.pk
+    assert link.original_part.category_id == groceries.pk
+
+
+@pytest.mark.django_db
+def test_splitting_suggested_transfer_leg_drops_pair_and_allows_rematch():
+    owner = make_person("owner")
+    household = make_household(owner)
+    groceries = household.categories.get(name="Groceries")
+    housing = household.categories.get(name="Housing")
+    checking = make_account(owner, name="Synthetic Checking")
+    savings = make_account(owner, name="Synthetic Savings", account_type=Account.Type.SAVINGS)
+    extra = make_account(owner, name="Synthetic Extra", account_type=Account.Type.SAVINGS)
+    outflow_a = make_transaction(owner, checking, amount_minor=-4000, description="Synthetic moved out a")
+    inflow = make_transaction(owner, savings, amount_minor=4000, description="Synthetic moved in")
+    outflow_b = make_transaction(owner, extra, amount_minor=-4000, description="Synthetic moved out b")
+    refresh_transfer_pairs(owner)
+    pair = TransferPair.objects.get(status=TransferPair.Status.SUGGESTED)
+    occupied = {pair.leg_a_id, pair.leg_b_id}
+    split_leg = outflow_a if outflow_a.pk in occupied else outflow_b
+    leftover = outflow_b if split_leg.pk == outflow_a.pk else outflow_a
+
+    split_transaction(
+        owner,
+        split_leg.pk,
+        (
+            {"category_id": groceries.pk, "amount_minor": -2500},
+            {"category_id": housing.pk, "amount_minor": -1500},
+        ),
+    )
+
+    pair.refresh_from_db()
+    assert pair.status == TransferPair.Status.UNDONE
+    rematch = TransferPair.objects.exclude(pk=pair.pk).get()
+    rematch_ids = {rematch.leg_a_id, rematch.leg_b_id}
+    assert rematch.status in (TransferPair.Status.SUGGESTED, TransferPair.Status.AUTO_MARKED)
+    assert rematch_ids == {inflow.pk, leftover.pk}
+
