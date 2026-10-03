@@ -91,6 +91,7 @@ def alerts_for(principal):
     kept = []
     rows = (
         Alert.objects.filter(recipient=person)
+        .exclude(kind=Alert.Kind.LARGE_TRANSACTION, account_id__isnull=True)
         .filter(Q(account_id__isnull=True) | Q(account_id__in=visible_accounts))
         .order_by("-created_at", "-pk")
     )

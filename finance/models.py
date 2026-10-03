@@ -1656,7 +1656,7 @@ class Alert(models.Model):
     dedupe_key = models.CharField(max_length=200)
     account = models.ForeignKey(
         Account,
-        on_delete=models.PROTECT,
+        on_delete=models.SET_NULL,
         null=True,
         blank=True,
         related_name="alerts",

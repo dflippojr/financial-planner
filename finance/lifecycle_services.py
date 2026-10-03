@@ -4,6 +4,7 @@ from django.utils import timezone
 
 from .models import (
     Account,
+    Alert,
     ImportBatch,
     Membership,
     Person,
@@ -420,6 +421,7 @@ def _repair_then_delete_account_rows(person, account):
         TransactionCorrectionHistory.objects.filter(transaction_id__in=tx_ids).delete()
         Transaction.objects.filter(pk__in=tx_ids).delete()
     ImportBatch.objects.filter(account_id=account.pk).delete()
+    Alert.objects.filter(account_id=account.pk).delete()
     account.delete()
 
 

@@ -21,7 +21,7 @@ class Migration(migrations.Migration):
                 ('dedupe_key', models.CharField(max_length=200)),
                 ('created_at', models.DateTimeField(auto_now_add=True)),
                 ('read_at', models.DateTimeField(blank=True, null=True)),
-                ('account', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name='alerts', to='finance.account')),
+                ('account', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='alerts', to='finance.account')),
                 ('recipient', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='alerts', to='finance.person')),
             ],
             options={

@@ -20,7 +20,7 @@ from finance.alert_services import (
 )
 from finance.budget_services import save_budget
 from finance.category_services import assign_category
-from finance.lifecycle_services import leave_household
+from finance.lifecycle_services import delete_account, leave_household
 from finance.models import (
     Account,
     Alert,
@@ -56,10 +56,17 @@ def make_household(*people, name="Synthetic Household"):
     return household
 
 
-def make_account(owner, *, name="Synthetic Checking", scope=Account.Scope.PRIVATE, household=None):
+def make_account(
+    owner,
+    *,
+    name="Synthetic Checking",
+    account_type=Account.Type.CHECKING,
+    scope=Account.Scope.PRIVATE,
+    household=None,
+):
     return Account.objects.create(
         name=name,
-        account_type=Account.Type.CHECKING,
+        account_type=account_type,
         owner=owner,
         scope=scope,
         household=household,
@@ -378,3 +385,21 @@ def test_daily_pass_rechecks_sync_from_scheduler_command():
     )
     call_command("sync_simplefin")
     assert Alert.objects.filter(recipient=owner, kind=Alert.Kind.SYNC).count() == 1
+
+
+@pytest.mark.django_db
+def test_account_with_large_transaction_alert_can_be_deleted():
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner)
+    txn = make_transaction(owner, checking, amount_minor=-80_000)
+    AlertSettings.objects.create(person=owner, large_transaction_minor=50_000)
+    raise_large_transaction_alerts([txn])
+    assert Alert.objects.filter(recipient=owner, account=checking).count() == 1
+    account_id = checking.pk
+
+    delete_account(owner, account_id)
+
+    assert not Account.objects.filter(pk=account_id).exists()
+    assert not Alert.objects.filter(recipient=owner, kind=Alert.Kind.LARGE_TRANSACTION).exists()
+    assert alerts_for(owner).count() == 0
