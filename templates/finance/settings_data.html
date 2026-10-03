@@ -1,0 +1,9 @@
+{% extends "finance/settings_base.html" %}
+{% block title %}Data · Financial Planner{% endblock %}
+{% block settings_content %}
+<h2 class="mb-4 text-xl font-semibold">Data</h2>
+<form method="post" action="{% url 'account-export' %}" class="mb-4">
+  {% csrf_token %}
+  <button type="submit" class="btn btn-outline">Export data</button>
+</form>
+{% endblock %}

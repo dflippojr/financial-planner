@@ -1,4 +1,4 @@
-"""Account-settings AI connection views."""
+"""Settings AI connection views."""
 
 from __future__ import annotations
 
@@ -64,13 +64,13 @@ def ai_settings_context(person):
 
 
 @require_POST
-@requires_recent_auth("connect-ai", form_url_name="account-settings")
+@requires_recent_auth("connect-ai", form_url_name="settings-ai")
 def ai_connect(request):
     person = get_object_or_404(Person, user=request.user)
     form = HarnessConnectForm(request.POST)
     if not form.is_valid():
         messages.error(request, "Enter a harness URL and an App token.")
-        return redirect("account-settings")
+        return redirect("settings-ai")
     try:
         connect_harness(
             person,
@@ -80,31 +80,31 @@ def ai_connect(request):
         messages.success(request, "Agent Harness is connected.")
     except (AiError, HarnessUrlError) as exc:
         messages.error(request, str(exc))
-    return redirect("account-settings")
+    return redirect("settings-ai")
 
 
 @require_POST
-@requires_recent_auth("disconnect-ai", form_url_name="account-settings")
+@requires_recent_auth("disconnect-ai", form_url_name="settings-ai")
 def ai_disconnect(request):
     person = get_object_or_404(Person, user=request.user)
     disconnect_harness(person)
     messages.success(request, "The AI connection was removed.")
-    return redirect("account-settings")
+    return redirect("settings-ai")
 
 
 @require_POST
-@requires_recent_auth("ai-defaults", form_url_name="account-settings")
+@requires_recent_auth("ai-defaults", form_url_name="settings-ai")
 def ai_save_defaults(request):
     person = get_object_or_404(Person, user=request.user)
     try:
         backends = discovered_backends(person)
     except AiError as exc:
         messages.error(request, str(exc))
-        return redirect("account-settings")
+        return redirect("settings-ai")
     form = AiDefaultsForm(request.POST, backends=backends)
     if not form.is_valid():
         messages.error(request, "Choose available backends for chat and background jobs.")
-        return redirect("account-settings")
+        return redirect("settings-ai")
     try:
         set_defaults(
             person,
@@ -116,4 +116,4 @@ def ai_save_defaults(request):
         messages.success(request, "AI backend defaults were saved.")
     except AiError as exc:
         messages.error(request, str(exc))
-    return redirect("account-settings")
+    return redirect("settings-ai")
