@@ -6,7 +6,6 @@ import json
 from datetime import date, datetime
 from urllib.parse import urlencode
 
-from django.db.models import Exists, OuterRef
 from django.urls import reverse
 from django.utils import timezone
 
@@ -23,7 +22,7 @@ from .cash_flow import (
 from .category_services import current_household
 from .models import Account, Category, PlannedItem, RecurringSeries, RecurringSeriesMember, Transaction
 from .net_worth import net_worth_report
-from .planning_services import projected_months_for
+from .planning_services import confine_recurring_series_to_accounts, projected_months_for
 from .policy_services import household_ai_allowed, may_use_ai
 
 MAX_TOOL_ROWS = 50
@@ -388,15 +387,10 @@ def recurring_series(person, args):
     url = reverse("recurring-review")
     rows = []
     figures = []
-    hidden = RecurringSeriesMember.objects.filter(series_id=OuterRef("pk")).exclude(
-        transaction__account_id__in=accounts.values("pk")
-    )
-    series_query = (
-        RecurringSeries.objects.visible_to(person)
-        .filter(is_active=True)
-        .exclude(Exists(hidden))
-        .order_by("display_name", "pk")
-    )
+    series_query = confine_recurring_series_to_accounts(
+        RecurringSeries.objects.visible_to(person).filter(is_active=True),
+        accounts,
+    ).order_by("display_name", "pk")
     shown = list(series_query[:MAX_TOOL_ROWS])
     for series in shown:
         rows.append(

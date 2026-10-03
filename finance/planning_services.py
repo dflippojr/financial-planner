@@ -1,11 +1,11 @@
 from types import SimpleNamespace
 
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.db.models import Max
+from django.db.models import Exists, Max, OuterRef
 
 from .cash_flow import cash_flow_report, selected_accounts
 from .category_services import current_household, exclusion_exists_for
-from .models import Account, PlannedItem, RecurringSeries, Transaction
+from .models import Account, PlannedItem, RecurringSeries, RecurringSeriesMember, Transaction
 from .projection import (
     DEFAULT_HORIZON,
     KIND_EXPENSE,
@@ -44,6 +44,22 @@ def _series_input(series, last_on):
         source=SOURCE_SERIES,
         source_id=series.pk,
     )
+
+
+def confine_recurring_series_to_accounts(series_qs, accounts):
+    """Keep a series only when every member already sits in `accounts`.
+
+    A mixed private/household series is dropped entirely when household
+    accounts are outside the allowed set, so its typical amount cannot leak.
+    """
+    if hasattr(accounts, "values"):
+        allowed_ids = accounts.values("pk")
+    else:
+        allowed_ids = [item.pk for item in accounts]
+    hidden = RecurringSeriesMember.objects.filter(series_id=OuterRef("pk")).exclude(
+        transaction__account_id__in=allowed_ids
+    )
+    return series_qs.exclude(Exists(hidden))
 
 
 def visible_projection_inputs(principal, *, account=None, scope="", accounts=None, include_household=True):
@@ -96,6 +112,27 @@ def visible_projection_inputs(principal, *, account=None, scope="", accounts=Non
         cancelled_at__isnull=True,
         members__transaction__in=eligible,
     )
+    if not include_household or accounts is not None:
+        if accounts is not None:
+            allowed = selected_accounts(
+                principal,
+                account=account,
+                scope=scope,
+                cash_flow_only=True,
+                accounts=accounts,
+            )
+        else:
+            allowed = selected_accounts(
+                principal,
+                account=account,
+                scope=scope,
+                cash_flow_only=True,
+                accounts=Account.objects.visible_to(principal).filter(
+                    scope=Account.Scope.PRIVATE,
+                    owner=_person(principal),
+                ),
+            )
+        series = confine_recurring_series_to_accounts(series, allowed)
     series_rows = (
         series.exclude(pk__in=replaced)
         .annotate(last_on=Max("members__transaction__transaction_date"))

@@ -1,9 +1,12 @@
 from datetime import date, timedelta
 import hashlib
 import json
+import threading
+from unittest.mock import patch
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.db import connection, connections
 from django.test import Client
 from django.urls import reverse
 from django.utils import timezone
@@ -19,6 +22,7 @@ from finance.ai_tools import (
     search_transactions,
     spending_by_category,
 )
+from finance.ai_types import ProviderResult, ToolResult
 from finance.budget_services import save_budget
 from finance.category_services import ensure_household_categories
 from finance.chat_services import (
@@ -464,6 +468,98 @@ def test_tools_hide_household_data_until_every_member_accepts_policy():
         blob = _tool_blob(result)
         assert result.ok
         assert any(marker in blob for marker in HOUSEHOLD_MARKERS), f"{name} missing household data after acceptance"
+
+
+MIXED_SERIES_NAME = "MIX-HH-SYN-SERIES"
+MIXED_SERIES_AMOUNT = 777001
+
+
+@pytest.mark.django_db
+def test_mixed_private_household_series_hidden_until_household_ai_allowed():
+    _user_a, person_a, household = make_member("alpha")
+    user_b = get_user_model().objects.create_user(username="beta", password=PASSWORD)
+    person_b = Person.objects.create(user=user_b, display_name="Beta Example")
+    Membership.objects.create(person=person_b, household=household)
+    shared = checking(person_a, household, "HH-SYN-SHARED-CHECKING")
+    private_a = checking(person_a, household, "Alpha Private", private=True)
+    household_txn = add_txn(shared, person_a, date(2026, 3, 4), -MIXED_SERIES_AMOUNT, MIXED_SERIES_NAME)
+    private_txn = add_txn(private_a, person_a, date(2026, 4, 4), -1100, MIXED_SERIES_NAME)
+    series = RecurringSeries.objects.create(
+        person=person_a,
+        merchant_key="mix hh syn series",
+        display_name=MIXED_SERIES_NAME,
+        cadence=RecurringSeries.Cadence.MONTHLY,
+        typical_amount_minor=-MIXED_SERIES_AMOUNT,
+        status=RecurringSeries.Status.CONFIRMED,
+        confidence=RecurringSeries.Confidence.HIGH,
+        reasons=["synthetic"],
+        fingerprint="b" * 64,
+    )
+    RecurringSeriesMember.objects.create(series=series, transaction=household_txn)
+    RecurringSeriesMember.objects.create(series=series, transaction=private_txn)
+    tools = default_tools()
+    markers = (MIXED_SERIES_NAME, str(MIXED_SERIES_AMOUNT))
+    for name, args in (("recurring_series", {}), ("projected_cash_flow", {"horizon": 3})):
+        result = run_tool(person_a, tools, name, args)
+        blob = _tool_blob(result)
+        for marker in markers:
+            assert marker not in blob, f"{name} leaked {marker} from a mixed series"
+        if name == "recurring_series":
+            assert shared.pk not in result.account_ids
+    accept_policy(person_b, current_policy())
+    for name, args in (("recurring_series", {}), ("projected_cash_flow", {"horizon": 3})):
+        result = run_tool(person_a, tools, name, args)
+        blob = _tool_blob(result)
+        assert result.ok
+        assert any(marker in blob for marker in markers), f"{name} missing mixed series after acceptance"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_concurrent_sends_keep_both_queried_account_ids(harness):
+    if connection.vendor != "postgresql":
+        pytest.skip("atomic conversation updates need PostgreSQL row locks")
+    _state, url = harness
+    _user, person, household = make_member("owner")
+    first = checking(person, household, "First Checking")
+    second = checking(person, household, "Second Checking")
+    add_txn(first, person, date(2026, 1, 4), -800, "Synthetic coffee")
+    add_txn(second, person, date(2026, 1, 5), -900, "Synthetic groceries")
+    connect_harness(person, base_url=url, token=TOKEN)
+    conversation = start_conversation(person)
+    barrier = threading.Barrier(2)
+    errors = []
+
+    def fake_run(_person, prompt, **kwargs):
+        allow_tool = kwargs["allow_tool"]
+        on_tool = kwargs["on_tool"]
+        account_id = first.pk if prompt.startswith("Query-A") else second.pk
+        barrier.wait(timeout=10)
+        denied = allow_tool("list_transactions", {"account_id": account_id})
+        if denied is None:
+            on_tool(ToolResult(text="{}", account_ids=(account_id,)))
+        barrier.wait(timeout=10)
+        return ProviderResult(ok=True, answer="ok")
+
+    def run(prompt):
+        try:
+            send_message(person, prompt, conversation_id=conversation.pk, sleep=lambda _s: None)
+        except Exception as exc:  # noqa: BLE001 - reported to the main thread
+            errors.append(exc)
+        finally:
+            connections.close_all()
+
+    with patch("finance.chat_services.run_conversation", side_effect=fake_run):
+        first_thread = threading.Thread(target=run, args=("Query-A first account",))
+        second_thread = threading.Thread(target=run, args=("Query-B second account",))
+        first_thread.start()
+        second_thread.start()
+        first_thread.join(timeout=30)
+        second_thread.join(timeout=30)
+    assert errors == []
+    conversation.refresh_from_db()
+    assert first.pk in conversation.used_account_ids
+    assert second.pk in conversation.used_account_ids
+    assert conversation.tool_call_count == 2
 
 
 @pytest.mark.django_db

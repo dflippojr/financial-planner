@@ -6,6 +6,7 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.core.exceptions import PermissionDenied
+from django.db import transaction
 from django.utils import timezone
 
 from .ai_jobs import _connection_marker
@@ -152,21 +153,23 @@ def send_message(principal, text, *, conversation_id=None, page_context=None, sl
         conversation = conversations_for(person).first()
     if conversation is None:
         conversation = _new_conversation(person, backend)
-    if conversation.turn_count >= max_turns():
-        raise AiError(TURN_LIMIT, LIMIT_REACHED)
-    if conversation.tool_call_count >= max_tool_calls():
-        raise AiError(TOOL_LIMIT, LIMIT_REACHED)
+    with transaction.atomic():
+        conversation = _lock_conversation(conversation.pk)
+        if conversation.turn_count >= max_turns():
+            raise AiError(TURN_LIMIT, LIMIT_REACHED)
+        if conversation.tool_call_count >= max_tool_calls():
+            raise AiError(TOOL_LIMIT, LIMIT_REACHED)
 
-    AiConversationMessage.objects.create(
-        conversation=conversation,
-        role=AiConversationMessage.Role.USER,
-        content=prompt,
-        page_context=context_payload,
-    )
-    conversation.turn_count += 1
-    if not conversation.title:
-        conversation.title = prompt[:80]
-    conversation.save(update_fields=("turn_count", "title", "updated_at"))
+        AiConversationMessage.objects.create(
+            conversation=conversation,
+            role=AiConversationMessage.Role.USER,
+            content=prompt,
+            page_context=context_payload,
+        )
+        conversation.turn_count += 1
+        if not conversation.title:
+            conversation.title = prompt[:80]
+        conversation.save(update_fields=("turn_count", "title", "updated_at"))
 
     if _out_of_scope(prompt):
         AiConversationMessage.objects.create(
@@ -181,18 +184,29 @@ def send_message(principal, text, *, conversation_id=None, page_context=None, sl
     cap = max_tool_calls()
 
     def allow_tool(_name, _args):
-        if conversation.tool_call_count >= cap:
-            return ToolResult(text=TOOL_LIMIT, ok=False)
+        with transaction.atomic():
+            locked = _lock_conversation(conversation.pk)
+            conversation.tool_call_count = locked.tool_call_count
+            conversation.used_account_ids = list(locked.used_account_ids or [])
+            if locked.tool_call_count >= cap:
+                return ToolResult(text=TOOL_LIMIT, ok=False)
+            locked.tool_call_count += 1
+            locked.save(update_fields=("tool_call_count", "updated_at"))
+            conversation.tool_call_count = locked.tool_call_count
         return None
 
     def on_tool(result: ToolResult):
-        conversation.tool_call_count += 1
         collected.append(result)
-        ids = list(conversation.used_account_ids or [])
-        for account_id in result.account_ids:
-            if account_id not in ids:
-                ids.append(account_id)
-        conversation.used_account_ids = ids
+        with transaction.atomic():
+            locked = _lock_conversation(conversation.pk)
+            ids = list(locked.used_account_ids or [])
+            for account_id in result.account_ids:
+                if account_id not in ids:
+                    ids.append(account_id)
+            locked.used_account_ids = ids
+            locked.save(update_fields=("used_account_ids", "updated_at"))
+            conversation.used_account_ids = ids
+            conversation.tool_call_count = locked.tool_call_count
 
     tools = default_tools()
     harness_context = _harness_context(context_payload)
@@ -206,9 +220,13 @@ def send_message(principal, text, *, conversation_id=None, page_context=None, sl
     session_id = saved_session if follow_up else ""
 
     def on_session(new_id):
-        conversation.harness_session_id = new_id
-        conversation.harness_connection = marker
-        conversation.save(update_fields=("harness_session_id", "harness_connection", "updated_at"))
+        with transaction.atomic():
+            locked = _lock_conversation(conversation.pk)
+            locked.harness_session_id = new_id
+            locked.harness_connection = marker
+            locked.save(update_fields=("harness_session_id", "harness_connection", "updated_at"))
+            conversation.harness_session_id = new_id
+            conversation.harness_connection = marker
 
     result = run_conversation(
         person,
@@ -226,17 +244,19 @@ def send_message(principal, text, *, conversation_id=None, page_context=None, sl
         on_tool=on_tool,
         allow_tool=allow_tool,
     )
-    conversation.backend = backend
-    conversation.save(
-        update_fields=(
-            "backend",
-            "used_account_ids",
-            "tool_call_count",
-            "harness_session_id",
-            "harness_connection",
-            "updated_at",
+    with transaction.atomic():
+        locked = _lock_conversation(conversation.pk)
+        locked.backend = backend
+        locked.harness_session_id = conversation.harness_session_id
+        locked.harness_connection = conversation.harness_connection
+        locked.save(
+            update_fields=("backend", "harness_session_id", "harness_connection", "updated_at")
         )
-    )
+        conversation.backend = locked.backend
+        conversation.used_account_ids = list(locked.used_account_ids or [])
+        conversation.tool_call_count = locked.tool_call_count
+        conversation.harness_session_id = locked.harness_session_id
+        conversation.harness_connection = locked.harness_connection
     figures = []
     for item in collected:
         figures.extend(item.figures)
@@ -258,6 +278,10 @@ def send_message(principal, text, *, conversation_id=None, page_context=None, sl
             notices=list(result.notices),
         )
     return conversation
+
+
+def _lock_conversation(pk):
+    return AiConversation.objects.select_for_update().get(pk=pk)
 
 
 def _new_conversation(person, backend):
