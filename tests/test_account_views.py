@@ -86,6 +86,20 @@ def test_empty_accounts_page_prompts_to_add_first_account():
 
 
 @pytest.mark.django_db
+def test_account_row_actions_use_visible_button_styles():
+    owner = make_person("owner")
+    account = make_account(owner, name="Synthetic Checking")
+    page = signed_in(owner).get(reverse("account-list")).content.decode()
+    balance_href = reverse("account-balances", args=(account.pk,))
+    delete_href = reverse("account-delete", args=(account.pk,))
+
+    assert f'class="btn btn-sm btn-outline" href="{balance_href}"' in page
+    assert f'class="btn btn-sm btn-outline btn-error ms-auto" href="{delete_href}"' in page
+    assert "btn-ghost text-error" not in page
+    assert page.index(balance_href) < page.index(delete_href)
+
+
+@pytest.mark.django_db
 def test_add_private_account_redirects_to_import():
     owner = make_person("owner")
     make_household(owner)

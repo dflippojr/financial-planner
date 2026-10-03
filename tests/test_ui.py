@@ -26,7 +26,16 @@ def test_daisy_widget_adds_control_classes_and_error_state():
     assert "textarea" in daisy_widget(bound["notes"])
     errored = _SampleForm({"name": "x", "kind": "a", "notes": ""})
     assert "textarea-error" in daisy_widget(errored["notes"])
-    assert "file-input" in daisy_widget(bound["csv_file"])
+
+
+def test_daisy_widget_file_fields_use_file_input_class():
+    html = daisy_widget(_SampleForm()["csv_file"])
+    assert "file-input" in html
+    assert "file-input-bordered" in html
+    assert "file-input-primary" in html
+    errored = _SampleForm(data={})
+    errored.add_error("csv_file", "Choose a CSV file.")
+    assert "file-input-error" in daisy_widget(errored["csv_file"])
 
 
 def test_form_include_keeps_field_names():
@@ -35,3 +44,5 @@ def test_form_include_keeps_field_names():
     assert 'name="name"' in html
     assert 'name="kind"' in html
     assert 'for="' in html
+    assert "file-input" in html
+    assert 'name="csv_file"' in html
