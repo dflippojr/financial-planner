@@ -1,0 +1,64 @@
+{% extends "finance/base.html" %}
+{% block title %}Import · Financial Planner{% endblock %}
+{% block content %}
+<h1 class="mb-4 text-2xl font-bold">Import</h1>
+<p class="mb-4 max-w-2xl opacity-80">Choose an account and a CSV file to continue into the existing preview and mapping flow. Per-account Import CSV on Accounts still works.</p>
+{% include "finance/_messages.html" %}
+{% if has_linked_accounts %}
+<p class="mb-4 max-w-2xl">Accounts marked Linked are connected through SimpleFIN. CSV history before the cut-over date stays; SimpleFIN supplies activity from that date forward. CSV rows on or after the cut-over can overlap linked data for that account.</p>
+{% endif %}
+<section class="card bg-base-100 shadow-sm mb-8 max-w-lg">
+  <div class="card-body">
+    <h2 class="card-title">Import CSV</h2>
+    {% if accounts %}
+    <form method="post" enctype="multipart/form-data">
+      {% csrf_token %}
+      <div class="mb-3">
+        <label class="label" for="id_account_id">
+          <span class="label-text">Account</span>
+        </label>
+        <select id="id_account_id" class="select select-bordered w-full" name="account_id" required>
+          <option value="">Select an account</option>
+          {% for account in accounts %}
+          <option value="{{ account.pk }}"{% if selected_account_id == account.pk|stringformat:"s" %} selected{% endif %}>
+            {{ account.name }}{% if account.simplefin_cutover %} (Linked){% endif %}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      {% if has_linked_accounts %}
+      <ul class="mb-3 text-sm opacity-80">
+        {% for account in accounts %}
+          {% if account.simplefin_cutover %}
+          <li>{{ account.name }}: CSV rows dated before {{ account.simplefin_cutover|date:"Y-m-d" }} stay as CSV history. Rows on or after that cut-over are in the SimpleFIN period.</li>
+          {% endif %}
+        {% endfor %}
+      </ul>
+      {% endif %}
+      {% include "finance/_form_fields.html" with form=upload_form %}
+      <button type="submit" class="btn btn-primary">Upload and map</button>
+    </form>
+    {% else %}
+    <p>Add an active checking, savings, credit card, or investment account before importing.</p>
+    {% endif %}
+  </div>
+</section>
+<section class="mb-6">
+  <h2 class="mb-3 text-xl font-semibold">Recent imports</h2>
+  {% if recent_batches %}
+  <ul class="space-y-3">
+    {% for batch in recent_batches %}
+    <li class="flex flex-wrap items-center gap-3">
+      <span>{{ batch.account.name }} · {{ batch.get_source_display }} {{ batch.date_range_start }}–{{ batch.date_range_end }}</span>
+      <form method="post" action="{% url 'csv-import-undo' batch.account_id batch.pk %}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-sm btn-outline">Undo this import</button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="opacity-80">No active imports yet.</p>
+  {% endif %}
+</section>
+{% endblock %}
