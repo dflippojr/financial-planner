@@ -107,6 +107,10 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      # The app applies migrations before it reports healthy; starting earlier
+      # can query tables a new release has not created yet.
+      app:
+        condition: service_healthy
     entrypoint: ["/app/scripts/run-simplefin-sync.sh"]
     # The image's HTTP health check probes Gunicorn, which this container does
     # not run. The scheduler loop is the main process, so the container stops
@@ -142,6 +146,10 @@ services:
       POSTGRES_PORT: "5432"
     depends_on:
       db:
+        condition: service_healthy
+      # The app applies migrations before it reports healthy; starting earlier
+      # can query tables a new release has not created yet.
+      app:
         condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"

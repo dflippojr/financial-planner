@@ -185,3 +185,14 @@ def test_ai_jobs_container_receives_every_ai_job_setting():
     block = compose[start : start + 1 + following.start()] if following else compose[start:]
     missing = [name for name in names if f"{name}:" not in block]
     assert missing == []
+
+
+def test_background_workers_wait_for_the_migrated_app():
+    import re
+
+    compose = (Path(__file__).resolve().parent.parent / "compose.yml").read_text()
+    for service in ("simplefin-sync", "ai-jobs"):
+        start = compose.index(f"  {service}:\n")
+        following = re.search(r"\n  [a-z][a-z0-9-]*:\n", compose[start + 1 :])
+        block = compose[start : start + 1 + following.start()] if following else compose[start:]
+        assert re.search(r"depends_on:\n(?:.*\n)*?\s+app:\n\s+condition: service_healthy", block), service

@@ -177,13 +177,13 @@ Use a fresh named volume so the old database remains available for investigation
 Review release notes and take a verified manual backup first. Then fetch the approved revision and run:
 
 ```powershell
-docker compose --env-file $Config build --pull app backup simplefin-sync
+docker compose --env-file $Config build --pull app backup simplefin-sync ai-jobs
 docker compose --env-file $Config up -d
 docker compose --env-file $Config ps
 Invoke-WebRequest https://BASEMENT-PC.MAGICDNS-NAME/health/
 ```
 
-Starting the new app applies all pending Django migrations before Gunicorn accepts traffic. If a migration or health check fails, inspect bounded logs with `docker compose --env-file $Config logs --tail 100 app db`; do not repeatedly restart or run migrations by hand. Restore the pre-upgrade dump into a fresh volume using the procedure above when database rollback is required.
+Starting the new app applies all pending Django migrations before Gunicorn accepts traffic. `simplefin-sync` and `ai-jobs` wait for the app to report healthy, so they never run against a database that has not been migrated yet. After `up -d`, compare each running container's image with the newly built one (`docker inspect -f '{{.Image}}' <container>` against `docker image inspect -f '{{.Id}}' <image>`). If one still runs the old image, as `backup` has done, recreate it with `docker compose --env-file $Config up -d --force-recreate <service>`. If a migration or health check fails, inspect bounded logs with `docker compose --env-file $Config logs --tail 100 app db`; do not repeatedly restart or run migrations by hand. Restore the pre-upgrade dump into a fresh volume using the procedure above when database rollback is required.
 
 ## Synthetic restore exercise record
 
