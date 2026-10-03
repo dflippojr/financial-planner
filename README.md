@@ -390,6 +390,7 @@ check when the SonarCloud quality gate fails (including 80% coverage on new code
 | [Deployment](docs/deployment.md) | Home server deployment, backup, and restore |
 | [Backlog](docs/backlog.md) | Milestones and issue roadmap |
 | [Account connections research](docs/research/account-connections.md) | SimpleFIN, Plaid, and alternatives |
+| [Sign in with ChatGPT research](docs/research/sign-in-with-chatgpt.md) | Per-member ChatGPT plan as an AI backend (#92) |
 | [Agent guide](AGENTS.md) | Rules for AI agents working in this repository |
 
 ## License and security
