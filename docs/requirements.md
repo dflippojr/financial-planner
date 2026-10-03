@@ -170,6 +170,19 @@ Same 439 rows and 282 negative amounts as the native file, so the same transacti
 - Amounts may vary by up to 25% within a series, measured against the selected cadence chain's own median rather than the whole merchant cluster. Detection picks a cadence chain for a merchant first, then applies that 25% band. When the chosen chain fails the band, the member farthest from that chain's median is left out of this pick (not marked used) and the chain is picked again, repeating until a chain passes or fewer than two candidates remain; only then does detection fall back to clustering remaining charges by amount. Exact amounts get higher confidence than varying ones.
 - Confirmed series appear on their own Recurring page, with monthly and annual totals, linked from the dashboard. Summary cards show those totals and the largest confirmed series is listed first (issue #57). A confirmed series stays matched only to suggestions in its own amount cluster (within 25% of that series' typical amount, not a pairwise median with a second cluster) and is never reassigned onto another cluster or given a colliding fingerprint. Refresh keeps a confirmed series active while at least one of its occurrences is still eligible; it deactivates the series (clears members, drops it from totals, keeps the confirmation) only when none remain. An eligible leftover occurrence is enough even when detection can no longer form a chain. A later eligible chain of the same merchant, cadence, and amount band can reactivate it.
 
+## Recurring series grouping (2026-10-03, #124)
+
+These rules replace the whole-chain median band above. Prices drift with inflation, and a fixed 25% band around one median splits a single bill into several series over time.
+
+- The 25% amount band is measured between neighbouring charges. Each charge after the first in a chain must be within 25% of the median of the up to two charges before it, in date order. Gradual drift and single step changes stay in one series. Two concurrent plans at clearly different prices from one merchant stay separate. Outlier removal and the amount-clustering fallback (#50) apply to this rolling band.
+- A series' typical amount is its recent price: the median of its latest three occurrences, or of all of them if there are fewer. Monthly and annual totals, matching a confirmed series to new suggestions, the projection, and export all use it.
+- Members correct grouping on the Recurring page, on their own series, whether confirmed or suggested:
+  - **Merge** one series into another, even across merchant keys. The target keeps its cadence and name, and becomes confirmed if either series was confirmed. The source series is deleted.
+  - **Remove** a charge from a series. The charge is then excluded from recurring detection for that person until it is added back by hand.
+  - **Add** an eligible charge that is not in another active series.
+- Manual edits survive refresh. Members are marked as detected or manual. Refresh adds detected chains to a series and never drops manual members. A detected chain that shares any charge with an existing active series attaches to that series. Manual members follow the same eligibility and revalidation rules as detected ones, including account deletion and sharing changes.
+- Export includes each member's source and the person's excluded charges.
+
 ## Spending by category decisions (2026-09-30, #10)
 
 - The default range and presets match the cash flow view: the last 12 full months plus the current month to date. Presets are this month, last month, last 3 months, last 12 months, and year to date.
