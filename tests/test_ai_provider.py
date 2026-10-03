@@ -926,3 +926,33 @@ def test_resume_delay_counts_from_when_the_wait_ended(harness, settings):
     job.refresh_from_db()
     assert job.status == job.Status.QUEUED
     assert job.next_attempt_at >= timezone.now() + timedelta(seconds=290)
+
+
+@pytest.mark.django_db
+def test_connect_refuses_when_the_dedicated_project_is_missing(harness):
+    state, url = harness
+    state.projects = [{"name": "personal-code", "description": "", "target": "local"}]
+    _user, person, _household = make_member("owner")
+
+    with pytest.raises(AiError) as caught:
+        connect_harness(person, base_url=url, token=TOKEN)
+
+    assert "financial-planner" in str(caught.value)
+    assert connection_for(person) is None
+
+
+@pytest.mark.django_db
+def test_unreadable_token_shows_reconnect_and_disconnect_still_works(harness):
+    _state, url = harness
+    user, person, _household = make_member("owner")
+    connect_harness(person, base_url=url, token=TOKEN)
+    AiProviderConnection.objects.filter(owner=person).update(encrypted_token=b"not-a-valid-ciphertext")
+    client = Client()
+    client.force_login(user)
+
+    page = client.get(reverse("account-settings"))
+    assert b"Disconnect it and connect again" in page.content
+
+    stamp_recent_auth(client)
+    client.post(reverse("ai-disconnect"))
+    assert connection_for(person) is None
