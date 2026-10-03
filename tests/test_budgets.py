@@ -434,3 +434,22 @@ def test_add_edit_archive_and_reset_confirmation():
     client.post(reverse("budget-archive", args=[budget.pk]), {"month": "2026-10"})
     budget.refresh_from_db()
     assert budget.status == Budget.Status.ARCHIVED
+
+
+@pytest.mark.django_db
+def test_resetting_the_same_month_again_counts_in_the_new_rollover_period():
+    owner = make_person("owner")
+    household = make_household(owner)
+    groceries = household.categories.get(name="Groceries")
+    budget = add_budget(owner, category=groceries, amount_minor=10_000, month=date(2026, 1, 1), rollover=True)
+    reset_budget_rollover(owner.user, budget, month=date(2026, 6, 1))
+    set_budget_rollover(owner.user, budget, False, month=date(2026, 6, 1))
+    set_budget_rollover(owner.user, budget, True, month=date(2026, 3, 1))
+    budget.refresh_from_db()
+
+    reset_budget_rollover(owner.user, budget, month=date(2026, 6, 1))
+
+    cards = {card.budget.pk: card for card in month_budget_cards(owner.user, date(2026, 7, 1))}
+    # The June reset is part of the current period again: only June's leftover carries.
+    assert cards[budget.pk].carry_minor == 10_000
+    assert BudgetRolloverReset.objects.filter(budget=budget, month=date(2026, 6, 1)).count() == 1

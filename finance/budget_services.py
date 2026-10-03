@@ -376,11 +376,10 @@ def reset_budget_rollover(principal, budget, *, month):
     month = month_start(month)
     try:
         with transaction.atomic():
-            BudgetRolloverReset.objects.update_or_create(
-                budget=budget,
-                month=month,
-                defaults={"actor": person},
-            )
+            # Replace rather than update, so created_at marks this reset and it counts
+            # in the current rollover period (which ignores resets created earlier).
+            BudgetRolloverReset.objects.filter(budget=budget, month=month).delete()
+            BudgetRolloverReset.objects.create(budget=budget, month=month, actor=person)
     except IntegrityError as exc:
         raise ValidationError("Could not reset rollover for this month.") from exc
     return budget
