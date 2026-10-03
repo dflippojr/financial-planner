@@ -87,7 +87,10 @@
         <li class="menu-title">Planning</li>
         {% endif %}
         <li>
-          <a href="{{ item.url }}"{% if item.active %} class="menu-active" aria-current="page"{% endif %}>{{ item.label }}</a>
+          <a href="{{ item.url }}"{% if item.active %} class="menu-active" aria-current="page"{% endif %}>
+            {{ item.label }}
+            {% if item.unread %}<span class="badge badge-sm">{{ item.unread }}</span>{% endif %}
+          </a>
         </li>
         {% endfor %}
       </ul>
