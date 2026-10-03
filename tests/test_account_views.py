@@ -80,7 +80,9 @@ def test_empty_accounts_page_prompts_to_add_first_account():
     assert "Currency" not in content
     accounts_item = next(item for item in response.context["nav_items"] if item["label"] == "Accounts")
     import_item = next(item for item in response.context["nav_items"] if item["label"] == "Import")
-    assert accounts_item["url"] == import_item["url"] == reverse("account-list")
+    assert accounts_item["url"] == reverse("account-list")
+    assert import_item["url"] == reverse("csv-import")
+    assert import_item["url"] != accounts_item["url"]
     assert accounts_item["active"]
     assert not import_item["active"]
 
@@ -353,12 +355,13 @@ def test_get_mutations_are_rejected():
 
 
 @pytest.mark.django_db
-def test_import_nav_points_to_accounts_when_an_account_exists():
+def test_import_nav_points_to_import_page_when_an_account_exists():
     owner = make_person("owner")
     make_account(owner)
     home = signed_in(owner).get(reverse("home"))
     import_item = next(item for item in home.context["nav_items"] if item["label"] == "Import")
-    assert import_item["url"] == reverse("account-list")
+    assert import_item["url"] == reverse("csv-import")
+    assert import_item["url"] != reverse("account-list")
     assert reverse("home") != import_item["url"]
 
 
