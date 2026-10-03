@@ -170,6 +170,26 @@ Same 439 rows and 282 negative amounts as the native file, so the same transacti
 - Amounts may vary by up to 25% within a series, measured against the selected cadence chain's own median rather than the whole merchant cluster. Detection picks a cadence chain for a merchant first, then applies that 25% band. When the chosen chain fails the band, the member farthest from that chain's median is left out of this pick (not marked used) and the chain is picked again, repeating until a chain passes or fewer than two candidates remain; only then does detection fall back to clustering remaining charges by amount. Exact amounts get higher confidence than varying ones.
 - Confirmed series appear on their own Recurring page, with monthly and annual totals, linked from the dashboard. Summary cards show those totals and the largest confirmed series is listed first (issue #57). A confirmed series stays matched only to suggestions in its own amount cluster (within 25% of that series' typical amount, not a pairwise median with a second cluster) and is never reassigned onto another cluster or given a colliding fingerprint. Refresh keeps a confirmed series active while at least one of its occurrences is still eligible; it deactivates the series (clears members, drops it from totals, keeps the confirmation) only when none remain. An eligible leftover occurrence is enough even when detection can no longer form a chain. A later eligible chain of the same merchant, cadence, and amount band can reactivate it.
 
+## Recurring series grouping (2026-10-03, #124)
+
+These rules replace the whole-chain median band above. Prices drift with inflation, and a fixed 25% band around one median splits a single bill into several series over time.
+
+- **The 25% band is measured between neighbouring charges.** Each charge after the first must be within 25% of the chain's current level: the median of the up to two accepted charges before it, in date order.
+  - **Confirmed price change.** A charge outside that band still belongs to the chain when the next charge is within 25% of it *and* outside the band of the old level. The level then resets to the new price.
+    - A charge that returns to the old price confirms nothing.
+    - The latest out-of-band charge, with no next charge yet, is treated as an outlier until a later charge confirms it.
+  - **Outliers.** A lone out-of-band charge that the next charge doesn't confirm is an outlier. Outlier removal and the amount-clustering fallback (#50) apply as before.
+  - **Result.**
+    - Gradual drift stays in one series. So do single step changes once confirmed: $20 then $27, $27; or $100, $120, $144, $144.
+    - Two concurrent plans at clearly different prices from one merchant stay separate, even when they are less than 50% apart. For example, $100 and $130 interleaved: each $100 that follows a $130 is back in the old band, so it never confirms the $130.
+- A series' typical amount is its recent price: the median of its latest three occurrences, or of all of them if there are fewer. Monthly and annual totals, matching a confirmed series to new suggestions, the projection, and export all use it.
+- Members correct grouping on the Recurring page, on their own series, whether confirmed or suggested:
+  - **Merge** one series into another, even across merchant keys. The target keeps its cadence and name, and becomes confirmed if either series was confirmed. The source series is deleted.
+  - **Remove** a charge from a series. The charge is then excluded from recurring detection for that person until it is added back by hand.
+  - **Add** an eligible charge that is not in another active series.
+- Manual edits survive refresh. Members are marked as detected or manual. Refresh adds detected chains to a series and never drops manual members. A detected chain that shares any charge with an existing active series attaches to that series. Manual members follow the same eligibility and revalidation rules as detected ones, including account deletion and sharing changes.
+- Export includes each member's source and the person's excluded charges.
+
 ## Spending by category decisions (2026-09-30, #10)
 
 - The default range and presets match the cash flow view: the last 12 full months plus the current month to date. Presets are this month, last month, last 3 months, last 12 months, and year to date.
@@ -434,3 +454,57 @@ Owner decisions:
 - **Recurring detection** uses the whole transaction.
 - **History.** Splitting and unsplitting are recorded in correction history.
 - **Reports.** Spending by category, trends, and budgets count each part in its own category. Cash flow totals are unchanged, because the parts add up to the transaction.
+
+## Notes and tags (2026-10-03, #98)
+
+Owner decisions:
+- **Notes.** A transaction can have one free-text note. Notes follow the transaction's visibility, so anyone who can see a household transaction sees its note. Editing a note is not recorded in correction history.
+- **Tags** are household-scoped, like categories. A transaction can have many.
+- **Filtering.** A tag filter is available on the transaction list, spending by category, and cash flow, so a trip total is one filter away.
+- **Reimports and export.** Notes and tags are never changed by a reimport, and both are included in the export.
+
+## Alerts (2026-10-03, #99)
+
+Owner decisions:
+- **Delivery in v1** is an in-app inbox only: an unread count in the nav and an Alerts page. No outside service.
+- **Alerts in v1:**
+  - a SimpleFIN sync failed, or a connection needs re-linking;
+  - a recurring charge's price changed or an expected charge is missing (raised by #102);
+  - a budget reached 90% or went over;
+  - a transaction was above a threshold the member sets.
+- **Who gets an alert.** One about a household account goes to every current member. One about a private account goes only to its owner. A member who leaves no longer sees household alerts.
+
+## Saved CSV mappings (2026-10-03, #101)
+
+Owner decisions:
+- **Scope.** Saved mappings are household-wide: any current member can use and edit them, like categories.
+- **Locked after the first import.** Once a mapping has imported a batch, none of its parsing fields can change: date, amount, sign, and description columns and formats. They all feed the reimport fingerprint (account, date, amount, description). Only the name and account default stay editable. A member makes a new mapping instead.
+
+## Recurring review (2026-10-03, #102)
+
+Owner decisions:
+- **Price changes.** A change is flagged when the latest charge differs from the series' recent typical amount (#124) by 10% or more.
+- **Cancelling.** A member can mark a series cancelled. It leaves totals and the projection, and its history stays. If a new matching charge arrives, it shows as "resumed?" for the member to confirm.
+- **Step changes** are covered by #124: a confirmed series follows step changes and gradual drift.
+
+## Monthly review (2026-10-03, #95)
+
+Owner decisions:
+- **Facts first.** A plain monthly review of computed facts ships first and works with AI off. AI phrasing follows as a later step.
+- **Alert.** Each month's review also arrives as an inbox alert (#99): "Your September review is ready".
+
+## Deleting a member's data (2026-10-03, #104)
+
+Owner decision: a member can delete their own data, self-service from settings.
+- **Before deleting:**
+  - It needs re-authentication and typing a confirmation.
+  - The member is offered an export first.
+- **What is deleted:** the member's private accounts and personal records.
+- **What stays:**
+  - Shared household data stays.
+  - The member appears as "former member" in shared history.
+- **Lent accounts.** For each household account the member has lent, they choose:
+  - hand it over to the household, so it becomes co-owned and stays; or
+  - delete it with their data.
+
+  Deletion can't proceed until each lent account has a choice.
