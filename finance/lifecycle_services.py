@@ -1,5 +1,6 @@
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
+from django.db.models import ProtectedError
 from django.utils import timezone
 
 from .models import (
@@ -696,16 +697,33 @@ def _delete_empty_household(household_id):
     PlannedItem.objects.filter(household_id=household_id).delete()
     SavingsGoal.objects.filter(household_id=household_id).delete()
     Budget.objects.filter(household_id=household_id).delete()
-    Tag.objects.filter(household_id=household_id).delete()
+    kept = _delete_unless_referenced(Tag.objects.filter(household_id=household_id))
     mapping_ids = list(SavedCsvMapping.objects.filter(household_id=household_id).values_list("pk", flat=True))
     if mapping_ids:
         ImportBatch.objects.filter(saved_csv_mapping_id__in=mapping_ids).update(saved_csv_mapping=None)
         Account.objects.filter(default_saved_csv_mapping_id__in=mapping_ids).update(default_saved_csv_mapping=None)
         SavedCsvMapping.objects.filter(pk__in=mapping_ids).delete()
-    Category.objects.filter(household_id=household_id).delete()
+    kept += _delete_unless_referenced(Category.objects.filter(household_id=household_id))
     Invitation.objects.filter(household_id=household_id).delete()
+    if kept:
+        # Former members' private transactions, splits, rules, or budgets still use
+        # some of these categories or tags. Keep them, and the empty household that
+        # holds them, rather than change another person's private data.
+        return
     Membership.objects.filter(household_id=household_id).delete()
     Household.objects.filter(pk=household_id).delete()
+
+
+def _delete_unless_referenced(queryset):
+    """Delete each row unless a PROTECT reference still points at it; return how many were kept."""
+    kept = 0
+    for row in queryset.order_by("pk"):
+        try:
+            with transaction.atomic():
+                row.delete()
+        except ProtectedError:
+            kept += 1
+    return kept
 
 
 def _delete_login_user(user):

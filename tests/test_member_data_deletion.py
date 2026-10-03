@@ -535,3 +535,28 @@ def test_every_protect_link_to_person_is_handled_by_member_data_deletion():
         if rel.on_delete is django_models.PROTECT
     }
     assert protected - handled == set()
+
+
+@pytest.mark.django_db
+def test_last_member_can_delete_data_while_a_former_member_still_uses_household_categories_and_tags():
+    from finance.category_services import assign_category
+    from finance.lifecycle_services import delete_member_data, leave_household
+    from finance.models import Tag, TransactionTag
+
+    former = make_person("former")
+    last = make_person("last")
+    household = make_household(former, last)
+    groceries = household.categories.get(name="Groceries")
+    tag = Tag.objects.create(household=household, name="Synthetic trip")
+    private = make_account(former, name="Synthetic Former Private")
+    txn = make_transaction(former, private, description="Synthetic grocer")
+    assign_category(former, txn.pk, groceries.pk)
+    TransactionTag.objects.create(transaction=txn, tag=tag)
+    leave_household(former.user)
+
+    delete_member_data(last)
+
+    assert not Person.objects.filter(pk=last.pk).exists()
+    txn.refresh_from_db()
+    assert txn.category_id == groceries.pk
+    assert TransactionTag.objects.filter(transaction=txn, tag=tag).exists()
