@@ -10,6 +10,7 @@ from django.views.decorators.http import require_http_methods, require_POST
 
 from .budget_services import (
     add_months,
+    amount_for,
     month_budget_cards,
     parse_month,
     reset_budget_rollover,
@@ -45,13 +46,11 @@ def _form(request, person, data=None, instance=None, *, month):
     household = current_household(person)
     initial = {"effective_month": month.isoformat()[:7], "scope": Budget.Scope.PRIVATE}
     if instance is not None and data is None:
-        latest = instance.amounts.filter(effective_month__lte=month).order_by("-effective_month").first()
-        if latest is None:
-            latest = instance.amounts.order_by("-effective_month").first()
+        amount_minor = amount_for(instance, month)
         initial = {
             "scope": instance.scope,
             "category": instance.category,
-            "amount": Decimal(latest.amount_minor) / Decimal(100) if latest else None,
+            "amount": Decimal(amount_minor) / Decimal(100) if amount_minor else None,
             "effective_month": month.isoformat()[:7],
             "rollover_enabled": instance.rollover_enabled,
         }
