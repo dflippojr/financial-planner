@@ -23,7 +23,7 @@ from .ai_types import AUTHORIZATION_REQUIRED, LOCAL_BACKEND, PROVIDER_ERROR, UNA
 from .ai_urls import HarnessUrlError, parse_harness_url
 from .encryption import decrypt_secret, encrypt_secret
 from .lifecycle_services import _DENIED, _person_for
-from .models import AiProviderConnection, AiUsageEvent
+from .models import AiJob, AiProviderConnection, AiUsageEvent
 from .policy_services import household_ai_allowed, may_use_ai
 from .category_services import current_household
 
@@ -81,12 +81,22 @@ def connect_harness(principal, *, base_url, token):
             "last_status": "",
         },
     )
+    _forget_saved_sessions(person)
     return connection
 
 
 def disconnect_harness(principal):
     person = _person_for(principal)
     AiProviderConnection.objects.owned_by(person).delete()
+    _forget_saved_sessions(person)
+
+
+def _forget_saved_sessions(person):
+    """Saved session ids belong to the old harness; never resume them on a new connection."""
+    AiJob.objects.filter(
+        member=person,
+        status__in=(AiJob.Status.QUEUED, AiJob.Status.WAITING_MODEL),
+    ).exclude(harness_session_id="").update(harness_session_id="", updated_at=timezone.now())
 
 
 def set_defaults(principal, *, chat_backend, background_backend, chat_model="", background_model=""):
