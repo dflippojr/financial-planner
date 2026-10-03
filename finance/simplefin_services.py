@@ -637,9 +637,9 @@ def _sync_connection_locked(principal, connection_id, *, ignore_rate_limit=False
     connection.last_sync_result = summary[:500]
     connection.disabled = False
     connection.save(update_fields=("last_sync_at", "last_sync_result", "disabled"))
-    from finance.alert_services import after_new_transactions
+    from finance.alert_services import schedule_after_new_transactions
 
-    after_new_transactions(synced)
+    schedule_after_new_transactions(synced)
     return {"imported": imported, "errors": errors, "result": connection.last_sync_result}, None
 
 

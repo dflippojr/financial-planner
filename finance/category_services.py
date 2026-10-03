@@ -232,9 +232,9 @@ def assign_category(principal, transaction_id, category_id):
             _history_label(previous_refund_category),
             _history_label(category),
         )
-    from finance.alert_services import after_category_change
+    from finance.alert_services import schedule_after_category_change
 
-    after_category_change()
+    schedule_after_category_change()
     return financial_transaction
 
 
@@ -974,9 +974,9 @@ def split_transaction(principal, txn_id, parts, refund_assignments=None):
         new_label,
     )
     _refresh_household_transfer_pairs(person)
-    from finance.alert_services import after_category_change
+    from finance.alert_services import schedule_after_category_change
 
-    after_category_change()
+    schedule_after_category_change()
     return financial_transaction
 
 
@@ -1032,9 +1032,9 @@ def unsplit_transaction(principal, txn_id, category_id):
             _history_label(category),
         )
     _refresh_household_transfer_pairs(person)
-    from finance.alert_services import after_category_change
+    from finance.alert_services import schedule_after_category_change
 
-    after_category_change()
+    schedule_after_category_change()
     return financial_transaction
 
 
@@ -1093,9 +1093,9 @@ def assign_split_part_category(principal, part_id, category_id):
             _history_label(previous),
             _history_label(category),
         )
-    from finance.alert_services import after_category_change
+    from finance.alert_services import schedule_after_category_change
 
-    after_category_change()
+    schedule_after_category_change()
     return part
 
 

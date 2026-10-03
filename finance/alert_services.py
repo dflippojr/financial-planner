@@ -2,6 +2,7 @@ from calendar import month_name
 from datetime import timedelta
 
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.db import transaction
 from django.db.models import Q
 from django.urls import reverse
 from django.utils import timezone
@@ -315,6 +316,20 @@ def after_new_transactions(transactions):
 
 def after_category_change():
     return evaluate_active_budget_alerts()
+
+
+def schedule_after_category_change():
+    transaction.on_commit(after_category_change)
+
+
+def schedule_after_new_transactions(transactions):
+    pks = [txn.pk for txn in transactions]
+
+    def _run():
+        rows = list(Transaction.objects.filter(pk__in=pks).select_related("account"))
+        after_new_transactions(rows)
+
+    transaction.on_commit(_run)
 
 
 def purge_old_read_alerts(*, now=None):
