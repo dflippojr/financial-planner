@@ -5,6 +5,7 @@ from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
 from django.db import models
 from django.db.models import F, Q
+from django.db.models.functions import Lower
 from django.utils import timezone
 
 
@@ -134,6 +135,42 @@ class Category(models.Model):
             models.CheckConstraint(
                 condition=Q(code__in=("custom", "uncategorized", "transfer")),
                 name="category_code_valid",
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
+class Tag(models.Model):
+    household = models.ForeignKey(Household, on_delete=models.PROTECT, related_name="tags")
+    name = models.CharField(max_length=80)
+    is_archived = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            person = _person_for(principal)
+            if person is None:
+                return self.none()
+            current_households = Membership.objects.filter(
+                person=person,
+                ended_at__isnull=True,
+            ).values("household_id")
+            return self.filter(household_id__in=current_households)
+
+        def active(self):
+            return self.filter(is_archived=False)
+
+    objects = QuerySet.as_manager()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                Lower("name"),
+                F("household"),
+                name="tag_unique_name_per_household",
             ),
         ]
 
@@ -291,7 +328,14 @@ class Transaction(ArchivableModel):
     amount_minor = models.BigIntegerField()
     currency = models.CharField(max_length=3, default="USD")
     description = models.TextField()
+    note = models.CharField(max_length=2000, blank=True, default="")
     kind = models.CharField(max_length=19, choices=Kind, default=Kind.CASH_FLOW)
+    tags = models.ManyToManyField(
+        Tag,
+        through="TransactionTag",
+        related_name="tagged_transactions",
+        blank=True,
+    )
     source_row_number = models.PositiveIntegerField()
     source_transaction_id = models.CharField(max_length=255, blank=True)
     fingerprint = models.CharField(max_length=64, validators=(sha256_validator,), db_index=True)
@@ -391,6 +435,19 @@ class Transaction(ArchivableModel):
         return TransferPair.objects.excluding_income_and_spending().filter(
             Q(leg_a=self) | Q(leg_b=self)
         ).exists()
+
+
+class TransactionTag(models.Model):
+    transaction = models.ForeignKey(Transaction, on_delete=models.CASCADE, related_name="tag_links")
+    tag = models.ForeignKey(Tag, on_delete=models.PROTECT, related_name="transaction_links")
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("transaction", "tag"), name="transaction_tag_unique"),
+        ]
+
+    def __str__(self):
+        return f"{self.transaction_id}:{self.tag_id}"
 
 
 class TransactionCorrectionHistory(models.Model):

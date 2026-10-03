@@ -44,7 +44,7 @@ AI decisions are in [requirements](requirements.md#ai-features-2026-10-02-90).
 - Remaining Rocket Money gaps:
   - [#96 budgets](https://github.com/dflippojr/financial-planner/issues/96) (decisions in requirements)
   - [#97 split transactions](https://github.com/dflippojr/financial-planner/issues/97) (decisions in requirements)
-  - [#98 notes and tags](https://github.com/dflippojr/financial-planner/issues/98)
+  - [#98 notes and tags](https://github.com/dflippojr/financial-planner/issues/98) (decisions in requirements)
   - [#99 alerts](https://github.com/dflippojr/financial-planner/issues/99)
   - [#100 category trends](https://github.com/dflippojr/financial-planner/issues/100)
   - [#101 saved CSV mappings](https://github.com/dflippojr/financial-planner/issues/101)

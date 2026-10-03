@@ -433,3 +433,11 @@ Owner decisions:
 - **Recurring detection** uses the whole transaction.
 - **History.** Splitting and unsplitting are recorded in correction history.
 - **Reports.** Spending by category, trends, and budgets count each part in its own category. Cash flow totals are unchanged, because the parts add up to the transaction.
+
+## Notes and tags (2026-10-03, #98)
+
+Owner decisions:
+- **Notes.** A transaction can have one free-text note. Notes follow the transaction's visibility, so anyone who can see a household transaction sees its note. Editing a note is not recorded in correction history.
+- **Tags** are household-scoped, like categories. A transaction can have many.
+- **Filtering.** A tag filter is available on the transaction list, spending by category, and cash flow, so a trip total is one filter away.
+- **Reimports and export.** Notes and tags are never changed by a reimport, and both are included in the export.

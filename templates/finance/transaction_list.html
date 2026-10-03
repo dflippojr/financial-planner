@@ -8,6 +8,28 @@
   <button type="submit" class="btn btn-primary">Filter</button>
   <a class="btn btn-ghost" href="{% url 'transaction-list' %}">Clear</a>
 </form>
+{% if list_totals %}
+<div class="mb-4 grid grid-cols-1 gap-4 md:grid-cols-3">
+  <article class="stats bg-base-100 shadow">
+    <div class="stat">
+      <h2 class="stat-title">Income</h2>
+      <p class="stat-value text-xl">{{ list_totals.income_display }}</p>
+    </div>
+  </article>
+  <article class="stats bg-base-100 shadow">
+    <div class="stat">
+      <h2 class="stat-title">Spending</h2>
+      <p class="stat-value text-xl">{{ list_totals.spending_display }}</p>
+    </div>
+  </article>
+  <article class="stats bg-base-100 shadow">
+    <div class="stat">
+      <h2 class="stat-title">Net</h2>
+      <p class="stat-value text-xl">{{ list_totals.net_display }}</p>
+    </div>
+  </article>
+</div>
+{% endif %}
 {% if show_ai_suggestions and uncategorized_filter %}
 <form method="post" action="{% url 'suggest-categories' %}" class="mb-4">
   {% csrf_token %}
@@ -56,7 +78,28 @@
       <tr>
         <td>{{ transaction.transaction_date }}</td>
         <td>{{ transaction.account.name }}</td>
-        <td>{{ transaction.description }}</td>
+        <td>
+          {{ transaction.description }}
+          {% if transaction.tags.all %}
+          <div class="mt-1 flex flex-wrap gap-1">
+            {% for tag in transaction.tags.all %}
+            <span class="badge badge-outline">{{ tag.name }}</span>
+            {% endfor %}
+          </div>
+          {% endif %}
+          {% if transaction.note %}
+          <div class="mt-1 text-sm opacity-80">
+            {% if transaction.note|length > 80 %}
+            <details>
+              <summary>{{ transaction.note|truncatechars:80 }}</summary>
+              {{ transaction.note }}
+            </details>
+            {% else %}
+            {{ transaction.note }}
+            {% endif %}
+          </div>
+          {% endif %}
+        </td>
         <td class="text-right">{% include "finance/_amount.html" with value=transaction.amount_display tone="" %}</td>
         <td>
           {{ transaction.category_display }}

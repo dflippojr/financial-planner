@@ -16,6 +16,7 @@ from .models import (
     Account,
     Budget,
     Category,
+    Tag,
     PlannedItem,
     RecurringSeries,
     RefundLink,
@@ -161,6 +162,7 @@ class TransactionFilterForm(forms.Form):
         choices=(("", "All categories"), ("uncategorized", "Uncategorized")),
     )
     q = forms.CharField(required=False, label="Description contains", max_length=200)
+    tag = forms.ModelChoiceField(queryset=Tag.objects.none(), required=False, empty_label="All tags")
     scope = forms.ChoiceField(
         required=False,
         choices=(
@@ -173,6 +175,7 @@ class TransactionFilterForm(forms.Form):
     def __init__(self, *args, principal=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["account"].queryset = Account.objects.visible_to(principal).order_by("name", "pk")
+        self.fields["tag"].queryset = Tag.objects.visible_to(principal).order_by("name", "pk")
         choices = [("", "All categories"), ("uncategorized", "Uncategorized"), ("transfer", "Transfer")]
         if principal is not None:
             from .category_services import assignable_categories
@@ -217,6 +220,7 @@ class CashFlowFilterForm(forms.Form):
         label="Projection horizon",
     )
     account = forms.ModelChoiceField(queryset=Account.objects.none(), required=False)
+    tag = forms.ModelChoiceField(queryset=Tag.objects.none(), required=False, empty_label="All tags")
     scope = forms.ChoiceField(
         required=False,
         choices=(
@@ -229,6 +233,7 @@ class CashFlowFilterForm(forms.Form):
     def __init__(self, *args, principal=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["account"].queryset = Account.objects.visible_to(principal).order_by("name", "pk")
+        self.fields["tag"].queryset = Tag.objects.visible_to(principal).order_by("name", "pk")
 
     def clean(self):
         cleaned = super().clean()
@@ -370,6 +375,7 @@ class SpendingFilterForm(forms.Form):
         initial="month",
     )
     account = forms.ModelChoiceField(queryset=Account.objects.none(), required=False)
+    tag = forms.ModelChoiceField(queryset=Tag.objects.none(), required=False, empty_label="All tags")
     scope = forms.ChoiceField(
         required=False,
         choices=(
@@ -385,6 +391,7 @@ class SpendingFilterForm(forms.Form):
             data["grouping"] = "month"
         super().__init__(data, *args, **kwargs)
         self.fields["account"].queryset = Account.objects.visible_to(principal).order_by("name", "pk")
+        self.fields["tag"].queryset = Tag.objects.visible_to(principal).order_by("name", "pk")
 
     def clean(self):
         cleaned = super().clean()
@@ -745,6 +752,41 @@ class AccountDeleteForm(forms.Form):
 
 class CategoryNameForm(forms.Form):
     name = forms.CharField(max_length=80)
+
+
+class TagNameForm(forms.Form):
+    name = forms.CharField(max_length=80)
+
+
+class TransactionNoteTagsForm(forms.Form):
+    note = forms.CharField(
+        required=False,
+        max_length=2000,
+        widget=forms.Textarea(attrs={"rows": 3}),
+    )
+    tags = forms.ModelMultipleChoiceField(
+        queryset=Tag.objects.none(),
+        required=False,
+        widget=forms.CheckboxSelectMultiple,
+        label="Tags",
+    )
+    new_tag = forms.CharField(required=False, max_length=80, label="Create tag")
+
+    def __init__(self, *args, principal=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["tags"].queryset = Tag.objects.visible_to(principal).active().order_by("name", "pk")
+
+    @classmethod
+    def for_transaction(cls, transaction, principal, *args, **kwargs):
+        return cls(
+            *args,
+            principal=principal,
+            initial={
+                "note": transaction.note,
+                "tags": list(transaction.tags.active().values_list("pk", flat=True)),
+            },
+            **kwargs,
+        )
 
 
 class TransferWindowForm(forms.Form):
