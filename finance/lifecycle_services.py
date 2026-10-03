@@ -462,5 +462,10 @@ def delete_account(principal, account_id):
         raise PermissionDenied(_DENIED)
     if not Account.objects.visible_to(person).filter(pk=account.pk).exists():
         raise PermissionDenied(_DENIED)
+    kept_id = account.pk
+    name = account.name
     _repair_then_delete_account_rows(person, account)
-    return account.name
+    from finance.chat_services import delete_conversations_for_account
+
+    delete_conversations_for_account(kept_id)
+    return name

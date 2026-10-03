@@ -116,6 +116,7 @@ def test_signed_in_pages_use_shared_nav_and_signed_out_pages_use_a_card():
         "Net worth",
         "Spending",
         "Transactions",
+        "Chat",
         "Transfers",
         "Recurring",
         "Accounts",

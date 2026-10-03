@@ -30,6 +30,11 @@
         </label>
       </div>
       <div class="flex-1 px-2 font-semibold">Financial Planner</div>
+      {% if user.is_authenticated %}
+      <div class="flex-none">
+        <label for="finance-chat-drawer" class="btn btn-ghost btn-sm">Chat</label>
+      </div>
+      {% endif %}
     </header>
     <main class="flex-1 p-4 lg:p-6">
       {% if privacy_policy_prompt %}
@@ -68,6 +73,9 @@
       {% block content %}{% endblock %}
 {% if user.is_authenticated and not auth_card_layout %}
     </main>
+    <div class="hidden lg:block">
+      <label for="finance-chat-drawer" class="btn btn-primary btn-sm fixed right-4 top-4 z-30">Chat</label>
+    </div>
   </div>
   <div class="drawer-side z-40">
     <label for="nav-drawer" class="drawer-overlay" aria-label="Close menu"></label>
@@ -119,6 +127,24 @@
     </div>
   </div>
 </div>
+<input id="finance-chat-drawer" type="checkbox" class="sr-only" aria-hidden="true">
+<aside id="finance-chat-panel" class="fixed inset-y-0 right-0 z-50 w-full max-w-md overflow-y-auto border-l border-base-300 bg-base-100 p-4 shadow-xl" aria-label="Chat">
+  <div class="mb-3 flex items-center justify-between">
+    <h2 class="font-semibold">Chat</h2>
+    <label for="finance-chat-drawer" class="btn btn-sm btn-ghost">Close</label>
+  </div>
+  {% if show_ai_features and chat_drawer %}
+    {% with conversation=chat_drawer.conversation chat_messages=chat_drawer.chat_messages conversations=chat_drawer.conversations chat_backend_label=chat_drawer.chat_backend_label chat_show_local=chat_drawer.chat_show_local chat_ready=chat_drawer.chat_ready page_context=chat_drawer.page_context chat_next=request.get_full_path %}
+    {% include "finance/_chat_thread.html" %}
+    {% endwith %}
+  {% else %}
+    <p class="text-sm">Connect an AI backend in <a class="link" href="{% url 'settings-ai' %}">Settings → AI</a> to chat about your data.</p>
+  {% endif %}
+</aside>
+<style>
+#finance-chat-panel { display: none; }
+#finance-chat-drawer:checked ~ #finance-chat-panel { display: block; }
+</style>
 {% else %}
     </div>
   </div>

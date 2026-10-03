@@ -12,7 +12,7 @@
   {% else %}
   <div{% if show_ai_features %} data-ai-ui="connected"{% endif %}>
     <p class="mb-2 text-sm">Connected to {{ ai_connection.base_url }}.</p>
-    <p class="mb-4 text-sm">Hosted backends stay listed but unavailable until Agent Harness app-tools-only sessions land. Chat defaults to a hosted backend when one is selectable; background jobs default to the local model when it is available.</p>
+    <p class="mb-4 text-sm">Chat can use a hosted backend that supports app-tools-only sessions (Claude). Background jobs still need hosted sessions enabled by the operator before they can use Claude, Codex, or Cursor. Chat on the local model stays hidden until it is evaluated.</p>
     {% if ai_backends %}
     <table class="table table-sm mb-4">
       <thead>

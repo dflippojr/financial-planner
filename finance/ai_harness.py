@@ -9,6 +9,7 @@ from django.conf import settings
 
 from .ai_http import HarnessHttpError, json_request
 from .ai_types import (
+    APP_TOOLS_ONLY_UNSUPPORTED,
     AUTHORIZATION_REQUIRED,
     HOSTED_BACKENDS,
     LIMIT_REACHED,
@@ -23,6 +24,8 @@ from .ai_types import (
 )
 
 HOSTED_UNAVAILABLE_REASON = "Hosted backends stay unavailable until Agent Harness app-tools-only sessions land."
+LOCAL_WARM_REFUSED = "The local model can't load right now."
+_SLEEPING_STATES = frozenset({"sleeping", "unloaded", "paused", "unreachable"})
 _POLL_INITIAL_DELAY_SECONDS = 0.5
 _POLL_MAX_DELAY_SECONDS = 5.0
 _DEFAULT_SESSION_TIMEOUT_SECONDS = 600
@@ -57,8 +60,11 @@ def describe_backend(item):
     logged_in = bool(item.get("logged_in", item.get("available", False)))
     harness_available = bool(item.get("available")) and policy_allowed and logged_in
     hosted = name in HOSTED_BACKENDS
-    selectable = harness_available and (not hosted or hosted_sessions_enabled())
-    if hosted and harness_available and not hosted_sessions_enabled():
+    app_tools_only = bool(item.get("app_tools_only"))
+    suits_background = harness_available and (not hosted or hosted_sessions_enabled())
+    suits_live = harness_available and app_tools_only
+    selectable = suits_live or suits_background
+    if hosted and harness_available and not selectable:
         status = HOSTED_UNAVAILABLE_REASON
     elif not harness_available:
         status = str(item.get("notice") or "Unavailable")
@@ -72,20 +78,21 @@ def describe_backend(item):
         logged_in=logged_in,
         supports_structured=True,
         supports_conversation=True,
-        suits_live=True,
-        suits_background=True,
+        suits_live=suits_live,
+        suits_background=suits_background,
         slow_to_start=slow,
         status=status,
         model=str(item.get("model") or ""),
+        app_tools_only=app_tools_only,
     )
 
 
 def default_backends(backends):
-    available = [item for item in backends if item.available]
-    hosted = [item for item in available if item.id in HOSTED_BACKENDS]
-    local = next((item for item in available if item.id == LOCAL_BACKEND), None)
-    chat = hosted[0].id if hosted else (local.id if local else "")
-    background = local.id if local else (chat if chat else "")
+    live = [item for item in backends if item.suits_live]
+    hosted_live = [item for item in live if item.id in HOSTED_BACKENDS]
+    local_bg = next((item for item in backends if item.id == LOCAL_BACKEND and item.suits_background), None)
+    chat = hosted_live[0].id if hosted_live else (live[0].id if live else "")
+    background = local_bg.id if local_bg else (chat if chat else "")
     return chat, background
 
 
@@ -109,6 +116,13 @@ def local_model_ready(statuses):
     return any(item.state == "ready" for item in local)
 
 
+def local_model_asleep(statuses):
+    local = [item for item in statuses if item.name]
+    if not local:
+        return True
+    return all(item.state in _SLEEPING_STATES for item in local)
+
+
 def warm_local_model(base_url, token):
     try:
         json_request(
@@ -120,6 +134,8 @@ def warm_local_model(base_url, token):
     except HarnessHttpError as exc:
         if exc.status in {401, 403}:
             return model_status(base_url, token)
+        if exc.status == 409:
+            raise
         raise
     return model_status(base_url, token)
 
@@ -130,22 +146,29 @@ def run_session(
     *,
     prompt,
     backend,
-    project,
+    project=None,
     model="",
     tools=None,
     tool_runner=None,
     on_session=None,
     sleep=None,
     monotonic=None,
+    tools_only=False,
+    context=None,
 ):
     payload = {
         "prompt": prompt,
         "backend": backend,
-        "project": project,
         "tools": [_tool_payload(spec) for spec in (tools or ())],
     }
+    if tools_only:
+        payload["tools_only"] = True
+    else:
+        payload["project"] = project
     if model:
         payload["model"] = model
+    if context:
+        payload["context"] = context
     created = json_request(
         urljoin(base_url + "/", "api/v1/sessions"),
         token=token,
@@ -165,6 +188,41 @@ def run_session(
         tool_runner=tool_runner,
         sleep=sleep,
         monotonic=monotonic,
+    )
+
+
+def send_session_message(
+    base_url,
+    token,
+    session_id,
+    content,
+    *,
+    tool_runner=None,
+    sleep=None,
+    monotonic=None,
+):
+    json_request(
+        urljoin(base_url + "/", f"api/v1/sessions/{session_id}/messages"),
+        token=token,
+        method="POST",
+        body={"content": content},
+    )
+    return wait_for_session(
+        base_url,
+        token,
+        session_id,
+        tool_runner=tool_runner,
+        sleep=sleep,
+        monotonic=monotonic,
+    )
+
+
+def add_session_context(base_url, token, session_id, context):
+    json_request(
+        urljoin(base_url + "/", f"api/v1/sessions/{session_id}/context"),
+        token=token,
+        method="POST",
+        body={"context": context},
     )
 
 
@@ -226,24 +284,29 @@ def _result_from_session(session):
         prompt_tokens=_int_or_none(session.get("prompt_tokens")),
         completion_tokens=_int_or_none(session.get("completion_tokens")),
     )
+    notices = _notices_from_session(session)
     if str(session.get("status") or "") == "done":
         return ProviderResult(
             ok=True,
             answer=str(session.get("answer") or ""),
             usage=usage,
             session_id=session_id,
+            notices=notices,
         )
-    return _failed(session, usage=usage, session_id=session_id)
+    return _failed(session, usage=usage, session_id=session_id, notices=notices)
 
 
-def _failed(session, usage=None, session_id=None):
+def _failed(session, usage=None, session_id=None, notices=()):
     failure = session.get("failure") if isinstance(session.get("failure"), dict) else {}
     code = map_harness_failure(failure.get("code"))
+    if str(failure.get("code") or "") == APP_TOOLS_ONLY_UNSUPPORTED:
+        code = APP_TOOLS_ONLY_UNSUPPORTED
     return ProviderResult(
         ok=False,
         failure_code=code or PROVIDER_ERROR,
         usage=usage or Usage(),
         session_id=session_id or str(session.get("id") or ""),
+        notices=notices,
     )
 
 
@@ -262,6 +325,21 @@ def failure_from_http(exc: HarnessHttpError) -> str:
     if exc.status == 0:
         return UNAVAILABLE
     return PROVIDER_ERROR
+
+
+def _notices_from_session(session):
+    notices = []
+    for item in session.get("billing_notices") or ():
+        if isinstance(item, str) and item.strip():
+            notices.append(item.strip())
+        elif isinstance(item, dict) and item.get("message"):
+            notices.append(str(item["message"]))
+    rate = session.get("rate_limit")
+    if isinstance(rate, dict) and rate.get("message"):
+        notices.append(str(rate["message"]))
+    elif isinstance(rate, str) and rate.strip():
+        notices.append(rate.strip())
+    return tuple(notices)
 
 
 def _tool_payload(spec):

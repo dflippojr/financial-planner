@@ -7,6 +7,8 @@ from django.core.exceptions import PermissionDenied
 from django.utils import timezone
 
 from .ai_harness import (
+    LOCAL_WARM_REFUSED,
+    add_session_context,
     default_backends,
     hosted_sessions_enabled,
     describe_backend,
@@ -15,6 +17,7 @@ from .ai_harness import (
     list_backends,
     model_status,
     run_session,
+    send_session_message,
     wait_for_session,
     warm_local_model,
 )
@@ -159,6 +162,8 @@ def warm_for_chat(principal):
     try:
         return warm_local_model(connection.base_url, _token(connection))
     except HarnessHttpError as exc:
+        if exc.status == 409:
+            raise AiError(LOCAL_WARM_REFUSED, UNAVAILABLE) from None
         raise AiError("The local model could not be warmed.", failure_from_http(exc)) from None
 
 
@@ -199,7 +204,12 @@ def run_conversation(
     on_session=None,
     sleep=None,
     monotonic=None,
+    tools_only=None,
+    context=None,
+    follow_up=False,
+    on_tool=None,
 ):
+    use_tools_only = bool(tools) if tools_only is None else bool(tools_only)
     return _run(
         principal,
         prompt,
@@ -211,6 +221,10 @@ def run_conversation(
         on_session=on_session,
         sleep=sleep,
         monotonic=monotonic,
+        tools_only=use_tools_only,
+        context=context,
+        follow_up=follow_up,
+        on_tool=on_tool,
     )
 
 
@@ -238,6 +252,10 @@ def _run(
     on_session=None,
     sleep=None,
     monotonic=None,
+    tools_only=False,
+    context=None,
+    follow_up=False,
+    on_tool=None,
 ):
     person = _person_for(principal)
     if not may_use_ai(person):
@@ -248,9 +266,9 @@ def _run(
     chosen = (backend or (connection.chat_backend if use_chat else connection.background_backend) or "").strip()
     if not chosen:
         return ProviderResult(ok=False, failure_code=AUTHORIZATION_REQUIRED)
-    # Enforced at run time, not only in settings: the operator may turn hosted
-    # sessions off after a member chose one, and queued work must not go out.
-    if chosen != LOCAL_BACKEND and not hosted_sessions_enabled():
+    # Project-based hosted sessions still need the operator flag. Tools-only
+    # chat uses the harness guarantee instead and may call claude without it.
+    if chosen != LOCAL_BACKEND and not tools_only and not hosted_sessions_enabled():
         return ProviderResult(ok=False, failure_code=UNAVAILABLE)
     try:
         token = _token(connection)
@@ -262,7 +280,10 @@ def _run(
     if tools:
 
         def runner(name, args):
-            return _invoke_tool(person, tools, name, args)
+            result = _invoke_tool(person, tools, name, args)
+            if on_tool is not None:
+                on_tool(result)
+            return result.text, result.ok
     known_session = {"id": session_id or ""}
 
     def track_session(new_id):
@@ -271,7 +292,19 @@ def _run(
             on_session(new_id)
 
     try:
-        if session_id:
+        if follow_up and session_id:
+            if context:
+                add_session_context(connection.base_url, token, session_id, context)
+            result = send_session_message(
+                connection.base_url,
+                token,
+                session_id,
+                prompt,
+                tool_runner=runner,
+                sleep=sleep,
+                monotonic=monotonic,
+            )
+        elif session_id:
             result = wait_for_session(
                 connection.base_url,
                 token,
@@ -286,13 +319,15 @@ def _run(
                 token,
                 prompt=prompt,
                 backend=chosen,
-                project=project,
+                project=None if tools_only else project,
                 model=model,
                 tools=tools,
                 tool_runner=runner,
                 on_session=track_session,
                 sleep=sleep,
                 monotonic=monotonic,
+                tools_only=tools_only,
+                context=context,
             )
     except HarnessHttpError as exc:
         # A transport or server error while polling says nothing about the session
