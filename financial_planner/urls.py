@@ -123,6 +123,7 @@ urlpatterns = [
         net_worth_views.account_snapshot_delete,
         name="account-snapshot-delete",
     ),
+    path("imports/", csv_import_views.csv_import_page, name="csv-import"),
     path("accounts/<int:account_id>/imports/preview/", csv_import_views.csv_preview, name="csv-import-preview"),
     path("accounts/<int:account_id>/imports/<int:batch_id>/undo/", csv_import_views.csv_undo_import, name="csv-import-undo"),
     path("transactions/", views.transaction_list, name="transaction-list"),

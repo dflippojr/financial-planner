@@ -23,6 +23,7 @@ from .models import (
     Category,
     ImportBatch,
     PrivacyPolicyAcceptance,
+    RecurringExclusion,
     RecurringSeries,
     RefundLink,
     Tag,
@@ -43,6 +44,7 @@ ENTITY_FILES = (
     "transaction_splits",
     "transaction_tags",
     "recurring_series",
+    "recurring_exclusions",
     "privacy_policy_acceptances",
     "ai_connections",
     "ai_jobs",
@@ -127,8 +129,10 @@ CSV_FIELDS = {
         "confidence",
         "is_active",
         "member_transaction_ids",
+        "member_sources",
         "fingerprint",
     ),
+    "recurring_exclusions": ("transaction_id",),
     "privacy_policy_acceptances": (
         "id",
         "policy_version",
@@ -296,7 +300,13 @@ recurring_series.csv / recurring_series.json
   transactions.
   id, merchant_key, display_name, cadence, typical_amount_minor,
   typical_amount_decimal, currency, status, confidence, is_active,
-  member_transaction_ids, fingerprint
+  member_transaction_ids, member_sources, fingerprint
+  member_sources is a JSON object mapping each member transaction id to
+  detected or manual.
+
+recurring_exclusions.csv / recurring_exclusions.json
+  Transaction ids this member excluded from recurring detection.
+  transaction_id
 
 balance_snapshots.csv / balance_snapshots.json
   Dated account balances (SimpleFIN or manual) for visible accounts:
@@ -606,10 +616,20 @@ def _recurring_series_rows(person):
                 "confidence": series.confidence,
                 "is_active": series.is_active,
                 "member_transaction_ids": member_ids,
+                "member_sources": {
+                    str(member.transaction_id): member.source for member in series.members.all()
+                },
                 "fingerprint": series.fingerprint,
             }
         )
     return rows
+
+
+def _recurring_exclusion_rows(person):
+    ids = RecurringExclusion.objects.filter(person=person).order_by("transaction_id").values_list(
+        "transaction_id", flat=True
+    )
+    return [{"transaction_id": pk} for pk in ids]
 
 
 def _privacy_acceptance_rows(person):
@@ -799,6 +819,7 @@ def collect_export_tables(person) -> dict[str, list[dict]]:
         "transaction_splits": _split_rows(person),
         "transaction_tags": _transaction_tag_rows(person, visible_txn_ids),
         "recurring_series": _recurring_series_rows(person),
+        "recurring_exclusions": _recurring_exclusion_rows(person),
         "privacy_policy_acceptances": _privacy_acceptance_rows(person),
         "ai_connections": _ai_connection_rows(person),
         "ai_jobs": _ai_job_rows(person),

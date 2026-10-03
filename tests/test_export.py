@@ -34,6 +34,7 @@ from finance.models import (
     ImportBatch,
     Membership,
     Person,
+    RecurringExclusion,
     RecurringSeries,
     RecurringSeriesMember,
     RefundLink,
@@ -226,6 +227,49 @@ def test_export_never_includes_another_members_private_data():
     assert secret_hash not in text
     refund_row = next(row for row in _json_rows(archive, "transactions") if row["id"] == refund.pk)
     assert refund_row["refund_original_id"] is None
+
+
+@pytest.mark.django_db
+def test_export_includes_member_sources_and_recurring_exclusions():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    rows = []
+    for index in range(3):
+        rows.append(
+            make_transaction(
+                owner,
+                account,
+                transaction_date=date(2026, 1 + index, 15),
+                amount_minor=-1599,
+                description="Synthetic Stream",
+            )
+        )
+    extra = make_transaction(
+        owner,
+        account,
+        transaction_date=date(2026, 4, 20),
+        amount_minor=-500,
+        description="Synthetic leftover",
+    )
+    refresh_recurring_series(owner)
+    series = RecurringSeries.objects.get()
+    RecurringSeriesMember.objects.filter(series=series, transaction=rows[0]).update(
+        source=RecurringSeriesMember.Source.MANUAL
+    )
+    RecurringExclusion.objects.create(person=owner, transaction=extra)
+
+    tables = collect_export_tables(owner)
+    payload = write_export_zip(owner)
+    archive = _zip_from_bytes(payload)
+    series_row = tables["recurring_series"][0]
+    readme = archive.read("README.txt")
+
+    assert series_row["member_sources"][str(rows[0].pk)] == "manual"
+    assert extra.pk in {row["transaction_id"] for row in tables["recurring_exclusions"]}
+    assert b"member_sources" in readme
+    assert b"recurring_exclusions" in readme
+    assert "recurring_exclusions.csv" in archive.namelist()
 
 
 @pytest.mark.django_db
