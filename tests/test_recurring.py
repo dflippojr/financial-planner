@@ -541,9 +541,16 @@ def test_member_cannot_confirm_another_persons_private_series():
     client = Client()
     client.force_login(member.user)
 
-    response = client.post(reverse("recurring-review"), {"series_id": series.pk, "action": "confirm"})
+    url = reverse("recurring-review")
+    confirm = client.post(url, {"series_id": series.pk, "action": "confirm"})
+    dismiss = client.post(url, {"series_id": series.pk, "action": "dismiss"})
+    picker = client.get(url, {"add_series": series.pk, "q": "secret"})
 
-    assert response.status_code == 404
+    assert confirm.status_code == dismiss.status_code == 404
+    assert picker.status_code == 200
+    assert picker.context["add_series_id"] is None
+    assert picker.context["add_candidates"] == []
+    assert b"Synthetic Secret Sub" not in picker.content
     series.refresh_from_db()
     assert series.status == RecurringSeries.Status.SUGGESTED
 
@@ -892,6 +899,60 @@ def test_interleaved_hundred_and_one_thirty_plans_stay_two_series():
     assert all(series.members.count() == 6 for series in RecurringSeries.objects.filter(person=owner))
 
 
+def _interleaved_hundred_and_one_thirty(owner, account):
+    hundred = add_monthly_charges(owner, account, description="Synthetic Twin Plan", amount_minor=-10000, count=6)
+    one_thirty = add_monthly_charges(
+        owner,
+        account,
+        description="Synthetic Twin Plan",
+        amount_minor=-13000,
+        count=6,
+        start=date(2026, 1, 20),
+    )
+    refresh_recurring_series(owner)
+    source = RecurringSeries.objects.get(person=owner, typical_amount_minor=-13000)
+    target = RecurringSeries.objects.get(person=owner, typical_amount_minor=-10000)
+    return hundred, one_thirty, source, target
+
+
+def _assert_merged_interleaved_survives_refresh(owner, hundred, one_thirty, surviving):
+    refresh_recurring_series(owner)
+    refresh_recurring_series(owner)
+    remaining = list(RecurringSeries.objects.filter(person=owner, is_active=True))
+    assert len(remaining) == 1
+    series = remaining[0]
+    assert series.pk == surviving.pk
+    member_ids = set(series.members.values_list("transaction_id", flat=True))
+    assert member_ids == {row.pk for row in hundred} | {row.pk for row in one_thirty}
+    assert not RecurringSeries.objects.filter(person=owner, typical_amount_minor=-13000).exclude(pk=series.pk).exists()
+    amounts = set(series.members.values_list("transaction__amount_minor", flat=True))
+    assert amounts == {-10000, -13000}
+
+
+@pytest.mark.django_db
+def test_merging_one_thirty_into_hundred_survives_refresh():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    hundred, one_thirty, source, target = _interleaved_hundred_and_one_thirty(owner, account)
+
+    merge_recurring_series(owner, source.pk, target.pk)
+
+    _assert_merged_interleaved_survives_refresh(owner, hundred, one_thirty, target)
+
+
+@pytest.mark.django_db
+def test_merging_hundred_into_one_thirty_survives_refresh():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    hundred, one_thirty, source, target = _interleaved_hundred_and_one_thirty(owner, account)
+
+    merge_recurring_series(owner, target.pk, source.pk)
+
+    _assert_merged_interleaved_survives_refresh(owner, hundred, one_thirty, source)
+
+
 @pytest.mark.django_db
 def test_six_twenties_then_two_twenty_sevens_is_one_series_at_the_new_price():
     owner = make_person("owner")
@@ -1195,6 +1256,18 @@ def test_grouping_actions_deny_another_members_series_and_private_transactions()
     assert hidden_picker.context["add_series_id"] is None
     assert hidden_picker.context["add_candidates"] == []
     assert b"Synthetic Secret" not in hidden_picker.content
+    owner_client = Client()
+    owner_client.force_login(owner.user)
+    other_member_picker = owner_client.get(url, {"add_series": member_series.pk, "q": "member"})
+    dismiss_other = owner_client.post(url, {"series_id": member_series.pk, "action": "dismiss"})
+    confirm_other = owner_client.post(url, {"series_id": member_series.pk, "action": "confirm"})
+    assert other_member_picker.status_code == 200
+    assert other_member_picker.context["add_series_id"] is None
+    assert other_member_picker.context["add_candidates"] == []
+    assert b"Synthetic Member Sub" not in other_member_picker.content
+    assert dismiss_other.status_code == confirm_other.status_code == 404
+    member_series.refresh_from_db()
+    assert member_series.status == RecurringSeries.Status.SUGGESTED
 
 
 @pytest.mark.django_db
@@ -1260,3 +1333,42 @@ def test_review_page_posts_merge_remove_and_add_for_the_signed_in_member():
     bad_remove = client.post(url, {"series_id": remaining.pk, "transaction_id": "nope", "action": "remove"})
     bad_add = client.post(url, {"series_id": remaining.pk, "transaction_id": "nope", "action": "add"})
     assert bad_target.status_code == bad_remove.status_code == bad_add.status_code == 404
+
+
+@pytest.mark.django_db
+def test_grouping_refuses_self_merge_dismissed_series_and_claimed_charges():
+    from django.core.exceptions import PermissionDenied
+
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    add_monthly_charges(owner, account, description="Synthetic Alpha", amount_minor=-1000)
+    add_monthly_charges(owner, account, description="Synthetic Beta", amount_minor=-2200, start=date(2026, 1, 20))
+    refresh_recurring_series(owner)
+    alpha = RecurringSeries.objects.get(person=owner, merchant_key="synthetic alpha")
+    beta = RecurringSeries.objects.get(person=owner, merchant_key="synthetic beta")
+    claimed = alpha.members.first().transaction_id
+
+    with pytest.raises(PermissionDenied):
+        merge_recurring_series(owner, alpha.pk, alpha.pk)
+    with pytest.raises(PermissionDenied):
+        add_recurring_members(owner, beta.pk, [claimed])
+
+    dismiss_recurring_series(owner, beta.pk)
+    with pytest.raises(PermissionDenied):
+        merge_recurring_series(owner, alpha.pk, beta.pk)
+    with pytest.raises(PermissionDenied):
+        add_recurring_members(owner, beta.pk, [claimed])
+    with pytest.raises(PermissionDenied):
+        remove_recurring_member(owner, beta.pk, beta.members.first().transaction_id)
+
+    client = Client()
+    client.force_login(owner.user)
+    url = reverse("recurring-review")
+    self_merge = client.post(url, {"series_id": alpha.pk, "target_id": alpha.pk, "action": "merge"})
+    dismissed_merge = client.post(url, {"series_id": alpha.pk, "target_id": beta.pk, "action": "merge"})
+    dismissed_add = client.post(url, {"series_id": beta.pk, "transaction_id": claimed, "action": "add"})
+    assert self_merge.status_code == dismissed_merge.status_code == dismissed_add.status_code == 404
+    assert RecurringSeries.objects.filter(pk=alpha.pk).exists()
+    assert RecurringSeries.objects.filter(pk=beta.pk, status=RecurringSeries.Status.DISMISSED).exists()
+    assert RecurringSeriesMember.objects.filter(series=alpha, transaction_id=claimed).exists()

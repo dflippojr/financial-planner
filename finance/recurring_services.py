@@ -510,18 +510,26 @@ def _recompute_series_from_members(series, *, extra_reasons=()):
     return series
 
 
+def _detected_items(detected):
+    if isinstance(detected, DetectedSeries):
+        return (detected,)
+    return tuple(detected)
+
+
 def _apply_detection(series, detected, *, eligible_ids, preserve_identity=False):
+    items = _detected_items(detected)
+    primary = items[0]
     if not preserve_identity:
-        series.merchant_key = detected.merchant_key
-        series.display_name = detected.display_name
-        series.cadence = detected.cadence
-    series.currency = detected.currency
+        series.merchant_key = primary.merchant_key
+        series.display_name = primary.display_name
+        series.cadence = primary.cadence
+    series.currency = primary.currency
+    chain_ids = {pk for item in items for pk in item.transaction_ids}
     RecurringSeriesMember.objects.filter(series=series).exclude(transaction_id__in=eligible_ids).delete()
-    if not preserve_identity:
-        RecurringSeriesMember.objects.filter(
-            series=series,
-            source=RecurringSeriesMember.Source.DETECTED,
-        ).exclude(transaction_id__in=detected.transaction_ids).delete()
+    RecurringSeriesMember.objects.filter(
+        series=series,
+        source=RecurringSeriesMember.Source.DETECTED,
+    ).exclude(transaction_id__in=chain_ids).delete()
     claimed_elsewhere = _active_member_transaction_ids(series.person, exclude_series_id=series.pk)
     existing_ids = set(series.members.values_list("transaction_id", flat=True))
     RecurringSeriesMember.objects.bulk_create(
@@ -530,7 +538,7 @@ def _apply_detection(series, detected, *, eligible_ids, preserve_identity=False)
             transaction_id=pk,
             source=RecurringSeriesMember.Source.DETECTED,
         )
-        for pk in detected.transaction_ids
+        for pk in chain_ids
         if pk in eligible_ids and pk not in claimed_elsewhere and pk not in existing_ids
     )
     extra = []
@@ -614,6 +622,35 @@ def _confirmed_target(person, item, confirmed, kept_ids):
     if target is not None and _fingerprint_taken(person, item.fingerprint, exclude_pk=target.pk):
         return None
     return target
+
+
+def _apply_overlapping_detections(confirmed, open_rows, detected, *, dismissed_fingerprints, kept_ids, eligible_ids):
+    """Attach every overlapping chain for a series before pruning detected members.
+
+    Refresh detects $100 and $130 as two clusters. After a merge both still
+    overlap the surviving series; applying either cluster with deletion would
+    drop the other amount's detected members and undo the merge.
+    """
+    pending = defaultdict(list)
+    unmatched = []
+    owners = confirmed + open_rows
+    for item in detected:
+        if item.fingerprint in dismissed_fingerprints:
+            continue
+        overlap = _overlapping_owner(owners, item)
+        if overlap is None:
+            unmatched.append(item)
+            continue
+        pending[overlap.pk].append(item)
+    by_pk = {series.pk: series for series in owners}
+    for series_pk, items in pending.items():
+        series = by_pk[series_pk]
+        preserve_identity = any(
+            series.merchant_key != item.merchant_key or series.cadence != item.cadence for item in items
+        )
+        _apply_detection(series, items, eligible_ids=eligible_ids, preserve_identity=preserve_identity)
+        kept_ids.add(series.pk)
+    return unmatched
 
 
 def _upsert_detected(
@@ -744,7 +781,15 @@ def refresh_recurring_series(principal):
     kept_ids = {series.pk for series in existing if series.status == RecurringSeries.Status.DISMISSED}
     open_by_fingerprint = {series.fingerprint: series for series in open_rows}
     eligible_ids = {row.pk for row in candidates}
-    for item in detected:
+    unmatched = _apply_overlapping_detections(
+        confirmed,
+        open_rows,
+        detected,
+        dismissed_fingerprints=dismissed_fingerprints,
+        kept_ids=kept_ids,
+        eligible_ids=eligible_ids,
+    )
+    for item in unmatched:
         _upsert_detected(
             person,
             item,
