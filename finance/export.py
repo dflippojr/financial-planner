@@ -128,6 +128,8 @@ CSV_FIELDS = {
         "status",
         "confidence",
         "is_active",
+        "cancelled_at",
+        "acknowledged_amount_minor",
         "member_transaction_ids",
         "member_sources",
         "fingerprint",
@@ -300,7 +302,8 @@ recurring_series.csv / recurring_series.json
   transactions.
   id, merchant_key, display_name, cadence, typical_amount_minor,
   typical_amount_decimal, currency, status, confidence, is_active,
-  member_transaction_ids, member_sources, fingerprint
+  cancelled_at, acknowledged_amount_minor, member_transaction_ids,
+  member_sources, fingerprint
   member_sources is a JSON object mapping each member transaction id to
   detected or manual.
 
@@ -615,6 +618,8 @@ def _recurring_series_rows(person):
                 "status": series.status,
                 "confidence": series.confidence,
                 "is_active": series.is_active,
+                "cancelled_at": series.cancelled_at,
+                "acknowledged_amount_minor": series.acknowledged_amount_minor,
                 "member_transaction_ids": member_ids,
                 "member_sources": {
                     str(member.transaction_id): member.source for member in series.members.all()
