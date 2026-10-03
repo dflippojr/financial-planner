@@ -168,3 +168,20 @@ def test_the_simplefin_scheduler_does_not_inherit_the_web_health_check():
 
     # It runs no web server, so the image's HTTP probe would always fail.
     assert "healthcheck:\n      disable: true" in scheduler
+
+
+def test_ai_jobs_container_receives_every_ai_job_setting():
+    import re
+
+    root = Path(__file__).resolve().parent.parent
+    settings_text = (root / "financial_planner" / "settings.py").read_text()
+    names = sorted(
+        set(re.findall(r'os\.environ\.get\("((?:AI_|AGENT_HARNESS_)[A-Z_]+)"', settings_text))
+    )
+    assert names
+    compose = (root / "compose.yml").read_text()
+    start = compose.index("  ai-jobs:")
+    following = re.search(r"\n  [a-z][a-z0-9-]*:\n", compose[start + 1 :])
+    block = compose[start : start + 1 + following.start()] if following else compose[start:]
+    missing = [name for name in names if f"{name}:" not in block]
+    assert missing == []
