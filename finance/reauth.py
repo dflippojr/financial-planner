@@ -22,6 +22,7 @@ ACTION_LABELS = {
     "change-share-mode": "Change co-owned or lent",
     "delete-account": "Delete an account",
     "export-data": "Download the data export",
+    "delete-my-data": "Delete my data",
     "connect-simplefin": "Connect SimpleFIN",
     "disconnect-simplefin": "Disconnect SimpleFIN",
     "connect-ai": "Connect an AI backend",

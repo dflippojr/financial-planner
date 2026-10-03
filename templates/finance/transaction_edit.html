@@ -92,7 +92,7 @@
 <h2 class="mb-3 text-xl font-semibold">Correction history</h2>
 <ol class="list-decimal pl-6">
   {% for entry in correction_history %}
-  <li>{{ entry.recorded_at }} · {{ entry.actor.display_name }} · {{ entry.get_field_name_display }}: {{ entry.previous_display }} → {{ entry.new_display }}</li>
+  <li>{{ entry.recorded_at }} · {{ entry.actor_label }} · {{ entry.get_field_name_display }}: {{ entry.previous_display }} → {{ entry.new_display }}</li>
   {% endfor %}
 </ol>
 {% endif %}

@@ -61,6 +61,7 @@ SETTINGS_TAB_BY_NAME = {
     "settings-alerts": "alerts",
     "settings-data": "data",
     "account-export": "data",
+    "delete-my-data": "data",
     "settings-ai": "ai",
     "ai-connect": "ai",
     "ai-disconnect": "ai",

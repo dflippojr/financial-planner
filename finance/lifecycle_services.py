@@ -1,5 +1,6 @@
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
+from django.db.models import ProtectedError
 from django.utils import timezone
 
 from .models import (
@@ -21,6 +22,9 @@ from .models import (
 
 
 _DENIED = "Operation is not permitted."
+LENT_HANDOVER = "handover"
+LENT_DELETE = "delete"
+LENT_CHOICES = (LENT_HANDOVER, LENT_DELETE)
 
 
 def _person_for(principal):
@@ -478,3 +482,293 @@ def delete_account(principal, account_id):
 
     delete_conversations_for_account(kept_id)
     return name
+
+
+def last_household_member(person):
+    membership = Membership.objects.filter(person=person, ended_at__isnull=True).first()
+    if membership is None:
+        return False
+    return (
+        Membership.objects.filter(household_id=membership.household_id, ended_at__isnull=True).count()
+        == 1
+    )
+
+
+def lent_household_accounts(person):
+    """Household accounts this member has lent, in primary-key order."""
+    membership = Membership.objects.filter(person=person, ended_at__isnull=True).first()
+    if membership is None:
+        return []
+    return list(
+        Account.objects.filter(
+            owner=person,
+            scope=Account.Scope.HOUSEHOLD,
+            household_id=membership.household_id,
+            share_mode=Account.ShareMode.LENT,
+        ).order_by("pk")
+    )
+
+
+def member_deletion_counts(person):
+    """Counts shown on the delete-my-data confirmation page (counts only)."""
+    from .models import (
+        AiJob,
+        AiProviderConnection,
+        AiUsageEvent,
+        Budget,
+        CategoryRule,
+        CategorySuggestion,
+        PlannedItem,
+        PrivacyPolicyAcceptance,
+        RecoveryCode,
+        RecurringSeries,
+        RuleApplication,
+        SavingsGoal,
+        SimpleFinConnection,
+    )
+
+    private_ids = list(
+        Account.objects.filter(owner=person, scope=Account.Scope.PRIVATE).values_list("pk", flat=True)
+    )
+    personal_records = (
+        CategoryRule.objects.filter(owner_person=person).count()
+        + RuleApplication.objects.filter(rule__owner_person=person).count()
+        + Budget.objects.filter(owner=person, scope=Budget.Scope.PRIVATE).count()
+        + PlannedItem.objects.filter(owner=person, scope=PlannedItem.Scope.PRIVATE).count()
+        + SavingsGoal.objects.filter(owner=person, scope=SavingsGoal.Scope.PRIVATE).count()
+        + RecurringSeries.objects.filter(person=person).count()
+        + AiProviderConnection.objects.filter(owner=person).count()
+        + AiJob.objects.filter(member=person).count()
+        + AiUsageEvent.objects.filter(member=person).count()
+        + CategorySuggestion.objects.filter(member=person).count()
+        + SimpleFinConnection.objects.filter(owner=person).count()
+        + PrivacyPolicyAcceptance.objects.filter(person=person).count()
+        + RecoveryCode.objects.filter(user_id=person.user_id).count()
+    )
+    return {
+        "private_account_count": len(private_ids),
+        "transaction_count": Transaction.objects.filter(account_id__in=private_ids).count(),
+        "import_count": ImportBatch.objects.filter(account_id__in=private_ids).count(),
+        "personal_record_count": personal_records,
+    }
+
+
+def _parsed_lent_choices(person, lent_choices):
+    lent = lent_household_accounts(person)
+    required = {account.pk for account in lent}
+    submitted = {} if lent_choices is None else {int(pk): value for pk, value in lent_choices.items()}
+    if set(submitted) != required:
+        raise ValidationError("Every lent account needs a choice.")
+    if any(value not in LENT_CHOICES for value in submitted.values()):
+        raise ValidationError("Every lent account needs a choice.")
+    return lent, submitted
+
+
+def _handover_lent_accounts(lent, submitted, successor):
+    handover_ids = [account.pk for account in lent if submitted[account.pk] == LENT_HANDOVER]
+    if handover_ids and successor is None:
+        raise ValidationError("Every lent account needs a choice.")
+    if handover_ids:
+        Account.objects.filter(pk__in=handover_ids).update(
+            share_mode=Account.ShareMode.CO_OWNED,
+            updated_at=timezone.now(),
+        )
+
+
+def _release_household_owned_rows(person):
+    """Hand household rows this person still owns to a current member, in every household.
+
+    The person may own rows in a household they already left (or were evicted
+    from). Each household's earliest current member takes them over; a household
+    with nobody current keeps its other rows; only this person's rows there go.
+    """
+    from .models import Budget, PlannedItem, SavedCsvMapping, SavingsGoal
+
+    owned = (
+        PlannedItem.objects.filter(owner=person, scope=PlannedItem.Scope.HOUSEHOLD),
+        SavingsGoal.objects.filter(owner=person, scope=SavingsGoal.Scope.HOUSEHOLD),
+        Budget.objects.filter(owner=person, scope=Budget.Scope.HOUSEHOLD),
+    )
+    household_ids = set()
+    for rows in owned:
+        household_ids.update(rows.values_list("household_id", flat=True))
+    household_ids.update(SavedCsvMapping.objects.filter(created_by=person).values_list("household_id", flat=True))
+    for household_id in sorted(pk for pk in household_ids if pk is not None):
+        successor_membership = (
+            Membership.objects.filter(household_id=household_id, ended_at__isnull=True)
+            .exclude(person=person)
+            .select_related("person")
+            .order_by("joined_at", "pk")
+            .first()
+        )
+        if successor_membership is None:
+            # Nobody current to hand them to: remove only this person's rows there,
+            # never other former members' rows or the household itself.
+            for rows in owned:
+                rows.filter(household_id=household_id).delete()
+            mine = list(
+                SavedCsvMapping.objects.filter(created_by=person, household_id=household_id).values_list("pk", flat=True)
+            )
+            if mine:
+                ImportBatch.objects.filter(saved_csv_mapping_id__in=mine).update(saved_csv_mapping=None)
+                Account.objects.filter(default_saved_csv_mapping_id__in=mine).update(default_saved_csv_mapping=None)
+                SavedCsvMapping.objects.filter(pk__in=mine).delete()
+            continue
+        successor = successor_membership.person
+        for rows in owned:
+            rows.filter(household_id=household_id).update(owner=successor)
+        SavedCsvMapping.objects.filter(created_by=person, household_id=household_id).update(created_by=successor)
+
+
+def _delete_personal_records(person):
+    from .models import (
+        Alert,
+        AlertSettings,
+        AiJob,
+        AiProviderConnection,
+        AiUsageEvent,
+        Budget,
+        CategoryRule,
+        CategorySuggestion,
+        PlannedItem,
+        PrivacyPolicyAcceptance,
+        RecurringExclusion,
+        RecurringSeries,
+        RecurringSeriesMember,
+        RuleApplication,
+        RuleApplicationEntry,
+        SavingsGoal,
+        SimpleFinConnection,
+    )
+
+    PlannedItem.objects.filter(owner=person, scope=PlannedItem.Scope.PRIVATE).delete()
+    SavingsGoal.objects.filter(owner=person, scope=SavingsGoal.Scope.PRIVATE).delete()
+    Budget.objects.filter(owner=person, scope=Budget.Scope.PRIVATE).delete()
+    rule_ids = list(CategoryRule.objects.filter(owner_person=person).values_list("pk", flat=True))
+    if rule_ids:
+        RuleApplicationEntry.objects.filter(application__rule_id__in=rule_ids).delete()
+        RuleApplication.objects.filter(rule_id__in=rule_ids).delete()
+        CategoryRule.objects.filter(pk__in=rule_ids).delete()
+    series_ids = list(RecurringSeries.objects.filter(person=person).values_list("pk", flat=True))
+    if series_ids:
+        RecurringSeriesMember.objects.filter(series_id__in=series_ids).delete()
+        RecurringSeries.objects.filter(pk__in=series_ids).delete()
+    SimpleFinConnection.objects.filter(owner=person).delete()
+    CategorySuggestion.objects.filter(member=person).delete()
+    AiJob.objects.filter(member=person).delete()
+    AiUsageEvent.objects.filter(member=person).delete()
+    AiProviderConnection.objects.filter(owner=person).delete()
+    PrivacyPolicyAcceptance.objects.filter(person=person).delete()
+    RecurringExclusion.objects.filter(person=person).delete()
+    Alert.objects.filter(recipient=person).delete()
+    AlertSettings.objects.filter(person=person).delete()
+    person.privacy_policy_declined_version = None
+    person.save(update_fields=("privacy_policy_declined_version", "updated_at"))
+
+
+def _anonymize_shared_actor_refs(person):
+    from .models import BudgetRolloverReset, Invitation, RuleApplication
+
+    TransactionCorrectionHistory.objects.filter(actor=person).update(actor=None)
+    ImportBatch.objects.filter(imported_by=person).update(imported_by=None)
+    RuleApplication.objects.filter(applied_by=person).update(applied_by=None)
+    Invitation.objects.filter(invited_by=person).update(invited_by=None)
+    BudgetRolloverReset.objects.filter(actor=person).update(actor=None)
+    Membership.objects.filter(person=person).update(person=None)
+
+
+def _tear_down_household(household_id):
+    from .models import (
+        Budget,
+        Category,
+        CategoryRule,
+        Household,
+        Invitation,
+        PlannedItem,
+        RuleApplication,
+        RuleApplicationEntry,
+        SavedCsvMapping,
+        SavingsGoal,
+        Tag,
+    )
+
+    if Membership.objects.filter(household_id=household_id, ended_at__isnull=True).exists():
+        return
+    rule_ids = list(CategoryRule.objects.filter(owner_household_id=household_id).values_list("pk", flat=True))
+    if rule_ids:
+        RuleApplicationEntry.objects.filter(application__rule_id__in=rule_ids).delete()
+        RuleApplication.objects.filter(rule_id__in=rule_ids).delete()
+        CategoryRule.objects.filter(pk__in=rule_ids).delete()
+    PlannedItem.objects.filter(household_id=household_id).delete()
+    SavingsGoal.objects.filter(household_id=household_id).delete()
+    Budget.objects.filter(household_id=household_id).delete()
+    Tag.objects.filter(household_id=household_id).delete()
+    mapping_ids = list(SavedCsvMapping.objects.filter(household_id=household_id).values_list("pk", flat=True))
+    if mapping_ids:
+        ImportBatch.objects.filter(saved_csv_mapping_id__in=mapping_ids).update(saved_csv_mapping=None)
+        Account.objects.filter(default_saved_csv_mapping_id__in=mapping_ids).update(default_saved_csv_mapping=None)
+        SavedCsvMapping.objects.filter(pk__in=mapping_ids).delete()
+    Category.objects.filter(household_id=household_id).delete()
+    Invitation.objects.filter(household_id=household_id).delete()
+    Membership.objects.filter(household_id=household_id).delete()
+    Household.objects.filter(pk=household_id).delete()
+
+
+def _delete_empty_household(household_id):
+    """Remove a household with no current members, all at once or not at all.
+
+    Former members' private transactions, splits, rules, or budgets may still use
+    its categories or tags (PROTECT). Then the whole teardown rolls back and the
+    household keeps every row, rather than changing another person's private data
+    or deleting only part of the household.
+    """
+    try:
+        with transaction.atomic():
+            _tear_down_household(household_id)
+    except ProtectedError:
+        pass
+
+
+def _delete_login_user(user):
+    from allauth.socialaccount.models import SocialAccount
+
+    from finance.auth_services import revoke_user_sessions
+
+    SocialAccount.objects.filter(user=user).delete()
+    revoke_user_sessions(user)
+    user.delete()
+
+
+@transaction.atomic
+def delete_member_data(principal, lent_choices=None):
+    """Remove this member's private data and login, keeping shared household rows."""
+    person = _person_for(principal)
+    user = person.user
+    lent, submitted = _parsed_lent_choices(person, lent_choices)
+    own_membership, current_memberships = lock_actor_household(person)
+    household_id = own_membership.household_id if own_membership is not None else None
+    remaining = []
+    if own_membership is not None:
+        remaining = sorted(
+            (membership for membership in current_memberships if membership.pk != own_membership.pk),
+            key=lambda membership: (membership.joined_at, membership.pk),
+        )
+    successor = remaining[0].person if remaining else None
+    owned_ids = list(Account.objects.filter(owner=person).values_list("pk", flat=True))
+    _lock_accounts_in_pk_order(owned_ids)
+    _handover_lent_accounts(lent, submitted, successor)
+    if own_membership is not None:
+        end_current_membership(person)
+    _release_household_owned_rows(person)
+    remaining_private_ids = list(
+        Account.objects.filter(owner=person).order_by("pk").values_list("pk", flat=True)
+    )
+    for account_id in remaining_private_ids:
+        delete_account(person, account_id)
+    _delete_personal_records(person)
+    _anonymize_shared_actor_refs(person)
+    if household_id is not None:
+        _delete_empty_household(household_id)
+    person.delete()
+    _delete_login_user(user)
+

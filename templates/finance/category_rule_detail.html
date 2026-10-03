@@ -75,7 +75,7 @@
     {% for application in applications %}
       <tr>
         <td>{{ application.applied_at }}</td>
-        <td>{{ application.applied_by.display_name }}</td>
+        <td>{{ application.applied_by_label }}</td>
         <td>
           {% if application.reversed_at %}
           Reversed

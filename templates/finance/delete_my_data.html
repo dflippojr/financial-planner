@@ -1,0 +1,42 @@
+{% extends "finance/settings_base.html" %}
+{% block title %}Delete my data · Financial Planner{% endblock %}
+{% block settings_content %}
+<h2 class="mb-4 text-xl font-semibold">Delete my data</h2>
+<div role="alert" class="alert alert-warning mb-4 max-w-lg">
+  <span>
+    This permanently deletes your private accounts and personal records.
+    {% if last_member %}
+    You are the last member of your household, so the household, its categories, and its shared accounts are deleted too.
+    {% else %}
+    Shared household data stays. You appear as former member in shared history.
+    {% endif %}
+    Existing backups keep a copy until they rotate out (14 nightly and 8 weekly).
+  </span>
+</div>
+<p class="mb-4 max-w-lg">Download a copy first.</p>
+<form method="post" action="{% url 'account-export' %}" class="mb-4">
+  {% csrf_token %}
+  <button type="submit" class="btn btn-outline">Export data</button>
+</form>
+<ul class="mb-4 max-w-lg list-disc pl-6">
+  <li>{{ private_account_count }} private account{{ private_account_count|pluralize }}</li>
+  <li>{{ transaction_count }} transaction{{ transaction_count|pluralize }}</li>
+  <li>{{ import_count }} import{{ import_count|pluralize }}</li>
+  <li>{{ personal_record_count }} personal record{{ personal_record_count|pluralize }}</li>
+</ul>
+<section class="card bg-base-100 shadow-sm max-w-lg">
+  <div class="card-body">
+    <form method="post">
+      {% csrf_token %}
+      {% if lent_accounts %}
+      <p class="font-semibold mb-2">Lent household accounts</p>
+      {% endif %}
+      {% include "finance/_form_fields.html" with form=form %}
+      <div class="flex flex-wrap items-center gap-2">
+        <a class="btn" href="{% url 'account-settings' %}">Cancel</a>
+        <button type="submit" class="btn btn-error">Delete my data</button>
+      </div>
+    </form>
+  </div>
+</section>
+{% endblock %}
