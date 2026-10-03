@@ -166,7 +166,14 @@ def _chain_passes_rolling_band(chain):
 
 
 def _worst_rolling_band_breaker(chain):
-    return _farthest_from_chain_median(chain)
+    _passed, breakers = _evaluate_rolling_chain(chain)
+    farthest = _farthest_from_chain_median(chain)
+    remaining = [item for item in chain if item.pk != farthest.pk]
+    if len(remaining) >= 2 and _chain_passes_rolling_band(remaining):
+        return farthest
+    if breakers:
+        return max(breakers)[2]
+    return farthest
 
 
 def _collapse_same_day(transactions):
@@ -510,6 +517,10 @@ def _apply_detection(series, detected, *, eligible_ids, preserve_identity=False)
         series.cadence = detected.cadence
     series.currency = detected.currency
     RecurringSeriesMember.objects.filter(series=series).exclude(transaction_id__in=eligible_ids).delete()
+    RecurringSeriesMember.objects.filter(
+        series=series,
+        source=RecurringSeriesMember.Source.DETECTED,
+    ).exclude(transaction_id__in=detected.transaction_ids).delete()
     claimed_elsewhere = _active_member_transaction_ids(series.person, exclude_series_id=series.pk)
     existing_ids = set(series.members.values_list("transaction_id", flat=True))
     RecurringSeriesMember.objects.bulk_create(

@@ -953,6 +953,43 @@ def test_unconfirmed_final_twenty_seven_stays_out_until_a_second_confirms_it():
 
 
 @pytest.mark.django_db
+def test_undoing_the_confirming_step_leaves_the_unconfirmed_charge_out():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    add_monthly_charges(owner, account, description="Synthetic Drift Bill", amount_minor=-2000, count=6)
+    first_step, second_step = add_monthly_charges(
+        owner,
+        account,
+        description="Synthetic Drift Bill",
+        amount_minor=-2700,
+        count=2,
+        start=date(2026, 7, 15),
+    )
+    extra = make_transaction(
+        owner,
+        account,
+        transaction_date=date(2026, 3, 20),
+        amount_minor=-1800,
+        description="Synthetic other shop",
+    )
+    refresh_recurring_series(owner)
+    series = RecurringSeries.objects.get(person=owner)
+    add_recurring_members(owner, series.pk, [extra.pk])
+
+    undo_import_batch(owner, account.pk, second_step.import_batch_id)
+    refresh_recurring_series(owner)
+    series.refresh_from_db()
+
+    member_amounts = set(series.members.values_list("transaction__amount_minor", flat=True))
+    assert first_step.pk not in set(series.members.values_list("transaction_id", flat=True))
+    assert extra.pk in set(series.members.values_list("transaction_id", flat=True))
+    assert -2700 not in member_amounts
+    assert series.typical_amount_minor == -2000
+    assert series.members.filter(transaction_id=extra.pk, source=RecurringSeriesMember.Source.MANUAL).exists()
+
+
+@pytest.mark.django_db
 def test_hundred_one_twenty_one_forty_four_confirmed_step_is_one_series():
     owner = make_person("owner")
     make_household(owner)
@@ -972,6 +1009,35 @@ def test_hundred_one_twenty_one_forty_four_confirmed_step_is_one_series():
 
     assert series.members.count() == 4
     assert set(series.members.values_list("transaction__amount_minor", flat=True)) == {-10000, -12000, -14400}
+
+
+@pytest.mark.django_db
+def test_trailing_one_off_return_to_old_price_is_left_out_of_the_step_chain():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    amounts = (-10000, -12000, -14400, -14400, -10000)
+    for index, amount in enumerate(amounts):
+        make_transaction(
+            owner,
+            account,
+            transaction_date=date(2026, index + 1, 10),
+            amount_minor=amount,
+            description="Synthetic Steps",
+        )
+
+    refresh_recurring_series(owner)
+    series = RecurringSeries.objects.get(person=owner)
+
+    assert series.members.count() == 4
+    assert list(series.members.order_by("transaction__transaction_date").values_list("transaction__amount_minor", flat=True)) == [
+        -10000,
+        -12000,
+        -14400,
+        -14400,
+    ]
+    leftover = Transaction.objects.get(transaction_date=date(2026, 5, 10), amount_minor=-10000)
+    assert not RecurringSeriesMember.objects.filter(transaction=leftover).exists()
 
 
 @pytest.mark.django_db
