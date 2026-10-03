@@ -956,3 +956,23 @@ def test_unreadable_token_shows_reconnect_and_disconnect_still_works(harness):
     stamp_recent_auth(client)
     client.post(reverse("ai-disconnect"))
     assert connection_for(person) is None
+
+
+@pytest.mark.django_db
+def test_reconnecting_forgets_session_ids_from_the_old_harness(harness):
+    state, url = harness
+    _user, person, _household = make_member("owner")
+    connect_harness(person, base_url=url, token=TOKEN)
+    job = enqueue_job(person, feature="structured")
+    AiJob.objects.filter(pk=job.pk).update(harness_session_id="old-harness-session")
+
+    connect_harness(person, base_url=url, token=TOKEN)
+
+    job.refresh_from_db()
+    assert job.harness_session_id == ""
+    AiJob.objects.filter(pk=job.pk).update(harness_session_id="old-harness-session")
+
+    disconnect_harness(person)
+
+    job.refresh_from_db()
+    assert job.harness_session_id == ""
