@@ -40,15 +40,19 @@ def _person(principal):
         raise PermissionDenied(_DENIED) from exc
 
 
-def _current_amount(principal, goal):
+def _current_amount(principal, goal, *, as_of):
     visible_account = None
     if goal.linked_account_id is not None:
         visible_account = Account.objects.visible_to(principal).filter(pk=goal.linked_account_id).first()
         if visible_account is not None:
-            # Same precedence as Accounts and Net worth: the latest date, and on
-            # one date a SimpleFIN snapshot outranks a manual one.
+            # Same precedence as Accounts and Net worth: the latest date on or
+            # before as_of, and on one date a SimpleFIN snapshot outranks a
+            # manual one.
             snapshot = (
-                BalanceSnapshot.objects.filter(account_id=goal.linked_account_id)
+                BalanceSnapshot.objects.filter(
+                    account_id=goal.linked_account_id,
+                    snapshot_date__lte=as_of,
+                )
                 .annotate(
                     _source_rank=Case(
                         When(source=BalanceSnapshot.Source.SIMPLEFIN, then=Value(1)),
@@ -60,7 +64,7 @@ def _current_amount(principal, goal):
             )
             if snapshot is not None:
                 return snapshot.amount_minor, SOURCE_SNAPSHOT, snapshot.snapshot_date, visible_account
-    if goal.manual_amount_minor is not None:
+    if goal.manual_amount_minor is not None and goal.manual_amount_date is not None and goal.manual_amount_date <= as_of:
         return goal.manual_amount_minor, SOURCE_MANUAL, goal.manual_amount_date, visible_account
     return 0, SOURCE_NONE, None, visible_account
 
@@ -71,7 +75,7 @@ def goal_progress(principal, goal, *, today):
     A linked account the viewer can no longer see falls back to the manual
     amount without exposing the account's balance or name.
     """
-    current_minor, source, as_of, visible_account = _current_amount(principal, goal)
+    current_minor, source, as_of, visible_account = _current_amount(principal, goal, as_of=today)
     target_minor = goal.target_amount_minor
     reached = current_minor >= target_minor
     past_due = (not reached) and goal.target_date < today

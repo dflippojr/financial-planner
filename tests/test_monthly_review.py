@@ -420,3 +420,79 @@ def test_management_command_and_nav():
     assert page.status_code == 200
     assert "Monthly review" in page.content.decode()
     assert "Computed facts" in page.content.decode()
+
+
+@pytest.mark.django_db
+def test_largest_increases_exclude_categories_that_fell():
+    owner = make_person("owner")
+    household = make_household(owner)
+    checking = make_account(owner)
+    groceries = household.categories.get(name="Groceries")
+    dining = household.categories.get(name="Dining")
+    transport = household.categories.get(name="Transportation")
+    groc = make_transaction(
+        owner, checking, transaction_date=date(2026, 9, 8), amount_minor=-4_000, description="Synthetic groceries"
+    )
+    dine = make_transaction(
+        owner, checking, transaction_date=date(2026, 9, 9), amount_minor=-1_000, description="Synthetic dining"
+    )
+    ride = make_transaction(
+        owner, checking, transaction_date=date(2026, 9, 10), amount_minor=-2_500, description="Synthetic transit"
+    )
+    prior_dine = make_transaction(
+        owner, checking, transaction_date=date(2026, 8, 9), amount_minor=-2_000, description="Synthetic dining prior"
+    )
+    prior_ride = make_transaction(
+        owner, checking, transaction_date=date(2026, 8, 10), amount_minor=-5_000, description="Synthetic transit prior"
+    )
+    assign_category(owner, groc.pk, groceries.pk)
+    assign_category(owner, dine.pk, dining.pk)
+    assign_category(owner, ride.pk, transport.pk)
+    assign_category(owner, prior_dine.pk, dining.pk)
+    assign_category(owner, prior_ride.pk, transport.pk)
+
+    facts = compute_monthly_review_facts(owner, SEP, today=TODAY)
+
+    increase_names = [item["name"] for item in facts["category_increases"]]
+    decrease_names = [item["name"] for item in facts["category_decreases"]]
+    assert increase_names == ["Groceries"]
+    assert facts["category_increases"][0]["delta_minor"] == 4_000
+    assert "Dining" not in increase_names
+    assert "Transportation" not in increase_names
+    assert decrease_names == ["Transportation", "Dining"]
+
+
+@pytest.mark.django_db
+def test_goal_progress_uses_snapshot_on_or_before_closed_month_end():
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner)
+    BalanceSnapshot.objects.create(
+        account=checking,
+        snapshot_date=date(2026, 9, 30),
+        amount_minor=200_000,
+        currency="USD",
+        source=BalanceSnapshot.Source.MANUAL,
+    )
+    BalanceSnapshot.objects.create(
+        account=checking,
+        snapshot_date=date(2026, 10, 2),
+        amount_minor=500_000,
+        currency="USD",
+        source=BalanceSnapshot.Source.MANUAL,
+    )
+    SavingsGoal.objects.create(
+        owner=owner,
+        name="Synthetic emergency",
+        target_amount_minor=1_000_000,
+        target_date=date(2026, 12, 31),
+        linked_account=checking,
+        manual_amount_minor=500_000,
+        manual_amount_date=date(2026, 10, 3),
+    )
+
+    facts = compute_monthly_review_facts(owner, SEP, today=TODAY)
+
+    assert facts["savings_goals"][0]["name"] == "Synthetic emergency"
+    assert facts["savings_goals"][0]["current_display"] == "2,000.00 USD"
+    assert facts["savings_goals"][0]["percent"] == 20

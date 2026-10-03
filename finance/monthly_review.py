@@ -30,7 +30,7 @@ from .models import (
 )
 from .net_worth import net_worth_report
 from .recurring_review import build_recurring_review
-from .savings_goal_services import goal_progress
+from .savings_goal_services import SOURCE_NONE, goal_progress
 
 
 def latest_closed_month(today=None):
@@ -188,7 +188,10 @@ def _category_facts(principal, start, end):
         if delta == 0:
             continue
         deltas.append(_category_delta_item(key, current_row, previous_row, start, end, delta))
-    increases = sorted(deltas, key=lambda item: (-item["delta_minor"], item["name"]))[:3]
+    increases = sorted(
+        [item for item in deltas if item["delta_minor"] > 0],
+        key=lambda item: (-item["delta_minor"], item["name"]),
+    )[:3]
     decreases = sorted(
         [item for item in deltas if item["delta_minor"] < 0],
         key=lambda item: (item["delta_minor"], item["name"]),
@@ -297,6 +300,18 @@ def _goal_facts(principal, today):
     rows = []
     for goal in goals.order_by("name", "pk"):
         card = goal_progress(principal, goal, today=today)
+        if card.source == SOURCE_NONE:
+            rows.append(
+                {
+                    "name": goal.name,
+                    "percent": None,
+                    "remaining_display": None,
+                    "current_display": None,
+                    "target_display": card.target_amount_display,
+                    "url": reverse("savings-goals"),
+                }
+            )
+            continue
         rows.append(
             {
                 "name": goal.name,

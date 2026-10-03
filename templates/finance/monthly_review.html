@@ -144,7 +144,7 @@
     {% if facts.savings_goals %}
     <ul class="list-disc pl-6">
       {% for item in facts.savings_goals %}
-      <li><a class="link" href="{{ item.url }}">{{ item.name }}</a> {{ item.percent }}% ({{ item.current_display }} of {{ item.target_display }}, {{ item.remaining_display }} remaining)</li>
+      <li><a class="link" href="{{ item.url }}">{{ item.name }}</a>{% if item.percent is not None %} {{ item.percent }}% ({{ item.current_display }} of {{ item.target_display }}, {{ item.remaining_display }} remaining){% else %} {{ item.target_display }} target{% endif %}</li>
       {% endfor %}
     </ul>
     {% else %}
