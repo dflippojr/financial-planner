@@ -47,6 +47,7 @@ SETTINGS_TAB_BY_NAME = {
     "category-rule-list": "categories",
     "category-rule-detail": "categories",
     "category-rule-application-reverse": "categories",
+    "tag-list": "tags",
     "settings-data": "data",
     "account-export": "data",
     "settings-ai": "ai",
@@ -60,6 +61,7 @@ SETTINGS_TABS = (
     ("connections", "Connections", "simplefin-connections"),
     ("household", "Household", "invite"),
     ("categories", "Categories", "category-list"),
+    ("tags", "Tags", "tag-list"),
     ("data", "Data", "settings-data"),
     ("ai", "AI", "settings-ai"),
 )
@@ -77,6 +79,7 @@ def _nav_current(request):
         "transaction-split",
         "transaction-unsplit",
         "transaction-split-part-category",
+        "transaction-note-tags",
     }:
         return "transaction-list"
     if name.startswith("csv-import"):

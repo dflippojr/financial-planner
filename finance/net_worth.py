@@ -23,10 +23,10 @@ CARRIED_FORWARD = "carried forward"
 def contribution_parts(account_type, source, amount_minor):
     """Split a snapshot into asset and liability minor units.
 
-    Credit-card SimpleFIN rows keep the protocol sign (owed is negative).
-    Credit-card manual rows store the amount owed as a positive number.
+    Credit-card and loan SimpleFIN rows keep the protocol sign (owed is negative).
+    Manual rows for those types store the amount owed as a positive number.
     """
-    if account_type != Account.Type.CREDIT_CARD:
+    if account_type not in Account.LIABILITY_TYPES:
         return amount_minor, 0
     owed = -amount_minor if source == BalanceSnapshot.Source.SIMPLEFIN else amount_minor
     if owed >= 0:
@@ -83,6 +83,7 @@ def _account_month_row(account, snapshot, window):
         source=snapshot.source,
         source_badge=CARRIED_FORWARD if carried else snapshot.source,
         carried_forward=carried,
+        is_estimate=account.is_physical_asset(),
     )
 
 
@@ -115,7 +116,38 @@ def _month_period(window, accounts, indexed, today):
         net_display=format_minor(net),
         omitted_untracked=omitted,
         accounts=rows,
+        equity_lines=_equity_lines(accounts, rows),
     )
+
+
+def _equity_lines(accounts, rows):
+    visible = {account.pk: account for account in accounts}
+    by_id = {row.account_id: row for row in rows}
+    lines = []
+    for account in accounts:
+        if account.account_type != Account.Type.LOAN or not account.secured_asset_id:
+            continue
+        asset = visible.get(account.secured_asset_id)
+        if asset is None:
+            continue
+        asset_row = by_id.get(asset.pk)
+        loan_row = by_id.get(account.pk)
+        if asset_row is None or loan_row is None:
+            continue
+        equity = asset_row.assets_minor - loan_row.liabilities_minor
+        lines.append(
+            SimpleNamespace(
+                asset_id=asset.pk,
+                loan_id=account.pk,
+                label=f"{asset.name} equity",
+                asset_name=asset.name,
+                loan_name=account.name,
+                equity_minor=equity,
+                equity_display=format_minor(equity),
+                is_estimate=True,
+            )
+        )
+    return lines
 
 
 def _delta(current_minor, previous_minor, versus):
@@ -186,6 +218,7 @@ def _account_chart_row(row):
         "source": row.source,
         "source_badge": row.source_badge,
         "carried_forward": row.carried_forward,
+        "is_estimate": row.is_estimate,
     }
 
 
@@ -200,6 +233,17 @@ def _period_chart_row(period):
         "net_display": period.net_display,
         "omitted_untracked": period.omitted_untracked,
         "accounts": [_account_chart_row(row) for row in period.accounts],
+        "equity_lines": [
+            {
+                "label": line.label,
+                "asset_name": line.asset_name,
+                "loan_name": line.loan_name,
+                "equity_minor": line.equity_minor,
+                "equity_display": line.equity_display,
+                "is_estimate": line.is_estimate,
+            }
+            for line in period.equity_lines
+        ],
     }
 
 

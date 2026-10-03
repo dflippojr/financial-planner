@@ -58,6 +58,7 @@ def test_settings_tabs_and_footer_are_active_on_subpages():
         (reverse("invite"), "Household"),
         (reverse("category-list"), "Categories"),
         (reverse("category-rule-list"), "Categories"),
+        (reverse("tag-list"), "Tags"),
         (reverse("settings-data"), "Data"),
         (reverse("settings-ai"), "AI"),
     ]
@@ -96,3 +97,15 @@ def test_settings_data_tab_is_read_only():
     client.force_login(user)
 
     assert client.post(reverse("settings-data")).status_code == 405
+
+
+@pytest.mark.django_db
+def test_old_tags_url_redirects_to_the_settings_tab():
+    user = _member()
+    client = Client()
+    client.force_login(user)
+
+    response = client.get("/tags/")
+
+    assert response.status_code == 301
+    assert response["Location"] == reverse("tag-list")

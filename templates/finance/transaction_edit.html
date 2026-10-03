@@ -11,7 +11,13 @@
     <a class="btn btn-ghost" href="{% url 'transaction-list' %}">Cancel</a>
   </div>
 </form>
-<p class="mb-8 text-sm opacity-70">The original imported fields and import batch provenance are retained.</p>
+<p class="mb-4 text-sm opacity-70">The original imported fields and import batch provenance are retained.</p>
+<form method="post" action="{% url 'transaction-note-tags' transaction.pk %}" class="mb-8 max-w-lg">
+  <h2 class="mb-3 text-xl font-semibold">Note and tags</h2>
+  {% csrf_token %}
+  {% include "finance/_form_fields.html" with form=note_form %}
+  <button type="submit" class="btn btn-primary">Save note and tags</button>
+</form>
 {% if is_split %}
 <h2 class="mb-3 text-xl font-semibold">Split parts</h2>
 <ul class="mb-6 space-y-3">

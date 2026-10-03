@@ -1,16 +1,32 @@
 {% extends "finance/base.html" %}
-{% block title %}Record balance · {{ account.name }} · Financial Planner{% endblock %}
+{% block title %}{% if account.is_physical_asset %}Record valuation{% else %}Record balance{% endif %} · {{ account.name }} · Financial Planner{% endblock %}
 {% block content %}
-<h1 class="mb-4 text-2xl font-bold">Record balance</h1>
+<h1 class="mb-4 text-2xl font-bold">{% if account.is_physical_asset %}Record valuation{% else %}Record balance{% endif %}</h1>
 <p class="mb-4"><a class="link" href="{% url 'account-list' %}">Accounts</a> · {{ account.name }}</p>
+{% if account.is_physical_asset %}
+<p class="mb-4 max-w-2xl">Values are estimates, not appraisals or verified facts. An optional note can name the source, such as a county assessment or online estimate.</p>
+{% endif %}
 {% include "finance/_messages.html" %}
+{% if pair_form %}
 <section class="card bg-base-100 shadow-sm mb-6 max-w-lg">
   <div class="card-body">
-    <h2 class="card-title">New manual balance</h2>
+    <h2 class="card-title">Home equity pairing</h2>
+    <p>Pair this loan with an asset of the same scope. Net worth totals stay the same; pairing only adds an equity line.</p>
+    <form method="post" action="{% url 'account-pair-loan' account.pk %}">
+      {% csrf_token %}
+      {% include "finance/_form_fields.html" with form=pair_form %}
+      <button type="submit" class="btn btn-primary">Save pairing</button>
+    </form>
+  </div>
+</section>
+{% endif %}
+<section class="card bg-base-100 shadow-sm mb-6 max-w-lg">
+  <div class="card-body">
+    <h2 class="card-title">{% if account.is_physical_asset %}New estimated value{% else %}New manual balance{% endif %}</h2>
     <form method="post">
       {% csrf_token %}
       {% include "finance/_form_fields.html" with form=form %}
-      <button type="submit" class="btn btn-primary">Record balance</button>
+      <button type="submit" class="btn btn-primary">{% if account.is_physical_asset %}Record estimate{% else %}Record balance{% endif %}</button>
     </form>
   </div>
 </section>
@@ -19,7 +35,7 @@
     <thead class="sticky top-0 z-10 bg-base-200">
       <tr>
         <th>Date</th>
-        <th class="text-right">Amount</th>
+        <th class="text-right">{% if account.is_physical_asset %}Estimated value{% else %}Amount{% endif %}</th>
         {% if account.account_type == "investment" %}<th class="text-right">Net contributions</th>{% endif %}
         <th>Source</th>
         <th>Note</th>
@@ -30,7 +46,7 @@
     {% for snapshot in snapshots %}
       <tr>
         <td>{{ snapshot.snapshot_date|date:"Y-m-d" }}</td>
-        <td class="text-right">{% include "finance/_amount.html" with value=snapshot.amount_display tone="" %}</td>
+        <td class="text-right">{% include "finance/_amount.html" with value=snapshot.amount_display tone="" %}{% if account.is_physical_asset %} <span class="badge badge-ghost">estimate</span>{% endif %}</td>
         {% if account.account_type == "investment" %}
         <td class="text-right">{% if snapshot.net_contribution_display %}{% include "finance/_amount.html" with value=snapshot.net_contribution_display tone="" %}{% else %}—{% endif %}</td>
         {% endif %}
@@ -47,7 +63,7 @@
         </td>
       </tr>
     {% empty %}
-      <tr><td colspan="{% if account.account_type == "investment" %}6{% else %}5{% endif %}">No balances recorded yet.</td></tr>
+      <tr><td colspan="{% if account.account_type == "investment" %}6{% else %}5{% endif %}">No {% if account.is_physical_asset %}valuations{% else %}balances{% endif %} recorded yet.</td></tr>
     {% endfor %}
     </tbody>
   </table>

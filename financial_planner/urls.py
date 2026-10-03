@@ -63,6 +63,7 @@ urlpatterns = [
         rule_views.category_rule_application_reverse,
         name="category-rule-application-reverse",
     ),
+    path("settings/tags/", views.tag_list, name="tag-list"),
     path("settings/data/", views.settings_data, name="settings-data"),
     path("settings/data/export/", views.account_export, name="account-export"),
     path("settings/ai/", views.settings_ai, name="settings-ai"),
@@ -103,6 +104,7 @@ urlpatterns = [
     path("accounts/<int:account_id>/archive/", account_views.account_archive, name="account-archive"),
     path("accounts/<int:account_id>/delete/", account_views.account_delete, name="account-delete"),
     path("accounts/<int:account_id>/balances/", net_worth_views.account_balances, name="account-balances"),
+    path("accounts/<int:account_id>/pair/", net_worth_views.account_pair_loan, name="account-pair-loan"),
     path(
         "accounts/<int:account_id>/balances/<int:snapshot_id>/edit/",
         net_worth_views.account_snapshot_edit,
@@ -133,6 +135,7 @@ urlpatterns = [
         name="suggestion-reject",
     ),
     path("transactions/<int:transaction_id>/edit/", views.transaction_edit, name="transaction-edit"),
+    path("transactions/<int:transaction_id>/note-tags/", views.transaction_note_tags, name="transaction-note-tags"),
     path("transactions/<int:transaction_id>/category/", views.transaction_categorize, name="transaction-categorize"),
     path("transactions/<int:transaction_id>/split/", views.transaction_split, name="transaction-split"),
     path("transactions/<int:transaction_id>/unsplit/", views.transaction_unsplit, name="transaction-unsplit"),
@@ -151,6 +154,7 @@ urlpatterns = [
         "categories/rules/<int:rule_id>/",
         RedirectView.as_view(pattern_name="category-rule-detail", permanent=True, query_string=True),
     ),
+    path("tags/", RedirectView.as_view(pattern_name="tag-list", permanent=True, query_string=True)),
     path(
         "categories/rules/applications/<int:application_id>/reverse/",
         RedirectView.as_view(pattern_name="category-rule-application-reverse", permanent=True, query_string=True),

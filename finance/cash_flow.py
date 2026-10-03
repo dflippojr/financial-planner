@@ -242,8 +242,10 @@ def period_label(window, *, today):
     return base
 
 
-def selected_accounts(principal, *, account=None, scope=""):
+def selected_accounts(principal, *, account=None, scope="", cash_flow_only=False):
     accounts = Account.objects.visible_to(principal).order_by("name", "pk")
+    if cash_flow_only:
+        accounts = accounts.for_cash_flow()
     if scope:
         accounts = accounts.filter(scope=scope)
     if account is not None:
@@ -275,7 +277,7 @@ def _period_missing_import(window, accounts, batches_by_account):
     return False
 
 
-def _filter_query(date_from, date_to, *, account=None, scope="", category=None):
+def _filter_query(date_from, date_to, *, account=None, scope="", category=None, tag=None):
     query = {"date_from": date_from.isoformat(), "date_to": date_to.isoformat()}
     if account is not None:
         query["account"] = str(account.pk)
@@ -283,11 +285,13 @@ def _filter_query(date_from, date_to, *, account=None, scope="", category=None):
         query["scope"] = scope
     if category is not None:
         query["category"] = category
+    if tag is not None:
+        query["tag"] = str(tag.pk)
     return query
 
 
-def _drilldown_url(window, *, account=None, scope=""):
-    return f"{reverse('transaction-list')}?{urlencode(_filter_query(window.start, window.end, account=account, scope=scope))}"
+def _drilldown_url(window, *, account=None, scope="", tag=None):
+    return f"{reverse('transaction-list')}?{urlencode(_filter_query(window.start, window.end, account=account, scope=scope, tag=tag))}"
 
 
 def format_percent(amount_minor, total_minor):
@@ -338,17 +342,18 @@ def spending_category_detail_url(
     account=None,
     scope="",
     grouping=GROUPING_MONTH,
+    tag=None,
 ):
     if filter_value == "uncategorized":
         path = reverse("spending-category-uncategorized")
     else:
         path = reverse("spending-category-detail", args=[int(filter_value)])
-    query = _filter_query(date_from, date_to, account=account, scope=scope)
+    query = _filter_query(date_from, date_to, account=account, scope=scope, tag=tag)
     query["grouping"] = grouping
     return f"{path}?{urlencode(query)}"
 
 
-def _spending_row(item, *, total_spending, date_from, date_to, account, scope, grouping=GROUPING_MONTH):
+def _spending_row(item, *, total_spending, date_from, date_to, account, scope, grouping=GROUPING_MONTH, tag=None):
     spending_minor = item["spending_minor"]
     query = _filter_query(
         date_from,
@@ -356,6 +361,7 @@ def _spending_row(item, *, total_spending, date_from, date_to, account, scope, g
         account=account,
         scope=scope,
         category=item["filter_value"],
+        tag=tag,
     )
     return SimpleNamespace(
         key=item["filter_value"],
@@ -373,6 +379,7 @@ def _spending_row(item, *, total_spending, date_from, date_to, account, scope, g
             account=account,
             scope=scope,
             grouping=grouping,
+            tag=tag,
         ),
     )
 
@@ -385,13 +392,15 @@ def spending_by_category_report(
     account=None,
     scope="",
     grouping=GROUPING_MONTH,
+    tag=None,
 ):
-    accounts = selected_accounts(principal, account=account, scope=scope)
+    accounts = selected_accounts(principal, account=account, scope=scope, cash_flow_only=True)
     totals = income_and_spending_totals(
         principal,
         date_from=date_from,
         date_to=date_to,
         accounts=accounts,
+        tag=tag,
     )
     named = {item.pk: item for item in Category.objects.visible_to(principal)}
     combined = _combine_category_spending(totals.spending_by_category_id, named)
@@ -404,6 +413,7 @@ def spending_by_category_report(
             account=account,
             scope=scope,
             grouping=grouping,
+            tag=tag,
         )
         for item in combined.values()
     ]
@@ -435,11 +445,12 @@ def cash_flow_report(
     account=None,
     scope="",
     today=None,
+    tag=None,
 ):
     if period_count(date_from, date_to, grouping) > MAX_REPORT_PERIODS:
         raise ValueError("Too many periods for one report.")
     today = today or timezone.localdate()
-    accounts = selected_accounts(principal, account=account, scope=scope)
+    accounts = selected_accounts(principal, account=account, scope=scope, cash_flow_only=True)
     batches_by_account = _batches_by_account(principal, accounts)
     account_filter = accounts
     periods = []
@@ -449,6 +460,7 @@ def cash_flow_report(
             date_from=window.start,
             date_to=window.end,
             accounts=account_filter,
+            tag=tag,
         )
         missing = bool(accounts) and _period_missing_import(window, accounts, batches_by_account)
         periods.append(
@@ -463,7 +475,7 @@ def cash_flow_report(
                 spending_display=format_minor(totals.spending_minor),
                 net_display=format_minor(totals.net_minor),
                 missing_import=missing,
-                drilldown_url=_drilldown_url(window, account=account, scope=scope),
+                drilldown_url=_drilldown_url(window, account=account, scope=scope, tag=tag),
             )
         )
     visible_transactions = (
@@ -478,6 +490,7 @@ def cash_flow_report(
         date_from=date_from,
         date_to=date_to,
         accounts=account_filter,
+        tag=tag,
     )
     previous_from, previous_to = previous_equal_range(date_from, date_to)
     previous = None
@@ -487,6 +500,7 @@ def cash_flow_report(
             date_from=previous_from,
             date_to=previous_to,
             accounts=account_filter,
+            tag=tag,
         )
     return SimpleNamespace(
         accounts=accounts,
