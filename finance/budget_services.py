@@ -397,7 +397,11 @@ def reset_budget_rollover(principal, budget, *, month):
             # Replace rather than update, so created_at marks this reset and it counts
             # in the current rollover period (which ignores resets created earlier).
             BudgetRolloverReset.objects.filter(budget=budget, month=month).delete()
-            BudgetRolloverReset.objects.create(budget=budget, month=month, actor=person)
+            reset = BudgetRolloverReset.objects.create(budget=budget, month=month, actor=person)
+            # Never earlier than the current period's start, so a reset made in the
+            # same clock tick as re-enabling still counts in the new period.
+            if budget.rollover_enabled_at is not None and reset.created_at < budget.rollover_enabled_at:
+                BudgetRolloverReset.objects.filter(pk=reset.pk).update(created_at=budget.rollover_enabled_at)
     except IntegrityError as exc:
         raise ValidationError("Could not reset rollover for this month.") from exc
     return budget
