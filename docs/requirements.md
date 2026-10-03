@@ -1,6 +1,6 @@
 # Requirements
 
-Updated: 2026-09-30. This is a working product brief; open questions are explicit.
+Updated: 2026-10-02. This is a working product brief; open questions are explicit.
 
 ## Goal
 
@@ -175,8 +175,16 @@ Same 439 rows and 282 negative amounts as the native file, so the same transacti
 - The default range and presets match the cash flow view: the last 12 full months plus the current month to date. Presets are this month, last month, last 3 months, last 12 months, and year to date.
 - A category whose refunds exceed its spending in the range shows a negative total, marked as a net refund, so totals reconcile exactly with the cash flow view.
 - Rows are sorted by spending, largest first, with a percent-of-total column. Uncategorized is always listed.
-- Category tiles and a donut chart of the same shares come first (issue #57); the totals table remains the accessible detail, with drilldown from tiles, slices, and rows. Per-category trends over time come later.
+- Category tiles and a donut chart of the same shares come first (issue #57); the totals table remains the accessible detail, with drilldown from tiles, slices, and rows. Per-category trends over time are issue #100.
 - Income is not part of this view.
+
+## Spending by category over time (2026-10-02, #100)
+
+- A Trends tab on the spending-by-category page uses the same range presets, account and private/household filters, and default range as the overview. Grouping matches cash flow: month by default, with week, quarter, and year available.
+- Each period's per-category totals come from `spending_by_category_report`, so they reconcile with the overview and with cash flow spending for that period, including refunds and excluded transfers.
+- The stacked bar chart shows the top 8 categories by spending in the selected range plus an Other group. The accessible table lists every category, including Uncategorized. Chart data is on the page (`json_script`).
+- Category tiles and table names link to `/spending/category/<id>/` (or `uncategorized`). That page shows the category's trend for the selected grouping, its average per period, its change against the previous equal-length range, and a link to the transaction list.
+- Colors use the existing stable category color mapping.
 
 ## Adjusting transaction dates (2026-09-30)
 
@@ -207,6 +215,17 @@ Owner decisions:
 - **Look:** bold and visual. Charts and color-coded summary cards come first, with tables as the detail behind them.
 - **Theme:** light or dark following the device setting, plus a manual toggle that the browser remembers.
 - **Devices:** desktop and iPhone matter equally. The layout is responsive, with a sidebar on desktop and a compact menu on the phone. Wide tables stay usable on a narrow screen.
+
+## Installable home-screen app (2026-10-02, #103)
+
+Defaults recorded so backlog work can continue (the owner may change them):
+
+- There is **no service worker in v1**, so the browser does not cache HTML or financial data on the device. Web push for alerts (#99) would add a service worker under its own decision.
+- The web app manifest name is **Financial Planner**, short name **Finances**, `display: standalone`.
+- Icons are an original rising-bar SVG in the repository, with committed PNG sizes 180 (Apple touch icon), 192, and 512. No third-party artwork or CDN.
+- Theme-color meta tags follow daisyUI light and dark base backgrounds (`#ffffff` / `#1d232a`); the manifest `theme_color` is daisyUI light primary (`#422ad5`).
+- Compact phone layout uses `viewport-fit=cover` and `env(safe-area-inset-*)` padding for the notch and home indicator.
+- Adding the app to an iPhone home screen, password and Google sign-in in standalone mode, and safe-area spacing are an owner device check after merge, not an automated test.
 
 Constraints carried from the existing requirements:
 - **Self-hosted assets only.** No CDN, web fonts, or other third-party requests. The app is private and must work without reaching outside services.
@@ -365,3 +384,20 @@ AI refinements (owner, 2026-10-02, #91 and #94):
 - **Advice.** The chat bot answers factual and explanatory questions. Its suggestions are labeled as opinion and never presented as financial advice.
 - **Chat UI.** A Chat page, plus a drawer on every page that continues the same conversation. The drawer passes only the current route and its query parameters, never page data.
 - **Local model in chat.** Offered only after a synthetic-data evaluation shows reliable tool calling.
+
+## Sign in with ChatGPT as an AI backend (2026-10-02, #92)
+
+Research is in `docs/research/sign-in-with-chatgpt.md` (sources checked 2026-10-02).
+
+**Owner decision: pursue access.** The research found that a household web connect button doesn't fit OpenAI's self-serve flow today:
+- callbacks go only to `http://127.0.0.1`;
+- the Sign in with ChatGPT Terms, as quoted in the research, say tokens must stay local and under the user's control, and one person's plan must not serve another person's requests.
+
+The owner wants to find out what access is possible rather than wait. Two routes:
+- **The hosting member, self-serve (to prototype).** OpenAI documents a self-hosted procedure: complete sign-in on a machine with a browser through the `127.0.0.1` callback, then move the credentials to a server the same user controls. Here the server is the hosting member's own basement PC. Signing in from a browser on that PC lets the loopback callback reach it directly. The connection is the hosting member's only, which matches #91's "only the hosting member for now". Whether storing that member's token encrypted in this app's database counts as "local and under the user's control" is unverified, and the prototype must record the reading it relies on.
+- **Other members: no documented route today.** OpenAI's interest form is for commercial integrations. Open-source developers are directed to the self-serve docs, whose flow needs a `127.0.0.1` callback on the member's own device. OpenAI's documented credential transfer assumes a server that only that member controls, which a household server is not. Revisit when OpenAI documents a self-serve pattern for small multi-user self-hosted apps.
+- **Also available now:** the hosting member's ChatGPT plan already works through Agent Harness's `codex` backend (#91), without Sign in with ChatGPT.
+
+**Proposed, not yet decided:** Sign in with ChatGPT is an AI connection only, not a sign-in method next to Google. Invitations still apply.
+
+**Data use:** plan-usage Responses must use `store: false`. Whether request bodies are used for training was not established. #106 applies before household-shared data is sent.

@@ -340,7 +340,11 @@ def _choose_project(projects):
             names.append(item)
     if wanted in names:
         return wanted
-    return names[0] if names else wanted
+    # Never fall back to another project: until app-tools-only sessions exist, a
+    # session gets that project's workspace and tools.
+    raise AiError(
+        f"Create an empty project named {wanted} in Agent Harness, then connect again."
+    )
 
 
 def _backend_items(payload):

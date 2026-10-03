@@ -1,6 +1,9 @@
+import mimetypes
 import os
 import tempfile
 from pathlib import Path
+
+mimetypes.add_type("application/manifest+json", ".webmanifest")
 
 from django.core.exceptions import ImproperlyConfigured
 
@@ -102,6 +105,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 STATICFILES_DIRS = [BASE_DIR / "static"]
+WHITENOISE_MIMETYPES = {".webmanifest": "application/manifest+json"}
 STORAGES = {
     "default": {
         "BACKEND": "django.core.files.storage.FileSystemStorage",

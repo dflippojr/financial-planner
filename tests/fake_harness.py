@@ -26,6 +26,7 @@ class FakeHarnessState:
         self.running_polls = 0
         self.stuck_waiting_app = False
         self.session_get_errors = 0
+        self.projects = [{"name": "financial-planner", "description": "", "target": "local"}]
         self.initial_session_status = "running"
         self.session_polls_left = {}
 
@@ -129,7 +130,7 @@ def start_fake_harness(state=None):
             if parsed.path == "/api/v1/projects":
                 if not self._auth():
                     return
-                self._json(200, [{"name": "financial-planner", "description": "", "target": "local"}])
+                self._json(200, harness.projects)
                 return
             if parsed.path == "/api/v1/models/status":
                 if not self._auth():

@@ -330,7 +330,25 @@ def _combine_category_spending(by_category_id, named):
     return combined
 
 
-def _spending_row(item, *, total_spending, date_from, date_to, account, scope):
+def spending_category_detail_url(
+    filter_value,
+    date_from,
+    date_to,
+    *,
+    account=None,
+    scope="",
+    grouping=GROUPING_MONTH,
+):
+    if filter_value == "uncategorized":
+        path = reverse("spending-category-uncategorized")
+    else:
+        path = reverse("spending-category-detail", args=[int(filter_value)])
+    query = _filter_query(date_from, date_to, account=account, scope=scope)
+    query["grouping"] = grouping
+    return f"{path}?{urlencode(query)}"
+
+
+def _spending_row(item, *, total_spending, date_from, date_to, account, scope, grouping=GROUPING_MONTH):
     spending_minor = item["spending_minor"]
     query = _filter_query(
         date_from,
@@ -340,6 +358,7 @@ def _spending_row(item, *, total_spending, date_from, date_to, account, scope):
         category=item["filter_value"],
     )
     return SimpleNamespace(
+        key=item["filter_value"],
         name=item["name"],
         spending_minor=spending_minor,
         spending_display=format_minor(spending_minor),
@@ -347,6 +366,14 @@ def _spending_row(item, *, total_spending, date_from, date_to, account, scope):
         is_net_refund=spending_minor < 0,
         color_index=category_color_index(item["color_key"]),
         drilldown_url=f"{reverse('transaction-list')}?{urlencode(query)}",
+        detail_url=spending_category_detail_url(
+            item["filter_value"],
+            date_from,
+            date_to,
+            account=account,
+            scope=scope,
+            grouping=grouping,
+        ),
     )
 
 
@@ -357,6 +384,7 @@ def spending_by_category_report(
     date_to,
     account=None,
     scope="",
+    grouping=GROUPING_MONTH,
 ):
     accounts = selected_accounts(principal, account=account, scope=scope)
     totals = income_and_spending_totals(
@@ -375,6 +403,7 @@ def spending_by_category_report(
             date_to=date_to,
             account=account,
             scope=scope,
+            grouping=grouping,
         )
         for item in combined.values()
     ]
