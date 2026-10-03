@@ -33,6 +33,7 @@ def _backend_label(backend):
     return labels.get(backend, backend or "AI")
 
 
+@require_GET
 def chat_page(request):
     person = _person(request)
     conversation_id = request.GET.get("c")

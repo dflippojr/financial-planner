@@ -6,6 +6,7 @@ import json
 from datetime import date, datetime
 from urllib.parse import urlencode
 
+from django.db.models import Exists, OuterRef
 from django.urls import reverse
 from django.utils import timezone
 
@@ -20,7 +21,7 @@ from .cash_flow import (
     spending_by_category_report,
 )
 from .category_services import current_household
-from .models import Account, Category, PlannedItem, RecurringSeries, Transaction
+from .models import Account, Category, PlannedItem, RecurringSeries, RecurringSeriesMember, Transaction
 from .net_worth import net_worth_report
 from .planning_services import projected_months_for
 from .policy_services import household_ai_allowed, may_use_ai
@@ -172,6 +173,12 @@ def visible_accounts(person):
     return query
 
 
+def _ai_scope(person):
+    household = current_household(person)
+    include_household = household is None or household_ai_allowed(household)
+    return visible_accounts(person), include_household
+
+
 def list_accounts(person, args):
     rows = []
     for account in visible_accounts(person).order_by("name", "pk")[:MAX_TOOL_ROWS]:
@@ -219,6 +226,7 @@ def cash_flow_totals(person, args):
     if error:
         return ToolResult(text=error, ok=False)
     scope = _scope(args.get("scope"))
+    accounts, _include_household = _ai_scope(person)
     report = cash_flow_report(
         person,
         date_from=date_from,
@@ -226,6 +234,7 @@ def cash_flow_totals(person, args):
         grouping=GROUPING_MONTH,
         account=account,
         scope=scope,
+        accounts=accounts,
     )
     query = _range_query(date_from, date_to, account=account, scope=scope)
     page_url = f"{reverse('home')}?{urlencode(query)}"
@@ -261,12 +270,14 @@ def spending_by_category(person, args):
     if error:
         return ToolResult(text=error, ok=False)
     scope = _scope(args.get("scope"))
+    accounts, _include_household = _ai_scope(person)
     report = spending_by_category_report(
         person,
         date_from=date_from,
         date_to=date_to,
         account=account,
         scope=scope,
+        accounts=accounts,
     )
     wanted = (args.get("category") or "").strip()
     rows = []
@@ -365,10 +376,20 @@ def search_transactions(person, args):
 
 
 def recurring_series(person, args):
+    accounts, _include_household = _ai_scope(person)
     url = reverse("recurring-review")
     rows = []
     figures = []
-    for series in RecurringSeries.objects.visible_to(person).filter(is_active=True).order_by("display_name", "pk")[:MAX_TOOL_ROWS]:
+    hidden = RecurringSeriesMember.objects.filter(series_id=OuterRef("pk")).exclude(
+        transaction__account_id__in=accounts.values("pk")
+    )
+    series_query = (
+        RecurringSeries.objects.visible_to(person)
+        .filter(is_active=True)
+        .exclude(Exists(hidden))
+        .order_by("display_name", "pk")
+    )
+    for series in series_query[:MAX_TOOL_ROWS]:
         rows.append(
             {
                 "id": series.pk,
@@ -387,7 +408,10 @@ def recurring_series(person, args):
 def net_worth_series(person, args):
     date_from, date_to = _dates(args)
     scope = _scope(args.get("scope"))
-    report = net_worth_report(person, date_from=date_from, date_to=date_to, scope=scope)
+    accounts, _include_household = _ai_scope(person)
+    report = net_worth_report(
+        person, date_from=date_from, date_to=date_to, scope=scope, accounts=accounts
+    )
     query = _range_query(date_from, date_to, scope=scope)
     url = f"{reverse('net-worth')}?{urlencode(query)}"
     periods = []
@@ -406,8 +430,11 @@ def net_worth_series(person, args):
 
 
 def list_budgets(person, args):
+    accounts, include_household = _ai_scope(person)
     month = parse_month(args.get("month"))
-    cards = month_budget_cards(person, month)
+    cards = month_budget_cards(
+        person, month, accounts=accounts, include_household=include_household
+    )
     url = f"{reverse('budgets')}?{urlencode({'month': month.isoformat()[:7]})}"
     rows = []
     figures = []
@@ -424,7 +451,10 @@ def list_budgets(person, args):
             }
         )
         figures.append(_figure(f"{card.name} spent", card.spent_minor, card.drilldown_url))
-    return ToolResult(text=json.dumps({"month": month.isoformat(), "page_url": url, "rows": rows}), figures=tuple(figures))
+    return ToolResult(
+        text=json.dumps({"month": month.isoformat()[:7], "page_url": url, "rows": rows}),
+        figures=tuple(figures),
+    )
 
 
 def projected_cash_flow_tool(person, args):
@@ -435,7 +465,14 @@ def projected_cash_flow_tool(person, args):
         horizon = 12
     if horizon not in {3, 6, 12, 24}:
         horizon = 12
-    months = projected_months_for(person, today=today, horizon=horizon)
+    accounts, include_household = _ai_scope(person)
+    months = projected_months_for(
+        person,
+        today=today,
+        horizon=horizon,
+        accounts=accounts,
+        include_household=include_household,
+    )
     url = f"{reverse('home')}?{urlencode({'horizon': horizon})}"
     rows = []
     figures = []
@@ -452,9 +489,10 @@ def projected_cash_flow_tool(person, args):
             }
         )
         figures.append(_figure(f"Projected {month.label} net", month.net_minor, url))
-    planned = list(
-        PlannedItem.objects.visible_to(person).filter(enabled=True).order_by("start_date", "pk")[:MAX_TOOL_ROWS]
-    )
+    planned_query = PlannedItem.objects.visible_to(person).filter(enabled=True)
+    if not include_household:
+        planned_query = planned_query.filter(scope=PlannedItem.Scope.PRIVATE, owner=person)
+    planned = list(planned_query.order_by("start_date", "pk")[:MAX_TOOL_ROWS])
     planned_rows = [
         {
             "id": item.pk,

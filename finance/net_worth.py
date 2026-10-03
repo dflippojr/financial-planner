@@ -188,11 +188,11 @@ def _summary(periods):
     )
 
 
-def net_worth_report(principal, *, date_from, date_to, scope="", today=None):
+def net_worth_report(principal, *, date_from, date_to, scope="", today=None, accounts=None):
     if period_count(date_from, date_to, GROUPING_MONTH) > MAX_REPORT_PERIODS:
         raise ValueError("Too many periods for one report.")
     today = today or timezone.localdate()
-    accounts = selected_accounts(principal, scope=scope)
+    accounts = selected_accounts(principal, scope=scope, accounts=accounts)
     indexed = _indexed_snapshots(principal, accounts, date_to)
     periods = [
         _month_period(window, accounts, indexed, today)

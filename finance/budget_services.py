@@ -36,11 +36,14 @@ def parse_month(raw, *, today=None):
     if not raw:
         return month_start(today)
     try:
-        year_s, month_s = raw.split("-", 1)
-        parsed = date(int(year_s), int(month_s), 1)
-    except (TypeError, ValueError):
+        parts = str(raw).strip().split("-")
+        year = int(parts[0])
+        month = int(parts[1])
+        day = int(parts[2]) if len(parts) >= 3 else 1
+        parsed = date(year, month, day)
+    except (TypeError, ValueError, IndexError):
         return month_start(today)
-    return parsed
+    return month_start(parsed)
 
 
 def _person(principal):
@@ -92,7 +95,7 @@ def _spent_from_report(budget, report):
     return 0
 
 
-def _reports_for_months(principal, months, scope):
+def _reports_for_months(principal, months, scope, accounts=None):
     cache = {}
     for month in months:
         cache[month] = spending_by_category_report(
@@ -100,6 +103,7 @@ def _reports_for_months(principal, months, scope):
             date_from=month,
             date_to=month_end(month),
             scope=scope,
+            accounts=accounts,
         )
     return cache
 
@@ -212,11 +216,14 @@ def _needed_months(budgets, month):
     return sorted(needed)
 
 
-def month_budget_cards(principal, month, *, include_archived=False):
+def month_budget_cards(principal, month, *, include_archived=False, accounts=None, include_household=True):
     month = month_start(month)
     budgets = Budget.objects.visible_to(principal).select_related("category")
     if not include_archived:
         budgets = budgets.filter(status=Budget.Status.ACTIVE)
+    if not include_household:
+        person = _person(principal)
+        budgets = budgets.filter(scope=Budget.Scope.PRIVATE, owner=person)
     budgets = list(budgets.order_by("scope", "category__name", "pk"))
     by_scope = {}
     for budget in budgets:
@@ -224,7 +231,7 @@ def month_budget_cards(principal, month, *, include_archived=False):
     cards = []
     for scope, group in by_scope.items():
         months = _needed_months(group, month)
-        reports = _reports_for_months(principal, months, scope)
+        reports = _reports_for_months(principal, months, scope, accounts=accounts)
         for budget in group:
             cards.append(progress_for(budget, month, reports))
     cards.sort(key=lambda card: (card.budget.scope, card.name.lower(), card.budget.pk))

@@ -46,7 +46,7 @@ def _series_input(series, last_on):
     )
 
 
-def visible_projection_inputs(principal, *, account=None, scope=""):
+def visible_projection_inputs(principal, *, account=None, scope="", accounts=None, include_household=True):
     """Planned items and confirmed series behind the projection.
 
     Filters match the actual report: a scope keeps planned items and series
@@ -56,6 +56,9 @@ def visible_projection_inputs(principal, *, account=None, scope=""):
     planned = PlannedItem.objects.visible_to(principal).filter(enabled=True)
     if scope:
         planned = planned.filter(scope=scope)
+    if not include_household:
+        person = _person(principal)
+        planned = planned.filter(scope=PlannedItem.Scope.PRIVATE, owner=person)
     planned_rows = list(planned.select_related("replaces_series").order_by("start_date", "pk"))
     if account is not None:
         # Planned items are left out for one account, so the series they
@@ -77,9 +80,15 @@ def visible_projection_inputs(principal, *, account=None, scope=""):
         .filter(_excluded=False)
         .values("pk")
     )
-    if account is not None or scope:
+    if account is not None or scope or accounts is not None:
         eligible = eligible.filter(
-            account__in=selected_accounts(principal, account=account, scope=scope, cash_flow_only=True)
+            account__in=selected_accounts(
+                principal,
+                account=account,
+                scope=scope,
+                cash_flow_only=True,
+                accounts=accounts,
+            )
         )
     series = RecurringSeries.objects.visible_to(principal).filter(
         status=RecurringSeries.Status.CONFIRMED,
@@ -98,8 +107,16 @@ def visible_projection_inputs(principal, *, account=None, scope=""):
     return inputs
 
 
-def projected_months_for(principal, *, today, horizon=DEFAULT_HORIZON, account=None, scope=""):
-    inputs = visible_projection_inputs(principal, account=account, scope=scope)
+def projected_months_for(
+    principal, *, today, horizon=DEFAULT_HORIZON, account=None, scope="", accounts=None, include_household=True
+):
+    inputs = visible_projection_inputs(
+        principal,
+        account=account,
+        scope=scope,
+        accounts=accounts,
+        include_household=include_household,
+    )
     return project_cash_flow(inputs, today=today, horizon=horizon)
 
 

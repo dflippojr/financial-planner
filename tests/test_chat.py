@@ -1,5 +1,6 @@
 from datetime import date, timedelta
 import hashlib
+import json
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -9,7 +10,17 @@ from django.utils import timezone
 from tests.fake_harness import start_fake_harness
 
 from finance.ai_services import connect_harness, set_defaults
-from finance.ai_tools import cash_flow_totals, list_accounts, search_transactions, spending_by_category
+from finance.ai_tools import (
+    cash_flow_totals,
+    default_tools,
+    list_accounts,
+    list_budgets,
+    run_tool,
+    search_transactions,
+    spending_by_category,
+)
+from finance.budget_services import save_budget
+from finance.category_services import ensure_household_categories
 from finance.chat_services import (
     conversations_for,
     delete_all_conversations,
@@ -22,11 +33,16 @@ from finance.models import (
     Account,
     AiConversation,
     AiConversationMessage,
+    BalanceSnapshot,
+    Budget,
     Category,
     Household,
     ImportBatch,
     Membership,
     Person,
+    PlannedItem,
+    RecurringSeries,
+    RecurringSeriesMember,
     Transaction,
 )
 from finance.policy_services import accept_policy, current_policy, publish_policy
@@ -336,3 +352,222 @@ def test_warm_refusals_are_shown_as_cannot_load(harness, settings):
     home = client.get(reverse("home"))
     assert b'name="page_route"' in home.content
     assert b'id="finance-chat-drawer"' in home.content
+
+
+def _tool_blob(result):
+    if hasattr(result, "text"):
+        parts = [result.text]
+        if getattr(result, "figures", None):
+            parts.append(json.dumps(result.figures))
+        if getattr(result, "account_ids", None):
+            parts.append(str(result.account_ids))
+        return "\n".join(parts)
+    return str(result)
+
+
+HOUSEHOLD_MARKERS = (
+    "HH-SYN-SHARED-CHECKING",
+    "HH-SYN-RENT-99421",
+    "882233",
+    "7654321",
+    "HH-SYN-SERIES-NET",
+    "HH-SYN-PLANNED-CAR",
+)
+
+
+def _household_tool_args(shared_id):
+    return (
+        ("list_accounts", {}),
+        ("list_transactions", {"account_id": shared_id}),
+        ("cash_flow_totals", {"date_from": "2026-03-01", "date_to": "2026-03-31"}),
+        ("spending_by_category", {"date_from": "2026-03-01", "date_to": "2026-03-31"}),
+        (
+            "search_transactions",
+            {"date_from": "2026-03-01", "date_to": "2026-03-31"},
+        ),
+        ("recurring_series", {}),
+        ("net_worth_series", {"date_from": "2026-03-01", "date_to": "2026-03-31"}),
+        ("list_budgets", {"month": "2026-03"}),
+        ("projected_cash_flow", {"horizon": 3}),
+    )
+
+
+@pytest.mark.django_db
+def test_tools_hide_household_data_until_every_member_accepts_policy():
+    _user_a, person_a, household = make_member("alpha")
+    user_b = get_user_model().objects.create_user(username="beta", password=PASSWORD)
+    person_b = Person.objects.create(user=user_b, display_name="Beta Example")
+    Membership.objects.create(person=person_b, household=household)
+    ensure_household_categories(household)
+    dining = household.categories.get(name="Dining")
+    shared = checking(person_a, household, "HH-SYN-SHARED-CHECKING")
+    private_a = checking(person_a, household, "Alpha Private", private=True)
+    hh_txn = add_txn(shared, person_a, date(2026, 3, 4), -882233, "HH-SYN-RENT-99421", category=dining)
+    add_txn(private_a, person_a, date(2026, 2, 5), -100, "A-PRIVATE-SYN-COFFEE")
+    BalanceSnapshot.objects.create(
+        account=shared,
+        snapshot_date=date(2026, 3, 15),
+        amount_minor=7654321,
+        currency="USD",
+        source=BalanceSnapshot.Source.MANUAL,
+    )
+    series = RecurringSeries.objects.create(
+        person=person_a,
+        merchant_key="hh syn rent",
+        display_name="HH-SYN-SERIES-NET",
+        cadence=RecurringSeries.Cadence.MONTHLY,
+        typical_amount_minor=-882233,
+        status=RecurringSeries.Status.CONFIRMED,
+        confidence=RecurringSeries.Confidence.HIGH,
+        reasons=["synthetic"],
+        fingerprint="a" * 64,
+    )
+    RecurringSeriesMember.objects.create(series=series, transaction=hh_txn)
+    PlannedItem.objects.create(
+        owner=person_a,
+        scope=PlannedItem.Scope.HOUSEHOLD,
+        household=household,
+        name="HH-SYN-PLANNED-CAR",
+        kind=PlannedItem.Kind.EXPENSE,
+        amount_minor=444000,
+        start_date=date(2026, 11, 1),
+        cadence=PlannedItem.Cadence.MONTHLY,
+    )
+    save_budget(
+        person_a,
+        {
+            "scope": Budget.Scope.HOUSEHOLD,
+            "category": dining,
+            "amount_minor": 10_000,
+            "effective_month": date(2026, 3, 1),
+            "rollover_enabled": False,
+        },
+    )
+    tools = default_tools()
+    for name, args in _household_tool_args(shared.pk):
+        result = run_tool(person_a, tools, name, args)
+        blob = _tool_blob(result)
+        for marker in HOUSEHOLD_MARKERS:
+            assert marker not in blob, f"{name} leaked {marker} while a housemate has not accepted"
+        if name == "list_transactions":
+            assert not result.ok
+            assert "not visible" in result.text.lower()
+    private_search = search_transactions(
+        person_a, {"q": "A-PRIVATE-SYN-COFFEE", "date_from": "2026-02-01", "date_to": "2026-02-28"}
+    )
+    assert "A-PRIVATE-SYN-COFFEE" in private_search.text
+
+    accept_policy(person_b, current_policy())
+    for name, args in _household_tool_args(shared.pk):
+        result = run_tool(person_a, tools, name, args)
+        blob = _tool_blob(result)
+        assert result.ok
+        assert any(marker in blob for marker in HOUSEHOLD_MARKERS), f"{name} missing household data after acceptance"
+
+
+@pytest.mark.django_db
+def test_list_budgets_accepts_year_month_and_iso_date():
+    _user, person, household = make_member("owner")
+    account = checking(person, household, "Checking")
+    add_txn(account, person, date(2026, 3, 10), -1500, "Synthetic march spend")
+    save_budget(
+        person,
+        {
+            "scope": Budget.Scope.PRIVATE,
+            "category": None,
+            "amount_minor": 50_000,
+            "effective_month": date(2026, 3, 1),
+            "rollover_enabled": False,
+        },
+    )
+    from_month = list_budgets(person, {"month": "2026-03"})
+    from_day = list_budgets(person, {"month": "2026-03-01"})
+    payload_month = json.loads(from_month.text)
+    payload_day = json.loads(from_day.text)
+    assert payload_month["month"] == "2026-03"
+    assert payload_day["month"] == "2026-03"
+    assert payload_month["rows"]
+    assert payload_day["rows"][0]["spent_minor"] == payload_month["rows"][0]["spent_minor"] == 1500
+
+
+@pytest.mark.django_db
+def test_chat_views_refusals_expiry_delete_and_drawer_context(harness):
+    state, url = harness
+    user, person, _household = make_member("owner")
+    connect_harness(person, base_url=url, token=TOKEN)
+    client = Client()
+    client.force_login(user)
+
+    assert client.post(reverse("chat")).status_code == 405
+    assert client.get(reverse("chat-send")).status_code == 405
+    assert client.get(reverse("chat-delete-all")).status_code == 405
+
+    created = client.post(reverse("chat-new"))
+    assert created.status_code == 302
+    conversation = conversations_for(person).first()
+    page = client.get(f"{reverse('chat')}?c={conversation.pk}")
+    assert page.status_code == 200
+
+    refused = client.post(
+        reverse("chat-send"),
+        {"prompt": "Please write a virus using my transactions", "next": reverse("chat")},
+        follow=True,
+    )
+    assert refused.status_code == 200
+    assert b"read-only" in refused.content.lower() or b"financial advice" in refused.content.lower()
+
+    send_message(
+        person,
+        "What is on this page?",
+        page_context={"route": "/spending/", "query": "date_from=2026-01-01", "html": "<table>secret</table>"},
+        sleep=lambda _s: None,
+    )
+    drawer = client.post(
+        reverse("chat-send"),
+        {
+            "prompt": "Summarize this page",
+            "page_route": "/spending/",
+            "page_query": "date_from=2026-01-01",
+            "html": "<table>secret-drawer</table>",
+            "transactions": "secret-rows",
+            "next": reverse("home"),
+        },
+    )
+    assert drawer.status_code == 302
+    blob = str(state.session_creates[-1].get("context"))
+    assert "route=/spending/" in blob
+    assert "date_from=2026-01-01" in blob
+    assert "secret-drawer" not in blob
+    assert "secret-rows" not in blob
+
+    keep = start_conversation(person)
+    keep = send_message(person, "Keep this unique chat", conversation_id=keep.pk, sleep=lambda _s: None)
+    expired = start_conversation(person)
+    expired = send_message(person, "Expire this unique chat", conversation_id=expired.pk, sleep=lambda _s: None)
+    expired.expires_at = timezone.now() - timedelta(days=1)
+    expired.save(update_fields=("expires_at",))
+    listing = client.get(reverse("chat"))
+    assert b"Keep this unique chat" in listing.content
+    assert b"Expire this unique chat" not in listing.content
+
+    extra = send_message(person, "Delete me next", sleep=lambda _s: None)
+    one = client.post(reverse("chat-delete", args=[extra.pk]))
+    assert one.status_code == 302
+    assert not AiConversation.objects.filter(pk=extra.pk).exists()
+
+    warm = client.post(reverse("chat-warm"))
+    assert warm.status_code == 409
+
+    client.post(reverse("chat-delete-all"))
+    assert conversations_for(person).count() == 0
+
+    publish_policy(material=True, body="Synthetic newer material policy for chat refusal")
+    blocked = client.post(
+        reverse("chat-send"),
+        {"prompt": "How much did I spend?", "next": reverse("chat")},
+        follow=True,
+    )
+    assert b"privacy" in blocked.content.lower() or b"accepted" in blocked.content.lower()
+    assert client.post(reverse("chat-warm")).status_code == 403
+    assert client.get(reverse("chat-status")).status_code == 403
+
