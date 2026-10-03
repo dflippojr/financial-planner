@@ -23,8 +23,10 @@ from .models import (
     PrivacyPolicyAcceptance,
     RecurringSeries,
     RefundLink,
+    Tag,
     Transaction,
     TransactionSplit,
+    TransactionTag,
     TransferPair,
 )
 
@@ -32,10 +34,12 @@ CENTS = Decimal("0.01")
 ENTITY_FILES = (
     "accounts",
     "categories",
+    "tags",
     "transactions",
     "import_batches",
     "transfer_pairs",
     "transaction_splits",
+    "transaction_tags",
     "recurring_series",
     "privacy_policy_acceptances",
     "ai_connections",
@@ -61,6 +65,7 @@ CSV_FIELDS = {
         "secured_asset_id",
     ),
     "categories": ("id", "household_id", "name", "code", "created_at"),
+    "tags": ("id", "household_id", "name", "is_archived", "created_at", "updated_at"),
     "transactions": (
         "id",
         "account_id",
@@ -70,6 +75,7 @@ CSV_FIELDS = {
         "amount_decimal",
         "currency",
         "description",
+        "note",
         "kind",
         "source_row_number",
         "source_transaction_id",
@@ -104,6 +110,7 @@ CSV_FIELDS = {
         "amount_minor",
         "amount_decimal",
     ),
+    "transaction_tags": ("id", "transaction_id", "tag_id", "tag_name"),
     "recurring_series": (
         "id",
         "merchant_key",
@@ -226,16 +233,25 @@ categories.csv / categories.json
   Household categories visible to the member.
   id, household_id, name, code, created_at
 
+tags.csv / tags.json
+  Household tags visible to the member.
+  id, household_id, name, is_archived, created_at, updated_at
+
 transactions.csv / transactions.json
   id, account_id, import_batch_id, transaction_date, amount_minor,
-  amount_decimal, currency, description, kind, source_row_number,
+  amount_decimal, currency, description, note, kind, source_row_number,
   source_transaction_id, category_id, category_name,
   excluded_from_income_and_spending, refund_original_id, refund_original_part_id, status, archived_at,
   fingerprint
   excluded_from_income_and_spending is true only when both legs of an
   excluding transfer pair are visible. refund_original_id is set only when the
   original transaction is also visible. refund_original_part_id is set when that
-  original is split and the chosen part is on a visible transaction.
+  original is split and the chosen part is on a visible transaction. note is the
+  member-entered free-text note.
+
+transaction_tags.csv / transaction_tags.json
+  Tag links for visible transactions.
+  id, transaction_id, tag_id, tag_name
 
 import_batches.csv / import_batches.json
   Provenance for imports on visible accounts.
@@ -383,6 +399,23 @@ def _category_rows(person):
     return rows
 
 
+def _tag_rows(person):
+    rows = []
+    tags = Tag.objects.visible_to(person).order_by("pk")
+    for tag in tags:
+        rows.append(
+            {
+                "id": tag.pk,
+                "household_id": tag.household_id,
+                "name": tag.name,
+                "is_archived": tag.is_archived,
+                "created_at": tag.created_at,
+                "updated_at": tag.updated_at,
+            }
+        )
+    return rows
+
+
 def _excluded_transaction_ids(visible_txn_ids):
     pairs = TransferPair.objects.excluding_income_and_spending().filter(
         leg_a_id__in=visible_txn_ids,
@@ -424,6 +457,7 @@ def _transaction_rows(person, visible_txn_ids):
                 "amount_decimal": money_decimal(txn.amount_minor),
                 "currency": txn.currency,
                 "description": txn.description,
+                "note": txn.note,
                 "kind": txn.kind,
                 "source_row_number": txn.source_row_number,
                 "source_transaction_id": txn.source_transaction_id,
@@ -497,6 +531,25 @@ def _split_rows(person):
                 "category_name": part.category.name,
                 "amount_minor": part.amount_minor,
                 "amount_decimal": money_decimal(part.amount_minor),
+            }
+        )
+    return rows
+
+
+def _transaction_tag_rows(person, visible_txn_ids):
+    rows = []
+    links = (
+        TransactionTag.objects.filter(transaction_id__in=visible_txn_ids)
+        .select_related("tag")
+        .order_by("pk")
+    )
+    for link in links:
+        rows.append(
+            {
+                "id": link.pk,
+                "transaction_id": link.transaction_id,
+                "tag_id": link.tag_id,
+                "tag_name": link.tag.name,
             }
         )
     return rows
@@ -667,10 +720,12 @@ def collect_export_tables(person) -> dict[str, list[dict]]:
     tables = {
         "accounts": _account_rows(person),
         "categories": _category_rows(person),
+        "tags": _tag_rows(person),
         "transactions": _transaction_rows(person, visible_txn_ids),
         "import_batches": _import_batch_rows(person),
         "transfer_pairs": _transfer_pair_rows(person),
         "transaction_splits": _split_rows(person),
+        "transaction_tags": _transaction_tag_rows(person, visible_txn_ids),
         "recurring_series": _recurring_series_rows(person),
         "privacy_policy_acceptances": _privacy_acceptance_rows(person),
         "ai_connections": _ai_connection_rows(person),

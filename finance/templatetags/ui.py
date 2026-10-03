@@ -1,5 +1,5 @@
 from django import template
-from django.forms.widgets import CheckboxInput, FileInput, Select, Textarea
+from django.forms.widgets import CheckboxInput, CheckboxSelectMultiple, FileInput, Select, Textarea
 
 
 register = template.Library()
@@ -22,6 +22,8 @@ def daisy_widget(field):
         if field.errors:
             classes += " file-input-error"
     elif isinstance(widget, CheckboxInput):
+        classes = "checkbox"
+    elif isinstance(widget, CheckboxSelectMultiple):
         classes = "checkbox"
     else:
         classes = "input input-bordered w-full"

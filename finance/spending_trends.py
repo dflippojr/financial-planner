@@ -49,6 +49,7 @@ def spending_category_trend_report(
     account=None,
     scope="",
     today=None,
+    tag=None,
 ):
     if period_count(date_from, date_to, grouping) > MAX_REPORT_PERIODS:
         raise ValueError("Too many periods for one report.")
@@ -60,6 +61,7 @@ def spending_category_trend_report(
         account=account,
         scope=scope,
         grouping=grouping,
+        tag=tag,
     )
     categories = [
         SimpleNamespace(
@@ -80,6 +82,7 @@ def spending_category_trend_report(
             account=account,
             scope=scope,
             grouping=grouping,
+            tag=tag,
         )
         amounts = _amounts_by_key(period_report.rows)
         values = [amounts.get(item.key, 0) for item in categories]
@@ -191,6 +194,7 @@ def category_spending_trend_report(
     account=None,
     scope="",
     today=None,
+    tag=None,
 ):
     trend = spending_category_trend_report(
         principal,
@@ -200,6 +204,7 @@ def category_spending_trend_report(
         account=account,
         scope=scope,
         today=today,
+        tag=tag,
     )
     color_key = "uncategorized" if category_key == "uncategorized" else int(category_key)
     color_index = category_color_index(color_key)
@@ -232,6 +237,7 @@ def category_spending_trend_report(
             account=account,
             scope=scope,
             grouping=grouping,
+            tag=tag,
         )
         previous_total = _category_total(previous_report, category_key)
     average_minor = _average_minor(values)
@@ -241,6 +247,7 @@ def category_spending_trend_report(
         account=account,
         scope=scope,
         category=category_key,
+        tag=tag,
     )
     return SimpleNamespace(
         key=category_key,

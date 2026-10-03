@@ -12,6 +12,7 @@ from .models import (
     RefundLink,
     Transaction,
     TransactionCorrectionHistory,
+    TransactionTag,
     TransferPair,
     clear_invalid_loan_pairings,
 )
@@ -387,6 +388,11 @@ def _lock_rows_for_account_delete(account):
         list(RecurringSeries.objects.select_for_update(of=("self",)).filter(pk__in=series_ids).order_by("pk"))
     if tx_ids:
         list(
+            TransactionTag.objects.select_for_update()
+            .filter(transaction_id__in=tx_ids)
+            .order_by("pk")
+        )
+        list(
             TransactionCorrectionHistory.objects.select_for_update()
             .filter(transaction_id__in=tx_ids)
             .order_by("pk")
@@ -410,6 +416,7 @@ def _repair_then_delete_account_rows(person, account):
     revalidate_series_after_member_removal(person, series_ids)
     _delete_rule_history_for_account(account, tx_ids)
     if tx_ids:
+        TransactionTag.objects.filter(transaction_id__in=tx_ids).delete()
         TransactionCorrectionHistory.objects.filter(transaction_id__in=tx_ids).delete()
         Transaction.objects.filter(pk__in=tx_ids).delete()
     ImportBatch.objects.filter(account_id=account.pk).delete()
