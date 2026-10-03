@@ -42,8 +42,8 @@ AI decisions are in [requirements](requirements.md#ai-features-2026-10-02-90).
 - [#91 AI provider layer with per-member backends](https://github.com/dflippojr/financial-planner/issues/91). Research: [#92 Sign in with ChatGPT](https://github.com/dflippojr/financial-planner/issues/92).
 - [#94 Chat with your data](https://github.com/dflippojr/financial-planner/issues/94), [#93 category suggestions](https://github.com/dflippojr/financial-planner/issues/93), and [#95 monthly review](https://github.com/dflippojr/financial-planner/issues/95).
 - Remaining Rocket Money gaps:
-  - [#96 budgets](https://github.com/dflippojr/financial-planner/issues/96)
-  - [#97 split transactions](https://github.com/dflippojr/financial-planner/issues/97)
+  - [#96 budgets](https://github.com/dflippojr/financial-planner/issues/96) (decisions in requirements)
+  - [#97 split transactions](https://github.com/dflippojr/financial-planner/issues/97) (decisions in requirements)
   - [#98 notes and tags](https://github.com/dflippojr/financial-planner/issues/98)
   - [#99 alerts](https://github.com/dflippojr/financial-planner/issues/99)
   - [#100 category trends](https://github.com/dflippojr/financial-planner/issues/100)
