@@ -402,6 +402,25 @@ The owner wants to find out what access is possible rather than wait. Two routes
 
 **Data use:** plan-usage Responses must use `store: false`. Whether request bodies are used for training was not established. #106 applies before household-shared data is sent.
 
+## Budgets (2026-10-02, #96)
+
+Owner decisions:
+- **Scope.** Budgets are private or household.
+  - A household budget counts only household-shared accounts.
+  - A private budget counts the owner's visible accounts (private and household).
+  - No member's private spending ever appears in a household total.
+  - Any current member may edit a household budget. Only the owner may edit a private one.
+- **What a budget is.** A monthly amount for one category, plus an optional overall monthly total.
+- **Actuals.**
+  - Spending comes from the same totals as spending by category (#10): transfers excluded, linked refunds reduce spending, investment activity omitted.
+  - Months use the corrected transaction date.
+  - Budget totals reconcile exactly with that view.
+- **Amount changes** apply from the chosen month onward. Past months keep their amounts.
+- **Rollover** is optional per budget, and carries in both directions: unspent adds to the next month, and overspend subtracts from it.
+  - The balance starts in the month rollover is turned on.
+  - A member who can edit the budget may reset it to zero. Each reset records who reset it and when.
+- **Projection.** Budgets do not feed the projected cash flow (#21) in v1.
+
 ## Split transactions (2026-10-02, #97)
 
 Owner decisions:
@@ -414,4 +433,3 @@ Owner decisions:
 - **Recurring detection** uses the whole transaction.
 - **History.** Splitting and unsplitting are recorded in correction history.
 - **Reports.** Spending by category, trends, and budgets count each part in its own category. Cash flow totals are unchanged, because the parts add up to the transaction.
-- **Amount edits.** Editing the amount of a split transaction is refused with "Unsplit to change the amount".
