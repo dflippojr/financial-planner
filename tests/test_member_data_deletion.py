@@ -403,3 +403,42 @@ def test_member_with_exclusions_and_alerts_can_delete_their_data():
     assert not Alert.objects.filter(dedupe_key="sync:synthetic").exists()
     assert not AlertSettings.objects.exists()
     charge.refresh_from_db()
+
+
+def _synthetic_mapping(household, creator, name):
+    from finance.models import SavedCsvMapping
+
+    return SavedCsvMapping.objects.create(
+        household=household,
+        name=name,
+        headers=["When", "Memo", "Amount"],
+        date_column="When",
+        description_column="Memo",
+        date_format="iso",
+        number_format="dot_none",
+        amount_mode="signed",
+        amount_column="Amount",
+        created_by=creator,
+    )
+
+
+@pytest.mark.django_db
+def test_saved_mappings_pass_to_the_next_member_or_go_with_the_last_one():
+    from finance.lifecycle_services import delete_member_data
+    from finance.models import SavedCsvMapping
+
+    owner = make_person("owner")
+    member = make_person("member")
+    household = make_household(owner, member)
+    handed = _synthetic_mapping(household, member, "Synthetic member mapping")
+
+    delete_member_data(member)
+
+    handed.refresh_from_db()
+    assert handed.created_by_id == owner.pk
+
+    _synthetic_mapping(household, owner, "Synthetic owner mapping")
+    delete_member_data(owner)
+
+    assert not SavedCsvMapping.objects.filter(household_id=household.pk).exists()
+    assert not Household.objects.filter(pk=household.pk).exists()

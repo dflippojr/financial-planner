@@ -10,21 +10,38 @@ from django.views.decorators.http import require_http_methods, require_POST
 
 from finance.models import Account, AccountLink, ImportBatch
 
-from .forms import AppleCardImportForm, CapitalOneImportForm, CsvMappingForm, CsvUploadForm, HuntingtonImportForm
+from .forms import (
+    AppleCardImportForm,
+    CapitalOneImportForm,
+    CsvMappingForm,
+    CsvUploadForm,
+    HuntingtonImportForm,
+    SavedMappingImportForm,
+)
 from .parser import CsvInputError, preview_csv, read_csv
 from .profiles import (
     APPLE_CARD,
     APPLE_CARD_MAPPING,
     CAPITAL_ONE,
     CAPITAL_ONE_MAPPING,
+    GENERIC,
     HUNTINGTON,
     HUNTINGTON_MAPPING,
     require_apple_card_headers,
     require_capital_one_headers,
     require_huntington_headers,
 )
+from .saved_mappings import (
+    HEADERS_DO_NOT_MATCH,
+    active_saved_mappings,
+    headers_match,
+    mapping_from_saved,
+    parse_saved_profile,
+    save_csv_mapping,
+    saved_profile_key,
+)
 from .services import categorize_imported_batch, classify_overlap, commit_csv_import, undo_import_batch
-from .staging import StageUnavailable, create_stage, delete_stage, find_live_stage, load_stage, stage_profile
+from .staging import StageUnavailable, create_stage, delete_stage, find_live_stage, load_stage, set_stage_profile, stage_profile
 
 
 HUB_TEMPLATE = "finance/csv_import/hub.html"
@@ -39,6 +56,18 @@ FIXED_PROFILES = {
     CAPITAL_ONE: FixedProfile(require_capital_one_headers, CAPITAL_ONE_MAPPING, ImportBatch.Source.CAPITAL_ONE, CapitalOneImportForm),
     APPLE_CARD: FixedProfile(require_apple_card_headers, APPLE_CARD_MAPPING, ImportBatch.Source.APPLE_CARD, AppleCardImportForm),
 }
+
+
+def _upload_form(request, account, data=None, files=None):
+    mappings = list(active_saved_mappings(request.user))
+    default = GENERIC
+    default_id = account.default_saved_csv_mapping_id
+    if default_id and any(item.pk == default_id for item in mappings):
+        default = saved_profile_key(next(item for item in mappings if item.pk == default_id))
+    kwargs = {"saved_mappings": mappings, "default_profile": default}
+    if data is not None:
+        return CsvUploadForm(data, files, **kwargs)
+    return CsvUploadForm(**kwargs)
 
 
 def _visible_account(request, account_id):
@@ -96,6 +125,38 @@ def _mapping_context(context, token, document, profile):
     return context
 
 
+def _usable_saved_mapping(user, profile):
+    saved_id = parse_saved_profile(profile)
+    if saved_id is None:
+        return None
+    return active_saved_mappings(user).filter(pk=saved_id).first()
+
+
+def _reset_stage_to_generic(request, token, account, document, context, *, header_mismatch=False):
+    set_stage_profile(request, token, account.pk, GENERIC)
+    if header_mismatch:
+        context["header_mismatch_message"] = HEADERS_DO_NOT_MATCH
+    _mapping_context(context, token, document, GENERIC)
+    return GENERIC, None
+
+
+def _resolve_saved_stage(request, token, account, document, profile, context):
+    saved_id = parse_saved_profile(profile)
+    if saved_id is None:
+        return profile, None
+    saved = _usable_saved_mapping(request.user, profile)
+    if saved is not None and headers_match(saved, document.headers):
+        return profile, saved
+    return _reset_stage_to_generic(
+        request,
+        token,
+        account,
+        document,
+        context,
+        header_mismatch=saved is not None,
+    )
+
+
 def _restore_live_stage(request, account, context):
     token = find_live_stage(request, account.pk)
     if not token:
@@ -105,6 +166,16 @@ def _restore_live_stage(request, account, context):
     except (CsvInputError, StageUnavailable):
         return
     profile = stage_profile(request, token, account.pk)
+    profile, saved = _resolve_saved_stage(request, token, account, document, profile, context)
+    if saved is not None:
+        _saved_mapping_preview(
+            context,
+            document,
+            account,
+            {"token": token},
+            saved,
+        )
+        return
     if profile in FIXED_PROFILES:
         try:
             _fixed_profile_preview(
@@ -129,7 +200,7 @@ def _import_batches(request, account):
 
 
 def _render_preview(request, account, context):
-    context.setdefault("upload_form", CsvUploadForm())
+    context.setdefault("upload_form", _upload_form(request, account))
     context["account"] = account
     context["import_batches"] = _import_batches(request, account)
     if request.method == "GET":
@@ -180,6 +251,25 @@ def _fixed_profile_preview(context, document, account, post_data, profile):
     return preview, mapping_form
 
 
+def _saved_mapping_preview(context, document, account, post_data, saved):
+    mapping = mapping_from_saved(saved)
+    preview = classify_overlap(account, preview_csv(document, mapping))
+    filled = _prefill_date_range(post_data, preview)
+    mapping_form = SavedMappingImportForm(filled)
+    mapping_form.is_valid()
+    context.update(
+        {
+            "mapping_form": mapping_form,
+            "headers": document.headers,
+            "import_profile": saved_profile_key(saved),
+            "preview": preview,
+            "commit_available": True,
+            "saved_mapping": saved,
+        }
+    )
+    return preview, mapping_form, mapping
+
+
 def _require_import_range(mapping_form, *, source_required):
     source = mapping_form.cleaned_data.get("source")
     start = mapping_form.cleaned_data.get("date_range_start")
@@ -196,7 +286,7 @@ def _require_import_range(mapping_form, *, source_required):
 
 
 def _stage_upload(request, account, context):
-    upload_form = CsvUploadForm(request.POST, request.FILES)
+    upload_form = _upload_form(request, account, request.POST, request.FILES)
     context["upload_form"] = upload_form
     if not upload_form.is_valid():
         return False
@@ -210,7 +300,10 @@ def _stage_upload(request, account, context):
             import_profile=profile,
         )
         document = read_csv(content)
-        if profile in FIXED_PROFILES:
+        profile, saved = _resolve_saved_stage(request, token, account, document, profile, context)
+        if saved is not None:
+            _saved_mapping_preview(context, document, account, {"token": token}, saved)
+        elif profile in FIXED_PROFILES:
             _fixed_profile_preview(
                 context,
                 document,
@@ -234,6 +327,7 @@ def _handle_upload(request, account, context):
 
 
 def _prepare_staged_preview(request, account, document, profile, context):
+    token = request.POST.get("token", "")
     if profile in FIXED_PROFILES:
         spec = FIXED_PROFILES[profile]
         mapping_form = spec.form_class(request.POST)
@@ -246,14 +340,30 @@ def _prepare_staged_preview(request, account, document, profile, context):
             preview, mapping_form = _fixed_profile_preview(context, document, account, request.POST, profile)
         except CsvInputError:
             raise Http404 from None
-        return preview, mapping_form, spec.mapping, False
+        return preview, mapping_form, spec.mapping, False, None
+    profile, saved = _resolve_saved_stage(request, token, account, document, profile, context)
+    if saved is not None:
+        mapping_form = SavedMappingImportForm(request.POST)
+        context.update(
+            {
+                "mapping_form": mapping_form,
+                "headers": document.headers,
+                "import_profile": profile,
+                "saved_mapping": saved,
+            }
+        )
+        if not mapping_form.is_valid():
+            return None
+        mapping = mapping_from_saved(saved)
+        preview = classify_overlap(account, preview_csv(document, mapping))
+        return preview, mapping_form, mapping, True, saved
     mapping_form = CsvMappingForm(request.POST, headers=document.headers)
     context.update({"mapping_form": mapping_form, "headers": document.headers, "import_profile": profile})
     if not mapping_form.is_valid():
         return None
     mapping = mapping_form.mapping()
     preview = classify_overlap(account, preview_csv(document, mapping))
-    return preview, mapping_form, mapping, True
+    return preview, mapping_form, mapping, True, None
 
 
 def _render_generic_preview(request, account, context, document, preview):
@@ -266,7 +376,20 @@ def _render_generic_preview(request, account, context, document, preview):
     return _render_preview(request, account, context)
 
 
-def _commit_staged_import(request, account, context, *, token, content, document, mapping, mapping_form, preview, source_required):
+def _commit_staged_import(
+    request,
+    account,
+    context,
+    *,
+    token,
+    content,
+    document,
+    mapping,
+    mapping_form,
+    preview,
+    source_required,
+    saved_csv_mapping=None,
+):
     source, start, end = _require_import_range(mapping_form, source_required=source_required)
     if mapping_form.errors:
         context["preview"] = preview
@@ -282,6 +405,7 @@ def _commit_staged_import(request, account, context, *, token, content, document
             source=source,
             date_range_start=start,
             date_range_end=end,
+            saved_csv_mapping=saved_csv_mapping,
         )
     except PermissionDenied as exc:
         raise Http404 from exc
@@ -302,6 +426,29 @@ def _commit_staged_import(request, account, context, *, token, content, document
         invalid_count=result.invalid_count,
     )
     return redirect("csv-import-preview", account_id=account.pk)
+
+
+def _save_mapping_from_preview(request, account, context, document, mapping_form, mapping, preview):
+    if not isinstance(mapping_form, CsvMappingForm):
+        return _render_preview(request, account, context)
+    try:
+        save_csv_mapping(
+            request.user,
+            name=mapping_form.cleaned_data.get("save_mapping_as", ""),
+            headers=document.headers,
+            mapping=mapping,
+            account=account,
+            set_as_account_default=mapping_form.cleaned_data.get("set_as_account_default", False),
+        )
+    except ValidationError as exc:
+        mapping_form.add_error("save_mapping_as", exc.messages[0] if exc.messages else "The mapping could not be saved.")
+        context["preview"] = preview
+        context["commit_available"] = True
+        return _render_preview(request, account, context)
+    context["mapping_saved"] = True
+    context["preview"] = preview
+    context["commit_available"] = True
+    return _render_preview(request, account, context)
 
 
 @never_cache
@@ -359,11 +506,18 @@ def csv_preview(request, account_id):
     prepared = _prepare_staged_preview(request, account, document, profile, context)
     if prepared is None:
         return _render_preview(request, account, context)
-    preview, mapping_form, mapping, source_required = prepared
+    preview, mapping_form, mapping, source_required, saved_mapping = prepared
+    profile = stage_profile(request, token, account.pk)
 
+    if action == "save_mapping":
+        return _save_mapping_from_preview(
+            request, account, context, document, mapping_form, mapping, preview
+        )
     if action == "preview":
-        if profile not in FIXED_PROFILES:
+        if profile not in FIXED_PROFILES and parse_saved_profile(profile) is None:
             return _render_generic_preview(request, account, context, document, preview)
+        context["preview"] = preview
+        context["commit_available"] = True
         return _render_preview(request, account, context)
     if action != "commit":
         return _render_preview(request, account, context)
@@ -378,6 +532,7 @@ def csv_preview(request, account_id):
         mapping_form=mapping_form,
         preview=preview,
         source_required=source_required,
+        saved_csv_mapping=saved_mapping,
     )
 
 

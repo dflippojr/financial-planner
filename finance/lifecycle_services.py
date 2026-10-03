@@ -570,11 +570,13 @@ def _handover_lent_accounts(lent, submitted, successor):
 
 
 def _transfer_household_owned_rows(person, successor_person):
-    from .models import Budget, PlannedItem, SavingsGoal
+    from .models import Budget, PlannedItem, SavedCsvMapping, SavingsGoal
 
     PlannedItem.objects.filter(owner=person, scope=PlannedItem.Scope.HOUSEHOLD).update(owner=successor_person)
     SavingsGoal.objects.filter(owner=person, scope=SavingsGoal.Scope.HOUSEHOLD).update(owner=successor_person)
     Budget.objects.filter(owner=person, scope=Budget.Scope.HOUSEHOLD).update(owner=successor_person)
+    # Saved CSV mappings are household-wide; the creator reference moves on.
+    SavedCsvMapping.objects.filter(created_by=person).update(created_by=successor_person)
 
 
 def _delete_personal_records(person):
@@ -644,6 +646,7 @@ def _delete_empty_household(household_id):
         PlannedItem,
         RuleApplication,
         RuleApplicationEntry,
+        SavedCsvMapping,
         SavingsGoal,
         Tag,
     )
@@ -659,6 +662,11 @@ def _delete_empty_household(household_id):
     SavingsGoal.objects.filter(household_id=household_id).delete()
     Budget.objects.filter(household_id=household_id).delete()
     Tag.objects.filter(household_id=household_id).delete()
+    mapping_ids = list(SavedCsvMapping.objects.filter(household_id=household_id).values_list("pk", flat=True))
+    if mapping_ids:
+        ImportBatch.objects.filter(saved_csv_mapping_id__in=mapping_ids).update(saved_csv_mapping=None)
+        Account.objects.filter(default_saved_csv_mapping_id__in=mapping_ids).update(default_saved_csv_mapping=None)
+        SavedCsvMapping.objects.filter(pk__in=mapping_ids).delete()
     Category.objects.filter(household_id=household_id).delete()
     Invitation.objects.filter(household_id=household_id).delete()
     Membership.objects.filter(household_id=household_id).delete()

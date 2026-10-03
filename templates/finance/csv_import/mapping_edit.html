@@ -1,0 +1,17 @@
+{% extends "finance/settings_base.html" %}
+{% block title %}Edit CSV mapping · Financial Planner{% endblock %}
+{% block settings_content %}
+<h2 class="mb-4 text-xl font-semibold">{{ saved_mapping.name }}</h2>
+<p class="mb-4"><a class="link" href="{% url 'csv-mapping-list' %}">Back to CSV mappings</a></p>
+{% if locked %}
+<div role="status" class="alert mb-4">
+  This mapping is locked after an import. Make a new mapping to change how files are parsed.
+  You can still rename it and change which accounts use it as the default.
+</div>
+{% endif %}
+<form method="post" class="max-w-lg">
+  {% csrf_token %}
+  {% include "finance/_form_fields.html" with form=form %}
+  <button type="submit" class="btn btn-primary">Save</button>
+</form>
+{% endblock %}
