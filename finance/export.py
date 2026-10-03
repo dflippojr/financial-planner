@@ -12,6 +12,9 @@ from django.apps import apps
 
 from .models import (
     Account,
+    AiJob,
+    AiProviderConnection,
+    AiUsageEvent,
     Category,
     ImportBatch,
     PrivacyPolicyAcceptance,
@@ -30,6 +33,9 @@ ENTITY_FILES = (
     "transfer_pairs",
     "recurring_series",
     "privacy_policy_acceptances",
+    "ai_connections",
+    "ai_jobs",
+    "ai_usage",
 )
 CSV_FIELDS = {
     "accounts": (
@@ -98,6 +104,36 @@ CSV_FIELDS = {
         "policy_version",
         "is_material",
         "accepted_at",
+    ),
+    "ai_connections": (
+        "id",
+        "kind",
+        "base_url",
+        "chat_backend",
+        "background_backend",
+        "connected_at",
+    ),
+    "ai_jobs": (
+        "id",
+        "feature",
+        "backend",
+        "status",
+        "attempts",
+        "input_refs",
+        "result_ref",
+        "failure_code",
+        "created_at",
+        "finished_at",
+    ),
+    "ai_usage": (
+        "id",
+        "provider",
+        "backend",
+        "feature",
+        "prompt_tokens",
+        "completion_tokens",
+        "outcome",
+        "created_at",
     ),
     "balance_snapshots": (
         "id",
@@ -178,6 +214,18 @@ balance_snapshots.csv / balance_snapshots.json
 privacy_policy_acceptances.csv / privacy_policy_acceptances.json
   This member's policy-acceptance rows: id, policy_version, is_material,
   accepted_at.
+
+ai_connections.csv / ai_connections.json
+  This member's AI provider connections: kind, base URL, chosen backends.
+  Tokens and other secrets are omitted.
+
+ai_jobs.csv / ai_jobs.json
+  Background AI jobs for this member. Inputs are references (ids), never
+  copies of financial rows. Prompts and model answers are omitted.
+
+ai_usage.csv / ai_usage.json
+  This member's AI usage: provider, backend, feature, token counts, outcome.
+  Prompts and responses are omitted.
 
 JSON files are arrays of objects. CSV uses UTF-8. Nested lists in CSV are JSON
 arrays. Date and datetime values are ISO-8601.
@@ -407,6 +455,61 @@ def _privacy_acceptance_rows(person):
     return rows
 
 
+def _ai_connection_rows(person):
+    rows = []
+    query = AiProviderConnection.objects.owned_by(person).order_by("pk")
+    for row in query:
+        rows.append(
+            {
+                "id": row.pk,
+                "kind": row.kind,
+                "base_url": row.base_url,
+                "chat_backend": row.chat_backend,
+                "background_backend": row.background_backend,
+                "connected_at": row.connected_at,
+            }
+        )
+    return rows
+
+
+def _ai_job_rows(person):
+    rows = []
+    for row in AiJob.objects.visible_to(person).order_by("pk"):
+        rows.append(
+            {
+                "id": row.pk,
+                "feature": row.feature,
+                "backend": row.backend,
+                "status": row.status,
+                "attempts": row.attempts,
+                "input_refs": row.input_refs,
+                "result_ref": row.result_ref,
+                "failure_code": row.failure_code,
+                "created_at": row.created_at,
+                "finished_at": row.finished_at,
+            }
+        )
+    return rows
+
+
+def _ai_usage_rows(person):
+    rows = []
+    for row in AiUsageEvent.objects.visible_to(person).order_by("pk"):
+        rows.append(
+            {
+                "id": row.pk,
+                "provider": row.provider,
+                "backend": row.backend,
+                "feature": row.feature,
+                "prompt_tokens": row.prompt_tokens,
+                "completion_tokens": row.completion_tokens,
+                "outcome": row.outcome,
+                "created_at": row.created_at,
+            }
+        )
+    return rows
+
+
 def _balance_snapshot_model():
     try:
         return apps.get_model("finance", "BalanceSnapshot")
@@ -424,6 +527,9 @@ def collect_export_tables(person) -> dict[str, list[dict]]:
         "transfer_pairs": _transfer_pair_rows(person),
         "recurring_series": _recurring_series_rows(person),
         "privacy_policy_acceptances": _privacy_acceptance_rows(person),
+        "ai_connections": _ai_connection_rows(person),
+        "ai_jobs": _ai_job_rows(person),
+        "ai_usage": _ai_usage_rows(person),
     }
     snapshot_model = _balance_snapshot_model()
     if snapshot_model is not None:

@@ -53,7 +53,7 @@ Prerequisites are Docker Desktop configured to use WSL2 and start when Windows s
    docker compose --env-file $Config ps
    ```
 
-   The app entrypoint runs `python manage.py migrate --noinput` before Gunicorn starts. Both the application and PostgreSQL should report `healthy`; the backup and SimpleFIN sync schedulers should report `Up`.
+   The app entrypoint runs `python manage.py migrate --noinput` before Gunicorn starts. Both the application and PostgreSQL should report `healthy`; the backup, SimpleFIN sync, and AI job runners should report `Up`.
 
 4. Configure persistent tailnet-only HTTPS using the current Tailscale CLI syntax:
 

@@ -34,6 +34,7 @@
   </form>
   {% endif %}
 </section>
+{% include "finance/_ai_settings.html" %}
 <form method="post" action="{% url 'account-export' %}" class="mb-4">
   {% csrf_token %}
   <button type="submit" class="btn btn-outline">Export data</button>

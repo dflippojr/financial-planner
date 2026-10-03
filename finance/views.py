@@ -76,6 +76,7 @@ from .reauth import (
 )
 from .export import export_filename, write_export_zip
 from .models import Account, Category, Person, PrivacyPolicyVersion, RecurringSeries, RefundLink, Transaction, TransactionCorrectionHistory, TransferPair
+from .ai_views import ai_settings_context
 from .policy_services import (
     accept_shown_version,
     current_policy,
@@ -1110,6 +1111,7 @@ def account_settings(request):
             "privacy_policy": policy,
             "privacy_in_acceptance": in_acceptance(person) if person is not None else False,
             "privacy_acceptance": acceptance,
+            **ai_settings_context(person),
         },
     )
 

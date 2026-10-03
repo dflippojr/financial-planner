@@ -41,9 +41,16 @@ services:
       POSTGRES_PORT: "5432"
       # Staged CSV uploads live on the tmpfs below, so they never reach disk.
       CSV_IMPORT_STAGING_DIR: /run/csv-staging/uploads
+      AI_LOCAL_QUIET_WINDOW: ${AI_LOCAL_QUIET_WINDOW:-22:00-06:00}
+      AGENT_HARNESS_PROJECT: ${AGENT_HARNESS_PROJECT:-financial-planner}
+      AGENT_HARNESS_HOSTED_SESSIONS: ${AGENT_HARNESS_HOSTED_SESSIONS:-false}
+      AGENT_HARNESS_SESSION_TIMEOUT_SECONDS: ${AGENT_HARNESS_SESSION_TIMEOUT_SECONDS:-600}
+      AGENT_HARNESS_STALE_JOB_MARGIN_SECONDS: ${AGENT_HARNESS_STALE_JOB_MARGIN_SECONDS:-120}
     depends_on:
       db:
         condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     tmpfs:
       # Memory-backed and discarded whenever the container stops. The app creates
       # its own 0700 subdirectory here, so the mount itself needs no fixed user id.
@@ -104,6 +111,41 @@ services:
     # The image's HTTP health check probes Gunicorn, which this container does
     # not run. The scheduler loop is the main process, so the container stops
     # (and restarts) if it dies; like the backup scheduler, it reports only Up.
+    healthcheck:
+      disable: true
+
+  ai-jobs:
+    build: .
+    restart: unless-stopped
+    environment:
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?DJANGO_SECRET_KEY must be set}
+      DJANGO_DEBUG: "false"
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:?DJANGO_ALLOWED_HOSTS must be set}
+      DJANGO_CSRF_TRUSTED_ORIGINS: ${DJANGO_CSRF_TRUSTED_ORIGINS:?DJANGO_CSRF_TRUSTED_ORIGINS must be set}
+      DJANGO_SECURE_COOKIES: "true"
+      DJANGO_SECURE_SSL_REDIRECT: "true"
+      FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:?FIELD_ENCRYPTION_KEY must be set}
+      AI_LOCAL_QUIET_WINDOW: ${AI_LOCAL_QUIET_WINDOW:-22:00-06:00}
+      AI_JOB_POLL_SECONDS: ${AI_JOB_POLL_SECONDS:-15}
+      AI_JOB_MAX_ATTEMPTS: ${AI_JOB_MAX_ATTEMPTS:-5}
+      AI_JOB_RESUME_DELAY_SECONDS: ${AI_JOB_RESUME_DELAY_SECONDS:-300}
+      AI_JOB_RESUME_MAX_AGE_SECONDS: ${AI_JOB_RESUME_MAX_AGE_SECONDS:-86400}
+      AGENT_HARNESS_PROJECT: ${AGENT_HARNESS_PROJECT:-financial-planner}
+      AGENT_HARNESS_HOSTED_SESSIONS: ${AGENT_HARNESS_HOSTED_SESSIONS:-false}
+      AGENT_HARNESS_SESSION_TIMEOUT_SECONDS: ${AGENT_HARNESS_SESSION_TIMEOUT_SECONDS:-600}
+      AGENT_HARNESS_STALE_JOB_MARGIN_SECONDS: ${AGENT_HARNESS_STALE_JOB_MARGIN_SECONDS:-120}
+      TZ: ${TZ:-America/New_York}
+      POSTGRES_DB: ${POSTGRES_DB:-financial_planner}
+      POSTGRES_USER: ${POSTGRES_USER:-financial_planner}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+    depends_on:
+      db:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    entrypoint: ["/app/scripts/run-ai-jobs.sh"]
     healthcheck:
       disable: true
 
