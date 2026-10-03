@@ -331,15 +331,6 @@ Savings goals:
 - **Progress** is informational. It is the linked account's latest balance (#67/#69 balance snapshots) or a manually entered current amount, compared against the target. It shows the monthly amount needed to reach the target by the target date.
 - Goals do not change the projection in v1.
 
-## Budgets (2026-10-02, #96)
-
-Owner decisions:
-- Separate scopes: a household budget counts only household-shared accounts; a private budget counts the owner's visible accounts.
-- An optional overall monthly total alongside the category budgets.
-- Amount changes apply from a chosen month onward.
-- Optional rollover per budget, in both directions, starting the month it's turned on, with a manual reset.
-- Budgets do not feed the projection in v1.
-
 ## Investment performance (2026-10-02, #18)
 
 Owner decisions:
@@ -410,3 +401,35 @@ The owner wants to find out what access is possible rather than wait. Two routes
 **Proposed, not yet decided:** Sign in with ChatGPT is an AI connection only, not a sign-in method next to Google. Invitations still apply.
 
 **Data use:** plan-usage Responses must use `store: false`. Whether request bodies are used for training was not established. #106 applies before household-shared data is sent.
+
+## Budgets (2026-10-02, #96)
+
+Owner decisions:
+- **Scope.** Budgets are private or household.
+  - A household budget counts only household-shared accounts.
+  - A private budget counts the owner's visible accounts (private and household).
+  - No member's private spending ever appears in a household total.
+  - Any current member may edit a household budget. Only the owner may edit a private one.
+- **What a budget is.** A monthly amount for one category, plus an optional overall monthly total.
+- **Actuals.**
+  - Spending comes from the same totals as spending by category (#10): transfers excluded, linked refunds reduce spending, investment activity omitted.
+  - Months use the corrected transaction date.
+  - Budget totals reconcile exactly with that view.
+- **Amount changes** apply from the chosen month onward. Past months keep their amounts.
+- **Rollover** is optional per budget, and carries in both directions: unspent adds to the next month, and overspend subtracts from it.
+  - The balance starts in the month rollover is turned on.
+  - A member who can edit the budget may reset it to zero. Each reset records who reset it and when.
+- **Projection.** Budgets do not feed the projected cash flow (#21) in v1.
+
+## Split transactions (2026-10-02, #97)
+
+Owner decisions:
+- **Splitting.** A transaction can be split into two or more parts, each with a category. The parts must add up exactly to the transaction amount in minor units, and every part has the transaction's sign.
+- **Transfers and refunds.**
+  - A transfer leg or a linked refund cannot be split. It must be unpaired or unlinked first.
+  - A refund linked to a split purchase is attached to one part chosen by the member, and inherits that part's category.
+  - Splitting a purchase that already has linked refunds asks which part each refund belongs to.
+- **Categorization rules** skip split transactions: a split counts as categorized by hand.
+- **Recurring detection** uses the whole transaction.
+- **History.** Splitting and unsplitting are recorded in correction history.
+- **Reports.** Spending by category, trends, and budgets count each part in its own category. Cash flow totals are unchanged, because the parts add up to the transaction.
