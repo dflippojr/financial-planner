@@ -109,3 +109,18 @@ def test_old_tags_url_redirects_to_the_settings_tab():
 
     assert response.status_code == 301
     assert response["Location"] == reverse("tag-list")
+
+
+@pytest.mark.django_db
+def test_csv_mappings_live_on_a_settings_tab_and_old_url_redirects():
+    user = _member()
+    client = Client()
+    client.force_login(user)
+
+    page = client.get(reverse("csv-mapping-list"))
+    assert page.status_code == 200
+    assert ">CSV mappings<" in page.content.decode()
+    assert 'aria-current="page"' in page.content.decode()
+    old = client.get("/csv-mappings/")
+    assert old.status_code == 301
+    assert old["Location"] == reverse("csv-mapping-list")

@@ -14,6 +14,7 @@ from finance import (
     simplefin_views,
     views,
 )
+from finance.csv_import import mapping_views as csv_mapping_views
 from finance.csv_import import views as csv_import_views
 
 
@@ -65,6 +66,12 @@ urlpatterns = [
         name="category-rule-application-reverse",
     ),
     path("settings/tags/", views.tag_list, name="tag-list"),
+    path("settings/csv-mappings/", csv_mapping_views.csv_mapping_list, name="csv-mapping-list"),
+    path(
+        "settings/csv-mappings/<int:mapping_id>/",
+        csv_mapping_views.csv_mapping_edit,
+        name="csv-mapping-edit",
+    ),
     path("settings/alerts/", views.settings_alerts, name="settings-alerts"),
     path("settings/data/", views.settings_data, name="settings-data"),
     path("settings/data/export/", views.account_export, name="account-export"),
@@ -123,6 +130,11 @@ urlpatterns = [
     path("imports/", csv_import_views.csv_import_page, name="csv-import"),
     path("accounts/<int:account_id>/imports/preview/", csv_import_views.csv_preview, name="csv-import-preview"),
     path("accounts/<int:account_id>/imports/<int:batch_id>/undo/", csv_import_views.csv_undo_import, name="csv-import-undo"),
+    path("csv-mappings/", RedirectView.as_view(pattern_name="csv-mapping-list", permanent=True, query_string=True)),
+    path(
+        "csv-mappings/<int:mapping_id>/",
+        RedirectView.as_view(pattern_name="csv-mapping-edit", permanent=True, query_string=True),
+    ),
     path("transactions/", views.transaction_list, name="transaction-list"),
     path("transactions/suggest-categories/", category_suggestion_views.suggest_categories, name="suggest-categories"),
     path(
