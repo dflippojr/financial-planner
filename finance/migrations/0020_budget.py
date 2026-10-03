@@ -20,6 +20,7 @@ class Migration(migrations.Migration):
                 ('scope', models.CharField(choices=[('private', 'Private'), ('household', 'Household')], default='private', max_length=9)),
                 ('rollover_enabled', models.BooleanField(default=False)),
                 ('rollover_started_month', models.DateField(blank=True, null=True)),
+                ('rollover_enabled_at', models.DateTimeField(blank=True, null=True)),
                 ('created_at', models.DateTimeField(auto_now_add=True)),
                 ('updated_at', models.DateTimeField(auto_now=True)),
                 ('category', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name='budgets', to='finance.category')),

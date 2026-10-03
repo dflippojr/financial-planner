@@ -105,11 +105,10 @@ def _reports_for_months(principal, months, scope):
 
 
 def last_reset_month(budget, month):
-    row = (
-        BudgetRolloverReset.objects.filter(budget=budget, month__lte=month_start(month))
-        .order_by("-month")
-        .first()
-    )
+    resets = BudgetRolloverReset.objects.filter(budget=budget, month__lte=month_start(month))
+    if budget.rollover_enabled_at is not None:
+        resets = resets.filter(created_at__gte=budget.rollover_enabled_at)
+    row = resets.order_by("-month").first()
     return None if row is None else row.month
 
 
@@ -308,6 +307,7 @@ def save_budget(principal, payload, *, budget=None):
         if payload.get("rollover_enabled"):
             budget.rollover_enabled = True
             budget.rollover_started_month = effective_month
+            budget.rollover_enabled_at = timezone.now()
     try:
         with transaction.atomic():
             budget.save()
@@ -355,13 +355,18 @@ def set_budget_rollover(principal, budget, enabled, *, month):
     _check_can_edit(person, budget)
     month = month_start(month)
     if enabled:
+        turning_on = not budget.rollover_enabled
         budget.rollover_enabled = True
         if budget.rollover_started_month is None:
             budget.rollover_started_month = month
+        if turning_on:
+            budget.rollover_enabled_at = timezone.now()
     else:
         budget.rollover_enabled = False
         budget.rollover_started_month = None
-    budget.save(update_fields=("rollover_enabled", "rollover_started_month", "updated_at"))
+    budget.save(
+        update_fields=("rollover_enabled", "rollover_started_month", "rollover_enabled_at", "updated_at")
+    )
     return budget
 
 

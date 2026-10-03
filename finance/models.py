@@ -1355,6 +1355,7 @@ class Budget(ArchivableModel):
     )
     rollover_enabled = models.BooleanField(default=False)
     rollover_started_month = models.DateField(null=True, blank=True)
+    rollover_enabled_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
