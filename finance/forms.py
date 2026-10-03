@@ -793,6 +793,53 @@ class AccountDeleteForm(forms.Form):
         return confirm_name
 
 
+class DeleteMyDataForm(forms.Form):
+    confirm_username = forms.CharField(label="Type your username to confirm", max_length=150)
+
+    def __init__(self, *args, username, lent_accounts, last_member, **kwargs):
+        from .lifecycle_services import LENT_DELETE, LENT_HANDOVER
+
+        super().__init__(*args, **kwargs)
+        self.username = username
+        self.lent_accounts = list(lent_accounts)
+        self.last_member = last_member
+        self._lent_delete = LENT_DELETE
+        self._lent_handover = LENT_HANDOVER
+        for account in self.lent_accounts:
+            key = f"lent_{account.pk}"
+            if last_member:
+                self.fields[key] = forms.CharField(widget=forms.HiddenInput(), initial=LENT_DELETE)
+            else:
+                self.fields[key] = forms.ChoiceField(
+                    label=account.name,
+                    choices=(
+                        ("", "Choose…"),
+                        (LENT_HANDOVER, "Hand over to household"),
+                        (LENT_DELETE, "Delete with my data"),
+                    ),
+                )
+
+    def clean_confirm_username(self):
+        confirm_username = self.cleaned_data["confirm_username"]
+        if confirm_username != self.username:
+            raise ValidationError("Type your username to confirm.")
+        return confirm_username
+
+    def clean(self):
+        cleaned = super().clean()
+        for account in self.lent_accounts:
+            key = f"lent_{account.pk}"
+            choice = cleaned.get(key)
+            if choice not in {self._lent_handover, self._lent_delete}:
+                self.add_error(key, "Choose what happens to this lent account.")
+            elif self.last_member and choice == self._lent_handover:
+                self.add_error(key, "Choose what happens to this lent account.")
+        return cleaned
+
+    def lent_choices(self):
+        return {account.pk: self.cleaned_data[f"lent_{account.pk}"] for account in self.lent_accounts}
+
+
 class CategoryNameForm(forms.Form):
     name = forms.CharField(max_length=80)
 

@@ -25,6 +25,15 @@ def validate_reason_list(value):
         raise ValidationError("Reasons must be a list of strings.")
 
 
+FORMER_MEMBER_LABEL = "former member"
+
+
+def actor_display_name(person):
+    if person is None:
+        return FORMER_MEMBER_LABEL
+    return person.display_name
+
+
 def validate_header_name_list(value):
     if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
         raise ValidationError("Column names must be a list of non-empty strings.")
@@ -88,7 +97,13 @@ class Household(models.Model):
 
 
 class Membership(models.Model):
-    person = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="memberships")
+    person = models.ForeignKey(
+        Person,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="memberships",
+    )
     household = models.ForeignKey(Household, on_delete=models.PROTECT, related_name="memberships")
     joined_at = models.DateTimeField(default=timezone.now)
     ended_at = models.DateTimeField(null=True, blank=True)
@@ -104,10 +119,14 @@ class Membership(models.Model):
                 condition=Q(ended_at__isnull=True) | Q(ended_at__gte=F("joined_at")),
                 name="membership_end_not_before_join",
             ),
+            models.CheckConstraint(
+                condition=Q(person__isnull=False) | Q(ended_at__isnull=False),
+                name="membership_person_required_while_current",
+            ),
         ]
 
     def __str__(self):
-        return f"{self.person} in {self.household}"
+        return f"{actor_display_name(self.person)} in {self.household}"
 
 
 class Category(models.Model):
@@ -470,7 +489,13 @@ class ImportBatch(ArchivableModel):
         SIMPLEFIN = "simplefin", "SimpleFIN"
 
     account = models.ForeignKey(Account, on_delete=models.PROTECT, related_name="import_batches")
-    imported_by = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="import_batches")
+    imported_by = models.ForeignKey(
+        Person,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="import_batches",
+    )
     source = models.CharField(max_length=32, choices=Source)
     source_file_sha256 = models.CharField(max_length=64, validators=(sha256_validator,))
     # Set for SimpleFIN sync batches so IDs are unique per remote account, not globally.
@@ -667,7 +692,13 @@ class TransactionCorrectionHistory(models.Model):
         on_delete=models.PROTECT,
         related_name="correction_history",
     )
-    actor = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="transaction_correction_history")
+    actor = models.ForeignKey(
+        Person,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="transaction_correction_history",
+    )
     recorded_at = models.DateTimeField(default=timezone.now)
     field_name = models.CharField(max_length=16, choices=Field)
     previous_date = models.DateField(null=True, blank=True)
@@ -684,6 +715,10 @@ class TransactionCorrectionHistory(models.Model):
             return self.filter(transaction_id__in=visible_transactions)
 
     objects = QuerySet.as_manager()
+
+    @property
+    def actor_label(self):
+        return actor_display_name(self.actor)
 
     class Meta:
         indexes = [
@@ -1368,9 +1403,19 @@ class CategoryRule(models.Model):
 
 class RuleApplication(models.Model):
     rule = models.ForeignKey(CategoryRule, on_delete=models.PROTECT, related_name="applications")
-    applied_by = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="rule_applications")
+    applied_by = models.ForeignKey(
+        Person,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="rule_applications",
+    )
     applied_at = models.DateTimeField(default=timezone.now)
     reversed_at = models.DateTimeField(null=True, blank=True)
+
+    @property
+    def applied_by_label(self):
+        return actor_display_name(self.applied_by)
 
     class QuerySet(models.QuerySet):
         def visible_to(self, principal):
@@ -1418,7 +1463,13 @@ class RuleApplicationEntry(models.Model):
 
 class Invitation(models.Model):
     household = models.ForeignKey(Household, on_delete=models.CASCADE, related_name="invitations")
-    invited_by = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="invitations_created")
+    invited_by = models.ForeignKey(
+        Person,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="invitations_created",
+    )
     token_digest = models.CharField(max_length=64, unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField()
@@ -1750,7 +1801,13 @@ class BudgetAmount(models.Model):
 class BudgetRolloverReset(models.Model):
     budget = models.ForeignKey(Budget, on_delete=models.CASCADE, related_name="rollover_resets")
     month = models.DateField()
-    actor = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="budget_rollover_resets")
+    actor = models.ForeignKey(
+        Person,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="budget_rollover_resets",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
