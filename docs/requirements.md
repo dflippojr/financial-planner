@@ -1,6 +1,6 @@
 # Requirements
 
-Updated: 2026-10-02. This is a working product brief; open questions are explicit.
+Updated: 2026-10-03. This is a working product brief; open questions are explicit.
 
 ## Goal
 
@@ -420,6 +420,17 @@ Owner decisions:
   - The balance starts in the month rollover is turned on.
   - A member who can edit the budget may reset it to zero. Each reset records who reset it and when.
 - **Projection.** Budgets do not feed the projected cash flow (#21) in v1.
+
+## Alerts (2026-10-03, #99)
+
+Owner decisions:
+- **Delivery in v1** is an in-app inbox only: an unread count in the nav and an Alerts page. No outside service.
+- **Alerts in v1:**
+  - a SimpleFIN sync failed, or a connection needs re-linking;
+  - a recurring charge's price changed or an expected charge is missing (raised by #102);
+  - a budget reached 90% or went over;
+  - a transaction was above a threshold the member sets.
+- **Who gets an alert.** One about a household account goes to every current member. One about a private account goes only to its owner. A member who leaves no longer sees household alerts.
 
 ## Split transactions (2026-10-02, #97)
 
