@@ -335,3 +335,90 @@ def test_tags_page_and_edit_page_let_members_manage_tags():
     assert archived.status_code == 302
     tag.refresh_from_db()
     assert tag.is_archived
+
+
+@pytest.mark.django_db
+def test_tags_page_adds_renames_and_archives_and_refuses_duplicates():
+    from finance.tag_services import TAG_EXISTS
+
+    owner = make_person("owner")
+    household = make_household(owner)
+    client = signed_client(owner)
+    url = reverse("tag-list")
+
+    assert client.post(url, {"action": "add", "name": "Vacation 2026"}).status_code == 302
+    vacation = Tag.objects.get(household=household, name="Vacation 2026")
+    client.post(url, {"action": "add", "name": "Reimbursable"})
+
+    duplicate_add = client.post(url, {"action": "add", "name": "vacation 2026"})
+    assert duplicate_add.status_code == 200
+    assert TAG_EXISTS.encode() in duplicate_add.content
+    assert Tag.objects.filter(household=household).count() == 2
+
+    renamed = client.post(url, {"action": "rename", "tag_id": str(vacation.pk), "name": "Trip 2026"})
+    assert renamed.status_code == 302
+    vacation.refresh_from_db()
+    assert vacation.name == "Trip 2026"
+
+    clash = client.post(url, {"action": "rename", "tag_id": str(vacation.pk), "name": "REIMBURSABLE"})
+    assert clash.status_code == 200
+    assert TAG_EXISTS.encode() in clash.content
+    vacation.refresh_from_db()
+    assert vacation.name == "Trip 2026"
+
+    assert client.post(url, {"action": "archive", "tag_id": str(vacation.pk)}).status_code == 302
+    vacation.refresh_from_db()
+    assert vacation.is_archived
+
+
+@pytest.mark.django_db
+def test_tag_names_are_validated_and_other_households_tags_are_out_of_reach():
+    from finance.tag_services import TAG_NAME_ERROR, rename_tag
+
+    owner = make_person("owner")
+    make_household(owner)
+    outsider = make_person("outsider")
+    other_household = make_household(outsider, name="Other Household")
+    theirs = Tag.objects.create(household=other_household, name="Theirs")
+
+    with pytest.raises(ValidationError, match=TAG_NAME_ERROR):
+        add_tag(owner, "   ")
+    with pytest.raises(ValidationError):
+        add_tag(owner, "x" * 81)
+    with pytest.raises(PermissionDenied):
+        rename_tag(owner, theirs.pk, "Mine now")
+    with pytest.raises(PermissionDenied):
+        archive_tag(owner, theirs.pk)
+    theirs.refresh_from_db()
+    assert theirs.name == "Theirs"
+    assert not theirs.is_archived
+
+    response = signed_client(owner).post(
+        reverse("tag-list"), {"action": "rename", "tag_id": str(theirs.pk), "name": "Mine now"}
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.django_db
+def test_note_page_creates_a_tag_inline_and_reports_a_duplicate_new_tag():
+    from finance.tag_services import TAG_EXISTS
+
+    owner = make_person("owner")
+    household = make_household(owner)
+    account = make_account(owner)
+    txn = make_transaction(owner, account)
+    Tag.objects.create(household=household, name="Vacation 2026")
+    client = signed_client(owner)
+    url = reverse("transaction-note-tags", args=(txn.pk,))
+
+    saved = client.post(url, {"note": "Synthetic note", "new_tag": "Reimbursable"})
+    assert saved.status_code == 302
+    txn.refresh_from_db()
+    assert txn.note == "Synthetic note"
+    assert list(txn.tags.values_list("name", flat=True)) == ["Reimbursable"]
+
+    duplicate = client.post(url, {"note": "Changed", "new_tag": "vacation 2026"})
+    assert duplicate.status_code == 200
+    assert TAG_EXISTS.encode() in duplicate.content
+    txn.refresh_from_db()
+    assert txn.note == "Synthetic note"
