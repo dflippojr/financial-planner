@@ -172,19 +172,6 @@ def audience_for_budget(budget):
     return [budget.owner]
 
 
-def _budget_report_principal(budget):
-    if budget.scope != Budget.Scope.HOUSEHOLD:
-        return budget.owner
-    return (
-        Person.objects.filter(
-            memberships__household=budget.household,
-            memberships__ended_at__isnull=True,
-        )
-        .order_by("pk")
-        .first()
-    )
-
-
 def _budget_thresholds(spent_minor, available_minor):
     if available_minor <= 0:
         return spent_minor > 0, spent_minor > 0
@@ -196,36 +183,36 @@ def _budget_thresholds(spent_minor, available_minor):
 def evaluate_budget_alert(budget, *, today=None):
     if budget.status != Budget.Status.ACTIVE:
         return []
-    principal = _budget_report_principal(budget)
-    if principal is None:
-        return []
     today = today or timezone.localdate()
     month = month_start(today)
-    card = progress_snapshot(budget, month, principal)
-    at_90, at_100 = _budget_thresholds(card.spent_minor, card.available_minor)
-    if not at_90:
-        return []
     stamp = month.isoformat()[:7]
     month_label = f"{month_name[month.month]} {month.year}"
     link = f"{reverse('budgets')}?month={stamp}"
-    audience = audience_for_budget(budget)
-    created = raise_alert(
-        audience,
-        Alert.Kind.BUDGET,
-        f"{card.name} is at 90% of its {month_label} budget",
-        link,
-        f"budget:{budget.pk}:{stamp}:90",
-    )
-    if at_100:
+    created = []
+    for recipient in audience_for_budget(budget):
+        card = progress_snapshot(budget, month, recipient)
+        at_90, at_100 = _budget_thresholds(card.spent_minor, card.available_minor)
+        if not at_90:
+            continue
         created.extend(
             raise_alert(
-                audience,
+                [recipient],
                 Alert.Kind.BUDGET,
-                f"{card.name} reached its {month_label} budget",
+                f"{card.name} is at 90% of its {month_label} budget",
                 link,
-                f"budget:{budget.pk}:{stamp}:100",
+                f"budget:{budget.pk}:{stamp}:90",
             )
         )
+        if at_100:
+            created.extend(
+                raise_alert(
+                    [recipient],
+                    Alert.Kind.BUDGET,
+                    f"{card.name} reached its {month_label} budget",
+                    link,
+                    f"budget:{budget.pk}:{stamp}:100",
+                )
+            )
     return created
 
 

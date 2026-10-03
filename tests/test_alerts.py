@@ -18,8 +18,8 @@ from finance.alert_services import (
     raise_sync_alert,
     unread_alert_count,
 )
-from finance.budget_services import save_budget
-from finance.category_services import assign_category
+from finance.budget_services import save_budget, progress_snapshot
+from finance.category_services import assign_category, refresh_transfer_pairs
 from finance.lifecycle_services import delete_account, leave_household
 from finance.models import (
     Account,
@@ -32,6 +32,7 @@ from finance.models import (
     Person,
     SimpleFinConnection,
     Transaction,
+    TransferPair,
 )
 from finance.simplefin_errors import SimpleFinError
 from finance.simplefin_services import sync_connection
@@ -199,6 +200,57 @@ def test_household_budget_alert_goes_to_current_members():
     assert (member.pk, f"budget:{budget.pk}:2026-10:90") in keys
     assert (owner.pk, f"budget:{budget.pk}:2026-10:100") in keys
     assert (member.pk, f"budget:{budget.pk}:2026-10:100") in keys
+
+
+@pytest.mark.django_db
+def test_household_budget_alert_uses_each_member_view():
+    card_owner = make_person("cardowner")
+    roommate = make_person("roommate")
+    household = make_household(card_owner, roommate)
+    checking = make_account(
+        card_owner,
+        name="Joint Checking",
+        scope=Account.Scope.HOUSEHOLD,
+        household=household,
+    )
+    private_card = make_account(
+        card_owner,
+        name="Private Card",
+        account_type=Account.Type.CREDIT_CARD,
+    )
+    make_transaction(
+        card_owner,
+        checking,
+        amount_minor=-9000,
+        description="Synthetic card payment out",
+    )
+    make_transaction(
+        card_owner,
+        private_card,
+        amount_minor=9000,
+        description="Synthetic card payment in",
+    )
+    refresh_transfer_pairs(card_owner)
+    pair = TransferPair.objects.get()
+    assert pair.status in (TransferPair.Status.AUTO_MARKED, TransferPair.Status.CONFIRMED)
+    budget = add_budget(
+        card_owner,
+        category=None,
+        amount_minor=10_000,
+        scope=Budget.Scope.HOUSEHOLD,
+        household=household,
+    )
+    month = date(2026, 10, 1)
+    owner_card = progress_snapshot(budget, month, card_owner)
+    roommate_card = progress_snapshot(budget, month, roommate)
+    assert owner_card.spent_minor * 10 < owner_card.available_minor * 9
+    assert roommate_card.spent_minor * 10 >= roommate_card.available_minor * 9
+    evaluate_budget_alert(budget, today=date(2026, 10, 15))
+
+    recipients = set(Alert.objects.filter(kind=Alert.Kind.BUDGET).values_list("recipient_id", flat=True))
+    assert recipients == {roommate.pk}
+    assert Alert.objects.filter(recipient=roommate, kind=Alert.Kind.BUDGET).count() == 1
+    assert Alert.objects.get(recipient=roommate).dedupe_key == f"budget:{budget.pk}:2026-10:90"
 
 
 @pytest.mark.django_db
