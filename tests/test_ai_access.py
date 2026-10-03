@@ -107,10 +107,10 @@ def test_member_a_tools_never_return_member_b_private_data(harness):
     connect_harness(person_a, base_url=url, token=TOKEN)
     accounts = list_accounts(person_a, {})
     txns = list_transactions(person_a, {})
-    assert "Shared Checking" in accounts
-    assert "Beta Private" not in accounts
-    assert "Shared rent" in txns
-    assert "Beta private grocery" not in txns
+    assert "Shared Checking" in accounts.text
+    assert "Beta Private" not in accounts.text
+    assert "Shared rent" in txns.text
+    assert "Beta private grocery" not in txns.text
     result = run_conversation(
         person_a,
         "List my accounts",

@@ -208,6 +208,7 @@ def run_conversation(
     context=None,
     follow_up=False,
     on_tool=None,
+    allow_tool=None,
 ):
     use_tools_only = bool(tools) if tools_only is None else bool(tools_only)
     return _run(
@@ -225,6 +226,7 @@ def run_conversation(
         context=context,
         follow_up=follow_up,
         on_tool=on_tool,
+        allow_tool=allow_tool,
     )
 
 
@@ -256,6 +258,7 @@ def _run(
     context=None,
     follow_up=False,
     on_tool=None,
+    allow_tool=None,
 ):
     person = _person_for(principal)
     if not may_use_ai(person):
@@ -280,6 +283,10 @@ def _run(
     if tools:
 
         def runner(name, args):
+            if allow_tool is not None:
+                denied = allow_tool(name, args)
+                if denied is not None:
+                    return denied.text, denied.ok
             result = _invoke_tool(person, tools, name, args)
             if on_tool is not None:
                 on_tool(result)

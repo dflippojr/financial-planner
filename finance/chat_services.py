@@ -8,6 +8,7 @@ from django.conf import settings
 from django.core.exceptions import PermissionDenied
 from django.utils import timezone
 
+from .ai_jobs import _connection_marker
 from .ai_services import AiError, connection_for, run_conversation
 from .ai_tools import INSTRUCTION_CONTEXT, default_tools
 from .ai_types import (
@@ -177,6 +178,12 @@ def send_message(principal, text, *, conversation_id=None, page_context=None, sl
         return conversation
 
     collected = []
+    cap = max_tool_calls()
+
+    def allow_tool(_name, _args):
+        if conversation.tool_call_count >= cap:
+            return ToolResult(text=TOOL_LIMIT, ok=False)
+        return None
 
     def on_tool(result: ToolResult):
         conversation.tool_call_count += 1
@@ -189,12 +196,15 @@ def send_message(principal, text, *, conversation_id=None, page_context=None, sl
 
     tools = default_tools()
     harness_context = _harness_context(context_payload)
-    follow_up = bool(conversation.harness_session_id)
-    session_id = conversation.harness_session_id
+    marker = _connection_marker(connection)
+    saved_session = (conversation.harness_session_id or "").strip()
+    follow_up = bool(saved_session) and (conversation.harness_connection or "") == marker
+    session_id = saved_session if follow_up else ""
 
     def on_session(new_id):
         conversation.harness_session_id = new_id
-        conversation.save(update_fields=("harness_session_id", "updated_at"))
+        conversation.harness_connection = marker
+        conversation.save(update_fields=("harness_session_id", "harness_connection", "updated_at"))
 
     result = run_conversation(
         person,
@@ -202,7 +212,7 @@ def send_message(principal, text, *, conversation_id=None, page_context=None, sl
         feature=FEATURE,
         backend=backend,
         tools=tools,
-        session_id=session_id if follow_up else "",
+        session_id=session_id,
         on_session=on_session,
         sleep=sleep,
         monotonic=monotonic,
@@ -210,9 +220,19 @@ def send_message(principal, text, *, conversation_id=None, page_context=None, sl
         context=harness_context,
         follow_up=follow_up,
         on_tool=on_tool,
+        allow_tool=allow_tool,
     )
     conversation.backend = backend
-    conversation.save(update_fields=("backend", "used_account_ids", "tool_call_count", "harness_session_id", "updated_at"))
+    conversation.save(
+        update_fields=(
+            "backend",
+            "used_account_ids",
+            "tool_call_count",
+            "harness_session_id",
+            "harness_connection",
+            "updated_at",
+        )
+    )
     figures = []
     for item in collected:
         figures.extend(item.figures)

@@ -1585,6 +1585,7 @@ class AiUsageEvent(models.Model):
 class AiConversation(models.Model):
     member = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="ai_conversations")
     harness_session_id = models.CharField(max_length=120, blank=True, default="")
+    harness_connection = models.CharField(max_length=120, blank=True, default="")
     backend = models.CharField(max_length=32, blank=True, default="")
     title = models.CharField(max_length=120, blank=True, default="")
     used_account_ids = models.JSONField(default=list)

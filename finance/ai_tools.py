@@ -190,7 +190,10 @@ def list_accounts(person, args):
                 "scope": account.scope,
             }
         )
-    return _format_rows(rows)
+    return ToolResult(
+        text=_format_rows(rows),
+        account_ids=tuple(row["id"] for row in rows),
+    )
 
 
 def list_transactions(person, args):
@@ -199,14 +202,17 @@ def list_transactions(person, args):
         status=Transaction.Status.ACTIVE,
         account_id__in=visible_accounts(person).values("pk"),
     )
+    account_ids = set()
     account_id = args.get("account_id")
     if account_id is not None:
         account, error = _visible_account(person, account_id, name=None)
         if error:
             return ToolResult(text=error, ok=False)
         query = query.filter(account_id=account.pk)
+        account_ids.add(account.pk)
     rows = []
     for txn in query.order_by("-transaction_date", "-pk")[:limit]:
+        account_ids.add(txn.account_id)
         rows.append(
             {
                 "id": txn.pk,
@@ -217,7 +223,7 @@ def list_transactions(person, args):
                 "description": txn.description,
             }
         )
-    return _format_rows(rows)
+    return ToolResult(text=_format_rows(rows), account_ids=tuple(sorted(account_ids)))
 
 
 def cash_flow_totals(person, args):
@@ -345,6 +351,8 @@ def search_transactions(person, args):
     limit = _limit(args.get("limit"))
     rows = []
     account_ids = set()
+    if account is not None:
+        account_ids.add(account.pk)
     for txn in query.select_related("account").order_by("-transaction_date", "-pk")[:limit]:
         account_ids.add(txn.account_id)
         rows.append(
@@ -389,7 +397,8 @@ def recurring_series(person, args):
         .exclude(Exists(hidden))
         .order_by("display_name", "pk")
     )
-    for series in series_query[:MAX_TOOL_ROWS]:
+    shown = list(series_query[:MAX_TOOL_ROWS])
+    for series in shown:
         rows.append(
             {
                 "id": series.pk,
@@ -402,7 +411,16 @@ def recurring_series(person, args):
             }
         )
         figures.append(_figure(series.display_name, series.typical_amount_minor, url, series.currency))
-    return ToolResult(text=json.dumps({"url": url, "rows": rows}), figures=tuple(figures))
+    member_ids = tuple(
+        RecurringSeriesMember.objects.filter(series__in=shown)
+        .values_list("transaction__account_id", flat=True)
+        .distinct()
+    )
+    return ToolResult(
+        text=json.dumps({"url": url, "rows": rows}),
+        figures=tuple(figures),
+        account_ids=member_ids,
+    )
 
 
 def net_worth_series(person, args):
@@ -454,6 +472,7 @@ def list_budgets(person, args):
     return ToolResult(
         text=json.dumps({"month": month.isoformat()[:7], "page_url": url, "rows": rows}),
         figures=tuple(figures),
+        account_ids=_account_ids(None, accounts),
     )
 
 
@@ -504,7 +523,11 @@ def projected_cash_flow_tool(person, args):
         for item in planned
     ]
     payload = {"horizon": horizon, "page_url": url, "months": rows, "planned_items": planned_rows}
-    return ToolResult(text=json.dumps(payload), figures=tuple(figures))
+    return ToolResult(
+        text=json.dumps(payload),
+        figures=tuple(figures),
+        account_ids=_account_ids(None, accounts),
+    )
 
 
 def _visible_account(person, account_id, name):

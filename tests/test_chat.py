@@ -9,7 +9,7 @@ from django.urls import reverse
 from django.utils import timezone
 from tests.fake_harness import start_fake_harness
 
-from finance.ai_services import connect_harness, set_defaults
+from finance.ai_services import AiError, connect_harness, set_defaults
 from finance.ai_tools import (
     cash_flow_totals,
     default_tools,
@@ -24,6 +24,7 @@ from finance.category_services import ensure_household_categories
 from finance.chat_services import (
     conversations_for,
     delete_all_conversations,
+    delete_conversation,
     sanitize_page_context,
     send_message,
     start_conversation,
@@ -129,8 +130,8 @@ def test_tools_return_only_viewer_visible_accounts_by_name(harness):
     add_txn(private_b, person_b, date(2026, 1, 2), -999, "Beta private grocery")
     connect_harness(person_a, base_url=url, token=TOKEN)
     accounts = list_accounts(person_a, {})
-    assert "Shared Checking" in accounts
-    assert "Beta Private" not in accounts
+    assert "Shared Checking" in accounts.text
+    assert "Beta Private" not in accounts.text
     missed = cash_flow_totals(person_a, {"account_name": "Beta Private"})
     assert not missed.ok
     assert "not visible" in missed.text.lower()
@@ -570,4 +571,198 @@ def test_chat_views_refusals_expiry_delete_and_drawer_context(harness):
     assert b"privacy" in blocked.content.lower() or b"accepted" in blocked.content.lower()
     assert client.post(reverse("chat-warm")).status_code == 403
     assert client.get(reverse("chat-status")).status_code == 403
+
+
+@pytest.mark.django_db
+def test_tool_calls_in_one_response_stop_at_the_conversation_limit(harness, settings):
+    settings.AI_CHAT_MAX_TOOL_CALLS = 40
+    state, url = harness
+    _user, person, household = make_member("owner")
+    first = checking(person, household, "First Checking")
+    second = checking(person, household, "Second Checking")
+    add_txn(first, person, date(2026, 1, 4), -800, "Synthetic coffee")
+    add_txn(second, person, date(2026, 1, 5), -900, "Synthetic groceries")
+    connect_harness(person, base_url=url, token=TOKEN)
+    conversation = send_message(person, "Start the thread", sleep=lambda _s: None)
+    conversation.tool_call_count = 39
+    conversation.save(update_fields=("tool_call_count",))
+    state.need_tool = True
+    state.pending_tool_calls = [
+        [
+            {
+                "call_id": "c1",
+                "name": "cash_flow_totals",
+                "args": {"date_from": "2026-01-01", "date_to": "2026-01-31", "account_id": first.pk},
+            },
+            {
+                "call_id": "c2",
+                "name": "cash_flow_totals",
+                "args": {"date_from": "2026-01-01", "date_to": "2026-01-31", "account_id": second.pk},
+            },
+            {
+                "call_id": "c3",
+                "name": "list_accounts",
+                "args": {},
+            },
+        ]
+    ]
+    conversation = send_message(
+        person,
+        "Totals for both accounts?",
+        conversation_id=conversation.pk,
+        sleep=lambda _s: None,
+    )
+    conversation.refresh_from_db()
+    assert conversation.tool_call_count == 40
+    assert first.pk in conversation.used_account_ids
+    assert second.pk not in conversation.used_account_ids
+
+
+@pytest.mark.django_db
+def test_list_transactions_conversation_is_removed_when_that_account_is_deleted(harness):
+    state, url = harness
+    _user, person, household = make_member("owner")
+    account = checking(person, household, "Shared Checking")
+    add_txn(account, person, date(2026, 1, 4), -800, "Synthetic coffee")
+    connect_harness(person, base_url=url, token=TOKEN)
+    state.need_tool = True
+    state.pending_tool_calls = [
+        [{"call_id": "c1", "name": "list_transactions", "args": {"account_id": account.pk}}]
+    ]
+    conversation = send_message(person, "Show recent rows on this account", sleep=lambda _s: None)
+    conversation.refresh_from_db()
+    assert account.pk in conversation.used_account_ids
+    delete_account(person, account.pk)
+    assert not AiConversation.objects.filter(pk=conversation.pk).exists()
+
+
+@pytest.mark.django_db
+def test_followup_starts_a_new_session_after_harness_reconnect(harness):
+    state, url = harness
+    _user, person, _household = make_member("owner")
+    connect_harness(person, base_url=url, token=TOKEN)
+    conversation = send_message(person, "First question", sleep=lambda _s: None)
+    conversation.refresh_from_db()
+    old_session = conversation.harness_session_id
+    assert old_session
+    creates_before = len(state.session_creates)
+    connect_harness(person, base_url=url, token=TOKEN)
+    state.need_tool = False
+    send_message(
+        person,
+        "Follow up after reconnect",
+        conversation_id=conversation.pk,
+        sleep=lambda _s: None,
+    )
+    assert ("POST", f"/api/v1/sessions/{old_session}/messages") not in state.requests
+    assert len(state.session_creates) == creates_before + 1
+    conversation.refresh_from_db()
+    assert conversation.harness_session_id
+    assert conversation.harness_session_id != old_session
+
+
+@pytest.mark.django_db
+def test_chat_send_and_delete_cover_remaining_error_paths(harness):
+    from django.core.exceptions import PermissionDenied
+
+    state, url = harness
+    user, person, _household = make_member("owner")
+    other_user, other, _ = make_member("intruder", policy=current_policy())
+    connect_harness(person, base_url=url, token=TOKEN)
+    client = Client()
+    client.force_login(user)
+
+    empty = client.post(reverse("chat-send"), {"prompt": "   ", "next": reverse("home")})
+    assert empty.status_code == 302
+    assert empty.url == reverse("home")
+
+    created = send_message(person, "A valid question", sleep=lambda _s: None)
+    bad_id = client.post(
+        reverse("chat-send"),
+        {"prompt": "Hello", "conversation_id": "not-a-number", "next": reverse("chat")},
+        follow=True,
+    )
+    assert bad_id.status_code == 200
+
+    sent = client.post(
+        reverse("chat-send"),
+        {
+            "prompt": "Drawer follow-up",
+            "conversation_id": str(created.pk),
+            "next": reverse("home"),
+            "page_route": "not-a-path",
+            "page_query": "?date_from=2026-01-01\nsecret",
+        },
+    )
+    assert sent.status_code == 302
+    assert sent.url.startswith(reverse("home")) or sent.url == reverse("home")
+
+    client.force_login(other_user)
+    denied = client.post(reverse("chat-delete", args=[created.pk]))
+    assert denied.status_code == 302
+    assert AiConversation.objects.filter(pk=created.pk).exists()
+    with pytest.raises(PermissionDenied):
+        delete_conversation(other, created.pk)
+
+    cleaned = sanitize_page_context({"route": "https://evil.example/x", "query": "a=1"})
+    assert "route" not in cleaned
+    assert cleaned.get("query") == "a=1"
+    query_only = sanitize_page_context({"path": "/spending/", "query_string": "?x=1"})
+    assert query_only == {"route": "/spending/", "query": "x=1"}
+
+    with pytest.raises(AiError):
+        send_message(person, "   ", sleep=lambda _s: None)
+    state.session_failure = "provider_error"
+    failed = send_message(person, "A later question", conversation_id=created.pk, sleep=lambda _s: None)
+    error = failed.messages.filter(role=AiConversationMessage.Role.ERROR).last()
+    assert "could not complete" in error.content.lower()
+
+    client.force_login(user)
+    gone = client.post(
+        reverse("chat-send"),
+        {"prompt": "Talk about a missing thread", "conversation_id": "999999", "next": reverse("chat")},
+        follow=True,
+    )
+    assert gone.status_code == 200
+    created.turn_count = 99
+    created.save(update_fields=("turn_count",))
+    with pytest.raises(AiError) as turned:
+        send_message(person, "One more turn", conversation_id=created.pk, sleep=lambda _s: None)
+    assert "turn limit" in str(turned.value).lower()
+    created.turn_count = 1
+    created.tool_call_count = 40
+    created.save(update_fields=("turn_count", "tool_call_count"))
+    with pytest.raises(AiError) as capped:
+        send_message(person, "One more tool", conversation_id=created.pk, sleep=lambda _s: None)
+    assert "tool-call" in str(capped.value).lower()
+    from finance.ai_services import disconnect_harness
+
+    disconnect_harness(person)
+    with pytest.raises(AiError):
+        send_message(person, "After disconnect", sleep=lambda _s: None)
+    status = client.get(reverse("chat-status"))
+    assert status.status_code == 403
+
+
+@pytest.mark.django_db
+def test_chat_warm_and_status_surface_provider_errors(harness, settings, monkeypatch):
+    settings.AI_CHAT_LOCAL_ENABLED = True
+    state, url = harness
+    user, person, _household = make_member("owner")
+    connect_harness(person, base_url=url, token=TOKEN)
+    set_defaults(person, chat_backend="local", background_backend="local")
+    client = Client()
+    client.force_login(user)
+
+    def boom(*_args, **_kwargs):
+        raise AiError("synthetic provider failure")
+
+    monkeypatch.setattr("finance.chat_views.warm_for_chat", boom)
+    monkeypatch.setattr("finance.chat_views.local_status", boom)
+    warm = client.post(reverse("chat-warm"))
+    assert warm.status_code == 409
+    assert b"synthetic provider failure" in warm.content
+    status = client.get(reverse("chat-status"))
+    assert status.status_code == 400
+    assert b"synthetic provider failure" in status.content
 
