@@ -287,7 +287,7 @@ def test_settings_links_to_delete_my_data():
     make_household(owner)
     client = Client()
     client.force_login(owner.user)
-    page = client.get(reverse("account-settings"))
+    page = client.get(reverse("settings-data"))
     assert reverse("delete-my-data") in page.content.decode()
 
 

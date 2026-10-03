@@ -118,14 +118,15 @@ def test_signed_in_pages_use_shared_nav_and_signed_out_pages_use_a_card():
         "Transactions",
         "Transfers",
         "Recurring",
-        "Categories",
         "Accounts",
         "Import",
-        "Invite",
         "Planning",
         "Planned items",
     ):
         assert label in home
+    assert reverse("category-list") not in home
+    assert reverse("invite") not in home
+    assert reverse("simplefin-connections") not in home
     assert 'aria-current="page"' in home
     assert 'aria-label="Settings"' in home
     assert 'data-tip="Settings"' in home

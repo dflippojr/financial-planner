@@ -288,9 +288,9 @@ def test_export_view_streams_zip_without_storing_cache_or_logging_content(caplog
     assert "Logged-secret-should-not-appear" not in logged
     assert "-4321" not in logged
 
-    page = client.get(reverse("account-settings"))
+    page = client.get(reverse("settings-data"))
     assert b"Export data" in page.content
-    from_settings = client.post(reverse("account-settings"), {"action": "export"})
+    from_settings = client.post(reverse("account-export"))
     assert from_settings.status_code == 200
     assert from_settings["Content-Type"] == "application/zip"
 
@@ -307,7 +307,7 @@ def test_export_requires_auth_post_and_csrf():
     csrf_client = Client(enforce_csrf_checks=True)
     csrf_client.force_login(owner.user)
     stamp_recent_auth(csrf_client)
-    csrf_client.get(reverse("account-settings"))
+    csrf_client.get(reverse("settings-data"))
     token = csrf_client.cookies["csrftoken"].value
     denied = csrf_client.post(reverse("account-export"))
     allowed = csrf_client.post(reverse("account-export"), {"csrfmiddlewaretoken": token})

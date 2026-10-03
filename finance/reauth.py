@@ -35,7 +35,6 @@ ACCOUNT_SETTINGS_ACTIONS = {
     "disconnect-google": "disconnect-google",
     "add-password": "add-password",
     "remove-password": "remove-password",
-    "export": "export-data",
 }
 
 

@@ -1,0 +1,12 @@
+{% extends "finance/settings_base.html" %}
+{% block title %}Data · Financial Planner{% endblock %}
+{% block settings_content %}
+<h2 class="mb-4 text-xl font-semibold">Data</h2>
+<form method="post" action="{% url 'account-export' %}" class="mb-4">
+  {% csrf_token %}
+  <button type="submit" class="btn btn-outline">Export data</button>
+</form>
+<h3 class="mt-8 mb-2 font-semibold">Delete my data</h3>
+<p class="mb-4 text-sm">Permanently delete your private accounts and personal records. Shared household data stays. You'll be asked to confirm first.</p>
+<a class="btn btn-outline btn-error" href="{% url 'delete-my-data' %}">Delete my data</a>
+{% endblock %}
