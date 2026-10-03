@@ -442,3 +442,33 @@ def test_saved_mappings_pass_to_the_next_member_or_go_with_the_last_one():
 
     assert not SavedCsvMapping.objects.filter(household_id=household.pk).exists()
     assert not Household.objects.filter(pk=household.pk).exists()
+
+
+@pytest.mark.django_db
+def test_member_who_already_left_can_delete_data_and_their_household_rows_pass_on():
+    from finance.lifecycle_services import delete_member_data, leave_household
+    from finance.models import SavedCsvMapping
+
+    owner = make_person("owner")
+    member = make_person("member")
+    household = make_household(owner, member)
+    item = PlannedItem.objects.create(
+        owner=member,
+        scope=PlannedItem.Scope.HOUSEHOLD,
+        household=household,
+        name="Synthetic shared plan",
+        kind=PlannedItem.Kind.EXPENSE,
+        amount_minor=5000,
+        start_date=date(2026, 1, 1),
+        cadence=PlannedItem.Cadence.MONTHLY,
+    )
+    mapping = _synthetic_mapping(household, member, "Synthetic left-behind mapping")
+    leave_household(member.user)
+
+    delete_member_data(member)
+
+    item.refresh_from_db()
+    mapping.refresh_from_db()
+    assert item.owner_id == owner.pk
+    assert mapping.created_by_id == owner.pk
+    assert not Person.objects.filter(pk=member.pk).exists()

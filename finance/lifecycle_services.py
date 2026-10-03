@@ -569,14 +569,42 @@ def _handover_lent_accounts(lent, submitted, successor):
         )
 
 
-def _transfer_household_owned_rows(person, successor_person):
+def _release_household_owned_rows(person):
+    """Hand household rows this person still owns to a current member, in every household.
+
+    The person may own rows in a household they already left (or were evicted
+    from). Each household's earliest current member takes them over; a household
+    with nobody left is returned, so it can be removed once the person's own
+    accounts (whose transactions use its categories) are gone.
+    """
     from .models import Budget, PlannedItem, SavedCsvMapping, SavingsGoal
 
-    PlannedItem.objects.filter(owner=person, scope=PlannedItem.Scope.HOUSEHOLD).update(owner=successor_person)
-    SavingsGoal.objects.filter(owner=person, scope=SavingsGoal.Scope.HOUSEHOLD).update(owner=successor_person)
-    Budget.objects.filter(owner=person, scope=Budget.Scope.HOUSEHOLD).update(owner=successor_person)
-    # Saved CSV mappings are household-wide; the creator reference moves on.
-    SavedCsvMapping.objects.filter(created_by=person).update(created_by=successor_person)
+    owned = (
+        PlannedItem.objects.filter(owner=person, scope=PlannedItem.Scope.HOUSEHOLD),
+        SavingsGoal.objects.filter(owner=person, scope=SavingsGoal.Scope.HOUSEHOLD),
+        Budget.objects.filter(owner=person, scope=Budget.Scope.HOUSEHOLD),
+    )
+    household_ids = set()
+    for rows in owned:
+        household_ids.update(rows.values_list("household_id", flat=True))
+    household_ids.update(SavedCsvMapping.objects.filter(created_by=person).values_list("household_id", flat=True))
+    orphaned = set()
+    for household_id in sorted(pk for pk in household_ids if pk is not None):
+        successor_membership = (
+            Membership.objects.filter(household_id=household_id, ended_at__isnull=True)
+            .exclude(person=person)
+            .select_related("person")
+            .order_by("joined_at", "pk")
+            .first()
+        )
+        if successor_membership is None:
+            orphaned.add(household_id)
+            continue
+        successor = successor_membership.person
+        for rows in owned:
+            rows.filter(household_id=household_id).update(owner=successor)
+        SavedCsvMapping.objects.filter(created_by=person, household_id=household_id).update(created_by=successor)
+    return orphaned
 
 
 def _delete_personal_records(person):
@@ -703,8 +731,7 @@ def delete_member_data(principal, lent_choices=None):
     _handover_lent_accounts(lent, submitted, successor)
     if own_membership is not None:
         end_current_membership(person)
-    if successor is not None:
-        _transfer_household_owned_rows(person, successor)
+    orphaned_households = _release_household_owned_rows(person)
     remaining_private_ids = list(
         Account.objects.filter(owner=person).order_by("pk").values_list("pk", flat=True)
     )
@@ -712,8 +739,8 @@ def delete_member_data(principal, lent_choices=None):
         delete_account(person, account_id)
     _delete_personal_records(person)
     _anonymize_shared_actor_refs(person)
-    if household_id is not None:
-        _delete_empty_household(household_id)
+    for empty_id in sorted(orphaned_households | ({household_id} if household_id is not None else set())):
+        _delete_empty_household(empty_id)
     person.delete()
     _delete_login_user(user)
 
