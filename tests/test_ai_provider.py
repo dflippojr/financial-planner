@@ -87,7 +87,7 @@ def test_unconnected_member_sees_no_ai_ui_and_makes_no_request(harness):
     client.force_login(user)
     with patch("finance.ai_http.json_request") as mocked:
         home = client.get(reverse("home"))
-        settings_page = client.get(reverse("account-settings"))
+        settings_page = client.get(reverse("settings-ai"))
     assert mocked.call_count == 0
     assert home.status_code == 200
     assert b'data-ai-ui=' not in home.content
@@ -228,8 +228,8 @@ def test_settings_connect_requires_reauth_and_hides_token(harness):
     assert refused.url.startswith(reverse("reauth"))
     stamp_recent_auth(client)
     saved = client.post(reverse("ai-connect"), {"base_url": url, "token": TOKEN})
-    assert saved.url == reverse("account-settings")
-    page = client.get(reverse("account-settings"))
+    assert saved.url == reverse("settings-ai")
+    page = client.get(reverse("settings-ai"))
     assert TOKEN not in page.content.decode()
     assert b'data-ai-ui="connected"' in page.content
 
@@ -571,7 +571,7 @@ def test_settings_disconnect_and_defaults_require_reauth(harness):
     assert refused.url.startswith(reverse("reauth"))
     stamp_recent_auth(client)
     disconnected = client.post(reverse("ai-disconnect"))
-    assert disconnected.url == reverse("account-settings")
+    assert disconnected.url == reverse("settings-ai")
     assert not AiProviderConnection.objects.owned_by(person).exists()
     connect_harness(person, base_url=url, token=TOKEN)
     stamp_recent_auth(client)
@@ -579,12 +579,12 @@ def test_settings_disconnect_and_defaults_require_reauth(harness):
         reverse("ai-defaults"),
         {"chat_backend": "local", "background_backend": "local", "chat_model": "", "background_model": ""},
     )
-    assert saved.url == reverse("account-settings")
+    assert saved.url == reverse("settings-ai")
     person.refresh_from_db()
     connection = connection_for(person)
     assert connection.chat_backend == "local"
     invalid = client.post(reverse("ai-connect"), {"base_url": "", "token": ""})
-    assert invalid.url == reverse("account-settings")
+    assert invalid.url == reverse("settings-ai")
 
 
 @pytest.mark.django_db
@@ -956,7 +956,7 @@ def test_unreadable_token_shows_reconnect_and_disconnect_still_works(harness):
     client = Client()
     client.force_login(user)
 
-    page = client.get(reverse("account-settings"))
+    page = client.get(reverse("settings-ai"))
     assert b"Disconnect it and connect again" in page.content
 
     stamp_recent_auth(client)

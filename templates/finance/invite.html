@@ -1,19 +1,34 @@
-{% extends "finance/base.html" %}
-{% block title %}Invite · Financial Planner{% endblock %}
-{% block content %}
-<h1 class="mb-4 text-2xl font-bold">Invite a household member</h1>
+{% extends "finance/settings_base.html" %}
+{% block title %}Household · Financial Planner{% endblock %}
+{% block settings_content %}
+<h2 class="mb-4 text-xl font-semibold">Household</h2>
+{% if household %}
+<h3 class="mb-2 font-semibold">Members</h3>
+<ul class="mb-6 list-disc pl-6">
+  {% for membership in members %}
+  <li>{{ membership.person.display_name }}</li>
+  {% endfor %}
+</ul>
+<h3 class="mb-2 font-semibold">Invite a household member</h3>
 {% if invitation_code %}
 <div role="status" class="alert alert-info mb-4">Share this one-time code securely. It expires in {{ invitation_ttl_hours }} hours and will not be shown again.</div>
-<div class="card bg-base-200">
+<div class="card bg-base-200 mb-6">
   <div class="card-body">
     <pre id="invitation-code" class="font-mono text-lg">{{ invitation_code }}</pre>
     <button type="button" class="btn btn-outline btn-sm w-fit" data-copy-target="invitation-code">Copy code</button>
   </div>
 </div>
 {% else %}
-<form method="post">
+<form method="post" class="mb-6">
   {% csrf_token %}
   <button type="submit" class="btn btn-primary">Create invitation code</button>
 </form>
+{% endif %}
+<form method="post" action="{% url 'leave-household' %}">
+  {% csrf_token %}
+  <button type="submit" class="btn btn-outline btn-error">Leave household</button>
+</form>
+{% else %}
+<div role="status" class="alert">Join or create a household to invite members.</div>
 {% endif %}
 {% endblock %}

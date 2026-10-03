@@ -1,7 +1,7 @@
-{% extends "finance/base.html" %}
+{% extends "finance/settings_base.html" %}
 {% block title %}Categorization rules · Financial Planner{% endblock %}
-{% block content %}
-<h1 class="mb-4 text-2xl font-bold">Categorization rules</h1>
+{% block settings_content %}
+<h2 class="mb-4 text-xl font-semibold">Categorization rules</h2>
 <p class="mb-4"><a class="link" href="{% url 'category-list' %}">Back to categories</a></p>
 {% if unreachable_applications %}
 <h2 class="mb-3 text-xl font-semibold">Changes from rules you can no longer open</h2>

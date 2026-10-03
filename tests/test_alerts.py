@@ -386,10 +386,12 @@ def test_alert_settings_form_saves_threshold():
     owner = make_person("owner")
     make_household(owner)
     client = signed_in(owner)
+    page = client.get(reverse("settings-alerts"))
+    assert page.status_code == 200
+    assert b'aria-current="page"' in page.content
     response = client.post(
-        reverse("account-settings"),
+        reverse("settings-alerts"),
         {
-            "action": "save-alert-settings",
             "sync_enabled": "on",
             "budget_enabled": "on",
             "large_transaction_enabled": "on",

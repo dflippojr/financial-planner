@@ -286,10 +286,10 @@ def test_settings_shows_state_and_accepts_current_version():
     client = Client()
     client.force_login(user)
     stamp_recent_auth(client)
-    page = client.get(reverse("account-settings"))
+    page = client.get(reverse("settings-ai"))
     assert b"not in acceptance" in page.content
     accepted = client.post(
-        reverse("account-settings"),
+        reverse("settings-ai"),
         {"action": "accept-privacy-policy", "version": str(current_policy().version)},
     )
     assert accepted.status_code == 200
@@ -410,11 +410,11 @@ def test_settings_stale_shown_version_is_not_accepted():
     client = Client()
     client.force_login(user)
     stamp_recent_auth(client)
-    shown = _hidden_version(client.get(reverse("account-settings")).content, "version")
+    shown = _hidden_version(client.get(reverse("settings-ai")).content, "version")
     later = publish_policy(material=True, body="Synthetic policy v2")
 
     posted = client.post(
-        reverse("account-settings"),
+        reverse("settings-ai"),
         {"action": "accept-privacy-policy", "version": shown},
     )
 
