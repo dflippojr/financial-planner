@@ -206,7 +206,7 @@ def test_policy_page_is_public_and_shows_version_and_date():
     assert response.status_code == 200
     assert b"Privacy and data policy" in response.content
     assert f"Version {policy.version}".encode() in response.content
-    assert policy.published_at.date().isoformat().encode() in response.content
+    assert timezone.localtime(policy.published_at).date().isoformat().encode() in response.content
 
 
 @pytest.mark.django_db
