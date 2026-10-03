@@ -68,6 +68,7 @@
         · Liabilities {% include "finance/_amount.html" with value=period.liabilities_display tone="out" %}
         · Net worth {% include "finance/_amount.html" with value=period.net_display tone="" %}
       </p>
+<p class="mb-4 text-sm">Physical asset values are estimates, not appraisals or verified facts.</p>
       <div class="overflow-x-auto">
         <table class="table table-zebra">
           <thead class="sticky top-0 z-10 bg-base-200">
@@ -81,7 +82,7 @@
           <tbody>
           {% for row in period.accounts %}
             <tr>
-              <td>{{ row.account_name }}</td>
+              <td>{{ row.account_name }}{% if row.is_estimate %} <span class="badge badge-ghost">estimate</span>{% endif %}</td>
               <td class="text-right">{% include "finance/_amount.html" with value=row.amount_display tone="" %}</td>
               <td>{{ row.snapshot_date|date:"Y-m-d" }}</td>
               <td><span class="badge">{{ row.source_badge }}</span></td>
@@ -92,6 +93,28 @@
           </tbody>
         </table>
       </div>
+      {% if period.equity_lines %}
+      <h3 class="mt-4 font-medium">Equity (estimates)</h3>
+      <p class="text-sm">Shown for paired loans. These lines do not change totals.</p>
+      <div class="overflow-x-auto">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Pair</th>
+              <th class="text-right">Equity</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for line in period.equity_lines %}
+            <tr>
+              <td>{{ line.label }} <span class="badge badge-ghost">estimate</span> ({{ line.asset_name }} − {{ line.loan_name }})</td>
+              <td class="text-right">{% include "finance/_amount.html" with value=line.equity_display tone="" %}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
     </div>
   </section>
   {% endfor %}

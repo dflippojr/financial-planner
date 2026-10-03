@@ -1,8 +1,8 @@
 {% extends "finance/base.html" %}
-{% block title %}Edit balance · {{ account.name }} · Financial Planner{% endblock %}
+{% block title %}{% if account.is_physical_asset %}Edit estimate{% else %}Edit balance{% endif %} · {{ account.name }} · Financial Planner{% endblock %}
 {% block content %}
-<h1 class="mb-4 text-2xl font-bold">Edit balance</h1>
-<p class="mb-4"><a class="link" href="{% url 'account-balances' account.pk %}">{{ account.name }} balances</a></p>
+<h1 class="mb-4 text-2xl font-bold">{% if account.is_physical_asset %}Edit estimate{% else %}Edit balance{% endif %}</h1>
+<p class="mb-4"><a class="link" href="{% url 'account-balances' account.pk %}">{{ account.name }}</a></p>
 <section class="card bg-base-100 shadow-sm mb-6 max-w-lg">
   <div class="card-body">
     <form method="post">
