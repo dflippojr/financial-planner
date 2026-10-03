@@ -75,7 +75,9 @@ def account_list(request):
     form = AddAccountForm(request.POST or None, has_household=household is not None)
     if request.method == "POST" and form.is_valid():
         account = _create_account(person, form)
-        return redirect("csv-import-preview", account.pk)
+        if account.accepts_csv_import():
+            return redirect("csv-import-preview", account.pk)
+        return redirect("account-balances", account.pk)
     accounts = list(_visible_accounts(request.user))
     for account in accounts:
         if account.last_snapshot_date is None:

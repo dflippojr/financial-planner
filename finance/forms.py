@@ -172,7 +172,9 @@ class TransactionFilterForm(forms.Form):
 
     def __init__(self, *args, principal=None, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["account"].queryset = Account.objects.visible_to(principal).order_by("name", "pk")
+        self.fields["account"].queryset = (
+            Account.objects.visible_to(principal).for_cash_flow().order_by("name", "pk")
+        )
         choices = [("", "All categories"), ("uncategorized", "Uncategorized"), ("transfer", "Transfer")]
         if principal is not None:
             from .category_services import assignable_categories
@@ -228,7 +230,9 @@ class CashFlowFilterForm(forms.Form):
 
     def __init__(self, *args, principal=None, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["account"].queryset = Account.objects.visible_to(principal).order_by("name", "pk")
+        self.fields["account"].queryset = (
+            Account.objects.visible_to(principal).for_cash_flow().order_by("name", "pk")
+        )
 
     def clean(self):
         cleaned = super().clean()
@@ -310,8 +314,13 @@ class ManualBalanceForm(forms.Form):
     def __init__(self, *args, account=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.account = account
-        if account is not None and account.account_type == Account.Type.CREDIT_CARD:
+        if account is not None and account.account_type in Account.LIABILITY_TYPES:
             self.fields["amount"].help_text = "Amount owed. An overpayment is negative."
+        elif account is not None and account.is_physical_asset():
+            self.fields["amount"].label = "Estimated value"
+            self.fields["amount"].help_text = (
+                "A personal estimate, not an appraisal or verified fact. Optional note can name the source."
+            )
         elif account is not None:
             self.fields["amount"].help_text = "Current balance."
         if account is None or account.account_type != Account.Type.INVESTMENT:
@@ -384,7 +393,9 @@ class SpendingFilterForm(forms.Form):
             data = data.copy()
             data["grouping"] = "month"
         super().__init__(data, *args, **kwargs)
-        self.fields["account"].queryset = Account.objects.visible_to(principal).order_by("name", "pk")
+        self.fields["account"].queryset = (
+            Account.objects.visible_to(principal).for_cash_flow().order_by("name", "pk")
+        )
 
     def clean(self):
         cleaned = super().clean()
@@ -729,6 +740,38 @@ class AccountRenameForm(forms.Form):
     name = forms.CharField(max_length=150)
 
 
+class PairLoanForm(forms.Form):
+    secured_asset = forms.ModelChoiceField(
+        queryset=Account.objects.none(),
+        required=False,
+        empty_label="Not paired",
+        label="Secured by",
+    )
+
+    def __init__(self, *args, loan=None, principal=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.loan = loan
+        assets = Account.objects.none()
+        if loan is not None and principal is not None:
+            assets = (
+                Account.objects.visible_to(principal)
+                .filter(
+                    account_type__in=Account.PHYSICAL_ASSET_TYPES,
+                    status=Account.Status.ACTIVE,
+                    archived_at__isnull=True,
+                    scope=loan.scope,
+                )
+                .order_by("name", "pk")
+            )
+            if loan.scope == Account.Scope.PRIVATE:
+                assets = assets.filter(owner_id=loan.owner_id)
+            else:
+                assets = assets.filter(household_id=loan.household_id)
+        self.fields["secured_asset"].queryset = assets
+        if loan is not None and loan.secured_asset_id:
+            self.fields["secured_asset"].initial = loan.secured_asset_id
+
+
 class AccountDeleteForm(forms.Form):
     confirm_name = forms.CharField(label="Type the exact account name to confirm", max_length=150)
 
@@ -996,7 +1039,9 @@ class CategoryRuleForm(forms.Form):
         super().__init__(*args, **kwargs)
         from .category_services import assignable_categories
 
-        self.fields["account"].queryset = Account.objects.visible_to(principal).order_by("name", "pk")
+        self.fields["account"].queryset = (
+            Account.objects.visible_to(principal).for_cash_flow().order_by("name", "pk")
+        )
         self.fields["category"].queryset = assignable_categories(principal)
 
     def clean_min_amount(self):

@@ -78,7 +78,9 @@ def visible_projection_inputs(principal, *, account=None, scope=""):
         .values("pk")
     )
     if account is not None or scope:
-        eligible = eligible.filter(account__in=selected_accounts(principal, account=account, scope=scope))
+        eligible = eligible.filter(
+            account__in=selected_accounts(principal, account=account, scope=scope, cash_flow_only=True)
+        )
     series = RecurringSeries.objects.visible_to(principal).filter(
         status=RecurringSeries.Status.CONFIRMED,
         is_active=True,

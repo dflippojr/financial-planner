@@ -61,6 +61,7 @@ urlpatterns = [
     path("accounts/<int:account_id>/archive/", account_views.account_archive, name="account-archive"),
     path("accounts/<int:account_id>/delete/", account_views.account_delete, name="account-delete"),
     path("accounts/<int:account_id>/balances/", net_worth_views.account_balances, name="account-balances"),
+    path("accounts/<int:account_id>/pair/", net_worth_views.account_pair_loan, name="account-pair-loan"),
     path(
         "accounts/<int:account_id>/balances/<int:snapshot_id>/edit/",
         net_worth_views.account_snapshot_edit,
