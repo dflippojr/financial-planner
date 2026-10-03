@@ -1103,3 +1103,34 @@ class CategoryRuleForm(forms.Form):
         if not MIN_SIGNED_BIGINT <= minor_units <= MAX_SIGNED_BIGINT:
             raise ValidationError(AMOUNT_RANGE_ERROR)
         return amount
+
+
+class AlertSettingsForm(forms.Form):
+    sync_enabled = forms.BooleanField(required=False, label="Sync failures and re-linking")
+    recurring_price_enabled = forms.BooleanField(required=False, label="Recurring price changes")
+    recurring_missed_enabled = forms.BooleanField(required=False, label="Missed recurring charges")
+    budget_enabled = forms.BooleanField(required=False, label="Budgets near or over the limit")
+    large_transaction_enabled = forms.BooleanField(required=False, label="Large transactions")
+    monthly_review_enabled = forms.BooleanField(required=False, label="Monthly review")
+    large_transaction_amount = forms.DecimalField(
+        required=False,
+        min_value=Decimal("0.01"),
+        max_digits=19,
+        decimal_places=2,
+        label="Large transaction threshold",
+        help_text="USD. Leave blank to keep large-transaction alerts off.",
+        widget=forms.TextInput(attrs={"inputmode": "decimal"}),
+    )
+
+    def save_payload(self):
+        amount = self.cleaned_data.get("large_transaction_amount")
+        minor = int(amount * 100) if amount is not None else None
+        return {
+            "sync_enabled": self.cleaned_data["sync_enabled"],
+            "recurring_price_enabled": self.cleaned_data["recurring_price_enabled"],
+            "recurring_missed_enabled": self.cleaned_data["recurring_missed_enabled"],
+            "budget_enabled": self.cleaned_data["budget_enabled"],
+            "large_transaction_enabled": self.cleaned_data["large_transaction_enabled"],
+            "monthly_review_enabled": self.cleaned_data["monthly_review_enabled"],
+            "large_transaction_minor": minor,
+        }

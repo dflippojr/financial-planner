@@ -1661,3 +1661,78 @@ class BudgetRolloverReset(models.Model):
 
     def __str__(self):
         return f"Rollover reset {self.budget_id} {self.month}"
+
+
+class Alert(models.Model):
+    class Kind(models.TextChoices):
+        SYNC = "sync", "Sync"
+        RECURRING_PRICE = "recurring_price", "Recurring price change"
+        RECURRING_MISSED = "recurring_missed", "Missed recurring charge"
+        BUDGET = "budget", "Budget"
+        LARGE_TRANSACTION = "large_transaction", "Large transaction"
+        MONTHLY_REVIEW = "monthly_review", "Monthly review"
+
+    recipient = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="alerts")
+    kind = models.CharField(max_length=20, choices=Kind)
+    title = models.CharField(max_length=200)
+    link = models.CharField(max_length=500)
+    dedupe_key = models.CharField(max_length=200)
+    account = models.ForeignKey(
+        Account,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="alerts",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    read_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("recipient", "dedupe_key"), name="alert_unique_recipient_dedupe"),
+            models.CheckConstraint(
+                condition=Q(
+                    kind__in=(
+                        "sync",
+                        "recurring_price",
+                        "recurring_missed",
+                        "budget",
+                        "large_transaction",
+                        "monthly_review",
+                    )
+                ),
+                name="alert_kind_valid",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=("recipient", "created_at"), name="alert_recipient_created_idx"),
+        ]
+
+    def __str__(self):
+        return self.title
+
+
+class AlertSettings(models.Model):
+    person = models.OneToOneField(Person, on_delete=models.PROTECT, related_name="alert_settings")
+    sync_enabled = models.BooleanField(default=True)
+    recurring_price_enabled = models.BooleanField(default=True)
+    recurring_missed_enabled = models.BooleanField(default=True)
+    budget_enabled = models.BooleanField(default=True)
+    large_transaction_enabled = models.BooleanField(default=True)
+    monthly_review_enabled = models.BooleanField(default=True)
+    large_transaction_minor = models.BigIntegerField(
+        null=True,
+        blank=True,
+        help_text="USD threshold in minor units. Empty means large-transaction alerts are off.",
+    )
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(large_transaction_minor__isnull=True) | Q(large_transaction_minor__gte=0),
+                name="alert_settings_large_threshold_non_negative",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Alert settings for {self.person_id}"
