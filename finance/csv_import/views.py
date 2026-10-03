@@ -1,5 +1,6 @@
 from collections import namedtuple
 
+from django.contrib import messages
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
@@ -263,6 +264,9 @@ def _commit_staged_import(request, account, context, *, token, content, document
 @require_http_methods(["GET", "POST"])
 def csv_preview(request, account_id):
     account = _visible_account(request, account_id)
+    if not account.accepts_csv_import():
+        messages.info(request, "This account has no transactions. Record a valuation or balance instead.")
+        return redirect("account-balances", account.pk)
     context = {}
     if request.method == "GET":
         _restore_live_stage(request, account, context)

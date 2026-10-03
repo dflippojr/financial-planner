@@ -189,6 +189,34 @@ def _person_for(principal):
     return None
 
 
+def loan_asset_pairing_allowed(loan, asset):
+    """True when a loan and asset share scope so an equity line cannot leak."""
+    if loan is None or asset is None:
+        return False
+    if loan.account_type != Account.Type.LOAN:
+        return False
+    if asset.account_type not in Account.PHYSICAL_ASSET_TYPES:
+        return False
+    if loan.pk is not None and asset.pk is not None and loan.pk == asset.pk:
+        return False
+    if loan.scope != asset.scope:
+        return False
+    if loan.scope == Account.Scope.PRIVATE:
+        return loan.owner_id == asset.owner_id
+    return loan.household_id is not None and loan.household_id == asset.household_id
+
+
+def clear_invalid_loan_pairings(account):
+    """Drop pairings that no longer share scope after a share or unshare."""
+    if account.secured_asset_id and not loan_asset_pairing_allowed(account, account.secured_asset):
+        account.secured_asset = None
+        account.save(update_fields=("secured_asset", "updated_at"))
+    for loan in Account.objects.filter(secured_asset=account).select_related("secured_asset"):
+        if not loan_asset_pairing_allowed(loan, account):
+            loan.secured_asset = None
+            loan.save(update_fields=("secured_asset", "updated_at"))
+
+
 class AccountQuerySet(models.QuerySet):
     def visible_to(self, principal):
         person = _person_for(principal)
@@ -203,6 +231,9 @@ class AccountQuerySet(models.QuerySet):
             | Q(scope="household", household_id__in=current_households)
         )
 
+    def for_cash_flow(self):
+        return self.exclude(account_type__in=Account.NON_CASH_FLOW_TYPES)
+
 
 class Account(ArchivableModel):
     class Type(models.TextChoices):
@@ -210,6 +241,28 @@ class Account(ArchivableModel):
         SAVINGS = "savings", "Savings"
         CREDIT_CARD = "credit_card", "Credit card"
         INVESTMENT = "investment", "Investment"
+        REAL_ESTATE = "real_estate", "Real estate"
+        VEHICLE = "vehicle", "Vehicle"
+        PRECIOUS_METALS = "precious_metals", "Precious metals"
+        OTHER_ASSET = "other_asset", "Other asset"
+        LOAN = "loan", "Loan"
+
+    PHYSICAL_ASSET_TYPES = (
+        Type.REAL_ESTATE,
+        Type.VEHICLE,
+        Type.PRECIOUS_METALS,
+        Type.OTHER_ASSET,
+    )
+    LIABILITY_TYPES = (Type.CREDIT_CARD, Type.LOAN)
+    NON_CASH_FLOW_TYPES = PHYSICAL_ASSET_TYPES + (Type.LOAN,)
+    SIMPLEFIN_TYPES = (
+        Type.CHECKING,
+        Type.SAVINGS,
+        Type.CREDIT_CARD,
+        Type.INVESTMENT,
+        Type.LOAN,
+    )
+    PAIRING_REJECTED = "A loan can only be paired with an asset of the same scope."
 
     class Scope(models.TextChoices):
         PRIVATE = "private", "Private"
@@ -220,7 +273,7 @@ class Account(ArchivableModel):
         LENT = "lent", "Lent"
 
     name = models.CharField(max_length=150)
-    account_type = models.CharField(max_length=11, choices=Type)
+    account_type = models.CharField(max_length=16, choices=Type)
     owner = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="owned_accounts")
     scope = models.CharField(max_length=9, choices=Scope, default=Scope.PRIVATE)
     share_mode = models.CharField(max_length=8, choices=ShareMode, blank=True, default="")
@@ -230,6 +283,13 @@ class Account(ArchivableModel):
         null=True,
         blank=True,
         related_name="accounts",
+    )
+    secured_asset = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="securing_loans",
     )
     currency = models.CharField(max_length=3, default="USD")
     created_at = models.DateTimeField(auto_now_add=True)
@@ -251,8 +311,24 @@ class Account(ArchivableModel):
             ),
             models.CheckConstraint(condition=Q(currency="USD"), name="account_currency_usd"),
             models.CheckConstraint(
-                condition=Q(account_type__in=("checking", "savings", "credit_card", "investment")),
+                condition=Q(
+                    account_type__in=(
+                        "checking",
+                        "savings",
+                        "credit_card",
+                        "investment",
+                        "real_estate",
+                        "vehicle",
+                        "precious_metals",
+                        "other_asset",
+                        "loan",
+                    )
+                ),
                 name="account_type_valid",
+            ),
+            models.CheckConstraint(
+                condition=Q(secured_asset__isnull=True) | Q(account_type="loan"),
+                name="account_secured_asset_requires_loan",
             ),
             models.CheckConstraint(
                 condition=(
@@ -265,6 +341,33 @@ class Account(ArchivableModel):
 
     def __str__(self):
         return self.name
+
+    def is_physical_asset(self):
+        return self.account_type in self.PHYSICAL_ASSET_TYPES
+
+    def is_liability(self):
+        return self.account_type in self.LIABILITY_TYPES
+
+    def accepts_csv_import(self):
+        return self.account_type not in self.NON_CASH_FLOW_TYPES
+
+    def accepts_simplefin(self):
+        return self.account_type in self.SIMPLEFIN_TYPES
+
+    def validate_secured_asset(self):
+        if self.secured_asset_id is None:
+            return
+        if self.account_type != self.Type.LOAN:
+            raise ValidationError(self.PAIRING_REJECTED)
+        asset = self.secured_asset
+        if not loan_asset_pairing_allowed(self, asset):
+            raise ValidationError(self.PAIRING_REJECTED)
+
+    def save(self, *args, **kwargs):
+        update_fields = kwargs.get("update_fields")
+        if update_fields is None or "secured_asset" in update_fields:
+            self.validate_secured_asset()
+        super().save(*args, **kwargs)
 
 
 class ImportBatch(ArchivableModel):

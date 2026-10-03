@@ -31,7 +31,7 @@ def _person(request):
 def _linkable_accounts(person):
     return list(
         Account.objects.visible_to(person)
-        .filter(status=Account.Status.ACTIVE, archived_at__isnull=True)
+        .filter(status=Account.Status.ACTIVE, archived_at__isnull=True, account_type__in=Account.SIMPLEFIN_TYPES)
         .order_by("name", "pk")
     )
 
@@ -192,7 +192,9 @@ def connections(request):
             "load_error": load_error,
             "next_sync": next_sync,
             "can_sync_now": can_sync_now,
-            "account_types": Account.Type.choices,
+            "account_types": [
+                (value, label) for value, label in Account.Type.choices if value in Account.SIMPLEFIN_TYPES
+            ],
         },
     )
 

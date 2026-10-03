@@ -28,6 +28,8 @@ A release is usable when people can sign in, keep private accounts private, view
 - [#50 Recurring detection: drop amount outliers and re-pick the cadence chain](https://github.com/dflippojr/financial-planner/issues/50)
 - [#124 Recurring series: follow price drift and let members merge, split, and add charges](https://github.com/dflippojr/financial-planner/issues/124) (decisions in requirements)
 - [#18 Account balance, net worth, and investment-performance history](https://github.com/dflippojr/financial-planner/issues/18); portfolio/account composition is a possible later extension.
+- [#69 Net worth from balances](https://github.com/dflippojr/financial-planner/issues/69)
+- [#109 Physical assets and loans for home equity](https://github.com/dflippojr/financial-planner/issues/109)
 - [#19 Export and Google Sheet migration](https://github.com/dflippojr/financial-planner/issues/19)
 
 ## Milestone 3: connections and planning

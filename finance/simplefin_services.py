@@ -68,7 +68,7 @@ def decode_setup_token(token: str) -> str:
 
 
 def _mode_for_account_type(account_type: str) -> str:
-    if account_type == Account.Type.INVESTMENT:
+    if account_type in (Account.Type.INVESTMENT, Account.Type.LOAN):
         return AccountLink.Mode.BALANCES_ONLY
     return AccountLink.Mode.TRANSACTIONS
 
@@ -229,6 +229,8 @@ def _link_existing(person, connection, choice, simplefin_account_id):
     if not choice.get("account_id"):
         raise SimpleFinError("Choose an account to link.")
     account = _visible_linkable_account(person, choice["account_id"])
+    if not account.accepts_simplefin():
+        raise SimpleFinError("Physical asset accounts are valued manually, not through SimpleFIN.")
     if (
         AccountLink.objects.filter(account=account)
         .exclude(connection=connection, simplefin_account_id=simplefin_account_id)
@@ -247,7 +249,7 @@ def _link_existing(person, connection, choice, simplefin_account_id):
 
 def _create_and_link(person, connection, choice, simplefin_account_id):
     account_type = choice.get("account_type")
-    if account_type not in Account.Type.values:
+    if account_type not in Account.SIMPLEFIN_TYPES:
         raise SimpleFinError("Choose a valid account type.")
     name = (choice.get("name") or "").strip()
     if not name:

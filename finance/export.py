@@ -62,6 +62,7 @@ CSV_FIELDS = {
         "status",
         "archived_at",
         "created_at",
+        "secured_asset_id",
     ),
     "categories": ("id", "household_id", "name", "code", "created_at"),
     "tags": ("id", "household_id", "name", "is_archived", "created_at", "updated_at"),
@@ -225,7 +226,8 @@ Files
 accounts.csv / accounts.json
   id, name, account_type, owner_username, scope, share_mode (co_owned or lent
   for household accounts, empty for private), household_id, currency,
-  status, archived_at, created_at
+  status, archived_at, created_at, secured_asset_id (loan accounts may name the
+  asset that secures them; empty otherwise)
 
 categories.csv / categories.json
   Household categories visible to the member.
@@ -375,6 +377,7 @@ def _account_rows(person):
                 "status": account.status,
                 "archived_at": account.archived_at,
                 "created_at": account.created_at,
+                "secured_asset_id": account.secured_asset_id,
             }
         )
     return rows

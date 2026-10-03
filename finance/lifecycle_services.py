@@ -14,6 +14,7 @@ from .models import (
     TransactionCorrectionHistory,
     TransactionTag,
     TransferPair,
+    clear_invalid_loan_pairings,
 )
 
 
@@ -92,6 +93,7 @@ def _make_account_private(account):
     account.household = None
     account.share_mode = ""
     account.save(update_fields=("scope", "household", "share_mode", "updated_at"))
+    clear_invalid_loan_pairings(account)
 
 
 def _actor_may_manage_sharing(person, account):
@@ -121,6 +123,8 @@ def share_account(principal, account_id, share_mode):
     account.household = membership.household
     account.share_mode = mode
     account.save(update_fields=("scope", "household", "share_mode", "updated_at"))
+    clear_invalid_loan_pairings(account)
+    return account
 
 
 @transaction.atomic
