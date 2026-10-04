@@ -5,7 +5,7 @@ from datetime import date, timedelta
 from types import SimpleNamespace
 
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.db.models import Case, Value, When
+from django.db.models import Case, Sum, Value, When
 from django.urls import reverse
 from django.utils import timezone
 
@@ -210,8 +210,18 @@ def _latest_snapshots(accounts, *, as_of):
 
 
 def starting_balance_minor(accounts, *, as_of):
+    """Each account's latest snapshot plus the transactions posted after it, through `as_of`."""
     snapshots = _latest_snapshots(accounts, as_of=as_of)
-    return sum(snapshot.amount_minor for snapshot in snapshots.values())
+    total = 0
+    for account_id, snapshot in snapshots.items():
+        since = Transaction.objects.filter(
+            account_id=account_id,
+            status=Transaction.Status.ACTIVE,
+            transaction_date__gt=snapshot.snapshot_date,
+            transaction_date__lte=as_of,
+        ).aggregate(total=Sum("amount_minor"))["total"]
+        total += snapshot.amount_minor + (since or 0)
+    return total
 
 
 def _balance_delta_on_day(sources, on_date, selected_ids):
