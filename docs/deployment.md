@@ -185,6 +185,15 @@ Invoke-WebRequest https://BASEMENT-PC.MAGICDNS-NAME/health/
 
 Starting the new app applies all pending Django migrations before Gunicorn accepts traffic. `simplefin-sync` and `ai-jobs` wait for the app to report healthy, so they never run against a database that has not been migrated yet. After `up -d`, compare each running container's image with the newly built one (`docker inspect -f '{{.Image}}' <container>` against `docker image inspect -f '{{.Id}}' <image>`). If one still runs the old image, as `backup` has done, recreate it with `docker compose --env-file $Config up -d --force-recreate <service>`. If a migration or health check fails, inspect bounded logs with `docker compose --env-file $Config logs --tail 100 app db`; do not repeatedly restart or run migrations by hand. Restore the pre-upgrade dump into a fresh volume using the procedure above when database rollback is required.
 
+## Reviewing a dependency pull request
+
+Dependabot opens version and security update PRs. There is no auto-merge; the owner approves every merge. Keep exact pins in `requirements.txt`. Treat `django-allauth` upgrades as needing the Google sign-in tests as well as the rest of the suite.
+
+On the PR branch:
+
+1. Run the SQLite suite (`python -m pytest tests -q`) and `bash scripts/test_postgres.sh`.
+2. After merge, rebuild and deploy with the upgrade steps above (backup first, then `docker compose --env-file $Config build --pull` and `up -d`, then the health check).
+
 ## Synthetic restore exercise record
 
 On 2026-09-27, this procedure was exercised locally with Docker Desktop 29.8.0, PostgreSQL 16, and only the committed `synthetic_demo` fixture. The app and database health checks passed; the fixture contained 3 synthetic transactions; a custom-format dump produced both nightly and forced weekly copies; the transactions were deleted (count 0); and `pg_restore` recovered the count to 3. The same dump was then restored into a second, fresh named volume, where the count was 3 and `/health/` returned HTTP 200. No real statement, credential, account number, or financial record was used or written to Git.
