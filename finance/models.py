@@ -64,6 +64,8 @@ class Person(models.Model):
         related_name="person",
     )
     display_name = models.CharField(max_length=150)
+    use_shared_local_chat = models.BooleanField(default=False)
+    use_shared_local_background = models.BooleanField(default=False)
     privacy_policy_declined_version = models.ForeignKey(
         "PrivacyPolicyVersion",
         on_delete=models.SET_NULL,
@@ -1543,6 +1545,7 @@ class AiProviderConnection(models.Model):
     background_backend = models.CharField(max_length=32, blank=True, default="")
     chat_model = models.CharField(max_length=80, blank=True, default="")
     background_model = models.CharField(max_length=80, blank=True, default="")
+    offer_local_to_household = models.BooleanField(default=False)
     connected_at = models.DateTimeField(default=timezone.now)
     last_status = models.CharField(max_length=80, blank=True, default="")
 

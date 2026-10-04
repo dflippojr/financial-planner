@@ -28,6 +28,8 @@ ACTION_LABELS = {
     "connect-ai": "Connect an AI backend",
     "disconnect-ai": "Disconnect the AI backend",
     "ai-defaults": "Change AI backend defaults",
+    "ai-offer-local": "Offer the household local model",
+    "ai-shared-local": "Use the household local model",
 }
 
 ACCOUNT_SETTINGS_ACTIONS = {

@@ -66,6 +66,8 @@ SETTINGS_TAB_BY_NAME = {
     "ai-connect": "ai",
     "ai-disconnect": "ai",
     "ai-defaults": "ai",
+    "ai-offer-local": "ai",
+    "ai-shared-local": "ai",
 }
 
 SETTINGS_TABS = (

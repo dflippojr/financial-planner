@@ -726,7 +726,7 @@ class AiDefaultsForm(forms.Form):
     chat_model = forms.CharField(label="Chat model", required=False, max_length=80)
     background_model = forms.CharField(label="Background model", required=False, max_length=80)
 
-    def __init__(self, *args, backends=(), **kwargs):
+    def __init__(self, *args, backends=(), offer_shared_local=False, **kwargs):
         super().__init__(*args, **kwargs)
         allow_local_chat = bool(getattr(settings, "AI_CHAT_LOCAL_ENABLED", False))
         chat_choices = [
@@ -735,12 +735,33 @@ class AiDefaultsForm(forms.Form):
             if item.suits_live and (allow_local_chat or item.id != "local")
         ]
         background_choices = [(item.id, item.label) for item in backends if item.suits_background]
+        if offer_shared_local:
+            chat_choices.append(("shared_local", "Local model (shared)"))
+            background_choices.append(("shared_local", "Local model (shared)"))
         if not chat_choices:
             chat_choices = [("", "No available backend")]
         if not background_choices:
             background_choices = [("", "No available backend")]
         self.fields["chat_backend"].choices = chat_choices
         self.fields["background_backend"].choices = background_choices
+
+
+class AiOfferLocalForm(forms.Form):
+    offer_local_to_household = forms.BooleanField(
+        required=False,
+        label="Offer the local model to household members",
+    )
+
+
+class AiSharedLocalForm(forms.Form):
+    use_shared_local_chat = forms.BooleanField(
+        required=False,
+        label="Chat",
+    )
+    use_shared_local_background = forms.BooleanField(
+        required=False,
+        label="Background jobs",
+    )
 
 
 class ShareAccountForm(forms.Form):
