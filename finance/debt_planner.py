@@ -192,11 +192,12 @@ def simulate_payoff(debts, extra_minor=0, strategy=STRATEGY_MINIMUMS, custom_ord
             continue
         elif stalled or account_id in frozen:
             never_ids.add(account_id)
-        elif strategy == STRATEGY_MINIMUMS:
-            shrinking = balances[account_id] < balances_at_horizon[account_id]
-            (beyond_ids if shrinking else never_ids).add(account_id)
         else:
-            (beyond_ids if total_shrinking else never_ids).add(account_id)
+            # Its own balance shrinking means it ends; with rollover, so does a
+            # shrinking total, since freed payments eventually reach every debt.
+            shrinking = balances[account_id] < balances_at_horizon[account_id]
+            rolls_over = strategy != STRATEGY_MINIMUMS and total_shrinking
+            (beyond_ids if shrinking or rolls_over else never_ids).add(account_id)
 
     summaries = []
     for debt in debts:
