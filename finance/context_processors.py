@@ -46,6 +46,8 @@ def privacy_policy_prompt(request):
 
 SETTINGS_TAB_BY_NAME = {
     "account-settings": "security",
+    "revoke-session": "security",
+    "revoke-other-sessions": "security",
     "simplefin-connections": "connections",
     "simplefin-sync": "connections",
     "simplefin-disconnect": "connections",

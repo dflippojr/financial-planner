@@ -662,6 +662,10 @@ def _delete_personal_records(person):
     RecurringExclusion.objects.filter(person=person).delete()
     Alert.objects.filter(recipient=person).delete()
     AlertSettings.objects.filter(person=person).delete()
+    from .models import MemberSecurityEvent, MemberSession
+
+    MemberSecurityEvent.objects.filter(member=person).delete()
+    MemberSession.objects.filter(member=person).delete()
     person.privacy_policy_declined_version = None
     person.save(update_fields=("privacy_policy_declined_version", "updated_at"))
 

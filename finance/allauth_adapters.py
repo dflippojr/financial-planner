@@ -175,6 +175,7 @@ class MemberSocialAccountAdapter(DefaultSocialAccountAdapter):
             _user.person,
             pending.get("accept_privacy_policy", False),
             pending.get("privacy_policy_version"),
+            request=request,
         )
         clear_login_failures(key)
         raise ImmediateHttpResponse(
@@ -212,6 +213,7 @@ class MemberSocialAccountAdapter(DefaultSocialAccountAdapter):
             user.person,
             pending.get("accept_privacy_policy", False),
             pending.get("privacy_policy_version"),
+            request=request,
         )
         clear_login_failures(key)
         complete_member_session(request, user)
