@@ -9,6 +9,11 @@ class Migration(migrations.Migration):
 
     operations = [
         migrations.AddField(
+            model_name="aiusageevent",
+            name="resumed",
+            field=models.BooleanField(default=False),
+        ),
+        migrations.AddField(
             model_name="aiproviderconnection",
             name="offer_local_to_household",
             field=models.BooleanField(default=False),

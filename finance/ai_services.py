@@ -361,9 +361,10 @@ def run_conversation(
     )
 
 
-def record_usage(person, *, provider, backend, feature, result: ProviderResult):
+def record_usage(person, *, provider, backend, feature, result: ProviderResult, resumed=False):
     AiUsageEvent.objects.create(
         member=person,
+        resumed=resumed,
         provider=provider,
         backend=backend,
         feature=feature,
@@ -403,11 +404,11 @@ def _run(
         connection, chosen = resolve_ai(person, use_chat=use_chat, requested_backend=backend)
     if connection is None or not chosen:
         return ProviderResult(ok=False, failure_code=AUTHORIZATION_REQUIRED)
+    # Polling a started session is not a new request; a follow-up prompt is.
+    polling_resume = bool(session_id) and not follow_up
     shared = connection.owner_id != person.id
     if shared:
-        # Only polling a started session skips the cap; a follow-up prompt is new work.
-        resuming = bool(session_id) and not follow_up
-        denied = _shared_local_denied(person, connection, chosen, use_chat=use_chat, resuming=resuming)
+        denied = _shared_local_denied(person, connection, chosen, use_chat=use_chat, resuming=polling_resume)
         if denied is not None:
             return denied
     # Project-based hosted sessions still need the operator flag. Tools-only
@@ -494,6 +495,7 @@ def _run(
         backend=chosen,
         feature=feature,
         result=result,
+        resumed=polling_resume,
     )
     return result
 
@@ -542,6 +544,7 @@ def _shared_local_cap_reached(person):
             member=person,
             backend=LOCAL_BACKEND,
             created_at__gte=start,
+            resumed=False,
         ).count()
         >= cap
     )

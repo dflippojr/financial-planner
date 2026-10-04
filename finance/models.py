@@ -1637,6 +1637,8 @@ class AiUsageEvent(models.Model):
     prompt_tokens = models.PositiveIntegerField(null=True, blank=True)
     completion_tokens = models.PositiveIntegerField(null=True, blank=True)
     outcome = models.CharField(max_length=40)
+    # True when this event polled a session started earlier, not a new request.
+    resumed = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class QuerySet(models.QuerySet):

@@ -311,3 +311,25 @@ def test_daily_cap_still_blocks_chat_follow_ups(harness, settings):
     )
 
     assert follow_up.failure_code == LIMIT_REACHED
+
+
+@pytest.mark.django_db
+def test_a_resumed_poll_does_not_count_as_another_request(harness, settings):
+    settings.AI_SHARED_LOCAL_DAILY_CAP = 2
+    state, _url = harness
+    _host_user, host, _guest_user, guest, _household = _household_pair(harness)
+    set_offer_local_to_household(host, True)
+    set_shared_local_use(guest, chat=False, background=True)
+    assert run_structured(guest, "one", feature="structured").ok
+    state.sessions["sess-poll-1"] = {
+        "id": "sess-poll-1",
+        "status": "done",
+        "answer": "synthetic-ok",
+        "prompt_tokens": 3,
+        "completion_tokens": 4,
+    }
+    assert run_structured(guest, "one", feature="structured", session_id="sess-poll-1").ok
+
+    second = run_structured(guest, "two", feature="structured")
+
+    assert second.ok
