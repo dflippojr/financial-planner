@@ -9,7 +9,6 @@ from django.contrib.auth.decorators import login_not_required
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import DatabaseError, connections
 from django.db import transaction as database_transaction
-from django.db.models import Q
 from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -61,6 +60,7 @@ from .forms import (
     TransactionNoteTagsForm,
     TransferWindowForm,
     UnsplitTransactionForm,
+    SavedTransactionFilterNameForm,
 )
 from .google_auth import (
     disconnect_google_account,
@@ -108,6 +108,7 @@ from .models import (
     PrivacyPolicyVersion,
     RecurringSeries,
     RefundLink,
+    SavedTransactionFilter,
     Tag,
     Transaction,
     TransactionCorrectionHistory,
@@ -160,11 +161,20 @@ from .spending_trends import (
 )
 from .tag_services import (
     add_tag,
-    apply_tag_filter,
     archive_tag,
     rename_tag,
     selected_tag,
     set_transaction_note_and_tags,
+)
+from .transaction_filters import (
+    apply_saved_filter_url,
+    apply_transaction_filters,
+    delete_saved_transaction_filter,
+    filter_hidden_pairs,
+    paginate_transactions,
+    query_params_from_cleaned,
+    save_transaction_filter,
+    visible_transaction_queryset,
 )
 from .category_services import (
     add_category,
@@ -455,34 +465,13 @@ def spending_category_detail(request, category_id=None):
 
 
 def _apply_transaction_filters(transactions, filters, principal):
-    if filters["date_from"]:
-        transactions = transactions.filter(transaction_date__gte=filters["date_from"])
-    if filters["date_to"]:
-        transactions = transactions.filter(transaction_date__lte=filters["date_to"])
-    if filters["account"]:
-        transactions = transactions.filter(account=filters["account"])
-    if filters["scope"]:
-        transactions = transactions.filter(account__scope=filters["scope"])
-    if filters["q"]:
-        transactions = transactions.filter(description__icontains=filters["q"])
-    if filters.get("tag"):
-        transactions = apply_tag_filter(transactions, filters["tag"])
-    category = filters["category"]
-    if category == "uncategorized":
-        # Match the spending view: a category the viewer can no longer see
-        # (for example after leaving a household) counts as uncategorized.
-        return transactions.filter(
-            Q(category__isnull=True)
-            | Q(category__code=Category.Code.UNCATEGORIZED)
-            | ~Q(category__in=Category.objects.visible_to(principal))
-        ).exclude(_excluded=True).exclude(category_source=Transaction.CategorySource.SPLIT)
-    if category == "transfer":
-        return transactions.filter(_excluded=True)
-    if category:
-        return transactions.filter(
-            Q(category_id=category) | Q(splits__category_id=category)
-        ).exclude(_excluded=True).distinct()
-    return transactions
+    return apply_transaction_filters(transactions, filters, principal)
+
+
+def _query_without_page(request):
+    params = request.GET.copy()
+    params.pop("page", None)
+    return params.urlencode()
 
 
 @require_GET
@@ -496,18 +485,11 @@ def transaction_list(request):
     )
 
     person = Person.objects.filter(user=request.user).first()
-    transactions = (
-        Transaction.objects.visible_to(request.user)
-        .filter(status=Transaction.Status.ACTIVE)
-        .select_related("account", "import_batch", "category")
-        .prefetch_related("splits__category", "tags")
-        .annotate(_excluded=exclusion_exists_for(request.user))
-        .order_by("-transaction_date", "-pk")
-    )
+    transactions = visible_transaction_queryset(request.user)
     form = TransactionFilterForm(request.GET or None, principal=request.user)
     list_totals = None
     if form.is_valid():
-        transactions = _apply_transaction_filters(transactions, form.cleaned_data, request.user)
+        transactions = apply_transaction_filters(transactions, form.cleaned_data, request.user)
         list_totals = income_and_spending_totals(
             request.user,
             date_from=form.cleaned_data.get("date_from"),
@@ -529,19 +511,17 @@ def transaction_list(request):
         )
     elif form.is_bound:
         transactions = transactions.none()
+    matching_count = transactions.count()
+    page = paginate_transactions(transactions, request.GET.get("page"))
     show_ai = bool(person and member_has_ai(person))
     uncategorized_filter = form.is_valid() and form.cleaned_data.get("category") == "uncategorized"
-    suggestions = pending_suggestions_for(person, transactions) if show_ai else {}
-    filter_hidden = []
-    if form.is_valid():
-        for name, value in form.cleaned_data.items():
-            if value in (None, ""):
-                continue
-            if name in {"account", "tag"}:
-                filter_hidden.append((name, str(value.pk)))
-            else:
-                filter_hidden.append((name, str(value)))
-    matching_count = transactions.count()
+    suggestions = pending_suggestions_for(person, page.object_list) if show_ai else {}
+    filter_hidden = filter_hidden_pairs(form.cleaned_data) if form.is_valid() else []
+    saved_filters = (
+        SavedTransactionFilter.objects.visible_to(request.user).order_by("name", "pk")
+        if person
+        else SavedTransactionFilter.objects.none()
+    )
     from .bulk_edit_services import BULK_EDIT_CAP
     from .bulk_edit_views import active_bulk_undo
     from .forms import BulkTransactionEditForm
@@ -551,7 +531,10 @@ def transaction_list(request):
         "finance/transaction_list.html",
         {
             "filter_form": form,
-            "transactions": transactions,
+            "save_filter_form": SavedTransactionFilterNameForm(),
+            "saved_filters": saved_filters,
+            "transactions": page.object_list,
+            "page": page,
             "list_totals": list_totals,
             "show_ai_suggestions": show_ai,
             "uncategorized_filter": uncategorized_filter,
@@ -561,7 +544,7 @@ def transaction_list(request):
             "proposed_rule": proposed_rule_from_accepts(person) if show_ai else None,
             "list_query": request.get_full_path(),
             "filter_hidden": filter_hidden,
-            "filter_query": request.GET.urlencode(),
+            "filter_query": _query_without_page(request),
             "matching_count": matching_count,
             "matching_over_cap": matching_count > BULK_EDIT_CAP,
             "bulk_select_cap": BULK_EDIT_CAP,
@@ -569,6 +552,41 @@ def transaction_list(request):
             "bulk_undo": active_bulk_undo(request),
         },
     )
+
+
+@require_POST
+@never_cache
+def transaction_saved_filter_create(request):
+    form = TransactionFilterForm(request.POST or None, principal=request.user)
+    name_form = SavedTransactionFilterNameForm(request.POST)
+    if not name_form.is_valid():
+        return redirect("transaction-list")
+    query = query_params_from_cleaned(form.cleaned_data) if form.is_valid() else {}
+    try:
+        save_transaction_filter(request.user, name=name_form.cleaned_data["name"], query=query)
+    except PermissionDenied as exc:
+        raise Http404 from exc
+    except ValidationError:
+        params = urlencode(query)
+        path = reverse("transaction-list")
+        return redirect(f"{path}?{params}" if params else path)
+    params = urlencode(query)
+    path = reverse("transaction-list")
+    return redirect(f"{path}?{params}" if params else path)
+
+
+@require_POST
+@never_cache
+def transaction_saved_filter_delete(request, filter_id):
+    _service_or_404(lambda: delete_saved_transaction_filter(request.user, filter_id))
+    return redirect("transaction-list")
+
+
+@require_GET
+@never_cache
+def transaction_saved_filter_apply(request, filter_id):
+    url = _service_or_404(lambda: apply_saved_filter_url(request.user, filter_id))
+    return redirect(url)
 
 
 def _visible_active_transaction(principal, transaction_id):
@@ -1521,6 +1539,10 @@ def _alert_settings_form(person, data=None):
             "large_transaction_enabled": prefs.large_transaction_enabled,
             "monthly_review_enabled": prefs.monthly_review_enabled,
             "monthly_review_ai_enabled": prefs.monthly_review_ai_enabled,
+            "unusual_spending_enabled": prefs.unusual_spending_enabled,
+            "unusual_spending_ai_enabled": prefs.unusual_spending_ai_enabled,
+            "unusual_category_percent": prefs.unusual_category_percent,
+            "unusual_category_amount": Decimal(prefs.unusual_category_floor_minor) / Decimal(100),
             "large_transaction_amount": amount,
         },
     )

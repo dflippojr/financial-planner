@@ -9,7 +9,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_GET, require_POST
 
-from .ai_services import AiError, connection_for, local_status, member_has_ai, warm_for_chat
+from .ai_services import AiError, local_status, member_has_ai, resolve_ai, warm_for_chat
 from .ai_types import LOCAL_BACKEND
 from .chat_services import (
     chat_local_enabled,
@@ -109,7 +109,9 @@ def chat_warm(request):
     person = _person(request)
     if not member_has_ai(person):
         return JsonResponse({"ok": False, "error": "Connect an AI backend first."}, status=403)
-    if not chat_local_enabled():
+    connection, backend = resolve_ai(person, use_chat=True)
+    shared = bool(connection and connection.owner_id != person.id and backend == LOCAL_BACKEND)
+    if not shared and not chat_local_enabled():
         return JsonResponse({"ok": False, "error": "Chat on the local model is not offered yet."}, status=409)
     try:
         rows = warm_for_chat(person)
@@ -148,14 +150,15 @@ def _status_payload(rows):
 
 
 def _chat_context(person, conversation, request):
-    connection = connection_for(person)
-    backend = connection.chat_backend if connection else ""
-    show_local = bool(connection and backend == LOCAL_BACKEND and chat_local_enabled())
+    connection, backend = resolve_ai(person, use_chat=True)
+    show_local = bool(connection and backend == LOCAL_BACKEND and (
+        connection.owner_id != person.id or chat_local_enabled()
+    ))
     messages_qs = []
     if conversation is not None:
         messages_qs = list(conversation.messages.order_by("created_at", "pk"))
     return {
-        "chat_ready": member_has_ai(person),
+        "chat_ready": bool(member_has_ai(person) and connection is not None and backend),
         "chat_backend": backend,
         "chat_backend_label": _backend_label(backend),
         "chat_show_local": show_local,

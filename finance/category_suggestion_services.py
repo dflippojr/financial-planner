@@ -13,7 +13,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from .ai_jobs import enqueue_job
-from .ai_services import connection_for, member_has_ai, run_structured
+from .ai_services import member_has_ai, resolve_ai, run_structured
 from .ai_tools import visible_accounts
 from .ai_types import ProviderResult
 from .lifecycle_services import lock_actor_household
@@ -215,7 +215,7 @@ def accept_suggestions(principal, suggestion_ids):
     return accepted
 
 
-def run_category_suggestion_job(person, job, *, backend, session_id="", on_session=None):
+def run_category_suggestion_job(person, job, *, backend, session_id="", on_session=None, connection=None):
     ids = _ids_from_refs(job.input_refs)
     txns = list(eligible_uncategorized(person, ids).select_related("account"))
     if not txns:
@@ -238,14 +238,15 @@ def run_category_suggestion_job(person, job, *, backend, session_id="", on_sessi
         backend=backend,
         session_id=session_id,
         on_session=on_session,
+        connection=connection,
     )
     if not result.ok:
         return result
     allowed = {item.pk for item in categories}
     by_id = {txn.pk: txn for txn in txns}
-    connection = connection_for(person)
+    connection, resolved_backend = resolve_ai(person, use_chat=False, requested_backend=backend)
     provider = connection.kind if connection else "agent_harness"
-    chosen = backend or (connection.background_backend if connection else "")
+    chosen = backend or resolved_backend
     for txn_id, category_id in _parse_suggestions(result.answer):
         txn = by_id.get(txn_id)
         if txn is None or category_id not in allowed:
