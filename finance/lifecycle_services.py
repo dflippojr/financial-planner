@@ -9,6 +9,7 @@ from .models import (
     ImportBatch,
     Membership,
     Person,
+    Receipt,
     RecurringExclusion,
     RecurringSeries,
     RecurringSeriesMember,
@@ -407,6 +408,7 @@ def _lock_rows_for_account_delete(account):
             .filter(transaction_id__in=tx_ids)
             .order_by("pk")
         )
+        list(Receipt.objects.select_for_update().filter(transaction_id__in=tx_ids).order_by("pk"))
     list(ImportBatch.objects.select_for_update().filter(account_id=account.pk).order_by("pk"))
     return locked_txs, pairs, refunds, members, exclusions, series_ids, tx_ids
 
@@ -428,8 +430,11 @@ def _repair_then_delete_account_rows(person, account):
     revalidate_series_after_member_removal(person, series_ids)
     _delete_rule_history_for_account(account, tx_ids)
     if tx_ids:
+        from finance.receipt_services import delete_receipts_for_transactions
+
         TransactionTag.objects.filter(transaction_id__in=tx_ids).delete()
         TransactionCorrectionHistory.objects.filter(transaction_id__in=tx_ids).delete()
+        delete_receipts_for_transactions(tx_ids)
         Transaction.objects.filter(pk__in=tx_ids).delete()
     ImportBatch.objects.filter(account_id=account.pk).delete()
     Alert.objects.filter(account_id=account.pk).delete()

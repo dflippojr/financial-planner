@@ -9,6 +9,7 @@ This runbook deploys the first release to the Windows basement PC with Docker De
 | Application source and synthetic fixture | Git checkout | Code only; never add populated environment files, CSV exports, database files, or dumps. |
 | Secrets and per-machine settings | A protected file outside the checkout, such as `D:/financial-planner-config/production.env` | Keep until rotated; restrict its Windows permissions to the operator account. |
 | PostgreSQL data | Docker named volume selected by `POSTGRES_VOLUME_NAME` | Durable across container replacement; never commit or manually edit it. |
+| Receipt files | Docker named volume selected by `RECEIPTS_VOLUME_NAME` (`RECEIPTS_DIR=/receipts`) | Durable across container replacement. Served only through access-checked views, never as static or media files. Nightly backups archive this directory next to the database dump. |
 | Logical backups | `BACKUP_DIR` on the second local disk | Keep the 14 newest nightly dumps and 8 newest Sunday weekly copies. |
 | Source CSV exports | A private folder outside the checkout | The application discards an uploaded source after a successful import; the operator should remove the original export when no longer needed. |
 | Staged CSV uploads | A tmpfs (memory-backed) mount at `/run/csv-staging` inside the app container | Never written to disk. Each upload expires within an hour, is deleted on cancel, and is discarded whenever the container stops or restarts. |
@@ -134,13 +135,13 @@ That applies the same shared-account exit rules as leaving. It prints a short co
 
 ## Backups
 
-The backup container runs `pg_dump` in PostgreSQL custom format every night at 2:00 AM in `TZ` (default `America/New_York`). A Sunday dump is also copied into `weekly/`. A dump is published atomically only after `pg_restore --list` verifies it. Pruning keeps the newest 14 files in `nightly/` and 8 in `weekly/`. Each run writes `$BACKUP_DIR/health/status` with the last success time, dump name, size, table count, and last error. The app and SimpleFIN scheduler mount only `$BACKUP_DIR/health` read-only and raise an in-app alert to operators if no dump has succeeded in 26 hours or the last run failed, including an off-site upload failure.
+The backup container runs `pg_dump` in PostgreSQL custom format every night at 2:00 AM in `TZ` (default `America/New_York`). A Sunday dump is also copied into `weekly/`. A dump is published atomically only after `pg_restore --list` verifies it. The same run then archives `$RECEIPTS_DIR` as `financial_planner_TIMESTAMP.receipts.tar.gz` next to that dump, with the same 14 nightly and 8 weekly copies. Pruning keeps the newest 14 files of each kind in `nightly/` and 8 in `weekly/`. Each run writes `$BACKUP_DIR/health/status` with the last success time, dump name, size, table count, and last error. The app and SimpleFIN scheduler mount only `$BACKUP_DIR/health` read-only and raise an in-app alert to operators if no dump has succeeded in 26 hours or the last run failed, including an off-site upload failure.
 
 Set `OPERATOR_USERNAMES` in `production.env` to a comma-separated list of member usernames. If it is empty, the earliest-created member is the operator. Operators see last local and off-site success times on Settings → Data. Other members do not. Alerts name no file contents and fire at most once per local calendar day until a run succeeds.
 
 ### Encrypted off-site copy
 
-When both `OFFSITE_RCLONE_REMOTE` and `OFFSITE_AGE_RECIPIENT` are set, each verified dump is encrypted with `age` to that public key and uploaded with rclone. Remote nightly and weekly prefixes keep the same 14 and 8 file retention, pruned by name. An upload failure is recorded in `offsite_error` (the local dump stays published) and alerts operators. A configured off-site copy whose last success is older than 26 hours is also unhealthy.
+When both `OFFSITE_RCLONE_REMOTE` and `OFFSITE_AGE_RECIPIENT` are set, each verified dump and its receipts archive are encrypted with `age` to that public key and uploaded with rclone. Remote nightly and weekly prefixes keep the same 14 and 8 file retention per kind, pruned by name. An upload failure is recorded in `offsite_error` (the local dump stays published) and alerts operators. A configured off-site copy whose last success is older than 26 hours is also unhealthy.
 
 1. Install rclone on a trusted machine, run `rclone config`, and save the file outside the checkout. Set `OFFSITE_RCLONE_CONFIG` in `production.env` to that path (forward slashes on Windows). The backup container mounts only that file, read-only, as `/config/rclone.conf`. Leave the variable unset to use the committed empty placeholder.
 2. Create an age key pair on a trusted machine (`age-keygen`). Put the **public** key in `OFFSITE_AGE_RECIPIENT`. Keep the private key in a password manager. The private key must never live on the tower.
@@ -161,13 +162,14 @@ The backup directory is a bind mount from the second disk, not part of the datab
 
 ## Restore into a fresh database volume
 
-Use a fresh named volume so the old database remains available for investigation or rollback. The commands below cause downtime and assume `BACKUP_DIR` still points to the directory containing the selected dump. For an off-site copy, download the `.dump.age` file, decrypt it with the age private key, then restore the dump:
+Use a fresh named volume so the old database remains available for investigation or rollback. The commands below cause downtime and assume `BACKUP_DIR` still points to the directory containing the selected dump. For an off-site copy, download the `.dump.age` file and the matching `.receipts.tar.gz.age` file, decrypt both with the age private key, then restore:
 
 ```powershell
 age -d -i $AgeIdentity -o financial_planner_YYYYMMDDTHHMMSSZ.dump financial_planner_YYYYMMDDTHHMMSSZ.dump.age
+age -d -i $AgeIdentity -o financial_planner_YYYYMMDDTHHMMSSZ.receipts.tar.gz financial_planner_YYYYMMDDTHHMMSSZ.receipts.tar.gz.age
 ```
 
-Copy the decrypted dump into `E:\financial-planner-backups\nightly\` (or pass its path to `restore.sh`) and continue with the local procedure. Do not copy the age private key onto the tower.
+Copy the decrypted dump and receipts archive into `E:\financial-planner-backups\nightly\` (or pass the dump path to `restore.sh`; it restores the sibling receipts archive into `RECEIPTS_DIR`) and continue with the local procedure. Do not copy the age private key onto the tower.
 
 1. Choose a known-good file and stop writers:
 
@@ -177,7 +179,7 @@ Copy the decrypted dump into `E:\financial-planner-backups\nightly\` (or pass it
    docker compose --env-file $Config stop app backup simplefin-sync db
    ```
 
-2. In `production.env`, change `POSTGRES_VOLUME_NAME` to a new name such as `financial-planner-postgres-data-restored-YYYYMMDD`. Do not delete or reuse the old volume.
+2. In `production.env`, change `POSTGRES_VOLUME_NAME` to a new name such as `financial-planner-postgres-data-restored-YYYYMMDD`. Change `RECEIPTS_VOLUME_NAME` to a matching new receipts volume such as `financial-planner-receipts-restored-YYYYMMDD`. Do not delete or reuse the old volumes.
 
 3. Start empty PostgreSQL, restore, and start the application:
 

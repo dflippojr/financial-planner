@@ -6,9 +6,11 @@ import csv
 import io
 import json
 import zipfile
+from pathlib import Path
 from datetime import date, datetime
 from decimal import Decimal
 from django.apps import apps
+from django.core.exceptions import PermissionDenied
 
 from .models import (
     FORMER_MEMBER_LABEL,
@@ -32,6 +34,7 @@ from .models import (
     TransactionSplit,
     TransactionTag,
     TransferPair,
+    Receipt,
 )
 
 CENTS = Decimal("0.01")
@@ -44,6 +47,7 @@ ENTITY_FILES = (
     "transfer_pairs",
     "transaction_splits",
     "transaction_tags",
+    "receipts",
     "recurring_series",
     "recurring_exclusions",
     "privacy_policy_acceptances",
@@ -118,6 +122,15 @@ CSV_FIELDS = {
         "amount_decimal",
     ),
     "transaction_tags": ("id", "transaction_id", "tag_id", "tag_name"),
+    "receipts": (
+        "id",
+        "transaction_id",
+        "original_name",
+        "content_type",
+        "size_bytes",
+        "created_at",
+        "export_path",
+    ),
     "recurring_series": (
         "id",
         "merchant_key",
@@ -284,6 +297,13 @@ transactions.csv / transactions.json
 transaction_tags.csv / transaction_tags.json
   Tag links for visible transactions.
   id, transaction_id, tag_id, tag_name
+
+receipts.csv / receipts.json
+  Receipts attached to visible transactions. Binary files are under
+  receipts/<id>/ using the original filename. Another member's private
+  receipts are omitted.
+  id, transaction_id, original_name, content_type, size_bytes, created_at,
+  export_path
 
 import_batches.csv / import_batches.json
   Provenance for imports on visible accounts.
@@ -604,6 +624,34 @@ def _transaction_tag_rows(person, visible_txn_ids):
     return rows
 
 
+def _safe_zip_name(name):
+    cleaned = Path(str(name).replace("\\", "/")).name
+    if not cleaned or cleaned in {".", ".."}:
+        return "receipt"
+    return cleaned
+
+
+def _receipt_export_path(receipt):
+    return f"receipts/{receipt.pk}/{_safe_zip_name(receipt.original_name)}"
+
+
+def _receipt_rows(person):
+    rows = []
+    for receipt in Receipt.objects.visible_to(person).order_by("pk"):
+        rows.append(
+            {
+                "id": receipt.pk,
+                "transaction_id": receipt.transaction_id,
+                "original_name": receipt.original_name,
+                "content_type": receipt.content_type,
+                "size_bytes": receipt.size_bytes,
+                "created_at": receipt.created_at,
+                "export_path": _receipt_export_path(receipt),
+            }
+        )
+    return rows
+
+
 def _recurring_series_rows(person):
     rows = []
     series_qs = RecurringSeries.objects.visible_to(person).prefetch_related("members").order_by("pk")
@@ -828,6 +876,7 @@ def collect_export_tables(person) -> dict[str, list[dict]]:
         "transfer_pairs": _transfer_pair_rows(person),
         "transaction_splits": _split_rows(person),
         "transaction_tags": _transaction_tag_rows(person, visible_txn_ids),
+        "receipts": _receipt_rows(person),
         "recurring_series": _recurring_series_rows(person),
         "recurring_exclusions": _recurring_exclusion_rows(person),
         "privacy_policy_acceptances": _privacy_acceptance_rows(person),
@@ -882,4 +931,13 @@ def write_export_zip(person) -> bytes:
             json_buf = io.StringIO()
             _write_json(json_buf, rows)
             archive.writestr(f"{name}.json", json_buf.getvalue())
+        from .receipt_services import stored_receipt_path
+
+        for receipt in Receipt.objects.visible_to(person).order_by("pk"):
+            try:
+                disk = stored_receipt_path(receipt.stored_name)
+            except PermissionDenied:
+                continue
+            if disk.is_file():
+                archive.write(str(disk), _receipt_export_path(receipt))
     return buffer.getvalue()

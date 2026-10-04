@@ -196,6 +196,15 @@ GOOGLE_REAUTH_MAX_AGE_SECONDS = int(os.environ.get("GOOGLE_REAUTH_MAX_AGE_SECOND
 # counterpart in the window. Override per household when a window is stored there.
 TRANSFER_MATCH_WINDOW_DAYS = int(os.environ.get("TRANSFER_MATCH_WINDOW_DAYS", "5"))
 
+# Receipt images and PDFs. Never place this directory under STATIC_ROOT or a
+# public media URL; files are served only through an access-checked view.
+RECEIPTS_DIR = os.environ.get(
+    "RECEIPTS_DIR",
+    str(Path(BASE_DIR) / "data" / "receipts"),
+)
+RECEIPT_MAX_BYTES = 10 * 1024 * 1024
+RECEIPT_MAX_PER_TRANSACTION = 5
+
 # Uploaded CSVs are short-lived, private staging data. Keep the default outside
 # the repository and allow deployments to place it on an appropriate local disk.
 CSV_IMPORT_STAGING_DIR = os.environ.get(
@@ -235,8 +244,9 @@ OPERATOR_USERNAMES = os.environ.get("OPERATOR_USERNAMES", "").strip()
 # 2.5 MB to a temporary file in /tmp before application code runs, which would put
 # a real bank export on disk even though staging itself is memory-backed, and it
 # does so at any size. With only the memory handler, a file larger than the
-# threshold is dropped instead of written anywhere. The threshold sits a little
-# above the 5 MB import cap so a file just over the cap still gets the specific
-# "exceeds the 5 MB limit" message; anything larger gets the form's generic one.
+# threshold is dropped instead of written anywhere. The threshold sits above the
+# 10 MB receipt cap (and the 12 MB CSV oversize check) so those files still reach
+# application code; CSV imports keep a separate 5 MB cap.
 FILE_UPLOAD_HANDLERS = ["django.core.files.uploadhandler.MemoryFileUploadHandler"]
-FILE_UPLOAD_MAX_MEMORY_SIZE = 6 * 1024 * 1024
+FILE_UPLOAD_MAX_MEMORY_SIZE = 13 * 1024 * 1024
+DATA_UPLOAD_MAX_MEMORY_SIZE = 13 * 1024 * 1024

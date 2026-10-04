@@ -55,6 +55,7 @@ services:
       AI_CHAT_LOCAL_ENABLED: ${AI_CHAT_LOCAL_ENABLED:-false}
       BACKUP_STATUS_PATH: /backup-health/status
       OPERATOR_USERNAMES: ${OPERATOR_USERNAMES:-}
+      RECEIPTS_DIR: /receipts
     depends_on:
       db:
         condition: service_healthy
@@ -73,6 +74,7 @@ services:
         # this, an upgrade would refuse to start the app until then.
         bind:
           create_host_path: true
+      - receipts:/receipts
     ports:
       - "127.0.0.1:${APP_PORT:-8000}:8000"
     healthcheck:
@@ -98,6 +100,7 @@ services:
       OFFSITE_RCLONE_REMOTE: ${OFFSITE_RCLONE_REMOTE:-}
       OFFSITE_AGE_RECIPIENT: ${OFFSITE_AGE_RECIPIENT:-}
       RCLONE_CONFIG: /config/rclone.conf
+      RECEIPTS_DIR: /receipts
     depends_on:
       db:
         condition: service_healthy
@@ -109,6 +112,7 @@ services:
         source: ${OFFSITE_RCLONE_CONFIG:-./ops/backup/rclone.conf.example}
         target: /config/rclone.conf
         read_only: true
+      - receipts:/receipts
     command: ["/opt/financial-planner/run-backups.sh"]
 
   simplefin-sync:
@@ -200,3 +204,5 @@ services:
 volumes:
   postgres_data:
     name: ${POSTGRES_VOLUME_NAME:-financial-planner-postgres-data}
+  receipts:
+    name: ${RECEIPTS_VOLUME_NAME:-financial-planner-receipts}

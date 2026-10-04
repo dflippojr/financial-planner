@@ -96,6 +96,7 @@ prune_backups() {
 prune_remote() {
   prefix=$1
   keep=$2
+  match=$3
   # Exit code 3 is rclone's "directory not found": nothing to prune yet.
   listing=$(rclone lsf --config "$rclone_config" --files-only "${remote_base}/${prefix}" 2>/dev/null)
   listed=$?
@@ -105,8 +106,7 @@ prune_remote() {
   if [ "$listed" -ne 0 ]; then
     return 1
   fi
-  expired=$(printf '%s
-' "$listing"     | grep -E '^financial_planner_[0-9TZ]+\.dump\.age$'     | sort -r     | awk -v keep="$keep" 'NR > keep')
+  expired=$(printf '%s\n' "$listing" | grep -E "$match" | sort -r | awk -v keep="$keep" 'NR > keep')
   failed=0
   for name in $expired; do
     rclone deletefile --config "$rclone_config" "${remote_base}/${prefix}/${name}" >/dev/null 2>&1 || failed=1
@@ -124,6 +124,7 @@ require_env POSTGRES_DB
 require_env POSTGRES_USER
 require_env POSTGRES_PASSWORD
 require_env POSTGRES_HOST
+require_env RECEIPTS_DIR
 
 backup_root=${BACKUP_ROOT:-/backups}
 nightly_retention=${NIGHTLY_RETENTION:-14}
@@ -156,13 +157,21 @@ success_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 filename="financial_planner_${timestamp}.dump"
 partial="$nightly_dir/.${filename}.partial"
 encrypted=""
+receipts_partial=""
+receipts_encrypted=""
 nightly="$nightly_dir/$filename"
 
 cleanup() {
   code=$?
   rm -f "$partial"
+  if [ -n "$receipts_partial" ]; then
+    rm -f "$receipts_partial"
+  fi
   if [ -n "$encrypted" ]; then
     rm -f "$encrypted"
+  fi
+  if [ -n "$receipts_encrypted" ]; then
+    rm -f "$receipts_encrypted"
   fi
   if [ "$code" -ne 0 ] && [ "${status_written:-0}" != 1 ]; then
     last_error=$(sanitize_error "Backup run failed")
@@ -212,8 +221,25 @@ if [ "$weekday" = "7" ] || [ "${BACKUP_FORCE_WEEKLY:-0}" = "1" ]; then
   chmod 600 "$weekly"
 fi
 
+mkdir -p "$RECEIPTS_DIR"
+receipts_name="financial_planner_${timestamp}.receipts.tar.gz"
+receipts_partial="$nightly_dir/.${receipts_name}.partial"
+receipts_archive="$nightly_dir/$receipts_name"
+if ! tar -C "$RECEIPTS_DIR" -czf "$receipts_partial" .; then
+  fail_run "Receipts archive failed"
+fi
+mv "$receipts_partial" "$receipts_archive"
+receipts_partial=""
+chmod 600 "$receipts_archive"
+if [ -n "$weekly" ]; then
+  cp "$receipts_archive" "$weekly_dir/$receipts_name"
+  chmod 600 "$weekly_dir/$receipts_name"
+fi
+
 prune_backups "$nightly_dir" "$nightly_retention" 'financial_planner_*.dump'
 prune_backups "$weekly_dir" "$weekly_retention" 'financial_planner_*.dump'
+prune_backups "$nightly_dir" "$nightly_retention" 'financial_planner_*.receipts.tar.gz'
+prune_backups "$weekly_dir" "$weekly_retention" 'financial_planner_*.receipts.tar.gz'
 
 last_success_at=$success_at
 dump_name=$filename
@@ -230,16 +256,33 @@ if [ -n "$offsite_remote" ] || [ -n "$offsite_recipient" ]; then
   if ! copy_offsite "$encrypted" "${remote_base}/nightly/${filename}.age"; then
     fail_offsite "Off-site upload failed"
   fi
+  receipts_encrypted="$nightly_dir/.${receipts_name}.age.partial"
+  if ! age -r "$offsite_recipient" -o "$receipts_encrypted" "$receipts_archive"; then
+    fail_offsite "age encryption failed"
+  fi
+  if ! copy_offsite "$receipts_encrypted" "${remote_base}/nightly/${receipts_name}.age"; then
+    fail_offsite "Off-site upload failed"
+  fi
   if [ -n "$weekly" ]; then
     if ! copy_offsite "$encrypted" "${remote_base}/weekly/${filename}.age"; then
+      fail_offsite "Off-site weekly upload failed"
+    fi
+    if ! copy_offsite "$receipts_encrypted" "${remote_base}/weekly/${receipts_name}.age"; then
       fail_offsite "Off-site weekly upload failed"
     fi
   fi
   rm -f "$encrypted"
   encrypted=""
+  rm -f "$receipts_encrypted"
+  receipts_encrypted=""
   offsite_success_at=$success_at
   offsite_error=""
-  if ! prune_remote nightly "$nightly_retention" || ! prune_remote weekly "$weekly_retention"; then
+  dump_age_match='^financial_planner_[0-9TZ]+\.dump\.age$'
+  receipts_age_match='^financial_planner_[0-9TZ]+\.receipts\.tar\.gz\.age$'
+  if ! prune_remote nightly "$nightly_retention" "$dump_age_match" \
+    || ! prune_remote weekly "$weekly_retention" "$dump_age_match" \
+    || ! prune_remote nightly "$nightly_retention" "$receipts_age_match" \
+    || ! prune_remote weekly "$weekly_retention" "$receipts_age_match"; then
     fail_offsite "Off-site retention pruning failed"
   fi
 fi
