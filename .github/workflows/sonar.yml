@@ -47,7 +47,7 @@ jobs:
           # Full history so SonarCloud can blame lines and find the PR base.
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
