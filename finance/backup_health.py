@@ -75,7 +75,7 @@ def read_backup_status(path=None):
 
 def backup_is_unhealthy(status, *, now=None):
     if status is None:
-        return False
+        return True
     if (status.get("last_error") or "").strip():
         return True
     last = status.get("last_success")
@@ -83,6 +83,14 @@ def backup_is_unhealthy(status, *, now=None):
         return True
     now = now or timezone.now()
     return now - last > STALE_AFTER
+
+
+def backup_alert_title(status):
+    if status is None:
+        return "No backup status found"
+    if (status.get("last_error") or "").strip():
+        return "The latest backup run failed"
+    return "Nightly backups have not succeeded"
 
 
 def evaluate_backup_alerts(*, now=None, today=None):
@@ -94,15 +102,10 @@ def evaluate_backup_alerts(*, now=None, today=None):
     if not backup_is_unhealthy(status, now=now):
         Alert.objects.filter(kind=Alert.Kind.BACKUP).delete()
         return []
-    title = (
-        "The latest backup run failed"
-        if (status.get("last_error") or "").strip()
-        else "Nightly backups have not succeeded"
-    )
     return raise_alert(
         operator_people(),
         Alert.Kind.BACKUP,
-        title,
+        backup_alert_title(status),
         reverse("settings-data"),
         f"backup:{today.isoformat()}",
     )

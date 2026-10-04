@@ -6,7 +6,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from finance.alert_services import run_daily_alert_pass
-from finance.backup_health import evaluate_backup_alerts
+from finance.backup_health import backup_is_unhealthy, evaluate_backup_alerts
 from finance.models import Alert, Household, Membership
 from tests.test_alerts import make_person, signed_in
 
@@ -114,3 +114,21 @@ def test_non_operators_do_not_see_backup_status(tmp_path):
     assert b"Last local backup" not in member_page.content
     assert b"Last off-site copy" not in member_page.content
     assert b"financial_planner_synthetic.dump" not in member_page.content
+
+
+def test_missing_backup_status_is_unhealthy():
+    assert backup_is_unhealthy(None) is True
+
+
+@pytest.mark.django_db
+def test_missing_status_file_alerts_and_settings_say_none_found(tmp_path):
+    operator = make_person("operator")
+    missing = tmp_path / "health" / "status"
+
+    with override_settings(BACKUP_STATUS_PATH=str(missing), OPERATOR_USERNAMES="operator"):
+        created = evaluate_backup_alerts(today=datetime(2026, 10, 4).date())
+        page = signed_in(operator).get(reverse("settings-data"))
+
+    assert [row.title for row in created] == ["No backup status found"]
+    assert page.status_code == 200
+    assert b"No backup status found" in page.content
