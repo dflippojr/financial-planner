@@ -44,8 +44,10 @@ load_status() {
 }
 
 write_status() {
+  mkdir -p "$health_dir"
+  chmod 755 "$health_dir" 2>/dev/null || true
   tmp="$status_file.tmp"
-  umask 077
+  umask 022
   cat > "$tmp" <<EOF
 last_success_at=$last_success_at
 dump_name=$dump_name
@@ -56,7 +58,8 @@ offsite_success_at=$offsite_success_at
 offsite_error=$offsite_error
 EOF
   mv "$tmp" "$status_file"
-  chmod 600 "$status_file" 2>/dev/null || true
+  chmod 644 "$status_file" 2>/dev/null || true
+  umask 077
   status_written=1
 }
 
@@ -173,6 +176,7 @@ fi
 rm -f "$list_err"
 table_count=$(printf '%s\n' "$table_list" | grep -c 'TABLE DATA' || true)
 mv "$partial" "$nightly"
+chmod 600 "$nightly"
 size_bytes=$(wc -c < "$nightly" | awk '{print $1}')
 
 weekday=$(date '+%u')

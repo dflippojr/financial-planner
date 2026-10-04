@@ -164,6 +164,16 @@ def _read_status(backup_root):
     return data
 
 
+def _posix_mode(path):
+    result = subprocess.run(
+        [POSIX_BASH, "-c", f'stat -c %a "{_unix_path(path)}"'],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
 @pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
 def test_backup_is_verified_and_retains_latest_nightly_and_weekly_files(tmp_path):
     fake_bin = tmp_path / "bin"
@@ -320,3 +330,25 @@ def test_age_failure_keeps_local_dump(tmp_path):
     assert (backup_root / "nightly" / "financial_planner_20260927T060000Z.dump").read_text() == "synthetic dump"
     status = _read_status(backup_root)
     assert "age encryption failed" in status["last_error"]
+
+
+@pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
+def test_backup_status_is_readable_by_the_app_user(tmp_path):
+    fake_bin = tmp_path / "bin"
+    backup_root = tmp_path / "backups"
+    fake_bin.mkdir()
+    (backup_root / "nightly").mkdir(parents=True)
+    _fake_date(fake_bin)
+    _fake_pg(fake_bin)
+
+    result = _run_backup(fake_bin, backup_root)
+
+    assert result.returncode == 0, result.stderr
+    script = BACKUP_SCRIPT.read_text(encoding="utf-8")
+    assert 'chmod 644 "$status_file"' in script
+    assert 'chmod 755 "$health_dir"' in script
+    dump = backup_root / "nightly" / "financial_planner_20260927T060000Z.dump"
+    assert _posix_mode(backup_root / "health") == "755"
+    assert _posix_mode(backup_root / "health" / "status") == "644"
+    if os.name != "nt":
+        assert _posix_mode(dump) == "600"
