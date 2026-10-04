@@ -106,6 +106,8 @@ def _nav_current(request):
         return "bills-calendar"
     if name in {"monthly-review", "monthly-review-regenerate"}:
         return "monthly-review"
+    if name in {"year-end", "year-end-csv"}:
+        return "year-end"
     if name.startswith("budget"):
         return "budgets"
     if name in {
@@ -155,6 +157,7 @@ def navigation(request):
         ("planned-items", "Planned items", reverse("planned-items")),
         ("bills-calendar", "Bills", reverse("bills-calendar")),
         ("monthly-review", "Monthly review", reverse("monthly-review")),
+        ("year-end", "Year-end", reverse("year-end")),
         ("budgets", "Budgets", reverse("budgets")),
         ("alert-list", "Alerts", reverse("alert-list")),
         ("savings-goals", "Goals", reverse("savings-goals")),
