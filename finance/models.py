@@ -1897,6 +1897,7 @@ class Alert(models.Model):
         BUDGET = "budget", "Budget"
         LARGE_TRANSACTION = "large_transaction", "Large transaction"
         MONTHLY_REVIEW = "monthly_review", "Monthly review"
+        BACKUP = "backup", "Backup"
 
     recipient = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="alerts")
     kind = models.CharField(max_length=20, choices=Kind)
@@ -1925,6 +1926,7 @@ class Alert(models.Model):
                         "budget",
                         "large_transaction",
                         "monthly_review",
+                        "backup",
                     )
                 ),
                 name="alert_kind_valid",

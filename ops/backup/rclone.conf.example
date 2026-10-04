@@ -1,0 +1,3 @@
+# Placeholder rclone config for Compose when off-site copy is not configured.
+# Point OFFSITE_RCLONE_CONFIG at a real rclone.conf outside the checkout.
+# Do not put tokens or remote credentials in this file.
