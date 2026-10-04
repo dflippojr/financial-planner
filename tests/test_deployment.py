@@ -174,6 +174,7 @@ def test_app_and_simplefin_mount_backup_health_not_the_dump_directory():
         assert "BACKUP_STATUS_PATH: /backup-health/status" in block
         assert "source: ${BACKUP_DIR:?BACKUP_DIR must be set}/health" in block
         assert "target: /backup-health" in block
+        assert "create_host_path: true" in block.split("target: /backup-health", 1)[1].split("entrypoint", 1)[0]
         assert "source: ${BACKUP_DIR:?BACKUP_DIR must be set}\n" not in block
     assert "source: ${BACKUP_DIR:?BACKUP_DIR must be set}\n" in backup
     assert "/health" not in backup.split("volumes:", 1)[1].split("OFFSITE_RCLONE_CONFIG", 1)[0]

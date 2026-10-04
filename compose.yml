@@ -66,6 +66,10 @@ services:
         source: ${BACKUP_DIR:?BACKUP_DIR must be set}/health
         target: /backup-health
         read_only: true
+        # The backup script creates this directory on its first run; without
+        # this, an upgrade would refuse to start the app until then.
+        bind:
+          create_host_path: true
     ports:
       - "127.0.0.1:${APP_PORT:-8000}:8000"
     healthcheck:
@@ -136,6 +140,10 @@ services:
         source: ${BACKUP_DIR:?BACKUP_DIR must be set}/health
         target: /backup-health
         read_only: true
+        # The backup script creates this directory on its first run; without
+        # this, an upgrade would refuse to start the app until then.
+        bind:
+          create_host_path: true
     entrypoint: ["/app/scripts/run-simplefin-sync.sh"]
     # The image's HTTP health check probes Gunicorn, which this container does
     # not run. The scheduler loop is the main process, so the container stops
