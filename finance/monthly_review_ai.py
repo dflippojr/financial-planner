@@ -6,12 +6,14 @@ import json
 import re
 from decimal import Decimal, InvalidOperation
 
+from django.urls import Resolver404, resolve
+
 from .ai_jobs import enqueue_job
-from .ai_services import connection_for, member_has_ai, run_structured
+from .ai_services import member_has_ai, run_structured
 from .ai_types import ProviderResult
 from .alert_services import settings_for
 from .category_services import current_household
-from .models import Account, Budget, MonthlyReview, RecurringSeries, SavingsGoal, Transaction
+from .models import Account, MonthlyReview, RecurringSeries, Transaction
 from .policy_services import household_ai_allowed
 
 FEATURE = "monthly_review"
@@ -35,27 +37,10 @@ DROP_KEYS = frozenset(
         "key",
     }
 )
-MIXED_ACCOUNT_KEYS = frozenset(
-    {
-        "income_minor",
-        "spending_minor",
-        "net_minor",
-        "income_display",
-        "spending_display",
-        "net_display",
-        "prior",
-        "year_ago",
-        "missing_import",
-        "category_increases",
-        "category_decreases",
-        "net_worth_minor",
-        "net_worth_display",
-        "net_worth_prior_minor",
-        "net_worth_prior_display",
-        "net_worth_change_minor",
-        "net_worth_change_display",
-    }
-)
+# While a household member is not in acceptance, only these facts are sent, and list
+# items only when every record behind them is the member's own private record.
+PRIVATE_SAFE_KEYS = ("month", "month_label")
+RECURRING_LIST_KEYS = ("price_changes", "missed_charges", "cancellations", "new_recurring")
 NUMBER_RE = re.compile(r"(?<![A-Za-z])[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?%?")
 PROMPT = (
     "Phrase the following monthly review facts as a short paragraph of three to five "
@@ -80,24 +65,21 @@ def monthly_review_ai_on(person):
 
 
 def facts_payload_for_ai(person, facts):
-    payload = _drop_keys(facts)
     household = current_household(person)
     if household is None or household_ai_allowed(household):
-        return payload
-    return _omit_household_derived(person, payload)
+        return _drop_keys(facts)
+    return _drop_keys(_own_private_facts(person, facts))
 
 
 def queue_monthly_review_phrasing(person, review):
     if review is None or not monthly_review_ai_on(person):
         return None
-    payload = facts_payload_for_ai(person, review.facts)
     return enqueue_job(
         person,
         feature=FEATURE,
         input_refs={
             "monthly_review_id": review.pk,
             "generated_at": review.generated_at.isoformat(),
-            "facts": payload,
         },
     )
 
@@ -111,15 +93,6 @@ def visible_phrasing(person, review):
     return paragraph, phrasing_label(review.ai_backend)
 
 
-def paragraph_is_grounded(paragraph, facts):
-    allowed_values, blob = _allowed_numbers(facts)
-    for token in NUMBER_RE.findall(paragraph or ""):
-        if _token_allowed(token, allowed_values, blob):
-            continue
-        return False
-    return True
-
-
 def run_monthly_review_job(person, job, *, backend, session_id="", on_session=None):
     refs = job.input_refs or {}
     review = MonthlyReview.objects.filter(pk=refs.get("monthly_review_id"), person=person).first()
@@ -127,9 +100,10 @@ def run_monthly_review_job(person, job, *, backend, session_id="", on_session=No
         return ProviderResult(ok=True, answer="", session_id="skipped")
     if refs.get("generated_at") != review.generated_at.isoformat():
         return ProviderResult(ok=True, answer="", session_id="skipped")
-    facts = refs.get("facts")
-    if not isinstance(facts, dict):
-        facts = facts_payload_for_ai(person, review.facts)
+    if not monthly_review_ai_on(person):
+        return ProviderResult(ok=True, answer="", session_id="skipped")
+    # Filter at run time: household acceptance can change while the job waits.
+    facts = facts_payload_for_ai(person, review.facts)
     prompt = PROMPT + json.dumps(facts, default=str)
     result = run_structured(
         person,
@@ -161,86 +135,44 @@ def _drop_keys(value):
     return value
 
 
-def _omit_household_derived(person, payload):
-    filtered = {key: value for key, value in payload.items() if key not in MIXED_ACCOUNT_KEYS}
+def _own_private_facts(person, facts):
+    filtered = {key: facts[key] for key in PRIVATE_SAFE_KEYS if key in facts}
     filtered["large_transactions"] = [
-        item for item in filtered.get("large_transactions") or [] if _private_transaction_item(person, item)
+        item for item in facts.get("large_transactions") or [] if _own_private_transaction(person, item)
     ]
-    filtered["price_changes"] = [
-        item for item in filtered.get("price_changes") or [] if _private_series_item(person, item)
-    ]
-    filtered["missed_charges"] = [
-        item for item in filtered.get("missed_charges") or [] if _private_series_item(person, item)
-    ]
-    filtered["cancellations"] = [
-        item for item in filtered.get("cancellations") or [] if _private_series_item(person, item)
-    ]
-    filtered["new_recurring"] = [
-        item for item in filtered.get("new_recurring") or [] if _private_series_item(person, item)
-    ]
-    filtered["budgets_over"] = [
-        item for item in filtered.get("budgets_over") or [] if _private_budget_item(person, item)
-    ]
-    remaining = filtered.get("largest_remaining")
-    if remaining is not None and not _private_budget_item(person, remaining):
-        filtered["largest_remaining"] = None
-    filtered["savings_goals"] = [
-        item for item in filtered.get("savings_goals") or [] if _private_goal_item(person, item)
-    ]
+    for key in RECURRING_LIST_KEYS:
+        filtered[key] = [item for item in facts.get(key) or [] if _own_private_series(person, item)]
     return filtered
 
 
-def _private_transaction_item(person, item):
-    if not isinstance(item, dict):
-        return False
-    rows = Transaction.objects.visible_to(person).filter(
-        description=item.get("description") or "",
-        transaction_date=item.get("date") or None,
-        account__scope=Account.Scope.PRIVATE,
-        account__owner=person,
-    )
-    return rows.exists()
+def _own_private_accounts(person):
+    return Account.objects.filter(scope=Account.Scope.PRIVATE, owner=person)
 
 
-def _private_series_item(person, item):
+def _own_private_transaction(person, item):
     if not isinstance(item, dict):
         return False
-    series = (
-        RecurringSeries.objects.visible_to(person)
-        .filter(display_name=item.get("name") or "")
-        .prefetch_related("members__transaction__account")
-        .first()
-    )
+    try:
+        match = resolve(str(item.get("url") or ""))
+    except Resolver404:
+        return False
+    transaction_id = match.kwargs.get("transaction_id")
+    if match.url_name != "transaction-edit" or transaction_id is None:
+        return False
+    return Transaction.objects.filter(pk=transaction_id, account__in=_own_private_accounts(person)).exists()
+
+
+def _own_private_series(person, item):
+    if not isinstance(item, dict) or not isinstance(item.get("series_id"), int):
+        return False
+    series = RecurringSeries.objects.visible_to(person).filter(pk=item["series_id"]).first()
     if series is None:
         return False
-    accounts = [member.transaction.account for member in series.members.all()]
-    if not accounts:
+    account_ids = set(series.members.values_list("transaction__account_id", flat=True))
+    if not account_ids:
         return False
-    return all(account.scope == Account.Scope.PRIVATE and account.owner_id == person.pk for account in accounts)
-
-
-def _private_budget_item(person, item):
-    if not isinstance(item, dict):
-        return False
-    wanted = item.get("name") or ""
-    budgets = Budget.objects.visible_to(person).filter(scope=Budget.Scope.PRIVATE, owner=person).select_related(
-        "category"
-    )
-    for budget in budgets:
-        label = "Overall spending" if budget.category_id is None else budget.category.name
-        if label == wanted:
-            return True
-    return False
-
-
-def _private_goal_item(person, item):
-    if not isinstance(item, dict):
-        return False
-    return SavingsGoal.objects.visible_to(person).filter(
-        name=item.get("name") or "",
-        scope=SavingsGoal.Scope.PRIVATE,
-        owner=person,
-    ).exists()
+    own = set(_own_private_accounts(person).filter(pk__in=account_ids).values_list("pk", flat=True))
+    return own == account_ids
 
 
 def _extract_paragraph(answer):
@@ -252,44 +184,41 @@ def _extract_paragraph(answer):
 
 
 def _allowed_numbers(facts):
+    """Every number a fact states, as an absolute value; a paragraph may only repeat these."""
     values = set()
-    blob = json.dumps(facts, default=str)
 
-    def walk(node):
+    def add(value):
+        if value is not None:
+            values.add(abs(value))
+
+    def walk(node, key=""):
         if isinstance(node, dict):
-            for key, item in node.items():
-                walk(item)
-                if isinstance(item, int) and str(key).endswith("_minor"):
-                    values.add(Decimal(item) / Decimal(100))
+            for child_key, item in node.items():
+                walk(item, str(child_key))
         elif isinstance(node, list):
             for item in node:
-                walk(item)
+                walk(item, key)
         elif isinstance(node, bool):
             return
         elif isinstance(node, int):
-            values.add(Decimal(node))
+            add(Decimal(node) / Decimal(100) if key.endswith("_minor") else Decimal(node))
         elif isinstance(node, float):
-            values.add(Decimal(str(node)))
+            add(Decimal(str(node)))
         elif isinstance(node, str):
             for token in NUMBER_RE.findall(node):
-                parsed = _as_decimal(token)
-                if parsed is not None:
-                    values.add(parsed)
+                add(_as_decimal(token))
 
     walk(facts)
-    return values, blob
+    return values
 
 
-def _token_allowed(token, allowed_values, blob):
-    stripped = token.replace(",", "").rstrip("%")
-    if stripped and stripped in blob:
-        return True
-    if token in blob:
-        return True
-    parsed = _as_decimal(token)
-    if parsed is None:
-        return False
-    return parsed in allowed_values
+def paragraph_is_grounded(paragraph, facts):
+    allowed = _allowed_numbers(facts)
+    for token in NUMBER_RE.findall(paragraph or ""):
+        parsed = _as_decimal(token)
+        if parsed is None or abs(parsed) not in allowed:
+            return False
+    return True
 
 
 def _as_decimal(token):

@@ -163,8 +163,7 @@ def test_ai_on_phrases_in_background_and_shows_label(harness, monkeypatch):
     assert wrote
     job = AiJob.objects.get(member=owner, feature="monthly_review")
     assert job.status == AiJob.Status.QUEUED
-    assert "transaction_ids" not in job.input_refs
-    assert all("original_fields" not in str(item) for item in job.input_refs["facts"].get("large_transactions", []))
+    assert set(job.input_refs) == {"monthly_review_id", "generated_at"}
     state.session_answer = (
         "Spending was 12.34 USD. The largest listed purchase was Synthetic coffee. "
         "This is a closed-month summary. Totals come from the stored facts. "
@@ -224,9 +223,8 @@ def test_household_facts_omitted_when_member_not_in_acceptance(harness, monkeypa
     blob = str(payload)
     assert "888.88" not in blob
     assert "Household rent" not in blob
-    job = AiJob.objects.get(member=owner, feature="monthly_review")
-    assert "888.88" not in str(job.input_refs["facts"])
-    assert "Household rent" not in str(job.input_refs["facts"])
+    assert "90.88" not in blob
+    assert [item["description"] for item in payload["large_transactions"]] == ["Private coffee"]
     monkeypatch.setattr("finance.ai_jobs.in_quiet_window", lambda moment=None: True)
     process_due_jobs()
     assert state.session_prompts
@@ -285,3 +283,47 @@ def test_queue_helper_skips_without_backend():
     review, _wrote = store_monthly_review(owner, SEP, today=TODAY)
     assert queue_monthly_review_phrasing(owner, review) is None
     assert AiJob.objects.count() == 0
+
+
+def test_grounding_needs_a_whole_fact_number_not_a_fragment():
+    facts = {"month": "2026-09", "spending_minor": 1200, "spending_display": "$12.00", "net_minor": -4321}
+    assert paragraph_is_grounded("Spending was $12.00 and net was $43.21 in September 2026.", facts)
+    assert not paragraph_is_grounded("Spending was 120 dollars.", facts)
+    assert not paragraph_is_grounded("Spending rose 20 percent.", facts)
+    assert not paragraph_is_grounded("Net was $4.32.", facts)
+
+
+@pytest.mark.django_db
+def test_household_filter_applies_when_the_job_runs(harness, monkeypatch):
+    state, url = harness
+    owner = make_person("owner")
+    household = make_household(owner)
+    connect_ai(owner, url)
+    shared = make_account(owner, name="Shared checking", scope=Account.Scope.HOUSEHOLD, household=household)
+    make_transaction(owner, shared, amount_minor=-77777, description="Household boiler")
+    store_monthly_review(owner, SEP, today=TODAY)
+    late_joiner = make_person("joiner", accept=False)
+    Membership.objects.create(person=late_joiner, household=household)
+    monkeypatch.setattr("finance.ai_jobs.in_quiet_window", lambda moment=None: True)
+    process_due_jobs()
+    assert state.session_prompts
+    assert "777.77" not in state.session_prompts[0]
+    assert "Household boiler" not in state.session_prompts[0]
+
+
+@pytest.mark.django_db
+def test_switch_turned_off_before_the_job_runs_sends_nothing(harness, monkeypatch):
+    state, url = harness
+    owner = make_person("owner")
+    make_household(owner)
+    connect_ai(owner, url)
+    checking = make_account(owner)
+    make_transaction(owner, checking, amount_minor=-1234)
+    store_monthly_review(owner, SEP, today=TODAY)
+    prefs = settings_for(owner)
+    prefs.monthly_review_ai_enabled = False
+    prefs.save(update_fields=["monthly_review_ai_enabled"])
+    monkeypatch.setattr("finance.ai_jobs.in_quiet_window", lambda moment=None: True)
+    process_due_jobs()
+    assert not state.session_prompts
+    assert MonthlyReview.objects.get(person=owner, month=SEP).ai_paragraph == ""
