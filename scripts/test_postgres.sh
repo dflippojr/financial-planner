@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the test suite against a throwaway PostgreSQL 16 container.
+# Run the test suite against a throwaway PostgreSQL 18 container.
 #
 # The default test settings use in-memory SQLite, which is fast but is not the
 # production engine and silently ignores behavior PostgreSQL enforces (for
@@ -21,7 +21,7 @@ cleanup
 
 docker run -d --name "$name" \
   -e POSTGRES_USER=financial_planner -e POSTGRES_PASSWORD=test -e POSTGRES_DB=financial_planner \
-  -p "127.0.0.1:${port}:5432" postgres:16-alpine >/dev/null
+  -p "127.0.0.1:${port}:5432" postgres:18-alpine >/dev/null
 until docker exec "$name" pg_isready -U financial_planner >/dev/null 2>&1; do sleep 1; done
 
 FINANCIAL_PLANNER_TEST_DB=postgres POSTGRES_HOST=127.0.0.1 POSTGRES_PORT="$port" POSTGRES_PASSWORD=test \

@@ -237,3 +237,28 @@ def test_background_workers_wait_for_the_migrated_app():
         following = re.search(r"\n  [a-z][a-z0-9-]*:\n", compose[start + 1 :])
         block = compose[start : start + 1 + following.start()] if following else compose[start:]
         assert re.search(r"depends_on:\n(?:.*\n)*?\s+app:\n\s+condition: service_healthy", block), service
+
+
+def test_database_backup_and_test_images_share_one_postgres_major():
+    import re
+
+    root = Path(__file__).resolve().parent.parent
+    compose = (root / "compose.yml").read_text()
+    db = compose.split("  db:\n", 1)[1].split("\n  app:", 1)[0]
+    majors = {
+        "compose db": re.findall(r"image: postgres:(\d+)-alpine", db),
+        "backup image": re.findall(r"^FROM postgres:(\d+)-alpine", (root / "ops/backup/Dockerfile").read_text(), re.M),
+        "test_postgres.sh": re.findall(r"postgres:(\d+)-alpine", (root / "scripts/test_postgres.sh").read_text()),
+    }
+    assert all(len(found) == 1 for found in majors.values()), majors
+    assert len({found[0] for found in majors.values()}) == 1, majors
+    # 18+ images keep data in a versioned subdirectory and refuse a mount at .../data.
+    if int(majors["compose db"][0]) >= 18:
+        assert "- postgres_data:/var/lib/postgresql\n" in db
+
+
+def test_backup_image_ships_the_row_count_script_the_upgrade_runbook_uses():
+    root = Path(__file__).resolve().parent.parent
+    copy_line = next(line for line in (root / "ops/backup/Dockerfile").read_text().splitlines() if line.startswith("COPY"))
+    assert "row-counts.sh" in copy_line
+    assert "/opt/financial-planner/row-counts.sh" in (root / "docs/deployment.md").read_text(encoding="utf-8")

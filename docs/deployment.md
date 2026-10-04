@@ -206,6 +206,91 @@ Invoke-WebRequest https://BASEMENT-PC.MAGICDNS-NAME/health/
 
 Starting the new app applies all pending Django migrations before Gunicorn accepts traffic. `simplefin-sync` and `ai-jobs` wait for the app to report healthy, so they never run against a database that has not been migrated yet. After `up -d`, compare each running container's image with the newly built one (`docker inspect -f '{{.Image}}' <container>` against `docker image inspect -f '{{.Id}}' <image>`). If one still runs the old image, as `backup` has done, recreate it with `docker compose --env-file $Config up -d --force-recreate <service>`. If a migration or health check fails, inspect bounded logs with `docker compose --env-file $Config logs --tail 100 app db`; do not repeatedly restart or run migrations by hand. Restore the pre-upgrade dump into a fresh volume using the procedure above when database rollback is required.
 
+A PostgreSQL major-version change cannot use these steps. Follow [PostgreSQL 16 to 18 upgrade](#postgresql-16-to-18-upgrade) instead.
+
+## PostgreSQL 16 to 18 upgrade
+
+A PostgreSQL major version cannot open an older major's data directory, so this upgrade moves the data with a dump and restore onto new volumes. Do it only with the owner present. It causes downtime, and the old volumes stay untouched for rollback.
+
+From 18, the `postgres` image keeps its data in a versioned subdirectory, so `compose.yml` mounts the volume at `/var/lib/postgresql` instead of `/var/lib/postgresql/data`. If the 18 image is started on a volume that still holds 16 data, it refuses to start and restarts in a loop (`docker compose logs db` explains). It never starts an empty database in its place. The backup image moves to 18 with it: `pg_dump` 18 can dump a 16 server, but `pg_dump` 16 cannot dump an 18 server.
+
+1. Record the starting point. Keep both files outside the checkout:
+
+   ```powershell
+   $Config = 'D:\financial-planner-config\production.env'
+   $Work = 'D:\financial-planner-config\pg18-upgrade'
+   New-Item -ItemType Directory -Force $Work
+   git rev-parse HEAD | Out-File -Encoding utf8 "$Work\revision-before.txt"
+   Select-String '^(POSTGRES|RECEIPTS)_VOLUME_NAME=' $Config | Out-File -Encoding utf8 "$Work\volumes-before.txt"
+   ```
+
+   If `POSTGRES_VOLUME_NAME` or `RECEIPTS_VOLUME_NAME` is not set, the volume in use is the default from `compose.yml` (`financial-planner-postgres-data` or `financial-planner-receipts`).
+
+2. Take and verify a backup while still on 16, using the commands under [Backups](#backups).
+
+3. Fetch the approved revision and build its images. Building does not change the running containers:
+
+   ```powershell
+   docker compose --env-file $Config build --pull app backup simplefin-sync ai-jobs
+   ```
+
+4. Stop the app and workers, leaving PostgreSQL 16 running. Then take the cut-over dump with the new backup image, and record row counts. `--no-deps` keeps compose from recreating `db` with the 18 image:
+
+   ```powershell
+   docker compose --env-file $Config stop app simplefin-sync ai-jobs backup
+   docker compose --env-file $Config run --rm -T --no-deps backup /opt/financial-planner/backup.sh
+   docker compose --env-file $Config run --rm -T --no-deps backup /opt/financial-planner/row-counts.sh | Out-File -Encoding utf8 "$Work\row-counts-before.tsv"
+   docker compose --env-file $Config stop db
+   ```
+
+   Note the `Backup completed: financial_planner_TIMESTAMP.dump` name as `$Dump`. `row-counts.sh` prints one line for each table: the table name and an exact row count, never row contents.
+
+5. In `production.env`, set `POSTGRES_VOLUME_NAME` to a new name such as `financial-planner-postgres18-YYYYMMDD`. Set `RECEIPTS_VOLUME_NAME` to a new name such as `financial-planner-receipts-pg18-YYYYMMDD`. The receipts move too, so the old receipts volume still matches the old database for rollback. Do not delete or reuse the old volumes.
+
+6. Start PostgreSQL 18 on the new volume, restore the dump, and compare row counts. `Compare-Object` should print nothing:
+
+   ```powershell
+   $Dump = 'financial_planner_YYYYMMDDTHHMMSSZ.dump'
+   docker compose --env-file $Config up -d db
+   docker compose --env-file $Config run --rm -T backup /opt/financial-planner/restore.sh "/backups/nightly/$Dump"
+   docker compose --env-file $Config run --rm -T backup /opt/financial-planner/row-counts.sh | Out-File -Encoding utf8 "$Work\row-counts-after.tsv"
+   Compare-Object (Get-Content "$Work\row-counts-before.tsv") (Get-Content "$Work\row-counts-after.tsv")
+   ```
+
+   If the counts differ, stop here and roll back. Do not start the app.
+
+7. Start everything, then check health:
+
+   ```powershell
+   docker compose --env-file $Config up -d
+   docker compose --env-file $Config ps
+   docker compose --env-file $Config exec db psql -U financial_planner -d financial_planner -tAc "select version()"
+   Invoke-WebRequest https://BASEMENT-PC.MAGICDNS-NAME/health/
+   ```
+
+   `ps` should show `db` on `postgres:18-alpine`, with `app` and `db` healthy. If you changed `POSTGRES_USER` or `POSTGRES_DB`, use those values with `psql`. Sign in and spot-check recent transactions and a receipt. Run one manual backup on 18 (see [Backups](#backups)).
+
+8. Keep the old 16 volumes until the owner explicitly confirms the upgrade. Deleting a volume is intentionally not part of this runbook.
+
+### Rolling back to 16
+
+Rollback points the stack back at the old volumes and runs the 16 image on them through the `ops/postgres16-rollback.yml` override. Anything written after the cut-over is not carried back. The app and backup images stay on the new revision; the 18 `pg_dump` still backs up a 16 server.
+
+1. Stop everything: `docker compose --env-file $Config stop`.
+2. In `production.env`, set `POSTGRES_VOLUME_NAME` and `RECEIPTS_VOLUME_NAME` back to the values in `$Work\volumes-before.txt`. If they were not set before, remove them again.
+3. Start with the override, then verify:
+
+   ```powershell
+   $Rollback = @('--env-file', $Config, '-f', 'compose.yml', '-f', 'ops/postgres16-rollback.yml')
+   docker compose @Rollback up -d
+   docker compose @Rollback ps
+   docker compose @Rollback run --rm -T backup /opt/financial-planner/row-counts.sh | Out-File -Encoding utf8 "$Work\row-counts-rollback.tsv"
+   Compare-Object (Get-Content "$Work\row-counts-before.tsv") (Get-Content "$Work\row-counts-rollback.tsv")
+   Invoke-WebRequest https://BASEMENT-PC.MAGICDNS-NAME/health/
+   ```
+
+While rolled back, pass both `-f` files on every compose command. A command without the override tries the 18 image on the 16 volume, which only restart-loops. That failed start leaves an empty `18` directory in the old volume, which PostgreSQL 16 ignores. To go back to the full revision that ran before the upgrade instead, check out the commit in `revision-before.txt`, rebuild the images, and run `up -d` without the override.
+
 ## Reviewing a dependency pull request
 
 Dependabot opens version and security update PRs. There is no auto-merge; the owner approves every merge. Keep exact pins in `requirements.txt`. Treat `django-allauth` upgrades as needing the Google sign-in tests as well as the rest of the suite.
@@ -218,3 +303,14 @@ On the PR branch:
 ## Synthetic restore exercise record
 
 On 2026-09-27, this procedure was exercised locally with Docker Desktop 29.8.0, PostgreSQL 16, and only the committed `synthetic_demo` fixture. The app and database health checks passed; the fixture contained 3 synthetic transactions; a custom-format dump produced both nightly and forced weekly copies; the transactions were deleted (count 0); and `pg_restore` recovered the count to 3. The same dump was then restored into a second, fresh named volume, where the count was 3 and `/health/` returned HTTP 200. No real statement, credential, account number, or financial record was used or written to Git.
+
+## PostgreSQL 16 to 18 upgrade drill record
+
+On 2026-10-04, the upgrade and rollback runbook was exercised on the basement PC with Docker Desktop 29.8.1. It ran in an isolated compose project (`-p fp-drill`) with its own volume names, loopback port, and scratch backup directory, so the production project and volumes were not touched. Only the committed `synthetic_demo` fixture and one invented receipt file were used.
+
+- **Baseline:** the pre-change revision ran on PostgreSQL 16.15, held 3 synthetic transactions, and returned HTTP 200 from `/health/`.
+- **Cut-over:** with the app and workers stopped, the new 18 backup image dumped the 16 server under `run --no-deps`, and the running 16 container was left in place. `row-counts.sh` recorded 66 tables.
+- **Restore:** PostgreSQL 18.6 started on new database and receipts volumes. `restore.sh` restored the dump and the receipt, and every table's row count matched the baseline. Counts still matched after the app started and ran its migrations. All containers came up, `app` and `db` reported healthy, `/health/` returned HTTP 200, and a nightly backup on 18 succeeded.
+- **Rollback:** a `db` start on the 16 volume without the override restart-looped with the image's old-data error and never initialized a database. With `ops/postgres16-rollback.yml`, the stack returned to 16.15 on the old volumes. Row counts matched the baseline, `/health/` returned HTTP 200, the receipt was intact, and the 18 backup image backed up the 16 server.
+
+The drill's containers, volumes, and images were removed afterward.

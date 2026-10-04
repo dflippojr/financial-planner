@@ -1,0 +1,11 @@
+# Rollback override for the PostgreSQL 16 to 18 upgrade (docs/deployment.md).
+# It runs the old 16 image on the old data volume, mounted where 16 keeps its
+# data. Pass it after compose.yml on every compose command while rolled back:
+#   docker compose --env-file $Config -f compose.yml -f ops/postgres16-rollback.yml ...
+# Without it, the 18 image refuses to start on the 16 volume. The backup image
+# stays on 18; its pg_dump can still dump a 16 server.
+services:
+  db:
+    image: postgres:16-alpine
+    volumes: !override
+      - postgres_data:/var/lib/postgresql/data
