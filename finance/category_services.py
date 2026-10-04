@@ -1212,28 +1212,36 @@ def income_and_spending_totals(principal, *, date_from=None, date_to=None, accou
 
     income = 0
     spending = 0
-    by_category = defaultdict(int)
+    spending_by_category = defaultdict(int)
+    income_by_category = defaultdict(int)
     for item in rows:
         if item.pk in excluded:
             continue
         if item.pk in refunds:
             spending -= item.amount_minor
-            by_category[item.category_id] -= item.amount_minor
+            spending_by_category[item.category_id] -= item.amount_minor
             continue
+        parts = splits_by_txn.get(item.pk)
+        split_parts = item.category_source == Transaction.CategorySource.SPLIT and parts
         if item.amount_minor > 0:
             income += item.amount_minor
+            if split_parts:
+                for part in parts:
+                    income_by_category[part.category_id] += part.amount_minor
+            else:
+                income_by_category[item.category_id] += item.amount_minor
         elif item.amount_minor < 0:
             magnitude = -item.amount_minor
             spending += magnitude
-            parts = splits_by_txn.get(item.pk)
-            if item.category_source == Transaction.CategorySource.SPLIT and parts:
+            if split_parts:
                 for part in parts:
-                    by_category[part.category_id] += -part.amount_minor
+                    spending_by_category[part.category_id] += -part.amount_minor
             else:
-                by_category[item.category_id] += magnitude
+                spending_by_category[item.category_id] += magnitude
     return SimpleNamespace(
         income_minor=income,
         spending_minor=spending,
         net_minor=income - spending,
-        spending_by_category_id=dict(by_category),
+        spending_by_category_id=dict(spending_by_category),
+        income_by_category_id=dict(income_by_category),
     )
