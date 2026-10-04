@@ -148,6 +148,22 @@ def test_compose_stages_csv_uploads_on_a_memory_backed_mount():
     assert "RCLONE_CONFIG: /config/rclone.conf" in compose
 
 
+def test_backup_container_mounts_only_the_rclone_config_file():
+    root = Path(__file__).resolve().parent.parent
+    compose = (root / "compose.yml").read_text()
+    env_example = (root / ".env.example").read_text()
+    placeholder = root / "ops" / "backup" / "rclone.conf.example"
+
+    assert "CONFIG_DIR" not in compose
+    assert "D:/financial-planner-config" not in compose
+    assert "CONFIG_DIR" not in env_example
+    assert "OFFSITE_RCLONE_CONFIG:-./ops/backup/rclone.conf.example" in compose
+    assert "target: /config/rclone.conf" in compose
+    assert "OFFSITE_RCLONE_CONFIG=" in env_example
+    assert placeholder.is_file()
+    assert placeholder.read_text(encoding="utf-8").lstrip().startswith("#")
+
+
 def test_dockerfile_builds_css_with_a_pinned_checksum_and_collectstatic():
     dockerfile = (Path(__file__).resolve().parent.parent / "Dockerfile").read_text()
     pins = (Path(__file__).resolve().parent.parent / "scripts" / "css_pins.env").read_text()

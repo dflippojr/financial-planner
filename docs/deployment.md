@@ -142,7 +142,7 @@ Set `OPERATOR_USERNAMES` in `production.env` to a comma-separated list of member
 
 When both `OFFSITE_RCLONE_REMOTE` and `OFFSITE_AGE_RECIPIENT` are set, each verified dump is encrypted with `age` to that public key and uploaded with rclone. Remote nightly and weekly prefixes keep the same 14 and 8 file retention, pruned by name. An upload failure is recorded in the status file and alerts operators; the local dump is left in place.
 
-1. Install rclone on a trusted machine, run `rclone config`, and save the file as `D:\financial-planner-config\rclone.conf`. The backup container mounts `CONFIG_DIR` (default `D:/financial-planner-config`) read-only as `/config`.
+1. Install rclone on a trusted machine, run `rclone config`, and save the file outside the checkout. Set `OFFSITE_RCLONE_CONFIG` in `production.env` to that path (forward slashes on Windows). The backup container mounts only that file, read-only, as `/config/rclone.conf`. Leave the variable unset to use the committed empty placeholder.
 2. Create an age key pair on a trusted machine (`age-keygen`). Put the **public** key in `OFFSITE_AGE_RECIPIENT`. Keep the private key in a password manager. The private key must never live on the tower.
 3. Set `OFFSITE_RCLONE_REMOTE` to the rclone destination, for example `b2:bucket/financial-planner` or `drive:financial-planner-backups`. Recreate the backup container after editing `production.env`.
 

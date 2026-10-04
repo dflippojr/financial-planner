@@ -99,8 +99,8 @@ services:
         source: ${BACKUP_DIR:?BACKUP_DIR must be set}
         target: /backups
       - type: bind
-        source: ${CONFIG_DIR:-D:/financial-planner-config}
-        target: /config
+        source: ${OFFSITE_RCLONE_CONFIG:-./ops/backup/rclone.conf.example}
+        target: /config/rclone.conf
         read_only: true
     command: ["/opt/financial-planner/run-backups.sh"]
 
