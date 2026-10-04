@@ -19,6 +19,7 @@ from .forms import AiDefaultsForm, HarnessConnectForm
 from .models import AiUsageEvent, Person
 from .policy_services import may_use_ai
 from .reauth import requires_recent_auth
+from .security_services import EVENT_TYPES, record_security_event
 
 
 def ai_settings_context(person):
@@ -77,6 +78,7 @@ def ai_connect(request):
             base_url=form.cleaned_data["base_url"],
             token=form.cleaned_data["token"],
         )
+        record_security_event(person, EVENT_TYPES.AI_CONNECTION_CHANGED, request=request)
         messages.success(request, "Agent Harness is connected.")
     except (AiError, HarnessUrlError) as exc:
         messages.error(request, str(exc))
@@ -88,6 +90,7 @@ def ai_connect(request):
 def ai_disconnect(request):
     person = get_object_or_404(Person, user=request.user)
     disconnect_harness(person)
+    record_security_event(person, EVENT_TYPES.AI_CONNECTION_CHANGED, request=request)
     messages.success(request, "The AI connection was removed.")
     return redirect("settings-ai")
 
@@ -113,6 +116,7 @@ def ai_save_defaults(request):
             chat_model=form.cleaned_data.get("chat_model") or "",
             background_model=form.cleaned_data.get("background_model") or "",
         )
+        record_security_event(person, EVENT_TYPES.AI_CONNECTION_CHANGED, request=request)
         messages.success(request, "AI backend defaults were saved.")
     except AiError as exc:
         messages.error(request, str(exc))
