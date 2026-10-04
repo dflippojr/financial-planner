@@ -260,6 +260,18 @@ class CashFlowFilterForm(forms.Form):
         return cleaned
 
 
+class YearEndFilterForm(forms.Form):
+    year = forms.IntegerField(min_value=1, max_value=MAX_REPORT_DATE.year)
+    scope = forms.ChoiceField(
+        required=False,
+        choices=(
+            ("", ALL_VISIBLE_ACCOUNTS),
+            (Account.Scope.PRIVATE, "Private"),
+            (Account.Scope.HOUSEHOLD, "Household"),
+        ),
+    )
+
+
 class NetWorthFilterForm(forms.Form):
     date_from = forms.DateField(
         required=False,
@@ -969,6 +981,41 @@ class TransactionNoteTagsForm(forms.Form):
             },
             **kwargs,
         )
+
+
+class BulkTransactionEditForm(forms.Form):
+    ACTION_CATEGORY = "set_category"
+    ACTION_ADD_TAGS = "add_tags"
+    ACTION_REMOVE_TAGS = "remove_tags"
+    ACTION_APPEND_NOTE = "append_note"
+
+    action = forms.ChoiceField(
+        choices=(
+            (ACTION_CATEGORY, "Set category"),
+            (ACTION_ADD_TAGS, "Add tags"),
+            (ACTION_REMOVE_TAGS, "Remove tags"),
+            (ACTION_APPEND_NOTE, "Append note"),
+        )
+    )
+    select_matching = forms.BooleanField(required=False)
+    category = forms.ModelChoiceField(
+        queryset=Category.objects.none(),
+        required=False,
+        empty_label="Uncategorized",
+    )
+    tags = forms.ModelMultipleChoiceField(
+        queryset=Tag.objects.none(),
+        required=False,
+        widget=forms.CheckboxSelectMultiple,
+    )
+    note_line = forms.CharField(required=False, max_length=2000, label="Note line")
+
+    def __init__(self, *args, principal=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        from .category_services import assignable_categories
+
+        self.fields["category"].queryset = assignable_categories(principal)
+        self.fields["tags"].queryset = Tag.objects.visible_to(principal).active().order_by("name", "pk")
 
 
 class TransferWindowForm(forms.Form):

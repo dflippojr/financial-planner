@@ -541,6 +541,11 @@ def transaction_list(request):
                 filter_hidden.append((name, str(value.pk)))
             else:
                 filter_hidden.append((name, str(value)))
+    matching_count = transactions.count()
+    from .bulk_edit_services import BULK_EDIT_CAP
+    from .bulk_edit_views import active_bulk_undo
+    from .forms import BulkTransactionEditForm
+
     return render(
         request,
         "finance/transaction_list.html",
@@ -556,6 +561,12 @@ def transaction_list(request):
             "proposed_rule": proposed_rule_from_accepts(person) if show_ai else None,
             "list_query": request.get_full_path(),
             "filter_hidden": filter_hidden,
+            "filter_query": request.GET.urlencode(),
+            "matching_count": matching_count,
+            "matching_over_cap": matching_count > BULK_EDIT_CAP,
+            "bulk_select_cap": BULK_EDIT_CAP,
+            "bulk_form": BulkTransactionEditForm(principal=request.user),
+            "bulk_undo": active_bulk_undo(request),
         },
     )
 
