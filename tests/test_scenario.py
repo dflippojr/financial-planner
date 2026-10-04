@@ -351,3 +351,123 @@ def test_an_invalid_grouping_with_a_huge_range_is_not_a_server_error():
     page = client.get(reverse("home"), {"date_from": "1900-01-01", "date_to": "2026-10-01", "grouping": "invalid"})
 
     assert page.status_code in (200, 400)
+
+
+def _tokens(*values):
+    from django.http import QueryDict
+
+    query = QueryDict(mutable=True)
+    query.setlist("sc", list(values))
+    return query
+
+
+def test_each_change_type_round_trips_through_the_query_string():
+    from finance.scenario import encode_changes
+
+    changes = (
+        add_change(end=date(2027, 6, 1)),
+        SimpleNamespace(type=CHANGE_AMOUNT, source_id=7, amount_minor=12_345),
+        SimpleNamespace(type=CHANGE_PAUSE, source_id=9, pause_from=date(2026, 12, 1)),
+        SimpleNamespace(
+            type=CHANGE_ONEOFF,
+            name="Synthetic bonus|extra",
+            kind="income",
+            amount_minor=50_000,
+            start=date(2026, 11, 15),
+        ),
+    )
+
+    parsed = parse_scenario_tokens(_tokens(*encode_changes(changes)))
+
+    assert [change.type for change in parsed] == [CHANGE_ADD, CHANGE_AMOUNT, CHANGE_PAUSE, CHANGE_ONEOFF]
+    assert parsed[0].end == date(2027, 6, 1)
+    assert parsed[1].source_id == 7 and parsed[1].amount_minor == 12_345
+    assert parsed[2].pause_from == date(2026, 12, 1)
+    assert parsed[3].name == "Synthetic bonus extra" and parsed[3].amount_minor == 50_000
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        "",
+        "z|1|2",
+        "a|income|100|monthly|not-a-date||Name",
+        "a|income|-5|monthly|2026-10-01||Name",
+        "a|gift|100|monthly|2026-10-01||Name",
+        "a|income|100|hourly|2026-10-01||Name",
+        "a|income|100|monthly|2026-10-01||",
+        "a|income|100|monthly|2026-10-01|2026-09-01|Ends before it starts",
+        "a|income|100|monthly|2026-10-01||" + "x" * 151,
+        "m|0|100",
+        "m|abc|100",
+        "m|5|0",
+        "p|5|someday",
+        "p|-1|2026-10-01",
+        "o|income|100|bad-date|Name",
+        "o|gift|100|2026-10-01|Name",
+        "o|income|100|2026-10-01|",
+    ],
+)
+def test_malformed_tokens_are_ignored(token):
+    assert parse_scenario_tokens(_tokens(token)) == ()
+
+
+def test_only_the_first_max_changes_tokens_are_kept():
+    from finance.scenario import MAX_CHANGES
+
+    tokens = [f"m|{index}|100" for index in range(1, MAX_CHANGES + 5)]
+
+    assert len(parse_scenario_tokens(_tokens(*tokens))) == MAX_CHANGES
+
+
+def test_scenario_form_requires_the_fields_each_change_type_needs():
+    from finance.forms import ScenarioChangeForm
+
+    add = ScenarioChangeForm({"change_type": "add"})
+    oneoff = ScenarioChangeForm({"change_type": "oneoff", "name": "Synthetic gift", "kind": "income", "amount": "10.00"})
+    amount = ScenarioChangeForm({"change_type": "amount"})
+    pause = ScenarioChangeForm({"change_type": "pause"})
+    backwards = ScenarioChangeForm(
+        {
+            "change_type": "add",
+            "name": "Synthetic job",
+            "kind": "income",
+            "amount": "100.00",
+            "cadence": "monthly",
+            "start_date": "2026-10-01",
+            "end_date": "2026-09-01",
+        }
+    )
+    negative = ScenarioChangeForm({"change_type": "amount", "amount": "-1.00"})
+
+    assert not add.is_valid() and {"name", "kind", "amount", "start_date", "cadence"} <= set(add.errors)
+    assert not oneoff.is_valid() and "start_date" in oneoff.errors
+    assert not amount.is_valid() and {"planned_item", "amount"} <= set(amount.errors)
+    assert not pause.is_valid() and {"series", "pause_from"} <= set(pause.errors)
+    assert not backwards.is_valid() and "end_date" in backwards.errors
+    assert not negative.is_valid() and "amount" in negative.errors
+
+
+def test_scenario_form_builds_add_and_one_off_changes():
+    from finance.forms import ScenarioChangeForm
+
+    add = ScenarioChangeForm(
+        {
+            "change_type": "add",
+            "name": "Synthetic job",
+            "kind": "income",
+            "amount": "1234.56",
+            "cadence": "monthly",
+            "start_date": "2026-10-01",
+        }
+    )
+    oneoff = ScenarioChangeForm(
+        {"change_type": "oneoff", "name": "Synthetic gift", "kind": "income", "amount": "10.00", "start_date": "2026-11-01"}
+    )
+
+    assert add.is_valid(), add.errors
+    assert oneoff.is_valid(), oneoff.errors
+    added = add.to_change()
+    once = oneoff.to_change()
+    assert (added.type, added.amount_minor, added.cadence, added.end) == (CHANGE_ADD, 123_456, "monthly", None)
+    assert (once.type, once.amount_minor, once.start) == (CHANGE_ONEOFF, 1_000, date(2026, 11, 1))
