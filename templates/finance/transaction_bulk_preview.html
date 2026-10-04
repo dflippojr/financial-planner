@@ -19,9 +19,6 @@
   {% csrf_token %}
   <input type="hidden" name="filter_query" value="{{ filter_query }}">
   <input type="hidden" name="action" value="{{ form.cleaned_data.action }}">
-  {% if form.cleaned_data.select_matching %}
-  <input type="hidden" name="select_matching" value="on">
-  {% endif %}
   {% if form.cleaned_data.category %}
   <input type="hidden" name="category" value="{{ form.cleaned_data.category.pk }}">
   {% endif %}
@@ -33,6 +30,9 @@
   {% endif %}
   {% for txn_id in transaction_ids %}
   <input type="hidden" name="transaction_id" value="{{ txn_id }}">
+  {% endfor %}
+  {% for txn_id in eligible_ids %}
+  <input type="hidden" name="eligible_id" value="{{ txn_id }}">
   {% endfor %}
   <button type="submit" class="btn btn-primary">Apply bulk edit</button>
   <a class="btn btn-ghost" href="{% url 'transaction-list' %}">Cancel</a>

@@ -506,7 +506,7 @@ def test_uncategorized_and_select_matching_under_cap():
     apply_bulk_edit(
         owner,
         matching=matching_qs(owner),
-        transaction_ids=[],
+        transaction_ids=[txn.pk],
         select_matching=True,
         action=ACTION_CATEGORY,
         category_id=None,
@@ -597,3 +597,80 @@ def test_bulk_category_propagates_to_linked_refunds_and_skips_refund_legs():
     assert purchase.category_source == Transaction.CategorySource.MANUAL
     assert refund.category_id == grocery.pk
     assert refund.category_source == Transaction.CategorySource.INHERITED
+
+
+@pytest.mark.django_db
+def test_apply_writes_previewed_ids_not_rows_imported_later():
+    owner = make_person("owner")
+    household = make_household(owner)
+    account = make_account(owner)
+    first = make_transaction(owner, account, description="Synthetic first", fingerprint="1" * 64)
+    client = Client()
+    client.force_login(owner.user)
+    preview = client.post(
+        reverse("transaction-bulk-preview"),
+        {
+            "action": ACTION_CATEGORY,
+            "select_matching": "on",
+            "category": str(dining(household).pk),
+        },
+    )
+    body = preview.content.decode()
+    assert f'name="transaction_id" value="{first.pk}"' in body
+    assert 'name="select_matching"' not in body
+    second = make_transaction(owner, account, description="Synthetic later", fingerprint="2" * 64)
+    apply = client.post(
+        reverse("transaction-bulk-apply"),
+        {
+            "action": ACTION_CATEGORY,
+            "select_matching": "on",
+            "transaction_id": str(first.pk),
+            "eligible_id": str(first.pk),
+            "category": str(dining(household).pk),
+        },
+        follow=True,
+    )
+    assert b"Updated 1 transaction" in apply.content
+    first.refresh_from_db()
+    second.refresh_from_db()
+    assert first.category_id == dining(household).pk
+    assert second.category_id is None
+
+
+@pytest.mark.django_db
+def test_apply_refuses_when_a_previewed_row_is_no_longer_eligible():
+    owner = make_person("owner")
+    household = make_household(owner)
+    account = make_account(owner)
+    first = make_transaction(owner, account, amount_minor=-5000, description="Synthetic one", fingerprint="s" * 64)
+    second = make_transaction(owner, account, description="Synthetic two", fingerprint="t" * 64)
+    dine = dining(household)
+    preview = preview_bulk_edit(
+        owner,
+        matching=matching_qs(owner),
+        transaction_ids=[first.pk, second.pk],
+        select_matching=False,
+        action=ACTION_CATEGORY,
+        category_id=dine.pk,
+    )
+    assert preview.eligible_ids == sorted([first.pk, second.pk])
+    split_transaction(
+        owner,
+        first.pk,
+        (
+            {"category_id": groceries(household).pk, "amount_minor": -3000},
+            {"category_id": dine.pk, "amount_minor": -2000},
+        ),
+    )
+    with pytest.raises(ValidationError, match="No eligible transactions to update"):
+        apply_bulk_edit(
+            owner,
+            matching=matching_qs(owner),
+            transaction_ids=[first.pk, second.pk],
+            select_matching=False,
+            action=ACTION_CATEGORY,
+            category_id=dine.pk,
+            expected_eligible_ids=preview.eligible_ids,
+        )
+    second.refresh_from_db()
+    assert second.category_id is None

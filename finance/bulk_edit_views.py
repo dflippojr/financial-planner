@@ -94,6 +94,7 @@ def bulk_edit_preview(request):
             "cap": BULK_EDIT_CAP,
             "filter_query": request.POST.get("filter_query", ""),
             "transaction_ids": preview.selected_ids,
+            "eligible_ids": preview.eligible_ids,
         },
     )
 
@@ -107,6 +108,9 @@ def bulk_edit_apply(request):
         messages.error(request, "Choose a bulk edit action and try again.")
         return redirect("transaction-list")
     kwargs = _bulk_kwargs(form)
+    kwargs["select_matching"] = False
+    posted_eligible = form.data.getlist("eligible_id")
+    kwargs["expected_eligible_ids"] = posted_eligible or None
     try:
         preview, undo = _service_or_404(
             lambda: apply_bulk_edit(request.user, matching=matching, **kwargs)

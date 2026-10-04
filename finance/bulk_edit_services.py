@@ -333,6 +333,7 @@ def apply_bulk_edit(
     category_id=None,
     tag_ids=None,
     note_line="",
+    expected_eligible_ids=None,
 ):
     person = _person_for(principal)
     if person is None:
@@ -341,7 +342,7 @@ def apply_bulk_edit(
         person,
         matching=matching,
         transaction_ids=transaction_ids,
-        select_matching=select_matching,
+        select_matching=False,
         action=action,
         category_id=category_id,
         tag_ids=tag_ids,
@@ -350,6 +351,8 @@ def apply_bulk_edit(
     if preview.over_cap:
         raise ValidationError(OVER_CAP)
     if not preview.eligible_ids:
+        raise ValidationError(NO_ELIGIBLE)
+    if expected_eligible_ids is not None and set(preview.eligible_ids) != set(_parse_ids(expected_eligible_ids)):
         raise ValidationError(NO_ELIGIBLE)
     if action == ACTION_APPEND_NOTE:
         note_line = (note_line or "").strip()
