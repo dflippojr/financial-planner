@@ -4,7 +4,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("finance", "0035_person_sessions_valid_after"),
+        ("finance", "0036_bulk_edit_undo"),
     ]
 
     operations = [
