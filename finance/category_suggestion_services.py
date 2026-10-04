@@ -215,7 +215,7 @@ def accept_suggestions(principal, suggestion_ids):
     return accepted
 
 
-def run_category_suggestion_job(person, job, *, backend, session_id="", on_session=None):
+def run_category_suggestion_job(person, job, *, backend, session_id="", on_session=None, connection=None):
     ids = _ids_from_refs(job.input_refs)
     txns = list(eligible_uncategorized(person, ids).select_related("account"))
     if not txns:
@@ -238,6 +238,7 @@ def run_category_suggestion_job(person, job, *, backend, session_id="", on_sessi
         backend=backend,
         session_id=session_id,
         on_session=on_session,
+        connection=connection,
     )
     if not result.ok:
         return result

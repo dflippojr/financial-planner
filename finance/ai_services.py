@@ -307,6 +307,7 @@ def run_structured(
     on_session=None,
     sleep=None,
     monotonic=None,
+    connection=None,
 ):
     return _run(
         principal,
@@ -319,6 +320,7 @@ def run_structured(
         on_session=on_session,
         sleep=sleep,
         monotonic=monotonic,
+        connection=connection,
     )
 
 
@@ -388,11 +390,17 @@ def _run(
     follow_up=False,
     on_tool=None,
     allow_tool=None,
+    connection=None,
 ):
     person = _person_for(principal)
     if not may_use_ai(person):
         return ProviderResult(ok=False, failure_code=AUTHORIZATION_REQUIRED)
-    connection, chosen = resolve_ai(person, use_chat=use_chat, requested_backend=backend)
+    if connection is not None:
+        # A background job passes the connection its saved session belongs to, so
+        # a changed preference can never send that session to a different harness.
+        chosen = (backend or "").strip()
+    else:
+        connection, chosen = resolve_ai(person, use_chat=use_chat, requested_backend=backend)
     if connection is None or not chosen:
         return ProviderResult(ok=False, failure_code=AUTHORIZATION_REQUIRED)
     shared = connection.owner_id != person.id

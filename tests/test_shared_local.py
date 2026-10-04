@@ -5,7 +5,6 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
 from django.test import Client
 from django.urls import reverse
-from django.utils import timezone
 from tests.fake_harness import start_fake_harness
 from tests.helpers import stamp_recent_auth
 
@@ -230,3 +229,42 @@ def test_only_connection_owner_can_offer_local(harness):
     guest.refresh_from_db()
     assert guest.use_shared_local_chat
     assert guest.use_shared_local_background
+
+
+@pytest.mark.django_db
+def test_shared_job_never_resumes_on_the_members_own_harness(harness):
+    from finance.ai_jobs import SESSION_CONNECTION_KEY, _connection_marker
+    from finance.ai_services import offered_local_connection
+
+    host_state, _host_url = harness
+    own_state, own_url, own_server = start_fake_harness()
+    try:
+        _host_user, host, _guest_user, guest, _household = _household_pair(harness)
+        set_offer_local_to_household(host, True)
+        connect_harness(guest, base_url=own_url, token=TOKEN)
+        set_shared_local_use(guest, chat=False, background=True)
+        job = enqueue_job(guest, feature="structured")
+        shared = offered_local_connection(guest)
+        host_state.sessions["sess-shared-1"] = {
+            "id": "sess-shared-1",
+            "status": "done",
+            "answer": "synthetic-ok",
+            "prompt_tokens": 3,
+            "completion_tokens": 4,
+        }
+        job.harness_session_id = "sess-shared-1"
+        job.input_refs = {**job.input_refs, SESSION_CONNECTION_KEY: _connection_marker(shared)}
+        job.save(update_fields=("harness_session_id", "input_refs", "updated_at"))
+        # The member stops using the shared model while the job waits to resume.
+        set_shared_local_use(guest, chat=False, background=False)
+
+        process_due_jobs()
+
+        job.refresh_from_db()
+        # The host's session never reaches the member's own harness; the shared job ends instead.
+        assert not any("sess-shared-1" in path for _method, path in own_state.requests)
+        assert job.status == AiJob.Status.FAILED
+        assert job.failure_code == AUTHORIZATION_REQUIRED
+    finally:
+        own_server.shutdown()
+        own_server.server_close()
