@@ -1540,6 +1540,10 @@ def _alert_settings_form(person, data=None):
             "monthly_review_enabled": prefs.monthly_review_enabled,
             "monthly_review_ai_enabled": prefs.monthly_review_ai_enabled,
             "expected_balance_enabled": prefs.expected_balance_enabled,
+            "unusual_spending_enabled": prefs.unusual_spending_enabled,
+            "unusual_spending_ai_enabled": prefs.unusual_spending_ai_enabled,
+            "unusual_category_percent": prefs.unusual_category_percent,
+            "unusual_category_amount": Decimal(prefs.unusual_category_floor_minor) / Decimal(100),
             "large_transaction_amount": amount,
         },
     )

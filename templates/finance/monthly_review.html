@@ -54,6 +54,33 @@
 
 <section class="card bg-base-100 shadow-sm mb-6">
   <div class="card-body">
+    <h2 class="card-title">Unusual this month</h2>
+    {% if unusual_paragraph %}
+    <p class="text-sm opacity-70">{{ unusual_label }}</p>
+    <p class="mt-2 max-w-3xl">{{ unusual_paragraph }}</p>
+    {% endif %}
+    {% if facts.unusual %}
+    <ul class="list-disc pl-6 mt-4">
+      {% for item in facts.unusual %}
+      <li>
+        {% if item.kind == "category" %}
+        <a class="link" href="{{ item.url }}">{{ item.name }}</a> spent {{ item.month_display }} versus a 6-month median of {{ item.baseline_display }}.
+        {% elif item.kind == "new_merchant" %}
+        <a class="link" href="{{ item.url }}">{{ item.name }}</a> first charge {{ item.amount_display }} on {{ item.date }}.
+        {% else %}
+        <a class="link" href="{{ item.url }}">{{ item.name }}</a> charged {{ item.amount_display }} versus a median of {{ item.median_display }} on {{ item.date }}.
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="opacity-80 mt-2">No unusual spending flags this month.</p>
+    {% endif %}
+  </div>
+</section>
+
+<section class="card bg-base-100 shadow-sm mb-6">
+  <div class="card-body">
     <h2 class="card-title">Category changes</h2>
     <p class="mb-2"><a class="link" href="{{ facts.spending_url }}">Open spending</a></p>
     <h3 class="font-semibold">Largest increases</h3>

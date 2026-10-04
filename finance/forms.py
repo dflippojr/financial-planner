@@ -1397,19 +1397,49 @@ class AlertSettingsForm(forms.Form):
         label="Expected balance below threshold in the next 7 days",
         help_text="Off by default. Uses the accounts and threshold from the bills calendar. Figures are expected, not guaranteed.",
     )
+    unusual_spending_enabled = forms.BooleanField(required=False, label="Unusual spending")
+    unusual_spending_ai_enabled = forms.BooleanField(
+        required=False,
+        label="AI unusual-spending summary",
+        help_text="On by default when an AI backend is connected. Phrases this month's flags in two or three sentences. The flags stay the source of truth.",
+    )
+    unusual_category_percent = forms.IntegerField(
+        required=False,
+        min_value=1,
+        max_value=1000,
+        initial=50,
+        label="Category unusual percent",
+        help_text="Flag a category when this month exceeds its trailing 6-month median by at least this percent and by the dollar floor.",
+    )
+    unusual_category_amount = forms.DecimalField(
+        required=False,
+        min_value=Decimal("0.00"),
+        max_digits=19,
+        decimal_places=2,
+        initial=Decimal("50.00"),
+        label="Category unusual dollar floor",
+        help_text="USD. Combined with the percent: both must be exceeded versus the trailing 6-month median.",
+        widget=forms.TextInput(attrs={"inputmode": "decimal"}),
+    )
     large_transaction_amount = forms.DecimalField(
         required=False,
         min_value=Decimal("0.01"),
         max_digits=19,
         decimal_places=2,
         label="Large transaction threshold",
-        help_text="USD. Leave blank to keep large-transaction alerts off.",
+        help_text="USD. Leave blank to keep large-transaction alerts off. Also used for new-merchant unusual flags.",
         widget=forms.TextInput(attrs={"inputmode": "decimal"}),
     )
 
     def save_payload(self):
         amount = self.cleaned_data.get("large_transaction_amount")
         minor = int(amount * 100) if amount is not None else None
+        floor = self.cleaned_data.get("unusual_category_amount")
+        if floor is None:
+            floor = Decimal("50.00")
+        percent = self.cleaned_data.get("unusual_category_percent")
+        if percent is None:
+            percent = 50
         return {
             "sync_enabled": self.cleaned_data["sync_enabled"],
             "recurring_price_enabled": self.cleaned_data["recurring_price_enabled"],
@@ -1419,6 +1449,10 @@ class AlertSettingsForm(forms.Form):
             "monthly_review_enabled": self.cleaned_data["monthly_review_enabled"],
             "monthly_review_ai_enabled": self.cleaned_data["monthly_review_ai_enabled"],
             "expected_balance_enabled": self.cleaned_data["expected_balance_enabled"],
+            "unusual_spending_enabled": self.cleaned_data["unusual_spending_enabled"],
+            "unusual_spending_ai_enabled": self.cleaned_data["unusual_spending_ai_enabled"],
+            "unusual_category_percent": percent,
+            "unusual_category_floor_minor": int(floor * 100),
             "large_transaction_minor": minor,
         }
 
