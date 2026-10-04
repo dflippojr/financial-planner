@@ -1182,12 +1182,12 @@ def sign_in(request):
             if not already_blocked:
                 record_sign_in_failure_for_username(username, request)
         else:
-            clear_login_failures(key)
             from .passkey_services import passkey_required_after_password, store_pending_passkey_login
 
             if passkey_required_after_password(user):
                 store_pending_passkey_login(request, user, _redirect_target(request))
                 return redirect("passkey-sign-in")
+            clear_login_failures(key)
             _complete_member_session(request, user)
             return redirect(_redirect_target(request))
     return render(
