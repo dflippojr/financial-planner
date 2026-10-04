@@ -217,6 +217,10 @@ AI_JOB_POLL_SECONDS = int(os.environ.get("AI_JOB_POLL_SECONDS", "15"))
 AI_JOB_MAX_ATTEMPTS = int(os.environ.get("AI_JOB_MAX_ATTEMPTS", "5"))
 AI_JOB_RESUME_DELAY_SECONDS = int(os.environ.get("AI_JOB_RESUME_DELAY_SECONDS", "300"))
 AI_JOB_RESUME_MAX_AGE_SECONDS = int(os.environ.get("AI_JOB_RESUME_MAX_AGE_SECONDS", "86400"))
+AI_CHAT_EXPIRE_DAYS = int(os.environ.get("AI_CHAT_EXPIRE_DAYS", "30"))
+AI_CHAT_MAX_TURNS = int(os.environ.get("AI_CHAT_MAX_TURNS", "20"))
+AI_CHAT_MAX_TOOL_CALLS = int(os.environ.get("AI_CHAT_MAX_TOOL_CALLS", "40"))
+AI_CHAT_LOCAL_ENABLED = os.environ.get("AI_CHAT_LOCAL_ENABLED", "false").lower() == "true"
 
 # Handle uploads in memory only. Django's default handlers write any upload over
 # 2.5 MB to a temporary file in /tmp before application code runs, which would put

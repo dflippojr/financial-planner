@@ -1636,6 +1636,74 @@ class AiUsageEvent(models.Model):
         return f"AI usage {self.pk}"
 
 
+class AiConversation(models.Model):
+    member = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="ai_conversations")
+    harness_session_id = models.CharField(max_length=120, blank=True, default="")
+    harness_connection = models.CharField(max_length=120, blank=True, default="")
+    backend = models.CharField(max_length=32, blank=True, default="")
+    title = models.CharField(max_length=120, blank=True, default="")
+    used_account_ids = models.JSONField(default=list)
+    turn_count = models.PositiveIntegerField(default=0)
+    tool_call_count = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    expires_at = models.DateTimeField()
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            person = _person_for(principal)
+            if person is None:
+                return self.none()
+            return self.filter(member=person, expires_at__gt=timezone.now())
+
+        def owned_by(self, principal):
+            person = _person_for(principal)
+            if person is None:
+                return self.none()
+            return self.filter(member=person)
+
+    objects = QuerySet.as_manager()
+
+    def __str__(self):
+        return f"AI conversation {self.pk}"
+
+
+class AiConversationMessage(models.Model):
+    class Role(models.TextChoices):
+        USER = "user", "User"
+        ASSISTANT = "assistant", "Assistant"
+        ERROR = "error", "Error"
+
+    conversation = models.ForeignKey(AiConversation, on_delete=models.CASCADE, related_name="messages")
+    role = models.CharField(max_length=16, choices=Role)
+    content = models.TextField()
+    backend = models.CharField(max_length=32, blank=True, default="")
+    figures = models.JSONField(default=list)
+    notices = models.JSONField(default=list)
+    page_context = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            person = _person_for(principal)
+            if person is None:
+                return self.none()
+            return self.filter(conversation__member=person)
+
+    objects = QuerySet.as_manager()
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(role__in=("user", "assistant", "error")),
+                name="ai_conversation_message_role_valid",
+            ),
+        ]
+
+    def __str__(self):
+        return f"AI message {self.pk}"
+
+
 class CategorySuggestion(models.Model):
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"

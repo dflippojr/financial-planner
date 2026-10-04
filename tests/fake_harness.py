@@ -29,6 +29,15 @@ class FakeHarnessState:
         self.projects = [{"name": "financial-planner", "description": "", "target": "local"}]
         self.initial_session_status = "running"
         self.session_polls_left = {}
+        self.session_creates = []
+        self.session_messages = []
+        self.session_contexts = []
+        self.create_http_error = None
+        self.warm_error = None
+        self.followup_need_tool = False
+        self.followup_answer = "synthetic-followup"
+        self.pending_tool_calls = None
+        self.app_tools_only = {"local": True, "claude": True, "codex": False, "cursor": False}
 
     def backends(self):
         return [
@@ -42,6 +51,7 @@ class FakeHarnessState:
                 "effort": "",
                 "notice": "Available",
                 "provider_policy": {"allowed": True, "available": True},
+                "app_tools_only": self.app_tools_only.get("local", True),
             },
             {
                 "name": "claude",
@@ -53,6 +63,7 @@ class FakeHarnessState:
                 "effort": "",
                 "notice": "Available",
                 "provider_policy": {"allowed": True, "available": True},
+                "app_tools_only": self.app_tools_only.get("claude", True),
             },
             {
                 "name": "codex",
@@ -64,6 +75,7 @@ class FakeHarnessState:
                 "effort": "",
                 "notice": "Not logged in",
                 "provider_policy": {"allowed": True, "available": False},
+                "app_tools_only": self.app_tools_only.get("codex", False),
             },
             {
                 "name": "cursor",
@@ -75,6 +87,7 @@ class FakeHarnessState:
                 "effort": "",
                 "notice": "Available",
                 "provider_policy": {"allowed": True, "available": True},
+                "app_tools_only": self.app_tools_only.get("cursor", False),
             },
         ]
 
@@ -156,13 +169,16 @@ def start_fake_harness(state=None):
                     return
                 pending = []
                 if session.get("status") == "waiting_app" and not harness.tool_answered and not harness.stuck_waiting_app:
-                    pending = [
-                        {
-                            "call_id": "call-1",
-                            "name": "list_accounts",
-                            "args": {},
-                        }
-                    ]
+                    if harness.pending_tool_calls:
+                        pending = harness.pending_tool_calls[0]
+                    else:
+                        pending = [
+                            {
+                                "call_id": "call-1",
+                                "name": "list_accounts",
+                                "args": {},
+                            }
+                        ]
                 self._json(200, pending)
                 return
             if parsed.path.startswith("/api/v1/sessions/"):
@@ -196,12 +212,55 @@ def start_fake_harness(state=None):
             if parsed.path == "/api/v1/models/warm":
                 if not self._auth():
                     return
-                self._json(403, {"detail": "app tokens cannot warm the local model"})
+                if harness.warm_error:
+                    self._json(
+                        409,
+                        {
+                            "detail": "the local model cannot load",
+                            "error": {"code": harness.warm_error, "message": "synthetic"},
+                        },
+                    )
+                    return
+                if harness.model_state in {"sleeping", "unloaded"}:
+                    harness.model_state = "waking"
+                self._json(200, {"name": "tower", "state": harness.model_state})
                 return
             if parsed.path == "/api/v1/sessions":
                 if not self._auth():
                     return
+                harness.session_creates.append(body)
                 harness.session_prompts.append(str(body.get("prompt") or ""))
+                if harness.create_http_error:
+                    error = harness.create_http_error
+                    harness.create_http_error = None
+                    self._json(
+                        error.get("status", 400),
+                        {
+                            "detail": error.get("detail", "bad request"),
+                            "error": {"code": error.get("code", "provider_error"), "message": "synthetic"},
+                        },
+                    )
+                    return
+                tools_only = bool(body.get("tools_only"))
+                backend = str(body.get("backend") or "")
+                if tools_only and "project" in body and body.get("project") not in (None, ""):
+                    self._json(
+                        400,
+                        {
+                            "detail": "tools_only sessions cannot include a project",
+                            "error": {"code": "invalid_request", "message": "synthetic"},
+                        },
+                    )
+                    return
+                if tools_only and not harness.app_tools_only.get(backend, False):
+                    self._json(
+                        400,
+                        {
+                            "detail": "backend does not support tools_only",
+                            "error": {"code": "app_tools_only_unsupported", "message": "synthetic"},
+                        },
+                    )
+                    return
                 session_id = f"ses-{harness._next_id}"
                 harness._next_id += 1
                 if harness.session_failure:
@@ -246,6 +305,38 @@ def start_fake_harness(state=None):
                 harness.sessions[session_id] = session
                 self._json(200, session)
                 return
+            if parsed.path.endswith("/messages") and parsed.path.startswith("/api/v1/sessions/"):
+                if not self._auth():
+                    return
+                session_id = parsed.path.split("/")[4]
+                session = harness.sessions.get(session_id)
+                if session is None:
+                    self._json(404, {"detail": "not found"})
+                    return
+                harness.session_messages.append(str(body.get("content") or ""))
+                harness.tool_answered = False
+                if harness.session_failure:
+                    session["status"] = "failed"
+                    session["failure"] = {"code": harness.session_failure, "message": "synthetic"}
+                    harness.session_failure = None
+                elif harness.followup_need_tool or harness.need_tool:
+                    session["status"] = "waiting_app"
+                else:
+                    session["status"] = "done"
+                    session["answer"] = harness.followup_answer
+                    session["completion_tokens"] = 6
+                self._json(200, session)
+                return
+            if parsed.path.endswith("/context") and parsed.path.startswith("/api/v1/sessions/"):
+                if not self._auth():
+                    return
+                session_id = parsed.path.split("/")[4]
+                if session_id not in harness.sessions:
+                    self._json(404, {"detail": "not found"})
+                    return
+                harness.session_contexts.append(body.get("context") or [])
+                self._json(200, {"ok": True})
+                return
             if "/tool_calls/" in parsed.path:
                 if not self._auth():
                     return
@@ -255,9 +346,19 @@ def start_fake_harness(state=None):
                     self._json(404, {"detail": "not found"})
                     return
                 harness.tool_answered = True
-                session["status"] = "done"
-                session["answer"] = f"tool:{body.get('output', '')[:80]}"
-                session["completion_tokens"] = 5
+                if harness.pending_tool_calls:
+                    harness.pending_tool_calls = harness.pending_tool_calls[1:]
+                    if harness.pending_tool_calls:
+                        session["status"] = "waiting_app"
+                        harness.tool_answered = False
+                    else:
+                        session["status"] = "done"
+                        session["answer"] = harness.session_answer if harness.session_answer is not None else f"tool:{body.get('output', '')[:80]}"
+                        session["completion_tokens"] = 5
+                else:
+                    session["status"] = "done"
+                    session["answer"] = f"tool:{body.get('output', '')[:80]}"
+                    session["completion_tokens"] = 5
                 self._json(200, {"ok": True})
                 return
             self._json(404, {"detail": "not found"})

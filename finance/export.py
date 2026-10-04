@@ -13,6 +13,8 @@ from django.apps import apps
 from .models import (
     FORMER_MEMBER_LABEL,
     Account,
+    AiConversation,
+    AiConversationMessage,
     AiJob,
     AiProviderConnection,
     AiUsageEvent,
@@ -48,6 +50,8 @@ ENTITY_FILES = (
     "ai_connections",
     "ai_jobs",
     "ai_usage",
+    "ai_conversations",
+    "ai_conversation_messages",
     "budgets",
     "budget_amounts",
     "budget_rollover_resets",
@@ -166,6 +170,27 @@ CSV_FIELDS = {
         "prompt_tokens",
         "completion_tokens",
         "outcome",
+        "created_at",
+    ),
+    "ai_conversations": (
+        "id",
+        "backend",
+        "title",
+        "turn_count",
+        "tool_call_count",
+        "created_at",
+        "updated_at",
+        "expires_at",
+    ),
+    "ai_conversation_messages": (
+        "id",
+        "conversation_id",
+        "role",
+        "content",
+        "backend",
+        "figures",
+        "notices",
+        "page_context",
         "created_at",
     ),
     "budgets": (
@@ -309,6 +334,14 @@ ai_jobs.csv / ai_jobs.json
 ai_usage.csv / ai_usage.json
   This member's AI usage: provider, backend, feature, token counts, outcome.
   Prompts and responses are omitted.
+
+ai_conversations.csv / ai_conversations.json
+  Chat conversations this member started: backend, title, turn counts, expiry.
+  Another member's conversations are omitted.
+
+ai_conversation_messages.csv / ai_conversation_messages.json
+  Messages, cited figures (amounts and page links), notices, and page context
+  (route and query only) for those conversations.
 
 budgets.csv / budgets.json
   Monthly spending budgets visible to this member: private budgets they own
@@ -681,6 +714,45 @@ def _ai_usage_rows(person):
     return rows
 
 
+def _ai_conversation_rows(person):
+    rows = []
+    for row in AiConversation.objects.owned_by(person).order_by("pk"):
+        rows.append(
+            {
+                "id": row.pk,
+                "backend": row.backend,
+                "title": row.title,
+                "turn_count": row.turn_count,
+                "tool_call_count": row.tool_call_count,
+                "created_at": row.created_at,
+                "updated_at": row.updated_at,
+                "expires_at": row.expires_at,
+            }
+        )
+    return rows
+
+
+def _ai_conversation_message_rows(person):
+    rows = []
+    visible = AiConversation.objects.owned_by(person).values("pk")
+    query = AiConversationMessage.objects.filter(conversation_id__in=visible).order_by("pk")
+    for row in query:
+        rows.append(
+            {
+                "id": row.pk,
+                "conversation_id": row.conversation_id,
+                "role": row.role,
+                "content": row.content,
+                "backend": row.backend,
+                "figures": row.figures,
+                "notices": row.notices,
+                "page_context": row.page_context,
+                "created_at": row.created_at,
+            }
+        )
+    return rows
+
+
 def _budget_rows(person):
     rows = []
     budgets = Budget.objects.visible_to(person).select_related("owner__user", "category").order_by("pk")
@@ -762,6 +834,8 @@ def collect_export_tables(person) -> dict[str, list[dict]]:
         "ai_connections": _ai_connection_rows(person),
         "ai_jobs": _ai_job_rows(person),
         "ai_usage": _ai_usage_rows(person),
+        "ai_conversations": _ai_conversation_rows(person),
+        "ai_conversation_messages": _ai_conversation_message_rows(person),
         "budgets": _budget_rows(person),
         "budget_amounts": _budget_amount_rows(person),
         "budget_rollover_resets": _budget_reset_rows(person),

@@ -11,7 +11,7 @@ from django.utils import timezone
 from tests.fake_harness import start_fake_harness
 from tests.helpers import stamp_recent_auth
 
-from finance.ai_harness import failure_from_http, run_session
+from finance.ai_harness import default_backends, describe_backend, failure_from_http, run_session
 from finance.ai_http import HarnessHttpError
 from finance.ai_jobs import enqueue_job, in_quiet_window, process_due_jobs
 from finance.ai_services import (
@@ -104,16 +104,48 @@ def test_discovery_lists_backends_and_marks_hosted_unavailable(harness):
     backends = {item.id: item for item in discovered_backends(person)}
     assert backends["local"].available
     assert backends["local"].slow_to_start
+    assert backends["local"].app_tools_only
     assert backends["claude"].logged_in
-    assert not backends["claude"].available
-    assert "unavailable" in backends["claude"].status.lower() or "Hosted" in backends["claude"].status
+    assert backends["claude"].available
+    assert backends["claude"].suits_live
+    assert not backends["claude"].suits_background
     assert not backends["codex"].available
     connection = connection_for(person)
     assert connection.background_backend == "local"
-    assert connection.chat_backend == "local"
+    assert connection.chat_backend == "claude"
     assert connection.harness_project == "financial-planner"
     assert decrypt_secret(connection.encrypted_token) == TOKEN
     assert TOKEN.encode() not in bytes(connection.encrypted_token)
+
+
+@pytest.mark.django_db
+def test_background_default_skips_tools_only_hosted_chat(settings):
+    settings.AGENT_HARNESS_HOSTED_SESSIONS = False
+    local = describe_backend(
+        {
+            "name": "local",
+            "available": False,
+            "logged_in": False,
+            "app_tools_only": True,
+            "provider_policy": {"allowed": True},
+        }
+    )
+    claude = describe_backend(
+        {
+            "name": "claude",
+            "available": True,
+            "logged_in": True,
+            "app_tools_only": True,
+            "provider_policy": {"allowed": True},
+        }
+    )
+    assert claude.suits_live
+    assert not claude.suits_background
+    assert not local.suits_background
+    chat, background = default_backends([local, claude])
+    assert chat == "claude"
+    assert background != "claude"
+    assert background == ""
 
 
 @pytest.mark.django_db
@@ -126,6 +158,9 @@ def test_structured_request_returns_normalized_result(harness):
     assert result.ok
     assert result.answer == "synthetic-ok"
     assert result.usage.prompt_tokens == 3
+    created = _state.session_creates[-1]
+    assert created.get("project") == "financial-planner"
+    assert "tools_only" not in created
     event = AiUsageEvent.objects.visible_to(person).get()
     assert event.backend == "local"
     assert event.feature == "structured"
@@ -171,6 +206,9 @@ def test_tool_calling_conversation(harness):
     assert result.ok
     assert result.answer.startswith("tool:")
     assert "Unknown tool" not in result.answer
+    created = state.session_creates[-1]
+    assert created.get("tools_only") is True
+    assert "project" not in created
 
 
 @pytest.mark.django_db
@@ -577,12 +615,13 @@ def test_settings_disconnect_and_defaults_require_reauth(harness):
     stamp_recent_auth(client)
     saved = client.post(
         reverse("ai-defaults"),
-        {"chat_backend": "local", "background_backend": "local", "chat_model": "", "background_model": ""},
+        {"chat_backend": "claude", "background_backend": "local", "chat_model": "", "background_model": ""},
     )
     assert saved.url == reverse("settings-ai")
     person.refresh_from_db()
     connection = connection_for(person)
-    assert connection.chat_backend == "local"
+    assert connection.chat_backend == "claude"
+    assert connection.background_backend == "local"
     invalid = client.post(reverse("ai-connect"), {"base_url": "", "token": ""})
     assert invalid.url == reverse("settings-ai")
 
@@ -602,12 +641,12 @@ def test_connect_rejects_non_app_token(harness):
 
 
 @pytest.mark.django_db
-def test_set_defaults_rejects_unavailable_hosted_backend(harness):
+def test_set_defaults_rejects_hosted_background_without_flag(harness):
     _state, url = harness
     _user, person, _household = make_member("owner")
     connect_harness(person, base_url=url, token=TOKEN)
     with pytest.raises(AiError):
-        set_defaults(person, chat_backend="claude", background_backend="local")
+        set_defaults(person, chat_backend="claude", background_backend="claude")
 
 
 @pytest.mark.django_db
@@ -786,14 +825,14 @@ def test_tool_calls_stop_when_a_new_material_policy_is_published(harness):
     _state, _url = harness
     _user, person, _household = make_member("owner")
     tools = default_tools()
-    output, ok = run_tool(person, tools, "list_accounts", {})
-    assert ok
+    output = run_tool(person, tools, "list_accounts", {})
+    assert output.ok
 
     publish_policy(material=True, body="Synthetic policy, second material version")
 
-    output, ok = run_tool(person, tools, "list_accounts", {})
-    assert not ok
-    assert "privacy and data policy" in output
+    output = run_tool(person, tools, "list_accounts", {})
+    assert not output.ok
+    assert "privacy and data policy" in output.text
 
 
 @pytest.mark.django_db
@@ -1031,3 +1070,27 @@ def test_a_session_saved_on_an_earlier_connection_is_never_resumed(harness):
     assert job.status == job.Status.SUCCEEDED
     assert ("GET", "/api/v1/sessions/old-harness-session") not in state.requests
     assert state.requests.count(("POST", "/api/v1/sessions")) == 1
+
+
+@pytest.mark.django_db
+def test_chat_default_skips_local_while_local_chat_is_off(settings):
+    settings.AI_CHAT_LOCAL_ENABLED = False
+    local = describe_backend(
+        {
+            "name": "local",
+            "available": True,
+            "logged_in": True,
+            "app_tools_only": True,
+            "provider_policy": {"allowed": True},
+        }
+    )
+    claude = describe_backend(
+        {"name": "claude", "available": True, "logged_in": False, "provider_policy": {"allowed": True}}
+    )
+    assert local.suits_live
+    chat, _background = default_backends([local, claude])
+    assert chat == ""
+
+    settings.AI_CHAT_LOCAL_ENABLED = True
+    chat, _background = default_backends([local, claude])
+    assert chat == "local"

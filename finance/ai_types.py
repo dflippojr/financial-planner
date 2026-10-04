@@ -9,12 +9,14 @@ UNAVAILABLE = "unavailable"
 AUTHORIZATION_REQUIRED = "authorization_required"
 LIMIT_REACHED = "limit_reached"
 PROVIDER_ERROR = "provider_error"
+APP_TOOLS_ONLY_UNSUPPORTED = "app_tools_only_unsupported"
 
 FAILURE_CODES = (
     UNAVAILABLE,
     AUTHORIZATION_REQUIRED,
     LIMIT_REACHED,
     PROVIDER_ERROR,
+    APP_TOOLS_ONLY_UNSUPPORTED,
 )
 
 HARNESS_FAILURE_MAP = {
@@ -27,6 +29,7 @@ HARNESS_FAILURE_MAP = {
     "rate_limited": LIMIT_REACHED,
     "limit_reached": LIMIT_REACHED,
     "provider_error": PROVIDER_ERROR,
+    "app_tools_only_unsupported": APP_TOOLS_ONLY_UNSUPPORTED,
 }
 
 HOSTED_BACKENDS = frozenset({"claude", "codex", "cursor"})
@@ -55,6 +58,7 @@ class ProviderResult:
     # True only when the harness session may still be running (a client-side
     # timeout), so a retry should resume it instead of starting a new one.
     session_open: bool = False
+    notices: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -70,6 +74,7 @@ class BackendInfo:
     slow_to_start: bool
     status: str
     model: str = ""
+    app_tools_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -85,3 +90,11 @@ class ToolSpec:
     description: str
     parameters: dict
     handler: object
+
+
+@dataclass(frozen=True)
+class ToolResult:
+    text: str
+    ok: bool = True
+    figures: tuple[dict, ...] = ()
+    account_ids: tuple[int, ...] = ()

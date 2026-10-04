@@ -7,6 +7,7 @@ from finance import (
     alert_views,
     budget_views,
     category_suggestion_views,
+    chat_views,
     net_worth_views,
     planning_views,
     monthly_review_views,
@@ -21,6 +22,13 @@ from finance.csv_import import views as csv_import_views
 
 urlpatterns = [
     path("health/", views.health, name="health"),
+    path("chat/", chat_views.chat_page, name="chat"),
+    path("chat/send/", chat_views.chat_send, name="chat-send"),
+    path("chat/new/", chat_views.chat_new, name="chat-new"),
+    path("chat/delete-all/", chat_views.chat_delete_all, name="chat-delete-all"),
+    path("chat/<int:conversation_id>/delete/", chat_views.chat_delete, name="chat-delete"),
+    path("chat/warm/", chat_views.chat_warm, name="chat-warm"),
+    path("chat/status/", chat_views.chat_status, name="chat-status"),
     path("", views.home, name="home"),
     path("spending/", views.spending_by_category, name="spending-by-category"),
     path(

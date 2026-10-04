@@ -1,0 +1,30 @@
+{% extends "finance/base.html" %}
+{% block title %}Chat · Financial Planner{% endblock %}
+{% block content %}
+<div class="mb-4 flex flex-wrap items-center justify-between gap-2">
+  <h1 class="text-2xl font-bold">Chat</h1>
+  {% if chat_ready %}
+  <div class="flex flex-wrap gap-2">
+    <form method="post" action="{% url 'chat-new' %}">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-sm">New conversation</button>
+    </form>
+    <form method="post" action="{% url 'chat-delete-all' %}" onsubmit="return confirm('Delete every conversation?');">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-sm btn-outline">Delete all</button>
+    </form>
+  </div>
+  {% endif %}
+</div>
+{% if messages %}
+  {% for message in messages %}
+  <div role="status" class="alert mb-4">{{ message }}</div>
+  {% endfor %}
+{% endif %}
+{% if not chat_ready %}
+<p class="mb-4">Connect an AI backend in <a class="link" href="{% url 'settings-ai' %}">Settings → AI</a> to chat about your data.</p>
+{% else %}
+<p class="mb-2 text-sm">Answers are produced by <strong>{{ chat_backend_label }}</strong> from read-only tools. Suggestions are opinion, not financial advice.</p>
+{% include "finance/_chat_thread.html" %}
+{% endif %}
+{% endblock %}
