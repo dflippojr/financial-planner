@@ -341,4 +341,8 @@ def run_daily_alert_pass(*, today=None, now=None):
     generate_due_monthly_reviews(today=today)
     created.extend(evaluate_backup_alerts(today=today, now=now))
     purge_old_read_alerts(now=now)
+    from .security_services import purge_old_security_events, purge_stale_member_sessions
+
+    purge_old_security_events(now=now)
+    purge_stale_member_sessions(now=now)
     return created
