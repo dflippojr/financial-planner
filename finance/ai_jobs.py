@@ -11,8 +11,15 @@ from django.utils import timezone
 
 from .ai_harness import failure_from_http, local_model_ready, model_status
 from .ai_http import HarnessHttpError
-from .ai_services import AiError, _token, connection_for, run_structured
-from .ai_types import AUTHORIZATION_REQUIRED, LOCAL_BACKEND, PROVIDER_ERROR, UNAVAILABLE
+from .ai_services import AiError, _token, offered_local_connection, resolve_ai, run_structured
+from .ai_types import (
+    AUTHORIZATION_REQUIRED,
+    LOCAL_BACKEND,
+    PROVIDER_ERROR,
+    SHARED_CONNECTION_ID_REF,
+    SHARED_LOCAL_REF,
+    UNAVAILABLE,
+)
 from .models import AiJob
 from .policy_services import may_use_ai
 
@@ -24,13 +31,20 @@ FEATURE_PROMPTS = {
 
 
 def enqueue_job(person, *, feature, input_refs=None, backend=""):
-    connection_row = connection_for(person)
-    chosen = backend or (connection_row.background_backend if connection_row else "")
+    connection_row, chosen = resolve_ai(person, use_chat=False, requested_backend=backend)
+    refs = dict(input_refs or {})
+    if connection_row is not None and connection_row.owner_id != person.id:
+        refs[SHARED_LOCAL_REF] = True
+        refs[SHARED_CONNECTION_ID_REF] = connection_row.pk
+        refs[SESSION_CONNECTION_KEY] = _connection_marker(connection_row)
+        chosen = LOCAL_BACKEND
+    elif backend:
+        chosen = backend
     return AiJob.objects.create(
         member=person,
         feature=feature,
         backend=chosen,
-        input_refs=input_refs or {},
+        input_refs=refs,
         status=AiJob.Status.QUEUED,
         next_attempt_at=timezone.now(),
     )
@@ -88,7 +102,7 @@ def _lock_qs(qs):
 
 def _process_one(job, moment):
     cutoff = _stale_running_cutoff(moment)
-    member_connection = connection_for(job.member)
+    member_connection, backend = _job_connection(job)
     session_id = _session_for(job, member_connection)
     if job.harness_session_id and not session_id:
         # Saved on an earlier connection: never resume it on this one.
@@ -100,7 +114,10 @@ def _process_one(job, moment):
         return _fail_if_unchanged(job, UNAVAILABLE)
     if member_connection is None:
         return _fail_if_unchanged(job, UNAVAILABLE)
-    backend = job.backend or member_connection.background_backend
+    backend = job.backend or backend
+    if member_connection.owner_id != job.member_id:
+        if backend != LOCAL_BACKEND or not member_connection.offer_local_to_household:
+            return _fail_if_unchanged(job, UNAVAILABLE)
     # A job with a session id resumes that session (it may already be done), so it
     # skips the local-model readiness gate whether it is queued or stale-running.
     resuming = bool(session_id)
@@ -127,6 +144,7 @@ def _process_one(job, moment):
             backend=backend,
             session_id=session_id,
             on_session=remember_session,
+            connection=member_connection,
         )
     elif job.feature == "monthly_review":
         from .monthly_review_ai import run_monthly_review_job
@@ -137,6 +155,7 @@ def _process_one(job, moment):
             backend=backend,
             session_id=session_id,
             on_session=remember_session,
+            connection=member_connection,
         )
     else:
         prompt = FEATURE_PROMPTS.get(job.feature, FEATURE_PROMPTS["structured"])
@@ -147,6 +166,7 @@ def _process_one(job, moment):
             backend=backend,
             session_id=session_id,
             on_session=remember_session,
+            connection=member_connection,
         )
     if result.session_id:
         job.harness_session_id = result.session_id
@@ -178,6 +198,19 @@ def _process_one(job, moment):
 
 
 SESSION_CONNECTION_KEY = "harness_connection"
+
+
+def _job_connection(job):
+    refs = job.input_refs or {}
+    if refs.get(SHARED_LOCAL_REF):
+        shared = offered_local_connection(job.member)
+        stored_id = refs.get(SHARED_CONNECTION_ID_REF)
+        if shared is None:
+            return None, LOCAL_BACKEND
+        if stored_id not in (None, "", shared.pk, str(shared.pk)):
+            return None, LOCAL_BACKEND
+        return shared, LOCAL_BACKEND
+    return resolve_ai(job.member, use_chat=False, requested_backend=job.backend)
 
 
 def _connection_marker(connection):
