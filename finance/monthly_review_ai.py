@@ -39,6 +39,8 @@ DROP_KEYS = frozenset(
         "transaction_id",
         "account_id",
         "merchant_key",
+        # Cache key for stored reviews, not a fact: its numbers must not ground AI text.
+        "unusual_settings",
     }
 )
 # While a household member is not in acceptance, only these facts are sent.

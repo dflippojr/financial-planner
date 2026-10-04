@@ -409,9 +409,10 @@ def compute_monthly_review_facts(principal, month, *, today=None):
     facts.update(_goal_facts(principal, end))
     facts.update(_net_worth_facts(principal, start, end))
     facts.update(_large_transaction_facts(principal, start, end))
-    from .unusual_spending import compute_unusual_flags
+    from .unusual_spending import compute_unusual_flags, unusual_settings_signature
 
     facts["unusual"] = compute_unusual_flags(principal, start)
+    facts["unusual_settings"] = unusual_settings_signature(principal)
     return facts
 
 
@@ -435,7 +436,15 @@ def store_monthly_review(principal, month, *, force=False, today=None, raise_inb
     today = today or timezone.localdate()
     key = visibility_key(person)
     existing = MonthlyReview.objects.filter(person=person, month=month).first()
-    if existing is not None and not force and existing.visibility_key == key and "unusual" in (existing.facts or {}):
+    from .unusual_spending import unusual_settings_signature
+
+    if (
+        existing is not None
+        and not force
+        and existing.visibility_key == key
+        and "unusual" in (existing.facts or {})
+        and (existing.facts or {}).get("unusual_settings") == unusual_settings_signature(person)
+    ):
         return existing, False
     facts = compute_monthly_review_facts(person, month, today=today)
     now = timezone.now()

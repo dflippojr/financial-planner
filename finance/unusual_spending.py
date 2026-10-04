@@ -50,6 +50,13 @@ def _category_thresholds(prefs):
     return int(percent), int(floor)
 
 
+def unusual_settings_signature(principal):
+    """The settings a month's flags depend on; a stored review is rebuilt when they change."""
+    prefs = settings_for(_person_for(principal))
+    percent, floor = _category_thresholds(prefs)
+    return [percent, floor, prefs.large_transaction_minor]
+
+
 def _median_minor(values):
     ordered = sorted(int(value) for value in values)
     count = len(ordered)

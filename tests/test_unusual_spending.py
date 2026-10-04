@@ -377,3 +377,17 @@ def test_a_long_merchant_key_still_fits_the_alert_dedupe_key():
 
     assert created
     assert all(len(alert.dedupe_key) <= 200 for alert in Alert.objects.filter(recipient=owner))
+
+
+@pytest.mark.django_db
+def test_changing_unusual_thresholds_rebuilds_the_stored_review():
+    owner = make_person("owner")
+    make_household(owner)
+    store_monthly_review(owner, date(2026, 9, 1), today=date(2026, 10, 4))
+    prefs = settings_for(owner)
+    prefs.unusual_category_percent = 80
+    prefs.save(update_fields=["unusual_category_percent"])
+
+    _review, wrote = store_monthly_review(owner, date(2026, 9, 1), today=date(2026, 10, 4))
+
+    assert wrote
