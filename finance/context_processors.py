@@ -46,6 +46,8 @@ def privacy_policy_prompt(request):
 
 SETTINGS_TAB_BY_NAME = {
     "account-settings": "security",
+    "revoke-session": "security",
+    "revoke-other-sessions": "security",
     "simplefin-connections": "connections",
     "simplefin-sync": "connections",
     "simplefin-disconnect": "connections",
@@ -104,6 +106,8 @@ def _nav_current(request):
         return "monthly-review"
     if name in {"sheet-comparison", "sheet-comparison-delete"}:
         return "sheet-comparison"
+    if name in {"year-end", "year-end-csv"}:
+        return "year-end"
     if name.startswith("budget"):
         return "budgets"
     if name in {
@@ -153,6 +157,7 @@ def navigation(request):
         ("planned-items", "Planned items", reverse("planned-items")),
         ("monthly-review", "Monthly review", reverse("monthly-review")),
         ("sheet-comparison", "Sheet comparison", reverse("sheet-comparison")),
+        ("year-end", "Year-end", reverse("year-end")),
         ("budgets", "Budgets", reverse("budgets")),
         ("alert-list", "Alerts", reverse("alert-list")),
         ("savings-goals", "Goals", reverse("savings-goals")),

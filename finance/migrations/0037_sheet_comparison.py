@@ -7,7 +7,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('finance', '0033_alert_backup_kind'),
+        ('finance', '0036_bulk_edit_undo'),
     ]
 
     operations = [
