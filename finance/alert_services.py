@@ -27,6 +27,7 @@ _KIND_ENABLED_FIELD = {
     Alert.Kind.BUDGET: "budget_enabled",
     Alert.Kind.LARGE_TRANSACTION: "large_transaction_enabled",
     Alert.Kind.MONTHLY_REVIEW: "monthly_review_enabled",
+    Alert.Kind.UNUSUAL_SPENDING: "unusual_spending_enabled",
 }
 READ_RETENTION_DAYS = 180
 
@@ -136,6 +137,10 @@ def save_alert_settings(
     monthly_review_enabled,
     monthly_review_ai_enabled,
     large_transaction_minor,
+    unusual_spending_enabled=True,
+    unusual_spending_ai_enabled=True,
+    unusual_category_percent=50,
+    unusual_category_floor_minor=5_000,
 ):
     person = _person_for(principal)
     if person is None:
@@ -148,6 +153,10 @@ def save_alert_settings(
     prefs.large_transaction_enabled = bool(large_transaction_enabled)
     prefs.monthly_review_enabled = bool(monthly_review_enabled)
     prefs.monthly_review_ai_enabled = bool(monthly_review_ai_enabled)
+    prefs.unusual_spending_enabled = bool(unusual_spending_enabled)
+    prefs.unusual_spending_ai_enabled = bool(unusual_spending_ai_enabled)
+    prefs.unusual_category_percent = int(unusual_category_percent)
+    prefs.unusual_category_floor_minor = int(unusual_category_floor_minor)
     prefs.large_transaction_minor = large_transaction_minor
     prefs.save()
     return prefs

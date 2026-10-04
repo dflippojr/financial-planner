@@ -2046,6 +2046,7 @@ class Alert(models.Model):
         BUDGET = "budget", "Budget"
         LARGE_TRANSACTION = "large_transaction", "Large transaction"
         MONTHLY_REVIEW = "monthly_review", "Monthly review"
+        UNUSUAL_SPENDING = "unusual_spending", "Unusual spending"
         BACKUP = "backup", "Backup"
 
     recipient = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="alerts")
@@ -2075,6 +2076,7 @@ class Alert(models.Model):
                         "budget",
                         "large_transaction",
                         "monthly_review",
+                        "unusual_spending",
                         "backup",
                     )
                 ),
@@ -2098,6 +2100,10 @@ class AlertSettings(models.Model):
     large_transaction_enabled = models.BooleanField(default=True)
     monthly_review_enabled = models.BooleanField(default=True)
     monthly_review_ai_enabled = models.BooleanField(default=True)
+    unusual_spending_enabled = models.BooleanField(default=True)
+    unusual_spending_ai_enabled = models.BooleanField(default=True)
+    unusual_category_percent = models.PositiveIntegerField(default=50)
+    unusual_category_floor_minor = models.BigIntegerField(default=5_000)
     large_transaction_minor = models.BigIntegerField(
         null=True,
         blank=True,
@@ -2109,6 +2115,14 @@ class AlertSettings(models.Model):
             models.CheckConstraint(
                 condition=Q(large_transaction_minor__isnull=True) | Q(large_transaction_minor__gte=0),
                 name="alert_settings_large_threshold_non_negative",
+            ),
+            models.CheckConstraint(
+                condition=Q(unusual_category_percent__gte=1, unusual_category_percent__lte=1000),
+                name="alert_settings_unusual_percent_range",
+            ),
+            models.CheckConstraint(
+                condition=Q(unusual_category_floor_minor__gte=0),
+                name="alert_settings_unusual_floor_non_negative",
             ),
         ]
 
@@ -2124,6 +2138,8 @@ class MonthlyReview(models.Model):
     generated_at = models.DateTimeField()
     ai_paragraph = models.TextField(blank=True, default="")
     ai_backend = models.CharField(max_length=32, blank=True, default="")
+    unusual_ai_paragraph = models.TextField(blank=True, default="")
+    unusual_ai_backend = models.CharField(max_length=32, blank=True, default="")
 
     class Meta:
         constraints = [
