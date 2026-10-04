@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import secrets
+from datetime import timedelta
 from pathlib import Path
 
 from django.conf import settings
@@ -39,8 +41,12 @@ def receipts_root() -> Path:
     return Path(settings.RECEIPTS_DIR)
 
 
+def is_stored_receipt_name(stored_name: str) -> bool:
+    return len(stored_name) == 32 and all(ch in "0123456789abcdef" for ch in stored_name)
+
+
 def stored_receipt_path(stored_name: str) -> Path:
-    if len(stored_name) != 32 or any(ch not in "0123456789abcdef" for ch in stored_name):
+    if not is_stored_receipt_name(stored_name):
         raise PermissionDenied(_DENIED)
     return receipts_root() / stored_name
 
@@ -73,27 +79,40 @@ def _looks_like_heic(data: bytes) -> bool:
     return bool(brands & _HEIC_BRANDS)
 
 
-def unlink_receipt_files(stored_names):
-    for name in stored_names:
-        try:
-            stored_receipt_path(name).unlink(missing_ok=True)
-        except (OSError, PermissionDenied):
-            continue
-
-
-def schedule_receipt_file_removal(stored_names):
-    unlink_receipt_files(stored_names)
-
-
 def delete_receipts_for_transactions(transaction_ids):
     ids = list(transaction_ids)
     if not ids:
         return
-    names = list(
-        Receipt.objects.filter(transaction_id__in=ids).values_list("stored_name", flat=True)
-    )
     Receipt.objects.filter(transaction_id__in=ids).delete()
-    schedule_receipt_file_removal(names)
+
+
+def sweep_orphan_receipt_files(now=None):
+    from django.utils import timezone
+
+    now = now or timezone.now()
+    grace_hours = int(settings.RECEIPT_ORPHAN_GRACE_HOURS)
+    cutoff = now.timestamp() - timedelta(hours=grace_hours).total_seconds()
+    root = receipts_root()
+    try:
+        listing = os.scandir(root)
+    except FileNotFoundError:
+        return 0
+    referenced = set(Receipt.objects.values_list("stored_name", flat=True))
+    removed = 0
+    with listing:
+        for entry in listing:
+            try:
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                if not is_stored_receipt_name(entry.name) or entry.name in referenced:
+                    continue
+                if entry.stat(follow_symlinks=False).st_mtime > cutoff:
+                    continue
+                os.unlink(entry.path)
+            except OSError:
+                continue
+            removed += 1
+    return removed
 
 
 @transaction.atomic
@@ -142,9 +161,7 @@ def remove_receipt(principal, transaction_id, receipt_id):
     )
     if receipt is None:
         raise PermissionDenied(_DENIED)
-    stored_name = receipt.stored_name
     receipt.delete()
-    schedule_receipt_file_removal([stored_name])
 
 
 def visible_receipt_or_none(principal, transaction_id, receipt_id) -> Receipt | None:

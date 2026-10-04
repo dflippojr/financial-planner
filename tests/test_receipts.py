@@ -116,7 +116,7 @@ def test_upload_view_download_and_delete(tmp_path, settings):
     deleted = client.post(reverse("transaction-receipt-delete", args=(txn.pk, receipt.pk)))
     assert deleted.status_code == 302
     assert not Receipt.objects.filter(pk=receipt.pk).exists()
-    assert not stored.exists()
+    assert stored.is_file()
 
 
 @pytest.mark.django_db
@@ -179,7 +179,7 @@ def test_files_are_removed_with_transaction_account_and_member(tmp_path, setting
 
     deleted = delete_account(owner, txn.account_id)
     assert deleted
-    assert not path.exists()
+    assert path.is_file()
     assert not Receipt.objects.filter(pk=receipt.pk).exists()
 
     leftover = make_person("leaving")
@@ -187,7 +187,7 @@ def test_files_are_removed_with_transaction_account_and_member(tmp_path, setting
     leftover_receipt = attach_receipt(leftover, leftover_txn.pk, upload_bytes("mine.jpg", PNG))
     leftover_path = Path(settings.RECEIPTS_DIR) / leftover_receipt.stored_name
     delete_member_data(leftover)
-    assert not leftover_path.exists()
+    assert leftover_path.is_file()
     assert not Receipt.objects.filter(pk=leftover_receipt.pk).exists()
 
 
@@ -229,7 +229,7 @@ def test_undo_import_deletes_receipts_on_removed_rows(tmp_path, settings):
     undo_import_batch(owner, txn.account_id, txn.import_batch_id)
 
     assert not Receipt.objects.filter(pk=receipt.pk).exists()
-    assert not path.exists()
+    assert path.is_file()
     txn.refresh_from_db()
     assert txn.status == Transaction.Status.ARCHIVED
 

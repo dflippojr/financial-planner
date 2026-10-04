@@ -204,6 +204,7 @@ RECEIPTS_DIR = os.environ.get(
 )
 RECEIPT_MAX_BYTES = 10 * 1024 * 1024
 RECEIPT_MAX_PER_TRANSACTION = 5
+RECEIPT_ORPHAN_GRACE_HOURS = int(os.environ.get("RECEIPT_ORPHAN_GRACE_HOURS", "48"))
 
 # Uploaded CSVs are short-lived, private staging data. Keep the default outside
 # the repository and allow deployments to place it on an appropriate local disk.

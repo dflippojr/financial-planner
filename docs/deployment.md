@@ -9,7 +9,7 @@ This runbook deploys the first release to the Windows basement PC with Docker De
 | Application source and synthetic fixture | Git checkout | Code only; never add populated environment files, CSV exports, database files, or dumps. |
 | Secrets and per-machine settings | A protected file outside the checkout, such as `D:/financial-planner-config/production.env` | Keep until rotated; restrict its Windows permissions to the operator account. |
 | PostgreSQL data | Docker named volume selected by `POSTGRES_VOLUME_NAME` | Durable across container replacement; never commit or manually edit it. |
-| Receipt files | Docker named volume selected by `RECEIPTS_VOLUME_NAME` (`RECEIPTS_DIR=/receipts`) | Durable across container replacement. Served only through access-checked views, never as static or media files. Nightly backups archive this directory next to the database dump. |
+| Receipt files | Docker named volume selected by `RECEIPTS_VOLUME_NAME` (`RECEIPTS_DIR=/receipts`) | Durable across container replacement. Served only through access-checked views, never as static or media files. Deleting a receipt drops the database row immediately; the file is removed within about two days. Nightly backups archive this directory next to the database dump and keep deleted receipts' files until those copies rotate out. |
 | Logical backups | `BACKUP_DIR` on the second local disk | Keep the 14 newest nightly dumps and 8 newest Sunday weekly copies. |
 | Source CSV exports | A private folder outside the checkout | The application discards an uploaded source after a successful import; the operator should remove the original export when no longer needed. |
 | Staged CSV uploads | A tmpfs (memory-backed) mount at `/run/csv-staging` inside the app container | Never written to disk. Each upload expires within an hour, is deleted on cancel, and is discarded whenever the container stops or restarts. |
@@ -135,7 +135,7 @@ That applies the same shared-account exit rules as leaving. It prints a short co
 
 ## Backups
 
-The backup container runs `pg_dump` in PostgreSQL custom format every night at 2:00 AM in `TZ` (default `America/New_York`). A Sunday dump is also copied into `weekly/`. A dump is published atomically only after `pg_restore --list` verifies it. The same run then archives `$RECEIPTS_DIR` as `financial_planner_TIMESTAMP.receipts.tar.gz` next to that dump, with the same 14 nightly and 8 weekly copies. Pruning keeps the newest 14 files of each kind in `nightly/` and 8 in `weekly/`. Each run writes `$BACKUP_DIR/health/status` with the last success time, dump name, size, table count, and last error. The app and SimpleFIN scheduler mount only `$BACKUP_DIR/health` read-only and raise an in-app alert to operators if no dump has succeeded in 26 hours or the last run failed, including an off-site upload failure.
+The backup container runs `pg_dump` in PostgreSQL custom format every night at 2:00 AM in `TZ` (default `America/New_York`). A Sunday dump is also copied into `weekly/`. A dump is published atomically only after `pg_restore --list` verifies it. The same run then archives `$RECEIPTS_DIR` as `financial_planner_TIMESTAMP.receipts.tar.gz` next to that dump, with the same 14 nightly and 8 weekly copies. Receipt deletes only drop the database row; files stay on disk for about two days, so a file removed from the dump between those steps is still present for the archive. Backups keep those files until they rotate out. Pruning keeps the newest 14 files of each kind in `nightly/` and 8 in `weekly/`. Each run writes `$BACKUP_DIR/health/status` with the last success time, dump name, size, table count, and last error. The app and SimpleFIN scheduler mount only `$BACKUP_DIR/health` read-only and raise an in-app alert to operators if no dump has succeeded in 26 hours or the last run failed, including an off-site upload failure.
 
 Set `OPERATOR_USERNAMES` in `production.env` to a comma-separated list of member usernames. If it is empty, the earliest-created member is the operator. Operators see last local and off-site success times on Settings → Data. Other members do not. Alerts name no file contents and fire at most once per local calendar day until a run succeeds.
 
@@ -169,7 +169,7 @@ age -d -i $AgeIdentity -o financial_planner_YYYYMMDDTHHMMSSZ.dump financial_plan
 age -d -i $AgeIdentity -o financial_planner_YYYYMMDDTHHMMSSZ.receipts.tar.gz financial_planner_YYYYMMDDTHHMMSSZ.receipts.tar.gz.age
 ```
 
-Copy the decrypted dump and receipts archive into `E:\financial-planner-backups\nightly\` (or pass the dump path to `restore.sh`; it restores the sibling receipts archive into `RECEIPTS_DIR`) and continue with the local procedure. Do not copy the age private key onto the tower.
+Copy the decrypted dump into `E:\financial-planner-backups\nightly\` (or pass the dump path to `restore.sh`). If a sibling receipts archive is present, restore puts it into `RECEIPTS_DIR`; if that archive is missing (backups from before this release), the database is still restored and the live receipts directory is left unchanged. Continue with the local procedure. Do not copy the age private key onto the tower.
 
 1. Choose a known-good file and stop writers:
 

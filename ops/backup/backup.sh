@@ -221,6 +221,9 @@ if [ "$weekday" = "7" ] || [ "${BACKUP_FORCE_WEEKLY:-0}" = "1" ]; then
   chmod 600 "$weekly"
 fi
 
+# Archive receipts after pg_dump. Receipt deletes drop only the database row;
+# files stay on disk until the orphan sweep (about two days), so this archive
+# still contains a file that disappeared from the dump between the two steps.
 mkdir -p "$RECEIPTS_DIR"
 receipts_name="financial_planner_${timestamp}.receipts.tar.gz"
 receipts_partial="$nightly_dir/.${receipts_name}.partial"
