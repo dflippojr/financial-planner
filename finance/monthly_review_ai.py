@@ -41,8 +41,11 @@ DROP_KEYS = frozenset(
         "merchant_key",
     }
 )
-# While a household member is not in acceptance, only these facts are sent, and list
-# items only when every record behind them is the member's own private record.
+# While a household member is not in acceptance, only these facts are sent.
+# Recurring and large-transaction items stay only when every record behind them is
+# the member's own private record. Unusual-spending flags are recomputed from the
+# member's own private cash-flow accounts so baselines and medians cannot carry
+# household amounts.
 PRIVATE_SAFE_KEYS = ("month", "month_label")
 RECURRING_LIST_KEYS = ("price_changes", "missed_charges", "cancellations", "new_recurring")
 NUMBER_RE = re.compile(r"(?<![A-Za-z])[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?%?")
@@ -152,10 +155,7 @@ def _own_private_facts(person, facts):
     filtered["large_transactions"] = [
         item for item in facts.get("large_transactions") or [] if _own_private_transaction(person, item)
     ]
-    month = facts.get("month")
-    filtered["unusual"] = [
-        item for item in facts.get("unusual") or [] if _own_private_unusual(person, item, month)
-    ]
+    filtered["unusual"] = _private_unusual_flags(person, facts)
     for key in RECURRING_LIST_KEYS:
         filtered[key] = [item for item in facts.get(key) or [] if _own_private_series(person, item)]
     return filtered
@@ -165,41 +165,29 @@ def _own_private_accounts(person):
     return Account.objects.filter(scope=Account.Scope.PRIVATE, owner=person)
 
 
-def _own_private_unusual(person, item, month):
-    if not isinstance(item, dict):
-        return False
-    if item.get("kind") in {"merchant", "new_merchant"}:
-        return _own_private_transaction(person, item)
-    if item.get("kind") != "category":
-        return False
-    return _category_only_own_private(person, item, month)
+def _private_unusual_flags(person, facts):
+    own = list(_own_private_accounts(person).for_cash_flow())
+    if not own:
+        return []
+    month = _month_from_facts(facts)
+    if month is None:
+        return []
+    from .unusual_spending import compute_unusual_flags
+
+    return compute_unusual_flags(person, month, accounts=own)
 
 
-def _category_only_own_private(person, item, month):
+def _month_from_facts(facts):
     from datetime import date
 
-    from .budget_services import month_end, month_start
-    from .cash_flow import spending_by_category_report
-
-    if not month:
-        return False
+    raw = facts.get("month")
+    if not raw:
+        return None
     try:
-        year_s, month_s = str(month).split("-", 1)
-        start = month_start(date(int(year_s), int(month_s), 1))
+        year_s, month_s = str(raw).split("-", 1)
+        return date(int(year_s), int(month_s), 1)
     except (TypeError, ValueError):
-        return False
-    own = list(_own_private_accounts(person))
-    if not own:
-        return False
-    end = month_end(start)
-    key = item.get("key")
-    own_amount = _row_amount(spending_by_category_report(person, date_from=start, date_to=end, accounts=own), key)
-    visible_amount = _row_amount(spending_by_category_report(person, date_from=start, date_to=end), key)
-    return own_amount == visible_amount and own_amount > 0
-
-
-def _row_amount(report, key):
-    return next((row.spending_minor for row in report.rows if row.key == key), 0)
+        return None
 
 
 def _own_private_transaction(person, item):

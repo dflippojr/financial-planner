@@ -31,6 +31,7 @@ def unusual_spending_ai_on(person):
 
 
 def unusual_facts_for_ai(person, facts):
+    # Restricted household AI recomputes unusual flags from private accounts in facts_payload_for_ai.
     payload = facts_payload_for_ai(person, facts)
     return {
         "month": payload.get("month"),
