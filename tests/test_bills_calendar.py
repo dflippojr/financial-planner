@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from hashlib import sha256
 from unittest.mock import patch
 
@@ -481,3 +481,27 @@ def test_an_archived_charge_does_not_move_a_series_to_another_account():
     Account.objects.filter(pk=other.pk).update(status=Account.Status.ARCHIVED, archived_at=timezone.now())
 
     assert _last_charge_account_ids([series.pk]) == {series.pk: checking.pk}
+
+
+@pytest.mark.django_db
+def test_a_far_future_month_does_not_forecast_day_by_day_from_today(monkeypatch):
+    import finance.bills_calendar as bills
+
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner)
+    add_snapshot(checking, date(2026, 10, 1), 10_000)
+    seen = {}
+    real = bills.expected_balances_by_day
+
+    def spy(*args, **kwargs):
+        seen["through"] = kwargs["through_date"]
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(bills, "expected_balances_by_day", spy)
+
+    calendar = build_month(owner, year=9998, month=12, today=TODAY, account_ids=[checking.pk])
+
+    assert seen["through"] <= TODAY + timedelta(days=bills.MAX_FORECAST_DAYS)
+    assert calendar.beyond_forecast is True
+    assert all(day.balance_display is None for day in calendar.days if not getattr(day, "blank", False))

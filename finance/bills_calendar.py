@@ -32,6 +32,9 @@ ALERT_TITLE = "Expected balance below threshold in the next 7 days"
 DEPOSIT_TYPES = (Account.Type.CHECKING, Account.Type.SAVINGS)
 
 
+# How far ahead a running expected balance is computed (about two years).
+MAX_FORECAST_DAYS = 731
+
 def _person(principal):
     from .models import _person_for
 
@@ -351,7 +354,8 @@ def build_month(
             start_balance=start_balance,
             selected_ids=selected_ids,
             from_date=today,
-            through_date=max(through, today + timedelta(days=7)),
+            # Running balances stop at the forecast horizon, so a far-future month is cheap.
+            through_date=min(max(through, today + timedelta(days=7)), today + timedelta(days=MAX_FORECAST_DAYS)),
         )
     days = []
     for day in (month_start + timedelta(days=offset) for offset in range((last - month_start).days + 1)):
@@ -408,6 +412,7 @@ def build_month(
         selected_accounts=selected,
         start_balance_minor=start_balance,
         missing_balance_names=[account.name for account in missing_balance],
+        beyond_forecast=start_balance is not None and month_start > today + timedelta(days=MAX_FORECAST_DAYS),
         start_balance_display=format_minor(start_balance) if start_balance is not None else None,
         threshold_minor=threshold_minor,
         prev_year=prev_year,
