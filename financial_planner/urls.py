@@ -19,6 +19,7 @@ from finance import (
     simplefin_views,
     views,
     bulk_edit_views,
+    receipt_views,
 )
 from finance.csv_import import mapping_views as csv_mapping_views
 from finance.csv_import import views as csv_import_views
@@ -204,6 +205,17 @@ urlpatterns = [
         name="suggestion-reject",
     ),
     path("transactions/<int:transaction_id>/edit/", views.transaction_edit, name="transaction-edit"),
+    path("transactions/<int:transaction_id>/receipts/", receipt_views.receipt_upload, name="transaction-receipt-upload"),
+    path(
+        "transactions/<int:transaction_id>/receipts/<int:receipt_id>/",
+        receipt_views.receipt_download,
+        name="transaction-receipt-download",
+    ),
+    path(
+        "transactions/<int:transaction_id>/receipts/<int:receipt_id>/delete/",
+        receipt_views.receipt_delete,
+        name="transaction-receipt-delete",
+    ),
     path("transactions/<int:transaction_id>/note-tags/", views.transaction_note_tags, name="transaction-note-tags"),
     path("transactions/<int:transaction_id>/category/", views.transaction_categorize, name="transaction-categorize"),
     path("transactions/<int:transaction_id>/split/", views.transaction_split, name="transaction-split"),

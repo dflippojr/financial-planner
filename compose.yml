@@ -56,6 +56,7 @@ services:
       AI_SHARED_LOCAL_DAILY_CAP: ${AI_SHARED_LOCAL_DAILY_CAP:-200}
       BACKUP_STATUS_PATH: /backup-health/status
       OPERATOR_USERNAMES: ${OPERATOR_USERNAMES:-}
+      RECEIPTS_DIR: /receipts
     depends_on:
       db:
         condition: service_healthy
@@ -74,6 +75,7 @@ services:
         # this, an upgrade would refuse to start the app until then.
         bind:
           create_host_path: true
+      - receipts:/receipts
     ports:
       - "127.0.0.1:${APP_PORT:-8000}:8000"
     healthcheck:
@@ -99,6 +101,7 @@ services:
       OFFSITE_RCLONE_REMOTE: ${OFFSITE_RCLONE_REMOTE:-}
       OFFSITE_AGE_RECIPIENT: ${OFFSITE_AGE_RECIPIENT:-}
       RCLONE_CONFIG: /config/rclone.conf
+      RECEIPTS_DIR: /receipts
     depends_on:
       db:
         condition: service_healthy
@@ -110,6 +113,7 @@ services:
         source: ${OFFSITE_RCLONE_CONFIG:-./ops/backup/rclone.conf.example}
         target: /config/rclone.conf
         read_only: true
+      - receipts:/receipts
     command: ["/opt/financial-planner/run-backups.sh"]
 
   simplefin-sync:
@@ -129,6 +133,8 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-financial_planner}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       POSTGRES_HOST: db
+      # The daily pass sweeps orphaned receipt files, so it needs the receipts volume.
+      RECEIPTS_DIR: /receipts
       POSTGRES_PORT: "5432"
       BACKUP_STATUS_PATH: /backup-health/status
       OPERATOR_USERNAMES: ${OPERATOR_USERNAMES:-}
@@ -140,6 +146,7 @@ services:
       app:
         condition: service_healthy
     volumes:
+      - receipts:/receipts
       - type: bind
         source: ${BACKUP_DIR:?BACKUP_DIR must be set}/health
         target: /backup-health
@@ -202,3 +209,5 @@ services:
 volumes:
   postgres_data:
     name: ${POSTGRES_VOLUME_NAME:-financial-planner-postgres-data}
+  receipts:
+    name: ${RECEIPTS_VOLUME_NAME:-financial-planner-receipts}

@@ -37,6 +37,7 @@ from .auth_services import (
     validated_username,
 )
 from .forms import (
+    ReceiptUploadForm,
     AlertSettingsForm,
     CashFlowFilterForm,
     CategoryNameForm,
@@ -48,6 +49,7 @@ from .forms import (
     ReauthPasswordForm,
     RecoveryForm,
     RefundLinkForm,
+    ScenarioChangeForm,
     SetupForm,
     SetupGoogleForm,
     SpendingFilterForm,
@@ -105,7 +107,9 @@ from .models import (
     Category,
     Membership,
     Person,
+    PlannedItem,
     PrivacyPolicyVersion,
+    Receipt,
     RecurringSeries,
     RefundLink,
     SavedTransactionFilter,
@@ -149,10 +153,19 @@ from .cash_flow import (
     spending_by_category_report,
     spending_chart_data,
 )
-from .planning_services import cash_flow_with_projection
+from .planning_services import cash_flow_with_projection, visible_projection_inputs
 from .budget_services import dashboard_budget_summary
 from .alert_services import save_alert_settings, settings_for
-from .projection import DEFAULT_HORIZON
+from .projection import DEFAULT_HORIZON, SOURCE_PLANNED, SOURCE_SERIES
+from .scenario import (
+    MAX_CHANGES,
+    describe_change,
+    encode_change,
+    encode_changes,
+    make_this_real_url,
+    parse_scenario_tokens,
+    visible_scenario_changes,
+)
 from .spending_trends import (
     category_spending_trend_report,
     category_trend_chart_data,
@@ -210,12 +223,43 @@ def health(request):
     return HttpResponse("ok\n", content_type="text/plain")
 
 
+def _cash_flow_pairs(*, date_from, date_to, grouping, horizon, account, scope, tag, changes):
+    pairs = [
+        ("date_from", date_from.isoformat()),
+        ("date_to", date_to.isoformat()),
+        ("grouping", grouping),
+        ("horizon", str(horizon)),
+    ]
+    if account is not None:
+        pairs.append(("account", str(account.pk)))
+    if scope:
+        pairs.append(("scope", scope))
+    if tag is not None:
+        pairs.append(("tag", str(tag.pk)))
+    pairs.extend(("sc", token) for token in encode_changes(changes))
+    return pairs
+
+
+def _scenario_choice_querysets(principal, inputs):
+    planned_ids = [item.source_id for item in inputs if item.source == SOURCE_PLANNED]
+    series_ids = [item.source_id for item in inputs if item.source == SOURCE_SERIES]
+    planned = PlannedItem.objects.visible_to(principal).filter(pk__in=planned_ids).order_by("name", "pk")
+    series = RecurringSeries.objects.visible_to(principal).filter(pk__in=series_ids).order_by("display_name", "pk")
+    return planned, series
+
+
 @require_GET
 @never_cache
 def home(request):
     today = timezone.localdate()
     default_from, default_to = default_date_range(today)
     form = CashFlowFilterForm(request.GET or None, principal=request.user)
+    if form.is_bound and form.has_error("grouping"):
+        # A missing or invalid grouping falls back to months; validate again with it so
+        # the period-limit check still applies.
+        data = request.GET.copy()
+        data["grouping"] = "month"
+        form = CashFlowFilterForm(data, principal=request.user)
     if not form.is_bound:
         form = CashFlowFilterForm(
             principal=request.user,
@@ -237,10 +281,45 @@ def home(request):
         scope = form.cleaned_data["scope"]
         horizon = form.cleaned_data["horizon"] or DEFAULT_HORIZON
         tag = form.cleaned_data.get("tag")
-    else:
+    elif (
+        form.non_field_errors()
+        or form.has_error("date_from")
+        or form.has_error("date_to")
+    ):
         date_from = date_to = grouping = account = scope = None
         horizon = DEFAULT_HORIZON
         tag = None
+    else:
+        date_from = form.cleaned_data.get("date_from") or default_from
+        date_to = form.cleaned_data.get("date_to") or default_to
+        grouping = form.cleaned_data.get("grouping") or "month"
+        account = form.cleaned_data.get("account")
+        scope = form.cleaned_data.get("scope") or ""
+        horizon = form.cleaned_data.get("horizon") or DEFAULT_HORIZON
+        tag = form.cleaned_data.get("tag")
+    changes = list(parse_scenario_tokens(request.GET))
+    inputs_for_form = ()
+    if date_from is not None:
+        inputs_for_form = visible_projection_inputs(request.user, account=account, scope=scope)
+        changes = list(visible_scenario_changes(changes, inputs_for_form))
+    planned_qs, series_qs = _scenario_choice_querysets(request.user, inputs_for_form)
+    scenario_form = ScenarioChangeForm(
+        request.GET if request.GET.get("scenario_action") == "add" else None,
+        planned_items=planned_qs,
+        series=series_qs,
+    )
+    if date_from is not None and request.GET.get("scenario_action") == "remove":
+        remove_token = request.GET.get("remove_sc", "")
+        remaining = [change for change in changes if encode_change(change) != remove_token]
+        return redirect(
+            f"{reverse('home')}?{urlencode(_cash_flow_pairs(date_from=date_from, date_to=date_to, grouping=grouping, horizon=horizon, account=account, scope=scope, tag=tag, changes=remaining))}"
+        )
+    if date_from is not None and request.GET.get("scenario_action") == "add" and scenario_form.is_valid():
+        changes.append(scenario_form.to_change())
+        changes = changes[:MAX_CHANGES]
+        return redirect(
+            f"{reverse('home')}?{urlencode(_cash_flow_pairs(date_from=date_from, date_to=date_to, grouping=grouping, horizon=horizon, account=account, scope=scope, tag=tag, changes=changes))}"
+        )
     report = None
     if date_from is not None:
         report = cash_flow_with_projection(
@@ -253,12 +332,59 @@ def home(request):
             today=today,
             horizon=horizon,
             tag=tag,
+            scenario_changes=changes,
         )
+        inputs_for_form = report.projection_inputs
+        planned_qs, series_qs = _scenario_choice_querysets(request.user, inputs_for_form)
+        if request.GET.get("scenario_action") != "add":
+            scenario_form = ScenarioChangeForm(planned_items=planned_qs, series=series_qs)
+    planned_by_id = {item.source_id: item for item in inputs_for_form if item.source == SOURCE_PLANNED}
+    series_by_id = {item.source_id: item for item in inputs_for_form if item.source == SOURCE_SERIES}
+    listed_changes = []
+    for change in changes:
+        token = encode_change(change)
+        remove_pairs = _cash_flow_pairs(
+            date_from=date_from or default_from,
+            date_to=date_to or default_to,
+            grouping=grouping or "month",
+            horizon=horizon,
+            account=account,
+            scope=scope or "",
+            tag=tag,
+            changes=changes,
+        )
+        remove_url = (
+            f"{reverse('home')}?{urlencode(remove_pairs + [('scenario_action', 'remove'), ('remove_sc', token)])}"
+        )
+        listed_changes.append(
+            SimpleNamespace(
+                summary=describe_change(change, planned_by_id=planned_by_id, series_by_id=series_by_id),
+                make_real_url=make_this_real_url(change),
+                remove_url=remove_url,
+                token=token,
+            )
+        )
+    scenario_tokens = encode_changes(changes)
+    filter_pairs = _cash_flow_pairs(
+        date_from=date_from or default_from,
+        date_to=date_to or default_to,
+        grouping=grouping or "month",
+        horizon=horizon,
+        account=account,
+        scope=scope or "",
+        tag=tag,
+        changes=(),
+    )
     return render(
         request,
         "finance/home.html",
         {
             "filter_form": form,
+            "filter_pairs": filter_pairs,
+            "scenario_form": scenario_form,
+            "scenario_tokens": scenario_tokens,
+            "scenario_listed_changes": listed_changes,
+            "scenario_comparison": report.scenario_comparison if report is not None else None,
             "report": report,
             "chart_data": cash_flow_chart_data(report) if report is not None else None,
             "accounts": Account.objects.visible_to(request.user),
@@ -636,11 +762,15 @@ def transaction_edit(request, transaction_id):
     return _render_transaction_edit(request, financial_transaction, form=form)
 
 
-def _render_transaction_edit(request, financial_transaction, *, form=None, refund_form=None, split_form=None, note_form=None):
+def _render_transaction_edit(
+    request, financial_transaction, *, form=None, refund_form=None, split_form=None, note_form=None, receipt_form=None
+):
     if form is None:
         form = TransactionCorrectionForm.for_transaction(financial_transaction)
     if note_form is None:
         note_form = TransactionNoteTagsForm.for_transaction(financial_transaction, request.user)
+    if receipt_form is None:
+        receipt_form = ReceiptUploadForm()
     correction_history = (
         TransactionCorrectionHistory.objects.visible_to(request.user)
         .filter(transaction=financial_transaction)
@@ -683,6 +813,12 @@ def _render_transaction_edit(request, financial_transaction, *, form=None, refun
             "is_split": financial_transaction.category_source == Transaction.CategorySource.SPLIT,
             "transaction": financial_transaction,
             "correction_history": correction_history,
+            "receipt_form": receipt_form,
+            "receipts": list(
+                Receipt.objects.visible_to(request.user)
+                .filter(transaction=financial_transaction)
+                .order_by("pk")
+            ),
         },
     )
 
