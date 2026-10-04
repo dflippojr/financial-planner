@@ -23,6 +23,7 @@ from .models import (
     RecurringSeries,
     RefundLink,
     SavingsGoal,
+    SheetComparisonSettings,
     Transaction,
     TransactionCorrectionHistory,
     TransactionSplit,
@@ -163,7 +164,7 @@ class TransactionFilterForm(forms.Form):
         required=False,
         choices=(("", "All categories"), ("uncategorized", "Uncategorized")),
     )
-    q = forms.CharField(required=False, label="Description contains", max_length=200)
+    q = forms.CharField(required=False, label="Search", max_length=200)
     tag = forms.ModelChoiceField(queryset=Tag.objects.none(), required=False, empty_label="All tags")
     scope = forms.ChoiceField(
         required=False,
@@ -171,6 +172,45 @@ class TransactionFilterForm(forms.Form):
             ("", ALL_VISIBLE_ACCOUNTS),
             (Account.Scope.PRIVATE, "Private"),
             (Account.Scope.HOUSEHOLD, "Household"),
+        ),
+    )
+    amount_min = forms.DecimalField(
+        max_digits=19,
+        decimal_places=2,
+        required=False,
+        label="Amount min",
+        widget=forms.TextInput(attrs={"inputmode": "decimal"}),
+    )
+    amount_max = forms.DecimalField(
+        max_digits=19,
+        decimal_places=2,
+        required=False,
+        label="Amount max",
+        widget=forms.TextInput(attrs={"inputmode": "decimal"}),
+    )
+    amount_mode = forms.ChoiceField(
+        required=False,
+        choices=(
+            ("signed", "Signed (money in or out)"),
+            ("absolute", "Absolute value"),
+        ),
+        initial="signed",
+    )
+    has_note = forms.ChoiceField(
+        required=False,
+        choices=(("", "Any notes"), ("1", "Has note")),
+    )
+    is_split = forms.ChoiceField(
+        required=False,
+        choices=(("", "Any splits"), ("1", "Split")),
+    )
+    set_by = forms.ChoiceField(
+        required=False,
+        choices=(
+            ("", "Any category source"),
+            ("hand", "Set by hand"),
+            ("rule", "Set by rule"),
+            ("suggestion", "Set by AI suggestion"),
         ),
     )
 
@@ -188,13 +228,41 @@ class TransactionFilterForm(forms.Form):
                 choices.append((str(category.pk), category.name))
         self.fields["category"].choices = choices
 
+    def clean_amount_min(self):
+        return self._cleaned_amount("amount_min")
+
+    def clean_amount_max(self):
+        return self._cleaned_amount("amount_max")
+
+    def _cleaned_amount(self, field_name):
+        amount = self.cleaned_data.get(field_name)
+        if amount is None:
+            return None
+        minor_units = int(amount * 100)
+        if not MIN_SIGNED_BIGINT <= minor_units <= MAX_SIGNED_BIGINT:
+            raise ValidationError(AMOUNT_RANGE_ERROR)
+        return amount
+
     def clean(self):
         cleaned = super().clean()
         date_from = cleaned.get("date_from")
         date_to = cleaned.get("date_to")
         if date_from and date_to and date_from > date_to:
             self.add_error("date_to", END_DATE_ORDER_ERROR)
+        amount_min = cleaned.get("amount_min")
+        amount_max = cleaned.get("amount_max")
+        mode = cleaned.get("amount_mode") or "signed"
+        if amount_min is not None and amount_max is not None:
+            if mode == "absolute":
+                if abs(amount_min) > abs(amount_max):
+                    self.add_error("amount_max", "Maximum amount must be at least the minimum.")
+            elif amount_min > amount_max:
+                self.add_error("amount_max", "Maximum amount must be at least the minimum.")
         return cleaned
+
+
+class SavedTransactionFilterNameForm(forms.Form):
+    name = forms.CharField(max_length=80, label="Save current filters as")
 
 
 class CashFlowFilterForm(forms.Form):
@@ -851,7 +919,7 @@ class AiDefaultsForm(forms.Form):
     chat_model = forms.CharField(label="Chat model", required=False, max_length=80)
     background_model = forms.CharField(label="Background model", required=False, max_length=80)
 
-    def __init__(self, *args, backends=(), **kwargs):
+    def __init__(self, *args, backends=(), offer_shared_local=False, **kwargs):
         super().__init__(*args, **kwargs)
         allow_local_chat = bool(getattr(settings, "AI_CHAT_LOCAL_ENABLED", False))
         chat_choices = [
@@ -860,12 +928,33 @@ class AiDefaultsForm(forms.Form):
             if item.suits_live and (allow_local_chat or item.id != "local")
         ]
         background_choices = [(item.id, item.label) for item in backends if item.suits_background]
+        if offer_shared_local:
+            chat_choices.append(("shared_local", "Local model (shared)"))
+            background_choices.append(("shared_local", "Local model (shared)"))
         if not chat_choices:
             chat_choices = [("", "No available backend")]
         if not background_choices:
             background_choices = [("", "No available backend")]
         self.fields["chat_backend"].choices = chat_choices
         self.fields["background_backend"].choices = background_choices
+
+
+class AiOfferLocalForm(forms.Form):
+    offer_local_to_household = forms.BooleanField(
+        required=False,
+        label="Offer the local model to household members",
+    )
+
+
+class AiSharedLocalForm(forms.Form):
+    use_shared_local_chat = forms.BooleanField(
+        required=False,
+        label="Chat",
+    )
+    use_shared_local_background = forms.BooleanField(
+        required=False,
+        label="Background jobs",
+    )
 
 
 class ShareAccountForm(forms.Form):
@@ -879,6 +968,89 @@ class ChangeShareModeForm(forms.Form):
 
 class AccountRenameForm(forms.Form):
     name = forms.CharField(max_length=150)
+
+
+class DebtTermsForm(forms.Form):
+    apr_percent = forms.DecimalField(
+        label="APR percent",
+        max_digits=6,
+        decimal_places=3,
+        required=False,
+        min_value=0,
+        widget=forms.TextInput(attrs={"inputmode": "decimal"}),
+        help_text="Annual percentage rate, for example 19.990.",
+    )
+    minimum_payment = forms.DecimalField(
+        label="Minimum payment",
+        max_digits=19,
+        decimal_places=2,
+        required=False,
+        min_value=0,
+        widget=forms.TextInput(attrs={"inputmode": "decimal"}),
+    )
+    payment_day = forms.IntegerField(
+        label="Payment day",
+        required=False,
+        min_value=1,
+        max_value=31,
+        help_text="Day of the month the loan payment is due.",
+    )
+
+    def __init__(self, *args, account=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.account = account
+        if account is not None and account.account_type != Account.Type.LOAN:
+            del self.fields["payment_day"]
+
+    def clean_minimum_payment(self):
+        amount = self.cleaned_data.get("minimum_payment")
+        if amount is None:
+            return None
+        minor_units = int(amount * 100)
+        if not 0 <= minor_units <= MAX_SIGNED_BIGINT:
+            raise ValidationError(AMOUNT_RANGE_ERROR)
+        return amount
+
+    def minimum_payment_minor(self):
+        amount = self.cleaned_data.get("minimum_payment")
+        if amount is None:
+            return None
+        return int(amount * 100)
+
+
+class DebtPlannerForm(forms.Form):
+    strategy = forms.ChoiceField(
+        choices=(
+            ("minimums", "Minimums only"),
+            ("snowball", "Snowball (smallest balance first)"),
+            ("avalanche", "Avalanche (highest APR first)"),
+            ("custom", "Custom order"),
+        )
+    )
+    extra = forms.DecimalField(
+        label="Extra monthly payment",
+        required=False,
+        min_value=0,
+        max_digits=19,
+        decimal_places=2,
+        widget=forms.TextInput(attrs={"inputmode": "decimal"}),
+        help_text="Applied after minimums, toward the current target debt.",
+    )
+
+    def clean_extra(self):
+        amount = self.cleaned_data.get("extra")
+        if amount is None:
+            return None
+        minor_units = int(amount * 100)
+        if not 0 <= minor_units <= MAX_SIGNED_BIGINT:
+            raise ValidationError(AMOUNT_RANGE_ERROR)
+        return amount
+
+    def extra_minor(self):
+        amount = self.cleaned_data.get("extra")
+        if amount is None:
+            return 0
+        return int(amount * 100)
 
 
 class PairLoanForm(forms.Form):
@@ -1356,3 +1528,77 @@ class AlertSettingsForm(forms.Form):
             "monthly_review_ai_enabled": self.cleaned_data["monthly_review_ai_enabled"],
             "large_transaction_minor": minor,
         }
+
+
+class SheetComparisonFilterForm(forms.Form):
+    account = forms.ModelChoiceField(queryset=Account.objects.none(), required=False)
+    tag = forms.ModelChoiceField(queryset=Tag.objects.none(), required=False, empty_label="All tags")
+    scope = forms.ChoiceField(
+        required=False,
+        choices=(
+            ("", ALL_VISIBLE_ACCOUNTS),
+            (Account.Scope.PRIVATE, "Private"),
+            (Account.Scope.HOUSEHOLD, "Household"),
+        ),
+    )
+
+    def __init__(self, *args, principal=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["account"].queryset = (
+            Account.objects.visible_to(principal).for_cash_flow().order_by("name", "pk")
+        )
+        self.fields["tag"].queryset = Tag.objects.visible_to(principal).order_by("name", "pk")
+
+
+class SheetCsvUploadForm(forms.Form):
+    csv_file = forms.FileField(
+        label="Google Sheet CSV",
+        help_text="One row per month. The file is not kept after the totals are stored.",
+        error_messages={"required": "Choose a CSV file of at most 5 MB."},
+    )
+
+
+class SheetColumnMappingForm(forms.Form):
+    month_column = forms.ChoiceField(label="Month column")
+    income_column = forms.ChoiceField(label="Income column")
+    spending_column = forms.ChoiceField(label="Spending column")
+    spending_sign = forms.ChoiceField(
+        label="Spending numbers",
+        choices=SheetComparisonSettings.SpendingSign.choices,
+        initial=SheetComparisonSettings.SpendingSign.UNSIGNED,
+        help_text="Unsigned columns are positive spending. Signed columns use negative for spending.",
+    )
+
+    def __init__(self, *args, headers=(), **kwargs):
+        super().__init__(*args, **kwargs)
+        choices = [(name, name) for name in headers]
+        for name in ("month_column", "income_column", "spending_column"):
+            self.fields[name].choices = choices
+
+    def clean(self):
+        cleaned = super().clean()
+        columns = [cleaned.get("month_column"), cleaned.get("income_column"), cleaned.get("spending_column")]
+        if all(columns) and len(set(columns)) != 3:
+            raise ValidationError("Choose three different columns.")
+        return cleaned
+
+
+class SheetToleranceForm(forms.Form):
+    tolerance = forms.DecimalField(
+        min_value=Decimal("0.00"),
+        max_value=Decimal("1000000.00"),
+        max_digits=12,
+        decimal_places=2,
+        label="Match tolerance",
+        help_text="Recent months match when the net difference is this amount or less. Default is 1.00.",
+        widget=forms.TextInput(attrs={"inputmode": "decimal"}),
+    )
+
+    def tolerance_minor(self):
+        return int(self.cleaned_data["tolerance"] * 100)
+
+
+class SheetMonthNoteForm(forms.Form):
+    month = forms.DateField(widget=forms.HiddenInput)
+    note = forms.CharField(required=False, max_length=2000, widget=forms.TextInput(attrs={"class": "input input-bordered w-full"}))
+

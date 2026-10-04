@@ -68,6 +68,8 @@ SETTINGS_TAB_BY_NAME = {
     "ai-connect": "ai",
     "ai-disconnect": "ai",
     "ai-defaults": "ai",
+    "ai-offer-local": "ai",
+    "ai-shared-local": "ai",
 }
 
 SETTINGS_TABS = (
@@ -102,8 +104,12 @@ def _nav_current(request):
         return "csv-import"
     if name in {"planned-item-edit", "planned-item-disable", "planned-item-enable"}:
         return "planned-items"
+    if name == "debt-payoff":
+        return "debt-payoff"
     if name in {"monthly-review", "monthly-review-regenerate"}:
         return "monthly-review"
+    if name in {"sheet-comparison", "sheet-comparison-delete"}:
+        return "sheet-comparison"
     if name in {"year-end", "year-end-csv"}:
         return "year-end"
     if name.startswith("budget"):
@@ -118,7 +124,7 @@ def _nav_current(request):
         return "savings-goals"
     if name.startswith("alert"):
         return "alert-list"
-    if name in {"account-balances", "account-snapshot-edit", "account-snapshot-delete"}:
+    if name in {"account-balances", "account-snapshot-edit", "account-snapshot-delete", "account-debt-terms"}:
         return "account-list"
     if name.startswith("chat"):
         return "chat"
@@ -153,7 +159,9 @@ def navigation(request):
         ("account-list", "Accounts", reverse("account-list")),
         ("csv-import", "Import", reverse("csv-import")),
         ("planned-items", "Planned items", reverse("planned-items")),
+        ("debt-payoff", "Debt payoff", reverse("debt-payoff")),
         ("monthly-review", "Monthly review", reverse("monthly-review")),
+        ("sheet-comparison", "Sheet comparison", reverse("sheet-comparison")),
         ("year-end", "Year-end", reverse("year-end")),
         ("budgets", "Budgets", reverse("budgets")),
         ("alert-list", "Alerts", reverse("alert-list")),

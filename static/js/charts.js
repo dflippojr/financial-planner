@@ -252,6 +252,63 @@
     });
   }
 
+  function debtPayoffChart(canvas, data, palette) {
+    var labels = data.labels || [];
+    return new window.Chart(canvas, {
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            type: "bar",
+            label: "Interest this month",
+            data: data.interest_minor || [],
+            backgroundColor: palette.spending,
+            displays: data.interest_display || [],
+          },
+          {
+            type: "line",
+            label: "Remaining",
+            data: data.remaining_minor || [],
+            borderColor: palette.net,
+            backgroundColor: palette.net,
+            tension: 0.2,
+            displays: data.remaining_display || [],
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { labels: { color: palette.text } },
+          tooltip: {
+            callbacks: {
+              label: function (context) {
+                var displays = context.dataset.displays || [];
+                var display = displays[context.dataIndex];
+                if (display) {
+                  return context.dataset.label + ": " + display;
+                }
+                return context.dataset.label + ": " + context.formattedValue;
+              },
+            },
+          },
+        },
+        scales: {
+          x: {
+            ticks: { color: palette.text, maxRotation: 45, minRotation: 0 },
+            grid: { color: palette.grid },
+          },
+          y: {
+            ticks: { color: palette.text, callback: formatAxisMinor },
+            title: { display: true, text: "USD", color: palette.text },
+            grid: { color: palette.grid },
+          },
+        },
+      },
+    });
+  }
+
   function netWorthChart(canvas, data, palette) {
     var periods = data.periods || [];
     return new window.Chart(canvas, {
@@ -548,6 +605,8 @@
         charts.push(categoryTrendChart(canvas, data, palette));
       } else if (kind === "net-worth") {
         charts.push(netWorthChart(canvas, data, palette));
+      } else if (kind === "debt-payoff") {
+        charts.push(debtPayoffChart(canvas, data, palette));
       }
     });
   }

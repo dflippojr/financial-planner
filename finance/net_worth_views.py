@@ -1,7 +1,7 @@
 from decimal import Decimal
 
 from django.contrib import messages
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
@@ -10,7 +10,8 @@ from django.views.decorators.http import require_GET, require_http_methods, requ
 
 from .account_views import _active_visible_account, _service_or_404
 from .cash_flow import default_date_range, format_minor
-from .forms import ManualBalanceForm, NetWorthFilterForm, PairLoanForm
+from .forms import DebtTermsForm, ManualBalanceForm, NetWorthFilterForm, PairLoanForm
+from .lifecycle_services import update_debt_terms
 from .models import Account, BalanceSnapshot
 from .net_worth import net_worth_chart_data, net_worth_preset_links, net_worth_report
 from .performance import account_performance
@@ -84,6 +85,23 @@ def _manual_form(account, data=None, snapshot=None):
     return ManualBalanceForm(data, account=account, initial=initial)
 
 
+def _debt_terms_form(account, data=None):
+    if account.account_type not in Account.LIABILITY_TYPES:
+        return None
+    initial = None
+    if data is None:
+        initial = {
+            "apr_percent": account.apr_percent,
+            "minimum_payment": (
+                Decimal(account.minimum_payment_minor) / Decimal(100)
+                if account.minimum_payment_minor is not None
+                else None
+            ),
+            "payment_day": account.payment_day,
+        }
+    return DebtTermsForm(data, account=account, initial=initial)
+
+
 @require_http_methods(["GET", "POST"])
 @never_cache
 def account_balances(request, account_id):
@@ -118,6 +136,7 @@ def account_balances(request, account_id):
     pair_form = None
     if account.account_type == Account.Type.LOAN:
         pair_form = PairLoanForm(loan=account, principal=request.user)
+    debt_terms_form = _debt_terms_form(account)
     return render(
         request,
         "finance/account_balances.html",
@@ -127,6 +146,7 @@ def account_balances(request, account_id):
             "snapshots": snapshots,
             "performance": performance,
             "pair_form": pair_form,
+            "debt_terms_form": debt_terms_form,
         },
     )
 
@@ -197,4 +217,30 @@ def account_pair_loan(request, account_id):
             messages.error(request, str(exc))
         except PermissionDenied as exc:
             raise Http404 from exc
+    return redirect("account-balances", account.pk)
+
+
+@require_POST
+@never_cache
+def account_debt_terms(request, account_id):
+    account = _active_visible_account(request.user, account_id)
+    form = _debt_terms_form(account, request.POST)
+    if form is None:
+        raise Http404
+    if form.is_valid():
+        try:
+            update_debt_terms(
+                request.user,
+                account.pk,
+                apr_percent=form.cleaned_data["apr_percent"],
+                minimum_payment_minor=form.minimum_payment_minor(),
+                payment_day=form.cleaned_data.get("payment_day"),
+            )
+            messages.success(request, "Updated debt details.")
+        except ValidationError as exc:
+            messages.error(request, exc.messages[0] if getattr(exc, "messages", None) else str(exc))
+        except PermissionDenied as exc:
+            raise Http404 from exc
+    else:
+        messages.error(request, form.errors.as_text())
     return redirect("account-balances", account.pk)

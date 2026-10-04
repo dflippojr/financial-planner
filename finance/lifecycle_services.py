@@ -196,6 +196,31 @@ def rename_account(principal, account_id, name):
 
 
 @transaction.atomic
+def update_debt_terms(principal, account_id, *, apr_percent, minimum_payment_minor, payment_day):
+    """Save APR, minimum payment, and loan due day for a visible liability."""
+    person = _person_for(principal)
+    lock_actor_household(person)
+    account = _visible_account_for_update(person, account_id)
+    if account.status != Account.Status.ACTIVE or account.archived_at is not None:
+        raise PermissionDenied(_DENIED)
+    if account.account_type not in Account.LIABILITY_TYPES:
+        raise PermissionDenied(_DENIED)
+    if account.account_type != Account.Type.LOAN:
+        payment_day = None
+    elif payment_day is not None and not 1 <= int(payment_day) <= 31:
+        raise ValidationError("Payment day must be between 1 and 31.")
+    if apr_percent is not None and apr_percent < 0:
+        raise ValidationError("APR cannot be negative.")
+    if minimum_payment_minor is not None and minimum_payment_minor < 0:
+        raise ValidationError("Minimum payment cannot be negative.")
+    account.apr_percent = apr_percent
+    account.minimum_payment_minor = minimum_payment_minor
+    account.payment_day = payment_day
+    account.save(update_fields=("apr_percent", "minimum_payment_minor", "payment_day", "updated_at"))
+    return account
+
+
+@transaction.atomic
 def unshare_account(principal, account_id):
     """Return a visible household account to its owner's private scope."""
     person = _person_for(principal)
@@ -524,6 +549,8 @@ def member_deletion_counts(person):
         RecurringSeries,
         RuleApplication,
         SavingsGoal,
+        SheetComparisonSettings,
+        SheetMonthTotal,
         SimpleFinConnection,
     )
 
@@ -544,6 +571,8 @@ def member_deletion_counts(person):
         + SimpleFinConnection.objects.filter(owner=person).count()
         + PrivacyPolicyAcceptance.objects.filter(person=person).count()
         + RecoveryCode.objects.filter(user_id=person.user_id).count()
+        + SheetMonthTotal.objects.filter(member=person).count()
+        + SheetComparisonSettings.objects.filter(member=person).count()
     )
     return {
         "private_account_count": len(private_ids),
@@ -638,6 +667,8 @@ def _delete_personal_records(person):
         RuleApplication,
         RuleApplicationEntry,
         SavingsGoal,
+        SheetComparisonSettings,
+        SheetMonthTotal,
         SimpleFinConnection,
     )
 
@@ -655,6 +686,9 @@ def _delete_personal_records(person):
         RecurringSeries.objects.filter(pk__in=series_ids).delete()
     SimpleFinConnection.objects.filter(owner=person).delete()
     CategorySuggestion.objects.filter(member=person).delete()
+    from .models import SavedTransactionFilter
+
+    SavedTransactionFilter.objects.filter(member=person).delete()
     AiJob.objects.filter(member=person).delete()
     AiUsageEvent.objects.filter(member=person).delete()
     AiProviderConnection.objects.filter(owner=person).delete()
@@ -662,6 +696,8 @@ def _delete_personal_records(person):
     RecurringExclusion.objects.filter(person=person).delete()
     Alert.objects.filter(recipient=person).delete()
     AlertSettings.objects.filter(person=person).delete()
+    SheetMonthTotal.objects.filter(member=person).delete()
+    SheetComparisonSettings.objects.filter(member=person).delete()
     from .models import MemberSecurityEvent, MemberSession
 
     MemberSecurityEvent.objects.filter(member=person).delete()
