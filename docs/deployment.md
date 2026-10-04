@@ -62,7 +62,7 @@ Prerequisites are Docker Desktop configured to use WSL2 and start when Windows s
    tailscale serve status
    ```
 
-   If `APP_PORT` is not 8000, use its value in the target URL. Tailscale Serve accepts only loopback HTTP proxy targets and supplies `X-Forwarded-Proto`; Django trusts that proxy header, redirects other HTTP requests to HTTPS, and uses secure session and CSRF cookies. Open the HTTPS MagicDNS URL shown by `tailscale serve status`. The command uses Serve, not Funnel, so it does not intentionally expose the app to the public internet. See the [Tailscale Serve command reference](https://tailscale.com/docs/reference/tailscale-cli/serve).
+   If `APP_PORT` is not 8000, use its value in the target URL. Tailscale Serve accepts only loopback HTTP proxy targets and supplies `X-Forwarded-Proto` and `X-Forwarded-For`. Django trusts that proxy header, redirects other HTTP requests to HTTPS, and uses secure session and CSRF cookies. Compose sets `TRUST_PROXY_FORWARDED_FOR=true` for the app service because the published port is loopback-only; sign-in and session logs then store the right-most `X-Forwarded-For` address (the hop Serve added). Leave that setting off anywhere the app port is reachable without that proxy, or clients can spoof the left-most address. Open the HTTPS MagicDNS URL shown by `tailscale serve status`. The command uses Serve, not Funnel, so it does not intentionally expose the app to the public internet. See the [Tailscale Serve command reference](https://tailscale.com/docs/reference/tailscale-cli/serve).
 
    **When the PC already runs other services**, check before choosing ports:
 

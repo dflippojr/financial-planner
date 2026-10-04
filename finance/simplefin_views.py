@@ -13,6 +13,7 @@ from .category_services import current_household
 from .forms import SimpleFinSetupForm
 from .models import Account, AccountLink, Person, SimpleFinConnection
 from .reauth import requires_recent_auth
+from .security_services import EVENT_TYPES, record_security_event
 from .simplefin_errors import SimpleFinError, SimpleFinRateLimited
 from .simplefin_schedule import next_scheduled_sync
 from .simplefin_services import (
@@ -94,6 +95,7 @@ def _handle_claim(request, connection, form):
         return None
     except PermissionDenied as exc:
         raise Http404 from exc
+    record_security_event(request.user, EVENT_TYPES.SIMPLEFIN_CONNECTION_CHANGED, request=request)
     messages.success(request, "SimpleFIN is connected. Link the accounts below.")
     return redirect("simplefin-connections")
 
@@ -228,5 +230,6 @@ def connections_disconnect(request):
         disconnect_connection(request.user, connection.pk)
     except PermissionDenied as exc:
         raise Http404 from exc
+    record_security_event(request.user, EVENT_TYPES.SIMPLEFIN_CONNECTION_CHANGED, request=request)
     messages.success(request, "SimpleFIN disconnected. Imported transactions and balances were kept.")
     return redirect("simplefin-connections")

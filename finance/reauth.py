@@ -28,6 +28,8 @@ ACTION_LABELS = {
     "connect-ai": "Connect an AI backend",
     "disconnect-ai": "Disconnect the AI backend",
     "ai-defaults": "Change AI backend defaults",
+    "revoke-session": "Sign out a session",
+    "revoke-other-sessions": "Sign out other sessions",
 }
 
 ACCOUNT_SETTINGS_ACTIONS = {
