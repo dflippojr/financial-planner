@@ -327,3 +327,50 @@ def test_switch_turned_off_before_the_job_runs_sends_nothing(harness, monkeypatc
     process_due_jobs()
     assert not state.session_prompts
     assert MonthlyReview.objects.get(person=owner, month=SEP).ai_paragraph == ""
+
+
+@pytest.mark.django_db
+def test_job_sends_nothing_once_an_account_is_no_longer_visible(harness, monkeypatch):
+    state, url = harness
+    owner = make_person("owner")
+    partner = make_person("partner")
+    household = make_household(owner, partner)
+    connect_ai(owner, url)
+    shared = make_account(partner, name="Partner shared", scope=Account.Scope.HOUSEHOLD, household=household)
+    make_transaction(partner, shared, amount_minor=-65432, description="Partner furniture")
+    store_monthly_review(owner, SEP, today=TODAY)
+    Account.objects.filter(pk=shared.pk).update(scope=Account.Scope.PRIVATE, household=None, share_mode="")
+    monkeypatch.setattr("finance.ai_jobs.in_quiet_window", lambda moment=None: True)
+    process_due_jobs()
+    assert not any("Partner furniture" in prompt or "654.32" in prompt for prompt in state.session_prompts)
+    assert MonthlyReview.objects.get(person=owner, month=SEP).ai_paragraph == ""
+
+
+@pytest.mark.django_db
+def test_regenerate_during_the_call_keeps_the_cleared_summary(harness, monkeypatch):
+    state, url = harness
+    owner = make_person("owner")
+    make_household(owner)
+    connect_ai(owner, url)
+    checking = make_account(owner)
+    make_transaction(owner, checking, amount_minor=-1234)
+    store_monthly_review(owner, SEP, today=TODAY)
+    state.session_answer = "Spending was 12.34 USD."
+    from finance import monthly_review_ai
+
+    real_run = monthly_review_ai.run_structured
+
+    def regenerate_mid_call(*args, **kwargs):
+        result = real_run(*args, **kwargs)
+        store_monthly_review(owner, SEP, today=TODAY, force=True)
+        return result
+
+    monkeypatch.setattr(monthly_review_ai, "run_structured", regenerate_mid_call)
+    monkeypatch.setattr("finance.ai_jobs.in_quiet_window", lambda moment=None: True)
+    old_job = AiJob.objects.get(member=owner, feature="monthly_review")
+    from finance.ai_jobs import _process_one
+    from django.utils import timezone
+
+    _process_one(old_job, timezone.now())
+    review = MonthlyReview.objects.get(person=owner, month=SEP)
+    assert review.ai_paragraph == ""

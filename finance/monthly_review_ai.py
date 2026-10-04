@@ -102,6 +102,12 @@ def run_monthly_review_job(person, job, *, backend, session_id="", on_session=No
         return ProviderResult(ok=True, answer="", session_id="skipped")
     if not monthly_review_ai_on(person):
         return ProviderResult(ok=True, answer="", session_id="skipped")
+    # Stored facts reflect the accounts visible when they were computed. If access has
+    # changed since, send nothing; the next view regenerates the review and queues again.
+    from .monthly_review import visibility_key
+
+    if review.visibility_key != visibility_key(person):
+        return ProviderResult(ok=True, answer="", session_id="skipped")
     # Filter at run time: household acceptance can change while the job waits.
     facts = facts_payload_for_ai(person, review.facts)
     prompt = PROMPT + json.dumps(facts, default=str)
@@ -116,14 +122,16 @@ def run_monthly_review_job(person, job, *, backend, session_id="", on_session=No
     if not result.ok:
         return result
     paragraph = _extract_paragraph(result.answer)
-    if paragraph and paragraph_is_grounded(paragraph, facts):
-        review.ai_paragraph = paragraph
-        review.ai_backend = backend or ""
-        review.save(update_fields=("ai_paragraph", "ai_backend"))
-    else:
-        review.ai_paragraph = ""
-        review.ai_backend = ""
-        review.save(update_fields=("ai_paragraph", "ai_backend"))
+    grounded = bool(paragraph) and paragraph_is_grounded(paragraph, facts)
+    # Write only if the review was not regenerated while the call ran.
+    MonthlyReview.objects.filter(
+        pk=review.pk,
+        generated_at=review.generated_at,
+        visibility_key=review.visibility_key,
+    ).update(
+        ai_paragraph=paragraph if grounded else "",
+        ai_backend=(backend or "") if grounded else "",
+    )
     return result
 
 
