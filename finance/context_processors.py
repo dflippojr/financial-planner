@@ -110,6 +110,8 @@ def _nav_current(request):
         return "debt-payoff"
     if name in {"monthly-review", "monthly-review-regenerate"}:
         return "monthly-review"
+    if name in {"sheet-comparison", "sheet-comparison-delete"}:
+        return "sheet-comparison"
     if name in {"year-end", "year-end-csv"}:
         return "year-end"
     if name.startswith("budget"):
@@ -162,6 +164,7 @@ def navigation(request):
         ("bills-calendar", "Bills", reverse("bills-calendar")),
         ("debt-payoff", "Debt payoff", reverse("debt-payoff")),
         ("monthly-review", "Monthly review", reverse("monthly-review")),
+        ("sheet-comparison", "Sheet comparison", reverse("sheet-comparison")),
         ("year-end", "Year-end", reverse("year-end")),
         ("budgets", "Budgets", reverse("budgets")),
         ("alert-list", "Alerts", reverse("alert-list")),

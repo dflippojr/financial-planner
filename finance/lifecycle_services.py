@@ -549,6 +549,8 @@ def member_deletion_counts(person):
         RecurringSeries,
         RuleApplication,
         SavingsGoal,
+        SheetComparisonSettings,
+        SheetMonthTotal,
         SimpleFinConnection,
     )
 
@@ -569,6 +571,8 @@ def member_deletion_counts(person):
         + SimpleFinConnection.objects.filter(owner=person).count()
         + PrivacyPolicyAcceptance.objects.filter(person=person).count()
         + RecoveryCode.objects.filter(user_id=person.user_id).count()
+        + SheetMonthTotal.objects.filter(member=person).count()
+        + SheetComparisonSettings.objects.filter(member=person).count()
     )
     return {
         "private_account_count": len(private_ids),
@@ -664,6 +668,8 @@ def _delete_personal_records(person):
         RuleApplication,
         RuleApplicationEntry,
         SavingsGoal,
+        SheetComparisonSettings,
+        SheetMonthTotal,
         SimpleFinConnection,
     )
 
@@ -681,6 +687,9 @@ def _delete_personal_records(person):
         RecurringSeries.objects.filter(pk__in=series_ids).delete()
     SimpleFinConnection.objects.filter(owner=person).delete()
     CategorySuggestion.objects.filter(member=person).delete()
+    from .models import SavedTransactionFilter
+
+    SavedTransactionFilter.objects.filter(member=person).delete()
     AiJob.objects.filter(member=person).delete()
     AiUsageEvent.objects.filter(member=person).delete()
     AiProviderConnection.objects.filter(owner=person).delete()
@@ -689,6 +698,8 @@ def _delete_personal_records(person):
     Alert.objects.filter(recipient=person).delete()
     AlertSettings.objects.filter(person=person).delete()
     BillsCalendarSettings.objects.filter(person=person).delete()
+    SheetMonthTotal.objects.filter(member=person).delete()
+    SheetComparisonSettings.objects.filter(member=person).delete()
     from .models import MemberSecurityEvent, MemberSession
 
     MemberSecurityEvent.objects.filter(member=person).delete()
