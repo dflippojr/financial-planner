@@ -176,6 +176,53 @@ def _lock_owned_transactions(transactions):
     return locked
 
 
+def linked_refunds_for_originals(originals):
+    ids = [txn.pk for txn in originals]
+    if not ids:
+        return []
+    return list(
+        Transaction.objects.filter(
+            refund_link__original_id__in=ids,
+            status=Transaction.Status.ACTIVE,
+        )
+        .select_related("account", "category")
+        .prefetch_related("tags")
+        .order_by("pk")
+    )
+
+
+def transaction_is_linked_refund(txn):
+    return hasattr(txn, "refund_link")
+
+
+def apply_manual_category(person, txn, category):
+    previous = txn.category
+    txn.category = category
+    txn.category_source = Transaction.CategorySource.MANUAL
+    txn.save(update_fields=("category", "category_source", "updated_at"))
+    _record_text_history(
+        txn,
+        person,
+        TransactionCorrectionHistory.Field.CATEGORY,
+        _history_label(previous),
+        _history_label(category),
+    )
+
+
+def apply_inherited_category(person, refund, category):
+    previous = refund.category
+    refund.category = category
+    refund.category_source = Transaction.CategorySource.INHERITED
+    refund.save(update_fields=("category", "category_source", "updated_at"))
+    _record_text_history(
+        refund,
+        person,
+        TransactionCorrectionHistory.Field.CATEGORY,
+        _history_label(previous),
+        _history_label(category),
+    )
+
+
 @transaction.atomic
 def assign_category(principal, transaction_id, category_id):
     person = _person_for(principal)
@@ -194,13 +241,9 @@ def assign_category(principal, transaction_id, category_id):
         category = assignable_categories(person).filter(pk=category_id).first()
         if category is None:
             raise PermissionDenied(_DENIED)
-    linked_refunds = list(
-        Transaction.objects.filter(
-            refund_link__original=financial_transaction,
-            status=Transaction.Status.ACTIVE,
-        ).select_related("account", "category")
-    )
+    # Look up refunds under the household lock, which link_refund also takes first.
     lock_actor_household(person)
+    linked_refunds = linked_refunds_for_originals([financial_transaction])
     locked = _lock_owned_transactions([financial_transaction, *linked_refunds])
     # Recheck after locking: the account may have been unshared between the
     # first visibility query and the locks.
@@ -208,30 +251,9 @@ def assign_category(principal, transaction_id, category_id):
         raise PermissionDenied(_DENIED)
     by_id = {item.pk: item for item in locked}
     financial_transaction = by_id[financial_transaction.pk]
-    previous = financial_transaction.category
-    financial_transaction.category = category
-    financial_transaction.category_source = Transaction.CategorySource.MANUAL
-    financial_transaction.save(update_fields=("category", "category_source", "updated_at"))
-    _record_text_history(
-        financial_transaction,
-        person,
-        TransactionCorrectionHistory.Field.CATEGORY,
-        _history_label(previous),
-        _history_label(category),
-    )
+    apply_manual_category(person, financial_transaction, category)
     for refund in linked_refunds:
-        locked_refund = by_id[refund.pk]
-        previous_refund_category = locked_refund.category
-        locked_refund.category = category
-        locked_refund.category_source = Transaction.CategorySource.INHERITED
-        locked_refund.save(update_fields=("category", "category_source", "updated_at"))
-        _record_text_history(
-            locked_refund,
-            person,
-            TransactionCorrectionHistory.Field.CATEGORY,
-            _history_label(previous_refund_category),
-            _history_label(category),
-        )
+        apply_inherited_category(person, by_id[refund.pk], category)
     from finance.alert_services import schedule_after_category_change
 
     schedule_after_category_change()
@@ -500,17 +522,7 @@ def _restore_refund_categories(original, actor):
     )
     new_category = None if original.category_id is None else Category.objects.get(pk=original.category_id)
     for refund in refunds:
-        previous = refund.category
-        refund.category = new_category
-        refund.category_source = Transaction.CategorySource.INHERITED
-        refund.save(update_fields=("category", "category_source", "updated_at"))
-        _record_text_history(
-            refund,
-            actor,
-            TransactionCorrectionHistory.Field.CATEGORY,
-            _history_label(previous),
-            _history_label(new_category),
-        )
+        apply_inherited_category(actor, refund, new_category)
 
 
 def _restore_snapshot_category(leg, category_id, actor):

@@ -1,3 +1,4 @@
+import uuid
 from decimal import Decimal
 
 from django.conf import settings
@@ -18,6 +19,11 @@ sha256_validator = RegexValidator(
 def validate_json_object(value):
     if not isinstance(value, dict):
         raise ValidationError("Original imported fields must be a JSON object.")
+
+
+def validate_bulk_edit_snapshot(value):
+    if not isinstance(value, dict) or not isinstance(value.get("rows"), list):
+        raise ValidationError("Bulk edit snapshot must be an object with a row list.")
 
 
 def validate_reason_list(value):
@@ -687,6 +693,8 @@ class TransactionCorrectionHistory(models.Model):
         CATEGORY = "category", "Category"
         EXCLUSION = "exclusion", "Transfer exclusion"
         REFUND_LINK = "refund_link", "Refund link"
+        NOTE = "note", "Note"
+        TAGS = "tags", "Tags"
 
     transaction = models.ForeignKey(
         Transaction,
@@ -739,7 +747,7 @@ class TransactionCorrectionHistory(models.Model):
                         currency="",
                     )
                     | Q(
-                        field_name__in=("description", "category", "exclusion", "refund_link"),
+                        field_name__in=("description", "category", "exclusion", "refund_link", "note", "tags"),
                         previous_date__isnull=True,
                         new_date__isnull=True,
                         previous_amount_minor__isnull=True,
@@ -777,6 +785,8 @@ class TransactionCorrectionHistory(models.Model):
             self.Field.CATEGORY,
             self.Field.EXCLUSION,
             self.Field.REFUND_LINK,
+            self.Field.NOTE,
+            self.Field.TAGS,
         ):
             return self.previous_description
         return self._amount_display(self.previous_amount_minor)
@@ -790,6 +800,8 @@ class TransactionCorrectionHistory(models.Model):
             self.Field.CATEGORY,
             self.Field.EXCLUSION,
             self.Field.REFUND_LINK,
+            self.Field.NOTE,
+            self.Field.TAGS,
         ):
             return self.new_description
         return self._amount_display(self.new_amount_minor)
@@ -2069,3 +2081,31 @@ class MemberSession(models.Model):
 
     def __str__(self):
         return f"Member session {self.pk}"
+
+
+class BulkEditUndo(models.Model):
+    """Prior values for one bulk edit, held for a short undo window."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    actor = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="bulk_edit_undos")
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    undone_at = models.DateTimeField(null=True, blank=True)
+    snapshot = models.JSONField(validators=(validate_bulk_edit_snapshot,))
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            person = _person_for(principal)
+            if person is None:
+                return self.none()
+            return self.filter(actor=person)
+
+    objects = QuerySet.as_manager()
+
+    class Meta:
+        indexes = [
+            models.Index(fields=("actor", "expires_at"), name="bulk_edit_undo_actor_exp_idx"),
+        ]
+
+    def __str__(self):
+        return f"Bulk edit undo {self.pk}"

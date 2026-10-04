@@ -15,6 +15,7 @@ from finance import (
     savings_goal_views,
     simplefin_views,
     views,
+    bulk_edit_views,
 )
 from finance.csv_import import mapping_views as csv_mapping_views
 from finance.csv_import import views as csv_import_views
@@ -158,6 +159,13 @@ urlpatterns = [
         RedirectView.as_view(pattern_name="csv-mapping-edit", permanent=True, query_string=True),
     ),
     path("transactions/", views.transaction_list, name="transaction-list"),
+    path("transactions/bulk-edit/", bulk_edit_views.bulk_edit_preview, name="transaction-bulk-preview"),
+    path("transactions/bulk-edit/apply/", bulk_edit_views.bulk_edit_apply, name="transaction-bulk-apply"),
+    path(
+        "transactions/bulk-edit/undo/<uuid:undo_id>/",
+        bulk_edit_views.bulk_edit_undo,
+        name="transaction-bulk-undo",
+    ),
     path("transactions/suggest-categories/", category_suggestion_views.suggest_categories, name="suggest-categories"),
     path(
         "transactions/suggestions/accept-all/",
