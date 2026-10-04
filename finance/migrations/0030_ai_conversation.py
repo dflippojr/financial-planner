@@ -7,7 +7,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("finance", "0027_recurring_review"),
+        ("finance", "0029_monthly_review"),
     ]
 
     operations = [
