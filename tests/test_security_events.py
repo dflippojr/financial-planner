@@ -3,7 +3,7 @@ from datetime import timedelta
 
 import pytest
 from django.contrib.sessions.models import Session
-from django.test import Client, override_settings
+from django.test import Client, RequestFactory, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
@@ -14,6 +14,7 @@ from finance.reauth import RECENT_AUTH_SESSION_KEY
 from finance.security_services import (
     EVENT_TYPES,
     SECURITY_EVENT_RETENTION_DAYS,
+    client_ip,
     purge_old_security_events,
     record_security_event,
 )
@@ -239,3 +240,53 @@ def test_logs_omit_passwords_and_session_keys(caplog):
     assert secret not in caplog.text
     if session_key:
         assert session_key not in caplog.text
+
+
+def _client_ip_request(*, remote="127.0.0.1", forwarded=None):
+    extra = {}
+    if forwarded is not None:
+        extra["HTTP_X_FORWARDED_FOR"] = forwarded
+    return RequestFactory().get("/sign-in/", REMOTE_ADDR=remote, **extra)
+
+
+def test_client_ip_ignores_forwarded_for_unless_proxy_trust_is_enabled():
+    request = _client_ip_request(remote="203.0.113.20", forwarded="198.51.100.1, 192.0.2.60")
+    with override_settings(TRUST_PROXY_FORWARDED_FOR=False):
+        assert client_ip(request) == "203.0.113.20"
+    with override_settings(TRUST_PROXY_FORWARDED_FOR=True):
+        assert client_ip(request) == "192.0.2.60"
+
+
+def test_client_ip_falls_back_when_the_trusted_forwarded_address_is_invalid():
+    request = _client_ip_request(remote="203.0.113.20", forwarded="198.51.100.1, not-an-ip")
+    with override_settings(TRUST_PROXY_FORWARDED_FOR=True):
+        assert client_ip(request) == "203.0.113.20"
+
+
+@pytest.mark.django_db
+@override_settings(TRUST_PROXY_FORWARDED_FOR=False)
+def test_sign_in_log_does_not_trust_spoofed_forwarded_for():
+    user, person, _household = make_member()
+    client = Client(REMOTE_ADDR="203.0.113.20")
+    client.post(
+        reverse("login"),
+        {"username": user.username, "password": PASSWORD},
+        HTTP_X_FORWARDED_FOR="198.51.100.1, 192.0.2.60",
+    )
+    success = MemberSecurityEvent.objects.visible_to(person).get(event_type=EVENT_TYPES.SIGN_IN_SUCCESS)
+    assert success.ip_address == "203.0.113.20"
+
+
+@pytest.mark.django_db
+@override_settings(TRUST_PROXY_FORWARDED_FOR=True)
+def test_sign_in_log_uses_rightmost_forwarded_for_when_proxy_is_trusted():
+    user, person, _household = make_member()
+    client = Client(REMOTE_ADDR="127.0.0.1")
+    client.post(
+        reverse("login"),
+        {"username": user.username, "password": PASSWORD},
+        HTTP_X_FORWARDED_FOR="198.51.100.1, 192.0.2.60",
+    )
+    success = MemberSecurityEvent.objects.visible_to(person).get(event_type=EVENT_TYPES.SIGN_IN_SUCCESS)
+    assert success.ip_address == "192.0.2.60"
+

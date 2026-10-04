@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta
+import ipaddress
 
+from django.conf import settings
 from django.contrib.auth import get_user_model, logout
 from django.contrib.sessions.models import Session
 from django.http import Http404
@@ -53,6 +55,14 @@ def enforce_session_validity(request):
 def client_ip(request):
     if request is None:
         return ""
+    if getattr(settings, "TRUST_PROXY_FORWARDED_FOR", False):
+        parts = [part.strip() for part in (request.META.get("HTTP_X_FORWARDED_FOR") or "").split(",") if part.strip()]
+        if parts:
+            candidate = parts[-1]
+            try:
+                return str(ipaddress.ip_address(candidate))[:45]
+            except ValueError:
+                pass
     return (request.META.get("REMOTE_ADDR") or "")[:45]
 
 

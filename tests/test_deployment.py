@@ -133,6 +133,7 @@ def test_compose_stages_csv_uploads_on_a_memory_backed_mount():
     assert "GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}" in compose
     assert "GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}" in compose
     assert "FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:?FIELD_ENCRYPTION_KEY must be set}" in compose
+    assert 'TRUST_PROXY_FORWARDED_FOR: "true"' in compose
     assert "SIMPLEFIN_SYNC_CRON: ${SIMPLEFIN_SYNC_CRON:-30 6 * * *}" in compose
     assert "simplefin-sync:" in compose
     assert 'entrypoint: ["/app/scripts/run-simplefin-sync.sh"]' in compose
