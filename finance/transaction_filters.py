@@ -16,6 +16,7 @@ from .models import (
     Tag,
     Transaction,
     _person_for,
+    TransactionCorrectionHistory,
 )
 from .tag_services import apply_tag_filter
 
@@ -226,12 +227,22 @@ def _apply_amount_filters(transactions, filters):
 
 
 def _accepted_suggestion_exists():
+    """The current category came from an accepted suggestion with no category change since.
+
+    Accepting writes its own history row before the suggestion is resolved, so any
+    category history recorded after `resolved_at` is a later change by someone.
+    """
+    changed_since = TransactionCorrectionHistory.objects.filter(
+        transaction_id=OuterRef(OuterRef("pk")),
+        field_name=TransactionCorrectionHistory.Field.CATEGORY,
+        recorded_at__gt=OuterRef("resolved_at"),
+    )
     return Exists(
         CategorySuggestion.objects.filter(
             transaction_id=OuterRef("pk"),
             status=CategorySuggestion.Status.ACCEPTED,
             category_id=OuterRef("category_id"),
-        )
+        ).exclude(Exists(changed_since))
     )
 
 
@@ -241,7 +252,9 @@ def _apply_set_by(transactions, set_by):
     if set_by == SET_BY_RULE:
         return transactions.filter(category_source=Transaction.CategorySource.RULE)
     if set_by == SET_BY_SUGGESTION:
-        return transactions.filter(_accepted_suggestion_exists())
+        return transactions.filter(category_source=Transaction.CategorySource.MANUAL).filter(
+            _accepted_suggestion_exists()
+        )
     if set_by == SET_BY_HAND:
         return transactions.filter(category_source=Transaction.CategorySource.MANUAL).exclude(
             _accepted_suggestion_exists()

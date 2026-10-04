@@ -317,3 +317,36 @@ def test_pagination_keeps_filter_query():
     assert set(ids(page_one)).isdisjoint(ids(page_two))
     assert "page=2" in page_one.content.decode()
     assert "q=Synthetic+page" in page_one.content.decode() or "q=Synthetic%20page" in page_one.content.decode()
+
+
+@pytest.mark.django_db
+def test_a_category_changed_by_hand_after_accepting_a_suggestion_is_set_by_hand():
+    from django.utils import timezone
+
+    from finance.category_services import assign_category
+
+    owner = make_person("owner")
+    household = make_household(owner)
+    groceries = household.categories.get(name="Groceries")
+    dining = household.categories.get(name="Dining")
+    account = make_account(owner)
+    txn = make_transaction(owner, account, description="Synthetic bistro", amount_minor=-2500)
+    assign_category(owner, txn.pk, dining.pk)
+    CategorySuggestion.objects.create(
+        member=owner,
+        transaction=txn,
+        category=dining,
+        provider="agent_harness",
+        backend="local",
+        status=CategorySuggestion.Status.ACCEPTED,
+        resolved_at=timezone.now(),
+        snapshot_hash="b" * 64,
+    )
+    assign_category(owner, txn.pk, groceries.pk)
+    assign_category(owner, txn.pk, dining.pk)
+    client = Client()
+    client.force_login(owner.user)
+    url = reverse("transaction-list")
+
+    assert ids(client.get(url, {"set_by": "suggestion"})) == []
+    assert ids(client.get(url, {"set_by": "hand"})) == [txn.pk]
