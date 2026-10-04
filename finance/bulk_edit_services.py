@@ -271,6 +271,14 @@ def _append_note(txn, note_line):
     return f"{current}\n{note_line}" if current else note_line
 
 
+def _refunds_by_original(by_id, refunds):
+    grouped = {}
+    for refund in refunds:
+        locked_refund = by_id[refund.pk]
+        grouped.setdefault(locked_refund.refund_link.original_id, []).append(locked_refund)
+    return grouped
+
+
 def _apply_category(person, txn, category, refunds):
     apply_manual_category(person, txn, category)
     for refund in refunds:
@@ -377,15 +385,11 @@ def apply_bulk_edit(
     if {txn.pk for txn in eligible} != set(preview.eligible_ids):
         # Eligibility moved after lock; refuse rather than write a different set.
         raise ValidationError(NO_ELIGIBLE)
-    refunds_by_original = {}
-    for refund in refunds:
-        locked_refund = by_id[refund.pk]
-        refunds_by_original.setdefault(locked_refund.refund_link.original_id, []).append(locked_refund)
+    refunds_by_original = _refunds_by_original(by_id, refunds)
     snapshots = []
     for txn in eligible:
         related = refunds_by_original.get(txn.pk, [])
         before = _row_snapshot(txn, action)
-        refund_befores = [_row_snapshot(refund, action) for refund in related]
         if action == ACTION_CATEGORY:
             _apply_category(person, txn, category, related)
         elif action == ACTION_ADD_TAGS:
@@ -397,10 +401,6 @@ def apply_bulk_edit(
         txn.refresh_from_db()
         before["applied_updated_at"] = txn.updated_at.isoformat()
         snapshots.append(before)
-        for snap, refund in zip(refund_befores, related):
-            refund.refresh_from_db()
-            snap["applied_updated_at"] = refund.updated_at.isoformat()
-            snapshots.append(snap)
     undo = BulkEditUndo.objects.create(
         actor=person,
         expires_at=timezone.now() + timedelta(minutes=UNDO_MINUTES),
@@ -427,10 +427,12 @@ def undo_bulk_edit(principal, undo_id):
     ids = [item["id"] for item in rows]
     if not ids:
         raise ValidationError(UNDO_UNAVAILABLE)
+    action = record.snapshot.get("action")
     unlocked = list(_visible_active(person).filter(pk__in=ids))
     if len(unlocked) != len(ids):
         raise ValidationError(CHANGED_SINCE)
-    locked = _lock_rows(person, unlocked)
+    refunds = linked_refunds_for_originals(unlocked) if action == ACTION_CATEGORY else []
+    locked = _lock_rows(person, unlocked, extra=refunds)
     by_id = {txn.pk: txn for txn in locked}
     for item in rows:
         txn = by_id.get(item["id"])
@@ -438,7 +440,7 @@ def undo_bulk_edit(principal, undo_id):
             raise ValidationError(CHANGED_SINCE)
         if txn.updated_at.isoformat() != item["applied_updated_at"]:
             raise ValidationError(CHANGED_SINCE)
-    action = record.snapshot.get("action")
+    refunds_by_original = _refunds_by_original(by_id, refunds)
     for item in rows:
         txn = by_id[item["id"]]
         if action == ACTION_CATEGORY:
@@ -454,6 +456,8 @@ def undo_bulk_edit(principal, undo_id):
                 previous_label,
                 _history_label(txn.category),
             )
+            for refund in refunds_by_original.get(txn.pk, []):
+                apply_inherited_category(person, refund, txn.category)
         elif action in (ACTION_ADD_TAGS, ACTION_REMOVE_TAGS):
             previous = list(txn.tags.all())
             restored = list(Tag.objects.visible_to(person).filter(pk__in=item["previous_tag_ids"]))

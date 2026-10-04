@@ -705,3 +705,73 @@ def test_apply_refuses_when_a_previewed_row_is_no_longer_eligible():
         )
     second.refresh_from_db()
     assert second.category_id is None
+
+
+@pytest.mark.django_db
+def test_undo_category_follows_refund_linked_after_bulk_edit():
+    owner = make_person("owner")
+    household = make_household(owner)
+    account = make_account(owner)
+    purchase = make_transaction(
+        owner, account, amount_minor=-4000, description="Synthetic store", fingerprint="p" * 64
+    )
+    grocery = groceries(household)
+    dine = dining(household)
+    assign_category(owner, purchase.pk, grocery.pk)
+    _preview, undo = apply_bulk_edit(
+        owner,
+        matching=matching_qs(owner),
+        transaction_ids=[purchase.pk],
+        select_matching=False,
+        action=ACTION_CATEGORY,
+        category_id=dine.pk,
+    )
+    refund = make_transaction(
+        owner, account, amount_minor=1500, description="Synthetic store refund", fingerprint="r" * 64
+    )
+    link_refund(owner, refund.pk, purchase.pk)
+    refund.refresh_from_db()
+    assert refund.category_id == dine.pk
+    assert refund.category_source == Transaction.CategorySource.INHERITED
+    undo_bulk_edit(owner, undo.pk)
+    purchase.refresh_from_db()
+    refund.refresh_from_db()
+    assert purchase.category_id == grocery.pk
+    assert purchase.category_source == Transaction.CategorySource.MANUAL
+    assert refund.category_id == grocery.pk
+    assert refund.category_source == Transaction.CategorySource.INHERITED
+
+
+@pytest.mark.django_db
+def test_undo_category_succeeds_when_linked_refund_is_on_unseen_account():
+    owner = make_person("owner")
+    member = make_person("member")
+    household = make_household(owner, member)
+    shared = make_account(owner, scope=Account.Scope.HOUSEHOLD, household=household)
+    private = make_account(owner, name="Synthetic Private")
+    purchase = make_transaction(
+        owner, shared, amount_minor=-4000, description="Synthetic store", fingerprint="p" * 64
+    )
+    refund = make_transaction(
+        owner, private, amount_minor=1500, description="Synthetic store refund", fingerprint="r" * 64
+    )
+    grocery = groceries(household)
+    dine = dining(household)
+    assign_category(owner, purchase.pk, grocery.pk)
+    link_refund(owner, refund.pk, purchase.pk)
+    _preview, undo = apply_bulk_edit(
+        member,
+        matching=matching_qs(member),
+        transaction_ids=[purchase.pk],
+        select_matching=False,
+        action=ACTION_CATEGORY,
+        category_id=dine.pk,
+    )
+    assert [row["id"] for row in undo.snapshot["rows"]] == [purchase.pk]
+    undo_bulk_edit(member, undo.pk)
+    purchase.refresh_from_db()
+    refund.refresh_from_db()
+    assert purchase.category_id == grocery.pk
+    assert purchase.category_source == Transaction.CategorySource.MANUAL
+    assert refund.category_id == grocery.pk
+    assert refund.category_source == Transaction.CategorySource.INHERITED
