@@ -325,3 +325,125 @@ def test_member_cannot_save_a_note_on_another_members_month():
     )
     assert response.status_code in (302, 400)
     assert SheetMonthTotal.objects.visible_to(owner).get(month=date(2026, 1, 1)).note == ""
+
+
+@pytest.mark.django_db
+def test_upload_errors_and_cancel_do_not_store_totals():
+    owner = make_person("owner")
+    make_household(owner)
+    client = signed_in(owner)
+    bad = client.post(
+        reverse("sheet-comparison"),
+        {"action": "upload", "csv_file": SimpleUploadedFile("synthetic.csv", b"\xff\xfe", "text/csv")},
+        follow=True,
+    )
+    assert bad.status_code == 200
+    assert b"UTF-8" in bad.content
+    assert SheetMonthTotal.objects.visible_to(owner).count() == 0
+    client.post(
+        reverse("sheet-comparison"),
+        {"action": "upload", "csv_file": SimpleUploadedFile("synthetic-sheet.csv", UNSIGNED_CSV, "text/csv")},
+    )
+    cancel = client.post(reverse("sheet-comparison"), {"action": "cancel-map"})
+    assert cancel.status_code == 302
+    assert client.get(reverse("sheet-comparison")).context["pending"] is None
+    client.post(
+        reverse("sheet-comparison"),
+        {"action": "upload", "csv_file": SimpleUploadedFile("synthetic-signed.csv", SIGNED_CSV, "text/csv")},
+    )
+    same_columns = client.post(
+        reverse("sheet-comparison"),
+        {
+            "action": "map",
+            "month_column": "Month",
+            "income_column": "Month",
+            "spending_column": "Spending",
+            "spending_sign": "signed",
+        },
+    )
+    assert same_columns.status_code == 400
+    stored = client.post(
+        reverse("sheet-comparison"),
+        {
+            "action": "map",
+            "month_column": "Month",
+            "income_column": "Income",
+            "spending_column": "Spending",
+            "spending_sign": "signed",
+        },
+    )
+    assert stored.status_code == 302
+    assert SheetMonthTotal.objects.visible_to(owner).get(month=date(2026, 1, 1)).spending_minor == 40000
+
+
+@pytest.mark.django_db
+def test_duplicate_month_rows_are_rejected_without_storing():
+    owner = make_person("owner")
+    make_household(owner)
+    client = signed_in(owner)
+    client.post(
+        reverse("sheet-comparison"),
+        {
+            "action": "upload",
+            "csv_file": SimpleUploadedFile(
+                "synthetic-sheet.csv",
+                b"Month,Income,Spending\n2026-01,1.00,1.00\n2026-01,2.00,2.00\n",
+                "text/csv",
+            ),
+        },
+    )
+    response = client.post(
+        reverse("sheet-comparison"),
+        {
+            "action": "map",
+            "month_column": "Month",
+            "income_column": "Income",
+            "spending_column": "Spending",
+            "spending_sign": "unsigned",
+        },
+        follow=True,
+    )
+    assert b"only once" in response.content
+    assert SheetMonthTotal.objects.visible_to(owner).count() == 0
+
+
+@pytest.mark.django_db
+def test_unauthenticated_visitor_is_sent_to_sign_in():
+    response = Client().get(reverse("sheet-comparison"))
+    assert response.status_code == 302
+    assert reverse("login") in response.url
+
+
+@pytest.mark.django_db
+def test_source_filename_is_sanitized():
+    from finance.sheet_comparison import _source_name, parsed_month_totals, save_mapping, store_month_totals
+
+    owner = make_person("owner")
+    make_household(owner)
+    headers, rows = read_sheet_csv(UNSIGNED_CSV)
+    mapping = save_mapping(
+        owner,
+        month_column="Month",
+        income_column="Income",
+        spending_column="Spending",
+        spending_sign="unsigned",
+        headers=headers,
+    )
+    store_month_totals(owner, parsed_month_totals(rows, mapping), r"..\..\secret-export.csv")
+    assert SheetMonthTotal.objects.visible_to(owner).first().source == "secret-export.csv"
+    assert _source_name("synthetic-sheet.csv") == "synthetic-sheet.csv"
+    assert _source_name("bad/name?.csv") == "uploaded.csv"
+
+
+def test_oversized_and_empty_csv_are_rejected():
+    from finance.sheet_comparison import MAX_FILE_BYTES, SheetCsvError
+
+    with pytest.raises(SheetCsvError):
+        read_sheet_csv(None)
+    with pytest.raises(SheetCsvError):
+        read_sheet_csv(b"x" * (MAX_FILE_BYTES + 1))
+    with pytest.raises(SheetCsvError):
+        read_sheet_csv(b"Month,Income,Spending\n")
+    with pytest.raises(SheetCsvError):
+        read_sheet_csv(b"Month,Month,Spending\n2026-01,1,1\n")
+
