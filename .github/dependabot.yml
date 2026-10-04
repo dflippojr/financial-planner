@@ -10,6 +10,8 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    assignees:
+      - dflippojr
     ignore:
       # Django major upgrades are planned as their own issue; 5.2 is LTS.
       - dependency-name: django
@@ -28,6 +30,8 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    assignees:
+      - dflippojr
     ignore:
       # A Postgres major upgrade needs a dump and restore of the data
       # volume; it is planned as its own issue, never merged as a bump.
@@ -39,6 +43,8 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    assignees:
+      - dflippojr
     ignore:
       # A Postgres major upgrade needs a dump and restore of the data
       # volume; it is planned as its own issue, never merged as a bump.
@@ -50,3 +56,5 @@ updates:
     schedule:
       interval: monthly
     open-pull-requests-limit: 5
+    assignees:
+      - dflippojr
