@@ -18,6 +18,27 @@
   <button type="submit" class="btn btn-primary">Filter</button>
   <a class="btn btn-ghost" href="{% url 'transaction-list' %}">Clear</a>
 </form>
+<form method="post" action="{% url 'transaction-saved-filter-create' %}" class="mb-4 flex flex-wrap items-end gap-3">
+  {% csrf_token %}
+  {% for name, value in filter_hidden %}
+    <input type="hidden" name="{{ name }}" value="{{ value }}">
+  {% endfor %}
+  {% include "finance/_form_fields.html" with form=save_filter_form %}
+  <button type="submit" class="btn">Save filters</button>
+</form>
+{% if saved_filters %}
+<div class="mb-4 flex flex-wrap items-center gap-2">
+  {% for saved in saved_filters %}
+  <span class="badge badge-lg gap-1">
+    <a class="link" href="{% url 'transaction-saved-filter-apply' saved.pk %}">{{ saved.name }}</a>
+    <form method="post" action="{% url 'transaction-saved-filter-delete' saved.pk %}" class="inline">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-ghost btn-xs" aria-label="Delete saved filter {{ saved.name }}">×</button>
+    </form>
+  </span>
+  {% endfor %}
+</div>
+{% endif %}
 {% if list_totals %}
 <div class="mb-4 grid grid-cols-1 gap-4 md:grid-cols-3">
   <article class="stats bg-base-100 shadow">
@@ -191,6 +212,17 @@
     </tbody>
   </table>
 </div>
+{% if page and page.paginator.num_pages > 1 %}
+<nav class="mt-4 flex flex-wrap items-center gap-2" aria-label="Transaction pages">
+  {% if page.has_previous %}
+  <a class="btn btn-sm" href="?{{ filter_query }}{% if filter_query %}&{% endif %}page={{ page.previous_page_number }}">Previous</a>
+  {% endif %}
+  <span>Page {{ page.number }} of {{ page.paginator.num_pages }}</span>
+  {% if page.has_next %}
+  <a class="btn btn-sm" href="?{{ filter_query }}{% if filter_query %}&{% endif %}page={{ page.next_page_number }}">Next</a>
+  {% endif %}
+</nav>
+{% endif %}
 <script>
 (function () {
   var page = document.getElementById("select-page");

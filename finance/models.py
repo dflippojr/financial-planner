@@ -26,6 +26,33 @@ def validate_bulk_edit_snapshot(value):
         raise ValidationError("Bulk edit snapshot must be an object with a row list.")
 
 
+SAVED_FILTER_QUERY_KEYS = frozenset(
+    (
+        "date_from",
+        "date_to",
+        "account",
+        "category",
+        "q",
+        "tag",
+        "scope",
+        "amount_min",
+        "amount_max",
+        "amount_mode",
+        "has_note",
+        "is_split",
+        "set_by",
+    )
+)
+
+
+def validate_saved_filter_query(value):
+    if not isinstance(value, dict):
+        raise ValidationError("Saved filter query must be an object.")
+    for key, item in value.items():
+        if key not in SAVED_FILTER_QUERY_KEYS or not isinstance(item, str):
+            raise ValidationError("Saved filter query is invalid.")
+
+
 def validate_reason_list(value):
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise ValidationError("Reasons must be a list of strings.")
@@ -709,6 +736,35 @@ class TransactionTag(models.Model):
 
     def __str__(self):
         return f"{self.transaction_id}:{self.tag_id}"
+
+
+class SavedTransactionFilter(models.Model):
+    member = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="saved_transaction_filters")
+    name = models.CharField(max_length=80)
+    query = models.JSONField(validators=(validate_saved_filter_query,))
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            person = _person_for(principal)
+            if person is None:
+                return self.none()
+            return self.filter(member=person)
+
+    objects = QuerySet.as_manager()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                Lower("name"),
+                F("member"),
+                name="saved_txn_filter_unique_name_per_member",
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
 
 
 class TransactionCorrectionHistory(models.Model):
