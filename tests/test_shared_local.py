@@ -291,3 +291,23 @@ def test_daily_cap_does_not_block_resuming_a_started_session(harness, settings):
 
     assert resumed.ok
     assert fresh.failure_code == LIMIT_REACHED
+
+
+@pytest.mark.django_db
+def test_daily_cap_still_blocks_chat_follow_ups(harness, settings):
+    settings.AI_SHARED_LOCAL_DAILY_CAP = 1
+    _host_user, host, _guest_user, guest, _household = _household_pair(harness)
+    set_offer_local_to_household(host, True)
+    set_shared_local_use(guest, chat=True, background=True)
+    assert run_structured(guest, "one", feature="structured").ok
+
+    follow_up = run_conversation(
+        guest,
+        "another question",
+        feature="chat",
+        session_id="sess-chat-1",
+        follow_up=True,
+        tools=default_tools(),
+    )
+
+    assert follow_up.failure_code == LIMIT_REACHED

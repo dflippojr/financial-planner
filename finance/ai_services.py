@@ -405,7 +405,9 @@ def _run(
         return ProviderResult(ok=False, failure_code=AUTHORIZATION_REQUIRED)
     shared = connection.owner_id != person.id
     if shared:
-        denied = _shared_local_denied(person, connection, chosen, use_chat=use_chat, resuming=bool(session_id))
+        # Only polling a started session skips the cap; a follow-up prompt is new work.
+        resuming = bool(session_id) and not follow_up
+        denied = _shared_local_denied(person, connection, chosen, use_chat=use_chat, resuming=resuming)
         if denied is not None:
             return denied
     # Project-based hosted sessions still need the operator flag. Tools-only
