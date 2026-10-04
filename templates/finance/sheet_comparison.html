@@ -1,0 +1,105 @@
+{% extends "finance/base.html" %}
+{% block title %}Sheet comparison · Financial Planner{% endblock %}
+{% block content %}
+<h1 class="mb-4 text-2xl font-bold">Sheet comparison</h1>
+{% include "finance/_messages.html" %}
+<p class="mb-4 max-w-2xl opacity-80">Compare monthly income and spending from a Google Sheet CSV with the same cash-flow totals the app already shows. Only month totals are stored, privately, for you. The uploaded file is discarded.</p>
+
+<form method="get" class="mb-6 flex flex-wrap items-end gap-3">
+  {% include "finance/_form_fields.html" with form=filter_form %}
+  <button type="submit" class="btn btn-primary">Update filters</button>
+</form>
+
+{% if report.rows %}
+<section class="card bg-base-100 shadow-sm mb-6" aria-label="Match summary">
+  <div class="card-body">
+    <h2 class="card-title">Recent months</h2>
+    <p>{{ report.recent_matched }} of {{ report.recent_count }} recent months match within {{ report.tolerance_display }}.</p>
+    <form method="post" class="mt-4 flex flex-wrap items-end gap-3">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="tolerance">
+      {% include "finance/_form_fields.html" with form=tolerance_form %}
+      <button type="submit" class="btn btn-outline">Save tolerance</button>
+    </form>
+  </div>
+</section>
+
+<section class="mb-6 overflow-x-auto">
+  <table class="table table-zebra">
+    <thead>
+      <tr>
+        <th>Month</th>
+        <th>Sheet income</th>
+        <th>App income</th>
+        <th>Sheet spending</th>
+        <th>App spending</th>
+        <th>Sheet net</th>
+        <th>App net</th>
+        <th>Net difference</th>
+        <th>Transactions</th>
+        <th>Note</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in report.rows %}
+      <tr>
+        <td>{{ row.label }}{% if row.matches %} <span class="badge badge-ghost">match</span>{% endif %}</td>
+        <td>{{ row.sheet_income_display }}</td>
+        <td>{{ row.app_income_display }}</td>
+        <td>{{ row.sheet_spending_display }}</td>
+        <td>{{ row.app_spending_display }}</td>
+        <td>{{ row.sheet_net_display }}</td>
+        <td>{{ row.app_net_display }}</td>
+        <td>{{ row.net_diff_display }}</td>
+        <td><a class="link" href="{{ row.drilldown_url }}">Transactions</a></td>
+        <td>
+          <form method="post" class="flex gap-2">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="note">
+            <input type="hidden" name="month" value="{{ row.month|date:'Y-m-01' }}">
+            <label class="sr-only" for="note-{{ row.month|date:'Y-m' }}">Note for {{ row.label }}</label>
+            <input id="note-{{ row.month|date:'Y-m' }}" class="input input-bordered input-sm w-48" type="text" name="note" value="{{ row.note }}" maxlength="2000">
+            <button type="submit" class="btn btn-sm btn-ghost">Save</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% else %}
+<p class="mb-6 opacity-80">No stored sheet totals yet. Upload a CSV with one row per month.</p>
+{% endif %}
+
+<section class="card bg-base-100 shadow-sm mb-6">
+  <div class="card-body">
+    <h2 class="card-title">{% if pending %}Map columns{% else %}Upload month totals{% endif %}</h2>
+    {% if pending %}
+    <p class="opacity-80">Pick the month, income, and spending columns. This mapping is remembered for later uploads. Spending may be unsigned (positive) or signed (negative means spending).</p>
+    <form method="post">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="map">
+      {% include "finance/_form_fields.html" with form=mapping_form %}
+      <div class="flex flex-wrap gap-2">
+        <button type="submit" class="btn btn-primary">Store totals</button>
+        <button type="submit" class="btn btn-ghost" name="action" value="cancel-map">Cancel</button>
+      </div>
+    </form>
+    {% else %}
+    <form method="post" enctype="multipart/form-data">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="upload">
+      {% include "finance/_form_fields.html" with form=upload_form %}
+      <button type="submit" class="btn btn-primary">Upload CSV</button>
+    </form>
+    {% endif %}
+  </div>
+</section>
+
+{% if report.rows or report.settings %}
+<form method="post" action="{% url 'sheet-comparison-delete' %}" class="mb-8" onsubmit="return confirm('Delete all stored sheet totals and the remembered mapping?');">
+  {% csrf_token %}
+  <button type="submit" class="btn btn-outline btn-error">Delete comparison data</button>
+</form>
+{% endif %}
+{% endblock %}

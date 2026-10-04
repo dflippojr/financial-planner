@@ -13,6 +13,8 @@ from .saved_mappings import parse_saved_profile
 
 SESSION_KEY = "csv_import_stages"
 TOKEN_PATTERN = re.compile(r"[0-9a-f]{32}")
+KIND_CSV_IMPORT = "csv_import"
+KIND_SHEET_COMPARISON = "sheet_comparison"
 
 
 class StageUnavailable(ValueError):
@@ -35,16 +37,24 @@ def _session_stages(request):
     return request.session.get(SESSION_KEY, {})
 
 
-def _is_account_stage(request, metadata, account_id):
-    return metadata.get("user_id") == request.user.pk and metadata.get("account_id") == account_id
+def _stage_kind(metadata):
+    return metadata.get("kind") or KIND_CSV_IMPORT
 
 
-def find_live_stage(request, account_id):
+def _is_account_stage(request, metadata, account_id, kind=KIND_CSV_IMPORT):
+    return (
+        metadata.get("user_id") == request.user.pk
+        and metadata.get("account_id") == account_id
+        and _stage_kind(metadata) == kind
+    )
+
+
+def find_live_stage(request, account_id, kind=KIND_CSV_IMPORT):
     cleanup_expired(request)
     matches = [
         (token, metadata)
         for token, metadata in _session_stages(request).items()
-        if _is_account_stage(request, metadata, account_id)
+        if _is_account_stage(request, metadata, account_id, kind)
     ]
     if not matches:
         return None
@@ -52,11 +62,11 @@ def find_live_stage(request, account_id):
     return token
 
 
-def _delete_account_stages(request, account_id):
+def _delete_account_stages(request, account_id, kind=KIND_CSV_IMPORT):
     tokens = [
         token
         for token, metadata in _session_stages(request).items()
-        if _is_account_stage(request, metadata, account_id)
+        if _is_account_stage(request, metadata, account_id, kind)
     ]
     for token in tokens:
         delete_stage(request, token)
@@ -83,7 +93,7 @@ def cleanup_expired(request):
             pass
 
 
-def create_stage(request, account_id, uploaded_file, import_profile="generic"):
+def create_stage(request, account_id, uploaded_file, import_profile="generic", *, kind=KIND_CSV_IMPORT):
     cleanup_expired(request)
     if uploaded_file.size > MAX_FILE_BYTES:
         raise CsvInputError("The CSV file exceeds the 5 MB limit.")
@@ -91,7 +101,7 @@ def create_stage(request, account_id, uploaded_file, import_profile="generic"):
     if len(content) > MAX_FILE_BYTES:
         raise CsvInputError("The CSV file exceeds the 5 MB limit.")
 
-    _delete_account_stages(request, account_id)
+    _delete_account_stages(request, account_id, kind)
     token = uuid.uuid4().hex
     path = _path(token)
     with path.open("xb") as staged:
@@ -103,21 +113,27 @@ def create_stage(request, account_id, uploaded_file, import_profile="generic"):
         "account_id": account_id,
         "created_at": time.time(),
         "import_profile": import_profile,
+        "kind": kind,
     }
     request.session[SESSION_KEY] = stages
     return token, content
 
 
-def _live_metadata(request, token, account_id):
+def _live_metadata(request, token, account_id, kind=KIND_CSV_IMPORT):
     cleanup_expired(request)
     metadata = _session_stages(request).get(token)
-    if not metadata or metadata.get("user_id") != request.user.pk or metadata.get("account_id") != account_id:
+    if (
+        not metadata
+        or metadata.get("user_id") != request.user.pk
+        or metadata.get("account_id") != account_id
+        or _stage_kind(metadata) != kind
+    ):
         raise StageUnavailable
     return metadata
 
 
-def load_stage(request, token, account_id):
-    _live_metadata(request, token, account_id)
+def load_stage(request, token, account_id, kind=KIND_CSV_IMPORT):
+    _live_metadata(request, token, account_id, kind)
     try:
         return _path(token).read_bytes()
     except OSError as exc:

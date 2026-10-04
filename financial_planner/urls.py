@@ -12,6 +12,7 @@ from finance import (
     net_worth_views,
     planning_views,
     monthly_review_views,
+    sheet_comparison_views,
     rule_views,
     year_end_views,
     savings_goal_views,
@@ -165,6 +166,21 @@ urlpatterns = [
         RedirectView.as_view(pattern_name="csv-mapping-edit", permanent=True, query_string=True),
     ),
     path("transactions/", views.transaction_list, name="transaction-list"),
+    path(
+        "transactions/saved-filters/",
+        views.transaction_saved_filter_create,
+        name="transaction-saved-filter-create",
+    ),
+    path(
+        "transactions/saved-filters/<int:filter_id>/apply/",
+        views.transaction_saved_filter_apply,
+        name="transaction-saved-filter-apply",
+    ),
+    path(
+        "transactions/saved-filters/<int:filter_id>/delete/",
+        views.transaction_saved_filter_delete,
+        name="transaction-saved-filter-delete",
+    ),
     path("transactions/bulk-edit/", bulk_edit_views.bulk_edit_preview, name="transaction-bulk-preview"),
     path("transactions/bulk-edit/apply/", bulk_edit_views.bulk_edit_apply, name="transaction-bulk-apply"),
     path(
@@ -233,6 +249,12 @@ urlpatterns = [
         "planning/review/regenerate/",
         monthly_review_views.monthly_review_regenerate,
         name="monthly-review-regenerate",
+    ),
+    path("planning/sheet-comparison/", sheet_comparison_views.sheet_comparison, name="sheet-comparison"),
+    path(
+        "planning/sheet-comparison/delete/",
+        sheet_comparison_views.sheet_comparison_delete,
+        name="sheet-comparison-delete",
     ),
     path("planning/year-end/", year_end_views.year_end, name="year-end"),
     path("planning/year-end/csv/<slug:section>/", year_end_views.year_end_csv, name="year-end-csv"),
