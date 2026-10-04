@@ -1878,6 +1878,7 @@ class AlertSettings(models.Model):
     budget_enabled = models.BooleanField(default=True)
     large_transaction_enabled = models.BooleanField(default=True)
     monthly_review_enabled = models.BooleanField(default=True)
+    monthly_review_ai_enabled = models.BooleanField(default=True)
     large_transaction_minor = models.BigIntegerField(
         null=True,
         blank=True,
@@ -1902,6 +1903,8 @@ class MonthlyReview(models.Model):
     visibility_key = models.CharField(max_length=64, validators=(sha256_validator,))
     facts = models.JSONField()
     generated_at = models.DateTimeField()
+    ai_paragraph = models.TextField(blank=True, default="")
+    ai_backend = models.CharField(max_length=32, blank=True, default="")
 
     class Meta:
         constraints = [
