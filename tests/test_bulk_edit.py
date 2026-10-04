@@ -25,6 +25,7 @@ from finance.bulk_edit_services import (
 from finance.category_services import (
     assign_category,
     ensure_household_categories,
+    link_refund,
     split_transaction,
 )
 from finance.category_suggestion_services import accept_suggestion, snapshot_hash
@@ -543,3 +544,56 @@ def test_http_preview_apply_undo_flow():
     assert b"Bulk edit undone" in undo.content
     txn.refresh_from_db()
     assert txn.category_id is None
+
+
+@pytest.mark.django_db
+def test_bulk_category_propagates_to_linked_refunds_and_skips_refund_legs():
+    from finance.bulk_edit_services import SKIP_LINKED_REFUND
+
+    owner = make_person("owner")
+    household = make_household(owner)
+    account = make_account(owner)
+    purchase = make_transaction(
+        owner, account, amount_minor=-4000, description="Synthetic store", fingerprint="p" * 64
+    )
+    refund = make_transaction(
+        owner, account, amount_minor=1500, description="Synthetic store refund", fingerprint="r" * 64
+    )
+    grocery = groceries(household)
+    dine = dining(household)
+    assign_category(owner, purchase.pk, grocery.pk)
+    link_refund(owner, refund.pk, purchase.pk)
+    refund.refresh_from_db()
+    assert refund.category_id == grocery.pk
+    assert refund.category_source == Transaction.CategorySource.INHERITED
+    preview = preview_bulk_edit(
+        owner,
+        matching=matching_qs(owner),
+        transaction_ids=[purchase.pk, refund.pk],
+        select_matching=False,
+        action=ACTION_CATEGORY,
+        category_id=dine.pk,
+    )
+    assert preview.eligible_ids == [purchase.pk]
+    assert preview.skip_counts[SKIP_LINKED_REFUND] == 1
+    _applied, undo = apply_bulk_edit(
+        owner,
+        matching=matching_qs(owner),
+        transaction_ids=[purchase.pk, refund.pk],
+        select_matching=False,
+        action=ACTION_CATEGORY,
+        category_id=dine.pk,
+    )
+    purchase.refresh_from_db()
+    refund.refresh_from_db()
+    assert purchase.category_id == dine.pk
+    assert purchase.category_source == Transaction.CategorySource.MANUAL
+    assert refund.category_id == dine.pk
+    assert refund.category_source == Transaction.CategorySource.INHERITED
+    undo_bulk_edit(owner, undo.pk)
+    purchase.refresh_from_db()
+    refund.refresh_from_db()
+    assert purchase.category_id == grocery.pk
+    assert purchase.category_source == Transaction.CategorySource.MANUAL
+    assert refund.category_id == grocery.pk
+    assert refund.category_source == Transaction.CategorySource.INHERITED

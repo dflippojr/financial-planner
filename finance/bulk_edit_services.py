@@ -8,8 +8,12 @@ from django.utils import timezone
 from .category_services import (
     _history_label,
     _record_text_history,
+    apply_inherited_category,
+    apply_manual_category,
     assignable_categories,
     exclusion_exists_for,
+    linked_refunds_for_originals,
+    transaction_is_linked_refund,
 )
 from .lifecycle_services import lock_actor_household
 from .models import (
@@ -34,11 +38,13 @@ ACTIONS = (ACTION_CATEGORY, ACTION_ADD_TAGS, ACTION_REMOVE_TAGS, ACTION_APPEND_N
 SKIP_INVESTMENT = "investment_activity"
 SKIP_SPLIT = "split_parent"
 SKIP_TRANSFER = "transfer_or_card_payment"
+SKIP_LINKED_REFUND = "linked_refund"
 SKIP_NOTE_TOO_LONG = "note_too_long"
 SKIP_LABELS = {
     SKIP_INVESTMENT: "Investment activity",
     SKIP_SPLIT: "Split parents (edit parts on the split page)",
     SKIP_TRANSFER: "Transfers and card payments",
+    SKIP_LINKED_REFUND: "Linked refunds (follow their purchase)",
     SKIP_NOTE_TOO_LONG: "Note would exceed 2,000 characters",
 }
 NO_TAGS = "No tags"
@@ -110,7 +116,9 @@ def _candidate_rows(person, matching, transaction_ids, select_matching):
         if matching_count > BULK_EDIT_CAP:
             return matching_count, True, []
         rows = list(
-            matching.select_related("account", "category").prefetch_related("tags")[:BULK_EDIT_CAP]
+            matching.select_related("account", "category", "refund_link").prefetch_related("tags")[
+                :BULK_EDIT_CAP
+            ]
         )
         return matching_count, False, rows
     ids = _parse_ids(transaction_ids)
@@ -120,7 +128,7 @@ def _candidate_rows(person, matching, transaction_ids, select_matching):
         _visible_active(person)
         .filter(pk__in=ids)
         .annotate(_excluded=exclusion_exists_for(person))
-        .select_related("account", "category")
+        .select_related("account", "category", "refund_link")
         .prefetch_related("tags")
         .order_by("pk")
     )
@@ -131,6 +139,8 @@ def _skip_reason(txn, action, note_line=""):
     if txn.kind == Transaction.Kind.INVESTMENT_ACTIVITY:
         return SKIP_INVESTMENT
     if action == ACTION_CATEGORY:
+        if transaction_is_linked_refund(txn):
+            return SKIP_LINKED_REFUND
         if txn.category_source == Transaction.CategorySource.SPLIT:
             return SKIP_SPLIT
         if txn.is_excluded_transfer:
@@ -221,27 +231,30 @@ def preview_bulk_edit(
     )
 
 
-def _lock_rows(person, transactions):
+def _lock_rows(person, transactions, extra=()):
     lock_actor_household(person)
-    account_ids = sorted({item.account_id for item in transactions})
+    required_ids = sorted({item.pk for item in transactions})
+    all_items = list(transactions) + [item for item in extra if item.pk not in set(required_ids)]
+    account_ids = sorted({item.account_id for item in all_items})
     if account_ids:
         list(Account.objects.select_for_update().filter(pk__in=account_ids).order_by("pk"))
-    ids = sorted(item.pk for item in transactions)
+    ids = sorted({item.pk for item in all_items})
     locked = list(
         Transaction.objects.select_for_update(of=("self",))
-        .select_related("account", "category")
+        .select_related("account", "category", "refund_link")
+        .prefetch_related("tags")
         .filter(pk__in=ids, status=Transaction.Status.ACTIVE)
         .order_by("pk")
     )
     if len(locked) != len(ids):
         raise PermissionDenied(_DENIED)
-    visible = set(_visible_active(person).filter(pk__in=ids).values_list("pk", flat=True))
-    if visible != set(ids):
+    visible = set(_visible_active(person).filter(pk__in=required_ids).values_list("pk", flat=True))
+    if visible != set(required_ids):
         raise PermissionDenied(_DENIED)
     excluded = {
         pk
         for pk, is_excluded in _visible_active(person)
-        .filter(pk__in=ids)
+        .filter(pk__in=required_ids)
         .annotate(_excluded=exclusion_exists_for(person))
         .values_list("pk", "_excluded")
         if is_excluded
@@ -256,18 +269,10 @@ def _append_note(txn, note_line):
     return f"{current}\n{note_line}" if current else note_line
 
 
-def _apply_category(person, txn, category):
-    previous = txn.category
-    txn.category = category
-    txn.category_source = Transaction.CategorySource.MANUAL
-    txn.save(update_fields=("category", "category_source", "updated_at"))
-    _record_text_history(
-        txn,
-        person,
-        TransactionCorrectionHistory.Field.CATEGORY,
-        _history_label(previous),
-        _history_label(category),
-    )
+def _apply_category(person, txn, category, refunds):
+    apply_manual_category(person, txn, category)
+    for refund in refunds:
+        apply_inherited_category(person, refund, category)
 
 
 def _apply_tags(person, txn, tags, *, add):
@@ -350,10 +355,15 @@ def apply_bulk_edit(
         note_line = (note_line or "").strip()
     category = _category_for(person, category_id) if action == ACTION_CATEGORY else None
     tags = _tags_for(person, tag_ids) if action in (ACTION_ADD_TAGS, ACTION_REMOVE_TAGS) else []
-    unlocked = list(_visible_active(person).filter(pk__in=preview.eligible_ids))
-    locked = _lock_rows(person, unlocked)
+    unlocked = list(_visible_active(person).filter(pk__in=preview.eligible_ids).order_by("pk"))
+    refunds = linked_refunds_for_originals(unlocked) if action == ACTION_CATEGORY else []
+    locked = _lock_rows(person, unlocked, extra=refunds)
+    by_id = {txn.pk: txn for txn in locked}
     eligible = []
-    for txn in locked:
+    for pk in preview.eligible_ids:
+        txn = by_id.get(pk)
+        if txn is None:
+            continue
         reason = _skip_reason(txn, action, note_line=note_line)
         if reason:
             continue
@@ -362,11 +372,17 @@ def apply_bulk_edit(
     if {txn.pk for txn in eligible} != set(preview.eligible_ids):
         # Eligibility moved after lock; refuse rather than write a different set.
         raise ValidationError(NO_ELIGIBLE)
+    refunds_by_original = {}
+    for refund in refunds:
+        locked_refund = by_id[refund.pk]
+        refunds_by_original.setdefault(locked_refund.refund_link.original_id, []).append(locked_refund)
     snapshots = []
     for txn in eligible:
+        related = refunds_by_original.get(txn.pk, [])
         before = _row_snapshot(txn, action)
+        refund_befores = [_row_snapshot(refund, action) for refund in related]
         if action == ACTION_CATEGORY:
-            _apply_category(person, txn, category)
+            _apply_category(person, txn, category, related)
         elif action == ACTION_ADD_TAGS:
             _apply_tags(person, txn, tags, add=True)
         elif action == ACTION_REMOVE_TAGS:
@@ -376,6 +392,10 @@ def apply_bulk_edit(
         txn.refresh_from_db()
         before["applied_updated_at"] = txn.updated_at.isoformat()
         snapshots.append(before)
+        for snap, refund in zip(refund_befores, related):
+            refund.refresh_from_db()
+            snap["applied_updated_at"] = refund.updated_at.isoformat()
+            snapshots.append(snap)
     undo = BulkEditUndo.objects.create(
         actor=person,
         expires_at=timezone.now() + timedelta(minutes=UNDO_MINUTES),
