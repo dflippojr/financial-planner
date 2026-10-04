@@ -141,6 +141,11 @@ def test_compose_stages_csv_uploads_on_a_memory_backed_mount():
     assert "AI_LOCAL_QUIET_WINDOW: ${AI_LOCAL_QUIET_WINDOW:-22:00-06:00}" in compose
     assert "tmpfs:" in compose
     assert "- /run/csv-staging:size=128m,mode=1777" in compose
+    assert "BACKUP_STATUS_PATH: /backups/status" in compose
+    assert "OPERATOR_USERNAMES: ${OPERATOR_USERNAMES:-}" in compose
+    assert "OFFSITE_RCLONE_REMOTE: ${OFFSITE_RCLONE_REMOTE:-}" in compose
+    assert "OFFSITE_AGE_RECIPIENT: ${OFFSITE_AGE_RECIPIENT:-}" in compose
+    assert "RCLONE_CONFIG: /config/rclone.conf" in compose
 
 
 def test_dockerfile_builds_css_with_a_pinned_checksum_and_collectstatic():

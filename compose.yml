@@ -50,6 +50,8 @@ services:
       AI_CHAT_MAX_TURNS: ${AI_CHAT_MAX_TURNS:-20}
       AI_CHAT_MAX_TOOL_CALLS: ${AI_CHAT_MAX_TOOL_CALLS:-40}
       AI_CHAT_LOCAL_ENABLED: ${AI_CHAT_LOCAL_ENABLED:-false}
+      BACKUP_STATUS_PATH: /backups/status
+      OPERATOR_USERNAMES: ${OPERATOR_USERNAMES:-}
     depends_on:
       db:
         condition: service_healthy
@@ -59,6 +61,11 @@ services:
       # Memory-backed and discarded whenever the container stops. The app creates
       # its own 0700 subdirectory here, so the mount itself needs no fixed user id.
       - /run/csv-staging:size=128m,mode=1777
+    volumes:
+      - type: bind
+        source: ${BACKUP_DIR:?BACKUP_DIR must be set}
+        target: /backups
+        read_only: true
     ports:
       - "127.0.0.1:${APP_PORT:-8000}:8000"
     healthcheck:
@@ -81,6 +88,9 @@ services:
       TZ: ${TZ:-America/New_York}
       NIGHTLY_RETENTION: ${NIGHTLY_RETENTION:-14}
       WEEKLY_RETENTION: ${WEEKLY_RETENTION:-8}
+      OFFSITE_RCLONE_REMOTE: ${OFFSITE_RCLONE_REMOTE:-}
+      OFFSITE_AGE_RECIPIENT: ${OFFSITE_AGE_RECIPIENT:-}
+      RCLONE_CONFIG: /config/rclone.conf
     depends_on:
       db:
         condition: service_healthy
@@ -88,6 +98,10 @@ services:
       - type: bind
         source: ${BACKUP_DIR:?BACKUP_DIR must be set}
         target: /backups
+      - type: bind
+        source: ${CONFIG_DIR:-D:/financial-planner-config}
+        target: /config
+        read_only: true
     command: ["/opt/financial-planner/run-backups.sh"]
 
   simplefin-sync:
@@ -108,6 +122,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       POSTGRES_HOST: db
       POSTGRES_PORT: "5432"
+      BACKUP_STATUS_PATH: /backups/status
+      OPERATOR_USERNAMES: ${OPERATOR_USERNAMES:-}
     depends_on:
       db:
         condition: service_healthy
@@ -115,6 +131,11 @@ services:
       # can query tables a new release has not created yet.
       app:
         condition: service_healthy
+    volumes:
+      - type: bind
+        source: ${BACKUP_DIR:?BACKUP_DIR must be set}
+        target: /backups
+        read_only: true
     entrypoint: ["/app/scripts/run-simplefin-sync.sh"]
     # The image's HTTP health check probes Gunicorn, which this container does
     # not run. The scheduler loop is the main process, so the container stops

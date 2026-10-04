@@ -2,6 +2,11 @@
 {% block title %}Data · Financial Planner{% endblock %}
 {% block settings_content %}
 <h2 class="mb-4 text-xl font-semibold">Data</h2>
+{% if is_backup_operator %}
+<h3 class="mb-2 font-semibold">Backups</h3>
+<p class="mb-2 text-sm">Last local backup: {% if backup_status.last_success %}{{ backup_status.last_success|date:"Y-m-d H:i" }}{% else %}Never{% endif %}</p>
+<p class="mb-6 text-sm">Last off-site copy: {% if backup_status.offsite_success %}{{ backup_status.offsite_success|date:"Y-m-d H:i" }}{% else %}Never{% endif %}</p>
+{% endif %}
 <form method="post" action="{% url 'account-export' %}" class="mb-4">
   {% csrf_token %}
   <button type="submit" class="btn btn-outline">Export data</button>
