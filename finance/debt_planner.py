@@ -65,14 +65,15 @@ def _strategy_order(debts, balances, strategy, custom_order):
     return remaining
 
 
-def _allocate_payments(debts_in_order, balances, extra_minor):
+def _allocate_payments(debts_in_order, balances, extra_minor, *, rollover=True):
     payments = {debt.account_id: 0 for debt in debts_in_order}
     pool = extra_minor
     for debt in debts_in_order:
         due = min(debt.minimum_payment_minor, balances[debt.account_id])
         payments[debt.account_id] = due
         unused = debt.minimum_payment_minor - due
-        if unused > 0:
+        # Minimums only pays each debt its own minimum; nothing moves between debts.
+        if unused > 0 and rollover:
             pool += unused
     for debt in debts_in_order:
         leftover = balances[debt.account_id] - payments[debt.account_id]
@@ -121,7 +122,12 @@ def simulate_payoff(debts, extra_minor=0, strategy=STRATEGY_MINIMUMS, custom_ord
         freed_minor = 0
         if strategy != STRATEGY_MINIMUMS:
             freed_minor = sum(debt.minimum_payment_minor for debt in debts if before[debt.account_id] <= 0)
-        payments = _allocate_payments(ordered, balances, extra_minor + freed_minor)
+        payments = _allocate_payments(
+            ordered,
+            balances,
+            extra_minor + freed_minor,
+            rollover=strategy != STRATEGY_MINIMUMS,
+        )
         paid_total = 0
         for debt in debts:
             paid = payments.get(debt.account_id, 0)
@@ -192,7 +198,8 @@ def compare_to_minimums(debts, extra_minor, strategy, custom_order=None, start=N
         start=start,
     )
     baseline = simulate_payoff(debts, extra_minor=0, strategy=STRATEGY_MINIMUMS, start=start)
-    if chosen.never_pays_off or baseline.never_pays_off:
+    # Interest past the horizon is unknown, so a truncated plan can't be compared.
+    if chosen.never_pays_off or baseline.never_pays_off or chosen.beyond_limit or baseline.beyond_limit:
         interest_saved = None
     else:
         interest_saved = baseline.total_interest_minor - chosen.total_interest_minor

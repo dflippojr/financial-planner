@@ -151,3 +151,21 @@ def test_a_payoff_past_the_horizon_is_not_reported_as_never():
     assert plan.never_pays_off is False
     assert plan.beyond_limit is True
     assert plan.debts[0].payoff_label == BEYOND_LIMIT
+
+
+def test_minimums_only_keeps_an_unused_minimum_with_its_own_debt():
+    tiny = _debt(1, 100, "0", 10_000)
+    other = _debt(2, 30_000, "0", 1_000)
+
+    plan = simulate_payoff([tiny, other], strategy=STRATEGY_MINIMUMS, start=date(2026, 1, 1))
+
+    assert plan.months[0].paid_by_id == {1: 100, 2: 1_000}
+
+
+def test_interest_savings_are_not_compared_past_the_horizon():
+    slow = _debt(1, 100_000, "12", 1_001)
+
+    comparison = compare_to_minimums([slow], extra_minor=10_000, strategy=STRATEGY_SNOWBALL, start=date(2026, 1, 1))
+
+    assert comparison.baseline.beyond_limit is True
+    assert comparison.interest_saved_minor is None
