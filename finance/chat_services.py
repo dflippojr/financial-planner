@@ -10,7 +10,15 @@ from django.db import transaction
 from django.utils import timezone
 
 from .ai_jobs import _connection_marker
-from .ai_services import AiError, connection_for, run_conversation
+from .ai_services import (
+    AiError,
+    HOSTED_SHARED_DENIED,
+    SHARED_LOCAL_CHOOSE,
+    SHARED_LOCAL_UNAVAILABLE,
+    offered_local_connection,
+    resolve_ai,
+    run_conversation,
+)
 from .ai_tools import INSTRUCTION_CONTEXT, default_tools
 from .ai_types import (
     APP_TOOLS_ONLY_UNSUPPORTED,
@@ -60,8 +68,7 @@ def purge_expired(person=None):
 
 def start_conversation(principal):
     person = _person_for(principal)
-    connection = connection_for(person)
-    backend = connection.chat_backend if connection else ""
+    connection, backend = resolve_ai(person, use_chat=True)
     return _new_conversation(person, backend)
 
 
@@ -135,11 +142,17 @@ def send_message(principal, text, *, conversation_id=None, page_context=None, sl
     purge_expired(person)
     if not may_use_ai(person):
         raise AiError("AI is off until the current privacy and data policy is accepted.", AUTHORIZATION_REQUIRED)
-    connection = connection_for(person)
+    connection, backend = resolve_ai(person, use_chat=True)
     if connection is None:
+        if offered_local_connection(person) is not None:
+            raise AiError(SHARED_LOCAL_CHOOSE, AUTHORIZATION_REQUIRED)
         raise AiError("Connect an AI backend first.", AUTHORIZATION_REQUIRED)
-    backend = (connection.chat_backend or "").strip()
-    if backend == LOCAL_BACKEND and not chat_local_enabled():
+    if connection.owner_id != person.id:
+        if backend != LOCAL_BACKEND:
+            raise AiError(HOSTED_SHARED_DENIED, AUTHORIZATION_REQUIRED)
+        if not connection.offer_local_to_household:
+            raise AiError(SHARED_LOCAL_UNAVAILABLE, UNAVAILABLE)
+    elif backend == LOCAL_BACKEND and not chat_local_enabled():
         raise AiError(LOCAL_HIDDEN, UNAVAILABLE)
     if not backend:
         raise AiError(NO_CHAT_BACKEND, UNAVAILABLE)

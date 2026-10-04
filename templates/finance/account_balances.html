@@ -20,6 +20,20 @@
   </div>
 </section>
 {% endif %}
+{% if debt_terms_form %}
+<section class="card bg-base-100 shadow-sm mb-6 max-w-lg">
+  <div class="card-body">
+    <h2 class="card-title">Debt payoff details</h2>
+    <p>Used by the debt payoff planner. These figures are estimates, not advice.</p>
+    <form method="post" action="{% url 'account-debt-terms' account.pk %}">
+      {% csrf_token %}
+      {% include "finance/_form_fields.html" with form=debt_terms_form %}
+      <button type="submit" class="btn btn-primary">Save debt details</button>
+    </form>
+    <p class="mt-2"><a class="link" href="{% url 'debt-payoff' %}">Open debt payoff planner</a></p>
+  </div>
+</section>
+{% endif %}
 <section class="card bg-base-100 shadow-sm mb-6 max-w-lg">
   <div class="card-body">
     <h2 class="card-title">{% if account.is_physical_asset %}New estimated value{% else %}New manual balance{% endif %}</h2>

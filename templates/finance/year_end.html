@@ -1,0 +1,241 @@
+{% extends "finance/base.html" %}
+{% block title %}Year-end {{ report.year|default:"" }} · Financial Planner{% endblock %}
+{% block content %}
+<h1 class="mb-4 text-2xl font-bold">Year-end report</h1>
+<p class="mb-4 max-w-2xl opacity-80">Annual totals from the same functions as Cash flow, Spending, Recurring, and Net worth. Print this page to save a PDF. This is not tax advice.</p>
+<form method="get" class="no-print mb-4 flex flex-wrap items-end gap-3">
+  {% include "finance/_form_fields.html" with form=filter_form %}
+  <button type="submit" class="btn btn-primary">Update</button>
+  <a class="btn btn-ghost" href="{% url 'year-end' %}">Reset to last full year</a>
+</form>
+{% if report %}
+<header class="year-end-print-header mb-6">
+  <p><strong>Year:</strong> {{ report.year }}</p>
+  <p><strong>Accounts:</strong> {{ report.scope_label }}</p>
+  <p><strong>Generated:</strong> {{ report.generated_at|date:"Y-m-d H:i T" }}</p>
+</header>
+<p class="no-print mb-6 flex flex-wrap gap-2">
+  {% for section in csv_sections %}
+  <a class="btn btn-sm btn-outline" href="{% url 'year-end-csv' section %}{% if csv_query %}?{{ csv_query }}{% endif %}">CSV: {{ section }}</a>
+  {% endfor %}
+</p>
+
+<section class="year-end-section card bg-base-100 shadow-sm mb-6">
+  <div class="card-body">
+    <h2 class="card-title">Income, spending, and net by month</h2>
+    <p>Income {{ report.cash_flow.summary.income_display }} · Spending {{ report.cash_flow.summary.spending_display }} · Net {{ report.cash_flow.summary.net_display }}</p>
+    <div class="overflow-x-auto">
+      <table class="table table-zebra">
+        <thead>
+          <tr>
+            <th>Month</th>
+            <th class="text-right">Income</th>
+            <th class="text-right">Spending</th>
+            <th class="text-right">Net</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for period in report.cash_flow.periods %}
+          <tr>
+            <td>
+              {{ period.label }}
+              {% if period.missing_import %}<span class="badge badge-warning">Missing import</span>{% endif %}
+            </td>
+            <td class="text-right">{% include "finance/_amount.html" with value=period.income_display tone="in" %}</td>
+            <td class="text-right">{% include "finance/_amount.html" with value=period.spending_display tone="out" %}</td>
+            <td class="text-right">{% include "finance/_amount.html" with value=period.net_display tone="" %}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="year-end-section card bg-base-100 shadow-sm mb-6">
+  <div class="card-body">
+    <h2 class="card-title">Missing imports</h2>
+    {% if report.missing_months %}
+    <ul class="list-disc pl-6">
+      {% for period in report.missing_months %}
+      <li>{{ period.label }} — Missing import</li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p>No months flagged Missing import.</p>
+    {% endif %}
+  </div>
+</section>
+
+<section class="year-end-section card bg-base-100 shadow-sm mb-6">
+  <div class="card-body">
+    <h2 class="card-title">Spending by category</h2>
+    <p>Total {{ report.spending.total_spending_display }}</p>
+    <div class="overflow-x-auto">
+      <table class="table table-zebra">
+        <thead>
+          <tr>
+            <th>Parent</th>
+            <th>Category</th>
+            <th class="text-right">Spending</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for row in report.spending.rows %}
+          <tr>
+            <td>{{ row.parent_name|default:"—" }}</td>
+            <td>{{ row.name }}</td>
+            <td class="text-right">{% include "finance/_amount.html" with value=row.spending_display tone="out" %}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="year-end-section card bg-base-100 shadow-sm mb-6">
+  <div class="card-body">
+    <h2 class="card-title">Income by category</h2>
+    <p>Total {{ report.income.total_income_display }}</p>
+    <div class="overflow-x-auto">
+      <table class="table table-zebra">
+        <thead>
+          <tr>
+            <th>Parent</th>
+            <th>Category</th>
+            <th class="text-right">Income</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for row in report.income.rows %}
+          <tr>
+            <td>{{ row.parent_name|default:"—" }}</td>
+            <td>{{ row.name }}</td>
+            <td class="text-right">{% include "finance/_amount.html" with value=row.income_display tone="in" %}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="year-end-section card bg-base-100 shadow-sm mb-6">
+  <div class="card-body">
+    <h2 class="card-title">Totals by account</h2>
+    <div class="overflow-x-auto">
+      <table class="table table-zebra">
+        <thead>
+          <tr>
+            <th>Account</th>
+            <th class="text-right">Income</th>
+            <th class="text-right">Spending</th>
+            <th class="text-right">Net</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for row in report.accounts %}
+          <tr>
+            <td>{{ row.name }}</td>
+            <td class="text-right">{% include "finance/_amount.html" with value=row.income_display tone="in" %}</td>
+            <td class="text-right">{% include "finance/_amount.html" with value=row.spending_display tone="out" %}</td>
+            <td class="text-right">{% include "finance/_amount.html" with value=row.net_display tone="" %}</td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="4">No visible cash-flow accounts.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="year-end-section card bg-base-100 shadow-sm mb-6">
+  <div class="card-body">
+    <h2 class="card-title">Tag totals</h2>
+    <div class="overflow-x-auto">
+      <table class="table table-zebra">
+        <thead>
+          <tr>
+            <th>Tag</th>
+            <th class="text-right">Income</th>
+            <th class="text-right">Spending</th>
+            <th class="text-right">Net</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for row in report.tags %}
+          <tr>
+            <td>{{ row.name }}</td>
+            <td class="text-right">{% include "finance/_amount.html" with value=row.income_display tone="in" %}</td>
+            <td class="text-right">{% include "finance/_amount.html" with value=row.spending_display tone="out" %}</td>
+            <td class="text-right">{% include "finance/_amount.html" with value=row.net_display tone="" %}</td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="4">No tagged totals in this year.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="year-end-section card bg-base-100 shadow-sm mb-6">
+  <div class="card-body">
+    <h2 class="card-title">Confirmed recurring</h2>
+    <p>Annual cost {{ report.recurring.annual_display }}</p>
+    <div class="overflow-x-auto">
+      <table class="table table-zebra">
+        <thead>
+          <tr>
+            <th>Series</th>
+            <th>Cadence</th>
+            <th class="text-right">Annual cost</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for row in report.recurring.rows %}
+          <tr>
+            <td>{{ row.name }}</td>
+            <td>{{ row.cadence }}</td>
+            <td class="text-right">{% include "finance/_amount.html" with value=row.annual_display tone="out" %}</td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="3">No confirmed recurring series.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="year-end-section card bg-base-100 shadow-sm mb-6">
+  <div class="card-body">
+    <h2 class="card-title">Net worth</h2>
+    <dl class="grid gap-3 sm:grid-cols-2">
+      <div>
+        <dt class="opacity-80">Start of year{% if report.net_worth.start_as_of %} ({{ report.net_worth.start_as_of|date:"Y-m-d" }}){% endif %}</dt>
+        <dd class="text-lg font-semibold">
+          {% if report.net_worth.start %}
+            {% include "finance/_amount.html" with value=report.net_worth.start.net_display tone="" %}
+          {% else %}
+            —
+          {% endif %}
+        </dd>
+      </div>
+      <div>
+        <dt class="opacity-80">End of year ({{ report.net_worth.end_as_of|date:"Y-m-d" }})</dt>
+        <dd class="text-lg font-semibold">
+          {% if report.net_worth.end %}
+            {% include "finance/_amount.html" with value=report.net_worth.end.net_display tone="" %}
+          {% else %}
+            —
+          {% endif %}
+        </dd>
+      </div>
+    </dl>
+  </div>
+</section>
+{% endif %}
+{% endblock %}

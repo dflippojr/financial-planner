@@ -1,3 +1,4 @@
+import uuid
 from decimal import Decimal
 
 from django.conf import settings
@@ -13,11 +14,47 @@ sha256_validator = RegexValidator(
     regex=r"^[0-9a-f]{64}$",
     message="Enter a lowercase hexadecimal SHA-256 digest.",
 )
+receipt_stored_name_validator = RegexValidator(
+    regex=r"^[0-9a-f]{32}$",
+    message="Enter a 32-character hexadecimal stored name.",
+)
 
 
 def validate_json_object(value):
     if not isinstance(value, dict):
         raise ValidationError("Original imported fields must be a JSON object.")
+
+
+def validate_bulk_edit_snapshot(value):
+    if not isinstance(value, dict) or not isinstance(value.get("rows"), list):
+        raise ValidationError("Bulk edit snapshot must be an object with a row list.")
+
+
+SAVED_FILTER_QUERY_KEYS = frozenset(
+    (
+        "date_from",
+        "date_to",
+        "account",
+        "category",
+        "q",
+        "tag",
+        "scope",
+        "amount_min",
+        "amount_max",
+        "amount_mode",
+        "has_note",
+        "is_split",
+        "set_by",
+    )
+)
+
+
+def validate_saved_filter_query(value):
+    if not isinstance(value, dict):
+        raise ValidationError("Saved filter query must be an object.")
+    for key, item in value.items():
+        if key not in SAVED_FILTER_QUERY_KEYS or not isinstance(item, str):
+            raise ValidationError("Saved filter query is invalid.")
 
 
 def validate_reason_list(value):
@@ -64,6 +101,9 @@ class Person(models.Model):
         related_name="person",
     )
     display_name = models.CharField(max_length=150)
+    use_shared_local_chat = models.BooleanField(default=False)
+    use_shared_local_background = models.BooleanField(default=False)
+    sessions_valid_after = models.DateTimeField(null=True, blank=True)
     privacy_policy_declined_version = models.ForeignKey(
         "PrivacyPolicyVersion",
         on_delete=models.SET_NULL,
@@ -395,6 +435,9 @@ class Account(ArchivableModel):
         related_name="securing_loans",
     )
     currency = models.CharField(max_length=3, default="USD")
+    apr_percent = models.DecimalField(max_digits=6, decimal_places=3, null=True, blank=True)
+    minimum_payment_minor = models.BigIntegerField(null=True, blank=True)
+    payment_day = models.PositiveSmallIntegerField(null=True, blank=True)
     default_saved_csv_mapping = models.ForeignKey(
         SavedCsvMapping,
         on_delete=models.SET_NULL,
@@ -439,6 +482,29 @@ class Account(ArchivableModel):
             models.CheckConstraint(
                 condition=Q(secured_asset__isnull=True) | Q(account_type="loan"),
                 name="account_secured_asset_requires_loan",
+            ),
+            models.CheckConstraint(
+                condition=Q(apr_percent__isnull=True) | Q(apr_percent__gte=0),
+                name="account_apr_percent_non_negative",
+            ),
+            models.CheckConstraint(
+                condition=Q(minimum_payment_minor__isnull=True) | Q(minimum_payment_minor__gte=0),
+                name="account_minimum_payment_non_negative",
+            ),
+            models.CheckConstraint(
+                condition=Q(payment_day__isnull=True) | Q(payment_day__gte=1, payment_day__lte=31),
+                name="account_payment_day_range",
+            ),
+            models.CheckConstraint(
+                condition=Q(payment_day__isnull=True) | Q(account_type="loan"),
+                name="account_payment_day_requires_loan",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(account_type__in=("loan", "credit_card"))
+                    | Q(apr_percent__isnull=True, minimum_payment_minor__isnull=True)
+                ),
+                name="account_debt_terms_require_liability",
             ),
             models.CheckConstraint(
                 condition=(
@@ -663,6 +729,51 @@ class Transaction(ArchivableModel):
         ).exists()
 
 
+class Receipt(models.Model):
+    class ContentType(models.TextChoices):
+        JPEG = "image/jpeg", "JPEG"
+        PNG = "image/png", "PNG"
+        WEBP = "image/webp", "WebP"
+        HEIC = "image/heic", "HEIC"
+        PDF = "application/pdf", "PDF"
+
+    transaction = models.ForeignKey(Transaction, on_delete=models.CASCADE, related_name="receipts")
+    original_name = models.CharField(max_length=255)
+    stored_name = models.CharField(max_length=32, unique=True, validators=(receipt_stored_name_validator,))
+    content_type = models.CharField(max_length=16, choices=ContentType)
+    size_bytes = models.PositiveIntegerField()
+    uploaded_by = models.ForeignKey(
+        Person,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="uploaded_receipts",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            visible_transactions = Transaction.objects.visible_to(principal).values("pk")
+            return self.filter(transaction_id__in=visible_transactions)
+
+    objects = QuerySet.as_manager()
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(content_type__in=("image/jpeg", "image/png", "image/webp", "image/heic", "application/pdf")),
+                name="receipt_content_type_valid",
+            ),
+            models.CheckConstraint(
+                condition=Q(size_bytes__gt=0, size_bytes__lte=10 * 1024 * 1024),
+                name="receipt_size_within_cap",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Receipt {self.pk}"
+
+
 class TransactionTag(models.Model):
     transaction = models.ForeignKey(Transaction, on_delete=models.CASCADE, related_name="tag_links")
     tag = models.ForeignKey(Tag, on_delete=models.PROTECT, related_name="transaction_links")
@@ -676,6 +787,35 @@ class TransactionTag(models.Model):
         return f"{self.transaction_id}:{self.tag_id}"
 
 
+class SavedTransactionFilter(models.Model):
+    member = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="saved_transaction_filters")
+    name = models.CharField(max_length=80)
+    query = models.JSONField(validators=(validate_saved_filter_query,))
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            person = _person_for(principal)
+            if person is None:
+                return self.none()
+            return self.filter(member=person)
+
+    objects = QuerySet.as_manager()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                Lower("name"),
+                F("member"),
+                name="saved_txn_filter_unique_name_per_member",
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
 class TransactionCorrectionHistory(models.Model):
     """Append-only record of one corrected field. Never log these values."""
 
@@ -686,6 +826,8 @@ class TransactionCorrectionHistory(models.Model):
         CATEGORY = "category", "Category"
         EXCLUSION = "exclusion", "Transfer exclusion"
         REFUND_LINK = "refund_link", "Refund link"
+        NOTE = "note", "Note"
+        TAGS = "tags", "Tags"
 
     transaction = models.ForeignKey(
         Transaction,
@@ -738,7 +880,7 @@ class TransactionCorrectionHistory(models.Model):
                         currency="",
                     )
                     | Q(
-                        field_name__in=("description", "category", "exclusion", "refund_link"),
+                        field_name__in=("description", "category", "exclusion", "refund_link", "note", "tags"),
                         previous_date__isnull=True,
                         new_date__isnull=True,
                         previous_amount_minor__isnull=True,
@@ -776,6 +918,8 @@ class TransactionCorrectionHistory(models.Model):
             self.Field.CATEGORY,
             self.Field.EXCLUSION,
             self.Field.REFUND_LINK,
+            self.Field.NOTE,
+            self.Field.TAGS,
         ):
             return self.previous_description
         return self._amount_display(self.previous_amount_minor)
@@ -789,6 +933,8 @@ class TransactionCorrectionHistory(models.Model):
             self.Field.CATEGORY,
             self.Field.EXCLUSION,
             self.Field.REFUND_LINK,
+            self.Field.NOTE,
+            self.Field.TAGS,
         ):
             return self.new_description
         return self._amount_display(self.new_amount_minor)
@@ -1543,6 +1689,7 @@ class AiProviderConnection(models.Model):
     background_backend = models.CharField(max_length=32, blank=True, default="")
     chat_model = models.CharField(max_length=80, blank=True, default="")
     background_model = models.CharField(max_length=80, blank=True, default="")
+    offer_local_to_household = models.BooleanField(default=False)
     connected_at = models.DateTimeField(default=timezone.now)
     last_status = models.CharField(max_length=80, blank=True, default="")
 
@@ -1621,6 +1768,8 @@ class AiUsageEvent(models.Model):
     prompt_tokens = models.PositiveIntegerField(null=True, blank=True)
     completion_tokens = models.PositiveIntegerField(null=True, blank=True)
     outcome = models.CharField(max_length=40)
+    # True when this event polled a session started earlier, not a new request.
+    resumed = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class QuerySet(models.QuerySet):
@@ -1897,6 +2046,8 @@ class Alert(models.Model):
         BUDGET = "budget", "Budget"
         LARGE_TRANSACTION = "large_transaction", "Large transaction"
         MONTHLY_REVIEW = "monthly_review", "Monthly review"
+        UNUSUAL_SPENDING = "unusual_spending", "Unusual spending"
+        BACKUP = "backup", "Backup"
 
     recipient = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="alerts")
     kind = models.CharField(max_length=20, choices=Kind)
@@ -1925,6 +2076,8 @@ class Alert(models.Model):
                         "budget",
                         "large_transaction",
                         "monthly_review",
+                        "unusual_spending",
+                        "backup",
                     )
                 ),
                 name="alert_kind_valid",
@@ -1947,6 +2100,10 @@ class AlertSettings(models.Model):
     large_transaction_enabled = models.BooleanField(default=True)
     monthly_review_enabled = models.BooleanField(default=True)
     monthly_review_ai_enabled = models.BooleanField(default=True)
+    unusual_spending_enabled = models.BooleanField(default=True)
+    unusual_spending_ai_enabled = models.BooleanField(default=True)
+    unusual_category_percent = models.PositiveIntegerField(default=50)
+    unusual_category_floor_minor = models.BigIntegerField(default=5_000)
     large_transaction_minor = models.BigIntegerField(
         null=True,
         blank=True,
@@ -1958,6 +2115,14 @@ class AlertSettings(models.Model):
             models.CheckConstraint(
                 condition=Q(large_transaction_minor__isnull=True) | Q(large_transaction_minor__gte=0),
                 name="alert_settings_large_threshold_non_negative",
+            ),
+            models.CheckConstraint(
+                condition=Q(unusual_category_percent__gte=1, unusual_category_percent__lte=1000),
+                name="alert_settings_unusual_percent_range",
+            ),
+            models.CheckConstraint(
+                condition=Q(unusual_category_floor_minor__gte=0),
+                name="alert_settings_unusual_floor_non_negative",
             ),
         ]
 
@@ -1973,6 +2138,8 @@ class MonthlyReview(models.Model):
     generated_at = models.DateTimeField()
     ai_paragraph = models.TextField(blank=True, default="")
     ai_backend = models.CharField(max_length=32, blank=True, default="")
+    unusual_ai_paragraph = models.TextField(blank=True, default="")
+    unusual_ai_backend = models.CharField(max_length=32, blank=True, default="")
 
     class Meta:
         constraints = [
@@ -1982,3 +2149,186 @@ class MonthlyReview(models.Model):
 
     def __str__(self):
         return f"Monthly review {self.person_id} {self.month}"
+
+
+class MemberSecurityEvent(models.Model):
+    class EventType(models.TextChoices):
+        SIGN_IN_SUCCESS = "sign_in_success", "Signed in"
+        SIGN_IN_FAILURE = "sign_in_failure", "Sign-in failed"
+        SIGN_OUT = "sign_out", "Signed out"
+        RECOVERY_CODE_USED = "recovery_code_used", "Recovery code used"
+        PASSKEY_ADDED = "passkey_added", "Passkey added"
+        PASSKEY_REMOVED = "passkey_removed", "Passkey removed"
+        PASSWORD_CHANGED = "password_changed", "Password changed"
+        AI_CONNECTION_CHANGED = "ai_connection_changed", "AI connection changed"
+        SIMPLEFIN_CONNECTION_CHANGED = "simplefin_connection_changed", "SimpleFIN connection changed"
+        MEMBER_DATA_EXPORT = "member_data_export", "Data exported"
+        POLICY_ACCEPTANCE = "policy_acceptance", "Policy accepted"
+
+    member = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="security_events")
+    event_type = models.CharField(max_length=40, choices=EventType)
+    occurred_at = models.DateTimeField(default=timezone.now)
+    ip_address = models.CharField(max_length=45, blank=True, default="")
+    user_agent = models.CharField(max_length=200, blank=True, default="")
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            person = _person_for(principal)
+            if person is None:
+                return self.none()
+            return self.filter(member=person)
+
+    objects = QuerySet.as_manager()
+
+    class Meta:
+        indexes = [
+            models.Index(fields=("member", "-occurred_at"), name="sec_event_member_occurred_idx"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(
+                    event_type__in=(
+                        "sign_in_success",
+                        "sign_in_failure",
+                        "sign_out",
+                        "recovery_code_used",
+                        "passkey_added",
+                        "passkey_removed",
+                        "password_changed",
+                        "ai_connection_changed",
+                        "simplefin_connection_changed",
+                        "member_data_export",
+                        "policy_acceptance",
+                    )
+                ),
+                name="member_security_event_type_valid",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Security event {self.pk}"
+
+
+class MemberSession(models.Model):
+    member = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="member_sessions")
+    session_key = models.CharField(max_length=40, unique=True)
+    ip_address = models.CharField(max_length=45, blank=True, default="")
+    user_agent = models.CharField(max_length=200, blank=True, default="")
+    created_at = models.DateTimeField(default=timezone.now)
+    last_activity_at = models.DateTimeField(default=timezone.now)
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            person = _person_for(principal)
+            if person is None:
+                return self.none()
+            return self.filter(member=person)
+
+    objects = QuerySet.as_manager()
+
+    class Meta:
+        indexes = [
+            models.Index(fields=("member", "-last_activity_at"), name="member_session_activity_idx"),
+        ]
+
+    def __str__(self):
+        return f"Member session {self.pk}"
+
+
+class BulkEditUndo(models.Model):
+    """Prior values for one bulk edit, held for a short undo window."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    actor = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="bulk_edit_undos")
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    undone_at = models.DateTimeField(null=True, blank=True)
+    snapshot = models.JSONField(validators=(validate_bulk_edit_snapshot,))
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            person = _person_for(principal)
+            if person is None:
+                return self.none()
+            return self.filter(actor=person)
+
+    objects = QuerySet.as_manager()
+
+    class Meta:
+        indexes = [
+            models.Index(fields=("actor", "expires_at"), name="bulk_edit_undo_actor_exp_idx"),
+        ]
+
+    def __str__(self):
+        return f"Bulk edit undo {self.pk}"
+
+
+class SheetComparisonSettings(models.Model):
+    class SpendingSign(models.TextChoices):
+        UNSIGNED = "unsigned", "Unsigned (positive spending)"
+        SIGNED = "signed", "Signed (negative is spending)"
+
+    member = models.OneToOneField(
+        Person,
+        on_delete=models.CASCADE,
+        related_name="sheet_comparison_settings",
+    )
+    month_column = models.CharField(max_length=255)
+    income_column = models.CharField(max_length=255)
+    spending_column = models.CharField(max_length=255)
+    spending_sign = models.CharField(
+        max_length=16,
+        choices=SpendingSign.choices,
+        default=SpendingSign.UNSIGNED,
+    )
+    tolerance_minor = models.PositiveIntegerField(default=100)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            person = _person_for(principal)
+            if person is None:
+                return self.none()
+            return self.filter(member=person)
+
+    objects = QuerySet.as_manager()
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(spending_sign__in=("unsigned", "signed")),
+                name="sheet_comparison_spending_sign_valid",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Sheet comparison settings {self.member_id}"
+
+
+class SheetMonthTotal(models.Model):
+    member = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="sheet_month_totals")
+    month = models.DateField()
+    income_minor = models.BigIntegerField()
+    spending_minor = models.BigIntegerField()
+    source = models.CharField(max_length=255)
+    note = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            person = _person_for(principal)
+            if person is None:
+                return self.none()
+            return self.filter(member=person)
+
+    objects = QuerySet.as_manager()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("member", "month"), name="sheet_month_total_unique_member_month"),
+            models.CheckConstraint(condition=Q(month__day=1), name="sheet_month_total_month_start"),
+        ]
+
+    def __str__(self):
+        return f"Sheet month {self.member_id} {self.month}"
