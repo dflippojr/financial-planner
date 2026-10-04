@@ -395,6 +395,9 @@ class Account(ArchivableModel):
         related_name="securing_loans",
     )
     currency = models.CharField(max_length=3, default="USD")
+    apr_percent = models.DecimalField(max_digits=6, decimal_places=3, null=True, blank=True)
+    minimum_payment_minor = models.BigIntegerField(null=True, blank=True)
+    payment_day = models.PositiveSmallIntegerField(null=True, blank=True)
     default_saved_csv_mapping = models.ForeignKey(
         SavedCsvMapping,
         on_delete=models.SET_NULL,
@@ -439,6 +442,29 @@ class Account(ArchivableModel):
             models.CheckConstraint(
                 condition=Q(secured_asset__isnull=True) | Q(account_type="loan"),
                 name="account_secured_asset_requires_loan",
+            ),
+            models.CheckConstraint(
+                condition=Q(apr_percent__isnull=True) | Q(apr_percent__gte=0),
+                name="account_apr_percent_non_negative",
+            ),
+            models.CheckConstraint(
+                condition=Q(minimum_payment_minor__isnull=True) | Q(minimum_payment_minor__gte=0),
+                name="account_minimum_payment_non_negative",
+            ),
+            models.CheckConstraint(
+                condition=Q(payment_day__isnull=True) | Q(payment_day__gte=1, payment_day__lte=31),
+                name="account_payment_day_range",
+            ),
+            models.CheckConstraint(
+                condition=Q(payment_day__isnull=True) | Q(account_type="loan"),
+                name="account_payment_day_requires_loan",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(account_type__in=("loan", "credit_card"))
+                    | Q(apr_percent__isnull=True, minimum_payment_minor__isnull=True)
+                ),
+                name="account_debt_terms_require_liability",
             ),
             models.CheckConstraint(
                 condition=(
