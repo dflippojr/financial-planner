@@ -15,15 +15,87 @@ positive_integer() {
   esac
 }
 
+sanitize_error() {
+  printf '%s' "${1:-}" | tr '\n\r' '  ' | cut -c1-180
+}
+
+load_status() {
+  last_success_at=""
+  dump_name=""
+  size_bytes=""
+  table_count=""
+  last_error=""
+  offsite_success_at=""
+  offsite_error=""
+  if [ ! -f "$status_file" ]; then
+    return 0
+  fi
+  while IFS='=' read -r key value || [ -n "${key:-}" ]; do
+    case "$key" in
+      last_success_at) last_success_at=$value ;;
+      dump_name) dump_name=$value ;;
+      size_bytes) size_bytes=$value ;;
+      table_count) table_count=$value ;;
+      last_error) last_error=$value ;;
+      offsite_success_at) offsite_success_at=$value ;;
+      offsite_error) offsite_error=$value ;;
+    esac
+  done < "$status_file"
+}
+
+write_status() {
+  tmp="$status_file.tmp"
+  umask 077
+  cat > "$tmp" <<EOF
+last_success_at=$last_success_at
+dump_name=$dump_name
+size_bytes=$size_bytes
+table_count=$table_count
+last_error=$last_error
+offsite_success_at=$offsite_success_at
+offsite_error=$offsite_error
+EOF
+  mv "$tmp" "$status_file"
+  chmod 600 "$status_file" 2>/dev/null || true
+  status_written=1
+}
+
+fail_run() {
+  last_error=$(sanitize_error "$1")
+  write_status
+  echo "$last_error" >&2
+  exit 1
+}
+
 prune_backups() {
   directory=$1
   keep=$2
-  find "$directory" -type f -name 'financial_planner_*.dump' -print \
+  pattern=$3
+  find "$directory" -type f -name "$pattern" -print \
     | sort -r \
     | awk -v keep="$keep" 'NR > keep' \
     | while IFS= read -r expired; do
         rm -f -- "$expired"
       done
+}
+
+prune_remote() {
+  prefix=$1
+  keep=$2
+  listing=$(rclone lsf --config "$rclone_config" --files-only "${remote_base}/${prefix}" 2>/dev/null || true)
+  echo "$listing" \
+    | grep -E '^financial_planner_.*\.dump\.age$' \
+    | sort -r \
+    | awk -v keep="$keep" 'NR > keep' \
+    | while IFS= read -r expired; do
+        rclone deletefile --config "$rclone_config" "${remote_base}/${prefix}/${expired}" >/dev/null 2>&1 || true
+      done
+}
+
+copy_offsite() {
+  src=$1
+  dest=$2
+  rclone copyto --config "$rclone_config" "$src" "$dest"
 }
 
 require_env POSTGRES_DB
@@ -37,19 +109,44 @@ weekly_retention=${WEEKLY_RETENTION:-8}
 positive_integer NIGHTLY_RETENTION "$nightly_retention"
 positive_integer WEEKLY_RETENTION "$weekly_retention"
 
+offsite_remote=${OFFSITE_RCLONE_REMOTE:-}
+offsite_recipient=${OFFSITE_AGE_RECIPIENT:-}
+rclone_config=${RCLONE_CONFIG:-/config/rclone.conf}
+remote_base=${offsite_remote%/}
+
 nightly_dir="$backup_root/nightly"
 weekly_dir="$backup_root/weekly"
+status_file="$backup_root/status"
 mkdir -p "$nightly_dir" "$weekly_dir"
 umask 077
+status_written=0
+load_status
 
 timestamp=$(date -u '+%Y%m%dT%H%M%SZ')
+success_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 filename="financial_planner_${timestamp}.dump"
 partial="$nightly_dir/.${filename}.partial"
+encrypted=""
 nightly="$nightly_dir/$filename"
-trap 'rm -f "$partial"' EXIT HUP INT TERM
+
+cleanup() {
+  code=$?
+  rm -f "$partial"
+  if [ -n "$encrypted" ]; then
+    rm -f "$encrypted"
+  fi
+  if [ "$code" -ne 0 ] && [ "${status_written:-0}" != 1 ]; then
+    last_error=$(sanitize_error "Backup run failed")
+    write_status
+  fi
+  exit "$code"
+}
+trap cleanup EXIT HUP INT TERM
 
 export PGPASSWORD=$POSTGRES_PASSWORD
-pg_dump \
+dump_err="$backup_root/.dump.err"
+rm -f "$dump_err"
+if ! pg_dump \
   --host "$POSTGRES_HOST" \
   --port "${POSTGRES_PORT:-5432}" \
   --username "$POSTGRES_USER" \
@@ -57,21 +154,64 @@ pg_dump \
   --format custom \
   --no-owner \
   --no-privileges \
-  --file "$partial"
+  --file "$partial" 2>"$dump_err"
+then
+  err=$(cat "$dump_err" 2>/dev/null || true)
+  rm -f "$dump_err"
+  fail_run "${err:-pg_dump failed}"
+fi
+rm -f "$dump_err"
 
 # Do not publish or prune around an unreadable dump.
-pg_restore --list "$partial" >/dev/null
+list_err="$backup_root/.restore.err"
+if ! table_list=$(pg_restore --list "$partial" 2>"$list_err"); then
+  err=$(cat "$list_err" 2>/dev/null || true)
+  rm -f "$list_err"
+  fail_run "${err:-pg_restore --list failed}"
+fi
+rm -f "$list_err"
+table_count=$(printf '%s\n' "$table_list" | grep -c 'TABLE DATA' || true)
 mv "$partial" "$nightly"
-trap - EXIT HUP INT TERM
+size_bytes=$(wc -c < "$nightly" | awk '{print $1}')
 
 weekday=$(date '+%u')
+weekly=""
 if [ "$weekday" = "7" ] || [ "${BACKUP_FORCE_WEEKLY:-0}" = "1" ]; then
   weekly="$weekly_dir/$filename"
   cp "$nightly" "$weekly"
   chmod 600 "$weekly"
 fi
 
-prune_backups "$nightly_dir" "$nightly_retention"
-prune_backups "$weekly_dir" "$weekly_retention"
+prune_backups "$nightly_dir" "$nightly_retention" 'financial_planner_*.dump'
+prune_backups "$weekly_dir" "$weekly_retention" 'financial_planner_*.dump'
 
+last_success_at=$success_at
+dump_name=$filename
+last_error=""
+
+if [ -n "$offsite_remote" ] || [ -n "$offsite_recipient" ]; then
+  if [ -z "$offsite_remote" ] || [ -z "$offsite_recipient" ]; then
+    fail_run "Off-site copy is incomplete: set both OFFSITE_RCLONE_REMOTE and OFFSITE_AGE_RECIPIENT"
+  fi
+  encrypted="$nightly_dir/.${filename}.age.partial"
+  if ! age -r "$offsite_recipient" -o "$encrypted" "$nightly"; then
+    fail_run "age encryption failed"
+  fi
+  if ! copy_offsite "$encrypted" "${remote_base}/nightly/${filename}.age"; then
+    fail_run "Off-site upload failed"
+  fi
+  if [ -n "$weekly" ]; then
+    if ! copy_offsite "$encrypted" "${remote_base}/weekly/${filename}.age"; then
+      fail_run "Off-site weekly upload failed"
+    fi
+  fi
+  rm -f "$encrypted"
+  encrypted=""
+  prune_remote nightly "$nightly_retention"
+  prune_remote weekly "$weekly_retention"
+  offsite_success_at=$success_at
+  offsite_error=""
+fi
+
+write_status
 echo "Backup completed: $filename"
