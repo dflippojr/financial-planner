@@ -379,5 +379,6 @@ def test_starting_balance_includes_transactions_after_the_latest_snapshot():
     make_transaction(owner, checking, transaction_date=date(2026, 10, 2), amount_minor=-80_000, description="Synthetic rent")
     make_transaction(owner, checking, transaction_date=date(2026, 9, 30), amount_minor=-5_000, description="Synthetic before snapshot")
     make_transaction(owner, checking, transaction_date=date(2026, 10, 6), amount_minor=-1_000, description="Synthetic after today")
+    make_transaction(owner, checking, transaction_date=date(2026, 10, 4), amount_minor=-7_000, description="Synthetic posted today")
 
     assert starting_balance_minor([checking], as_of=date(2026, 10, 4)) == 20_000

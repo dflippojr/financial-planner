@@ -210,7 +210,11 @@ def _latest_snapshots(accounts, *, as_of):
 
 
 def starting_balance_minor(accounts, *, as_of):
-    """Each account's latest snapshot plus the transactions posted after it, through `as_of`."""
+    """Each account's latest snapshot plus the transactions posted after it, before `as_of`.
+
+    `as_of` itself is left to the forecast, which applies that day's expected items,
+    so a payment posted today is never counted twice.
+    """
     snapshots = _latest_snapshots(accounts, as_of=as_of)
     total = 0
     for account_id, snapshot in snapshots.items():
@@ -218,7 +222,7 @@ def starting_balance_minor(accounts, *, as_of):
             account_id=account_id,
             status=Transaction.Status.ACTIVE,
             transaction_date__gt=snapshot.snapshot_date,
-            transaction_date__lte=as_of,
+            transaction_date__lt=as_of,
         ).aggregate(total=Sum("amount_minor"))["total"]
         total += snapshot.amount_minor + (since or 0)
     return total
