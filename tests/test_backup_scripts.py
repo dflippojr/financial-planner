@@ -518,16 +518,23 @@ def test_restore_replaces_receipts_from_the_sibling_archive(tmp_path):
 
 
 @pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
-def test_restore_fails_when_the_receipts_archive_is_missing(tmp_path):
+def test_restore_succeeds_when_the_receipts_archive_is_missing(tmp_path):
     fake_bin = tmp_path / "bin"
     backup_root = tmp_path / "backups"
     fake_bin.mkdir()
     dump = backup_root / "nightly" / "financial_planner_20260927T060000Z.dump"
     dump.parent.mkdir(parents=True)
     dump.write_text("synthetic dump")
+    live = backup_root / "receipts-live"
+    live.mkdir(parents=True)
+    leftover = live / "pre-release.bin"
+    leftover.write_bytes(b"leave-unchanged")
     _fake_pg(fake_bin)
 
-    restored = _run_restore(fake_bin, dump, {"RECEIPTS_DIR": backup_root / "receipts-live"})
+    restored = _run_restore(fake_bin, dump, {"RECEIPTS_DIR": live})
 
-    assert restored.returncode == 2
-    assert "Receipts archive does not exist" in restored.stderr
+    assert restored.returncode == 0, restored.stderr
+    assert "no receipts archive for this backup; receipts directory left unchanged" in (
+        restored.stderr + restored.stdout
+    )
+    assert leftover.read_bytes() == b"leave-unchanged"
