@@ -1,10 +1,13 @@
+import json
 from datetime import date
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.contrib.sessions.models import Session
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import Client
+from django.test import Client, override_settings
 from django.urls import reverse
 
 from finance.cash_flow import GROUPING_MONTH, cash_flow_report
@@ -18,6 +21,7 @@ from finance.models import (
     SheetMonthTotal,
     Transaction,
 )
+from finance.csv_import.staging import SESSION_KEY as STAGE_SESSION_KEY
 from finance.sheet_comparison import (
     comparison_rows,
     mapping_matches_headers,
@@ -97,6 +101,12 @@ def signed_in(person):
     client = Client()
     assert client.login(username=person.user.username, password=PASSWORD)
     return client
+
+
+@pytest.fixture
+def staging_settings(tmp_path):
+    with override_settings(CSV_IMPORT_STAGING_DIR=tmp_path, CSV_IMPORT_STAGE_TTL_SECONDS=3600):
+        yield tmp_path
 
 
 def test_parse_sheet_month_formats():
@@ -450,6 +460,8 @@ def test_oversized_and_empty_csv_are_rejected():
         read_sheet_csv(b"Month,Income,Spending\n")
     with pytest.raises(SheetCsvError):
         read_sheet_csv(b"Month,Month,Spending\n2026-01,1,1\n")
+    with pytest.raises(SheetCsvError, match="couldn't be read as CSV"):
+        read_sheet_csv(b'Month,Income,Spending\n2026-01,1.00,"unterminated\n')
 
 
 @pytest.mark.django_db
@@ -474,4 +486,97 @@ def test_delete_member_data_removes_this_members_sheet_totals_only():
     delete_member_data(owner, {})
     assert not SheetMonthTotal.objects.filter(member_id=owner_id).exists()
     assert SheetMonthTotal.objects.visible_to(member).count() == 2
+
+
+PENDING_CELL = "SYNTHETIC-CELL-ABSENT-FROM-SESSION"
+PENDING_CSV = (
+    b"Month,Income,Spending,Note\n"
+    b"2026-01,1000.00,400.00," + PENDING_CELL.encode() + b"\n"
+)
+
+
+def _session_blob(client):
+    live = json.dumps(dict(client.session.items()), default=str)
+    stored = Session.objects.get(session_key=client.session.session_key)
+    return live + json.dumps(stored.get_decoded(), default=str)
+
+
+def _stage_path(staging_dir, client):
+    token = client.session["sheet_comparison_pending"]["token"]
+    return Path(staging_dir) / f"{token}.csvstage", token
+
+
+@pytest.mark.django_db
+def test_pending_upload_is_not_stored_in_the_session(staging_settings):
+    owner = make_person("owner")
+    make_household(owner)
+    client = signed_in(owner)
+    response = client.post(
+        reverse("sheet-comparison"),
+        {"action": "upload", "csv_file": SimpleUploadedFile("synthetic-sheet.csv", PENDING_CSV, "text/csv")},
+    )
+    assert response.status_code == 302
+    assert client.get(reverse("sheet-comparison")).context["pending"] is not None
+    assert PENDING_CELL not in _session_blob(client)
+    path, _token = _stage_path(staging_settings, client)
+    assert path.is_file()
+
+
+@pytest.mark.django_db
+def test_mapping_and_cancel_delete_the_staged_sheet(staging_settings):
+    owner = make_person("owner")
+    make_household(owner)
+    client = signed_in(owner)
+    client.post(
+        reverse("sheet-comparison"),
+        {"action": "upload", "csv_file": SimpleUploadedFile("synthetic-sheet.csv", PENDING_CSV, "text/csv")},
+    )
+    path, token = _stage_path(staging_settings, client)
+    assert path.is_file()
+    cancel = client.post(reverse("sheet-comparison"), {"action": "cancel-map"})
+    assert cancel.status_code == 302
+    assert not path.exists()
+    assert token not in client.session.get(STAGE_SESSION_KEY, {})
+
+    client.post(
+        reverse("sheet-comparison"),
+        {"action": "upload", "csv_file": SimpleUploadedFile("synthetic-sheet.csv", PENDING_CSV, "text/csv")},
+    )
+    path, token = _stage_path(staging_settings, client)
+    stored = client.post(
+        reverse("sheet-comparison"),
+        {
+            "action": "map",
+            "month_column": "Month",
+            "income_column": "Income",
+            "spending_column": "Spending",
+            "spending_sign": "unsigned",
+        },
+    )
+    assert stored.status_code == 302
+    assert not path.exists()
+    assert token not in client.session.get(STAGE_SESSION_KEY, {})
+    assert SheetMonthTotal.objects.visible_to(owner).count() == 1
+
+
+@pytest.mark.django_db
+def test_malformed_csv_redirects_instead_of_500():
+    owner = make_person("owner")
+    make_household(owner)
+    client = signed_in(owner)
+    response = client.post(
+        reverse("sheet-comparison"),
+        {
+            "action": "upload",
+            "csv_file": SimpleUploadedFile(
+                "synthetic-sheet.csv",
+                b'Month,Income,Spending\n2026-01,1.00,"unterminated\n',
+                "text/csv",
+            ),
+        },
+    )
+    assert response.status_code == 302
+    follow = client.get(response.url)
+    assert follow.status_code == 200
+    assert b"That file couldn't be read as CSV." in follow.content
 
