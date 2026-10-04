@@ -5,9 +5,11 @@ enabled: sign-in and re-auth are custom views, and TOTP is out of scope.
 """
 
 from django.conf import settings
+from django.contrib.sessions.models import Session
 from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
 from django.utils import timezone
+from django.utils.crypto import constant_time_compare
 from webauthn import (
     generate_authentication_options,
     generate_registration_options,
@@ -31,6 +33,8 @@ from .security_services import EVENT_TYPES, record_security_event
 
 PENDING_USER_KEY = "passkey_pending_user_id"
 PENDING_NEXT_KEY = "passkey_pending_next"
+PENDING_AUTH_HASH_KEY = "passkey_pending_auth_hash"
+PENDING_STARTED_KEY = "passkey_pending_started_at"
 REG_CHALLENGE_KEY = "webauthn_reg_challenge"
 AUTH_CHALLENGE_KEY = "webauthn_auth_challenge"
 
@@ -82,6 +86,8 @@ def passkey_required_after_password(user):
 def store_pending_passkey_login(request, user, next_url):
     request.session[PENDING_USER_KEY] = user.pk
     request.session[PENDING_NEXT_KEY] = next_url or ""
+    request.session[PENDING_AUTH_HASH_KEY] = user.get_session_auth_hash()
+    request.session[PENDING_STARTED_KEY] = timezone.now().timestamp()
     request.session.pop(AUTH_CHALLENGE_KEY, None)
 
 
@@ -91,7 +97,20 @@ def pending_passkey_user(request):
         return None
     from django.contrib.auth import get_user_model
 
-    return get_user_model().objects.filter(pk=user_id).select_related("person").first()
+    user = get_user_model().objects.filter(pk=user_id).select_related("person").first()
+    stored_hash = request.session.get(PENDING_AUTH_HASH_KEY) or ""
+    started_at = request.session.get(PENDING_STARTED_KEY)
+    max_age = settings.PASSKEY_PENDING_MAX_AGE_SECONDS
+    if (
+        user is None
+        or not stored_hash
+        or not constant_time_compare(stored_hash, user.get_session_auth_hash())
+        or started_at is None
+        or (timezone.now().timestamp() - float(started_at)) > max_age
+    ):
+        clear_pending_passkey_login(request)
+        return None
+    return user
 
 
 def pending_passkey_next(request):
@@ -101,7 +120,19 @@ def pending_passkey_next(request):
 def clear_pending_passkey_login(request):
     request.session.pop(PENDING_USER_KEY, None)
     request.session.pop(PENDING_NEXT_KEY, None)
+    request.session.pop(PENDING_AUTH_HASH_KEY, None)
+    request.session.pop(PENDING_STARTED_KEY, None)
     request.session.pop(AUTH_CHALLENGE_KEY, None)
+
+
+def clear_pending_passkey_logins_for_user(user):
+    if user is None or user.pk is None:
+        return
+    user_id = str(user.pk)
+    for session in Session.objects.filter(expire_date__gte=timezone.now()).iterator():
+        data = session.get_decoded()
+        if str(data.get(PENDING_USER_KEY, "")) == user_id:
+            session.delete()
 
 
 def _normalized_name(name):

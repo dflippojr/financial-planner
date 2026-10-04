@@ -218,6 +218,12 @@ def revoke_other_sessions_for(principal, current_session_key, *, session=None):
         stamp_session_auth_at(session, now)
     rows = list(MemberSession.objects.visible_to(principal).exclude(session_key=current_session_key or ""))
     _delete_django_sessions([row.session_key for row in rows])
+    user = getattr(person, "user", None) if person is not None else None
+    if user is None:
+        user = getattr(principal, "user", None)
+    from .passkey_services import clear_pending_passkey_logins_for_user
+
+    clear_pending_passkey_logins_for_user(user)
     if rows:
         record_security_event(principal, EVENT_TYPES.SIGN_OUT)
     return len(rows)

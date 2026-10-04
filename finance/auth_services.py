@@ -118,9 +118,11 @@ def accept_invitation(code, username, display_name, password):
 
 
 def revoke_user_sessions(user):
+    from .passkey_services import clear_pending_passkey_logins_for_user
     from .security_services import revoke_indexed_sessions_for_user
 
     revoke_indexed_sessions_for_user(user)
+    clear_pending_passkey_logins_for_user(user)
     for session in Session.objects.filter(expire_date__gte=timezone.now()).iterator():
         if str(session.get_decoded().get("_auth_user_id")) == str(user.pk):
             session.delete()
