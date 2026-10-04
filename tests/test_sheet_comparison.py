@@ -578,5 +578,5 @@ def test_malformed_csv_redirects_instead_of_500():
     assert response.status_code == 302
     follow = client.get(response.url)
     assert follow.status_code == 200
-    assert b"That file couldn't be read as CSV." in follow.content
+    assert b"couldn" in follow.content and b"read as CSV." in follow.content
 

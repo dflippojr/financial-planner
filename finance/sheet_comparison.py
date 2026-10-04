@@ -123,12 +123,15 @@ def read_sheet_csv(raw_bytes):
     if not headers or any(not item for item in headers) or len(headers) != len(set(headers)):
         raise SheetCsvError("Column names must be unique and non-empty.")
     rows = []
-    for number, cells in enumerate(reader, start=2):
-        if number - 1 > MAX_MONTH_ROWS:
-            raise SheetCsvError("The CSV has too many month rows.")
-        if len(cells) < len(headers):
-            cells = list(cells) + [""] * (len(headers) - len(cells))
-        rows.append(dict(zip(headers, (cell.strip() for cell in cells[: len(headers)]), strict=True)))
+    try:
+        for number, cells in enumerate(reader, start=2):
+            if number - 1 > MAX_MONTH_ROWS:
+                raise SheetCsvError("The CSV has too many month rows.")
+            if len(cells) < len(headers):
+                cells = list(cells) + [""] * (len(headers) - len(cells))
+            rows.append(dict(zip(headers, (cell.strip() for cell in cells[: len(headers)]), strict=True)))
+    except csv.Error as exc:
+        raise SheetCsvError("That file couldn't be read as CSV.") from exc
     if not rows:
         raise SheetCsvError("The CSV needs a header row and one row per month.")
     return headers, rows

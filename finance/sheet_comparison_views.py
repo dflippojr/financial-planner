@@ -13,6 +13,14 @@ from .forms import (
     SheetMonthNoteForm,
     SheetToleranceForm,
 )
+from .csv_import.parser import CsvInputError
+from .csv_import.staging import (
+    KIND_SHEET_COMPARISON,
+    StageUnavailable,
+    create_stage,
+    delete_stage,
+    load_stage,
+)
 from .models import Person
 from .sheet_comparison import (
     DEFAULT_TOLERANCE_MINOR,
@@ -40,23 +48,37 @@ def _pending(request):
     if not isinstance(pending, dict):
         return None
     headers = pending.get("headers")
-    rows = pending.get("rows")
+    token = pending.get("token")
     source = pending.get("source")
-    if not isinstance(headers, list) or not isinstance(rows, list) or not source:
+    if not isinstance(headers, list) or not token or not source:
+        return None
+    try:
+        load_stage(request, token, None, kind=KIND_SHEET_COMPARISON)
+    except StageUnavailable:
+        request.session.pop(SESSION_KEY, None)
         return None
     return pending
 
 
 def _clear_pending(request):
+    pending = request.session.get(SESSION_KEY)
+    token = pending.get("token") if isinstance(pending, dict) else None
+    if token:
+        delete_stage(request, token)
     request.session.pop(SESSION_KEY, None)
 
 
-def _store_pending(request, headers, rows, source):
+def _store_pending(request, headers, token, source):
     request.session[SESSION_KEY] = {
         "headers": list(headers),
-        "rows": rows,
+        "token": token,
         "source": source,
     }
+
+
+def _staged_rows(request, pending):
+    raw = load_stage(request, pending["token"], None, kind=KIND_SHEET_COMPARISON)
+    return read_sheet_csv(raw)
 
 
 def _filter_kwargs(form):
@@ -69,16 +91,17 @@ def _filter_kwargs(form):
     }
 
 
-def _commit_rows(request, person, headers, rows, source, mapping_data=None):
+def _commit_rows(request, person, headers, rows, source, token, mapping_data=None):
     settings_row = settings_for(person)
     if mapping_data is not None:
         settings_row = save_mapping(person, headers=headers, **mapping_data)
     elif not mapping_matches_headers(settings_row, headers):
-        _store_pending(request, headers, rows, source)
+        _store_pending(request, headers, token, source)
         return False
     by_month = parsed_month_totals(rows, settings_row)
     store_month_totals(person, by_month, source)
-    _clear_pending(request)
+    delete_stage(request, token)
+    request.session.pop(SESSION_KEY, None)
     messages.success(request, "Stored month totals from the CSV. The file was not kept.")
     return True
 
@@ -133,9 +156,24 @@ def _handle_post(request, person, pending, mapping_form):
             if not upload_form.is_valid():
                 return _rerender(request, person, upload_form=upload_form, mapping_form=mapping_form, pending=pending)
             uploaded = upload_form.cleaned_data["csv_file"]
-            raw = uploaded.read()
-            headers, rows = read_sheet_csv(raw)
-            _commit_rows(request, person, headers, rows, uploaded.name)
+            token = None
+            try:
+                token, raw = create_stage(
+                    request,
+                    None,
+                    uploaded,
+                    kind=KIND_SHEET_COMPARISON,
+                )
+                headers, rows = read_sheet_csv(raw)
+            except CsvInputError as exc:
+                if token:
+                    delete_stage(request, token)
+                raise SheetCsvError("Choose a CSV file of at most 5 MB.") from exc
+            except (SheetCsvError, StageUnavailable):
+                if token:
+                    delete_stage(request, token)
+                raise
+            _commit_rows(request, person, headers, rows, uploaded.name, token)
             return redirect("sheet-comparison")
         if action == "map":
             if pending is None:
@@ -143,12 +181,17 @@ def _handle_post(request, person, pending, mapping_form):
             mapping_form = SheetColumnMappingForm(request.POST, headers=pending["headers"])
             if not mapping_form.is_valid():
                 return _rerender(request, person, mapping_form=mapping_form, pending=pending)
+            try:
+                headers, rows = _staged_rows(request, pending)
+            except StageUnavailable as exc:
+                raise SheetCsvError("Upload a CSV to map its columns.") from exc
             _commit_rows(
                 request,
                 person,
-                pending["headers"],
-                pending["rows"],
+                headers,
+                rows,
                 pending["source"],
+                pending["token"],
                 mapping_data=mapping_form.cleaned_data,
             )
             return redirect("sheet-comparison")
