@@ -17,6 +17,7 @@ from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_GET, require_http_methods, require_POST, require_safe
 
+from .backup_health import settings_backup_context
 from .auth_services import (
     InvalidOneTimeCode,
     SETUP_THROTTLE_USERNAME,
@@ -87,6 +88,16 @@ from .reauth import (
     requires_recent_auth,
     safe_next_url,
     stamp_recent_auth,
+)
+from .security_services import (
+    EVENT_TYPES,
+    active_sessions_for,
+    events_for,
+    record_security_event,
+    record_sign_in_failure_for_username,
+    retouch_after_session_cycle,
+    revoke_other_sessions_for,
+    revoke_session_for,
 )
 from .export import export_filename, write_export_zip
 from .models import (
@@ -530,6 +541,11 @@ def transaction_list(request):
                 filter_hidden.append((name, str(value.pk)))
             else:
                 filter_hidden.append((name, str(value)))
+    matching_count = transactions.count()
+    from .bulk_edit_services import BULK_EDIT_CAP
+    from .bulk_edit_views import active_bulk_undo
+    from .forms import BulkTransactionEditForm
+
     return render(
         request,
         "finance/transaction_list.html",
@@ -545,6 +561,12 @@ def transaction_list(request):
             "proposed_rule": proposed_rule_from_accepts(person) if show_ai else None,
             "list_query": request.get_full_path(),
             "filter_hidden": filter_hidden,
+            "filter_query": request.GET.urlencode(),
+            "matching_count": matching_count,
+            "matching_over_cap": matching_count > BULK_EDIT_CAP,
+            "bulk_select_cap": BULK_EDIT_CAP,
+            "bulk_form": BulkTransactionEditForm(principal=request.user),
+            "bulk_undo": active_bulk_undo(request),
         },
     )
 
@@ -1164,9 +1186,12 @@ def sign_in(request):
     if request.method == "POST" and form.is_valid():
         username = normalize_username(form.cleaned_data["username"])
         key = throttle_key(username, request.META.get("REMOTE_ADDR"))
+        already_blocked = login_is_blocked(key)
         user = _authenticate_member(request, username, form.cleaned_data["password"], key)
         if user is None:
             form.add_error(None, "Sign-in failed. Check your credentials and try again later.")
+            if not already_blocked:
+                record_sign_in_failure_for_username(username, request)
         else:
             clear_login_failures(key)
             _complete_member_session(request, user)
@@ -1265,6 +1290,7 @@ def _complete_password_setup(request, form):
         user.person,
         form.cleaned_data.get("accept_privacy_policy", False),
         form.cleaned_data.get("privacy_policy_version"),
+        request=request,
     )
     return recovery_codes
 
@@ -1289,7 +1315,10 @@ def _account_add_password(request, password_form):
         return password_form, None
     request.user.set_password(password_form.cleaned_data["password1"])
     request.user.save(update_fields=("password",))
+    previous_key = request.session.session_key
     update_session_auth_hash(request, request.user)
+    retouch_after_session_cycle(request, previous_key)
+    record_security_event(request.user, EVENT_TYPES.PASSWORD_CHANGED, request=request)
     password_form = PasswordPairForm()
     password_form.existing_user = request.user
     return password_form, None
@@ -1299,7 +1328,10 @@ def _account_remove_password(request):
     if not remove_member_password(request.user):
         return LAST_SIGN_IN_METHOD
     request.user.refresh_from_db()
+    previous_key = request.session.session_key
     update_session_auth_hash(request, request.user)
+    retouch_after_session_cycle(request, previous_key)
+    record_security_event(request.user, EVENT_TYPES.PASSWORD_CHANGED, request=request)
     return None
 
 
@@ -1415,6 +1447,7 @@ def join(request):
                     _user.person,
                     form.cleaned_data.get("accept_privacy_policy", False),
                     form.cleaned_data.get("privacy_policy_version"),
+                    request=request,
                 )
     return render(
         request,
@@ -1511,6 +1544,19 @@ def account_settings(request):
             password_form, error = _account_add_password(request, password_form)
         elif action == "remove-password":
             error = _account_remove_password(request)
+    person = getattr(request.user, "person", None)
+    current_key = request.session.session_key
+    session_rows = []
+    for row in active_sessions_for(request.user):
+        session_rows.append(
+            {
+                "id": row.pk,
+                "ip_address": row.ip_address,
+                "user_agent": row.user_agent,
+                "last_activity_at": row.last_activity_at,
+                "is_current": bool(current_key) and row.session_key == current_key,
+            }
+        )
     return render(
         request,
         "finance/account_settings.html",
@@ -1519,8 +1565,37 @@ def account_settings(request):
             "has_google": has_google_account(request.user),
             "has_password": request.user.has_usable_password(),
             "error": error,
+            "security_events": list(events_for(person)[:50]),
+            "member_sessions": session_rows,
         },
     )
+
+
+@require_POST
+@never_cache
+@requires_recent_auth("revoke-session", form_url_name="account-settings")
+def revoke_session(request, session_id):
+    was_current = revoke_session_for(
+        request.user,
+        session_id,
+        current_session_key=request.session.session_key,
+    )
+    if was_current:
+        logout(request)
+        return redirect("login")
+    return redirect("account-settings")
+
+
+@require_POST
+@never_cache
+@requires_recent_auth("revoke-other-sessions", form_url_name="account-settings")
+def revoke_other_sessions(request):
+    revoke_other_sessions_for(
+        request.user,
+        request.session.session_key,
+        session=request.session,
+    )
+    return redirect("account-settings")
 
 
 @require_http_methods(["GET", "HEAD", "POST"])
@@ -1539,7 +1614,8 @@ def settings_alerts(request):
 @require_safe
 @never_cache
 def settings_data(request):
-    return render(request, "finance/settings_data.html")
+    person = get_object_or_404(Person, user=request.user)
+    return render(request, "finance/settings_data.html", settings_backup_context(person))
 
 
 @never_cache
@@ -1547,7 +1623,7 @@ def settings_ai(request):
     person = getattr(request.user, "person", None)
     if request.method == "POST" and request.POST.get("action") == "accept-privacy-policy":
         if person is not None:
-            accept_shown_version(person, request.POST.get("version"))
+            accept_shown_version(person, request.POST.get("version"), request=request)
     policy = current_policy()
     acceptance = latest_acceptance(person) if person is not None else None
     return render(
@@ -1575,7 +1651,9 @@ def _account_export_zip(request):
 @never_cache
 @requires_recent_auth("export-data", form_url_name="settings-data")
 def account_export(request):
-    return _account_export_zip(request)
+    response = _account_export_zip(request)
+    record_security_event(request.user, EVENT_TYPES.MEMBER_DATA_EXPORT, request=request)
+    return response
 
 
 REAUTH_FAILED = "Confirmation failed. Try again later."
@@ -1736,7 +1814,7 @@ def privacy_policy_respond(request):
     person = get_object_or_404(Person, user=request.user)
     action = request.POST.get("action")
     if action == "accept":
-        if not accept_shown_version(person, request.POST.get("version")):
+        if not accept_shown_version(person, request.POST.get("version"), request=request):
             return redirect("privacy-policy")
     elif action == "decline":
         decline_shown_version(person, request.POST.get("version"))
@@ -1750,12 +1828,14 @@ def recover(request):
     recovered = False
     if request.method == "POST" and form.is_valid():
         try:
-            recover_account(
+            recovered_user = recover_account(
                 form.cleaned_data["username"],
                 form.cleaned_data["recovery_code"],
                 form.cleaned_data["password1"],
             )
             recovered = True
+            record_security_event(recovered_user, EVENT_TYPES.RECOVERY_CODE_USED, request=request)
+            record_security_event(recovered_user, EVENT_TYPES.PASSWORD_CHANGED, request=request)
         except InvalidOneTimeCode:
             form.add_error(None, "Recovery failed. Check the supplied details.")
     return render(request, "finance/recover.html", {"form": form, "recovered": recovered})

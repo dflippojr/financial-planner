@@ -1,3 +1,4 @@
+import uuid
 from decimal import Decimal
 
 from django.conf import settings
@@ -18,6 +19,11 @@ sha256_validator = RegexValidator(
 def validate_json_object(value):
     if not isinstance(value, dict):
         raise ValidationError("Original imported fields must be a JSON object.")
+
+
+def validate_bulk_edit_snapshot(value):
+    if not isinstance(value, dict) or not isinstance(value.get("rows"), list):
+        raise ValidationError("Bulk edit snapshot must be an object with a row list.")
 
 
 def validate_reason_list(value):
@@ -64,6 +70,7 @@ class Person(models.Model):
         related_name="person",
     )
     display_name = models.CharField(max_length=150)
+    sessions_valid_after = models.DateTimeField(null=True, blank=True)
     privacy_policy_declined_version = models.ForeignKey(
         "PrivacyPolicyVersion",
         on_delete=models.SET_NULL,
@@ -686,6 +693,8 @@ class TransactionCorrectionHistory(models.Model):
         CATEGORY = "category", "Category"
         EXCLUSION = "exclusion", "Transfer exclusion"
         REFUND_LINK = "refund_link", "Refund link"
+        NOTE = "note", "Note"
+        TAGS = "tags", "Tags"
 
     transaction = models.ForeignKey(
         Transaction,
@@ -738,7 +747,7 @@ class TransactionCorrectionHistory(models.Model):
                         currency="",
                     )
                     | Q(
-                        field_name__in=("description", "category", "exclusion", "refund_link"),
+                        field_name__in=("description", "category", "exclusion", "refund_link", "note", "tags"),
                         previous_date__isnull=True,
                         new_date__isnull=True,
                         previous_amount_minor__isnull=True,
@@ -776,6 +785,8 @@ class TransactionCorrectionHistory(models.Model):
             self.Field.CATEGORY,
             self.Field.EXCLUSION,
             self.Field.REFUND_LINK,
+            self.Field.NOTE,
+            self.Field.TAGS,
         ):
             return self.previous_description
         return self._amount_display(self.previous_amount_minor)
@@ -789,6 +800,8 @@ class TransactionCorrectionHistory(models.Model):
             self.Field.CATEGORY,
             self.Field.EXCLUSION,
             self.Field.REFUND_LINK,
+            self.Field.NOTE,
+            self.Field.TAGS,
         ):
             return self.new_description
         return self._amount_display(self.new_amount_minor)
@@ -1897,6 +1910,7 @@ class Alert(models.Model):
         BUDGET = "budget", "Budget"
         LARGE_TRANSACTION = "large_transaction", "Large transaction"
         MONTHLY_REVIEW = "monthly_review", "Monthly review"
+        BACKUP = "backup", "Backup"
 
     recipient = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="alerts")
     kind = models.CharField(max_length=20, choices=Kind)
@@ -1925,6 +1939,7 @@ class Alert(models.Model):
                         "budget",
                         "large_transaction",
                         "monthly_review",
+                        "backup",
                     )
                 ),
                 name="alert_kind_valid",
@@ -1982,3 +1997,115 @@ class MonthlyReview(models.Model):
 
     def __str__(self):
         return f"Monthly review {self.person_id} {self.month}"
+
+
+class MemberSecurityEvent(models.Model):
+    class EventType(models.TextChoices):
+        SIGN_IN_SUCCESS = "sign_in_success", "Signed in"
+        SIGN_IN_FAILURE = "sign_in_failure", "Sign-in failed"
+        SIGN_OUT = "sign_out", "Signed out"
+        RECOVERY_CODE_USED = "recovery_code_used", "Recovery code used"
+        PASSKEY_ADDED = "passkey_added", "Passkey added"
+        PASSKEY_REMOVED = "passkey_removed", "Passkey removed"
+        PASSWORD_CHANGED = "password_changed", "Password changed"
+        AI_CONNECTION_CHANGED = "ai_connection_changed", "AI connection changed"
+        SIMPLEFIN_CONNECTION_CHANGED = "simplefin_connection_changed", "SimpleFIN connection changed"
+        MEMBER_DATA_EXPORT = "member_data_export", "Data exported"
+        POLICY_ACCEPTANCE = "policy_acceptance", "Policy accepted"
+
+    member = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="security_events")
+    event_type = models.CharField(max_length=40, choices=EventType)
+    occurred_at = models.DateTimeField(default=timezone.now)
+    ip_address = models.CharField(max_length=45, blank=True, default="")
+    user_agent = models.CharField(max_length=200, blank=True, default="")
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            person = _person_for(principal)
+            if person is None:
+                return self.none()
+            return self.filter(member=person)
+
+    objects = QuerySet.as_manager()
+
+    class Meta:
+        indexes = [
+            models.Index(fields=("member", "-occurred_at"), name="sec_event_member_occurred_idx"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(
+                    event_type__in=(
+                        "sign_in_success",
+                        "sign_in_failure",
+                        "sign_out",
+                        "recovery_code_used",
+                        "passkey_added",
+                        "passkey_removed",
+                        "password_changed",
+                        "ai_connection_changed",
+                        "simplefin_connection_changed",
+                        "member_data_export",
+                        "policy_acceptance",
+                    )
+                ),
+                name="member_security_event_type_valid",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Security event {self.pk}"
+
+
+class MemberSession(models.Model):
+    member = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="member_sessions")
+    session_key = models.CharField(max_length=40, unique=True)
+    ip_address = models.CharField(max_length=45, blank=True, default="")
+    user_agent = models.CharField(max_length=200, blank=True, default="")
+    created_at = models.DateTimeField(default=timezone.now)
+    last_activity_at = models.DateTimeField(default=timezone.now)
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            person = _person_for(principal)
+            if person is None:
+                return self.none()
+            return self.filter(member=person)
+
+    objects = QuerySet.as_manager()
+
+    class Meta:
+        indexes = [
+            models.Index(fields=("member", "-last_activity_at"), name="member_session_activity_idx"),
+        ]
+
+    def __str__(self):
+        return f"Member session {self.pk}"
+
+
+class BulkEditUndo(models.Model):
+    """Prior values for one bulk edit, held for a short undo window."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    actor = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="bulk_edit_undos")
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    undone_at = models.DateTimeField(null=True, blank=True)
+    snapshot = models.JSONField(validators=(validate_bulk_edit_snapshot,))
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            person = _person_for(principal)
+            if person is None:
+                return self.none()
+            return self.filter(actor=person)
+
+    objects = QuerySet.as_manager()
+
+    class Meta:
+        indexes = [
+            models.Index(fields=("actor", "expires_at"), name="bulk_edit_undo_actor_exp_idx"),
+        ]
+
+    def __str__(self):
+        return f"Bulk edit undo {self.pk}"

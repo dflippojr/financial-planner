@@ -377,6 +377,7 @@ def _spending_row(item, *, total_spending, date_from, date_to, account, scope, g
         percent_display=format_percent(spending_minor, total_spending),
         is_net_refund=spending_minor < 0,
         color_index=category_color_index(item["color_key"]),
+        parent_name="",
         drilldown_url=f"{reverse('transaction-list')}?{urlencode(query)}",
         detail_url=spending_category_detail_url(
             item["filter_value"],
@@ -442,6 +443,59 @@ def spending_by_category_report(
         has_visible_transactions=visible_transactions,
         includes_investment=any(item.account_type == Account.Type.INVESTMENT for item in accounts),
         investment_notice=INVESTMENT_NOTICE,
+    )
+
+
+def income_by_category_report(
+    principal,
+    *,
+    date_from,
+    date_to,
+    account=None,
+    scope="",
+    tag=None,
+    accounts=None,
+):
+    accounts = selected_accounts(
+        principal, account=account, scope=scope, cash_flow_only=True, accounts=accounts
+    )
+    totals = income_and_spending_totals(
+        principal,
+        date_from=date_from,
+        date_to=date_to,
+        accounts=accounts,
+        tag=tag,
+    )
+    named = {item.pk: item for item in Category.objects.visible_to(principal)}
+    combined = _combine_category_spending(totals.income_by_category_id, named)
+    rows = []
+    for item in combined.values():
+        income_minor = item["spending_minor"]
+        query = _filter_query(
+            date_from,
+            date_to,
+            account=account,
+            scope=scope,
+            category=item["filter_value"],
+            tag=tag,
+        )
+        rows.append(
+            SimpleNamespace(
+                key=item["filter_value"],
+                name=item["name"],
+                parent_name="",
+                income_minor=income_minor,
+                income_display=format_minor(income_minor),
+                percent_display=format_percent(income_minor, totals.income_minor),
+                drilldown_url=f"{reverse('transaction-list')}?{urlencode(query)}",
+            )
+        )
+    rows.sort(key=lambda row: (-row.income_minor, row.name))
+    return SimpleNamespace(
+        accounts=accounts,
+        rows=rows,
+        total_income_minor=totals.income_minor,
+        total_income_display=format_minor(totals.income_minor),
     )
 
 

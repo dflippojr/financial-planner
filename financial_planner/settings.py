@@ -51,6 +51,7 @@ MIDDLEWARE = [
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "finance.middleware.MemberSessionActivityMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "allauth.account.middleware.AccountMiddleware",
     "finance.middleware.LoginRequiredExceptStaticMiddleware",
@@ -136,6 +137,10 @@ SESSION_COOKIE_SECURE = os.environ.get("DJANGO_SECURE_COOKIES", "true").lower() 
 SESSION_COOKIE_SAMESITE = "Lax"
 CSRF_COOKIE_SECURE = SESSION_COOKIE_SECURE
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+# True only when the app port is loopback-only behind a trusted proxy such as
+# Tailscale Serve. When on, client IP comes from the right-most X-Forwarded-For
+# hop the proxy added; when off, X-Forwarded-For is ignored.
+TRUST_PROXY_FORWARDED_FOR = os.environ.get("TRUST_PROXY_FORWARDED_FOR", "false").lower() == "true"
 SECURE_SSL_REDIRECT = os.environ.get("DJANGO_SECURE_SSL_REDIRECT", "true").lower() == "true"
 SECURE_HSTS_SECONDS = int(os.environ.get("DJANGO_SECURE_HSTS_SECONDS", "31536000"))
 SECURE_HSTS_INCLUDE_SUBDOMAINS = True
@@ -221,6 +226,10 @@ AI_CHAT_EXPIRE_DAYS = int(os.environ.get("AI_CHAT_EXPIRE_DAYS", "30"))
 AI_CHAT_MAX_TURNS = int(os.environ.get("AI_CHAT_MAX_TURNS", "20"))
 AI_CHAT_MAX_TOOL_CALLS = int(os.environ.get("AI_CHAT_MAX_TOOL_CALLS", "40"))
 AI_CHAT_LOCAL_ENABLED = os.environ.get("AI_CHAT_LOCAL_ENABLED", "false").lower() == "true"
+
+# Written by ops/backup/backup.sh and mounted read-only into the app.
+BACKUP_STATUS_PATH = os.environ.get("BACKUP_STATUS_PATH", "/backup-health/status").strip() or "/backup-health/status"
+OPERATOR_USERNAMES = os.environ.get("OPERATOR_USERNAMES", "").strip()
 
 # Handle uploads in memory only. Django's default handlers write any upload over
 # 2.5 MB to a temporary file in /tmp before application code runs, which would put

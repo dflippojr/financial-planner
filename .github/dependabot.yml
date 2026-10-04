@@ -1,0 +1,60 @@
+# Version and security update PRs only. There is no auto-merge; the owner
+# reviews and approves every dependency pull request.
+#
+# docker-compose is listed separately because GitHub split it out of docker;
+# both are required so root Dockerfiles and compose.yml postgres stay current.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    assignees:
+      - dflippojr
+    ignore:
+      # Django major upgrades are planned as their own issue; 5.2 is LTS.
+      - dependency-name: django
+        update-types: ["version-update:semver-major"]
+    groups:
+      python-minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: docker
+    directories:
+      - /
+      - /ops/backup
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    assignees:
+      - dflippojr
+    ignore:
+      # A Postgres major upgrade needs a dump and restore of the data
+      # volume; it is planned as its own issue, never merged as a bump.
+      - dependency-name: postgres
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    assignees:
+      - dflippojr
+    ignore:
+      # A Postgres major upgrade needs a dump and restore of the data
+      # volume; it is planned as its own issue, never merged as a bump.
+      - dependency-name: postgres
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    assignees:
+      - dflippojr
