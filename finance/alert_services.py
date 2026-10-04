@@ -43,6 +43,8 @@ def settings_for(person):
 
 
 def kind_is_enabled(prefs, kind):
+    if kind == Alert.Kind.BACKUP:
+        return True
     field = _KIND_ENABLED_FIELD.get(kind)
     return bool(field and getattr(prefs, field))
 
@@ -333,8 +335,10 @@ def run_daily_alert_pass(*, today=None, now=None):
     created = evaluate_sync_alerts()
     created.extend(evaluate_active_budget_alerts(today=today))
     created.extend(evaluate_recent_large_transactions())
+    from .backup_health import evaluate_backup_alerts
     from .monthly_review import generate_due_monthly_reviews
 
     generate_due_monthly_reviews(today=today)
+    created.extend(evaluate_backup_alerts(today=today, now=now))
     purge_old_read_alerts(now=now)
     return created
