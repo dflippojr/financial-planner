@@ -3,10 +3,16 @@ name: Automated Code Review
 # Thin caller for the shared review workflow in dflippojr/agent-harness (pinned to the review-v1 tag), so fixes to
 # the reviewer reach this repository without a copy. See agent-harness docs/CI-CD.md, "Adopting the review workflow".
 #
-# Dispatch only, never pull_request: the reviewer reads untrusted PR content with shell access on the self-hosted
-# runner, and a fork's pull_request run would execute the fork's copy of this file. The shared job also refuses
-# pull requests from forks.
+# Reviews a PR once when it is opened; dispatch for a re-review after later commits.
+#
+# Never pull_request: the reviewer reads untrusted PR content with shell access on the self-hosted runner, and a
+# fork's pull_request run would execute the fork's copy of this file. pull_request_target and workflow_dispatch
+# always run main's copy. Fork PRs are skipped before they reach the runner, and the shared job refuses them too.
+# The PR head is checked out only as review context; nothing from it runs. Dependabot PRs are skipped, and a
+# review on open uses the Cursor backend.
 on:
+  pull_request_target:
+    types: [opened]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -32,10 +38,14 @@ permissions:
 
 jobs:
   review:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login != 'dependabot[bot]')
     uses: dflippojr/agent-harness/.github/workflows/review.yml@review-v1
     with:
-      pr_number: ${{ inputs.pr_number }}
-      backend: ${{ inputs.backend }}
-      mode: ${{ inputs.mode }}
+      pr_number: ${{ inputs.pr_number || github.event.pull_request.number }}
+      backend: ${{ inputs.backend || 'cursor' }}
+      mode: ${{ inputs.mode || 'full' }}
       runs_on: '["self-hosted","Windows","X64","financial-planner-review"]'
     secrets: inherit
