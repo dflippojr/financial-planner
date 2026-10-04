@@ -116,8 +116,9 @@ remote_base=${offsite_remote%/}
 
 nightly_dir="$backup_root/nightly"
 weekly_dir="$backup_root/weekly"
-status_file="$backup_root/status"
-mkdir -p "$nightly_dir" "$weekly_dir"
+health_dir="$backup_root/health"
+status_file="$health_dir/status"
+mkdir -p "$nightly_dir" "$weekly_dir" "$health_dir"
 umask 077
 status_written=0
 load_status

@@ -155,7 +155,7 @@ def _run_backup(fake_bin, backup_root, extra_env=None):
 
 
 def _read_status(backup_root):
-    text = (backup_root / "status").read_text(encoding="utf-8")
+    text = (backup_root / "health" / "status").read_text(encoding="utf-8")
     data = {}
     for line in text.splitlines():
         if "=" in line:
@@ -196,6 +196,8 @@ def test_backup_is_verified_and_retains_latest_nightly_and_weekly_files(tmp_path
     assert status["size_bytes"] == str(dump.stat().st_size)
     assert status["table_count"] == "2"
     assert status["last_error"] == ""
+    assert (backup_root / "health" / "status").is_file()
+    assert not (backup_root / "status").exists()
 
 
 @pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")

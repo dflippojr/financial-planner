@@ -223,7 +223,7 @@ AI_CHAT_MAX_TOOL_CALLS = int(os.environ.get("AI_CHAT_MAX_TOOL_CALLS", "40"))
 AI_CHAT_LOCAL_ENABLED = os.environ.get("AI_CHAT_LOCAL_ENABLED", "false").lower() == "true"
 
 # Written by ops/backup/backup.sh and mounted read-only into the app.
-BACKUP_STATUS_PATH = os.environ.get("BACKUP_STATUS_PATH", "/backups/status").strip() or "/backups/status"
+BACKUP_STATUS_PATH = os.environ.get("BACKUP_STATUS_PATH", "/backup-health/status").strip() or "/backup-health/status"
 OPERATOR_USERNAMES = os.environ.get("OPERATOR_USERNAMES", "").strip()
 
 # Handle uploads in memory only. Django's default handlers write any upload over

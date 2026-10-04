@@ -134,7 +134,7 @@ That applies the same shared-account exit rules as leaving. It prints a short co
 
 ## Backups
 
-The backup container runs `pg_dump` in PostgreSQL custom format every night at 2:00 AM in `TZ` (default `America/New_York`). A Sunday dump is also copied into `weekly/`. A dump is published atomically only after `pg_restore --list` verifies it. Pruning keeps the newest 14 files in `nightly/` and 8 in `weekly/`. Each run writes `$BACKUP_DIR/status` with the last success time, dump name, size, table count, and last error. The app and SimpleFIN scheduler mount that directory read-only and raise an in-app alert to operators if no dump has succeeded in 26 hours or the last run failed, including an off-site upload failure.
+The backup container runs `pg_dump` in PostgreSQL custom format every night at 2:00 AM in `TZ` (default `America/New_York`). A Sunday dump is also copied into `weekly/`. A dump is published atomically only after `pg_restore --list` verifies it. Pruning keeps the newest 14 files in `nightly/` and 8 in `weekly/`. Each run writes `$BACKUP_DIR/health/status` with the last success time, dump name, size, table count, and last error. The app and SimpleFIN scheduler mount only `$BACKUP_DIR/health` read-only and raise an in-app alert to operators if no dump has succeeded in 26 hours or the last run failed, including an off-site upload failure.
 
 Set `OPERATOR_USERNAMES` in `production.env` to a comma-separated list of member usernames. If it is empty, the earliest-created member is the operator. Operators see last local and off-site success times on Settings → Data. Other members do not. Alerts name no file contents and fire at most once per local calendar day until a run succeeds.
 
@@ -153,7 +153,7 @@ Run and verify an extra backup before an upgrade or restore drill:
 ```powershell
 docker compose --env-file $Config run --rm backup /opt/financial-planner/backup.sh
 Get-ChildItem E:\financial-planner-backups\nightly
-Get-Content E:\financial-planner-backups\status
+Get-Content E:\financial-planner-backups\health\status
 docker compose --env-file $Config logs --tail 50 backup
 ```
 
