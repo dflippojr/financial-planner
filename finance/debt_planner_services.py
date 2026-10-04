@@ -143,6 +143,7 @@ def build_debt_plan(principal, *, include_ids, extra_minor, strategy, custom_ord
     results_by_id = {}
     if comparison is not None:
         results_by_id = {row.account_id: row for row in comparison.chosen.debts}
+    custom_rank = {account_id: index for index, account_id in enumerate(custom_order or (), start=1)}
     display_rows = []
     for row in catalog:
         result = results_by_id.get(row.account_id)
@@ -157,6 +158,7 @@ def build_debt_plan(principal, *, include_ids, extra_minor, strategy, custom_ord
                 **row.__dict__,
                 included=result is not None,
                 payoff_label=payoff_label,
+                rank=custom_rank.get(row.account_id),
             )
         )
     if comparison is not None:

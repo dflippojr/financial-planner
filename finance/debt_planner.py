@@ -10,6 +10,7 @@ MONTHS_PER_YEAR = Decimal("12")
 PERCENT = Decimal("100")
 MAX_MONTHS = 600
 NEVER_PAYS_OFF = "never pays off"
+BEYOND_LIMIT = "more than 50 years"
 NEEDS_DETAILS = "needs details"
 STRATEGY_MINIMUMS = "minimums"
 STRATEGY_SNOWBALL = "snowball"
@@ -100,6 +101,7 @@ def simulate_payoff(debts, extra_minor=0, strategy=STRATEGY_MINIMUMS, custom_ord
     total_interest = 0
     months = []
     never = False
+    beyond_limit = False
     for offset in range(MAX_MONTHS):
         if all(balance <= 0 for balance in balances.values()):
             break
@@ -114,7 +116,12 @@ def simulate_payoff(debts, extra_minor=0, strategy=STRATEGY_MINIMUMS, custom_ord
             balances[debt.account_id] += interest
             total_interest += interest
         ordered = _strategy_order(debts, balances, strategy, custom_order)
-        payments = _allocate_payments(ordered, balances, extra_minor)
+        # Snowball, avalanche, and custom keep the monthly total constant: a
+        # paid-off debt's minimum rolls into the next debt in order.
+        freed_minor = 0
+        if strategy != STRATEGY_MINIMUMS:
+            freed_minor = sum(debt.minimum_payment_minor for debt in debts if before[debt.account_id] <= 0)
+        payments = _allocate_payments(ordered, balances, extra_minor + freed_minor)
         paid_total = 0
         for debt in debts:
             paid = payments.get(debt.account_id, 0)
@@ -140,14 +147,18 @@ def simulate_payoff(debts, extra_minor=0, strategy=STRATEGY_MINIMUMS, custom_ord
             never = True
             break
     else:
+        # Still shrinking after MAX_MONTHS: it pays off, just not within the horizon.
         if any(balance > 0 for balance in balances.values()):
-            never = True
+            beyond_limit = True
 
     summaries = []
     for debt in debts:
         remaining = balances[debt.account_id]
         if never and remaining > 0:
             status = NEVER_PAYS_OFF
+            payoff = None
+        elif beyond_limit and remaining > 0:
+            status = BEYOND_LIMIT
             payoff = None
         else:
             status = ""
@@ -166,6 +177,7 @@ def simulate_payoff(debts, extra_minor=0, strategy=STRATEGY_MINIMUMS, custom_ord
         debts=summaries,
         total_interest_minor=total_interest,
         never_pays_off=never,
+        beyond_limit=beyond_limit,
         extra_minor=extra_minor,
         strategy=strategy,
     )

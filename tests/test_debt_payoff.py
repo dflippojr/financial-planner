@@ -193,3 +193,24 @@ def test_future_snapshot_is_ignored_and_simplefin_owed_sign_is_used():
     html = signed_in(owner).get(reverse("debt-payoff")).content.decode()
     assert "40.00 USD" in html
     assert "999.99 USD" not in html
+
+
+@pytest.mark.django_db
+def test_custom_ranks_are_kept_after_comparing():
+    owner = make_person("owner")
+    first = _ready_card(owner, "Synthetic First Card")
+    second = _ready_card(owner, "Synthetic Second Card")
+
+    page = signed_in(owner).get(
+        reverse("debt-payoff"),
+        {
+            "include": [first.pk, second.pk],
+            "strategy": "custom",
+            f"rank_{first.pk}": "2",
+            f"rank_{second.pk}": "1",
+        },
+    )
+
+    html = page.content.decode()
+    assert f'id="rank-{first.pk}" class="input input-bordered input-sm w-20" type="number" name="rank_{first.pk}" min="1" value="2"' in html
+    assert f'id="rank-{second.pk}" class="input input-bordered input-sm w-20" type="number" name="rank_{second.pk}" min="1" value="1"' in html

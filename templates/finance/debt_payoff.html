@@ -32,7 +32,7 @@
             <td class="text-right">{% if row.owed_display %}{% include "finance/_amount.html" with value=row.owed_display tone="" %}{% else %}—{% endif %}</td>
             <td>
               <label class="sr-only" for="rank-{{ row.account_id }}">Custom order for {{ row.name }}</label>
-              <input id="rank-{{ row.account_id }}" class="input input-bordered input-sm w-20" type="number" name="rank_{{ row.account_id }}" min="1" value="{{ forloop.counter }}">
+              <input id="rank-{{ row.account_id }}" class="input input-bordered input-sm w-20" type="number" name="rank_{{ row.account_id }}" min="1" value="{{ row.rank|default:forloop.counter }}">
             </td>
             <td>
               {% if row.ready %}
@@ -54,6 +54,11 @@
   </div>
 </form>
 {% if plan.comparison %}
+{% if plan.comparison.chosen.beyond_limit %}
+<div role="status" class="alert alert-info mb-4">
+  <span>At least one included debt takes more than 50 years to pay off at these payments.</span>
+</div>
+{% endif %}
 {% if plan.comparison.chosen.never_pays_off %}
 <div role="status" class="alert alert-warning mb-4">
   <span>At least one included debt never pays off because the payment does not cover the monthly interest.</span>

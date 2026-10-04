@@ -2,6 +2,8 @@ from datetime import date
 from decimal import Decimal
 
 from finance.debt_planner import (
+    BEYOND_LIMIT,
+    add_calendar_months,
     NEVER_PAYS_OFF,
     STRATEGY_AVALANCHE,
     STRATEGY_CUSTOM,
@@ -117,3 +119,35 @@ def test_compare_to_minimums_reports_interest_saved():
     assert comparison.interest_saved_minor > 0
     assert comparison.chosen.total_interest_minor < comparison.baseline.total_interest_minor
     assert comparison.baseline.strategy == STRATEGY_MINIMUMS
+
+
+def test_snowball_rolls_a_paid_off_minimum_into_the_next_debt():
+    start = date(2026, 1, 1)
+    small = _debt(1, 10_000, "0", 10_000, name="Synthetic small")
+    large = _debt(2, 30_000, "0", 1_000, name="Synthetic large")
+
+    plan = simulate_payoff([small, large], extra_minor=1_000, strategy=STRATEGY_SNOWBALL, start=start)
+
+    by_id = {row.account_id: row for row in plan.debts}
+    assert by_id[1].payoff_month == start
+    # 30,000 - 2,000 in month one, then 12,000 a month with the freed 10,000 minimum.
+    assert by_id[2].payoff_month == add_calendar_months(start, 3)
+    assert [month.paid_minor for month in plan.months] == [12_000, 12_000, 12_000, 4_000]
+
+
+def test_minimums_only_does_not_roll_freed_minimums():
+    start = date(2026, 1, 1)
+    small = _debt(1, 10_000, "0", 10_000)
+    large = _debt(2, 3_000, "0", 1_000)
+
+    plan = simulate_payoff([small, large], strategy=STRATEGY_MINIMUMS, start=start)
+
+    assert [month.paid_minor for month in plan.months] == [11_000, 1_000, 1_000]
+
+
+def test_a_payoff_past_the_horizon_is_not_reported_as_never():
+    plan = simulate_payoff([_debt(1, 100_000, "0", 100)], strategy=STRATEGY_MINIMUMS, start=date(2026, 1, 1))
+
+    assert plan.never_pays_off is False
+    assert plan.beyond_limit is True
+    assert plan.debts[0].payoff_label == BEYOND_LIMIT
