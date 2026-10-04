@@ -337,7 +337,7 @@ def test_a_very_large_upload_is_refused_without_touching_disk(staging_settings):
 
     assert spool.call_count == 0
     assert response.status_code == 200
-    assert b"at most 5 MB" in response.content
+    assert b"exceeds the 5 MB limit" in response.content
     assert not list(Path(staging_settings).glob("*.csvstage"))
 
 

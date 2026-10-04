@@ -9,6 +9,7 @@ This runbook deploys the first release to the Windows basement PC with Docker De
 | Application source and synthetic fixture | Git checkout | Code only; never add populated environment files, CSV exports, database files, or dumps. |
 | Secrets and per-machine settings | A protected file outside the checkout, such as `D:/financial-planner-config/production.env` | Keep until rotated; restrict its Windows permissions to the operator account. |
 | PostgreSQL data | Docker named volume selected by `POSTGRES_VOLUME_NAME` | Durable across container replacement; never commit or manually edit it. |
+| Receipt files | Docker named volume selected by `RECEIPTS_VOLUME_NAME` (`RECEIPTS_DIR=/receipts`) | Durable across container replacement. Served only through access-checked views, never as static or media files. Deleting a receipt drops the database row immediately; the file is removed within about two days. Nightly backups archive this directory next to the database dump and keep deleted receipts' files until those copies rotate out. |
 | Logical backups | `BACKUP_DIR` on the second local disk | Keep the 14 newest nightly dumps and 8 newest Sunday weekly copies. |
 | Source CSV exports | A private folder outside the checkout | The application discards an uploaded source after a successful import; the operator should remove the original export when no longer needed. |
 | Staged CSV uploads | A tmpfs (memory-backed) mount at `/run/csv-staging` inside the app container | Never written to disk. Each upload expires within an hour, is deleted on cancel, and is discarded whenever the container stops or restarts. |
@@ -42,7 +43,7 @@ Prerequisites are Docker Desktop configured to use WSL2 and start when Windows s
    python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
    ```
 
-   `SIMPLEFIN_SYNC_CRON` defaults to `30 6 * * *` (06:30 in `TZ`). It uses the same five-field cron shape as `BACKUP_CRON`.
+   `SIMPLEFIN_SYNC_CRON` defaults to `30 6 * * *` (06:30 in `TZ`). It uses the same five-field cron shape as `BACKUP_CRON`. Optional `OPERATOR_USERNAMES` names who receive backup health alerts. Optional `OFFSITE_RCLONE_REMOTE` and `OFFSITE_AGE_RECIPIENT` enable the encrypted off-site copy; see Backups below.
 
 3. Validate, build, migrate, and start the stack:
 
@@ -62,7 +63,7 @@ Prerequisites are Docker Desktop configured to use WSL2 and start when Windows s
    tailscale serve status
    ```
 
-   If `APP_PORT` is not 8000, use its value in the target URL. Tailscale Serve accepts only loopback HTTP proxy targets and supplies `X-Forwarded-Proto`; Django trusts that proxy header, redirects other HTTP requests to HTTPS, and uses secure session and CSRF cookies. Open the HTTPS MagicDNS URL shown by `tailscale serve status`. The command uses Serve, not Funnel, so it does not intentionally expose the app to the public internet. See the [Tailscale Serve command reference](https://tailscale.com/docs/reference/tailscale-cli/serve).
+   If `APP_PORT` is not 8000, use its value in the target URL. Tailscale Serve accepts only loopback HTTP proxy targets and supplies `X-Forwarded-Proto` and `X-Forwarded-For`. Django trusts that proxy header, redirects other HTTP requests to HTTPS, and uses secure session and CSRF cookies. Compose sets `TRUST_PROXY_FORWARDED_FOR=true` for the app service because the published port is loopback-only; sign-in and session logs then store the right-most `X-Forwarded-For` address (the hop Serve added). Leave that setting off anywhere the app port is reachable without that proxy, or clients can spoof the left-most address. Open the HTTPS MagicDNS URL shown by `tailscale serve status`. The command uses Serve, not Funnel, so it does not intentionally expose the app to the public internet. See the [Tailscale Serve command reference](https://tailscale.com/docs/reference/tailscale-cli/serve).
 
    **When the PC already runs other services**, check before choosing ports:
 
@@ -134,21 +135,41 @@ That applies the same shared-account exit rules as leaving. It prints a short co
 
 ## Backups
 
-The backup container runs `pg_dump` in PostgreSQL custom format every night at 2:00 AM in `TZ` (default `America/New_York`). A Sunday dump is also copied into `weekly/`. A dump is published atomically only after `pg_restore --list` verifies it. Pruning keeps the newest 14 files in `nightly/` and 8 in `weekly/`.
+The backup container runs `pg_dump` in PostgreSQL custom format every night at 2:00 AM in `TZ` (default `America/New_York`). A Sunday dump is also copied into `weekly/`. A dump is published atomically only after `pg_restore --list` verifies it. The same run then archives `$RECEIPTS_DIR` as `financial_planner_TIMESTAMP.receipts.tar.gz` next to that dump, with the same 14 nightly and 8 weekly copies. Receipt deletes only drop the database row; files stay on disk for about two days, so a file removed from the dump between those steps is still present for the archive. Backups keep those files until they rotate out. Pruning keeps the newest 14 files of each kind in `nightly/` and 8 in `weekly/`. Each run writes `$BACKUP_DIR/health/status` with the last success time, dump name, size, table count, and last error. The app and SimpleFIN scheduler mount only `$BACKUP_DIR/health` read-only and raise an in-app alert to operators if no dump has succeeded in 26 hours or the last run failed, including an off-site upload failure.
+
+Set `OPERATOR_USERNAMES` in `production.env` to a comma-separated list of member usernames. If it is empty, the earliest-created member is the operator. Operators see last local and off-site success times on Settings → Data. Other members do not. Alerts name no file contents and fire at most once per local calendar day until a run succeeds.
+
+### Encrypted off-site copy
+
+When both `OFFSITE_RCLONE_REMOTE` and `OFFSITE_AGE_RECIPIENT` are set, each verified dump and its receipts archive are encrypted with `age` to that public key and uploaded with rclone. Remote nightly and weekly prefixes keep the same 14 and 8 file retention per kind, pruned by name. An upload failure is recorded in `offsite_error` (the local dump stays published) and alerts operators. A configured off-site copy whose last success is older than 26 hours is also unhealthy.
+
+1. Install rclone on a trusted machine, run `rclone config`, and save the file outside the checkout. Set `OFFSITE_RCLONE_CONFIG` in `production.env` to that path (forward slashes on Windows). The backup container mounts only that file, read-only, as `/config/rclone.conf`. Leave the variable unset to use the committed empty placeholder.
+2. Create an age key pair on a trusted machine (`age-keygen`). Put the **public** key in `OFFSITE_AGE_RECIPIENT`. Keep the private key in a password manager. The private key must never live on the tower.
+3. Set `OFFSITE_RCLONE_REMOTE` to the rclone destination, for example `b2:bucket/financial-planner` or `drive:financial-planner-backups`. Recreate the backup container after editing `production.env`.
+
+Example remote names include Backblaze B2, Google Drive, and OneDrive. A NAS can be another rclone remote later.
 
 Run and verify an extra backup before an upgrade or restore drill:
 
 ```powershell
 docker compose --env-file $Config run --rm backup /opt/financial-planner/backup.sh
 Get-ChildItem E:\financial-planner-backups\nightly
+Get-Content E:\financial-planner-backups\health\status
 docker compose --env-file $Config logs --tail 50 backup
 ```
 
-The backup directory is a bind mount from the second disk, not part of the database volume or image. Monitor that disk's free space and confirm new nightly files appear. Retention is not an off-site backup; copying encrypted backups off-site is a separate operational decision.
+The backup directory is a bind mount from the second disk, not part of the database volume or image. Monitor that disk's free space and confirm new nightly files appear.
 
 ## Restore into a fresh database volume
 
-Use a fresh named volume so the old database remains available for investigation or rollback. The commands below cause downtime and assume `BACKUP_DIR` still points to the directory containing the selected dump.
+Use a fresh named volume so the old database remains available for investigation or rollback. The commands below cause downtime and assume `BACKUP_DIR` still points to the directory containing the selected dump. For an off-site copy, download the `.dump.age` file and the matching `.receipts.tar.gz.age` file, decrypt both with the age private key, then restore:
+
+```powershell
+age -d -i $AgeIdentity -o financial_planner_YYYYMMDDTHHMMSSZ.dump financial_planner_YYYYMMDDTHHMMSSZ.dump.age
+age -d -i $AgeIdentity -o financial_planner_YYYYMMDDTHHMMSSZ.receipts.tar.gz financial_planner_YYYYMMDDTHHMMSSZ.receipts.tar.gz.age
+```
+
+Copy the decrypted dump into `E:\financial-planner-backups\nightly\` (or pass the dump path to `restore.sh`). If a sibling receipts archive is present, restore puts it into `RECEIPTS_DIR`; if that archive is missing (backups from before this release), the database is still restored and the live receipts directory is left unchanged. Continue with the local procedure. Do not copy the age private key onto the tower.
 
 1. Choose a known-good file and stop writers:
 
@@ -158,7 +179,7 @@ Use a fresh named volume so the old database remains available for investigation
    docker compose --env-file $Config stop app backup simplefin-sync db
    ```
 
-2. In `production.env`, change `POSTGRES_VOLUME_NAME` to a new name such as `financial-planner-postgres-data-restored-YYYYMMDD`. Do not delete or reuse the old volume.
+2. In `production.env`, change `POSTGRES_VOLUME_NAME` to a new name such as `financial-planner-postgres-data-restored-YYYYMMDD`. Change `RECEIPTS_VOLUME_NAME` to a matching new receipts volume such as `financial-planner-receipts-restored-YYYYMMDD`. Do not delete or reuse the old volumes.
 
 3. Start empty PostgreSQL, restore, and start the application:
 

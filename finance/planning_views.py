@@ -27,7 +27,16 @@ def _visible_item(user, item_id):
     return get_object_or_404(PlannedItem.objects.visible_to(user), pk=item_id)
 
 
-def _form(request, person, data=None, instance=None):
+def _prefill_from_query(query):
+    initial = {}
+    for key in ("name", "kind", "amount", "start_date", "end_date", "cadence", "scope"):
+        value = query.get(key)
+        if value:
+            initial[key] = value
+    return initial
+
+
+def _form(request, person, data=None, instance=None, extra_initial=None):
     household = current_household(person)
     initial = None
     if instance is not None and data is None:
@@ -42,6 +51,8 @@ def _form(request, person, data=None, instance=None):
             "category": instance.category,
             "replaces_series": instance.replaces_series,
         }
+    if extra_initial:
+        initial = {**(initial or {}), **extra_initial}
     return PlannedItemForm(
         data,
         principal=request.user,
@@ -56,7 +67,8 @@ def _form(request, person, data=None, instance=None):
 @never_cache
 def planned_item_list(request):
     person = _person(request)
-    form = _form(request, person, request.POST if request.method == "POST" else None)
+    extra = _prefill_from_query(request.GET) if request.method == "GET" else None
+    form = _form(request, person, request.POST if request.method == "POST" else None, extra_initial=extra)
     if request.method == "POST" and form.is_valid():
         _service_or_404(lambda: save_planned_item(request.user, form.save_payload()))
         return redirect("planned-items")
@@ -73,11 +85,13 @@ def planned_item_list(request):
 def planned_item_edit(request, item_id):
     person = _person(request)
     item = _visible_item(request.user, item_id)
+    extra = _prefill_from_query(request.GET) if request.method == "GET" else None
     form = _form(
         request,
         person,
         request.POST if request.method == "POST" else None,
         instance=item,
+        extra_initial=extra,
     )
     if request.method == "POST" and form.is_valid():
         _service_or_404(lambda: save_planned_item(request.user, form.save_payload(), item=item))

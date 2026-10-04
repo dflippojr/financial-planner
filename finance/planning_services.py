@@ -5,7 +5,7 @@ from django.db.models import Exists, Max, OuterRef
 
 from .cash_flow import cash_flow_report, selected_accounts
 from .category_services import current_household, exclusion_exists_for
-from .models import Account, PlannedItem, RecurringSeries, RecurringSeriesMember, Transaction
+from .models import Account, PlannedItem, RecurringSeries, RecurringSeriesMember, SavingsGoal, Transaction
 from .projection import (
     DEFAULT_HORIZON,
     KIND_EXPENSE,
@@ -14,6 +14,8 @@ from .projection import (
     project_cash_flow,
     step_occurrence,
 )
+from .scenario import apply_scenario, compare_projected_months
+from .savings_goal_services import goal_progress
 
 _DENIED = "Operation is not permitted."
 
@@ -158,6 +160,27 @@ def projected_months_for(
     return project_cash_flow(inputs, today=today, horizon=horizon)
 
 
+def visible_savings_goal_dates(principal, *, today, scope=""):
+    """Active visible goals with their target dates, for baseline and scenario."""
+    goals = SavingsGoal.objects.visible_to(principal).filter(
+        status=SavingsGoal.Status.ACTIVE,
+        completed_at__isnull=True,
+    )
+    if scope:
+        goals = goals.filter(scope=scope)
+    rows = []
+    for goal in goals.order_by("target_date", "name", "pk"):
+        progress = goal_progress(principal, goal, today=today)
+        rows.append(
+            SimpleNamespace(
+                name=goal.name,
+                target_date=goal.target_date,
+                remaining_display=progress.remaining_display,
+            )
+        )
+    return tuple(rows)
+
+
 def cash_flow_with_projection(
     principal,
     *,
@@ -169,6 +192,7 @@ def cash_flow_with_projection(
     today,
     horizon=DEFAULT_HORIZON,
     tag=None,
+    scenario_changes=(),
 ):
     report = cash_flow_report(
         principal,
@@ -180,11 +204,18 @@ def cash_flow_with_projection(
         today=today,
         tag=tag,
     )
-    report.projected_periods = projected_months_for(
-        principal, today=today, horizon=horizon, account=account, scope=scope
+    inputs = visible_projection_inputs(principal, account=account, scope=scope)
+    report.projected_periods = project_cash_flow(inputs, today=today, horizon=horizon)
+    scenario_inputs = apply_scenario(inputs, scenario_changes)
+    report.scenario_projected_periods = project_cash_flow(scenario_inputs, today=today, horizon=horizon)
+    report.scenario_comparison = compare_projected_months(
+        report.projected_periods, report.scenario_projected_periods
     )
     report.projection_excludes_planned_items = account is not None
     report.horizon = horizon
+    report.scenario_changes = tuple(scenario_changes)
+    report.savings_goal_dates = visible_savings_goal_dates(principal, today=today, scope=scope)
+    report.projection_inputs = inputs
     return report
 
 

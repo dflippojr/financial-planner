@@ -35,10 +35,19 @@ DROP_KEYS = frozenset(
         "net_worth_url",
         "series_id",
         "key",
+        "item_id",
+        "transaction_id",
+        "account_id",
+        "merchant_key",
+        # Cache key for stored reviews, not a fact: its numbers must not ground AI text.
+        "unusual_settings",
     }
 )
-# While a household member is not in acceptance, only these facts are sent, and list
-# items only when every record behind them is the member's own private record.
+# While a household member is not in acceptance, only these facts are sent.
+# Recurring and large-transaction items stay only when every record behind them is
+# the member's own private record. Unusual-spending flags are recomputed from the
+# member's own private cash-flow accounts so baselines and medians cannot carry
+# household amounts.
 PRIVATE_SAFE_KEYS = ("month", "month_label")
 RECURRING_LIST_KEYS = ("price_changes", "missed_charges", "cancellations", "new_recurring")
 NUMBER_RE = re.compile(r"(?<![A-Za-z])[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?%?")
@@ -93,7 +102,7 @@ def visible_phrasing(person, review):
     return paragraph, phrasing_label(review.ai_backend)
 
 
-def run_monthly_review_job(person, job, *, backend, session_id="", on_session=None):
+def run_monthly_review_job(person, job, *, backend, session_id="", on_session=None, connection=None):
     refs = job.input_refs or {}
     review = MonthlyReview.objects.filter(pk=refs.get("monthly_review_id"), person=person).first()
     if review is None:
@@ -118,6 +127,7 @@ def run_monthly_review_job(person, job, *, backend, session_id="", on_session=No
         backend=backend,
         session_id=session_id,
         on_session=on_session,
+        connection=connection,
     )
     if not result.ok:
         return result
@@ -148,6 +158,7 @@ def _own_private_facts(person, facts):
     filtered["large_transactions"] = [
         item for item in facts.get("large_transactions") or [] if _own_private_transaction(person, item)
     ]
+    filtered["unusual"] = _private_unusual_flags(person, facts)
     for key in RECURRING_LIST_KEYS:
         filtered[key] = [item for item in facts.get(key) or [] if _own_private_series(person, item)]
     return filtered
@@ -157,11 +168,36 @@ def _own_private_accounts(person):
     return Account.objects.filter(scope=Account.Scope.PRIVATE, owner=person)
 
 
+def _private_unusual_flags(person, facts):
+    own = list(_own_private_accounts(person).for_cash_flow())
+    if not own:
+        return []
+    month = _month_from_facts(facts)
+    if month is None:
+        return []
+    from .unusual_spending import compute_unusual_flags
+
+    return compute_unusual_flags(person, month, accounts=own)
+
+
+def _month_from_facts(facts):
+    from datetime import date
+
+    raw = facts.get("month")
+    if not raw:
+        return None
+    try:
+        year_s, month_s = str(raw).split("-", 1)
+        return date(int(year_s), int(month_s), 1)
+    except (TypeError, ValueError):
+        return None
+
+
 def _own_private_transaction(person, item):
     if not isinstance(item, dict):
         return False
     try:
-        match = resolve(str(item.get("url") or ""))
+        match = resolve(str(item.get("url") or "").split("?", 1)[0])
     except Resolver404:
         return False
     transaction_id = match.kwargs.get("transaction_id")

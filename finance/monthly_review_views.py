@@ -8,6 +8,7 @@ from .budget_services import add_months
 from .models import Person
 from .monthly_review import latest_closed_month, parse_review_month, review_for_viewer
 from .monthly_review_ai import visible_phrasing
+from .unusual_spending_ai import visible_unusual_phrasing
 
 
 def _person(request):
@@ -29,6 +30,7 @@ def monthly_review(request):
     previous_month = add_months(month, -1)
     next_month = add_months(month, 1)
     ai_paragraph, ai_label = visible_phrasing(person, review)
+    unusual_paragraph, unusual_label = visible_unusual_phrasing(person, review)
     return render(
         request,
         "finance/monthly_review.html",
@@ -37,6 +39,8 @@ def monthly_review(request):
             "facts": review.facts,
             "ai_paragraph": ai_paragraph,
             "ai_label": ai_label,
+            "unusual_paragraph": unusual_paragraph,
+            "unusual_label": unusual_label,
             "month": month,
             "month_label": review.facts.get("month_label"),
             "previous_url": _list_url(previous_month),

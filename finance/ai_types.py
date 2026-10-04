@@ -34,6 +34,9 @@ HARNESS_FAILURE_MAP = {
 
 HOSTED_BACKENDS = frozenset({"claude", "codex", "cursor"})
 LOCAL_BACKEND = "local"
+SHARED_LOCAL_CHOICE = "shared_local"
+SHARED_LOCAL_REF = "shared_local"
+SHARED_CONNECTION_ID_REF = "shared_connection_id"
 
 
 def map_harness_failure(code) -> str:

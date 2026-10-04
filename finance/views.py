@@ -9,7 +9,6 @@ from django.contrib.auth.decorators import login_not_required
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import DatabaseError, connections
 from django.db import transaction as database_transaction
-from django.db.models import Q
 from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -17,6 +16,7 @@ from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_GET, require_http_methods, require_POST, require_safe
 
+from .backup_health import settings_backup_context
 from .auth_services import (
     InvalidOneTimeCode,
     SETUP_THROTTLE_USERNAME,
@@ -37,6 +37,7 @@ from .auth_services import (
     validated_username,
 )
 from .forms import (
+    ReceiptUploadForm,
     AlertSettingsForm,
     CashFlowFilterForm,
     CategoryNameForm,
@@ -48,6 +49,7 @@ from .forms import (
     ReauthPasswordForm,
     RecoveryForm,
     RefundLinkForm,
+    ScenarioChangeForm,
     SetupForm,
     SetupGoogleForm,
     SpendingFilterForm,
@@ -60,6 +62,7 @@ from .forms import (
     TransactionNoteTagsForm,
     TransferWindowForm,
     UnsplitTransactionForm,
+    SavedTransactionFilterNameForm,
 )
 from .google_auth import (
     disconnect_google_account,
@@ -88,15 +91,28 @@ from .reauth import (
     safe_next_url,
     stamp_recent_auth,
 )
+from .security_services import (
+    EVENT_TYPES,
+    active_sessions_for,
+    events_for,
+    record_security_event,
+    record_sign_in_failure_for_username,
+    retouch_after_session_cycle,
+    revoke_other_sessions_for,
+    revoke_session_for,
+)
 from .export import export_filename, write_export_zip
 from .models import (
     Account,
     Category,
     Membership,
     Person,
+    PlannedItem,
     PrivacyPolicyVersion,
+    Receipt,
     RecurringSeries,
     RefundLink,
+    SavedTransactionFilter,
     Tag,
     Transaction,
     TransactionCorrectionHistory,
@@ -137,10 +153,19 @@ from .cash_flow import (
     spending_by_category_report,
     spending_chart_data,
 )
-from .planning_services import cash_flow_with_projection
+from .planning_services import cash_flow_with_projection, visible_projection_inputs
 from .budget_services import dashboard_budget_summary
 from .alert_services import save_alert_settings, settings_for
-from .projection import DEFAULT_HORIZON
+from .projection import DEFAULT_HORIZON, SOURCE_PLANNED, SOURCE_SERIES
+from .scenario import (
+    MAX_CHANGES,
+    describe_change,
+    encode_change,
+    encode_changes,
+    make_this_real_url,
+    parse_scenario_tokens,
+    visible_scenario_changes,
+)
 from .spending_trends import (
     category_spending_trend_report,
     category_trend_chart_data,
@@ -149,11 +174,20 @@ from .spending_trends import (
 )
 from .tag_services import (
     add_tag,
-    apply_tag_filter,
     archive_tag,
     rename_tag,
     selected_tag,
     set_transaction_note_and_tags,
+)
+from .transaction_filters import (
+    apply_saved_filter_url,
+    apply_transaction_filters,
+    delete_saved_transaction_filter,
+    filter_hidden_pairs,
+    paginate_transactions,
+    query_params_from_cleaned,
+    save_transaction_filter,
+    visible_transaction_queryset,
 )
 from .category_services import (
     add_category,
@@ -189,12 +223,43 @@ def health(request):
     return HttpResponse("ok\n", content_type="text/plain")
 
 
+def _cash_flow_pairs(*, date_from, date_to, grouping, horizon, account, scope, tag, changes):
+    pairs = [
+        ("date_from", date_from.isoformat()),
+        ("date_to", date_to.isoformat()),
+        ("grouping", grouping),
+        ("horizon", str(horizon)),
+    ]
+    if account is not None:
+        pairs.append(("account", str(account.pk)))
+    if scope:
+        pairs.append(("scope", scope))
+    if tag is not None:
+        pairs.append(("tag", str(tag.pk)))
+    pairs.extend(("sc", token) for token in encode_changes(changes))
+    return pairs
+
+
+def _scenario_choice_querysets(principal, inputs):
+    planned_ids = [item.source_id for item in inputs if item.source == SOURCE_PLANNED]
+    series_ids = [item.source_id for item in inputs if item.source == SOURCE_SERIES]
+    planned = PlannedItem.objects.visible_to(principal).filter(pk__in=planned_ids).order_by("name", "pk")
+    series = RecurringSeries.objects.visible_to(principal).filter(pk__in=series_ids).order_by("display_name", "pk")
+    return planned, series
+
+
 @require_GET
 @never_cache
 def home(request):
     today = timezone.localdate()
     default_from, default_to = default_date_range(today)
     form = CashFlowFilterForm(request.GET or None, principal=request.user)
+    if form.is_bound and form.has_error("grouping"):
+        # A missing or invalid grouping falls back to months; validate again with it so
+        # the period-limit check still applies.
+        data = request.GET.copy()
+        data["grouping"] = "month"
+        form = CashFlowFilterForm(data, principal=request.user)
     if not form.is_bound:
         form = CashFlowFilterForm(
             principal=request.user,
@@ -216,10 +281,45 @@ def home(request):
         scope = form.cleaned_data["scope"]
         horizon = form.cleaned_data["horizon"] or DEFAULT_HORIZON
         tag = form.cleaned_data.get("tag")
-    else:
+    elif (
+        form.non_field_errors()
+        or form.has_error("date_from")
+        or form.has_error("date_to")
+    ):
         date_from = date_to = grouping = account = scope = None
         horizon = DEFAULT_HORIZON
         tag = None
+    else:
+        date_from = form.cleaned_data.get("date_from") or default_from
+        date_to = form.cleaned_data.get("date_to") or default_to
+        grouping = form.cleaned_data.get("grouping") or "month"
+        account = form.cleaned_data.get("account")
+        scope = form.cleaned_data.get("scope") or ""
+        horizon = form.cleaned_data.get("horizon") or DEFAULT_HORIZON
+        tag = form.cleaned_data.get("tag")
+    changes = list(parse_scenario_tokens(request.GET))
+    inputs_for_form = ()
+    if date_from is not None:
+        inputs_for_form = visible_projection_inputs(request.user, account=account, scope=scope)
+        changes = list(visible_scenario_changes(changes, inputs_for_form))
+    planned_qs, series_qs = _scenario_choice_querysets(request.user, inputs_for_form)
+    scenario_form = ScenarioChangeForm(
+        request.GET if request.GET.get("scenario_action") == "add" else None,
+        planned_items=planned_qs,
+        series=series_qs,
+    )
+    if date_from is not None and request.GET.get("scenario_action") == "remove":
+        remove_token = request.GET.get("remove_sc", "")
+        remaining = [change for change in changes if encode_change(change) != remove_token]
+        return redirect(
+            f"{reverse('home')}?{urlencode(_cash_flow_pairs(date_from=date_from, date_to=date_to, grouping=grouping, horizon=horizon, account=account, scope=scope, tag=tag, changes=remaining))}"
+        )
+    if date_from is not None and request.GET.get("scenario_action") == "add" and scenario_form.is_valid():
+        changes.append(scenario_form.to_change())
+        changes = changes[:MAX_CHANGES]
+        return redirect(
+            f"{reverse('home')}?{urlencode(_cash_flow_pairs(date_from=date_from, date_to=date_to, grouping=grouping, horizon=horizon, account=account, scope=scope, tag=tag, changes=changes))}"
+        )
     report = None
     if date_from is not None:
         report = cash_flow_with_projection(
@@ -232,12 +332,59 @@ def home(request):
             today=today,
             horizon=horizon,
             tag=tag,
+            scenario_changes=changes,
         )
+        inputs_for_form = report.projection_inputs
+        planned_qs, series_qs = _scenario_choice_querysets(request.user, inputs_for_form)
+        if request.GET.get("scenario_action") != "add":
+            scenario_form = ScenarioChangeForm(planned_items=planned_qs, series=series_qs)
+    planned_by_id = {item.source_id: item for item in inputs_for_form if item.source == SOURCE_PLANNED}
+    series_by_id = {item.source_id: item for item in inputs_for_form if item.source == SOURCE_SERIES}
+    listed_changes = []
+    for change in changes:
+        token = encode_change(change)
+        remove_pairs = _cash_flow_pairs(
+            date_from=date_from or default_from,
+            date_to=date_to or default_to,
+            grouping=grouping or "month",
+            horizon=horizon,
+            account=account,
+            scope=scope or "",
+            tag=tag,
+            changes=changes,
+        )
+        remove_url = (
+            f"{reverse('home')}?{urlencode(remove_pairs + [('scenario_action', 'remove'), ('remove_sc', token)])}"
+        )
+        listed_changes.append(
+            SimpleNamespace(
+                summary=describe_change(change, planned_by_id=planned_by_id, series_by_id=series_by_id),
+                make_real_url=make_this_real_url(change),
+                remove_url=remove_url,
+                token=token,
+            )
+        )
+    scenario_tokens = encode_changes(changes)
+    filter_pairs = _cash_flow_pairs(
+        date_from=date_from or default_from,
+        date_to=date_to or default_to,
+        grouping=grouping or "month",
+        horizon=horizon,
+        account=account,
+        scope=scope or "",
+        tag=tag,
+        changes=(),
+    )
     return render(
         request,
         "finance/home.html",
         {
             "filter_form": form,
+            "filter_pairs": filter_pairs,
+            "scenario_form": scenario_form,
+            "scenario_tokens": scenario_tokens,
+            "scenario_listed_changes": listed_changes,
+            "scenario_comparison": report.scenario_comparison if report is not None else None,
             "report": report,
             "chart_data": cash_flow_chart_data(report) if report is not None else None,
             "accounts": Account.objects.visible_to(request.user),
@@ -444,34 +591,13 @@ def spending_category_detail(request, category_id=None):
 
 
 def _apply_transaction_filters(transactions, filters, principal):
-    if filters["date_from"]:
-        transactions = transactions.filter(transaction_date__gte=filters["date_from"])
-    if filters["date_to"]:
-        transactions = transactions.filter(transaction_date__lte=filters["date_to"])
-    if filters["account"]:
-        transactions = transactions.filter(account=filters["account"])
-    if filters["scope"]:
-        transactions = transactions.filter(account__scope=filters["scope"])
-    if filters["q"]:
-        transactions = transactions.filter(description__icontains=filters["q"])
-    if filters.get("tag"):
-        transactions = apply_tag_filter(transactions, filters["tag"])
-    category = filters["category"]
-    if category == "uncategorized":
-        # Match the spending view: a category the viewer can no longer see
-        # (for example after leaving a household) counts as uncategorized.
-        return transactions.filter(
-            Q(category__isnull=True)
-            | Q(category__code=Category.Code.UNCATEGORIZED)
-            | ~Q(category__in=Category.objects.visible_to(principal))
-        ).exclude(_excluded=True).exclude(category_source=Transaction.CategorySource.SPLIT)
-    if category == "transfer":
-        return transactions.filter(_excluded=True)
-    if category:
-        return transactions.filter(
-            Q(category_id=category) | Q(splits__category_id=category)
-        ).exclude(_excluded=True).distinct()
-    return transactions
+    return apply_transaction_filters(transactions, filters, principal)
+
+
+def _query_without_page(request):
+    params = request.GET.copy()
+    params.pop("page", None)
+    return params.urlencode()
 
 
 @require_GET
@@ -485,18 +611,11 @@ def transaction_list(request):
     )
 
     person = Person.objects.filter(user=request.user).first()
-    transactions = (
-        Transaction.objects.visible_to(request.user)
-        .filter(status=Transaction.Status.ACTIVE)
-        .select_related("account", "import_batch", "category")
-        .prefetch_related("splits__category", "tags")
-        .annotate(_excluded=exclusion_exists_for(request.user))
-        .order_by("-transaction_date", "-pk")
-    )
+    transactions = visible_transaction_queryset(request.user)
     form = TransactionFilterForm(request.GET or None, principal=request.user)
     list_totals = None
     if form.is_valid():
-        transactions = _apply_transaction_filters(transactions, form.cleaned_data, request.user)
+        transactions = apply_transaction_filters(transactions, form.cleaned_data, request.user)
         list_totals = income_and_spending_totals(
             request.user,
             date_from=form.cleaned_data.get("date_from"),
@@ -518,24 +637,30 @@ def transaction_list(request):
         )
     elif form.is_bound:
         transactions = transactions.none()
+    matching_count = transactions.count()
+    page = paginate_transactions(transactions, request.GET.get("page"))
     show_ai = bool(person and member_has_ai(person))
     uncategorized_filter = form.is_valid() and form.cleaned_data.get("category") == "uncategorized"
-    suggestions = pending_suggestions_for(person, transactions) if show_ai else {}
-    filter_hidden = []
-    if form.is_valid():
-        for name, value in form.cleaned_data.items():
-            if value in (None, ""):
-                continue
-            if name in {"account", "tag"}:
-                filter_hidden.append((name, str(value.pk)))
-            else:
-                filter_hidden.append((name, str(value)))
+    suggestions = pending_suggestions_for(person, page.object_list) if show_ai else {}
+    filter_hidden = filter_hidden_pairs(form.cleaned_data) if form.is_valid() else []
+    saved_filters = (
+        SavedTransactionFilter.objects.visible_to(request.user).order_by("name", "pk")
+        if person
+        else SavedTransactionFilter.objects.none()
+    )
+    from .bulk_edit_services import BULK_EDIT_CAP
+    from .bulk_edit_views import active_bulk_undo
+    from .forms import BulkTransactionEditForm
+
     return render(
         request,
         "finance/transaction_list.html",
         {
             "filter_form": form,
-            "transactions": transactions,
+            "save_filter_form": SavedTransactionFilterNameForm(),
+            "saved_filters": saved_filters,
+            "transactions": page.object_list,
+            "page": page,
             "list_totals": list_totals,
             "show_ai_suggestions": show_ai,
             "uncategorized_filter": uncategorized_filter,
@@ -545,8 +670,49 @@ def transaction_list(request):
             "proposed_rule": proposed_rule_from_accepts(person) if show_ai else None,
             "list_query": request.get_full_path(),
             "filter_hidden": filter_hidden,
+            "filter_query": _query_without_page(request),
+            "matching_count": matching_count,
+            "matching_over_cap": matching_count > BULK_EDIT_CAP,
+            "bulk_select_cap": BULK_EDIT_CAP,
+            "bulk_form": BulkTransactionEditForm(principal=request.user),
+            "bulk_undo": active_bulk_undo(request),
         },
     )
+
+
+@require_POST
+@never_cache
+def transaction_saved_filter_create(request):
+    form = TransactionFilterForm(request.POST or None, principal=request.user)
+    name_form = SavedTransactionFilterNameForm(request.POST)
+    if not name_form.is_valid():
+        return redirect("transaction-list")
+    query = query_params_from_cleaned(form.cleaned_data) if form.is_valid() else {}
+    try:
+        save_transaction_filter(request.user, name=name_form.cleaned_data["name"], query=query)
+    except PermissionDenied as exc:
+        raise Http404 from exc
+    except ValidationError:
+        params = urlencode(query)
+        path = reverse("transaction-list")
+        return redirect(f"{path}?{params}" if params else path)
+    params = urlencode(query)
+    path = reverse("transaction-list")
+    return redirect(f"{path}?{params}" if params else path)
+
+
+@require_POST
+@never_cache
+def transaction_saved_filter_delete(request, filter_id):
+    _service_or_404(lambda: delete_saved_transaction_filter(request.user, filter_id))
+    return redirect("transaction-list")
+
+
+@require_GET
+@never_cache
+def transaction_saved_filter_apply(request, filter_id):
+    url = _service_or_404(lambda: apply_saved_filter_url(request.user, filter_id))
+    return redirect(url)
 
 
 def _visible_active_transaction(principal, transaction_id):
@@ -596,11 +762,15 @@ def transaction_edit(request, transaction_id):
     return _render_transaction_edit(request, financial_transaction, form=form)
 
 
-def _render_transaction_edit(request, financial_transaction, *, form=None, refund_form=None, split_form=None, note_form=None):
+def _render_transaction_edit(
+    request, financial_transaction, *, form=None, refund_form=None, split_form=None, note_form=None, receipt_form=None
+):
     if form is None:
         form = TransactionCorrectionForm.for_transaction(financial_transaction)
     if note_form is None:
         note_form = TransactionNoteTagsForm.for_transaction(financial_transaction, request.user)
+    if receipt_form is None:
+        receipt_form = ReceiptUploadForm()
     correction_history = (
         TransactionCorrectionHistory.objects.visible_to(request.user)
         .filter(transaction=financial_transaction)
@@ -643,6 +813,12 @@ def _render_transaction_edit(request, financial_transaction, *, form=None, refun
             "is_split": financial_transaction.category_source == Transaction.CategorySource.SPLIT,
             "transaction": financial_transaction,
             "correction_history": correction_history,
+            "receipt_form": receipt_form,
+            "receipts": list(
+                Receipt.objects.visible_to(request.user)
+                .filter(transaction=financial_transaction)
+                .order_by("pk")
+            ),
         },
     )
 
@@ -1164,9 +1340,12 @@ def sign_in(request):
     if request.method == "POST" and form.is_valid():
         username = normalize_username(form.cleaned_data["username"])
         key = throttle_key(username, request.META.get("REMOTE_ADDR"))
+        already_blocked = login_is_blocked(key)
         user = _authenticate_member(request, username, form.cleaned_data["password"], key)
         if user is None:
             form.add_error(None, "Sign-in failed. Check your credentials and try again later.")
+            if not already_blocked:
+                record_sign_in_failure_for_username(username, request)
         else:
             clear_login_failures(key)
             _complete_member_session(request, user)
@@ -1265,6 +1444,7 @@ def _complete_password_setup(request, form):
         user.person,
         form.cleaned_data.get("accept_privacy_policy", False),
         form.cleaned_data.get("privacy_policy_version"),
+        request=request,
     )
     return recovery_codes
 
@@ -1289,7 +1469,10 @@ def _account_add_password(request, password_form):
         return password_form, None
     request.user.set_password(password_form.cleaned_data["password1"])
     request.user.save(update_fields=("password",))
+    previous_key = request.session.session_key
     update_session_auth_hash(request, request.user)
+    retouch_after_session_cycle(request, previous_key)
+    record_security_event(request.user, EVENT_TYPES.PASSWORD_CHANGED, request=request)
     password_form = PasswordPairForm()
     password_form.existing_user = request.user
     return password_form, None
@@ -1299,7 +1482,10 @@ def _account_remove_password(request):
     if not remove_member_password(request.user):
         return LAST_SIGN_IN_METHOD
     request.user.refresh_from_db()
+    previous_key = request.session.session_key
     update_session_auth_hash(request, request.user)
+    retouch_after_session_cycle(request, previous_key)
+    record_security_event(request.user, EVENT_TYPES.PASSWORD_CHANGED, request=request)
     return None
 
 
@@ -1415,6 +1601,7 @@ def join(request):
                     _user.person,
                     form.cleaned_data.get("accept_privacy_policy", False),
                     form.cleaned_data.get("privacy_policy_version"),
+                    request=request,
                 )
     return render(
         request,
@@ -1488,6 +1675,10 @@ def _alert_settings_form(person, data=None):
             "large_transaction_enabled": prefs.large_transaction_enabled,
             "monthly_review_enabled": prefs.monthly_review_enabled,
             "monthly_review_ai_enabled": prefs.monthly_review_ai_enabled,
+            "unusual_spending_enabled": prefs.unusual_spending_enabled,
+            "unusual_spending_ai_enabled": prefs.unusual_spending_ai_enabled,
+            "unusual_category_percent": prefs.unusual_category_percent,
+            "unusual_category_amount": Decimal(prefs.unusual_category_floor_minor) / Decimal(100),
             "large_transaction_amount": amount,
         },
     )
@@ -1511,6 +1702,19 @@ def account_settings(request):
             password_form, error = _account_add_password(request, password_form)
         elif action == "remove-password":
             error = _account_remove_password(request)
+    person = getattr(request.user, "person", None)
+    current_key = request.session.session_key
+    session_rows = []
+    for row in active_sessions_for(request.user):
+        session_rows.append(
+            {
+                "id": row.pk,
+                "ip_address": row.ip_address,
+                "user_agent": row.user_agent,
+                "last_activity_at": row.last_activity_at,
+                "is_current": bool(current_key) and row.session_key == current_key,
+            }
+        )
     return render(
         request,
         "finance/account_settings.html",
@@ -1519,8 +1723,37 @@ def account_settings(request):
             "has_google": has_google_account(request.user),
             "has_password": request.user.has_usable_password(),
             "error": error,
+            "security_events": list(events_for(person)[:50]),
+            "member_sessions": session_rows,
         },
     )
+
+
+@require_POST
+@never_cache
+@requires_recent_auth("revoke-session", form_url_name="account-settings")
+def revoke_session(request, session_id):
+    was_current = revoke_session_for(
+        request.user,
+        session_id,
+        current_session_key=request.session.session_key,
+    )
+    if was_current:
+        logout(request)
+        return redirect("login")
+    return redirect("account-settings")
+
+
+@require_POST
+@never_cache
+@requires_recent_auth("revoke-other-sessions", form_url_name="account-settings")
+def revoke_other_sessions(request):
+    revoke_other_sessions_for(
+        request.user,
+        request.session.session_key,
+        session=request.session,
+    )
+    return redirect("account-settings")
 
 
 @require_http_methods(["GET", "HEAD", "POST"])
@@ -1539,7 +1772,8 @@ def settings_alerts(request):
 @require_safe
 @never_cache
 def settings_data(request):
-    return render(request, "finance/settings_data.html")
+    person = get_object_or_404(Person, user=request.user)
+    return render(request, "finance/settings_data.html", settings_backup_context(person))
 
 
 @never_cache
@@ -1547,7 +1781,7 @@ def settings_ai(request):
     person = getattr(request.user, "person", None)
     if request.method == "POST" and request.POST.get("action") == "accept-privacy-policy":
         if person is not None:
-            accept_shown_version(person, request.POST.get("version"))
+            accept_shown_version(person, request.POST.get("version"), request=request)
     policy = current_policy()
     acceptance = latest_acceptance(person) if person is not None else None
     return render(
@@ -1575,7 +1809,9 @@ def _account_export_zip(request):
 @never_cache
 @requires_recent_auth("export-data", form_url_name="settings-data")
 def account_export(request):
-    return _account_export_zip(request)
+    response = _account_export_zip(request)
+    record_security_event(request.user, EVENT_TYPES.MEMBER_DATA_EXPORT, request=request)
+    return response
 
 
 REAUTH_FAILED = "Confirmation failed. Try again later."
@@ -1736,7 +1972,7 @@ def privacy_policy_respond(request):
     person = get_object_or_404(Person, user=request.user)
     action = request.POST.get("action")
     if action == "accept":
-        if not accept_shown_version(person, request.POST.get("version")):
+        if not accept_shown_version(person, request.POST.get("version"), request=request):
             return redirect("privacy-policy")
     elif action == "decline":
         decline_shown_version(person, request.POST.get("version"))
@@ -1750,12 +1986,14 @@ def recover(request):
     recovered = False
     if request.method == "POST" and form.is_valid():
         try:
-            recover_account(
+            recovered_user = recover_account(
                 form.cleaned_data["username"],
                 form.cleaned_data["recovery_code"],
                 form.cleaned_data["password1"],
             )
             recovered = True
+            record_security_event(recovered_user, EVENT_TYPES.RECOVERY_CODE_USED, request=request)
+            record_security_event(recovered_user, EVENT_TYPES.PASSWORD_CHANGED, request=request)
         except InvalidOneTimeCode:
             form.add_error(None, "Recovery failed. Check the supplied details.")
     return render(request, "finance/recover.html", {"form": form, "recovered": recovered})
