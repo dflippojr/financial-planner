@@ -118,9 +118,11 @@ def accept_invitation(code, username, display_name, password):
 
 
 def revoke_user_sessions(user):
+    from .passkey_services import clear_pending_passkey_logins_for_user
     from .security_services import revoke_indexed_sessions_for_user
 
     revoke_indexed_sessions_for_user(user)
+    clear_pending_passkey_logins_for_user(user)
     for session in Session.objects.filter(expire_date__gte=timezone.now()).iterator():
         if str(session.get_decoded().get("_auth_user_id")) == str(user.pk):
             session.delete()
@@ -135,19 +137,25 @@ def recover_account(username, code, password):
     user = get_user_model().objects.filter(username=normalize_username(username)).first()
     if user is None:
         raise InvalidOneTimeCode
+    consume_recovery_code(user, code)
+    user.set_password(password)
+    user.save(update_fields=("password",))
+    revoke_user_sessions(user)
+    return user
+
+
+@transaction.atomic
+def consume_recovery_code(user, code):
     recovery_code = RecoveryCode.objects.select_for_update().filter(
         user=user,
-        code_digest=_digest(code.strip().lower()),
+        code_digest=_digest((code or "").strip().lower()),
         used_at__isnull=True,
     ).first()
     if recovery_code is None:
         raise InvalidOneTimeCode
     recovery_code.used_at = timezone.now()
     recovery_code.save(update_fields=("used_at",))
-    user.set_password(password)
-    user.save(update_fields=("password",))
-    revoke_user_sessions(user)
-    return user
+    return recovery_code
 
 
 def throttle_key(username, remote_address):

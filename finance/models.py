@@ -111,6 +111,7 @@ class Person(models.Model):
         blank=True,
         related_name="declined_by",
     )
+    require_passkey_after_password = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -2048,6 +2049,7 @@ class Alert(models.Model):
         MONTHLY_REVIEW = "monthly_review", "Monthly review"
         UNUSUAL_SPENDING = "unusual_spending", "Unusual spending"
         BACKUP = "backup", "Backup"
+        EXPECTED_BALANCE = "expected_balance", "Expected balance"
 
     recipient = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="alerts")
     kind = models.CharField(max_length=20, choices=Kind)
@@ -2078,6 +2080,7 @@ class Alert(models.Model):
                         "monthly_review",
                         "unusual_spending",
                         "backup",
+                        "expected_balance",
                     )
                 ),
                 name="alert_kind_valid",
@@ -2100,6 +2103,7 @@ class AlertSettings(models.Model):
     large_transaction_enabled = models.BooleanField(default=True)
     monthly_review_enabled = models.BooleanField(default=True)
     monthly_review_ai_enabled = models.BooleanField(default=True)
+    expected_balance_enabled = models.BooleanField(default=False)
     unusual_spending_enabled = models.BooleanField(default=True)
     unusual_spending_ai_enabled = models.BooleanField(default=True)
     unusual_category_percent = models.PositiveIntegerField(default=50)
@@ -2128,6 +2132,23 @@ class AlertSettings(models.Model):
 
     def __str__(self):
         return f"Alert settings for {self.person_id}"
+
+
+class BillsCalendarSettings(models.Model):
+    person = models.OneToOneField(Person, on_delete=models.PROTECT, related_name="bills_calendar_settings")
+    threshold_minor = models.BigIntegerField(null=True, blank=True)
+    accounts = models.ManyToManyField(Account, blank=True, related_name="bills_calendar_settings")
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(threshold_minor__isnull=True) | Q(threshold_minor__gte=0),
+                name="bills_calendar_threshold_non_negative",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Bills calendar settings for {self.person_id}"
 
 
 class MonthlyReview(models.Model):
@@ -2332,3 +2353,30 @@ class SheetMonthTotal(models.Model):
 
     def __str__(self):
         return f"Sheet month {self.member_id} {self.month}"
+
+
+class Passkey(models.Model):
+    member = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="passkeys")
+    name = models.CharField(max_length=80)
+    credential_id = models.BinaryField(unique=True)
+    public_key = models.BinaryField()
+    sign_count = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            person = _person_for(principal)
+            if person is None:
+                return self.none()
+            return self.filter(member=person)
+
+    objects = QuerySet.as_manager()
+
+    class Meta:
+        indexes = [
+            models.Index(fields=("member", "-created_at"), name="passkey_member_created_idx"),
+        ]
+
+    def __str__(self):
+        return self.name

@@ -159,6 +159,10 @@ class RecoveryForm(PasswordPairForm):
     field_order = ("username", "recovery_code", "password1", "password2")
 
 
+class RecoveryCodeOnlyForm(forms.Form):
+    recovery_code = forms.CharField(max_length=32, label="Recovery code")
+
+
 class TransactionFilterForm(forms.Form):
     date_from = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
     date_to = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
@@ -1508,6 +1512,11 @@ class AlertSettingsForm(forms.Form):
         label="AI monthly review summary",
         help_text="On by default when an AI backend is connected and the privacy policy is accepted. The facts list stays the source of truth.",
     )
+    expected_balance_enabled = forms.BooleanField(
+        required=False,
+        label="Expected balance below threshold in the next 7 days",
+        help_text="Off by default. Uses the accounts and threshold from the bills calendar. Figures are expected, not guaranteed.",
+    )
     unusual_spending_enabled = forms.BooleanField(required=False, label="Unusual spending")
     unusual_spending_ai_enabled = forms.BooleanField(
         required=False,
@@ -1559,6 +1568,7 @@ class AlertSettingsForm(forms.Form):
             "large_transaction_enabled": self.cleaned_data["large_transaction_enabled"],
             "monthly_review_enabled": self.cleaned_data["monthly_review_enabled"],
             "monthly_review_ai_enabled": self.cleaned_data["monthly_review_ai_enabled"],
+            "expected_balance_enabled": self.cleaned_data["expected_balance_enabled"],
             "unusual_spending_enabled": self.cleaned_data["unusual_spending_enabled"],
             "unusual_spending_ai_enabled": self.cleaned_data["unusual_spending_ai_enabled"],
             "unusual_category_percent": percent,
@@ -1638,6 +1648,39 @@ class SheetToleranceForm(forms.Form):
 class SheetMonthNoteForm(forms.Form):
     month = forms.DateField(widget=forms.HiddenInput)
     note = forms.CharField(required=False, max_length=2000, widget=forms.TextInput(attrs={"class": "input input-bordered w-full"}))
+
+
+class BillsCalendarForm(forms.Form):
+    accounts = forms.ModelMultipleChoiceField(
+        queryset=Account.objects.none(),
+        required=False,
+        widget=forms.CheckboxSelectMultiple,
+        label="Checking and savings accounts",
+        help_text="Expected balance starts from these accounts' latest snapshots.",
+    )
+    threshold_amount = forms.DecimalField(
+        required=False,
+        min_value=Decimal("0.00"),
+        max_digits=19,
+        decimal_places=2,
+        label="Highlight below",
+        help_text="USD. Days whose expected balance is below this amount are highlighted. Leave blank for no highlight.",
+        widget=forms.TextInput(attrs={"inputmode": "decimal"}),
+    )
+
+    def __init__(self, *args, principal=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        from .bills_calendar import deposit_accounts
+
+        self.fields["accounts"].queryset = deposit_accounts(principal)
+
+    def save_payload(self):
+        amount = self.cleaned_data.get("threshold_amount")
+        minor = int(amount * 100) if amount is not None else None
+        return {
+            "account_ids": [account.pk for account in self.cleaned_data["accounts"]],
+            "threshold_minor": minor,
+        }
 
 
 class ReceiptUploadForm(forms.Form):

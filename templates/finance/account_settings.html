@@ -35,6 +35,53 @@
   <button type="submit" class="btn btn-primary">Add password</button>
 </form>
 {% endif %}
+<h3 class="mt-8 mb-3 text-lg font-semibold">Passkeys</h3>
+<p class="mb-4 text-sm">Register Face ID, Touch ID, Windows Hello, or a security key. You can require a passkey after password sign-in. Google sign-in is not asked for a passkey. Use this app over the tailnet HTTPS name so the browser will create a passkey.</p>
+{% if passkeys %}
+<div class="overflow-x-auto mb-4">
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Added</th>
+        <th>Last used</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for passkey in passkeys %}
+      <tr>
+        <td>{{ passkey.name }}</td>
+        <td>{{ passkey.created_at }}</td>
+        <td>{% if passkey.last_used_at %}{{ passkey.last_used_at }}{% else %}Never{% endif %}</td>
+        <td>
+          <form method="post" action="{% url 'passkey-delete' passkey.id %}">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-sm">Remove</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<form method="post" action="{% url 'passkey-require' %}" class="mb-4">
+  {% csrf_token %}
+  <label class="label cursor-pointer justify-start gap-3">
+    <input type="checkbox" name="require_passkey" class="checkbox" {% if require_passkey_after_password %}checked{% endif %}>
+    <span class="label-text">Require a passkey after password</span>
+  </label>
+  <button type="submit" class="btn btn-sm mt-2">Save</button>
+</form>
+{% else %}
+<p class="mb-4 text-sm">No passkeys yet. Add one to turn on a second factor after password sign-in.</p>
+{% endif %}
+<div id="passkey-register" class="mb-8 max-w-lg" data-options-url="{% url 'passkey-register-options' %}" data-register-url="{% url 'passkey-register' %}" data-reauth-url="{% url 'reauth' %}?next={% url 'account-settings' %}&amp;action=add-passkey">
+  <label class="label" for="passkey-name"><span class="label-text">Passkey name</span></label>
+  <input id="passkey-name" class="input input-bordered w-full mb-2" maxlength="80" value="Passkey">
+  <p id="passkey-register-error" class="text-error text-sm mb-2 hidden" role="alert"></p>
+  <button type="button" class="btn btn-primary" data-passkey-register>Add passkey</button>
+</div>
 <h3 class="mt-8 mb-3 text-lg font-semibold">Sessions</h3>
 {% if member_sessions %}
 <div class="overflow-x-auto mb-4">
@@ -103,4 +150,8 @@
 {% else %}
 <p class="text-sm">No recent sign-ins or security events.</p>
 {% endif %}
+{% endblock %}
+{% block extra_js %}
+{% load static %}
+<script src="{% static 'js/passkeys.js' %}"></script>
 {% endblock %}

@@ -143,6 +143,7 @@ def test_switch_off_does_not_queue(harness):
         large_transaction_enabled=True,
         monthly_review_enabled=True,
         monthly_review_ai_enabled=False,
+        expected_balance_enabled=False,
         large_transaction_minor=prefs.large_transaction_minor,
     )
     checking = make_account(owner)

@@ -74,7 +74,7 @@ Prerequisites are Docker Desktop configured to use WSL2 and start when Windows s
      tailscale serve --bg --https=10443 http://127.0.0.1:8210
      ```
 
-   - With a non-default HTTPS port, `DJANGO_CSRF_TRUSTED_ORIGINS` must include it, for example `https://basement-pc.example-tailnet.ts.net:10443`, or every sign-in and form post fails the CSRF check. `DJANGO_ALLOWED_HOSTS` stays the bare MagicDNS name, without a port.
+   - With a non-default HTTPS port, `DJANGO_CSRF_TRUSTED_ORIGINS` must include it, for example `https://basement-pc.example-tailnet.ts.net:10443`, or every sign-in and form post fails the CSRF check. `DJANGO_ALLOWED_HOSTS` stays the bare MagicDNS name, without a port. Passkeys use that hostname as the WebAuthn relying party ID and the CSRF origins (including `:10443`) as the allowed origin list, so members must open the same HTTPS MagicDNS URL to register or use a passkey.
    - To remove only this app's route later, run `tailscale serve --https=10443 off`.
 
 5. Create the first account. Set `SETUP_CODE` in the env file to a long random value. The same generator as in step 2 works. A running container does not reread the env file, so recreate the app if the stack is already up:
