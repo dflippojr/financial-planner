@@ -20,6 +20,7 @@ FEATURE_PROMPTS = {
     "structured": "Reply with a short confirmation that the structured request ran.",
     "category_suggestions": "Reply with a short confirmation that category suggestions ran.",
     "monthly_review": "Reply with a short confirmation that the monthly review ran.",
+    "unusual_spending": "Reply with a short confirmation that unusual spending phrasing ran.",
 }
 
 
@@ -132,6 +133,16 @@ def _process_one(job, moment):
         from .monthly_review_ai import run_monthly_review_job
 
         result = run_monthly_review_job(
+            job.member,
+            job,
+            backend=backend,
+            session_id=session_id,
+            on_session=remember_session,
+        )
+    elif job.feature == "unusual_spending":
+        from .unusual_spending_ai import run_unusual_spending_job
+
+        result = run_unusual_spending_job(
             job.member,
             job,
             backend=backend,

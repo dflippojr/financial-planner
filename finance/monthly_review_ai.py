@@ -35,6 +35,10 @@ DROP_KEYS = frozenset(
         "net_worth_url",
         "series_id",
         "key",
+        "item_id",
+        "transaction_id",
+        "account_id",
+        "merchant_key",
     }
 )
 # While a household member is not in acceptance, only these facts are sent, and list
@@ -148,6 +152,10 @@ def _own_private_facts(person, facts):
     filtered["large_transactions"] = [
         item for item in facts.get("large_transactions") or [] if _own_private_transaction(person, item)
     ]
+    month = facts.get("month")
+    filtered["unusual"] = [
+        item for item in facts.get("unusual") or [] if _own_private_unusual(person, item, month)
+    ]
     for key in RECURRING_LIST_KEYS:
         filtered[key] = [item for item in facts.get(key) or [] if _own_private_series(person, item)]
     return filtered
@@ -157,11 +165,48 @@ def _own_private_accounts(person):
     return Account.objects.filter(scope=Account.Scope.PRIVATE, owner=person)
 
 
+def _own_private_unusual(person, item, month):
+    if not isinstance(item, dict):
+        return False
+    if item.get("kind") in {"merchant", "new_merchant"}:
+        return _own_private_transaction(person, item)
+    if item.get("kind") != "category":
+        return False
+    return _category_only_own_private(person, item, month)
+
+
+def _category_only_own_private(person, item, month):
+    from datetime import date
+
+    from .budget_services import month_end, month_start
+    from .cash_flow import spending_by_category_report
+
+    if not month:
+        return False
+    try:
+        year_s, month_s = str(month).split("-", 1)
+        start = month_start(date(int(year_s), int(month_s), 1))
+    except (TypeError, ValueError):
+        return False
+    own = list(_own_private_accounts(person))
+    if not own:
+        return False
+    end = month_end(start)
+    key = item.get("key")
+    own_amount = _row_amount(spending_by_category_report(person, date_from=start, date_to=end, accounts=own), key)
+    visible_amount = _row_amount(spending_by_category_report(person, date_from=start, date_to=end), key)
+    return own_amount == visible_amount and own_amount > 0
+
+
+def _row_amount(report, key):
+    return next((row.spending_minor for row in report.rows if row.key == key), 0)
+
+
 def _own_private_transaction(person, item):
     if not isinstance(item, dict):
         return False
     try:
-        match = resolve(str(item.get("url") or ""))
+        match = resolve(str(item.get("url") or "").split("?", 1)[0])
     except Resolver404:
         return False
     transaction_id = match.kwargs.get("transaction_id")

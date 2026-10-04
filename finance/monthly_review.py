@@ -409,6 +409,9 @@ def compute_monthly_review_facts(principal, month, *, today=None):
     facts.update(_goal_facts(principal, end))
     facts.update(_net_worth_facts(principal, start, end))
     facts.update(_large_transaction_facts(principal, start, end))
+    from .unusual_spending import compute_unusual_flags
+
+    facts["unusual"] = compute_unusual_flags(principal, start)
     return facts
 
 
@@ -445,13 +448,19 @@ def store_monthly_review(principal, month, *, force=False, today=None, raise_inb
             "generated_at": now,
             "ai_paragraph": "",
             "ai_backend": "",
+            "unusual_ai_paragraph": "",
+            "unusual_ai_backend": "",
         },
     )
     from .monthly_review_ai import queue_monthly_review_phrasing
+    from .unusual_spending import raise_unusual_alerts
+    from .unusual_spending_ai import queue_unusual_phrasing
 
     queue_monthly_review_phrasing(person, review)
+    queue_unusual_phrasing(person, review)
     if raise_inbox:
         _raise_review_alert(person, month)
+        raise_unusual_alerts(person, month, facts.get("unusual") or [])
     return review, True
 
 
