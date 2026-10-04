@@ -13,7 +13,7 @@ from finance.alert_services import save_alert_settings, settings_for
 from finance.category_services import assign_category, ensure_household_categories
 from finance.models import Account, AiJob, Household, ImportBatch, Membership, MonthlyReview, Person, Transaction
 from finance.monthly_review import store_monthly_review
-from finance.monthly_review_ai import phrasing_label
+from finance.monthly_review_ai import facts_payload_for_ai, phrasing_label
 from finance.policy_services import accept_policy, current_policy, publish_policy
 from finance.unusual_spending_ai import unusual_facts_for_ai, queue_unusual_phrasing
 
@@ -212,3 +212,156 @@ def test_unusual_ai_phrases_and_household_private_stays_out(harness, monkeypatch
     assert phrasing_label("local") in body
     assert "150.00 USD" in body
     assert "Unusual this month" in body
+
+
+def _prompts(state):
+    return "\n".join(state.session_prompts)
+
+
+def _category_shared_baseline_private_spike(owner, household):
+    groceries = household.categories.get(name="Groceries")
+    private = make_account(owner, name="Private checking")
+    shared = make_account(owner, name="Shared checking", scope=Account.Scope.HOUSEHOLD, household=household)
+    for when in (
+        date(2026, 3, 10),
+        date(2026, 4, 10),
+        date(2026, 5, 10),
+        date(2026, 6, 10),
+        date(2026, 7, 10),
+        date(2026, 8, 10),
+    ):
+        row = make_transaction(
+            owner, shared, amount_minor=-10_000, description=f"Synthetic grocer {when}", transaction_date=when
+        )
+        assign_category(owner, row.pk, groceries.pk)
+    spike = make_transaction(
+        owner, private, amount_minor=-15_000, description="Synthetic grocer spike", transaction_date=date(2026, 9, 12)
+    )
+    assign_category(owner, spike.pk, groceries.pk)
+    return private, groceries
+
+
+def _merchant_shared_median_private_charge(owner, household):
+    private = make_account(owner, name="Private checking")
+    shared = make_account(owner, name="Shared checking", scope=Account.Scope.HOUSEHOLD, household=household)
+    for when in (date(2026, 6, 2), date(2026, 7, 2), date(2026, 8, 2)):
+        make_transaction(owner, shared, amount_minor=-1_000, description="SYNTHETIC-CAFE", transaction_date=when)
+    make_transaction(
+        owner, private, amount_minor=-2_500, description="SYNTHETIC-CAFE", transaction_date=date(2026, 9, 4)
+    )
+    return private
+
+
+@pytest.mark.django_db
+def test_restricted_ai_does_not_send_shared_category_baseline(harness, monkeypatch):
+    state, url = harness
+    owner = make_person("owner")
+    household = make_household(owner, make_person("member", accept=False))
+    connect_ai(owner, url)
+    _category_shared_baseline_private_spike(owner, household)
+    review, _wrote = store_monthly_review(owner, SEP, today=TODAY)
+    grocery = next(item for item in review.facts["unusual"] if item["kind"] == "category" and item["name"] == "Groceries")
+    assert grocery["baseline_minor"] == "10000"
+    payload = unusual_facts_for_ai(owner, review.facts)
+    blob = str(payload) + str(facts_payload_for_ai(owner, review.facts))
+    assert "100.00" not in blob
+    assert "10000" not in blob
+    state.session_answer = "A short summary with no extra numbers."
+    monkeypatch.setattr("finance.ai_jobs.in_quiet_window", lambda moment=None: True)
+    process_due_jobs()
+    prompts = _prompts(state)
+    assert prompts
+    assert "100.00" not in prompts
+    assert "10000" not in prompts
+    page = signed_in(owner).get(reverse("monthly-review") + "?month=2026-09")
+    body = page.content.decode()
+    assert "Unusual this month" in body
+    assert "100.00 USD" in body
+
+
+@pytest.mark.django_db
+def test_restricted_ai_does_not_send_shared_merchant_median(harness, monkeypatch):
+    state, url = harness
+    owner = make_person("owner")
+    household = make_household(owner, make_person("member", accept=False))
+    connect_ai(owner, url)
+    _merchant_shared_median_private_charge(owner, household)
+    review, _wrote = store_monthly_review(owner, SEP, today=TODAY)
+    merchant = next(item for item in review.facts["unusual"] if item["kind"] == "merchant")
+    assert merchant["median_minor"] == "1000"
+    payload = unusual_facts_for_ai(owner, review.facts)
+    blob = str(payload) + str(facts_payload_for_ai(owner, review.facts))
+    assert "10.00" not in blob
+    assert "1000" not in blob
+    state.session_answer = "A short summary with no extra numbers."
+    monkeypatch.setattr("finance.ai_jobs.in_quiet_window", lambda moment=None: True)
+    process_due_jobs()
+    prompts = _prompts(state)
+    assert prompts
+    assert "10.00" not in prompts
+    assert "1000" not in prompts
+    page = signed_in(owner).get(reverse("monthly-review") + "?month=2026-09")
+    assert "10.00 USD" in page.content.decode()
+
+
+@pytest.mark.django_db
+def test_allowed_household_ai_still_sends_full_unusual_flags(harness, monkeypatch):
+    state, url = harness
+    owner = make_person("owner")
+    household = make_household(owner, make_person("member"))
+    connect_ai(owner, url)
+    _category_shared_baseline_private_spike(owner, household)
+    _merchant_shared_median_private_charge(owner, household)
+    review, _wrote = store_monthly_review(owner, SEP, today=TODAY)
+    payload = unusual_facts_for_ai(owner, review.facts)
+    blob = str(payload)
+    assert "100.00" in blob
+    assert "10000" in blob
+    assert "10.00" in blob
+    assert "1000" in blob
+    state.session_answer = "A short summary with no extra numbers."
+    monkeypatch.setattr("finance.ai_jobs.in_quiet_window", lambda moment=None: True)
+    process_due_jobs()
+    prompts = _prompts(state)
+    assert "100.00" in prompts
+    assert "10000" in prompts
+    assert "10.00" in prompts
+    assert "1000" in prompts
+
+
+@pytest.mark.django_db
+def test_restricted_ai_sends_no_unusual_facts_without_private_accounts(harness, monkeypatch):
+    state, url = harness
+    owner = make_person("owner")
+    household = make_household(owner, make_person("member", accept=False))
+    connect_ai(owner, url)
+    shared = make_account(owner, name="Shared checking", scope=Account.Scope.HOUSEHOLD, household=household)
+    groceries = household.categories.get(name="Groceries")
+    for when in (
+        date(2026, 3, 10),
+        date(2026, 4, 10),
+        date(2026, 5, 10),
+        date(2026, 6, 10),
+        date(2026, 7, 10),
+        date(2026, 8, 10),
+    ):
+        row = make_transaction(
+            owner, shared, amount_minor=-10_000, description=f"Synthetic grocer {when}", transaction_date=when
+        )
+        assign_category(owner, row.pk, groceries.pk)
+    spike = make_transaction(
+        owner, shared, amount_minor=-15_000, description="Synthetic grocer spike", transaction_date=date(2026, 9, 12)
+    )
+    assign_category(owner, spike.pk, groceries.pk)
+    review, _wrote = store_monthly_review(owner, SEP, today=TODAY)
+    assert any(item["kind"] == "category" for item in review.facts["unusual"])
+    payload = unusual_facts_for_ai(owner, review.facts)
+    assert payload["unusual"] == []
+    state.session_answer = "A short summary with no extra numbers."
+    monkeypatch.setattr("finance.ai_jobs.in_quiet_window", lambda moment=None: True)
+    process_due_jobs()
+    prompts = _prompts(state)
+    assert "100.00" not in prompts
+    assert "10000" not in prompts
+    assert "150.00" not in prompts
+    assert "15000" not in prompts
