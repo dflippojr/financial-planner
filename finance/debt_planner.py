@@ -9,6 +9,10 @@ CENTS = Decimal("1")
 MONTHS_PER_YEAR = Decimal("12")
 PERCENT = Decimal("100")
 MAX_MONTHS = 600
+# A balance past this is never going to be repaid; stop compounding it so the
+# simulation stays within Decimal precision.
+GROWTH_CAP_MINOR = 10**15
+STALL_WINDOW_MONTHS = 12
 NEVER_PAYS_OFF = "never pays off"
 BEYOND_LIMIT = "more than 50 years"
 NEEDS_DETAILS = "needs details"
@@ -91,6 +95,29 @@ def _month_stalled(before, after):
     return all(after[account_id] >= before[account_id] for account_id in before)
 
 
+def _unpaid_at_horizon(debts, balances, months, frozen, *, stalled):
+    """Split debts still owed into "never pays off" and "past the horizon".
+
+    A debt never pays off when it hit the growth cap, when every balance stopped
+    falling, or when its balance did not fall over the last year. Otherwise it is
+    still shrinking and simply needs more than MAX_MONTHS.
+    """
+    never_ids = set()
+    beyond_ids = set()
+    year_ago = months[-(STALL_WINDOW_MONTHS + 1)].remaining_by_id if len(months) > STALL_WINDOW_MONTHS else None
+    for debt in debts:
+        remaining = balances[debt.account_id]
+        if remaining <= 0:
+            continue
+        if stalled or debt.account_id in frozen:
+            never_ids.add(debt.account_id)
+        elif year_ago is not None and remaining >= year_ago[debt.account_id]:
+            never_ids.add(debt.account_id)
+        else:
+            beyond_ids.add(debt.account_id)
+    return never_ids, beyond_ids
+
+
 def simulate_payoff(debts, extra_minor=0, strategy=STRATEGY_MINIMUMS, custom_order=None, start=None):
     """Amortize included debts. Extra is applied after each debt's minimum."""
     start = start or date.today().replace(day=1)
@@ -102,21 +129,23 @@ def simulate_payoff(debts, extra_minor=0, strategy=STRATEGY_MINIMUMS, custom_ord
     total_interest = 0
     months = []
     never = False
-    beyond_limit = False
+    frozen = set()
     for offset in range(MAX_MONTHS):
         if all(balance <= 0 for balance in balances.values()):
             break
         before = dict(balances)
         interest_by_id = {}
         for debt in debts:
-            if balances[debt.account_id] <= 0:
+            if balances[debt.account_id] <= 0 or debt.account_id in frozen:
                 interest_by_id[debt.account_id] = 0
                 continue
             interest = monthly_interest_minor(balances[debt.account_id], debt.apr_percent)
             interest_by_id[debt.account_id] = interest
             balances[debt.account_id] += interest
             total_interest += interest
-        ordered = _strategy_order(debts, balances, strategy, custom_order)
+        ordered = [
+            debt for debt in _strategy_order(debts, balances, strategy, custom_order) if debt.account_id not in frozen
+        ]
         # Snowball, avalanche, and custom keep the monthly total constant: a
         # paid-off debt's minimum rolls into the next debt in order.
         freed_minor = 0
@@ -135,6 +164,8 @@ def simulate_payoff(debts, extra_minor=0, strategy=STRATEGY_MINIMUMS, custom_ord
             paid_total += paid
             if balances[debt.account_id] <= 0 and debt.account_id not in payoff_months:
                 payoff_months[debt.account_id] = add_calendar_months(start, offset)
+            if balances[debt.account_id] > GROWTH_CAP_MINOR:
+                frozen.add(debt.account_id)
         month_date = add_calendar_months(start, offset)
         remaining_total = sum(max(0, amount) for amount in balances.values())
         months.append(
@@ -152,18 +183,15 @@ def simulate_payoff(debts, extra_minor=0, strategy=STRATEGY_MINIMUMS, custom_ord
         if remaining_total > 0 and _month_stalled(before, balances):
             never = True
             break
-    else:
-        # Still shrinking after MAX_MONTHS: it pays off, just not within the horizon.
-        if any(balance > 0 for balance in balances.values()):
-            beyond_limit = True
+    never_ids, beyond_ids = _unpaid_at_horizon(debts, balances, months, frozen, stalled=never)
 
     summaries = []
     for debt in debts:
         remaining = balances[debt.account_id]
-        if never and remaining > 0:
+        if debt.account_id in never_ids:
             status = NEVER_PAYS_OFF
             payoff = None
-        elif beyond_limit and remaining > 0:
+        elif debt.account_id in beyond_ids:
             status = BEYOND_LIMIT
             payoff = None
         else:
@@ -182,8 +210,8 @@ def simulate_payoff(debts, extra_minor=0, strategy=STRATEGY_MINIMUMS, custom_ord
         months=months,
         debts=summaries,
         total_interest_minor=total_interest,
-        never_pays_off=never,
-        beyond_limit=beyond_limit,
+        never_pays_off=bool(never_ids),
+        beyond_limit=bool(beyond_ids),
         extra_minor=extra_minor,
         strategy=strategy,
     )

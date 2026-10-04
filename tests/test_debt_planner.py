@@ -169,3 +169,24 @@ def test_interest_savings_are_not_compared_past_the_horizon():
 
     assert comparison.baseline.beyond_limit is True
     assert comparison.interest_saved_minor is None
+
+
+def test_a_growing_debt_is_never_while_a_slow_one_is_past_the_horizon():
+    growing = _debt(1, 10_000, "99", 0)
+    slow = _debt(2, 100_000, "0", 100)
+
+    plan = simulate_payoff([growing, slow], strategy=STRATEGY_MINIMUMS, start=date(2026, 1, 1))
+
+    labels = {row.account_id: row.payoff_label for row in plan.debts}
+    assert labels == {1: NEVER_PAYS_OFF, 2: BEYOND_LIMIT}
+    assert plan.never_pays_off is True
+    assert plan.beyond_limit is True
+
+
+def test_runaway_interest_stops_at_the_growth_cap_instead_of_crashing():
+    runaway = _debt(1, 10_000, "200", 0)
+    slow = _debt(2, 100_000, "0", 100)
+
+    plan = simulate_payoff([runaway, slow], strategy=STRATEGY_MINIMUMS, start=date(2026, 1, 1))
+
+    assert {row.account_id: row.payoff_label for row in plan.debts}[1] == NEVER_PAYS_OFF
