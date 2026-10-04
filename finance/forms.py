@@ -771,6 +771,89 @@ class AccountRenameForm(forms.Form):
     name = forms.CharField(max_length=150)
 
 
+class DebtTermsForm(forms.Form):
+    apr_percent = forms.DecimalField(
+        label="APR percent",
+        max_digits=6,
+        decimal_places=3,
+        required=False,
+        min_value=0,
+        widget=forms.TextInput(attrs={"inputmode": "decimal"}),
+        help_text="Annual percentage rate, for example 19.990.",
+    )
+    minimum_payment = forms.DecimalField(
+        label="Minimum payment",
+        max_digits=19,
+        decimal_places=2,
+        required=False,
+        min_value=0,
+        widget=forms.TextInput(attrs={"inputmode": "decimal"}),
+    )
+    payment_day = forms.IntegerField(
+        label="Payment day",
+        required=False,
+        min_value=1,
+        max_value=31,
+        help_text="Day of the month the loan payment is due.",
+    )
+
+    def __init__(self, *args, account=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.account = account
+        if account is not None and account.account_type != Account.Type.LOAN:
+            del self.fields["payment_day"]
+
+    def clean_minimum_payment(self):
+        amount = self.cleaned_data.get("minimum_payment")
+        if amount is None:
+            return None
+        minor_units = int(amount * 100)
+        if not 0 <= minor_units <= MAX_SIGNED_BIGINT:
+            raise ValidationError(AMOUNT_RANGE_ERROR)
+        return amount
+
+    def minimum_payment_minor(self):
+        amount = self.cleaned_data.get("minimum_payment")
+        if amount is None:
+            return None
+        return int(amount * 100)
+
+
+class DebtPlannerForm(forms.Form):
+    strategy = forms.ChoiceField(
+        choices=(
+            ("minimums", "Minimums only"),
+            ("snowball", "Snowball (smallest balance first)"),
+            ("avalanche", "Avalanche (highest APR first)"),
+            ("custom", "Custom order"),
+        )
+    )
+    extra = forms.DecimalField(
+        label="Extra monthly payment",
+        required=False,
+        min_value=0,
+        max_digits=19,
+        decimal_places=2,
+        widget=forms.TextInput(attrs={"inputmode": "decimal"}),
+        help_text="Applied after minimums, toward the current target debt.",
+    )
+
+    def clean_extra(self):
+        amount = self.cleaned_data.get("extra")
+        if amount is None:
+            return None
+        minor_units = int(amount * 100)
+        if not 0 <= minor_units <= MAX_SIGNED_BIGINT:
+            raise ValidationError(AMOUNT_RANGE_ERROR)
+        return amount
+
+    def extra_minor(self):
+        amount = self.cleaned_data.get("extra")
+        if amount is None:
+            return 0
+        return int(amount * 100)
+
+
 class PairLoanForm(forms.Form):
     secured_asset = forms.ModelChoiceField(
         queryset=Account.objects.none(),
