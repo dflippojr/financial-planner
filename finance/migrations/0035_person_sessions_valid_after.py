@@ -4,7 +4,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("finance", "0033_member_security_events"),
+        ("finance", "0034_member_security_events"),
     ]
 
     operations = [
