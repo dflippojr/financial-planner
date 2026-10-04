@@ -316,3 +316,48 @@ def test_print_stylesheet_hides_sidebar_and_breaks_sections():
     assert "break-after: page" in css
     assert ".year-end-print-header" in css
     assert ".no-print" in css
+
+
+@pytest.mark.django_db
+def test_year_one_does_not_overflow():
+    owner = make_person("owner")
+    make_household(owner)
+    client = signed_client(owner)
+
+    page = client.get(reverse("year-end"), {"year": "1"})
+    download = client.get(reverse("year-end-csv", args=["net-worth"]), {"year": "1"})
+
+    assert page.status_code == 200
+    assert download.status_code == 200
+
+
+@pytest.mark.django_db
+def test_household_scope_leaves_out_private_recurring_series():
+    owner = make_person("owner")
+    household = make_household(owner)
+    private = make_account(owner, name="Owner Private")
+    shared = make_account(owner, name="Shared Checking", scope=Account.Scope.HOUSEHOLD, household=household)
+    rows = [
+        ("SYN-PRIVATE-STREAM", private, "c"),
+        ("SYN-SHARED-POWER", shared, "d"),
+    ]
+    for name, account, mark in rows:
+        txn = make_transaction(owner, account, description=name)
+        series = RecurringSeries.objects.create(
+            person=owner,
+            merchant_key=name.lower(),
+            display_name=name,
+            cadence=RecurringSeries.Cadence.MONTHLY,
+            typical_amount_minor=-1500,
+            status=RecurringSeries.Status.CONFIRMED,
+            confidence=RecurringSeries.Confidence.HIGH,
+            reasons=["synthetic"],
+            fingerprint=mark * 64,
+        )
+        RecurringSeriesMember.objects.create(series=series, transaction=txn)
+
+    household_report = year_end_report(owner, year=2025, scope="household", today=TODAY)
+    everything = year_end_report(owner, year=2025, scope="", today=TODAY)
+
+    assert [row.name for row in household_report.recurring.rows] == ["SYN-SHARED-POWER"]
+    assert sorted(row.name for row in everything.recurring.rows) == ["SYN-PRIVATE-STREAM", "SYN-SHARED-POWER"]

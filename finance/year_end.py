@@ -21,6 +21,7 @@ from .category_services import income_and_spending_totals
 from .export import money_decimal
 from .models import RecurringSeries, Tag
 from .net_worth import net_worth_report
+from .planning_services import confine_recurring_series_to_accounts
 from .recurring_services import confirmed_totals
 
 CSV_SECTIONS = (
@@ -133,11 +134,16 @@ def _tag_rows(principal, date_from, date_to, accounts):
     return rows
 
 
-def _recurring_rows(principal):
-    visible = RecurringSeries.objects.visible_to(principal).filter(
-        status=RecurringSeries.Status.CONFIRMED,
-        is_active=True,
-        cancelled_at__isnull=True,
+def _recurring_rows(principal, accounts):
+    # Keep only series whose charges all sit in the selected accounts, so a
+    # private subscription never counts toward a household-only report.
+    visible = confine_recurring_series_to_accounts(
+        RecurringSeries.objects.visible_to(principal).filter(
+            status=RecurringSeries.Status.CONFIRMED,
+            is_active=True,
+            cancelled_at__isnull=True,
+        ),
+        accounts,
     )
     series_list = list(visible)
     monthly_minor, annual_minor = confirmed_totals(series_list)
@@ -164,13 +170,13 @@ def _recurring_rows(principal):
 
 def _net_worth_points(principal, year, scope):
     date_from, date_to = year_bounds(year)
-    start_as_of = date_from - date.resolution
-    start = _as_of_net_worth(principal, start_as_of, scope) if year > 1 else None
+    start_as_of = date_from - date.resolution if year > 1 else None
+    start = _as_of_net_worth(principal, start_as_of, scope) if start_as_of else None
     end = _as_of_net_worth(principal, date_to, scope)
     return SimpleNamespace(
         start=start,
         end=end,
-        start_as_of=start_as_of if year > 1 else None,
+        start_as_of=start_as_of,
         end_as_of=date_to,
     )
 
@@ -213,7 +219,7 @@ def year_end_report(principal, *, year, scope="", today=None, generated_at=None)
         income=income,
         accounts=_account_rows(principal, date_from, date_to, scope),
         tags=_tag_rows(principal, date_from, date_to, cash_flow.accounts),
-        recurring=_recurring_rows(principal),
+        recurring=_recurring_rows(principal, cash_flow.accounts),
         net_worth=_net_worth_points(principal, year, scope),
         missing_months=missing_months,
     )
