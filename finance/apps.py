@@ -10,8 +10,9 @@ def set_absolute_session_expiry(sender, request, user, **kwargs):
     if request is None:
         return
     request.session.set_expiry(timezone.now() + timedelta(seconds=settings.SESSION_COOKIE_AGE))
-    from .security_services import EVENT_TYPES, record_security_event, touch_member_session
+    from .security_services import EVENT_TYPES, record_security_event, stamp_session_auth_at, touch_member_session
 
+    stamp_session_auth_at(request.session)
     record_security_event(user, EVENT_TYPES.SIGN_IN_SUCCESS, request=request)
     touch_member_session(request, force=True)
 

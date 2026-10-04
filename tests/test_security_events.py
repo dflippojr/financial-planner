@@ -141,6 +141,27 @@ def test_sign_out_everywhere_else_revokes_other_sessions_and_requires_recent_aut
 
 
 @pytest.mark.django_db
+def test_sign_out_everywhere_else_revokes_sessions_missing_from_the_index():
+    user, _person, _household = make_member()
+    here = Client()
+    there = Client()
+    here.post(reverse("login"), {"username": user.username, "password": PASSWORD})
+    there.post(reverse("login"), {"username": user.username, "password": PASSWORD})
+    there_key = there.session.session_key
+    MemberSession.objects.filter(session_key=there_key).delete()
+    assert Session.objects.filter(session_key=there_key).exists()
+
+    stamp_recent_auth(here)
+    done = here.post(reverse("revoke-other-sessions"))
+    assert done.status_code == 302
+    assert here.get(reverse("home")).status_code == 200
+
+    blocked = there.get(reverse("home"))
+    assert blocked.status_code == 302
+    assert blocked.url.startswith(reverse("login"))
+
+
+@pytest.mark.django_db
 def test_ninety_day_purge_removes_old_events_and_runs_from_the_daily_pass():
     _user, person, _household = make_member()
     old = record_security_event(person, EVENT_TYPES.SIGN_IN_SUCCESS)

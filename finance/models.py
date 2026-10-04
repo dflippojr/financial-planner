@@ -64,6 +64,7 @@ class Person(models.Model):
         related_name="person",
     )
     display_name = models.CharField(max_length=150)
+    sessions_valid_after = models.DateTimeField(null=True, blank=True)
     privacy_policy_declined_version = models.ForeignKey(
         "PrivacyPolicyVersion",
         on_delete=models.SET_NULL,

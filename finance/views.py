@@ -1578,7 +1578,11 @@ def revoke_session(request, session_id):
 @never_cache
 @requires_recent_auth("revoke-other-sessions", form_url_name="account-settings")
 def revoke_other_sessions(request):
-    revoke_other_sessions_for(request.user, request.session.session_key)
+    revoke_other_sessions_for(
+        request.user,
+        request.session.session_key,
+        session=request.session,
+    )
     return redirect("account-settings")
 
 

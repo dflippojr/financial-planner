@@ -27,10 +27,11 @@ class MemberSessionActivityMiddleware:
         self.get_response = get_response
 
     def __call__(self, request):
+        from .security_services import enforce_session_validity, touch_member_session
+
+        enforce_session_validity(request)
         response = self.get_response(request)
         user = getattr(request, "user", None)
         if user is not None and getattr(user, "is_authenticated", False):
-            from .security_services import touch_member_session
-
             touch_member_session(request)
         return response

@@ -1,6 +1,6 @@
-from datetime import timedelta
+from datetime import datetime, timedelta
 
-from django.contrib.auth import get_user_model
+from django.contrib.auth import get_user_model, logout
 from django.contrib.sessions.models import Session
 from django.http import Http404
 from django.utils import timezone
@@ -8,12 +8,46 @@ from django.utils import timezone
 from .auth_services import normalize_username
 from .models import MemberSecurityEvent, MemberSession, Person
 
+AUTH_AT_SESSION_KEY = "auth_at"
+
 
 SECURITY_EVENT_RETENTION_DAYS = 90
 USER_AGENT_MAX_LENGTH = 200
 SESSION_ACTIVITY_MIN_INTERVAL = timedelta(minutes=1)
 
 EVENT_TYPES = MemberSecurityEvent.EventType
+
+
+def stamp_session_auth_at(session, when=None):
+    when = when or timezone.now()
+    session[AUTH_AT_SESSION_KEY] = when.isoformat()
+
+
+def session_auth_at(session):
+    raw = session.get(AUTH_AT_SESSION_KEY) if session is not None else None
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except (TypeError, ValueError):
+        return None
+    if timezone.is_naive(parsed):
+        parsed = timezone.make_aware(parsed, timezone.utc)
+    return parsed
+
+
+def enforce_session_validity(request):
+    user = getattr(request, "user", None)
+    if user is None or not getattr(user, "is_authenticated", False):
+        return False
+    person = _person_from(user)
+    if person is None or person.sessions_valid_after is None:
+        return False
+    stamped = session_auth_at(getattr(request, "session", None))
+    if stamped is None or stamped < person.sessions_valid_after:
+        logout(request)
+        return True
+    return False
 
 
 def client_ip(request):
@@ -164,7 +198,14 @@ def revoke_session_for(principal, session_id, *, current_session_key=None):
     return was_current
 
 
-def revoke_other_sessions_for(principal, current_session_key):
+def revoke_other_sessions_for(principal, current_session_key, *, session=None):
+    person = _person_from(principal)
+    now = timezone.now()
+    if person is not None:
+        person.sessions_valid_after = now
+        person.save(update_fields=("sessions_valid_after", "updated_at"))
+    if session is not None:
+        stamp_session_auth_at(session, now)
     rows = list(MemberSession.objects.visible_to(principal).exclude(session_key=current_session_key or ""))
     _delete_django_sessions([row.session_key for row in rows])
     if rows:
