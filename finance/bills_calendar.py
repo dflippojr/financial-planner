@@ -229,11 +229,14 @@ def starting_balance_minor(accounts, *, as_of):
 
 
 def _posted_on(sources, on_date, selected_ids):
-    """Recurring series whose charge for `on_date` already posted on the selected accounts.
+    """Expected items for `on_date` already counted in the starting balance.
 
-    Series link to their transactions, so this is exact. Planned items have no link,
-    so they are always applied: a planned bill already paid today makes the forecast
-    run low until tomorrow, which can over-warn but never hides a real shortfall.
+    The forecast for today only ever errs low, so a shortfall is never hidden:
+    - recurring series link to their transactions, so a posted charge is skipped exactly;
+    - planned income is skipped when a deposit of the same amount posted today (a wrong
+      match leaves the forecast low);
+    - planned expenses are always applied (a bill already paid today runs the forecast
+      low until tomorrow).
     """
     from .models import RecurringSeriesMember
 
@@ -245,11 +248,15 @@ def _posted_on(sources, on_date, selected_ids):
     charged_series = set(
         RecurringSeriesMember.objects.filter(transaction__in=todays).values_list("series_id", flat=True)
     )
-    return {
-        (item.source, item.source_id)
-        for item in _expected_on_day(sources, on_date)
-        if item.source == SOURCE_SERIES and item.source_id in charged_series
-    }
+    deposits = [amount for amount in todays.values_list("amount_minor", flat=True) if amount > 0]
+    posted = set()
+    for item in _expected_on_day(sources, on_date):
+        if item.source == SOURCE_SERIES and item.source_id in charged_series:
+            posted.add((item.source, item.source_id))
+        elif item.source == SOURCE_PLANNED and item.amount_minor > 0 and item.amount_minor in deposits:
+            deposits.remove(item.amount_minor)
+            posted.add((item.source, item.source_id))
+    return posted
 
 
 def _balance_delta_on_day(sources, on_date, selected_ids, skip=frozenset()):

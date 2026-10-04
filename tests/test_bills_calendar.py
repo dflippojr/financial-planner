@@ -415,3 +415,32 @@ def test_today_skips_a_posted_series_charge_but_keeps_planned_items_and_counts_u
 
     # 1,000.00 - 30.00 gym (posted, not re-applied) - 100.00 purchase - 100.00 planned rent still due.
     assert balances[today] == 77_000
+
+
+@pytest.mark.django_db
+def test_planned_income_posted_today_counts_once():
+    from finance.bills_calendar import starting_balance_minor
+
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner)
+    today = date(2026, 10, 4)
+    add_snapshot(checking, date(2026, 10, 3), 0)
+    PlannedItem.objects.create(
+        owner=owner,
+        scope=PlannedItem.Scope.PRIVATE,
+        name="Synthetic paycheck",
+        kind=PlannedItem.Kind.INCOME,
+        amount_minor=100_000,
+        start_date=today,
+        cadence=PlannedItem.Cadence.MONTHLY,
+    )
+    make_transaction(owner, checking, transaction_date=today, amount_minor=100_000, description="Synthetic paycheck deposit")
+    sources = [item for item in calendar_inputs(owner) if item.name == "Synthetic paycheck"]
+    start = starting_balance_minor([checking], as_of=today)
+
+    balances = expected_balances_by_day(
+        sources, start_balance=start, selected_ids={checking.pk}, from_date=today, through_date=today
+    )
+
+    assert balances[today] == 100_000
