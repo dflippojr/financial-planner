@@ -140,7 +140,7 @@ Set `OPERATOR_USERNAMES` in `production.env` to a comma-separated list of member
 
 ### Encrypted off-site copy
 
-When both `OFFSITE_RCLONE_REMOTE` and `OFFSITE_AGE_RECIPIENT` are set, each verified dump is encrypted with `age` to that public key and uploaded with rclone. Remote nightly and weekly prefixes keep the same 14 and 8 file retention, pruned by name. An upload failure is recorded in the status file and alerts operators; the local dump is left in place.
+When both `OFFSITE_RCLONE_REMOTE` and `OFFSITE_AGE_RECIPIENT` are set, each verified dump is encrypted with `age` to that public key and uploaded with rclone. Remote nightly and weekly prefixes keep the same 14 and 8 file retention, pruned by name. An upload failure is recorded in `offsite_error` (the local dump stays published) and alerts operators. A configured off-site copy whose last success is older than 26 hours is also unhealthy.
 
 1. Install rclone on a trusted machine, run `rclone config`, and save the file outside the checkout. Set `OFFSITE_RCLONE_CONFIG` in `production.env` to that path (forward slashes on Windows). The backup container mounts only that file, read-only, as `/config/rclone.conf`. Leave the variable unset to use the committed empty placeholder.
 2. Create an age key pair on a trusted machine (`age-keygen`). Put the **public** key in `OFFSITE_AGE_RECIPIENT`. Keep the private key in a password manager. The private key must never live on the tower.

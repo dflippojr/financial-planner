@@ -206,6 +206,7 @@ def test_backup_is_verified_and_retains_latest_nightly_and_weekly_files(tmp_path
     assert status["size_bytes"] == str(dump.stat().st_size)
     assert status["table_count"] == "2"
     assert status["last_error"] == ""
+    assert status.get("offsite_configured", "0") == "0"
     assert (backup_root / "health" / "status").is_file()
     assert not (backup_root / "status").exists()
 
@@ -272,6 +273,7 @@ def test_offsite_encrypts_uploads_and_prunes_by_name(tmp_path):
     assert status["offsite_success_at"] == "2026-09-27T06:00:00Z"
     assert status["offsite_error"] == ""
     assert status["last_error"] == ""
+    assert status["offsite_configured"] == "1"
 
 
 @pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
@@ -302,7 +304,8 @@ def test_offsite_upload_failure_keeps_local_dump_and_records_error(tmp_path):
     status = _read_status(backup_root)
     assert status["last_success_at"] == "2026-09-27T06:00:00Z"
     assert status["dump_name"] == "financial_planner_20260927T060000Z.dump"
-    assert "Off-site upload failed" in status["last_error"] or "rclone refused" in status["last_error"]
+    assert "Off-site upload failed" in status["offsite_error"] or "rclone refused" in status["offsite_error"]
+    assert status["last_error"] == ""
 
 
 @pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
@@ -329,7 +332,9 @@ def test_age_failure_keeps_local_dump(tmp_path):
     assert result.returncode == 1
     assert (backup_root / "nightly" / "financial_planner_20260927T060000Z.dump").read_text() == "synthetic dump"
     status = _read_status(backup_root)
-    assert "age encryption failed" in status["last_error"]
+    assert status["last_success_at"] == "2026-09-27T06:00:00Z"
+    assert "age encryption failed" in status["offsite_error"]
+    assert status["last_error"] == ""
 
 
 @pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")

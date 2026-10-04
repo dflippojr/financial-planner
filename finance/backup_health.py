@@ -18,6 +18,7 @@ STATUS_KEYS = (
     "last_error",
     "offsite_success_at",
     "offsite_error",
+    "offsite_configured",
 )
 
 
@@ -73,23 +74,41 @@ def read_backup_status(path=None):
     return data
 
 
+def _offsite_configured(status):
+    return (status.get("offsite_configured") or "").strip() in {"1", "true", "yes"}
+
+
+def _offsite_is_unhealthy(status, now):
+    if (status.get("offsite_error") or "").strip():
+        return True
+    if not _offsite_configured(status):
+        return False
+    offsite = status.get("offsite_success")
+    if offsite is None:
+        return True
+    return now - offsite > STALE_AFTER
+
+
 def backup_is_unhealthy(status, *, now=None):
     if status is None:
         return True
+    now = now or timezone.now()
     if (status.get("last_error") or "").strip():
         return True
     last = status.get("last_success")
-    if last is None:
+    if last is None or now - last > STALE_AFTER:
         return True
-    now = now or timezone.now()
-    return now - last > STALE_AFTER
+    return _offsite_is_unhealthy(status, now)
 
 
-def backup_alert_title(status):
+def backup_alert_title(status, *, now=None):
     if status is None:
         return "No backup status found"
     if (status.get("last_error") or "").strip():
         return "The latest backup run failed"
+    now = now or timezone.now()
+    if _offsite_is_unhealthy(status, now):
+        return "The off-site backup copy failed"
     return "Nightly backups have not succeeded"
 
 
@@ -105,7 +124,7 @@ def evaluate_backup_alerts(*, now=None, today=None):
     return raise_alert(
         operator_people(),
         Alert.Kind.BACKUP,
-        backup_alert_title(status),
+        backup_alert_title(status, now=now),
         reverse("settings-data"),
         f"backup:{today.isoformat()}",
     )

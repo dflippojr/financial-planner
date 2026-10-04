@@ -8,7 +8,8 @@
 <p class="mb-6 text-sm">No backup status found</p>
 {% else %}
 <p class="mb-2 text-sm">Last local backup: {% if backup_status.last_success %}{{ backup_status.last_success|date:"Y-m-d H:i" }}{% else %}Never{% endif %}</p>
-<p class="mb-6 text-sm">Last off-site copy: {% if backup_status.offsite_success %}{{ backup_status.offsite_success|date:"Y-m-d H:i" }}{% else %}Never{% endif %}</p>
+<p class="mb-2 text-sm">Last off-site copy: {% if backup_status.offsite_success %}{{ backup_status.offsite_success|date:"Y-m-d H:i" }}{% else %}Never{% endif %}</p>
+{% if backup_status.offsite_error %}<p class="mb-6 text-sm">{{ backup_status.offsite_error }}</p>{% endif %}
 {% endif %}
 {% endif %}
 <form method="post" action="{% url 'account-export' %}" class="mb-4">

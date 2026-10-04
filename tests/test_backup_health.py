@@ -20,6 +20,7 @@ def _write_status(path, **fields):
         "last_error": "",
         "offsite_success_at": "",
         "offsite_error": "",
+        "offsite_configured": "",
     }
     defaults.update(fields)
     path.write_text(
@@ -132,3 +133,45 @@ def test_missing_status_file_alerts_and_settings_say_none_found(tmp_path):
     assert [row.title for row in created] == ["No backup status found"]
     assert page.status_code == 200
     assert b"No backup status found" in page.content
+
+
+@pytest.mark.django_db
+def test_offsite_error_alerts_and_is_shown_on_settings(tmp_path):
+    operator = make_person("operator")
+    status = tmp_path / "status"
+    _write_status(
+        status,
+        last_success_at="2026-10-04T06:00:00Z",
+        dump_name="financial_planner_synthetic.dump",
+        offsite_configured="1",
+        offsite_error="Off-site upload failed",
+    )
+
+    with override_settings(BACKUP_STATUS_PATH=str(status), OPERATOR_USERNAMES="operator"):
+        created = evaluate_backup_alerts(today=datetime(2026, 10, 4).date())
+        page = signed_in(operator).get(reverse("settings-data"))
+
+    assert [row.title for row in created] == ["The off-site backup copy failed"]
+    assert page.status_code == 200
+    assert b"Off-site upload failed" in page.content
+
+
+def test_stale_offsite_copy_is_unhealthy_when_configured():
+    now = datetime(2026, 10, 4, 12, tzinfo=dt_timezone.utc)
+    stale_offsite = now - timedelta(hours=27)
+    configured = {
+        "last_error": "",
+        "offsite_error": "",
+        "offsite_configured": "1",
+        "last_success": now,
+        "offsite_success": stale_offsite,
+    }
+    assert backup_is_unhealthy(configured, now=now) is True
+    local_only = {
+        "last_error": "",
+        "offsite_error": "",
+        "offsite_configured": "0",
+        "last_success": now,
+        "offsite_success": stale_offsite,
+    }
+    assert backup_is_unhealthy(local_only, now=now) is False

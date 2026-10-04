@@ -27,6 +27,7 @@ load_status() {
   last_error=""
   offsite_success_at=""
   offsite_error=""
+  offsite_configured=""
   if [ ! -f "$status_file" ]; then
     return 0
   fi
@@ -39,6 +40,7 @@ load_status() {
       last_error) last_error=$value ;;
       offsite_success_at) offsite_success_at=$value ;;
       offsite_error) offsite_error=$value ;;
+      offsite_configured) offsite_configured=$value ;;
     esac
   done < "$status_file"
 }
@@ -56,11 +58,20 @@ table_count=$table_count
 last_error=$last_error
 offsite_success_at=$offsite_success_at
 offsite_error=$offsite_error
+offsite_configured=$offsite_configured
 EOF
   mv "$tmp" "$status_file"
   chmod 644 "$status_file" 2>/dev/null || true
   umask 077
   status_written=1
+}
+
+fail_offsite() {
+  offsite_error=$(sanitize_error "$1")
+  last_error=""
+  write_status
+  echo "$offsite_error" >&2
+  exit 1
 }
 
 fail_run() {
@@ -125,6 +136,12 @@ mkdir -p "$nightly_dir" "$weekly_dir" "$health_dir"
 umask 077
 status_written=0
 load_status
+if [ -n "$offsite_remote" ] || [ -n "$offsite_recipient" ]; then
+  offsite_configured=1
+else
+  offsite_configured=0
+  offsite_error=""
+fi
 
 timestamp=$(date -u '+%Y%m%dT%H%M%SZ')
 success_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
@@ -196,18 +213,18 @@ last_error=""
 
 if [ -n "$offsite_remote" ] || [ -n "$offsite_recipient" ]; then
   if [ -z "$offsite_remote" ] || [ -z "$offsite_recipient" ]; then
-    fail_run "Off-site copy is incomplete: set both OFFSITE_RCLONE_REMOTE and OFFSITE_AGE_RECIPIENT"
+    fail_offsite "Off-site copy is incomplete: set both OFFSITE_RCLONE_REMOTE and OFFSITE_AGE_RECIPIENT"
   fi
   encrypted="$nightly_dir/.${filename}.age.partial"
   if ! age -r "$offsite_recipient" -o "$encrypted" "$nightly"; then
-    fail_run "age encryption failed"
+    fail_offsite "age encryption failed"
   fi
   if ! copy_offsite "$encrypted" "${remote_base}/nightly/${filename}.age"; then
-    fail_run "Off-site upload failed"
+    fail_offsite "Off-site upload failed"
   fi
   if [ -n "$weekly" ]; then
     if ! copy_offsite "$encrypted" "${remote_base}/weekly/${filename}.age"; then
-      fail_run "Off-site weekly upload failed"
+      fail_offsite "Off-site weekly upload failed"
     fi
   fi
   rm -f "$encrypted"
