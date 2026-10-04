@@ -32,6 +32,7 @@ OUT_OF_SCOPE = (
 TURN_LIMIT = "This conversation has reached its turn limit. Start a new one from Chat."
 TOOL_LIMIT = "This conversation has reached its tool-call limit."
 LOCAL_HIDDEN = "Chat on the local model is not offered yet. Choose Claude in Settings → AI."
+NO_CHAT_BACKEND = "No chat backend is available yet. Sign in to Claude on the harness, then choose it in Settings → AI."
 
 
 def expire_days():
@@ -140,6 +141,8 @@ def send_message(principal, text, *, conversation_id=None, page_context=None, sl
     backend = (connection.chat_backend or "").strip()
     if backend == LOCAL_BACKEND and not chat_local_enabled():
         raise AiError(LOCAL_HIDDEN, UNAVAILABLE)
+    if not backend:
+        raise AiError(NO_CHAT_BACKEND, UNAVAILABLE)
     prompt = (text or "").strip()
     if not prompt:
         raise AiError("Enter a question.")

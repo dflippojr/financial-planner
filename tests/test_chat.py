@@ -38,6 +38,7 @@ from finance.models import (
     Account,
     AiConversation,
     AiConversationMessage,
+    AiProviderConnection,
     BalanceSnapshot,
     Budget,
     Category,
@@ -935,3 +936,48 @@ def test_followup_starts_a_new_session_after_chat_backend_switch(harness, settin
     assert latest is not None
     assert latest.backend == "local"
 
+
+
+@pytest.mark.django_db
+def test_recurring_tool_lists_only_confirmed_current_series():
+    _user, person, household = make_member("owner")
+    account = checking(person, household, "Owner Private", private=True)
+    rows = [
+        ("SYN-CONFIRMED-GYM", RecurringSeries.Status.CONFIRMED, None),
+        ("SYN-SUGGESTED-STREAM", RecurringSeries.Status.SUGGESTED, None),
+        ("SYN-DISMISSED-PAPER", RecurringSeries.Status.DISMISSED, None),
+        ("SYN-CANCELLED-MUSIC", RecurringSeries.Status.CONFIRMED, timezone.now()),
+    ]
+    for index, (name, status, cancelled_at) in enumerate(rows):
+        txn = add_txn(account, person, date(2026, 3, 4 + index), -1500 - index, name)
+        series = RecurringSeries.objects.create(
+            person=person,
+            merchant_key=name.lower(),
+            display_name=name,
+            cadence=RecurringSeries.Cadence.MONTHLY,
+            typical_amount_minor=-1500 - index,
+            status=status,
+            confidence=RecurringSeries.Confidence.HIGH,
+            reasons=["synthetic"],
+            fingerprint=str(index) * 64,
+            cancelled_at=cancelled_at,
+        )
+        RecurringSeriesMember.objects.create(series=series, transaction=txn)
+
+    result = run_tool(person, default_tools(), "recurring_series", {})
+
+    names = [row["name"] for row in json.loads(result.text)["rows"]]
+    assert names == ["SYN-CONFIRMED-GYM"]
+    assert [figure["label"] for figure in result.figures] == ["SYN-CONFIRMED-GYM"]
+
+
+@pytest.mark.django_db
+def test_send_without_a_chat_backend_explains_what_to_do(harness):
+    _state, url = harness
+    _user, person, _household = make_member("owner")
+    connect_harness(person, base_url=url, token=TOKEN)
+    AiProviderConnection.objects.filter(owner=person).update(chat_backend="")
+
+    with pytest.raises(AiError, match="No chat backend is available yet"):
+        send_message(person, "What did I spend last month?")
+    assert not AiConversation.objects.filter(member=person).exists()

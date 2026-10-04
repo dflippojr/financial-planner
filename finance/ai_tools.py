@@ -388,7 +388,11 @@ def recurring_series(person, args):
     rows = []
     figures = []
     series_query = confine_recurring_series_to_accounts(
-        RecurringSeries.objects.visible_to(person).filter(is_active=True),
+        RecurringSeries.objects.visible_to(person).filter(
+            status=RecurringSeries.Status.CONFIRMED,
+            is_active=True,
+            cancelled_at__isnull=True,
+        ),
         accounts,
     ).order_by("display_name", "pk")
     shown = list(series_query[:MAX_TOOL_ROWS])

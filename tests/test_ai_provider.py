@@ -1070,3 +1070,27 @@ def test_a_session_saved_on_an_earlier_connection_is_never_resumed(harness):
     assert job.status == job.Status.SUCCEEDED
     assert ("GET", "/api/v1/sessions/old-harness-session") not in state.requests
     assert state.requests.count(("POST", "/api/v1/sessions")) == 1
+
+
+@pytest.mark.django_db
+def test_chat_default_skips_local_while_local_chat_is_off(settings):
+    settings.AI_CHAT_LOCAL_ENABLED = False
+    local = describe_backend(
+        {
+            "name": "local",
+            "available": True,
+            "logged_in": True,
+            "app_tools_only": True,
+            "provider_policy": {"allowed": True},
+        }
+    )
+    claude = describe_backend(
+        {"name": "claude", "available": True, "logged_in": False, "provider_policy": {"allowed": True}}
+    )
+    assert local.suits_live
+    chat, _background = default_backends([local, claude])
+    assert chat == ""
+
+    settings.AI_CHAT_LOCAL_ENABLED = True
+    chat, _background = default_backends([local, claude])
+    assert chat == "local"
