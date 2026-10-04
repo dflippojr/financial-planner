@@ -394,6 +394,7 @@ def test_member_with_exclusions_and_alerts_can_delete_their_data():
         large_transaction_enabled=False,
         monthly_review_enabled=True,
         monthly_review_ai_enabled=True,
+        expected_balance_enabled=False,
         large_transaction_minor=None,
     )
 
@@ -529,6 +530,7 @@ def test_every_protect_link_to_person_is_handled_by_member_data_deletion():
         ("Budget", "owner"),
         ("Alert", "recipient"),
         ("AlertSettings", "person"),
+        ("BillsCalendarSettings", "person"),
     }
     protected = {
         (rel.related_model.__name__, rel.field.name)

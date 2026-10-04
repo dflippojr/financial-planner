@@ -9,6 +9,7 @@ from .models import (
     ImportBatch,
     Membership,
     Person,
+    Receipt,
     RecurringExclusion,
     RecurringSeries,
     RecurringSeriesMember,
@@ -192,6 +193,31 @@ def rename_account(principal, account_id, name):
         raise PermissionDenied(_DENIED)
     account.name = name
     account.save(update_fields=("name", "updated_at"))
+    return account
+
+
+@transaction.atomic
+def update_debt_terms(principal, account_id, *, apr_percent, minimum_payment_minor, payment_day):
+    """Save APR, minimum payment, and loan due day for a visible liability."""
+    person = _person_for(principal)
+    lock_actor_household(person)
+    account = _visible_account_for_update(person, account_id)
+    if account.status != Account.Status.ACTIVE or account.archived_at is not None:
+        raise PermissionDenied(_DENIED)
+    if account.account_type not in Account.LIABILITY_TYPES:
+        raise PermissionDenied(_DENIED)
+    if account.account_type != Account.Type.LOAN:
+        payment_day = None
+    elif payment_day is not None and not 1 <= int(payment_day) <= 31:
+        raise ValidationError("Payment day must be between 1 and 31.")
+    if apr_percent is not None and apr_percent < 0:
+        raise ValidationError("APR cannot be negative.")
+    if minimum_payment_minor is not None and minimum_payment_minor < 0:
+        raise ValidationError("Minimum payment cannot be negative.")
+    account.apr_percent = apr_percent
+    account.minimum_payment_minor = minimum_payment_minor
+    account.payment_day = payment_day
+    account.save(update_fields=("apr_percent", "minimum_payment_minor", "payment_day", "updated_at"))
     return account
 
 
@@ -407,6 +433,7 @@ def _lock_rows_for_account_delete(account):
             .filter(transaction_id__in=tx_ids)
             .order_by("pk")
         )
+        list(Receipt.objects.select_for_update().filter(transaction_id__in=tx_ids).order_by("pk"))
     list(ImportBatch.objects.select_for_update().filter(account_id=account.pk).order_by("pk"))
     return locked_txs, pairs, refunds, members, exclusions, series_ids, tx_ids
 
@@ -428,8 +455,11 @@ def _repair_then_delete_account_rows(person, account):
     revalidate_series_after_member_removal(person, series_ids)
     _delete_rule_history_for_account(account, tx_ids)
     if tx_ids:
+        from finance.receipt_services import delete_receipts_for_transactions
+
         TransactionTag.objects.filter(transaction_id__in=tx_ids).delete()
         TransactionCorrectionHistory.objects.filter(transaction_id__in=tx_ids).delete()
+        delete_receipts_for_transactions(tx_ids)
         Transaction.objects.filter(pk__in=tx_ids).delete()
     ImportBatch.objects.filter(account_id=account.pk).delete()
     Alert.objects.filter(account_id=account.pk).delete()
@@ -525,6 +555,8 @@ def member_deletion_counts(person):
         RecurringSeries,
         RuleApplication,
         SavingsGoal,
+        SheetComparisonSettings,
+        SheetMonthTotal,
         SimpleFinConnection,
     )
 
@@ -546,6 +578,8 @@ def member_deletion_counts(person):
         + PrivacyPolicyAcceptance.objects.filter(person=person).count()
         + RecoveryCode.objects.filter(user_id=person.user_id).count()
         + Passkey.objects.filter(member=person).count()
+        + SheetMonthTotal.objects.filter(member=person).count()
+        + SheetComparisonSettings.objects.filter(member=person).count()
     )
     return {
         "private_account_count": len(private_ids),
@@ -629,6 +663,7 @@ def _delete_personal_records(person):
         AiJob,
         AiProviderConnection,
         AiUsageEvent,
+        BillsCalendarSettings,
         Budget,
         CategoryRule,
         CategorySuggestion,
@@ -640,6 +675,8 @@ def _delete_personal_records(person):
         RuleApplication,
         RuleApplicationEntry,
         SavingsGoal,
+        SheetComparisonSettings,
+        SheetMonthTotal,
         SimpleFinConnection,
     )
 
@@ -657,6 +694,9 @@ def _delete_personal_records(person):
         RecurringSeries.objects.filter(pk__in=series_ids).delete()
     SimpleFinConnection.objects.filter(owner=person).delete()
     CategorySuggestion.objects.filter(member=person).delete()
+    from .models import SavedTransactionFilter
+
+    SavedTransactionFilter.objects.filter(member=person).delete()
     AiJob.objects.filter(member=person).delete()
     AiUsageEvent.objects.filter(member=person).delete()
     AiProviderConnection.objects.filter(owner=person).delete()
@@ -664,6 +704,9 @@ def _delete_personal_records(person):
     RecurringExclusion.objects.filter(person=person).delete()
     Alert.objects.filter(recipient=person).delete()
     AlertSettings.objects.filter(person=person).delete()
+    BillsCalendarSettings.objects.filter(person=person).delete()
+    SheetMonthTotal.objects.filter(member=person).delete()
+    SheetComparisonSettings.objects.filter(member=person).delete()
     from .models import MemberSecurityEvent, MemberSession, Passkey
 
     MemberSecurityEvent.objects.filter(member=person).delete()

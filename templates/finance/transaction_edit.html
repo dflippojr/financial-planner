@@ -12,6 +12,29 @@
   </div>
 </form>
 <p class="mb-4 text-sm opacity-70">The original imported fields and import batch provenance are retained.</p>
+<section class="mb-8 max-w-lg">
+  <h2 class="mb-3 text-xl font-semibold">Receipts</h2>
+  {% if receipts %}
+  <ul class="mb-4 space-y-2">
+    {% for receipt in receipts %}
+    <li class="flex flex-wrap items-center gap-3">
+      <a class="link" href="{% url 'transaction-receipt-download' transaction.pk receipt.pk %}">{{ receipt.original_name }}</a>
+      <form method="post" action="{% url 'transaction-receipt-delete' transaction.pk receipt.pk %}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-sm btn-outline">Remove</button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% if receipts|length < 5 %}
+  <form method="post" action="{% url 'transaction-receipt-upload' transaction.pk %}" enctype="multipart/form-data">
+    {% csrf_token %}
+    {% include "finance/_form_fields.html" with form=receipt_form %}
+    <button type="submit" class="btn btn-primary">Attach receipt</button>
+  </form>
+  {% endif %}
+</section>
 <form method="post" action="{% url 'transaction-note-tags' transaction.pk %}" class="mb-8 max-w-lg">
   <h2 class="mb-3 text-xl font-semibold">Note and tags</h2>
   {% csrf_token %}
