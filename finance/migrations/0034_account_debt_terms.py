@@ -4,7 +4,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("finance", "0032_monthly_review_ai"),
+        ("finance", "0033_alert_backup_kind"),
     ]
 
     operations = [
