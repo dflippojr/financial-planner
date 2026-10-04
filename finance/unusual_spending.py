@@ -244,6 +244,18 @@ def unusual_review_url(month):
     return f"{reverse('monthly-review')}?month={month_start(month).isoformat()[:7]}"
 
 
+MAX_DEDUPE_ITEM = 150
+
+
+def _dedupe_key(stamp, item_id):
+    # Alert.dedupe_key holds 200 characters; only an item id too long for it is hashed,
+    # so ordinary keys stay readable and stable.
+    item = str(item_id)
+    if len(item) > MAX_DEDUPE_ITEM:
+        item = "h:" + sha256(item.encode()).hexdigest()
+    return f"unusual:{stamp}:{item}"
+
+
 def raise_unusual_alerts(person, month, flags):
     month = month_start(month)
     stamp = month.isoformat()[:7]
@@ -263,8 +275,7 @@ def raise_unusual_alerts(person, month, flags):
                 Alert.Kind.UNUSUAL_SPENDING,
                 title,
                 flag.get("url") or unusual_review_url(month),
-                # Hash the item so a long merchant key never overflows the 200-character dedupe key.
-                f"unusual:{stamp}:{sha256(str(flag['item_id']).encode()).hexdigest()[:32]}",
+                _dedupe_key(stamp, flag["item_id"]),
                 account=accounts.get(flag.get("account_id")),
             )
         )
