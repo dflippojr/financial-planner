@@ -96,14 +96,22 @@ prune_backups() {
 prune_remote() {
   prefix=$1
   keep=$2
-  listing=$(rclone lsf --config "$rclone_config" --files-only "${remote_base}/${prefix}" 2>/dev/null || true)
-  echo "$listing" \
-    | grep -E '^financial_planner_.*\.dump\.age$' \
-    | sort -r \
-    | awk -v keep="$keep" 'NR > keep' \
-    | while IFS= read -r expired; do
-        rclone deletefile --config "$rclone_config" "${remote_base}/${prefix}/${expired}" >/dev/null 2>&1 || true
-      done
+  # Exit code 3 is rclone's "directory not found": nothing to prune yet.
+  listing=$(rclone lsf --config "$rclone_config" --files-only "${remote_base}/${prefix}" 2>/dev/null)
+  listed=$?
+  if [ "$listed" -eq 3 ]; then
+    return 0
+  fi
+  if [ "$listed" -ne 0 ]; then
+    return 1
+  fi
+  expired=$(printf '%s
+' "$listing"     | grep -E '^financial_planner_[0-9TZ]+\.dump\.age$'     | sort -r     | awk -v keep="$keep" 'NR > keep')
+  failed=0
+  for name in $expired; do
+    rclone deletefile --config "$rclone_config" "${remote_base}/${prefix}/${name}" >/dev/null 2>&1 || failed=1
+  done
+  return "$failed"
 }
 
 copy_offsite() {
@@ -229,10 +237,11 @@ if [ -n "$offsite_remote" ] || [ -n "$offsite_recipient" ]; then
   fi
   rm -f "$encrypted"
   encrypted=""
-  prune_remote nightly "$nightly_retention"
-  prune_remote weekly "$weekly_retention"
   offsite_success_at=$success_at
   offsite_error=""
+  if ! prune_remote nightly "$nightly_retention" || ! prune_remote weekly "$weekly_retention"; then
+    fail_offsite "Off-site retention pruning failed"
+  fi
 fi
 
 write_status

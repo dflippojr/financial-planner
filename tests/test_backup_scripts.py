@@ -87,7 +87,7 @@ def _fake_age(fake_bin, *, fail=False):
     )
 
 
-def _fake_rclone(fake_bin, remote_root, *, fail=False):
+def _fake_rclone(fake_bin, remote_root, *, fail=False, delete_fail=False, missing_dir_code=0):
     if fail:
         _write_executable(fake_bin / "rclone", "#!/bin/sh\necho rclone refused >&2\nexit 1\n")
         return
@@ -107,11 +107,12 @@ def _fake_rclone(fake_bin, remote_root, *, fail=False):
         "    ;;\n"
         "  lsf)\n"
         "    dir=$(to_path \"$1\")\n"
-        "    [ -d \"$dir\" ] || exit 0\n"
+        f"    [ -d \"$dir\" ] || exit {missing_dir_code}\n"
         "    ls -1 \"$dir\"\n"
         "    ;;\n"
         "  deletefile)\n"
-        "    rm -f \"$(to_path \"$1\")\"\n"
+        + ("    exit 1\n" if delete_fail else "")
+        + "    rm -f \"$(to_path \"$1\")\"\n"
         "    ;;\n"
         "  *) exit 2 ;;\n"
         "esac\n",
@@ -357,3 +358,60 @@ def test_backup_status_is_readable_by_the_app_user(tmp_path):
     assert _posix_mode(backup_root / "health" / "status") == "644"
     if os.name != "nt":
         assert _posix_mode(dump) == "600"
+
+
+def _offsite_run(tmp_path, **rclone_options):
+    fake_bin = tmp_path / "bin"
+    backup_root = tmp_path / "backups"
+    remote = tmp_path / "remote"
+    fake_bin.mkdir()
+    (backup_root / "nightly").mkdir(parents=True)
+    _fake_date(fake_bin)
+    _fake_pg(fake_bin)
+    _fake_age(fake_bin)
+    _fake_rclone(fake_bin, remote, **rclone_options)
+    return fake_bin, backup_root, remote
+
+
+@pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
+def test_offsite_prune_failure_is_recorded_after_a_successful_upload(tmp_path):
+    fake_bin, backup_root, remote = _offsite_run(tmp_path, delete_fail=True)
+    nightly_remote = remote / "offsite" / "nightly"
+    nightly_remote.mkdir(parents=True)
+    for index in range(1, 16):
+        (nightly_remote / f"financial_planner_202609{index:02d}T060000Z.dump.age").write_text("old")
+
+    result = _run_backup(
+        fake_bin,
+        backup_root,
+        {
+            "OFFSITE_RCLONE_REMOTE": "fake:offsite",
+            "OFFSITE_AGE_RECIPIENT": "age1syntheticrecipient",
+            "RCLONE_CONFIG": (tmp_path / "rclone.conf").as_posix(),
+        },
+    )
+
+    assert result.returncode == 1
+    assert (nightly_remote / "financial_planner_20260927T060000Z.dump.age").is_file()
+    status = _read_status(backup_root)
+    assert status["offsite_success_at"] == "2026-09-27T06:00:00Z"
+    assert status["offsite_error"] == "Off-site retention pruning failed"
+    assert status["last_error"] == ""
+
+
+@pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
+def test_offsite_missing_remote_directory_is_not_a_prune_failure(tmp_path):
+    fake_bin, backup_root, _remote = _offsite_run(tmp_path, missing_dir_code=3)
+
+    result = _run_backup(
+        fake_bin,
+        backup_root,
+        {
+            "OFFSITE_RCLONE_REMOTE": "fake:offsite",
+            "OFFSITE_AGE_RECIPIENT": "age1syntheticrecipient",
+            "RCLONE_CONFIG": (tmp_path / "rclone.conf").as_posix(),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert _read_status(backup_root)["offsite_error"] == ""
