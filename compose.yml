@@ -27,6 +27,9 @@ services:
       DJANGO_CSRF_TRUSTED_ORIGINS: ${DJANGO_CSRF_TRUSTED_ORIGINS:?DJANGO_CSRF_TRUSTED_ORIGINS must be set}
       DJANGO_SECURE_COOKIES: "true"
       DJANGO_SECURE_SSL_REDIRECT: "true"
+      # App port is published on 127.0.0.1 only, behind Tailscale Serve, so
+      # REMOTE_ADDR is the proxy. Trust the right-most X-Forwarded-For hop.
+      TRUST_PROXY_FORWARDED_FOR: "true"
       SETUP_CODE: ${SETUP_CODE:-}
       PRIVACY_POLICY_PATH: ${PRIVACY_POLICY_PATH:-}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}

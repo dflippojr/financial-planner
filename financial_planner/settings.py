@@ -51,6 +51,7 @@ MIDDLEWARE = [
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "finance.middleware.MemberSessionActivityMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "allauth.account.middleware.AccountMiddleware",
     "finance.middleware.LoginRequiredExceptStaticMiddleware",
@@ -136,6 +137,10 @@ SESSION_COOKIE_SECURE = os.environ.get("DJANGO_SECURE_COOKIES", "true").lower() 
 SESSION_COOKIE_SAMESITE = "Lax"
 CSRF_COOKIE_SECURE = SESSION_COOKIE_SECURE
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+# True only when the app port is loopback-only behind a trusted proxy such as
+# Tailscale Serve. When on, client IP comes from the right-most X-Forwarded-For
+# hop the proxy added; when off, X-Forwarded-For is ignored.
+TRUST_PROXY_FORWARDED_FOR = os.environ.get("TRUST_PROXY_FORWARDED_FOR", "false").lower() == "true"
 SECURE_SSL_REDIRECT = os.environ.get("DJANGO_SECURE_SSL_REDIRECT", "true").lower() == "true"
 SECURE_HSTS_SECONDS = int(os.environ.get("DJANGO_SECURE_HSTS_SECONDS", "31536000"))
 SECURE_HSTS_INCLUDE_SUBDOMAINS = True

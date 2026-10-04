@@ -30,6 +30,8 @@ ACTION_LABELS = {
     "ai-defaults": "Change AI backend defaults",
     "ai-offer-local": "Offer the household local model",
     "ai-shared-local": "Use the household local model",
+    "revoke-session": "Sign out a session",
+    "revoke-other-sessions": "Sign out other sessions",
 }
 
 ACCOUNT_SETTINGS_ACTIONS = {

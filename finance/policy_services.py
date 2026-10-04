@@ -115,19 +115,23 @@ def household_ai_allowed(household):
     return all(in_acceptance(person) for person in people)
 
 
-def accept_policy(person, version):
+def accept_policy(person, version, *, request=None):
     if version is None:
         raise TypeError("A shown policy version is required.")
     person = _as_person(person)
-    PrivacyPolicyAcceptance.objects.get_or_create(
+    _acceptance, created = PrivacyPolicyAcceptance.objects.get_or_create(
         person=person,
         policy_version=version,
         defaults={"accepted_at": timezone.now()},
     )
+    if created:
+        from .security_services import EVENT_TYPES, record_security_event
+
+        record_security_event(person, EVENT_TYPES.POLICY_ACCEPTANCE, request=request)
     return version
 
 
-def accept_shown_version(person, shown_version):
+def accept_shown_version(person, shown_version, *, request=None):
     try:
         shown = int(shown_version)
     except (TypeError, ValueError):
@@ -135,7 +139,7 @@ def accept_shown_version(person, shown_version):
     current = current_policy()
     if shown != current.version:
         return False
-    accept_policy(person, current)
+    accept_policy(person, current, request=request)
     return True
 
 
@@ -182,6 +186,6 @@ def latest_acceptance(person):
     )
 
 
-def record_onboarding_acceptance(person, accepted, shown_version):
+def record_onboarding_acceptance(person, accepted, shown_version, *, request=None):
     if accepted:
-        accept_shown_version(person, shown_version)
+        accept_shown_version(person, shown_version, request=request)
