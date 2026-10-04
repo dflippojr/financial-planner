@@ -2140,3 +2140,74 @@ class BulkEditUndo(models.Model):
 
     def __str__(self):
         return f"Bulk edit undo {self.pk}"
+
+
+class SheetComparisonSettings(models.Model):
+    class SpendingSign(models.TextChoices):
+        UNSIGNED = "unsigned", "Unsigned (positive spending)"
+        SIGNED = "signed", "Signed (negative is spending)"
+
+    member = models.OneToOneField(
+        Person,
+        on_delete=models.CASCADE,
+        related_name="sheet_comparison_settings",
+    )
+    month_column = models.CharField(max_length=255)
+    income_column = models.CharField(max_length=255)
+    spending_column = models.CharField(max_length=255)
+    spending_sign = models.CharField(
+        max_length=16,
+        choices=SpendingSign.choices,
+        default=SpendingSign.UNSIGNED,
+    )
+    tolerance_minor = models.PositiveIntegerField(default=100)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            person = _person_for(principal)
+            if person is None:
+                return self.none()
+            return self.filter(member=person)
+
+    objects = QuerySet.as_manager()
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(spending_sign__in=("unsigned", "signed")),
+                name="sheet_comparison_spending_sign_valid",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Sheet comparison settings {self.member_id}"
+
+
+class SheetMonthTotal(models.Model):
+    member = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="sheet_month_totals")
+    month = models.DateField()
+    income_minor = models.BigIntegerField()
+    spending_minor = models.BigIntegerField()
+    source = models.CharField(max_length=255)
+    note = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            person = _person_for(principal)
+            if person is None:
+                return self.none()
+            return self.filter(member=person)
+
+    objects = QuerySet.as_manager()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("member", "month"), name="sheet_month_total_unique_member_month"),
+            models.CheckConstraint(condition=Q(month__day=1), name="sheet_month_total_month_start"),
+        ]
+
+    def __str__(self):
+        return f"Sheet month {self.member_id} {self.month}"
