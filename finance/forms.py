@@ -260,6 +260,18 @@ class CashFlowFilterForm(forms.Form):
         return cleaned
 
 
+class YearEndFilterForm(forms.Form):
+    year = forms.IntegerField(min_value=1, max_value=MAX_REPORT_DATE.year)
+    scope = forms.ChoiceField(
+        required=False,
+        choices=(
+            ("", ALL_VISIBLE_ACCOUNTS),
+            (Account.Scope.PRIVATE, "Private"),
+            (Account.Scope.HOUSEHOLD, "Household"),
+        ),
+    )
+
+
 class NetWorthFilterForm(forms.Form):
     date_from = forms.DateField(
         required=False,
