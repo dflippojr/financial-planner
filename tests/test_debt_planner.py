@@ -216,3 +216,12 @@ def test_a_debt_still_shrinking_after_the_labelling_run_is_past_the_horizon():
 
     assert plan.debts[0].payoff_label == BEYOND_LIMIT
     assert plan.never_pays_off is False
+
+
+def test_a_debt_waiting_beyond_the_labelling_run_is_past_the_horizon():
+    first = _debt(1, 300_000, "0", 100)
+    waiting = _debt(2, 100, "0", 0)
+
+    plan = simulate_payoff([first, waiting], strategy=STRATEGY_CUSTOM, custom_order=[1, 2], start=date(2026, 1, 1))
+
+    assert {row.account_id: row.payoff_label for row in plan.debts} == {1: BEYOND_LIMIT, 2: BEYOND_LIMIT}

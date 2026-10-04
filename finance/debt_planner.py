@@ -174,6 +174,12 @@ def simulate_payoff(debts, extra_minor=0, strategy=STRATEGY_MINIMUMS, custom_ord
         balances_at_horizon = horizon_balances
     else:
         balances_at_horizon = {debt.account_id: debt.balance_minor for debt in debts}
+    # With rollover, a debt can sit unchanged while it waits for freed payments, so
+    # it is judged by whether the total still owed (outside capped debts) shrank.
+    live_ids = [debt.account_id for debt in debts if balances[debt.account_id] > 0 and debt.account_id not in frozen]
+    total_shrinking = sum(balances[account_id] for account_id in live_ids) < sum(
+        max(0, balances_at_horizon[account_id]) for account_id in live_ids
+    )
     never_ids = set()
     beyond_ids = set()
     for debt in debts:
@@ -184,12 +190,13 @@ def simulate_payoff(debts, extra_minor=0, strategy=STRATEGY_MINIMUMS, custom_ord
             beyond_ids.add(account_id)
         elif balances[account_id] <= 0:
             continue
-        elif stalled or account_id in frozen or balances[account_id] >= balances_at_horizon[account_id]:
-            # Stopped shrinking, or grew past the cap: no payment plan here ends it.
+        elif stalled or account_id in frozen:
             never_ids.add(account_id)
+        elif strategy == STRATEGY_MINIMUMS:
+            shrinking = balances[account_id] < balances_at_horizon[account_id]
+            (beyond_ids if shrinking else never_ids).add(account_id)
         else:
-            # Still shrinking at the end of the labelling run: it ends, just very late.
-            beyond_ids.add(account_id)
+            (beyond_ids if total_shrinking else never_ids).add(account_id)
 
     summaries = []
     for debt in debts:
