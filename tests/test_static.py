@@ -123,6 +123,7 @@ def test_signed_in_pages_use_shared_nav_and_signed_out_pages_use_a_card():
         "Import",
         "Planning",
         "Planned items",
+        "Debt payoff",
     ):
         assert label in home
     assert reverse("category-list") not in home
