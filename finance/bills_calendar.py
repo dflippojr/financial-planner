@@ -229,10 +229,14 @@ def starting_balance_minor(accounts, *, as_of):
 
 
 def _posted_on(sources, on_date, selected_ids):
-    """Expected items for `on_date` that already posted on the selected accounts."""
+    """Recurring series whose charge for `on_date` already posted on the selected accounts.
+
+    Series link to their transactions, so this is exact. Planned items have no link,
+    so they are always applied: a planned bill already paid today makes the forecast
+    run low until tomorrow, which can over-warn but never hides a real shortfall.
+    """
     from .models import RecurringSeriesMember
 
-    posted = set()
     todays = Transaction.objects.filter(
         account_id__in=selected_ids,
         status=Transaction.Status.ACTIVE,
@@ -241,14 +245,11 @@ def _posted_on(sources, on_date, selected_ids):
     charged_series = set(
         RecurringSeriesMember.objects.filter(transaction__in=todays).values_list("series_id", flat=True)
     )
-    amounts = list(todays.values_list("amount_minor", flat=True))
-    for item in _expected_on_day(sources, on_date):
-        if item.source == SOURCE_SERIES and item.source_id in charged_series:
-            posted.add((item.source, item.source_id))
-        elif item.source == SOURCE_PLANNED and item.amount_minor in amounts:
-            amounts.remove(item.amount_minor)
-            posted.add((item.source, item.source_id))
-    return posted
+    return {
+        (item.source, item.source_id)
+        for item in _expected_on_day(sources, on_date)
+        if item.source == SOURCE_SERIES and item.source_id in charged_series
+    }
 
 
 def _balance_delta_on_day(sources, on_date, selected_ids, skip=frozenset()):

@@ -385,7 +385,7 @@ def test_starting_balance_includes_transactions_after_the_latest_snapshot():
 
 
 @pytest.mark.django_db
-def test_a_planned_payment_posted_today_counts_once_and_an_unplanned_one_counts():
+def test_today_skips_a_posted_series_charge_but_keeps_planned_items_and_counts_unplanned():
     from finance.bills_calendar import starting_balance_minor
 
     owner = make_person("owner")
@@ -393,22 +393,25 @@ def test_a_planned_payment_posted_today_counts_once_and_an_unplanned_one_counts(
     checking = make_account(owner)
     today = date(2026, 10, 4)
     add_snapshot(checking, date(2026, 10, 3), 100_000)
+    series = make_series(owner, name="Synthetic gym", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-3_000)
+    charge = make_transaction(owner, checking, transaction_date=today, amount_minor=-3_000, description="Synthetic gym")
+    RecurringSeriesMember.objects.create(series=series, transaction=charge)
     PlannedItem.objects.create(
         owner=owner,
         scope=PlannedItem.Scope.PRIVATE,
         name="Synthetic rent",
         kind=PlannedItem.Kind.EXPENSE,
-        amount_minor=80_000,
+        amount_minor=10_000,
         start_date=today,
         cadence=PlannedItem.Cadence.MONTHLY,
     )
-    make_transaction(owner, checking, transaction_date=today, amount_minor=-80_000, description="Synthetic rent paid")
-    make_transaction(owner, checking, transaction_date=today, amount_minor=-5_000, description="Synthetic unplanned")
-    sources = calendar_inputs(owner)
+    make_transaction(owner, checking, transaction_date=today, amount_minor=-10_000, description="Synthetic unrelated purchase")
+    sources = [item for item in calendar_inputs(owner) if item.source_id in {series.pk} or item.name == "Synthetic rent"]
     start = starting_balance_minor([checking], as_of=today)
 
     balances = expected_balances_by_day(
         sources, start_balance=start, selected_ids={checking.pk}, from_date=today, through_date=today
     )
 
-    assert balances[today] == 15_000
+    # 1,000.00 - 30.00 gym (posted, not re-applied) - 100.00 purchase - 100.00 planned rent still due.
+    assert balances[today] == 77_000
