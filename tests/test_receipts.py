@@ -1,19 +1,23 @@
-from datetime import date
+from datetime import date, timedelta
 from io import BytesIO
+import os
 from pathlib import Path
 import zipfile
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import transaction
 from django.test import Client
 from django.urls import reverse
+from django.utils import timezone
 
+from finance.alert_services import run_daily_alert_pass
 from finance.csv_import.services import undo_import_batch
 from finance.export import write_export_zip
 from finance.lifecycle_services import delete_account, delete_member_data
 from finance.models import Account, Household, ImportBatch, Membership, Person, Receipt, Transaction, TransactionSplit
-from finance.receipt_services import attach_receipt, sniff_receipt_content_type
+from finance.receipt_services import attach_receipt, remove_receipt, sniff_receipt_content_type
 
 
 PASSWORD = "Synthetic-passphrase-42!"
@@ -258,3 +262,70 @@ def test_export_includes_visible_receipts_only(tmp_path, settings):
     assert f"receipts/{secret.pk}/secret.jpg" not in names
     assert b"secret.jpg" not in archive.read("receipts.csv")
     assert b"shared.jpg" in archive.read("receipts.csv")
+
+
+@pytest.mark.django_db
+def test_receipt_delete_inside_rolled_back_atomic_keeps_row_and_file(tmp_path, settings):
+    settings.RECEIPTS_DIR = str(tmp_path)
+    owner = make_person("owner")
+    txn = make_transaction(owner)
+    receipt = attach_receipt(owner, txn.pk, upload_bytes("keep.jpg", JPEG))
+    path = Path(settings.RECEIPTS_DIR) / receipt.stored_name
+
+    with pytest.raises(RuntimeError, match="roll back"):
+        with transaction.atomic():
+            remove_receipt(owner, txn.pk, receipt.pk)
+            raise RuntimeError("roll back")
+
+    assert Receipt.objects.filter(pk=receipt.pk).exists()
+    assert path.is_file()
+
+
+@pytest.mark.django_db
+def test_sweep_removes_old_orphans_and_keeps_new_and_referenced(tmp_path, settings):
+    settings.RECEIPTS_DIR = str(tmp_path)
+    settings.RECEIPT_ORPHAN_GRACE_HOURS = 48
+    owner = make_person("owner")
+    txn = make_transaction(owner)
+    kept = attach_receipt(owner, txn.pk, upload_bytes("keep.jpg", JPEG))
+    referenced = Path(settings.RECEIPTS_DIR) / kept.stored_name
+    old_orphan = Path(settings.RECEIPTS_DIR) / ("a" * 32)
+    new_orphan = Path(settings.RECEIPTS_DIR) / ("b" * 32)
+    junk = Path(settings.RECEIPTS_DIR) / "not-a-receipt-name"
+    old_orphan.write_bytes(b"old-orphan")
+    new_orphan.write_bytes(b"new-orphan")
+    junk.write_bytes(b"junk")
+    now = timezone.now()
+    old_ts = (now - timedelta(hours=49)).timestamp()
+    os.utime(old_orphan, (old_ts, old_ts))
+    os.utime(referenced, (old_ts, old_ts))
+
+    run_daily_alert_pass(now=now)
+
+    assert not old_orphan.exists()
+    assert new_orphan.is_file()
+    assert referenced.is_file()
+    assert junk.is_file()
+
+
+@pytest.mark.django_db
+def test_member_data_deletion_leaves_files_until_orphan_sweep(tmp_path, settings):
+    settings.RECEIPTS_DIR = str(tmp_path)
+    settings.RECEIPT_ORPHAN_GRACE_HOURS = 48
+    leftover = make_person("leaving")
+    leftover_txn = make_transaction(leftover)
+    leftover_receipt = attach_receipt(leftover, leftover_txn.pk, upload_bytes("mine.jpg", PNG))
+    leftover_path = Path(settings.RECEIPTS_DIR) / leftover_receipt.stored_name
+
+    delete_member_data(leftover)
+
+    assert not Receipt.objects.filter(pk=leftover_receipt.pk).exists()
+    assert leftover_path.is_file()
+
+    now = timezone.now()
+    old_ts = (now - timedelta(hours=49)).timestamp()
+    os.utime(leftover_path, (old_ts, old_ts))
+    from finance.receipt_services import sweep_orphan_receipt_files
+
+    sweep_orphan_receipt_files(now=now)
+    assert not leftover_path.exists()
