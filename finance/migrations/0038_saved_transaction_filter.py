@@ -7,7 +7,7 @@ import finance.models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("finance", "0036_bulk_edit_undo"),
+        ("finance", "0037_account_debt_terms"),
     ]
 
     operations = [
