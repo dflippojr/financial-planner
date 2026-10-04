@@ -7,6 +7,7 @@ import pytest
 
 
 BACKUP_SCRIPT = Path(__file__).parents[1] / "ops" / "backup" / "backup.sh"
+RESTORE_SCRIPT = Path(__file__).parents[1] / "ops" / "backup" / "restore.sh"
 
 
 def _posix_bash():
@@ -64,9 +65,13 @@ def _fake_pg(fake_bin, *, dump_fail=False, restore_fail=False):
         _write_executable(
             fake_bin / "pg_restore",
             "#!/bin/sh\n"
-            "[ \"${1:-}\" = '--list' ] && [ -s \"$2\" ] || exit 1\n"
-            "echo '; 1 TABLE DATA public finance_account'\n"
-            "echo '; 2 TABLE DATA public finance_transaction'\n",
+            "if [ \"${1:-}\" = '--list' ]; then\n"
+            "  [ -s \"$2\" ] || exit 1\n"
+            "  echo '; 1 TABLE DATA public finance_account'\n"
+            "  echo '; 2 TABLE DATA public finance_transaction'\n"
+            "  exit 0\n"
+            "fi\n"
+            "exit 0\n",
         )
 
 
@@ -130,8 +135,10 @@ def _run_backup(fake_bin, backup_root, extra_env=None):
             "POSTGRES_HOST": "db",
             "NIGHTLY_RETENTION": "14",
             "WEEKLY_RETENTION": "8",
+            "RECEIPTS_DIR": _unix_path(backup_root / "receipts-live"),
         }
     )
+    (backup_root / "receipts-live").mkdir(parents=True, exist_ok=True)
     if extra_env:
         converted = {}
         for key, value in extra_env.items():
@@ -147,6 +154,40 @@ def _run_backup(fake_bin, backup_root, extra_env=None):
             POSIX_BASH,
             "-c",
             f'export PATH="{fake_unix}:$PATH"; exec sh "{script_unix}"',
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+
+def _run_restore(fake_bin, dump_path, extra_env=None):
+    env = os.environ.copy()
+    env.update(
+        {
+            "POSTGRES_DB": "financial_planner",
+            "POSTGRES_USER": "financial_planner",
+            "POSTGRES_PASSWORD": "synthetic-test-password",
+            "POSTGRES_HOST": "db",
+        }
+    )
+    if extra_env:
+        converted = {}
+        for key, value in extra_env.items():
+            if key in {"RECEIPTS_DIR"}:
+                converted[key] = _unix_path(value) if value else value
+            else:
+                converted[key] = value
+        env.update(converted)
+    fake_unix = _unix_path(fake_bin)
+    script_unix = _unix_path(RESTORE_SCRIPT)
+    dump_unix = _unix_path(dump_path)
+    return subprocess.run(
+        [
+            POSIX_BASH,
+            "-c",
+            f'export PATH="{fake_unix}:$PATH"; exec sh "{script_unix}" "{dump_unix}"',
         ],
         check=False,
         capture_output=True,
@@ -415,3 +456,85 @@ def test_offsite_missing_remote_directory_is_not_a_prune_failure(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert _read_status(backup_root)["offsite_error"] == ""
+
+
+@pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
+def test_backup_archives_receipts_next_to_the_dump(tmp_path):
+    fake_bin = tmp_path / "bin"
+    backup_root = tmp_path / "backups"
+    fake_bin.mkdir()
+    (backup_root / "nightly").mkdir(parents=True)
+    (backup_root / "weekly").mkdir()
+    live = backup_root / "receipts-live"
+    live.mkdir(parents=True)
+    (live / "synthetic-receipt.bin").write_bytes(b"synthetic-receipt-bytes")
+    _fake_date(fake_bin)
+    _fake_pg(fake_bin)
+
+    result = _run_backup(fake_bin, backup_root)
+
+    assert result.returncode == 0, result.stderr
+    archive = backup_root / "nightly" / "financial_planner_20260927T060000Z.receipts.tar.gz"
+    weekly = backup_root / "weekly" / "financial_planner_20260927T060000Z.receipts.tar.gz"
+    assert archive.is_file()
+    assert weekly.is_file()
+    listing = subprocess.run(
+        [POSIX_BASH, "-c", f'tar -tzf "{_unix_path(archive)}"'],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert listing.returncode == 0, listing.stderr
+    assert "synthetic-receipt.bin" in listing.stdout
+
+
+@pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
+def test_restore_replaces_receipts_from_the_sibling_archive(tmp_path):
+    fake_bin = tmp_path / "bin"
+    backup_root = tmp_path / "backups"
+    fake_bin.mkdir()
+    (backup_root / "nightly").mkdir(parents=True)
+    (backup_root / "weekly").mkdir()
+    live = backup_root / "receipts-live"
+    live.mkdir(parents=True)
+    (live / "synthetic-receipt.bin").write_bytes(b"synthetic-receipt-bytes")
+    _fake_date(fake_bin)
+    _fake_pg(fake_bin)
+
+    backed = _run_backup(fake_bin, backup_root)
+    assert backed.returncode == 0, backed.stderr
+    (live / "synthetic-receipt.bin").unlink()
+    (live / "stale.bin").write_bytes(b"should-be-removed")
+
+    restored = _run_restore(
+        fake_bin,
+        backup_root / "nightly" / "financial_planner_20260927T060000Z.dump",
+        {"RECEIPTS_DIR": live},
+    )
+
+    assert restored.returncode == 0, restored.stderr
+    assert (live / "synthetic-receipt.bin").read_bytes() == b"synthetic-receipt-bytes"
+    assert not (live / "stale.bin").exists()
+
+
+@pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
+def test_restore_succeeds_when_the_receipts_archive_is_missing(tmp_path):
+    fake_bin = tmp_path / "bin"
+    backup_root = tmp_path / "backups"
+    fake_bin.mkdir()
+    dump = backup_root / "nightly" / "financial_planner_20260927T060000Z.dump"
+    dump.parent.mkdir(parents=True)
+    dump.write_text("synthetic dump")
+    live = backup_root / "receipts-live"
+    live.mkdir(parents=True)
+    leftover = live / "pre-release.bin"
+    leftover.write_bytes(b"leave-unchanged")
+    _fake_pg(fake_bin)
+
+    restored = _run_restore(fake_bin, dump, {"RECEIPTS_DIR": live})
+
+    assert restored.returncode == 0, restored.stderr
+    assert "no receipts archive for this backup; receipts directory left unchanged" in (
+        restored.stderr + restored.stdout
+    )
+    assert leftover.read_bytes() == b"leave-unchanged"

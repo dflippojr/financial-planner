@@ -147,6 +147,9 @@ def test_compose_stages_csv_uploads_on_a_memory_backed_mount():
     assert "OFFSITE_RCLONE_REMOTE: ${OFFSITE_RCLONE_REMOTE:-}" in compose
     assert "OFFSITE_AGE_RECIPIENT: ${OFFSITE_AGE_RECIPIENT:-}" in compose
     assert "RCLONE_CONFIG: /config/rclone.conf" in compose
+    assert "RECEIPTS_DIR: /receipts" in compose
+    assert "- receipts:/receipts" in compose
+    assert "RECEIPTS_VOLUME_NAME:-financial-planner-receipts" in compose
 
 
 def test_backup_container_mounts_only_the_rclone_config_file():
