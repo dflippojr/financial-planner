@@ -10,7 +10,7 @@ What the app stores, and where
 
 The app stores the records you and other members create or import. That includes:
 
-- your username, display name, and sign-in credentials (a password hash, optional Google sign-in link, and recovery-code digests);
+- your username, display name, and sign-in credentials (a password hash, optional Google sign-in link, optional passkey public keys, and recovery-code digests);
 - household membership;
 - financial accounts, transactions, categories, rules, import batches, transfers, recurring series, planned items, savings goals, and balance snapshots;
 - SimpleFIN connection material needed to refresh linked accounts;

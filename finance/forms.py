@@ -159,6 +159,10 @@ class RecoveryForm(PasswordPairForm):
     field_order = ("username", "recovery_code", "password1", "password2")
 
 
+class RecoveryCodeOnlyForm(forms.Form):
+    recovery_code = forms.CharField(max_length=32, label="Recovery code")
+
+
 class TransactionFilterForm(forms.Form):
     date_from = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
     date_to = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))

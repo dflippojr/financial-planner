@@ -1,6 +1,6 @@
 # Authentication, onboarding, and recovery
 
-The app uses Django usernames and passwords with database-backed sessions, and optional Google sign-in through `django-allauth`. Authentication is required by default for every view; only sign-in, first-run setup, invitation acceptance, account recovery, the privacy and data policy page, and (when Google is configured) the Google OAuth start and callback paths are public. Financial records must be queried through the model `visible_to()` methods so private records do not appear in pages, aggregates, searches, errors, or exports.
+The app uses Django usernames and passwords with database-backed sessions, optional Google sign-in through `django-allauth`, and optional WebAuthn passkeys through Duo Labs `webauthn` (py_webauthn) 2.7.0. Authentication is required by default for every view; only sign-in, the passkey second-factor step, first-run setup, invitation acceptance, account recovery, the privacy and data policy page, and (when Google is configured) the Google OAuth start and callback paths are public. Financial records must be queried through the model `visible_to()` methods so private records do not appear in pages, aggregates, searches, errors, or exports.
 
 ## First member
 
@@ -30,6 +30,16 @@ A Google identity that is not already linked is refused at sign-in and does not 
 
 The OAuth handshake uses `state` and PKCE. The app does not store Google access or refresh tokens. Absolute session expiry is set at sign-in for both methods. Failed Google sign-in attempts for the same remote address use the login throttle. Standalone home-screen mode (issue #103) uses the same redirect; confirm password and Google sign-in on a real iPhone after install. There is no service worker.
 
+## Passkeys
+
+Passkeys are optional. On **Settings → Sign-in & security**, a member can register Face ID, Touch ID, Windows Hello, or a security key, name it, and later remove it. Adding, removing, and turning the requirement on or off are sensitive actions and need a fresh confirmation. A passkey assertion also counts as that confirmation. The relying party ID is the MagicDNS hostname from `DJANGO_ALLOWED_HOSTS` (no port). The browser origin must be listed in `DJANGO_CSRF_TRUSTED_ORIGINS`, including a non-default Serve port such as `:10443`.
+
+WebAuthn in browsers requires a secure context. Register and assert passkeys over the tailnet HTTPS name from `tailscale serve`, not over plain HTTP or a raw IP. `localhost` is allowed only for local development.
+
+When at least one passkey is registered, the member can turn on **Require a passkey after password**. Password sign-in then stores a pending login and asks for a passkey before a session is created. An unused recovery code can finish that step instead and is then used up. Removing the last passkey turns the requirement off. Google sign-in is not asked for a passkey.
+
+django-allauth's MFA extra is not used: this app's password sign-in and re-auth views are custom, and TOTP is out of scope.
+
 ## Recovery
 
 On **Recover account**, a person enters their username, one unused recovery code, and a new password. A successful recovery consumes the code and deletes every existing server-side session for that user. Other recovery codes remain valid. There is deliberately no email, administrator, or host CLI password-reset path. If the only member loses both the password and every recovery code, the account cannot be recovered through the application; restore a database backup or rebuild the installation.
@@ -40,7 +50,7 @@ Sessions expire 28 days after sign-in and do not extend with activity. Signing o
 
 The defaults can be changed with `DJANGO_SESSION_COOKIE_AGE`, `LOGIN_FAILURE_LIMIT`, `LOGIN_FAILURE_WINDOW_SECONDS`, and `LOGIN_BLOCK_SECONDS`. Values are seconds except the invitation duration noted above.
 
-Sensitive actions (invite, leave household, change sign-in methods, share or unshare an account, change co-owned or lent, delete an account, download a data export, connect or disconnect SimpleFIN, and connect, change, or disconnect an AI backend) require a fresh confirmation. One confirmation covers further sensitive actions for ten minutes in the same session (`REAUTH_WINDOW_SECONDS`). The timestamp lives in the server-side session, is set at sign-in and after a successful confirmation, and is cleared on sign-out. A sensitive POST without a fresh confirmation is not performed; the member is sent to `/reauth/` and then back to the form to submit again. Failed confirmations use the login throttle. Recovery codes are not accepted for this confirmation. `GOOGLE_REAUTH_MAX_AGE_SECONDS` bounds how recent a Google ID token `auth_time` must be. The confirmation request uses `prompt=select_account` with `max_age=0` and asks for `auth_time` through the `claims` parameter. Google sends `auth_time` only to published, verified apps; without it, the ID token must have been issued (`iat`) within the same bound. That proves a fresh round trip through the account chooser for the member's own Google account, not a fresh Google password entry. Signing in again with Google from an already signed-in session never counts as confirmation.
+Sensitive actions (invite, leave household, change sign-in methods, add or remove a passkey, share or unshare an account, change co-owned or lent, delete an account, download a data export, connect or disconnect SimpleFIN, and connect, change, or disconnect an AI backend) require a fresh confirmation. One confirmation covers further sensitive actions for ten minutes in the same session (`REAUTH_WINDOW_SECONDS`). The timestamp lives in the server-side session, is set at sign-in and after a successful confirmation, and is cleared on sign-out. A sensitive POST without a fresh confirmation is not performed; the member is sent to `/reauth/` and then back to the form to submit again. Failed confirmations use the login throttle. Recovery codes are not accepted for this confirmation. `GOOGLE_REAUTH_MAX_AGE_SECONDS` bounds how recent a Google ID token `auth_time` must be. The confirmation request uses `prompt=select_account` with `max_age=0` and asks for `auth_time` through the `claims` parameter. Google sends `auth_time` only to published, verified apps; without it, the ID token must have been issued (`iat`) within the same bound. That proves a fresh round trip through the account chooser for the member's own Google account, not a fresh Google password entry. Signing in again with Google from an already signed-in session never counts as confirmation.
 
 ## HTTPS settings
 

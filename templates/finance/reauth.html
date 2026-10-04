@@ -12,6 +12,11 @@
   <input type="hidden" name="action" value="{{ action }}">
   <button type="submit" class="btn btn-primary w-full">Confirm with Google</button>
 </form>
+{% if show_password or show_passkey %}<div class="divider">or</div>{% endif %}
+{% endif %}
+{% if show_passkey %}
+<p id="passkey-assert-error" class="text-error text-sm mb-2 hidden" role="alert"></p>
+<button type="button" class="btn btn-primary w-full mb-4" data-passkey-assert data-options-url="{% url 'passkey-reauth-options' %}" data-assert-url="{% url 'passkey-reauth-assert' %}" data-next="{{ next }}">Confirm with passkey</button>
 {% if show_password %}<div class="divider">or</div>{% endif %}
 {% endif %}
 {% if show_password %}
@@ -23,4 +28,8 @@
   <button type="submit" class="btn btn-primary w-full">Confirm</button>
 </form>
 {% endif %}
+{% endblock %}
+{% block extra_js %}
+{% load static %}
+<script src="{% static 'js/passkeys.js' %}"></script>
 {% endblock %}

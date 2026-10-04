@@ -111,6 +111,7 @@ class Person(models.Model):
         blank=True,
         related_name="declined_by",
     )
+    require_passkey_after_password = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -2352,3 +2353,30 @@ class SheetMonthTotal(models.Model):
 
     def __str__(self):
         return f"Sheet month {self.member_id} {self.month}"
+
+
+class Passkey(models.Model):
+    member = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="passkeys")
+    name = models.CharField(max_length=80)
+    credential_id = models.BinaryField(unique=True)
+    public_key = models.BinaryField()
+    sign_count = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            person = _person_for(principal)
+            if person is None:
+                return self.none()
+            return self.filter(member=person)
+
+    objects = QuerySet.as_manager()
+
+    class Meta:
+        indexes = [
+            models.Index(fields=("member", "-created_at"), name="passkey_member_created_idx"),
+        ]
+
+    def __str__(self):
+        return self.name

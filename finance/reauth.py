@@ -32,6 +32,9 @@ ACTION_LABELS = {
     "ai-shared-local": "Use the household local model",
     "revoke-session": "Sign out a session",
     "revoke-other-sessions": "Sign out other sessions",
+    "add-passkey": "Add a passkey",
+    "remove-passkey": "Remove a passkey",
+    "require-passkey": "Change passkey requirement",
 }
 
 ACCOUNT_SETTINGS_ACTIONS = {
