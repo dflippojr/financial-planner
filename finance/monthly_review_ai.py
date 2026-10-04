@@ -102,7 +102,7 @@ def visible_phrasing(person, review):
     return paragraph, phrasing_label(review.ai_backend)
 
 
-def run_monthly_review_job(person, job, *, backend, session_id="", on_session=None):
+def run_monthly_review_job(person, job, *, backend, session_id="", on_session=None, connection=None):
     refs = job.input_refs or {}
     review = MonthlyReview.objects.filter(pk=refs.get("monthly_review_id"), person=person).first()
     if review is None:
@@ -127,6 +127,7 @@ def run_monthly_review_job(person, job, *, backend, session_id="", on_session=No
         backend=backend,
         session_id=session_id,
         on_session=on_session,
+        connection=connection,
     )
     if not result.ok:
         return result

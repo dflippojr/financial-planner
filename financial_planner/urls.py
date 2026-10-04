@@ -8,6 +8,7 @@ from finance import (
     budget_views,
     category_suggestion_views,
     chat_views,
+    debt_planner_views,
     net_worth_views,
     planning_views,
     monthly_review_views,
@@ -101,6 +102,8 @@ urlpatterns = [
     path("settings/ai/connect/", ai_views.ai_connect, name="ai-connect"),
     path("settings/ai/disconnect/", ai_views.ai_disconnect, name="ai-disconnect"),
     path("settings/ai/defaults/", ai_views.ai_save_defaults, name="ai-defaults"),
+    path("settings/ai/offer-local/", ai_views.ai_save_offer_local, name="ai-offer-local"),
+    path("settings/ai/shared-local/", ai_views.ai_save_shared_local, name="ai-shared-local"),
     path("account/", RedirectView.as_view(pattern_name="account-settings", permanent=True, query_string=True)),
     path("account/ai/connect/", RedirectView.as_view(pattern_name="ai-connect", permanent=True, query_string=True)),
     path(
@@ -141,6 +144,7 @@ urlpatterns = [
     path("accounts/<int:account_id>/delete/", account_views.account_delete, name="account-delete"),
     path("accounts/<int:account_id>/balances/", net_worth_views.account_balances, name="account-balances"),
     path("accounts/<int:account_id>/pair/", net_worth_views.account_pair_loan, name="account-pair-loan"),
+    path("accounts/<int:account_id>/debt-terms/", net_worth_views.account_debt_terms, name="account-debt-terms"),
     path(
         "accounts/<int:account_id>/balances/<int:snapshot_id>/edit/",
         net_worth_views.account_snapshot_edit,
@@ -211,6 +215,7 @@ urlpatterns = [
     path("transfers/", views.transfer_review, name="transfer-review"),
     path("recurring/", views.recurring_review, name="recurring-review"),
     path("planning/items/", planning_views.planned_item_list, name="planned-items"),
+    path("planning/debts/", debt_planner_views.debt_payoff, name="debt-payoff"),
     path("planning/review/", monthly_review_views.monthly_review, name="monthly-review"),
     path(
         "planning/review/regenerate/",

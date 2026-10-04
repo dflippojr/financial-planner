@@ -738,7 +738,7 @@ class AiDefaultsForm(forms.Form):
     chat_model = forms.CharField(label="Chat model", required=False, max_length=80)
     background_model = forms.CharField(label="Background model", required=False, max_length=80)
 
-    def __init__(self, *args, backends=(), **kwargs):
+    def __init__(self, *args, backends=(), offer_shared_local=False, **kwargs):
         super().__init__(*args, **kwargs)
         allow_local_chat = bool(getattr(settings, "AI_CHAT_LOCAL_ENABLED", False))
         chat_choices = [
@@ -747,12 +747,33 @@ class AiDefaultsForm(forms.Form):
             if item.suits_live and (allow_local_chat or item.id != "local")
         ]
         background_choices = [(item.id, item.label) for item in backends if item.suits_background]
+        if offer_shared_local:
+            chat_choices.append(("shared_local", "Local model (shared)"))
+            background_choices.append(("shared_local", "Local model (shared)"))
         if not chat_choices:
             chat_choices = [("", "No available backend")]
         if not background_choices:
             background_choices = [("", "No available backend")]
         self.fields["chat_backend"].choices = chat_choices
         self.fields["background_backend"].choices = background_choices
+
+
+class AiOfferLocalForm(forms.Form):
+    offer_local_to_household = forms.BooleanField(
+        required=False,
+        label="Offer the local model to household members",
+    )
+
+
+class AiSharedLocalForm(forms.Form):
+    use_shared_local_chat = forms.BooleanField(
+        required=False,
+        label="Chat",
+    )
+    use_shared_local_background = forms.BooleanField(
+        required=False,
+        label="Background jobs",
+    )
 
 
 class ShareAccountForm(forms.Form):
@@ -766,6 +787,89 @@ class ChangeShareModeForm(forms.Form):
 
 class AccountRenameForm(forms.Form):
     name = forms.CharField(max_length=150)
+
+
+class DebtTermsForm(forms.Form):
+    apr_percent = forms.DecimalField(
+        label="APR percent",
+        max_digits=6,
+        decimal_places=3,
+        required=False,
+        min_value=0,
+        widget=forms.TextInput(attrs={"inputmode": "decimal"}),
+        help_text="Annual percentage rate, for example 19.990.",
+    )
+    minimum_payment = forms.DecimalField(
+        label="Minimum payment",
+        max_digits=19,
+        decimal_places=2,
+        required=False,
+        min_value=0,
+        widget=forms.TextInput(attrs={"inputmode": "decimal"}),
+    )
+    payment_day = forms.IntegerField(
+        label="Payment day",
+        required=False,
+        min_value=1,
+        max_value=31,
+        help_text="Day of the month the loan payment is due.",
+    )
+
+    def __init__(self, *args, account=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.account = account
+        if account is not None and account.account_type != Account.Type.LOAN:
+            del self.fields["payment_day"]
+
+    def clean_minimum_payment(self):
+        amount = self.cleaned_data.get("minimum_payment")
+        if amount is None:
+            return None
+        minor_units = int(amount * 100)
+        if not 0 <= minor_units <= MAX_SIGNED_BIGINT:
+            raise ValidationError(AMOUNT_RANGE_ERROR)
+        return amount
+
+    def minimum_payment_minor(self):
+        amount = self.cleaned_data.get("minimum_payment")
+        if amount is None:
+            return None
+        return int(amount * 100)
+
+
+class DebtPlannerForm(forms.Form):
+    strategy = forms.ChoiceField(
+        choices=(
+            ("minimums", "Minimums only"),
+            ("snowball", "Snowball (smallest balance first)"),
+            ("avalanche", "Avalanche (highest APR first)"),
+            ("custom", "Custom order"),
+        )
+    )
+    extra = forms.DecimalField(
+        label="Extra monthly payment",
+        required=False,
+        min_value=0,
+        max_digits=19,
+        decimal_places=2,
+        widget=forms.TextInput(attrs={"inputmode": "decimal"}),
+        help_text="Applied after minimums, toward the current target debt.",
+    )
+
+    def clean_extra(self):
+        amount = self.cleaned_data.get("extra")
+        if amount is None:
+            return None
+        minor_units = int(amount * 100)
+        if not 0 <= minor_units <= MAX_SIGNED_BIGINT:
+            raise ValidationError(AMOUNT_RANGE_ERROR)
+        return amount
+
+    def extra_minor(self):
+        amount = self.cleaned_data.get("extra")
+        if amount is None:
+            return 0
+        return int(amount * 100)
 
 
 class PairLoanForm(forms.Form):

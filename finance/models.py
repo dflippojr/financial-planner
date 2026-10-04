@@ -70,6 +70,8 @@ class Person(models.Model):
         related_name="person",
     )
     display_name = models.CharField(max_length=150)
+    use_shared_local_chat = models.BooleanField(default=False)
+    use_shared_local_background = models.BooleanField(default=False)
     sessions_valid_after = models.DateTimeField(null=True, blank=True)
     privacy_policy_declined_version = models.ForeignKey(
         "PrivacyPolicyVersion",
@@ -402,6 +404,9 @@ class Account(ArchivableModel):
         related_name="securing_loans",
     )
     currency = models.CharField(max_length=3, default="USD")
+    apr_percent = models.DecimalField(max_digits=6, decimal_places=3, null=True, blank=True)
+    minimum_payment_minor = models.BigIntegerField(null=True, blank=True)
+    payment_day = models.PositiveSmallIntegerField(null=True, blank=True)
     default_saved_csv_mapping = models.ForeignKey(
         SavedCsvMapping,
         on_delete=models.SET_NULL,
@@ -446,6 +451,29 @@ class Account(ArchivableModel):
             models.CheckConstraint(
                 condition=Q(secured_asset__isnull=True) | Q(account_type="loan"),
                 name="account_secured_asset_requires_loan",
+            ),
+            models.CheckConstraint(
+                condition=Q(apr_percent__isnull=True) | Q(apr_percent__gte=0),
+                name="account_apr_percent_non_negative",
+            ),
+            models.CheckConstraint(
+                condition=Q(minimum_payment_minor__isnull=True) | Q(minimum_payment_minor__gte=0),
+                name="account_minimum_payment_non_negative",
+            ),
+            models.CheckConstraint(
+                condition=Q(payment_day__isnull=True) | Q(payment_day__gte=1, payment_day__lte=31),
+                name="account_payment_day_range",
+            ),
+            models.CheckConstraint(
+                condition=Q(payment_day__isnull=True) | Q(account_type="loan"),
+                name="account_payment_day_requires_loan",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(account_type__in=("loan", "credit_card"))
+                    | Q(apr_percent__isnull=True, minimum_payment_minor__isnull=True)
+                ),
+                name="account_debt_terms_require_liability",
             ),
             models.CheckConstraint(
                 condition=(
@@ -1556,6 +1584,7 @@ class AiProviderConnection(models.Model):
     background_backend = models.CharField(max_length=32, blank=True, default="")
     chat_model = models.CharField(max_length=80, blank=True, default="")
     background_model = models.CharField(max_length=80, blank=True, default="")
+    offer_local_to_household = models.BooleanField(default=False)
     connected_at = models.DateTimeField(default=timezone.now)
     last_status = models.CharField(max_length=80, blank=True, default="")
 
@@ -1634,6 +1663,8 @@ class AiUsageEvent(models.Model):
     prompt_tokens = models.PositiveIntegerField(null=True, blank=True)
     completion_tokens = models.PositiveIntegerField(null=True, blank=True)
     outcome = models.CharField(max_length=40)
+    # True when this event polled a session started earlier, not a new request.
+    resumed = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class QuerySet(models.QuerySet):
