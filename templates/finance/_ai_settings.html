@@ -9,10 +9,19 @@
     {% include "finance/_form_fields.html" with form=ai_connect_form %}
     <button type="submit" class="btn btn-primary">Connect Agent Harness</button>
   </form>
+  {% if ai_shared_local_form %}
+  <h3 class="mb-2 mt-6 font-semibold">Local model (shared)</h3>
+  <p class="mb-4 text-sm">The hosting member offered the tower's local model. Requests use that connection with the local backend only. Hosted backends on that connection cannot be used.</p>
+  <form method="post" action="{% url 'ai-shared-local' %}" class="max-w-lg space-y-3">
+    {% csrf_token %}
+    {% include "finance/_form_fields.html" with form=ai_shared_local_form %}
+    <button type="submit" class="btn btn-primary">Save local model use</button>
+  </form>
+  {% endif %}
   {% else %}
   <div{% if show_ai_features %} data-ai-ui="connected"{% endif %}>
     <p class="mb-2 text-sm">Connected to {{ ai_connection.base_url }}.</p>
-    <p class="mb-4 text-sm">Chat can use a hosted backend that supports app-tools-only sessions (Claude). Background jobs still need hosted sessions enabled by the operator before they can use Claude, Codex, or Cursor. Chat on the local model stays hidden until it is evaluated.</p>
+    <p class="mb-4 text-sm">Chat can use a hosted backend that supports app-tools-only sessions (Claude). Background jobs still need hosted sessions enabled by the operator before they can use Claude, Codex, or Cursor. Chat on the local model stays hidden until it is evaluated. Other household members never use hosted backends on this connection.</p>
     {% if ai_backends %}
     <table class="table table-sm mb-4">
       <thead>
@@ -29,6 +38,13 @@
         {% endfor %}
       </tbody>
     </table>
+    {% endif %}
+    {% if ai_offer_form %}
+    <form method="post" action="{% url 'ai-offer-local' %}" class="max-w-lg space-y-3 mb-4">
+      {% csrf_token %}
+      {% include "finance/_form_fields.html" with form=ai_offer_form %}
+      <button type="submit" class="btn btn-primary">Save household sharing</button>
+    </form>
     {% endif %}
     {% if ai_defaults_form %}
     <form method="post" action="{% url 'ai-defaults' %}" class="max-w-lg space-y-3 mb-4">

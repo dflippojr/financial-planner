@@ -43,6 +43,8 @@ COPY --chown=app:app . .
 COPY --from=css --chown=app:app /src/static/dist/app.css /app/static/dist/app.css
 RUN chmod +x /app/scripts/start-production.sh /app/scripts/build_css.sh /app/scripts/run-simplefin-sync.sh /app/scripts/run-ai-jobs.sh
 
+RUN mkdir -p /receipts && chown app:app /receipts
+
 RUN DJANGO_SECRET_KEY=build-collectstatic-only \
     DJANGO_SECURE_SSL_REDIRECT=false \
     DJANGO_SECURE_COOKIES=false \

@@ -133,6 +133,7 @@ def test_compose_stages_csv_uploads_on_a_memory_backed_mount():
     assert "GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}" in compose
     assert "GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}" in compose
     assert "FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:?FIELD_ENCRYPTION_KEY must be set}" in compose
+    assert 'TRUST_PROXY_FORWARDED_FOR: "true"' in compose
     assert "SIMPLEFIN_SYNC_CRON: ${SIMPLEFIN_SYNC_CRON:-30 6 * * *}" in compose
     assert "simplefin-sync:" in compose
     assert 'entrypoint: ["/app/scripts/run-simplefin-sync.sh"]' in compose
@@ -141,6 +142,46 @@ def test_compose_stages_csv_uploads_on_a_memory_backed_mount():
     assert "AI_LOCAL_QUIET_WINDOW: ${AI_LOCAL_QUIET_WINDOW:-22:00-06:00}" in compose
     assert "tmpfs:" in compose
     assert "- /run/csv-staging:size=128m,mode=1777" in compose
+    assert "BACKUP_STATUS_PATH: /backup-health/status" in compose
+    assert "OPERATOR_USERNAMES: ${OPERATOR_USERNAMES:-}" in compose
+    assert "OFFSITE_RCLONE_REMOTE: ${OFFSITE_RCLONE_REMOTE:-}" in compose
+    assert "OFFSITE_AGE_RECIPIENT: ${OFFSITE_AGE_RECIPIENT:-}" in compose
+    assert "RCLONE_CONFIG: /config/rclone.conf" in compose
+    assert "RECEIPTS_DIR: /receipts" in compose
+    assert "- receipts:/receipts" in compose
+    assert "RECEIPTS_VOLUME_NAME:-financial-planner-receipts" in compose
+
+
+def test_backup_container_mounts_only_the_rclone_config_file():
+    root = Path(__file__).resolve().parent.parent
+    compose = (root / "compose.yml").read_text()
+    env_example = (root / ".env.example").read_text()
+    placeholder = root / "ops" / "backup" / "rclone.conf.example"
+
+    assert "CONFIG_DIR" not in compose
+    assert "D:/financial-planner-config" not in compose
+    assert "CONFIG_DIR" not in env_example
+    assert "OFFSITE_RCLONE_CONFIG:-./ops/backup/rclone.conf.example" in compose
+    assert "target: /config/rclone.conf" in compose
+    assert "OFFSITE_RCLONE_CONFIG=" in env_example
+    assert placeholder.is_file()
+    assert placeholder.read_text(encoding="utf-8").lstrip().startswith("#")
+
+
+def test_app_and_simplefin_mount_backup_health_not_the_dump_directory():
+    compose = (Path(__file__).resolve().parent.parent / "compose.yml").read_text()
+    app = compose.split("  app:", 1)[1].split("\n  backup:", 1)[0]
+    scheduler = compose.split("  simplefin-sync:", 1)[1].split("\n  ai-jobs:", 1)[0]
+    backup = compose.split("  backup:", 1)[1].split("\n  simplefin-sync:", 1)[0]
+
+    for block in (app, scheduler):
+        assert "BACKUP_STATUS_PATH: /backup-health/status" in block
+        assert "source: ${BACKUP_DIR:?BACKUP_DIR must be set}/health" in block
+        assert "target: /backup-health" in block
+        assert "create_host_path: true" in block.split("target: /backup-health", 1)[1].split("entrypoint", 1)[0]
+        assert "source: ${BACKUP_DIR:?BACKUP_DIR must be set}\n" not in block
+    assert "source: ${BACKUP_DIR:?BACKUP_DIR must be set}\n" in backup
+    assert "/health" not in backup.split("volumes:", 1)[1].split("OFFSITE_RCLONE_CONFIG", 1)[0]
 
 
 def test_dockerfile_builds_css_with_a_pinned_checksum_and_collectstatic():

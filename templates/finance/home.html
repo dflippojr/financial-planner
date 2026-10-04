@@ -4,9 +4,13 @@
 <h1 class="mb-4 text-2xl font-bold">Cash flow</h1>
 <form method="get" class="mb-4 flex flex-wrap items-end gap-3">
   {% include "finance/_form_fields.html" with form=filter_form %}
+  {% for token in scenario_tokens %}
+  <input type="hidden" name="sc" value="{{ token }}">
+  {% endfor %}
   <button type="submit" class="btn btn-primary">Update</button>
   <a class="btn btn-ghost" href="{% url 'home' %}">Reset to default range</a>
 </form>
+<p class="mb-4 max-w-3xl opacity-80">Projected months are a projection from planned items and confirmed recurring charges, not a forecast or advice. Historical actuals are unchanged.</p>
 {% if report and report.includes_investment %}
 <div role="note" class="alert alert-info mb-4">{{ report.investment_notice }}</div>
 {% endif %}
@@ -76,7 +80,7 @@
   <figure>
     <figcaption class="mb-2 font-medium">Income, spending, and net cash flow by period</figcaption>
     <div class="h-72 w-full rounded-box bg-base-100 p-2 shadow">
-      <canvas id="cash-flow-chart" data-chart="cash-flow" data-chart-payload="cash-flow-chart-data" role="img" aria-label="Bar chart of income and spending by period with a net cash flow line. Projected months use a dashed style. Periods missing an import are marked. The table below lists the same numbers."></canvas>
+      <canvas id="cash-flow-chart" data-chart="cash-flow" data-chart-payload="cash-flow-chart-data" role="img" aria-label="Bar chart of income and spending by period with baseline and scenario net cash flow lines. Projected months use a dashed style. Periods missing an import are marked. The table below lists the same numbers."></canvas>
     </div>
   </figure>
   <div class="overflow-x-auto">
@@ -131,6 +135,85 @@
       </tbody>
     </table>
   </div>
+  <section class="card bg-base-100 shadow" aria-labelledby="scenario-heading">
+    <div class="card-body">
+      <h2 id="scenario-heading" class="card-title">What-if scenario</h2>
+      <p>Try changes without saving. This is a projection, not a forecast or advice. Nothing is written until you make a change real.</p>
+      {% if scenario_listed_changes %}
+      <ul class="list-disc pl-6">
+        {% for change in scenario_listed_changes %}
+        <li>
+          {{ change.summary }}
+          · <a class="link" href="{{ change.make_real_url }}">Make this real</a>
+          · <a class="link" href="{{ change.remove_url }}">Remove</a>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p>No scenario changes yet. The scenario matches the baseline exactly.</p>
+      {% endif %}
+      <form method="get" class="mt-4 max-w-lg">
+        {% for name, value in filter_pairs %}
+        <input type="hidden" name="{{ name }}" value="{{ value }}">
+        {% endfor %}
+        {% for token in scenario_tokens %}
+        <input type="hidden" name="sc" value="{{ token }}">
+        {% endfor %}
+        <input type="hidden" name="scenario_action" value="add">
+        {% include "finance/_form_fields.html" with form=scenario_form %}
+        <button type="submit" class="btn btn-primary">Add to scenario</button>
+      </form>
+    </div>
+  </section>
+  {% if report.scenario_comparison %}
+  <div class="overflow-x-auto">
+    <table class="table table-zebra">
+      <caption class="mb-2 text-left font-medium">Baseline and scenario projected months</caption>
+      <thead class="sticky top-0 z-10 bg-base-200">
+        <tr>
+          <th>Period</th>
+          <th class="text-right">Baseline net</th>
+          <th class="text-right">Scenario net</th>
+          <th class="text-right">Difference</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for row in report.scenario_comparison %}
+        <tr>
+          <td>{{ row.label }} <span class="badge badge-ghost">Projected</span></td>
+          <td class="text-right">{% include "finance/_amount.html" with value=row.baseline.net_display tone="" %}</td>
+          <td class="text-right">{% include "finance/_amount.html" with value=row.scenario.net_display tone="" %}</td>
+          <td class="text-right">{% include "finance/_amount.html" with value=row.difference_display tone="" %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+  {% if report.savings_goal_dates %}
+  <section aria-labelledby="scenario-goals-heading">
+    <h2 id="scenario-goals-heading" class="text-lg font-semibold mb-2">Savings goal dates</h2>
+    <p class="mb-2 opacity-80">Goal dates are shown under the baseline and the scenario. Goals do not change either projection.</p>
+    <table class="table table-zebra max-w-3xl">
+      <thead class="sticky top-0 z-10 bg-base-200">
+        <tr>
+          <th>Goal</th>
+          <th>Baseline date</th>
+          <th>Scenario date</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for goal in report.savings_goal_dates %}
+        <tr>
+          <td>{{ goal.name }}</td>
+          <td>{{ goal.target_date|date:"Y-m-d" }}</td>
+          <td>{{ goal.target_date|date:"Y-m-d" }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
 </div>
 {% endif %}
 <h2 class="mt-8 mb-3 text-xl font-semibold">Accounts</h2>
