@@ -775,3 +775,44 @@ def test_undo_category_succeeds_when_linked_refund_is_on_unseen_account():
     assert purchase.category_source == Transaction.CategorySource.MANUAL
     assert refund.category_id == grocery.pk
     assert refund.category_source == Transaction.CategorySource.INHERITED
+
+
+@pytest.mark.django_db
+def test_refund_linked_just_before_the_locks_still_follows_the_purchase(monkeypatch):
+    import finance.bulk_edit_services as bulk
+
+    owner = make_person("owner")
+    household = make_household(owner)
+    account = make_account(owner)
+    purchase = make_transaction(
+        owner, account, amount_minor=-4000, description="Synthetic race store", fingerprint="q" * 64
+    )
+    refund = make_transaction(
+        owner, account, amount_minor=1500, description="Synthetic race refund", fingerprint="s" * 64
+    )
+    grocery = groceries(household)
+    dine = dining(household)
+    assign_category(owner, purchase.pk, grocery.pk)
+    real_lock = bulk.lock_actor_household
+    linked = []
+
+    def link_then_lock(person):
+        # Another request links a refund just as this bulk edit takes its locks.
+        if not linked:
+            linked.append(True)
+            link_refund(owner, refund.pk, purchase.pk)
+        return real_lock(person)
+
+    monkeypatch.setattr(bulk, "lock_actor_household", link_then_lock)
+    apply_bulk_edit(
+        owner,
+        matching=matching_qs(owner),
+        transaction_ids=[purchase.pk],
+        select_matching=False,
+        action=ACTION_CATEGORY,
+        category_id=dine.pk,
+    )
+
+    refund.refresh_from_db()
+    assert refund.category_id == dine.pk
+    assert refund.category_source == Transaction.CategorySource.INHERITED

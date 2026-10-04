@@ -241,8 +241,9 @@ def assign_category(principal, transaction_id, category_id):
         category = assignable_categories(person).filter(pk=category_id).first()
         if category is None:
             raise PermissionDenied(_DENIED)
-    linked_refunds = linked_refunds_for_originals([financial_transaction])
+    # Look up refunds under the household lock, which link_refund also takes first.
     lock_actor_household(person)
+    linked_refunds = linked_refunds_for_originals([financial_transaction])
     locked = _lock_owned_transactions([financial_transaction, *linked_refunds])
     # Recheck after locking: the account may have been unshared between the
     # first visibility query and the locks.

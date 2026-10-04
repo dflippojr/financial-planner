@@ -233,8 +233,14 @@ def preview_bulk_edit(
     )
 
 
-def _lock_rows(person, transactions, extra=()):
+def _lock_rows(person, transactions, *, with_refunds=False):
+    """Lock the rows, plus their linked refunds when asked.
+
+    Refunds are looked up only after the household lock: linking a refund takes
+    the same lock first, so none can be linked between the lookup and the locks.
+    """
     lock_actor_household(person)
+    extra = linked_refunds_for_originals(transactions) if with_refunds else []
     required_ids = sorted({item.pk for item in transactions})
     all_items = list(transactions) + [item for item in extra if item.pk not in set(required_ids)]
     account_ids = sorted({item.account_id for item in all_items})
@@ -263,7 +269,7 @@ def _lock_rows(person, transactions, extra=()):
     }
     for txn in locked:
         txn._excluded = txn.pk in excluded
-    return locked
+    return locked, extra
 
 
 def _append_note(txn, note_line):
@@ -369,8 +375,7 @@ def apply_bulk_edit(
     category = _category_for(person, category_id) if action == ACTION_CATEGORY else None
     tags = _tags_for(person, tag_ids) if action in (ACTION_ADD_TAGS, ACTION_REMOVE_TAGS) else []
     unlocked = list(_visible_active(person).filter(pk__in=preview.eligible_ids).order_by("pk"))
-    refunds = linked_refunds_for_originals(unlocked) if action == ACTION_CATEGORY else []
-    locked = _lock_rows(person, unlocked, extra=refunds)
+    locked, refunds = _lock_rows(person, unlocked, with_refunds=action == ACTION_CATEGORY)
     by_id = {txn.pk: txn for txn in locked}
     eligible = []
     for pk in preview.eligible_ids:
@@ -431,8 +436,7 @@ def undo_bulk_edit(principal, undo_id):
     unlocked = list(_visible_active(person).filter(pk__in=ids))
     if len(unlocked) != len(ids):
         raise ValidationError(CHANGED_SINCE)
-    refunds = linked_refunds_for_originals(unlocked) if action == ACTION_CATEGORY else []
-    locked = _lock_rows(person, unlocked, extra=refunds)
+    locked, refunds = _lock_rows(person, unlocked, with_refunds=action == ACTION_CATEGORY)
     by_id = {txn.pk: txn for txn in locked}
     for item in rows:
         txn = by_id.get(item["id"])
