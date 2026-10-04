@@ -405,7 +405,7 @@ def _run(
         return ProviderResult(ok=False, failure_code=AUTHORIZATION_REQUIRED)
     shared = connection.owner_id != person.id
     if shared:
-        denied = _shared_local_denied(person, connection, chosen, use_chat=use_chat)
+        denied = _shared_local_denied(person, connection, chosen, use_chat=use_chat, resuming=bool(session_id))
         if denied is not None:
             return denied
     # Project-based hosted sessions still need the operator flag. Tools-only
@@ -508,7 +508,7 @@ def _invoke_tool(person, tools, name, args):
     return run_tool(person, tools, name, args)
 
 
-def _shared_local_denied(person, connection, chosen, *, use_chat):
+def _shared_local_denied(person, connection, chosen, *, use_chat, resuming=False):
     if not _same_household(person, connection.owner):
         return ProviderResult(ok=False, failure_code=AUTHORIZATION_REQUIRED)
     if not connection.offer_local_to_household:
@@ -518,7 +518,8 @@ def _shared_local_denied(person, connection, chosen, *, use_chat):
     opted = person.use_shared_local_chat if use_chat else person.use_shared_local_background
     if not opted:
         return ProviderResult(ok=False, failure_code=AUTHORIZATION_REQUIRED)
-    if _shared_local_cap_reached(person):
+    # The cap limits new requests; resuming a session already started adds no GPU work.
+    if not resuming and _shared_local_cap_reached(person):
         return ProviderResult(ok=False, failure_code=LIMIT_REACHED)
     return None
 

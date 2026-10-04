@@ -268,3 +268,26 @@ def test_shared_job_never_resumes_on_the_members_own_harness(harness):
     finally:
         own_server.shutdown()
         own_server.server_close()
+
+
+@pytest.mark.django_db
+def test_daily_cap_does_not_block_resuming_a_started_session(harness, settings):
+    settings.AI_SHARED_LOCAL_DAILY_CAP = 1
+    state, _url = harness
+    _host_user, host, _guest_user, guest, _household = _household_pair(harness)
+    set_offer_local_to_household(host, True)
+    set_shared_local_use(guest, chat=False, background=True)
+    assert run_structured(guest, "one", feature="structured").ok
+    state.sessions["sess-cap-1"] = {
+        "id": "sess-cap-1",
+        "status": "done",
+        "answer": "synthetic-ok",
+        "prompt_tokens": 3,
+        "completion_tokens": 4,
+    }
+
+    resumed = run_structured(guest, "one", feature="structured", session_id="sess-cap-1")
+    fresh = run_structured(guest, "two", feature="structured")
+
+    assert resumed.ok
+    assert fresh.failure_code == LIMIT_REACHED
