@@ -426,6 +426,8 @@ The owner wants to find out what access is possible rather than wait. Two routes
 - **Other members: no documented route today.** OpenAI's interest form is for commercial integrations. Open-source developers are directed to the self-serve docs, whose flow needs a `127.0.0.1` callback on the member's own device. OpenAI's documented credential transfer assumes a server that only that member controls, which a household server is not. Revisit when OpenAI documents a self-serve pattern for small multi-user self-hosted apps.
 - **Also available now:** the hosting member's ChatGPT plan already works through Agent Harness's `codex` backend (#91), without Sign in with ChatGPT.
 
+**Owner decision (2026-10-03, #115): parked.** The hosting-member loopback prototype is not being built. That member's ChatGPT plan already works through the harness `codex` backend. Revisit if OpenAI documents a self-serve sign-in pattern for small multi-user self-hosted apps.
+
 **Proposed, not yet decided:** Sign in with ChatGPT is an AI connection only, not a sign-in method next to Google. Invitations still apply.
 
 **Data use:** plan-usage Responses must use `store: false`. Whether request bodies are used for training was not established. #106 applies before household-shared data is sent.
@@ -499,6 +501,10 @@ Owner decisions:
 Owner decisions:
 - **Facts first.** A plain monthly review of computed facts ships first and works with AI off. AI phrasing follows as a later step.
 - **Alert.** Each month's review also arrives as an inbox alert (#99): "Your September review is ready".
+- **AI phrasing (#141).**
+  - A short paragraph of three to five plain sentences sits above the facts, labeled AI-generated with the backend named.
+  - Every number must match a computed fact. A paragraph stating any other number is discarded, and the facts show alone.
+  - It is on by default for members who have connected an AI backend and are in acceptance of the privacy policy. Each member can turn it off.
 
 ## Deleting a member's data (2026-10-03, #104)
 

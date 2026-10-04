@@ -1,0 +1,97 @@
+{% if conversations %}
+<ul class="mb-4 flex flex-wrap gap-2" aria-label="Conversations">
+  {% for item in conversations %}
+  <li>
+    <a class="btn btn-xs {% if conversation and item.pk == conversation.pk %}btn-primary{% endif %}" href="{% url 'chat' %}?c={{ item.pk }}">{{ item.title|default:"Conversation" }}</a>
+    <form method="post" action="{% url 'chat-delete' item.pk %}" class="inline">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-xs btn-ghost" aria-label="Delete conversation">Delete</button>
+    </form>
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
+{% if chat_show_local %}
+<p id="chat-local-status" class="mb-2 text-sm" data-chat-warm-url="{% url 'chat-warm' %}" data-chat-status-url="{% url 'chat-status' %}">Local model: checking…</p>
+{% endif %}
+<div class="space-y-3 mb-4" aria-live="polite">
+  {% for item in chat_messages %}
+  <article class="rounded-box border border-base-300 bg-base-100 p-3">
+    {% if item.role == "user" %}
+    <p class="text-sm font-semibold">You</p>
+    {% elif item.role == "error" %}
+    <p class="text-sm font-semibold">{{ chat_backend_label }} (error)</p>
+    {% else %}
+    <p class="text-sm font-semibold">{{ chat_backend_label }}</p>
+    {% endif %}
+    <p class="whitespace-pre-wrap">{{ item.content }}</p>
+    {% if item.figures %}
+    <ul class="mt-2 list-disc pl-5 text-sm">
+      {% for figure in item.figures %}
+      <li><a class="link" href="{{ figure.url }}">{{ figure.label }}: {{ figure.amount_display }}</a></li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    {% if item.notices %}
+    <ul class="mt-2 text-sm opacity-80">
+      {% for notice in item.notices %}
+      <li>{{ notice }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </article>
+  {% empty %}
+  <p class="text-sm opacity-80">Ask a question about income, spending, transactions, budgets, or net worth.</p>
+  {% endfor %}
+</div>
+<form method="post" action="{% url 'chat-send' %}" class="space-y-2" id="chat-send-form">
+  {% csrf_token %}
+  {% if conversation %}<input type="hidden" name="conversation_id" value="{{ conversation.pk }}">{% endif %}
+  <input type="hidden" name="page_route" value="{{ page_context.route|default:request.path }}">
+  <input type="hidden" name="page_query" value="{{ page_context.query|default:request.GET.urlencode }}">
+  <input type="hidden" name="next" value="{{ chat_next|default:request.get_full_path }}">
+  <label class="form-control">
+    <span class="label-text">Question</span>
+    <textarea name="prompt" rows="3" class="textarea textarea-bordered w-full" required {% if chat_show_local %}data-chat-warm{% endif %}></textarea>
+  </label>
+  <button type="submit" class="btn btn-primary">Send</button>
+</form>
+{% if chat_show_local %}
+<script>
+(function () {
+  var statusEl = document.getElementById("chat-local-status");
+  var box = document.querySelector("[data-chat-warm]");
+  if (!statusEl || !box) return;
+  var warmed = false;
+  var started = 0;
+  var csrf = document.querySelector("#chat-send-form [name=csrfmiddlewaretoken]");
+  function render(data) {
+    if (!data) return;
+    if (data.ready) statusEl.textContent = "Local model: loaded";
+    else if (data.loading) {
+      var elapsed = started ? Math.round((Date.now() - started) / 1000) : data.waking_seconds || 0;
+      statusEl.textContent = "Local model: loading (" + elapsed + "s)";
+    } else statusEl.textContent = "Local model: not loaded";
+  }
+  function poll() {
+    fetch(statusEl.getAttribute("data-chat-status-url"), {headers: {"Accept": "application/json"}})
+      .then(function (r) { return r.json(); })
+      .then(render)
+      .catch(function () {});
+  }
+  box.addEventListener("input", function () {
+    if (warmed) return;
+    warmed = true;
+    started = Date.now();
+    fetch(statusEl.getAttribute("data-chat-warm-url"), {
+      method: "POST",
+      headers: {"X-CSRFToken": csrf ? csrf.value : "", "Accept": "application/json"},
+    }).then(function (r) { return r.json(); }).then(function (data) {
+      if (!data.ok && data.error) statusEl.textContent = data.error;
+      else render(data);
+    }).catch(function () { statusEl.textContent = "The local model can't load right now."; });
+    setInterval(poll, 2000);
+  }, {once: true});
+})();
+</script>
+{% endif %}

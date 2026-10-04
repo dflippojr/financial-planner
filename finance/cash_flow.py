@@ -242,15 +242,21 @@ def period_label(window, *, today):
     return base
 
 
-def selected_accounts(principal, *, account=None, scope="", cash_flow_only=False):
-    accounts = Account.objects.visible_to(principal).order_by("name", "pk")
+def selected_accounts(principal, *, account=None, scope="", cash_flow_only=False, accounts=None):
+    if accounts is None:
+        query = Account.objects.visible_to(principal)
+    elif hasattr(accounts, "filter"):
+        query = accounts
+    else:
+        query = Account.objects.filter(pk__in=[item.pk for item in accounts])
+    query = query.order_by("name", "pk")
     if cash_flow_only:
-        accounts = accounts.for_cash_flow()
+        query = query.for_cash_flow()
     if scope:
-        accounts = accounts.filter(scope=scope)
+        query = query.filter(scope=scope)
     if account is not None:
-        accounts = accounts.filter(pk=account.pk)
-    return list(accounts)
+        query = query.filter(pk=account.pk)
+    return list(query)
 
 
 def _batches_by_account(principal, accounts):
@@ -393,8 +399,11 @@ def spending_by_category_report(
     scope="",
     grouping=GROUPING_MONTH,
     tag=None,
+    accounts=None,
 ):
-    accounts = selected_accounts(principal, account=account, scope=scope, cash_flow_only=True)
+    accounts = selected_accounts(
+        principal, account=account, scope=scope, cash_flow_only=True, accounts=accounts
+    )
     totals = income_and_spending_totals(
         principal,
         date_from=date_from,
@@ -446,11 +455,14 @@ def cash_flow_report(
     scope="",
     today=None,
     tag=None,
+    accounts=None,
 ):
     if period_count(date_from, date_to, grouping) > MAX_REPORT_PERIODS:
         raise ValueError("Too many periods for one report.")
     today = today or timezone.localdate()
-    accounts = selected_accounts(principal, account=account, scope=scope, cash_flow_only=True)
+    accounts = selected_accounts(
+        principal, account=account, scope=scope, cash_flow_only=True, accounts=accounts
+    )
     batches_by_account = _batches_by_account(principal, accounts)
     account_filter = accounts
     periods = []

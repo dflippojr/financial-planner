@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from django import forms
+from django.conf import settings
 from django.contrib.auth import get_user_model, password_validation
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator
@@ -727,11 +728,19 @@ class AiDefaultsForm(forms.Form):
 
     def __init__(self, *args, backends=(), **kwargs):
         super().__init__(*args, **kwargs)
-        choices = [(item.id, item.label) for item in backends if item.available]
-        if not choices:
-            choices = [("", "No available backend")]
-        self.fields["chat_backend"].choices = choices
-        self.fields["background_backend"].choices = choices
+        allow_local_chat = bool(getattr(settings, "AI_CHAT_LOCAL_ENABLED", False))
+        chat_choices = [
+            (item.id, item.label)
+            for item in backends
+            if item.suits_live and (allow_local_chat or item.id != "local")
+        ]
+        background_choices = [(item.id, item.label) for item in backends if item.suits_background]
+        if not chat_choices:
+            chat_choices = [("", "No available backend")]
+        if not background_choices:
+            background_choices = [("", "No available backend")]
+        self.fields["chat_backend"].choices = chat_choices
+        self.fields["background_backend"].choices = background_choices
 
 
 class ShareAccountForm(forms.Form):

@@ -11,11 +11,19 @@ def google_signin(_request):
 def ai_features(request):
     user = getattr(request, "user", None)
     if not getattr(user, "is_authenticated", False):
-        return {"show_ai_features": False}
+        return {"show_ai_features": False, "chat_drawer": None}
     person = getattr(user, "person", None)
     if person is None:
-        return {"show_ai_features": False}
-    return {"show_ai_features": member_has_ai(person)}
+        return {"show_ai_features": False, "chat_drawer": None}
+    ready = member_has_ai(person)
+    drawer = None
+    if ready:
+        from .chat_views import _chat_context
+        from .chat_services import conversations_for
+
+        conversation = conversations_for(person).first()
+        drawer = _chat_context(person, conversation, request)
+    return {"show_ai_features": ready, "chat_drawer": drawer}
 
 
 def google_signin(_request):
@@ -108,6 +116,8 @@ def _nav_current(request):
         return "alert-list"
     if name in {"account-balances", "account-snapshot-edit", "account-snapshot-delete"}:
         return "account-list"
+    if name.startswith("chat"):
+        return "chat"
     return name
 
 
@@ -133,6 +143,7 @@ def navigation(request):
         ("net-worth", "Net worth", reverse("net-worth")),
         ("spending-by-category", "Spending", reverse("spending-by-category")),
         ("transaction-list", "Transactions", reverse("transaction-list")),
+        ("chat", "Chat", reverse("chat")),
         ("transfer-review", "Transfers", reverse("transfer-review")),
         ("recurring-review", "Recurring", reverse("recurring-review")),
         ("account-list", "Accounts", reverse("account-list")),
