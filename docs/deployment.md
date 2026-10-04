@@ -42,7 +42,7 @@ Prerequisites are Docker Desktop configured to use WSL2 and start when Windows s
    python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
    ```
 
-   `SIMPLEFIN_SYNC_CRON` defaults to `30 6 * * *` (06:30 in `TZ`). It uses the same five-field cron shape as `BACKUP_CRON`.
+   `SIMPLEFIN_SYNC_CRON` defaults to `30 6 * * *` (06:30 in `TZ`). It uses the same five-field cron shape as `BACKUP_CRON`. Optional `OPERATOR_USERNAMES` names who receive backup health alerts. Optional `OFFSITE_RCLONE_REMOTE` and `OFFSITE_AGE_RECIPIENT` enable the encrypted off-site copy; see Backups below.
 
 3. Validate, build, migrate, and start the stack:
 
@@ -134,21 +134,40 @@ That applies the same shared-account exit rules as leaving. It prints a short co
 
 ## Backups
 
-The backup container runs `pg_dump` in PostgreSQL custom format every night at 2:00 AM in `TZ` (default `America/New_York`). A Sunday dump is also copied into `weekly/`. A dump is published atomically only after `pg_restore --list` verifies it. Pruning keeps the newest 14 files in `nightly/` and 8 in `weekly/`.
+The backup container runs `pg_dump` in PostgreSQL custom format every night at 2:00 AM in `TZ` (default `America/New_York`). A Sunday dump is also copied into `weekly/`. A dump is published atomically only after `pg_restore --list` verifies it. Pruning keeps the newest 14 files in `nightly/` and 8 in `weekly/`. Each run writes `$BACKUP_DIR/health/status` with the last success time, dump name, size, table count, and last error. The app and SimpleFIN scheduler mount only `$BACKUP_DIR/health` read-only and raise an in-app alert to operators if no dump has succeeded in 26 hours or the last run failed, including an off-site upload failure.
+
+Set `OPERATOR_USERNAMES` in `production.env` to a comma-separated list of member usernames. If it is empty, the earliest-created member is the operator. Operators see last local and off-site success times on Settings → Data. Other members do not. Alerts name no file contents and fire at most once per local calendar day until a run succeeds.
+
+### Encrypted off-site copy
+
+When both `OFFSITE_RCLONE_REMOTE` and `OFFSITE_AGE_RECIPIENT` are set, each verified dump is encrypted with `age` to that public key and uploaded with rclone. Remote nightly and weekly prefixes keep the same 14 and 8 file retention, pruned by name. An upload failure is recorded in `offsite_error` (the local dump stays published) and alerts operators. A configured off-site copy whose last success is older than 26 hours is also unhealthy.
+
+1. Install rclone on a trusted machine, run `rclone config`, and save the file outside the checkout. Set `OFFSITE_RCLONE_CONFIG` in `production.env` to that path (forward slashes on Windows). The backup container mounts only that file, read-only, as `/config/rclone.conf`. Leave the variable unset to use the committed empty placeholder.
+2. Create an age key pair on a trusted machine (`age-keygen`). Put the **public** key in `OFFSITE_AGE_RECIPIENT`. Keep the private key in a password manager. The private key must never live on the tower.
+3. Set `OFFSITE_RCLONE_REMOTE` to the rclone destination, for example `b2:bucket/financial-planner` or `drive:financial-planner-backups`. Recreate the backup container after editing `production.env`.
+
+Example remote names include Backblaze B2, Google Drive, and OneDrive. A NAS can be another rclone remote later.
 
 Run and verify an extra backup before an upgrade or restore drill:
 
 ```powershell
 docker compose --env-file $Config run --rm backup /opt/financial-planner/backup.sh
 Get-ChildItem E:\financial-planner-backups\nightly
+Get-Content E:\financial-planner-backups\health\status
 docker compose --env-file $Config logs --tail 50 backup
 ```
 
-The backup directory is a bind mount from the second disk, not part of the database volume or image. Monitor that disk's free space and confirm new nightly files appear. Retention is not an off-site backup; copying encrypted backups off-site is a separate operational decision.
+The backup directory is a bind mount from the second disk, not part of the database volume or image. Monitor that disk's free space and confirm new nightly files appear.
 
 ## Restore into a fresh database volume
 
-Use a fresh named volume so the old database remains available for investigation or rollback. The commands below cause downtime and assume `BACKUP_DIR` still points to the directory containing the selected dump.
+Use a fresh named volume so the old database remains available for investigation or rollback. The commands below cause downtime and assume `BACKUP_DIR` still points to the directory containing the selected dump. For an off-site copy, download the `.dump.age` file, decrypt it with the age private key, then restore the dump:
+
+```powershell
+age -d -i $AgeIdentity -o financial_planner_YYYYMMDDTHHMMSSZ.dump financial_planner_YYYYMMDDTHHMMSSZ.dump.age
+```
+
+Copy the decrypted dump into `E:\financial-planner-backups\nightly\` (or pass its path to `restore.sh`) and continue with the local procedure. Do not copy the age private key onto the tower.
 
 1. Choose a known-good file and stop writers:
 

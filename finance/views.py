@@ -17,6 +17,7 @@ from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_GET, require_http_methods, require_POST, require_safe
 
+from .backup_health import settings_backup_context
 from .auth_services import (
     InvalidOneTimeCode,
     SETUP_THROTTLE_USERNAME,
@@ -1539,7 +1540,8 @@ def settings_alerts(request):
 @require_safe
 @never_cache
 def settings_data(request):
-    return render(request, "finance/settings_data.html")
+    person = get_object_or_404(Person, user=request.user)
+    return render(request, "finance/settings_data.html", settings_backup_context(person))
 
 
 @never_cache
