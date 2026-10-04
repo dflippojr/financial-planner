@@ -161,6 +161,7 @@ CSV_FIELDS = {
         "base_url",
         "chat_backend",
         "background_backend",
+        "offer_local_to_household",
         "connected_at",
     ),
     "ai_jobs": (
@@ -718,6 +719,7 @@ def _ai_connection_rows(person):
                 "base_url": row.base_url,
                 "chat_backend": row.chat_backend,
                 "background_backend": row.background_backend,
+                "offer_local_to_household": row.offer_local_to_household,
                 "connected_at": row.connected_at,
             }
         )
