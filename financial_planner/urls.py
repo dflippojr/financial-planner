@@ -12,9 +12,11 @@ from finance import (
     planning_views,
     monthly_review_views,
     rule_views,
+    year_end_views,
     savings_goal_views,
     simplefin_views,
     views,
+    bulk_edit_views,
 )
 from finance.csv_import import mapping_views as csv_mapping_views
 from finance.csv_import import views as csv_import_views
@@ -160,6 +162,13 @@ urlpatterns = [
         RedirectView.as_view(pattern_name="csv-mapping-edit", permanent=True, query_string=True),
     ),
     path("transactions/", views.transaction_list, name="transaction-list"),
+    path("transactions/bulk-edit/", bulk_edit_views.bulk_edit_preview, name="transaction-bulk-preview"),
+    path("transactions/bulk-edit/apply/", bulk_edit_views.bulk_edit_apply, name="transaction-bulk-apply"),
+    path(
+        "transactions/bulk-edit/undo/<uuid:undo_id>/",
+        bulk_edit_views.bulk_edit_undo,
+        name="transaction-bulk-undo",
+    ),
     path("transactions/suggest-categories/", category_suggestion_views.suggest_categories, name="suggest-categories"),
     path(
         "transactions/suggestions/accept-all/",
@@ -210,6 +219,8 @@ urlpatterns = [
         monthly_review_views.monthly_review_regenerate,
         name="monthly-review-regenerate",
     ),
+    path("planning/year-end/", year_end_views.year_end, name="year-end"),
+    path("planning/year-end/csv/<slug:section>/", year_end_views.year_end_csv, name="year-end-csv"),
     path("planning/items/<int:item_id>/edit/", planning_views.planned_item_edit, name="planned-item-edit"),
     path("planning/items/<int:item_id>/disable/", planning_views.planned_item_disable, name="planned-item-disable"),
     path("planning/items/<int:item_id>/enable/", planning_views.planned_item_enable, name="planned-item-enable"),

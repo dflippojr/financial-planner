@@ -2,7 +2,17 @@
 {% load ui %}
 {% block title %}Transactions · Financial Planner{% endblock %}
 {% block content %}
+{% include "finance/_messages.html" %}
 <h1 class="mb-4 text-2xl font-bold">Transactions</h1>
+{% if bulk_undo %}
+<form method="post" action="{% url 'transaction-bulk-undo' bulk_undo.pk %}" class="mb-4">
+  {% csrf_token %}
+  <div role="status" class="alert alert-info">
+    <span>Bulk edit applied.</span>
+    <button type="submit" class="btn btn-sm">Undo</button>
+  </div>
+</form>
+{% endif %}
 <form method="get" class="mb-4 flex flex-wrap items-end gap-3">
   {% include "finance/_form_fields.html" with form=filter_form %}
   <button type="submit" class="btn btn-primary">Filter</button>
@@ -59,10 +69,47 @@
   <button type="submit" class="btn btn-primary">Accept all shown</button>
 </form>
 {% endif %}
+<form method="post" action="{% url 'transaction-bulk-preview' %}" id="bulk-edit-form" class="mb-4">
+  {% csrf_token %}
+  <input type="hidden" name="filter_query" value="{{ filter_query }}">
+  <div class="mb-4 flex flex-wrap items-end gap-3 rounded-box bg-base-100 p-4 shadow">
+    <label class="form-control">
+      <span class="label-text">Bulk action</span>
+      {{ bulk_form.action }}
+    </label>
+    <label class="form-control">
+      <span class="label-text">Category</span>
+      {{ bulk_form.category }}
+    </label>
+    <fieldset class="form-control">
+      <legend class="label-text">Tags</legend>
+      {{ bulk_form.tags }}
+    </fieldset>
+    <label class="form-control">
+      <span class="label-text">Note line</span>
+      {{ bulk_form.note_line }}
+    </label>
+    <button type="submit" class="btn btn-primary">Preview bulk edit</button>
+    {% if matching_over_cap %}
+    <p class="w-full text-sm opacity-80">Narrow the filters to select all {{ matching_count }} matching rows (cap {{ bulk_select_cap }}).</p>
+    {% else %}
+    <label class="label cursor-pointer gap-2">
+      {{ bulk_form.select_matching }}
+      <span>Select all {{ matching_count }} matching</span>
+    </label>
+    {% endif %}
+  </div>
+</form>
 <div class="overflow-x-auto">
   <table class="table table-zebra">
     <thead class="sticky top-0 z-10 bg-base-200">
       <tr>
+        <th>
+          <label>
+            <input type="checkbox" id="select-page" class="checkbox">
+            <span class="sr-only">Select all on this page</span>
+          </label>
+        </th>
         <th>Date</th>
         <th>Account</th>
         <th>Description</th>
@@ -76,6 +123,12 @@
     <tbody>
     {% for transaction in transactions %}
       <tr>
+        <td>
+          <label>
+            <input type="checkbox" form="bulk-edit-form" name="transaction_id" value="{{ transaction.pk }}" class="checkbox js-bulk-row">
+            <span class="sr-only">Select transaction</span>
+          </label>
+        </td>
         <td>{{ transaction.transaction_date }}</td>
         <td>{{ transaction.account.name }}</td>
         <td>
@@ -133,9 +186,20 @@
         <td><a class="link" href="{% url 'transaction-edit' transaction.pk %}">Correct</a></td>
       </tr>
     {% empty %}
-      <tr><td colspan="8">No matching transactions.</td></tr>
+      <tr><td colspan="9">No matching transactions.</td></tr>
     {% endfor %}
     </tbody>
   </table>
 </div>
+<script>
+(function () {
+  var page = document.getElementById("select-page");
+  if (!page) return;
+  page.addEventListener("change", function () {
+    document.querySelectorAll(".js-bulk-row").forEach(function (box) {
+      box.checked = page.checked;
+    });
+  });
+})();
+</script>
 {% endblock %}

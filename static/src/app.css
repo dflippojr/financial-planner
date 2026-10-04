@@ -60,3 +60,36 @@
 @utility amount-out {
   color: var(--color-error);
 }
+
+@media print {
+  .drawer-side,
+  .navbar,
+  .drawer-overlay,
+  label[for="nav-drawer"],
+  label[for="finance-chat-drawer"],
+  .no-print {
+    display: none !important;
+  }
+
+  .drawer,
+  .drawer-content {
+    display: block;
+    height: auto;
+    overflow: visible;
+  }
+
+  .year-end-print-header {
+    margin-bottom: 1rem;
+  }
+
+  .year-end-section {
+    break-after: page;
+    page-break-after: always;
+    box-shadow: none;
+  }
+
+  .year-end-section:last-of-type {
+    break-after: auto;
+    page-break-after: auto;
+  }
+}
