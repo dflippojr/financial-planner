@@ -99,7 +99,7 @@ flowchart LR
         App["<b>app</b><br/>Django 5 + Gunicorn<br/>WhiteNoise static files"]
         Sync["<b>simplefin-sync</b><br/>scheduled bank sync"]
         Backup["<b>backup</b><br/>nightly pg_dump<br/>14 daily / 8 weekly"]
-        DB[("<b>db</b><br/>PostgreSQL 16")]
+        DB[("<b>db</b><br/>PostgreSQL 18")]
         Tmp[["tmpfs<br/>CSV staging<br/>(memory only)"]]
     end
 
@@ -123,7 +123,7 @@ flowchart LR
 |---|---|---|
 | Web | Django 5.2, server-rendered templates | Built-in ORM, migrations, sessions, and auth; no SPA to maintain for a household app |
 | UI | Tailwind CSS v4 + daisyUI 5, Chart.js | Modern, themeable UI (light and dark) compiled by Tailwind's standalone binary, so the repo has **no Node toolchain** |
-| Data | PostgreSQL 16 | Durable, constraint-rich storage; integrity rules live in the schema, not just in code |
+| Data | PostgreSQL 18 | Durable, constraint-rich storage; integrity rules live in the schema, not just in code |
 | Money | Integer cents (`BigInteger`) + ISO 4217 currency | Exact arithmetic, no floating-point drift anywhere in the pipeline |
 | Auth | Django sessions, django-allauth (Google), recovery codes | Invitation-only household with password or Google sign-in and re-authentication for sensitive actions |
 | Ops | Docker Compose, health checks, scripted backup/restore | Self-supervising stack with a documented, rehearsed restore drill |
@@ -262,7 +262,7 @@ erDiagram
 
 **Testing and quality**
 - 555 pytest tests across importers, authorization, reporting, deployment scripts, and UI.
-- The suite runs on in-memory SQLite for speed and on a throwaway PostgreSQL 16 container ([`scripts/test_postgres.sh`](scripts/test_postgres.sh)) before every pull request.
+- The suite runs on in-memory SQLite for speed and on a throwaway PostgreSQL 18 container ([`scripts/test_postgres.sh`](scripts/test_postgres.sh)) before every pull request.
 - SonarCloud quality gate in CI on every pull request and push to `main` (coverage, security, maintainability), plus on-demand automated code review on a self-hosted GitHub Actions runner.
 - Supply-chain care: pinned Python dependencies, a checksum-verified Tailwind binary, and vendored front-end assets with recorded SHA-256 sums.
 
@@ -303,7 +303,7 @@ Requirements: Python 3.13, and Docker for PostgreSQL tests or the full stack.
 python -m pip install -r requirements.txt
 python manage.py migrate --settings=financial_planner.test_settings
 python -m pytest                  # fast suite on in-memory SQLite
-bash scripts/test_postgres.sh     # same suite on PostgreSQL 16 (needs Docker)
+bash scripts/test_postgres.sh     # same suite on PostgreSQL 18 (needs Docker)
 ```
 
 Load synthetic demo records with `python manage.py loaddata synthetic_demo`. Never substitute a real
