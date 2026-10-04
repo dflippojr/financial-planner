@@ -217,3 +217,114 @@ def test_registration_requires_recent_auth():
     refused = _json(client, reverse("passkey-register-options"))
     assert refused.status_code == 403
     assert refused.json()["reauth"] is True
+
+
+def _require_passkey_after_password(user):
+    client = Client()
+    client.force_login(user)
+    stamp_recent_auth(client)
+    device = _register_passkey(client)
+    client.post(reverse("passkey-require"), {"require_passkey": "on"})
+    client.post(reverse("logout"))
+    return device
+
+
+@PASSKEY_SETTINGS
+@pytest.mark.django_db
+@override_settings(LOGIN_FAILURE_LIMIT=2, LOGIN_BLOCK_SECONDS=900)
+def test_correct_password_does_not_reset_throttle_before_second_factor():
+    user, _person, _household = make_member()
+    _require_passkey_after_password(user)
+    signed = Client()
+    for _ in range(2):
+        signed.post(reverse("login"), {"username": user.username, "password": PASSWORD})
+        signed.post(reverse("passkey-sign-in"), {"recovery_code": "not-a-recovery-code"})
+
+    blocked_login = signed.post(reverse("login"), {"username": user.username, "password": PASSWORD})
+    assert blocked_login.status_code == 200
+    assert b"Sign-in failed" in blocked_login.content
+    assert "_auth_user_id" not in signed.session
+
+    blocked_recovery = signed.post(reverse("passkey-sign-in"), {"recovery_code": "not-a-recovery-code"})
+    assert blocked_recovery.status_code in (200, 302)
+    assert "_auth_user_id" not in signed.session
+
+
+@PASSKEY_SETTINGS
+@pytest.mark.django_db
+def test_password_change_refuses_pending_passkey_completion():
+    user, _person, _household = make_member()
+    device = _require_passkey_after_password(user)
+    pending = Client()
+    pending.post(reverse("login"), {"username": user.username, "password": PASSWORD})
+    options = _json(pending, reverse("passkey-sign-in-options"))
+    credential = device.get(options.json()["options"])
+
+    user.set_password("synthetic-changed-passphrase")
+    user.save(update_fields=("password",))
+
+    finished = _json(pending, reverse("passkey-sign-in-assert"), {"credential": credential})
+    assert finished.status_code == 403
+    assert "_auth_user_id" not in pending.session
+
+
+@PASSKEY_SETTINGS
+@pytest.mark.django_db
+def test_password_change_refuses_pending_recovery_code_completion():
+    user, _person, _household = make_member()
+    codes = create_recovery_codes(user, count=1)
+    _require_passkey_after_password(user)
+    pending = Client()
+    pending.post(reverse("login"), {"username": user.username, "password": PASSWORD})
+
+    user.set_password("synthetic-changed-passphrase")
+    user.save(update_fields=("password",))
+
+    used = pending.post(reverse("passkey-sign-in"), {"recovery_code": codes[0]})
+    assert used.status_code == 302
+    assert used.url == reverse("login")
+    assert "_auth_user_id" not in pending.session
+    assert RecoveryCode.objects.get().used_at is None
+
+
+@PASSKEY_SETTINGS
+@pytest.mark.django_db
+@override_settings(PASSKEY_PENDING_MAX_AGE_SECONDS=300)
+def test_stale_pending_passkey_login_is_refused():
+    user, _person, _household = make_member()
+    codes = create_recovery_codes(user, count=1)
+    _require_passkey_after_password(user)
+    pending = Client()
+    pending.post(reverse("login"), {"username": user.username, "password": PASSWORD})
+    session = pending.session
+    session["passkey_pending_started_at"] = (timezone.now() - timedelta(seconds=301)).timestamp()
+    session.save()
+
+    used = pending.post(reverse("passkey-sign-in"), {"recovery_code": codes[0]})
+    assert used.status_code == 302
+    assert used.url == reverse("login")
+    assert "_auth_user_id" not in pending.session
+    assert RecoveryCode.objects.get().used_at is None
+
+
+@PASSKEY_SETTINGS
+@pytest.mark.django_db
+def test_sign_out_everywhere_else_clears_pending_passkey_login():
+    user, _person, _household = make_member()
+    codes = create_recovery_codes(user, count=1)
+    _require_passkey_after_password(user)
+
+    signed_in = Client()
+    signed_in.force_login(user)
+    stamp_recent_auth(signed_in)
+
+    pending = Client()
+    pending.post(reverse("login"), {"username": user.username, "password": PASSWORD})
+
+    signed_in.post(reverse("revoke-other-sessions"))
+
+    used = pending.post(reverse("passkey-sign-in"), {"recovery_code": codes[0]})
+    assert used.status_code == 302
+    assert used.url == reverse("login")
+    assert "_auth_user_id" not in pending.session
+    assert RecoveryCode.objects.get().used_at is None
