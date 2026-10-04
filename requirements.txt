@@ -1,9 +1,9 @@
-cryptography==50.0.0
+cryptography==50.0.2
 Django==5.2.17
-django-allauth[socialaccount]==65.11.1
+django-allauth[socialaccount]==65.19.7
 gunicorn==26.2.0
-psycopg[binary]==3.2.10
+psycopg[binary]==3.3.6
 pytest==9.1.1
-pytest-django==4.11.1
+pytest-django==4.14.0
 webauthn==2.7.0
-whitenoise==6.11.0
+whitenoise==6.12.0
