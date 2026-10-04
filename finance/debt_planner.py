@@ -3,7 +3,6 @@
 from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_HALF_EVEN, Decimal
-from fractions import Fraction
 from types import SimpleNamespace
 
 CENTS = Decimal("1")
@@ -103,8 +102,8 @@ def _month_stalled(before, after):
 
 def _monthly_rate(apr_percent):
     """The monthly rate as an exact (numerator, denominator) pair."""
-    rate = Fraction(Decimal(apr_percent)) / 1200
-    return rate.numerator, rate.denominator
+    numerator, denominator = Decimal(apr_percent).as_integer_ratio()
+    return numerator, denominator * 1200
 
 
 def _exact_interest(balance_minor, rate):

@@ -1,6 +1,7 @@
 from datetime import date
 from decimal import Decimal
 
+from finance import debt_planner
 from finance.debt_planner import (
     BEYOND_LIMIT,
     add_calendar_months,
@@ -268,3 +269,49 @@ def test_a_debt_behind_a_never_ending_avalanche_debt_never_gets_the_extra():
 
     assert {row.account_id: row.payoff_label for row in plan.debts} == {1: NEVER_PAYS_OFF, 2: NEVER_PAYS_OFF}
     assert len(plan.months) == 1
+
+
+def test_an_avalanche_debt_overtaken_at_the_same_apr_pays_off_past_the_horizon():
+    # Debt 1 grows past debt 2 (same APR); debt 2 then gets the extra and freed money, in month 805.
+    growing = _debt(1, 1_179, "12", 0)
+    waiting = _debt(2, 18_289, "12", 183)
+
+    plan = simulate_payoff([growing, waiting], extra_minor=1, strategy=STRATEGY_AVALANCHE, start=date(2026, 1, 1))
+
+    assert {row.account_id: row.payoff_label for row in plan.debts} == {1: NEVER_PAYS_OFF, 2: BEYOND_LIMIT}
+
+
+def test_snowball_debts_overtaken_by_growing_ones_pay_off_past_the_horizon():
+    # Debts 1 and 2 both grow past debt 3, which then gets the $0.01 extra; a plain run pays it off in month 20,411.
+    fast = _debt(1, 1_179, "12", 0)
+    slow = _debt(2, 3_000, "1.2", 0)
+    waiting = _debt(3, 18_289, "0", 0)
+
+    plan = simulate_payoff([fast, slow, waiting], extra_minor=1, strategy=STRATEGY_SNOWBALL, start=date(2026, 1, 1))
+
+    labels = {row.account_id: row.payoff_label for row in plan.debts}
+    assert labels == {1: NEVER_PAYS_OFF, 2: NEVER_PAYS_OFF, 3: BEYOND_LIMIT}
+
+
+def test_a_debt_waiting_behind_one_whose_interest_matches_its_payment_never_pays_off():
+    # The first debt's $1 interest exactly eats its $0.50 minimum plus the $0.50 extra, forever.
+    stuck = _debt(1, 10_000, "12", 50)
+    waiting = _debt(2, 20_000, "0", 0)
+
+    plan = simulate_payoff([stuck, waiting], extra_minor=50, strategy=STRATEGY_SNOWBALL, start=date(2026, 1, 1))
+
+    assert {row.account_id: row.payoff_label for row in plan.debts} == {1: NEVER_PAYS_OFF, 2: NEVER_PAYS_OFF}
+
+
+def test_the_label_check_falls_back_to_each_debts_direction_at_its_step_limit(monkeypatch):
+    monkeypatch.setattr(debt_planner, "MAX_LABEL_STEPS", 0)
+    first = _debt(1, 60_100, "0", 100)
+    growing = _debt(2, 100_000, "1.2", 0)
+    waiting = _debt(3, 20_000, "0", 0)
+
+    plan = simulate_payoff(
+        [first, growing, waiting], strategy=STRATEGY_CUSTOM, custom_order=[1, 3, 2], start=date(2026, 1, 1)
+    )
+
+    labels = {row.account_id: row.payoff_label for row in plan.debts}
+    assert labels == {1: BEYOND_LIMIT, 2: NEVER_PAYS_OFF, 3: NEVER_PAYS_OFF}
