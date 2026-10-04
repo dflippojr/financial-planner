@@ -8,7 +8,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('finance', '0037_account_debt_terms'),
+        ('finance', '0038_shared_local_model'),
     ]
 
     operations = [
