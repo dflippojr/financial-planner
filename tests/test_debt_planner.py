@@ -234,3 +234,37 @@ def test_a_debt_shrinking_on_its_own_is_past_the_horizon_even_if_the_total_grows
     plan = simulate_payoff([slow, growing], strategy=STRATEGY_CUSTOM, custom_order=[1, 2], start=date(2026, 1, 1))
 
     assert {row.account_id: row.payoff_label for row in plan.debts}[1] == BEYOND_LIMIT
+
+
+def test_a_card_left_growing_after_a_multi_century_loan_never_pays_off():
+    # The loan ends in month 3,000; by then the card's interest is more than the $1 freed payment.
+    loan = _debt(1, 300_000, "0", 100)
+    card = _debt(2, 10_000, "1.2", 0)
+
+    plan = simulate_payoff([loan, card], strategy=STRATEGY_CUSTOM, custom_order=[1, 2], start=date(2026, 1, 1))
+
+    assert {row.account_id: row.payoff_label for row in plan.debts} == {1: BEYOND_LIMIT, 2: NEVER_PAYS_OFF}
+    assert plan.never_pays_off is True
+    assert plan.beyond_limit is True
+
+
+def test_a_snowball_debt_overtaken_by_a_growing_one_still_pays_off():
+    # The first debt grows past the second, which then gets the extra and is paid off.
+    growing = _debt(1, 1_000, "120", 0)
+    waiting = _debt(2, 1_500, "0", 0)
+
+    plan = simulate_payoff([growing, waiting], extra_minor=50, strategy=STRATEGY_SNOWBALL, start=date(2026, 1, 1))
+
+    labels = {row.account_id: row.payoff_label for row in plan.debts}
+    assert labels == {1: NEVER_PAYS_OFF, 2: "2028-12"}
+    assert plan.months[6].paid_by_id == {1: 0, 2: 50}
+
+
+def test_a_debt_behind_a_never_ending_avalanche_debt_never_gets_the_extra():
+    growing = _debt(1, 100_000, "24", 500)
+    waiting = _debt(2, 100, "0", 0)
+
+    plan = simulate_payoff([growing, waiting], extra_minor=100, strategy=STRATEGY_AVALANCHE, start=date(2026, 1, 1))
+
+    assert {row.account_id: row.payoff_label for row in plan.debts} == {1: NEVER_PAYS_OFF, 2: NEVER_PAYS_OFF}
+    assert len(plan.months) == 1
