@@ -435,7 +435,7 @@ def store_monthly_review(principal, month, *, force=False, today=None, raise_inb
     today = today or timezone.localdate()
     key = visibility_key(person)
     existing = MonthlyReview.objects.filter(person=person, month=month).first()
-    if existing is not None and not force and existing.visibility_key == key:
+    if existing is not None and not force and existing.visibility_key == key and "unusual" in (existing.facts or {}):
         return existing, False
     facts = compute_monthly_review_facts(person, month, today=today)
     now = timezone.now()

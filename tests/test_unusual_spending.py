@@ -12,6 +12,7 @@ from finance.category_services import assign_category, ensure_household_categori
 from finance.models import (
     Account,
     Alert,
+    MonthlyReview,
     AlertSettings,
     Household,
     ImportBatch,
@@ -28,6 +29,7 @@ from finance.unusual_spending import (
     compute_unusual_flags,
     exceeds_category_baseline,
     exceeds_merchant_median,
+    raise_unusual_alerts,
 )
 
 
@@ -342,3 +344,36 @@ def test_monthly_review_section_alerts_and_settings():
     assert prefs.unusual_category_floor_minor == 7_500
     flags = compute_unusual_flags(owner, SEP)
     assert flags == []
+
+
+@pytest.mark.django_db
+def test_a_review_stored_before_unusual_flags_is_regenerated():
+    owner = make_person("owner")
+    make_household(owner)
+    review, _wrote = store_monthly_review(owner, date(2026, 9, 1), today=date(2026, 10, 4))
+    facts = dict(review.facts)
+    facts.pop("unusual", None)
+    MonthlyReview.objects.filter(pk=review.pk).update(facts=facts)
+
+    refreshed, wrote = store_monthly_review(owner, date(2026, 9, 1), today=date(2026, 10, 4))
+
+    assert wrote
+    assert "unusual" in refreshed.facts
+
+
+@pytest.mark.django_db
+def test_a_long_merchant_key_still_fits_the_alert_dedupe_key():
+    owner = make_person("owner")
+    make_household(owner)
+    flag = {
+        "kind": "new_merchant",
+        "name": "Synthetic merchant",
+        "item_id": "x" * 200,
+        "url": "",
+        "account_id": None,
+    }
+
+    created = raise_unusual_alerts(owner, date(2026, 9, 1), [flag])
+
+    assert created
+    assert all(len(alert.dedupe_key) <= 200 for alert in Alert.objects.filter(recipient=owner))

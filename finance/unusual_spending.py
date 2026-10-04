@@ -1,5 +1,6 @@
 """Deterministic unusual-spending flags from visible cash-flow facts."""
 
+from hashlib import sha256
 from decimal import Decimal
 
 from django.urls import reverse
@@ -262,7 +263,8 @@ def raise_unusual_alerts(person, month, flags):
                 Alert.Kind.UNUSUAL_SPENDING,
                 title,
                 flag.get("url") or unusual_review_url(month),
-                f"unusual:{stamp}:{flag['item_id']}",
+                # Hash the item so a long merchant key never overflows the 200-character dedupe key.
+                f"unusual:{stamp}:{sha256(str(flag['item_id']).encode()).hexdigest()[:32]}",
                 account=accounts.get(flag.get("account_id")),
             )
         )
