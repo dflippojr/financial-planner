@@ -107,6 +107,7 @@ def simulate_payoff(debts, extra_minor=0, strategy=STRATEGY_MINIMUMS, custom_ord
     total_interest = 0
     months = []
     frozen = set()
+    stalled = False
     paid_after_horizon = set()
     for offset in range(LABEL_HORIZON_MONTHS):
         if all(balance <= 0 for balance in balances.values()):
@@ -167,6 +168,7 @@ def simulate_payoff(debts, extra_minor=0, strategy=STRATEGY_MINIMUMS, custom_ord
             )
         # Nothing shrank this month: whatever is still owed never pays off.
         if remaining_total > 0 and _month_stalled(before, balances):
+            stalled = True
             break
     if months:
         balances_at_horizon = horizon_balances
@@ -180,8 +182,14 @@ def simulate_payoff(debts, extra_minor=0, strategy=STRATEGY_MINIMUMS, custom_ord
             continue
         if account_id in paid_after_horizon:
             beyond_ids.add(account_id)
-        elif balances_at_horizon.get(account_id, 0) > 0 or balances[account_id] > 0:
+        elif balances[account_id] <= 0:
+            continue
+        elif stalled or account_id in frozen or balances[account_id] >= balances_at_horizon[account_id]:
+            # Stopped shrinking, or grew past the cap: no payment plan here ends it.
             never_ids.add(account_id)
+        else:
+            # Still shrinking at the end of the labelling run: it ends, just very late.
+            beyond_ids.add(account_id)
 
     summaries = []
     for debt in debts:
