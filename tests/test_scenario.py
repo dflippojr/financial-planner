@@ -322,3 +322,32 @@ def test_make_this_real_prefills_planned_item_form():
     assert 'value="Synthetic raise"' in html
     assert 'value="500.00"' in html
     assert PlannedItem.objects.count() == 0
+
+
+def test_pausing_from_the_first_representable_day_pauses_the_whole_series():
+    today = date(2026, 10, 1)
+    series = planned_row(
+        name="Synthetic streamer",
+        amount_minor=2500,
+        start=date(2026, 10, 10),
+        cadence="monthly",
+        source=SOURCE_SERIES,
+        source_id=5,
+    )
+    change = SimpleNamespace(type=CHANGE_PAUSE, source_id=5, pause_from=date.min)
+
+    rows = scenario_projected_months((series,), (change,), today=today, horizon=3)
+
+    assert [row.spending_minor for row in rows] == [0, 0, 0]
+
+
+@pytest.mark.django_db
+def test_an_invalid_grouping_with_a_huge_range_is_not_a_server_error():
+    owner = make_person("owner")
+    make_household(owner)
+    client = Client()
+    client.force_login(owner.user)
+
+    page = client.get(reverse("home"), {"date_from": "1900-01-01", "date_to": "2026-10-01", "grouping": "invalid"})
+
+    assert page.status_code in (200, 400)

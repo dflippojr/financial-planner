@@ -242,6 +242,12 @@ def home(request):
     today = timezone.localdate()
     default_from, default_to = default_date_range(today)
     form = CashFlowFilterForm(request.GET or None, principal=request.user)
+    if form.is_bound and form.has_error("grouping"):
+        # A missing or invalid grouping falls back to months; validate again with it so
+        # the period-limit check still applies.
+        data = request.GET.copy()
+        data["grouping"] = "month"
+        form = CashFlowFilterForm(data, principal=request.user)
     if not form.is_bound:
         form = CashFlowFilterForm(
             principal=request.user,
@@ -263,7 +269,11 @@ def home(request):
         scope = form.cleaned_data["scope"]
         horizon = form.cleaned_data["horizon"] or DEFAULT_HORIZON
         tag = form.cleaned_data.get("tag")
-    elif form.non_field_errors() or form.has_error("date_from") or form.has_error("date_to"):
+    elif (
+        form.non_field_errors()
+        or form.has_error("date_from")
+        or form.has_error("date_to")
+    ):
         date_from = date_to = grouping = account = scope = None
         horizon = DEFAULT_HORIZON
         tag = None

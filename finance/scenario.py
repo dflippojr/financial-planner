@@ -204,7 +204,8 @@ def apply_scenario(items, changes):
         elif change.type == CHANGE_PAUSE:
             for item in result:
                 if item.source == SOURCE_SERIES and item.source_id == change.source_id:
-                    item.end = change.pause_from - timedelta(days=1)
+                    # Pausing from the first representable day pauses the whole series.
+                    item.end = change.pause_from - timedelta(days=1) if change.pause_from > date.min else date.min
                     break
     return result
 
