@@ -167,6 +167,7 @@ def _process_one(job, moment):
             backend=backend,
             session_id=session_id,
             on_session=remember_session,
+            connection=member_connection,
         )
     else:
         prompt = FEATURE_PROMPTS.get(job.feature, FEATURE_PROMPTS["structured"])

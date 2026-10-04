@@ -382,3 +382,42 @@ def test_a_cents_figure_read_as_dollars_is_not_grounded():
 
     assert paragraph_is_grounded("Groceries were 150.00 USD against a usual 100.00 USD.", facts)
     assert not paragraph_is_grounded("Groceries had a median of 10,000 USD.", facts)
+
+
+@pytest.mark.django_db
+def test_the_job_runs_on_the_connection_it_was_validated_against(monkeypatch):
+    from django.utils import timezone
+
+    from types import SimpleNamespace
+
+    from finance.monthly_review import visibility_key
+
+    from finance import unusual_spending_ai
+    from finance.ai_types import ProviderResult
+
+    owner = make_person("owner")
+    make_household(owner)
+    review = MonthlyReview.objects.create(
+        person=owner,
+        month=date(2026, 9, 1),
+        visibility_key=visibility_key(owner),
+        facts={
+            "unusual": [{"kind": "category", "name": "Groceries", "month_minor": 15000, "baseline_minor": 10000}],
+            "month": "2026-09",
+        },
+        generated_at=timezone.now(),
+    )
+    seen = {}
+
+    def spy(*args, **kwargs):
+        seen["connection"] = kwargs.get("connection")
+        return ProviderResult(ok=True, answer="")
+
+    monkeypatch.setattr(unusual_spending_ai, "run_structured", spy)
+    monkeypatch.setattr(unusual_spending_ai, "unusual_spending_ai_on", lambda person: True)
+    validated = object()
+    job = SimpleNamespace(input_refs={"monthly_review_id": review.pk, "generated_at": review.generated_at.isoformat()})
+
+    unusual_spending_ai.run_unusual_spending_job(owner, job, backend="local", connection=validated)
+
+    assert seen.get("connection") is validated

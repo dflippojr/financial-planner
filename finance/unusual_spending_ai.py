@@ -65,7 +65,7 @@ def visible_unusual_phrasing(person, review):
     return paragraph, phrasing_label(review.unusual_ai_backend)
 
 
-def run_unusual_spending_job(person, job, *, backend, session_id="", on_session=None):
+def run_unusual_spending_job(person, job, *, backend, session_id="", on_session=None, connection=None):
     from .monthly_review_ai import _extract_paragraph
 
     refs = job.input_refs or {}
@@ -91,6 +91,7 @@ def run_unusual_spending_job(person, job, *, backend, session_id="", on_session=
         backend=backend,
         session_id=session_id,
         on_session=on_session,
+        connection=connection,
     )
     if not result.ok:
         return result
