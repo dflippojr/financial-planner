@@ -95,26 +95,38 @@ def _month_stalled(before, after):
     return all(after[account_id] >= before[account_id] for account_id in before)
 
 
-def _unpaid_at_horizon(debts, balances, months, frozen, *, stalled):
+def _unpaid_at_horizon(debts, balances, months, frozen, *, stalled, strategy):
     """Split debts still owed into "never pays off" and "past the horizon".
 
-    A debt never pays off when it hit the growth cap, when every balance stopped
-    falling, or when its balance did not fall over the last year. Otherwise it is
-    still shrinking and simply needs more than MAX_MONTHS.
+    A debt never pays off when it hit the growth cap or when every balance stopped
+    falling. Otherwise, over the last year: with minimums only, each debt is judged
+    on its own balance, since nothing moves between debts. With a rollover strategy
+    a debt can sit unchanged while it waits for freed payments, so the remaining
+    debts are still being paid down as long as the total owed is falling.
     """
     never_ids = set()
     beyond_ids = set()
+    owed = [debt for debt in debts if balances[debt.account_id] > 0]
     year_ago = months[-(STALL_WINDOW_MONTHS + 1)].remaining_by_id if len(months) > STALL_WINDOW_MONTHS else None
-    for debt in debts:
-        remaining = balances[debt.account_id]
-        if remaining <= 0:
-            continue
-        if stalled or debt.account_id in frozen:
-            never_ids.add(debt.account_id)
-        elif year_ago is not None and remaining >= year_ago[debt.account_id]:
-            never_ids.add(debt.account_id)
+
+    def falling(ids):
+        if year_ago is None:
+            return True
+        now_total = sum(balances[account_id] for account_id in ids)
+        then_total = sum(max(0, year_ago[account_id]) for account_id in ids)
+        return now_total < then_total
+
+    if strategy != STRATEGY_MINIMUMS:
+        active = [debt.account_id for debt in owed if debt.account_id not in frozen]
+        total_falling = falling(active)
+    for debt in owed:
+        account_id = debt.account_id
+        if stalled or account_id in frozen:
+            never_ids.add(account_id)
+        elif strategy == STRATEGY_MINIMUMS:
+            (beyond_ids if falling([account_id]) else never_ids).add(account_id)
         else:
-            beyond_ids.add(debt.account_id)
+            (beyond_ids if total_falling else never_ids).add(account_id)
     return never_ids, beyond_ids
 
 
@@ -183,7 +195,7 @@ def simulate_payoff(debts, extra_minor=0, strategy=STRATEGY_MINIMUMS, custom_ord
         if remaining_total > 0 and _month_stalled(before, balances):
             never = True
             break
-    never_ids, beyond_ids = _unpaid_at_horizon(debts, balances, months, frozen, stalled=never)
+    never_ids, beyond_ids = _unpaid_at_horizon(debts, balances, months, frozen, stalled=never, strategy=strategy)
 
     summaries = []
     for debt in debts:

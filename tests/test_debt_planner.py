@@ -190,3 +190,13 @@ def test_runaway_interest_stops_at_the_growth_cap_instead_of_crashing():
     plan = simulate_payoff([runaway, slow], strategy=STRATEGY_MINIMUMS, start=date(2026, 1, 1))
 
     assert {row.account_id: row.payoff_label for row in plan.debts}[1] == NEVER_PAYS_OFF
+
+
+def test_a_debt_waiting_for_rolled_payments_is_past_the_horizon_not_never():
+    first = _debt(1, 60_100, "0", 100)
+    waiting = _debt(2, 100, "0", 0)
+
+    plan = simulate_payoff([first, waiting], strategy=STRATEGY_CUSTOM, custom_order=[1, 2], start=date(2026, 1, 1))
+
+    assert {row.account_id: row.payoff_label for row in plan.debts} == {1: BEYOND_LIMIT, 2: BEYOND_LIMIT}
+    assert plan.never_pays_off is False
