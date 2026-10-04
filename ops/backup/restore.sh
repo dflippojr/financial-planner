@@ -22,9 +22,10 @@ fi
 
 stem=${backup_file%.dump}
 receipts_archive="${stem}.receipts.tar.gz"
+restore_receipts=1
 if [ ! -f "$receipts_archive" ]; then
-  echo "Receipts archive does not exist: $receipts_archive" >&2
-  exit 2
+  echo "no receipts archive for this backup; receipts directory left unchanged" >&2
+  restore_receipts=0
 fi
 
 export PGPASSWORD=$POSTGRES_PASSWORD
@@ -41,9 +42,11 @@ pg_restore \
   --exit-on-error \
   "$backup_file"
 
-mkdir -p "$RECEIPTS_DIR"
-# Replace the live receipts tree with the archived copy for this dump.
-find "$RECEIPTS_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-tar -xzf "$receipts_archive" -C "$RECEIPTS_DIR"
+if [ "$restore_receipts" -eq 1 ]; then
+  mkdir -p "$RECEIPTS_DIR"
+  # Replace the live receipts tree with the archived copy for this dump.
+  find "$RECEIPTS_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+  tar -xzf "$receipts_archive" -C "$RECEIPTS_DIR"
+fi
 
 echo "Restore completed from $(basename "$backup_file")"
