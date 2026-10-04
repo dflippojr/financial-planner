@@ -12,7 +12,8 @@ MAX_MONTHS = 600
 # A balance past this is never going to be repaid; stop compounding it so the
 # simulation stays within Decimal precision.
 GROWTH_CAP_MINOR = 10**15
-STALL_WINDOW_MONTHS = 12
+# Months simulated past the display horizon, only to tell a slow payoff from one that never ends.
+LABEL_HORIZON_MONTHS = MAX_MONTHS * 4
 NEVER_PAYS_OFF = "never pays off"
 BEYOND_LIMIT = "more than 50 years"
 NEEDS_DETAILS = "needs details"
@@ -95,41 +96,6 @@ def _month_stalled(before, after):
     return all(after[account_id] >= before[account_id] for account_id in before)
 
 
-def _unpaid_at_horizon(debts, balances, months, frozen, *, stalled, strategy):
-    """Split debts still owed into "never pays off" and "past the horizon".
-
-    A debt never pays off when it hit the growth cap or when every balance stopped
-    falling. Otherwise, over the last year: with minimums only, each debt is judged
-    on its own balance, since nothing moves between debts. With a rollover strategy
-    a debt can sit unchanged while it waits for freed payments, so the remaining
-    debts are still being paid down as long as the total owed is falling.
-    """
-    never_ids = set()
-    beyond_ids = set()
-    owed = [debt for debt in debts if balances[debt.account_id] > 0]
-    year_ago = months[-(STALL_WINDOW_MONTHS + 1)].remaining_by_id if len(months) > STALL_WINDOW_MONTHS else None
-
-    def falling(ids):
-        if year_ago is None:
-            return True
-        now_total = sum(balances[account_id] for account_id in ids)
-        then_total = sum(max(0, year_ago[account_id]) for account_id in ids)
-        return now_total < then_total
-
-    if strategy != STRATEGY_MINIMUMS:
-        active = [debt.account_id for debt in owed if debt.account_id not in frozen]
-        total_falling = falling(active)
-    for debt in owed:
-        account_id = debt.account_id
-        if stalled or account_id in frozen:
-            never_ids.add(account_id)
-        elif strategy == STRATEGY_MINIMUMS:
-            (beyond_ids if falling([account_id]) else never_ids).add(account_id)
-        else:
-            (beyond_ids if total_falling else never_ids).add(account_id)
-    return never_ids, beyond_ids
-
-
 def simulate_payoff(debts, extra_minor=0, strategy=STRATEGY_MINIMUMS, custom_order=None, start=None):
     """Amortize included debts. Extra is applied after each debt's minimum."""
     start = start or date.today().replace(day=1)
@@ -140,11 +106,12 @@ def simulate_payoff(debts, extra_minor=0, strategy=STRATEGY_MINIMUMS, custom_ord
     payoff_months = {}
     total_interest = 0
     months = []
-    never = False
     frozen = set()
-    for offset in range(MAX_MONTHS):
+    paid_after_horizon = set()
+    for offset in range(LABEL_HORIZON_MONTHS):
         if all(balance <= 0 for balance in balances.values()):
             break
+        in_horizon = offset < MAX_MONTHS
         before = dict(balances)
         interest_by_id = {}
         for debt in debts:
@@ -154,7 +121,8 @@ def simulate_payoff(debts, extra_minor=0, strategy=STRATEGY_MINIMUMS, custom_ord
             interest = monthly_interest_minor(balances[debt.account_id], debt.apr_percent)
             interest_by_id[debt.account_id] = interest
             balances[debt.account_id] += interest
-            total_interest += interest
+            if in_horizon:
+                total_interest += interest
         ordered = [
             debt for debt in _strategy_order(debts, balances, strategy, custom_order) if debt.account_id not in frozen
         ]
@@ -175,31 +143,49 @@ def simulate_payoff(debts, extra_minor=0, strategy=STRATEGY_MINIMUMS, custom_ord
             balances[debt.account_id] -= paid
             paid_total += paid
             if balances[debt.account_id] <= 0 and debt.account_id not in payoff_months:
-                payoff_months[debt.account_id] = add_calendar_months(start, offset)
+                if in_horizon:
+                    payoff_months[debt.account_id] = add_calendar_months(start, offset)
+                elif debt.account_id not in paid_after_horizon:
+                    paid_after_horizon.add(debt.account_id)
             if balances[debt.account_id] > GROWTH_CAP_MINOR:
                 frozen.add(debt.account_id)
-        month_date = add_calendar_months(start, offset)
         remaining_total = sum(max(0, amount) for amount in balances.values())
-        months.append(
-            SimpleNamespace(
-                month=month_date,
-                label=month_label(month_date),
-                interest_minor=sum(interest_by_id.values()),
-                paid_minor=paid_total,
-                remaining_minor=remaining_total,
-                remaining_by_id=dict(balances),
-                interest_by_id=interest_by_id,
-                paid_by_id=payments,
+        if in_horizon:
+            horizon_balances = dict(balances)
+            month_date = add_calendar_months(start, offset)
+            months.append(
+                SimpleNamespace(
+                    month=month_date,
+                    label=month_label(month_date),
+                    interest_minor=sum(interest_by_id.values()),
+                    paid_minor=paid_total,
+                    remaining_minor=remaining_total,
+                    remaining_by_id=dict(balances),
+                    interest_by_id=interest_by_id,
+                    paid_by_id=payments,
+                )
             )
-        )
+        # Nothing shrank this month: whatever is still owed never pays off.
         if remaining_total > 0 and _month_stalled(before, balances):
-            never = True
             break
-    never_ids, beyond_ids = _unpaid_at_horizon(debts, balances, months, frozen, stalled=never, strategy=strategy)
+    if months:
+        balances_at_horizon = horizon_balances
+    else:
+        balances_at_horizon = {debt.account_id: debt.balance_minor for debt in debts}
+    never_ids = set()
+    beyond_ids = set()
+    for debt in debts:
+        account_id = debt.account_id
+        if account_id in payoff_months:
+            continue
+        if account_id in paid_after_horizon:
+            beyond_ids.add(account_id)
+        elif balances_at_horizon.get(account_id, 0) > 0 or balances[account_id] > 0:
+            never_ids.add(account_id)
 
     summaries = []
     for debt in debts:
-        remaining = balances[debt.account_id]
+        remaining = balances_at_horizon[debt.account_id]
         if debt.account_id in never_ids:
             status = NEVER_PAYS_OFF
             payoff = None
