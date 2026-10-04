@@ -331,5 +331,8 @@ def run_daily_alert_pass(*, today=None, now=None):
     created = evaluate_sync_alerts()
     created.extend(evaluate_active_budget_alerts(today=today))
     created.extend(evaluate_recent_large_transactions())
+    from .monthly_review import generate_due_monthly_reviews
+
+    generate_due_monthly_reviews(today=today)
     purge_old_read_alerts(now=now)
     return created

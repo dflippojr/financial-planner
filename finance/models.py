@@ -945,6 +945,7 @@ class RecurringSeries(models.Model):
     is_active = models.BooleanField(default=True)
     cancelled_at = models.DateTimeField(null=True, blank=True)
     acknowledged_amount_minor = models.BigIntegerField(null=True, blank=True)
+    confirmed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -1961,3 +1962,20 @@ class AlertSettings(models.Model):
 
     def __str__(self):
         return f"Alert settings for {self.person_id}"
+
+
+class MonthlyReview(models.Model):
+    person = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="monthly_reviews")
+    month = models.DateField()
+    visibility_key = models.CharField(max_length=64, validators=(sha256_validator,))
+    facts = models.JSONField()
+    generated_at = models.DateTimeField()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("person", "month"), name="monthly_review_person_month"),
+            models.CheckConstraint(condition=Q(month__day=1), name="monthly_review_month_start"),
+        ]
+
+    def __str__(self):
+        return f"Monthly review {self.person_id} {self.month}"
