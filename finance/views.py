@@ -161,7 +161,6 @@ from .spending_trends import (
 )
 from .tag_services import (
     add_tag,
-    apply_tag_filter,
     archive_tag,
     rename_tag,
     selected_tag,
