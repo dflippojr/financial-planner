@@ -1,0 +1,99 @@
+{% extends "finance/base.html" %}
+{% block title %}Bills calendar · Financial Planner{% endblock %}
+{% block content %}
+<h1 class="mb-4 text-2xl font-bold">Bills calendar</h1>
+<p class="mb-4 max-w-2xl opacity-80">Upcoming recurring charges and planned items with a running expected balance for the checking and savings accounts you pick. Figures are expected, not guaranteed.</p>
+<form method="get" class="mb-4 flex flex-wrap items-end gap-3">
+  <div>
+    <label class="label" for="id_scope"><span class="label-text">Scope</span></label>
+    <select name="scope" id="id_scope" class="select select-bordered">
+      <option value=""{% if not scope %} selected{% endif %}>All visible accounts</option>
+      <option value="private"{% if scope == "private" %} selected{% endif %}>Private</option>
+      <option value="household"{% if scope == "household" %} selected{% endif %}>Household</option>
+    </select>
+  </div>
+  <input type="hidden" name="year" value="{{ calendar.year }}">
+  <input type="hidden" name="month" value="{{ calendar.month }}">
+  <button type="submit" class="btn btn-primary">Update</button>
+</form>
+<nav class="mb-4 flex items-center gap-3" aria-label="Month">
+  <a class="btn btn-sm" href="?year={{ calendar.prev_year }}&amp;month={{ calendar.prev_month }}{% if scope %}&amp;scope={{ scope }}{% endif %}">Previous</a>
+  <h2 class="text-xl font-semibold">{{ calendar.label }}</h2>
+  <a class="btn btn-sm" href="?year={{ calendar.next_year }}&amp;month={{ calendar.next_month }}{% if scope %}&amp;scope={{ scope }}{% endif %}">Next</a>
+</nav>
+{% if calendar.start_balance_display %}
+<p class="mb-4">Starting expected balance from latest snapshots: {{ calendar.start_balance_display }}</p>
+{% else %}
+<p class="mb-4 opacity-80">Pick checking or savings accounts below to see a running expected balance.</p>
+{% endif %}
+<section class="card bg-base-100 shadow-sm mb-6 max-w-lg">
+  <div class="card-body">
+    <h2 class="card-title">Expected balance accounts</h2>
+    <form method="post">
+      {% csrf_token %}
+      <input type="hidden" name="year" value="{{ calendar.year }}">
+      <input type="hidden" name="month" value="{{ calendar.month }}">
+      <input type="hidden" name="scope" value="{{ scope }}">
+      {% include "finance/_form_fields.html" with form=settings_form %}
+      <button type="submit" class="btn btn-primary">Save</button>
+    </form>
+  </div>
+</section>
+<div class="hidden md:block overflow-x-auto mb-8">
+  <table class="table table-fixed border-collapse">
+    <thead>
+      <tr>
+        <th>Mon</th><th>Tue</th><th>Wed</th><th>Thu</th><th>Fri</th><th>Sat</th><th>Sun</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for week in calendar.weeks %}
+      <tr class="align-top">
+        {% for day in week %}
+        <td class="h-36 align-top {% if not day.in_month %}opacity-40{% endif %} {% if day.below_threshold %}bg-error/20{% endif %}">
+          <p class="font-semibold">{{ day.date.day }}</p>
+          {% if day.balance_display %}
+          <p class="text-sm {% if day.below_threshold %}text-error font-semibold{% endif %}">{{ day.balance_display }}</p>
+          {% endif %}
+          <ul class="mt-1 space-y-1 text-sm">
+            {% for item in day.items %}
+            <li>
+              <a class="link" href="{{ item.url }}">{{ item.name }}</a>
+              <span>{% include "finance/_amount.html" with value=item.amount_display tone="" %}</span>
+              {% if item.expected %}<span class="badge badge-ghost badge-sm">expected</span>{% endif %}
+            </li>
+            {% endfor %}
+          </ul>
+        </td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<div class="md:hidden space-y-4">
+  {% for day in calendar.days %}
+  <article class="card bg-base-100 shadow-sm {% if day.below_threshold %}border border-error{% endif %}">
+    <div class="card-body p-4">
+      <h3 class="font-semibold">{{ day.date|date:"D j M" }}</h3>
+      {% if day.balance_display %}
+      <p class="{% if day.below_threshold %}text-error font-semibold{% endif %}">Expected balance {{ day.balance_display }}</p>
+      {% endif %}
+      {% if day.items %}
+      <ul class="mt-2 space-y-1">
+        {% for item in day.items %}
+        <li>
+          <a class="link" href="{{ item.url }}">{{ item.name }}</a>
+          <span>{% include "finance/_amount.html" with value=item.amount_display tone="" %}</span>
+          {% if item.expected %}<span class="badge badge-ghost badge-sm">expected</span>{% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="opacity-70">No items.</p>
+      {% endif %}
+    </div>
+  </article>
+  {% endfor %}
+</div>
+{% endblock %}

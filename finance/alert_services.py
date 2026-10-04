@@ -27,6 +27,7 @@ _KIND_ENABLED_FIELD = {
     Alert.Kind.BUDGET: "budget_enabled",
     Alert.Kind.LARGE_TRANSACTION: "large_transaction_enabled",
     Alert.Kind.MONTHLY_REVIEW: "monthly_review_enabled",
+    Alert.Kind.EXPECTED_BALANCE: "expected_balance_enabled",
 }
 READ_RETENTION_DAYS = 180
 
@@ -135,6 +136,7 @@ def save_alert_settings(
     large_transaction_enabled,
     monthly_review_enabled,
     monthly_review_ai_enabled,
+    expected_balance_enabled,
     large_transaction_minor,
 ):
     person = _person_for(principal)
@@ -148,6 +150,7 @@ def save_alert_settings(
     prefs.large_transaction_enabled = bool(large_transaction_enabled)
     prefs.monthly_review_enabled = bool(monthly_review_enabled)
     prefs.monthly_review_ai_enabled = bool(monthly_review_ai_enabled)
+    prefs.expected_balance_enabled = bool(expected_balance_enabled)
     prefs.large_transaction_minor = large_transaction_minor
     prefs.save()
     return prefs
@@ -340,6 +343,9 @@ def run_daily_alert_pass(*, today=None, now=None):
 
     generate_due_monthly_reviews(today=today)
     created.extend(evaluate_backup_alerts(today=today, now=now))
+    from .bills_calendar import evaluate_expected_balance_alerts
+
+    created.extend(evaluate_expected_balance_alerts(today=today))
     purge_old_read_alerts(now=now)
     from .security_services import purge_old_security_events, purge_stale_member_sessions
 

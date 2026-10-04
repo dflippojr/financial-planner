@@ -1510,6 +1510,7 @@ def _alert_settings_form(person, data=None):
             "large_transaction_enabled": prefs.large_transaction_enabled,
             "monthly_review_enabled": prefs.monthly_review_enabled,
             "monthly_review_ai_enabled": prefs.monthly_review_ai_enabled,
+            "expected_balance_enabled": prefs.expected_balance_enabled,
             "large_transaction_amount": amount,
         },
     )

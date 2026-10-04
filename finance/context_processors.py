@@ -102,6 +102,8 @@ def _nav_current(request):
         return "csv-import"
     if name in {"planned-item-edit", "planned-item-disable", "planned-item-enable"}:
         return "planned-items"
+    if name == "bills-calendar":
+        return "bills-calendar"
     if name in {"monthly-review", "monthly-review-regenerate"}:
         return "monthly-review"
     if name.startswith("budget"):
@@ -151,6 +153,7 @@ def navigation(request):
         ("account-list", "Accounts", reverse("account-list")),
         ("csv-import", "Import", reverse("csv-import")),
         ("planned-items", "Planned items", reverse("planned-items")),
+        ("bills-calendar", "Bills", reverse("bills-calendar")),
         ("monthly-review", "Monthly review", reverse("monthly-review")),
         ("budgets", "Budgets", reverse("budgets")),
         ("alert-list", "Alerts", reverse("alert-list")),
