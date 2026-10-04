@@ -103,6 +103,8 @@ urlpatterns = [
     path("settings/ai/connect/", ai_views.ai_connect, name="ai-connect"),
     path("settings/ai/disconnect/", ai_views.ai_disconnect, name="ai-disconnect"),
     path("settings/ai/defaults/", ai_views.ai_save_defaults, name="ai-defaults"),
+    path("settings/ai/offer-local/", ai_views.ai_save_offer_local, name="ai-offer-local"),
+    path("settings/ai/shared-local/", ai_views.ai_save_shared_local, name="ai-shared-local"),
     path("account/", RedirectView.as_view(pattern_name="account-settings", permanent=True, query_string=True)),
     path("account/ai/connect/", RedirectView.as_view(pattern_name="ai-connect", permanent=True, query_string=True)),
     path(
