@@ -1,6 +1,6 @@
 # Requirements
 
-Updated: 2026-10-03. This is a working product brief; open questions are explicit.
+Updated: 2026-10-04. This is a working product brief; open questions are explicit.
 
 ## Goal
 
@@ -521,3 +521,20 @@ Owner decision: a member can delete their own data, self-service from settings.
   - delete it with their data.
 
   Deletion can't proceed until each lent account has a choice.
+
+## Next round (2026-10-04)
+
+Owner decisions:
+- **Queue:** the owner chose all of these:
+  - bulk edit (#148), better search and saved filters (#149), a year-end report (#150), and receipts (#146);
+  - what-if scenarios (#151), a debt payoff planner (#152), a bills calendar (#153), and a Google Sheet comparison (#154);
+  - backup health and an off-site copy (#155), passkeys (#156), a sign-in log and sessions (#157), and Dependabot (#158);
+  - local-model chat (#159), AI for other members (#162 and #147), chat proposals (#160), and unusual spending insights (#161).
+- **Year-end report:** a print-friendly page plus CSV downloads. No generated PDF.
+- **Off-site backups:** each verified dump is encrypted with `age` and copied with rclone to a remote the operator configures. The age private key stays off the tower.
+- **Second factor:** passkeys (WebAuthn), optional per member, after password sign-in. Recovery codes stay the fallback. Google sign-in is not challenged.
+- **AI for other members:**
+  - Other members may use the tower's local model through the hosting member's harness connection when the host offers it (#162). Hosted backends on that connection stay usable only by the host.
+  - Any member may bring their own Anthropic or OpenAI API key (#147). It is optional and paid by them; no paid key is ever required.
+  - Per-user subscription logins wait on Agent Harness support ([agent-harness #365](https://github.com/dflippojr/agent-harness/issues/365)).
+

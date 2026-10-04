@@ -55,4 +55,21 @@ AI decisions are in [requirements](requirements.md#ai-features-2026-10-02-90).
   - [#103 installable phone app](https://github.com/dflippojr/financial-planner/issues/103)
 - Open question: [#104 deleting a person's data](https://github.com/dflippojr/financial-planner/issues/104).
 
+## Milestone 5: everyday polish, planning, and hardening
+
+Decisions are in [requirements](requirements.md#next-round-2026-10-04).
+
+- Everyday: [#148 bulk edit](https://github.com/dflippojr/financial-planner/issues/148), [#149 search and saved filters](https://github.com/dflippojr/financial-planner/issues/149), [#150 year-end report](https://github.com/dflippojr/financial-planner/issues/150), [#146 receipts](https://github.com/dflippojr/financial-planner/issues/146).
+- Planning: [#151 what-if scenarios](https://github.com/dflippojr/financial-planner/issues/151), [#152 debt payoff](https://github.com/dflippojr/financial-planner/issues/152), [#153 bills calendar](https://github.com/dflippojr/financial-planner/issues/153), [#154 Google Sheet comparison](https://github.com/dflippojr/financial-planner/issues/154).
+- Security and operations: [#155 backup health and off-site copy](https://github.com/dflippojr/financial-planner/issues/155), [#156 passkeys](https://github.com/dflippojr/financial-planner/issues/156), [#157 sign-in log and sessions](https://github.com/dflippojr/financial-planner/issues/157), [#158 Dependabot](https://github.com/dflippojr/financial-planner/issues/158).
+- AI:
+  - [#159 local-model chat](https://github.com/dflippojr/financial-planner/issues/159)
+  - other members, through [#162 the shared local model](https://github.com/dflippojr/financial-planner/issues/162) and [#147 their own API key](https://github.com/dflippojr/financial-planner/issues/147)
+  - [#160 chat proposals](https://github.com/dflippojr/financial-planner/issues/160)
+  - [#161 unusual spending](https://github.com/dflippojr/financial-planner/issues/161)
+- **Build order:** issues that touch the same area go one after another, to avoid conflicts:
+  - Transactions page: #148, #149, #146.
+  - Security tab: #157, #156.
+  - AI provider layer: #162, #147, #159.
+
 Work from an issue to a pull request and link it with `Closes #<issue>`. The owner reviews merges.
