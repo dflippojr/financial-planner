@@ -445,6 +445,17 @@ def undo_bulk_edit(principal, undo_id):
         if txn.updated_at.isoformat() != item["applied_updated_at"]:
             raise ValidationError(CHANGED_SINCE)
     refunds_by_original = _refunds_by_original(by_id, refunds)
+    if action == ACTION_CATEGORY:
+        # A refund that still inherits its purchase's category follows it back. One
+        # recategorized by hand since the bulk edit is a change undo must not discard.
+        for item in rows:
+            purchase = by_id[item["id"]]
+            for refund in refunds_by_original.get(purchase.pk, []):
+                if (
+                    refund.category_source != Transaction.CategorySource.INHERITED
+                    or refund.category_id != purchase.category_id
+                ):
+                    raise ValidationError(CHANGED_SINCE)
     for item in rows:
         txn = by_id[item["id"]]
         if action == ACTION_CATEGORY:

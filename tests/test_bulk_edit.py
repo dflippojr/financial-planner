@@ -816,3 +816,38 @@ def test_refund_linked_just_before_the_locks_still_follows_the_purchase(monkeypa
     refund.refresh_from_db()
     assert refund.category_id == dine.pk
     assert refund.category_source == Transaction.CategorySource.INHERITED
+
+
+@pytest.mark.django_db
+def test_undo_refuses_when_a_linked_refund_was_recategorized_by_hand():
+    owner = make_person("owner")
+    household = make_household(owner)
+    account = make_account(owner)
+    purchase = make_transaction(
+        owner, account, amount_minor=-4000, description="Synthetic hand store", fingerprint="t" * 64
+    )
+    refund = make_transaction(
+        owner, account, amount_minor=1500, description="Synthetic hand refund", fingerprint="u" * 64
+    )
+    grocery = groceries(household)
+    dine = dining(household)
+    assign_category(owner, purchase.pk, grocery.pk)
+    link_refund(owner, refund.pk, purchase.pk)
+    _applied, undo = apply_bulk_edit(
+        owner,
+        matching=matching_qs(owner),
+        transaction_ids=[purchase.pk],
+        select_matching=False,
+        action=ACTION_CATEGORY,
+        category_id=dine.pk,
+    )
+    assign_category(owner, refund.pk, grocery.pk)
+
+    with pytest.raises(ValidationError):
+        undo_bulk_edit(owner, undo.pk)
+
+    purchase.refresh_from_db()
+    refund.refresh_from_db()
+    assert purchase.category_id == dine.pk
+    assert refund.category_id == grocery.pk
+    assert refund.category_source == Transaction.CategorySource.MANUAL
