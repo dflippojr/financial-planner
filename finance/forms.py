@@ -162,7 +162,7 @@ class TransactionFilterForm(forms.Form):
         required=False,
         choices=(("", "All categories"), ("uncategorized", "Uncategorized")),
     )
-    q = forms.CharField(required=False, label="Description contains", max_length=200)
+    q = forms.CharField(required=False, label="Search", max_length=200)
     tag = forms.ModelChoiceField(queryset=Tag.objects.none(), required=False, empty_label="All tags")
     scope = forms.ChoiceField(
         required=False,
@@ -170,6 +170,45 @@ class TransactionFilterForm(forms.Form):
             ("", ALL_VISIBLE_ACCOUNTS),
             (Account.Scope.PRIVATE, "Private"),
             (Account.Scope.HOUSEHOLD, "Household"),
+        ),
+    )
+    amount_min = forms.DecimalField(
+        max_digits=19,
+        decimal_places=2,
+        required=False,
+        label="Amount min",
+        widget=forms.TextInput(attrs={"inputmode": "decimal"}),
+    )
+    amount_max = forms.DecimalField(
+        max_digits=19,
+        decimal_places=2,
+        required=False,
+        label="Amount max",
+        widget=forms.TextInput(attrs={"inputmode": "decimal"}),
+    )
+    amount_mode = forms.ChoiceField(
+        required=False,
+        choices=(
+            ("signed", "Signed (money in or out)"),
+            ("absolute", "Absolute value"),
+        ),
+        initial="signed",
+    )
+    has_note = forms.ChoiceField(
+        required=False,
+        choices=(("", "Any notes"), ("1", "Has note")),
+    )
+    is_split = forms.ChoiceField(
+        required=False,
+        choices=(("", "Any splits"), ("1", "Split")),
+    )
+    set_by = forms.ChoiceField(
+        required=False,
+        choices=(
+            ("", "Any category source"),
+            ("hand", "Set by hand"),
+            ("rule", "Set by rule"),
+            ("suggestion", "Set by AI suggestion"),
         ),
     )
 
@@ -187,13 +226,41 @@ class TransactionFilterForm(forms.Form):
                 choices.append((str(category.pk), category.name))
         self.fields["category"].choices = choices
 
+    def clean_amount_min(self):
+        return self._cleaned_amount("amount_min")
+
+    def clean_amount_max(self):
+        return self._cleaned_amount("amount_max")
+
+    def _cleaned_amount(self, field_name):
+        amount = self.cleaned_data.get(field_name)
+        if amount is None:
+            return None
+        minor_units = int(amount * 100)
+        if not MIN_SIGNED_BIGINT <= minor_units <= MAX_SIGNED_BIGINT:
+            raise ValidationError(AMOUNT_RANGE_ERROR)
+        return amount
+
     def clean(self):
         cleaned = super().clean()
         date_from = cleaned.get("date_from")
         date_to = cleaned.get("date_to")
         if date_from and date_to and date_from > date_to:
             self.add_error("date_to", END_DATE_ORDER_ERROR)
+        amount_min = cleaned.get("amount_min")
+        amount_max = cleaned.get("amount_max")
+        mode = cleaned.get("amount_mode") or "signed"
+        if amount_min is not None and amount_max is not None:
+            if mode == "absolute":
+                if abs(amount_min) > abs(amount_max):
+                    self.add_error("amount_max", "Maximum amount must be at least the minimum.")
+            elif amount_min > amount_max:
+                self.add_error("amount_max", "Maximum amount must be at least the minimum.")
         return cleaned
+
+
+class SavedTransactionFilterNameForm(forms.Form):
+    name = forms.CharField(max_length=80, label="Save current filters as")
 
 
 class CashFlowFilterForm(forms.Form):

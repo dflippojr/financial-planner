@@ -655,6 +655,9 @@ def _delete_personal_records(person):
         RecurringSeries.objects.filter(pk__in=series_ids).delete()
     SimpleFinConnection.objects.filter(owner=person).delete()
     CategorySuggestion.objects.filter(member=person).delete()
+    from .models import SavedTransactionFilter
+
+    SavedTransactionFilter.objects.filter(member=person).delete()
     AiJob.objects.filter(member=person).delete()
     AiUsageEvent.objects.filter(member=person).delete()
     AiProviderConnection.objects.filter(owner=person).delete()

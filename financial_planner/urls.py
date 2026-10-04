@@ -160,6 +160,21 @@ urlpatterns = [
         RedirectView.as_view(pattern_name="csv-mapping-edit", permanent=True, query_string=True),
     ),
     path("transactions/", views.transaction_list, name="transaction-list"),
+    path(
+        "transactions/saved-filters/",
+        views.transaction_saved_filter_create,
+        name="transaction-saved-filter-create",
+    ),
+    path(
+        "transactions/saved-filters/<int:filter_id>/apply/",
+        views.transaction_saved_filter_apply,
+        name="transaction-saved-filter-apply",
+    ),
+    path(
+        "transactions/saved-filters/<int:filter_id>/delete/",
+        views.transaction_saved_filter_delete,
+        name="transaction-saved-filter-delete",
+    ),
     path("transactions/bulk-edit/", bulk_edit_views.bulk_edit_preview, name="transaction-bulk-preview"),
     path("transactions/bulk-edit/apply/", bulk_edit_views.bulk_edit_apply, name="transaction-bulk-apply"),
     path(
