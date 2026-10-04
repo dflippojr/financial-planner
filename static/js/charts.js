@@ -150,9 +150,9 @@
             borderDash: [6, 4],
             displays: spendingDisplays,
           },
-          {
+            {
             type: "line",
-            label: "Net cash flow",
+            label: "Baseline net",
             data: periods.map(function (row) {
               return row.net_minor;
             }),
@@ -160,6 +160,28 @@
             backgroundColor: palette.net,
             tension: 0.2,
             displays: netDisplays,
+            segment: {
+              borderDash: function (ctx) {
+                var row = periods[ctx.p1DataIndex];
+                return row && row.projected ? [6, 4] : [];
+              },
+            },
+          },
+          {
+            type: "line",
+            label: "Scenario net",
+            data: periods.map(function (row) {
+              if (row.scenario_net_minor == null) {
+                return null;
+              }
+              return row.scenario_net_minor;
+            }),
+            borderColor: palette.warning,
+            backgroundColor: palette.warning,
+            tension: 0.2,
+            displays: periods.map(function (row) {
+              return row.scenario_net_display;
+            }),
             segment: {
               borderDash: function (ctx) {
                 var row = periods[ctx.p1DataIndex];

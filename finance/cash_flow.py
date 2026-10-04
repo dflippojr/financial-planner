@@ -547,9 +547,14 @@ def _change_chart_row(change):
     }
 
 
-def _projected_chart_row(period):
+def _projected_chart_row(period, scenario=None):
     row = _period_chart_row(period)
     row["projected"] = True
+    if scenario is not None:
+        row["scenario_net_minor"] = scenario.net_minor
+        row["scenario_net_display"] = scenario.net_display
+        row["scenario_income_minor"] = scenario.income_minor
+        row["scenario_spending_minor"] = scenario.spending_minor
     row["contributions"] = [
         {
             "source": item.source,
@@ -569,12 +574,18 @@ def _projected_chart_row(period):
 def cash_flow_chart_data(report):
     summary = report.summary
     periods = []
+    scenario_by_label = {
+        item.label: item for item in getattr(report, "scenario_projected_periods", ()) or ()
+    }
     for period in report.periods:
         row = _period_chart_row(period)
         row["projected"] = False
+        if scenario_by_label:
+            row["scenario_net_minor"] = period.net_minor
+            row["scenario_net_display"] = period.net_display
         periods.append(row)
     for period in getattr(report, "projected_periods", ()) or ():
-        periods.append(_projected_chart_row(period))
+        periods.append(_projected_chart_row(period, scenario_by_label.get(period.label)))
     return {
         "periods": periods,
         "summary": {

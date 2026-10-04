@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from decimal import Decimal
 
 from django import forms
@@ -258,6 +259,118 @@ class CashFlowFilterForm(forms.Form):
                 "Choose a shorter range or a longer grouping.",
             )
         return cleaned
+
+
+class ScenarioChangeForm(forms.Form):
+    change_type = forms.ChoiceField(
+        choices=(
+            ("add", "New income or expense"),
+            ("amount", "Change a planned item amount"),
+            ("pause", "Pause a recurring series"),
+            ("oneoff", "One-off amount on a date"),
+        ),
+        label="Change",
+    )
+    name = forms.CharField(max_length=150, required=False)
+    kind = forms.ChoiceField(choices=PlannedItem.Kind.choices, required=False)
+    amount = forms.DecimalField(
+        required=False,
+        min_value=Decimal("0.01"),
+        max_digits=19,
+        decimal_places=2,
+        widget=forms.TextInput(attrs={"inputmode": "decimal"}),
+    )
+    cadence = forms.ChoiceField(choices=PlannedItem.Cadence.choices, required=False)
+    start_date = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
+    end_date = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
+    planned_item = forms.ModelChoiceField(queryset=PlannedItem.objects.none(), required=False)
+    series = forms.ModelChoiceField(
+        queryset=RecurringSeries.objects.none(),
+        required=False,
+        label="Recurring series",
+    )
+    pause_from = forms.DateField(
+        required=False,
+        label="Pause from",
+        widget=forms.DateInput(attrs={"type": "date"}),
+    )
+
+    def __init__(self, *args, planned_items=None, series=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["planned_item"].queryset = planned_items if planned_items is not None else PlannedItem.objects.none()
+        self.fields["series"].queryset = series if series is not None else RecurringSeries.objects.none()
+
+    def clean_amount(self):
+        amount = self.cleaned_data.get("amount")
+        if amount is None:
+            return amount
+        minor_units = int(amount * 100)
+        if minor_units <= 0 or minor_units > MAX_SIGNED_BIGINT:
+            raise ValidationError(AMOUNT_RANGE_ERROR)
+        return amount
+
+    def clean(self):
+        cleaned = super().clean()
+        change_type = cleaned.get("change_type")
+        if change_type in ("add", "oneoff"):
+            for field in ("name", "kind", "amount", "start_date"):
+                if not cleaned.get(field):
+                    self.add_error(field, "This field is required.")
+            if change_type == "add" and not cleaned.get("cadence"):
+                self.add_error("cadence", "This field is required.")
+            start_date = cleaned.get("start_date")
+            end_date = cleaned.get("end_date")
+            if start_date and end_date and end_date < start_date:
+                self.add_error("end_date", END_DATE_ORDER_ERROR)
+        elif change_type == "amount":
+            if cleaned.get("planned_item") is None:
+                self.add_error("planned_item", "This field is required.")
+            if cleaned.get("amount") is None:
+                self.add_error("amount", "This field is required.")
+        elif change_type == "pause":
+            if cleaned.get("series") is None:
+                self.add_error("series", "This field is required.")
+            if not cleaned.get("pause_from"):
+                self.add_error("pause_from", "This field is required.")
+        return cleaned
+
+    def to_change(self):
+        from .scenario import CHANGE_ADD, CHANGE_AMOUNT, CHANGE_ONEOFF, CHANGE_PAUSE
+
+        cleaned = self.cleaned_data
+        change_type = cleaned["change_type"]
+        amount_minor = int(cleaned["amount"] * 100) if cleaned.get("amount") is not None else None
+        if change_type == "add":
+            return SimpleNamespace(
+                type=CHANGE_ADD,
+                name=cleaned["name"],
+                kind=cleaned["kind"],
+                amount_minor=amount_minor,
+                cadence=cleaned["cadence"],
+                start=cleaned["start_date"],
+                end=cleaned.get("end_date"),
+            )
+        if change_type == "oneoff":
+            return SimpleNamespace(
+                type=CHANGE_ONEOFF,
+                name=cleaned["name"],
+                kind=cleaned["kind"],
+                amount_minor=amount_minor,
+                cadence="one_time",
+                start=cleaned["start_date"],
+                end=None,
+            )
+        if change_type == "amount":
+            return SimpleNamespace(
+                type=CHANGE_AMOUNT,
+                source_id=cleaned["planned_item"].pk,
+                amount_minor=amount_minor,
+            )
+        return SimpleNamespace(
+            type=CHANGE_PAUSE,
+            source_id=cleaned["series"].pk,
+            pause_from=cleaned["pause_from"],
+        )
 
 
 class NetWorthFilterForm(forms.Form):
