@@ -104,6 +104,8 @@ def test_upload_view_download_and_delete(tmp_path, settings):
     assert download["X-Content-Type-Options"] == "nosniff"
     assert "synthetic-lunch.jpg" in download["Content-Disposition"]
     assert "inline" in download["Content-Disposition"].lower()
+    assert "sandbox" in download["Content-Security-Policy"]
+    assert download["X-Content-Type-Options"] == "nosniff"
     assert download.getvalue() == JPEG
 
     pdf = attach_receipt(owner, txn.pk, upload_bytes("synthetic.pdf", PDF))
@@ -111,7 +113,7 @@ def test_upload_view_download_and_delete(tmp_path, settings):
     assert "attachment" in pdf_response["Content-Disposition"].lower()
     assert pdf_response["X-Content-Type-Options"] == "nosniff"
     assert pdf_response["Content-Type"] == "application/pdf"
-    assert pdf_response.content == PDF
+    assert b"".join(pdf_response.streaming_content) == PDF
 
     deleted = client.post(reverse("transaction-receipt-delete", args=(txn.pk, receipt.pk)))
     assert deleted.status_code == 302
