@@ -661,6 +661,7 @@ def _delete_personal_records(person):
         AiJob,
         AiProviderConnection,
         AiUsageEvent,
+        BillsCalendarSettings,
         Budget,
         CategoryRule,
         CategorySuggestion,
@@ -701,6 +702,7 @@ def _delete_personal_records(person):
     RecurringExclusion.objects.filter(person=person).delete()
     Alert.objects.filter(recipient=person).delete()
     AlertSettings.objects.filter(person=person).delete()
+    BillsCalendarSettings.objects.filter(person=person).delete()
     SheetMonthTotal.objects.filter(member=person).delete()
     SheetComparisonSettings.objects.filter(member=person).delete()
     from .models import MemberSecurityEvent, MemberSession

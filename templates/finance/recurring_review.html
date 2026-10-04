@@ -173,7 +173,7 @@
     </thead>
     <tbody>
     {% for series in confirmed %}
-      <tr>
+      <tr id="series-{{ series.pk }}">
         <td>{{ series.display_name }}</td>
         <td>{{ series.get_cadence_display }}</td>
         <td class="text-right">{% include "finance/_amount.html" with value=series.amount_display tone="out" %}</td>

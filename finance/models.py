@@ -2048,6 +2048,7 @@ class Alert(models.Model):
         MONTHLY_REVIEW = "monthly_review", "Monthly review"
         UNUSUAL_SPENDING = "unusual_spending", "Unusual spending"
         BACKUP = "backup", "Backup"
+        EXPECTED_BALANCE = "expected_balance", "Expected balance"
 
     recipient = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="alerts")
     kind = models.CharField(max_length=20, choices=Kind)
@@ -2078,6 +2079,7 @@ class Alert(models.Model):
                         "monthly_review",
                         "unusual_spending",
                         "backup",
+                        "expected_balance",
                     )
                 ),
                 name="alert_kind_valid",
@@ -2100,6 +2102,7 @@ class AlertSettings(models.Model):
     large_transaction_enabled = models.BooleanField(default=True)
     monthly_review_enabled = models.BooleanField(default=True)
     monthly_review_ai_enabled = models.BooleanField(default=True)
+    expected_balance_enabled = models.BooleanField(default=False)
     unusual_spending_enabled = models.BooleanField(default=True)
     unusual_spending_ai_enabled = models.BooleanField(default=True)
     unusual_category_percent = models.PositiveIntegerField(default=50)
@@ -2128,6 +2131,23 @@ class AlertSettings(models.Model):
 
     def __str__(self):
         return f"Alert settings for {self.person_id}"
+
+
+class BillsCalendarSettings(models.Model):
+    person = models.OneToOneField(Person, on_delete=models.PROTECT, related_name="bills_calendar_settings")
+    threshold_minor = models.BigIntegerField(null=True, blank=True)
+    accounts = models.ManyToManyField(Account, blank=True, related_name="bills_calendar_settings")
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(threshold_minor__isnull=True) | Q(threshold_minor__gte=0),
+                name="bills_calendar_threshold_non_negative",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Bills calendar settings for {self.person_id}"
 
 
 class MonthlyReview(models.Model):

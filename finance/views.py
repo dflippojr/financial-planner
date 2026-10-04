@@ -1675,6 +1675,7 @@ def _alert_settings_form(person, data=None):
             "large_transaction_enabled": prefs.large_transaction_enabled,
             "monthly_review_enabled": prefs.monthly_review_enabled,
             "monthly_review_ai_enabled": prefs.monthly_review_ai_enabled,
+            "expected_balance_enabled": prefs.expected_balance_enabled,
             "unusual_spending_enabled": prefs.unusual_spending_enabled,
             "unusual_spending_ai_enabled": prefs.unusual_spending_ai_enabled,
             "unusual_category_percent": prefs.unusual_category_percent,

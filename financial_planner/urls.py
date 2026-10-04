@@ -6,6 +6,7 @@ from finance import (
     ai_views,
     alert_views,
     budget_views,
+    bills_calendar_views,
     category_suggestion_views,
     chat_views,
     debt_planner_views,
@@ -243,6 +244,7 @@ urlpatterns = [
     path("transfers/", views.transfer_review, name="transfer-review"),
     path("recurring/", views.recurring_review, name="recurring-review"),
     path("planning/items/", planning_views.planned_item_list, name="planned-items"),
+    path("planning/calendar/", bills_calendar_views.bills_calendar, name="bills-calendar"),
     path("planning/debts/", debt_planner_views.debt_payoff, name="debt-payoff"),
     path("planning/review/", monthly_review_views.monthly_review, name="monthly-review"),
     path(
