@@ -185,7 +185,7 @@ def test_category_flag_matches_spending_page_and_respects_filters():
     category_flags = [item for item in flags if item["kind"] == KIND_CATEGORY]
     assert [item["name"] for item in category_flags] == ["Groceries"]
     assert category_flags[0]["month_minor"] == grocery_row.spending_minor == 15_000
-    assert category_flags[0]["baseline_minor"] == "10000"
+    assert category_flags[0]["baseline_minor"] == 10000
 
     mixed = compute_unusual_flags(owner, SEP)
     mixed_grocery = next(item for item in mixed if item["kind"] == KIND_CATEGORY and item["name"] == "Groceries")

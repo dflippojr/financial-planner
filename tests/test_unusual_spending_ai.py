@@ -261,7 +261,7 @@ def test_restricted_ai_does_not_send_shared_category_baseline(harness, monkeypat
     _category_shared_baseline_private_spike(owner, household)
     review, _wrote = store_monthly_review(owner, SEP, today=TODAY)
     grocery = next(item for item in review.facts["unusual"] if item["kind"] == "category" and item["name"] == "Groceries")
-    assert grocery["baseline_minor"] == "10000"
+    assert grocery["baseline_minor"] == 10000
     payload = unusual_facts_for_ai(owner, review.facts)
     blob = str(payload) + str(facts_payload_for_ai(owner, review.facts))
     assert "100.00" not in blob
@@ -288,7 +288,7 @@ def test_restricted_ai_does_not_send_shared_merchant_median(harness, monkeypatch
     _merchant_shared_median_private_charge(owner, household)
     review, _wrote = store_monthly_review(owner, SEP, today=TODAY)
     merchant = next(item for item in review.facts["unusual"] if item["kind"] == "merchant")
-    assert merchant["median_minor"] == "1000"
+    assert merchant["median_minor"] == 1000
     payload = unusual_facts_for_ai(owner, review.facts)
     blob = str(payload) + str(facts_payload_for_ai(owner, review.facts))
     assert "10.00" not in blob
@@ -365,3 +365,20 @@ def test_restricted_ai_sends_no_unusual_facts_without_private_accounts(harness, 
     assert "10000" not in prompts
     assert "150.00" not in prompts
     assert "15000" not in prompts
+
+
+def test_baseline_and_median_are_stored_as_integer_cents():
+    from finance.unusual_spending import _whole_minor
+
+    assert _whole_minor(10000) == 10000
+    assert _whole_minor("2500.5") == 2500
+    assert _whole_minor("2501.5") == 2502
+
+
+def test_a_cents_figure_read_as_dollars_is_not_grounded():
+    from finance.monthly_review_ai import paragraph_is_grounded
+
+    facts = {"unusual": [{"kind": "category", "name": "Groceries", "month_minor": 15000, "baseline_minor": 10000}]}
+
+    assert paragraph_is_grounded("Groceries were 150.00 USD against a usual 100.00 USD.", facts)
+    assert not paragraph_is_grounded("Groceries had a median of 10,000 USD.", facts)

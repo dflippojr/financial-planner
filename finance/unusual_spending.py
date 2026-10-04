@@ -1,7 +1,7 @@
 """Deterministic unusual-spending flags from visible cash-flow facts."""
 
 from hashlib import sha256
-from decimal import Decimal
+from decimal import ROUND_HALF_EVEN, Decimal
 
 from django.urls import reverse
 
@@ -55,6 +55,11 @@ def unusual_settings_signature(principal):
     prefs = settings_for(_person_for(principal))
     percent, floor = _category_thresholds(prefs)
     return [percent, floor, prefs.large_transaction_minor]
+
+
+def _whole_minor(value):
+    # Stored as an integer like every other *_minor fact, so AI grounding reads it as cents.
+    return int(Decimal(value).quantize(Decimal(1), rounding=ROUND_HALF_EVEN))
 
 
 def _median_minor(values):
@@ -126,7 +131,7 @@ def _category_flags(principal, start, end, prefs, *, account=None, scope="", tag
                 "name": row.name,
                 "key": row.key,
                 "month_minor": row.spending_minor,
-                "baseline_minor": str(baseline),
+                "baseline_minor": _whole_minor(baseline),
                 "baseline_display": format_minor(baseline),
                 "month_display": row.spending_display,
                 "url": spending_category_detail_url(
@@ -197,7 +202,7 @@ def _merchant_flags(principal, start, end, prefs, accounts, excluded):
                     "name": txn.description,
                     "merchant_key": key,
                     "amount_minor": amount,
-                    "median_minor": str(baseline),
+                    "median_minor": _whole_minor(baseline),
                     "median_display": format_minor(baseline, txn.currency),
                     "amount_display": format_minor(amount, txn.currency),
                     "date": txn.transaction_date.isoformat(),
