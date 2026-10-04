@@ -1,0 +1,19 @@
+{% extends "finance/base.html" %}
+{% block title %}Confirm passkey · Financial Planner{% endblock %}
+{% block content %}
+<h1 class="mb-4 text-2xl font-bold">Confirm with a passkey</h1>
+{% if error %}<div role="alert" class="alert alert-error mb-3">{{ error }}</div>{% endif %}
+<p class="mb-4">Use a registered passkey to finish signing in. A recovery code works once instead.</p>
+<p id="passkey-assert-error" class="text-error text-sm mb-2 hidden" role="alert"></p>
+<button type="button" class="btn btn-primary w-full mb-4" data-passkey-assert data-options-url="{% url 'passkey-sign-in-options' %}" data-assert-url="{% url 'passkey-sign-in-assert' %}">Use passkey</button>
+<div class="divider">or</div>
+<form method="post">
+  {% csrf_token %}
+  {% include "finance/_form_fields.html" %}
+  <button type="submit" class="btn w-full">Use a recovery code</button>
+</form>
+{% endblock %}
+{% block extra_js %}
+{% load static %}
+<script src="{% static 'js/passkeys.js' %}"></script>
+{% endblock %}

@@ -1183,6 +1183,11 @@ def sign_in(request):
                 record_sign_in_failure_for_username(username, request)
         else:
             clear_login_failures(key)
+            from .passkey_services import passkey_required_after_password, store_pending_passkey_login
+
+            if passkey_required_after_password(user):
+                store_pending_passkey_login(request, user, _redirect_target(request))
+                return redirect("passkey-sign-in")
             _complete_member_session(request, user)
             return redirect(_redirect_target(request))
     return render(
@@ -1556,6 +1561,10 @@ def account_settings(request):
             "error": error,
             "security_events": list(events_for(person)[:50]),
             "member_sessions": session_rows,
+            "passkeys": list(person.passkeys.visible_to(person).order_by("-created_at", "-pk"))
+            if person is not None
+            else [],
+            "require_passkey_after_password": bool(person and person.require_passkey_after_password),
         },
     )
 
@@ -1668,6 +1677,9 @@ def _reauth_context(request, form, auth_error=None):
         "action_label": action_label(action),
         "show_password": request.user.has_usable_password(),
         "show_google": has_usable_google_sign_in(request.user),
+        "show_passkey": bool(
+            getattr(request.user, "person", None) and request.user.person.passkeys.exists()
+        ),
         "auth_error": auth_error,
         "auth_card_layout": True,
     }

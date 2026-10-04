@@ -520,6 +520,7 @@ def member_deletion_counts(person):
         CategorySuggestion,
         PlannedItem,
         PrivacyPolicyAcceptance,
+        Passkey,
         RecoveryCode,
         RecurringSeries,
         RuleApplication,
@@ -544,6 +545,7 @@ def member_deletion_counts(person):
         + SimpleFinConnection.objects.filter(owner=person).count()
         + PrivacyPolicyAcceptance.objects.filter(person=person).count()
         + RecoveryCode.objects.filter(user_id=person.user_id).count()
+        + Passkey.objects.filter(member=person).count()
     )
     return {
         "private_account_count": len(private_ids),
@@ -662,10 +664,11 @@ def _delete_personal_records(person):
     RecurringExclusion.objects.filter(person=person).delete()
     Alert.objects.filter(recipient=person).delete()
     AlertSettings.objects.filter(person=person).delete()
-    from .models import MemberSecurityEvent, MemberSession
+    from .models import MemberSecurityEvent, MemberSession, Passkey
 
     MemberSecurityEvent.objects.filter(member=person).delete()
     MemberSession.objects.filter(member=person).delete()
+    Passkey.objects.filter(member=person).delete()
     person.privacy_policy_declined_version = None
     person.save(update_fields=("privacy_policy_declined_version", "updated_at"))
 

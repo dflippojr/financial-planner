@@ -30,6 +30,9 @@ ACTION_LABELS = {
     "ai-defaults": "Change AI backend defaults",
     "revoke-session": "Sign out a session",
     "revoke-other-sessions": "Sign out other sessions",
+    "add-passkey": "Add a passkey",
+    "remove-passkey": "Remove a passkey",
+    "require-passkey": "Change passkey requirement",
 }
 
 ACCOUNT_SETTINGS_ACTIONS = {
