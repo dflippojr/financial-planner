@@ -18,3 +18,19 @@ class LoginRequiredExceptStaticMiddleware(LoginRequiredMiddleware):
         if request.path.startswith(_static_prefix()):
             return None
         return super().process_view(request, view_func, view_args, view_kwargs)
+
+
+class MemberSessionActivityMiddleware:
+    """Keep the member session index current without scanning django_session."""
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        response = self.get_response(request)
+        user = getattr(request, "user", None)
+        if user is not None and getattr(user, "is_authenticated", False):
+            from .security_services import touch_member_session
+
+            touch_member_session(request)
+        return response

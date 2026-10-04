@@ -1982,3 +1982,87 @@ class MonthlyReview(models.Model):
 
     def __str__(self):
         return f"Monthly review {self.person_id} {self.month}"
+
+
+class MemberSecurityEvent(models.Model):
+    class EventType(models.TextChoices):
+        SIGN_IN_SUCCESS = "sign_in_success", "Signed in"
+        SIGN_IN_FAILURE = "sign_in_failure", "Sign-in failed"
+        SIGN_OUT = "sign_out", "Signed out"
+        RECOVERY_CODE_USED = "recovery_code_used", "Recovery code used"
+        PASSKEY_ADDED = "passkey_added", "Passkey added"
+        PASSKEY_REMOVED = "passkey_removed", "Passkey removed"
+        PASSWORD_CHANGED = "password_changed", "Password changed"
+        AI_CONNECTION_CHANGED = "ai_connection_changed", "AI connection changed"
+        SIMPLEFIN_CONNECTION_CHANGED = "simplefin_connection_changed", "SimpleFIN connection changed"
+        MEMBER_DATA_EXPORT = "member_data_export", "Data exported"
+        POLICY_ACCEPTANCE = "policy_acceptance", "Policy accepted"
+
+    member = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="security_events")
+    event_type = models.CharField(max_length=40, choices=EventType)
+    occurred_at = models.DateTimeField(default=timezone.now)
+    ip_address = models.CharField(max_length=45, blank=True, default="")
+    user_agent = models.CharField(max_length=200, blank=True, default="")
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            person = _person_for(principal)
+            if person is None:
+                return self.none()
+            return self.filter(member=person)
+
+    objects = QuerySet.as_manager()
+
+    class Meta:
+        indexes = [
+            models.Index(fields=("member", "-occurred_at"), name="sec_event_member_occurred_idx"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(
+                    event_type__in=(
+                        "sign_in_success",
+                        "sign_in_failure",
+                        "sign_out",
+                        "recovery_code_used",
+                        "passkey_added",
+                        "passkey_removed",
+                        "password_changed",
+                        "ai_connection_changed",
+                        "simplefin_connection_changed",
+                        "member_data_export",
+                        "policy_acceptance",
+                    )
+                ),
+                name="member_security_event_type_valid",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Security event {self.pk}"
+
+
+class MemberSession(models.Model):
+    member = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="member_sessions")
+    session_key = models.CharField(max_length=40, unique=True)
+    ip_address = models.CharField(max_length=45, blank=True, default="")
+    user_agent = models.CharField(max_length=200, blank=True, default="")
+    created_at = models.DateTimeField(default=timezone.now)
+    last_activity_at = models.DateTimeField(default=timezone.now)
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            person = _person_for(principal)
+            if person is None:
+                return self.none()
+            return self.filter(member=person)
+
+    objects = QuerySet.as_manager()
+
+    class Meta:
+        indexes = [
+            models.Index(fields=("member", "-last_activity_at"), name="member_session_activity_idx"),
+        ]
+
+    def __str__(self):
+        return f"Member session {self.pk}"

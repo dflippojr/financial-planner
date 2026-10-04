@@ -53,6 +53,16 @@ urlpatterns = [
     path("setup/", views.setup, name="setup"),
     path("settings/", RedirectView.as_view(pattern_name="account-settings", query_string=True)),
     path("settings/security/", views.account_settings, name="account-settings"),
+    path(
+        "settings/security/sessions/<int:session_id>/revoke/",
+        views.revoke_session,
+        name="revoke-session",
+    ),
+    path(
+        "settings/security/sessions/revoke-others/",
+        views.revoke_other_sessions,
+        name="revoke-other-sessions",
+    ),
     path("settings/connections/", simplefin_views.connections, name="simplefin-connections"),
     path("settings/connections/sync/", simplefin_views.connections_sync, name="simplefin-sync"),
     path(

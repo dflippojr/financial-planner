@@ -35,4 +35,72 @@
   <button type="submit" class="btn btn-primary">Add password</button>
 </form>
 {% endif %}
+<h3 class="mt-8 mb-3 text-lg font-semibold">Sessions</h3>
+{% if member_sessions %}
+<div class="overflow-x-auto mb-4">
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Device</th>
+        <th>IP</th>
+        <th>Last activity</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for session in member_sessions %}
+      <tr>
+        <td>
+          <span class="break-all">{{ session.user_agent|default:"Unknown device" }}</span>
+          {% if session.is_current %}<span class="badge badge-neutral ml-2">This device</span>{% endif %}
+        </td>
+        <td>{{ session.ip_address|default:"—" }}</td>
+        <td>{{ session.last_activity_at }}</td>
+        <td>
+          <form method="post" action="{% url 'revoke-session' session.id %}">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-sm">Sign out</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if member_sessions|length > 1 %}
+<form method="post" action="{% url 'revoke-other-sessions' %}" class="mb-8">
+  {% csrf_token %}
+  <button type="submit" class="btn btn-outline">Sign out everywhere else</button>
+</form>
+{% endif %}
+{% else %}
+<p class="mb-8 text-sm">No active sessions are listed yet.</p>
+{% endif %}
+<h3 class="mt-8 mb-3 text-lg font-semibold">Recent security events</h3>
+{% if security_events %}
+<div class="overflow-x-auto">
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Event</th>
+        <th>When</th>
+        <th>IP</th>
+        <th>Device</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for event in security_events %}
+      <tr>
+        <td>{{ event.get_event_type_display }}</td>
+        <td>{{ event.occurred_at }}</td>
+        <td>{{ event.ip_address|default:"—" }}</td>
+        <td class="break-all">{{ event.user_agent|default:"—" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="text-sm">No recent sign-ins or security events.</p>
+{% endif %}
 {% endblock %}
