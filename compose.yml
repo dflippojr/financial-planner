@@ -133,6 +133,8 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-financial_planner}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       POSTGRES_HOST: db
+      # The daily pass sweeps orphaned receipt files, so it needs the receipts volume.
+      RECEIPTS_DIR: /receipts
       POSTGRES_PORT: "5432"
       BACKUP_STATUS_PATH: /backup-health/status
       OPERATOR_USERNAMES: ${OPERATOR_USERNAMES:-}
@@ -144,6 +146,7 @@ services:
       app:
         condition: service_healthy
     volumes:
+      - receipts:/receipts
       - type: bind
         source: ${BACKUP_DIR:?BACKUP_DIR must be set}/health
         target: /backup-health

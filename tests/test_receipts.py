@@ -329,3 +329,28 @@ def test_member_data_deletion_leaves_files_until_orphan_sweep(tmp_path, settings
 
     sweep_orphan_receipt_files(now=now)
     assert not leftover_path.exists()
+
+
+@pytest.mark.django_db
+def test_the_grace_period_starts_when_an_old_receipt_is_deleted(tmp_path, settings):
+    settings.RECEIPTS_DIR = str(tmp_path)
+    settings.RECEIPT_ORPHAN_GRACE_HOURS = 48
+    owner = make_person("owner")
+    txn = make_transaction(owner)
+    receipt = attach_receipt(owner, txn.pk, upload_bytes("old.jpg", JPEG))
+    path = Path(settings.RECEIPTS_DIR) / receipt.stored_name
+    uploaded_long_ago = (timezone.now() - timedelta(days=5)).timestamp()
+    os.utime(path, (uploaded_long_ago, uploaded_long_ago))
+
+    remove_receipt(owner, txn.pk, receipt.pk)
+    run_daily_alert_pass(now=timezone.now())
+
+    assert path.is_file()
+
+
+def test_the_sync_container_can_sweep_receipts():
+    compose = (Path(__file__).resolve().parent.parent / "compose.yml").read_text()
+    scheduler = compose.split("  simplefin-sync:", 1)[1].split("\n  ai-jobs:", 1)[0]
+
+    assert "RECEIPTS_DIR: /receipts" in scheduler
+    assert "- receipts:/receipts" in scheduler

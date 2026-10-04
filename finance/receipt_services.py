@@ -86,6 +86,14 @@ def delete_receipts_for_transactions(transaction_ids):
     Receipt.objects.filter(transaction_id__in=ids).delete()
 
 
+def mark_receipt_file_deleted(stored_name):
+    """Start the orphan grace period now: the sweep measures it from the file's mtime."""
+    try:
+        os.utime(stored_receipt_path(stored_name))
+    except (OSError, PermissionDenied):
+        pass
+
+
 def sweep_orphan_receipt_files(now=None):
     from django.utils import timezone
 
