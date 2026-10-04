@@ -104,6 +104,8 @@ def _nav_current(request):
         return "planned-items"
     if name == "bills-calendar":
         return "bills-calendar"
+    if name == "debt-payoff":
+        return "debt-payoff"
     if name in {"monthly-review", "monthly-review-regenerate"}:
         return "monthly-review"
     if name in {"year-end", "year-end-csv"}:
@@ -120,7 +122,7 @@ def _nav_current(request):
         return "savings-goals"
     if name.startswith("alert"):
         return "alert-list"
-    if name in {"account-balances", "account-snapshot-edit", "account-snapshot-delete"}:
+    if name in {"account-balances", "account-snapshot-edit", "account-snapshot-delete", "account-debt-terms"}:
         return "account-list"
     if name.startswith("chat"):
         return "chat"
@@ -156,6 +158,7 @@ def navigation(request):
         ("csv-import", "Import", reverse("csv-import")),
         ("planned-items", "Planned items", reverse("planned-items")),
         ("bills-calendar", "Bills", reverse("bills-calendar")),
+        ("debt-payoff", "Debt payoff", reverse("debt-payoff")),
         ("monthly-review", "Monthly review", reverse("monthly-review")),
         ("year-end", "Year-end", reverse("year-end")),
         ("budgets", "Budgets", reverse("budgets")),
