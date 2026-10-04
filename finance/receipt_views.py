@@ -1,5 +1,5 @@
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.http import FileResponse, Http404
+from django.http import Http404, HttpResponse
 from django.shortcuts import redirect
 from django.utils.http import content_disposition_header
 from django.views.decorators.cache import never_cache
@@ -58,8 +58,8 @@ def receipt_download(request, transaction_id, receipt_id):
         raise Http404 from exc
     if not path.is_file():
         raise Http404()
-    handle = path.open("rb")
-    response = FileResponse(handle, content_type=receipt.content_type)
+    payload = path.read_bytes()
+    response = HttpResponse(payload, content_type=receipt.content_type)
     response["X-Content-Type-Options"] = "nosniff"
     response["Content-Disposition"] = content_disposition_header(
         as_attachment=receipt.content_type == Receipt.ContentType.PDF,

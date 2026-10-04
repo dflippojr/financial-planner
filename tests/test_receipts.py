@@ -107,7 +107,7 @@ def test_upload_view_download_and_delete(tmp_path, settings):
     assert "attachment" in pdf_response["Content-Disposition"].lower()
     assert pdf_response["X-Content-Type-Options"] == "nosniff"
     assert pdf_response["Content-Type"] == "application/pdf"
-    pdf_response.close()
+    assert pdf_response.content == PDF
 
     deleted = client.post(reverse("transaction-receipt-delete", args=(txn.pk, receipt.pk)))
     assert deleted.status_code == 302
