@@ -292,6 +292,10 @@ def test_app_totals_ignore_another_members_private_account():
     january = next(row for row in comparison_rows(owner).rows if row.month == date(2026, 1, 1))
     assert january.app_income_minor == 100000
     assert 999999 not in (january.app_income_minor, january.app_net_minor)
+    filtered = comparison_rows(owner, account=shared, scope=Account.Scope.HOUSEHOLD)
+    link = next(row for row in filtered.rows if row.month == date(2026, 1, 1)).drilldown_url
+    assert f"account={shared.pk}" in link
+    assert "scope=household" in link
 
 
 @pytest.mark.django_db
@@ -446,4 +450,28 @@ def test_oversized_and_empty_csv_are_rejected():
         read_sheet_csv(b"Month,Income,Spending\n")
     with pytest.raises(SheetCsvError):
         read_sheet_csv(b"Month,Month,Spending\n2026-01,1,1\n")
+
+
+@pytest.mark.django_db
+def test_delete_member_data_removes_this_members_sheet_totals_only():
+    from finance.lifecycle_services import delete_member_data
+
+    owner = make_person("owner")
+    member = make_person("member")
+    make_household(owner, member)
+    headers, rows = read_sheet_csv(UNSIGNED_CSV)
+    for person in (owner, member):
+        mapping = save_mapping(
+            person,
+            month_column="Month",
+            income_column="Income",
+            spending_column="Spending",
+            spending_sign="unsigned",
+            headers=headers,
+        )
+        store_month_totals(person, parsed_month_totals(rows, mapping), "synthetic-sheet.csv")
+    owner_id = owner.pk
+    delete_member_data(owner, {})
+    assert not SheetMonthTotal.objects.filter(member_id=owner_id).exists()
+    assert SheetMonthTotal.objects.visible_to(member).count() == 2
 
