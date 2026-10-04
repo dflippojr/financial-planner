@@ -212,6 +212,12 @@ def undo_import_batch(principal, account_id, batch_id):
     )
     if batch is None:
         raise PermissionDenied(_DENIED)
+    from finance.receipt_services import delete_receipts_for_transactions
+
+    removed_ids = list(
+        Transaction.objects.filter(import_batch=batch, status=Transaction.Status.ACTIVE).values_list("pk", flat=True)
+    )
+    delete_receipts_for_transactions(removed_ids)
     now = timezone.now()
     Transaction.objects.select_for_update().filter(
         import_batch=batch,

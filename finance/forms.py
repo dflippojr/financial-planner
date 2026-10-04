@@ -29,6 +29,9 @@ from .models import (
 )
 
 
+RECEIPT_ACCEPT = "image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf"
+
+
 MIN_SIGNED_BIGINT = -(2**63)
 MAX_SIGNED_BIGINT = 2**63 - 1
 ALL_VISIBLE_ACCOUNTS = "All visible accounts"
@@ -1561,3 +1564,16 @@ class BillsCalendarForm(forms.Form):
             "account_ids": [account.pk for account in self.cleaned_data["accounts"]],
             "threshold_minor": minor,
         }
+
+
+class ReceiptUploadForm(forms.Form):
+    receipt = forms.FileField(
+        label="Receipt photo or PDF",
+        widget=forms.FileInput(
+            attrs={
+                "accept": RECEIPT_ACCEPT,
+                "capture": "environment",
+            }
+        ),
+        help_text="JPEG, PNG, WebP, HEIC, or PDF. Up to 10 MB, 5 per transaction.",
+    )

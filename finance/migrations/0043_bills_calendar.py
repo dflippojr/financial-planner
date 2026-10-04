@@ -4,7 +4,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("finance", "0040_saved_transaction_filter"),
+        ("finance", "0042_transaction_receipts"),
     ]
 
     operations = [
@@ -23,6 +23,7 @@ class Migration(migrations.Migration):
                     ("budget", "Budget"),
                     ("large_transaction", "Large transaction"),
                     ("monthly_review", "Monthly review"),
+                    ("unusual_spending", "Unusual spending"),
                     ("backup", "Backup"),
                     ("expected_balance", "Expected balance"),
                 ],
@@ -40,6 +41,7 @@ class Migration(migrations.Migration):
                         "budget",
                         "large_transaction",
                         "monthly_review",
+                        "unusual_spending",
                         "backup",
                         "expected_balance",
                     )

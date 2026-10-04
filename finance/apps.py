@@ -32,3 +32,16 @@ class FinanceConfig(AppConfig):
     def ready(self):
         user_logged_in.connect(set_absolute_session_expiry)
         user_logged_out.connect(record_sign_out_event)
+
+        from django.db.models.signals import post_delete
+
+        from .models import Receipt
+        from .receipt_services import mark_receipt_file_deleted
+
+        # Runs for cascaded deletes too (transactions, accounts, members).
+        post_delete.connect(
+            lambda sender, instance, **kwargs: mark_receipt_file_deleted(instance.stored_name),
+            sender=Receipt,
+            weak=False,
+            dispatch_uid="receipt_file_deleted",
+        )

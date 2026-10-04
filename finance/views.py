@@ -37,6 +37,7 @@ from .auth_services import (
     validated_username,
 )
 from .forms import (
+    ReceiptUploadForm,
     AlertSettingsForm,
     CashFlowFilterForm,
     CategoryNameForm,
@@ -106,6 +107,7 @@ from .models import (
     Membership,
     Person,
     PrivacyPolicyVersion,
+    Receipt,
     RecurringSeries,
     RefundLink,
     SavedTransactionFilter,
@@ -636,11 +638,15 @@ def transaction_edit(request, transaction_id):
     return _render_transaction_edit(request, financial_transaction, form=form)
 
 
-def _render_transaction_edit(request, financial_transaction, *, form=None, refund_form=None, split_form=None, note_form=None):
+def _render_transaction_edit(
+    request, financial_transaction, *, form=None, refund_form=None, split_form=None, note_form=None, receipt_form=None
+):
     if form is None:
         form = TransactionCorrectionForm.for_transaction(financial_transaction)
     if note_form is None:
         note_form = TransactionNoteTagsForm.for_transaction(financial_transaction, request.user)
+    if receipt_form is None:
+        receipt_form = ReceiptUploadForm()
     correction_history = (
         TransactionCorrectionHistory.objects.visible_to(request.user)
         .filter(transaction=financial_transaction)
@@ -683,6 +689,12 @@ def _render_transaction_edit(request, financial_transaction, *, form=None, refun
             "is_split": financial_transaction.category_source == Transaction.CategorySource.SPLIT,
             "transaction": financial_transaction,
             "correction_history": correction_history,
+            "receipt_form": receipt_form,
+            "receipts": list(
+                Receipt.objects.visible_to(request.user)
+                .filter(transaction=financial_transaction)
+                .order_by("pk")
+            ),
         },
     )
 

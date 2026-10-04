@@ -14,6 +14,10 @@ sha256_validator = RegexValidator(
     regex=r"^[0-9a-f]{64}$",
     message="Enter a lowercase hexadecimal SHA-256 digest.",
 )
+receipt_stored_name_validator = RegexValidator(
+    regex=r"^[0-9a-f]{32}$",
+    message="Enter a 32-character hexadecimal stored name.",
+)
 
 
 def validate_json_object(value):
@@ -723,6 +727,51 @@ class Transaction(ArchivableModel):
         return TransferPair.objects.excluding_income_and_spending().filter(
             Q(leg_a=self) | Q(leg_b=self)
         ).exists()
+
+
+class Receipt(models.Model):
+    class ContentType(models.TextChoices):
+        JPEG = "image/jpeg", "JPEG"
+        PNG = "image/png", "PNG"
+        WEBP = "image/webp", "WebP"
+        HEIC = "image/heic", "HEIC"
+        PDF = "application/pdf", "PDF"
+
+    transaction = models.ForeignKey(Transaction, on_delete=models.CASCADE, related_name="receipts")
+    original_name = models.CharField(max_length=255)
+    stored_name = models.CharField(max_length=32, unique=True, validators=(receipt_stored_name_validator,))
+    content_type = models.CharField(max_length=16, choices=ContentType)
+    size_bytes = models.PositiveIntegerField()
+    uploaded_by = models.ForeignKey(
+        Person,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="uploaded_receipts",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            visible_transactions = Transaction.objects.visible_to(principal).values("pk")
+            return self.filter(transaction_id__in=visible_transactions)
+
+    objects = QuerySet.as_manager()
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(content_type__in=("image/jpeg", "image/png", "image/webp", "image/heic", "application/pdf")),
+                name="receipt_content_type_valid",
+            ),
+            models.CheckConstraint(
+                condition=Q(size_bytes__gt=0, size_bytes__lte=10 * 1024 * 1024),
+                name="receipt_size_within_cap",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Receipt {self.pk}"
 
 
 class TransactionTag(models.Model):
