@@ -393,6 +393,7 @@ def test_member_with_exclusions_and_alerts_can_delete_their_data():
         budget_enabled=True,
         large_transaction_enabled=False,
         monthly_review_enabled=True,
+        monthly_review_ai_enabled=True,
         large_transaction_minor=None,
     )
 

@@ -16,6 +16,15 @@
   <button type="submit" class="btn btn-outline">Regenerate</button>
 </form>
 
+{% if ai_paragraph %}
+<section class="card bg-base-100 shadow-sm mb-6" aria-label="AI summary">
+  <div class="card-body">
+    <p class="text-sm opacity-70">{{ ai_label }}</p>
+    <p class="mt-2 max-w-3xl">{{ ai_paragraph }}</p>
+  </div>
+</section>
+{% endif %}
+
 <section class="card bg-base-100 shadow-sm mb-6">
   <div class="card-body">
     <h2 class="card-title">Income, spending, and net</h2>

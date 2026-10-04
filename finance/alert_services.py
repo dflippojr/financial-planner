@@ -132,6 +132,7 @@ def save_alert_settings(
     budget_enabled,
     large_transaction_enabled,
     monthly_review_enabled,
+    monthly_review_ai_enabled,
     large_transaction_minor,
 ):
     person = _person_for(principal)
@@ -144,6 +145,7 @@ def save_alert_settings(
     prefs.budget_enabled = bool(budget_enabled)
     prefs.large_transaction_enabled = bool(large_transaction_enabled)
     prefs.monthly_review_enabled = bool(monthly_review_enabled)
+    prefs.monthly_review_ai_enabled = bool(monthly_review_ai_enabled)
     prefs.large_transaction_minor = large_transaction_minor
     prefs.save()
     return prefs

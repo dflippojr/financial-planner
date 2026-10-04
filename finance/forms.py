@@ -1168,6 +1168,11 @@ class AlertSettingsForm(forms.Form):
     budget_enabled = forms.BooleanField(required=False, label="Budgets near or over the limit")
     large_transaction_enabled = forms.BooleanField(required=False, label="Large transactions")
     monthly_review_enabled = forms.BooleanField(required=False, label="Monthly review")
+    monthly_review_ai_enabled = forms.BooleanField(
+        required=False,
+        label="AI monthly review summary",
+        help_text="On by default when an AI backend is connected and the privacy policy is accepted. The facts list stays the source of truth.",
+    )
     large_transaction_amount = forms.DecimalField(
         required=False,
         min_value=Decimal("0.01"),
@@ -1188,5 +1193,6 @@ class AlertSettingsForm(forms.Form):
             "budget_enabled": self.cleaned_data["budget_enabled"],
             "large_transaction_enabled": self.cleaned_data["large_transaction_enabled"],
             "monthly_review_enabled": self.cleaned_data["monthly_review_enabled"],
+            "monthly_review_ai_enabled": self.cleaned_data["monthly_review_ai_enabled"],
             "large_transaction_minor": minor,
         }

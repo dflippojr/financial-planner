@@ -128,6 +128,16 @@ def _process_one(job, moment):
             session_id=session_id,
             on_session=remember_session,
         )
+    elif job.feature == "monthly_review":
+        from .monthly_review_ai import run_monthly_review_job
+
+        result = run_monthly_review_job(
+            job.member,
+            job,
+            backend=backend,
+            session_id=session_id,
+            on_session=remember_session,
+        )
     else:
         prompt = FEATURE_PROMPTS.get(job.feature, FEATURE_PROMPTS["structured"])
         result = run_structured(

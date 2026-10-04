@@ -439,8 +439,17 @@ def store_monthly_review(principal, month, *, force=False, today=None, raise_inb
     review, _created = MonthlyReview.objects.update_or_create(
         person=person,
         month=month,
-        defaults={"visibility_key": key, "facts": facts, "generated_at": now},
+        defaults={
+            "visibility_key": key,
+            "facts": facts,
+            "generated_at": now,
+            "ai_paragraph": "",
+            "ai_backend": "",
+        },
     )
+    from .monthly_review_ai import queue_monthly_review_phrasing
+
+    queue_monthly_review_phrasing(person, review)
     if raise_inbox:
         _raise_review_alert(person, month)
     return review, True
