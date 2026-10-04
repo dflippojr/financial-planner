@@ -82,7 +82,12 @@ def _last_charge_account_ids(series_ids):
     from .models import RecurringSeriesMember
 
     best = {}
-    rows = RecurringSeriesMember.objects.filter(series_id__in=series_ids).values(
+    # Only active charges on active accounts, matching the projection's own filtering.
+    rows = RecurringSeriesMember.objects.filter(
+        series_id__in=series_ids,
+        transaction__status=Transaction.Status.ACTIVE,
+        transaction__account__status=Account.Status.ACTIVE,
+    ).values(
         "series_id",
         "transaction__account_id",
         "transaction__transaction_date",
@@ -209,6 +214,12 @@ def _latest_snapshots(accounts, *, as_of):
     return latest
 
 
+def accounts_without_snapshot(accounts, *, as_of):
+    """Selected accounts with no balance snapshot yet: their balance is unknown, not zero."""
+    known = _latest_snapshots(accounts, as_of=as_of)
+    return [account for account in accounts if account.pk not in known]
+
+
 def starting_balance_minor(accounts, *, as_of):
     """Each account's latest snapshot plus the transactions posted after it, through `as_of`.
 
@@ -330,7 +341,8 @@ def build_month(
     wanted = set(account_ids or [])
     selected = [account for account in selected if account.pk in wanted]
     selected_ids = {account.pk for account in selected}
-    start_balance = starting_balance_minor(selected, as_of=today) if selected else None
+    missing_balance = accounts_without_snapshot(selected, as_of=today) if selected else []
+    start_balance = starting_balance_minor(selected, as_of=today) if selected and not missing_balance else None
     through = last if last >= today else today
     balances = {}
     if start_balance is not None and selected:
@@ -395,6 +407,7 @@ def build_month(
         weeks=weeks,
         selected_accounts=selected,
         start_balance_minor=start_balance,
+        missing_balance_names=[account.name for account in missing_balance],
         start_balance_display=format_minor(start_balance) if start_balance is not None else None,
         threshold_minor=threshold_minor,
         prev_year=prev_year,
@@ -411,7 +424,7 @@ def first_below_in_next_days(principal, *, today=None, days=7):
         return None
     selected_ids = list(prefs.accounts.values_list("pk", flat=True))
     selected = list(deposit_accounts(principal).filter(pk__in=selected_ids))
-    if not selected:
+    if not selected or accounts_without_snapshot(selected, as_of=today):
         return None
     sources = calendar_inputs(principal)
     start_balance = starting_balance_minor(selected, as_of=today)

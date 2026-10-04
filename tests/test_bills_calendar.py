@@ -6,6 +6,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.test import Client
 from django.urls import reverse
+from django.utils import timezone
 
 from finance.alert_services import alerts_for, save_alert_settings, settings_for
 from finance.bills_calendar import (
@@ -444,3 +445,39 @@ def test_planned_income_posted_today_counts_once():
     )
 
     assert balances[today] == 100_000
+
+
+@pytest.mark.django_db
+def test_an_account_without_a_balance_snapshot_gets_no_balance_or_alert():
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner, name="Synthetic Unsnapshotted")
+    make_transaction(owner, checking, transaction_date=date(2026, 9, 10), amount_minor=500_000, description="Synthetic deposit")
+    save_calendar_settings(owner, account_ids=[checking.pk], threshold_minor=5_000)
+    save_alert_settings(owner, **_alert_kwargs(expected_balance_enabled=True))
+
+    calendar = build_month(owner, year=2026, month=10, today=TODAY, account_ids=[checking.pk], threshold_minor=5_000)
+
+    assert calendar.start_balance_minor is None
+    assert calendar.missing_balance_names == ["Synthetic Unsnapshotted"]
+    assert first_below_in_next_days(owner, today=TODAY) is None
+
+
+@pytest.mark.django_db
+def test_an_archived_charge_does_not_move_a_series_to_another_account():
+    from finance.bills_calendar import _last_charge_account_ids
+
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner, name="Synthetic A")
+    other = make_account(owner, name="Synthetic B")
+    series = make_series(owner, name="Synthetic gym", cadence=RecurringSeries.Cadence.MONTHLY)
+    RecurringSeriesMember.objects.create(
+        series=series,
+        transaction=make_transaction(owner, checking, transaction_date=date(2026, 9, 1), description="Synthetic gym A"),
+    )
+    newer = make_transaction(owner, other, transaction_date=date(2026, 9, 20), description="Synthetic gym B")
+    RecurringSeriesMember.objects.create(series=series, transaction=newer)
+    Account.objects.filter(pk=other.pk).update(status=Account.Status.ARCHIVED, archived_at=timezone.now())
+
+    assert _last_charge_account_ids([series.pk]) == {series.pk: checking.pk}

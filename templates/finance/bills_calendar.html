@@ -21,7 +21,9 @@
   <h2 class="text-xl font-semibold">{{ calendar.label }}</h2>
   <a class="btn btn-sm" href="?year={{ calendar.next_year }}&amp;month={{ calendar.next_month }}{% if scope %}&amp;scope={{ scope }}{% endif %}">Next</a>
 </nav>
-{% if calendar.start_balance_display %}
+{% if calendar.missing_balance_names %}
+<p class="mb-4 alert alert-info" role="status">Record a balance for {{ calendar.missing_balance_names|join:", " }} to see a running expected balance.</p>
+{% elif calendar.start_balance_display %}
 <p class="mb-4">Starting expected balance from latest snapshots: {{ calendar.start_balance_display }}</p>
 {% else %}
 <p class="mb-4 opacity-80">Pick checking or savings accounts below to see a running expected balance.</p>
