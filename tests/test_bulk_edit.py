@@ -497,6 +497,37 @@ def test_select_matching_respects_cap(monkeypatch):
 
 
 @pytest.mark.django_db
+def test_explicit_ids_respect_cap(monkeypatch):
+    owner = make_person("owner")
+    household = make_household(owner)
+    account = make_account(owner)
+    first = make_transaction(owner, account, description="Synthetic a", fingerprint="u" * 64)
+    second = make_transaction(owner, account, description="Synthetic b", fingerprint="v" * 64)
+    third = make_transaction(owner, account, description="Synthetic c", fingerprint="w" * 64)
+    monkeypatch.setattr("finance.bulk_edit_services.BULK_EDIT_CAP", 2)
+    ids = [first.pk, second.pk, third.pk]
+    preview = preview_bulk_edit(
+        owner,
+        matching=matching_qs(owner),
+        transaction_ids=ids,
+        select_matching=False,
+        action=ACTION_CATEGORY,
+        category_id=groceries(household).pk,
+    )
+    assert preview.over_cap is True
+    assert preview.eligible_ids == []
+    with pytest.raises(ValidationError):
+        apply_bulk_edit(
+            owner,
+            matching=matching_qs(owner),
+            transaction_ids=ids,
+            select_matching=False,
+            action=ACTION_CATEGORY,
+            category_id=groceries(household).pk,
+        )
+
+
+@pytest.mark.django_db
 def test_uncategorized_and_select_matching_under_cap():
     owner = make_person("owner")
     household = make_household(owner)

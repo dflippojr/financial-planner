@@ -124,6 +124,8 @@ def _candidate_rows(person, matching, transaction_ids, select_matching):
     ids = _parse_ids(transaction_ids)
     if not ids:
         return matching_count, False, []
+    if len(ids) > BULK_EDIT_CAP:
+        return matching_count, True, []
     rows = list(
         _visible_active(person)
         .filter(pk__in=ids)
