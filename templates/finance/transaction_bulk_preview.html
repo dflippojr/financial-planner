@@ -1,0 +1,45 @@
+{% extends "finance/base.html" %}
+{% block title %}Preview bulk edit · Financial Planner{% endblock %}
+{% block content %}
+<h1 class="mb-4 text-2xl font-bold">Preview bulk edit</h1>
+{% if preview.over_cap %}
+<p role="alert" class="alert alert-warning mb-4">Narrow the filters to select all {{ preview.matching_count }} matching rows (cap {{ cap }}).</p>
+<p><a class="link" href="{% url 'transaction-list' %}">Back to transactions</a></p>
+{% else %}
+<p class="mb-2">{{ preview.selected_count }} selected. {{ preview.eligible_ids|length }} will be updated.</p>
+{% if skips %}
+<ul class="mb-4 list-disc pl-6">
+  {% for skip in skips %}
+  <li>{{ skip.count }} skipped: {{ skip.label }}</li>
+  {% endfor %}
+</ul>
+{% endif %}
+{% if preview.eligible_ids %}
+<form method="post" action="{% url 'transaction-bulk-apply' %}">
+  {% csrf_token %}
+  <input type="hidden" name="filter_query" value="{{ filter_query }}">
+  <input type="hidden" name="action" value="{{ form.cleaned_data.action }}">
+  {% if form.cleaned_data.select_matching %}
+  <input type="hidden" name="select_matching" value="on">
+  {% endif %}
+  {% if form.cleaned_data.category %}
+  <input type="hidden" name="category" value="{{ form.cleaned_data.category.pk }}">
+  {% endif %}
+  {% for tag in form.cleaned_data.tags %}
+  <input type="hidden" name="tags" value="{{ tag.pk }}">
+  {% endfor %}
+  {% if form.cleaned_data.note_line %}
+  <input type="hidden" name="note_line" value="{{ form.cleaned_data.note_line }}">
+  {% endif %}
+  {% for txn_id in transaction_ids %}
+  <input type="hidden" name="transaction_id" value="{{ txn_id }}">
+  {% endfor %}
+  <button type="submit" class="btn btn-primary">Apply bulk edit</button>
+  <a class="btn btn-ghost" href="{% url 'transaction-list' %}">Cancel</a>
+</form>
+{% else %}
+<p class="mb-4">No eligible transactions to update.</p>
+<p><a class="link" href="{% url 'transaction-list' %}">Back to transactions</a></p>
+{% endif %}
+{% endif %}
+{% endblock %}

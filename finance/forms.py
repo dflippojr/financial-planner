@@ -888,6 +888,41 @@ class TransactionNoteTagsForm(forms.Form):
         )
 
 
+class BulkTransactionEditForm(forms.Form):
+    ACTION_CATEGORY = "set_category"
+    ACTION_ADD_TAGS = "add_tags"
+    ACTION_REMOVE_TAGS = "remove_tags"
+    ACTION_APPEND_NOTE = "append_note"
+
+    action = forms.ChoiceField(
+        choices=(
+            (ACTION_CATEGORY, "Set category"),
+            (ACTION_ADD_TAGS, "Add tags"),
+            (ACTION_REMOVE_TAGS, "Remove tags"),
+            (ACTION_APPEND_NOTE, "Append note"),
+        )
+    )
+    select_matching = forms.BooleanField(required=False)
+    category = forms.ModelChoiceField(
+        queryset=Category.objects.none(),
+        required=False,
+        empty_label="Uncategorized",
+    )
+    tags = forms.ModelMultipleChoiceField(
+        queryset=Tag.objects.none(),
+        required=False,
+        widget=forms.CheckboxSelectMultiple,
+    )
+    note_line = forms.CharField(required=False, max_length=2000, label="Note line")
+
+    def __init__(self, *args, principal=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        from .category_services import assignable_categories
+
+        self.fields["category"].queryset = assignable_categories(principal)
+        self.fields["tags"].queryset = Tag.objects.visible_to(principal).active().order_by("name", "pk")
+
+
 class TransferWindowForm(forms.Form):
     transfer_match_window_days = forms.IntegerField(min_value=0, max_value=366, label="Match window (days)")
 
