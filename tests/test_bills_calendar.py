@@ -381,4 +381,34 @@ def test_starting_balance_includes_transactions_after_the_latest_snapshot():
     make_transaction(owner, checking, transaction_date=date(2026, 10, 6), amount_minor=-1_000, description="Synthetic after today")
     make_transaction(owner, checking, transaction_date=date(2026, 10, 4), amount_minor=-7_000, description="Synthetic posted today")
 
-    assert starting_balance_minor([checking], as_of=date(2026, 10, 4)) == 20_000
+    assert starting_balance_minor([checking], as_of=date(2026, 10, 4)) == 13_000
+
+
+@pytest.mark.django_db
+def test_a_planned_payment_posted_today_counts_once_and_an_unplanned_one_counts():
+    from finance.bills_calendar import starting_balance_minor
+
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner)
+    today = date(2026, 10, 4)
+    add_snapshot(checking, date(2026, 10, 3), 100_000)
+    PlannedItem.objects.create(
+        owner=owner,
+        scope=PlannedItem.Scope.PRIVATE,
+        name="Synthetic rent",
+        kind=PlannedItem.Kind.EXPENSE,
+        amount_minor=80_000,
+        start_date=today,
+        cadence=PlannedItem.Cadence.MONTHLY,
+    )
+    make_transaction(owner, checking, transaction_date=today, amount_minor=-80_000, description="Synthetic rent paid")
+    make_transaction(owner, checking, transaction_date=today, amount_minor=-5_000, description="Synthetic unplanned")
+    sources = calendar_inputs(owner)
+    start = starting_balance_minor([checking], as_of=today)
+
+    balances = expected_balances_by_day(
+        sources, start_balance=start, selected_ids={checking.pk}, from_date=today, through_date=today
+    )
+
+    assert balances[today] == 15_000

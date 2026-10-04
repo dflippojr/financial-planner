@@ -210,10 +210,10 @@ def _latest_snapshots(accounts, *, as_of):
 
 
 def starting_balance_minor(accounts, *, as_of):
-    """Each account's latest snapshot plus the transactions posted after it, before `as_of`.
+    """Each account's latest snapshot plus the transactions posted after it, through `as_of`.
 
-    `as_of` itself is left to the forecast, which applies that day's expected items,
-    so a payment posted today is never counted twice.
+    The forecast skips any of `as_of`'s expected items that have already posted
+    (see `_posted_on`), so a payment made today is counted once.
     """
     snapshots = _latest_snapshots(accounts, as_of=as_of)
     total = 0
@@ -222,15 +222,40 @@ def starting_balance_minor(accounts, *, as_of):
             account_id=account_id,
             status=Transaction.Status.ACTIVE,
             transaction_date__gt=snapshot.snapshot_date,
-            transaction_date__lt=as_of,
+            transaction_date__lte=as_of,
         ).aggregate(total=Sum("amount_minor"))["total"]
         total += snapshot.amount_minor + (since or 0)
     return total
 
 
-def _balance_delta_on_day(sources, on_date, selected_ids):
+def _posted_on(sources, on_date, selected_ids):
+    """Expected items for `on_date` that already posted on the selected accounts."""
+    from .models import RecurringSeriesMember
+
+    posted = set()
+    todays = Transaction.objects.filter(
+        account_id__in=selected_ids,
+        status=Transaction.Status.ACTIVE,
+        transaction_date=on_date,
+    )
+    charged_series = set(
+        RecurringSeriesMember.objects.filter(transaction__in=todays).values_list("series_id", flat=True)
+    )
+    amounts = list(todays.values_list("amount_minor", flat=True))
+    for item in _expected_on_day(sources, on_date):
+        if item.source == SOURCE_SERIES and item.source_id in charged_series:
+            posted.add((item.source, item.source_id))
+        elif item.source == SOURCE_PLANNED and item.amount_minor in amounts:
+            amounts.remove(item.amount_minor)
+            posted.add((item.source, item.source_id))
+    return posted
+
+
+def _balance_delta_on_day(sources, on_date, selected_ids, skip=frozenset()):
     total = 0
     for item in _expected_on_day(sources, on_date):
+        if (item.source, item.source_id) in skip:
+            continue
         if item.source == SOURCE_SERIES and item.account_id not in selected_ids:
             continue
         if item.source == SOURCE_PLANNED or (item.source == SOURCE_SERIES and item.account_id in selected_ids):
@@ -262,12 +287,18 @@ def month_weeks(year, month):
 
 
 def expected_balances_by_day(sources, *, start_balance, selected_ids, from_date, through_date):
-    """Inclusive running expected balances from from_date through through_date."""
+    """Inclusive running expected balances from from_date through through_date.
+
+    `start_balance` already includes what posted on from_date, so that day's
+    expected items that have posted are skipped.
+    """
     running = start_balance
     balances = {}
     day = from_date
+    posted_first_day = _posted_on(sources, from_date, selected_ids)
     while day <= through_date:
-        running += _balance_delta_on_day(sources, day, selected_ids)
+        skip = posted_first_day if day == from_date else frozenset()
+        running += _balance_delta_on_day(sources, day, selected_ids, skip)
         balances[day] = running
         day += timedelta(days=1)
     return balances
