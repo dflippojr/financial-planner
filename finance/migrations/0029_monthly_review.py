@@ -1,3 +1,4 @@
+import django.core.validators
 from django.db import migrations, models
 import django.db.models.deletion
 
@@ -5,7 +6,7 @@ import django.db.models.deletion
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("finance", "0027_recurring_review"),
+        ("finance", "0028_member_data_deletion"),
     ]
 
     operations = [
@@ -19,7 +20,18 @@ class Migration(migrations.Migration):
             fields=[
                 ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
                 ("month", models.DateField()),
-                ("visibility_key", models.CharField(max_length=64)),
+                (
+                    "visibility_key",
+                    models.CharField(
+                        max_length=64,
+                        validators=[
+                            django.core.validators.RegexValidator(
+                                message="Enter a lowercase hexadecimal SHA-256 digest.",
+                                regex="^[0-9a-f]{64}$",
+                            )
+                        ],
+                    ),
+                ),
                 ("facts", models.JSONField()),
                 ("generated_at", models.DateTimeField()),
                 (
