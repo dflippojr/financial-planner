@@ -186,8 +186,8 @@ def _own_private_series(person, item):
 def _extract_paragraph(answer):
     text = (answer or "").strip()
     if text.startswith("```"):
-        text = re.sub(r"^```(?:\w+)?\s*", "", text)
-        text = re.sub(r"\s*```$", "", text).strip()
+        text = re.sub(r"^```\w*", "", text).strip()
+        text = text.removesuffix("```").strip()
     return text
 
 

@@ -374,3 +374,11 @@ def test_regenerate_during_the_call_keeps_the_cleared_summary(harness, monkeypat
     _process_one(old_job, timezone.now())
     review = MonthlyReview.objects.get(person=owner, month=SEP)
     assert review.ai_paragraph == ""
+
+
+def test_code_fences_are_stripped_from_the_reply():
+    from finance.monthly_review_ai import _extract_paragraph
+
+    assert _extract_paragraph("```text\nSpending was 12.34 USD.\n```") == "Spending was 12.34 USD."
+    assert _extract_paragraph("```\nSpending was 12.34 USD.\n```   ") == "Spending was 12.34 USD."
+    assert _extract_paragraph("Spending was 12.34 USD.") == "Spending was 12.34 USD."
