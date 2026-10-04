@@ -7,7 +7,7 @@ import finance.models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("finance", "0038_shared_local_model"),
+        ("finance", "0039_sheet_comparison"),
     ]
 
     operations = [
