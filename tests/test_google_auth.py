@@ -88,6 +88,13 @@ class _FakeTokenSession:
         self.id_token = id_token
         self.token_posts = []
 
+    # allauth 65.12+ opens the session as a context manager, like requests.Session.
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
     def request(self, method, url, params=None, data=None, headers=None, auth=None, **kwargs):
         self.token_posts.append({"method": method, "url": url, "data": data})
         if "oauth2.googleapis.com/token" not in url:
