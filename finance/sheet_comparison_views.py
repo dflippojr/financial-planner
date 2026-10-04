@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from django.contrib import messages
+from django.db import transaction
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.cache import never_cache
@@ -93,13 +94,15 @@ def _filter_kwargs(form):
 
 def _commit_rows(request, person, headers, rows, source, token, mapping_data=None):
     settings_row = settings_for(person)
-    if mapping_data is not None:
-        settings_row = save_mapping(person, headers=headers, **mapping_data)
-    elif not mapping_matches_headers(settings_row, headers):
-        _store_pending(request, headers, token, source)
-        return False
-    by_month = parsed_month_totals(rows, settings_row)
-    store_month_totals(person, by_month, source)
+    # One transaction: a new mapping is kept only if its rows also parse and store.
+    with transaction.atomic():
+        if mapping_data is not None:
+            settings_row = save_mapping(person, headers=headers, **mapping_data)
+        elif not mapping_matches_headers(settings_row, headers):
+            _store_pending(request, headers, token, source)
+            return False
+        by_month = parsed_month_totals(rows, settings_row)
+        store_month_totals(person, by_month, source)
     delete_stage(request, token)
     request.session.pop(SESSION_KEY, None)
     messages.success(request, "Stored month totals from the CSV. The file was not kept.")

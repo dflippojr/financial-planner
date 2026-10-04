@@ -580,3 +580,51 @@ def test_malformed_csv_redirects_instead_of_500():
     assert follow.status_code == 200
     assert b"couldn" in follow.content and b"read as CSV." in follow.content
 
+
+
+@pytest.mark.django_db
+def test_a_rejected_mapping_upload_keeps_the_previous_mapping(staging_settings):
+    owner = make_person("owner")
+    make_household(owner)
+    client = signed_in(owner)
+    client.post(
+        reverse("sheet-comparison"),
+        {"action": "upload", "csv_file": SimpleUploadedFile("synthetic-sheet.csv", UNSIGNED_CSV, "text/csv")},
+    )
+    client.post(
+        reverse("sheet-comparison"),
+        {
+            "action": "map",
+            "month_column": "Month",
+            "income_column": "Income",
+            "spending_column": "Spending",
+            "spending_sign": "unsigned",
+        },
+    )
+    renamed = b"Month,Money out,Money in" + bytes([10]) + b"not-a-month,400.00,1000.00" + bytes([10])
+    client.post(
+        reverse("sheet-comparison"),
+        {"action": "upload", "csv_file": SimpleUploadedFile("synthetic-bad.csv", renamed, "text/csv")},
+    )
+
+    rejected = client.post(
+        reverse("sheet-comparison"),
+        {
+            "action": "map",
+            "month_column": "Month",
+            "income_column": "Money out",
+            "spending_column": "Money in",
+            "spending_sign": "unsigned",
+        },
+    )
+
+    assert rejected.status_code == 302
+    kept = SheetComparisonSettings.objects.visible_to(owner).get()
+    assert (kept.income_column, kept.spending_column) == ("Income", "Spending")
+
+
+def test_an_oversized_tolerance_is_a_form_error_not_a_server_error():
+    from finance.forms import SheetToleranceForm
+
+    assert not SheetToleranceForm({"tolerance": "21474836.48"}).is_valid()
+    assert SheetToleranceForm({"tolerance": "1000000.00"}).is_valid()

@@ -1255,6 +1255,7 @@ class SheetColumnMappingForm(forms.Form):
 class SheetToleranceForm(forms.Form):
     tolerance = forms.DecimalField(
         min_value=Decimal("0.00"),
+        max_value=Decimal("1000000.00"),
         max_digits=12,
         decimal_places=2,
         label="Match tolerance",
