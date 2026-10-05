@@ -1,6 +1,7 @@
 from datetime import date
 
 import pytest
+from tests.chat_helpers import ask
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
 from django.test import Client
@@ -20,7 +21,6 @@ from finance.ai_services import (
 )
 from finance.ai_tools import default_tools, list_accounts
 from finance.ai_types import AUTHORIZATION_REQUIRED, LIMIT_REACHED, LOCAL_BACKEND, UNAVAILABLE
-from finance.chat_services import send_message
 from finance.models import Account, AiJob, AiUsageEvent, Household, ImportBatch, Membership, Person, Transaction
 from finance.policy_services import accept_policy, current_policy, publish_policy
 
@@ -64,7 +64,7 @@ def test_guest_chat_allowed_only_when_host_offers_local(harness):
     state, _url = harness
     _host_user, host, _guest_user, guest, _household = _household_pair(harness)
     with pytest.raises(AiError) as hidden:
-        send_message(guest, "What can I see?", sleep=lambda _s: None)
+        ask(guest, "What can I see?", sleep=lambda _s: None)
     assert hidden.value.failure_code == AUTHORIZATION_REQUIRED
     before = list(state.requests)
     result = run_conversation(guest, "Hi", feature="chat", backend=LOCAL_BACKEND, tools=default_tools())
@@ -75,14 +75,14 @@ def test_guest_chat_allowed_only_when_host_offers_local(harness):
         set_shared_local_use(guest, chat=True, background=True)
     set_offer_local_to_household(host, True)
     set_shared_local_use(guest, chat=True, background=True)
-    conversation = send_message(guest, "What can I see?", sleep=lambda _s: None)
+    conversation = ask(guest, "What can I see?", sleep=lambda _s: None)
     assert conversation.member_id == guest.pk
     assert conversation.backend == LOCAL_BACKEND
     assert conversation.messages.filter(role="assistant").exists()
     assert member_has_ai(guest)
     set_offer_local_to_household(host, False)
     with pytest.raises(AiError) as stopped:
-        send_message(guest, "Still there?", sleep=lambda _s: None)
+        ask(guest, "Still there?", sleep=lambda _s: None)
     assert stopped.value.failure_code in {AUTHORIZATION_REQUIRED, UNAVAILABLE}
 
 
@@ -143,7 +143,7 @@ def test_guest_tools_hide_host_private_data(harness):
     listed = list_accounts(guest, {})
     assert "Shared Checking" in listed.text
     assert "Host Private" not in listed.text
-    conversation = send_message(guest, "List my accounts", sleep=lambda _s: None)
+    conversation = ask(guest, "List my accounts", sleep=lambda _s: None)
     text = " ".join(conversation.messages.values_list("content", flat=True))
     assert "Host Private" not in text
     usage = AiUsageEvent.objects.visible_to(guest)

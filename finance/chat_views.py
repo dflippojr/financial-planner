@@ -11,6 +11,7 @@ from django.views.decorators.http import require_GET, require_POST
 
 from .ai_services import AiError, local_status, member_has_ai, resolve_ai, warm_for_chat
 from .ai_types import LOCAL_BACKEND
+from .chat_runner import recover_stale_turns
 from .chat_services import (
     chat_local_enabled,
     conversations_for,
@@ -134,6 +135,50 @@ def chat_status(request):
     payload = _status_payload(rows)
     payload["ok"] = True
     return JsonResponse(payload)
+
+
+@require_GET
+def chat_turn(request, turn_id):
+    """Where a pending chat turn stands, for the page to swap in the reply without a reload."""
+    person = _person(request)
+    turn = (
+        AiConversationMessage.objects.visible_to(person)
+        .filter(
+            pk=turn_id,
+            conversation__in=conversations_for(person),
+            role__in=(AiConversationMessage.Role.ASSISTANT, AiConversationMessage.Role.ERROR),
+        )
+        .first()
+    )
+    if turn is None:
+        return JsonResponse({"ok": False}, status=404)
+    if turn.status == AiConversationMessage.Status.PENDING and recover_stale_turns(pk=turn.pk):
+        # The runner died or never picked it up: end it here so the page stops waiting.
+        turn.refresh_from_db()
+    payload = {"ok": True, "status": turn.status}
+    if turn.status != AiConversationMessage.Status.PENDING:
+        payload.update(
+            {
+                "role": turn.role,
+                "content": turn.content,
+                "figures": [
+                    {
+                        "url": _local_url(item.get("url")),
+                        "label": str(item.get("label") or ""),
+                        "amount_display": str(item.get("amount_display") or ""),
+                    }
+                    for item in turn.figures or ()
+                    if isinstance(item, dict)
+                ],
+                "notices": [str(item) for item in turn.notices or ()],
+            }
+        )
+    return JsonResponse(payload)
+
+
+def _local_url(value):
+    url = str(value or "")
+    return url if url.startswith("/") and not url.startswith("//") else ""
 
 
 def _status_payload(rows):
