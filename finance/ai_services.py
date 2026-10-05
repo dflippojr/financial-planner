@@ -48,6 +48,20 @@ SHARED_LOCAL_UNAVAILABLE = "The household local model is not available."
 SHARED_LOCAL_NOT_OFFERED = "The household local model is not offered."
 SHARED_LOCAL_CHOOSE = "Choose Local model (shared) in Settings → AI."
 HOSTED_SHARED_DENIED = "Hosted AI backends on another member's connection cannot be used."
+TOKEN_FORMAT = "Paste an Agent Harness App token that starts with ha-."
+TOKEN_REJECTED = (
+    "That token isn't valid for this Agent Harness. Create an App token in that "
+    "harness's Settings → Apps, then connect again."
+)
+HARNESS_NOT_FOUND = (
+    "That URL doesn't point at an Agent Harness API. Use the harness's own address, "
+    "without /api/v1 or a page path."
+)
+HARNESS_UNREACHABLE = (
+    "The app can't reach that Agent Harness. Inside Docker, localhost is the app's "
+    "own container, so use the harness's tailnet URL."
+)
+HARNESS_FAILED = "Agent Harness couldn't finish connecting. Try again in a moment."
 
 
 class AiError(Exception):
@@ -118,12 +132,12 @@ def connect_harness(principal, *, base_url, token):
         raise AiError(CONNECT_DENIED, AUTHORIZATION_REQUIRED)
     url = parse_harness_url(base_url)
     secret = (token or "").strip()
-    if not secret.startswith(TOKEN_PREFIX):
-        raise AiError("Paste an Agent Harness App token that starts with ha-.")
+    if not _looks_like_app_token(secret):
+        raise AiError(TOKEN_FORMAT)
     try:
         _root, backends, projects = discover(url, secret)
     except HarnessHttpError as exc:
-        raise AiError("That Agent Harness token could not be used.", failure_from_http(exc)) from None
+        raise AiError(_connect_failure_message(exc), failure_from_http(exc)) from None
     infos = [describe_backend(item) for item in _backend_items(backends)]
     chat, background = default_backends(infos)
     project = _choose_project(projects)
@@ -149,6 +163,27 @@ def connect_harness(principal, *, base_url, token):
     )
     _forget_saved_sessions(person)
     return connection
+
+
+def _looks_like_app_token(secret):
+    # The token goes into an HTTP header: a curly quote or line break from a bad
+    # paste would make http.client fail before the harness sees the request.
+    return (
+        secret.startswith(TOKEN_PREFIX)
+        and secret.isascii()
+        and secret.isprintable()
+        and not any(ch.isspace() for ch in secret)
+    )
+
+
+def _connect_failure_message(exc):
+    if exc.status in {401, 403}:
+        return TOKEN_REJECTED
+    if exc.status == 404:
+        return HARNESS_NOT_FOUND
+    if exc.status == 0:
+        return HARNESS_UNREACHABLE
+    return HARNESS_FAILED
 
 
 def disconnect_harness(principal):

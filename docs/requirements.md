@@ -408,6 +408,8 @@ Owner decisions:
 
 AI refinements (owner, 2026-10-02, #91 and #94):
 - **Harness address.** A member may connect only an Agent Harness on the same host or on the tailnet. HTTPS is required except on loopback.
+- **Connect errors (#212).** A URL copied with a trailing `/api/v1` is accepted and stored without it. Connect names the actual problem: a token the harness rejects (401/403, create one in that harness's Settings → Apps), a URL that isn't a harness API (404), or a harness the app can't reach (inside Docker, `localhost` is the app's own container). Malformed URLs and badly pasted tokens get a message, never a server error.
+- **Error logs (#212).** Unexpected server errors write a traceback to the container's stdout. Logs never carry transaction details, raw import rows or secrets; the log formatter also strips App tokens and URL credentials that an exception message might quote.
 - **Chat history.** Conversations are kept only for the member who started them, can be deleted, and expire after 30 days (configurable). They are included in that member's export.
 - **Advice.** The chat bot answers factual and explanatory questions. Its suggestions are labeled as opinion and never presented as financial advice.
 - **Chat UI.** A Chat page, plus a drawer on every page that continues the same conversation. The drawer passes only the current route and its query parameters, never page data.
