@@ -45,7 +45,7 @@ def _sgml_tree(text):
 
 
 def _sgml_tag(stack, token):
-    match = re.fullmatch(r"<(/?)([A-Z][A-Z0-9]*)\s*>", token)
+    match = re.fullmatch(r"<(/?)([A-Z][A-Z0-9_.:-]*)\s*>", token)
     if not match:
         raise CsvInputError(MALFORMED)
     closing, tag = match.groups()

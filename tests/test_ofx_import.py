@@ -86,6 +86,11 @@ def test_sgml_explicit_scalar_end_tags_and_empty_memo():
     assert preview_csv(read_ofx(content), OFX_MAPPING).invalid_count == 0
 
 
+def test_sgml_extension_fields_are_ignored():
+    content = fixture().replace(b"<OFX>", b"<OFX><SYNTHETIC.BID>999\n")
+    assert preview_csv(read_ofx(content), OFX_MAPPING).valid_count == 2
+
+
 def test_mixed_currencies_are_row_errors():
     content = fixture("synthetic_card.qfx").replace(
         b"<TRNAMT>-45.67", b"<CURRENCY><CURSYM>EUR</CURSYM></CURRENCY><TRNAMT>-45.67"
@@ -143,6 +148,10 @@ def test_import_reimport_and_undo(import_client, name, account_type):
     assert set(stored.original_fields) == set(OFX_HEADERS)
     assert stored.source_transaction_id.startswith("synthetic-")
     assert stored.kind == "cash_flow"
+    expected = preview_csv(read_ofx(content), OFX_MAPPING)
+    assert list(Transaction.objects.order_by("source_row_number").values_list(
+        "transaction_date", "amount_minor", "description", "currency"
+    )) == [(row.transaction_date, row.amount_minor, row.description, row.currency) for row in expected.rows]
     response = upload(client, account, content)
     assert response.context["preview"].duplicate_count == 2
     assert commit(client, account, response).status_code == 302
