@@ -1,7 +1,7 @@
 {% extends "finance/base.html" %}
 {% block title %}Import CSV · Financial Planner{% endblock %}
 {% block content %}
-<h1 class="mb-4 text-2xl font-bold">Preview CSV import for {{ account.name }}</h1>
+<h1 class="mb-4 text-2xl font-bold">Preview import for {{ account.name }}</h1>
 <p class="mb-4">This tool previews data only. It does not import transactions until you confirm an import.</p>
 {% if import_result %}
 <div role="status" class="alert {% if import_result.undone %}alert-info{% else %}alert-success{% endif %} mb-4">
@@ -30,6 +30,8 @@
 {% else %}
 {% if saved_mapping %}
 <p class="mb-4">Using saved mapping {{ saved_mapping.name }}. Stored amounts use negative for money out and positive for money in.</p>
+{% elif import_profile == "ofx" %}
+<p class="mb-4">OFX / QFX transactions are mapped automatically. Stored amounts use negative for money out and positive for money in.</p>
 {% elif import_profile == "huntington" %}
 <p class="mb-4">Huntington checking columns are mapped automatically. Stored amounts use negative for money out and positive for money in.</p>
 {% elif import_profile == "capital_one" %}
@@ -45,7 +47,7 @@
   <div class="flex flex-wrap gap-2">
     <button type="submit" name="action" value="preview" class="btn btn-primary">Preview rows</button>
     {% if commit_available %}<button type="submit" name="action" value="commit" class="btn btn-success">Import new rows</button>{% endif %}
-    {% if not saved_mapping and import_profile != "huntington" and import_profile != "capital_one" and import_profile != "apple_card" %}
+    {% if not saved_mapping and import_profile != "huntington" and import_profile != "capital_one" and import_profile != "apple_card" and import_profile != "ofx" %}
     <button type="submit" name="action" value="save_mapping" class="btn btn-outline">Save mapping</button>
     {% endif %}
     <button type="submit" name="action" value="cancel" formnovalidate class="btn btn-ghost">Cancel and delete upload</button>

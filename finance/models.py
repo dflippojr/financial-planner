@@ -554,6 +554,7 @@ class ImportBatch(ArchivableModel):
         APPLE_CARD = "apple_card", "Apple Card"
         VANGUARD = "vanguard", "Vanguard"
         SIMPLEFIN = "simplefin", "SimpleFIN"
+        OFX = "ofx", "OFX / QFX"
 
     account = models.ForeignKey(Account, on_delete=models.PROTECT, related_name="import_batches")
     imported_by = models.ForeignKey(
@@ -589,7 +590,7 @@ class ImportBatch(ArchivableModel):
         constraints = [
             models.CheckConstraint(
                 condition=Q(
-                    source__in=("huntington", "capital_one", "apple_card", "vanguard", "simplefin")
+                    source__in=("huntington", "capital_one", "apple_card", "vanguard", "simplefin", "ofx")
                 ),
                 name="import_source_valid",
             ),

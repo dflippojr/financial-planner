@@ -2,14 +2,14 @@
 {% block title %}Import · Financial Planner{% endblock %}
 {% block content %}
 <h1 class="mb-4 text-2xl font-bold">Import</h1>
-<p class="mb-4 max-w-2xl opacity-80">Choose an account and a CSV file to continue into the existing preview and mapping flow. Per-account Import CSV on Accounts still works.</p>
+<p class="mb-4 max-w-2xl opacity-80">Choose an account and a CSV, OFX or QFX file to continue into the existing preview and mapping flow. Per-account Import CSV on Accounts still works.</p>
 {% include "finance/_messages.html" %}
 {% if has_linked_accounts %}
 <p class="mb-4 max-w-2xl">Accounts marked Linked are connected through SimpleFIN. CSV history before the cut-over date stays; SimpleFIN supplies activity from that date forward. CSV rows on or after the cut-over can overlap linked data for that account.</p>
 {% endif %}
 <section class="card bg-base-100 shadow-sm mb-8 max-w-lg">
   <div class="card-body">
-    <h2 class="card-title">Import CSV</h2>
+    <h2 class="card-title">Import statement</h2>
     {% if accounts %}
     <form method="post" enctype="multipart/form-data">
       {% csrf_token %}
