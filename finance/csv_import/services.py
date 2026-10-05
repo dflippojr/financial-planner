@@ -122,7 +122,7 @@ def commit_csv_import(
 
     if date_range_end < date_range_start:
         raise ValidationError("The import date range must end on or after it starts.")
-    if source not in ImportBatch.Source.values:
+    if source not in ImportBatch.Source.values or source == ImportBatch.Source.MANUAL:
         raise ValidationError("Choose a supported import source.")
 
     preview = classify_overlap(account, preview_csv(document, mapping))
@@ -187,9 +187,18 @@ def categorize_imported_batch(principal, batch):
     return applied
 
 
-@transaction.atomic
 def undo_import_batch(principal, account_id, batch_id):
-    """Archive one import batch and only its transactions."""
+    """Archive one import batch and only its transactions.
+
+    Manual entries are one-row batches too, but they are removed only through
+    delete_manual_transaction, which also records the deletion in history.
+    """
+    return archive_batch(principal, account_id, batch_id, manual=False)
+
+
+@transaction.atomic
+def archive_batch(principal, account_id, batch_id, *, manual):
+    """Archive one active batch of the given kind (manual entry or import)."""
     person = _person_for(principal)
     lock_actor_household(person)
     if not Account.objects.visible_to(person).filter(pk=account_id).exists():
@@ -210,7 +219,7 @@ def undo_import_batch(principal, account_id, batch_id):
         )
         .first()
     )
-    if batch is None:
+    if batch is None or (batch.source == ImportBatch.Source.MANUAL) != manual:
         raise PermissionDenied(_DENIED)
     from finance.receipt_services import delete_receipts_for_transactions
 

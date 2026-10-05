@@ -12,7 +12,17 @@
     <a class="btn btn-ghost" href="{% url 'transaction-list' %}">Cancel</a>
   </div>
 </form>
+{% if transaction.is_manual_entry %}
+<section class="mb-8 max-w-lg">
+  <p class="mb-3 text-sm opacity-70">Entered by hand on {{ transaction.import_batch.imported_at }}. Deleting it removes it from every total; the deletion is kept in the correction history.</p>
+  <form method="post" action="{% url 'transaction-delete' transaction.pk %}">
+    {% csrf_token %}
+    <button type="submit" class="btn btn-outline btn-error">Delete manual transaction</button>
+  </form>
+</section>
+{% else %}
 <p class="mb-4 text-sm opacity-70">The original imported fields and import batch provenance are retained.</p>
+{% endif %}
 <section class="mb-8 max-w-lg">
   <h2 class="mb-3 text-xl font-semibold">Receipts</h2>
   {% if receipts %}

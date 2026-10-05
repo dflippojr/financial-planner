@@ -263,6 +263,8 @@ def _batches_by_account(principal, accounts):
     batches = (
         ImportBatch.objects.visible_to(principal)
         .filter(status=ImportBatch.Status.ACTIVE, account__in=accounts)
+        # A hand-entered row covers one day; it does not show a statement was imported.
+        .exclude(source=ImportBatch.Source.MANUAL)
         .only("account_id", "date_range_start", "date_range_end")
     )
     grouped = {account.pk: [] for account in accounts}

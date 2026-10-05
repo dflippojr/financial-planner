@@ -6,6 +6,9 @@ from .parser import DATE_FORMATS, NUMBER_FORMATS, Mapping
 from .profiles import GENERIC, PROFILE_CHOICES, normalize_profile
 from .saved_mappings import parse_saved_profile, saved_profile_key
 
+# Hand-entered rows are batches too, but never a file import source.
+FILE_IMPORT_SOURCE_CHOICES = [choice for choice in ImportBatch.Source.choices if choice[0] != ImportBatch.Source.MANUAL]
+
 
 class CsvUploadForm(forms.Form):
     csv_file = forms.FileField(
@@ -93,7 +96,7 @@ class CsvMappingForm(forms.Form):
         required=False,
         help_text="Use when the source shows money out as positive; positive values become negative when stored.",
     )
-    source = forms.ChoiceField(choices=ImportBatch.Source.choices, required=False)
+    source = forms.ChoiceField(choices=FILE_IMPORT_SOURCE_CHOICES, required=False)
     date_range_start = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
     date_range_end = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
     save_mapping_as = forms.CharField(
@@ -146,7 +149,7 @@ class CsvMappingForm(forms.Form):
 
 class SavedMappingImportForm(forms.Form):
     token = forms.CharField(widget=forms.HiddenInput)
-    source = forms.ChoiceField(choices=ImportBatch.Source.choices, required=False)
+    source = forms.ChoiceField(choices=FILE_IMPORT_SOURCE_CHOICES, required=False)
     date_range_start = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
     date_range_end = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
 

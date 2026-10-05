@@ -723,6 +723,63 @@ class TransactionCorrectionForm(forms.Form):
         return transaction
 
 
+class ManualTransactionForm(forms.Form):
+    DIRECTION_OUT = "out"
+    DIRECTION_IN = "in"
+
+    account = forms.ModelChoiceField(queryset=Account.objects.none(), empty_label=None)
+    transaction_date = forms.DateField(label="Date", widget=forms.DateInput(attrs={"type": "date"}))
+    direction = forms.ChoiceField(
+        label="Money in or out",
+        choices=((DIRECTION_OUT, "Out (spending, payment, withdrawal)"), (DIRECTION_IN, "In (income, deposit, refund)")),
+        initial=DIRECTION_OUT,
+    )
+    amount = forms.DecimalField(
+        max_digits=19,
+        decimal_places=2,
+        min_value=Decimal("0.01"),
+        help_text="Enter the amount without a sign; the choice above sets money in or out.",
+        widget=forms.TextInput(attrs={"inputmode": "decimal", "autocomplete": "off"}),
+    )
+    description = forms.CharField(max_length=500, help_text="For example the payee, or the check number and payee.")
+    category = forms.ModelChoiceField(queryset=Category.objects.none(), required=False, empty_label="Uncategorized")
+    note = forms.CharField(required=False, max_length=2000, widget=forms.Textarea(attrs={"rows": 2}))
+    tags = forms.ModelMultipleChoiceField(
+        queryset=Tag.objects.none(),
+        required=False,
+        widget=forms.CheckboxSelectMultiple,
+    )
+
+    def __init__(self, *args, principal=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        from .category_services import assignable_categories
+        from .manual_entry_services import manual_entry_accounts
+
+        self.fields["account"].queryset = manual_entry_accounts(principal)
+        self.fields["category"].queryset = assignable_categories(principal)
+        self.fields["tags"].queryset = Tag.objects.visible_to(principal).active().order_by("name", "pk")
+        if not self.is_bound:
+            self.initial.setdefault("transaction_date", timezone.localdate())
+        if not self.fields["tags"].queryset.exists():
+            del self.fields["tags"]
+
+    def clean_transaction_date(self):
+        value = self.cleaned_data["transaction_date"]
+        if value > timezone.localdate():
+            raise ValidationError("Date cannot be in the future. Use a planned item for an expected amount.")
+        return value
+
+    def clean_amount(self):
+        amount = self.cleaned_data["amount"]
+        if int(amount * 100) > MAX_SIGNED_BIGINT:
+            raise ValidationError(AMOUNT_RANGE_ERROR)
+        return amount
+
+    def amount_minor(self):
+        minor = int(self.cleaned_data["amount"] * 100)
+        return -minor if self.cleaned_data["direction"] == self.DIRECTION_OUT else minor
+
+
 class TransactionCategoryForm(forms.Form):
     category = forms.ModelChoiceField(queryset=Category.objects.none(), required=False, empty_label="Uncategorized")
 

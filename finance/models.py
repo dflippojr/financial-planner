@@ -555,6 +555,7 @@ class ImportBatch(ArchivableModel):
         VANGUARD = "vanguard", "Vanguard"
         SIMPLEFIN = "simplefin", "SimpleFIN"
         OFX = "ofx", "OFX / QFX"
+        MANUAL = "manual", "Manual"
 
     account = models.ForeignKey(Account, on_delete=models.PROTECT, related_name="import_batches")
     imported_by = models.ForeignKey(
@@ -590,7 +591,7 @@ class ImportBatch(ArchivableModel):
         constraints = [
             models.CheckConstraint(
                 condition=Q(
-                    source__in=("huntington", "capital_one", "apple_card", "vanguard", "simplefin", "ofx")
+                    source__in=("huntington", "capital_one", "apple_card", "vanguard", "simplefin", "ofx", "manual")
                 ),
                 name="import_source_valid",
             ),
@@ -696,6 +697,10 @@ class Transaction(ArchivableModel):
 
     def __str__(self):
         return f"{self.transaction_date}: {self.amount_minor} {self.currency}"
+
+    @property
+    def is_manual_entry(self):
+        return self.import_batch.source == ImportBatch.Source.MANUAL
 
     @property
     def amount_display(self):
@@ -830,6 +835,7 @@ class TransactionCorrectionHistory(models.Model):
         REFUND_LINK = "refund_link", "Refund link"
         NOTE = "note", "Note"
         TAGS = "tags", "Tags"
+        DELETED = "deleted", "Deleted"
 
     transaction = models.ForeignKey(
         Transaction,
@@ -882,7 +888,7 @@ class TransactionCorrectionHistory(models.Model):
                         currency="",
                     )
                     | Q(
-                        field_name__in=("description", "category", "exclusion", "refund_link", "note", "tags"),
+                        field_name__in=("description", "category", "exclusion", "refund_link", "note", "tags", "deleted"),
                         previous_date__isnull=True,
                         new_date__isnull=True,
                         previous_amount_minor__isnull=True,
@@ -922,6 +928,7 @@ class TransactionCorrectionHistory(models.Model):
             self.Field.REFUND_LINK,
             self.Field.NOTE,
             self.Field.TAGS,
+            self.Field.DELETED,
         ):
             return self.previous_description
         return self._amount_display(self.previous_amount_minor)
@@ -937,6 +944,7 @@ class TransactionCorrectionHistory(models.Model):
             self.Field.REFUND_LINK,
             self.Field.NOTE,
             self.Field.TAGS,
+            self.Field.DELETED,
         ):
             return self.new_description
         return self._amount_display(self.new_amount_minor)

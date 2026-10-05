@@ -52,7 +52,8 @@ def _visible_accounts(user):
         .annotate(
             last_import_at=Max(
                 "import_batches__imported_at",
-                filter=Q(import_batches__status=ImportBatch.Status.ACTIVE),
+                filter=Q(import_batches__status=ImportBatch.Status.ACTIVE)
+                & ~Q(import_batches__source=ImportBatch.Source.MANUAL),
             ),
             transaction_count=Count(
                 "transactions",
