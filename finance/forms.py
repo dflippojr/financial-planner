@@ -1698,7 +1698,7 @@ class ReceiptUploadForm(forms.Form):
 
 class AlertEmailSettingsForm(forms.Form):
     email_enabled = forms.BooleanField(required=False, label="Email me when new alerts arrive")
-    notification_email = forms.EmailField(required=False, label="Notification address",
+    notification_email = forms.EmailField(required=False, max_length=254, label="Notification address",
         help_text="Notices contain only alert counts and kinds, with a link to the inbox.")
 
     def clean(self):

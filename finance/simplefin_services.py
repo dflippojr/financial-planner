@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from .alert_email import notify_after_alert_run
-
 import base64
 import hashlib
 from datetime import date, datetime, timedelta, timezone as dt_timezone
@@ -14,6 +12,7 @@ from django.db import transaction
 from django.db.models import Max
 from django.utils import timezone
 
+from finance.alert_email import notify_after_alert_run
 from finance.csv_import.fingerprint import transaction_fingerprint
 from finance.encryption import decrypt_access_url, encrypt_access_url
 from finance.lifecycle_services import _DENIED, _person_for, lock_actor_household

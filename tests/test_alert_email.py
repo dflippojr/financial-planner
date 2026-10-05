@@ -2,6 +2,7 @@ from unittest.mock import patch
 
 import pytest
 from django.core import mail
+from django.core.management import call_command
 from django.db import transaction
 from django.test import Client
 from django.urls import reverse
@@ -10,7 +11,7 @@ from django.utils import timezone
 from finance.alert_email import (
     email_notices_available, notify_after_alert_run, send_run_notices, send_test_notice,
 )
-from finance.alert_services import raise_alert, run_daily_alert_pass, settings_for
+from finance.alert_services import raise_alert, run_daily_alert_pass, schedule_after_new_transactions, settings_for
 from finance.models import Alert
 from finance.reauth import RECENT_AUTH_SESSION_KEY
 from finance.simplefin_errors import SimpleFinError
@@ -137,6 +138,23 @@ def test_rollback_never_sends(smtp, django_capture_on_commit_callbacks):
     assert not Alert.objects.exists()
 
 
+def test_deferred_transaction_alerts_join_run_batch(smtp, django_capture_on_commit_callbacks):
+    person = make_person("synthetic")
+    opt_in(person)
+
+    @notify_after_alert_run
+    def run():
+        new_alert(person)
+        schedule_after_new_transactions([])
+
+    with patch("finance.alert_services.after_new_transactions", side_effect=lambda rows: new_alert(person, "deferred")):
+        with django_capture_on_commit_callbacks(execute=True):
+            run()
+            assert not mail.outbox
+    assert len(mail.outbox) == 1
+    assert "2 new alerts" in mail.outbox[0].body
+
+
 def test_failure_logs_no_address_or_exception_and_keeps_inbox(smtp, caplog, django_capture_on_commit_callbacks):
     person = make_person("synthetic")
     prefs = opt_in(person)
@@ -186,6 +204,33 @@ def test_failed_sync_delivers_generic_notice(smtp, monkeypatch, django_capture_o
     assert len(mail.outbox) == 1
     assert "1 new alert" in mail.outbox[0].body
     assert "Synthetic failure" not in mail.outbox[0].body
+
+
+def test_successful_sync_in_outer_transaction_delivers_after_callbacks(smtp, monkeypatch, django_capture_on_commit_callbacks):
+    person = make_person("synthetic")
+    make_household(person)
+    connection = connect_owner(person, monkeypatch)
+    opt_in(person)
+    with patch("finance.alert_services.after_new_transactions", side_effect=lambda rows: new_alert(person)):
+        with django_capture_on_commit_callbacks(execute=True):
+            with transaction.atomic():
+                result = sync_connection(person, connection.pk)
+            assert result["imported"] == 0
+            assert not mail.outbox
+    assert len(mail.outbox) == 1
+
+
+def test_scheduler_combines_sync_and_daily_notices(smtp, monkeypatch, django_capture_on_commit_callbacks):
+    person = make_person("synthetic")
+    make_household(person)
+    connect_owner(person, monkeypatch)
+    opt_in(person)
+    with patch("finance.management.commands.sync_simplefin.sync_all_connections", side_effect=lambda: new_alert(person)), \
+         patch("finance.management.commands.sync_simplefin.run_daily_alert_pass", side_effect=lambda: new_alert(person, "daily")):
+        with django_capture_on_commit_callbacks(execute=True):
+            call_command("sync_simplefin")
+    assert len(mail.outbox) == 1
+    assert "2 new alerts" in mail.outbox[0].body
 
 
 def signed_in(person):

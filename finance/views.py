@@ -1767,6 +1767,18 @@ def revoke_other_sessions(request):
     return redirect("account-settings")
 
 
+def _save_alert_email_form(request, prefs, form):
+    if not form.is_valid():
+        return None
+    address = form.cleaned_data["notification_email"]
+    if address != prefs.notification_email and not recent_auth_is_fresh(request):
+        return reauth_redirect(request, "alert-email-address", reverse("settings-alerts"))
+    prefs.email_enabled = form.cleaned_data["email_enabled"]
+    prefs.notification_email = address
+    prefs.save(update_fields=("email_enabled", "notification_email"))
+    return redirect("settings-alerts")
+
+
 @require_http_methods(["GET", "HEAD", "POST"])
 @never_cache
 def settings_alerts(request):
@@ -1790,14 +1802,9 @@ def settings_alerts(request):
                       else "Test notice could not be sent. Check your saved settings or ask the operator.")
         else:
             email_form = AlertEmailSettingsForm(request.POST)
-            if email_form.is_valid():
-                address = email_form.cleaned_data["notification_email"]
-                if address != prefs.notification_email and not recent_auth_is_fresh(request):
-                    return reauth_redirect(request, "alert-email-address", reverse("settings-alerts"))
-                prefs.email_enabled = email_form.cleaned_data["email_enabled"]
-                prefs.notification_email = address
-                prefs.save(update_fields=("email_enabled", "notification_email"))
-                return redirect("settings-alerts")
+            response = _save_alert_email_form(request, prefs, email_form)
+            if response is not None:
+                return response
     elif request.method == "POST":
         form = _alert_settings_form(person, request.POST)
         if form.is_valid():
@@ -1807,6 +1814,7 @@ def settings_alerts(request):
         "alert_settings_form": form, "email_notices_available": available,
         "email_settings_form": email_form, "email_notice": notice,
     })
+
 
 @require_safe
 @never_cache

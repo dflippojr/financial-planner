@@ -1,4 +1,5 @@
 from calendar import month_name
+from contextvars import copy_context
 from datetime import timedelta
 
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -330,12 +331,15 @@ def schedule_after_category_change():
 
 def schedule_after_new_transactions(transactions):
     pks = [txn.pk for txn in transactions]
+    context = copy_context()
 
     def _run():
         rows = list(Transaction.objects.filter(pk__in=pks).select_related("account"))
         after_new_transactions(rows)
 
-    transaction.on_commit(_run)
+    # A surrounding transaction may commit after the sync's notice scope exits.
+    # Keep its collector so this callback contributes to the same notice batch.
+    transaction.on_commit(lambda: context.run(_run))
 
 
 def purge_old_read_alerts(*, now=None):
