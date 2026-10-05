@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .alert_email import notify_after_alert_run
+
 import base64
 import hashlib
 from datetime import date, datetime, timedelta, timezone as dt_timezone
@@ -534,6 +536,7 @@ def _sync_one_link(person, connection, link, remote, synced_at, payload) -> int:
     return imported
 
 
+@notify_after_alert_run
 def sync_connection(principal, connection_id, *, ignore_rate_limit=False) -> dict:
     """Sync one connection. A fetch failure is recorded, then raised.
 

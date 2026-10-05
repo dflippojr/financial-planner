@@ -32,3 +32,7 @@ if os.environ.get("FINANCIAL_PLANNER_TEST_DB") != "postgres":
             "NAME": ":memory:",
         }
     }
+
+# Never contact SMTP from the test suite, even if operator variables are set.
+EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
+EMAIL_HOST = ""

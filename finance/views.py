@@ -39,6 +39,7 @@ from .auth_services import (
 from .forms import (
     ReceiptUploadForm,
     AlertSettingsForm,
+    AlertEmailSettingsForm,
     CashFlowFilterForm,
     CategoryNameForm,
     DeleteMyDataForm,
@@ -1769,15 +1770,43 @@ def revoke_other_sessions(request):
 @require_http_methods(["GET", "HEAD", "POST"])
 @never_cache
 def settings_alerts(request):
+    from .alert_email import email_notices_available, send_test_notice
+
     person = get_object_or_404(Person, user=request.user)
+    prefs = settings_for(person)
     form = _alert_settings_form(person)
-    if request.method == "POST":
+    available = email_notices_available()
+    email_form = AlertEmailSettingsForm(initial={
+        "email_enabled": prefs.email_enabled,
+        "notification_email": prefs.notification_email,
+    })
+    notice = None
+    action = request.POST.get("action", "")
+    if request.method == "POST" and action in ("save-email", "test-email"):
+        if not available:
+            return redirect("settings-alerts")
+        if action == "test-email":
+            notice = ("Test notice sent." if send_test_notice(prefs)
+                      else "Test notice could not be sent. Check your saved settings or ask the operator.")
+        else:
+            email_form = AlertEmailSettingsForm(request.POST)
+            if email_form.is_valid():
+                address = email_form.cleaned_data["notification_email"]
+                if address != prefs.notification_email and not recent_auth_is_fresh(request):
+                    return reauth_redirect(request, "alert-email-address", reverse("settings-alerts"))
+                prefs.email_enabled = email_form.cleaned_data["email_enabled"]
+                prefs.notification_email = address
+                prefs.save(update_fields=("email_enabled", "notification_email"))
+                return redirect("settings-alerts")
+    elif request.method == "POST":
         form = _alert_settings_form(person, request.POST)
         if form.is_valid():
             save_alert_settings(person, **form.save_payload())
             return redirect("settings-alerts")
-    return render(request, "finance/settings_alerts.html", {"alert_settings_form": form})
-
+    return render(request, "finance/settings_alerts.html", {
+        "alert_settings_form": form, "email_notices_available": available,
+        "email_settings_form": email_form, "email_notice": notice,
+    })
 
 @require_safe
 @never_cache

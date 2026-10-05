@@ -11,6 +11,7 @@ from django.utils.http import url_has_allowed_host_and_scheme
 RECENT_AUTH_SESSION_KEY = "recent_auth_at"
 
 ACTION_LABELS = {
+    "alert-email-address": "Change the alert notification address",
     "invite": "Invite a household member",
     "leave-household": "Leave the household",
     "connect-google": "Connect Google",

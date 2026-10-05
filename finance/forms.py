@@ -1694,3 +1694,15 @@ class ReceiptUploadForm(forms.Form):
         ),
         help_text="JPEG, PNG, WebP, HEIC, or PDF. Up to 10 MB, 5 per transaction.",
     )
+
+
+class AlertEmailSettingsForm(forms.Form):
+    email_enabled = forms.BooleanField(required=False, label="Email me when new alerts arrive")
+    notification_email = forms.EmailField(required=False, label="Notification address",
+        help_text="Notices contain only alert counts and kinds, with a link to the inbox.")
+
+    def clean(self):
+        cleaned = super().clean()
+        if cleaned.get("email_enabled") and not cleaned.get("notification_email"):
+            self.add_error("notification_email", "Enter an address to enable email notices.")
+        return cleaned
