@@ -9,6 +9,19 @@
   themes: light --default, dark --prefersdark;
 }
 
+@layer daisyui {
+  /* A text-colored boundary stays visible on both themes' page and card surfaces.
+     :where keeps specificity at one class; color/style variants retain their borders. */
+  .btn:where(:not(
+    .btn-primary, .btn-secondary, .btn-accent, .btn-neutral,
+    .btn-info, .btn-success, .btn-warning, .btn-error,
+    .btn-outline, .btn-dash, .btn-ghost, .btn-link, .btn-soft,
+    .btn-disabled, :disabled, [disabled], [aria-disabled="true"], :checked
+  )) {
+    --btn-border: var(--color-base-content);
+  }
+}
+
 @layer base {
   *:focus-visible {
     outline: 2px solid var(--color-primary);
