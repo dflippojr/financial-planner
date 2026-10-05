@@ -1,0 +1,26 @@
+{% extends "finance/base.html" %}
+{% block title %}Add transaction · Financial Planner{% endblock %}
+{% block content %}
+<h1 class="mb-4 text-2xl font-bold">Add transaction</h1>
+<p class="mb-4 max-w-lg opacity-80">Record cash spending, a check, or a payment from an account you don't import. To track cash, add a checking account named "Cash" on the Accounts page.</p>
+{% if has_accounts %}
+<section class="card bg-base-100 shadow-sm max-w-lg">
+  <div class="card-body">
+    <form method="post">
+      {% csrf_token %}
+      {% include "finance/_form_fields.html" with form=form %}
+      <div class="flex flex-wrap gap-2">
+        <button type="submit" class="btn btn-primary">Add transaction</button>
+        <button type="submit" name="add_another" value="1" class="btn">Add and enter another</button>
+        <a class="btn btn-ghost" href="{% url 'transaction-list' %}">Cancel</a>
+      </div>
+    </form>
+  </div>
+</section>
+{% else %}
+<div role="status" class="alert max-w-lg">
+  <span>You need an active checking, savings or credit-card account first.</span>
+  <a class="btn btn-sm" href="{% url 'account-list' %}">Accounts</a>
+</div>
+{% endif %}
+{% endblock %}

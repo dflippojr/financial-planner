@@ -70,6 +70,7 @@ def missing_import_on(principal, accounts, on_date):
             date_range_start__lte=on_date,
             date_range_end__gte=on_date,
         )
+        .exclude(source=ImportBatch.Source.MANUAL)
         .values_list("account_id", flat=True)
     )
     return any(account.pk not in covered for account in accounts)

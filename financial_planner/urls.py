@@ -23,6 +23,7 @@ from finance import (
     views,
     bulk_edit_views,
     receipt_views,
+    manual_entry_views,
 )
 from finance.csv_import import mapping_views as csv_mapping_views
 from finance.csv_import import views as csv_import_views
@@ -225,7 +226,13 @@ urlpatterns = [
         category_suggestion_views.suggestion_reject,
         name="suggestion-reject",
     ),
+    path("transactions/add/", manual_entry_views.manual_transaction_add, name="transaction-add"),
     path("transactions/<int:transaction_id>/edit/", views.transaction_edit, name="transaction-edit"),
+    path(
+        "transactions/<int:transaction_id>/delete/",
+        manual_entry_views.manual_transaction_delete,
+        name="transaction-delete",
+    ),
     path("transactions/<int:transaction_id>/receipts/", receipt_views.receipt_upload, name="transaction-receipt-upload"),
     path(
         "transactions/<int:transaction_id>/receipts/<int:receipt_id>/",

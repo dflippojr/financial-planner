@@ -109,6 +109,7 @@ def _recent_import_batches(principal):
     return (
         ImportBatch.objects.visible_to(principal)
         .filter(status=ImportBatch.Status.ACTIVE)
+        .exclude(source=ImportBatch.Source.MANUAL)
         .select_related("account")
         .order_by("-imported_at", "-pk")[:RECENT_BATCH_LIMIT]
     )
@@ -210,6 +211,7 @@ def _import_batches(request, account):
     return (
         ImportBatch.objects.visible_to(request.user)
         .filter(account=account, status=ImportBatch.Status.ACTIVE)
+        .exclude(source=ImportBatch.Source.MANUAL)
         .order_by("-imported_at", "-pk")
     )
 

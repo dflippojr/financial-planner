@@ -98,6 +98,7 @@ CSV_FIELDS = {
         "status",
         "archived_at",
         "fingerprint",
+        "import_source",
     ),
     "import_batches": (
         "id",
@@ -288,12 +289,13 @@ transactions.csv / transactions.json
   amount_decimal, currency, description, note, kind, source_row_number,
   source_transaction_id, category_id, category_name,
   excluded_from_income_and_spending, refund_original_id, refund_original_part_id, status, archived_at,
-  fingerprint
+  fingerprint, import_source
   excluded_from_income_and_spending is true only when both legs of an
   excluding transfer pair are visible. refund_original_id is set only when the
   original transaction is also visible. refund_original_part_id is set when that
   original is split and the chosen part is on a visible transaction. note is the
-  member-entered free-text note.
+  member-entered free-text note. import_source is the source of the row's
+  import batch; "manual" marks a transaction a member entered by hand.
 
 transaction_tags.csv / transaction_tags.json
   Tag links for visible transactions.
@@ -310,6 +312,8 @@ import_batches.csv / import_batches.json
   Provenance for imports on visible accounts.
   id, account_id, source, source_file_sha256, date_range_start, date_range_end,
   status, archived_at, imported_at, imported_by_username
+  A manual entry is its own one-row batch with source "manual" and a random
+  source_file_sha256; imported_at is when it was entered.
 
 transfer_pairs.csv / transfer_pairs.json
   Pairs whose legs are both visible.
@@ -510,7 +514,7 @@ def _transaction_rows(person, visible_txn_ids):
     rows = []
     transactions = (
         Transaction.objects.visible_to(person)
-        .select_related("category")
+        .select_related("category", "import_batch")
         .order_by("pk")
     )
     for txn in transactions:
@@ -537,6 +541,7 @@ def _transaction_rows(person, visible_txn_ids):
                 "status": txn.status,
                 "archived_at": txn.archived_at,
                 "fingerprint": txn.fingerprint,
+                "import_source": txn.import_batch.source,
             }
         )
     return rows
