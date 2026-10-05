@@ -9,8 +9,10 @@ from .saved_mappings import parse_saved_profile, saved_profile_key
 
 class CsvUploadForm(forms.Form):
     csv_file = forms.FileField(
-        label="CSV file",
-        error_messages={"required": "Choose a CSV file of at most 5 MB."},
+        label="CSV, OFX or QFX file",
+        help_text="Upload .csv, .ofx, .qfx or .qbo, at most 5 MB. Choose OFX / QFX for statement files.",
+        widget=forms.ClearableFileInput(attrs={"accept": ".csv,.ofx,.qfx,.qbo"}),
+        error_messages={"required": "Choose a CSV, OFX or QFX file of at most 5 MB."},
     )
     import_profile = forms.ChoiceField(
         label="Import profile",
@@ -66,6 +68,11 @@ class AppleCardImportForm(forms.Form):
 
     def clean_source(self):
         return ImportBatch.Source.APPLE_CARD
+
+
+class OfxImportForm(HuntingtonImportForm):
+    def clean_source(self):
+        return ImportBatch.Source.OFX
 
 
 class CsvMappingForm(forms.Form):

@@ -1,5 +1,6 @@
 from .parser import CsvInputError, Mapping
 
+OFX = "ofx"
 GENERIC = "generic"
 # Both card exports date rows by this column (owner decision 2026-10-02).
 TRANSACTION_DATE = "Transaction Date"
@@ -9,6 +10,7 @@ APPLE_CARD = "apple_card"
 
 PROFILE_CHOICES = (
     (GENERIC, "Generic mapper"),
+    (OFX, "OFX / QFX file"),
     (HUNTINGTON, "Huntington"),
     (CAPITAL_ONE, "Capital One"),
     (APPLE_CARD, "Apple Card"),
@@ -100,7 +102,7 @@ CAPITAL_ONE_HEADER_ERROR = (
 
 
 def normalize_profile(value):
-    if value in (HUNTINGTON, CAPITAL_ONE, APPLE_CARD):
+    if value in (HUNTINGTON, CAPITAL_ONE, APPLE_CARD, OFX):
         return value
     return GENERIC
 
@@ -121,3 +123,18 @@ def require_apple_card_headers(headers):
     present = set(headers)
     if any(name not in present for name in APPLE_CARD_HEADERS):
         raise CsvInputError(APPLE_CARD_HEADER_ERROR)
+
+
+OFX_MAPPING = Mapping(
+    date_column="Date", description_column="Name", date_format="iso",
+    number_format="dot_none", amount_mode="signed", amount_column="Amount",
+    description_mode="payee_memo", payee_column="Name", memo_column="Memo",
+    source_id_column="FITID",
+)
+
+
+def require_ofx_headers(headers):
+    from .ofx import OFX_HEADERS
+
+    if headers != OFX_HEADERS:
+        raise CsvInputError("Choose the OFX / QFX profile for a statement file.")

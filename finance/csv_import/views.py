@@ -11,6 +11,7 @@ from django.views.decorators.http import require_http_methods, require_POST
 from finance.models import Account, AccountLink, ImportBatch
 
 from .forms import (
+    OfxImportForm,
     AppleCardImportForm,
     CapitalOneImportForm,
     CsvMappingForm,
@@ -19,7 +20,11 @@ from .forms import (
     SavedMappingImportForm,
 )
 from .parser import CsvInputError, preview_csv, read_csv
+from .ofx import looks_like_ofx, read_ofx
 from .profiles import (
+    OFX,
+    OFX_MAPPING,
+    require_ofx_headers,
     APPLE_CARD,
     APPLE_CARD_MAPPING,
     CAPITAL_ONE,
@@ -52,10 +57,19 @@ RECENT_BATCH_LIMIT = 25
 FixedProfile = namedtuple("FixedProfile", ("require_headers", "mapping", "source", "form_class"))
 
 FIXED_PROFILES = {
+    OFX: FixedProfile(require_ofx_headers, OFX_MAPPING, ImportBatch.Source.OFX, OfxImportForm),
     HUNTINGTON: FixedProfile(require_huntington_headers, HUNTINGTON_MAPPING, ImportBatch.Source.HUNTINGTON, HuntingtonImportForm),
     CAPITAL_ONE: FixedProfile(require_capital_one_headers, CAPITAL_ONE_MAPPING, ImportBatch.Source.CAPITAL_ONE, CapitalOneImportForm),
     APPLE_CARD: FixedProfile(require_apple_card_headers, APPLE_CARD_MAPPING, ImportBatch.Source.APPLE_CARD, AppleCardImportForm),
 }
+
+
+def _read_document(content, profile):
+    if profile == OFX:
+        return read_ofx(content)
+    if looks_like_ofx(content):
+        raise CsvInputError("Choose the OFX / QFX profile for this statement file.")
+    return read_csv(content)
 
 
 def _upload_form(request, account, data=None, files=None):
@@ -162,7 +176,8 @@ def _restore_live_stage(request, account, context):
     if not token:
         return
     try:
-        document = read_csv(load_stage(request, token, account.pk))
+        profile = stage_profile(request, token, account.pk)
+        document = _read_document(load_stage(request, token, account.pk), profile)
     except (CsvInputError, StageUnavailable):
         return
     profile = stage_profile(request, token, account.pk)
@@ -299,7 +314,9 @@ def _stage_upload(request, account, context):
             upload_form.cleaned_data["csv_file"],
             import_profile=profile,
         )
-        document = read_csv(content)
+        document = _read_document(content, profile)
+        if profile == OFX and all(row.structural_error == "Currency must be USD." for row in document.rows):
+            raise CsvInputError("Currency must be USD.")
         profile, saved = _resolve_saved_stage(request, token, account, document, profile, context)
         if saved is not None:
             _saved_mapping_preview(context, document, account, {"token": token}, saved)
@@ -496,8 +513,8 @@ def csv_preview(request, account_id):
     token = request.POST.get("token", "")
     try:
         content = load_stage(request, token, account.pk)
-        document = read_csv(content)
         profile = stage_profile(request, token, account.pk)
+        document = _read_document(content, profile)
     except (CsvInputError, StageUnavailable):
         # Missing, expired, cross-user, and cross-account stages are deliberately
         # indistinguishable and never expose metadata about the staged upload.
