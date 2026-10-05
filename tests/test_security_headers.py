@@ -160,6 +160,9 @@ def test_chat_page_keeps_confirm_text_without_inline_code(harness):  # noqa: F81
 
     assert_page_is_csp_clean(response)
     assert 'data-confirm="Delete every conversation?"' in response.content.decode()
+    # The send button shows a pending state from the static page-actions script,
+    # because the answer can take a minute or more (no inline script allowed).
+    assert 'id="chat-send-form" data-pending-label="Thinking…"' in response.content.decode()
 
 
 @pytest.mark.django_db
