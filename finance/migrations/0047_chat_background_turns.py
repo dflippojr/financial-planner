@@ -7,7 +7,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('finance', '0045_alert_email_settings'),
+        ('finance', '0046_ofx_import_source'),
     ]
 
     operations = [
