@@ -91,6 +91,11 @@ def test_sgml_extension_fields_are_ignored():
     assert preview_csv(read_ofx(content), OFX_MAPPING).valid_count == 2
 
 
+def test_long_unclosed_sgml_tags_are_rejected():
+    with pytest.raises(CsvInputError, match="not a valid"):
+        read_ofx(b"OFXHEADER:100\n<OFX>" + b"<" * 100_000)
+
+
 def test_mixed_currencies_are_row_errors():
     content = fixture("synthetic_card.qfx").replace(
         b"<TRNAMT>-45.67", b"<CURRENCY><CURSYM>EUR</CURSYM></CURRENCY><TRNAMT>-45.67"

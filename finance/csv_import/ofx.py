@@ -31,7 +31,7 @@ def _sgml_tree(text):
     """OFX 1.x permits omitted scalar end tags, but requires aggregate end tags."""
     root = ET.Element("DOCUMENT")
     stack = [root]
-    for token in re.split(r"(<[^>]*>)", text):
+    for token in re.split(r"(<[^<>]*>)", text):
         if not token.startswith("<"):
             if token.strip():
                 if len(stack) == 1:
