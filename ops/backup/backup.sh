@@ -36,7 +36,7 @@ load_status() {
   offsite_configured=""
   restore_check_at=""
   restore_check_error=""
-  restore_check_enabled=""
+  restore_check_interval_days=""
   if [ ! -f "$status_file" ]; then
     return 0
   fi
@@ -52,7 +52,7 @@ load_status() {
       offsite_configured) offsite_configured=$value ;;
       restore_check_at) restore_check_at=$value ;;
       restore_check_error) restore_check_error=$value ;;
-      restore_check_enabled) restore_check_enabled=$value ;;
+      restore_check_interval_days) restore_check_interval_days=$value ;;
     esac
   done < "$status_file"
 }
@@ -73,7 +73,7 @@ offsite_error=$offsite_error
 offsite_configured=$offsite_configured
 restore_check_at=$restore_check_at
 restore_check_error=$restore_check_error
-restore_check_enabled=$restore_check_enabled
+restore_check_interval_days=$restore_check_interval_days
 EOF
   mv "$tmp" "$status_file"
   chmod 644 "$status_file" 2>/dev/null || true
@@ -201,10 +201,9 @@ else
   offsite_configured=0
   offsite_error=""
 fi
-if [ "$restore_check_interval" -gt 0 ]; then
-  restore_check_enabled=1
-else
-  restore_check_enabled=0
+# Recorded so the app knows whether the check is on and when it is overdue.
+restore_check_interval_days=$restore_check_interval
+if [ "$restore_check_interval" -eq 0 ]; then
   restore_check_error=""
 fi
 
@@ -304,7 +303,7 @@ last_success_at=$success_at
 dump_name=$filename
 last_error=""
 
-if [ "$restore_check_enabled" = 1 ] && restore_check_due; then
+if [ "$restore_check_interval" -gt 0 ] && restore_check_due; then
   run_restore_check "$nightly"
 fi
 

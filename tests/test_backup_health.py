@@ -188,7 +188,7 @@ def _healthy_status(**fields):
         "offsite_configured": "0",
         "offsite_success": None,
         "restore_check_error": "",
-        "restore_check_enabled": "1",
+        "restore_check_interval_days": "7",
         "restore_check": NOW - timedelta(days=2),
     }
     status.update(fields)
@@ -211,18 +211,25 @@ def test_restore_check_older_than_eight_days_is_overdue():
     overdue = _healthy_status(restore_check=NOW - timedelta(days=8, hours=1))
     assert backup_is_unhealthy(on_time, now=NOW) is False
     assert backup_is_unhealthy(overdue, now=NOW) is True
-    assert backup_alert_title(overdue, now=NOW) == "The weekly restore check has not passed in 8 days"
+    assert backup_alert_title(overdue, now=NOW) == "The restore check is overdue"
+
+
+def test_restore_check_overdue_window_follows_the_configured_interval():
+    on_schedule = _healthy_status(restore_check_interval_days="14", restore_check=NOW - timedelta(days=10))
+    overdue = _healthy_status(restore_check_interval_days="14", restore_check=NOW - timedelta(days=15, hours=1))
+    assert backup_is_unhealthy(on_schedule, now=NOW) is False
+    assert backup_is_unhealthy(overdue, now=NOW) is True
 
 
 def test_restore_check_turned_off_is_never_overdue():
-    status = _healthy_status(restore_check_enabled="0", restore_check=NOW - timedelta(days=30))
+    status = _healthy_status(restore_check_interval_days="0", restore_check=NOW - timedelta(days=30))
     assert backup_is_unhealthy(status, now=NOW) is False
 
 
 def test_status_without_restore_check_keys_counts_as_never_checked():
     # A status file from before the restore check existed.
     status = _healthy_status()
-    for key in ("restore_check_error", "restore_check_enabled", "restore_check"):
+    for key in ("restore_check_error", "restore_check_interval_days", "restore_check"):
         del status[key]
     assert backup_is_unhealthy(status, now=NOW) is False
     never_checked = _healthy_status(restore_check=None)
@@ -243,7 +250,7 @@ def test_failed_restore_check_alerts_operators(tmp_path):
         status,
         last_success_at=now,
         dump_name="financial_planner_synthetic.dump",
-        restore_check_enabled="1",
+        restore_check_interval_days="7",
         restore_check_error="Restore check failed: pg_restore could not restore the dump",
     )
 
@@ -265,7 +272,7 @@ def test_settings_show_the_restore_check_only_to_operators(tmp_path):
         status,
         last_success_at="2026-10-04T06:00:00Z",
         restore_check_at="2026-10-03T06:05:00Z",
-        restore_check_enabled="1",
+        restore_check_interval_days="7",
         restore_check_error="Restore check failed: core table finance_person is missing",
     )
 
@@ -284,8 +291,8 @@ def test_settings_show_the_restore_check_only_to_operators(tmp_path):
     ("fields", "shown"),
     [
         ({}, b"Last restore check: Never"),
-        ({"restore_check_enabled": "1"}, b"Last restore check: Never"),
-        ({"restore_check_enabled": "0", "restore_check_at": "2026-09-01T06:00:00Z"}, b"Last restore check: Off"),
+        ({"restore_check_interval_days": "7"}, b"Last restore check: Never"),
+        ({"restore_check_interval_days": "0", "restore_check_at": "2026-09-01T06:00:00Z"}, b"Last restore check: Off"),
     ],
 )
 def test_settings_restore_check_line_for_never_checked_and_off(tmp_path, fields, shown):

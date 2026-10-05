@@ -10,8 +10,8 @@ from .models import Alert, Person
 
 
 STALE_AFTER = timedelta(hours=26)
-# The check runs weekly by default; one day of grace before it counts as overdue.
-RESTORE_CHECK_STALE_AFTER = timedelta(days=8)
+# A restore check is overdue one day after its interval (8 days for the weekly default).
+RESTORE_CHECK_GRACE = timedelta(days=1)
 STATUS_KEYS = (
     "last_success_at",
     "dump_name",
@@ -23,7 +23,7 @@ STATUS_KEYS = (
     "offsite_configured",
     "restore_check_at",
     "restore_check_error",
-    "restore_check_enabled",
+    "restore_check_interval_days",
 )
 
 
@@ -77,8 +77,8 @@ def read_backup_status(path=None):
     data["last_success"] = _parse_iso(data["last_success_at"])
     data["offsite_success"] = _parse_iso(data["offsite_success_at"])
     data["restore_check"] = _parse_iso(data["restore_check_at"])
-    # Status files from before the restore check have no flag: neither on nor off.
-    data["restore_check_off"] = data["restore_check_enabled"].strip() == "0"
+    # Status files from before the restore check have no interval: neither on nor off.
+    data["restore_check_off"] = _restore_check_interval(data) == 0
     return data
 
 
@@ -97,8 +97,9 @@ def _offsite_is_unhealthy(status, now):
     return now - offsite > STALE_AFTER
 
 
-def _restore_check_enabled(status):
-    return (status.get("restore_check_enabled") or "").strip() in {"1", "true", "yes"}
+def _restore_check_interval(status):
+    value = (status.get("restore_check_interval_days") or "").strip()
+    return int(value) if value.isdigit() else None
 
 
 def _restore_check_failed(status):
@@ -106,13 +107,14 @@ def _restore_check_failed(status):
 
 
 def _restore_check_overdue(status, now):
-    if not _restore_check_enabled(status):
+    interval = _restore_check_interval(status)
+    if not interval:
         return False
     # Never checked is not overdue: every backup run with the check on either
     # records a pass or sets restore_check_error, and a backup that stops
     # running is already caught by the nightly staleness rule.
     passed = status.get("restore_check")
-    return passed is not None and now - passed > RESTORE_CHECK_STALE_AFTER
+    return passed is not None and now - passed > timedelta(days=interval) + RESTORE_CHECK_GRACE
 
 
 def backup_is_unhealthy(status, *, now=None):
@@ -142,7 +144,7 @@ def backup_alert_title(status, *, now=None):
         if _restore_check_failed(status):
             return "The weekly restore check failed"
         if _restore_check_overdue(status, now):
-            return "The weekly restore check has not passed in 8 days"
+            return "The restore check is overdue"
     return "Nightly backups have not succeeded"
 
 

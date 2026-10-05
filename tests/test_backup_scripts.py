@@ -779,13 +779,13 @@ def test_backup_runs_the_first_restore_check_and_records_the_pass(tmp_path):
     status = _read_status(backup_root)
     assert status["restore_check_at"] == "2026-09-27T06:00:00Z"
     assert status["restore_check_error"] == ""
-    assert status["restore_check_enabled"] == "1"
+    assert status["restore_check_interval_days"] == "7"
 
 
 @pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
 def test_failed_restore_check_keeps_the_dump_published_and_records_the_error(tmp_path):
     fake_bin, backup_root, state = _backup_setup(tmp_path, dump_text="truncated synthetic dump")
-    _write_status_file(backup_root, restore_check_at="2026-09-01T06:00:00Z", restore_check_enabled="1")
+    _write_status_file(backup_root, restore_check_at="2026-09-01T06:00:00Z", restore_check_interval_days="7")
 
     result = _run_backup(fake_bin, backup_root)
 
@@ -805,7 +805,7 @@ def test_failed_restore_check_keeps_the_dump_published_and_records_the_error(tmp
 @pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
 def test_restore_check_waits_for_the_interval_after_a_pass(tmp_path):
     fake_bin, backup_root, state = _backup_setup(tmp_path)
-    _write_status_file(backup_root, restore_check_at="2026-09-21T06:00:00Z", restore_check_enabled="1")
+    _write_status_file(backup_root, restore_check_at="2026-09-21T06:00:00Z", restore_check_interval_days="7")
 
     result = _run_backup(fake_bin, backup_root)
 
@@ -818,7 +818,7 @@ def test_restore_check_waits_for_the_interval_after_a_pass(tmp_path):
 def test_restore_check_runs_when_the_interval_has_passed_despite_a_late_start(tmp_path):
     fake_bin, backup_root, state = _backup_setup(tmp_path)
     # Six days and 23 hours ago: that run started an hour later in the day.
-    _write_status_file(backup_root, restore_check_at="2026-09-20T07:00:00Z", restore_check_enabled="1")
+    _write_status_file(backup_root, restore_check_at="2026-09-20T07:00:00Z", restore_check_interval_days="7")
 
     result = _run_backup(fake_bin, backup_root)
 
@@ -834,7 +834,7 @@ def test_restore_check_retries_the_next_night_after_a_failure(tmp_path):
         backup_root,
         restore_check_at="2026-09-26T06:00:00Z",
         restore_check_error="Restore check failed: pg_restore could not restore the dump",
-        restore_check_enabled="1",
+        restore_check_interval_days="7",
     )
 
     result = _run_backup(fake_bin, backup_root)
@@ -847,14 +847,14 @@ def test_restore_check_retries_the_next_night_after_a_failure(tmp_path):
 @pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
 def test_restore_check_interval_zero_turns_the_check_off(tmp_path):
     fake_bin, backup_root, state = _backup_setup(tmp_path)
-    _write_status_file(backup_root, restore_check_error="Restore check failed: old", restore_check_enabled="1")
+    _write_status_file(backup_root, restore_check_error="Restore check failed: old", restore_check_interval_days="7")
 
     result = _run_backup(fake_bin, backup_root, {"RESTORE_CHECK_INTERVAL_DAYS": "0"})
 
     assert result.returncode == 0, result.stderr
     assert _scratch_restores(state) == 0
     status = _read_status(backup_root)
-    assert status["restore_check_enabled"] == "0"
+    assert status["restore_check_interval_days"] == "0"
     assert status["restore_check_error"] == ""
 
 
