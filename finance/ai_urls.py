@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 
+# The adapter appends this itself; a URL copied from the harness API docs often ends in it.
+API_PATH = "/api/v1"
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
 DOCKER_HOSTS = frozenset({"host.docker.internal"})
 SAME_HOST = LOOPBACK_HOSTS | DOCKER_HOSTS
@@ -17,7 +19,15 @@ def parse_harness_url(raw: str) -> str:
     text = (raw or "").strip()
     if not text:
         raise HarnessUrlError("Enter an Agent Harness Server URL.")
-    parsed = urlparse(text)
+    if not text.isascii() or any(ch.isspace() or not ch.isprintable() for ch in text):
+        raise HarnessUrlError("The harness URL cannot include spaces or special characters.")
+    try:
+        parsed = urlparse(text)
+        valid_port = parsed.port != 0
+    except ValueError:
+        valid_port = False
+    if not valid_port:
+        raise HarnessUrlError("That harness URL is not valid.")
     if parsed.scheme not in {"http", "https"}:
         raise HarnessUrlError("The harness URL must start with http:// or https://.")
     if parsed.username or parsed.password:
@@ -40,7 +50,7 @@ def parse_harness_url(raw: str) -> str:
 
 def _normalized(parsed) -> str:
     path = parsed.path.rstrip("/")
-    if path in {"", "/"}:
-        path = ""
+    if path.endswith(API_PATH):
+        path = path[: -len(API_PATH)].rstrip("/")
     netloc = parsed.netloc
     return f"{parsed.scheme}://{netloc}{path}"

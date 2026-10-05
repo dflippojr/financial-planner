@@ -268,3 +268,33 @@ OPERATOR_USERNAMES = os.environ.get("OPERATOR_USERNAMES", "").strip()
 FILE_UPLOAD_HANDLERS = ["django.core.files.uploadhandler.MemoryFileUploadHandler"]
 FILE_UPLOAD_MAX_MEMORY_SIZE = 13 * 1024 * 1024
 DATA_UPLOAD_MAX_MEMORY_SIZE = 13 * 1024 * 1024
+
+# Without this, DEBUG=False sends request errors only to mail_admins and the
+# traceback is lost. Errors go to the container's stdout with tracebacks. Logs
+# never carry transaction details, raw import rows or secrets: the app logs no
+# request data, and the formatter strips App tokens and URL credentials that an
+# exception message might quote.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "redacted": {
+            "()": "finance.log_redaction.RedactingFormatter",
+            "format": "{asctime} {levelname} {name}: {message}",
+            "style": "{",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "stream": "ext://sys.stdout",
+            # Records from Django's own loggers propagate here at INFO and WARNING.
+            "level": "ERROR",
+            "formatter": "redacted",
+        },
+    },
+    "root": {"handlers": ["console"], "level": "ERROR"},
+    "loggers": {
+        "django.request": {"handlers": ["console"], "level": "ERROR", "propagate": False},
+    },
+}

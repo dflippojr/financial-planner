@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import urllib.error
 import urllib.request
@@ -33,8 +34,8 @@ def json_request(url, *, token, method="GET", body=None, timeout=30):
     if body is not None:
         data = json.dumps(body).encode("utf-8")
         headers["Content-Type"] = "application/json"
-    request = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
+        request = urllib.request.Request(url, data=data, headers=headers, method=method)
         with _OPENER.open(request, timeout=timeout) as response:
             raw = response.read()
             if not raw:
@@ -43,7 +44,10 @@ def json_request(url, *, token, method="GET", body=None, timeout=30):
     except urllib.error.HTTPError as exc:
         payload = _read_error_payload(exc)
         raise HarnessHttpError(exc.code, payload) from None
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
+    except (http.client.HTTPException, OSError, ValueError, OverflowError):
+        # OSError covers URLError and timeouts. ValueError covers bad JSON and a URL
+        # or header http.client refuses; its message can quote the Authorization
+        # header, so it is never chained.
         raise HarnessHttpError(0, {}) from None
 
 
