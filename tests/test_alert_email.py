@@ -9,7 +9,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from finance.alert_email import (
-    email_notices_available, notify_after_alert_run, send_run_notices, send_test_notice,
+    _send_member_notice, email_notices_available, notify_after_alert_run, send_run_notices, send_test_notice,
 )
 from finance.alert_services import raise_alert, run_daily_alert_pass, schedule_after_new_transactions, settings_for
 from finance.models import Alert
@@ -79,7 +79,7 @@ def test_notice_contains_only_count_kinds_and_inbox_url(smtp):
         assert detail not in message.body + message.subject
 
 
-def test_excludes_read_old_and_invisible_alerts(smtp):
+def test_excludes_read_unselected_and_invisible_alerts(smtp):
     owner = make_person("owner")
     member = make_person("member")
     make_household(owner, member)
@@ -92,6 +92,70 @@ def test_excludes_read_old_and_invisible_alerts(smtp):
     send_run_notices([a.pk for a in hidden + read])
     send_run_notices([])
     assert not mail.outbox
+
+
+def test_alerts_between_runs_deliver_once_and_new_arrivals_deliver_later(smtp, django_capture_on_commit_callbacks):
+    person = make_person("synthetic")
+    opt_in(person)
+    first = new_alert(person)[0]
+
+    @notify_after_alert_run
+    def idle_run():
+        pass
+
+    with django_capture_on_commit_callbacks(execute=True):
+        idle_run()
+    first.refresh_from_db()
+    assert first.email_notice_sent_at is not None
+    assert len(mail.outbox) == 1
+    with django_capture_on_commit_callbacks(execute=True):
+        idle_run()
+    assert len(mail.outbox) == 1
+    new_alert(person, "later")
+    with django_capture_on_commit_callbacks(execute=True):
+        idle_run()
+    assert len(mail.outbox) == 2
+    assert "1 new alert" in mail.outbox[1].body
+
+
+def test_failed_notice_stays_pending_and_other_recipient_is_sent(smtp):
+    first = make_person("first")
+    second = make_person("second")
+    opt_in(first)
+    opt_in(second)
+    first_alert = new_alert(first)[0]
+    second_alert = new_alert(second)[0]
+    with patch("finance.alert_email.send_mail", side_effect=[RuntimeError("Synthetic failure"), 1]) as send:
+        send_run_notices()
+    assert send.call_count == 2
+    first_alert.refresh_from_db()
+    second_alert.refresh_from_db()
+    assert first_alert.email_notice_sent_at is None
+    assert second_alert.email_notice_sent_at is not None
+    send_run_notices()
+    assert len(mail.outbox) == 1
+    assert mail.outbox[0].to == ["first@example.invalid"]
+
+
+@pytest.mark.parametrize("change", ["disable", "read"])
+def test_delivery_rechecks_state_after_selecting_recipient(smtp, change):
+    person = make_person("synthetic")
+    prefs = opt_in(person)
+    alert = new_alert(person)[0]
+
+    def changed_before_lock(preference_id, alert_ids, visible_alerts):
+        if change == "disable":
+            prefs.email_enabled = False
+            prefs.save()
+        else:
+            Alert.objects.filter(pk=alert.pk).update(read_at=timezone.now())
+        return _send_member_notice(preference_id, alert_ids, visible_alerts)
+
+    with patch("finance.alert_email._send_member_notice", side_effect=changed_before_lock):
+        send_run_notices()
+    assert not mail.outbox
+    alert.refresh_from_db()
+    assert alert.email_notice_sent_at is None
 
 
 def test_one_per_recipient_nested_runs_and_no_dedupe_repeats(smtp, django_capture_on_commit_callbacks):

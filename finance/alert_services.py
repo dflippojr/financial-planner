@@ -1,5 +1,4 @@
 from calendar import month_name
-from contextvars import copy_context
 from datetime import timedelta
 
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -8,7 +7,7 @@ from django.db.models import Q
 from django.urls import reverse
 from django.utils import timezone
 
-from .alert_email import collect_new_alert, notify_after_alert_run
+from .alert_email import notify_after_alert_run
 from .budget_services import month_start, progress_snapshot
 from .cash_flow import format_minor
 from .models import (
@@ -77,7 +76,6 @@ def raise_alert(recipients, kind, title, link, dedupe_key, account=None):
             },
         )
         if was_created:
-            collect_new_alert(alert)
             created.append(alert)
     return created
 
@@ -331,15 +329,12 @@ def schedule_after_category_change():
 
 def schedule_after_new_transactions(transactions):
     pks = [txn.pk for txn in transactions]
-    context = copy_context()
 
     def _run():
         rows = list(Transaction.objects.filter(pk__in=pks).select_related("account"))
         after_new_transactions(rows)
 
-    # A surrounding transaction may commit after the sync's notice scope exits.
-    # Keep its collector so this callback contributes to the same notice batch.
-    transaction.on_commit(lambda: context.run(_run))
+    transaction.on_commit(_run)
 
 
 def purge_old_read_alerts(*, now=None):

@@ -350,12 +350,13 @@ changing that address requires recent authentication. Save first, then use
 **Send a test** to check delivery. Disabling notices does not require reauthentication.
 
 After a daily alert pass or sync, one plain-text notice per opted-in member lists
-only newly created, still-unread visible alerts' count and kinds and links to
+the count and kinds of unread visible alerts that have not been emailed, with a link to
 `/alerts/`. It never includes alert titles, amounts, merchants, or account names.
-Existing unread alerts are not repeatedly emailed. Nested scheduled sync and daily
-passes share one batch. Notices wait for database commit. Failed sends leave the
-inbox intact, log a generic message without the address or SMTP exception, and
-are not retried automatically. SMTP has a ten-second timeout.
+Alerts raised between runs wait for the next pass. Successful delivery records a
+timestamp so those alerts are not emailed again. Nested scheduled sync and daily
+passes share one batch; overlapping runs serialize delivery per member. Notices
+wait for database commit. Failed sends leave the inbox intact, log a generic message without the address or SMTP exception, and
+remain pending for a later pass. SMTP has a ten-second timeout.
 
 For development or tests, use Django's console or locmem email backend. Never
 point a test suite at a real SMTP server.

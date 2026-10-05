@@ -11,6 +11,11 @@ class Migration(migrations.Migration):
 
     operations = [
         migrations.AddField(
+            model_name="alert",
+            name="email_notice_sent_at",
+            field=models.DateTimeField(blank=True, null=True),
+        ),
+        migrations.AddField(
             model_name='alertsettings',
             name='email_enabled',
             field=models.BooleanField(default=False),

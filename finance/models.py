@@ -2065,6 +2065,7 @@ class Alert(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     read_at = models.DateTimeField(null=True, blank=True)
+    email_notice_sent_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         constraints = [
