@@ -60,14 +60,14 @@
   }
 
   document.addEventListener("DOMContentLoaded", function () {
-    var button = document.getElementById("theme-toggle");
-    if (button) {
+    var buttons = document.querySelectorAll("[data-theme-toggle]");
+    buttons.forEach(function (button) {
       button.addEventListener("click", function () {
         window.financialPlannerTheme.toggle();
-        syncToggle(button);
+        buttons.forEach(syncToggle);
       });
       syncToggle(button);
-    }
+    });
     document.querySelectorAll("[data-copy-target]").forEach(function (control) {
       control.addEventListener("click", function () {
         var target = document.getElementById(control.getAttribute("data-copy-target"));

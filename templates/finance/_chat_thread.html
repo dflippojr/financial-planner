@@ -1,23 +1,26 @@
 {% load static %}
 {% if conversations %}
-<ul class="mb-4 flex flex-wrap gap-2" aria-label="Conversations">
+<details class="mb-4" {% if composer_fixed %}data-open-from="md"{% else %}open{% endif %}>
+<summary class="btn min-h-11 w-full justify-between md:hidden">{% if conversation %}{{ conversation.title|default:"Conversation" }}{% else %}Conversations{% endif %} <span aria-hidden="true">▾</span></summary>
+<ul class="mt-2 flex flex-wrap gap-2 md:mt-0" aria-label="Conversations">
   {% for item in conversations %}
   <li>
-    <a class="btn btn-xs {% if conversation and item.pk == conversation.pk %}btn-primary{% endif %}" href="{% url 'chat' %}?c={{ item.pk }}">{{ item.title|default:"Conversation" }}</a>
+    <a class="btn btn-xs max-md:min-h-11 {% if conversation and item.pk == conversation.pk %}btn-primary{% endif %}" href="{% url 'chat' %}?c={{ item.pk }}">{{ item.title|default:"Conversation" }}</a>
     <form method="post" action="{% url 'chat-delete' item.pk %}" class="inline">
       {% csrf_token %}
-      <button type="submit" class="btn btn-xs btn-ghost" aria-label="Delete conversation">Delete</button>
+      <button type="submit" class="btn btn-xs btn-ghost max-md:min-h-11" aria-label="Delete conversation">Delete</button>
     </form>
   </li>
   {% endfor %}
 </ul>
+</details>
 {% endif %}
 {% if chat_show_local %}
 <p id="chat-local-status" class="mb-2 text-sm" data-chat-warm-url="{% url 'chat-warm' %}" data-chat-status-url="{% url 'chat-status' %}">Local model: checking…</p>
 {% endif %}
 <div class="space-y-3 mb-4" aria-live="polite">
   {% for item in chat_messages %}
-  <article class="rounded-box border border-base-300 bg-base-100 p-3"{% if item.status == "pending" %} data-chat-turn-url="{% url 'chat-turn' item.pk %}"{% endif %}>
+  <article class="rounded-box border border-base-300 p-3 {% if item.role == "user" %}bg-base-200 max-md:ml-8{% else %}bg-base-100 max-md:mr-8{% endif %}"{% if item.status == "pending" %} data-chat-turn-url="{% url 'chat-turn' item.pk %}"{% endif %}>
     {% if item.role == "user" %}
     <p class="text-sm font-semibold">You</p>
     {% elif item.role == "error" %}
@@ -33,7 +36,7 @@
     {% if item.figures %}
     <ul class="mt-2 list-disc pl-5 text-sm">
       {% for figure in item.figures %}
-      <li><a class="link" href="{{ figure.url }}">{{ figure.label }}: {{ figure.amount_display }}</a></li>
+      <li><a class="link inline-flex min-h-11 items-center" href="{{ figure.url }}">{{ figure.label }}: {{ figure.amount_display }}</a></li>
       {% endfor %}
     </ul>
     {% endif %}
@@ -49,18 +52,21 @@
   <p class="text-sm opacity-80">Ask a question about income, spending, transactions, budgets, or net worth.</p>
   {% endfor %}
 </div>
-<form method="post" action="{% url 'chat-send' %}" class="space-y-2" id="chat-send-form" data-pending-label="Thinking…">
+<form method="post" action="{% url 'chat-send' %}" class="space-y-2{% if composer_fixed %} max-md:fixed max-md:inset-x-0 max-md:bottom-[calc(4rem+env(safe-area-inset-bottom))] max-md:z-20 max-md:space-y-0 max-md:border-t max-md:border-base-300 max-md:bg-base-100 max-md:p-3{% endif %}" id="chat-send-form" data-pending-label="Thinking…">
   {% csrf_token %}
   {% if conversation %}<input type="hidden" name="conversation_id" value="{{ conversation.pk }}">{% endif %}
   <input type="hidden" name="page_route" value="{{ page_context.route|default:request.path }}">
   <input type="hidden" name="page_query" value="{{ page_context.query|default:request.GET.urlencode }}">
   <input type="hidden" name="next" value="{{ chat_next|default:request.get_full_path }}">
-  <label class="form-control">
-    <span class="label-text">Question</span>
-    <textarea name="prompt" rows="3" class="textarea textarea-bordered w-full" required {% if chat_show_local %}data-chat-warm{% endif %}></textarea>
+  <div class="{% if composer_fixed %}max-md:flex max-md:items-end max-md:gap-2{% endif %}">
+  <label class="form-control{% if composer_fixed %} max-md:flex-1{% endif %}">
+    <span class="label-text{% if composer_fixed %} max-md:sr-only{% endif %}">Question</span>
+    <textarea name="prompt" rows="3" class="textarea textarea-bordered w-full{% if composer_fixed %} max-md:min-h-11{% endif %}" required {% if chat_show_local %}data-chat-warm{% endif %}></textarea>
   </label>
-  <button type="submit" class="btn btn-primary">Send</button>
+  <button type="submit" class="btn btn-primary{% if composer_fixed %} max-md:min-h-11{% endif %}">Send</button>
+  </div>
 </form>
+{% if composer_fixed %}<div class="h-28 md:hidden" aria-hidden="true"></div>{% endif %}
 {% if chat_show_local %}
 <script src="{% static 'js/chat-local.js' %}"></script>
 {% endif %}

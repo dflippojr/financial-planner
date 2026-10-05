@@ -1,25 +1,93 @@
 {% extends "finance/base.html" %}
 {% block title %}Budgets · Financial Planner{% endblock %}
 {% block content %}
-<h1 class="mb-4 text-2xl font-bold">Budgets</h1>
-<p class="mb-4 max-w-2xl opacity-80">Monthly spending limits by category, with an optional overall total. Progress uses the same spending totals as the Spending page. Budgets do not change the cash-flow projection.</p>
-<nav class="mb-6 flex flex-wrap items-center gap-3" aria-label="Month">
-  <a class="btn btn-ghost" href="{{ previous_url }}">Previous month</a>
-  <h2 class="text-lg font-semibold">{{ month_label }}</h2>
-  <a class="btn btn-ghost" href="{{ next_url }}">Next month</a>
+<header class="mb-3 flex items-start justify-between gap-3">
+  <div class="min-w-0">
+    <h1 class="text-2xl font-bold">Budgets</h1>
+    <p class="max-w-2xl text-sm opacity-80">Monthly limits by category, with an optional overall total.
+      <span class="hidden md:inline">Progress uses the same spending totals as the Spending page. Budgets do not change the cash-flow projection.</span>
+      <a class="link md:hidden" href="#budgets-note">More</a></p>
+  </div>
+  <button type="button" class="btn btn-primary min-h-11 shrink-0" data-open-dialog="add-budget-dialog">Add</button>
+</header>
+<nav class="mb-4 flex items-center justify-between rounded-box border border-base-300 bg-base-100 p-0.5 md:justify-start md:gap-3 md:border-0 md:bg-transparent" aria-label="Month">
+  <a class="btn btn-ghost size-11 p-0 md:size-auto md:px-4" href="{{ previous_url }}" aria-label="Previous month"><span aria-hidden="true" class="md:hidden">‹</span><span class="hidden md:inline">Previous month</span></a>
+  <h2 class="text-base font-semibold md:text-lg">{{ month_label }}</h2>
+  <a class="btn btn-ghost size-11 p-0 md:size-auto md:px-4" href="{{ next_url }}" aria-label="Next month"><span aria-hidden="true" class="md:hidden">›</span><span class="hidden md:inline">Next month</span></a>
 </nav>
-<section class="card bg-base-100 shadow-sm mb-6 max-w-lg">
-  <div class="card-body">
-    <h2 class="card-title">Add budget</h2>
-    <form method="post">
+<dialog id="add-budget-dialog" class="modal modal-bottom sm:modal-middle"{% if add_form.errors %} data-show-on-load{% endif %}>
+  <div class="modal-box">
+    <h2 class="text-lg font-semibold">Add budget</h2>
+    <form method="post" class="mt-3">
       {% csrf_token %}
       <input type="hidden" name="month" value="{{ month|date:'Y-m' }}">
       {% include "finance/_form_fields.html" with form=add_form %}
-      <button type="submit" class="btn btn-primary">Add budget</button>
+      <div class="modal-action">
+        <button type="submit" class="btn btn-primary">Add budget</button>
+        <button type="submit" class="btn" formmethod="dialog" formnovalidate>Cancel</button>
+      </div>
     </form>
   </div>
-</section>
-<div class="overflow-x-auto">
+  <form method="dialog" class="modal-backdrop"><button aria-label="Close">close</button></form>
+</dialog>
+<div class="md:hidden">
+  {% for card in overall_cards %}
+  <section class="mb-3 rounded-box border border-base-300 bg-base-100 p-4" aria-label="{{ card.name }}, {{ card.budget.get_scope_display }}">
+    <p class="text-sm font-medium opacity-80">{{ card.name }} · {{ card.budget.get_scope_display }}</p>
+    <p class="flex items-baseline justify-between gap-2"><span class="text-3xl font-bold tabular-nums">{{ card.spent_display }}</span><span class="text-sm tabular-nums opacity-80">of {{ card.amount_display }}</span></p>
+    <progress class="progress {% if card.over_budget %}progress-warning{% else %}progress-primary{% endif %} my-2 w-full" value="{{ card.percent }}" max="100" aria-label="{{ card.percent }} percent of overall budget spent"></progress>
+    <p class="text-sm font-medium tabular-nums">{% if card.over_budget %}Over by {{ card.over_by_display }}{% else %}{{ card.remaining_display }} left{% endif %}</p>
+  </section>
+  {% endfor %}
+  {% if category_cards %}
+  <h2 class="mb-2 mt-4 px-1 font-semibold">By category</h2>
+  <ul class="flex flex-col gap-2" aria-label="Category budgets">
+    {% for card in category_cards %}
+    <li class="rounded-box border border-base-300 bg-base-100 py-1 pl-4 pr-2">
+      <div class="flex items-center gap-2">
+        <a class="flex min-h-11 min-w-0 flex-1 flex-wrap items-center gap-x-2" href="{{ card.drilldown_url }}">
+          <span class="font-semibold">{{ card.name }}</span>
+          {% if card.budget.scope == "household" %}<span class="badge badge-info badge-sm">Household</span>{% else %}<span class="badge badge-sm">Private</span>{% endif %}
+          {% if card.rollover_enabled and card.carry_minor %}<span class="text-xs opacity-80">{{ card.carry_display }} carried</span>{% endif %}
+        </a>
+        <details class="dropdown dropdown-end">
+          <summary class="btn btn-ghost size-11 p-0" aria-label="Actions for {{ card.name }}"><span aria-hidden="true">⋯</span></summary>
+          <ul class="dropdown-content menu z-10 w-56 rounded-box border border-base-300 bg-base-100 p-2 shadow">
+            <li><a href="{% url 'budget-edit' card.budget.pk %}?month={{ month|date:'Y-m' }}">Edit</a></li>
+            <li>
+              <form method="post" action="{% url 'budget-rollover-toggle' card.budget.pk %}" class="p-0">
+                {% csrf_token %}
+                <input type="hidden" name="month" value="{{ month|date:'Y-m' }}">
+                <input type="hidden" name="enabled" value="{% if card.rollover_enabled %}0{% else %}1{% endif %}">
+                <button type="submit" class="w-full text-left">Turn rollover {% if card.rollover_enabled %}off{% else %}on{% endif %}</button>
+              </form>
+            </li>
+            {% if card.rollover_enabled %}
+            <li><a href="{% url 'budget-rollover-reset' card.budget.pk %}?month={{ month|date:'Y-m' }}">Reset rollover</a></li>
+            {% endif %}
+            <li>
+              <form method="post" action="{% url 'budget-archive' card.budget.pk %}" class="p-0">
+                {% csrf_token %}
+                <input type="hidden" name="month" value="{{ month|date:'Y-m' }}">
+                <button type="submit" class="w-full text-left">Archive</button>
+              </form>
+            </li>
+          </ul>
+        </details>
+      </div>
+      <div class="pr-2 pb-2">
+        <progress class="progress {% if card.over_budget %}progress-warning{% else %}progress-primary{% endif %} w-full" value="{{ card.percent }}" max="100" aria-label="{{ card.percent }} percent of budget spent{% if card.over_budget %}, over by {{ card.over_by_display }}{% endif %}"></progress>
+        <p class="mt-1 flex justify-between gap-2 text-sm tabular-nums"><span class="opacity-80">{{ card.spent_display }} of {{ card.amount_display }}</span><span class="font-semibold">{% if card.over_budget %}Over by {{ card.over_by_display }}{% else %}{{ card.remaining_display }} left{% endif %}</span></p>
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% elif not overall_cards %}
+  <p>No budgets for this month yet.</p>
+  {% endif %}
+  <p id="budgets-note" class="mt-4 px-1 text-sm opacity-80">Progress uses the same spending totals as the Spending page. Budgets do not change the cash-flow projection.</p>
+</div>
+<div class="hidden overflow-x-auto md:block">
   <table class="table table-zebra">
     <thead class="sticky top-0 z-10 bg-base-200">
       <tr>

@@ -1,16 +1,26 @@
 {% extends "finance/base.html" %}
 {% block title %}Cash flow · Financial Planner{% endblock %}
 {% block content %}
-<h1 class="mb-4 text-2xl font-bold">Cash flow</h1>
-<form method="get" class="mb-4 flex flex-wrap items-end gap-3">
-  {% include "finance/_form_fields.html" with form=filter_form %}
-  {% for token in scenario_tokens %}
-  <input type="hidden" name="sc" value="{{ token }}">
-  {% endfor %}
-  <button type="submit" class="btn btn-primary">Update</button>
-  <a class="btn btn-ghost" href="{% url 'home' %}">Reset to default range</a>
-</form>
-<p class="mb-4 max-w-3xl opacity-80">Projected months are a projection from planned items and confirmed recurring charges, not a forecast or advice. Historical actuals are unchanged.</p>
+<div class="relative">
+<div class="mb-3 flex items-end justify-between gap-3">
+  <div>
+    <p class="text-sm opacity-80 md:hidden">Household</p>
+    <h1 class="text-2xl font-bold">Cash flow</h1>
+  </div>
+</div>
+<details class="group mb-4 md:mb-4" data-open-from="md">
+  <summary class="btn min-h-11 rounded-full md:hidden absolute right-0 top-0">Change range</summary>
+  <form method="get" class="mt-3 flex flex-wrap items-end gap-3">
+    {% include "finance/_form_fields.html" with form=filter_form %}
+    {% for token in scenario_tokens %}
+    <input type="hidden" name="sc" value="{{ token }}">
+    {% endfor %}
+    <button type="submit" class="btn btn-primary">Update</button>
+    <a class="btn btn-ghost" href="{% url 'home' %}">Reset range</a>
+  </form>
+</details>
+</div>
+<p class="mb-4 hidden max-w-3xl opacity-80 md:block">Projected months are a projection from planned items and confirmed recurring charges, not a forecast or advice. Historical actuals are unchanged.</p>
 {% if report and report.includes_investment %}
 <div role="note" class="alert alert-info mb-4">{{ report.investment_notice }}</div>
 {% endif %}
@@ -28,37 +38,70 @@
 {% endif %}
 {% if report %}
 <div class="flex flex-col gap-4">
-  <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
+  <div class="grid grid-cols-2 gap-3 md:grid-cols-3 md:gap-4">
     <article class="stats bg-base-100 shadow">
-      <div class="stat">
+      <div class="stat max-md:px-4">
         <h2 class="stat-title">Income</h2>
-        <p class="stat-value text-2xl sm:text-3xl">{% include "finance/_amount.html" with value=report.summary.income_display tone="in" %}</p>
-        <p class="stat-desc">{{ report.summary.income_change.label }}</p>
+        <p class="stat-value text-xl sm:text-3xl">{% include "finance/_amount.html" with value=report.summary.income_display tone="in" %}</p>
+        <p class="stat-desc max-md:whitespace-normal">{{ report.summary.income_change.label }}</p>
       </div>
     </article>
     <article class="stats bg-base-100 shadow">
-      <div class="stat">
+      <div class="stat max-md:px-4">
         <h2 class="stat-title">Spending</h2>
-        <p class="stat-value text-2xl sm:text-3xl">{% include "finance/_amount.html" with value=report.summary.spending_display tone="out" %}</p>
-        <p class="stat-desc">{{ report.summary.spending_change.label }}</p>
+        <p class="stat-value text-xl sm:text-3xl">{% include "finance/_amount.html" with value=report.summary.spending_display tone="out" %}</p>
+        <p class="stat-desc max-md:whitespace-normal">{{ report.summary.spending_change.label }}</p>
       </div>
     </article>
-    <article class="stats bg-base-100 shadow">
-      <div class="stat">
+    <article class="stats bg-base-100 shadow max-md:order-first max-md:col-span-2">
+      <div class="stat max-md:px-4">
         <h2 class="stat-title">Net cash flow</h2>
-        <p class="stat-value text-2xl sm:text-3xl">{% include "finance/_amount.html" with value=report.summary.net_display tone="" %}</p>
-        <p class="stat-desc">{{ report.summary.net_change.label }}</p>
+        <p class="stat-value text-4xl md:text-2xl lg:text-3xl">{% include "finance/_amount.html" with value=report.summary.net_display tone="" %}</p>
+        <p class="stat-desc max-md:whitespace-normal">{% if range_from and range_to %}<span class="md:hidden">{{ range_from|date:"M j" }} – {{ range_to|date:"M j" }} · </span>{% endif %}{{ report.summary.net_change.label }}</p>
       </div>
     </article>
   </div>
+  {% if attention_items %}
+  <section aria-labelledby="attention-heading" class="md:hidden">
+    <h2 id="attention-heading" class="mb-2 px-1 font-semibold">Needs attention</h2>
+    <ul class="flex flex-col gap-2">
+      {% for item in attention_items %}
+      <li>
+        <a href="{{ item.url }}" class="flex min-h-14 items-center justify-between gap-3 rounded-box border border-base-300 bg-base-100 px-4 py-2">
+          <span class="flex min-w-0 flex-col">
+            <span class="font-medium">{{ item.title }}</span>
+            <span class="text-sm opacity-80">{{ item.detail }}</span>
+          </span>
+          <span aria-hidden="true">›</span>
+        </a>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
   {% if budget_summary %}
   <article class="card bg-base-100 shadow">
-    <div class="card-body">
-      <h2 class="card-title">Budgets</h2>
+    <div class="card-body max-md:p-4">
+      <div class="flex items-center justify-between gap-3">
+        <h2 class="card-title">Budgets</h2>
+        <a class="link inline-flex min-h-11 items-center md:hidden" href="{% url 'budgets' %}">See all</a>
+      </div>
       <p class="stat-desc">{{ budget_summary.month|date:"F Y" }}</p>
       {% if budget_summary.count == 0 %}
       <p>No budgets yet. <a class="link" href="{% url 'budgets' %}">Add a monthly budget</a>.</p>
       {% else %}
+      <ul class="flex flex-col gap-3 md:hidden">
+        {% for card in budget_summary.top_cards %}
+        <li>
+          <div class="flex justify-between gap-2 text-sm">
+            <span>{{ card.name }}</span>
+            <span class="tabular-nums{% if card.over_budget %} font-semibold{% endif %}">{{ card.spent_display }} of {{ card.amount_display }}{% if card.over_budget %} · Over by {{ card.over_by_display }}{% endif %}</span>
+          </div>
+          <progress class="progress {% if card.over_budget %}progress-warning{% else %}progress-primary{% endif %} w-full" value="{{ card.percent }}" max="100" aria-label="{{ card.name }}: {{ card.percent }} percent of budget spent"></progress>
+        </li>
+        {% endfor %}
+      </ul>
+      <div class="hidden md:block">
       {% for card in budget_summary.cards %}
         {% if card.budget.category_id is None %}
         <p>
@@ -72,11 +115,29 @@
       {% endfor %}
       <p>{{ budget_summary.remaining_count }} on track · {{ budget_summary.over_count }} over budget</p>
       <a class="link" href="{% url 'budgets' %}">Open budgets</a>
+      </div>
       {% endif %}
     </div>
   </article>
   {% endif %}
+  <section class="md:hidden" aria-labelledby="accounts-heading-mobile">
+    <h2 id="accounts-heading-mobile" class="mb-2 px-1 font-semibold">Accounts</h2>
+    <ul class="rounded-box border border-base-300 bg-base-100 px-4">
+      {% for account in accounts %}
+      <li class="flex min-h-12 items-center justify-between gap-3 border-b border-base-300 last:border-b-0">
+        <span class="min-w-0 truncate">{{ account.name }}</span>
+        {% if account.status == "active" and account.archived_at is None %}
+        <a class="link inline-flex min-h-11 items-center" href="{% url 'csv-import-preview' account.pk %}">Preview CSV import</a>
+        {% endif %}
+      </li>
+      {% empty %}
+      <li class="min-h-12 py-3">No accounts yet.</li>
+      {% endfor %}
+    </ul>
+  </section>
   {{ chart_data|json_script:"cash-flow-chart-data" }}
+  <details class="flex flex-col gap-4 max-md:rounded-box max-md:border max-md:border-base-300 max-md:bg-base-100 max-md:px-4" data-open-from="md">
+    <summary class="flex min-h-12 cursor-pointer items-center font-medium md:hidden">Income, spending, and net by period</summary>
   <figure>
     <figcaption class="mb-2 font-medium">Income, spending, and net cash flow by period</figcaption>
     <div class="h-72 w-full rounded-box bg-base-100 p-2 shadow">
@@ -135,9 +196,12 @@
       </tbody>
     </table>
   </div>
-  <section class="card bg-base-100 shadow" aria-labelledby="scenario-heading">
-    <div class="card-body">
-      <h2 id="scenario-heading" class="card-title">What-if scenario</h2>
+  </details>
+  <details class="flex flex-col gap-4 max-md:rounded-box max-md:border max-md:border-base-300 max-md:bg-base-100 max-md:px-4" data-open-from="md">
+    <summary class="flex min-h-12 cursor-pointer items-center font-medium md:hidden">What-if scenario</summary>
+  <section class="card bg-base-100 shadow max-md:shadow-none" aria-labelledby="scenario-heading">
+    <div class="card-body max-md:px-0">
+      <h2 id="scenario-heading" class="card-title max-md:sr-only">What-if scenario</h2>
       <p>Try changes without saving. This is a projection, not a forecast or advice. Nothing is written until you make a change real.</p>
       {% if scenario_listed_changes %}
       <ul class="list-disc pl-6">
@@ -190,10 +254,14 @@
     </table>
   </div>
   {% endif %}
+  </details>
   {% if report.savings_goal_dates %}
+  <details class="max-md:rounded-box max-md:border max-md:border-base-300 max-md:bg-base-100 max-md:px-4" data-open-from="md">
+    <summary class="flex min-h-12 cursor-pointer items-center font-medium md:hidden">Savings goal dates</summary>
   <section aria-labelledby="scenario-goals-heading">
-    <h2 id="scenario-goals-heading" class="text-lg font-semibold mb-2">Savings goal dates</h2>
+    <h2 id="scenario-goals-heading" class="text-lg font-semibold mb-2 max-md:sr-only">Savings goal dates</h2>
     <p class="mb-2 opacity-80">Goal dates are shown under the baseline and the scenario. Goals do not change either projection.</p>
+    <div class="overflow-x-auto">
     <table class="table table-zebra max-w-3xl">
       <thead class="sticky top-0 z-10 bg-base-200">
         <tr>
@@ -212,11 +280,18 @@
       {% endfor %}
       </tbody>
     </table>
+    </div>
   </section>
+  </details>
   {% endif %}
+  <details class="px-1 text-sm md:hidden">
+    <summary class="cursor-pointer">Projections, not advice. <span class="link">More</span></summary>
+    <p class="mt-2 opacity-80">Projected months are a projection from planned items and confirmed recurring charges, not a forecast or advice. Historical actuals are unchanged.</p>
+  </details>
 </div>
 {% endif %}
-<h2 class="mt-8 mb-3 text-xl font-semibold">Accounts</h2>
+<section class="hidden md:block" aria-labelledby="accounts-heading">
+<h2 id="accounts-heading" class="mt-8 mb-3 text-xl font-semibold">Accounts</h2>
 <ul class="list-disc pl-6">
   {% for account in accounts %}
   <li>
@@ -229,6 +304,7 @@
   <li>No accounts yet.</li>
   {% endfor %}
 </ul>
+</section>
 {% endblock %}
 {% block extra_js %}
 {% if chart_data %}{% include "finance/_chart_scripts.html" %}{% endif %}

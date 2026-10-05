@@ -156,7 +156,8 @@ from .cash_flow import (
 )
 from .planning_services import cash_flow_with_projection, visible_projection_inputs
 from .budget_services import dashboard_budget_summary
-from .alert_services import save_alert_settings, settings_for
+from .context_processors import navigation
+from .alert_services import save_alert_settings, settings_for, unread_alert_count
 from .projection import DEFAULT_HORIZON, SOURCE_PLANNED, SOURCE_SERIES
 from .scenario import (
     MAX_CHANGES,
@@ -247,6 +248,27 @@ def _scenario_choice_querysets(principal, inputs):
     planned = PlannedItem.objects.visible_to(principal).filter(pk__in=planned_ids).order_by("name", "pk")
     series = RecurringSeries.objects.visible_to(principal).filter(pk__in=series_ids).order_by("display_name", "pk")
     return planned, series
+
+
+def _home_attention_items(principal, budget_summary):
+    """Phone "Needs attention" rows: unread alerts, then budgets over or near their limit."""
+    items = []
+    unread = unread_alert_count(principal)
+    if unread:
+        items.append(
+            SimpleNamespace(
+                title=f"{unread} unread alert{'s' if unread != 1 else ''}",
+                detail="Open your alerts",
+                url=reverse("alert-list"),
+            )
+        )
+    for card in budget_summary.attention_cards:
+        if card.over_budget:
+            title, detail = f"{card.name} is over budget", f"{card.spent_display} of {card.amount_display}"
+        else:
+            title, detail = f"{card.name} is close to its limit", f"{card.spent_display} of {card.amount_display}"
+        items.append(SimpleNamespace(title=title, detail=detail, url=reverse("budgets")))
+    return items
 
 
 @require_GET
@@ -366,6 +388,8 @@ def home(request):
             )
         )
     scenario_tokens = encode_changes(changes)
+    budget_summary = dashboard_budget_summary(request.user, today=today)
+    attention_items = _home_attention_items(request.user, budget_summary)
     filter_pairs = _cash_flow_pairs(
         date_from=date_from or default_from,
         date_to=date_to or default_to,
@@ -389,8 +413,26 @@ def home(request):
             "report": report,
             "chart_data": cash_flow_chart_data(report) if report is not None else None,
             "accounts": Account.objects.visible_to(request.user),
-            "budget_summary": dashboard_budget_summary(request.user, today=today),
+            "budget_summary": budget_summary,
+            "attention_items": attention_items,
+            "range_from": date_from,
+            "range_to": date_to,
         },
+    )
+
+
+@require_GET
+def more(request):
+    """Phone home for every page the bottom tabs do not cover."""
+    by_key = {item["key"]: item for item in navigation(request)["nav_items"]}
+    groups = (
+        ("Money", ("net-worth", "spending-by-category", "account-list", "alert-list", "recurring-review", "transfer-review", "bills-calendar", "savings-goals", "csv-import")),
+        ("Planning", ("planned-items", "debt-payoff", "monthly-review", "sheet-comparison", "year-end")),
+    )
+    return render(
+        request,
+        "finance/more.html",
+        {"more_groups": [(title, [by_key[key] for key in keys]) for title, keys in groups]},
     )
 
 

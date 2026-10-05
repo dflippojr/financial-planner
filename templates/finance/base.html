@@ -15,6 +15,7 @@
   <link rel="apple-touch-icon" href="{% static 'icons/apple-touch-icon.png' %}">
   <script src="{% static 'js/theme.js' %}"></script>
   <script src="{% static 'js/page-actions.js' %}" defer></script>
+  <script src="{% static 'js/responsive-details.js' %}" defer></script>
   <link rel="stylesheet" href="{% static 'dist/app.css' %}">
 </head>
 <body class="min-h-screen bg-base-200 text-base-content">
@@ -23,22 +24,7 @@
 <div class="drawer lg:drawer-open">
   <input id="nav-drawer" type="checkbox" class="drawer-toggle">
   <div class="drawer-content flex min-h-screen flex-col">
-    <header class="navbar bg-base-100 shadow-sm lg:hidden">
-      <div class="flex-none">
-        <label for="nav-drawer" class="btn btn-square btn-ghost" aria-label="Open menu">
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
-          </svg>
-        </label>
-      </div>
-      <div class="flex-1 px-2 font-semibold">Financial Planner</div>
-      {% if user.is_authenticated %}
-      <div class="flex-none">
-        <label for="finance-chat-drawer" class="btn btn-ghost btn-sm">Chat</label>
-      </div>
-      {% endif %}
-    </header>
-    <main id="main-content" tabindex="-1" class="flex-1 p-4 lg:p-6">
+    <main id="main-content" tabindex="-1" class="flex-1 p-4 pb-28 lg:p-6 lg:pb-6">
       {% if privacy_policy_prompt %}
       <div role="status" class="alert mb-4">
         <div>
@@ -54,14 +40,14 @@
               <input type="hidden" name="action" value="accept">
               <input type="hidden" name="version" value="{{ privacy_policy_prompt.version }}">
               <input type="hidden" name="next" value="{{ request.path }}">
-              <button type="submit" class="btn btn-primary btn-sm">Accept</button>
+              <button type="submit" class="btn btn-primary btn-sm max-md:min-h-11">Accept</button>
             </form>
             <form method="post" action="{% url 'privacy-policy-respond' %}">
               {% csrf_token %}
               <input type="hidden" name="action" value="decline">
               <input type="hidden" name="version" value="{{ privacy_policy_prompt.version }}">
               <input type="hidden" name="next" value="{{ request.path }}">
-              <button type="submit" class="btn btn-sm">Not now</button>
+              <button type="submit" class="btn btn-sm max-md:min-h-11">Not now</button>
             </form>
           </div>
         </div>
@@ -108,7 +94,7 @@
             </a>
           </span>
           <span class="tooltip" data-tip="Switch to dark theme">
-            <button type="button" id="theme-toggle" class="btn btn-square btn-ghost" aria-pressed="false" aria-label="Switch to dark theme" title="Switch to dark theme">
+            <button type="button" id="theme-toggle" data-theme-toggle class="btn btn-square btn-ghost" aria-pressed="false" aria-label="Switch to dark theme" title="Switch to dark theme">
               <svg xmlns="http://www.w3.org/2000/svg" class="theme-icon-sun h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364-.707-.707M6.343 6.343l-.707-.707m12.728 0-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
               </svg>
@@ -132,6 +118,20 @@
     </div>
   </div>
 </div>
+<nav class="dock dock-md z-30 lg:hidden" aria-label="Main tabs">
+  {% for tab in dock_tabs %}
+  <a href="{{ tab.url }}" class="{% if tab.active %}dock-active{% endif %}"{% if tab.active %} aria-current="page"{% endif %}>
+    <svg xmlns="http://www.w3.org/2000/svg" class="size-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      {% if tab.key == "home" %}<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>
+      {% elif tab.key == "transaction-list" %}<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>
+      {% elif tab.key == "budgets" %}<path d="M21 12a9 9 0 1 1-9-9v9z"/><path d="M15 3.5A9 9 0 0 1 20.5 9H15z"/>
+      {% elif tab.key == "chat" %}<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+      {% else %}<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>{% endif %}
+    </svg>
+    <span class="dock-label text-xs">{{ tab.label }}</span>
+  </a>
+  {% endfor %}
+</nav>
 <input id="finance-chat-drawer" type="checkbox" class="sr-only" aria-hidden="true">
 <aside id="finance-chat-panel" class="fixed inset-y-0 right-0 z-50 w-full max-w-md overflow-y-auto border-l border-base-300 bg-base-100 p-4 shadow-xl" aria-label="Chat">
   <div class="mb-3 flex items-center justify-between">

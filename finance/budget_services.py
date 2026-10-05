@@ -238,6 +238,9 @@ def month_budget_cards(principal, month, *, include_archived=False, accounts=Non
     return cards
 
 
+NEAR_LIMIT_PERCENT = 85
+
+
 def dashboard_budget_summary(principal, *, today=None):
     today = today or timezone.localdate()
     month = month_start(today)
@@ -250,9 +253,13 @@ def dashboard_budget_summary(principal, *, today=None):
     if overall is None and cards:
         spent_minor = sum(card.spent_minor for card in cards)
         amount_minor = sum(card.available_minor for card in cards)
+    # Phone home shows the few budgets that need a look first: over, then closest to the limit.
+    top_cards = sorted(cards, key=lambda card: (not card.over_budget, -card.percent, card.name.lower()))
     return SimpleNamespace(
         month=month,
         cards=cards,
+        top_cards=top_cards[:3],
+        attention_cards=[card for card in top_cards if card.over_budget or card.percent >= NEAR_LIMIT_PERCENT],
         count=len(cards),
         over_count=over_count,
         remaining_count=remaining_count,
