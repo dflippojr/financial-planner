@@ -135,6 +135,42 @@ def test_mixed_currencies_are_row_errors():
     assert preview.valid_count == 1
 
 
+@pytest.mark.parametrize("prefix", ["", "ofx:"])
+def test_namespaced_xml_statements(prefix):
+    content = fixture("synthetic_card.qfx").decode()
+    if prefix:
+        import re
+
+        content = re.sub(r"<(/?)([A-Z][A-Z0-9]*)", rf"<\1{prefix}\2", content)
+    declaration = f'xmlns{":ofx" if prefix else ""}="http://ofx.net/types/2003/04"'
+    content = content.replace(f"<{prefix}OFX>", f"<{prefix}OFX {declaration}>")
+    # A foreign namespace is not a statement transaction in the document's namespace.
+    content = content.replace(f"</{prefix}OFX>", f'<foreign:STMTRS xmlns:foreign="urn:synthetic"/></{prefix}OFX>')
+    preview = preview_csv(read_ofx(content.encode()), OFX_MAPPING)
+    assert preview.valid_count == 2
+    assert preview.rows[0].amount_minor == -4567
+
+
+@pytest.mark.parametrize("encoding", [
+    "windows-1252", "iso-8859-1", "utf-16", "utf-32", "utf-16-le", "utf-16-be", "utf-32-le", "utf-32-be",
+])
+def test_xml_declared_encodings(encoding):
+    content = fixture("synthetic_card.qfx").decode().replace('encoding="UTF-8"', f'encoding="{encoding}"')
+    content = content.replace("Supplies", "Synthetic café")
+    preview = preview_csv(read_ofx(content.encode(encoding)), OFX_MAPPING)
+    assert preview.valid_count == 2
+    assert preview.rows[0].description == "SYNTHETIC SHOP - Synthetic café"
+
+
+def test_xml_unknown_encoding_and_encoded_entity_declarations_are_safe():
+    content = fixture("synthetic_card.qfx").replace(b'encoding="UTF-8"', b'encoding="unknown-synthetic"')
+    with pytest.raises(CsvInputError, match="encoding"):
+        read_ofx(content)
+    content = '<?xml version="1.0" encoding="utf-16"?><!DOCTYPE OFX [<!ENTITY x "bad">]><OFX/>'
+    with pytest.raises(CsvInputError, match="entities are not supported"):
+        read_ofx(content.encode("utf-16"))
+
+
 def test_foreign_purchase_posted_in_usd_ignores_original_currency():
     content = fixture("synthetic_card.qfx").replace(
         b"<TRNAMT>-45.67",

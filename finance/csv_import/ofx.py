@@ -1,5 +1,6 @@
 """Read statement transactions only; never retain account or balance fields."""
 
+import codecs
 import re
 from html import unescape
 from xml.etree import ElementTree as ET
@@ -15,16 +16,34 @@ def _decode(content):
     if len(content) > MAX_FILE_BYTES:
         raise CsvInputError("The statement file exceeds the 5 MB limit.")
     try:
-        return content.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        # OFX 1.x commonly declares Windows code page 1252.
-        header = content.split(b"<", 1)[0]
-        if b"CHARSET:1252" in header or b"CHARSET:WINDOWS-1252" in header:
-            try:
-                return content.decode("cp1252")
-            except UnicodeDecodeError:
-                pass
-        raise CsvInputError("The statement file must use UTF-8 or declared Windows-1252 encoding.") from None
+        return content.decode(_encoding(content))
+    except (UnicodeError, LookupError):
+        raise CsvInputError("The statement file has an invalid or unsupported text encoding.") from None
+
+
+def _encoding(content):
+    # XML's declaration takes precedence even when its bytes happen to be UTF-8.
+    if content.startswith((codecs.BOM_UTF32_LE, codecs.BOM_UTF32_BE)):
+        return "utf-32"
+    if content.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        return "utf-16"
+    for signature, encoding in (
+        (b"\x00\x00\x00<", "utf-32-be"), (b"<\x00\x00\x00", "utf-32-le"),
+        (b"\x00<", "utf-16-be"), (b"<\x00", "utf-16-le"),
+    ):
+        if content.startswith(signature):
+            return encoding
+    declaration = re.match(
+        rb"(?:\xef\xbb\xbf)?<\?xml\s[^>]*\bencoding\s*=\s*['\"]([A-Za-z0-9_.-]+)['\"]",
+        content[:1024],
+    )
+    if declaration:
+        name = declaration.group(1).decode("ascii")
+        return "utf-8-sig" if name.lower() in ("utf-8", "utf8") else name
+    header = content.split(b"<", 1)[0]
+    if b"CHARSET:1252" in header or b"CHARSET:WINDOWS-1252" in header:
+        return "cp1252"
+    return "utf-8-sig"
 
 
 def _sgml_tree(text):
@@ -77,8 +96,14 @@ def _tree(text):
         root = ET.fromstring(text)
     except ET.ParseError:
         raise CsvInputError(MALFORMED) from None
-    if root.tag != "OFX":
+    namespace, _separator, name = root.tag.rpartition("}")
+    if name != "OFX":
         raise CsvInputError(MALFORMED)
+    if namespace:
+        prefix = namespace + "}"
+        for element in root.iter():
+            if element.tag.startswith(prefix):
+                element.tag = element.tag[len(prefix):]
     return root
 
 

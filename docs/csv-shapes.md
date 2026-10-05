@@ -51,7 +51,8 @@ Never commit an export, its output for a real account with your own edits, or an
 
 Choose **OFX / QFX file** for `.ofx`, `.qfx`, or `.qbo` downloads (up to 5 MB).
 The fixed profile reads OFX 1.x SGML and OFX 2.x XML bank and credit-card
-statement transactions. UTF-8 and declared Windows-1252 files are supported.
+statement transactions. XML namespaces and declared text encodings are supported;
+SGML uses UTF-8 or declared Windows-1252.
 Dates use the first eight digits of DTPOSTED, ignoring time and zone. TRNAMT
 is signed as supplied: negative means money out, positive means money in,
 including on cards. Amounts must have at most two decimal places; only USD
