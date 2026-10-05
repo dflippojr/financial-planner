@@ -86,6 +86,8 @@ def test_planner_matches_hand_computed_interest_and_lists_needs_details():
     payload = json_script_payload(html, "debt-payoff-chart-data")
     assert payload["remaining_minor"][-1] == 0
     assert 'data-chart="debt-payoff"' in html
+    assert "vendor/chart.umd.min.js" in html
+    assert "js/charts.js" in html
 
 
 @pytest.mark.django_db

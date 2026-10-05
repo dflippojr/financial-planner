@@ -149,3 +149,6 @@
 </section>
 {% endif %}
 {% endblock %}
+{% block extra_js %}
+{% if plan.chart_data %}{% include "finance/_chart_scripts.html" %}{% endif %}
+{% endblock %}

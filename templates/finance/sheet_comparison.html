@@ -97,7 +97,7 @@
 </section>
 
 {% if report.rows or report.settings %}
-<form method="post" action="{% url 'sheet-comparison-delete' %}" class="mb-8" onsubmit="return confirm('Delete all stored sheet totals and the remembered mapping?');">
+<form method="post" action="{% url 'sheet-comparison-delete' %}" class="mb-8" data-confirm="Delete all stored sheet totals and the remembered mapping?">
   {% csrf_token %}
   <button type="submit" class="btn btn-outline btn-error">Delete comparison data</button>
 </form>

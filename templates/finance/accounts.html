@@ -99,7 +99,7 @@
               {% endif %}
               {% if account.owner_id == viewer_id %}
                 {% if account.share_mode == "lent" %}
-            <button type="button" class="btn btn-sm btn-outline" onclick="document.getElementById('co-own-{{ account.pk }}').showModal()">Make co-owned</button>
+            <button type="button" class="btn btn-sm btn-outline" data-open-dialog="co-own-{{ account.pk }}">Make co-owned</button>
             <dialog id="co-own-{{ account.pk }}" class="modal">
               <div class="modal-box">
                 <h3 class="font-bold text-lg">Give up sole ownership of {{ account.name }}?</h3>
@@ -127,7 +127,7 @@
               {% endif %}
             {% endif %}
             {% if account.scope != "household" or account.share_mode != "lent" or account.owner_id == viewer_id %}
-            <button type="button" class="btn btn-sm btn-error" onclick="document.getElementById('archive-{{ account.pk }}').showModal()">Archive</button>
+            <button type="button" class="btn btn-sm btn-error" data-open-dialog="archive-{{ account.pk }}">Archive</button>
             <dialog id="archive-{{ account.pk }}" class="modal">
               <div class="modal-box">
                 <h3 class="font-bold text-lg">Archive {{ account.name }}?</h3>

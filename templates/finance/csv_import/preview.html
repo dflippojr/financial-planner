@@ -95,7 +95,7 @@
   {% for batch in import_batches %}
     <li class="flex flex-wrap items-center gap-3">
       <span>{{ batch.get_source_display }} {{ batch.date_range_start }}–{{ batch.date_range_end }}</span>
-      <form method="post" action="{% url 'csv-import-undo' account.pk batch.pk %}" onsubmit="return confirm('Undoing this import deletes receipts on the rows it removes.');">
+      <form method="post" action="{% url 'csv-import-undo' account.pk batch.pk %}" data-confirm="Undoing this import deletes receipts on the rows it removes.">
         {% csrf_token %}
         <button type="submit" class="btn btn-sm btn-outline">Undo this import</button>
       </form>

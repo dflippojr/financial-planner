@@ -35,3 +35,23 @@ class MemberSessionActivityMiddleware:
         if user is not None and getattr(user, "is_authenticated", False):
             touch_member_session(request)
         return response
+
+
+class SecurityPolicyHeadersMiddleware:
+    """Add the configured CSP and Permissions-Policy unless a view set its own."""
+
+    HEADERS = (
+        ("Content-Security-Policy", "CONTENT_SECURITY_POLICY"),
+        ("Permissions-Policy", "PERMISSIONS_POLICY"),
+    )
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        response = self.get_response(request)
+        for header, setting in self.HEADERS:
+            value = getattr(settings, setting, "")
+            if value and header not in response:
+                response[header] = value
+        return response

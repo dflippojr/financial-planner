@@ -93,3 +93,12 @@
     page-break-after: auto;
   }
 }
+
+/* The chat drawer is a CSS-only toggle; it lives here because the CSP blocks inline <style>. */
+#finance-chat-panel {
+  display: none;
+}
+
+#finance-chat-drawer:checked ~ #finance-chat-panel {
+  display: block;
+}

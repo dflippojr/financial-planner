@@ -1,4 +1,5 @@
 {% extends "finance/base.html" %}
+{% load static %}
 {% block title %}Correct transaction · Financial Planner{% endblock %}
 {% block content %}
 <h1 class="mb-4 text-2xl font-bold">Correct transaction</h1>
@@ -78,29 +79,7 @@
     <button type="submit" class="btn btn-primary">Save split</button>
   </div>
 </form>
-<script>
-(function () {
-  const form = document.getElementById("split-form");
-  if (!form) return;
-  const parent = Number(form.dataset.parentAmount || "0");
-  const remaining = document.getElementById("split-remaining");
-  function cents(value) {
-    const parsed = Number(value);
-    if (!Number.isFinite(parsed)) return 0;
-    return Math.round(parsed * 100);
-  }
-  function update() {
-    let total = 0;
-    form.querySelectorAll(".split-part-amount").forEach(function (input) {
-      total += cents(input.value);
-    });
-    const left = parent - total;
-    remaining.textContent = "Remaining: " + (left / 100).toFixed(2);
-  }
-  form.addEventListener("input", update);
-  update();
-})();
-</script>
+<script src="{% static 'js/transaction-split.js' %}"></script>
 {% endif %}
 {% if refund_link %}
 <div role="status" class="alert alert-info mb-8">This refund is linked to a purchase on {{ refund_link.original.transaction_date }} and inherits that category.</div>
