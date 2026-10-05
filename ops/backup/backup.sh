@@ -15,6 +15,12 @@ positive_integer() {
   esac
 }
 
+non_negative_integer() {
+  case "$2" in
+    ''|*[!0-9]*) echo "$1 must be a whole number of days" >&2; exit 2 ;;
+  esac
+}
+
 sanitize_error() {
   printf '%s' "${1:-}" | tr '\n\r' '  ' | cut -c1-180
 }
@@ -28,6 +34,9 @@ load_status() {
   offsite_success_at=""
   offsite_error=""
   offsite_configured=""
+  restore_check_at=""
+  restore_check_error=""
+  restore_check_enabled=""
   if [ ! -f "$status_file" ]; then
     return 0
   fi
@@ -41,6 +50,9 @@ load_status() {
       offsite_success_at) offsite_success_at=$value ;;
       offsite_error) offsite_error=$value ;;
       offsite_configured) offsite_configured=$value ;;
+      restore_check_at) restore_check_at=$value ;;
+      restore_check_error) restore_check_error=$value ;;
+      restore_check_enabled) restore_check_enabled=$value ;;
     esac
   done < "$status_file"
 }
@@ -59,6 +71,9 @@ last_error=$last_error
 offsite_success_at=$offsite_success_at
 offsite_error=$offsite_error
 offsite_configured=$offsite_configured
+restore_check_at=$restore_check_at
+restore_check_error=$restore_check_error
+restore_check_enabled=$restore_check_enabled
 EOF
   mv "$tmp" "$status_file"
   chmod 644 "$status_file" 2>/dev/null || true
@@ -114,6 +129,37 @@ prune_remote() {
   return "$failed"
 }
 
+epoch_of() {
+  # "2026-09-27T06:00:00Z" -> seconds; both GNU and BusyBox date read "YYYY-MM-DD HH:MM:SS".
+  date -u -d "$(printf '%s' "$1" | sed 's/T/ /; s/Z$//')" '+%s' 2>/dev/null
+}
+
+restore_check_due() {
+  if [ -n "$restore_check_error" ] || [ -z "$restore_check_at" ]; then
+    return 0
+  fi
+  if ! last_check=$(epoch_of "$restore_check_at"); then
+    return 0
+  fi
+  now=$(date -u '+%s')
+  # Six hours of slack so a nightly start that drifts (DST, a slow dump) does
+  # not push the check a whole extra day.
+  [ $((now - last_check)) -ge $((restore_check_interval * 86400 - 21600)) ]
+}
+
+# A failed check is recorded but never unpublishes or deletes the dump.
+run_restore_check() {
+  if ! check_output=$(sh "$verify_script" "$1" 2>&1 >/dev/null); then
+    restore_check_error=$(sanitize_error "${check_output:-Restore check failed}")
+    echo "$restore_check_error" >&2
+    restore_check_failed=1
+    return 0
+  fi
+  restore_check_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+  restore_check_error=""
+  echo "Restore check passed for $(basename "$1")"
+}
+
 copy_offsite() {
   src=$1
   dest=$2
@@ -131,6 +177,10 @@ nightly_retention=${NIGHTLY_RETENTION:-14}
 weekly_retention=${WEEKLY_RETENTION:-8}
 positive_integer NIGHTLY_RETENTION "$nightly_retention"
 positive_integer WEEKLY_RETENTION "$weekly_retention"
+restore_check_interval=${RESTORE_CHECK_INTERVAL_DAYS:-7}
+non_negative_integer RESTORE_CHECK_INTERVAL_DAYS "$restore_check_interval"
+verify_script=${RESTORE_CHECK_SCRIPT:-$(dirname "$0")/verify-restore.sh}
+restore_check_failed=0
 
 offsite_remote=${OFFSITE_RCLONE_REMOTE:-}
 offsite_recipient=${OFFSITE_AGE_RECIPIENT:-}
@@ -150,6 +200,12 @@ if [ -n "$offsite_remote" ] || [ -n "$offsite_recipient" ]; then
 else
   offsite_configured=0
   offsite_error=""
+fi
+if [ "$restore_check_interval" -gt 0 ]; then
+  restore_check_enabled=1
+else
+  restore_check_enabled=0
+  restore_check_error=""
 fi
 
 timestamp=$(date -u '+%Y%m%dT%H%M%SZ')
@@ -248,6 +304,10 @@ last_success_at=$success_at
 dump_name=$filename
 last_error=""
 
+if [ "$restore_check_enabled" = 1 ] && restore_check_due; then
+  run_restore_check "$nightly"
+fi
+
 if [ -n "$offsite_remote" ] || [ -n "$offsite_recipient" ]; then
   if [ -z "$offsite_remote" ] || [ -z "$offsite_recipient" ]; then
     fail_offsite "Off-site copy is incomplete: set both OFFSITE_RCLONE_REMOTE and OFFSITE_AGE_RECIPIENT"
@@ -292,3 +352,6 @@ fi
 
 write_status
 echo "Backup completed: $filename"
+if [ "$restore_check_failed" = 1 ]; then
+  exit 1
+fi

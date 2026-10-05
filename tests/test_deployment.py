@@ -146,6 +146,7 @@ def test_compose_stages_csv_uploads_on_a_memory_backed_mount():
     assert "OPERATOR_USERNAMES: ${OPERATOR_USERNAMES:-}" in compose
     assert "OFFSITE_RCLONE_REMOTE: ${OFFSITE_RCLONE_REMOTE:-}" in compose
     assert "OFFSITE_AGE_RECIPIENT: ${OFFSITE_AGE_RECIPIENT:-}" in compose
+    assert "RESTORE_CHECK_INTERVAL_DAYS: ${RESTORE_CHECK_INTERVAL_DAYS:-7}" in compose
     assert "RCLONE_CONFIG: /config/rclone.conf" in compose
     assert "RECEIPTS_DIR: /receipts" in compose
     assert "- receipts:/receipts" in compose
@@ -262,3 +263,10 @@ def test_backup_image_ships_the_row_count_script_the_upgrade_runbook_uses():
     copy_line = next(line for line in (root / "ops/backup/Dockerfile").read_text().splitlines() if line.startswith("COPY"))
     assert "row-counts.sh" in copy_line
     assert "/opt/financial-planner/row-counts.sh" in (root / "docs/deployment.md").read_text(encoding="utf-8")
+
+
+def test_backup_image_ships_the_restore_check_script():
+    root = Path(__file__).resolve().parent.parent
+    copy_line = next(line for line in (root / "ops/backup/Dockerfile").read_text().splitlines() if line.startswith("COPY"))
+    assert "verify-restore.sh" in copy_line
+    assert "/opt/financial-planner/verify-restore.sh" in (root / "docs/deployment.md").read_text(encoding="utf-8")
