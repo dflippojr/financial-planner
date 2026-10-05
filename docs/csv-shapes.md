@@ -64,6 +64,9 @@ still uses account, date, amount and description. Original fields contain only
 Date, Amount, Name, Memo, FITID and Type. Account identifiers, balances, security
 lists and investment statements are ignored. No bank downloading is offered.
 A statement with no bank or card transactions is rejected.
+Files with nonempty CORRECTFITID or CORRECTACTION correction records are also
+rejected: provider replacements/deletions need ID matching, which this importer
+does not perform. Use the app's correction or import undo controls instead.
 
 Importing the same activity as both CSV and OFX may create duplicates when the
 descriptions differ. Use one format for overlapping periods, or review and undo

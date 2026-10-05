@@ -183,6 +183,15 @@ def test_foreign_purchase_posted_in_usd_ignores_original_currency():
     assert preview.rows[0].currency == "USD"
 
 
+@pytest.mark.parametrize("action", ["REPLACE", "DELETE"])
+@pytest.mark.parametrize("name", ["synthetic_checking.ofx", "synthetic_card.qfx"])
+def test_provider_corrections_are_rejected(name, action):
+    marker = f"<CORRECTFITID>synthetic-prior</CORRECTFITID><CORRECTACTION>{action}</CORRECTACTION>".encode()
+    content = fixture(name).replace(b"<TRNAMT>", marker + b"<TRNAMT>", 1)
+    with pytest.raises(CsvInputError, match="transaction corrections are not supported"):
+        read_ofx(content)
+
+
 @pytest.fixture
 def import_client(tmp_path):
     user, person = make_person("ofx-owner")
@@ -283,6 +292,24 @@ def test_stage_cannot_be_used_for_another_account_or_session(import_client):
     second.force_login(account.owner.user)
     assert second.post(reverse("csv-import-preview", args=[account.pk]), {"action": "commit", "token": token}).status_code == 404
     assert not Transaction.objects.exists()
+
+
+@pytest.mark.django_db
+def test_replacement_does_not_add_to_an_earlier_import(import_client):
+    client, account, staging = import_client
+    response = upload(client, account, fixture())
+    assert commit(client, account, response).status_code == 302
+    amounts = list(Transaction.objects.order_by("pk").values_list("amount_minor", flat=True))
+    correction = fixture().replace(
+        b"<TRNAMT>-12.34",
+        b"<CORRECTFITID>synthetic-1\n<CORRECTACTION>REPLACE\n<TRNAMT>-10.00",
+    ).replace(b"<FITID>synthetic-1", b"<FITID>synthetic-correction")
+    response = upload(client, account, correction)
+    assert "transaction corrections are not supported" in str(response.context["upload_form"].errors)
+    assert not list(staging.iterdir())
+    assert not client.session.get(SESSION_KEY)
+    assert ImportBatch.objects.count() == 1
+    assert list(Transaction.objects.order_by("pk").values_list("amount_minor", flat=True)) == amounts
 
 
 @pytest.mark.django_db

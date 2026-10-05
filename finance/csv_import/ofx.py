@@ -10,6 +10,10 @@ from .ofx_sgml import LEAF_TAGS
 
 OFX_HEADERS = ("Date", "Amount", "Name", "Memo", "FITID", "Type")
 MALFORMED = "This is not a valid OFX / QFX statement file."
+UNSUPPORTED_CORRECTIONS = (
+    "OFX transaction corrections are not supported. "
+    "Use the app's transaction correction or import undo controls instead."
+)
 
 
 def _decode(content):
@@ -136,6 +140,10 @@ def read_ofx(content: bytes, *, max_rows=MAX_DATA_ROWS) -> CsvDocument:
 
 
 def _row(statement, transaction, number):
+    if _value(transaction, "CORRECTFITID") or _value(transaction, "CORRECTACTION"):
+        # Corrections require matching provider IDs, which this importer does
+        # not do. Treating a replacement as a new fingerprint would double count.
+        raise CsvInputError(UNSUPPORTED_CORRECTIONS)
     posted = _value(transaction, "DTPOSTED")
     date = f"{posted[:4]}-{posted[4:6]}-{posted[6:8]}" if re.match(r"^\d{8}", posted) else ""
     name = _value(transaction, "NAME") or _value(transaction, "PAYEE/NAME") or _value(transaction, "PAYEE2/NAME")
