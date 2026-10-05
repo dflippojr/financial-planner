@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('finance', '0046_ofx_import_source'),
+        ('finance', '0047_chat_background_turns'),
     ]
 
     operations = [
