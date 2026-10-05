@@ -54,9 +54,14 @@ def test_backup_alert_fires_once_per_day_and_clears_after_success(tmp_path, sett
         assert "dump" not in alert.title.lower()
         assert "synthetic" not in alert.title.lower()
 
+        # Relative to the real clock: staleness is measured against now, so a
+        # fixed date here turned stale the day after it was written (#223).
+        fresh = (timezone.now() - timedelta(hours=1)).astimezone(dt_timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
         _write_status(
             status,
-            last_success_at="2026-10-04T06:00:00Z",
+            last_success_at=fresh,
             dump_name="financial_planner_synthetic.dump",
         )
         evaluate_backup_alerts(today=datetime(2026, 10, 4).date())
