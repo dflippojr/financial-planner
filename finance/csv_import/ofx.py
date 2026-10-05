@@ -20,7 +20,10 @@ def _decode(content):
         # OFX 1.x commonly declares Windows code page 1252.
         header = content.split(b"<", 1)[0]
         if b"CHARSET:1252" in header or b"CHARSET:WINDOWS-1252" in header:
-            return content.decode("cp1252")
+            try:
+                return content.decode("cp1252")
+            except UnicodeDecodeError:
+                pass
         raise CsvInputError("The statement file must use UTF-8 or declared Windows-1252 encoding.") from None
 
 
@@ -61,6 +64,8 @@ def _sgml_tag(stack, token):
 
 
 def _tree(text):
+    if "\x00" in text:
+        raise CsvInputError(MALFORMED)
     if re.search(r"<!\s*(DOCTYPE|ENTITY)", text, re.IGNORECASE):
         raise CsvInputError("OFX declarations of document types or entities are not supported.")
     if text.lstrip().startswith("OFXHEADER:"):
@@ -100,10 +105,17 @@ def read_ofx(content: bytes, *, max_rows=MAX_DATA_ROWS) -> CsvDocument:
             for transaction in statement.findall("BANKTRANLIST/STMTTRN"):
                 if len(rows) >= max_rows:
                     raise CsvInputError(f"The statement file exceeds the {max_rows:,} row limit.")
-                posted = _value(transaction, "DTPOSTED")
-                date = f"{posted[:4]}-{posted[4:6]}-{posted[6:8]}" if re.match(r"^\d{8}", posted) else ""
-                cells = (date, *(_value(transaction, tag) for tag in ("TRNAMT", "NAME", "MEMO", "FITID", "TRNTYPE")))
-                rows.append(CsvRow(len(rows) + 2, cells, _currency_error(statement, transaction)))
+                rows.append(_row(statement, transaction, len(rows) + 2))
     if not rows:
         raise CsvInputError("This file has no bank or card transactions")
     return CsvDocument(OFX_HEADERS, tuple(rows))
+
+
+def _row(statement, transaction, number):
+    posted = _value(transaction, "DTPOSTED")
+    date = f"{posted[:4]}-{posted[4:6]}-{posted[6:8]}" if re.match(r"^\d{8}", posted) else ""
+    cells = (date, *(_value(transaction, tag) for tag in ("TRNAMT", "NAME", "MEMO", "FITID", "TRNTYPE")))
+    error = _currency_error(statement, transaction)
+    if len(cells[4]) > 255:
+        error = "FITID exceeds the 255 character limit."
+    return CsvRow(number, cells, error)

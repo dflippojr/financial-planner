@@ -41,6 +41,7 @@ def test_statement_preview(name, amounts, descriptions):
     (b"20260927120000", b"bad-date", "Date does not match"),
     (b"<CURDEF>USD", b"<CURDEF>EUR", "Currency must be USD"),
     (b"<TRNAMT>-12.34", b"<CURRENCY><CURSYM>CAD</CURRENCY><TRNAMT>-12.34", "Currency must be USD"),
+    (b"<FITID>synthetic-1", b"<FITID>" + b"a" * 256, "FITID exceeds"),
 ])
 def test_invalid_row_fields(old, new, error):
     preview = preview_csv(read_ofx(fixture().replace(old, new)), OFX_MAPPING)
@@ -54,10 +55,16 @@ def test_invalid_row_fields(old, new, error):
     (b"OFXHEADER:100\n<OFX><STMTRS></OFX>", "not a valid"),
     (b"OFXHEADER:100\nno root", "not a valid"),
     (b"OFXHEADER:100\n<OFX><!bad></OFX>", "not a valid"),
+    (b"OFXHEADER:100\n<OFX><", "not a valid"),
+    (b"OFXHEADER:100\n<OFX></OFX>junk", "not a valid"),
+    (b"OFXHEADER:100\n<OFX>", "not a valid"),
+    (b"OFXHEADER:100\n<OFX>" + b"<NEST>" * 65, "not a valid"),
+    (b"OFXHEADER:100\n<OFX>\x00</OFX>", "not a valid"),
     (b"<OTHER/>", "not a valid"),
     (b"<OFX><INVSTMTMSGSRSV1><INVSTMTRS><STMTTRN/></INVSTMTRS></INVSTMTMSGSRSV1></OFX>", "no bank or card transactions"),
     (b'<!DOCTYPE OFX [<!ENTITY x "secret">]><OFX/>', "entities are not supported"),
     (b"\xff<OFX/>", "encoding"),
+    (b"OFXHEADER:100\nCHARSET:1252\n<OFX>\x81</OFX>", "encoding"),
 ])
 def test_bad_files(content, message):
     with pytest.raises(CsvInputError, match=message):
@@ -71,6 +78,21 @@ def test_row_limit_and_legacy_encoding():
         read_ofx(fixture(), max_rows=1)
     document = read_ofx(fixture().replace(b"Weekly &amp; fresh", b"Synthetic caf\xe9"))
     assert document.rows[0].cells[3] == "Synthetic café"
+
+
+def test_sgml_explicit_scalar_end_tags_and_empty_memo():
+    content = fixture().replace(b"<CURDEF>USD", b"<CURDEF>USD</CURDEF>")
+    content = content.replace(b"<NAME>SYNTHETIC PAY", b"<MEMO></MEMO><NAME>SYNTHETIC PAY</NAME>")
+    assert preview_csv(read_ofx(content), OFX_MAPPING).invalid_count == 0
+
+
+def test_mixed_currencies_are_row_errors():
+    content = fixture("synthetic_card.qfx").replace(
+        b"<TRNAMT>-45.67", b"<CURRENCY><CURSYM>EUR</CURSYM></CURRENCY><TRNAMT>-45.67"
+    )
+    preview = preview_csv(read_ofx(content), OFX_MAPPING)
+    assert preview.invalid_count == 1
+    assert preview.valid_count == 1
 
 
 @pytest.fixture
