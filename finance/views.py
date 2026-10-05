@@ -674,7 +674,7 @@ def transaction_list(request):
             "matching_count": matching_count,
             "matching_over_cap": matching_count > BULK_EDIT_CAP,
             "bulk_select_cap": BULK_EDIT_CAP,
-            "bulk_form": BulkTransactionEditForm(principal=request.user),
+            "bulk_form": BulkTransactionEditForm(principal=request.user, auto_id="bulk_%s"),
             "bulk_undo": active_bulk_undo(request),
         },
     )
