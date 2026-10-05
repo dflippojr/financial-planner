@@ -86,6 +86,26 @@ def test_sgml_explicit_scalar_end_tags_and_empty_memo():
     assert preview_csv(read_ofx(content), OFX_MAPPING).invalid_count == 0
 
 
+@pytest.mark.parametrize("field", ["CHECKNUM", "REFNUM", "SIC", "DTUSER", "DTAVAIL", "CORRECTFITID", "SRVRTID", "PAYEEID"])
+def test_empty_optional_sgml_scalar(field):
+    content = fixture().replace(b"<NAME>SYNTHETIC GROCER", f"<{field}><NAME>SYNTHETIC GROCER".encode())
+    preview = preview_csv(read_ofx(content), OFX_MAPPING)
+    assert preview.valid_count == 2
+    assert preview.rows[0].amount_minor == -1234
+    assert preview.rows[0].description == "SYNTHETIC GROCER - Weekly & fresh"
+
+
+def test_nested_payee_with_empty_sgml_address():
+    content = fixture().replace(
+        b"<NAME>SYNTHETIC GROCER",
+        b"<PAYEE><NAME>IGNORED PAYEE\n<ADDR1>SYNTHETIC STREET\n<ADDR2><CITY>SYNTHETIC CITY\n"
+        b"<STATE>ZZ\n<POSTALCODE>00000\n<PHONE>0000000000\n</PAYEE><NAME>SYNTHETIC GROCER",
+    )
+    preview = preview_csv(read_ofx(content), OFX_MAPPING)
+    assert preview.valid_count == 2
+    assert preview.rows[0].description == "SYNTHETIC GROCER - Weekly & fresh"
+
+
 def test_sgml_extension_fields_are_ignored():
     content = fixture().replace(b"<OFX>", b"<OFX><SYNTHETIC.BID>999\n")
     assert preview_csv(read_ofx(content), OFX_MAPPING).valid_count == 2

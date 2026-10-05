@@ -5,10 +5,10 @@ from html import unescape
 from xml.etree import ElementTree as ET
 
 from .parser import MAX_DATA_ROWS, MAX_FILE_BYTES, CsvDocument, CsvInputError, CsvRow
+from .ofx_sgml import LEAF_TAGS
 
 OFX_HEADERS = ("Date", "Amount", "Name", "Memo", "FITID", "Type")
 MALFORMED = "This is not a valid OFX / QFX statement file."
-LEAF_TAGS = {"DTPOSTED", "TRNAMT", "NAME", "MEMO", "FITID", "TRNTYPE", "CURDEF", "CURSYM"}
 
 
 def _decode(content):
