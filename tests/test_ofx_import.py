@@ -95,11 +95,12 @@ def test_empty_optional_sgml_scalar(field):
     assert preview.rows[0].description == "SYNTHETIC GROCER - Weekly & fresh"
 
 
-def test_nested_payee_with_empty_sgml_address():
+@pytest.mark.parametrize("payee_tag", ["PAYEE", "PAYEE2"])
+def test_nested_payee_with_empty_sgml_address(payee_tag):
     content = fixture().replace(
         b"<NAME>SYNTHETIC GROCER",
-        b"<PAYEE><NAME>IGNORED PAYEE\n<ADDR1>SYNTHETIC STREET\n<ADDR2><CITY>SYNTHETIC CITY\n"
-        b"<STATE>ZZ\n<POSTALCODE>00000\n<PHONE>0000000000\n</PAYEE><NAME>SYNTHETIC GROCER",
+        f"<{payee_tag}><NAME>SYNTHETIC GROCER\n<ADDR1>SYNTHETIC STREET\n<ADDR2><CITY>SYNTHETIC CITY\n"
+        f"<STATE>ZZ\n<POSTALCODE>00000\n<PHONE>0000000000\n</{payee_tag}>".encode(),
     )
     preview = preview_csv(read_ofx(content), OFX_MAPPING)
     assert preview.valid_count == 2

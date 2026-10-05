@@ -113,7 +113,9 @@ def read_ofx(content: bytes, *, max_rows=MAX_DATA_ROWS) -> CsvDocument:
 def _row(statement, transaction, number):
     posted = _value(transaction, "DTPOSTED")
     date = f"{posted[:4]}-{posted[4:6]}-{posted[6:8]}" if re.match(r"^\d{8}", posted) else ""
-    cells = (date, *(_value(transaction, tag) for tag in ("TRNAMT", "NAME", "MEMO", "FITID", "TRNTYPE")))
+    name = _value(transaction, "NAME") or _value(transaction, "PAYEE/NAME") or _value(transaction, "PAYEE2/NAME")
+    cells = (date, _value(transaction, "TRNAMT"), name,
+             *(_value(transaction, tag) for tag in ("MEMO", "FITID", "TRNTYPE")))
     error = _currency_error(statement, transaction)
     if len(cells[4]) > 255:
         error = "FITID exceeds the 255 character limit."
