@@ -9,7 +9,7 @@
       {% csrf_token %}
       <button type="submit" class="btn btn-sm">New conversation</button>
     </form>
-    <form method="post" action="{% url 'chat-delete-all' %}" onsubmit="return confirm('Delete every conversation?');">
+    <form method="post" action="{% url 'chat-delete-all' %}" data-confirm="Delete every conversation?">
       {% csrf_token %}
       <button type="submit" class="btn btn-sm btn-outline">Delete all</button>
     </form>

@@ -14,6 +14,7 @@
   <link rel="manifest" href="{% static 'manifest.webmanifest' %}">
   <link rel="apple-touch-icon" href="{% static 'icons/apple-touch-icon.png' %}">
   <script src="{% static 'js/theme.js' %}"></script>
+  <script src="{% static 'js/page-actions.js' %}" defer></script>
   <link rel="stylesheet" href="{% static 'dist/app.css' %}">
 </head>
 <body class="min-h-screen bg-base-200 text-base-content">
@@ -144,10 +145,6 @@
     <p class="text-sm">Connect an AI backend in <a class="link" href="{% url 'settings-ai' %}">Settings → AI</a> to chat about your data.</p>
   {% endif %}
 </aside>
-<style>
-#finance-chat-panel { display: none; }
-#finance-chat-drawer:checked ~ #finance-chat-panel { display: block; }
-</style>
 {% else %}
     </div>
   </div>

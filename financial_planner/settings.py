@@ -44,6 +44,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    "finance.middleware.SecurityPolicyHeadersMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -148,6 +149,20 @@ SECURE_HSTS_PRELOAD = False
 CSRF_TRUSTED_ORIGINS = [
     origin for origin in os.environ.get("DJANGO_CSRF_TRUSTED_ORIGINS", "").split(",") if origin
 ]
+# Sent by finance.middleware.SecurityPolicyHeadersMiddleware; an empty value sends
+# no header. Names map to Django 6's SECURE_CSP when #182 upgrades. Google is in
+# form-action because the sign-in form posts to the app, which redirects to Google,
+# and browsers check form-action on every redirect of a form submission.
+CONTENT_SECURITY_POLICY = os.environ.get(
+    "CONTENT_SECURITY_POLICY",
+    "default-src 'self'; script-src 'self'; style-src-elem 'self'; "
+    "style-src-attr 'unsafe-inline'; img-src 'self' data:; font-src 'self'; "
+    "connect-src 'self'; object-src 'none'; base-uri 'self'; "
+    "form-action 'self' https://accounts.google.com; frame-ancestors 'none'",
+).strip()
+PERMISSIONS_POLICY = os.environ.get(
+    "PERMISSIONS_POLICY", "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+).strip()
 
 SETUP_CODE = os.environ.get("SETUP_CODE", "")
 # File or directory. A directory must contain privacy-policy.md. Empty uses the

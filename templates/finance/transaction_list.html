@@ -1,4 +1,5 @@
 {% extends "finance/base.html" %}
+{% load static %}
 {% load ui %}
 {% block title %}Transactions · Financial Planner{% endblock %}
 {% block content %}
@@ -223,15 +224,5 @@
   {% endif %}
 </nav>
 {% endif %}
-<script>
-(function () {
-  var page = document.getElementById("select-page");
-  if (!page) return;
-  page.addEventListener("change", function () {
-    document.querySelectorAll(".js-bulk-row").forEach(function (box) {
-      box.checked = page.checked;
-    });
-  });
-})();
-</script>
+<script src="{% static 'js/bulk-select.js' %}"></script>
 {% endblock %}
