@@ -20,7 +20,7 @@ from .forms import (
     SavedMappingImportForm,
 )
 from .parser import CsvInputError, preview_csv, read_csv
-from .ofx import read_ofx
+from .ofx import looks_like_ofx, read_ofx
 from .profiles import (
     OFX,
     OFX_MAPPING,
@@ -67,7 +67,7 @@ FIXED_PROFILES = {
 def _read_document(content, profile):
     if profile == OFX:
         return read_ofx(content)
-    if b"<OFX" in content[:8192].upper():
+    if looks_like_ofx(content):
         raise CsvInputError("Choose the OFX / QFX profile for this statement file.")
     return read_csv(content)
 

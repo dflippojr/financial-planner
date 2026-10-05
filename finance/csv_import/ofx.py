@@ -50,6 +50,40 @@ def _encoding(content):
     return "utf-8-sig"
 
 
+def _content_start(text):
+    """Skip XML's leading whitespace, instructions and comments in linear time."""
+    offset = 0
+    while offset < len(text):
+        if text[offset].isspace():
+            offset += 1
+            continue
+        terminator = None
+        if text.startswith("<?", offset):
+            terminator = "?>"
+        elif text.startswith("<!--", offset):
+            terminator = "-->"
+        if terminator is None:
+            return offset
+        end = text.find(terminator, offset + 2)
+        if end < 0:
+            return len(text)
+        offset = end + len(terminator)
+    return offset
+
+
+def looks_like_ofx(content):
+    """Recognize a statement header/root, never text inside a CSV cell."""
+    try:
+        text = _decode(content)
+    except CsvInputError:
+        return False
+    beginning = text[_content_start(text):]
+    return bool(re.match(
+        r"(?:OFXHEADER:\d+[^\S\r\n]*(?:\r?\n|$)|<(?:[^\W\d][\w.-]*:)?OFX(?:\s|/?>))",
+        beginning,
+    ))
+
+
 def _sgml_tree(text):
     """OFX 1.x permits omitted scalar end tags, but requires aggregate end tags."""
     root = ET.Element("DOCUMENT")

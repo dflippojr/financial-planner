@@ -6,12 +6,12 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, override_settings
 from django.urls import reverse
 
-from finance.csv_import.ofx import OFX_HEADERS, read_ofx
+from finance.csv_import.ofx import OFX_HEADERS, looks_like_ofx, read_ofx
 from finance.csv_import.parser import MAX_FILE_BYTES, CsvInputError, preview_csv
 from finance.csv_import.profiles import OFX_MAPPING
 from finance.csv_import.staging import SESSION_KEY
 from finance.models import Account, ImportBatch, Transaction
-from tests.test_csv_import_views import make_person
+from tests.test_csv_import_views import make_person, mapping_data
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -171,6 +171,23 @@ def test_xml_unknown_encoding_and_encoded_entity_declarations_are_safe():
         read_ofx(content.encode("utf-16"))
 
 
+@pytest.mark.parametrize("content,expected", [
+    (fixture(), True),
+    (fixture("synthetic_card.qfx"), True),
+    (b'<?xml version="1.0"?><!-- synthetic --><x:OFX xmlns:x="urn:synthetic"/>', True),
+    (b"\n<!-- synthetic --><?OFX version='200'?><OFX/>", True),
+    (b"<?unterminated", False),
+    (b"<!-- unterminated", False),
+    (b"", False),
+    (b"  ", False),
+    (b"\xff", False),
+    (b"OFXHEADER:100,Memo,Amount\nexample,<OFX>,-1.00", False),
+    (b"Date,Memo,Amount\n2026-09-27,<OFX>,-1.00", False),
+])
+def test_format_detection_uses_only_the_file_preamble(content, expected):
+    assert looks_like_ofx(content) is expected
+
+
 def test_foreign_purchase_posted_in_usd_ignores_original_currency():
     content = fixture("synthetic_card.qfx").replace(
         b"<TRNAMT>-45.67",
@@ -323,4 +340,30 @@ def test_hub_upload_and_cancel(import_client):
     preview = client.get(response.url)
     token = preview.context["mapping_form"].data["token"]
     assert client.post(response.url, {"action": "cancel", "token": token}).status_code == 302
+    assert not list(staging.iterdir())
+
+
+@pytest.mark.django_db
+def test_csv_description_containing_ofx_imports_normally(import_client):
+    client, account, staging = import_client
+    content = b"When,Memo,Amount,Currency\n09/27/2026,<OFX> SYNTHETIC,-12.34,USD\n"
+    response = upload(client, account, content, profile="generic", name="synthetic.csv")
+    assert not response.context["upload_form"].errors
+    token = response.context["mapping_form"].initial["token"]
+    data = mapping_data(token, action="commit", source="huntington",
+                        date_range_start="2026-09-01", date_range_end="2026-09-30")
+    response = client.post(reverse("csv-import-preview", args=[account.pk]), data)
+    assert response.status_code == 302
+    transaction = Transaction.objects.get()
+    assert transaction.description == "<OFX> SYNTHETIC"
+    assert transaction.amount_minor == -1234
+    assert not list(staging.iterdir())
+
+
+@pytest.mark.django_db
+def test_encoded_xml_chosen_as_csv_has_a_profile_error(import_client):
+    client, account, staging = import_client
+    content = fixture("synthetic_card.qfx").decode().replace('encoding="UTF-8"', 'encoding="utf-16"')
+    response = upload(client, account, content.encode("utf-16"), profile="generic")
+    assert "Choose the OFX / QFX profile" in str(response.context["upload_form"].errors)
     assert not list(staging.iterdir())
