@@ -8,6 +8,10 @@ import pytest
 
 BACKUP_SCRIPT = Path(__file__).parents[1] / "ops" / "backup" / "backup.sh"
 RESTORE_SCRIPT = Path(__file__).parents[1] / "ops" / "backup" / "restore.sh"
+VERIFY_SCRIPT = Path(__file__).parents[1] / "ops" / "backup" / "verify-restore.sh"
+CORE_TABLES = ("django_migrations", "finance_account", "finance_person", "finance_transaction")
+# Stands in for a row value that PostgreSQL quotes in a COPY error.
+SECRET_ROW_VALUE = "synthetic-private-row-value"
 
 
 def _posix_bash():
@@ -39,40 +43,105 @@ def _write_executable(path, content):
 
 
 def _fake_date(fake_bin):
+    # "Now" is 2026-09-27T06:00:00Z (epoch 1790488800). Parsing a given date
+    # goes to the real date command.
     _write_executable(
         fake_bin / "date",
         "#!/bin/sh\n"
         "if [ \"${1:-}\" = '-u' ]; then\n"
-        "  if [ \"$2\" = '+%Y-%m-%dT%H:%M:%SZ' ]; then echo 2026-09-27T06:00:00Z; else echo 20260927T060000Z; fi\n"
+        "  case \"$2\" in\n"
+        "    -d) exec /usr/bin/date \"$@\" ;;\n"
+        "    '+%s') echo 1790488800 ;;\n"
+        "    '+%Y-%m-%dT%H:%M:%SZ') echo 2026-09-27T06:00:00Z ;;\n"
+        "    *) echo 20260927T060000Z ;;\n"
+        "  esac\n"
         "else echo 7; fi\n",
     )
 
 
-def _fake_pg(fake_bin, *, dump_fail=False, restore_fail=False):
+FAKE_PSQL = r"""#!/bin/sh
+# A server that knows only whether the scratch database exists and which
+# tables a restore into it produces.
+state='@STATE@'
+db=''; cmd=''
+while [ "$#" -gt 0 ]; do
+  case "$1" in --dbname) shift; db=$1 ;; --command) shift; cmd=$1 ;; esac
+  shift
+done
+printf '%s|%s\n' "$db" "$(printf '%s' "$cmd" | tr '\n' ' ')" >> "$state/psql.log"
+case "$cmd" in
+  *server_version_num*) cat "$state/server-version" 2>/dev/null || echo 180006 ;;
+  *'DROP DATABASE'*)
+    [ -f "$state/drop-fail" ] && exit 1
+    rm -f "$state/scratch" ;;
+  *'CREATE DATABASE'*)
+    [ -f "$state/create-fail" ] && exit 1
+    touch "$state/scratch" ;;
+  *'count(*)'*) [ -f "$state/scratch" ] || exit 1; grep -c . "$state/tables" || true ;;
+  *relname*) [ -f "$state/scratch" ] || exit 1; cat "$state/tables" ;;
+  *) exit 2 ;;
+esac
+"""
+
+# Lists the core tables. Restoring into the scratch database fails for a dump
+# whose text contains "truncated", quoting a row value the way a COPY error does.
+FAKE_PG_RESTORE = r"""#!/bin/sh
+state='@STATE@'
+if [ "${1:-}" = '--version' ]; then
+  echo 'pg_restore (PostgreSQL) 18.6'
+  exit 0
+fi
+if [ "${1:-}" = '--list' ]; then
+  [ -s "$2" ] || exit 1
+@LISTING@
+  exit 0
+fi
+db=''
+for arg in "$@"; do dump=$arg; done
+while [ "$#" -gt 0 ]; do [ "$1" = '--dbname' ] && db=$2; shift; done
+echo "$db" >> "$state/restores.log"
+if [ "$db" = 'financial_planner_restore_check' ]; then
+  [ -f "$state/scratch" ] || exit 1
+  if grep -q truncated "$dump"; then
+    echo 'pg_restore: error: COPY failed: CONTEXT: COPY finance_transaction, line 1: @SECRET@' >&2
+    exit 1
+  fi
+fi
+exit 0
+"""
+
+
+def _fake_pg(
+    fake_bin, *, dump_fail=False, restore_fail=False, restored_tables=CORE_TABLES, dump_text="synthetic dump"
+):
     if dump_fail:
         _write_executable(fake_bin / "pg_dump", "#!/bin/sh\necho dump refused >&2\nexit 1\n")
     else:
         _write_executable(
             fake_bin / "pg_dump",
             "#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do\n"
-            "  if [ \"$1\" = '--file' ]; then shift; printf 'synthetic dump' > \"$1\"; exit 0; fi\n"
+            f"  if [ \"$1\" = '--file' ]; then shift; printf '{dump_text}' > \"$1\"; exit 0; fi\n"
             "  shift\n"
             "done\nexit 2\n",
         )
+    state = fake_bin / "pgstate"
+    state.mkdir(exist_ok=True)
+    (state / "tables").write_text("".join(f"{name}\n" for name in restored_tables), encoding="utf-8")
+    _write_executable(fake_bin / "psql", FAKE_PSQL.replace("@STATE@", _unix_path(state)))
     if restore_fail:
         _write_executable(fake_bin / "pg_restore", "#!/bin/sh\necho list refused >&2\nexit 1\n")
     else:
+        listing = "\n".join(
+            f"  echo '{index}; 0 0 TABLE DATA public {name} financial_planner'"
+            for index, name in enumerate(CORE_TABLES, start=1)
+        )
         _write_executable(
             fake_bin / "pg_restore",
-            "#!/bin/sh\n"
-            "if [ \"${1:-}\" = '--list' ]; then\n"
-            "  [ -s \"$2\" ] || exit 1\n"
-            "  echo '; 1 TABLE DATA public finance_account'\n"
-            "  echo '; 2 TABLE DATA public finance_transaction'\n"
-            "  exit 0\n"
-            "fi\n"
-            "exit 0\n",
+            FAKE_PG_RESTORE.replace("@STATE@", _unix_path(state))
+            .replace("@LISTING@", listing)
+            .replace("@SECRET@", SECRET_ROW_VALUE),
         )
+    return state
 
 
 def _fake_age(fake_bin, *, fail=False):
@@ -196,6 +265,29 @@ def _run_restore(fake_bin, dump_path, extra_env=None):
     )
 
 
+def _run_verify(fake_bin, dump_path):
+    env = os.environ.copy()
+    env.update(
+        {
+            "POSTGRES_USER": "financial_planner",
+            "POSTGRES_PASSWORD": "synthetic-test-password",
+            "POSTGRES_HOST": "db",
+        }
+    )
+    fake_unix = _unix_path(fake_bin)
+    return subprocess.run(
+        [
+            POSIX_BASH,
+            "-c",
+            f'export PATH="{fake_unix}:$PATH"; exec sh "{_unix_path(VERIFY_SCRIPT)}" "{_unix_path(dump_path)}"',
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+
 def _read_status(backup_root):
     text = (backup_root / "health" / "status").read_text(encoding="utf-8")
     data = {}
@@ -246,7 +338,7 @@ def test_backup_is_verified_and_retains_latest_nightly_and_weekly_files(tmp_path
     assert status["last_success_at"] == "2026-09-27T06:00:00Z"
     assert status["dump_name"] == "financial_planner_20260927T060000Z.dump"
     assert status["size_bytes"] == str(dump.stat().st_size)
-    assert status["table_count"] == "2"
+    assert status["table_count"] == "4"
     assert status["last_error"] == ""
     assert status.get("offsite_configured", "0") == "0"
     assert (backup_root / "health" / "status").is_file()
@@ -538,3 +630,239 @@ def test_restore_succeeds_when_the_receipts_archive_is_missing(tmp_path):
         restored.stderr + restored.stdout
     )
     assert leftover.read_bytes() == b"leave-unchanged"
+
+
+def _verify_setup(tmp_path, dump_text="synthetic dump", **pg_options):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    state = _fake_pg(fake_bin, **pg_options)
+    dump = tmp_path / "financial_planner_20260927T060000Z.dump"
+    dump.write_text(dump_text, encoding="utf-8")
+    return fake_bin, state, dump
+
+
+@pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
+def test_verify_restore_passes_on_a_good_dump_and_drops_the_scratch_database(tmp_path):
+    fake_bin, state, dump = _verify_setup(tmp_path)
+    (state / "scratch").touch()  # a leftover from an interrupted check
+
+    result = _run_verify(fake_bin, dump)
+
+    assert result.returncode == 0, result.stderr
+    assert "Restore check passed: 4 tables restored" in result.stdout
+    assert not (state / "scratch").exists()
+    assert (state / "restores.log").read_text().split() == ["financial_planner_restore_check"]
+    statements = (state / "psql.log").read_text().splitlines()
+    assert "SHOW server_version_num" in statements[0]
+    assert "DROP DATABASE IF EXISTS financial_planner_restore_check" in statements[1]
+    assert "CREATE DATABASE financial_planner_restore_check" in statements[2]
+    assert "DROP DATABASE IF EXISTS financial_planner_restore_check" in statements[-1]
+    assert all(line.startswith(("postgres|", "financial_planner_restore_check|")) for line in statements)
+
+
+@pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
+def test_verify_restore_fails_on_a_truncated_dump_without_quoting_rows(tmp_path):
+    fake_bin, state, dump = _verify_setup(tmp_path, dump_text="truncated synthetic dump")
+
+    result = _run_verify(fake_bin, dump)
+
+    assert result.returncode == 1
+    assert result.stderr.strip() == "Restore check failed: pg_restore could not restore the dump"
+    assert SECRET_ROW_VALUE not in result.stdout + result.stderr
+    assert not (state / "scratch").exists()
+
+
+@pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
+def test_verify_restore_fails_on_an_unreadable_dump(tmp_path):
+    fake_bin, state, dump = _verify_setup(tmp_path, dump_text="")
+
+    result = _run_verify(fake_bin, dump)
+
+    assert result.returncode == 1
+    assert result.stderr.strip() == "Restore check failed: pg_restore could not read the dump"
+    assert not (state / "scratch").exists()
+
+
+@pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
+def test_verify_restore_fails_when_tables_are_missing_after_restore(tmp_path):
+    fake_bin, state, dump = _verify_setup(tmp_path, restored_tables=CORE_TABLES[:3])
+
+    result = _run_verify(fake_bin, dump)
+
+    assert result.returncode == 1
+    assert result.stderr.strip() == "Restore check failed: restored 3 tables but the dump has 4"
+    assert not (state / "scratch").exists()
+
+
+@pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
+def test_verify_restore_fails_when_a_core_table_is_missing(tmp_path):
+    fake_bin, state, dump = _verify_setup(
+        tmp_path, restored_tables=("django_migrations", "finance_account", "finance_person", "other_table")
+    )
+
+    result = _run_verify(fake_bin, dump)
+
+    assert result.returncode == 1
+    assert result.stderr.strip() == "Restore check failed: core table finance_transaction is missing"
+    assert not (state / "scratch").exists()
+
+
+@pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
+def test_verify_restore_stops_when_the_scratch_database_cannot_be_created(tmp_path):
+    fake_bin, state, dump = _verify_setup(tmp_path)
+    (state / "create-fail").touch()
+
+    result = _run_verify(fake_bin, dump)
+
+    assert result.returncode == 1
+    assert result.stderr.strip() == "Restore check failed: could not create the scratch database"
+    assert not (state / "restores.log").exists()
+
+
+@pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
+def test_verify_restore_fails_when_the_scratch_database_cannot_be_dropped(tmp_path):
+    fake_bin, state, dump = _verify_setup(tmp_path)
+    (state / "drop-fail").touch()
+
+    result = _run_verify(fake_bin, dump)
+
+    assert result.returncode == 1
+    assert result.stderr.strip() == "Restore check failed: could not drop a leftover scratch database"
+    assert not (state / "restores.log").exists()
+
+
+@pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
+def test_verify_restore_names_a_server_older_than_pg_restore(tmp_path):
+    fake_bin, state, dump = _verify_setup(tmp_path)
+    (state / "server-version").write_text("160010\n", encoding="utf-8")
+
+    result = _run_verify(fake_bin, dump)
+
+    assert result.returncode == 1
+    assert result.stderr.strip() == (
+        "Restore check failed: PostgreSQL 16 server is older than pg_restore 18; "
+        "upgrade the server (docs/deployment.md)"
+    )
+    assert not (state / "restores.log").exists()
+
+
+def _write_status_file(backup_root, **fields):
+    health = backup_root / "health"
+    health.mkdir(parents=True, exist_ok=True)
+    (health / "status").write_text("".join(f"{key}={value}\n" for key, value in fields.items()), encoding="utf-8")
+
+
+def _backup_setup(tmp_path, **pg_options):
+    fake_bin = tmp_path / "bin"
+    backup_root = tmp_path / "backups"
+    fake_bin.mkdir()
+    (backup_root / "nightly").mkdir(parents=True)
+    _fake_date(fake_bin)
+    state = _fake_pg(fake_bin, **pg_options)
+    return fake_bin, backup_root, state
+
+
+def _scratch_restores(state):
+    log = state / "restores.log"
+    return log.read_text().split().count("financial_planner_restore_check") if log.exists() else 0
+
+
+@pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
+def test_backup_runs_the_first_restore_check_and_records_the_pass(tmp_path):
+    fake_bin, backup_root, state = _backup_setup(tmp_path)
+
+    result = _run_backup(fake_bin, backup_root)
+
+    assert result.returncode == 0, result.stderr
+    assert _scratch_restores(state) == 1
+    assert not (state / "scratch").exists()
+    status = _read_status(backup_root)
+    assert status["restore_check_at"] == "2026-09-27T06:00:00Z"
+    assert status["restore_check_error"] == ""
+    assert status["restore_check_interval_days"] == "7"
+
+
+@pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
+def test_failed_restore_check_keeps_the_dump_published_and_records_the_error(tmp_path):
+    fake_bin, backup_root, state = _backup_setup(tmp_path, dump_text="truncated synthetic dump")
+    _write_status_file(backup_root, restore_check_at="2026-09-01T06:00:00Z", restore_check_interval_days="7")
+
+    result = _run_backup(fake_bin, backup_root)
+
+    assert result.returncode == 1
+    dump = backup_root / "nightly" / "financial_planner_20260927T060000Z.dump"
+    assert dump.read_text() == "truncated synthetic dump"
+    assert not (state / "scratch").exists()
+    status = _read_status(backup_root)
+    assert status["last_success_at"] == "2026-09-27T06:00:00Z"
+    assert status["dump_name"] == dump.name
+    assert status["last_error"] == ""
+    assert status["restore_check_error"] == "Restore check failed: pg_restore could not restore the dump"
+    assert status["restore_check_at"] == "2026-09-01T06:00:00Z"
+    assert SECRET_ROW_VALUE not in (backup_root / "health" / "status").read_text()
+
+
+@pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
+def test_restore_check_waits_for_the_interval_after_a_pass(tmp_path):
+    fake_bin, backup_root, state = _backup_setup(tmp_path)
+    _write_status_file(backup_root, restore_check_at="2026-09-21T06:00:00Z", restore_check_interval_days="7")
+
+    result = _run_backup(fake_bin, backup_root)
+
+    assert result.returncode == 0, result.stderr
+    assert _scratch_restores(state) == 0
+    assert _read_status(backup_root)["restore_check_at"] == "2026-09-21T06:00:00Z"
+
+
+@pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
+def test_restore_check_runs_when_the_interval_has_passed_despite_a_late_start(tmp_path):
+    fake_bin, backup_root, state = _backup_setup(tmp_path)
+    # Six days and 23 hours ago: that run started an hour later in the day.
+    _write_status_file(backup_root, restore_check_at="2026-09-20T07:00:00Z", restore_check_interval_days="7")
+
+    result = _run_backup(fake_bin, backup_root)
+
+    assert result.returncode == 0, result.stderr
+    assert _scratch_restores(state) == 1
+    assert _read_status(backup_root)["restore_check_at"] == "2026-09-27T06:00:00Z"
+
+
+@pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
+def test_restore_check_retries_the_next_night_after_a_failure(tmp_path):
+    fake_bin, backup_root, state = _backup_setup(tmp_path)
+    _write_status_file(
+        backup_root,
+        restore_check_at="2026-09-26T06:00:00Z",
+        restore_check_error="Restore check failed: pg_restore could not restore the dump",
+        restore_check_interval_days="7",
+    )
+
+    result = _run_backup(fake_bin, backup_root)
+
+    assert result.returncode == 0, result.stderr
+    assert _scratch_restores(state) == 1
+    assert _read_status(backup_root)["restore_check_error"] == ""
+
+
+@pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
+def test_restore_check_interval_zero_turns_the_check_off(tmp_path):
+    fake_bin, backup_root, state = _backup_setup(tmp_path)
+    _write_status_file(backup_root, restore_check_error="Restore check failed: old", restore_check_interval_days="7")
+
+    result = _run_backup(fake_bin, backup_root, {"RESTORE_CHECK_INTERVAL_DAYS": "0"})
+
+    assert result.returncode == 0, result.stderr
+    assert _scratch_restores(state) == 0
+    status = _read_status(backup_root)
+    assert status["restore_check_interval_days"] == "0"
+    assert status["restore_check_error"] == ""
+
+
+@pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
+def test_restore_check_interval_must_be_a_whole_number(tmp_path):
+    fake_bin, backup_root, _state = _backup_setup(tmp_path)
+
+    result = _run_backup(fake_bin, backup_root, {"RESTORE_CHECK_INTERVAL_DAYS": "weekly"})
+
+    assert result.returncode == 2
+    assert "RESTORE_CHECK_INTERVAL_DAYS must be a whole number of days" in result.stderr

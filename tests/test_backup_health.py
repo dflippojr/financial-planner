@@ -6,7 +6,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from finance.alert_services import run_daily_alert_pass
-from finance.backup_health import backup_is_unhealthy, evaluate_backup_alerts
+from finance.backup_health import backup_alert_title, backup_is_unhealthy, evaluate_backup_alerts
 from finance.models import Alert, Household, Membership
 from tests.test_alerts import make_person, signed_in
 
@@ -175,3 +175,132 @@ def test_stale_offsite_copy_is_unhealthy_when_configured():
         "offsite_success": stale_offsite,
     }
     assert backup_is_unhealthy(local_only, now=now) is False
+
+
+NOW = datetime(2026, 10, 4, 12, tzinfo=dt_timezone.utc)
+
+
+def _healthy_status(**fields):
+    status = {
+        "last_error": "",
+        "last_success": NOW - timedelta(hours=6),
+        "offsite_error": "",
+        "offsite_configured": "0",
+        "offsite_success": None,
+        "restore_check_error": "",
+        "restore_check_interval_days": "7",
+        "restore_check": NOW - timedelta(days=2),
+    }
+    status.update(fields)
+    return status
+
+
+def test_recent_restore_check_pass_is_healthy():
+    status = _healthy_status()
+    assert backup_is_unhealthy(status, now=NOW) is False
+
+
+def test_failed_restore_check_is_unhealthy_with_its_own_title():
+    status = _healthy_status(restore_check_error="Restore check failed: pg_restore could not restore the dump")
+    assert backup_is_unhealthy(status, now=NOW) is True
+    assert backup_alert_title(status, now=NOW) == "The weekly restore check failed"
+
+
+def test_restore_check_older_than_eight_days_is_overdue():
+    on_time = _healthy_status(restore_check=NOW - timedelta(days=7, hours=23))
+    overdue = _healthy_status(restore_check=NOW - timedelta(days=8, hours=1))
+    assert backup_is_unhealthy(on_time, now=NOW) is False
+    assert backup_is_unhealthy(overdue, now=NOW) is True
+    assert backup_alert_title(overdue, now=NOW) == "The restore check is overdue"
+
+
+def test_restore_check_overdue_window_follows_the_configured_interval():
+    on_schedule = _healthy_status(restore_check_interval_days="14", restore_check=NOW - timedelta(days=10))
+    overdue = _healthy_status(restore_check_interval_days="14", restore_check=NOW - timedelta(days=15, hours=1))
+    assert backup_is_unhealthy(on_schedule, now=NOW) is False
+    assert backup_is_unhealthy(overdue, now=NOW) is True
+
+
+def test_restore_check_turned_off_is_never_overdue():
+    status = _healthy_status(restore_check_interval_days="0", restore_check=NOW - timedelta(days=30))
+    assert backup_is_unhealthy(status, now=NOW) is False
+
+
+def test_status_without_restore_check_keys_counts_as_never_checked():
+    # A status file from before the restore check existed.
+    status = _healthy_status()
+    for key in ("restore_check_error", "restore_check_interval_days", "restore_check"):
+        del status[key]
+    assert backup_is_unhealthy(status, now=NOW) is False
+    never_checked = _healthy_status(restore_check=None)
+    assert backup_is_unhealthy(never_checked, now=NOW) is False
+
+
+def test_stale_nightly_backup_title_wins_over_an_overdue_restore_check():
+    status = _healthy_status(last_success=NOW - timedelta(days=3), restore_check=NOW - timedelta(days=10))
+    assert backup_alert_title(status, now=NOW) == "Nightly backups have not succeeded"
+
+
+@pytest.mark.django_db
+def test_failed_restore_check_alerts_operators(tmp_path):
+    operator = make_person("operator")
+    status = tmp_path / "status"
+    now = timezone.now().astimezone(dt_timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _write_status(
+        status,
+        last_success_at=now,
+        dump_name="financial_planner_synthetic.dump",
+        restore_check_interval_days="7",
+        restore_check_error="Restore check failed: pg_restore could not restore the dump",
+    )
+
+    with override_settings(BACKUP_STATUS_PATH=str(status), OPERATOR_USERNAMES="operator"):
+        created = evaluate_backup_alerts(today=datetime(2026, 10, 4).date())
+
+    assert [(row.recipient_id, row.title) for row in created] == [(operator.pk, "The weekly restore check failed")]
+
+
+@pytest.mark.django_db
+def test_settings_show_the_restore_check_only_to_operators(tmp_path):
+    operator = make_person("operator")
+    other = make_person("member")
+    household = Household.objects.create(name="Synthetic Household")
+    Membership.objects.create(person=operator, household=household)
+    Membership.objects.create(person=other, household=household)
+    status = tmp_path / "status"
+    _write_status(
+        status,
+        last_success_at="2026-10-04T06:00:00Z",
+        restore_check_at="2026-10-03T06:05:00Z",
+        restore_check_interval_days="7",
+        restore_check_error="Restore check failed: core table finance_person is missing",
+    )
+
+    with override_settings(BACKUP_STATUS_PATH=str(status), OPERATOR_USERNAMES="operator"):
+        operator_page = signed_in(operator).get(reverse("settings-data"))
+        member_page = signed_in(other).get(reverse("settings-data"))
+
+    assert b"Last restore check: 2026-10-03" in operator_page.content
+    assert b"core table finance_person is missing" in operator_page.content
+    assert b"Last restore check" not in member_page.content
+    assert b"core table finance_person is missing" not in member_page.content
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("fields", "shown"),
+    [
+        ({}, b"Last restore check: Never"),
+        ({"restore_check_interval_days": "7"}, b"Last restore check: Never"),
+        ({"restore_check_interval_days": "0", "restore_check_at": "2026-09-01T06:00:00Z"}, b"Last restore check: Off"),
+    ],
+)
+def test_settings_restore_check_line_for_never_checked_and_off(tmp_path, fields, shown):
+    operator = make_person("operator")
+    status = tmp_path / "status"
+    _write_status(status, last_success_at="2026-10-04T06:00:00Z", **fields)
+
+    with override_settings(BACKUP_STATUS_PATH=str(status), OPERATOR_USERNAMES="operator"):
+        page = signed_in(operator).get(reverse("settings-data"))
+
+    assert shown in page.content

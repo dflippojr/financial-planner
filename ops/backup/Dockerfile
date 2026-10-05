@@ -3,5 +3,5 @@ FROM postgres:18-alpine
 
 RUN apk add --no-cache tzdata rclone age
 
-COPY backup.sh restore.sh row-counts.sh run-backups.sh /opt/financial-planner/
+COPY backup.sh restore.sh row-counts.sh run-backups.sh verify-restore.sh /opt/financial-planner/
 RUN chmod 755 /opt/financial-planner/*.sh && mkdir -p /config

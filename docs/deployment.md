@@ -135,9 +135,29 @@ That applies the same shared-account exit rules as leaving. It prints a short co
 
 ## Backups
 
-The backup container runs `pg_dump` in PostgreSQL custom format every night at 2:00 AM in `TZ` (default `America/New_York`). A Sunday dump is also copied into `weekly/`. A dump is published atomically only after `pg_restore --list` verifies it. The same run then archives `$RECEIPTS_DIR` as `financial_planner_TIMESTAMP.receipts.tar.gz` next to that dump, with the same 14 nightly and 8 weekly copies. Receipt deletes only drop the database row; files stay on disk for about two days, so a file removed from the dump between those steps is still present for the archive. Backups keep those files until they rotate out. Pruning keeps the newest 14 files of each kind in `nightly/` and 8 in `weekly/`. Each run writes `$BACKUP_DIR/health/status` with the last success time, dump name, size, table count, and last error. The app and SimpleFIN scheduler mount only `$BACKUP_DIR/health` read-only and raise an in-app alert to operators if no dump has succeeded in 26 hours or the last run failed, including an off-site upload failure.
+The backup container runs `pg_dump` in PostgreSQL custom format every night at 2:00 AM in `TZ` (default `America/New_York`). A Sunday dump is also copied into `weekly/`. A dump is published atomically only after `pg_restore --list` verifies it. The same run then archives `$RECEIPTS_DIR` as `financial_planner_TIMESTAMP.receipts.tar.gz` next to that dump, with the same 14 nightly and 8 weekly copies. Receipt deletes only drop the database row; files stay on disk for about two days, so a file removed from the dump between those steps is still present for the archive. Backups keep those files until they rotate out. Pruning keeps the newest 14 files of each kind in `nightly/` and 8 in `weekly/`. Each run writes `$BACKUP_DIR/health/status` with the last success time, dump name, size, table count, last error, and the weekly restore check result. The app and SimpleFIN scheduler mount only `$BACKUP_DIR/health` read-only and raise an in-app alert to operators if no dump has succeeded in 26 hours or the last run failed, including an off-site upload failure or a failed or overdue restore check.
 
 Set `OPERATOR_USERNAMES` in `production.env` to a comma-separated list of member usernames. If it is empty, the earliest-created member is the operator. Operators see last local and off-site success times on Settings → Data. Other members do not. Alerts name no file contents and fire at most once per local calendar day until a run succeeds.
+
+### Weekly restore check
+
+`pg_restore --list` proves a dump is readable, not that it restores. So once every `RESTORE_CHECK_INTERVAL_DAYS` (default 7) the backup run also restores the dump it just published into a scratch database, `financial_planner_restore_check`, on the same PostgreSQL server. It uses `ops/backup/verify-restore.sh` as `POSTGRES_USER`. The check:
+
+- drops any leftover scratch database, creates a new one, and runs `pg_restore --no-owner --no-privileges --exit-on-error` into it;
+- compares the number of restored tables with the dump's `TABLE DATA` entries (the status file's `table_count`), and checks that `django_migrations`, `finance_account`, `finance_person`, and `finance_transaction` exist;
+- always drops the scratch database afterwards, whether it passed or failed.
+
+It covers the database only, not the receipts archive, and never starts the app or runs migrations against the scratch copy. A pass sets `restore_check_at` in the status file. A failure sets `restore_check_error` to a short fixed message (never pg_restore output, which can quote row values) and the run exits non-zero. The dump stays published, off-site copying still runs, and the next nightly run tries the check again. The status file also records `restore_check_interval_days` so the app knows whether the check is on and when it is overdue. Set `RESTORE_CHECK_INTERVAL_DAYS=0` to turn the check off.
+
+Operators get the backup alert "The weekly restore check failed" when `restore_check_error` is set. They get "The restore check is overdue" when the check is on and its last pass is more than one day past the interval (8 days with the weekly default). Settings → Data shows the last restore check, `Never`, or `Off`. A status file written before this release has no restore check fields and counts as never checked, not as a failure; the next nightly backup runs the first check.
+
+The check needs a server at least as new as the backup image's `pg_restore` (18). `pg_restore` 17 and later always sends `SET transaction_timeout`, which a PostgreSQL 16 server rejects. So against 16 (for example while running `ops/postgres16-rollback.yml`) the check fails with "PostgreSQL 16 server is older than pg_restore 18". That message is accurate: `restore.sh` can't restore onto that server either. Finish the upgrade below, or set `RESTORE_CHECK_INTERVAL_DAYS=0` until then.
+
+When the check fails:
+
+1. Read the message on Settings → Data or in `Get-Content E:inancial-planner-backups\health\status`, and the backup logs (`docker compose --env-file $Config logs --tail 50 backup`).
+2. Run the check by hand against the newest dump: `docker compose --env-file $Config run --rm backup /opt/financial-planner/verify-restore.sh /backups/nightly/<newest dump>`. If it passes now, the failure was transient (for example, the server was restarting). The next scheduled check clears the alert.
+3. If it fails again, treat that dump as unusable: confirm an older dump restores with the same command, and take a fresh manual backup (see below) and check it. A table count mismatch or a missing core table usually means the dump was taken from the wrong database or during a broken migration; investigate before relying on any newer dump.
 
 ### Encrypted off-site copy
 
