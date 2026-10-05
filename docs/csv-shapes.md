@@ -45,3 +45,25 @@ Unless you use `--show-headers` or `--show-values`, it never prints any text fro
 Read it once. The tool is conservative but you know your data, and the two options that print text are your choice because only you can look at the file. If anything in the report looks like real data, do not share it and tell us.
 
 Never commit an export, its output for a real account with your own edits, or anything derived from a statement. The tool's tests use only synthetic data.
+
+
+## OFX / QFX statement files (#204)
+
+Choose **OFX / QFX file** for `.ofx`, `.qfx`, or `.qbo` downloads (up to 5 MB).
+The fixed profile reads OFX 1.x SGML and OFX 2.x XML bank and credit-card
+statement transactions. UTF-8 and declared Windows-1252 files are supported.
+Dates use the first eight digits of DTPOSTED, ignoring time and zone. TRNAMT
+is signed as supplied: negative means money out, positive means money in,
+including on cards. Amounts must have at most two decimal places; only USD
+is supported. Name and Memo form `Name - Memo`, using whichever is present.
+
+Preview, per-account overlap detection, staging expiry/cancel, import and undo
+use the CSV pipeline. FITID is stored as the source transaction ID, but matching
+still uses account, date, amount and description. Original fields contain only
+Date, Amount, Name, Memo, FITID and Type. Account identifiers, balances, security
+lists and investment statements are ignored. No bank downloading is offered.
+A statement with no bank or card transactions is rejected.
+
+Importing the same activity as both CSV and OFX may create duplicates when the
+descriptions differ. Use one format for overlapping periods, or review and undo
+the extra batch; this importer does not deduplicate across formats.
