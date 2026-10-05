@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from pathlib import Path
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -42,6 +43,7 @@ def test_valid_accessibility_snippets(snippet):
     ('<h1>Page</h1><a href="/"></a>', 'link/button has no accessible name'),
     ('<h1>Page</h1><img>', 'image has no alt'),
     ('<h1>Page</h1><table><tr><td>Value</td></tr></table>', 'table has no th'),
+    ('<h1>Page</h1><table><tr><td><table><tr><th>Nested header</th></tr></table></td></tr></table>', 'table has no th'),
     ('<h1>Page</h1><table><thead><tr><th>Date</th></tr></thead></table>', 'thead header needs scope=col'),
     ('<h1>Page</h1><table><thead><tr><th scope="row">Date</th></tr></thead></table>', 'thead header needs scope=col'),
     ('<h1 id="x">Page</h1><input id="x" aria-label="Name">', 'duplicate id'),
@@ -92,3 +94,13 @@ def test_signed_out_sign_in_is_accessible(member_client):
     response = member_client.get(reverse("login"))
     assert response.status_code == 200
     assert_accessible(response.content.decode())
+
+
+@pytest.mark.parametrize("template", sorted((Path(__file__).resolve().parent.parent / "templates" / "finance").rglob("*.html")), ids=lambda path: path.name)
+def test_all_template_column_headers_have_scope(template):
+    # Cover tables in conditional branches and detail pages outside the menu.
+    parser = PageParser()
+    parser.feed(template.read_text(encoding="utf-8"))
+    for node in parser.elements:
+        if node.tag == "th":
+            assert node.attrs.get("scope") == "col", f"{template.name}: column header needs scope=col"

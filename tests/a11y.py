@@ -103,8 +103,10 @@ def accessibility_errors(html):
             errors.append(f"link/button has no accessible name: {description}")
         if node.tag == "img" and "alt" not in node.attrs:
             errors.append(f"image has no alt: {description}")
-        if node.tag == "table" and not any(child.tag == "th" and node in child.ancestors for child in nodes):
-            errors.append(f"table has no th: {description}")
+        if node.tag == "table":
+            headers = [child for child in nodes if child.tag == "th"]
+            if not any(next((parent for parent in reversed(child.ancestors) if parent.tag == "table"), None) is node for child in headers):
+                errors.append(f"table has no th: {description}")
         if node.tag == "th" and any(parent.tag == "thead" for parent in node.ancestors) and node.attrs.get("scope") != "col":
             errors.append(f"thead header needs scope=col: {description}")
     return errors
