@@ -426,14 +426,16 @@ def test_file_imports_cannot_claim_the_manual_source():
     owner = make_person("owner")
     make_household(owner)
     account = make_account(owner)
+    document = read_csv(CSV)
+    csv_mapping = mapping()
 
     with pytest.raises(ValidationError):
         commit_csv_import(
             owner.user,
             account.pk,
             content=CSV,
-            document=read_csv(CSV),
-            mapping=mapping(),
+            document=document,
+            mapping=csv_mapping,
             source=ImportBatch.Source.MANUAL,
             date_range_start=date(2026, 9, 1),
             date_range_end=date(2026, 9, 30),
@@ -457,3 +459,34 @@ def test_a_manual_entry_does_not_count_as_an_imported_statement():
     import_csv(owner, account)
     report = cash_flow_report(owner, date_from=date(2026, 9, 1), date_to=date(2026, 9, 30))
     assert report.periods[0].missing_import is False
+
+
+@pytest.mark.django_db
+def test_entry_takes_household_tags_and_refuses_bad_input():
+    owner = make_person("owner")
+    outsider = make_person("outsider")
+    household = make_household(owner)
+    other_household = make_household(outsider)
+    account = make_account(owner)
+    tag = Tag.objects.create(household=household, name="Synthetic trip")
+    client = signed_in(owner)
+
+    response = client.post(reverse("transaction-add"), add_payload(account, tags=[tag.pk], add_another="1"))
+
+    assert response.status_code == 302
+    assert response.url == reverse("transaction-add")
+    assert list(Transaction.objects.get(account=account).tags.all()) == [tag]
+
+    def add(**overrides):
+        fields = {"transaction_date": ENTRY_DATE, "amount_minor": -100, "description": "SYNTHETIC"}
+        fields.update(overrides)
+        return add_manual_transaction(owner, account.pk, **fields)
+
+    foreign_category_id = category(other_household, "Groceries").pk
+    with pytest.raises(PermissionDenied):
+        add(category_id=foreign_category_id)
+    with pytest.raises(ValidationError):
+        add(description="   ")
+    with pytest.raises(ValidationError):
+        add(note="x" * 2001)
+    assert Transaction.objects.filter(account=account).count() == 1
