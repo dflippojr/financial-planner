@@ -105,6 +105,18 @@ def test_mixed_currencies_are_row_errors():
     assert preview.valid_count == 1
 
 
+def test_foreign_purchase_posted_in_usd_ignores_original_currency():
+    content = fixture("synthetic_card.qfx").replace(
+        b"<TRNAMT>-45.67",
+        b"<ORIGCURRENCY><CURSYM>EUR</CURSYM></ORIGCURRENCY>"
+        b"<CURRENCY><CURSYM>USD</CURSYM></CURRENCY><TRNAMT>-45.67",
+    )
+    preview = preview_csv(read_ofx(content), OFX_MAPPING)
+    assert preview.invalid_count == 0
+    assert preview.rows[0].amount_minor == -4567
+    assert preview.rows[0].currency == "USD"
+
+
 @pytest.fixture
 def import_client(tmp_path):
     user, person = make_person("ofx-owner")

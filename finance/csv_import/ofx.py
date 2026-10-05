@@ -89,9 +89,8 @@ def _value(element, tag):
 def _currency_error(statement, transaction):
     currencies = [_value(statement, "CURDEF")]
     for container in (statement, transaction):
-        for tag in ("CURRENCY", "ORIGCURRENCY"):
-            for currency in container.findall(tag):
-                currencies.append(_value(currency, "CURSYM") or (currency.text or "").strip())
+        for currency in container.findall("CURRENCY"):
+            currencies.append(_value(currency, "CURSYM") or (currency.text or "").strip())
     if any(value.upper() != "USD" for value in currencies if value):
         return "Currency must be USD."
     return None
