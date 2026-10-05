@@ -47,11 +47,11 @@
     <table class="table table-zebra">
       <thead class="sticky top-0 z-10 bg-base-200">
         <tr>
-          <th>Period</th>
+          <th scope="col">Period</th>
           {% for category in trend_report.categories %}
-          <th class="text-right">{{ category.name }}</th>
+          <th scope="col" class="text-right">{{ category.name }}</th>
           {% endfor %}
-          <th class="text-right">Total</th>
+          <th scope="col" class="text-right">Total</th>
         </tr>
       </thead>
       <tbody>
@@ -96,10 +96,10 @@
     <table class="table table-zebra">
       <thead class="sticky top-0 z-10 bg-base-200">
         <tr>
-          <th>Category</th>
-          <th class="text-right">Spending</th>
-          <th class="text-right">Percent of total</th>
-          <th></th>
+          <th scope="col">Category</th>
+          <th scope="col" class="text-right">Spending</th>
+          <th scope="col" class="text-right">Percent of total</th>
+          <th scope="col"></th>
         </tr>
       </thead>
       <tbody>
@@ -117,7 +117,7 @@
       </tbody>
       <tfoot>
         <tr>
-          <th>Total</th>
+          <th scope="col">Total</th>
           <td class="text-right">{% include "finance/_amount.html" with value=report.total_spending_display tone="out" %}</td>
           <td></td>
           <td></td>

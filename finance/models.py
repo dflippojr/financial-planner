@@ -2066,6 +2066,7 @@ class Alert(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     read_at = models.DateTimeField(null=True, blank=True)
+    email_notice_sent_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         constraints = [
@@ -2096,6 +2097,8 @@ class Alert(models.Model):
 
 
 class AlertSettings(models.Model):
+    email_enabled = models.BooleanField(default=False)
+    notification_email = models.EmailField(blank=True, default="")
     person = models.OneToOneField(Person, on_delete=models.PROTECT, related_name="alert_settings")
     sync_enabled = models.BooleanField(default=True)
     recurring_price_enabled = models.BooleanField(default=True)

@@ -122,6 +122,19 @@ def test_gunicorn_access_log_never_records_query_strings_or_referrers():
     assert [token for token in ("%(r)s", "%(q)s", "%(f)s", "%({referer}i)s") if token in log_format] == []
 
 
+def test_gunicorn_timeout_outlasts_the_agent_harness_chat_wait():
+    # Chat waits for the harness session inside the request. With gunicorn's
+    # default 30 s timeout the worker was killed mid-answer and chat returned 500.
+    from django.conf import settings
+
+    script = (Path(__file__).resolve().parent.parent / "scripts/start-production.sh").read_text()
+    timeout_line = next(line for line in script.splitlines() if "--timeout" in line)
+    default = int(timeout_line.split(":-", 1)[1].split("}", 1)[0])
+
+    assert default > settings.AGENT_HARNESS_SESSION_TIMEOUT_SECONDS
+    assert "--worker-class gthread" in script
+
+
 def test_compose_stages_csv_uploads_on_a_memory_backed_mount():
     # An abandoned upload of a real bank export must never sit on disk, so the
     # staging directory has to live on a tmpfs and the app has to be pointed at it.

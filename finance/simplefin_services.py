@@ -12,6 +12,7 @@ from django.db import transaction
 from django.db.models import Max
 from django.utils import timezone
 
+from finance.alert_email import notify_after_alert_run
 from finance.csv_import.fingerprint import transaction_fingerprint
 from finance.encryption import decrypt_access_url, encrypt_access_url
 from finance.lifecycle_services import _DENIED, _person_for, lock_actor_household
@@ -534,6 +535,7 @@ def _sync_one_link(person, connection, link, remote, synced_at, payload) -> int:
     return imported
 
 
+@notify_after_alert_run
 def sync_connection(principal, connection_id, *, ignore_rate_limit=False) -> dict:
     """Sync one connection. A fetch failure is recorded, then raised.
 

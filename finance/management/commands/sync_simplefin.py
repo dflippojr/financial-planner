@@ -1,5 +1,6 @@
 from django.core.management.base import BaseCommand
 
+from finance.alert_email import notify_after_alert_run
 from finance.alert_services import run_daily_alert_pass
 from finance.models import SimpleFinConnection
 from finance.simplefin_services import sync_all_connections
@@ -8,6 +9,7 @@ from finance.simplefin_services import sync_all_connections
 class Command(BaseCommand):
     help = "Sync every enabled SimpleFIN connection, then re-evaluate in-app alerts."
 
+    @notify_after_alert_run
     def handle(self, *args, **options):
         if not SimpleFinConnection.objects.exists():
             self.stdout.write("No SimpleFIN connections.")

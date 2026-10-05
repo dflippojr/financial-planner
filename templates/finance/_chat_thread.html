@@ -45,7 +45,7 @@
   <p class="text-sm opacity-80">Ask a question about income, spending, transactions, budgets, or net worth.</p>
   {% endfor %}
 </div>
-<form method="post" action="{% url 'chat-send' %}" class="space-y-2" id="chat-send-form">
+<form method="post" action="{% url 'chat-send' %}" class="space-y-2" id="chat-send-form" data-pending-label="Thinking…">
   {% csrf_token %}
   {% if conversation %}<input type="hidden" name="conversation_id" value="{{ conversation.pk }}">{% endif %}
   <input type="hidden" name="page_route" value="{{ page_context.route|default:request.path }}">

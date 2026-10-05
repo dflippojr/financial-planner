@@ -9,7 +9,7 @@
 <div class="overflow-x-auto mb-8">
   <table class="table table-zebra">
     <thead class="sticky top-0 z-10 bg-base-200">
-      <tr><th>Applied</th><th>Your transactions</th><th></th></tr>
+      <tr><th scope="col">Applied</th><th scope="col">Your transactions</th><th scope="col"></th></tr>
     </thead>
     <tbody>
     {% for application in unreachable_applications %}
@@ -36,11 +36,11 @@
   <table class="table table-zebra">
     <thead class="sticky top-0 z-10 bg-base-200">
       <tr>
-        <th>Match</th>
-        <th>Type</th>
-        <th>Category</th>
-        <th>Priority</th>
-        <th>Enabled</th>
+        <th scope="col">Match</th>
+        <th scope="col">Type</th>
+        <th scope="col">Category</th>
+        <th scope="col">Priority</th>
+        <th scope="col">Enabled</th>
       </tr>
     </thead>
     <tbody>

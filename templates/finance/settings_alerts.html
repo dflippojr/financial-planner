@@ -8,5 +8,18 @@
   {% include "finance/_form_fields.html" with form=alert_settings_form %}
   <button type="submit" class="btn btn-primary">Save alert settings</button>
 </form>
+{% if email_notices_available %}
+<h3 class="mt-6 mb-3 text-lg font-semibold">Email notices</h3>
+{% if email_notice %}<p role="status" class="mb-3">{{ email_notice }}</p>{% endif %}
+<form method="post" class="max-w-lg space-y-3">
+  {% csrf_token %}
+  {% include "finance/_form_fields.html" with form=email_settings_form %}
+  <button type="submit" name="action" value="save-email" class="btn btn-primary">Save email settings</button>
+</form>
+<form method="post" class="mt-3">
+  {% csrf_token %}
+  <button type="submit" name="action" value="test-email" class="btn btn-secondary">Send a test</button>
+</form>
+{% endif %}
 <p class="mt-6"><a class="link" href="{% url 'alert-list' %}">Open the alerts inbox</a></p>
 {% endblock %}
