@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('finance', '0044_passkeys'),
+        ('finance', '0045_alert_email_settings'),
     ]
 
     operations = [
