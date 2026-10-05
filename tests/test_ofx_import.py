@@ -106,6 +106,15 @@ def test_nested_payee_with_empty_sgml_address():
     assert preview.rows[0].description == "SYNTHETIC GROCER - Weekly & fresh"
 
 
+def test_sgml_investment_fields_do_not_affect_bank_transactions():
+    content = fixture().replace(
+        b"</OFX>",
+        b"<INVSTMTMSGSRSV1><INVSTMTRS><SECID><UNIQUEID><UNIQUEIDTYPE>CUSIP\n"
+        b"</SECID></INVSTMTRS></INVSTMTMSGSRSV1></OFX>",
+    )
+    assert preview_csv(read_ofx(content), OFX_MAPPING).valid_count == 2
+
+
 def test_sgml_extension_fields_are_ignored():
     content = fixture().replace(b"<OFX>", b"<OFX><SYNTHETIC.BID>999\n")
     assert preview_csv(read_ofx(content), OFX_MAPPING).valid_count == 2
