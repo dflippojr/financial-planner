@@ -45,7 +45,7 @@ def stale_seconds():
 
 
 def unclaimed_max_age_seconds():
-    """A turn no runner picked up within one full session wait is abandoned too."""
+    """With no runner alive, a turn nobody picked up within one full session wait is abandoned too."""
     timeout = int(getattr(settings, "AGENT_HARNESS_SESSION_TIMEOUT_SECONDS", 600))
     margin = int(getattr(settings, "AGENT_HARNESS_STALE_JOB_MARGIN_SECONDS", 120))
     return timeout + margin
@@ -113,12 +113,18 @@ def heartbeat(token, *, now=None):
 def recover_stale_turns(*, now=None, pk=None):
     """Fail pending turns whose runner died or that no runner picked up. Returns how many."""
     moment = now or timezone.now()
-    stale_claimed = Q(claimed_at__isnull=False, heartbeat_at__lt=moment - timedelta(seconds=stale_seconds()))
-    stale_unclaimed = Q(
-        claimed_at__isnull=True,
-        created_at__lt=moment - timedelta(seconds=unclaimed_max_age_seconds()),
-    )
-    query = AiConversationMessage.objects.filter(status=PENDING).filter(stale_claimed | stale_unclaimed)
+    heartbeat_cutoff = moment - timedelta(seconds=stale_seconds())
+    stale = Q(claimed_at__isnull=False, heartbeat_at__lt=heartbeat_cutoff)
+    pending = AiConversationMessage.objects.filter(status=PENDING)
+    # A turn waiting behind a running turn in its conversation, or for a free worker,
+    # is only queued. Unclaimed turns are abandoned only when no runner is alive.
+    runner_alive = pending.filter(claimed_at__isnull=False, heartbeat_at__gte=heartbeat_cutoff).exists()
+    if not runner_alive:
+        stale |= Q(
+            claimed_at__isnull=True,
+            created_at__lt=moment - timedelta(seconds=unclaimed_max_age_seconds()),
+        )
+    query = pending.filter(stale)
     if pk is not None:
         query = query.filter(pk=pk)
     return query.update(

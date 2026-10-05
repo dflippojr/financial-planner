@@ -348,3 +348,23 @@ def test_turn_status_returns_figures_with_local_links_only_and_notices(harness):
         "amount_display": "$12.00",
     }
     assert payload["notices"] == ["Synthetic usage notice"]
+
+
+@pytest.mark.django_db
+def test_a_follow_up_queued_behind_a_long_live_turn_is_not_failed(harness):
+    _state, client, person, _household = _connected_client(harness)
+    conversation = send_message(person, "A long first question")
+    send_message(person, "A quick follow-up", conversation_id=conversation.pk)
+    start = timezone.now()
+    first = claim_next_turn("live-runner", now=start)
+    waiting = conversation.messages.filter(status=PENDING).exclude(pk=first).get()
+    later = start + timedelta(seconds=unclaimed_max_age_seconds() + 30)
+    heartbeat("live-runner", now=later)
+
+    assert recover_stale_turns(now=later) == 0
+    waiting.refresh_from_db()
+    assert waiting.status == PENDING
+
+    # Once that runner is gone too, both turns end instead of waiting forever.
+    gone = later + timedelta(seconds=stale_seconds() + 1)
+    assert recover_stale_turns(now=gone) == 2

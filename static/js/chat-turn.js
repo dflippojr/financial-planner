@@ -1,6 +1,7 @@
 (function () {
   // Pending chat turns are answered in the background; poll each one and swap in the reply.
   var POLL_MS = 2000;
+  var MAX_FAILURES = 30;
 
   function list(className, items, build) {
     var ul = document.createElement("ul");
@@ -45,19 +46,31 @@
     var body = article.querySelector("[data-chat-turn-body]");
     article.setAttribute("data-chat-turn-polling", "true");
     if (body) body.textContent = "Thinking…";
+    var failures = 0;
+    function retry() {
+      // A signed-out session or a server error page: stop after about a minute.
+      failures += 1;
+      if (failures >= MAX_FAILURES) {
+        if (body) body.textContent = "Thinking… refresh to see the answer.";
+        return;
+      }
+      setTimeout(poll, POLL_MS);
+    }
     function poll() {
-      fetch(url, {headers: {"Accept": "application/json"}, credentials: "same-origin"})
+      fetch(url, {headers: {"Accept": "application/json"}, credentials: "same-origin", redirect: "error"})
         .then(function (response) {
           // Gone (deleted or expired): stop asking.
           if (response.status === 404) return {ok: false, gone: true};
+          if (!response.ok) throw new Error("status " + response.status);
           return response.json();
         })
         .then(function (data) {
           if (data && data.gone) return;
+          failures = 0;
           if (data && data.ok && data.status !== "pending") render(article, data);
           else setTimeout(poll, POLL_MS);
         })
-        .catch(function () { setTimeout(poll, POLL_MS); });
+        .catch(retry);
     }
     setTimeout(poll, POLL_MS);
   }

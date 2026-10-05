@@ -65,6 +65,8 @@ services:
       AI_CHAT_MAX_TURNS: ${AI_CHAT_MAX_TURNS:-20}
       AI_CHAT_MAX_TOOL_CALLS: ${AI_CHAT_MAX_TOOL_CALLS:-40}
       AI_CHAT_LOCAL_ENABLED: ${AI_CHAT_LOCAL_ENABLED:-false}
+      # The chat page's status poll fails a turn whose runner stopped heartbeating.
+      AI_CHAT_STALE_SECONDS: ${AI_CHAT_STALE_SECONDS:-60}
       AI_SHARED_LOCAL_DAILY_CAP: ${AI_SHARED_LOCAL_DAILY_CAP:-200}
       BACKUP_STATUS_PATH: /backup-health/status
       OPERATOR_USERNAMES: ${OPERATOR_USERNAMES:-}
