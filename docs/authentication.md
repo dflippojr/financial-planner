@@ -1,6 +1,6 @@
 # Authentication, onboarding, and recovery
 
-The app uses Django usernames and passwords with database-backed sessions, optional Google sign-in through `django-allauth`, and optional WebAuthn passkeys through Duo Labs `webauthn` (py_webauthn) 2.7.0. Authentication is required by default for every view; only sign-in, the passkey second-factor step, first-run setup, invitation acceptance, account recovery, the privacy and data policy page, and (when Google is configured) the Google OAuth start and callback paths are public. Financial records must be queried through the model `visible_to()` methods so private records do not appear in pages, aggregates, searches, errors, or exports.
+The app uses Django usernames and passwords with database-backed sessions, optional Google sign-in through `django-allauth`, and optional WebAuthn passkeys through Duo Labs `webauthn` (py_webauthn) 3.0.1. Authentication is required by default for every view; only sign-in, the passkey second-factor step, first-run setup, invitation acceptance, account recovery, the privacy and data policy page, and (when Google is configured) the Google OAuth start and callback paths are public. Financial records must be queried through the model `visible_to()` methods so private records do not appear in pages, aggregates, searches, errors, or exports.
 
 ## First member
 
