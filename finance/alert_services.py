@@ -7,6 +7,7 @@ from django.db.models import Q
 from django.urls import reverse
 from django.utils import timezone
 
+from .alert_email import notify_after_alert_run
 from .budget_services import month_start, progress_snapshot
 from .cash_flow import format_minor
 from .models import (
@@ -343,6 +344,7 @@ def purge_old_read_alerts(*, now=None):
     return deleted
 
 
+@notify_after_alert_run
 def run_daily_alert_pass(*, today=None, now=None):
     created = evaluate_sync_alerts()
     created.extend(evaluate_active_budget_alerts(today=today))

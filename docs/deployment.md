@@ -334,3 +334,29 @@ On 2026-10-04, the upgrade and rollback runbook was exercised on the basement PC
 - **Rollback:** a `db` start on the 16 volume without the override restart-looped with the image's old-data error and never initialized a database. With `ops/postgres16-rollback.yml`, the stack returned to 16.15 on the old volumes. Row counts matched the baseline, `/health/` returned HTTP 200, the receipt was intact, and the 18 backup image backed up the 16 server.
 
 The drill's containers, volumes, and images were removed afterward.
+
+## Optional alert email notices
+
+Email notices are off per member by default. To offer them, set `SMTP_HOST`,
+`SMTP_PORT` (default 587), `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, and
+`SMTP_TLS` (default true, STARTTLS) in the ignored `production.env`. Set
+`ALERT_EMAIL_BASE_URL` to the app's full HTTPS Tailscale origin without a trailing
+path (for example `https://planner.example.invalid`). Keep credentials out of Git.
+The app and SimpleFIN scheduler receive these settings through Compose.
+
+With host, from address, or app origin unset, email controls are hidden and no
+notices are sent. Members opt in and choose their address under Settings > Alerts;
+changing that address requires recent authentication. Save first, then use
+**Send a test** to check delivery. Disabling notices does not require reauthentication.
+
+After a daily alert pass or sync, one plain-text notice per opted-in member lists
+the count and kinds of unread visible alerts that have not been emailed, with a link to
+`/alerts/`. It never includes alert titles, amounts, merchants, or account names.
+Alerts raised between runs wait for the next pass. Successful delivery records a
+timestamp so those alerts are not emailed again. Nested scheduled sync and daily
+passes share one batch; overlapping runs serialize delivery per member. Notices
+wait for database commit. Failed sends leave the inbox intact, log a generic message without the address or SMTP exception, and
+remain pending for a later pass. SMTP has a ten-second timeout.
+
+For development or tests, use Django's console or locmem email backend. Never
+point a test suite at a real SMTP server.
