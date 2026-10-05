@@ -37,6 +37,7 @@ urlpatterns = [
     path("chat/<int:conversation_id>/delete/", chat_views.chat_delete, name="chat-delete"),
     path("chat/warm/", chat_views.chat_warm, name="chat-warm"),
     path("chat/status/", chat_views.chat_status, name="chat-status"),
+    path("chat/turn/<int:turn_id>/", chat_views.chat_turn, name="chat-turn"),
     path("", views.home, name="home"),
     path("spending/", views.spending_by_category, name="spending-by-category"),
     path(

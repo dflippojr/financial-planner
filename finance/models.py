@@ -1825,6 +1825,11 @@ class AiConversationMessage(models.Model):
         ASSISTANT = "assistant", "Assistant"
         ERROR = "error", "Error"
 
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        DONE = "done", "Done"
+        FAILED = "failed", "Failed"
+
     conversation = models.ForeignKey(AiConversation, on_delete=models.CASCADE, related_name="messages")
     role = models.CharField(max_length=16, choices=Role)
     content = models.TextField()
@@ -1833,6 +1838,12 @@ class AiConversationMessage(models.Model):
     notices = models.JSONField(default=list)
     page_context = models.JSONField(default=dict)
     created_at = models.DateTimeField(auto_now_add=True)
+    # A pending assistant turn is answered by the chat runner, never by a web request.
+    status = models.CharField(max_length=8, choices=Status, default=Status.DONE)
+    reply_to = models.ForeignKey("self", on_delete=models.CASCADE, null=True, blank=True, related_name="+")
+    claim_token = models.CharField(max_length=64, blank=True, default="")
+    claimed_at = models.DateTimeField(null=True, blank=True)
+    heartbeat_at = models.DateTimeField(null=True, blank=True)
 
     class QuerySet(models.QuerySet):
         def visible_to(self, principal):
@@ -1849,7 +1860,12 @@ class AiConversationMessage(models.Model):
                 condition=Q(role__in=("user", "assistant", "error")),
                 name="ai_conversation_message_role_valid",
             ),
+            models.CheckConstraint(
+                condition=Q(status__in=("pending", "done", "failed")),
+                name="ai_conversation_message_status_valid",
+            ),
         ]
+        indexes = [models.Index(fields=("status", "claimed_at"), name="ai_chat_turn_status_idx")]
 
     def __str__(self):
         return f"AI message {self.pk}"

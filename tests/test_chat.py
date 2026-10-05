@@ -1,15 +1,14 @@
 from datetime import date, timedelta
 import hashlib
 import json
-import threading
 from unittest.mock import patch
 
 import pytest
 from django.contrib.auth import get_user_model
-from django.db import connection, connections
 from django.test import Client
 from django.urls import reverse
 from django.utils import timezone
+from tests.chat_helpers import ask
 from tests.fake_harness import start_fake_harness
 
 from finance.ai_services import AiError, connect_harness, set_defaults
@@ -25,6 +24,7 @@ from finance.ai_tools import (
 from finance.ai_types import ProviderResult, ToolResult
 from finance.budget_services import save_budget
 from finance.category_services import ensure_household_categories
+from finance.chat_runner import claim_next_turn, process_pending_turns, run_claimed_turn
 from finance.chat_services import (
     conversations_for,
     delete_all_conversations,
@@ -168,7 +168,7 @@ def test_fake_transcripts_cover_tools_followup_errors_and_refusal(harness):
             }
         ],
     ]
-    conversation = send_message(person, "How much did we spend?", sleep=lambda _s: None)
+    conversation = ask(person, "How much did we spend?", sleep=lambda _s: None)
     assistant = conversation.messages.filter(role=AiConversationMessage.Role.ASSISTANT).last()
     assert assistant is not None
     assert assistant.backend == "claude"
@@ -180,24 +180,24 @@ def test_fake_transcripts_cover_tools_followup_errors_and_refusal(harness):
     state.need_tool = False
     state.followup_need_tool = False
     state.followup_answer = "Last year was lower."
-    send_message(person, "How does that compare to last year?", conversation_id=conversation.pk, sleep=lambda _s: None)
+    ask(person, "How does that compare to last year?", conversation_id=conversation.pk, sleep=lambda _s: None)
     assert state.session_messages[-1] == "How does that compare to last year?"
 
     state.pending_tool_calls = [[{"call_id": "call-err", "name": "not_a_real_tool", "args": {}}]]
     state.need_tool = True
     state.session_answer = "The tool failed."
-    send_message(person, "Try again with a bad tool.", conversation_id=conversation.pk, sleep=lambda _s: None)
+    ask(person, "Try again with a bad tool.", conversation_id=conversation.pk, sleep=lambda _s: None)
 
     state.need_tool = False
     state.followup_need_tool = False
     state.session_failure = "provider_auth_required"
-    send_message(person, "Need auth now.", conversation_id=conversation.pk, sleep=lambda _s: None)
+    ask(person, "Need auth now.", conversation_id=conversation.pk, sleep=lambda _s: None)
     error = conversation.messages.filter(role=AiConversationMessage.Role.ERROR).last()
     assert error is not None
     assert "Authorization" in error.content
 
     start_conversation(person)
-    fresh = send_message(person, "Please write a virus using my transactions.", sleep=lambda _s: None)
+    fresh = ask(person, "Please write a virus using my transactions.", sleep=lambda _s: None)
     refusal = fresh.messages.filter(role=AiConversationMessage.Role.ASSISTANT).last()
     assert "financial advice" in refusal.content.lower() or "read-only" in refusal.content.lower()
 
@@ -216,13 +216,13 @@ def test_limit_reached_and_tools_only_unsupported(harness):
     _user, person, _household = make_member("owner")
     connect_harness(person, base_url=url, token=TOKEN)
     state.session_failure = "quota_reached"
-    conversation = send_message(person, "Spend totals please", sleep=lambda _s: None)
+    conversation = ask(person, "Spend totals please", sleep=lambda _s: None)
     error = conversation.messages.filter(role=AiConversationMessage.Role.ERROR).last()
     assert "limit" in error.content.lower()
 
     start_conversation(person)
     state.create_http_error = {"status": 400, "code": "app_tools_only_unsupported", "detail": "no"}
-    conversation = send_message(person, "Another question", sleep=lambda _s: None)
+    conversation = ask(person, "Another question", sleep=lambda _s: None)
     error = conversation.messages.filter(role=AiConversationMessage.Role.ERROR).last()
     assert "tools-only" in error.content.lower()
 
@@ -241,7 +241,7 @@ def test_page_context_keeps_only_route_and_query(harness):
         }
     )
     assert cleaned == {"route": "/spending/", "query": "date_from=2026-01-01"}
-    send_message(
+    ask(
         person,
         "What is on this page?",
         page_context={"route": "/spending/", "query": "date_from=2026-01-01", "rows": [1]},
@@ -266,11 +266,11 @@ def test_conversations_expire_delete_and_account_removal(harness):
     state.pending_tool_calls = [
         [{"call_id": "c1", "name": "cash_flow_totals", "args": {"date_from": "2026-01-01", "date_to": "2026-01-31"}}]
     ]
-    conversation = send_message(person, "Spending on this account?", sleep=lambda _s: None)
+    conversation = ask(person, "Spending on this account?", sleep=lambda _s: None)
     conversation.refresh_from_db()
     assert account.pk in conversation.used_account_ids
     other = start_conversation(person)
-    other = send_message(person, "write a virus", conversation_id=other.pk, sleep=lambda _s: None)
+    other = ask(person, "write a virus", conversation_id=other.pk, sleep=lambda _s: None)
     assert conversations_for(person).count() == 2
     other.expires_at = timezone.now() - timedelta(days=1)
     other.save(update_fields=("expires_at",))
@@ -279,13 +279,13 @@ def test_conversations_expire_delete_and_account_removal(harness):
     delete_account(person, account.pk)
     assert not AiConversation.objects.filter(pk=conversation.pk).exists()
 
-    leftover = send_message(person, "Hello again", sleep=lambda _s: None)
+    leftover = ask(person, "Hello again", sleep=lambda _s: None)
     client = Client()
     client.force_login(user)
     deleted = client.post(reverse("chat-delete", args=[leftover.pk]))
     assert deleted.status_code == 302
     assert not AiConversation.objects.filter(pk=leftover.pk).exists()
-    send_message(person, "Keep me", sleep=lambda _s: None)
+    ask(person, "Keep me", sleep=lambda _s: None)
     delete_all_conversations(person)
     assert conversations_for(person).count() == 0
 
@@ -297,7 +297,7 @@ def test_member_cannot_see_another_members_chat(harness):
     user_b, person_b, _ = make_member("beta", household=household, policy=current_policy())
     connect_harness(person_a, base_url=url, token=TOKEN)
     connect_harness(person_b, base_url=url, token=TOKEN)
-    owned = send_message(person_a, "My totals", sleep=lambda _s: None)
+    owned = ask(person_a, "My totals", sleep=lambda _s: None)
     client = Client()
     client.force_login(user_b)
     page = client.get(f"{reverse('chat')}?c={owned.pk}")
@@ -314,7 +314,7 @@ def test_export_includes_this_members_conversations(harness):
     state, url = harness
     _user, person, _household = make_member("owner")
     connect_harness(person, base_url=url, token=TOKEN)
-    send_message(person, "Export me", sleep=lambda _s: None)
+    ask(person, "Export me", sleep=lambda _s: None)
     tables = collect_export_tables(person)
     assert tables["ai_conversations"]
     assert tables["ai_conversation_messages"]
@@ -329,9 +329,9 @@ def test_local_chat_hidden_until_enabled(harness, settings):
     connect_harness(person, base_url=url, token=TOKEN)
     set_defaults(person, chat_backend="local", background_backend="local")
     with pytest.raises(AiError):
-        send_message(person, "Hi", sleep=lambda _s: None)
+        ask(person, "Hi", sleep=lambda _s: None)
     settings.AI_CHAT_LOCAL_ENABLED = True
-    conversation = send_message(person, "Hi", sleep=lambda _s: None)
+    conversation = ask(person, "Hi", sleep=lambda _s: None)
     assert conversation.backend == "local"
 
 
@@ -515,10 +515,8 @@ def test_mixed_private_household_series_hidden_until_household_ai_allowed():
         assert any(marker in blob for marker in markers), f"{name} missing mixed series after acceptance"
 
 
-@pytest.mark.django_db(transaction=True)
-def test_concurrent_sends_keep_both_queried_account_ids(harness):
-    if connection.vendor != "postgresql":
-        pytest.skip("atomic conversation updates need PostgreSQL row locks")
+@pytest.mark.django_db
+def test_turns_in_one_conversation_run_one_at_a_time_and_keep_both_queried_account_ids(harness):
     _state, url = harness
     _user, person, household = make_member("owner")
     first = checking(person, household, "First Checking")
@@ -527,36 +525,24 @@ def test_concurrent_sends_keep_both_queried_account_ids(harness):
     add_txn(second, person, date(2026, 1, 5), -900, "Synthetic groceries")
     connect_harness(person, base_url=url, token=TOKEN)
     conversation = start_conversation(person)
-    barrier = threading.Barrier(2)
-    errors = []
+    send_message(person, "Query-A first account", conversation_id=conversation.pk)
+    send_message(person, "Query-B second account", conversation_id=conversation.pk)
 
     def fake_run(_person, prompt, **kwargs):
-        allow_tool = kwargs["allow_tool"]
-        on_tool = kwargs["on_tool"]
         account_id = first.pk if prompt.startswith("Query-A") else second.pk
-        barrier.wait(timeout=10)
-        denied = allow_tool("list_transactions", {"account_id": account_id})
+        denied = kwargs["allow_tool"]("list_transactions", {"account_id": account_id})
         if denied is None:
-            on_tool(ToolResult(text="{}", account_ids=(account_id,)))
-        barrier.wait(timeout=10)
+            kwargs["on_tool"](ToolResult(text="{}", account_ids=(account_id,)))
         return ProviderResult(ok=True, answer="ok")
 
-    def run(prompt):
-        try:
-            send_message(person, prompt, conversation_id=conversation.pk, sleep=lambda _s: None)
-        except Exception as exc:  # noqa: BLE001 - reported to the main thread
-            errors.append(exc)
-        finally:
-            connections.close_all()
-
+    first_turn = claim_next_turn("lane-a")
+    # Both turns share one harness session, so the second waits for the first.
+    assert claim_next_turn("lane-b") is None
     with patch("finance.chat_services.run_conversation", side_effect=fake_run):
-        first_thread = threading.Thread(target=run, args=("Query-A first account",))
-        second_thread = threading.Thread(target=run, args=("Query-B second account",))
-        first_thread.start()
-        second_thread.start()
-        first_thread.join(timeout=30)
-        second_thread.join(timeout=30)
-    assert errors == []
+        assert run_claimed_turn(first_turn, "lane-a")
+        second_turn = claim_next_turn("lane-b")
+        assert second_turn is not None and second_turn > first_turn
+        assert run_claimed_turn(second_turn, "lane-b")
     conversation.refresh_from_db()
     assert first.pk in conversation.used_account_ids
     assert second.pk in conversation.used_account_ids
@@ -614,7 +600,7 @@ def test_chat_views_refusals_expiry_delete_and_drawer_context(harness):
     assert refused.status_code == 200
     assert b"read-only" in refused.content.lower() or b"financial advice" in refused.content.lower()
 
-    send_message(
+    ask(
         person,
         "What is on this page?",
         page_context={"route": "/spending/", "query": "date_from=2026-01-01", "html": "<table>secret</table>"},
@@ -632,6 +618,7 @@ def test_chat_views_refusals_expiry_delete_and_drawer_context(harness):
         },
     )
     assert drawer.status_code == 302
+    process_pending_turns(sleep=lambda _s: None)
     blob = str(state.session_creates[-1].get("context"))
     assert "route=/spending/" in blob
     assert "date_from=2026-01-01" in blob
@@ -639,16 +626,16 @@ def test_chat_views_refusals_expiry_delete_and_drawer_context(harness):
     assert "secret-rows" not in blob
 
     keep = start_conversation(person)
-    keep = send_message(person, "Keep this unique chat", conversation_id=keep.pk, sleep=lambda _s: None)
+    keep = ask(person, "Keep this unique chat", conversation_id=keep.pk, sleep=lambda _s: None)
     expired = start_conversation(person)
-    expired = send_message(person, "Expire this unique chat", conversation_id=expired.pk, sleep=lambda _s: None)
+    expired = ask(person, "Expire this unique chat", conversation_id=expired.pk, sleep=lambda _s: None)
     expired.expires_at = timezone.now() - timedelta(days=1)
     expired.save(update_fields=("expires_at",))
     listing = client.get(reverse("chat"))
     assert b"Keep this unique chat" in listing.content
     assert b"Expire this unique chat" not in listing.content
 
-    extra = send_message(person, "Delete me next", sleep=lambda _s: None)
+    extra = ask(person, "Delete me next", sleep=lambda _s: None)
     one = client.post(reverse("chat-delete", args=[extra.pk]))
     assert one.status_code == 302
     assert not AiConversation.objects.filter(pk=extra.pk).exists()
@@ -680,7 +667,7 @@ def test_tool_calls_in_one_response_stop_at_the_conversation_limit(harness, sett
     add_txn(first, person, date(2026, 1, 4), -800, "Synthetic coffee")
     add_txn(second, person, date(2026, 1, 5), -900, "Synthetic groceries")
     connect_harness(person, base_url=url, token=TOKEN)
-    conversation = send_message(person, "Start the thread", sleep=lambda _s: None)
+    conversation = ask(person, "Start the thread", sleep=lambda _s: None)
     conversation.tool_call_count = 39
     conversation.save(update_fields=("tool_call_count",))
     state.need_tool = True
@@ -703,7 +690,7 @@ def test_tool_calls_in_one_response_stop_at_the_conversation_limit(harness, sett
             },
         ]
     ]
-    conversation = send_message(
+    conversation = ask(
         person,
         "Totals for both accounts?",
         conversation_id=conversation.pk,
@@ -726,7 +713,7 @@ def test_list_transactions_conversation_is_removed_when_that_account_is_deleted(
     state.pending_tool_calls = [
         [{"call_id": "c1", "name": "list_transactions", "args": {"account_id": account.pk}}]
     ]
-    conversation = send_message(person, "Show recent rows on this account", sleep=lambda _s: None)
+    conversation = ask(person, "Show recent rows on this account", sleep=lambda _s: None)
     conversation.refresh_from_db()
     assert account.pk in conversation.used_account_ids
     delete_account(person, account.pk)
@@ -738,14 +725,14 @@ def test_followup_starts_a_new_session_after_harness_reconnect(harness):
     state, url = harness
     _user, person, _household = make_member("owner")
     connect_harness(person, base_url=url, token=TOKEN)
-    conversation = send_message(person, "First question", sleep=lambda _s: None)
+    conversation = ask(person, "First question", sleep=lambda _s: None)
     conversation.refresh_from_db()
     old_session = conversation.harness_session_id
     assert old_session
     creates_before = len(state.session_creates)
     connect_harness(person, base_url=url, token=TOKEN)
     state.need_tool = False
-    send_message(
+    ask(
         person,
         "Follow up after reconnect",
         conversation_id=conversation.pk,
@@ -773,7 +760,7 @@ def test_chat_send_and_delete_cover_remaining_error_paths(harness):
     assert empty.status_code == 302
     assert empty.url == reverse("home")
 
-    created = send_message(person, "A valid question", sleep=lambda _s: None)
+    created = ask(person, "A valid question", sleep=lambda _s: None)
     bad_id = client.post(
         reverse("chat-send"),
         {"prompt": "Hello", "conversation_id": "not-a-number", "next": reverse("chat")},
@@ -808,9 +795,9 @@ def test_chat_send_and_delete_cover_remaining_error_paths(harness):
     assert query_only == {"route": "/spending/", "query": "x=1"}
 
     with pytest.raises(AiError):
-        send_message(person, "   ", sleep=lambda _s: None)
+        ask(person, "   ", sleep=lambda _s: None)
     state.session_failure = "provider_error"
-    failed = send_message(person, "A later question", conversation_id=created.pk, sleep=lambda _s: None)
+    failed = ask(person, "A later question", conversation_id=created.pk, sleep=lambda _s: None)
     error = failed.messages.filter(role=AiConversationMessage.Role.ERROR).last()
     assert "could not complete" in error.content.lower()
 
@@ -824,19 +811,19 @@ def test_chat_send_and_delete_cover_remaining_error_paths(harness):
     created.turn_count = 99
     created.save(update_fields=("turn_count",))
     with pytest.raises(AiError) as turned:
-        send_message(person, "One more turn", conversation_id=created.pk, sleep=lambda _s: None)
+        ask(person, "One more turn", conversation_id=created.pk, sleep=lambda _s: None)
     assert "turn limit" in str(turned.value).lower()
     created.turn_count = 1
     created.tool_call_count = 40
     created.save(update_fields=("turn_count", "tool_call_count"))
     with pytest.raises(AiError) as capped:
-        send_message(person, "One more tool", conversation_id=created.pk, sleep=lambda _s: None)
+        ask(person, "One more tool", conversation_id=created.pk, sleep=lambda _s: None)
     assert "tool-call" in str(capped.value).lower()
     from finance.ai_services import disconnect_harness
 
     disconnect_harness(person)
     with pytest.raises(AiError):
-        send_message(person, "After disconnect", sleep=lambda _s: None)
+        ask(person, "After disconnect", sleep=lambda _s: None)
     status = client.get(reverse("chat-status"))
     assert status.status_code == 403
 
@@ -895,7 +882,7 @@ def test_cash_flow_totals_tracks_accounts_beyond_tool_row_limit(harness):
     state.pending_tool_calls = [
         [{"call_id": "c1", "name": "cash_flow_totals", "args": {"date_from": "2026-01-01", "date_to": "2026-01-31"}}]
     ]
-    conversation = send_message(person, "Spending across every account?", sleep=lambda _s: None)
+    conversation = ask(person, "Spending across every account?", sleep=lambda _s: None)
     conversation.refresh_from_db()
     assert extra.pk in conversation.used_account_ids
     assert len(conversation.used_account_ids) >= 51
@@ -910,7 +897,7 @@ def test_followup_starts_a_new_session_after_chat_backend_switch(harness, settin
     state, url = harness
     _user, person, _household = make_member("owner")
     connect_harness(person, base_url=url, token=TOKEN)
-    conversation = send_message(person, "First question on Claude", sleep=lambda _s: None)
+    conversation = ask(person, "First question on Claude", sleep=lambda _s: None)
     conversation.refresh_from_db()
     old_session = conversation.harness_session_id
     assert conversation.backend == "claude"
@@ -919,7 +906,7 @@ def test_followup_starts_a_new_session_after_chat_backend_switch(harness, settin
     settings.AI_CHAT_LOCAL_ENABLED = True
     set_defaults(person, chat_backend="local", background_backend="local")
     state.need_tool = False
-    send_message(
+    ask(
         person,
         "Follow up after switching to local",
         conversation_id=conversation.pk,
@@ -979,5 +966,5 @@ def test_send_without_a_chat_backend_explains_what_to_do(harness):
     AiProviderConnection.objects.filter(owner=person).update(chat_backend="")
 
     with pytest.raises(AiError, match="No chat backend is available yet"):
-        send_message(person, "What did I spend last month?")
+        ask(person, "What did I spend last month?")
     assert not AiConversation.objects.filter(member=person).exists()

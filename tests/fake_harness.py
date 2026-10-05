@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
@@ -37,6 +38,8 @@ class FakeHarnessState:
         self.followup_need_tool = False
         self.followup_answer = "synthetic-followup"
         self.pending_tool_calls = None
+        self.tool_outputs = []
+        self.session_create_delay = 0
         self.app_tools_only = {"local": True, "claude": True, "codex": False, "cursor": False}
 
     def backends(self):
@@ -230,6 +233,8 @@ def start_fake_harness(state=None):
                     return
                 harness.session_creates.append(body)
                 harness.session_prompts.append(str(body.get("prompt") or ""))
+                if harness.session_create_delay:
+                    time.sleep(harness.session_create_delay)
                 if harness.create_http_error:
                     error = harness.create_http_error
                     harness.create_http_error = None
@@ -346,6 +351,7 @@ def start_fake_harness(state=None):
                     self._json(404, {"detail": "not found"})
                     return
                 harness.tool_answered = True
+                harness.tool_outputs.append(str(body.get("output") or ""))
                 if harness.pending_tool_calls:
                     harness.pending_tool_calls = harness.pending_tool_calls[1:]
                     if harness.pending_tool_calls:

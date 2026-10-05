@@ -137,25 +137,11 @@ def page_context_from_request(request):
     )
 
 
-def send_message(principal, text, *, conversation_id=None, page_context=None, sleep=None, monotonic=None):
+def send_message(principal, text, *, conversation_id=None, page_context=None):
+    """Store the question and a pending reply; the chat runner answers it in the background."""
     person = _person_for(principal)
     purge_expired(person)
-    if not may_use_ai(person):
-        raise AiError("AI is off until the current privacy and data policy is accepted.", AUTHORIZATION_REQUIRED)
-    connection, backend = resolve_ai(person, use_chat=True)
-    if connection is None:
-        if offered_local_connection(person) is not None:
-            raise AiError(SHARED_LOCAL_CHOOSE, AUTHORIZATION_REQUIRED)
-        raise AiError("Connect an AI backend first.", AUTHORIZATION_REQUIRED)
-    if connection.owner_id != person.id:
-        if backend != LOCAL_BACKEND:
-            raise AiError(HOSTED_SHARED_DENIED, AUTHORIZATION_REQUIRED)
-        if not connection.offer_local_to_household:
-            raise AiError(SHARED_LOCAL_UNAVAILABLE, UNAVAILABLE)
-    elif backend == LOCAL_BACKEND and not chat_local_enabled():
-        raise AiError(LOCAL_HIDDEN, UNAVAILABLE)
-    if not backend:
-        raise AiError(NO_CHAT_BACKEND, UNAVAILABLE)
+    _connection, backend = chat_backend_for(person)
     prompt = (text or "").strip()
     if not prompt:
         raise AiError("Enter a question.")
@@ -176,7 +162,7 @@ def send_message(principal, text, *, conversation_id=None, page_context=None, sl
         if conversation.tool_call_count >= max_tool_calls():
             raise AiError(TOOL_LIMIT, LIMIT_REACHED)
 
-        AiConversationMessage.objects.create(
+        question = AiConversationMessage.objects.create(
             conversation=conversation,
             role=AiConversationMessage.Role.USER,
             content=prompt,
@@ -187,14 +173,62 @@ def send_message(principal, text, *, conversation_id=None, page_context=None, sl
             conversation.title = prompt[:80]
         conversation.save(update_fields=("turn_count", "title", "updated_at"))
 
-    if _out_of_scope(prompt):
-        AiConversationMessage.objects.create(
-            conversation=conversation,
-            role=AiConversationMessage.Role.ASSISTANT,
-            content=OUT_OF_SCOPE,
-            backend=backend,
-        )
-        return conversation
+        if _out_of_scope(prompt):
+            AiConversationMessage.objects.create(
+                conversation=conversation,
+                role=AiConversationMessage.Role.ASSISTANT,
+                content=OUT_OF_SCOPE,
+                backend=backend,
+                reply_to=question,
+            )
+        else:
+            AiConversationMessage.objects.create(
+                conversation=conversation,
+                role=AiConversationMessage.Role.ASSISTANT,
+                content="",
+                backend=backend,
+                reply_to=question,
+                status=AiConversationMessage.Status.PENDING,
+            )
+    return conversation
+
+
+def chat_backend_for(person):
+    """The member's chat connection and backend, or an AiError with the member-facing reason."""
+    if not may_use_ai(person):
+        raise AiError("AI is off until the current privacy and data policy is accepted.", AUTHORIZATION_REQUIRED)
+    connection, backend = resolve_ai(person, use_chat=True)
+    if connection is None:
+        if offered_local_connection(person) is not None:
+            raise AiError(SHARED_LOCAL_CHOOSE, AUTHORIZATION_REQUIRED)
+        raise AiError("Connect an AI backend first.", AUTHORIZATION_REQUIRED)
+    if connection.owner_id != person.id:
+        if backend != LOCAL_BACKEND:
+            raise AiError(HOSTED_SHARED_DENIED, AUTHORIZATION_REQUIRED)
+        if not connection.offer_local_to_household:
+            raise AiError(SHARED_LOCAL_UNAVAILABLE, UNAVAILABLE)
+    elif backend == LOCAL_BACKEND and not chat_local_enabled():
+        raise AiError(LOCAL_HIDDEN, UNAVAILABLE)
+    if not backend:
+        raise AiError(NO_CHAT_BACKEND, UNAVAILABLE)
+    return connection, backend
+
+
+def answer_turn(turn, *, sleep=None, monotonic=None):
+    """Ask the harness for one pending turn's reply. Runs in the chat runner, never in a request.
+
+    Tool calls run as the member who owns the conversation, with that member's
+    visibility. Returns the reply fields for the runner to store.
+    """
+    conversation = turn.conversation
+    person = conversation.member
+    try:
+        connection, backend = chat_backend_for(person)
+    except AiError as exc:
+        return failed_reply(str(exc), backend=turn.backend)
+    question = turn.reply_to
+    prompt = question.content if question is not None else ""
+    context_payload = sanitize_page_context(question.page_context if question is not None else None)
 
     collected = []
     cap = max_tool_calls()
@@ -268,32 +302,30 @@ def send_message(principal, text, *, conversation_id=None, page_context=None, sl
         locked.save(
             update_fields=("backend", "harness_session_id", "harness_connection", "updated_at")
         )
-        conversation.backend = locked.backend
-        conversation.used_account_ids = list(locked.used_account_ids or [])
-        conversation.tool_call_count = locked.tool_call_count
-        conversation.harness_session_id = locked.harness_session_id
-        conversation.harness_connection = locked.harness_connection
+    if not result.ok:
+        return failed_reply(failure_text(result.failure_code), backend=backend, notices=result.notices)
     figures = []
     for item in collected:
         figures.extend(item.figures)
-    if result.ok:
-        AiConversationMessage.objects.create(
-            conversation=conversation,
-            role=AiConversationMessage.Role.ASSISTANT,
-            content=result.answer or "",
-            backend=backend,
-            figures=list(figures),
-            notices=list(result.notices),
-        )
-    else:
-        AiConversationMessage.objects.create(
-            conversation=conversation,
-            role=AiConversationMessage.Role.ERROR,
-            content=_failure_text(result.failure_code),
-            backend=backend,
-            notices=list(result.notices),
-        )
-    return conversation
+    return {
+        "status": AiConversationMessage.Status.DONE,
+        "role": AiConversationMessage.Role.ASSISTANT,
+        "content": result.answer or "",
+        "backend": backend,
+        "figures": list(figures),
+        "notices": list(result.notices),
+    }
+
+
+def failed_reply(text, *, backend="", notices=()):
+    return {
+        "status": AiConversationMessage.Status.FAILED,
+        "role": AiConversationMessage.Role.ERROR,
+        "content": text,
+        "backend": backend,
+        "figures": [],
+        "notices": list(notices),
+    }
 
 
 def _lock_conversation(pk):
@@ -338,7 +370,7 @@ def _out_of_scope(prompt):
     return any(item in text for item in needles)
 
 
-def _failure_text(code):
+def failure_text(code):
     if code == AUTHORIZATION_REQUIRED:
         return "Authorization is required to use this AI backend."
     if code == LIMIT_REACHED:

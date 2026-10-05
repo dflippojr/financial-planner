@@ -17,15 +17,19 @@
 {% endif %}
 <div class="space-y-3 mb-4" aria-live="polite">
   {% for item in chat_messages %}
-  <article class="rounded-box border border-base-300 bg-base-100 p-3">
+  <article class="rounded-box border border-base-300 bg-base-100 p-3"{% if item.status == "pending" %} data-chat-turn-url="{% url 'chat-turn' item.pk %}"{% endif %}>
     {% if item.role == "user" %}
     <p class="text-sm font-semibold">You</p>
     {% elif item.role == "error" %}
     <p class="text-sm font-semibold">{{ chat_backend_label }} (error)</p>
     {% else %}
-    <p class="text-sm font-semibold">{{ chat_backend_label }}</p>
+    <p class="text-sm font-semibold" data-chat-turn-label>{{ chat_backend_label }}</p>
     {% endif %}
+    {% if item.status == "pending" %}
+    <p class="whitespace-pre-wrap" data-chat-turn-body>Thinking… refresh to see the answer.</p>
+    {% else %}
     <p class="whitespace-pre-wrap">{{ item.content }}</p>
+    {% endif %}
     {% if item.figures %}
     <ul class="mt-2 list-disc pl-5 text-sm">
       {% for figure in item.figures %}
@@ -60,3 +64,4 @@
 {% if chat_show_local %}
 <script src="{% static 'js/chat-local.js' %}"></script>
 {% endif %}
+<script src="{% static 'js/chat-turn.js' %}"></script>
