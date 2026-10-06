@@ -12,7 +12,7 @@ from django.db import transaction
 from django.urls import reverse
 from django.utils import timezone
 
-from .ai_jobs import enqueue_job
+from .ai_jobs import enqueue_jobs
 from .ai_services import member_has_ai, resolve_ai, run_structured
 from .ai_tools import visible_accounts
 from .ai_types import ProviderResult
@@ -275,11 +275,12 @@ def shared_description_contains(descriptions):
     return best or None
 
 
+@transaction.atomic
 def _enqueue_ids(person, ids):
     if not ids:
         return []
     in_flight = list(
-        AiJob.objects.filter(
+        AiJob.objects.select_for_update().filter(
             member=person,
             feature=FEATURE,
             status__in=(AiJob.Status.QUEUED, AiJob.Status.WAITING_MODEL, AiJob.Status.RUNNING),
@@ -293,15 +294,23 @@ def _enqueue_ids(person, ids):
         return []
     jobs = []
     for job in in_flight:
-        if job.status != AiJob.Status.QUEUED:
+        if job.status != AiJob.Status.QUEUED or job.harness_session_id:
             continue
-        remaining, topped = _top_up_queued_job(job.pk, remaining)
-        if topped is not None:
-            jobs.append(topped)
+        current = _ids_from_refs(job.input_refs)
+        room = BATCH_SIZE - len(current)
+        if room <= 0:
+            continue
+        added, remaining = remaining[:room], remaining[room:]
+        job.input_refs = {**(job.input_refs or {}), "transaction_ids": current + added}
+        job.updated_at = timezone.now()
+        jobs.append(job)
         if not remaining:
-            return jobs
-    for chunk in _chunks(remaining, BATCH_SIZE):
-        jobs.append(enqueue_job(person, feature=FEATURE, input_refs={"transaction_ids": list(chunk)}))
+            break
+    AiJob.objects.bulk_update(jobs, ("input_refs", "updated_at"))
+    if remaining:
+        jobs.extend(enqueue_jobs(person, feature=FEATURE, input_refs_list=[
+            {"transaction_ids": list(chunk)} for chunk in _chunks(remaining, BATCH_SIZE)
+        ]))
     return jobs
 
 

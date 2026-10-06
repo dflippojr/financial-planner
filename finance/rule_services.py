@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Case, Exists, OuterRef, Q, Value, When
 from django.utils import timezone
 
 from .category_services import (
@@ -185,22 +185,19 @@ def ordered_rules_for_account(account, *, confirmed_only=False):
     enabled = CategoryRule.objects.filter(enabled=True)
     if confirmed_only:
         enabled = enabled.filter(confirmed_at__isnull=False)
-    personal = [
-        rule
-        for rule in enabled.filter(
-            owner_household__isnull=True,
-            owner_person_id__in=_people_who_can_see(account),
-        ).select_related("category", "account")
-        .order_by("priority", "pk")
-        if not personal_rule_is_inactive(rule)
-    ]
-    if account.scope != Account.Scope.HOUSEHOLD:
-        return personal
-    household = list(
-        enabled.filter(owner_household_id=account.household_id)
-        .select_related("category", "account")
+    eligible = Q(owner_household__isnull=True, owner_person_id__in=_people_who_can_see(account))
+    if account.scope == Account.Scope.HOUSEHOLD:
+        eligible |= Q(owner_household_id=account.household_id)
+    rules = list(enabled.filter(eligible).select_related("category", "account", "owner_person")
+        .annotate(_cached_inactive=~Exists(Membership.objects.filter(
+            person_id=OuterRef("owner_person_id"),
+            household_id=OuterRef("category__household_id"),
+            ended_at__isnull=True,
+        )))
         .order_by("priority", "pk")
     )
+    personal = [rule for rule in rules if not rule.owner_household_id and not personal_rule_is_inactive(rule)]
+    household = [rule for rule in rules if rule.owner_household_id]
     return personal + household
 
 
@@ -507,26 +504,81 @@ def apply_enabled_rules_to_transactions(principal, transactions):
     locked = [
         item for item in _still_eligible(person, _lock_transactions(person, transactions)) if item.pk in requested_ids
     ]
-    applications = []
     by_rule = {}
+    rules_by_account = {}
+    owner_accounts = {}
     for txn in locked:
         if _protected_source(txn):
             continue
         # Automatic application only uses rules whose preview was confirmed.
-        winner = first_matching_rule(txn, ordered_rules_for_account(txn.account, confirmed_only=True))
+        if txn.account_id not in rules_by_account:
+            rules = ordered_rules_for_account(txn.account, confirmed_only=True)
+            for rule in rules:
+                if rule.owner_person_id:
+                    if rule.owner_person_id not in owner_accounts:
+                        owner_accounts[rule.owner_person_id] = _personal_account_ids(rule.owner_person)
+                    rule._cached_owner_account_ids = owner_accounts[rule.owner_person_id]
+            rules_by_account[txn.account_id] = rules
+        winner = first_matching_rule(txn, rules_by_account[txn.account_id])
         if winner is None:
             continue
         bucket = by_rule.setdefault(winner.pk, {"rule": winner, "rows": []})
         bucket["rows"].append(txn)
-    for payload in by_rule.values():
-        application, _skipped = _apply_to_locked(
-            person,
-            payload["rule"],
-            payload["rows"],
-            require_first_match=False,
+    return _apply_automatic_rule_groups(person, by_rule)
+
+
+def _apply_automatic_rule_groups(person, by_rule):
+    """Persist the already locked, eligible winners with batch writes.
+
+    Keep the same application snapshots and correction labels as manual rule
+    application, so automatic applications remain fully reversible.
+    """
+    now = timezone.now()
+    applications = RuleApplication.objects.bulk_create([
+        RuleApplication(rule=payload["rule"], applied_by=person, applied_at=now)
+        for payload in by_rule.values()
+    ])
+    changed, history, entries = [], [], []
+    for application, payload in zip(applications, by_rule.values()):
+        rule = payload["rule"]
+        for txn in payload["rows"]:
+            entries.append(RuleApplicationEntry(
+                application=application, transaction=txn, previous_category=txn.category,
+                previous_category_source=txn.category_source,
+            ))
+            previous_label = _history_label(txn.category)
+            new_label = _history_new_label(rule.category, rule)
+            if previous_label != new_label:
+                history.append(TransactionCorrectionHistory(
+                    transaction=txn, actor=person, recorded_at=now,
+                    field_name=TransactionCorrectionHistory.Field.CATEGORY,
+                    previous_description=previous_label, new_description=new_label,
+                ))
+            txn.category = rule.category
+            txn.category_source = Transaction.CategorySource.RULE
+            txn.updated_at = now
+            changed.append(txn)
+    if changed:
+        # One branch per winning rule rather than three CASE branches per row.
+        # This avoids bulk_update's expression-building and SQL costs on 10k rows.
+        Transaction.objects.filter(pk__in=[txn.pk for txn in changed]).update(
+            category_id=Case(*[
+                When(pk__in=[txn.pk for txn in payload["rows"]], then=Value(payload["rule"].category_id))
+                for payload in by_rule.values()
+            ], output_field=Transaction._meta.get_field("category").target_field),
+            category_source=Transaction.CategorySource.RULE, updated_at=now,
         )
-        if application is not None:
-            applications.append(application)
+    TransactionCorrectionHistory.objects.bulk_create(history)
+    RuleApplicationEntry.objects.bulk_create(entries)
+    # Most imports have no linked refunds. Query once, and preserve the existing
+    # inheritance behavior for originals that do (e.g. SimpleFIN refreshes).
+    originals_with_refunds = set(RefundLink.objects.filter(
+        original_id__in=[txn.pk for txn in changed],
+        refund__status=Transaction.Status.ACTIVE,
+    ).values_list("original_id", flat=True))
+    for txn in changed:
+        if txn.pk in originals_with_refunds:
+            _restore_refund_categories(txn, person)
     return applications
 
 
