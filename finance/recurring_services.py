@@ -1,7 +1,9 @@
+from bisect import bisect_left, bisect_right
 from calendar import monthrange
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, timedelta
+from functools import lru_cache
 from decimal import Decimal
 from hashlib import sha256
 import re
@@ -18,6 +20,12 @@ from .models import Person, RecurringExclusion, RecurringSeries, RecurringSeries
 _DENIED = "Operation is not permitted."
 MANUAL_REASON = "grouping edited manually"
 MAX_AMOUNT_VARIANCE = Decimal("0.25")
+# Outlier removal makes the search superlinear in a merchant's charges, so a
+# merchant with more charges than this is left out of detection (and listed on
+# the page) rather than holding a request for minutes.
+MAX_CHARGES_PER_MERCHANT = 600
+# Bump when detection rules change so every household detects again.
+DETECTION_VERSION = "1"
 CADENCE_DAYS = {
     RecurringSeries.Cadence.WEEKLY: (7, 3),
     RecurringSeries.Cadence.BIWEEKLY: (14, 3),
@@ -59,6 +67,7 @@ def _add_months(value: date, months: int) -> date:
     return date(year, month, day)
 
 
+@lru_cache(maxsize=65536)
 def add_cadence(value: date, cadence: str) -> date:
     if cadence == RecurringSeries.Cadence.WEEKLY:
         return value + timedelta(days=7)
@@ -177,26 +186,31 @@ def _worst_rolling_band_breaker(chain):
     return farthest
 
 
+def _same_day_key(item):
+    return (item.transaction_date, abs(item.amount_minor))
+
+
 def _collapse_same_day(transactions):
     by_key = {}
     for item in sorted(transactions, key=lambda row: (row.transaction_date, abs(row.amount_minor), row.pk)):
         by_key.setdefault((item.transaction_date, abs(item.amount_minor)), item)
-    return list(by_key.values())
+    return sorted(by_key.values(), key=lambda row: (row.transaction_date, row.pk))
 
 
-def _longest_chain(transactions, cadence):
-    ordered = sorted(transactions, key=lambda row: (row.transaction_date, row.pk))
+def _longest_chain(ordered, dates, cadence):
+    """Longest cadence chain. `ordered` is sorted by (date, pk); `dates` is its dates."""
+    tolerance = CADENCE_DAYS[cadence][1]
+    days = [value.toordinal() for value in dates]
     length = [1] * len(ordered)
     previous = [-1] * len(ordered)
-    for start, source in enumerate(ordered):
-        expected = add_cadence(source.transaction_date, cadence)
-        for end in range(start + 1, len(ordered)):
-            actual = ordered[end].transaction_date
-            if actual < expected - timedelta(days=CADENCE_DAYS[cadence][1]):
-                continue
-            if not _within_tolerance(actual, expected, cadence):
-                continue
-            candidate = length[start] + 1
+    for start, source in enumerate(dates):
+        # A step can only land within the cadence tolerance, so look at that
+        # window of the sorted dates instead of every later charge.
+        expected = add_cadence(source, cadence).toordinal()
+        low = bisect_left(days, expected - tolerance, start + 1)
+        high = bisect_right(days, expected + tolerance, low)
+        candidate = length[start] + 1
+        for end in range(low, high):
             if candidate > length[end]:
                 length[end] = candidate
                 previous[end] = start
@@ -277,17 +291,23 @@ class DetectedSeries:
 
 def _cluster_by_amount(transactions):
     clusters = []
+    sizes = []
     for item in sorted(transactions, key=lambda row: (abs(row.amount_minor), row.pk)):
-        placed = False
-        for cluster in clusters:
-            trial_amounts = [row.amount_minor for row in cluster] + [item.amount_minor]
-            if amounts_within_tolerance(trial_amounts):
-                cluster.append(item)
-                placed = True
+        value = abs(item.amount_minor)
+        for cluster, size in zip(clusters, sizes):
+            # Same test as amounts_within_tolerance on cluster + item. Items
+            # arrive in ascending amount, so only the first and the new value
+            # can sit furthest from the median.
+            count = len(cluster) + 1
+            median = cluster[count // 2] if count // 2 < len(cluster) else value
+            if median and (median - cluster[0]) * 4 <= median and (value - median) * 4 <= median:
+                cluster.append(value)
+                size.append(item)
                 break
-        if not placed:
-            clusters.append([item])
-    return clusters
+        else:
+            clusters.append([value])
+            sizes.append([item])
+    return sizes
 
 
 def _detected_series(key, cadence, chain):
@@ -314,27 +334,68 @@ def _accept_chain(key, cadence, chain, detected, used):
     used.update(item.pk for item in chain)
 
 
-def _pick_cadence_chain(cluster):
-    collapsed = _collapse_same_day(cluster)
-    best = []
-    best_cadence = None
-    for cadence in CADENCE_ORDER:
-        chain = _longest_chain(collapsed, cadence)
-        if len(chain) < 2:
-            continue
-        if len(chain) > len(best):
-            best = chain
-            best_cadence = cadence
-            continue
-        if len(chain) == len(best) and best_cadence is not None:
-            current_interval, _ = CADENCE_DAYS[cadence]
-            best_interval, _ = CADENCE_DAYS[best_cadence]
-            if current_interval > best_interval:
+class _CadenceChains:
+    """Longest chain per cadence for a pool of charges, kept across removals.
+
+    Dropping charges that are not on a cadence's chain cannot change that
+    chain, so only the cadences whose chain lost a charge are searched again.
+    """
+
+    def __init__(self, transactions):
+        self._by_pk = {item.pk: item for item in transactions}
+        self._key_counts = Counter(_same_day_key(item) for item in transactions)
+        self._set_collapsed(_collapse_same_day(transactions))
+        self._chains = {}
+
+    def _set_collapsed(self, collapsed):
+        self._collapsed = collapsed
+        self._dates = [item.transaction_date for item in collapsed]
+
+    def remove(self, removed_pks):
+        removed = [self._by_pk.pop(pk) for pk in removed_pks]
+        shared = False
+        for item in removed:
+            key = _same_day_key(item)
+            self._key_counts[key] -= 1
+            shared = shared or self._key_counts[key] > 0
+        if shared:
+            # A duplicate steps in for a removed row: nothing is reusable.
+            self._chains = {}
+            self._set_collapsed(_collapse_same_day(self._by_pk.values()))
+            return
+        self._chains = {
+            cadence: chain
+            for cadence, chain in self._chains.items()
+            if not any(item.pk in removed_pks for item in chain)
+        }
+        self._set_collapsed([item for item in self._collapsed if item.pk not in removed_pks])
+
+    def pick(self):
+        best = []
+        best_cadence = None
+        for cadence in CADENCE_ORDER:
+            if cadence not in self._chains:
+                self._chains[cadence] = _longest_chain(self._collapsed, self._dates, cadence)
+            chain = self._chains[cadence]
+            if len(chain) < 2:
+                continue
+            if len(chain) > len(best):
                 best = chain
                 best_cadence = cadence
-    if best_cadence is None:
-        return None, []
-    return best_cadence, best
+                continue
+            if len(chain) == len(best) and best_cadence is not None:
+                current_interval, _ = CADENCE_DAYS[cadence]
+                best_interval, _ = CADENCE_DAYS[best_cadence]
+                if current_interval > best_interval:
+                    best = chain
+                    best_cadence = cadence
+        if best_cadence is None:
+            return None, []
+        return best_cadence, best
+
+
+def _pick_cadence_chain(cluster):
+    return _CadenceChains(cluster).pick()
 
 
 def _farthest_from_chain_median(chain):
@@ -343,15 +404,17 @@ def _farthest_from_chain_median(chain):
 
 
 def _pick_tolerant_cadence_chain(candidates):
-    pick_candidates = list(candidates)
-    while len(pick_candidates) >= 2:
-        cadence, chain = _pick_cadence_chain(pick_candidates)
+    pool_size = len(candidates)
+    chains = _CadenceChains(candidates)
+    while pool_size >= 2:
+        cadence, chain = chains.pick()
         if cadence is None:
             return None, []
         if _chain_passes_rolling_band(chain):
             return cadence, chain
         outlier = _worst_rolling_band_breaker(chain)
-        pick_candidates = [item for item in pick_candidates if item.pk != outlier.pk]
+        chains.remove({outlier.pk})
+        pool_size -= 1
     return None, []
 
 
@@ -415,17 +478,25 @@ def _drop_overlaps(detected):
     return chosen
 
 
-def detect_recurring_series(transactions):
+def detect_recurring_series_with_skips(transactions):
+    """Detected series plus the merchant keys left out for having too many charges."""
     detected = []
+    skipped = []
     for key, group in _group_by_merchant(transactions).items():
+        if len(group) > MAX_CHARGES_PER_MERCHANT:
+            skipped.append(key)
+            continue
         _detect_for_merchant(key, group, detected)
-    return _drop_overlaps(detected)
+    return _drop_overlaps(detected), sorted(skipped)
 
 
-def candidate_transactions(principal):
-    person = _person_for(principal)
+def detect_recurring_series(transactions):
+    return detect_recurring_series_with_skips(transactions)[0]
+
+
+def _candidate_queryset(person):
     excluded_ids = RecurringExclusion.objects.filter(person=person).values("transaction_id")
-    return list(
+    return (
         Transaction.objects.visible_to(person)
         .filter(
             status=Transaction.Status.ACTIVE,
@@ -435,9 +506,25 @@ def candidate_transactions(principal):
         .exclude(pk__in=excluded_ids)
         .annotate(_excluded=exclusion_exists_for(person))
         .filter(_excluded=False)
-        .select_related("account")
-        .order_by("transaction_date", "pk")
     )
+
+
+def candidate_transactions(principal):
+    person = _person_for(principal)
+    return list(_candidate_queryset(person).select_related("account").order_by("transaction_date", "pk"))
+
+
+def _inputs_signature(person):
+    """Fingerprint of everything detection reads from a person's charges."""
+    digest = sha256(DETECTION_VERSION.encode("utf-8"))
+    rows = (
+        _candidate_queryset(person)
+        .order_by("pk")
+        .values_list("pk", "transaction_date", "amount_minor", "currency", "description")
+    )
+    for row in rows.iterator(chunk_size=5000):
+        digest.update(repr(row).encode("utf-8"))
+    return digest.hexdigest()
 
 
 def grouping_candidate_transactions(principal):
@@ -763,12 +850,27 @@ def revalidate_series_after_member_removal(principal, series_ids):
     RecurringSeries.objects.filter(pk__in=open_ids).exclude(pk__in=still_membered).update(is_active=False)
 
 
-@transaction.atomic
-def refresh_recurring_series(principal):
+def refresh_recurring_series(principal, *, only_if_changed=False):
+    """Detect recurring series and bring the stored ones in line.
+
+    Detection runs before the household lock is taken; only the writes hold it.
+    With only_if_changed, a call is cheap when none of the charges detection
+    reads changed since the last run (the page view uses this).
+    """
     person = _person_for(principal)
-    lock_actor_household(person)
+    signature = _inputs_signature(person)
+    if only_if_changed and signature == Person.objects.values_list("recurring_inputs_signature", flat=True).get(
+        pk=person.pk
+    ):
+        return _raise_review_alerts(person)
     candidates = candidate_transactions(person)
-    detected = detect_recurring_series(candidates)
+    detected, skipped = detect_recurring_series_with_skips(candidates)
+    return _write_detected(person, candidates, detected, skipped, signature)
+
+
+@transaction.atomic
+def _write_detected(person, candidates, detected, skipped, signature):
+    lock_actor_household(person)
     existing = list(RecurringSeries.objects.select_for_update(of=("self",)).filter(person=person).order_by("pk"))
     dismissed_fingerprints = {
         series.fingerprint for series in existing if series.status == RecurringSeries.Status.DISMISSED
@@ -803,6 +905,14 @@ def refresh_recurring_series(principal):
         )
     _drop_stale_open_rows(open_rows, kept_ids)
     _reconcile_unmatched_confirmed(confirmed, kept_ids, eligible_ids)
+    Person.objects.filter(pk=person.pk).update(
+        recurring_inputs_signature=signature, recurring_skipped_merchants=skipped
+    )
+    return _raise_review_alerts(person)
+
+
+@transaction.atomic
+def _raise_review_alerts(person):
     visible = RecurringSeries.objects.visible_to(person).prefetch_related("members__transaction__account")
     from .recurring_review import raise_recurring_review_alerts
 

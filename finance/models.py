@@ -112,6 +112,11 @@ class Person(models.Model):
         related_name="declined_by",
     )
     require_passkey_after_password = models.BooleanField(default=False)
+    # Fingerprint of the charges the last recurring detection ran on; a page
+    # view detects again only when it changes. See recurring_services.
+    recurring_inputs_signature = models.CharField(max_length=64, blank=True, default="")
+    # Merchants the last detection left out because they have too many charges.
+    recurring_skipped_merchants = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
