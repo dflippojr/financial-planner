@@ -226,6 +226,8 @@ Invoke-WebRequest https://BASEMENT-PC.MAGICDNS-NAME/health/
 
 Starting the new app applies all pending Django migrations before Gunicorn accepts traffic. `simplefin-sync` and `ai-jobs` wait for the app to report healthy, so they never run against a database that has not been migrated yet. After `up -d`, compare each running container's image with the newly built one (`docker inspect -f '{{.Image}}' <container>` against `docker image inspect -f '{{.Id}}' <image>`). If one still runs the old image, as `backup` has done, recreate it with `docker compose --env-file $Config up -d --force-recreate <service>`. If a migration or health check fails, inspect bounded logs with `docker compose --env-file $Config logs --tail 100 app db`; do not repeatedly restart or run migrations by hand. Restore the pre-upgrade dump into a fresh volume using the procedure above when database rollback is required.
 
+The `Docker smoke test` workflow (`.github/workflows/docker-smoke.yml`) runs on pull requests that change packaging files (`Dockerfile`, `compose.yml`, `requirements.txt`, `scripts/`, `ops/`, `static/`, `templates/`) and on pushes to `main`, including Dependabot's. It builds the image, starts `db` and `app` from `compose.yml` with dummy values and a throwaway database, waits for the app to report healthy, and requests the sign-in page, which redirects to first-run setup on an empty database. It does not start the backup, SimpleFIN, or AI-job containers and never touches the tower.
+
 A PostgreSQL major-version change cannot use these steps. Follow [PostgreSQL 16 to 18 upgrade](#postgresql-16-to-18-upgrade) instead.
 
 ## PostgreSQL 16 to 18 upgrade
