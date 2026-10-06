@@ -795,7 +795,8 @@ class TransactionCategoryForm(forms.Form):
 class RefundSearchForm(forms.Form):
     refund_search = forms.CharField(required=False, max_length=255, label="Purchase description")
     refund_amount = forms.DecimalField(
-        required=False, decimal_places=2, max_digits=17, min_value=Decimal("0.01"), label="Purchase amount"
+        required=False, decimal_places=2, max_digits=19, min_value=Decimal("0.01"), label="Purchase amount",
+        widget=forms.TextInput(attrs={"inputmode": "decimal", "autocomplete": "off"}),
     )
     refund_same_account = forms.BooleanField(required=False, label="Only this account")
 
