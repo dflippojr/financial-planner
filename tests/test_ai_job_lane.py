@@ -105,6 +105,8 @@ def test_sleeping_model_jobs_do_not_starve_other_due_jobs(lane, monkeypatch):
 @pytest.mark.django_db
 def test_worker_closes_connections_after_missing_job_or_storage_failure(monkeypatch):
     close = Mock()
+    # This direct worker call runs inside pytest's wrapping transaction.
+    monkeypatch.setattr(ai_jobs, "close_old_connections", Mock())
     monkeypatch.setattr(ai_jobs.connections, "close_all", close)
     ai_jobs.AiJobLane._run(999999, timezone.now())
     _user, person, _household = make_member("failure")
@@ -121,6 +123,7 @@ def test_worker_isolates_one_failure_and_continues(monkeypatch):
     process = Mock(side_effect=[RuntimeError("synthetic job failure"), True])
     isolate = Mock()
     monkeypatch.setattr(ai_jobs, "_process_one", process)
+    monkeypatch.setattr(ai_jobs, "close_old_connections", Mock())
     monkeypatch.setattr(ai_jobs, "_isolate_job_failure", isolate)
     monkeypatch.setattr(ai_jobs.connections, "close_all", Mock())
     for job in jobs:
