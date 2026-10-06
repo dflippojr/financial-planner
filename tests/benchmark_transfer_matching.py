@@ -91,4 +91,3 @@ else:
         data=dict(action='commit',token=token,date_column='When',description_column='Memo',date_format='mdy_slash_4',number_format='dot_comma',amount_mode='signed',amount_column='Amount',currency_column='Currency',source='huntington',date_range_start='2026-09-01',date_range_end='2026-09-30')
         start=time.perf_counter();status,html,_=send(urllib.parse.urlencode(data).encode(),'application/x-www-form-urlencoded')
         print(mode,status,time.perf_counter()-start,'total',Transaction.objects.count())
-
