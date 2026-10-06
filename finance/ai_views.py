@@ -7,8 +7,15 @@ from django.core.exceptions import PermissionDenied
 from django.shortcuts import get_object_or_404, redirect
 from django.views.decorators.http import require_POST
 
+from .ai_api import label as api_label, default_model
 from .ai_services import (
     AiError,
+    api_connection,
+    api_connections,
+    api_usage_summary,
+    connect_api_key,
+    disconnect_api_key,
+    set_api_defaults,
     connect_harness,
     connection_for,
     disconnect_harness,
@@ -18,9 +25,16 @@ from .ai_services import (
     set_offer_local_to_household,
     set_shared_local_use,
 )
-from .ai_types import SHARED_LOCAL_CHOICE
+from .ai_types import API_KINDS, SHARED_LOCAL_CHOICE
 from .ai_urls import HarnessUrlError
-from .forms import AiDefaultsForm, AiOfferLocalForm, AiSharedLocalForm, HarnessConnectForm
+from .forms import (
+    AiDefaultsForm,
+    AiOfferLocalForm,
+    AiSharedLocalForm,
+    ApiKeyConnectForm,
+    ApiKeyDefaultsForm,
+    HarnessConnectForm,
+)
 from .models import AiUsageEvent, Person
 from .policy_services import may_use_ai
 from .reauth import requires_recent_auth
@@ -40,6 +54,8 @@ def ai_settings_context(person):
             "ai_shared_local_offered": False,
             "ai_usage": [],
             "ai_error": "",
+            "ai_key_connect_form": None,
+            "ai_key_cards": [],
         }
     connection = connection_for(person)
     error = ""
@@ -90,7 +106,33 @@ def ai_settings_context(person):
         "ai_shared_local_offered": shared_offered is not None,
         "ai_usage": list(AiUsageEvent.objects.visible_to(person).order_by("-created_at", "-pk")[:20]),
         "ai_error": error,
+        "ai_key_connect_form": ApiKeyConnectForm(),
+        "ai_key_cards": _key_cards(person),
     }
+
+
+def _key_cards(person):
+    tokens = api_usage_summary(person)
+    cards = []
+    for row in api_connections(person):
+        cards.append(
+            {
+                "kind": row.kind,
+                "label": api_label(row.kind),
+                "connected_at": row.connected_at,
+                "month_tokens": tokens.get(row.kind, 0),
+                "form": ApiKeyDefaultsForm(
+                    kind=row.kind,
+                    initial={
+                        "chat_model": row.chat_model or default_model(row.kind, use_chat=True),
+                        "background_model": row.background_model or default_model(row.kind, use_chat=False),
+                        "use_for_chat": row.use_for_chat,
+                        "use_for_background": row.use_for_background,
+                    },
+                ),
+            }
+        )
+    return cards
 
 
 @require_POST
@@ -191,4 +233,61 @@ def ai_save_shared_local(request):
         messages.success(request, "Household local-model settings were saved.")
     except AiError as exc:
         messages.error(request, str(exc))
+    return redirect("settings-ai")
+
+
+@require_POST
+@requires_recent_auth("connect-ai-key", form_url_name="settings-ai")
+def ai_key_connect(request):
+    person = get_object_or_404(Person, user=request.user)
+    form = ApiKeyConnectForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, "Choose a provider and paste its API key.")
+        return redirect("settings-ai")
+    try:
+        connect_api_key(person, kind=form.cleaned_data["provider"], key=form.cleaned_data["key"])
+        record_security_event(person, EVENT_TYPES.AI_CONNECTION_CHANGED, request=request)
+        messages.success(request, f"{api_label(form.cleaned_data['provider'])} key saved. It will not be shown again.")
+    except AiError as exc:
+        messages.error(request, str(exc))
+    return redirect("settings-ai")
+
+
+@require_POST
+@requires_recent_auth("ai-key-defaults", form_url_name="settings-ai")
+def ai_key_defaults(request, kind):
+    person = get_object_or_404(Person, user=request.user)
+    if kind not in API_KINDS or api_connection(person, kind) is None:
+        messages.error(request, "That provider is not connected.")
+        return redirect("settings-ai")
+    form = ApiKeyDefaultsForm(request.POST, kind=kind)
+    if not form.is_valid():
+        messages.error(request, "Choose models from the list.")
+        return redirect("settings-ai")
+    try:
+        set_api_defaults(
+            person,
+            kind=kind,
+            chat_model=form.cleaned_data["chat_model"],
+            background_model=form.cleaned_data["background_model"],
+            use_chat=form.cleaned_data["use_for_chat"],
+            use_background=form.cleaned_data["use_for_background"],
+        )
+        record_security_event(person, EVENT_TYPES.AI_CONNECTION_CHANGED, request=request)
+        messages.success(request, f"{api_label(kind)} settings were saved.")
+    except AiError as exc:
+        messages.error(request, str(exc))
+    return redirect("settings-ai")
+
+
+@require_POST
+@requires_recent_auth("disconnect-ai-key", form_url_name="settings-ai")
+def ai_key_disconnect(request, kind):
+    person = get_object_or_404(Person, user=request.user)
+    if kind not in API_KINDS:
+        messages.error(request, "That provider is not connected.")
+        return redirect("settings-ai")
+    disconnect_api_key(person, kind)
+    record_security_event(person, EVENT_TYPES.AI_CONNECTION_CHANGED, request=request)
+    messages.success(request, f"{api_label(kind)} key removed.")
     return redirect("settings-ai")

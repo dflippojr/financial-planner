@@ -57,28 +57,51 @@
       {% csrf_token %}
       <button type="submit" class="btn btn-outline">Disconnect</button>
     </form>
-    <h3 class="mb-2 font-semibold">Usage</h3>
-    {% if ai_usage %}
-    <table class="table table-sm">
-      <thead>
-        <tr><th scope="col">When</th><th scope="col">Backend</th><th scope="col">Feature</th><th scope="col">Tokens</th><th scope="col">Outcome</th></tr>
-      </thead>
-      <tbody>
-        {% for row in ai_usage %}
-        <tr>
-          <td>{{ row.created_at|date:"Y-m-d H:i" }}</td>
-          <td>{{ row.backend }}</td>
-          <td>{{ row.feature }}</td>
-          <td>{{ row.prompt_tokens|default:"—" }} / {{ row.completion_tokens|default:"—" }}</td>
-          <td>{{ row.outcome }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-    <p class="text-sm">No AI usage yet.</p>
-    {% endif %}
   </div>
+  {% endif %}
+  <h3 class="mb-2 mt-6 font-semibold">Your own API key</h3>
+  <p class="mb-4 text-sm">Optional. Connect your own Anthropic or OpenAI key and you pay that provider directly; no paid key is ever required. The key is stored encrypted and is never shown again. Requests send your questions and the finance data the chat tools read to that provider.</p>
+  {% for card in ai_key_cards %}
+  <div class="mb-4 rounded-box border border-base-300 p-3">
+    <p class="mb-2 text-sm"><strong>{{ card.label }}</strong> connected {{ card.connected_at|date:"Y-m-d" }}. About {{ card.month_tokens }} tokens this month.</p>
+    <form method="post" action="{% url 'ai-key-defaults' card.kind %}" class="max-w-lg space-y-3 mb-3">
+      {% csrf_token %}
+      {% include "finance/_form_fields.html" with form=card.form %}
+      <button type="submit" class="btn btn-primary">Save {{ card.label }} settings</button>
+    </form>
+    <form method="post" action="{% url 'ai-key-disconnect' card.kind %}">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-outline">Remove {{ card.label }} key</button>
+    </form>
+  </div>
+  {% endfor %}
+  <form method="post" action="{% url 'ai-key-connect' %}" class="max-w-lg space-y-3 mb-6">
+    {% csrf_token %}
+    {% include "finance/_form_fields.html" with form=ai_key_connect_form %}
+    <button type="submit" class="btn btn-primary">Save API key</button>
+  </form>
+  {% if ai_connected or ai_key_cards %}
+  <h3 class="mb-2 font-semibold">Usage</h3>
+  {% if ai_usage %}
+  <table class="table table-sm">
+    <thead>
+      <tr><th scope="col">When</th><th scope="col">Backend</th><th scope="col">Feature</th><th scope="col">Tokens</th><th scope="col">Outcome</th></tr>
+    </thead>
+    <tbody>
+      {% for row in ai_usage %}
+      <tr>
+        <td>{{ row.created_at|date:"Y-m-d H:i" }}</td>
+        <td>{{ row.backend }}</td>
+        <td>{{ row.feature }}</td>
+        <td>{{ row.prompt_tokens|default:"—" }} / {{ row.completion_tokens|default:"—" }}</td>
+        <td>{{ row.outcome }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="text-sm">No AI usage yet.</p>
+  {% endif %}
   {% endif %}
 </section>
 {% endif %}
