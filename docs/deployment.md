@@ -317,7 +317,7 @@ Dependabot opens version and security update PRs. There is no auto-merge; the ow
 
 On the PR branch:
 
-1. Run the SQLite suite (`python -m pytest tests -q`) and `bash scripts/test_postgres.sh`.
+1. Run the SQLite suite (`python -m pytest tests -q`) and `bash scripts/test_postgres.sh` (the `PostgreSQL 18` workflow runs the same on the PR).
 2. After merge, rebuild and deploy with the upgrade steps above (backup first, then `docker compose --env-file $Config build --pull` and `up -d`, then the health check).
 
 ## Synthetic restore exercise record

@@ -262,7 +262,7 @@ erDiagram
 
 **Testing and quality**
 - 555 pytest tests across importers, authorization, reporting, deployment scripts, and UI.
-- The suite runs on in-memory SQLite for speed and on a throwaway PostgreSQL 18 container ([`scripts/test_postgres.sh`](scripts/test_postgres.sh)) before every pull request.
+- The suite runs on in-memory SQLite for speed and on PostgreSQL 18, the production engine, in the `PostgreSQL 18` GitHub Actions workflow on every pull request and push to `main` (it also checks migrations on an empty database). Run the same locally with a throwaway container via [`scripts/test_postgres.sh`](scripts/test_postgres.sh).
 - SonarCloud quality gate in CI on every pull request and push to `main` (coverage, security, maintainability), plus on-demand automated code review on a self-hosted GitHub Actions runner.
 - Supply-chain care: pinned Python dependencies, a checksum-verified Tailwind binary, and vendored front-end assets with recorded SHA-256 sums.
 
