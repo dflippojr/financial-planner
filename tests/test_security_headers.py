@@ -1,3 +1,5 @@
+import gzip
+import re
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -248,3 +250,34 @@ def test_middleware_keeps_a_header_the_view_already_set(rf):
 
     assert response["Content-Security-Policy"] == "default-src 'none'"
     assert response["Permissions-Policy"] == django_settings.PERMISSIONS_POLICY
+
+
+@pytest.mark.django_db
+def test_html_is_gzipped_only_for_clients_that_accept_it():
+    owner = make_person("gzip-owner")
+    household = make_household(owner)
+    shared = make_account(owner, scope=Account.Scope.HOUSEHOLD, household=household)
+    for number in range(40):
+        make_transaction(owner, shared, description=f"Synthetic row {number}", fingerprint=f"{number:064d}")
+    client = Client()
+    client.force_login(owner.user)
+    url = reverse("transaction-list")
+
+    plain = client.get(url, headers={"accept-encoding": ""})
+    packed = client.get(url, headers={"accept-encoding": "gzip"})
+
+    assert not plain.has_header("Content-Encoding")
+    assert packed["Content-Encoding"] == "gzip"
+    # Django masks the CSRF token with a fresh salt on every response.
+    unmask = re.compile(rb'(name="csrfmiddlewaretoken" value=")[^"]+')
+    assert unmask.sub(rb"", gzip.decompress(packed.content)) == unmask.sub(rb"", plain.content)
+    assert len(packed.content) < len(plain.content) / 3
+    for response in (plain, packed):
+        assert "Accept-Encoding" in response["Vary"]
+        assert_headers_survive(response)
+
+
+def assert_headers_survive(response):
+    assert response["Content-Security-Policy"] == django_settings.CONTENT_SECURITY_POLICY
+    assert response["Permissions-Policy"] == django_settings.PERMISSIONS_POLICY
+    assert response["X-Content-Type-Options"] == "nosniff"
