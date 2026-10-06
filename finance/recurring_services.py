@@ -613,13 +613,19 @@ def _apply_detection(series, detected, *, eligible_ids, preserve_identity=False)
         series.cadence = primary.cadence
     series.currency = primary.currency
     chain_ids = {pk for item in items for pk in item.transaction_ids}
-    RecurringSeriesMember.objects.filter(series=series).exclude(transaction_id__in=eligible_ids).delete()
-    RecurringSeriesMember.objects.filter(
-        series=series,
-        source=RecurringSeriesMember.Source.DETECTED,
-    ).exclude(transaction_id__in=chain_ids).delete()
+    # eligible_ids can hold every charge a person has, so compare in Python
+    # rather than sending it to the database as a NOT IN list.
+    members = list(series.members.values_list("transaction_id", "source"))
+    gone = {
+        transaction_id
+        for transaction_id, source in members
+        if transaction_id not in eligible_ids
+        or (source == RecurringSeriesMember.Source.DETECTED and transaction_id not in chain_ids)
+    }
+    if gone:
+        RecurringSeriesMember.objects.filter(series=series, transaction_id__in=gone).delete()
     claimed_elsewhere = _active_member_transaction_ids(series.person, exclude_series_id=series.pk)
-    existing_ids = set(series.members.values_list("transaction_id", flat=True))
+    existing_ids = {transaction_id for transaction_id, _source in members} - gone
     RecurringSeriesMember.objects.bulk_create(
         RecurringSeriesMember(
             series=series,
@@ -633,6 +639,7 @@ def _apply_detection(series, detected, *, eligible_ids, preserve_identity=False)
     if series.members.filter(source=RecurringSeriesMember.Source.MANUAL).exists():
         extra.append(MANUAL_REASON)
     _recompute_series_from_members(series, extra_reasons=extra)
+    series._member_transaction_ids = None
 
 
 def _fingerprint_taken(person, fingerprint, *, exclude_pk):
@@ -687,6 +694,15 @@ def _create_series(person, detected):
     return created
 
 
+def _member_transaction_ids(series):
+    """A series' member ids, read once per row until _apply_detection changes them."""
+    ids = getattr(series, "_member_transaction_ids", None)
+    if ids is None:
+        ids = set(series.members.values_list("transaction_id", flat=True))
+        series._member_transaction_ids = ids
+    return ids
+
+
 def _overlapping_owner(series_list, item):
     """The active series sharing the most transactions with a detected chain.
 
@@ -699,7 +715,7 @@ def _overlapping_owner(series_list, item):
     for series in series_list:
         if series.status == RecurringSeries.Status.DISMISSED:
             continue
-        overlap = len(detected_ids & {member.transaction_id for member in series.members.all()})
+        overlap = len(detected_ids & _member_transaction_ids(series))
         if overlap > best_overlap:
             best, best_overlap = series, overlap
     return best
