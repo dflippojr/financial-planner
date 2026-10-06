@@ -21,7 +21,7 @@
   {% else %}
   <div{% if show_ai_features %} data-ai-ui="connected"{% endif %}>
     <p class="mb-2 text-sm">Connected to {{ ai_connection.base_url }}.</p>
-    <p class="mb-4 text-sm">Chat can use a hosted backend that supports app-tools-only sessions (Claude). Background jobs still need hosted sessions enabled by the operator before they can use Claude, Codex, or Cursor. Chat on the local model stays hidden until it is evaluated. Other household members never use hosted backends on this connection.</p>
+    <p class="mb-4 text-sm">Chat can use a hosted backend that supports app-tools-only sessions (Claude). Background jobs still need hosted sessions enabled by the operator before they can use Claude, Codex, or Cursor. Chat on the local model is offered only when the setting below is on. Other household members never use hosted backends on this connection.</p>
     {% if ai_backends %}
     <table class="table table-sm mb-4">
       <thead>
@@ -44,6 +44,14 @@
       {% csrf_token %}
       {% include "finance/_form_fields.html" with form=ai_offer_form %}
       <button type="submit" class="btn btn-primary">Save household sharing</button>
+    </form>
+    {% endif %}
+    {% if ai_offer_chat_form %}
+    <form method="post" action="{% url 'ai-offer-local-chat' %}" class="max-w-lg space-y-3 mb-4">
+      {% csrf_token %}
+      {% include "finance/_form_fields.html" with form=ai_offer_chat_form %}
+      <p class="text-sm">Chat still uses a hosted backend unless you choose the local model below. The model warms up when you start typing; cancelling never unloads it.</p>
+      <button type="submit" class="btn btn-primary">Save local-model chat setting</button>
     </form>
     {% endif %}
     {% if ai_defaults_form %}

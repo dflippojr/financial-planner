@@ -251,7 +251,8 @@ AI_JOB_RESUME_MAX_AGE_SECONDS = int(os.environ.get("AI_JOB_RESUME_MAX_AGE_SECOND
 AI_CHAT_EXPIRE_DAYS = int(os.environ.get("AI_CHAT_EXPIRE_DAYS", "30"))
 AI_CHAT_MAX_TURNS = int(os.environ.get("AI_CHAT_MAX_TURNS", "20"))
 AI_CHAT_MAX_TOOL_CALLS = int(os.environ.get("AI_CHAT_MAX_TOOL_CALLS", "40"))
-AI_CHAT_LOCAL_ENABLED = os.environ.get("AI_CHAT_LOCAL_ENABLED", "false").lower() == "true"
+# Hard off switch for chat on the local model. The host's "offer the local model for chat" setting decides whether it is offered.
+AI_CHAT_LOCAL_ENABLED = os.environ.get("AI_CHAT_LOCAL_ENABLED", "true").lower() == "true"
 # The chat lane in the ai-jobs container answers chat turns; web requests never wait on the harness.
 AI_CHAT_POLL_SECONDS = float(os.environ.get("AI_CHAT_POLL_SECONDS", "1"))
 AI_CHAT_WORKERS = int(os.environ.get("AI_CHAT_WORKERS", "4"))

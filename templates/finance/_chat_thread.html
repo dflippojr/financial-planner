@@ -16,7 +16,10 @@
 </details>
 {% endif %}
 {% if chat_show_local %}
-<p id="chat-local-status" class="mb-2 text-sm" data-chat-warm-url="{% url 'chat-warm' %}" data-chat-status-url="{% url 'chat-status' %}">Local model: checking…</p>
+<div class="mb-2 flex items-center gap-2 text-sm">
+  <p id="chat-local-status" aria-live="polite" data-chat-warm-url="{% url 'chat-warm' %}" data-chat-status-url="{% url 'chat-status' %}">Local model: checking…</p>
+  <button type="button" id="chat-local-cancel" class="btn btn-ghost btn-xs max-md:min-h-11" hidden>Cancel</button>
+</div>
 {% endif %}
 <div class="space-y-3 mb-4" aria-live="polite">
   {% for item in chat_messages %}

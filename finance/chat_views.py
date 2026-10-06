@@ -152,7 +152,7 @@ def chat_warm(request):
         return JsonResponse({"ok": False, "error": "Connect an AI backend first."}, status=403)
     connection, backend = resolve_ai(person, use_chat=True)
     shared = bool(connection and connection.owner_id != person.id and backend == LOCAL_BACKEND)
-    if not shared and not chat_local_enabled():
+    if not shared and not chat_local_enabled(connection):
         return JsonResponse({"ok": False, "error": "Chat on the local model is not offered yet."}, status=409)
     try:
         rows = warm_for_chat(person)
@@ -239,7 +239,7 @@ def _status_payload(rows):
 def _chat_context(person, conversation, request):
     connection, backend = resolve_ai(person, use_chat=True)
     show_local = bool(connection and backend == LOCAL_BACKEND and (
-        connection.owner_id != person.id or chat_local_enabled()
+        connection.owner_id != person.id or chat_local_enabled(connection)
     ))
     messages_qs = []
     if conversation is not None:

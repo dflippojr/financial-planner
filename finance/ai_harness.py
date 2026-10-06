@@ -88,8 +88,8 @@ def describe_backend(item):
 
 
 def default_backends(backends):
-    allow_local_chat = bool(getattr(settings, "AI_CHAT_LOCAL_ENABLED", False))
-    live = [item for item in backends if item.suits_live and (allow_local_chat or item.id != LOCAL_BACKEND)]
+    # Chat never defaults to the local model; the member chooses it (#138).
+    live = [item for item in backends if item.suits_live and item.id != LOCAL_BACKEND]
     hosted_live = [item for item in live if item.id in HOSTED_BACKENDS]
     local_bg = next((item for item in backends if item.id == LOCAL_BACKEND and item.suits_background), None)
     chat = hosted_live[0].id if hosted_live else (live[0].id if live else "")
