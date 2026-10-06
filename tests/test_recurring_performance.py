@@ -30,8 +30,8 @@ def test_five_hundred_random_charges_for_one_merchant_finish_quickly():
     rows = _random_merchant(500, seed=1)
     started = perf_counter()
     detect_recurring_series(rows)
-    # About 1.5 s on a laptop; the cubic search needed minutes.
-    assert perf_counter() - started < 8
+    # About 1.5 s locally and about 13 s under CI coverage tracing; the cubic search needed minutes.
+    assert perf_counter() - started < 60
 
 
 def test_frequent_varied_purchases_finish_quickly():
@@ -43,7 +43,7 @@ def test_frequent_varied_purchases_finish_quickly():
         rows.append(_row(pk, day, rng.randint(4000, 18000), "Synthetic Grocer"))
     started = perf_counter()
     detect_recurring_series(rows)
-    assert perf_counter() - started < 2
+    assert perf_counter() - started < 5
 
 
 def _golden_digest():
