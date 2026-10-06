@@ -298,9 +298,10 @@ def raise_large_transaction_alerts(transactions):
     Alert.objects.bulk_create(created, ignore_conflicts=True)
     # ignore_conflicts does not populate ids; callers (including email notices)
     # need the persisted rows. Also retain deduplication on repeated passes.
-    return list(Alert.objects.filter(
+    new_keys = {(alert.recipient_id, alert.dedupe_key) for alert in created}
+    return [alert for alert in Alert.objects.filter(
         recipient_id__in=people, dedupe_key__in=[alert.dedupe_key for alert in created],
-    ))
+    ) if (alert.recipient_id, alert.dedupe_key) in new_keys]
 
 
 def evaluate_recent_large_transactions(*, since=None):

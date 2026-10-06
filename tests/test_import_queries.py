@@ -68,6 +68,7 @@ def test_suggestion_queue_batches_existing_jobs_and_backend_resolution():
         accept_policy(member, policy)
     AiProviderConnection.objects.create(owner=person, encrypted_token=b"synthetic-unused",
         base_url="http://synthetic.invalid", background_backend="local")
+    Transaction.objects.filter(account=account).update(category=None, category_source=Transaction.CategorySource.UNSET)
     rows = list(Transaction.objects.filter(account=account, category__isnull=True)[:500])
     # Add a partly filled job, many full jobs, a claimed job and a session retry.
     full = [AiJob(member=person, feature="category_suggestions", input_refs={"transaction_ids": list(range(-40, 0))}) for _ in range(100)]
@@ -101,6 +102,11 @@ def test_large_transaction_alerts_batch_reads_and_writes_without_duplicates():
     assert len(alerts) == 1000  # shared account, both current members
     assert all(alert.pk for alert in alerts)
     assert raise_large_transaction_alerts(rows) == []
+    assert Alert.objects.count() == 1000
+    Alert.objects.exclude(recipient=person).delete()
+    topped_up = raise_large_transaction_alerts(rows)
+    assert len(topped_up) == 500
+    assert all(alert.recipient_id != person.pk for alert in topped_up)
     assert Alert.objects.count() == 1000
 
 
