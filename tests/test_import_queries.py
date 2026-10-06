@@ -59,7 +59,7 @@ def test_import_request_query_ceiling_and_bulk_scaling(tmp_path, profile):
     assert imported.filter(category_source=Transaction.CategorySource.UNSET, category__isnull=True).count() == 500
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_suggestion_queue_batches_existing_jobs_and_backend_resolution():
     person, account = seed(budgets=0)
     policy = publish_policy(material=True, body="Synthetic benchmark policy")
@@ -91,7 +91,7 @@ def test_suggestion_queue_batches_existing_jobs_and_backend_resolution():
     assert queue_category_suggestions_for(person, rows) == []
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_large_transaction_alerts_batch_reads_and_writes_without_duplicates():
     person, account = seed(budgets=0)
     AlertSettings.objects.update(large_transaction_minor=100)
@@ -153,7 +153,7 @@ def test_concurrent_reimports_serialize_on_the_account():
     assert Transaction.objects.filter(account=account).count() == 500
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("reset_in_current_period", [True, False])
 def test_prefetched_budget_progress_matches_amount_changes_and_rollover_resets(reset_in_current_period):
     from datetime import date, timedelta

@@ -98,6 +98,13 @@ def seed(*, budgets=12):
                      category=categories[i % len(categories)], priority=i, confirmed_at=timezone.now())
         for i in range(30)
     ])
+    if connection.vendor == "postgresql":
+        # A real historical ledger has planner statistics. Fresh test databases
+        # and bulk seeds need them too; otherwise complex access predicates can
+        # select pathological plans before autovacuum has had a chance to run.
+        with connection.cursor() as cursor:
+            cursor.execute("ANALYZE finance_transaction, finance_account, finance_membership, "
+                           "finance_transferpair, finance_refundlink, finance_categoryrule")
     return people[0], accounts[0]
 
 
