@@ -2,8 +2,8 @@
 
 Run against a THROWAWAY database, never production:
 
-    PERF_SEED=22500 python manage.py shell -c "exec(open('scripts/perf_pages.py').read())"   # seed, then time
-    PERF_RUNS=5 python manage.py shell -c "exec(open('scripts/perf_pages.py').read())"   # time only
+    PERF_SEED=22500 python manage.py shell -c "exec(open('docs/perf/perf_pages.py').read())"   # seed, then time
+    PERF_RUNS=5 python manage.py shell -c "exec(open('docs/perf/perf_pages.py').read())"   # time only
 
 The seed is 2 members, 1 household, 10 accounts, 36 months, about 85% of the
 rows categorised and 1,500 tagged, from `random.seed(42)`. Timing is the Django
