@@ -1,7 +1,8 @@
 (function () {
   // Pending chat turns are answered in the background; poll each one and swap in the reply.
-  var POLL_MS = 2000;
-  var MAX_FAILURES = 30;
+  var FIRST_POLL_MS = 500;
+  var POLL_MS = 1000;
+  var MAX_FAILURES = 60;
 
   function list(className, items, build) {
     var ul = document.createElement("ul");
@@ -74,7 +75,7 @@
         })
         .catch(retry);
     }
-    setTimeout(poll, POLL_MS);
+    setTimeout(poll, FIRST_POLL_MS);
   }
 
   document.querySelectorAll("[data-chat-turn-url]:not([data-chat-turn-polling])").forEach(watch);

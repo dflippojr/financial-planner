@@ -295,9 +295,9 @@ def test_disconnect_erases_the_token(harness):
 
 
 @pytest.mark.django_db
-def test_session_poll_backs_off_until_the_last_get_completes(harness):
+def test_session_poll_backs_off_to_a_short_cap(harness):
     state, url = harness
-    state.running_polls = 3
+    state.running_polls = 5
     clock = _FakeClock()
     result = run_session(
         url,
@@ -310,11 +310,11 @@ def test_session_poll_backs_off_until_the_last_get_completes(harness):
     )
     assert result.ok
     assert result.answer == "synthetic-ok"
-    assert clock.sleeps == [0.5, 1.0, 2.0]
+    assert clock.sleeps == [0.25, 0.5, 0.6, 0.6, 0.6]
     session_gets = [
         item for item in state.requests if item == ("GET", f"/api/v1/sessions/{result.session_id}")
     ]
-    assert len(session_gets) == 3
+    assert len(session_gets) == 5
 
 
 @pytest.mark.django_db
@@ -336,9 +336,9 @@ def test_session_timeout_returns_unavailable_without_another_create(harness, set
     assert result.failure_code == UNAVAILABLE
     assert result.session_id
     assert state.requests.count(("POST", "/api/v1/sessions")) == 1
-    assert clock.sleeps[0] == 0.5
-    assert clock.sleeps[1] == 1.0
-    assert max(clock.sleeps) <= 5.0
+    assert clock.sleeps[0] == 0.25
+    assert clock.sleeps[1] == 0.5
+    assert max(clock.sleeps) <= 0.6
 
 
 @pytest.mark.django_db
