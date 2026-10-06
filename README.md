@@ -97,7 +97,7 @@ flowchart LR
     subgraph Host["Home server · Docker Compose"]
         direction TB
         App["<b>app</b><br/>Django 5 + Gunicorn<br/>WhiteNoise static files"]
-        Sync["<b>simplefin-sync</b><br/>scheduled bank sync"]
+        Sync["<b>background</b><br/>bank sync, AI jobs and chat"]
         Backup["<b>backup</b><br/>nightly pg_dump<br/>14 daily / 8 weekly"]
         DB[("<b>db</b><br/>PostgreSQL 18")]
         Tmp[["tmpfs<br/>CSV staging<br/>(memory only)"]]
@@ -352,7 +352,7 @@ pinned compile in a throwaway image stage, then `collectstatic` so WhiteNoise ca
 <details>
 <summary><b>Production deployment</b></summary>
 
-`docker compose up -d` starts five services: `db`, `app`, `simplefin-sync`, `ai-jobs`, and `backup`. The app binds
+`docker compose up -d` starts four services: `db`, `app`, `background`, and `backup`. The app binds
 to localhost only and is published to the tailnet with `tailscale serve`. See
 [docs/deployment.md](docs/deployment.md) for first deployment, health checks, backups, restore into a
 fresh volume, and upgrades.

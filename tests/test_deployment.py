@@ -133,6 +133,29 @@ def test_gunicorn_timeout_outlasts_the_agent_harness_chat_wait():
 
     assert default > settings.AGENT_HARNESS_SESSION_TIMEOUT_SECONDS
     assert "--worker-class gthread" in script
+    assert '--threads "${GUNICORN_THREADS:-4}"' in script
+    assert "--preload" in script
+
+
+def test_wsgi_preload_opens_no_database_connection_before_fork():
+    import subprocess
+    import sys
+
+    # Run in a fresh interpreter: this pytest process has already set up Django.
+    result = subprocess.run(
+        [sys.executable, "-c", """
+from unittest.mock import patch
+from django.db.backends.base.base import BaseDatabaseWrapper
+with patch.object(BaseDatabaseWrapper, 'ensure_connection', side_effect=AssertionError('DB opened before fork')):
+    import financial_planner.wsgi
+from django.db import connections
+assert all(conn.connection is None for conn in connections.all())
+"""],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_compose_stages_csv_uploads_on_a_memory_backed_mount():
@@ -148,10 +171,8 @@ def test_compose_stages_csv_uploads_on_a_memory_backed_mount():
     assert "FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:?FIELD_ENCRYPTION_KEY must be set}" in compose
     assert 'TRUST_PROXY_FORWARDED_FOR: "true"' in compose
     assert "SIMPLEFIN_SYNC_CRON: ${SIMPLEFIN_SYNC_CRON:-30 6 * * *}" in compose
-    assert "simplefin-sync:" in compose
-    assert 'entrypoint: ["/app/scripts/run-simplefin-sync.sh"]' in compose
-    assert "ai-jobs:" in compose
-    assert 'entrypoint: ["/app/scripts/run-ai-jobs.sh"]' in compose
+    assert "background:" in compose
+    assert 'entrypoint: ["/app/scripts/run-background.sh"]' in compose
     assert "AI_LOCAL_QUIET_WINDOW: ${AI_LOCAL_QUIET_WINDOW:-22:00-06:00}" in compose
     assert "tmpfs:" in compose
     assert "- /run/csv-staging:size=128m,mode=1777" in compose
@@ -185,8 +206,8 @@ def test_backup_container_mounts_only_the_rclone_config_file():
 def test_app_and_simplefin_mount_backup_health_not_the_dump_directory():
     compose = (Path(__file__).resolve().parent.parent / "compose.yml").read_text()
     app = compose.split("  app:", 1)[1].split("\n  backup:", 1)[0]
-    scheduler = compose.split("  simplefin-sync:", 1)[1].split("\n  ai-jobs:", 1)[0]
-    backup = compose.split("  backup:", 1)[1].split("\n  simplefin-sync:", 1)[0]
+    scheduler = compose.split("  background:", 1)[1].split("\nvolumes:", 1)[0]
+    backup = compose.split("  backup:", 1)[1].split("\n  background:", 1)[0]
 
     for block in (app, scheduler):
         assert "BACKUP_STATUS_PATH: /backup-health/status" in block
@@ -205,7 +226,7 @@ def test_dockerfile_builds_css_with_a_pinned_checksum_and_collectstatic():
     assert "FROM debian:bookworm-slim AS css" in dockerfile
     assert "sha256sum -c" in dockerfile
     assert "collectstatic --noinput" in dockerfile
-    assert "run-ai-jobs.sh" in dockerfile
+    assert "run-background.sh" in dockerfile
     assert "--ignore src" in dockerfile
     assert "--ignore vendor" not in dockerfile
     assert "tailwindcss" in dockerfile
@@ -219,7 +240,7 @@ def test_dockerfile_builds_css_with_a_pinned_checksum_and_collectstatic():
 
 def test_the_simplefin_scheduler_does_not_inherit_the_web_health_check():
     compose = (Path(__file__).resolve().parents[1] / "compose.yml").read_text(encoding="utf-8")
-    scheduler = compose.split("  simplefin-sync:", 1)[1].split("\nvolumes:", 1)[0]
+    scheduler = compose.split("  background:", 1)[1].split("\nvolumes:", 1)[0]
 
     # It runs no web server, so the image's HTTP probe would always fail.
     assert "healthcheck:\n      disable: true" in scheduler
@@ -235,7 +256,7 @@ def test_ai_jobs_container_receives_every_ai_job_setting():
     )
     assert names
     compose = (root / "compose.yml").read_text()
-    start = compose.index("  ai-jobs:")
+    start = compose.index("  background:")
     following = re.search(r"\n  [a-z][a-z0-9-]*:\n", compose[start + 1 :])
     block = compose[start : start + 1 + following.start()] if following else compose[start:]
     missing = [name for name in names if f"{name}:" not in block]
@@ -246,7 +267,7 @@ def test_background_workers_wait_for_the_migrated_app():
     import re
 
     compose = (Path(__file__).resolve().parent.parent / "compose.yml").read_text()
-    for service in ("simplefin-sync", "ai-jobs"):
+    for service in ("background",):
         start = compose.index(f"  {service}:\n")
         following = re.search(r"\n  [a-z][a-z0-9-]*:\n", compose[start + 1 :])
         block = compose[start : start + 1 + following.start()] if following else compose[start:]

@@ -1,4 +1,4 @@
-"""Chat lane: answers pending chat turns in the ai-jobs container, never in a web request.
+"""Chat lane: answers pending chat turns in the background container, never in a web request.
 
 Batch jobs (ai_jobs.py) poll every AI_JOB_POLL_SECONDS, honour the local-model quiet
 window and back off between attempts; a single batch job can also hold the job loop for

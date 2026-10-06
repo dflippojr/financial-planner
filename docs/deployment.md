@@ -116,7 +116,7 @@ Google sign-in stays off until both `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET
 ```powershell
 Invoke-WebRequest https://BASEMENT-PC.MAGICDNS-NAME/health/
 docker compose --env-file $Config ps
-docker compose --env-file $Config logs --tail 50 app backup simplefin-sync db
+docker compose --env-file $Config logs --tail 50 app backup background db
 ```
 
 The container health check (`python -m financial_planner.healthcheck`) probes the app on loopback using the first concrete entry of `DJANGO_ALLOWED_HOSTS` as its `Host` header, because Django rejects any host that is not allowed. Put the MagicDNS name first and do not start the list with `*`; otherwise the container can be reported unhealthy while the app works.
@@ -135,7 +135,7 @@ That applies the same shared-account exit rules as leaving. It prints a short co
 
 ## Backups
 
-The backup container runs `pg_dump` in PostgreSQL custom format every night at 2:00 AM in `TZ` (default `America/New_York`). A Sunday dump is also copied into `weekly/`. A dump is published atomically only after `pg_restore --list` verifies it. The same run then archives `$RECEIPTS_DIR` as `financial_planner_TIMESTAMP.receipts.tar.gz` next to that dump, with the same 14 nightly and 8 weekly copies. Receipt deletes only drop the database row; files stay on disk for about two days, so a file removed from the dump between those steps is still present for the archive. Backups keep those files until they rotate out. Pruning keeps the newest 14 files of each kind in `nightly/` and 8 in `weekly/`. Each run writes `$BACKUP_DIR/health/status` with the last success time, dump name, size, table count, last error, and the weekly restore check result. The app and SimpleFIN scheduler mount only `$BACKUP_DIR/health` read-only and raise an in-app alert to operators if no dump has succeeded in 26 hours or the last run failed, including an off-site upload failure or a failed or overdue restore check.
+The backup container runs `pg_dump` in PostgreSQL custom format every night at 2:00 AM in `TZ` (default `America/New_York`). A Sunday dump is also copied into `weekly/`. A dump is published atomically only after `pg_restore --list` verifies it. The same run then archives `$RECEIPTS_DIR` as `financial_planner_TIMESTAMP.receipts.tar.gz` next to that dump, with the same 14 nightly and 8 weekly copies. Receipt deletes only drop the database row; files stay on disk for about two days, so a file removed from the dump between those steps is still present for the archive. Backups keep those files until they rotate out. Pruning keeps the newest 14 files of each kind in `nightly/` and 8 in `weekly/`. Each run writes `$BACKUP_DIR/health/status` with the last success time, dump name, size, table count, last error, and the weekly restore check result. The app and background container mount only `$BACKUP_DIR/health` read-only and raise an in-app alert to operators if no dump has succeeded in 26 hours or the last run failed, including an off-site upload failure or a failed or overdue restore check.
 
 Set `OPERATOR_USERNAMES` in `production.env` to a comma-separated list of member usernames. If it is empty, the earliest-created member is the operator. Operators see last local and off-site success times on Settings → Data. Other members do not. Alerts name no file contents and fire at most once per local calendar day until a run succeeds.
 
@@ -196,7 +196,7 @@ Copy the decrypted dump into `E:\financial-planner-backups\nightly\` (or pass th
    ```powershell
    $Config = 'D:\financial-planner-config\production.env'
    $Dump = 'financial_planner_YYYYMMDDTHHMMSSZ.dump'
-   docker compose --env-file $Config stop app backup simplefin-sync db
+   docker compose --env-file $Config stop app backup background db
    ```
 
 2. In `production.env`, change `POSTGRES_VOLUME_NAME` to a new name such as `financial-planner-postgres-data-restored-YYYYMMDD`. Change `RECEIPTS_VOLUME_NAME` to a matching new receipts volume such as `financial-planner-receipts-restored-YYYYMMDD`. Do not delete or reuse the old volumes.
@@ -206,7 +206,7 @@ Copy the decrypted dump into `E:\financial-planner-backups\nightly\` (or pass th
    ```powershell
    docker compose --env-file $Config up -d db
    docker compose --env-file $Config run --rm backup /opt/financial-planner/restore.sh "/backups/nightly/$Dump"
-   docker compose --env-file $Config up -d app backup simplefin-sync
+   docker compose --env-file $Config up -d app backup background
    docker compose --env-file $Config ps
    Invoke-WebRequest https://BASEMENT-PC.MAGICDNS-NAME/health/
    ```
@@ -215,18 +215,43 @@ Copy the decrypted dump into `E:\financial-planner-backups\nightly\` (or pass th
 
 ## Upgrades and migrations
 
+When deploying #249 for the first time, take the usual verified backup, then
+**while the old revision's Compose file is still checked out**, stop the old
+background services:
+
+```powershell
+docker compose --env-file $Config stop simplefin-sync ai-jobs
+```
+
+Check out the approved revision, build `app backup background`, and use
+`docker compose --env-file $Config up -d --remove-orphans` once. This removes
+the stopped `simplefin-sync` and `ai-jobs` containers and starts `background`.
+Do not run both generations of background services together. This PR adds no env variable,
+database migration, volume rename, or data conversion. Startup still applies
+any pending main migrations, including 0053 from #252 if not already deployed. The new
+container receives all existing AI, SimpleFIN, SMTP, timezone, receipt and backup
+health settings. Gunicorn adds `--preload` and retains two gthread workers,
+four threads per worker and the 660-second timeout. The app and background
+container limits are 1 GiB and 512 MiB respectively; PostgreSQL remains uncapped.
+
+The background runner imports Django once, then starts separate batch-job,
+chat and daily-pass threads. A stopped lane terminates the process, even if a
+chat executor is still waiting, so `restart: unless-stopped` restarts every lane.
+It reports Up rather than an HTTP health check and still waits for the migrated
+app to become healthy. Existing queued/stale-job and chat recovery rules apply.
+
 Review release notes and take a verified manual backup first. Then fetch the approved revision and run:
 
 ```powershell
-docker compose --env-file $Config build --pull app backup simplefin-sync ai-jobs
+docker compose --env-file $Config build --pull app backup background
 docker compose --env-file $Config up -d
 docker compose --env-file $Config ps
 Invoke-WebRequest https://BASEMENT-PC.MAGICDNS-NAME/health/
 ```
 
-Starting the new app applies all pending Django migrations before Gunicorn accepts traffic. `simplefin-sync` and `ai-jobs` wait for the app to report healthy, so they never run against a database that has not been migrated yet. After `up -d`, compare each running container's image with the newly built one (`docker inspect -f '{{.Image}}' <container>` against `docker image inspect -f '{{.Id}}' <image>`). If one still runs the old image, as `backup` has done, recreate it with `docker compose --env-file $Config up -d --force-recreate <service>`. If a migration or health check fails, inspect bounded logs with `docker compose --env-file $Config logs --tail 100 app db`; do not repeatedly restart or run migrations by hand. Restore the pre-upgrade dump into a fresh volume using the procedure above when database rollback is required.
+Starting the new app applies all pending Django migrations before Gunicorn accepts traffic. `background` waits for the app to report healthy, so it never runs against a database that has not been migrated yet. After `up -d`, compare each running container's image with the newly built one (`docker inspect -f '{{.Image}}' <container>` against `docker image inspect -f '{{.Id}}' <image>`). If one still runs the old image, as `backup` has done, recreate it with `docker compose --env-file $Config up -d --force-recreate <service>`. If a migration or health check fails, inspect bounded logs with `docker compose --env-file $Config logs --tail 100 app db`; do not repeatedly restart or run migrations by hand. Restore the pre-upgrade dump into a fresh volume using the procedure above when database rollback is required.
 
-The `Docker smoke test` workflow (`.github/workflows/docker-smoke.yml`) runs on pull requests that change packaging files (`Dockerfile`, `compose.yml`, `requirements.txt`, `scripts/`, `ops/`, `static/`, `templates/`) and on pushes to `main`, including Dependabot's. It builds the image, starts `db` and `app` from `compose.yml` with dummy values and a throwaway database, waits for the app to report healthy, and requests the sign-in page, which redirects to first-run setup on an empty database. It does not start the backup, SimpleFIN, or AI-job containers and never touches the tower.
+The `Docker smoke test` workflow (`.github/workflows/docker-smoke.yml`) runs on pull requests that change packaging files (`Dockerfile`, `compose.yml`, `requirements.txt`, `scripts/`, `ops/`, `static/`, `templates/`) and on pushes to `main`, including Dependabot's. It builds the image, starts `db` and `app` from `compose.yml` with dummy values and a throwaway database, waits for the app to report healthy, and requests the sign-in page, which redirects to first-run setup on an empty database. It does not start the backup or background containers and never touches the tower.
 
 A PostgreSQL major-version change cannot use these steps. Follow [PostgreSQL 16 to 18 upgrade](#postgresql-16-to-18-upgrade) instead.
 
@@ -253,13 +278,13 @@ From 18, the `postgres` image keeps its data in a versioned subdirectory, so `co
 3. Fetch the approved revision and build its images. Building does not change the running containers:
 
    ```powershell
-   docker compose --env-file $Config build --pull app backup simplefin-sync ai-jobs
+   docker compose --env-file $Config build --pull app backup background
    ```
 
 4. Stop the app and workers, leaving PostgreSQL 16 running. Then take the cut-over dump with the new backup image, and record row counts. `--no-deps` keeps compose from recreating `db` with the 18 image:
 
    ```powershell
-   docker compose --env-file $Config stop app simplefin-sync ai-jobs backup
+   docker compose --env-file $Config stop app background backup
    docker compose --env-file $Config run --rm -T --no-deps backup /opt/financial-planner/backup.sh
    docker compose --env-file $Config run --rm -T --no-deps backup /opt/financial-planner/row-counts.sh | Out-File -Encoding utf8 "$Work\row-counts-before.tsv"
    docker compose --env-file $Config stop db
@@ -313,6 +338,75 @@ Rollback points the stack back at the old volumes and runs the 16 image on them 
 
 While rolled back, pass both `-f` files on every compose command. A command without the override tries the 18 image on the 16 volume, which only restart-loops. That failed start leaves an empty `18` directory in the old volume, which PostgreSQL 16 ignores. To go back to the full revision that ran before the upgrade instead, check out the commit in `revision-before.txt`, rebuild the images, and run `up -d` without the override.
 
+## Stack memory measurement (#249, 2026-10-06)
+
+Measured on Docker Desktop 29.8.1 using the same `docker stats --no-stream`
+and `docker top <container> -o pid,rss,args` method as the issue. The baseline
+was main at `d74bb50` (after #252 and #253); the updated image preloads Gunicorn
+and runs one background process. Both used PostgreSQL 18 and two gthread workers with four
+threads and a 660-second timeout. These are throwaway-stack measurements,
+not a new measurement of the issue's 332.7 MiB production reference.
+
+The isolated `fp-test-249-base2` and `fp-test-249-final` projects used scratch
+checkouts, their own explicitly named PostgreSQL and receipt volumes, scratch
+backup directories, and
+`127.0.0.1:18249` and `127.0.0.1:18250`. **`-p` alone does not isolate this repository's volumes:**
+also override `POSTGRES_VOLUME_NAME`, `RECEIPTS_VOLUME_NAME`, `BACKUP_DIR` and
+`APP_PORT`. Never reuse production config or data for this exercise. Every
+throwaway project was removed with `docker compose -p fp-test-NAME --env-file
+test.env down -v` afterward.
+
+The expanded case was regenerated directly with `random.seed(42)` and
+`bulk_create`: 2 members, 1 household, 10 accounts, 36 months, 72,502 synthetic
+transactions (68,222 visible to the importing member), about 85% categorized,
+1,500 tagged, 12 budgets and 4 planned items. Both databases were seeded
+identically, removing each measured import's batch before the idle measurement.
+No real statement or provider schema was used.
+
+After each restart, the stack idled for at least five minutes on its normal
+schedule (including the regular health probes). The measured totals include
+every stack container:
+
+| Container | Before (MiB) | After (MiB) |
+| --- | ---: | ---: |
+| app | 153.50 | 126.40 |
+| ai-jobs | 55.54 | removed |
+| simplefin-sync | 50.45 | removed |
+| background | — | 56.84 |
+| db | 42.41 | 32.85 |
+| backup | 0.36 | 0.39 |
+| **Total** | **302.3** | **216.5** |
+
+That is an **85.8 MiB (28.4%)** reduction on the regenerated dataset, meeting
+the **250 MiB** idle target. PostgreSQL's cache varies between runs; the app
+and background processes alone save 76.3 MiB. The measured worker RSS values
+were approximately 97,300 KiB each before, versus 92,000 KiB each after, with
+the shared preload also resident in the master. RSS counts shared pages in
+each process; use the container stats for total memory rather than summing RSS.
+
+A 500-row generic CSV was staged in the app's tmpfs and committed through an
+actual HTTP request to Gunicorn, rather than executing the import in a separate
+`manage.py shell` process. Repeated `docker stats --no-stream` samples recorded
+an app peak of **730.3 MiB before and 686.3 MiB after**. Both imports added all
+500 rows. The updated app's cgroup `memory.peak` was **771.3 MiB**, including
+file cache that Docker's Linux stats subtract, with no OOM and a **1 GiB**
+limit. The sampled peak can miss a shorter spike, so the cgroup high-water
+mark informed the headroom decision. The suggested 512 MiB app limit was too
+small for this case.
+
+The merged background runner completed the scheduled SimpleFIN/alert pass,
+answered a chat turn against a synthetic harness, and resumed a stale running
+AI job's saved session after restart. The daily-pass cgroup peak was
+**285.6 MiB**, so its limit is **512 MiB**, rather than the suggested 256 MiB.
+For that daily-pass check, historical seed rows had historical `created_at`
+dates; the freshly imported 500 rows remained recent. PostgreSQL is uncapped.
+After a restart, `/health/` and `/sign-in/` returned 200, and `docker top`
+showed a preloaded master plus two workers, and one Python background process.
+
+Preloading and consolidation reduce idle overhead. Large requests can still
+grow a worker's retained heap; their transfer, totals and recurring-detection
+root causes remain separate performance work.
+
 ## Reviewing a dependency pull request
 
 Dependabot opens version and security update PRs. There is no auto-merge; the owner approves every merge. Keep exact pins in `requirements.txt`. Treat `django-allauth` upgrades as needing the Google sign-in tests as well as the rest of the suite.
@@ -344,7 +438,7 @@ Email notices are off per member by default. To offer them, set `SMTP_HOST`,
 `SMTP_TLS` (default true, STARTTLS) in the ignored `production.env`. Set
 `ALERT_EMAIL_BASE_URL` to the app's full HTTPS Tailscale origin without a trailing
 path (for example `https://planner.example.invalid`). Keep credentials out of Git.
-The app and SimpleFIN scheduler receive these settings through Compose.
+The app and background container receive these settings through Compose.
 
 With host, from address, or app origin unset, email controls are hidden and no
 notices are sent. Members opt in and choose their address under Settings > Alerts;

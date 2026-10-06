@@ -352,7 +352,7 @@ def test_the_grace_period_starts_when_an_old_receipt_is_deleted(tmp_path, settin
 
 def test_the_sync_container_can_sweep_receipts():
     compose = (Path(__file__).resolve().parent.parent / "compose.yml").read_text()
-    scheduler = compose.split("  simplefin-sync:", 1)[1].split("\n  ai-jobs:", 1)[0]
+    scheduler = compose.split("  background:", 1)[1].split("\nvolumes:", 1)[0]
 
     assert "RECEIPTS_DIR: /receipts" in scheduler
     assert "- receipts:/receipts" in scheduler
