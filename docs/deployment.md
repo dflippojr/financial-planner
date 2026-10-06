@@ -362,3 +362,14 @@ remain pending for a later pass. SMTP has a ten-second timeout.
 
 For development or tests, use Django's console or locmem email backend. Never
 point a test suite at a real SMTP server.
+
+## Transfer matching maintenance
+
+Routine edits, imports, undo and sync refresh only affected transfer candidates.
+To explicitly re-derive matching after maintenance, run `python manage.py
+rebuild_transfer_pairs --username <member>` in the app environment, or use
+`--all` for every member. This retains dismissed, undone and confirmed decisions
+and applies the same scoring and revalidation rules as normal refreshes. A full
+rebuild intentionally reads the selected member's complete visible active ledger;
+run it outside busy periods. Changing the household matching window also performs
+a full revalidation, since every historical candidate may change.

@@ -673,6 +673,8 @@ class Transaction(ArchivableModel):
     class Meta:
         indexes = [
             models.Index(fields=("account", "transaction_date"), name="txn_account_date_idx"),
+            models.Index(fields=("amount_minor", "transaction_date"),
+                         condition=Q(status="active"), name="txn_transfer_candidate_idx"),
             models.Index(fields=("account", "source_transaction_id"), name="txn_account_source_id_idx"),
         ]
         constraints = [

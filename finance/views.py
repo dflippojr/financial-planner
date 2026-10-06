@@ -203,6 +203,7 @@ from .category_services import (
     income_and_spending_totals,
     link_refund,
     refresh_transfer_pairs,
+    transfer_matching_key,
     rename_category,
     set_transfer_window_days,
     split_transaction,
@@ -794,12 +795,15 @@ def transaction_edit(request, transaction_id):
                     account=account,
                     status=Transaction.Status.ACTIVE,
                 )
+                previous_key = transfer_matching_key(financial_transaction)
                 try:
                     form.apply(financial_transaction, actor=person)
                 except ValidationError as exc:
                     form.add_error("amount", _first_message(exc, "The amount could not be saved."))
                     return _render_transaction_edit(request, financial_transaction, form=form)
-            _service_or_404(lambda: refresh_transfer_pairs(request.user))
+            _service_or_404(lambda: refresh_transfer_pairs(
+                request.user, transaction_ids=[financial_transaction.pk], previous_keys=[previous_key]
+            ))
             return redirect("transaction-list")
     else:
         form = TransactionCorrectionForm.for_transaction(financial_transaction)
@@ -1195,8 +1199,10 @@ def transfer_review(request):
         handler = actions.get(action)
         if handler is None:
             raise Http404
-        _service_or_404(lambda: handler(request.user, pair_id))
-        _service_or_404(lambda: refresh_transfer_pairs(request.user))
+        pair = _service_or_404(lambda: handler(request.user, pair_id))
+        _service_or_404(lambda: refresh_transfer_pairs(
+            request.user, transaction_ids=[pair.leg_a_id, pair.leg_b_id]
+        ))
         return redirect("transfer-review")
     visible = TransferPair.objects.visible_to(request.user).select_related(
         "leg_a",

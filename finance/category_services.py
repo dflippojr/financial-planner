@@ -1,4 +1,5 @@
 from collections import defaultdict
+from datetime import timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -318,16 +319,16 @@ def set_transfer_window_days(principal, days):
     return household
 
 
-def _refresh_household_transfer_pairs(person):
+def _refresh_household_transfer_pairs(person, transaction_ids):
     household = current_household(person)
     if household is None:
-        refresh_transfer_pairs(person, actor=person)
+        refresh_transfer_pairs(person, actor=person, transaction_ids=transaction_ids)
         return
     member_ids = Membership.objects.filter(household=household, ended_at__isnull=True).values_list(
         "person_id", flat=True
     )
     for member in Person.objects.filter(pk__in=list(member_ids)).order_by("pk"):
-        refresh_transfer_pairs(member, actor=person)
+        refresh_transfer_pairs(member, actor=person, transaction_ids=transaction_ids)
 
 
 def _accounts_share_a_viewer(account_a, account_b):
@@ -710,12 +711,84 @@ def revalidate_pairs_touching_import_batch(principal, batch_id):
     _revalidate_pairs_for_leg_ids(person, seed)
 
 
+def transfer_matching_key(txn):
+    """Fields needed to revisit the old candidates after an edit."""
+    return (txn.account_id, txn.transaction_date, txn.amount_minor)
+
+
+def _candidate_neighbors(person, keys, window):
+    # Bound SQL expression size even for large batches. No ledger-wide model
+    # construction: PostgreSQL can use the active amount/date index here.
+    keys = list(set(keys))
+    found = {}
+    for offset in range(0, len(keys), 100):
+        predicate = Q(pk__in=[])
+        for account_id, day, amount in keys[offset : offset + 100]:
+            if amount:
+                predicate |= Q(
+                    amount_minor=-amount,
+                    transaction_date__range=(day - timedelta(days=window), day + timedelta(days=window)),
+                ) & ~Q(account_id=account_id)
+        rows = (
+            Transaction.objects.visible_to(person)
+            .filter(predicate, status=Transaction.Status.ACTIVE)
+            .exclude(category_source=Transaction.CategorySource.SPLIT)
+            .select_related("account", "account__household", "category")
+        )
+        found.update((row.pk, row) for row in rows)
+    return found
+
+
+def _lock_affected_transactions(person, transaction_ids, previous_keys):
+    visible = Transaction.objects.visible_to(person)
+    affected = {
+        row.pk: row for row in visible.filter(pk__in=transaction_ids)
+        .select_related("account", "account__household", "category")
+    }
+    if not affected:
+        return []
+    household = current_household(person)
+    window = household.transfer_match_window_days if household else settings.TRANSFER_MATCH_WINDOW_DAYS
+    frontier = list(affected.values())
+    old_keys = previous_keys
+    while frontier or old_keys:
+        # Follow stored pairs as well as candidate edges. An edit can disconnect
+        # the old amount/date component, and settled pairs still occupy its legs.
+        rows = _pair_rows_touching([row.pk for row in frontier])
+        partner_ids = {pk for _, left, right in rows for pk in (left, right)} - affected.keys()
+        neighbors = {
+            row.pk: row for row in Transaction.objects.filter(pk__in=partner_ids)
+            .select_related("account", "account__household", "category")
+        }
+        keys = [transfer_matching_key(row) for row in frontier] + list(old_keys)
+        neighbors.update(_candidate_neighbors(person, keys, window))
+        frontier = [row for pk, row in neighbors.items() if pk not in affected]
+        affected.update((row.pk, row) for row in frontier)
+        old_keys = ()
+    account_ids = sorted({row.account_id for row in affected.values()})
+    list(Account.objects.select_for_update().filter(pk__in=account_ids).order_by("pk"))
+    return list(
+        Transaction.objects.select_for_update(of=("self",))
+        .filter(pk__in=sorted(affected))
+        .select_related("account", "account__household", "category")
+        .order_by("pk")
+    )
+
+
 @transaction.atomic
-def refresh_transfer_pairs(principal, *, actor=None):
+def refresh_transfer_pairs(principal, *, actor=None, transaction_ids=None, previous_keys=()):
+    """Refresh affected candidate components; omit ids for a maintenance rebuild."""
+    if transaction_ids is not None:
+        transaction_ids = list(transaction_ids)
+        if not transaction_ids:
+            return []
     person = _person_for(principal)
     actor = person if actor is None else actor
     lock_actor_household(person)
-    locked = _lock_visible_transactions(person)
+    locked = (
+        _lock_visible_transactions(person) if transaction_ids is None
+        else _lock_affected_transactions(person, transaction_ids, previous_keys)
+    )
     if not locked:
         return []
     tx_ids = [item.pk for item in locked]
@@ -723,13 +796,16 @@ def refresh_transfer_pairs(principal, *, actor=None):
         (pair.leg_a_id, pair.leg_b_id): pair
         for pair in TransferPair.objects.select_for_update(of=("self",)).filter(
             Q(leg_a_id__in=tx_ids) | Q(leg_b_id__in=tx_ids)
-        )
+        ).order_by("pk")
     }
     locked_by_id = {item.pk: item for item in locked}
     _revalidate_marked_pairs(existing, locked_by_id, actor)
     occupied = _occupied_transaction_ids(existing.values())
     created = []
-    scored_pairs = _score_pairs(locked)
+    visible_ids = set(Transaction.objects.visible_to(person).filter(
+        pk__in=tx_ids, status=Transaction.Status.ACTIVE
+    ).values_list("pk", flat=True))
+    scored_pairs = _score_pairs([row for row in locked if row.pk in visible_ids])
     scored_pairs.sort(
         key=lambda item: (
             0 if item["confidence"] == TransferPair.Confidence.HIGH else 1,
@@ -986,7 +1062,7 @@ def split_transaction(principal, txn_id, parts, refund_assignments=None):
         previous_label,
         new_label,
     )
-    _refresh_household_transfer_pairs(person)
+    _refresh_household_transfer_pairs(person, [financial_transaction.pk])
     from finance.alert_services import schedule_after_category_change
 
     schedule_after_category_change()
@@ -1044,7 +1120,7 @@ def unsplit_transaction(principal, txn_id, category_id):
             _history_label(previous),
             _history_label(category),
         )
-    _refresh_household_transfer_pairs(person)
+    _refresh_household_transfer_pairs(person, [financial_transaction.pk])
     from finance.alert_services import schedule_after_category_change
 
     schedule_after_category_change()
