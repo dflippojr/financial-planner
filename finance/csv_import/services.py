@@ -167,7 +167,7 @@ def categorize_imported_batch(principal, batch):
     """Match transfers, then apply enabled rules to a just-committed batch.
 
     Runs after the import commits: refreshing transfers locks affected
-    account in id order, which must not happen while the import still holds
+    accounts in id order, which must not happen while the import still holds
     its own account lock.
     """
     from finance.category_services import refresh_transfer_pairs

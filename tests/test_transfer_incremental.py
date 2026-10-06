@@ -52,12 +52,18 @@ def test_incremental_matches_full_after_imports_edits_archives_and_settlements()
         rows.append(make_transaction(person, random.choice(accounts),
             amount_minor=random.choice([-1234, 1234, -2000, 2000, -9000, 9000]),
             transaction_date=date(2026, 1, 1) + timedelta(days=random.randrange(40))))
+    for amount in (71111, 82222):
+        rows.extend([make_transaction(person, accounts[0], amount_minor=-amount),
+                     make_transaction(person, accounts[2], amount_minor=amount)])
     refresh_transfer_pairs(person)
     # Exercise each settled state and invalidation of confirmed/auto-marked legs.
     for status in ('confirm', 'dismiss', 'undo'):
         pair = TransferPair.objects.filter(status='suggested' if status != 'undo' else 'auto_marked').first()
-        if pair:
-            {'confirm': confirm_transfer_pair, 'dismiss': dismiss_transfer_pair, 'undo': undo_transfer_pair}[status](person, pair.pk)
+        assert pair is not None
+        {'confirm': confirm_transfer_pair, 'dismiss': dismiss_transfer_pair, 'undo': undo_transfer_pair}[status](person, pair.pk)
+    assert set(TransferPair.objects.values_list("status", flat=True)) >= {
+        "suggested", "auto_marked", "confirmed", "dismissed", "undone"
+    }
     for i in range(30):
         if i % 3 == 0:
             row = make_transaction(person, random.choice(accounts), amount_minor=random.choice([-1234, 1234, -2000, 2000]),
@@ -114,4 +120,53 @@ def test_incremental_does_not_materialize_unrelated_ledger():
     with patch.object(category_services, '_score_pairs', wraps=original) as score:
         refresh_transfer_pairs(p, transaction_ids=[seed.pk])
     assert {row.pk for row in score.call_args.args[0]} == {seed.pk, mate.pk}
+    assert TransferPair.objects.get().status == 'auto_marked'
+
+
+@pytest.mark.django_db
+def test_maintenance_command_requires_explicit_scope_and_rebuilds():
+    from django.core.management import call_command
+    from django.core.management.base import CommandError
+    p = make_person('maintenance'); make_household(p)
+    a, b = make_account(p), make_account(p)
+    make_transaction(p, a, amount_minor=-1000)
+    make_transaction(p, b, amount_minor=1000)
+    for args in ((), ('--username', 'maintenance', '--all'), ('--username', 'missing')):
+        with pytest.raises(CommandError):
+            call_command('rebuild_transfer_pairs', *args)
+    call_command('rebuild_transfer_pairs', '--username', 'maintenance')
+    assert TransferPair.objects.get().status == 'auto_marked'
+    call_command('rebuild_transfer_pairs', '--all')
+    assert TransferPair.objects.count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_overlapping_incremental_refreshes_lock_in_order_and_do_not_duplicate():
+    if connection.vendor != 'postgresql':
+        pytest.skip('row locking requires PostgreSQL')
+    import threading
+    from django.db import connections
+    p = make_person('concurrent'); make_household(p)
+    a, b = make_account(p), make_account(p)
+    left = make_transaction(p, a, amount_minor=-1000)
+    right = make_transaction(p, b, amount_minor=1000)
+    barrier = threading.Barrier(2)
+    errors = []
+
+    def run(ids):
+        try:
+            barrier.wait(timeout=10)
+            refresh_transfer_pairs(p, transaction_ids=ids)
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            connections.close_all()
+
+    workers = [threading.Thread(target=run, args=([row.pk],)) for row in (left, right)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=20)
+    assert not any(worker.is_alive() for worker in workers)
+    assert errors == []
     assert TransferPair.objects.get().status == 'auto_marked'
