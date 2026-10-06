@@ -30,3 +30,17 @@ def test_exact_path_allow_entry():
 
 def test_current_repository_passes():
     assert guard.offending_paths(guard.tracked_paths()) == []
+
+
+def test_main_reports_offending_paths(monkeypatch, capsys):
+    monkeypatch.setattr(guard, "tracked_paths", lambda: ["imports/synthetic.csv", "README.md"])
+    assert guard.main() == 1
+    output = capsys.readouterr().out
+    assert "imports/synthetic.csv" in output
+    assert "README.md" not in output
+
+
+def test_main_passes_on_clean_tree(monkeypatch, capsys):
+    monkeypatch.setattr(guard, "tracked_paths", lambda: ["tests/fixtures/synthetic_card.qfx"])
+    assert guard.main() == 0
+    assert capsys.readouterr().out == ""
