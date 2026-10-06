@@ -1,0 +1,74 @@
+name: Docker smoke test
+
+# Builds the production image and starts the app container against a throwaway
+# PostgreSQL, so a broken Dockerfile, CSS pin, missing static asset, or bad
+# start script fails here instead of during a deploy. Uses compose.yml with an
+# env file of dummy values: no secrets, no real paths, nothing is pushed.
+# Backup, SimpleFIN, and AI-job containers are not started.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - Dockerfile
+      - compose.yml
+      - requirements.txt
+      - scripts/**
+      - ops/**
+      - static/**
+      - templates/**
+      - .github/workflows/docker-smoke.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-smoke-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 10
+    env:
+      COMPOSE_PROJECT_NAME: fp-smoke
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Write dummy environment
+        run: |
+          mkdir -p "$RUNNER_TEMP/backups"
+          cat > "$RUNNER_TEMP/smoke.env" <<ENV
+          POSTGRES_PASSWORD=smoke-only-not-a-secret
+          DJANGO_SECRET_KEY=smoke-only-not-a-secret
+          DJANGO_ALLOWED_HOSTS=smoke.example.test
+          DJANGO_CSRF_TRUSTED_ORIGINS=https://smoke.example.test
+          FIELD_ENCRYPTION_KEY=dGVzdC1maWVsZC1lbmNyeXB0aW9uLWtleS0zMmJ5dGU=
+          BACKUP_DIR=$RUNNER_TEMP/backups
+          ENV
+
+      - name: Build image and wait for the app to report healthy
+        run: |
+          docker compose --env-file "$RUNNER_TEMP/smoke.env" build app
+          docker compose --env-file "$RUNNER_TEMP/smoke.env" up -d --wait --wait-timeout 240 db app
+
+      - name: Request the sign-in or first-run page
+        run: |
+          # The Host and X-Forwarded-Proto headers stand in for Tailscale Serve.
+          # An empty database redirects /sign-in/ to the first-run /setup/ page.
+          status=$(curl -sL -o /dev/null -w '%{http_code}' \
+            -H 'Host: smoke.example.test' -H 'X-Forwarded-Proto: https' \
+            http://127.0.0.1:8000/sign-in/)
+          echo "GET /sign-in/ -> $status"
+          test "$status" = 200
+
+      - name: Show container logs
+        if: failure()
+        run: docker compose --env-file "$RUNNER_TEMP/smoke.env" logs --tail 200 db app
+
+      - name: Tear down
+        if: always()
+        run: docker compose --env-file "$RUNNER_TEMP/smoke.env" down --volumes --remove-orphans
