@@ -93,12 +93,33 @@
 {% endif %}
 {% if refund_link %}
 <div role="status" class="alert alert-info mb-8">This refund is linked to a purchase on {{ refund_link.original.transaction_date }} and inherits that category.</div>
-{% else %}
+{% elif can_link_refund %}
+<section class="mb-8 max-w-lg">
+<h2 class="mb-3 text-xl font-semibold">Link a refund</h2>
+<form method="get" action="{% url 'transaction-edit' transaction.pk %}" class="mb-4">
+  {% include "finance/_form_fields.html" with form=refund_search_form %}
+  <button type="submit" class="btn btn-outline">Search purchases</button>
+</form>
+{% if refund_search_form.is_bound and 'refund_search' in request.GET %}
+<p class="mb-3 text-sm">Up to 25 matching purchases, newest first. Refine the search to find an older purchase.</p>
+<ul class="mb-4 space-y-2">
+  {% for purchase in refund_results %}
+  <li><a class="link" href="{% url 'transaction-edit' transaction.pk %}?original={{ purchase.pk }}">{{ purchase.transaction_date }} · {{ purchase.description }} · {{ purchase.amount_display }} {{ purchase.currency }} · {{ purchase.account.name }}</a></li>
+  {% empty %}<li>No matching purchases.</li>{% endfor %}
+</ul>
+{% endif %}
+{% if selected_original %}
+<p class="mb-3">Selected purchase: {{ selected_original.transaction_date }} · {{ selected_original.description }} · {{ selected_original.amount_display }} {{ selected_original.currency }} · {{ selected_original.account.name }}</p>
+{% endif %}
+{% if selected_original or refund_form.is_bound %}
 <form method="post" action="{% url 'transaction-link-refund' transaction.pk %}" class="mb-8 max-w-lg">
   {% csrf_token %}
+  {% if refund_form.original.errors %}<p role="alert" class="text-error">{{ refund_form.original.errors.0 }}</p>{% endif %}
   {% include "finance/_form_fields.html" with form=refund_form %}
   <button type="submit" class="btn btn-primary">Link refund</button>
 </form>
+{% endif %}
+</section>
 {% endif %}
 {% if correction_history %}
 <h2 class="mb-3 text-xl font-semibold">Correction history</h2>

@@ -792,8 +792,38 @@ class TransactionCategoryForm(forms.Form):
         self.fields["category"].queryset = assignable_categories(principal)
 
 
+class RefundSearchForm(forms.Form):
+    refund_search = forms.CharField(required=False, max_length=255, label="Purchase description")
+    refund_amount = forms.DecimalField(
+        required=False, decimal_places=2, max_digits=17, min_value=Decimal("0.01"), label="Purchase amount"
+    )
+    refund_same_account = forms.BooleanField(required=False, label="Only this account")
+
+    def candidates(self, principal, refund):
+        if not self.is_valid():
+            return Transaction.objects.none()
+        candidates = refund_candidates(principal, refund)
+        text = self.cleaned_data["refund_search"]
+        if text:
+            candidates = candidates.filter(description__icontains=text)
+        amount = self.cleaned_data["refund_amount"]
+        if amount is not None:
+            candidates = candidates.filter(amount_minor=-int(amount * 100))
+        if self.cleaned_data["refund_same_account"]:
+            candidates = candidates.filter(account_id=refund.account_id)
+        return candidates.select_related("account").order_by("-transaction_date", "-pk")[:25]
+
+
+def refund_candidates(principal, refund):
+    return Transaction.objects.visible_to(principal).filter(
+        status=Transaction.Status.ACTIVE, amount_minor__lt=0, kind=refund.kind
+    )
+
+
 class RefundLinkForm(forms.Form):
-    original = forms.ModelChoiceField(queryset=Transaction.objects.none(), required=True, label="Original purchase")
+    original = forms.ModelChoiceField(
+        queryset=Transaction.objects.none(), required=True, label="Original purchase", widget=forms.HiddenInput
+    )
     original_part = forms.ModelChoiceField(
         queryset=TransactionSplit.objects.none(),
         required=False,
@@ -803,15 +833,22 @@ class RefundLinkForm(forms.Form):
     def __init__(self, *args, principal=None, refund=None, **kwargs):
         super().__init__(*args, **kwargs)
         self._refund = refund
-        visible = Transaction.objects.visible_to(principal).filter(status=Transaction.Status.ACTIVE)
-        if refund is not None:
-            visible = visible.exclude(pk=refund.pk)
-        self.fields["original"].queryset = visible.order_by("-transaction_date", "-pk")
+        from .category_services import REFUND_LINK_RULE, SPLIT_PART_MISMATCH
+
+        visible = refund_candidates(principal, refund) if refund is not None else Transaction.objects.none()
+        selected_id = self.data.get("original") if self.is_bound else self.initial.get("original")
+        try:
+            selected_id = int(selected_id)
+        except (TypeError, ValueError):
+            selected_id = None
+        self.fields["original"].queryset = visible.filter(pk=selected_id)
+        self.fields["original"].error_messages["invalid_choice"] = REFUND_LINK_RULE
         self.fields["original_part"].queryset = (
-            TransactionSplit.objects.filter(transaction__in=visible)
+            TransactionSplit.objects.filter(transaction__in=self.fields["original"].queryset)
             .select_related("category", "transaction")
-            .order_by("transaction_id", "position")
+            .order_by("position")
         )
+        self.fields["original_part"].error_messages["invalid_choice"] = SPLIT_PART_MISMATCH
 
     def clean(self):
         cleaned = super().clean()
