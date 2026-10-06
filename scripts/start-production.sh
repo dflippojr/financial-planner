@@ -13,6 +13,7 @@ python manage.py migrate --noinput
 # 30 s timeout the worker was killed mid-answer, so the timeout must stay above
 # that wait. Threads keep one long chat from blocking every other page.
 exec gunicorn financial_planner.wsgi:application \
+  --preload \
   --bind 0.0.0.0:8000 \
   --workers "${GUNICORN_WORKERS:-2}" \
   --worker-class gthread \

@@ -25,6 +25,8 @@ services:
   app:
     build: .
     restart: unless-stopped
+    # A 500-row import into the 72k synthetic ledger peaks above 512 MiB.
+    mem_limit: 1g
     environment:
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?DJANGO_SECRET_KEY must be set}
       DJANGO_DEBUG: "false"
@@ -132,62 +134,11 @@ services:
       - receipts:/receipts
     command: ["/opt/financial-planner/run-backups.sh"]
 
-  simplefin-sync:
+  background:
     build: .
     restart: unless-stopped
-    environment:
-      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?DJANGO_SECRET_KEY must be set}
-      DJANGO_DEBUG: "false"
-      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:?DJANGO_ALLOWED_HOSTS must be set}
-      DJANGO_CSRF_TRUSTED_ORIGINS: ${DJANGO_CSRF_TRUSTED_ORIGINS:?DJANGO_CSRF_TRUSTED_ORIGINS must be set}
-      DJANGO_SECURE_COOKIES: "true"
-      DJANGO_SECURE_SSL_REDIRECT: "true"
-      FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:?FIELD_ENCRYPTION_KEY must be set}
-      SMTP_HOST: ${SMTP_HOST:-}
-      SMTP_PORT: ${SMTP_PORT:-587}
-      SMTP_USER: ${SMTP_USER:-}
-      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
-      SMTP_FROM: ${SMTP_FROM:-}
-      SMTP_TLS: ${SMTP_TLS:-true}
-      ALERT_EMAIL_BASE_URL: ${ALERT_EMAIL_BASE_URL:-}
-      SIMPLEFIN_SYNC_CRON: ${SIMPLEFIN_SYNC_CRON:-30 6 * * *}
-      TZ: ${TZ:-America/New_York}
-      POSTGRES_DB: ${POSTGRES_DB:-financial_planner}
-      POSTGRES_USER: ${POSTGRES_USER:-financial_planner}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
-      POSTGRES_HOST: db
-      # The daily pass sweeps orphaned receipt files, so it needs the receipts volume.
-      RECEIPTS_DIR: /receipts
-      POSTGRES_PORT: "5432"
-      BACKUP_STATUS_PATH: /backup-health/status
-      OPERATOR_USERNAMES: ${OPERATOR_USERNAMES:-}
-    depends_on:
-      db:
-        condition: service_healthy
-      # The app applies migrations before it reports healthy; starting earlier
-      # can query tables a new release has not created yet.
-      app:
-        condition: service_healthy
-    volumes:
-      - receipts:/receipts
-      - type: bind
-        source: ${BACKUP_DIR:?BACKUP_DIR must be set}/health
-        target: /backup-health
-        read_only: true
-        # The backup script creates this directory on its first run; without
-        # this, an upgrade would refuse to start the app until then.
-        bind:
-          create_host_path: true
-    entrypoint: ["/app/scripts/run-simplefin-sync.sh"]
-    # The image's HTTP health check probes Gunicorn, which this container does
-    # not run. The scheduler loop is the main process, so the container stops
-    # (and restarts) if it dies; like the backup scheduler, it reports only Up.
-    healthcheck:
-      disable: true
-
-  ai-jobs:
-    build: .
-    restart: unless-stopped
+    # One Django process, with independent job, chat and daily-pass threads.
+    mem_limit: 256m
     environment:
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?DJANGO_SECRET_KEY must be set}
       DJANGO_DEBUG: "false"
@@ -219,6 +170,17 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       POSTGRES_HOST: db
       POSTGRES_PORT: "5432"
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_TLS: ${SMTP_TLS:-true}
+      ALERT_EMAIL_BASE_URL: ${ALERT_EMAIL_BASE_URL:-}
+      SIMPLEFIN_SYNC_CRON: ${SIMPLEFIN_SYNC_CRON:-30 6 * * *}
+      RECEIPTS_DIR: /receipts
+      BACKUP_STATUS_PATH: /backup-health/status
+      OPERATOR_USERNAMES: ${OPERATOR_USERNAMES:-}
     depends_on:
       db:
         condition: service_healthy
@@ -228,7 +190,18 @@ services:
         condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    entrypoint: ["/app/scripts/run-ai-jobs.sh"]
+    volumes:
+      - receipts:/receipts
+      - type: bind
+        source: ${BACKUP_DIR:?BACKUP_DIR must be set}/health
+        target: /backup-health
+        read_only: true
+        # The backup script creates this directory on its first run; without
+        # this, an upgrade would refuse to start the app until then.
+        bind:
+          create_host_path: true
+    entrypoint: ["/app/scripts/run-background.sh"]
+    # No HTTP server; the process exits if any lane stops so Docker restarts it.
     healthcheck:
       disable: true
 

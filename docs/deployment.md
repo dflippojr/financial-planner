@@ -116,7 +116,7 @@ Google sign-in stays off until both `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET
 ```powershell
 Invoke-WebRequest https://BASEMENT-PC.MAGICDNS-NAME/health/
 docker compose --env-file $Config ps
-docker compose --env-file $Config logs --tail 50 app backup simplefin-sync db
+docker compose --env-file $Config logs --tail 50 app backup background db
 ```
 
 The container health check (`python -m financial_planner.healthcheck`) probes the app on loopback using the first concrete entry of `DJANGO_ALLOWED_HOSTS` as its `Host` header, because Django rejects any host that is not allowed. Put the MagicDNS name first and do not start the list with `*`; otherwise the container can be reported unhealthy while the app works.
@@ -196,7 +196,7 @@ Copy the decrypted dump into `E:\financial-planner-backups\nightly\` (or pass th
    ```powershell
    $Config = 'D:\financial-planner-config\production.env'
    $Dump = 'financial_planner_YYYYMMDDTHHMMSSZ.dump'
-   docker compose --env-file $Config stop app backup simplefin-sync db
+   docker compose --env-file $Config stop app backup background db
    ```
 
 2. In `production.env`, change `POSTGRES_VOLUME_NAME` to a new name such as `financial-planner-postgres-data-restored-YYYYMMDD`. Change `RECEIPTS_VOLUME_NAME` to a matching new receipts volume such as `financial-planner-receipts-restored-YYYYMMDD`. Do not delete or reuse the old volumes.
@@ -206,7 +206,7 @@ Copy the decrypted dump into `E:\financial-planner-backups\nightly\` (or pass th
    ```powershell
    docker compose --env-file $Config up -d db
    docker compose --env-file $Config run --rm backup /opt/financial-planner/restore.sh "/backups/nightly/$Dump"
-   docker compose --env-file $Config up -d app backup simplefin-sync
+   docker compose --env-file $Config up -d app backup background
    docker compose --env-file $Config ps
    Invoke-WebRequest https://BASEMENT-PC.MAGICDNS-NAME/health/
    ```
@@ -218,15 +218,15 @@ Copy the decrypted dump into `E:\financial-planner-backups\nightly\` (or pass th
 Review release notes and take a verified manual backup first. Then fetch the approved revision and run:
 
 ```powershell
-docker compose --env-file $Config build --pull app backup simplefin-sync ai-jobs
+docker compose --env-file $Config build --pull app backup background
 docker compose --env-file $Config up -d
 docker compose --env-file $Config ps
 Invoke-WebRequest https://BASEMENT-PC.MAGICDNS-NAME/health/
 ```
 
-Starting the new app applies all pending Django migrations before Gunicorn accepts traffic. `simplefin-sync` and `ai-jobs` wait for the app to report healthy, so they never run against a database that has not been migrated yet. After `up -d`, compare each running container's image with the newly built one (`docker inspect -f '{{.Image}}' <container>` against `docker image inspect -f '{{.Id}}' <image>`). If one still runs the old image, as `backup` has done, recreate it with `docker compose --env-file $Config up -d --force-recreate <service>`. If a migration or health check fails, inspect bounded logs with `docker compose --env-file $Config logs --tail 100 app db`; do not repeatedly restart or run migrations by hand. Restore the pre-upgrade dump into a fresh volume using the procedure above when database rollback is required.
+Starting the new app applies all pending Django migrations before Gunicorn accepts traffic. `background` waits for the app to report healthy, so it never runs against a database that has not been migrated yet. After `up -d`, compare each running container's image with the newly built one (`docker inspect -f '{{.Image}}' <container>` against `docker image inspect -f '{{.Id}}' <image>`). If one still runs the old image, as `backup` has done, recreate it with `docker compose --env-file $Config up -d --force-recreate <service>`. If a migration or health check fails, inspect bounded logs with `docker compose --env-file $Config logs --tail 100 app db`; do not repeatedly restart or run migrations by hand. Restore the pre-upgrade dump into a fresh volume using the procedure above when database rollback is required.
 
-The `Docker smoke test` workflow (`.github/workflows/docker-smoke.yml`) runs on pull requests that change packaging files (`Dockerfile`, `compose.yml`, `requirements.txt`, `scripts/`, `ops/`, `static/`, `templates/`) and on pushes to `main`, including Dependabot's. It builds the image, starts `db` and `app` from `compose.yml` with dummy values and a throwaway database, waits for the app to report healthy, and requests the sign-in page, which redirects to first-run setup on an empty database. It does not start the backup, SimpleFIN, or AI-job containers and never touches the tower.
+The `Docker smoke test` workflow (`.github/workflows/docker-smoke.yml`) runs on pull requests that change packaging files (`Dockerfile`, `compose.yml`, `requirements.txt`, `scripts/`, `ops/`, `static/`, `templates/`) and on pushes to `main`, including Dependabot's. It builds the image, starts `db` and `app` from `compose.yml` with dummy values and a throwaway database, waits for the app to report healthy, and requests the sign-in page, which redirects to first-run setup on an empty database. It does not start the backup or background containers and never touches the tower.
 
 A PostgreSQL major-version change cannot use these steps. Follow [PostgreSQL 16 to 18 upgrade](#postgresql-16-to-18-upgrade) instead.
 
@@ -253,13 +253,13 @@ From 18, the `postgres` image keeps its data in a versioned subdirectory, so `co
 3. Fetch the approved revision and build its images. Building does not change the running containers:
 
    ```powershell
-   docker compose --env-file $Config build --pull app backup simplefin-sync ai-jobs
+   docker compose --env-file $Config build --pull app backup background
    ```
 
 4. Stop the app and workers, leaving PostgreSQL 16 running. Then take the cut-over dump with the new backup image, and record row counts. `--no-deps` keeps compose from recreating `db` with the 18 image:
 
    ```powershell
-   docker compose --env-file $Config stop app simplefin-sync ai-jobs backup
+   docker compose --env-file $Config stop app background backup
    docker compose --env-file $Config run --rm -T --no-deps backup /opt/financial-planner/backup.sh
    docker compose --env-file $Config run --rm -T --no-deps backup /opt/financial-planner/row-counts.sh | Out-File -Encoding utf8 "$Work\row-counts-before.tsv"
    docker compose --env-file $Config stop db
