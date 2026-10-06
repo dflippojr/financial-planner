@@ -1706,6 +1706,8 @@ class AiProviderConnection(models.Model):
     chat_model = models.CharField(max_length=80, blank=True, default="")
     background_model = models.CharField(max_length=80, blank=True, default="")
     offer_local_to_household = models.BooleanField(default=False)
+    # The host offers the tower's local model for their own chat. Off until the owner has verified it.
+    offer_local_chat = models.BooleanField(default=False)
     connected_at = models.DateTimeField(default=timezone.now)
     last_status = models.CharField(max_length=80, blank=True, default="")
 

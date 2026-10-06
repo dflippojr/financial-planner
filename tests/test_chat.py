@@ -10,8 +10,9 @@ from django.urls import reverse
 from django.utils import timezone
 from tests.chat_helpers import ask
 from tests.fake_harness import start_fake_harness
+from tests.helpers import stamp_recent_auth
 
-from finance.ai_services import AiError, connect_harness, set_defaults
+from finance.ai_services import AiError, connect_harness, connection_for, set_defaults, set_offer_local_chat
 from finance.ai_tools import (
     cash_flow_totals,
     default_tools,
@@ -321,7 +322,7 @@ def test_export_includes_this_members_conversations(harness):
 
 
 @pytest.mark.django_db
-def test_local_chat_hidden_until_enabled(harness, settings):
+def test_local_chat_hidden_until_offered_and_hard_off_wins(harness, settings):
     from finance.ai_services import AiError
 
     _state, url = harness
@@ -330,17 +331,55 @@ def test_local_chat_hidden_until_enabled(harness, settings):
     set_defaults(person, chat_backend="local", background_backend="local")
     with pytest.raises(AiError):
         ask(person, "Hi", sleep=lambda _s: None)
+    set_offer_local_chat(person, True)
+    settings.AI_CHAT_LOCAL_ENABLED = False
+    with pytest.raises(AiError):
+        ask(person, "Hi", sleep=lambda _s: None)
     settings.AI_CHAT_LOCAL_ENABLED = True
     conversation = ask(person, "Hi", sleep=lambda _s: None)
     assert conversation.backend == "local"
 
 
 @pytest.mark.django_db
-def test_warm_refusals_are_shown_as_cannot_load(harness, settings):
-    settings.AI_CHAT_LOCAL_ENABLED = True
+def test_warm_refused_until_the_host_offers_local_chat(harness):
     state, url = harness
     user, person, _household = make_member("owner")
     connect_harness(person, base_url=url, token=TOKEN)
+    set_defaults(person, chat_backend="local", background_backend="local")
+    client = Client()
+    client.force_login(user)
+    assert client.post(reverse("chat-warm")).status_code == 409
+    assert not [row for row in state.requests if "warm" in row[1]]
+    set_offer_local_chat(person, True)
+    assert client.post(reverse("chat-warm")).status_code == 200
+
+
+@pytest.mark.django_db
+def test_offer_local_chat_setting_saves_and_gates_the_local_choice(harness):
+    _state, url = harness
+    user, person, _household = make_member("owner")
+    connect_harness(person, base_url=url, token=TOKEN)
+    assert connection_for(person).offer_local_chat is False
+    client = Client()
+    client.force_login(user)
+    stamp_recent_auth(client)
+    page = client.get(reverse("settings-ai"))
+    assert b"Offer the local model for chat" in page.content
+    client.post(reverse("ai-offer-local-chat"), {"offer_local_chat": "on"})
+    client.post(reverse("ai-defaults"), {"chat_backend": "local", "background_backend": "local"})
+    connection = connection_for(person)
+    assert connection.offer_local_chat is True
+    assert connection.chat_backend == "local"
+    client.post(reverse("ai-offer-local-chat"), {})
+    assert connection_for(person).offer_local_chat is False
+
+
+@pytest.mark.django_db
+def test_warm_refusals_are_shown_as_cannot_load(harness, settings):
+    state, url = harness
+    user, person, _household = make_member("owner")
+    connect_harness(person, base_url=url, token=TOKEN)
+    set_offer_local_chat(person, True)
     set_defaults(person, chat_backend="local", background_backend="local")
     state.model_state = "unloaded"
     state.warm_error = "gpu_held"
@@ -830,10 +869,10 @@ def test_chat_send_and_delete_cover_remaining_error_paths(harness):
 
 @pytest.mark.django_db
 def test_chat_warm_and_status_surface_provider_errors(harness, settings, monkeypatch):
-    settings.AI_CHAT_LOCAL_ENABLED = True
     state, url = harness
     user, person, _household = make_member("owner")
     connect_harness(person, base_url=url, token=TOKEN)
+    set_offer_local_chat(person, True)
     set_defaults(person, chat_backend="local", background_backend="local")
     client = Client()
     client.force_login(user)
@@ -903,7 +942,7 @@ def test_followup_starts_a_new_session_after_chat_backend_switch(harness, settin
     assert conversation.backend == "claude"
     assert old_session
     creates_before = len(state.session_creates)
-    settings.AI_CHAT_LOCAL_ENABLED = True
+    set_offer_local_chat(person, True)
     set_defaults(person, chat_backend="local", background_backend="local")
     state.need_tool = False
     ask(

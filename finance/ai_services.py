@@ -369,6 +369,14 @@ def set_offer_local_to_household(principal, offered):
     return connection
 
 
+def set_offer_local_chat(principal, offered):
+    person = _person_for(principal)
+    connection = _own_connection(person)
+    connection.offer_local_chat = bool(offered)
+    connection.save(update_fields=("offer_local_chat",))
+    return connection
+
+
 def set_shared_local_use(principal, *, chat, background):
     person = _person_for(principal)
     if not may_use_ai(person):

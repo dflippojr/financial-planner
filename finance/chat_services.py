@@ -57,8 +57,11 @@ def max_tool_calls():
     return max(1, int(getattr(settings, "AI_CHAT_MAX_TOOL_CALLS", 40)))
 
 
-def chat_local_enabled():
-    return bool(getattr(settings, "AI_CHAT_LOCAL_ENABLED", False))
+def chat_local_enabled(connection=None):
+    """The operator's hard switch, and the host's "offer the local model for chat" setting."""
+    if not getattr(settings, "AI_CHAT_LOCAL_ENABLED", True):
+        return False
+    return bool(connection is not None and connection.offer_local_chat)
 
 
 def purge_expired(person=None):
@@ -209,7 +212,7 @@ def chat_backend_for(person):
             raise AiError(HOSTED_SHARED_DENIED, AUTHORIZATION_REQUIRED)
         if not connection.offer_local_to_household:
             raise AiError(SHARED_LOCAL_UNAVAILABLE, UNAVAILABLE)
-    elif backend == LOCAL_BACKEND and not chat_local_enabled():
+    elif backend == LOCAL_BACKEND and not chat_local_enabled(connection):
         raise AiError(LOCAL_HIDDEN, UNAVAILABLE)
     if not backend:
         raise AiError(NO_CHAT_BACKEND, UNAVAILABLE)

@@ -2,7 +2,6 @@ from types import SimpleNamespace
 from decimal import Decimal
 
 from django import forms
-from django.conf import settings
 
 from .ai_api import MODELS as API_MODELS, label as api_label
 from .ai_types import API_KINDS
@@ -1007,9 +1006,8 @@ class AiDefaultsForm(forms.Form):
     chat_model = forms.CharField(label="Chat model", required=False, max_length=80)
     background_model = forms.CharField(label="Background model", required=False, max_length=80)
 
-    def __init__(self, *args, backends=(), offer_shared_local=False, **kwargs):
+    def __init__(self, *args, backends=(), offer_shared_local=False, allow_local_chat=False, **kwargs):
         super().__init__(*args, **kwargs)
-        allow_local_chat = bool(getattr(settings, "AI_CHAT_LOCAL_ENABLED", False))
         chat_choices = [
             (item.id, item.label)
             for item in backends
@@ -1031,6 +1029,13 @@ class AiOfferLocalForm(forms.Form):
     offer_local_to_household = forms.BooleanField(
         required=False,
         label="Offer the local model to household members",
+    )
+
+
+class AiOfferLocalChatForm(forms.Form):
+    offer_local_chat = forms.BooleanField(
+        required=False,
+        label="Offer the local model for chat",
     )
 
 

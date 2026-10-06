@@ -1073,8 +1073,7 @@ def test_a_session_saved_on_an_earlier_connection_is_never_resumed(harness):
 
 
 @pytest.mark.django_db
-def test_chat_default_skips_local_while_local_chat_is_off(settings):
-    settings.AI_CHAT_LOCAL_ENABLED = False
+def test_chat_default_never_picks_local_automatically():
     local = describe_backend(
         {
             "name": "local",
@@ -1090,7 +1089,5 @@ def test_chat_default_skips_local_while_local_chat_is_off(settings):
     assert local.suits_live
     chat, _background = default_backends([local, claude])
     assert chat == ""
-
-    settings.AI_CHAT_LOCAL_ENABLED = True
-    chat, _background = default_backends([local, claude])
-    assert chat == "local"
+    chat, _background = default_backends([local])
+    assert chat == ""

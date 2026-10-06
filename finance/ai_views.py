@@ -22,6 +22,7 @@ from .ai_services import (
     discovered_backends,
     offered_local_connection,
     set_defaults,
+    set_offer_local_chat,
     set_offer_local_to_household,
     set_shared_local_use,
 )
@@ -29,12 +30,14 @@ from .ai_types import API_KINDS, SHARED_LOCAL_CHOICE
 from .ai_urls import HarnessUrlError
 from .forms import (
     AiDefaultsForm,
+    AiOfferLocalChatForm,
     AiOfferLocalForm,
     AiSharedLocalForm,
     ApiKeyConnectForm,
     ApiKeyDefaultsForm,
     HarnessConnectForm,
 )
+from .chat_services import chat_local_enabled
 from .models import AiUsageEvent, Person
 from .policy_services import may_use_ai
 from .reauth import requires_recent_auth
@@ -50,6 +53,7 @@ def ai_settings_context(person):
             "ai_connect_form": HarnessConnectForm(),
             "ai_defaults_form": None,
             "ai_offer_form": None,
+            "ai_offer_chat_form": None,
             "ai_shared_local_form": None,
             "ai_shared_local_offered": False,
             "ai_usage": [],
@@ -62,6 +66,7 @@ def ai_settings_context(person):
     backends = []
     defaults_form = None
     offer_form = None
+    offer_chat_form = None
     shared_form = None
     shared_offered = offered_local_connection(person)
     if connection is not None:
@@ -76,6 +81,7 @@ def ai_settings_context(person):
         )
         defaults_form = AiDefaultsForm(
             backends=backends,
+            allow_local_chat=chat_local_enabled(connection),
             offer_shared_local=shared_offered is not None,
             initial={
                 "chat_backend": chat_initial,
@@ -87,6 +93,7 @@ def ai_settings_context(person):
         offer_form = AiOfferLocalForm(
             initial={"offer_local_to_household": connection.offer_local_to_household}
         )
+        offer_chat_form = AiOfferLocalChatForm(initial={"offer_local_chat": connection.offer_local_chat})
     elif shared_offered is not None:
         shared_form = AiSharedLocalForm(
             initial={
@@ -102,6 +109,7 @@ def ai_settings_context(person):
         "ai_connect_form": HarnessConnectForm(),
         "ai_defaults_form": defaults_form,
         "ai_offer_form": offer_form,
+        "ai_offer_chat_form": offer_chat_form,
         "ai_shared_local_form": shared_form,
         "ai_shared_local_offered": shared_offered is not None,
         "ai_usage": list(AiUsageEvent.objects.visible_to(person).order_by("-created_at", "-pk")[:20]),
@@ -178,6 +186,7 @@ def ai_save_defaults(request):
     form = AiDefaultsForm(
         request.POST,
         backends=backends,
+        allow_local_chat=chat_local_enabled(connection_for(person)),
         offer_shared_local=offered_local_connection(person) is not None,
     )
     if not form.is_valid():
@@ -211,6 +220,24 @@ def ai_save_offer_local(request):
         messages.success(request, "Household local-model sharing was saved.")
     except PermissionDenied:
         messages.error(request, "Only the connection owner can offer the local model.")
+    except AiError as exc:
+        messages.error(request, str(exc))
+    return redirect("settings-ai")
+
+
+@require_POST
+@requires_recent_auth("ai-offer-local-chat", form_url_name="settings-ai")
+def ai_save_offer_local_chat(request):
+    person = get_object_or_404(Person, user=request.user)
+    form = AiOfferLocalChatForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, "Choose whether to offer the local model for chat.")
+        return redirect("settings-ai")
+    try:
+        set_offer_local_chat(person, form.cleaned_data["offer_local_chat"])
+        messages.success(request, "Local-model chat setting was saved.")
+    except PermissionDenied:
+        messages.error(request, "Only the connection owner can offer the local model for chat.")
     except AiError as exc:
         messages.error(request, str(exc))
     return redirect("settings-ai")
