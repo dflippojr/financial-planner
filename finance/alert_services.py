@@ -3,12 +3,12 @@ from datetime import timedelta
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Q, prefetch_related_objects
 from django.urls import reverse
 from django.utils import timezone
 
 from .alert_email import notify_after_alert_run
-from .budget_services import month_start, progress_snapshot
+from .budget_services import month_start, progress_snapshot, progress_snapshots
 from .cash_flow import format_minor
 from .models import (
     Account,
@@ -197,7 +197,7 @@ def _budget_thresholds(spent_minor, available_minor):
     return at_90, at_100
 
 
-def evaluate_budget_alert(budget, *, today=None):
+def evaluate_budget_alert(budget, *, today=None, recipient_cards=None):
     if budget.status != Budget.Status.ACTIVE:
         return []
     today = today or timezone.localdate()
@@ -206,8 +206,10 @@ def evaluate_budget_alert(budget, *, today=None):
     month_label = f"{month_name[month.month]} {month.year}"
     link = f"{reverse('budgets')}?month={stamp}"
     created = []
-    for recipient in audience_for_budget(budget):
-        card = progress_snapshot(budget, month, recipient)
+    cards = recipient_cards if recipient_cards is not None else [
+        (recipient, progress_snapshot(budget, month, recipient)) for recipient in audience_for_budget(budget)
+    ]
+    for recipient, card in cards:
         at_90, at_100 = _budget_thresholds(card.spent_minor, card.available_minor)
         if not at_90:
             continue
@@ -234,12 +236,28 @@ def evaluate_budget_alert(budget, *, today=None):
 
 
 def evaluate_active_budget_alerts(*, today=None):
+    today = today or timezone.localdate()
     created = []
-    budgets = Budget.objects.filter(status=Budget.Status.ACTIVE).select_related(
+    budgets = list(Budget.objects.filter(status=Budget.Status.ACTIVE).select_related(
         "category", "owner", "household"
-    )
+    ).prefetch_related("amounts"))
+    prefetch_related_objects([budget for budget in budgets if budget.rollover_enabled], "rollover_resets")
+    groups = {}
+    audiences = {}
     for budget in budgets:
-        created.extend(evaluate_budget_alert(budget, today=today))
+        key = (budget.scope, budget.household_id if budget.scope == Budget.Scope.HOUSEHOLD else budget.owner_id)
+        if key not in audiences:
+            audiences[key] = audience_for_budget(budget)
+        for recipient in audiences[key]:
+            group = groups.setdefault(recipient.pk, {"person": recipient, "budgets": []})
+            group["budgets"].append(budget)
+    cards_by_budget = {}
+    for group in groups.values():
+        recipient = group["person"]
+        for budget_id, card in progress_snapshots(group["budgets"], month_start(today), recipient).items():
+            cards_by_budget.setdefault(budget_id, []).append((recipient, card))
+    for budget in budgets:
+        created.extend(evaluate_budget_alert(budget, today=today, recipient_cards=cards_by_budget.get(budget.pk, [])))
     return created
 
 

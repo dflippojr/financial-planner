@@ -134,7 +134,8 @@ def commit_csv_import(
             date_range_end=date_range_end,
             saved_csv_mapping=saved_csv_mapping,
         )
-        lock_saved_mapping(saved_csv_mapping)
+        if saved_csv_mapping is not None:
+            lock_saved_mapping(saved_csv_mapping)
         kind = _kind_for(source)
         source_rows = {row.number: row for row in document.rows}
         Transaction.objects.bulk_create(

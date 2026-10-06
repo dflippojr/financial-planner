@@ -19,7 +19,7 @@ from tests.import_benchmark import import_content, seed
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("profile", ["huntington", "ofx"])
 def test_import_request_query_ceiling_and_bulk_scaling(tmp_path, profile):
-    person, account = seed(budgets=0)
+    person, account = seed()
     client = Client()
     client.force_login(person.user)
     url = reverse("csv-import-preview", args=[account.pk])
@@ -43,7 +43,7 @@ def test_import_request_query_ceiling_and_bulk_scaling(tmp_path, profile):
             writes = [q["sql"].split(" SET ")[0].split(" (")[0]
                       for q in queries if q["sql"].startswith(("INSERT", "UPDATE"))]
             extra_bulk = len(writes) - len(set(writes)) if connection.vendor == "sqlite" else 0
-            assert len(queries) - extra_bulk <= 60
+            assert len(queries) - extra_bulk <= 60, "\n".join(q["sql"][:160] for q in queries)
         # SQLite splits bulk writes at its parameter limit; PostgreSQL doesn't.
         # Every other query must have a fixed ceiling, even for the larger file.
         fixed = [q for q in queries if not q["sql"].startswith(("INSERT", "UPDATE"))]
@@ -102,3 +102,46 @@ def test_large_transaction_alerts_batch_reads_and_writes_without_duplicates():
     assert all(alert.pk for alert in alerts)
     assert raise_large_transaction_alerts(rows) == []
     assert Alert.objects.count() == 1000
+
+
+@pytest.mark.django_db(transaction=True)
+def test_concurrent_reimports_serialize_on_the_account():
+    if connection.vendor != "postgresql":
+        pytest.skip("concurrent imports require PostgreSQL row locks")
+    import threading
+    from datetime import date
+    from django.db import connections
+    from finance.csv_import.parser import read_csv
+    from finance.csv_import.profiles import HUNTINGTON_MAPPING
+    from finance.csv_import.services import commit_csv_import
+    from tests.test_csv_import_views import make_person
+    from finance.models import Account
+
+    _user, person = make_person("synthetic-import-owner")
+    account = Account.objects.create(name="Synthetic account", account_type="checking", owner=person)
+    content = import_content(500, "huntington")
+    document = read_csv(content)
+    barrier = threading.Barrier(2)
+    results, errors = [], []
+
+    def commit():
+        try:
+            barrier.wait(timeout=10)
+            result = commit_csv_import(person, account.pk, content=content, document=document,
+                mapping=HUNTINGTON_MAPPING, source="huntington",
+                date_range_start=date(2026, 9, 1), date_range_end=date(2026, 9, 30))
+            results.append(result.new_count)
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            connections.close_all()
+
+    workers = [threading.Thread(target=commit) for _ in range(2)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=30)
+    assert not any(worker.is_alive() for worker in workers)
+    assert errors == []
+    assert sorted(results) == [0, 500]
+    assert Transaction.objects.filter(account=account).count() == 500

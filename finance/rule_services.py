@@ -185,27 +185,19 @@ def ordered_rules_for_account(account, *, confirmed_only=False):
     enabled = CategoryRule.objects.filter(enabled=True)
     if confirmed_only:
         enabled = enabled.filter(confirmed_at__isnull=False)
-    personal = [
-        rule
-        for rule in enabled.filter(
-            owner_household__isnull=True,
-            owner_person_id__in=_people_who_can_see(account),
-        ).select_related("category", "account", "owner_person")
+    eligible = Q(owner_household__isnull=True, owner_person_id__in=_people_who_can_see(account))
+    if account.scope == Account.Scope.HOUSEHOLD:
+        eligible |= Q(owner_household_id=account.household_id)
+    rules = list(enabled.filter(eligible).select_related("category", "account", "owner_person")
         .annotate(_cached_inactive=~Exists(Membership.objects.filter(
             person_id=OuterRef("owner_person_id"),
             household_id=OuterRef("category__household_id"),
             ended_at__isnull=True,
         )))
         .order_by("priority", "pk")
-        if not personal_rule_is_inactive(rule)
-    ]
-    if account.scope != Account.Scope.HOUSEHOLD:
-        return personal
-    household = list(
-        enabled.filter(owner_household_id=account.household_id)
-        .select_related("category", "account")
-        .order_by("priority", "pk")
     )
+    personal = [rule for rule in rules if not rule.owner_household_id and not personal_rule_is_inactive(rule)]
+    household = [rule for rule in rules if rule.owner_household_id]
     return personal + household
 
 

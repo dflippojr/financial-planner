@@ -73,6 +73,11 @@ def report_scope_for(budget):
 
 
 def amount_for(budget, month):
+    cached = getattr(budget, "_prefetched_objects_cache", {}).get("amounts")
+    if cached is not None:
+        rows = [row for row in cached if row.effective_month <= month_start(month)]
+        row = max(rows, key=lambda row: row.effective_month, default=None)
+        return 0 if row is None else row.amount_minor
     row = (
         BudgetAmount.objects.filter(budget=budget, effective_month__lte=month_start(month))
         .order_by("-effective_month")
@@ -109,6 +114,12 @@ def _reports_for_months(principal, months, scope, accounts=None):
 
 
 def last_reset_month(budget, month):
+    cached = getattr(budget, "_prefetched_objects_cache", {}).get("rollover_resets")
+    if cached is not None:
+        return max((row.month for row in cached
+                    if row.month <= month_start(month)
+                    and (budget.rollover_enabled_at is None or row.created_at >= budget.rollover_enabled_at)),
+                   default=None)
     resets = BudgetRolloverReset.objects.filter(budget=budget, month__lte=month_start(month))
     if budget.rollover_enabled_at is not None:
         resets = resets.filter(created_at__gte=budget.rollover_enabled_at)
@@ -202,6 +213,19 @@ def progress_snapshot(budget, month, principal):
     month = month_start(month)
     reports = _reports_for_months(principal, _needed_months([budget], month), report_scope_for(budget))
     return progress_for(budget, month, reports)
+
+
+def progress_snapshots(budgets, month, principal):
+    """Share report reads across a member's budgets, keeping scopes separate."""
+    month = month_start(month)
+    groups = {}
+    for budget in budgets:
+        groups.setdefault(report_scope_for(budget), []).append(budget)
+    cards = {}
+    for scope, group in groups.items():
+        reports = _reports_for_months(principal, _needed_months(group, month), scope)
+        cards.update({budget.pk: progress_for(budget, month, reports) for budget in group})
+    return cards
 
 
 def _needed_months(budgets, month):
