@@ -34,25 +34,30 @@ FEATURE_PROMPTS = {
 
 
 def enqueue_job(person, *, feature, input_refs=None, backend=""):
+    return enqueue_jobs(person, feature=feature, input_refs_list=[input_refs], backend=backend)[0]
+
+
+def enqueue_jobs(person, *, feature, input_refs_list, backend=""):
+    """Resolve the member's backend once, then insert a batch of jobs."""
     connection_row, chosen = resolve_ai(person, use_chat=False, requested_backend=backend)
-    refs = dict(input_refs or {})
+    common_refs = {}
     if connection_row is not None and plan_end_user(person, connection_row, chosen):
-        refs[SESSION_CONNECTION_KEY] = _connection_marker(connection_row)
+        common_refs[SESSION_CONNECTION_KEY] = _connection_marker(connection_row)
     elif connection_row is not None and connection_row.owner_id != person.id:
-        refs[SHARED_LOCAL_REF] = True
-        refs[SHARED_CONNECTION_ID_REF] = connection_row.pk
-        refs[SESSION_CONNECTION_KEY] = _connection_marker(connection_row)
+        common_refs[SHARED_LOCAL_REF] = True
+        common_refs[SHARED_CONNECTION_ID_REF] = connection_row.pk
+        common_refs[SESSION_CONNECTION_KEY] = _connection_marker(connection_row)
         chosen = LOCAL_BACKEND
     elif backend:
         chosen = backend
-    return AiJob.objects.create(
+    return AiJob.objects.bulk_create([AiJob(
         member=person,
         feature=feature,
         backend=chosen,
-        input_refs=refs,
+        input_refs={**(input_refs or {}), **common_refs},
         status=AiJob.Status.QUEUED,
         next_attempt_at=timezone.now(),
-    )
+    ) for input_refs in input_refs_list])
 
 
 def process_due_jobs(*, now=None):

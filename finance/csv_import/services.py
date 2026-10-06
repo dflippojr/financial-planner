@@ -69,12 +69,11 @@ def classify_overlap(account, preview: Preview) -> Preview:
     return Preview(tuple(classified))
 
 
-def _original_fields(document, row_number, mapping):
-    source_row = next(row for row in document.rows if row.number == row_number)
+def _original_fields(headers, source_row, mapping):
     excluded = set(mapping.excluded_original_columns)
     return {
         header: cell
-        for header, cell in zip(document.headers, source_row.cells)
+        for header, cell in zip(headers, source_row.cells)
         if header not in excluded
     }
 
@@ -113,12 +112,8 @@ def commit_csv_import(
         )
         if saved_csv_mapping is None:
             raise PermissionDenied(_DENIED)
-    list(
-        Transaction.objects.select_for_update().filter(
-            account=account,
-            status=Transaction.Status.ACTIVE,
-        )
-    )
+    # _active_account holds the account row lock, serializing concurrent imports
+    # and ledger lifecycle changes without materializing the entire history.
 
     if date_range_end < date_range_start:
         raise ValidationError("The import date range must end on or after it starts.")
@@ -141,6 +136,7 @@ def commit_csv_import(
         )
         lock_saved_mapping(saved_csv_mapping)
         kind = _kind_for(source)
+        source_rows = {row.number: row for row in document.rows}
         Transaction.objects.bulk_create(
             [
                 Transaction(
@@ -154,7 +150,7 @@ def commit_csv_import(
                     source_row_number=row.row_number,
                     source_transaction_id=row.source_transaction_id,
                     fingerprint=_fingerprint_for(account, row),
-                    original_fields=_original_fields(document, row.row_number, mapping),
+                    original_fields=_original_fields(document.headers, source_rows[row.row_number], mapping),
                 )
                 for row in new_rows
             ]
@@ -175,12 +171,13 @@ def categorize_imported_batch(principal, batch):
 
     if batch is None:
         return []
+    person = _person_for(principal)
     created = list(Transaction.objects.filter(import_batch=batch, status=Transaction.Status.ACTIVE))
-    refresh_transfer_pairs(principal, transaction_ids=[row.pk for row in created])
-    applied = apply_enabled_rules_to_transactions(principal, created)
+    refresh_transfer_pairs(person, transaction_ids=[row.pk for row in created])
+    applied = apply_enabled_rules_to_transactions(person, created)
     from finance.category_suggestion_services import queue_category_suggestions_for
 
-    queue_category_suggestions_for(principal, created)
+    queue_category_suggestions_for(person, created)
     from finance.alert_services import schedule_after_new_transactions
 
     schedule_after_new_transactions(created)

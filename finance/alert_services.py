@@ -244,29 +244,45 @@ def evaluate_active_budget_alerts(*, today=None):
 
 
 def raise_large_transaction_alerts(transactions):
-    created = []
+    transactions = [txn for txn in transactions if txn.status == Transaction.Status.ACTIVE]
+    accounts = {txn.account_id: txn.account for txn in transactions}
+    people = {}
+    audience = {}
+    for account in accounts.values():
+        audience[account.pk] = audience_for_account(account)
+        people.update({person.pk: person for person in audience[account.pk]})
+    preferences = {prefs.person_id: prefs for prefs in AlertSettings.objects.filter(person_id__in=people)}
+    missing = [AlertSettings(person=person) for pk, person in people.items() if pk not in preferences]
+    AlertSettings.objects.bulk_create(missing, ignore_conflicts=True)
+    if missing:
+        preferences = {prefs.person_id: prefs for prefs in AlertSettings.objects.filter(person_id__in=people)}
+    pending = {}
     for txn in transactions:
-        if txn.status != Transaction.Status.ACTIVE:
-            continue
         amount = abs(txn.amount_minor)
         link = reverse("transaction-edit", args=[txn.pk])
         title = f"Large transaction of {format_minor(amount, txn.currency)}"
-        for person in audience_for_account(txn.account):
-            prefs = settings_for(person)
+        for person in audience[txn.account_id]:
+            prefs = preferences[person.pk]
             threshold = prefs.large_transaction_minor
-            if threshold is None or threshold <= 0 or amount < threshold:
+            if not prefs.large_transaction_enabled or threshold is None or threshold <= 0 or amount < threshold:
                 continue
-            created.extend(
-                raise_alert(
-                    [person],
-                    Alert.Kind.LARGE_TRANSACTION,
-                    title,
-                    link,
-                    f"large:{txn.pk}",
-                    account=txn.account,
-                )
+            key = (person.pk, f"large:{txn.pk}")
+            pending[key] = Alert(
+                recipient=person, kind=Alert.Kind.LARGE_TRANSACTION, title=title,
+                link=link, dedupe_key=key[1], account=txn.account,
             )
-    return created
+    if not pending:
+        return []
+    existing = set(Alert.objects.filter(
+        recipient_id__in=people, dedupe_key__in=[key[1] for key in pending],
+    ).values_list("recipient_id", "dedupe_key"))
+    created = [alert for key, alert in pending.items() if key not in existing]
+    Alert.objects.bulk_create(created, ignore_conflicts=True)
+    # ignore_conflicts does not populate ids; callers (including email notices)
+    # need the persisted rows. Also retain deduplication on repeated passes.
+    return list(Alert.objects.filter(
+        recipient_id__in=people, dedupe_key__in=[alert.dedupe_key for alert in created],
+    ))
 
 
 def evaluate_recent_large_transactions(*, since=None):
@@ -331,7 +347,7 @@ def schedule_after_new_transactions(transactions):
     pks = [txn.pk for txn in transactions]
 
     def _run():
-        rows = list(Transaction.objects.filter(pk__in=pks).select_related("account"))
+        rows = list(Transaction.objects.filter(pk__in=pks).select_related("account", "account__owner", "account__household"))
         after_new_transactions(rows)
 
     transaction.on_commit(_run)
