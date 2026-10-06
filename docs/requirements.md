@@ -54,20 +54,21 @@ Build a private, self hosted personal finance app that can eventually replace Ro
 
 ## Later candidates
 
-- Saved mapping profiles and import rules for specific institutions.
-- Recurring charge detection, subscription review, and alerts.
-- Account balance, net worth, and investment-performance history (issue #18); portfolio/account composition may follow later.
-- Savings goals, future cash flow, and scenario planning.
-- Automatic bank/card aggregation after cost, coverage, privacy, and reliability are evaluated.
-- Import or reconciliation with the existing Google Sheet.
+Only ideas that have not shipped. Saved mapping profiles (#101), recurring detection, net worth and investment performance (#18), savings goals and scenarios (#77, #151), SimpleFIN aggregation (#67) and the Google Sheet comparison (#154) are built and recorded above.
+
+- Automatic bank/card aggregation beyond SimpleFIN, such as Plaid, after cost, coverage, privacy, and reliability are evaluated (#20; findings in docs/research/account-connections.md). It must not become a paid dependency for now.
+- Portfolio and account composition for investments.
+- Sign in with ChatGPT as an AI connection (parked, #115).
 
 ## Open questions
 
-- Verify CSV shapes for Huntington Bank, Capital One, Apple Card, and Vanguard using synthetic examples. Confirm how Vanguard investment activity should affect MVP cash flow; balance and investment-performance data sources and calculations can be settled in post-MVP issue #18.
-- Which goal or forecast capability should follow transaction tracking?
-- What custom categorization rule behavior does the user want beyond the starter category preset (issue #16)?
-- Whether/when to retire the Google Sheet once the app is trusted as the comparison winner.
-- Whether household-level data deletion (e.g. removing a person's data entirely) is needed, and if so, its rules.
+Resolved questions are kept in their decision sections; the first milestone's CSV shapes are in [csv-shapes.md](csv-shapes.md).
+
+- Whether/when to retire the Google Sheet once the app is trusted as the comparison winner (the comparison itself shipped in #154; the retirement call is the owner's).
+- Which further goal or forecast capability should follow the shipped planning features.
+- Further categorization rule behavior beyond the shipped rules (#16), if the owner wants any.
+
+Settled: deleting a member's data entirely is decided in [Deleting a member's data](#deleting-a-members-data-2026-10-03-104).
 
 ## First milestone acceptance
 
@@ -257,7 +258,7 @@ Constraints carried from the existing requirements:
 
 Owner decisions:
 - The footer **Account** link is **Settings** (gear icon from #112). Setup and administration live on Settings tabs, each with its own URL that works without JavaScript: Sign-in & security (`/settings/security/`), Connections (`/settings/connections/`), Household (`/settings/household/`), Categories (`/settings/categories/`), Data (`/settings/data/`), and AI (`/settings/ai/`).
-- The main menu is day-to-day views: Cash flow, Net worth, Spending, Transactions, Transfers, Recurring, Accounts, Import, Planned items, Budgets, Goals. Import still goes to `/accounts/` until #108 gives it its own page. Budgets stays in the main menu as a day-to-day view (the issue's enumerated list omitted it).
+- The main menu is day-to-day views: Cash flow, Net worth, Spending, Transactions, Transfers, Recurring, Accounts, Import, Planned items, Budgets, Goals. Import has its own page (#108). Budgets stays in the main menu as a day-to-day view (the issue's enumerated list omitted it).
 - Old URLs permanently redirect to the matching Settings tab, including category-rule and SimpleFIN sub-pages. Access checks and re-authentication are unchanged.
 
 ## Visual dashboard decisions (2026-10-01, #57)

@@ -53,7 +53,7 @@ AI decisions are in [requirements](requirements.md#ai-features-2026-10-02-90).
   - [#101 saved CSV mappings](https://github.com/dflippojr/financial-planner/issues/101)
   - [#102 recurring review](https://github.com/dflippojr/financial-planner/issues/102)
   - [#103 installable phone app](https://github.com/dflippojr/financial-planner/issues/103)
-- Open question: [#104 deleting a person's data](https://github.com/dflippojr/financial-planner/issues/104).
+- Decided: [#104 deleting a person's data](https://github.com/dflippojr/financial-planner/issues/104).
 
 ## Milestone 5: everyday polish, planning, and hardening
 
@@ -71,5 +71,24 @@ Decisions are in [requirements](requirements.md#next-round-2026-10-04).
   - Transactions page: #148, #149, #146.
   - Security tab: #157, #156.
   - AI provider layer: #162, #147, #159.
+
+## Milestone 6: hardening, polish, and CI
+
+Merged since Milestone 5 (all closed):
+
+- Security and operations: [#202](https://github.com/dflippojr/financial-planner/issues/202) weekly restore check, [#203](https://github.com/dflippojr/financial-planner/issues/203) Content-Security-Policy headers, [#206](https://github.com/dflippojr/financial-planner/issues/206) opt-in alert email, [#181](https://github.com/dflippojr/financial-planner/issues/181) PostgreSQL 16 to 18 upgrade.
+- Import and data entry: [#204](https://github.com/dflippojr/financial-planner/issues/204) OFX and QFX import, [#205](https://github.com/dflippojr/financial-planner/issues/205) add a transaction by hand.
+- Accessibility and layout: [#207](https://github.com/dflippojr/financial-planner/issues/207) accessibility checks, [#208](https://github.com/dflippojr/financial-planner/issues/208) and [#110](https://github.com/dflippojr/financial-planner/issues/110) visible buttons, [#221](https://github.com/dflippojr/financial-planner/issues/221) mobile layout.
+- AI: [#212](https://github.com/dflippojr/financial-planner/issues/212) Agent Harness connect fixes, [#218](https://github.com/dflippojr/financial-planner/issues/218) chat runs in the background.
+- Planning: [#193](https://github.com/dflippojr/financial-planner/issues/193) debt planner horizon labels.
+
+Open (readiness label in brackets):
+
+- [#159](https://github.com/dflippojr/financial-planner/issues/159) chat on the local model [`ready`].
+- [#182](https://github.com/dflippojr/financial-planner/issues/182) upgrade Django 5.2 LTS to 6.x [`blocked`].
+- CI: [#230](https://github.com/dflippojr/financial-planner/issues/230) tests against PostgreSQL 18 [`ready`], [#232](https://github.com/dflippojr/financial-planner/issues/232) CI guards for committed exports and pinned dependencies [`ready`], [#233](https://github.com/dflippojr/financial-planner/issues/233) Docker image build and startup smoke test [`ready`].
+- Docs: [#231](https://github.com/dflippojr/financial-planner/issues/231) this refresh [`ready`].
+
+Use `gh issue list` for the live state; this list is a snapshot of 2026-10-06.
 
 Work from an issue to a pull request and link it with `Closes #<issue>`. The owner reviews merges.
