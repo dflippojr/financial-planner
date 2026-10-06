@@ -9,6 +9,7 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods, require_POST
 
 from .budget_services import (
+    NEAR_LIMIT_PERCENT,
     add_months,
     amount_for,
     month_budget_cards,
@@ -78,6 +79,12 @@ def budget_list(request):
         except PermissionDenied as exc:
             raise Http404 from exc
     cards = month_budget_cards(request.user, month)
+    # Phone cards: the overall total first, then categories over their limit, then near it.
+    overall_cards = [card for card in cards if card.budget.category_id is None]
+    category_cards = sorted(
+        (card for card in cards if card.budget.category_id is not None),
+        key=lambda card: (not card.over_budget, card.percent < NEAR_LIMIT_PERCENT, -card.percent, card.name.lower()),
+    )
     previous_month = add_months(month, -1)
     next_month = add_months(month, 1)
     return render(
@@ -85,6 +92,8 @@ def budget_list(request):
         "finance/budgets.html",
         {
             "cards": cards,
+            "overall_cards": overall_cards,
+            "category_cards": category_cards,
             "add_form": form,
             "month": month,
             "month_label": f"{month_name[month.month]} {month.year}",

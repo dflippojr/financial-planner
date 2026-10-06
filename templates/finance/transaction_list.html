@@ -4,9 +4,13 @@
 {% block title %}Transactions · Financial Planner{% endblock %}
 {% block content %}
 {% include "finance/_messages.html" %}
-<div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+<div class="group" data-select="off" id="transaction-list-root">
+<div class="mb-3 flex items-center justify-between gap-2">
   <h1 class="text-2xl font-bold">Transactions</h1>
-  <a class="btn btn-primary" href="{% url 'transaction-add' %}">Add transaction</a>
+  <div class="flex items-center gap-2">
+    <button type="button" class="btn min-h-11 rounded-full md:hidden" data-select-toggle aria-pressed="false" aria-controls="bulk-edit-form">Select</button>
+    <a class="btn btn-primary min-h-11" href="{% url 'transaction-add' %}"><span class="md:hidden">Add</span><span class="hidden md:inline">Add transaction</span></a>
+  </div>
 </div>
 {% if bulk_undo %}
 <form method="post" action="{% url 'transaction-bulk-undo' bulk_undo.pk %}" class="mb-4">
@@ -17,23 +21,36 @@
   </div>
 </form>
 {% endif %}
-<form method="get" class="mb-4 flex flex-wrap items-end gap-3">
-  {% include "finance/_form_fields.html" with form=filter_form %}
-  <button type="submit" class="btn btn-primary">Filter</button>
-  <a class="btn btn-ghost" href="{% url 'transaction-list' %}">Clear</a>
+<form method="get" role="search" class="mb-2 flex gap-2 md:hidden">
+  {% for name, value in filter_hidden %}{% if name != "q" %}
+  <input type="hidden" name="{{ name }}" value="{{ value }}">
+  {% endif %}{% endfor %}
+  <label class="input input-bordered flex min-h-11 flex-1 items-center gap-2">
+    <span class="sr-only">Search descriptions</span>
+    <input type="search" name="q" value="{{ filter_form.q.value|default:'' }}" placeholder="Search descriptions" class="min-w-0 grow" maxlength="200">
+  </label>
+  <button type="submit" class="btn min-h-11">Search</button>
 </form>
-<form method="post" action="{% url 'transaction-saved-filter-create' %}" class="mb-4 flex flex-wrap items-end gap-3">
-  {% csrf_token %}
-  {% for name, value in filter_hidden %}
-    <input type="hidden" name="{{ name }}" value="{{ value }}">
-  {% endfor %}
-  {% include "finance/_form_fields.html" with form=save_filter_form %}
-  <button type="submit" class="btn">Save filters</button>
-</form>
+<details class="mb-4" data-open-from="md">
+  <summary class="btn min-h-11 md:hidden">Filters{% if filter_hidden %} <span class="badge badge-primary badge-sm">{{ filter_hidden|length }}</span>{% endif %}</summary>
+  <form method="get" class="mt-3 flex flex-wrap items-end gap-3 md:mt-0">
+    {% include "finance/_form_fields.html" with form=filter_form %}
+    <button type="submit" class="btn btn-primary">Filter</button>
+    <a class="btn btn-ghost" href="{% url 'transaction-list' %}">Clear</a>
+  </form>
+  <form method="post" action="{% url 'transaction-saved-filter-create' %}" class="mt-3 flex flex-wrap items-end gap-3">
+    {% csrf_token %}
+    {% for name, value in filter_hidden %}
+      <input type="hidden" name="{{ name }}" value="{{ value }}">
+    {% endfor %}
+    {% include "finance/_form_fields.html" with form=save_filter_form %}
+    <button type="submit" class="btn">Save filters</button>
+  </form>
+</details>
 {% if saved_filters %}
-<div class="mb-4 flex flex-wrap items-center gap-2">
+<div class="mb-4 flex items-center gap-2 overflow-x-auto md:flex-wrap">
   {% for saved in saved_filters %}
-  <span class="badge badge-lg gap-1">
+  <span class="badge badge-lg h-11 shrink-0 gap-1">
     <a class="link" href="{% url 'transaction-saved-filter-apply' saved.pk %}">{{ saved.name }}</a>
     <form method="post" action="{% url 'transaction-saved-filter-delete' saved.pk %}" class="inline">
       {% csrf_token %}
@@ -44,23 +61,23 @@
 </div>
 {% endif %}
 {% if list_totals %}
-<div class="mb-4 grid grid-cols-1 gap-4 md:grid-cols-3">
+<div class="mb-4 grid grid-cols-3 gap-2 md:gap-4">
   <article class="stats bg-base-100 shadow">
-    <div class="stat">
+    <div class="stat max-md:px-3 max-md:py-2">
       <h2 class="stat-title">Income</h2>
-      <p class="stat-value text-xl">{{ list_totals.income_display }}</p>
+      <p class="stat-value text-base md:text-xl">{{ list_totals.income_display }}</p>
     </div>
   </article>
   <article class="stats bg-base-100 shadow">
-    <div class="stat">
+    <div class="stat max-md:px-3 max-md:py-2">
       <h2 class="stat-title">Spending</h2>
-      <p class="stat-value text-xl">{{ list_totals.spending_display }}</p>
+      <p class="stat-value text-base md:text-xl">{{ list_totals.spending_display }}</p>
     </div>
   </article>
   <article class="stats bg-base-100 shadow">
-    <div class="stat">
+    <div class="stat max-md:px-3 max-md:py-2">
       <h2 class="stat-title">Net</h2>
-      <p class="stat-value text-xl">{{ list_totals.net_display }}</p>
+      <p class="stat-value text-base md:text-xl">{{ list_totals.net_display }}</p>
     </div>
   </article>
 </div>
@@ -94,7 +111,7 @@
   <button type="submit" class="btn btn-primary">Accept all shown</button>
 </form>
 {% endif %}
-<form method="post" action="{% url 'transaction-bulk-preview' %}" id="bulk-edit-form" class="mb-4">
+<form method="post" action="{% url 'transaction-bulk-preview' %}" id="bulk-edit-form" class="mb-4 max-md:hidden max-md:group-data-[select=on]:block">
   {% csrf_token %}
   <input type="hidden" name="filter_query" value="{{ filter_query }}">
   <div class="mb-4 flex flex-wrap items-end gap-3 rounded-box bg-base-100 p-4 shadow">
@@ -125,9 +142,9 @@
     {% endif %}
   </div>
 </form>
-<div class="overflow-x-auto">
-  <table class="table table-zebra">
-    <thead class="sticky top-0 z-10 bg-base-200">
+<div class="md:overflow-x-auto">
+  <table class="table md:table-zebra max-md:block">
+    <thead class="sticky top-0 z-10 bg-base-200 max-md:hidden">
       <tr>
         <th scope="col">
           <label>
@@ -145,19 +162,22 @@
         <th scope="col"></th>
       </tr>
     </thead>
-    <tbody>
+    <tbody class="max-md:block">
     {% for transaction in transactions %}
-      <tr>
-        <td>
+      {% ifchanged transaction.transaction_date %}
+      <tr class="md:hidden max-md:block"><td colspan="9" class="max-md:block max-md:px-1 max-md:pb-1 max-md:pt-3 max-md:text-sm max-md:font-semibold max-md:opacity-80">{{ transaction.transaction_date|date:"D, M j" }}</td></tr>
+      {% endifchanged %}
+      <tr class="max-md:relative max-md:grid max-md:[&>td]:border-0 max-md:min-h-16 max-md:grid-cols-[minmax(0,1fr)_auto] max-md:gap-x-3 max-md:border-b max-md:border-base-300 max-md:py-2">
+        <td class="max-md:hidden max-md:group-data-[select=on]:relative max-md:group-data-[select=on]:z-10 max-md:group-data-[select=on]:order-last max-md:group-data-[select=on]:col-span-2 max-md:group-data-[select=on]:block max-md:p-0">
           <label>
             <input type="checkbox" form="bulk-edit-form" name="transaction_id" value="{{ transaction.pk }}" class="checkbox js-bulk-row">
             <span class="sr-only">Select transaction</span>
           </label>
         </td>
-        <td>{{ transaction.transaction_date }}</td>
-        <td>{{ transaction.account.name }}</td>
-        <td>
-          {{ transaction.description }}
+        <td class="max-md:hidden">{{ transaction.transaction_date }}</td>
+        <td class="max-md:hidden">{{ transaction.account.name }}</td>
+        <td class="max-md:col-start-1 max-md:row-start-1 max-md:min-w-0 max-md:p-0">
+          <span class="block font-medium max-md:truncate md:font-normal">{{ transaction.description }}</span>
           {% if transaction.tags.all %}
           <div class="mt-1 flex flex-wrap gap-1">
             {% for tag in transaction.tags.all %}
@@ -168,7 +188,7 @@
           {% if transaction.note %}
           <div class="mt-1 text-sm opacity-80">
             {% if transaction.note|length > 80 %}
-            <details>
+            <details class="relative z-10">
               <summary>{{ transaction.note|truncatechars:80 }}</summary>
               {{ transaction.note }}
             </details>
@@ -178,9 +198,9 @@
           </div>
           {% endif %}
         </td>
-        <td class="text-right">{% include "finance/_amount.html" with value=transaction.amount_display tone="" %}</td>
-        <td>
-          {{ transaction.category_display }}
+        <td class="text-right max-md:col-start-2 max-md:row-start-1 max-md:p-0 max-md:font-semibold">{% include "finance/_amount.html" with value=transaction.amount_display tone="" %}</td>
+        <td class="max-md:col-span-2 max-md:row-start-2 max-md:p-0 max-md:text-sm">
+          <span class="{% if transaction.category_id is None %}max-md:badge max-md:badge-warning max-md:badge-sm{% else %}max-md:opacity-80{% endif %}">{{ transaction.category_display }}</span><span class="opacity-80 md:hidden"> · {{ transaction.account.name }}</span>
           {% if transaction.category_source == "split" %}
           <ul class="mt-1 text-sm opacity-80">
             {% for part in transaction.splits.all %}
@@ -190,29 +210,29 @@
           {% endif %}
           {% with suggestion=suggestions|lookup:transaction.pk %}
           {% if suggestion %}
-          <div class="mt-2">
+          <div class="relative z-10 mt-2 flex flex-wrap items-center gap-2 max-md:rounded-box max-md:bg-base-200 max-md:p-2">
             <span>{{ suggestion.display_label }}: {{ suggestion.category.name }}</span>
             <form method="post" action="{% url 'suggestion-accept' suggestion.pk %}" class="inline">
               {% csrf_token %}
               <input type="hidden" name="next" value="{{ list_query }}">
-              <button type="submit" class="btn btn-xs btn-primary">Accept</button>
+              <button type="submit" class="btn btn-xs btn-primary max-md:min-h-11 max-md:px-4 max-md:text-sm">Accept</button>
             </form>
             <form method="post" action="{% url 'suggestion-reject' suggestion.pk %}" class="inline">
               {% csrf_token %}
               <input type="hidden" name="next" value="{{ list_query }}">
-              <button type="submit" class="btn btn-xs">Reject</button>
+              <button type="submit" class="btn btn-xs max-md:min-h-11 max-md:px-4 max-md:text-sm">Reject</button>
             </form>
           </div>
           {% endif %}
           {% endwith %}
         </td>
         {% if transaction.is_manual_entry %}
-        <td>Manual<br><small>Added {{ transaction.import_batch.imported_at }}</small></td>
+        <td class="max-md:hidden">Manual<br><small>Added {{ transaction.import_batch.imported_at }}</small></td>
         {% else %}
-        <td>{{ transaction.import_batch.get_source_display }}<br><small>Imported {{ transaction.import_batch.imported_at }}</small></td>
+        <td class="max-md:hidden">{{ transaction.import_batch.get_source_display }}<br><small>Imported {{ transaction.import_batch.imported_at }}</small></td>
         {% endif %}
-        <td>{{ transaction.account.get_scope_display }}</td>
-        <td><a class="link" href="{% url 'transaction-edit' transaction.pk %}">Correct</a></td>
+        <td class="max-md:hidden">{{ transaction.account.get_scope_display }}</td>
+        <td class="max-md:contents"><a class="link max-md:absolute max-md:inset-0 max-md:overflow-hidden max-md:text-[0px]" href="{% url 'transaction-edit' transaction.pk %}"><span class="max-md:sr-only">Correct</span><span class="sr-only md:hidden"> {{ transaction.description }}</span></a></td>
       </tr>
     {% empty %}
       <tr><td colspan="9">No matching transactions.</td></tr>
@@ -220,14 +240,15 @@
     </tbody>
   </table>
 </div>
+</div>
 {% if page and page.paginator.num_pages > 1 %}
 <nav class="mt-4 flex flex-wrap items-center gap-2" aria-label="Transaction pages">
   {% if page.has_previous %}
-  <a class="btn btn-sm" href="?{{ filter_query }}{% if filter_query %}&{% endif %}page={{ page.previous_page_number }}">Previous</a>
+  <a class="btn btn-sm max-md:min-h-11" href="?{{ filter_query }}{% if filter_query %}&{% endif %}page={{ page.previous_page_number }}">Previous</a>
   {% endif %}
   <span>Page {{ page.number }} of {{ page.paginator.num_pages }}</span>
   {% if page.has_next %}
-  <a class="btn btn-sm" href="?{{ filter_query }}{% if filter_query %}&{% endif %}page={{ page.next_page_number }}">Next</a>
+  <a class="btn btn-sm max-md:min-h-11" href="?{{ filter_query }}{% if filter_query %}&{% endif %}page={{ page.next_page_number }}">Next</a>
   {% endif %}
 </nav>
 {% endif %}

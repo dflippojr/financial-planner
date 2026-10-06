@@ -147,7 +147,7 @@ def _settings_current(request):
 
 def navigation(request):
     if not getattr(request.user, "is_authenticated", False):
-        return {"nav_items": [], "nav_current": "", "settings_tabs": [], "settings_current": ""}
+        return {"dock_tabs": [], "nav_items": [], "nav_current": "", "settings_tabs": [], "settings_current": ""}
     current = _nav_current(request)
     settings_current = _settings_current(request)
     items = (
@@ -179,7 +179,23 @@ def navigation(request):
         if key == "alert-list":
             item["unread"] = unread
         nav_items.append(item)
+    tab_keys = {"home": "Home", "transaction-list": "Activity", "budgets": "Budgets", "chat": "Chat"}
+    tab_urls = {"home": reverse("home"), "transaction-list": reverse("transaction-list"), "budgets": reverse("budgets"), "chat": reverse("chat")}
+    dock_tabs = [
+        {"key": key, "label": label, "url": tab_urls[key], "active": key == current}
+        for key, label in tab_keys.items()
+    ]
+    # Every other page belongs to More, so one tab is always current.
+    dock_tabs.append(
+        {
+            "key": "more",
+            "label": "More",
+            "url": reverse("more"),
+            "active": current not in tab_keys,
+        }
+    )
     return {
+        "dock_tabs": dock_tabs,
         "nav_items": nav_items,
         "nav_current": current,
         "settings_current": settings_current,
