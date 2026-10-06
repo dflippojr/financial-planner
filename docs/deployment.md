@@ -215,6 +215,30 @@ Copy the decrypted dump into `E:\financial-planner-backups\nightly\` (or pass th
 
 ## Upgrades and migrations
 
+When deploying #249 for the first time, take the usual verified backup, then
+**while the old revision's Compose file is still checked out**, stop the old
+background services:
+
+```powershell
+docker compose --env-file $Config stop simplefin-sync ai-jobs
+```
+
+Check out the approved revision, build `app backup background`, and use
+`docker compose --env-file $Config up -d --remove-orphans` once. This removes
+the stopped `simplefin-sync` and `ai-jobs` containers and starts `background`.
+Do not run both generations of background services together. No env variable,
+database migration, volume rename, or data conversion is required. The new
+container receives all existing AI, SimpleFIN, SMTP, timezone, receipt and backup
+health settings. Gunicorn adds `--preload` and retains two gthread workers,
+four threads per worker and the 660-second timeout. The app and background
+container limits are 1 GiB and 256 MiB respectively; PostgreSQL remains uncapped.
+
+The background runner imports Django once, then starts separate batch-job,
+chat and daily-pass threads. A stopped lane terminates the process, even if a
+chat executor is still waiting, so `restart: unless-stopped` restarts every lane.
+It reports Up rather than an HTTP health check and still waits for the migrated
+app to become healthy. Existing queued/stale-job and chat recovery rules apply.
+
 Review release notes and take a verified manual backup first. Then fetch the approved revision and run:
 
 ```powershell

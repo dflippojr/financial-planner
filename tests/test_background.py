@@ -86,6 +86,8 @@ def test_daily_pass_waits_runs_and_advances_schedule(monkeypatch):
     background.run_daily_pass(stop)
     command.assert_called_once_with("sync_simplefin")
     close.assert_called_once()
+    assert schedule.call_args.args[1] == now
+    assert [call.args[0] for call in stop.wait.call_args_list] == [10, 86400]
 
 
 def test_entrypoint_bootstraps_django_once_then_starts_lanes(monkeypatch):
@@ -96,8 +98,6 @@ def test_entrypoint_bootstraps_django_once_then_starts_lanes(monkeypatch):
     runpy.run_path(str(Path(__file__).resolve().parents[1] / "scripts/background_loop.py"), run_name="__main__")
     setup.assert_called_once()
     main.assert_called_once()
-    assert schedule.call_args.args[1] == now
-    assert [call.args[0] for call in stop.wait.call_args_list] == [10, 86400]
 
 
 def test_daily_failure_propagates_to_supervisor_and_closes_connections(monkeypatch):
