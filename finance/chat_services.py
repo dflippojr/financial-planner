@@ -10,6 +10,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from .ai_jobs import _connection_marker
+from .ai_plan import LINK_PROMPT, plan_end_user
 from .ai_services import (
     AiError,
     HOSTED_SHARED_DENIED,
@@ -26,6 +27,7 @@ from .ai_types import (
     AUTHORIZATION_REQUIRED,
     LIMIT_REACHED,
     LOCAL_BACKEND,
+    LOGIN_REQUIRED,
     ToolResult,
     UNAVAILABLE,
 )
@@ -207,7 +209,7 @@ def chat_backend_for(person):
         if offered_local_connection(person) is not None:
             raise AiError(SHARED_LOCAL_CHOOSE, AUTHORIZATION_REQUIRED)
         raise AiError("Connect an AI backend first.", AUTHORIZATION_REQUIRED)
-    if connection.owner_id != person.id:
+    if connection.owner_id != person.id and not plan_end_user(person, connection, backend):
         if backend != LOCAL_BACKEND:
             raise AiError(HOSTED_SHARED_DENIED, AUTHORIZATION_REQUIRED)
         if not connection.offer_local_to_household:
@@ -389,6 +391,8 @@ def _out_of_scope(prompt):
 
 
 def failure_text(code):
+    if code == LOGIN_REQUIRED:
+        return LINK_PROMPT
     if code == AUTHORIZATION_REQUIRED:
         return "Authorization is required to use this AI backend."
     if code == LIMIT_REACHED:

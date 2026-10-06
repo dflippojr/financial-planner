@@ -4,10 +4,23 @@ from __future__ import annotations
 
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
+import json
+
+from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect
-from django.views.decorators.http import require_POST
+from django.urls import reverse
+from django.views.decorators.http import require_GET, require_POST
 
 from .ai_api import label as api_label, default_model
+from .ai_plan import (
+    PlanLinkError,
+    plan_cards,
+    poll_login,
+    set_offer_plan_links,
+    start_login,
+    submit_code,
+    unlink,
+)
 from .ai_services import (
     AiError,
     api_connection,
@@ -26,12 +39,13 @@ from .ai_services import (
     set_offer_local_to_household,
     set_shared_local_use,
 )
-from .ai_types import API_KINDS, SHARED_LOCAL_CHOICE
+from .ai_types import API_KINDS, PLAN_BACKENDS, SHARED_LOCAL_CHOICE
 from .ai_urls import HarnessUrlError
 from .forms import (
     AiDefaultsForm,
     AiOfferLocalChatForm,
     AiOfferLocalForm,
+    AiOfferPlanLinksForm,
     AiSharedLocalForm,
     ApiKeyConnectForm,
     ApiKeyDefaultsForm,
@@ -40,7 +54,7 @@ from .forms import (
 from .chat_services import chat_local_enabled
 from .models import AiUsageEvent, Person
 from .policy_services import may_use_ai
-from .reauth import requires_recent_auth
+from .reauth import recent_auth_is_fresh, reauth_redirect, requires_recent_auth
 from .security_services import EVENT_TYPES, record_security_event
 
 
@@ -60,6 +74,8 @@ def ai_settings_context(person):
             "ai_error": "",
             "ai_key_connect_form": None,
             "ai_key_cards": [],
+            "ai_plan_cards": [],
+            "ai_offer_plan_form": None,
         }
     connection = connection_for(person)
     error = ""
@@ -69,6 +85,9 @@ def ai_settings_context(person):
     offer_chat_form = None
     shared_form = None
     shared_offered = offered_local_connection(person)
+    offer_plan_form = None
+    if connection is not None:
+        offer_plan_form = AiOfferPlanLinksForm(initial={"offer_plan_links": connection.offer_plan_links})
     if connection is not None:
         try:
             backends = discovered_backends(person)
@@ -116,6 +135,8 @@ def ai_settings_context(person):
         "ai_error": error,
         "ai_key_connect_form": ApiKeyConnectForm(),
         "ai_key_cards": _key_cards(person),
+        "ai_plan_cards": plan_cards(person),
+        "ai_offer_plan_form": offer_plan_form,
     }
 
 
@@ -317,4 +338,87 @@ def ai_key_disconnect(request, kind):
     disconnect_api_key(person, kind)
     record_security_event(person, EVENT_TYPES.AI_CONNECTION_CHANGED, request=request)
     messages.success(request, f"{api_label(kind)} key removed.")
+    return redirect("settings-ai")
+
+
+def _plan_backend(backend):
+    if backend not in PLAN_BACKENDS:
+        raise PlanLinkError("Choose Claude or Codex.")
+    return backend
+
+
+def _json_error(message, status=400):
+    return JsonResponse({"ok": False, "error": message}, status=status)
+
+
+@require_POST
+def ai_plan_start(request, backend):
+    person = get_object_or_404(Person, user=request.user)
+    if not recent_auth_is_fresh(request):
+        # The popup's script cannot follow a redirect to the sign-in form, so hand it the address.
+        target = reauth_redirect(request, "link-ai-plan", reverse("settings-ai"))["Location"]
+        return JsonResponse({"ok": False, "reauth": target}, status=403)
+    try:
+        data = start_login(person, _plan_backend(backend))
+    except PlanLinkError as exc:
+        return _json_error(str(exc))
+    return JsonResponse({"ok": True, **data})
+
+
+@require_POST
+def ai_plan_code(request, backend):
+    person = get_object_or_404(Person, user=request.user)
+    if not recent_auth_is_fresh(request):
+        return _json_error("Sign in again to link your plan.", 403)
+    try:
+        payload = json.loads(request.body.decode("utf-8"))
+        attempt_id = str(payload.get("attempt_id") or "")
+        code = str(payload.get("code") or "")
+    except (ValueError, AttributeError, UnicodeDecodeError):
+        return _json_error("Paste the code from the sign-in page.")
+    try:
+        submit_code(person, _plan_backend(backend), attempt_id=attempt_id, code=code)
+    except PlanLinkError as exc:
+        return _json_error(str(exc))
+    return JsonResponse({"ok": True})
+
+
+@require_GET
+def ai_plan_status(request, backend):
+    person = get_object_or_404(Person, user=request.user)
+    try:
+        state = poll_login(person, _plan_backend(backend))
+    except PlanLinkError as exc:
+        return _json_error(str(exc))
+    if state.get("linked"):
+        record_security_event(person, EVENT_TYPES.AI_CONNECTION_CHANGED, request=request)
+    return JsonResponse({"ok": True, **state})
+
+
+@require_POST
+@requires_recent_auth("unlink-ai-plan", form_url_name="settings-ai")
+def ai_plan_unlink(request, backend):
+    person = get_object_or_404(Person, user=request.user)
+    try:
+        unlink(person, _plan_backend(backend))
+        record_security_event(person, EVENT_TYPES.AI_CONNECTION_CHANGED, request=request)
+        messages.success(request, "Your plan was unlinked.")
+    except PlanLinkError as exc:
+        messages.error(request, str(exc))
+    return redirect("settings-ai")
+
+
+@require_POST
+@requires_recent_auth("ai-offer-plan", form_url_name="settings-ai")
+def ai_save_offer_plan(request):
+    person = get_object_or_404(Person, user=request.user)
+    form = AiOfferPlanLinksForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, "Choose whether to offer plan linking.")
+        return redirect("settings-ai")
+    try:
+        set_offer_plan_links(person, form.cleaned_data["offer_plan_links"])
+        messages.success(request, "Plan linking setting was saved.")
+    except PermissionDenied:
+        messages.error(request, "Only the connection owner can offer plan linking.")
     return redirect("settings-ai")

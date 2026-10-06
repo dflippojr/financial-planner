@@ -1708,6 +1708,8 @@ class AiProviderConnection(models.Model):
     offer_local_to_household = models.BooleanField(default=False)
     # The host offers the tower's local model for their own chat. Off until the owner has verified it.
     offer_local_chat = models.BooleanField(default=False)
+    # Household members may link their own Claude or Codex plan through this connection.
+    offer_plan_links = models.BooleanField(default=False)
     connected_at = models.DateTimeField(default=timezone.now)
     last_status = models.CharField(max_length=80, blank=True, default="")
 
@@ -1731,6 +1733,30 @@ class AiProviderConnection(models.Model):
 
     def __str__(self):
         return f"AI connection {self.pk}"
+
+
+class AiPlanLink(models.Model):
+    """A member's own Claude or Codex plan, linked through an Agent Harness connection.
+
+    The login itself lives in the harness; this row only records that the member
+    linked one and which connection it was linked through.
+    """
+
+    person = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="ai_plan_links")
+    backend = models.CharField(max_length=16)
+    connection = models.ForeignKey(AiProviderConnection, on_delete=models.CASCADE, related_name="plan_links")
+    # The harness refused a request because the login lapsed; show the Link prompt.
+    needs_login = models.BooleanField(default=False)
+    linked_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("person", "backend"), name="ai_plan_link_unique_person_backend"),
+            models.CheckConstraint(condition=Q(backend__in=("claude", "codex")), name="ai_plan_link_backend_valid"),
+        ]
+
+    def __str__(self):
+        return f"AI plan link {self.pk}"
 
 
 class AiJob(models.Model):

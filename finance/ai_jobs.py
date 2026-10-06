@@ -11,10 +11,12 @@ from django.utils import timezone
 
 from .ai_harness import failure_from_http, local_model_ready, model_status
 from .ai_http import HarnessHttpError
+from .ai_plan import plan_end_user
 from .ai_services import AiError, _token, offered_local_connection, resolve_ai, run_structured
 from .ai_types import (
     AUTHORIZATION_REQUIRED,
     LOCAL_BACKEND,
+    LOGIN_REQUIRED,
     PROVIDER_ERROR,
     SHARED_CONNECTION_ID_REF,
     SHARED_LOCAL_REF,
@@ -34,7 +36,9 @@ FEATURE_PROMPTS = {
 def enqueue_job(person, *, feature, input_refs=None, backend=""):
     connection_row, chosen = resolve_ai(person, use_chat=False, requested_backend=backend)
     refs = dict(input_refs or {})
-    if connection_row is not None and connection_row.owner_id != person.id:
+    if connection_row is not None and plan_end_user(person, connection_row, chosen):
+        refs[SESSION_CONNECTION_KEY] = _connection_marker(connection_row)
+    elif connection_row is not None and connection_row.owner_id != person.id:
         refs[SHARED_LOCAL_REF] = True
         refs[SHARED_CONNECTION_ID_REF] = connection_row.pk
         refs[SESSION_CONNECTION_KEY] = _connection_marker(connection_row)
@@ -116,7 +120,8 @@ def _process_one(job, moment):
     if member_connection is None:
         return _fail_if_unchanged(job, UNAVAILABLE)
     backend = job.backend or backend
-    if member_connection.owner_id != job.member_id:
+    own_plan = bool(plan_end_user(job.member, member_connection, backend))
+    if member_connection.owner_id != job.member_id and not own_plan:
         if backend != LOCAL_BACKEND or not member_connection.offer_local_to_household:
             return _fail_if_unchanged(job, UNAVAILABLE)
     # A job with a session id resumes that session (it may already be done), so it
@@ -200,8 +205,8 @@ def _process_one(job, moment):
             )
         )
         return True
-    if result.failure_code == AUTHORIZATION_REQUIRED:
-        _fail(job, AUTHORIZATION_REQUIRED)
+    if result.failure_code in (AUTHORIZATION_REQUIRED, LOGIN_REQUIRED):
+        _fail(job, result.failure_code)
         return True
     if result.session_open:
         return _wait_for_open_session(job, moment, result.failure_code or UNAVAILABLE)

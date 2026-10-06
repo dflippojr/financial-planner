@@ -1039,6 +1039,13 @@ class AiOfferLocalChatForm(forms.Form):
     )
 
 
+class AiOfferPlanLinksForm(forms.Form):
+    offer_plan_links = forms.BooleanField(
+        required=False,
+        label="Let household members link their own Claude or Codex plan through this connection",
+    )
+
+
 class AiSharedLocalForm(forms.Form):
     use_shared_local_chat = forms.BooleanField(
         required=False,

@@ -40,6 +40,13 @@ class FakeHarnessState:
         self.pending_tool_calls = None
         self.tool_outputs = []
         self.session_create_delay = 0
+        # End-user logins: (end_user, backend) -> {"linked": bool, "attempt": dict | None}
+        self.end_user_logins = {}
+        self.login_codes = []
+        self.login_starts = []
+        self.login_deletes = []
+        self.login_start_error = None
+        self.codex_polls_to_link = 1
         self.app_tools_only = {"local": True, "claude": True, "codex": False, "cursor": False}
 
     def backends(self):
@@ -93,6 +100,24 @@ class FakeHarnessState:
                 "app_tools_only": self.app_tools_only.get("cursor", False),
             },
         ]
+
+
+def _login_parts(path):
+    """('end_user', 'backend') or ('end_user', 'backend', 'attempt') for a login path, else None."""
+    parts = path.strip("/").split("/")
+    if len(parts) < 6 or parts[:3] != ["api", "v1", "end-users"] or parts[4] != "logins":
+        return None
+    if len(parts) == 6:
+        return (parts[3], parts[5])
+    if len(parts) == 8 and parts[7] == "code":
+        return (parts[3], parts[5], parts[6])
+    return None
+
+
+def _public(attempt):
+    if not attempt:
+        return None
+    return {key: value for key, value in attempt.items() if key != "polls"}
 
 
 def start_fake_harness(state=None):
@@ -162,6 +187,21 @@ def start_fake_harness(state=None):
                     ],
                 )
                 return
+            login = _login_parts(parsed.path)
+            if login is not None and len(login) == 2:
+                if not self._auth():
+                    return
+                row = harness.end_user_logins.get(login)
+                if row is None:
+                    self._json(200, {"linked": False, "attempt": None})
+                    return
+                attempt = row.get("attempt")
+                if attempt and not row["linked"] and login[1] == "codex":
+                    attempt["polls"] += 1
+                    if attempt["polls"] >= harness.codex_polls_to_link:
+                        row["linked"] = True
+                self._json(200, {"linked": row["linked"], "attempt": None if row["linked"] else _public(attempt)})
+                return
             if parsed.path.startswith("/api/v1/sessions/") and parsed.path.endswith("/tool_calls"):
                 if not self._auth():
                     return
@@ -208,10 +248,54 @@ def start_fake_harness(state=None):
                 return
             self._json(404, {"detail": "not found"})
 
+        def do_DELETE(self):
+            parsed = urlparse(self.path)
+            harness.requests.append(("DELETE", parsed.path))
+            login = _login_parts(parsed.path)
+            if login is None or len(login) != 2 or not self._auth():
+                if login is None:
+                    self._json(404, {"detail": "not found"})
+                return
+            harness.login_deletes.append(login)
+            harness.end_user_logins.pop(login, None)
+            self._json(200, {"linked": False})
+
         def do_POST(self):
             parsed = urlparse(self.path)
             harness.requests.append(("POST", parsed.path))
             body = self._read_json()
+            login = _login_parts(parsed.path)
+            if login is not None:
+                if not self._auth():
+                    return
+                if len(login) == 2:
+                    if harness.login_start_error:
+                        self._json(harness.login_start_error, {"error": {"code": "provider_error"}})
+                        return
+                    harness.login_starts.append(login)
+                    attempt = {
+                        "attempt_id": f"att-{len(harness.login_starts)}",
+                        "verification_url": f"https://login.example.test/{login[1]}",
+                        "needs_code": login[1] == "claude",
+                        "status": "pending",
+                        "polls": 0,
+                    }
+                    if login[1] == "codex":
+                        attempt["user_code"] = "ABCD-1234"
+                    harness.end_user_logins[login] = {"linked": False, "attempt": attempt}
+                    self._json(200, _public(attempt))
+                    return
+                row = harness.end_user_logins.get(login[:2])
+                if row is None or not row["attempt"] or row["attempt"]["attempt_id"] != login[2]:
+                    self._json(404, {"detail": "not found"})
+                    return
+                harness.login_codes.append(str(body.get("code") or ""))
+                if str(body.get("code") or "").startswith("bad"):
+                    self._json(400, {"detail": "bad code " + str(body.get("code")), "error": {"code": "invalid_request"}})
+                    return
+                row["linked"] = True
+                self._json(200, {"ok": True})
+                return
             if parsed.path == "/api/v1/models/warm":
                 if not self._auth():
                     return
@@ -248,6 +332,16 @@ def start_fake_harness(state=None):
                     return
                 tools_only = bool(body.get("tools_only"))
                 backend = str(body.get("backend") or "")
+                end_user = str(body.get("end_user") or "")
+                if end_user and not (harness.end_user_logins.get((end_user, backend)) or {}).get("linked"):
+                    self._json(
+                        409,
+                        {
+                            "detail": "end user has no login",
+                            "error": {"code": "end_user_login_required", "message": "synthetic"},
+                        },
+                    )
+                    return
                 if tools_only and "project" in body and body.get("project") not in (None, ""):
                     self._json(
                         400,

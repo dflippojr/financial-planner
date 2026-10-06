@@ -29,6 +29,9 @@ from .ai_types import (
     HOSTED_BACKENDS,
     LOCAL_BACKEND,
     LIMIT_REACHED,
+    LOGIN_REQUIRED,
+    PLAN_BACKENDS,
+    PLAN_REPLACES_API,
     PROVIDER_ERROR,
     SHARED_CONNECTION_ID_REF,
     SHARED_LOCAL_CHOICE,
@@ -37,6 +40,7 @@ from .ai_types import (
     ProviderResult,
     Usage,
 )
+from .ai_plan import mark_login_required, plan_end_user, plan_link, plan_links
 from .ai_urls import HarnessUrlError, parse_harness_url
 from .encryption import decrypt_secret, encrypt_secret
 from .lifecycle_services import _DENIED, _person_for
@@ -104,7 +108,7 @@ def member_has_ai(principal):
         return False
     if not may_use_ai(person):
         return False
-    if connection_for(person) is not None or api_connections(person):
+    if connection_for(person) is not None or api_connections(person) or plan_links(person):
         return True
     opted = person.use_shared_local_chat or person.use_shared_local_background
     return opted and offered_local_connection(person) is not None
@@ -129,15 +133,29 @@ def offered_local_connection(principal):
     )
 
 
+def _linked_plan(person, backend):
+    """The connection and backend of the member's own linked plan, when they have one for it."""
+    link = plan_link(person, backend)
+    if link is None:
+        return None
+    return link.connection, backend
+
+
 def resolve_ai(principal, *, use_chat, requested_backend=None):
     person = _person_for(principal)
     requested = (requested_backend or "").strip()
     if requested in API_KINDS:
         return api_connection(person, requested), requested
+    if requested in PLAN_BACKENDS:
+        # A linked plan wins over the member's API key for that backend.
+        linked = _linked_plan(person, requested)
+        if linked is not None:
+            return linked
     if not requested:
         preferred = preferred_api_connection(person, use_chat=use_chat)
         if preferred is not None:
-            return preferred, preferred.kind
+            linked = _linked_plan(person, next(b for b, k in PLAN_REPLACES_API.items() if k == preferred.kind))
+            return linked if linked is not None else (preferred, preferred.kind)
     own = connection_for(person)
     if requested in HOSTED_BACKENDS:
         return own, requested
@@ -147,10 +165,18 @@ def resolve_ai(principal, *, use_chat, requested_backend=None):
         if shared is not None:
             return shared, LOCAL_BACKEND
     if own is None:
+        if not requested:
+            first = plan_links(person)
+            if first:
+                return first[0].connection, first[0].backend
         return None, requested
     chosen = requested or ((own.chat_backend if use_chat else own.background_backend) or "").strip()
     if chosen == SHARED_LOCAL_CHOICE:
         return None, chosen
+    if chosen in PLAN_BACKENDS:
+        linked = _linked_plan(person, chosen)
+        if linked is not None:
+            return linked
     return own, chosen
 
 
@@ -582,8 +608,9 @@ def _run(
             context=context,
             history=history,
         )
+    end_user = plan_end_user(person, connection, chosen)
     shared = connection.owner_id != person.id
-    if shared:
+    if shared and not end_user:
         denied = _shared_local_denied(person, connection, chosen, use_chat=use_chat, resuming=polling_resume)
         if denied is not None:
             return denied
@@ -597,6 +624,9 @@ def _run(
         return ProviderResult(ok=False, failure_code=exc.failure_code)
     project = connection.harness_project or getattr(settings, "AGENT_HARNESS_PROJECT", "financial-planner")
     model = "" if shared else (connection.chat_model if use_chat else connection.background_model)
+    if end_user:
+        # Another login's model choice never applies to a member's own plan.
+        model = ""
     known_session = {"id": session_id or ""}
 
     def track_session(new_id):
@@ -641,6 +671,7 @@ def _run(
                 monotonic=monotonic,
                 tools_only=tools_only,
                 context=context,
+                end_user=end_user,
             )
     except HarnessHttpError as exc:
         # A transport or server error while polling says nothing about the session
@@ -653,6 +684,8 @@ def _run(
             session_id=known_session["id"] or None,
             session_open=bool(known_session["id"]) and transient,
         )
+    if end_user and result.failure_code == LOGIN_REQUIRED:
+        mark_login_required(person, chosen)
     record_usage(
         person,
         provider=connection.kind,
