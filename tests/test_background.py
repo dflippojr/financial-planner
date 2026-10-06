@@ -63,12 +63,14 @@ def test_dead_lane_exits_process_even_with_chat_pool_alive(monkeypatch):
 def test_job_failure_does_not_stop_polling_and_closes_connections(monkeypatch):
     stop = Mock(is_set=Mock(side_effect=[False, False, True]))
     jobs = Mock(side_effect=[RuntimeError("synthetic failure"), None])
+    lane = Mock(tick=jobs)
     monkeypatch.setattr(background, "close_old_connections", Mock())
     close = Mock()
-    monkeypatch.setattr(background, "process_due_jobs", jobs)
+    monkeypatch.setattr(background, "AiJobLane", lambda: lane)
     monkeypatch.setattr(background.connections, "close_all", close)
     background.run_ai_jobs(stop)
     assert jobs.call_count == close.call_count == stop.wait.call_count == 2
+    lane.close.assert_called_once()
 
 
 def test_daily_pass_waits_runs_and_advances_schedule(monkeypatch):

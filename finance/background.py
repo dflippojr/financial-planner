@@ -14,7 +14,7 @@ from django.core.management import call_command
 from django.db import close_old_connections, connections
 from django.utils import timezone
 
-from .ai_jobs import process_due_jobs
+from .ai_jobs import AiJobLane
 from .chat_runner import ChatLane
 from .simplefin_schedule import next_scheduled_sync, parse_five_field_cron, seconds_until
 
@@ -23,15 +23,19 @@ logger = logging.getLogger(__name__)
 
 def run_ai_jobs(stop_event):
     poll = max(1, int(settings.AI_JOB_POLL_SECONDS))
-    while not stop_event.is_set():
-        close_old_connections()
-        try:
-            process_due_jobs()
-        except Exception:
-            logger.exception("AI job poll failed")
-        finally:
-            connections.close_all()
-        stop_event.wait(poll)
+    lane = AiJobLane()
+    try:
+        while not stop_event.is_set():
+            close_old_connections()
+            try:
+                lane.tick()
+            except Exception:
+                logger.exception("AI job poll failed")
+            finally:
+                connections.close_all()
+            stop_event.wait(poll)
+    finally:
+        lane.close()
 
 
 def run_daily_pass(stop_event):

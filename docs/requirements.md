@@ -549,3 +549,7 @@ Owner decisions:
 ## Stack memory (2026-10-06, #249)
 
 Owner-approved: preload the app in Gunicorn before its two gthread workers fork, keeping four threads and the 660-second timeout. One background container and one Django process run the daily SimpleFIN pass, batch AI jobs and interactive chat on independent threads. Keep restart on failure and the container Up check. Measure app and background memory limits with headroom; PostgreSQL remains uncapped. Request-spike root causes belong to the other performance issues.
+
+## Background AI concurrency (2026-10-06, #247)
+
+Owner-approved: the batch lane in the consolidated background runner polls every two seconds and runs at most three jobs concurrently, independently of the four chat workers and the daily pass. Fetch only enough due job IDs to fill free workers; use indexed due/stale lookups. Each job keeps its atomic claim, saved harness session, local-model quiet window, retry back-off and stale recovery rules. Independent category chunks and review/insight jobs do not share a harness session and can run concurrently for the same member. Use the shared harness completion poll from #245. Keep the background container capped at 512 MiB.
