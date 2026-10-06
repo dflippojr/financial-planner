@@ -10,6 +10,7 @@ AUTHORIZATION_REQUIRED = "authorization_required"
 LIMIT_REACHED = "limit_reached"
 PROVIDER_ERROR = "provider_error"
 APP_TOOLS_ONLY_UNSUPPORTED = "app_tools_only_unsupported"
+LOGIN_REQUIRED = "end_user_login_required"
 
 FAILURE_CODES = (
     UNAVAILABLE,
@@ -17,6 +18,7 @@ FAILURE_CODES = (
     LIMIT_REACHED,
     PROVIDER_ERROR,
     APP_TOOLS_ONLY_UNSUPPORTED,
+    LOGIN_REQUIRED,
 )
 
 HARNESS_FAILURE_MAP = {
@@ -30,9 +32,13 @@ HARNESS_FAILURE_MAP = {
     "limit_reached": LIMIT_REACHED,
     "provider_error": PROVIDER_ERROR,
     "app_tools_only_unsupported": APP_TOOLS_ONLY_UNSUPPORTED,
+    "end_user_login_required": LOGIN_REQUIRED,
 }
 
 HOSTED_BACKENDS = frozenset({"claude", "codex", "cursor"})
+# Backends a member can link their own subscription to, and the API-key kind each one replaces.
+PLAN_BACKENDS = ("claude", "codex")
+PLAN_REPLACES_API = {"claude": "anthropic_api", "codex": "openai_api"}
 LOCAL_BACKEND = "local"
 SHARED_LOCAL_CHOICE = "shared_local"
 SHARED_LOCAL_REF = "shared_local"

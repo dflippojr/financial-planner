@@ -1,3 +1,4 @@
+{% load static %}
 {% if show_ai_settings %}
 <section class="mb-6 rounded-box border border-base-300 p-4" aria-labelledby="ai-backends-heading">
   <h2 id="ai-backends-heading" class="mb-2 font-semibold">AI backends</h2>
@@ -88,6 +89,52 @@
     {% include "finance/_form_fields.html" with form=ai_key_connect_form %}
     <button type="submit" class="btn btn-primary">Save API key</button>
   </form>
+  <h3 class="mb-2 mt-6 font-semibold">Your Claude / Codex plan</h3>
+  <p class="mb-4 text-sm">Optional. Sign in to your own Claude or Codex subscription and your chat and background AI run on your plan, never on anyone else's login. Requests send your questions and the finance data the chat tools read to that provider. If you also saved an API key for the same provider, the plan is used instead.</p>
+  {% for card in ai_plan_cards %}
+  <div class="mb-3 rounded-box border border-base-300 p-3" data-plan-card="{{ card.backend }}">
+    <p class="mb-2 text-sm"><strong>{{ card.label }}</strong>:
+      {% if card.linked and card.needs_login %}Link your plan to use this.
+      {% elif card.linked %}Linked. {{ card.label }} requests use your plan{% if card.has_key %}, not your API key{% endif %}.
+      {% elif not card.available %}Not available: ask the household host to turn on plan linking.
+      {% else %}Not linked.{% endif %}
+    </p>
+    {% if card.available %}
+    <button type="button" class="btn btn-primary btn-sm" data-plan-link="{{ card.backend }}" data-plan-label="{{ card.label }}" data-plan-start="{% url 'ai-plan-start' card.backend %}" data-plan-code="{% url 'ai-plan-code' card.backend %}" data-plan-status="{% url 'ai-plan-status' card.backend %}">{% if card.linked %}Link again{% else %}Link{% endif %}</button>
+    {% endif %}
+    {% if card.linked %}
+    <form method="post" action="{% url 'ai-plan-unlink' card.backend %}" class="inline">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-outline btn-sm">Unlink</button>
+    </form>
+    {% endif %}
+  </div>
+  {% endfor %}
+  {% if ai_offer_plan_form %}
+  <form method="post" action="{% url 'ai-offer-plan' %}" class="max-w-lg space-y-3 mb-4">
+    {% csrf_token %}
+    {% include "finance/_form_fields.html" with form=ai_offer_plan_form %}
+    <button type="submit" class="btn btn-primary">Save plan linking</button>
+  </form>
+  {% endif %}
+  <dialog id="plan-link-dialog" class="modal" data-csrf="{{ csrf_token }}" aria-labelledby="plan-link-title">
+    <div class="modal-box">
+      <h3 id="plan-link-title" class="mb-2 font-semibold">Link your plan</h3>
+      <p id="plan-link-message" class="mb-3 text-sm" role="status"></p>
+      <p id="plan-link-url-row" class="mb-3 text-sm" hidden><a id="plan-link-url" class="link" href="#" target="_blank" rel="noopener noreferrer">Open the sign-in page</a></p>
+      <p id="plan-link-user-code-row" class="mb-3 text-sm" hidden>Enter this code there: <strong id="plan-link-user-code"></strong></p>
+      <form id="plan-link-code-form" class="mb-3 space-y-2" hidden>
+        <label for="plan-link-code-input" class="text-sm">Paste the code from the sign-in page</label>
+        <input id="plan-link-code-input" type="text" class="input input-bordered w-full" autocomplete="off" spellcheck="false">
+        <button type="submit" class="btn btn-primary btn-sm">Submit code</button>
+      </form>
+      <p id="plan-link-countdown" class="mb-3 text-sm opacity-80" hidden></p>
+      <div class="modal-action">
+        <button type="button" id="plan-link-cancel" class="btn">Cancel</button>
+      </div>
+    </div>
+  </dialog>
+  <script src="{% static 'js/ai-plan-link.js' %}" defer></script>
   {% if ai_connected or ai_key_cards %}
   <h3 class="mb-2 font-semibold">Usage</h3>
   {% if ai_usage %}

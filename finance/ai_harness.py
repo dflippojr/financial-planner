@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from urllib.parse import urljoin
+from urllib.parse import quote, urljoin
 
 from django.conf import settings
 
@@ -159,6 +159,7 @@ def run_session(
     monotonic=None,
     tools_only=False,
     context=None,
+    end_user="",
 ):
     payload = {
         "prompt": prompt,
@@ -173,6 +174,8 @@ def run_session(
         payload["model"] = model
     if context:
         payload["context"] = context
+    if end_user:
+        payload["end_user"] = end_user
     created = json_request(
         urljoin(base_url + "/", "api/v1/sessions"),
         token=token,
@@ -193,6 +196,32 @@ def run_session(
         sleep=sleep,
         monotonic=monotonic,
     )
+
+
+def _login_url(base_url, end_user, backend, suffix=""):
+    return urljoin(base_url + "/", f"api/v1/end-users/{quote(end_user, safe='')}/logins/{quote(backend, safe='')}{suffix}")
+
+
+def start_end_user_login(base_url, token, end_user, backend):
+    return json_request(_login_url(base_url, end_user, backend), token=token, method="POST", body={})
+
+
+def submit_end_user_code(base_url, token, end_user, backend, attempt_id, code):
+    # The pasted code goes straight into this one request; nothing here keeps or logs it.
+    return json_request(
+        _login_url(base_url, end_user, backend, f"/{quote(attempt_id, safe='')}/code"),
+        token=token,
+        method="POST",
+        body={"code": code},
+    )
+
+
+def end_user_login_state(base_url, token, end_user, backend):
+    return json_request(_login_url(base_url, end_user, backend), token=token)
+
+
+def unlink_end_user_login(base_url, token, end_user, backend):
+    return json_request(_login_url(base_url, end_user, backend), token=token, method="DELETE")
 
 
 def send_session_message(

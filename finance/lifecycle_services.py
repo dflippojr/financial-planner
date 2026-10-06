@@ -543,6 +543,7 @@ def member_deletion_counts(person):
     """Counts shown on the delete-my-data confirmation page (counts only)."""
     from .models import (
         AiJob,
+        AiPlanLink,
         AiProviderConnection,
         AiUsageEvent,
         Budget,
@@ -572,6 +573,7 @@ def member_deletion_counts(person):
         + RecurringSeries.objects.filter(person=person).count()
         + AiProviderConnection.objects.filter(owner=person).count()
         + AiJob.objects.filter(member=person).count()
+        + AiPlanLink.objects.filter(person=person).count()
         + AiUsageEvent.objects.filter(member=person).count()
         + CategorySuggestion.objects.filter(member=person).count()
         + SimpleFinConnection.objects.filter(owner=person).count()
@@ -661,6 +663,7 @@ def _delete_personal_records(person):
         Alert,
         AlertSettings,
         AiJob,
+        AiPlanLink,
         AiProviderConnection,
         AiUsageEvent,
         BillsCalendarSettings,
@@ -698,6 +701,7 @@ def _delete_personal_records(person):
 
     SavedTransactionFilter.objects.filter(member=person).delete()
     AiJob.objects.filter(member=person).delete()
+    AiPlanLink.objects.filter(person=person).delete()
     AiUsageEvent.objects.filter(member=person).delete()
     AiProviderConnection.objects.filter(owner=person).delete()
     PrivacyPolicyAcceptance.objects.filter(person=person).delete()
