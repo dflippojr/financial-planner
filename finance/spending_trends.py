@@ -9,6 +9,7 @@ from .cash_flow import (
     GROUPING_MONTH,
     MAX_REPORT_PERIODS,
     _change_from_previous,
+    _combine_category_spending,
     _filter_query,
     category_color_index,
     format_minor,
@@ -18,6 +19,8 @@ from .cash_flow import (
     previous_equal_range,
     spending_by_category_report,
 )
+from .category_services import spending_by_category_by_window
+from .models import Category
 
 
 CHART_CATEGORY_LIMIT = 8
@@ -74,25 +77,25 @@ def spending_category_trend_report(
         for row in overall.rows
     ]
     periods = []
-    for window in iter_period_windows(date_from, date_to, grouping):
-        period_report = spending_by_category_report(
-            principal,
-            date_from=window.start,
-            date_to=window.end,
-            account=account,
-            scope=scope,
-            grouping=grouping,
-            tag=tag,
-        )
-        amounts = _amounts_by_key(period_report.rows)
+    windows = list(iter_period_windows(date_from, date_to, grouping))
+    named = {item.pk: item for item in Category.objects.visible_to(principal)}
+    window_spending = spending_by_category_by_window(
+        principal,
+        [(window.start, window.end) for window in windows],
+        accounts=overall.accounts,
+        tag=tag,
+    )
+    for window, (total_spending_minor, by_category_id) in zip(windows, window_spending):
+        combined = _combine_category_spending(by_category_id, named)
+        amounts = {item["filter_value"]: item["spending_minor"] for item in combined.values()}
         values = [amounts.get(item.key, 0) for item in categories]
         periods.append(
             SimpleNamespace(
                 start=window.start,
                 end=window.end,
                 label=period_label(window, today=today),
-                total_spending_minor=period_report.total_spending_minor,
-                total_spending_display=period_report.total_spending_display,
+                total_spending_minor=total_spending_minor,
+                total_spending_display=format_minor(total_spending_minor),
                 values=values,
                 displays=[format_minor(value) for value in values],
             )

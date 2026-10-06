@@ -7,7 +7,7 @@ from urllib.parse import urlencode
 from django.urls import reverse
 from django.utils import timezone
 
-from .category_services import income_and_spending_totals
+from .category_services import income_and_spending_by_window, income_and_spending_totals
 from .models import Account, Category, ImportBatch, Transaction
 
 
@@ -522,13 +522,18 @@ def cash_flow_report(
     batches_by_account = _batches_by_account(principal, accounts)
     account_filter = accounts
     periods = []
-    for window in iter_period_windows(date_from, date_to, grouping):
-        totals = income_and_spending_totals(
-            principal,
-            date_from=window.start,
-            date_to=window.end,
-            accounts=account_filter,
-            tag=tag,
+    windows = list(iter_period_windows(date_from, date_to, grouping))
+    window_totals = income_and_spending_by_window(
+        principal,
+        [(window.start, window.end) for window in windows],
+        accounts=account_filter,
+        tag=tag,
+    )
+    for window, (income_minor, spending_minor) in zip(windows, window_totals):
+        totals = SimpleNamespace(
+            income_minor=income_minor,
+            spending_minor=spending_minor,
+            net_minor=income_minor - spending_minor,
         )
         missing = bool(accounts) and _period_missing_import(window, accounts, batches_by_account)
         periods.append(
@@ -553,22 +558,24 @@ def cash_flow_report(
         if accounts
         else False
     )
-    current = income_and_spending_totals(
-        principal,
-        date_from=date_from,
-        date_to=date_to,
-        accounts=account_filter,
-        tag=tag,
+    # The period windows partition the range, so their sum is the range total.
+    current_income = sum(income for income, _ in window_totals)
+    current_spending = sum(spending for _, spending in window_totals)
+    current = SimpleNamespace(
+        income_minor=current_income,
+        spending_minor=current_spending,
+        net_minor=current_income - current_spending,
     )
     previous_from, previous_to = previous_equal_range(date_from, date_to)
     previous = None
     if previous_from is not None:
-        previous = income_and_spending_totals(
-            principal,
-            date_from=previous_from,
-            date_to=previous_to,
-            accounts=account_filter,
-            tag=tag,
+        ((previous_income, previous_spending),) = income_and_spending_by_window(
+            principal, [(previous_from, previous_to)], accounts=account_filter, tag=tag
+        )
+        previous = SimpleNamespace(
+            income_minor=previous_income,
+            spending_minor=previous_spending,
+            net_minor=previous_income - previous_spending,
         )
     return SimpleNamespace(
         accounts=accounts,
