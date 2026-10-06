@@ -1,0 +1,45 @@
+name: Repository guards
+
+# Two cheap checks for a public repo that handles financial data: no tracked
+# statement exports outside the fixture allow-list, and no known-vulnerable
+# pinned dependency. Uses no secrets. The weekly run surfaces advisories that
+# appear on an unchanged pin; it only fails visibly and opens no issue.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: guards-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  statement-files:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - run: python scripts/check_statement_files.py
+
+  pip-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - run: python -m pip install pip-audit
+      # To ignore an advisory that has no fixed release, add
+      # --ignore-vuln <ID> here with a dated justification comment.
+      - run: pip-audit -r requirements.txt
