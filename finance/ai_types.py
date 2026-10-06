@@ -37,6 +37,9 @@ LOCAL_BACKEND = "local"
 SHARED_LOCAL_CHOICE = "shared_local"
 SHARED_LOCAL_REF = "shared_local"
 SHARED_CONNECTION_ID_REF = "shared_connection_id"
+ANTHROPIC_API = "anthropic_api"
+OPENAI_API = "openai_api"
+API_KINDS = (ANTHROPIC_API, OPENAI_API)
 
 
 def map_harness_failure(code) -> str:

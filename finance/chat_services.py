@@ -21,6 +21,7 @@ from .ai_services import (
 )
 from .ai_tools import INSTRUCTION_CONTEXT, default_tools
 from .ai_types import (
+    API_KINDS,
     APP_TOOLS_ONLY_UNSUPPORTED,
     AUTHORIZATION_REQUIRED,
     LIMIT_REACHED,
@@ -294,6 +295,7 @@ def answer_turn(turn, *, sleep=None, monotonic=None):
         follow_up=follow_up,
         on_tool=on_tool,
         allow_tool=allow_tool,
+        history=_api_history(conversation, question) if connection.kind in API_KINDS else (),
     )
     with transaction.atomic():
         locked = _lock_conversation(conversation.pk)
@@ -341,6 +343,20 @@ def _new_conversation(person, backend):
         expires_at=now + timedelta(days=expire_days()),
         used_account_ids=[],
     )
+
+
+def _api_history(conversation, question):
+    """Earlier turns, resent on every request: an API-key backend keeps no session."""
+    query = conversation.messages.filter(
+        role__in=(AiConversationMessage.Role.USER, AiConversationMessage.Role.ASSISTANT),
+        status=AiConversationMessage.Status.DONE,
+    )
+    if question is not None:
+        query = query.filter(pk__lt=question.pk)
+    rows = list(query.order_by("-pk")[: 2 * max_turns()])[::-1]
+    while rows and rows[0].role != AiConversationMessage.Role.USER:
+        rows.pop(0)
+    return [{"role": row.role, "content": row.content} for row in rows]
 
 
 def _harness_context(page_context):

@@ -1689,11 +1689,17 @@ class PrivacyPolicyAcceptance(models.Model):
 class AiProviderConnection(models.Model):
     class Kind(models.TextChoices):
         AGENT_HARNESS = "agent_harness", "Agent Harness"
+        ANTHROPIC_API = "anthropic_api", "Anthropic API"
+        OPENAI_API = "openai_api", "OpenAI API"
 
     owner = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="ai_connections")
     kind = models.CharField(max_length=32, choices=Kind, default=Kind.AGENT_HARNESS)
-    base_url = models.CharField(max_length=255)
+    # Empty for the API-key kinds, whose encrypted_token is the member's API key.
+    base_url = models.CharField(max_length=255, blank=True, default="")
     encrypted_token = models.BinaryField()
+    # API-key kinds only: this connection answers chat or background jobs.
+    use_for_chat = models.BooleanField(default=False)
+    use_for_background = models.BooleanField(default=False)
     harness_project = models.CharField(max_length=80, blank=True, default="")
     chat_backend = models.CharField(max_length=32, blank=True, default="")
     background_backend = models.CharField(max_length=32, blank=True, default="")
@@ -1716,7 +1722,7 @@ class AiProviderConnection(models.Model):
         constraints = [
             models.UniqueConstraint(fields=("owner", "kind"), name="ai_connection_unique_owner_kind"),
             models.CheckConstraint(
-                condition=Q(kind__in=("agent_harness",)),
+                condition=Q(kind__in=("agent_harness", "anthropic_api", "openai_api")),
                 name="ai_connection_kind_valid",
             ),
         ]

@@ -25,11 +25,9 @@ class HarnessHttpError(Exception):
         super().__init__("The AI provider could not be reached.")
 
 
-def json_request(url, *, token, method="GET", body=None, timeout=30):
-    headers = {
-        "Accept": "application/json",
-        "Authorization": f"Bearer {token}",
-    }
+def json_request(url, *, token, method="GET", body=None, timeout=30, headers=None):
+    """Send one JSON request. `headers` replaces the bearer header (for x-api-key providers)."""
+    headers = {"Accept": "application/json", **(headers if headers is not None else {"Authorization": f"Bearer {token}"})}
     data = None
     if body is not None:
         data = json.dumps(body).encode("utf-8")

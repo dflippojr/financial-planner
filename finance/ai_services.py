@@ -21,8 +21,10 @@ from .ai_harness import (
     wait_for_session,
     warm_local_model,
 )
+from .ai_api import label as api_label, looks_like_key, model_for, run_api
 from .ai_http import HarnessHttpError
 from .ai_types import (
+    API_KINDS,
     AUTHORIZATION_REQUIRED,
     HOSTED_BACKENDS,
     LOCAL_BACKEND,
@@ -71,8 +73,28 @@ class AiError(Exception):
 
 
 def connection_for(principal):
+    """The member's Agent Harness connection. API-key connections are separate."""
     person = _person_for(principal)
-    return AiProviderConnection.objects.owned_by(person).first()
+    return AiProviderConnection.objects.owned_by(person).filter(
+        kind=AiProviderConnection.Kind.AGENT_HARNESS
+    ).first()
+
+
+def api_connection(principal, kind):
+    person = _person_for(principal)
+    if kind not in API_KINDS:
+        return None
+    return AiProviderConnection.objects.owned_by(person).filter(kind=kind).first()
+
+
+def api_connections(principal):
+    person = _person_for(principal)
+    return list(AiProviderConnection.objects.owned_by(person).filter(kind__in=API_KINDS).order_by("kind"))
+
+
+def preferred_api_connection(person, *, use_chat):
+    field = "use_for_chat" if use_chat else "use_for_background"
+    return AiProviderConnection.objects.owned_by(person).filter(kind__in=API_KINDS, **{field: True}).first()
 
 
 def member_has_ai(principal):
@@ -82,7 +104,7 @@ def member_has_ai(principal):
         return False
     if not may_use_ai(person):
         return False
-    if connection_for(person) is not None:
+    if connection_for(person) is not None or api_connections(person):
         return True
     opted = person.use_shared_local_chat or person.use_shared_local_background
     return opted and offered_local_connection(person) is not None
@@ -109,8 +131,14 @@ def offered_local_connection(principal):
 
 def resolve_ai(principal, *, use_chat, requested_backend=None):
     person = _person_for(principal)
-    own = connection_for(person)
     requested = (requested_backend or "").strip()
+    if requested in API_KINDS:
+        return api_connection(person, requested), requested
+    if not requested:
+        preferred = preferred_api_connection(person, use_chat=use_chat)
+        if preferred is not None:
+            return preferred, preferred.kind
+    own = connection_for(person)
     if requested in HOSTED_BACKENDS:
         return own, requested
     wants_shared = person.use_shared_local_chat if use_chat else person.use_shared_local_background
@@ -165,6 +193,88 @@ def connect_harness(principal, *, base_url, token):
     return connection
 
 
+def connect_api_key(principal, *, kind, key, chat_model="", background_model=""):
+    """Save a member's own provider key. It is stored encrypted and never shown again."""
+    person = _person_for(principal)
+    if not may_use_ai(person):
+        raise AiError(CONNECT_DENIED, AUTHORIZATION_REQUIRED)
+    if kind not in API_KINDS:
+        raise AiError("Choose Anthropic or OpenAI.")
+    secret = (key or "").strip()
+    if not looks_like_key(kind, secret):
+        raise AiError(f"Paste a valid {api_label(kind)} key.")
+    existing = api_connection(person, kind)
+    connection, _created = AiProviderConnection.objects.update_or_create(
+        owner=person,
+        kind=kind,
+        defaults={
+            "base_url": "",
+            "encrypted_token": encrypt_secret(secret),
+            "chat_model": model_for(kind, chat_model, use_chat=True),
+            "background_model": model_for(kind, background_model, use_chat=False),
+            "use_for_chat": existing.use_for_chat if existing else False,
+            "use_for_background": existing.use_for_background if existing else False,
+            "connected_at": timezone.now(),
+            "last_status": "",
+        },
+    )
+    return connection
+
+
+def set_api_defaults(principal, *, kind, chat_model, background_model, use_chat, use_background):
+    person = _person_for(principal)
+    connection = api_connection(person, kind)
+    if connection is None:
+        raise AiError("Connect that provider first.")
+    connection.chat_model = model_for(kind, chat_model, use_chat=True)
+    connection.background_model = model_for(kind, background_model, use_chat=False)
+    connection.use_for_chat = bool(use_chat)
+    connection.use_for_background = bool(use_background)
+    connection.save(update_fields=("chat_model", "background_model", "use_for_chat", "use_for_background"))
+    # One backend per feature: choosing this connection replaces any other choice.
+    _clear_other_choices(person, keep=connection, chat=connection.use_for_chat, background=connection.use_for_background)
+    return connection
+
+
+def disconnect_api_key(principal, kind):
+    person = _person_for(principal)
+    if kind in API_KINDS:
+        AiProviderConnection.objects.owned_by(person).filter(kind=kind).delete()
+
+
+def _clear_other_choices(person, *, keep=None, chat=False, background=False, shared_local=True):
+    """Make the chosen API connection the only choice for those features."""
+    others = AiProviderConnection.objects.owned_by(person).filter(kind__in=API_KINDS)
+    if keep is not None:
+        others = others.exclude(pk=keep.pk)
+    if chat:
+        others.update(use_for_chat=False)
+    if background:
+        others.update(use_for_background=False)
+    fields = []
+    if not shared_local:
+        return
+    if chat and person.use_shared_local_chat:
+        person.use_shared_local_chat = False
+        fields.append("use_shared_local_chat")
+    if background and person.use_shared_local_background:
+        person.use_shared_local_background = False
+        fields.append("use_shared_local_background")
+    if fields:
+        person.save(update_fields=(*fields, "updated_at"))
+
+
+def api_usage_summary(principal):
+    """Approximate tokens this calendar month on the member's own API connections."""
+    person = _person_for(principal)
+    start = timezone.localtime().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    totals = {kind: 0 for kind in API_KINDS}
+    rows = AiUsageEvent.objects.visible_to(person).filter(provider__in=API_KINDS, created_at__gte=start)
+    for row in rows.values("provider", "prompt_tokens", "completion_tokens"):
+        totals[row["provider"]] += (row["prompt_tokens"] or 0) + (row["completion_tokens"] or 0)
+    return totals
+
+
 def _looks_like_app_token(secret):
     # The token goes into an HTTP header: a curly quote or line break from a bad
     # paste would make http.client fail before the harness sees the request.
@@ -191,7 +301,9 @@ def disconnect_harness(principal):
     connection = connection_for(person)
     if connection is not None:
         stop_shared_local_use(connection)
-    AiProviderConnection.objects.owned_by(person).delete()
+    AiProviderConnection.objects.owned_by(person).filter(
+        kind=AiProviderConnection.Kind.AGENT_HARNESS
+    ).delete()
     _forget_saved_sessions(person)
 
 
@@ -230,6 +342,10 @@ def set_defaults(principal, *, chat_backend, background_backend, chat_model="", 
     connection.chat_model = (chat_model or "").strip()
     connection.background_model = (background_model or "").strip()
     person.save(update_fields=("use_shared_local_chat", "use_shared_local_background", "updated_at"))
+    # Choosing a harness backend replaces an API-key choice for that feature.
+    AiProviderConnection.objects.owned_by(person).filter(kind__in=API_KINDS).update(
+        use_for_chat=False, use_for_background=False
+    )
     connection.save(
         update_fields=(
             "chat_backend",
@@ -264,6 +380,7 @@ def set_shared_local_use(principal, *, chat, background):
     person.use_shared_local_chat = want_chat
     person.use_shared_local_background = want_background
     person.save(update_fields=("use_shared_local_chat", "use_shared_local_background", "updated_at"))
+    _clear_other_choices(person, chat=want_chat, background=want_background, shared_local=False)
     return person
 
 
@@ -375,6 +492,7 @@ def run_conversation(
     follow_up=False,
     on_tool=None,
     allow_tool=None,
+    history=(),
 ):
     use_tools_only = bool(tools) if tools_only is None else bool(tools_only)
     return _run(
@@ -393,6 +511,7 @@ def run_conversation(
         follow_up=follow_up,
         on_tool=on_tool,
         allow_tool=allow_tool,
+        history=history,
     )
 
 
@@ -427,6 +546,7 @@ def _run(
     on_tool=None,
     allow_tool=None,
     connection=None,
+    history=(),
 ):
     person = _person_for(principal)
     if not may_use_ai(person):
@@ -441,6 +561,19 @@ def _run(
         return ProviderResult(ok=False, failure_code=AUTHORIZATION_REQUIRED)
     # Polling a started session is not a new request; a follow-up prompt is.
     polling_resume = bool(session_id) and not follow_up
+    runner = _tool_runner(person, tools, allow_tool, on_tool)
+    if connection.kind in API_KINDS:
+        return _run_api_connection(
+            person,
+            connection,
+            prompt,
+            feature=feature,
+            use_chat=use_chat,
+            tools=tools,
+            runner=runner,
+            context=context,
+            history=history,
+        )
     shared = connection.owner_id != person.id
     if shared:
         denied = _shared_local_denied(person, connection, chosen, use_chat=use_chat, resuming=polling_resume)
@@ -456,18 +589,6 @@ def _run(
         return ProviderResult(ok=False, failure_code=exc.failure_code)
     project = connection.harness_project or getattr(settings, "AGENT_HARNESS_PROJECT", "financial-planner")
     model = "" if shared else (connection.chat_model if use_chat else connection.background_model)
-    runner = None
-    if tools:
-
-        def runner(name, args):
-            if allow_tool is not None:
-                denied = allow_tool(name, args)
-                if denied is not None:
-                    return denied.text, denied.ok
-            result = _invoke_tool(person, tools, name, args)
-            if on_tool is not None:
-                on_tool(result)
-            return result.text, result.ok
     known_session = {"id": session_id or ""}
 
     def track_session(new_id):
@@ -532,6 +653,52 @@ def _run(
         result=result,
         resumed=polling_resume,
     )
+    return result
+
+
+def _tool_runner(person, tools, allow_tool, on_tool):
+    if not tools:
+        return None
+
+    def runner(name, args):
+        if allow_tool is not None:
+            denied = allow_tool(name, args)
+            if denied is not None:
+                return denied.text, denied.ok
+        result = _invoke_tool(person, tools, name, args)
+        if on_tool is not None:
+            on_tool(result)
+        return result.text, result.ok
+
+    return runner
+
+
+def _run_api_connection(person, connection, prompt, *, feature, use_chat, tools, runner, context, history):
+    """A member's own API key: stateless, so nothing to resume and the history is resent."""
+    if connection.owner_id != person.id:
+        return ProviderResult(ok=False, failure_code=AUTHORIZATION_REQUIRED)
+    try:
+        key = _token(connection)
+    except AiError as exc:
+        return ProviderResult(ok=False, failure_code=exc.failure_code)
+    system = "\n\n".join(
+        f"{block['title']}:\n{block['content']}" for block in (context or ()) if block.get("content")
+    )
+    result = run_api(
+        connection.kind,
+        key,
+        model=model_for(
+            connection.kind,
+            connection.chat_model if use_chat else connection.background_model,
+            use_chat=use_chat,
+        ),
+        prompt=prompt,
+        system=system,
+        history=history,
+        tools=tools or (),
+        tool_runner=runner,
+    )
+    record_usage(person, provider=connection.kind, backend=connection.kind, feature=feature, result=result)
     return result
 
 

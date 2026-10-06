@@ -3,6 +3,9 @@ from decimal import Decimal
 
 from django import forms
 from django.conf import settings
+
+from .ai_api import MODELS as API_MODELS, label as api_label
+from .ai_types import API_KINDS
 from django.contrib.auth import get_user_model, password_validation
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator
@@ -975,6 +978,27 @@ class HarnessConnectForm(forms.Form):
         label="App token",
         widget=forms.PasswordInput(attrs={"autocomplete": "off"}),
     )
+
+
+class ApiKeyConnectForm(forms.Form):
+    provider = forms.ChoiceField(label="Provider", choices=[(kind, api_label(kind)) for kind in API_KINDS])
+    key = forms.CharField(
+        label="API key",
+        widget=forms.PasswordInput(attrs={"autocomplete": "off"}),
+    )
+
+
+class ApiKeyDefaultsForm(forms.Form):
+    chat_model = forms.ChoiceField(label="Chat model")
+    background_model = forms.ChoiceField(label="Background jobs model")
+    use_for_chat = forms.BooleanField(required=False, label="Use for chat")
+    use_for_background = forms.BooleanField(required=False, label="Use for background jobs")
+
+    def __init__(self, *args, kind, **kwargs):
+        super().__init__(*args, **kwargs)
+        choices = [(name, name) for name in API_MODELS[kind]]
+        self.fields["chat_model"].choices = choices
+        self.fields["background_model"].choices = choices
 
 
 class AiDefaultsForm(forms.Form):
