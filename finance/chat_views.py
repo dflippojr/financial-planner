@@ -11,6 +11,7 @@ from django.views.decorators.http import require_GET, require_POST
 
 from .ai_services import AiError, local_status, member_has_ai, resolve_ai, warm_for_chat
 from .ai_types import LOCAL_BACKEND
+from .chat_proposals import ProposalError, apply_proposal, card_for, dismiss_proposal, proposal_for
 from .chat_runner import recover_stale_turns
 from .chat_services import (
     chat_local_enabled,
@@ -105,6 +106,45 @@ def chat_new(request):
     return redirect(f"{reverse('chat')}?c={conversation.pk}")
 
 
+def _back_to_chat(proposal):
+    return redirect(f"{reverse('chat')}?c={proposal.conversation_id}#proposal-{proposal.pk}")
+
+
+@require_POST
+def chat_proposal_apply(request, proposal_id):
+    person = _person(request)
+    proposal = proposal_for(person, proposal_id)
+    if proposal is None:
+        messages.error(request, "That suggestion is not available.")
+        return redirect("chat")
+    try:
+        apply_proposal(person, proposal_id)
+        messages.success(request, "Suggestion applied.")
+    except ProposalError as exc:
+        messages.error(request, str(exc))
+    except PermissionDenied:
+        messages.error(request, "That suggestion is not available.")
+        return redirect("chat")
+    return _back_to_chat(proposal)
+
+
+@require_POST
+def chat_proposal_dismiss(request, proposal_id):
+    person = _person(request)
+    proposal = proposal_for(person, proposal_id)
+    if proposal is None:
+        messages.error(request, "That suggestion is not available.")
+        return redirect("chat")
+    try:
+        dismiss_proposal(person, proposal_id)
+    except ProposalError as exc:
+        messages.error(request, str(exc))
+    except PermissionDenied:
+        messages.error(request, "That suggestion is not available.")
+        return redirect("chat")
+    return _back_to_chat(proposal)
+
+
 @require_POST
 def chat_warm(request):
     person = _person(request)
@@ -156,6 +196,7 @@ def chat_turn(request, turn_id):
         # The runner died or never picked it up: end it here so the page stops waiting.
         turn.refresh_from_db()
     payload = {"ok": True, "status": turn.status}
+    proposals = turn.proposals.count() if turn.status != AiConversationMessage.Status.PENDING else 0
     if turn.status != AiConversationMessage.Status.PENDING:
         payload.update(
             {
@@ -171,6 +212,7 @@ def chat_turn(request, turn_id):
                     if isinstance(item, dict)
                 ],
                 "notices": [str(item) for item in turn.notices or ()],
+                "proposals": proposals,
             }
         )
     return JsonResponse(payload)
@@ -201,7 +243,9 @@ def _chat_context(person, conversation, request):
     ))
     messages_qs = []
     if conversation is not None:
-        messages_qs = list(conversation.messages.order_by("created_at", "pk"))
+        messages_qs = list(conversation.messages.order_by("created_at", "pk").prefetch_related("proposals"))
+        for item in messages_qs:
+            item.cards = [card_for(person, proposal) for proposal in item.proposals.all()]
     return {
         "chat_ready": bool(member_has_ai(person) and connection is not None and backend),
         "chat_backend": backend,

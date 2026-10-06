@@ -1,0 +1,26 @@
+<div class="overflow-x-auto mb-8">
+  <table class="table table-zebra">
+    <thead class="sticky top-0 z-10 bg-base-200">
+      <tr>
+        <th scope="col">Date</th>
+        <th scope="col">Account</th>
+        <th scope="col">Description</th>
+        <th scope="col" class="text-right">Amount</th>
+        <th scope="col">Category</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for txn in matches %}
+      <tr>
+        <td>{{ txn.transaction_date }}</td>
+        <td>{{ txn.account.name }}</td>
+        <td>{{ txn.description }}</td>
+        <td class="text-right">{{ txn.amount_display }}</td>
+        <td>{{ txn.category_display }}</td>
+      </tr>
+    {% empty %}
+      <tr><td colspan="5">No matching transactions.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>

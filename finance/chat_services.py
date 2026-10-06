@@ -28,6 +28,7 @@ from .ai_types import (
     ToolResult,
     UNAVAILABLE,
 )
+from .chat_proposals import proposal_tools
 from .lifecycle_services import _DENIED, _person_for
 from .models import AiConversation, AiConversationMessage
 from .policy_services import may_use_ai
@@ -35,7 +36,7 @@ from .policy_services import may_use_ai
 FEATURE = "chat"
 OUT_OF_SCOPE = (
     "I can only answer questions about this member's finances using the app's "
-    "read-only tools, and I cannot change data or give financial advice."
+    "read-only tools and suggest changes for you to confirm. I cannot change data myself or give financial advice."
 )
 TURN_LIMIT = "This conversation has reached its turn limit. Start a new one from Chat."
 TOOL_LIMIT = "This conversation has reached its tool-call limit."
@@ -258,7 +259,7 @@ def answer_turn(turn, *, sleep=None, monotonic=None):
             conversation.used_account_ids = ids
             conversation.tool_call_count = locked.tool_call_count
 
-    tools = default_tools()
+    tools = default_tools() + proposal_tools(conversation, turn)
     harness_context = _harness_context(context_payload)
     marker = _connection_marker(connection)
     saved_session = (conversation.harness_session_id or "").strip()
@@ -362,8 +363,6 @@ def _out_of_scope(prompt):
         "run sql",
         "write a virus",
         "hack",
-        "change this transaction",
-        "recategorize",
         "transfer money",
         "wire funds",
     )

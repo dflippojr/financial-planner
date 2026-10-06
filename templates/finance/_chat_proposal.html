@@ -1,0 +1,42 @@
+<section id="proposal-{{ card.proposal.pk }}" class="mt-3 rounded-box border border-primary/40 bg-base-100 p-3" data-chat-proposal="{{ card.kind }}" data-proposal-status="{{ card.proposal.status }}" aria-label="Suggested change">
+  <p class="text-sm font-semibold">Suggested change · not applied yet</p>
+  {% if card.kind == "set_category" %}
+  <p>Set the category to <strong>{{ card.category_name }}</strong> on {{ card.count }} transaction{{ card.count|pluralize }}:</p>
+  {% elif card.kind == "add_tags" %}
+  <p>Add {% for name in card.tag_names %}<strong>{{ name }}</strong>{% if not forloop.last %}, {% endif %}{% endfor %} to {{ card.count }} transaction{{ card.count|pluralize }}:</p>
+  {% elif card.kind == "create_rule" %}
+  <p>{{ card.owner_label }}: when the description contains <strong>{{ card.description_contains }}</strong>{% if card.amount_range %} and the amount is {{ card.amount_range }}{% endif %}, set the category to <strong>{{ card.category_name }}</strong>.</p>
+  {% if card.proposal.status == "pending" %}<p class="text-sm">Preview: {{ card.count }} transaction{{ card.count|pluralize }} would change now.</p>{% endif %}
+  {% elif card.kind == "set_budget" %}
+  <p>{{ card.scope_label }} budget for <strong>{{ card.category_name }}</strong>, {{ card.month_label }}:
+    {% if card.before_amount %}{{ card.before_amount }} → <strong>{{ card.new_amount }}</strong>{% else %}new budget of <strong>{{ card.new_amount }}</strong>{% endif %}.
+    <a class="link inline-flex min-h-11 items-center" href="{{ card.budgets_url }}">Open budgets</a></p>
+  {% endif %}
+  {% if card.transactions %}
+  <ul class="mt-2 space-y-1 text-sm">
+    {% for txn in card.transactions %}
+    <li><a class="link inline-flex min-h-11 items-center" href="{% url 'transaction-edit' txn.pk %}">{{ txn.transaction_date }} · {{ txn.description }} · {{ txn.amount_display }}</a> <span class="opacity-80">now {{ txn.category_display }}</span></li>
+    {% endfor %}
+  </ul>
+  {% if card.more %}<p class="text-sm opacity-80">and {{ card.more }} more</p>{% endif %}
+  {% endif %}
+  {% if card.matches %}{% include "finance/_rule_preview_table.html" with matches=card.matches %}{% if card.more %}<p class="text-sm opacity-80">and {{ card.more }} more</p>{% endif %}{% endif %}
+  {% if card.pending %}
+  <div class="mt-2 flex flex-wrap gap-2">
+    <form method="post" action="{% url 'chat-proposal-apply' card.proposal.pk %}">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-primary min-h-11"{% if card.unavailable %} disabled{% endif %}>Apply</button>
+    </form>
+    <form method="post" action="{% url 'chat-proposal-dismiss' card.proposal.pk %}">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-outline min-h-11">Dismiss</button>
+    </form>
+  </div>
+  {% elif card.proposal.status == "applied" %}
+  <p class="mt-2 text-sm font-semibold" role="status">Applied{% if card.result_count is not None %} to {{ card.result_count }}{% endif %}.{% if card.rule_url %} <a class="link inline-flex min-h-11 items-center" href="{{ card.rule_url }}">Open rule</a>{% endif %}</p>
+  {% elif card.proposal.status == "dismissed" %}
+  <p class="mt-2 text-sm opacity-80">Dismissed.</p>
+  {% else %}
+  <p class="mt-2 text-sm" role="status">{{ card.stale_reason }}</p>
+  {% endif %}
+</section>

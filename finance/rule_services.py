@@ -301,6 +301,61 @@ def preview_rule(principal, rule_id):
     return rule, matches
 
 
+def unsaved_rule(
+    principal,
+    *,
+    owner_kind,
+    description_contains,
+    account_id=None,
+    min_amount_minor=None,
+    max_amount_minor=None,
+    category_id,
+    priority=0,
+):
+    """A rule as save_category_rule would build it, checked the same way but never saved."""
+    person = _person_for(principal)
+    household = current_household(person)
+    if household is None:
+        raise PermissionDenied(_DENIED)
+    ensure_household_categories(household)
+    cleaned = (description_contains or "").strip()
+    if not cleaned:
+        raise ValidationError("Enter text to match in the description.")
+    if min_amount_minor is not None and max_amount_minor is not None and min_amount_minor > max_amount_minor:
+        raise ValidationError("The minimum amount must be at most the maximum.")
+    category = assignable_categories(person).filter(pk=category_id).first()
+    if category is None:
+        raise PermissionDenied(_DENIED)
+    rule = CategoryRule(
+        description_contains=cleaned,
+        min_amount_minor=min_amount_minor,
+        max_amount_minor=max_amount_minor,
+        category=category,
+        priority=priority,
+        enabled=True,
+    )
+    _set_rule_owner(rule, person, household, owner_kind)
+    rule.account = _visible_rule_account(person, account_id)
+    _validate_rule_account(rule, person, household)
+    _validate_rule_category(rule, household)
+    return rule
+
+
+def preview_unsaved_rule(principal, rule):
+    """The transactions a not-yet-saved rule would categorize if it were saved and applied now.
+
+    Same candidates and precedence as preview_rule. A new rule sorts after existing
+    rules of equal priority, so it wins only where nothing matches earlier.
+    """
+    person = _person_for(principal)
+    matches = []
+    for txn in _matching_queryset(person, rule).order_by("-transaction_date", "-pk"):
+        winner = first_matching_rule(txn)
+        if winner is None or winner.priority > rule.priority:
+            matches.append(txn)
+    return matches
+
+
 def _history_new_label(category, rule):
     return f"{_history_label(category)} (rule: {rule.description_contains})"
 
