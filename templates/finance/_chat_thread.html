@@ -40,6 +40,7 @@
       {% endfor %}
     </ul>
     {% endif %}
+    {% for card in item.cards %}{% include "finance/_chat_proposal.html" %}{% endfor %}
     {% if item.notices %}
     <ul class="mt-2 text-sm opacity-80">
       {% for notice in item.notices %}

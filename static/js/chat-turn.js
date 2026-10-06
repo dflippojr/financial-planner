@@ -39,6 +39,8 @@
       }));
     }
     article.removeAttribute("data-chat-turn-url");
+    // Proposal cards are rendered by the server, so load the page to show them.
+    if (data.proposals) window.location.reload();
   }
 
   function watch(article) {

@@ -1879,6 +1879,57 @@ class AiConversationMessage(models.Model):
         return f"AI message {self.pk}"
 
 
+class AiProposal(models.Model):
+    """A change the chat model suggested. Nothing is written until the member presses Apply."""
+
+    class Kind(models.TextChoices):
+        SET_CATEGORY = "set_category", "Set category"
+        CREATE_RULE = "create_rule", "Create rule"
+        SET_BUDGET = "set_budget", "Set budget"
+        ADD_TAGS = "add_tags", "Add tags"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        APPLIED = "applied", "Applied"
+        DISMISSED = "dismissed", "Dismissed"
+        STALE = "stale", "No longer applies"
+
+    # Cascades with the conversation, so proposals expire and are deleted with it.
+    conversation = models.ForeignKey(AiConversation, on_delete=models.CASCADE, related_name="proposals")
+    message = models.ForeignKey(AiConversationMessage, on_delete=models.CASCADE, related_name="proposals")
+    kind = models.CharField(max_length=16, choices=Kind)
+    payload = models.JSONField(default=dict)
+    status = models.CharField(max_length=10, choices=Status, default=Status.PENDING)
+    result = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            person = _person_for(principal)
+            if person is None:
+                return self.none()
+            return self.filter(conversation__member=person, conversation__expires_at__gt=timezone.now())
+
+    objects = QuerySet.as_manager()
+
+    class Meta:
+        ordering = ("pk",)
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(kind__in=("set_category", "create_rule", "set_budget", "add_tags")),
+                name="ai_proposal_kind_valid",
+            ),
+            models.CheckConstraint(
+                condition=Q(status__in=("pending", "applied", "dismissed", "stale")),
+                name="ai_proposal_status_valid",
+            ),
+        ]
+
+    def __str__(self):
+        return f"AI proposal {self.pk}"
+
+
 class CategorySuggestion(models.Model):
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"

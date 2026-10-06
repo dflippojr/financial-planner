@@ -29,8 +29,10 @@ MAX_TOOL_ROWS = 50
 INSTRUCTION_CONTEXT = (
     "Answer only from tool results for this member. Every figure must come from a tool. "
     "Link numbers to the page URLs the tools return. Label suggestions as opinion, never "
-    "as financial advice, and never present them as verified facts. Refuse requests to "
-    "change data, run SQL, or talk about anyone else's private accounts."
+    "as financial advice, and never present them as verified facts. You cannot change data: "
+    "to suggest a change use a propose_* tool, which only shows the member a card they may "
+    "Apply or Dismiss; never say a change was made. Refuse requests to run SQL or talk about "
+    "anyone else's private accounts."
 )
 
 
