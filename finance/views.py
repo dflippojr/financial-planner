@@ -1264,7 +1264,7 @@ def _handle_recurring_post(request):
 def recurring_review(request):
     if request.method == "POST":
         return _handle_recurring_post(request)
-    _service_or_404(lambda: refresh_recurring_series(request.user))
+    _service_or_404(lambda: refresh_recurring_series(request.user, only_if_changed=True))
     visible = (
         RecurringSeries.objects.visible_to(request.user)
         .prefetch_related("members__transaction__account")
@@ -1317,6 +1317,9 @@ def recurring_review(request):
         "finance/recurring_review.html",
         {
             "suggestions": suggestions,
+            "skipped_merchants": Person.objects.values_list("recurring_skipped_merchants", flat=True).get(
+                pk=request.user.person.pk
+            ),
             "confirmed": confirmed,
             "upcoming": upcoming,
             "price_changes": price_change_rows,

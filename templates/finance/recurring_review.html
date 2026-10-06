@@ -3,6 +3,11 @@
 {% block content %}
 <h1 class="mb-4 text-2xl font-bold">Recurring charges</h1>
 {{ chart_data|json_script:"recurring-chart-data" }}
+{% if skipped_merchants %}
+<p class="mb-4 text-sm text-base-content/70" role="note">
+  Left out of detection because they have too many charges to check: {{ skipped_merchants|join:", " }}. Group their charges by hand if one is a subscription.
+</p>
+{% endif %}
 <div class="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2">
   <article class="stats bg-base-100 shadow">
     <div class="stat">
