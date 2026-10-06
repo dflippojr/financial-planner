@@ -546,12 +546,14 @@ def _apply_automatic_rule_groups(person, by_rule):
                 application=application, transaction=txn, previous_category=txn.category,
                 previous_category_source=txn.category_source,
             ))
-            history.append(TransactionCorrectionHistory(
-                transaction=txn, actor=person, recorded_at=now,
-                field_name=TransactionCorrectionHistory.Field.CATEGORY,
-                previous_description=_history_label(txn.category),
-                new_description=_history_new_label(rule.category, rule),
-            ))
+            previous_label = _history_label(txn.category)
+            new_label = _history_new_label(rule.category, rule)
+            if previous_label != new_label:
+                history.append(TransactionCorrectionHistory(
+                    transaction=txn, actor=person, recorded_at=now,
+                    field_name=TransactionCorrectionHistory.Field.CATEGORY,
+                    previous_description=previous_label, new_description=new_label,
+                ))
             txn.category = rule.category
             txn.category_source = Transaction.CategorySource.RULE
             txn.updated_at = now
