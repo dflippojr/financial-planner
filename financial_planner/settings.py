@@ -46,6 +46,9 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "finance.middleware.SecurityPolicyHeadersMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    # Compresses HTML and JSON; WhiteNoise already serves static files gzipped
+    # and GZipMiddleware skips responses that carry a Content-Encoding.
+    "django.middleware.gzip.GZipMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
