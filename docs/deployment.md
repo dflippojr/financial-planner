@@ -226,8 +226,9 @@ docker compose --env-file $Config stop simplefin-sync ai-jobs
 Check out the approved revision, build `app backup background`, and use
 `docker compose --env-file $Config up -d --remove-orphans` once. This removes
 the stopped `simplefin-sync` and `ai-jobs` containers and starts `background`.
-Do not run both generations of background services together. No env variable,
-database migration, volume rename, or data conversion is required. The new
+Do not run both generations of background services together. This PR adds no env variable,
+database migration, volume rename, or data conversion. Startup still applies
+any pending main migrations, including 0053 from #252 if not already deployed. The new
 container receives all existing AI, SimpleFIN, SMTP, timezone, receipt and backup
 health settings. Gunicorn adds `--preload` and retains two gthread workers,
 four threads per worker and the 660-second timeout. The app and background
@@ -341,25 +342,26 @@ While rolled back, pass both `-f` files on every compose command. A command with
 
 Measured on Docker Desktop 29.8.1 using the same `docker stats --no-stream`
 and `docker top <container> -o pid,rss,args` method as the issue. The baseline
-was main at `fafa01d`; the updated image preloads Gunicorn and runs one
-background process. Both used PostgreSQL 18 and two gthread workers with four
+was main at `d74bb50` (after #252 and #253); the updated image preloads Gunicorn
+and runs one background process. Both used PostgreSQL 18 and two gthread workers with four
 threads and a 660-second timeout. These are throwaway-stack measurements,
 not a new measurement of the issue's 332.7 MiB production reference.
 
-The isolated `fp-test-249` project used a scratch checkout, its own explicitly
-named PostgreSQL and receipt volumes, a scratch backup directory, and
-`127.0.0.1:18249`. **`-p` alone does not isolate this repository's volumes:**
+The isolated `fp-test-249-base2` and `fp-test-249-final` projects used scratch
+checkouts, their own explicitly named PostgreSQL and receipt volumes, scratch
+backup directories, and
+`127.0.0.1:18249` and `127.0.0.1:18250`. **`-p` alone does not isolate this repository's volumes:**
 also override `POSTGRES_VOLUME_NAME`, `RECEIPTS_VOLUME_NAME`, `BACKUP_DIR` and
-`APP_PORT`. Never reuse production config or data for this exercise. The
-throwaway project was removed with `docker compose -p fp-test-249 --env-file
+`APP_PORT`. Never reuse production config or data for this exercise. Every
+throwaway project was removed with `docker compose -p fp-test-NAME --env-file
 test.env down -v` afterward.
 
 The expanded case was regenerated directly with `random.seed(42)` and
 `bulk_create`: 2 members, 1 household, 10 accounts, 36 months, 72,502 synthetic
 transactions (68,222 visible to the importing member), about 85% categorized,
-1,500 tagged, 12 budgets and 4 planned items. The same database was used before
-and after, removing each measured import's batch before the next run. No real
-statement or provider schema was used.
+1,500 tagged, 12 budgets and 4 planned items. Both databases were seeded
+identically, removing each measured import's batch before the idle measurement.
+No real statement or provider schema was used.
 
 After each restart, the stack idled for at least five minutes on its normal
 schedule (including the regular health probes). The measured totals include
@@ -367,26 +369,26 @@ every stack container:
 
 | Container | Before (MiB) | After (MiB) |
 | --- | ---: | ---: |
-| app | 156.70 | 127.00 |
-| ai-jobs | 53.22 | removed |
-| simplefin-sync | 50.29 | removed |
-| background | — | 58.35 |
-| db | 37.49 | 30.47 |
-| backup | 0.35 | 0.40 |
-| **Total** | **298.0** | **216.2** |
+| app | 153.50 | 126.40 |
+| ai-jobs | 55.54 | removed |
+| simplefin-sync | 50.45 | removed |
+| background | — | 56.84 |
+| db | 42.41 | 32.85 |
+| backup | 0.36 | 0.39 |
+| **Total** | **302.3** | **216.5** |
 
-That is an **81.8 MiB (27.5%)** reduction on the regenerated dataset, meeting
+That is an **85.8 MiB (28.4%)** reduction on the regenerated dataset, meeting
 the **250 MiB** idle target. PostgreSQL's cache varies between runs; the app
-and background processes alone save 74.9 MiB. The measured worker RSS values
-were approximately 95,900 KiB each before, versus 91,900 KiB each after, with
+and background processes alone save 76.3 MiB. The measured worker RSS values
+were approximately 97,300 KiB each before, versus 92,000 KiB each after, with
 the shared preload also resident in the master. RSS counts shared pages in
 each process; use the container stats for total memory rather than summing RSS.
 
 A 500-row generic CSV was staged in the app's tmpfs and committed through an
 actual HTTP request to Gunicorn, rather than executing the import in a separate
 `manage.py shell` process. Repeated `docker stats --no-stream` samples recorded
-an app peak of **781 MiB before and 634.2 MiB after**. Both imports added all
-500 rows. The updated app's cgroup `memory.peak` was **753.5 MiB**, including
+an app peak of **730.3 MiB before and 686.3 MiB after**. Both imports added all
+500 rows. The updated app's cgroup `memory.peak` was **771.3 MiB**, including
 file cache that Docker's Linux stats subtract, with no OOM and a **1 GiB**
 limit. The sampled peak can miss a shorter spike, so the cgroup high-water
 mark informed the headroom decision. The suggested 512 MiB app limit was too
@@ -395,7 +397,7 @@ small for this case.
 The merged background runner completed the scheduled SimpleFIN/alert pass,
 answered a chat turn against a synthetic harness, and resumed a stale running
 AI job's saved session after restart. The daily-pass cgroup peak was
-**285.8 MiB**, so its limit is **512 MiB**, rather than the suggested 256 MiB.
+**285.6 MiB**, so its limit is **512 MiB**, rather than the suggested 256 MiB.
 For that daily-pass check, historical seed rows had historical `created_at`
 dates; the freshly imported 500 rows remained recent. PostgreSQL is uncapped.
 After a restart, `/health/` and `/sign-in/` returned 200, and `docker top`

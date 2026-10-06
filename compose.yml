@@ -138,7 +138,7 @@ services:
     build: .
     restart: unless-stopped
     # One Django process, with independent job, chat and daily-pass threads.
-    # The expanded synthetic ledger reached 257 MiB in a daily pass.
+    # The expanded synthetic ledger reached 286 MiB in a daily pass.
     mem_limit: 512m
     environment:
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?DJANGO_SECRET_KEY must be set}
