@@ -50,6 +50,7 @@ from .forms import (
     ReauthPasswordForm,
     RecoveryForm,
     RefundLinkForm,
+    RefundSearchForm,
     ScenarioChangeForm,
     SetupForm,
     SetupGoogleForm,
@@ -814,6 +815,30 @@ def _render_transaction_edit(
         note_form = TransactionNoteTagsForm.for_transaction(financial_transaction, request.user)
     if receipt_form is None:
         receipt_form = ReceiptUploadForm()
+    refund_link = (
+        RefundLink.objects.visible_to(request.user).select_related("original")
+        .filter(refund=financial_transaction).first()
+    )
+    can_link_refund = (
+        financial_transaction.amount_minor > 0 and refund_link is None
+        and not financial_transaction.is_excluded_transfer
+        # A visible refund may still have a link whose original is now private.
+        # Check only this transaction's link existence; never expose that purchase.
+        and not RefundLink.objects.filter(refund=financial_transaction).exists()
+    )
+    refund_search_form = None
+    refund_results = []
+    selected_original = None
+    if can_link_refund:
+        refund_search_form = RefundSearchForm(request.GET)
+        if "refund_search" in request.GET:
+            refund_results = refund_search_form.candidates(request.user, financial_transaction)
+        if refund_form is None:
+            refund_form = RefundLinkForm(
+                principal=request.user, refund=financial_transaction,
+                initial={"original": request.GET.get("original")},
+            )
+        selected_original = refund_form.fields["original"].queryset.select_related("account").first()
     correction_history = (
         TransactionCorrectionHistory.objects.visible_to(request.user)
         .filter(transaction=financial_transaction)
@@ -843,12 +868,12 @@ def _render_transaction_edit(
                 principal=request.user,
                 initial={"category": financial_transaction.category_id},
             ),
-            "refund_form": refund_form
-            or RefundLinkForm(principal=request.user, refund=financial_transaction),
-            "refund_link": RefundLink.objects.visible_to(request.user)
-            .select_related("original")
-            .filter(refund=financial_transaction)
-            .first(),
+            "refund_form": refund_form,
+            "refund_link": refund_link,
+            "can_link_refund": can_link_refund,
+            "refund_search_form": refund_search_form,
+            "refund_results": refund_results,
+            "selected_original": selected_original,
             "split_form": split_form
             or SplitTransactionForm(principal=request.user, transaction=financial_transaction),
             "unsplit_form": UnsplitTransactionForm(principal=request.user),

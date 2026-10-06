@@ -658,6 +658,7 @@ def test_linked_refund_reduces_spending_from_its_own_fields_when_original_is_hid
     assert not RefundLink.objects.visible_to(member).exists()
     assert b"This refund is linked" not in edit.content
     assert b"Synthetic Purchase Account" not in edit.content
+    assert b"Search purchases" not in edit.content
 
 
 @pytest.mark.django_db
