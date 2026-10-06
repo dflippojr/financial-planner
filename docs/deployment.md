@@ -135,7 +135,7 @@ That applies the same shared-account exit rules as leaving. It prints a short co
 
 ## Backups
 
-The backup container runs `pg_dump` in PostgreSQL custom format every night at 2:00 AM in `TZ` (default `America/New_York`). A Sunday dump is also copied into `weekly/`. A dump is published atomically only after `pg_restore --list` verifies it. The same run then archives `$RECEIPTS_DIR` as `financial_planner_TIMESTAMP.receipts.tar.gz` next to that dump, with the same 14 nightly and 8 weekly copies. Receipt deletes only drop the database row; files stay on disk for about two days, so a file removed from the dump between those steps is still present for the archive. Backups keep those files until they rotate out. Pruning keeps the newest 14 files of each kind in `nightly/` and 8 in `weekly/`. Each run writes `$BACKUP_DIR/health/status` with the last success time, dump name, size, table count, last error, and the weekly restore check result. The app and SimpleFIN scheduler mount only `$BACKUP_DIR/health` read-only and raise an in-app alert to operators if no dump has succeeded in 26 hours or the last run failed, including an off-site upload failure or a failed or overdue restore check.
+The backup container runs `pg_dump` in PostgreSQL custom format every night at 2:00 AM in `TZ` (default `America/New_York`). A Sunday dump is also copied into `weekly/`. A dump is published atomically only after `pg_restore --list` verifies it. The same run then archives `$RECEIPTS_DIR` as `financial_planner_TIMESTAMP.receipts.tar.gz` next to that dump, with the same 14 nightly and 8 weekly copies. Receipt deletes only drop the database row; files stay on disk for about two days, so a file removed from the dump between those steps is still present for the archive. Backups keep those files until they rotate out. Pruning keeps the newest 14 files of each kind in `nightly/` and 8 in `weekly/`. Each run writes `$BACKUP_DIR/health/status` with the last success time, dump name, size, table count, last error, and the weekly restore check result. The app and background container mount only `$BACKUP_DIR/health` read-only and raise an in-app alert to operators if no dump has succeeded in 26 hours or the last run failed, including an off-site upload failure or a failed or overdue restore check.
 
 Set `OPERATOR_USERNAMES` in `production.env` to a comma-separated list of member usernames. If it is empty, the earliest-created member is the operator. Operators see last local and off-site success times on Settings → Data. Other members do not. Alerts name no file contents and fire at most once per local calendar day until a run succeeds.
 
@@ -337,6 +337,74 @@ Rollback points the stack back at the old volumes and runs the 16 image on them 
 
 While rolled back, pass both `-f` files on every compose command. A command without the override tries the 18 image on the 16 volume, which only restart-loops. That failed start leaves an empty `18` directory in the old volume, which PostgreSQL 16 ignores. To go back to the full revision that ran before the upgrade instead, check out the commit in `revision-before.txt`, rebuild the images, and run `up -d` without the override.
 
+## Stack memory measurement (#249, 2026-10-06)
+
+Measured on Docker Desktop 29.8.1 using the same `docker stats --no-stream`
+and `docker top <container> -o pid,rss,args` method as the issue. The baseline
+was main at `fafa01d`; the updated image preloads Gunicorn and runs one
+background process. Both used PostgreSQL 18 and two gthread workers with four
+threads and a 660-second timeout. These are throwaway-stack measurements,
+not a new measurement of the issue's 332.7 MiB production reference.
+
+The isolated `fp-test-249` project used a scratch checkout, its own explicitly
+named PostgreSQL and receipt volumes, a scratch backup directory, and
+`127.0.0.1:18249`. **`-p` alone does not isolate this repository's volumes:**
+also override `POSTGRES_VOLUME_NAME`, `RECEIPTS_VOLUME_NAME`, `BACKUP_DIR` and
+`APP_PORT`. Never reuse production config or data for this exercise. The
+throwaway project was removed with `docker compose -p fp-test-249 --env-file
+test.env down -v` afterward.
+
+The expanded case was regenerated directly with `random.seed(42)` and
+`bulk_create`: 2 members, 1 household, 10 accounts, 36 months, 72,502 synthetic
+transactions (68,222 visible to the importing member), about 85% categorized,
+1,500 tagged, 12 budgets and 4 planned items. The same database was used before
+and after, removing each measured import's batch before the next run. No real
+statement or provider schema was used.
+
+After each restart, the stack idled for at least five minutes on its normal
+schedule (including the regular health probes). The measured totals include
+every stack container:
+
+| Container | Before (MiB) | After (MiB) |
+| --- | ---: | ---: |
+| app | 156.70 | 127.00 |
+| ai-jobs | 53.22 | removed |
+| simplefin-sync | 50.29 | removed |
+| background | — | 58.35 |
+| db | 37.49 | 30.47 |
+| backup | 0.35 | 0.40 |
+| **Total** | **298.0** | **216.2** |
+
+That is an **81.8 MiB (27.5%)** reduction on the regenerated dataset, meeting
+the **250 MiB** idle target. PostgreSQL's cache varies between runs; the app
+and background processes alone save 74.9 MiB. The measured worker RSS values
+were approximately 95,900 KiB each before, versus 91,900 KiB each after, with
+the shared preload also resident in the master. RSS counts shared pages in
+each process; use the container stats for total memory rather than summing RSS.
+
+A 500-row generic CSV was staged in the app's tmpfs and committed through an
+actual HTTP request to Gunicorn, rather than executing the import in a separate
+`manage.py shell` process. Repeated `docker stats --no-stream` samples recorded
+an app peak of **781 MiB before and 634.2 MiB after**. Both imports added all
+500 rows. The updated app's cgroup `memory.peak` was **753.5 MiB**, including
+file cache that Docker's Linux stats subtract, with no OOM and a **1 GiB**
+limit. The sampled peak can miss a shorter spike, so the cgroup high-water
+mark informed the headroom decision. The suggested 512 MiB app limit was too
+small for this case.
+
+The merged background runner completed the scheduled SimpleFIN/alert pass,
+answered a chat turn against a synthetic harness, and resumed a stale running
+AI job's saved session after restart. The daily-pass cgroup peak was
+**285.8 MiB**, so its limit is **512 MiB**, rather than the suggested 256 MiB.
+For that daily-pass check, historical seed rows had historical `created_at`
+dates; the freshly imported 500 rows remained recent. PostgreSQL is uncapped.
+After a restart, `/health/` and `/sign-in/` returned 200, and `docker top`
+showed a preloaded master plus two workers, and one Python background process.
+
+Preloading and consolidation reduce idle overhead. Large requests can still
+grow a worker's retained heap; their transfer, totals and recurring-detection
+root causes remain separate performance work.
+
 ## Reviewing a dependency pull request
 
 Dependabot opens version and security update PRs. There is no auto-merge; the owner approves every merge. Keep exact pins in `requirements.txt`. Treat `django-allauth` upgrades as needing the Google sign-in tests as well as the rest of the suite.
@@ -368,7 +436,7 @@ Email notices are off per member by default. To offer them, set `SMTP_HOST`,
 `SMTP_TLS` (default true, STARTTLS) in the ignored `production.env`. Set
 `ALERT_EMAIL_BASE_URL` to the app's full HTTPS Tailscale origin without a trailing
 path (for example `https://planner.example.invalid`). Keep credentials out of Git.
-The app and SimpleFIN scheduler receive these settings through Compose.
+The app and background container receive these settings through Compose.
 
 With host, from address, or app origin unset, email controls are hidden and no
 notices are sent. Members opt in and choose their address under Settings > Alerts;
