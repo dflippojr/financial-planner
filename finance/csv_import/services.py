@@ -166,17 +166,17 @@ def commit_csv_import(
 def categorize_imported_batch(principal, batch):
     """Match transfers, then apply enabled rules to a just-committed batch.
 
-    Runs after the import commits: refreshing transfers locks every visible
-    account in id order, which must not happen while the import still holds
+    Runs after the import commits: refreshing transfers locks affected
+    accounts in id order, which must not happen while the import still holds
     its own account lock.
     """
     from finance.category_services import refresh_transfer_pairs
     from finance.rule_services import apply_enabled_rules_to_transactions
 
-    refresh_transfer_pairs(principal)
     if batch is None:
         return []
     created = list(Transaction.objects.filter(import_batch=batch, status=Transaction.Status.ACTIVE))
+    refresh_transfer_pairs(principal, transaction_ids=[row.pk for row in created])
     applied = apply_enabled_rules_to_transactions(principal, created)
     from finance.category_suggestion_services import queue_category_suggestions_for
 
@@ -241,5 +241,5 @@ def archive_batch(principal, account_id, batch_id, *, manual):
     from finance.category_services import refresh_transfer_pairs, revalidate_pairs_touching_import_batch
 
     revalidate_pairs_touching_import_batch(person, batch_id)
-    refresh_transfer_pairs(person)
+    transaction.on_commit(lambda: refresh_transfer_pairs(person, transaction_ids=seed_leg_ids))
     return batch

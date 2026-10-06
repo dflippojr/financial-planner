@@ -272,7 +272,8 @@ def archive_account(principal, account_id):
     from finance.category_services import refresh_transfer_pairs, revalidate_pairs_touching_account
 
     revalidate_pairs_touching_account(person, account_id)
-    refresh_transfer_pairs(person)
+    seed_ids = list(Transaction.objects.filter(account_id=account_id).values_list("pk", flat=True))
+    transaction.on_commit(lambda: refresh_transfer_pairs(person, transaction_ids=seed_ids))
 
 
 @transaction.atomic

@@ -619,7 +619,6 @@ def _sync_connection_locked(principal, connection_id, *, ignore_rate_limit=False
     from finance.recurring_services import refresh_recurring_series
     from finance.rule_services import apply_enabled_rules_to_transactions
 
-    refresh_transfer_pairs(person)
     synced = list(
         Transaction.objects.filter(
             account_id__in=syncable_ids,
@@ -627,6 +626,7 @@ def _sync_connection_locked(principal, connection_id, *, ignore_rate_limit=False
             created_at__gte=now,
         )
     )
+    refresh_transfer_pairs(person, transaction_ids=[row.pk for row in synced])
     apply_enabled_rules_to_transactions(person, synced)
     from finance.category_suggestion_services import queue_category_suggestions_for
 
