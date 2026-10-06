@@ -9,6 +9,7 @@ from django.utils import timezone
 
 from finance.alert_services import (
     alerts_for,
+    evaluate_active_budget_alerts,
     evaluate_budget_alert,
     mark_all_alerts_read,
     mark_alert_read,
@@ -251,6 +252,10 @@ def test_household_budget_alert_uses_each_member_view():
     assert recipients == {roommate.pk}
     assert Alert.objects.filter(recipient=roommate, kind=Alert.Kind.BUDGET).count() == 1
     assert Alert.objects.get(recipient=roommate).dedupe_key == f"budget:{budget.pk}:2026-10:90"
+    Alert.objects.all().delete()
+    evaluate_active_budget_alerts(today=date(2026, 10, 15))
+    assert set(Alert.objects.values_list("recipient_id", flat=True)) == {roommate.pk}
+    assert Alert.objects.get().dedupe_key == f"budget:{budget.pk}:2026-10:90"
 
 
 @pytest.mark.django_db

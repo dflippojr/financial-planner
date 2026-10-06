@@ -145,3 +145,30 @@ def test_concurrent_reimports_serialize_on_the_account():
     assert errors == []
     assert sorted(results) == [0, 500]
     assert Transaction.objects.filter(account=account).count() == 500
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("reset_in_current_period", [True, False])
+def test_prefetched_budget_progress_matches_amount_changes_and_rollover_resets(reset_in_current_period):
+    from datetime import date, timedelta
+    from django.utils import timezone
+    from finance.budget_services import progress_snapshot, progress_snapshots
+    from finance.models import Budget, BudgetAmount, BudgetRolloverReset
+
+    person, _account = seed()
+    budget = Budget.objects.select_related("category").order_by("pk").first()
+    budget.rollover_enabled = True
+    budget.rollover_started_month = date(2026, 8, 1)
+    budget.rollover_enabled_at = timezone.now() - timedelta(days=1)
+    budget.save()
+    BudgetAmount.objects.create(budget=budget, effective_month=date(2026, 9, 1), amount_minor=5000)
+    reset = BudgetRolloverReset.objects.create(budget=budget, month=date(2026, 9, 1), actor=person)
+    if not reset_in_current_period:
+        BudgetRolloverReset.objects.filter(pk=reset.pk).update(created_at=timezone.now() - timedelta(days=2))
+    expected = progress_snapshot(budget, date(2026, 10, 1), person)
+    cached = Budget.objects.select_related("category").prefetch_related("amounts", "rollover_resets").get(pk=budget.pk)
+    actual = progress_snapshots([cached], date(2026, 10, 1), person)[budget.pk]
+    assert actual.amount_minor == expected.amount_minor == 5000
+    assert actual.carry_minor == expected.carry_minor
+    assert actual.spent_minor == expected.spent_minor
+    assert actual.available_minor == expected.available_minor
