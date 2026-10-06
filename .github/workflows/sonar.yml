@@ -15,8 +15,7 @@ name: SonarCloud
 # pytest.ini already points DJANGO_SETTINGS_MODULE at
 # financial_planner.test_settings (SQLite, in-memory), so this job needs no
 # database service. That only exercises migrations against SQLite; the
-# PostgreSQL-specific migration/fixture check remains a manual step until a
-# deploy or integration workflow adds a Postgres service container for it.
+# PostgreSQL 18 run (suite and migrations) lives in postgres.yml.
 #
 # Coverage is produced here (pytest-cov Cobertura XML) before the scanner
 # runs. sonar.qualitygate.wait then fails the check when the SonarCloud

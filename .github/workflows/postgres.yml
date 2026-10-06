@@ -1,0 +1,69 @@
+name: PostgreSQL 18
+
+# Runs the suite and the migrations on PostgreSQL 18, the production engine.
+# sonar.yml runs the same tests on in-memory SQLite, which silently ignores
+# behavior PostgreSQL enforces (for example SELECT ... FOR UPDATE with
+# DISTINCT). Kept separate so a Postgres failure neither masks nor delays the
+# SonarCloud gate. Uses no secrets; scripts/test_postgres.sh is the local
+# equivalent.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: postgres-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  postgres:
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: financial_planner
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: financial_planner
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U financial_planner -d financial_planner"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: "5432"
+      POSTGRES_PASSWORD: test
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Check migrations are complete and apply to an empty database
+        env:
+          DJANGO_SECRET_KEY: ci-only-not-a-secret
+        run: |
+          python manage.py makemigrations --check --dry-run
+          python manage.py migrate --noinput
+
+      - name: Run tests on PostgreSQL 18
+        env:
+          FINANCIAL_PLANNER_TEST_DB: postgres
+        run: python -m pytest tests -q -p no:cacheprovider
