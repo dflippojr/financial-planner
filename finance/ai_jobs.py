@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 
 from django.conf import settings
-from django.db import connection, transaction
+from django.db import close_old_connections, connection, connections, transaction
 from django.db.models import Q
 from django.utils import timezone
 
@@ -24,6 +26,8 @@ from .ai_types import (
 )
 from .models import AiJob
 from .policy_services import may_use_ai
+
+logger = logging.getLogger(__name__)
 
 FEATURE_PROMPTS = {
     "structured": "Reply with a short confirmation that the structured request ran.",
@@ -55,23 +59,73 @@ def enqueue_job(person, *, feature, input_refs=None, backend=""):
     )
 
 
-def process_due_jobs(*, now=None):
-    moment = now or timezone.now()
-    cutoff = _stale_running_cutoff(moment)
-    jobs = list(
-        AiJob.objects.filter(
-            Q(status__in=(AiJob.Status.QUEUED, AiJob.Status.WAITING_MODEL), next_attempt_at__lte=moment)
-            | Q(status=AiJob.Status.RUNNING, updated_at__lte=cutoff)
-        ).order_by("pk")
+def _due_jobs(moment):
+    return AiJob.objects.filter(
+        Q(status__in=(AiJob.Status.QUEUED, AiJob.Status.WAITING_MODEL), next_attempt_at__lte=moment)
+        | Q(status=AiJob.Status.RUNNING, updated_at__lte=_stale_running_cutoff(moment))
     )
+
+
+def _process_safely(job, moment):
+    try:
+        return _process_one(job, moment)
+    except Exception as exc:
+        _isolate_job_failure(job, moment, exc)
+        return False
+
+
+def process_due_jobs(*, now=None):
+    """Synchronous drain for management callers; the background runner uses AiJobLane."""
+    moment = now or timezone.now()
+    jobs = _due_jobs(moment).select_related("member").order_by("pk")
     processed = 0
     for job in jobs:
-        try:
-            if _process_one(job, moment):
-                processed += 1
-        except Exception as exc:
-            _isolate_job_failure(job, moment, exc)
+        if _process_safely(job, moment):
+            processed += 1
     return processed
+
+
+class AiJobLane:
+    """Bounded batch pool, independent of chat and the daily pass.
+
+    The scheduler holds only worker-count IDs, never the entire queue or job
+    payloads. Each worker still claims atomically before starting a session.
+    """
+
+    def __init__(self):
+        self.workers = max(1, min(3, int(settings.AI_JOB_WORKERS)))
+        self.executor = ThreadPoolExecutor(max_workers=self.workers, thread_name_prefix="ai-job")
+        self._inflight = {}
+
+    def tick(self, *, now=None):
+        self._inflight = {pk: future for pk, future in self._inflight.items() if not future.done()}
+        available = self.workers - len(self._inflight)
+        if not available:
+            return
+        moment = now or timezone.now()
+        # Waiting-model jobs move their next attempt to the current poll time.
+        # Oldest-due ordering lets other jobs progress while that model sleeps.
+        ids = list(
+            _due_jobs(moment).exclude(pk__in=self._inflight)
+            .order_by("next_attempt_at", "pk").values_list("pk", flat=True)[:available]
+        )
+        for pk in ids:
+            self._inflight[pk] = self.executor.submit(self._run, pk, moment)
+
+    @staticmethod
+    def _run(pk, moment):
+        close_old_connections()
+        try:
+            job = AiJob.objects.select_related("member").filter(pk=pk).first()
+            if job is not None:
+                _process_safely(job, moment)
+        except Exception:
+            logger.exception("AI job %s could not be stored", pk)
+        finally:
+            connections.close_all()
+
+    def close(self):
+        self.executor.shutdown(wait=True)
 
 
 def in_quiet_window(moment=None):

@@ -1798,6 +1798,10 @@ class AiJob(models.Model):
     objects = QuerySet.as_manager()
 
     class Meta:
+        indexes = [
+            models.Index(fields=("status", "next_attempt_at"), name="ai_job_due_idx"),
+            models.Index(fields=("status", "updated_at"), name="ai_job_stale_idx"),
+        ]
         constraints = [
             models.CheckConstraint(
                 condition=Q(

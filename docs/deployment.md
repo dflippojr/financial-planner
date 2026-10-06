@@ -240,6 +240,15 @@ chat executor is still waiting, so `restart: unless-stopped` restarts every lane
 It reports Up rather than an HTTP health check and still waits for the migrated
 app to become healthy. Existing queued/stale-job and chat recovery rules apply.
 
+Batch AI concurrency (#247) adds migration 0055 for due/stale job indexes.
+`AI_JOB_POLL_SECONDS` defaults to 2 and `AI_JOB_WORKERS` defaults to 3, with a
+hard maximum of 3. If a protected env file explicitly sets the old 15-second
+poll, update that value to 2 when deploying this release. The pool belongs to
+the existing background process; the chat and daily lanes stay independent,
+and its 512 MiB limit stays in place. A restart resumes saved sessions after
+the existing session-timeout plus stale-margin window; it does not create a
+replacement session for a job that already has one.
+
 Review release notes and take a verified manual backup first. Then fetch the approved revision and run:
 
 ```powershell
