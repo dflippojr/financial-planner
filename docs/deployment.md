@@ -231,7 +231,7 @@ database migration, volume rename, or data conversion is required. The new
 container receives all existing AI, SimpleFIN, SMTP, timezone, receipt and backup
 health settings. Gunicorn adds `--preload` and retains two gthread workers,
 four threads per worker and the 660-second timeout. The app and background
-container limits are 1 GiB and 256 MiB respectively; PostgreSQL remains uncapped.
+container limits are 1 GiB and 512 MiB respectively; PostgreSQL remains uncapped.
 
 The background runner imports Django once, then starts separate batch-job,
 chat and daily-pass threads. A stopped lane terminates the process, even if a
