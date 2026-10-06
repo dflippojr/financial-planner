@@ -26,8 +26,8 @@ from .ai_types import (
 HOSTED_UNAVAILABLE_REASON = "Hosted backends stay unavailable until Agent Harness app-tools-only sessions land."
 LOCAL_WARM_REFUSED = "The local model can't load right now."
 _SLEEPING_STATES = frozenset({"sleeping", "unloaded", "paused", "unreachable"})
-_POLL_INITIAL_DELAY_SECONDS = 0.5
-_POLL_MAX_DELAY_SECONDS = 5.0
+_POLL_INITIAL_DELAY_SECONDS = 0.25
+_POLL_MAX_DELAY_SECONDS = 0.6
 _DEFAULT_SESSION_TIMEOUT_SECONDS = 600
 
 
