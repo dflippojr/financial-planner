@@ -90,3 +90,15 @@ def test_split_selection_loads_only_selected_purchase_parts():
     response = client.post(reverse('transaction-link-refund', args=(refund.pk,)), {'original': purchases[0].pk, 'original_part': part.pk})
     assert response.status_code == 302
     assert RefundLink.objects.get(refund=refund).original_part_id == part.pk
+
+
+def test_excluded_transfer_has_no_refund_search():
+    from finance.category_services import refresh_transfer_pairs
+    owner, _, account, refund, client = setup_refund()
+    second = make_account(owner, name='Synthetic Savings')
+    make_transaction(owner, second, amount_minor=-refund.amount_minor)
+    refresh_transfer_pairs(owner)
+    refund.refresh_from_db()
+    assert refund.is_excluded_transfer
+    response = client.get(reverse('transaction-edit', args=(refund.pk,)))
+    assert b'Search purchases' not in response.content
