@@ -46,7 +46,10 @@ else:
             start=time.perf_counter()
             with CaptureQueriesContext(connection) as q:
                 ids = [Transaction.objects.visible_to(p).first().pk] if mode == "incremental" else None
-                refresh_transfer_pairs(p, transaction_ids=ids)
+                if ids is None:
+                    refresh_transfer_pairs(p)
+                else:
+                    refresh_transfer_pairs(p, transaction_ids=ids)
             print(json.dumps(dict(seconds=time.perf_counter()-start,queries=len(q),rss_before_mb=before/1024,rss_peak_mb=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1024)))
     elif mode=='edit':
         c=Client(); c.force_login(p.user)
