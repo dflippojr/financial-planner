@@ -223,7 +223,7 @@
     </thead>
     <tbody>
     {% for series in suggestions %}
-      <tr>
+      <tr id="series-{{ series.pk }}">
         <td>{{ series.display_name }}{% if series.status == "possible" %} <span class="badge badge-ghost">possible</span>{% endif %}</td>
         <td>{{ series.get_cadence_display }}</td>
         <td class="text-right">{% include "finance/_amount.html" with value=series.amount_display tone="out" %}</td>

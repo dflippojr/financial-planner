@@ -1290,6 +1290,18 @@ def _handle_recurring_post(request):
     return redirect("recurring-review")
 
 
+def _recurring_merge_selection(raw_merge, grouping_series):
+    if raw_merge is None:
+        return None, []
+    try:
+        series_id = int(raw_merge)
+    except (TypeError, ValueError) as exc:
+        raise Http404 from exc
+    if not any(series.pk == series_id for series in grouping_series):
+        raise Http404
+    return series_id, [target for target in grouping_series if target.pk != series_id]
+
+
 @require_http_methods(["GET", "POST"])
 @never_cache
 def recurring_review(request):
@@ -1323,8 +1335,7 @@ def recurring_review(request):
         and series.status != RecurringSeries.Status.DISMISSED
         and series.cancelled_at is None
     ]
-    for series in visible:
-        series.merge_targets = [target for target in grouping_series if target.pk != series.pk]
+    merge_series_id, merge_targets = _recurring_merge_selection(request.GET.get("merge_series"), grouping_series)
     add_series_id = None
     add_query = request.GET.get("q", "")
     add_candidates = []
@@ -1363,6 +1374,9 @@ def recurring_review(request):
             "add_series_id": add_series_id,
             "add_query": add_query,
             "add_candidates": add_candidates,
+            "can_merge": len(grouping_series) > 1,
+            "merge_series_id": merge_series_id,
+            "merge_targets": merge_targets,
             "chart_data": _recurring_chart_data(
                 confirmed,
                 monthly_minor,
