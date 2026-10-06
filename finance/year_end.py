@@ -17,7 +17,7 @@ from .cash_flow import (
     selected_accounts,
     spending_by_category_report,
 )
-from .category_services import income_and_spending_totals
+from .category_services import income_and_spending_by_account, income_and_spending_by_tag
 from .export import money_decimal
 from .models import RecurringSeries, Tag
 from .net_worth import net_worth_report
@@ -82,13 +82,10 @@ def _as_of_net_worth(principal, as_of, scope):
 def _account_rows(principal, date_from, date_to, scope):
     accounts = selected_accounts(principal, scope=scope, cash_flow_only=True)
     rows = []
+    by_account = income_and_spending_by_account(principal, accounts, date_from=date_from, date_to=date_to)
     for account in accounts:
-        totals = income_and_spending_totals(
-            principal,
-            date_from=date_from,
-            date_to=date_to,
-            accounts=[account],
-        )
+        income, spending = by_account[account.pk]
+        totals = SimpleNamespace(income_minor=income, spending_minor=spending, net_minor=income - spending)
         rows.append(
             SimpleNamespace(
                 account_id=account.pk,
@@ -108,15 +105,13 @@ def _account_rows(principal, date_from, date_to, scope):
 
 def _tag_rows(principal, date_from, date_to, accounts):
     rows = []
-    tags = Tag.objects.visible_to(principal).active().order_by("name", "pk")
+    tags = list(Tag.objects.visible_to(principal).active().order_by("name", "pk"))
+    by_tag = income_and_spending_by_tag(
+        principal, tags, date_from=date_from, date_to=date_to, accounts=accounts
+    )
     for tag in tags:
-        totals = income_and_spending_totals(
-            principal,
-            date_from=date_from,
-            date_to=date_to,
-            accounts=accounts,
-            tag=tag,
-        )
+        income, spending = by_tag[tag.pk]
+        totals = SimpleNamespace(income_minor=income, spending_minor=spending, net_minor=income - spending)
         if totals.income_minor == 0 and totals.spending_minor == 0:
             continue
         rows.append(
