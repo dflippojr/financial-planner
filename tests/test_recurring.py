@@ -1291,6 +1291,10 @@ def test_review_page_posts_merge_remove_and_add_for_the_signed_in_member():
     client.force_login(owner.user)
     url = reverse("recurring-review")
 
+    picker = client.get(url, {"merge_series": source.pk})
+    assert picker.status_code == 200
+    assert [row.pk for row in picker.context["merge_targets"]] == [target.pk]
+
     merge = client.post(url, {"series_id": source.pk, "target_id": target.pk, "action": "merge"})
     assert merge.status_code == 302
     remaining = RecurringSeries.objects.get(person=owner, is_active=True)

@@ -498,6 +498,8 @@ Owner decisions:
 
 ## Recurring review (2026-10-03, #102)
 
+- Merge selection (#254): load the target selector only for the series the member chooses to merge. Keep the existing member-authorized merge action and exclude the source, inactive, dismissed, cancelled, and inaccessible series from its targets.
+
 Owner decisions:
 - **Price changes.** A change is flagged when the latest charge differs from the series' recent typical amount (#124) by 10% or more.
 - **Cancelling.** A member can mark a series cancelled. It leaves totals and the projection, and its history stays. If a new matching charge arrives, it shows as "resumed?" for the member to confirm.
