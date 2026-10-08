@@ -1,3 +1,4 @@
+import uuid
 from dataclasses import dataclass, field
 from datetime import timedelta
 
@@ -15,9 +16,11 @@ from .category_services import (
     linked_refunds_for_originals,
     transaction_is_linked_refund,
 )
+from .audit_services import origin, record as audit_record
 from .lifecycle_services import lock_actor_household
 from .models import (
     Account,
+    AuditEvent,
     BulkEditUndo,
     Tag,
     Transaction,
@@ -338,6 +341,20 @@ def _row_snapshot(txn, action):
     return payload
 
 
+BULK_AUDIT_FIELDS = {ACTION_CATEGORY: ("category",), ACTION_ADD_TAGS: ("tags",), ACTION_REMOVE_TAGS: ("tags",)}
+
+
+def _record_bulk(person, audit_action, txns, operation_id, bulk_action):
+    """One bounded event per affected account, never per row. Notes are not named (#98)."""
+    counts = {}
+    for txn in txns:
+        counts[txn.account_id] = counts.get(txn.account_id, 0) + 1
+    for account_id, count in sorted(counts.items()):
+        audit_record(person, audit_action, AuditEvent.TargetType.ACCOUNT, account_id,
+               audience={"account": Account(pk=account_id)}, fields=BULK_AUDIT_FIELDS.get(bulk_action, ()),
+               metadata={"row_count": count}, source=AuditEvent.Source.BULK, correlation_id=operation_id)
+
+
 @transaction.atomic
 def apply_bulk_edit(
     principal,
@@ -392,21 +409,25 @@ def apply_bulk_edit(
         raise ValidationError(NO_ELIGIBLE)
     refunds_by_original = _refunds_by_original(by_id, refunds)
     snapshots = []
-    for txn in eligible:
-        related = refunds_by_original.get(txn.pk, [])
-        before = _row_snapshot(txn, action)
-        if action == ACTION_CATEGORY:
-            _apply_category(person, txn, category, related)
-        elif action == ACTION_ADD_TAGS:
-            _apply_tags(person, txn, tags, add=True)
-        elif action == ACTION_REMOVE_TAGS:
-            _apply_tags(person, txn, tags, add=False)
-        else:
-            _apply_note(person, txn, note_line)
-        txn.refresh_from_db()
-        before["applied_updated_at"] = txn.updated_at.isoformat()
-        snapshots.append(before)
+    operation_id = uuid.uuid4()
+    with origin(AuditEvent.Source.BULK, correlation_id=operation_id, per_row=False):
+        for txn in eligible:
+            related = refunds_by_original.get(txn.pk, [])
+            before = _row_snapshot(txn, action)
+            if action == ACTION_CATEGORY:
+                _apply_category(person, txn, category, related)
+            elif action == ACTION_ADD_TAGS:
+                _apply_tags(person, txn, tags, add=True)
+            elif action == ACTION_REMOVE_TAGS:
+                _apply_tags(person, txn, tags, add=False)
+            else:
+                _apply_note(person, txn, note_line)
+            txn.refresh_from_db()
+            before["applied_updated_at"] = txn.updated_at.isoformat()
+            snapshots.append(before)
+    _record_bulk(person, AuditEvent.Action.BULK_APPLIED, eligible, operation_id, action)
     undo = BulkEditUndo.objects.create(
+        id=operation_id,
         actor=person,
         expires_at=timezone.now() + timedelta(minutes=UNDO_MINUTES),
         snapshot={"action": action, "rows": snapshots},
@@ -456,50 +477,52 @@ def undo_bulk_edit(principal, undo_id):
                     or refund.category_id != purchase.category_id
                 ):
                     raise ValidationError(CHANGED_SINCE)
-    for item in rows:
-        txn = by_id[item["id"]]
-        if action == ACTION_CATEGORY:
-            previous_label = _history_label(txn.category)
-            txn.category_id = item["previous_category_id"]
-            txn.category_source = item["previous_category_source"]
-            txn.save(update_fields=("category", "category_source", "updated_at"))
-            txn.refresh_from_db()
-            _record_text_history(
-                txn,
-                person,
-                TransactionCorrectionHistory.Field.CATEGORY,
-                previous_label,
-                _history_label(txn.category),
-            )
-            for refund in refunds_by_original.get(txn.pk, []):
-                apply_inherited_category(person, refund, txn.category)
-        elif action in (ACTION_ADD_TAGS, ACTION_REMOVE_TAGS):
-            previous = list(txn.tags.all())
-            restored = list(Tag.objects.visible_to(person).filter(pk__in=item["previous_tag_ids"]))
-            if {tag.pk for tag in restored} != set(item["previous_tag_ids"]):
-                raise PermissionDenied(_DENIED)
-            txn.tags.set(restored)
-            txn.save(update_fields=("updated_at",))
-            _record_text_history(
-                txn,
-                person,
-                TransactionCorrectionHistory.Field.TAGS,
-                _tag_label(previous),
-                _tag_label(restored),
-            )
-        elif action == ACTION_APPEND_NOTE:
-            previous = txn.note or ""
-            txn.note = item["previous_note"]
-            txn.save(update_fields=("note", "updated_at"))
-            _record_text_history(
-                txn,
-                person,
-                TransactionCorrectionHistory.Field.NOTE,
-                previous,
-                txn.note,
-            )
+    with origin(AuditEvent.Source.BULK, correlation_id=record.pk, per_row=False):
+        for item in rows:
+            txn = by_id[item["id"]]
+            if action == ACTION_CATEGORY:
+                previous_label = _history_label(txn.category)
+                txn.category_id = item["previous_category_id"]
+                txn.category_source = item["previous_category_source"]
+                txn.save(update_fields=("category", "category_source", "updated_at"))
+                txn.refresh_from_db()
+                _record_text_history(
+                    txn,
+                    person,
+                    TransactionCorrectionHistory.Field.CATEGORY,
+                    previous_label,
+                    _history_label(txn.category),
+                )
+                for refund in refunds_by_original.get(txn.pk, []):
+                    apply_inherited_category(person, refund, txn.category)
+            elif action in (ACTION_ADD_TAGS, ACTION_REMOVE_TAGS):
+                previous = list(txn.tags.all())
+                restored = list(Tag.objects.visible_to(person).filter(pk__in=item["previous_tag_ids"]))
+                if {tag.pk for tag in restored} != set(item["previous_tag_ids"]):
+                    raise PermissionDenied(_DENIED)
+                txn.tags.set(restored)
+                txn.save(update_fields=("updated_at",))
+                _record_text_history(
+                    txn,
+                    person,
+                    TransactionCorrectionHistory.Field.TAGS,
+                    _tag_label(previous),
+                    _tag_label(restored),
+                )
+            elif action == ACTION_APPEND_NOTE:
+                previous = txn.note or ""
+                txn.note = item["previous_note"]
+                txn.save(update_fields=("note", "updated_at"))
+                _record_text_history(
+                    txn,
+                    person,
+                    TransactionCorrectionHistory.Field.NOTE,
+                    previous,
+                    txn.note,
+                )
     record.undone_at = timezone.now()
     record.save(update_fields=("undone_at",))
+    _record_bulk(person, AuditEvent.Action.BULK_UNDONE, [by_id[item["id"]] for item in rows], record.pk, action)
     if action == ACTION_CATEGORY:
         from finance.alert_services import schedule_after_category_change
 

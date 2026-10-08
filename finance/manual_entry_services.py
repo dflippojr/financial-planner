@@ -13,11 +13,12 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.utils import timezone
 
+from .audit_services import record
 from .category_services import assignable_categories
 from .csv_import.fingerprint import manual_entry_fingerprint
 from .csv_import.services import archive_batch, categorize_imported_batch
 from .lifecycle_services import _DENIED, _person_for, _visible_account_for_update, lock_actor_household
-from .models import Account, ImportBatch, Tag, Transaction, TransactionCorrectionHistory
+from .models import Account, AuditEvent, ImportBatch, Tag, Transaction, TransactionCorrectionHistory
 
 
 MANUAL_ENTRY_ACCOUNT_TYPES = (Account.Type.CHECKING, Account.Type.SAVINGS, Account.Type.CREDIT_CARD)
@@ -99,6 +100,8 @@ def _create_manual_entry(person, account_id, *, transaction_date, amount_minor, 
         category_source=Transaction.CategorySource.MANUAL if category else Transaction.CategorySource.UNSET,
     )
     entry.tags.set(tags)
+    record(person, AuditEvent.Action.RECORD_CREATED, AuditEvent.TargetType.TRANSACTION, entry.pk,
+           audience={"account": account}, metadata={"batch_id": batch.pk, "format": "manual"})
     return entry
 
 
@@ -155,7 +158,7 @@ def delete_manual_transaction(principal, transaction_id):
     if entry is None:
         raise PermissionDenied(_DENIED)
     archive_batch(person, entry.account_id, entry.import_batch_id, manual=True)
-    TransactionCorrectionHistory.objects.create(
+    history = TransactionCorrectionHistory.objects.create(
         transaction_id=entry.pk,
         actor=person,
         recorded_at=timezone.now(),
@@ -163,4 +166,7 @@ def delete_manual_transaction(principal, transaction_id):
         previous_description="Active",
         new_description="Deleted",
     )
+    record(person, AuditEvent.Action.RECORD_DELETED, AuditEvent.TargetType.TRANSACTION, entry.pk,
+           audience={"account": Account.objects.get(pk=entry.account_id)},
+           metadata={"batch_id": entry.import_batch_id, "history_id": history.pk})
     return entry

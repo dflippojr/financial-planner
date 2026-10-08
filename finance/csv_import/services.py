@@ -6,6 +6,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.utils import timezone
 
+from finance.audit_services import record
 from finance.csv_import.fingerprint import transaction_fingerprint
 from finance.csv_import.parser import Preview, preview_csv
 from finance.lifecycle_services import (
@@ -16,7 +17,7 @@ from finance.lifecycle_services import (
     lock_actor_household,
 )
 from finance.csv_import.saved_mappings import lock_saved_mapping
-from finance.models import Account, ImportBatch, SavedCsvMapping, Transaction
+from finance.models import Account, AuditEvent, ImportBatch, SavedCsvMapping, Transaction
 
 
 @dataclass(frozen=True)
@@ -156,6 +157,14 @@ def commit_csv_import(
                 for row in new_rows
             ]
         )
+    counts = {"new_count": preview.new_count, "duplicate_count": preview.duplicate_count,
+              "invalid_count": preview.invalid_count, "format": source}
+    if batch is None:
+        record(person, AuditEvent.Action.IMPORT_NO_NEW_ROWS, AuditEvent.TargetType.ACCOUNT, account.pk,
+               audience={"account": account}, metadata=counts, verified=True)
+    else:
+        record(person, AuditEvent.Action.IMPORT_COMMITTED, AuditEvent.TargetType.IMPORT_BATCH, batch.pk,
+               audience={"account": account}, metadata={**counts, "batch_id": batch.pk}, verified=True)
     return ImportCommitResult(preview.new_count, preview.duplicate_count, preview.invalid_count, batch)
 
 
@@ -240,4 +249,8 @@ def archive_batch(principal, account_id, batch_id, *, manual):
 
     revalidate_pairs_touching_import_batch(person, batch_id)
     transaction.on_commit(lambda: refresh_transfer_pairs(person, transaction_ids=seed_leg_ids))
+    if not manual:
+        record(person, AuditEvent.Action.IMPORT_UNDONE, AuditEvent.TargetType.IMPORT_BATCH, batch.pk,
+               audience={"account": account},
+               metadata={"batch_id": batch.pk, "row_count": len(removed_ids), "format": batch.source})
     return batch

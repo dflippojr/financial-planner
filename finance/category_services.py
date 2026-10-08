@@ -10,8 +10,10 @@ from django.db.models import Case, Count, Exists, F, IntegerField, OuterRef, Q, 
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 
+from .audit_services import record, record_correction
 from .lifecycle_services import lock_actor_household
 from .models import (
+    AuditEvent,
     Account,
     Category,
     Membership,
@@ -134,7 +136,7 @@ def _history_label(category):
 def _record_text_history(transaction, actor, field_name, previous, new):
     if previous == new:
         return
-    TransactionCorrectionHistory.objects.create(
+    history = TransactionCorrectionHistory.objects.create(
         transaction=transaction,
         actor=actor,
         recorded_at=timezone.now(),
@@ -142,6 +144,8 @@ def _record_text_history(transaction, actor, field_name, previous, new):
         previous_description=previous,
         new_description=new,
     )
+    record_correction(transaction, actor, history)
+    return history
 
 
 def _lock_accounts_and_transactions(person, transactions):
@@ -275,7 +279,10 @@ def add_category(principal, name):
         raise ValidationError("Enter a category name.")
     if household.categories.filter(name=cleaned).exists():
         raise ValidationError("A category with that name already exists.")
-    return Category.objects.create(household=household, name=cleaned, code=Category.Code.CUSTOM)
+    category = Category.objects.create(household=household, name=cleaned, code=Category.Code.CUSTOM)
+    record(person, AuditEvent.Action.RECORD_CREATED, AuditEvent.TargetType.CATEGORY, category.pk,
+           audience={"household": household})
+    return category
 
 
 @transaction.atomic
@@ -293,8 +300,12 @@ def rename_category(principal, category_id, name):
         raise ValidationError("Enter a category name.")
     if household.categories.exclude(pk=category.pk).filter(name=cleaned).exists():
         raise ValidationError("A category with that name already exists.")
+    renamed = category.name != cleaned
     category.name = cleaned
     category.save(update_fields=("name", "updated_at"))
+    if renamed:
+        record(person, AuditEvent.Action.RECORD_EDITED, AuditEvent.TargetType.CATEGORY, category.pk,
+               audience={"household": household}, fields=("name",))
     return category
 
 
@@ -852,6 +863,13 @@ def _visible_pair(principal, pair_id):
     return person, pair
 
 
+def _record_pair_event(person, leg, action, pair):
+    # Transfer confirm/dismiss/undo is a member decision on the first leg's account.
+    record(person, action, AuditEvent.TargetType.TRANSACTION, leg.pk,
+           audience={"account": Account(pk=leg.account_id)}, fields=("kind",),
+           metadata={"transaction_id": pair.leg_b_id if leg.pk == pair.leg_a_id else pair.leg_a_id})
+
+
 @transaction.atomic
 def confirm_transfer_pair(principal, pair_id):
     person, pair = _visible_pair(principal, pair_id)
@@ -863,6 +881,7 @@ def confirm_transfer_pair(principal, pair_id):
         raise PermissionDenied(_DENIED)
     pair = TransferPair.objects.select_for_update(of=("self",)).get(pk=pair.pk)
     _snapshot_and_mark(pair, left, right, TransferPair.Status.CONFIRMED, person)
+    _record_pair_event(person, left, AuditEvent.Action.RECORD_ENABLED, pair)
     return pair
 
 
@@ -875,6 +894,7 @@ def dismiss_transfer_pair(principal, pair_id):
     pair = TransferPair.objects.select_for_update(of=("self",)).get(pk=pair.pk)
     pair.status = TransferPair.Status.DISMISSED
     pair.save(update_fields=("status", "updated_at"))
+    _record_pair_event(person, pair.leg_a, AuditEvent.Action.RECORD_DISABLED, pair)
     return pair
 
 
@@ -889,6 +909,7 @@ def undo_transfer_pair(principal, pair_id):
     right = by_id[pair.leg_b_id]
     pair = TransferPair.objects.select_for_update(of=("self",)).get(pk=pair.pk)
     _unmark_exclusion(pair, left, right, person)
+    _record_pair_event(person, left, AuditEvent.Action.RECORD_DISABLED, pair)
     return pair
 
 

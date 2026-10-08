@@ -305,3 +305,21 @@ def test_chat_offers_only_propose_tools_and_resolved_proposals_stay_resolved(har
     )
     with pytest.raises(ProposalError):
         dismiss_proposal(person, resolved.pk)
+
+
+@pytest.mark.django_db
+def test_confirmed_proposal_audit_event_keeps_approver_and_proposal_after_conversation_deletion(harness):
+    from finance.models import AuditEvent
+
+    state, client, person, household = _setup(harness)
+    account = checking(person, household, "Shared Checking")
+    txn = add_txn(account, person, date(2026, 1, 3), -1200, "Synthetic cafe")
+    conversation = _propose(state, person, "propose_set_category", {"transaction_ids": [txn.pk], "category": "Dining"})
+    proposal = AiProposal.objects.get()
+    assert client.post(reverse("chat-proposal-apply", args=[proposal.pk])).status_code == 302
+    event = AuditEvent.objects.get(action="transaction_corrected")
+    assert (event.actor_id, event.source, event.metadata["proposal_id"]) == (person.pk, "chat_confirmation", proposal.pk)
+    assert event.target_id == txn.pk and event.account_id == account.pk
+    conversation.delete()
+    assert not AiProposal.objects.exists()
+    assert AuditEvent.objects.filter(pk=event.pk).exists()

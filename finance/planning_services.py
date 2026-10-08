@@ -1,11 +1,13 @@
 from types import SimpleNamespace
 
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.db import transaction
 from django.db.models import Exists, Max, OuterRef
 
 from .cash_flow import cash_flow_report, selected_accounts
 from .category_services import current_household, exclusion_exists_for
-from .models import Account, PlannedItem, RecurringSeries, RecurringSeriesMember, SavingsGoal, Transaction
+from .audit_services import changed_names, owned_audience, record, snapshot
+from .models import Account, AuditEvent, PlannedItem, RecurringSeries, RecurringSeriesMember, SavingsGoal, Transaction
 from .projection import (
     DEFAULT_HORIZON,
     KIND_EXPENSE,
@@ -230,6 +232,12 @@ def _person(principal):
         raise PermissionDenied(_DENIED) from exc
 
 
+PLANNED_AUDIT_FIELDS = {
+    "scope": "scope", "name": "name", "kind": "kind", "amount": "amount_minor", "date": "start_date",
+    "cadence": "cadence", "category": "category_id", "enabled": "enabled", "interval": "end_date",
+}
+
+
 def save_planned_item(principal, payload, *, item=None):
     person = _person(principal)
     household = current_household(person)
@@ -242,6 +250,7 @@ def save_planned_item(principal, payload, *, item=None):
         assigned_household = None
     if item is None:
         item = PlannedItem(owner=person)
+        before = None
     elif item.owner_id != person.pk and item.scope != PlannedItem.Scope.HOUSEHOLD:
         raise PermissionDenied(_DENIED)
     elif item.scope == PlannedItem.Scope.HOUSEHOLD and (
@@ -250,6 +259,8 @@ def save_planned_item(principal, payload, *, item=None):
         raise PermissionDenied(_DENIED)
     if item.pk is not None and item.owner_id != person.pk and scope != PlannedItem.Scope.HOUSEHOLD:
         raise PermissionDenied(_DENIED)
+    if item.pk is not None:
+        before = snapshot(item, PLANNED_AUDIT_FIELDS)
     item.scope = scope
     item.household = assigned_household
     item.name = payload["name"]
@@ -263,7 +274,20 @@ def save_planned_item(principal, payload, *, item=None):
     item.replaces_series = _replacement_series(person, item, payload.get("replaces_series"))
     if "enabled" in payload:
         item.enabled = payload["enabled"]
-    item.save()
+    with transaction.atomic():
+        item.save()
+        if before is None:
+            record(person, AuditEvent.Action.RECORD_CREATED, AuditEvent.TargetType.PLANNED_ITEM, item.pk,
+                   audience=owned_audience(item))
+        else:
+            changed = changed_names(before, snapshot(item, PLANNED_AUDIT_FIELDS))
+            if changed == ["enabled"]:
+                action = AuditEvent.Action.RECORD_ENABLED if item.enabled else AuditEvent.Action.RECORD_DISABLED
+            else:
+                action = AuditEvent.Action.RECORD_EDITED
+            if changed:
+                record(person, action, AuditEvent.TargetType.PLANNED_ITEM, item.pk,
+                       audience=owned_audience(item), fields=changed)
     return item
 
 

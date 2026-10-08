@@ -62,7 +62,7 @@ def only(person, action):
 
 def test_every_action_has_a_matrix_entry_with_a_known_audience():
     assert set(ACTION_SPECS) == set(AuditEvent.Action)
-    assert {audience for _t, audience, _f in ACTION_SPECS.values()} == {"account", "deletion", "personal", "household"}
+    assert {audience for _t, audience, _f in ACTION_SPECS.values()} == {"account", "deletion", "personal", "household", "flexible"}
 
 
 def test_account_lifecycle_events_record_changed_field_names_only():

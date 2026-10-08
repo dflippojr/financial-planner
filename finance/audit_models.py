@@ -16,12 +16,51 @@ CHANGED_FIELDS = frozenset({
     "use_shared_local_background", "offer_local_to_household", "offer_local_chat", "offer_plan_links",
     "alert_toggles", "thresholds", "notification_email", "email_enabled", "threshold", "accounts",
     "account_links", "cutover",
+    # Workflow slice (#273): field names only, never values.
+    "amount", "date", "note", "account", "category", "kind", "cadence", "period", "rollover", "enabled",
+    "archived", "target", "contribution", "tags", "mapping", "default", "refund", "split", "match",
+    "priority", "color", "description", "currency", "interval", "price",
 })
+METADATA_INT_KEYS = frozenset({
+    "batch_id", "new_count", "duplicate_count", "invalid_count", "row_count", "history_id",
+    "bulk_edit_id", "rule_application_id", "surviving_id", "source_id", "proposal_id",
+    "transaction_id", "account_id", "undo_id",
+})
+METADATA_ENUM_KEYS = {
+    "format": frozenset({"huntington", "capital_one", "apple_card", "vanguard", "simplefin", "ofx", "manual"}),
+    "section": frozenset({"cash-flow", "spending", "income", "accounts", "tags", "recurring", "net-worth", "all"}),
+    "export_kind": frozenset({"data_zip", "year_end_csv", "receipt", "transactions_csv"}),
+}
+METADATA_UUID_KEYS = frozenset({"operation_id"})
+MAX_METADATA_INT = 10**15
+
 # Audience kinds: "account" follows the target account's current access; "deletion"
 # snapshots the owner/household; "personal" is the acting member only; "household"
 # is the household's current members.
 AUDIENCE_ACCOUNT, AUDIENCE_DELETION, AUDIENCE_PERSONAL, AUDIENCE_HOUSEHOLD = "account", "deletion", "personal", "household"
+# Workflow actions (#273): any workflow target type, with exactly one of an account, a
+# private owner or a household as the audience, chosen by the trusted caller.
+AUDIENCE_FLEXIBLE = "flexible"
 APPEND_ONLY_ERROR = "Audit events are append-only."
+
+
+def validate_metadata(value):
+    if not isinstance(value, dict):
+        raise ValidationError("Unsupported audit metadata.")
+    for key, item in value.items():
+        if key in METADATA_INT_KEYS:
+            ok = isinstance(item, int) and not isinstance(item, bool) and 0 <= item <= MAX_METADATA_INT
+        elif key in METADATA_ENUM_KEYS:
+            ok = isinstance(item, str) and item in METADATA_ENUM_KEYS[key]
+        elif key in METADATA_UUID_KEYS:
+            try:
+                ok = isinstance(item, str) and str(uuid.UUID(item)) == item
+            except ValueError:
+                ok = False
+        else:
+            ok = False
+        if not ok:
+            raise ValidationError("Unsupported audit metadata.")
 
 
 def validate_changed_fields(value):
@@ -95,6 +134,36 @@ class AuditEvent(models.Model):
         NOTIFICATION_PREFERENCES_CHANGED = "notification_preferences_changed", "Notification preferences changed"
         NOTIFICATION_ADDRESS_CHANGED = "notification_address_changed", "Notification address changed"
         BILLS_CALENDAR_CHANGED = "bills_calendar_changed", "Bill calendar settings changed"
+        RECORD_CREATED = "record_created", "Created"
+        RECORD_EDITED = "record_edited", "Edited"
+        RECORD_DELETED = "record_deleted", "Deleted"
+        RECORD_ARCHIVED = "record_archived", "Archived"
+        RECORD_RESTORED = "record_restored", "Restored"
+        RECORD_ENABLED = "record_enabled", "Enabled"
+        RECORD_DISABLED = "record_disabled", "Disabled"
+        RECORD_COMPLETED = "record_completed", "Completed"
+        DEFAULT_CHANGED = "default_changed", "Default changed"
+        ROLLOVER_TOGGLED = "rollover_toggled", "Rollover toggled"
+        TAGS_CHANGED = "tags_changed", "Tags changed"
+        IMPORT_COMMITTED = "import_committed", "Import committed"
+        IMPORT_NO_NEW_ROWS = "import_no_new_rows", "Import completed, no new rows"
+        IMPORT_UNDONE = "import_undone", "Import undone"
+        TRANSACTION_CORRECTED = "transaction_corrected", "Transaction corrected"
+        BULK_APPLIED = "bulk_applied", "Bulk edit applied"
+        BULK_UNDONE = "bulk_undone", "Bulk edit undone"
+        RULE_APPLIED = "rule_applied", "Rule applied"
+        RULE_REVERSED = "rule_reversed", "Rule application reversed"
+        RECURRING_CONFIRMED = "recurring_confirmed", "Recurring confirmed"
+        RECURRING_DISMISSED = "recurring_dismissed", "Recurring dismissed"
+        RECURRING_MERGED = "recurring_merged", "Recurring merged"
+        RECURRING_ADDED = "recurring_added", "Recurring charge added"
+        RECURRING_REMOVED = "recurring_removed", "Recurring charge removed"
+        RECURRING_CANCELED = "recurring_canceled", "Recurring canceled"
+        RECURRING_RESUMED = "recurring_resumed", "Recurring resumed"
+        RECURRING_PRICE_ACKNOWLEDGED = "recurring_price_ack", "Recurring price change acknowledged"
+        RECEIPT_ATTACHED = "receipt_attached", "Receipt attached"
+        RECEIPT_REMOVED = "receipt_removed", "Receipt removed"
+        DOWNLOAD_PREPARED = "download_prepared", "Download response prepared"
 
     class Outcome(models.TextChoices):
         SUCCEEDED = "succeeded", "Succeeded"
@@ -111,6 +180,8 @@ class AuditEvent(models.Model):
         JOB = "job", "Job"
         CLI = "cli", "CLI"
         CHAT = "chat_confirmation", "Chat confirmation"
+        BULK = "bulk", "Bulk edit"
+        RULE = "rule", "Automatic rule"
 
     class TargetType(models.TextChoices):
         ACCOUNT = "account", "Account"
@@ -120,6 +191,20 @@ class AuditEvent(models.Model):
         SESSION = "session", "Session"
         CONNECTION = "connection", "Connection"
         SETTING = "setting", "Setting"
+        IMPORT_BATCH = "import_batch", "Import batch"
+        TRANSACTION = "transaction", "Transaction"
+        BALANCE = "balance", "Balance or valuation"
+        BUDGET = "budget", "Budget"
+        PLANNED_ITEM = "planned_item", "Planned item"
+        GOAL = "goal", "Savings goal"
+        CATEGORY = "category", "Category"
+        TAG = "tag", "Tag"
+        CSV_MAPPING = "csv_mapping", "Saved CSV mapping"
+        RULE = "rule", "Category rule"
+        RECURRING = "recurring", "Recurring series"
+        RECEIPT = "receipt", "Receipt"
+        EXPORT = "export", "Data download"
+        BULK_EDIT = "bulk_edit", "Bulk edit"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     occurred_at = models.DateTimeField(default=timezone.now, editable=False)
@@ -137,6 +222,7 @@ class AuditEvent(models.Model):
     source = models.CharField(max_length=20, choices=Source)
     correlation_id = models.UUIDField(default=uuid.uuid4)
     changed_fields = models.JSONField(default=list, validators=[validate_changed_fields], blank=True)
+    metadata = models.JSONField(default=dict, validators=[validate_metadata], blank=True)
     checksum = models.CharField(max_length=64, editable=False)
 
     objects = AuditQuerySet.as_manager()
@@ -157,7 +243,12 @@ class AuditEvent(models.Model):
     def clean(self):
         super().clean()
         audience = ACTION_AUDIENCE.get(self.action)
-        if audience == AUDIENCE_DELETION:
+        if audience == AUDIENCE_FLEXIBLE:
+            if (self.account_id is not None) + (self.private_owner_id is not None) + (self.household_id is not None) != 1:
+                raise ValidationError("Events use exactly one current audience.")
+            if self.target_type == self.TargetType.ACCOUNT and self.account_id != self.target_id:
+                raise ValidationError("Audit target must be a surviving account at append time.")
+        elif audience == AUDIENCE_DELETION:
             if bool(self.private_owner_id) == bool(self.household_id):
                 raise ValidationError("Deletion event requires one audience.")
         elif audience == AUDIENCE_PERSONAL:
@@ -183,13 +274,20 @@ class AuditEvent(models.Model):
         payload = [str(self.pk), self.occurred_at.isoformat(), self.action, self.outcome,
                    self.actor_kind, self.target_type, self.target_id, self.source,
                    str(self.correlation_id), self.changed_fields]
-        return hashlib.sha256(json.dumps(payload, separators=(",", ":")).encode()).hexdigest()
+        if self.metadata:
+            payload.append(self.metadata)
+        return hashlib.sha256(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()).hexdigest()
 
     def save(self, *args, **kwargs):
         if not self._state.adding:
             raise ValidationError(APPEND_ONLY_ERROR)
         try:
-            self.full_clean(exclude=("checksum",))
+            # Foreign keys and uniqueness are enforced by the database; skipping their
+            # validation queries keeps bulk workflows within their query budgets.
+            self.full_clean(
+                exclude=("checksum", "account", "actor", "effective_member", "affected_member", "private_owner", "household"),
+                validate_unique=False, validate_constraints=False,
+            )
         except ValidationError:
             raise ValidationError("Invalid audit metadata.") from None
         self.checksum = self.calculated_checksum()
@@ -248,5 +346,16 @@ ACTION_SPECS = {
     _A.NOTIFICATION_ADDRESS_CHANGED: (_T.SETTING, AUDIENCE_PERSONAL, {"notification_email", "email_enabled"}),
     _A.BILLS_CALENDAR_CHANGED: (_T.SETTING, AUDIENCE_PERSONAL, {"threshold", "accounts"}),
 }
+_WORKFLOW_ACTIONS = (
+    _A.RECORD_CREATED, _A.RECORD_EDITED, _A.RECORD_DELETED, _A.RECORD_ARCHIVED, _A.RECORD_RESTORED,
+    _A.RECORD_ENABLED, _A.RECORD_DISABLED, _A.RECORD_COMPLETED, _A.DEFAULT_CHANGED, _A.ROLLOVER_TOGGLED,
+    _A.TAGS_CHANGED, _A.IMPORT_COMMITTED, _A.IMPORT_NO_NEW_ROWS, _A.IMPORT_UNDONE, _A.TRANSACTION_CORRECTED,
+    _A.BULK_APPLIED, _A.BULK_UNDONE, _A.RULE_APPLIED, _A.RULE_REVERSED, _A.RECURRING_CONFIRMED,
+    _A.RECURRING_DISMISSED, _A.RECURRING_MERGED, _A.RECURRING_ADDED, _A.RECURRING_REMOVED,
+    _A.RECURRING_CANCELED, _A.RECURRING_RESUMED, _A.RECURRING_PRICE_ACKNOWLEDGED, _A.RECEIPT_ATTACHED,
+    _A.RECEIPT_REMOVED, _A.DOWNLOAD_PREPARED,
+)
+# Target type None: any workflow target type, checked by the caller's typed call sites.
+ACTION_SPECS.update({action: (None, AUDIENCE_FLEXIBLE, set(CHANGED_FIELDS)) for action in _WORKFLOW_ACTIONS})
 ACTION_AUDIENCE = {action: spec[1] for action, spec in ACTION_SPECS.items()}
 assert set(ACTION_SPECS) == set(AuditEvent.Action), "Every audit action needs a coverage-matrix entry."

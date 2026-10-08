@@ -93,6 +93,7 @@ from .reauth import (
     safe_next_url,
     stamp_recent_auth,
 )
+from .audit_services import record_download
 from .security_services import (
     EVENT_TYPES,
     active_sessions_for,
@@ -1966,6 +1967,7 @@ def _account_export_zip(request):
 @requires_recent_auth("export-data", form_url_name="settings-data")
 def account_export(request):
     response = _account_export_zip(request)
+    record_download(request.user, export_kind="data_zip")
     record_security_event(request.user, EVENT_TYPES.MEMBER_DATA_EXPORT, request=request)
     return response
 

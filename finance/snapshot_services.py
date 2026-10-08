@@ -1,8 +1,9 @@
 from django.core.exceptions import PermissionDenied
 from django.db import IntegrityError, transaction
 
+from .audit_services import changed_names, record, snapshot as audit_snapshot
 from .lifecycle_services import _DENIED, _person_for, lock_actor_household
-from .models import Account, BalanceSnapshot
+from .models import Account, AuditEvent, BalanceSnapshot
 
 
 class SnapshotError(Exception):
@@ -37,7 +38,16 @@ def _lock_manual_snapshot(account, snapshot_id):
     return snapshot
 
 
-def _apply_manual_fields(snapshot, *, snapshot_date, amount_minor, note, net_contribution_minor):
+SNAPSHOT_AUDIT_FIELDS = {"date": "snapshot_date", "amount": "amount_minor", "contribution": "net_contribution_minor"}
+
+
+def _record_snapshot(person, account, snapshot, action, changed=()):
+    record(person, action, AuditEvent.TargetType.BALANCE, snapshot.pk, audience={"account": account}, fields=changed)
+
+
+def _apply_manual_fields(person, account, snapshot, *, snapshot_date, amount_minor, note, net_contribution_minor):
+    before = audit_snapshot(snapshot, SNAPSHOT_AUDIT_FIELDS)
+    note_changed = snapshot.note != note
     snapshot.snapshot_date = snapshot_date
     snapshot.amount_minor = amount_minor
     snapshot.note = note
@@ -46,12 +56,18 @@ def _apply_manual_fields(snapshot, *, snapshot_date, amount_minor, note, net_con
         snapshot.save(update_fields=("snapshot_date", "amount_minor", "note", "net_contribution_minor"))
     except IntegrityError as exc:
         raise SnapshotError(DUPLICATE_MANUAL) from exc
+    changed = changed_names(before, audit_snapshot(snapshot, SNAPSHOT_AUDIT_FIELDS))
+    if note_changed:
+        changed = sorted([*changed, "note"])
+    if changed:
+        _record_snapshot(person, account, snapshot, AuditEvent.Action.RECORD_EDITED, changed)
     return snapshot
 
 
 @transaction.atomic
 def record_manual_snapshot(principal, account_id, *, snapshot_date, amount_minor, note="", net_contribution_minor=None):
     account = _lock_editable_account(principal, account_id)
+    person = _person_for(principal)
     existing = (
         BalanceSnapshot.objects.select_for_update(of=("self",))
         .filter(account=account, snapshot_date=snapshot_date, source=BalanceSnapshot.Source.MANUAL)
@@ -59,6 +75,8 @@ def record_manual_snapshot(principal, account_id, *, snapshot_date, amount_minor
     )
     if existing is not None:
         return _apply_manual_fields(
+            person,
+            account,
             existing,
             snapshot_date=snapshot_date,
             amount_minor=amount_minor,
@@ -66,7 +84,7 @@ def record_manual_snapshot(principal, account_id, *, snapshot_date, amount_minor
             net_contribution_minor=net_contribution_minor,
         )
     try:
-        return BalanceSnapshot.objects.create(
+        created = BalanceSnapshot.objects.create(
             account=account,
             snapshot_date=snapshot_date,
             amount_minor=amount_minor,
@@ -77,6 +95,8 @@ def record_manual_snapshot(principal, account_id, *, snapshot_date, amount_minor
         )
     except IntegrityError as exc:
         raise SnapshotError(DUPLICATE_MANUAL) from exc
+    _record_snapshot(person, account, created, AuditEvent.Action.RECORD_CREATED)
+    return created
 
 
 @transaction.atomic
@@ -84,6 +104,8 @@ def update_manual_snapshot(principal, account_id, snapshot_id, *, snapshot_date,
     account = _lock_editable_account(principal, account_id)
     snapshot = _lock_manual_snapshot(account, snapshot_id)
     return _apply_manual_fields(
+        _person_for(principal),
+        account,
         snapshot,
         snapshot_date=snapshot_date,
         amount_minor=amount_minor,
@@ -96,4 +118,7 @@ def update_manual_snapshot(principal, account_id, snapshot_id, *, snapshot_date,
 def delete_manual_snapshot(principal, account_id, snapshot_id):
     account = _lock_editable_account(principal, account_id)
     snapshot = _lock_manual_snapshot(account, snapshot_id)
+    target_id = snapshot.pk
     snapshot.delete()
+    record(_person_for(principal), AuditEvent.Action.RECORD_DELETED, AuditEvent.TargetType.BALANCE, target_id,
+           audience={"account": account})

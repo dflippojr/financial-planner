@@ -2,9 +2,10 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models.functions import Lower
 
+from .audit_services import record
 from .category_services import current_household
 from .lifecycle_services import lock_actor_household
-from .models import Account, Tag, Transaction, _person_for
+from .models import Account, AuditEvent, Tag, Transaction, _person_for
 
 
 _DENIED = "Operation is not permitted."
@@ -52,9 +53,12 @@ def add_tag(principal, name):
     if _name_taken(household, cleaned):
         raise ValidationError(TAG_EXISTS)
     try:
-        return Tag.objects.create(household=household, name=cleaned)
+        tag = Tag.objects.create(household=household, name=cleaned)
     except IntegrityError as exc:
         raise ValidationError(TAG_EXISTS) from exc
+    record(person, AuditEvent.Action.RECORD_CREATED, AuditEvent.TargetType.TAG, tag.pk,
+           audience={"household": household})
+    return tag
 
 
 @transaction.atomic
@@ -70,11 +74,15 @@ def rename_tag(principal, tag_id, name):
     cleaned = _cleaned_tag_name(name)
     if _name_taken(household, cleaned, exclude_pk=tag.pk):
         raise ValidationError(TAG_EXISTS)
+    renamed = tag.name != cleaned
     tag.name = cleaned
     try:
         tag.save(update_fields=("name", "updated_at"))
     except IntegrityError as exc:
         raise ValidationError(TAG_EXISTS) from exc
+    if renamed:
+        record(person, AuditEvent.Action.RECORD_EDITED, AuditEvent.TargetType.TAG, tag.pk,
+               audience={"household": household}, fields=("name",))
     return tag
 
 
@@ -91,6 +99,8 @@ def archive_tag(principal, tag_id):
     if not tag.is_archived:
         tag.is_archived = True
         tag.save(update_fields=("is_archived", "updated_at"))
+        record(person, AuditEvent.Action.RECORD_ARCHIVED, AuditEvent.TargetType.TAG, tag.pk,
+               audience={"household": household}, fields=("status",))
     return tag
 
 
@@ -139,8 +149,13 @@ def set_transaction_note_and_tags(principal, transaction_id, *, note, tag_ids, n
             raise PermissionDenied(_DENIED)
         selected.extend(active)
     kept_archived = list(txn.tags.filter(is_archived=True))
+    previous_tag_ids = set(txn.tags.values_list("pk", flat=True))
     txn.note = cleaned_note
     txn.save(update_fields=("note", "updated_at"))
     by_id = {tag.pk: tag for tag in kept_archived + selected}
     txn.tags.set(list(by_id.values()))
+    if previous_tag_ids != set(by_id):
+        # Tag membership only; ordinary note edits deliberately have no event (#98).
+        record(person, AuditEvent.Action.TAGS_CHANGED, AuditEvent.TargetType.TRANSACTION, txn.pk,
+               audience={"account": account}, fields=("tags",))
     return txn

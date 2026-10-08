@@ -31,6 +31,6 @@ class Command(BaseCommand):
              "outcome": row.outcome, "actor_kind": row.actor_kind, "actor_id": row.actor_id,
              "effective_member_id": row.effective_member_id, "affected_member_id": row.affected_member_id, "target_type": row.target_type,
              "target_id": row.target_id, "source": row.source, "correlation_id": str(row.correlation_id),
-             "changed_fields": row.changed_fields, "checksum_valid": row.checksum == row.calculated_checksum()}
+             "changed_fields": row.changed_fields, "metadata": row.metadata, "checksum_valid": row.checksum == row.calculated_checksum()}
             for row in page
         ]}))

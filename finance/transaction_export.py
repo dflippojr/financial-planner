@@ -15,6 +15,7 @@ from django.views.decorators.http import require_POST
 from .forms import TransactionFilterForm
 from .models import Category, Tag, TransactionSplit
 from .reauth import recent_auth_is_fresh, reauth_redirect
+from .audit_services import record_download
 from .security_services import EVENT_TYPES, record_security_event
 from .transaction_filters import (
     apply_transaction_filters,
@@ -98,4 +99,5 @@ def transaction_export(request):
     filename = f"financial-planner-transactions-{timezone.localdate():%Y%m%d}.csv"
     response["Content-Disposition"] = f'attachment; filename="{filename}"'
     record_security_event(request.user, EVENT_TYPES.MEMBER_DATA_EXPORT, request=request)
+    record_download(request.user, export_kind="transactions_csv")
     return response

@@ -4,10 +4,11 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.utils import timezone
 
+from finance.audit_services import record
 from finance.category_services import current_household
 from finance.csv_import.parser import DATE_FORMATS, NUMBER_FORMATS, Mapping
 from finance.lifecycle_services import _DENIED, lock_actor_household
-from finance.models import Account, ImportBatch, Person, SavedCsvMapping
+from finance.models import Account, AuditEvent, ImportBatch, Person, SavedCsvMapping
 
 
 SAVED_PROFILE_PREFIX = "saved:"
@@ -173,6 +174,8 @@ def save_csv_mapping(principal, *, name, headers, mapping, account=None, set_as_
         created_by=person,
         **_fields_from_mapping(mapping),
     )
+    record(person, AuditEvent.Action.RECORD_CREATED, AuditEvent.TargetType.CSV_MAPPING, saved.pk,
+           audience={"household": household})
     if set_as_account_default and account is not None:
         set_account_default_mapping(person, account.pk, saved.pk)
     return saved
@@ -202,16 +205,23 @@ def update_csv_mapping(principal, mapping_id, *, name, mapping=None, default_acc
         raise ValidationError("Name this mapping.")
     if _name_taken(saved.household, trimmed, exclude_pk=saved.pk):
         raise ValidationError(NAME_TAKEN_MESSAGE)
+    changed = ["name"] if saved.name != trimmed else []
     saved.name = trimmed
     if mapping is not None:
         if saved.locked_at is not None and _parsing_changed(saved, mapping):
             raise ValidationError(LOCKED_PARSING_MESSAGE)
         if saved.locked_at is None:
-            for field, value in _fields_from_mapping(mapping).items():
+            incoming = _fields_from_mapping(mapping)
+            if any(incoming[field] != getattr(saved, field) for field in PARSING_FIELD_NAMES):
+                changed.append("mapping")
+            for field, value in incoming.items():
                 setattr(saved, field, value)
     if default_account_ids and saved.status != SavedCsvMapping.Status.ACTIVE:
         raise ValidationError(ARCHIVED_DEFAULT_MESSAGE)
     saved.save()
+    if changed:
+        record(person, AuditEvent.Action.RECORD_EDITED, AuditEvent.TargetType.CSV_MAPPING, saved.pk,
+               audience={"household": saved.household}, fields=sorted(changed))
     if default_account_ids is not None:
         replace_mapping_account_defaults(person, saved, default_account_ids)
     return saved
@@ -224,16 +234,27 @@ def set_account_default_mapping(principal, account_id, mapping_id):
     account = Account.objects.visible_to(person).filter(pk=account_id, status=Account.Status.ACTIVE).first()
     if account is None:
         raise PermissionDenied(_DENIED)
+    previous_id = account.default_saved_csv_mapping_id
     if mapping_id is None:
         account.default_saved_csv_mapping = None
         account.save(update_fields=("default_saved_csv_mapping", "updated_at"))
+        if previous_id is not None:
+            _record_default_change(person, account, previous_id)
         return account
     saved = active_saved_mappings(person).filter(pk=mapping_id).first()
     if saved is None:
         raise PermissionDenied(_DENIED)
     account.default_saved_csv_mapping = saved
     account.save(update_fields=("default_saved_csv_mapping", "updated_at"))
+    if previous_id != saved.pk:
+        _record_default_change(person, account, saved.pk)
     return account
+
+
+def _record_default_change(person, account, mapping_id):
+    """Call only after a real change; mapping_id is the mapping set or removed."""
+    record(person, AuditEvent.Action.DEFAULT_CHANGED, AuditEvent.TargetType.CSV_MAPPING, mapping_id,
+           audience={"account": account}, fields=("default",), metadata={"account_id": account.pk})
 
 
 @transaction.atomic
@@ -251,9 +272,11 @@ def replace_mapping_account_defaults(principal, saved, account_ids):
             if account.default_saved_csv_mapping_id != saved.pk:
                 account.default_saved_csv_mapping = saved
                 account.save(update_fields=("default_saved_csv_mapping", "updated_at"))
+                _record_default_change(person, account, saved.pk)
         elif account.default_saved_csv_mapping_id == saved.pk:
             account.default_saved_csv_mapping = None
             account.save(update_fields=("default_saved_csv_mapping", "updated_at"))
+            _record_default_change(person, account, saved.pk)
 
 
 def mapping_has_batches(saved):
@@ -272,6 +295,7 @@ def delete_or_archive_csv_mapping(principal, mapping_id):
     if saved is None:
         raise PermissionDenied(_DENIED)
     _clear_account_defaults(saved)
+    target_id = saved.pk
     if mapping_has_batches(saved):
         if saved.status != SavedCsvMapping.Status.ARCHIVED:
             saved.status = SavedCsvMapping.Status.ARCHIVED
@@ -281,8 +305,13 @@ def delete_or_archive_csv_mapping(principal, mapping_id):
             Account.objects.filter(default_saved_csv_mapping=saved).update(
                 default_saved_csv_mapping=None, updated_at=timezone.now()
             )
+            record(person, AuditEvent.Action.RECORD_ARCHIVED, AuditEvent.TargetType.CSV_MAPPING, target_id,
+                   audience={"household": saved.household}, fields=("status",))
         return saved
+    household = saved.household
     saved.delete()
+    record(person, AuditEvent.Action.RECORD_DELETED, AuditEvent.TargetType.CSV_MAPPING, target_id,
+           audience={"household": household})
     return None
 
 

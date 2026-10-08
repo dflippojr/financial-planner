@@ -11,8 +11,9 @@ from django.conf import settings
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 
+from .audit_services import record
 from .lifecycle_services import lock_actor_household
-from .models import Account, Person, Receipt, Transaction, _person_for
+from .models import Account, AuditEvent, Person, Receipt, Transaction, _person_for
 
 _DENIED = "Operation is not permitted."
 _REJECTED = "That file could not be attached."
@@ -154,6 +155,13 @@ def attach_receipt(principal, transaction_id, uploaded_file) -> Receipt:
     except Exception:
         destination.unlink(missing_ok=True)
         raise
+    try:
+        record(person, AuditEvent.Action.RECEIPT_ATTACHED, AuditEvent.TargetType.RECEIPT, receipt.pk,
+               audience={"account": Account(pk=financial_transaction.account_id)},
+               metadata={"transaction_id": financial_transaction.pk}, verified=True)
+    except Exception:
+        destination.unlink(missing_ok=True)
+        raise
     return receipt
 
 
@@ -169,7 +177,11 @@ def remove_receipt(principal, transaction_id, receipt_id):
     )
     if receipt is None:
         raise PermissionDenied(_DENIED)
+    target_id = receipt.pk
     receipt.delete()
+    record(person, AuditEvent.Action.RECEIPT_REMOVED, AuditEvent.TargetType.RECEIPT, target_id,
+           audience={"account": Account(pk=financial_transaction.account_id)},
+           metadata={"transaction_id": financial_transaction.pk}, verified=True)
 
 
 def visible_receipt_or_none(principal, transaction_id, receipt_id) -> Receipt | None:

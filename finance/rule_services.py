@@ -16,11 +16,14 @@ from .category_services import (
     ensure_household_categories,
     exclusion_exists_for,
 )
+from .audit_services import changed_names, origin, record, snapshot
 from .lifecycle_services import lock_actor_household
 from .models import (
     Account,
+    AuditEvent,
     Category,
     CategoryRule,
+    Household,
     Membership,
     RefundLink,
     RuleApplication,
@@ -102,6 +105,30 @@ def _set_rule_owner(rule, person, household, owner_kind):
     raise ValidationError("Choose personal or household.")
 
 
+RULE_AUDIT_FIELDS = {
+    "match": "description_contains", "account": "account_id", "amount": "min_amount_minor",
+    "target": "max_amount_minor", "category": "category_id", "priority": "priority", "enabled": "enabled",
+    "owner": "owner_household_id",
+}
+
+
+def _rule_audience(rule):
+    if rule.owner_household_id:
+        return {"household": Household(pk=rule.owner_household_id)}
+    return {"private_owner": rule.owner_person}
+
+
+def _actor_audience(person, rule):
+    """Household rule events go to the household; otherwise to the acting member alone.
+
+    Callers hold a rule that was read through the actor's visibility, so a
+    household rule means the actor is a current member of that household.
+    """
+    if rule.owner_household_id:
+        return {"household": Household(pk=rule.owner_household_id)}
+    return {"private_owner": person}
+
+
 @transaction.atomic
 def save_category_rule(
     principal,
@@ -131,6 +158,7 @@ def save_category_rule(
     if category is None:
         raise PermissionDenied(_DENIED)
     rule = _rule_for_save(person, household, rule_id, owner_kind, enabled)
+    before = snapshot(rule, RULE_AUDIT_FIELDS) if rule.pk else None
     _set_rule_owner(rule, person, household, owner_kind)
     rule.description_contains = cleaned
     rule.account = _visible_rule_account(person, account_id)
@@ -145,6 +173,17 @@ def save_category_rule(
     _validate_rule_account(rule, person, household)
     _validate_rule_category(rule, household)
     rule.save()
+    if before is None:
+        record(person, AuditEvent.Action.RECORD_CREATED, AuditEvent.TargetType.RULE, rule.pk,
+               audience=_rule_audience(rule))
+    else:
+        changed = changed_names(before, snapshot(rule, RULE_AUDIT_FIELDS))
+        if changed == ["enabled"]:
+            action = AuditEvent.Action.RECORD_ENABLED if rule.enabled else AuditEvent.Action.RECORD_DISABLED
+        else:
+            action = AuditEvent.Action.RECORD_EDITED
+        if changed:
+            record(person, action, AuditEvent.TargetType.RULE, rule.pk, audience=_rule_audience(rule), fields=changed)
     return rule
 
 
@@ -152,8 +191,12 @@ def save_category_rule(
 def set_rule_enabled(principal, rule_id, enabled):
     person, rule = _rule_or_404(principal, rule_id)
     lock_actor_household(person)
+    was_enabled = rule.enabled
     rule.enabled = bool(enabled)
     rule.save(update_fields=("enabled", "updated_at"))
+    if was_enabled != rule.enabled:
+        record(person, AuditEvent.Action.RECORD_ENABLED if rule.enabled else AuditEvent.Action.RECORD_DISABLED,
+               AuditEvent.TargetType.RULE, rule.pk, audience=_rule_audience(rule), fields=("enabled",))
     return rule
 
 
@@ -452,6 +495,9 @@ def _apply_to_locked(person, rule, locked, *, require_first_match=True):
             for txn, previous, previous_source in changed
         ]
     )
+    record(person, AuditEvent.Action.RULE_APPLIED, AuditEvent.TargetType.RULE, rule.pk,
+           audience=_actor_audience(person, rule), verified=True,
+           metadata={"rule_application_id": application.pk, "row_count": len(changed)})
     return application, skipped_manual
 
 
@@ -489,7 +535,8 @@ def apply_rule(principal, rule_id, *, previewed_version=None):
     person, rule = _rule_or_404(principal, rule_id)
     if not rule.enabled:
         return None, 0
-    return _apply_to_locked(person, rule, locked)
+    with origin(per_row=False):
+        return _apply_to_locked(person, rule, locked)
 
 
 @transaction.atomic
@@ -524,7 +571,8 @@ def apply_enabled_rules_to_transactions(principal, transactions):
             continue
         bucket = by_rule.setdefault(winner.pk, {"rule": winner, "rows": []})
         bucket["rows"].append(txn)
-    return _apply_automatic_rule_groups(person, by_rule)
+    with origin(AuditEvent.Source.RULE, per_row=False):
+        return _apply_automatic_rule_groups(person, by_rule)
 
 
 def _apply_automatic_rule_groups(person, by_rule):
@@ -558,6 +606,10 @@ def _apply_automatic_rule_groups(person, by_rule):
             txn.category_source = Transaction.CategorySource.RULE
             txn.updated_at = now
             changed.append(txn)
+    for application, payload in zip(applications, by_rule.values()):
+        record(person, AuditEvent.Action.RULE_APPLIED, AuditEvent.TargetType.RULE, payload["rule"].pk,
+               audience=_actor_audience(person, payload["rule"]), source=AuditEvent.Source.RULE, verified=True,
+               metadata={"rule_application_id": application.pk, "row_count": len(payload["rows"])})
     if changed:
         # One branch per winning rule rather than three CASE branches per row.
         # This avoids bulk_update's expression-building and SQL costs on 10k rows.
@@ -615,42 +667,52 @@ def reverse_application(principal, application_id):
     now = timezone.now()
     restored = 0
     skipped_manual = 0
-    for entry in entries:
-        txn = by_id.get(entry.transaction_id)
-        if txn is None:
-            continue
-        entry.reversed_at = now
-        entry.save(update_fields=("reversed_at",))
-        if txn.pk in superseded_ids:
-            # A later rule application changed this row; reversing this older
-            # one must not undo the newer category.
-            skipped_manual += 1
-            continue
-        if txn.category_source in (
-            Transaction.CategorySource.MANUAL,
-            Transaction.CategorySource.INHERITED,
-            Transaction.CategorySource.SPLIT,
-        ):
-            skipped_manual += 1
-            continue
-        previous = txn.category
-        restored_category, restored_source = _category_before(entry, application)
-        txn.category = restored_category
-        txn.category_source = restored_source
-        txn.save(update_fields=("category", "category_source", "updated_at"))
-        _record_text_history(
-            txn,
-            person,
-            TransactionCorrectionHistory.Field.CATEGORY,
-            _history_label(previous),
-            _history_label(restored_category),
-        )
-        _carry_into_transfer_snapshots(txn, previous, restored_category)
-        _restore_refund_categories(txn, person)
-        restored += 1
+    with origin(per_row=False):
+        for entry in entries:
+            txn = by_id.get(entry.transaction_id)
+            if txn is None:
+                continue
+            entry.reversed_at = now
+            entry.save(update_fields=("reversed_at",))
+            if txn.pk in superseded_ids:
+                # A later rule application changed this row; reversing this older
+                # one must not undo the newer category.
+                skipped_manual += 1
+                continue
+            if txn.category_source in (
+                Transaction.CategorySource.MANUAL,
+                Transaction.CategorySource.INHERITED,
+                Transaction.CategorySource.SPLIT,
+            ):
+                skipped_manual += 1
+                continue
+            previous = txn.category
+            restored_category, restored_source = _category_before(entry, application)
+            txn.category = restored_category
+            txn.category_source = restored_source
+            txn.save(update_fields=("category", "category_source", "updated_at"))
+            _record_text_history(
+                txn,
+                person,
+                TransactionCorrectionHistory.Field.CATEGORY,
+                _history_label(previous),
+                _history_label(restored_category),
+            )
+            _carry_into_transfer_snapshots(txn, previous, restored_category)
+            _restore_refund_categories(txn, person)
+            restored += 1
     if not RuleApplicationEntry.objects.filter(application=application, reversed_at__isnull=True).exists():
         application.reversed_at = now
         application.save(update_fields=("reversed_at",))
+    if entries:
+        reversal = {"rule_application_id": application.pk, "row_count": restored}
+        try:
+            record(person, AuditEvent.Action.RULE_REVERSED, AuditEvent.TargetType.RULE, application.rule_id,
+                   audience=_actor_audience(person, application.rule), metadata=reversal)
+        except PermissionDenied:
+            # A former household member reversing rows on their now-private account.
+            record(person, AuditEvent.Action.RULE_REVERSED, AuditEvent.TargetType.RULE, application.rule_id,
+                   audience={"private_owner": person}, metadata=reversal)
     return ReverseResult(restored=restored, skipped_manual=skipped_manual)
 
 
