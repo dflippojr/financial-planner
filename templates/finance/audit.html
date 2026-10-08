@@ -3,7 +3,7 @@
 {% block title %}Audit trail · Financial Planner{% endblock %}
 {% block settings_content %}
 <h2 class="mb-4 text-xl font-semibold">Audit trail</h2>
-<p class="mb-4">Recent account sharing, archiving and deletion actions. Only currently authorized events are shown. IDs identify app records; no names or financial values are copied into this trail. Times and date filters use UTC.</p>
+<p class="mb-4">Recent account, household access, sign-in, connection and settings changes. Only currently authorized events are shown. IDs identify app records; no names or financial values are copied into this trail. Times and date filters use UTC.</p>
 <form method="get" class="mb-6">
   {% include "finance/_form_fields.html" with form=form %}
   <button class="btn btn-primary" type="submit">Filter events</button>
@@ -13,7 +13,7 @@
 <table class="table"><thead><tr><th scope="col">Time (UTC)</th><th scope="col">Action / outcome</th><th scope="col">Actor</th><th scope="col">Target</th><th scope="col">Source</th><th scope="col">Changed fields</th><th scope="col">Event / run</th></tr></thead>
 <tbody>{% for event in page %}
 <tr><td>{% timezone "UTC" %}{{ event.occurred_at|date:"c" }}{% endtimezone %}</td><td>{{ event.get_action_display }} / {{ event.get_outcome_display }}</td>
-<td>{{ event.get_actor_kind_display }}{% if event.actor_id %} #{{ event.actor_id }}{% elif event.actor_kind == 'member' %} (former member){% endif %}{% if event.effective_member_id %}; for member #{{ event.effective_member_id }}{% endif %}</td>
+<td>{{ event.get_actor_kind_display }}{% if event.actor_id %} #{{ event.actor_id }}{% elif event.actor_kind == 'member' %} (former member){% endif %}{% if event.effective_member_id %}; for member #{{ event.effective_member_id }}{% endif %}{% if event.affected_member_id %}; affecting member #{{ event.affected_member_id }}{% endif %}</td>
 <td>{{ event.target_type }} #{{ event.target_id }}</td><td>{{ event.get_source_display }}</td><td>{{ event.changed_fields|join:", " }}</td><td>{{ event.id }} / {{ event.correlation_id }}</td></tr>
 {% empty %}<tr><td colspan="7">No visible events match these filters.</td></tr>{% endfor %}</tbody></table>
 </div>

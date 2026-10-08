@@ -5,12 +5,15 @@ from datetime import date, timedelta
 from types import SimpleNamespace
 
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.db import transaction
 from django.db.models import Case, Sum, Value, When
 from django.urls import reverse
 from django.utils import timezone
 
+from .audit_services import append_event
 from .cash_flow import format_minor, selected_accounts
 from .models import (
+    AuditEvent,
     Account,
     Alert,
     AlertSettings,
@@ -65,6 +68,7 @@ def calendar_settings_for(principal):
     return prefs
 
 
+@transaction.atomic
 def save_calendar_settings(principal, *, account_ids, threshold_minor):
     person = _person(principal)
     if threshold_minor is not None and threshold_minor < 0:
@@ -73,9 +77,17 @@ def save_calendar_settings(principal, *, account_ids, threshold_minor):
     allowed_ids = set(allowed.values_list("pk", flat=True))
     chosen = [pk for pk in account_ids if pk in allowed_ids]
     prefs = calendar_settings_for(person)
+    changed = []
+    if prefs.threshold_minor != threshold_minor:
+        changed.append("threshold")
+    if set(prefs.accounts.values_list("pk", flat=True)) != set(chosen):
+        changed.append("accounts")
     prefs.threshold_minor = threshold_minor
     prefs.save(update_fields=("threshold_minor",))
     prefs.accounts.set(chosen)
+    if changed:
+        append_event(action=AuditEvent.Action.BILLS_CALENDAR_CHANGED, actor=person, target_id=prefs.pk,
+                     changed_fields=changed)
     return prefs
 
 

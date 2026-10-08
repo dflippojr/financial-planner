@@ -104,7 +104,9 @@ from .security_services import (
     revoke_session_for,
 )
 from .export import export_filename, write_export_zip
+from .audit_services import append_event
 from .models import (
+    AuditEvent,
     Account,
     Category,
     Membership,
@@ -1564,8 +1566,15 @@ def _account_disconnect_google(user):
 def _account_add_password(request, password_form):
     if not password_form.is_valid():
         return password_form, None
-    request.user.set_password(password_form.cleaned_data["password1"])
-    request.user.save(update_fields=("password",))
+    had_password = request.user.has_usable_password()
+    with database_transaction.atomic():
+        request.user.set_password(password_form.cleaned_data["password1"])
+        request.user.save(update_fields=("password",))
+        person = request.user.person
+        append_event(
+            action=AuditEvent.Action.PASSWORD_CHANGED if had_password else AuditEvent.Action.PASSWORD_ADDED,
+            actor=person, target_id=person.pk,
+        )
     previous_key = request.session.session_key
     update_session_auth_hash(request, request.user)
     retouch_after_session_cycle(request, previous_key)
@@ -1864,9 +1873,18 @@ def _save_alert_email_form(request, prefs, form):
     address = form.cleaned_data["notification_email"]
     if address != prefs.notification_email and not recent_auth_is_fresh(request):
         return reauth_redirect(request, "alert-email-address", reverse("settings-alerts"))
-    prefs.email_enabled = form.cleaned_data["email_enabled"]
-    prefs.notification_email = address
-    prefs.save(update_fields=("email_enabled", "notification_email"))
+    enabled = form.cleaned_data["email_enabled"]
+    changed = [name for name, old, new in (
+        ("email_enabled", prefs.email_enabled, enabled),
+        ("notification_email", prefs.notification_email, address),
+    ) if old != new]
+    with database_transaction.atomic():
+        prefs.email_enabled = enabled
+        prefs.notification_email = address
+        prefs.save(update_fields=("email_enabled", "notification_email"))
+        if changed:
+            append_event(action=AuditEvent.Action.NOTIFICATION_ADDRESS_CHANGED, actor=prefs.person,
+                         target_id=prefs.pk, changed_fields=changed)
     return redirect("settings-alerts")
 
 

@@ -8,7 +8,8 @@ from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
-from .models import Membership, Person, PrivacyPolicyAcceptance, PrivacyPolicyVersion
+from .audit_services import append_event
+from .models import AuditEvent, Membership, Person, PrivacyPolicyAcceptance, PrivacyPolicyVersion
 
 DEFAULT_POLICY_PATH = Path(__file__).resolve().parent / "policy" / "default.md"
 DIRECTORY_FILENAMES = ("privacy-policy.md", "privacy_policy.md", "policy.md")
@@ -119,11 +120,14 @@ def accept_policy(person, version, *, request=None):
     if version is None:
         raise TypeError("A shown policy version is required.")
     person = _as_person(person)
-    _acceptance, created = PrivacyPolicyAcceptance.objects.get_or_create(
-        person=person,
-        policy_version=version,
-        defaults={"accepted_at": timezone.now()},
-    )
+    with transaction.atomic():
+        _acceptance, created = PrivacyPolicyAcceptance.objects.get_or_create(
+            person=person,
+            policy_version=version,
+            defaults={"accepted_at": timezone.now()},
+        )
+        if created:
+            append_event(action=AuditEvent.Action.PRIVACY_ACCEPTED, actor=person, target_id=person.pk)
     if created:
         from .security_services import EVENT_TYPES, record_security_event
 
@@ -146,8 +150,12 @@ def accept_shown_version(person, shown_version, *, request=None):
 def decline_policy(person, version=None):
     person = _as_person(person)
     policy = version or current_policy()
-    person.privacy_policy_declined_version = policy
-    person.save(update_fields=("privacy_policy_declined_version",))
+    changed = person.privacy_policy_declined_version_id != policy.pk
+    with transaction.atomic():
+        person.privacy_policy_declined_version = policy
+        person.save(update_fields=("privacy_policy_declined_version",))
+        if changed:
+            append_event(action=AuditEvent.Action.PRIVACY_DECLINED, actor=person, target_id=person.pk)
     return policy
 
 

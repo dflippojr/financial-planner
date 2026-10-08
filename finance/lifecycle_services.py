@@ -191,6 +191,24 @@ def _lock_visible_account_with_pair_counterparts(person, account_id, seed_leg_id
     return account
 
 
+def create_account(person, *, name, account_type, household=None, share_mode=""):
+    """Create an account owned by `person`, private or shared, and audit it."""
+    shared = household is not None
+    with transaction.atomic():
+        account = Account.objects.create(
+            name=name,
+            account_type=account_type,
+            owner=person,
+            scope=Account.Scope.HOUSEHOLD if shared else Account.Scope.PRIVATE,
+            share_mode=share_mode if shared else "",
+            household=household,
+            currency="USD",
+        )
+        append_event(account=account, action=AuditEvent.Action.ACCOUNT_CREATED, actor=person,
+                     changed_fields=("scope", "share_mode"))
+    return account
+
+
 @transaction.atomic
 def rename_account(principal, account_id, name):
     """Rename an active account the actor can still see once the locks are held."""
@@ -199,8 +217,11 @@ def rename_account(principal, account_id, name):
     account = _visible_account_for_update(person, account_id)
     if account.status != Account.Status.ACTIVE or account.archived_at is not None:
         raise PermissionDenied(_DENIED)
+    renamed = account.name != name
     account.name = name
     account.save(update_fields=("name", "updated_at"))
+    if renamed:
+        append_event(account=account, action=AuditEvent.Action.ACCOUNT_RENAMED, actor=person, changed_fields=("name",))
     return account
 
 
@@ -222,10 +243,19 @@ def update_debt_terms(principal, account_id, *, apr_percent, minimum_payment_min
         raise ValidationError("APR cannot be negative.")
     if minimum_payment_minor is not None and minimum_payment_minor < 0:
         raise ValidationError("Minimum payment cannot be negative.")
+    changed = [
+        field for field, old, new in (
+            ("apr_percent", account.apr_percent, apr_percent),
+            ("minimum_payment", account.minimum_payment_minor, minimum_payment_minor),
+            ("payment_day", account.payment_day, payment_day),
+        ) if old != new
+    ]
     account.apr_percent = apr_percent
     account.minimum_payment_minor = minimum_payment_minor
     account.payment_day = payment_day
     account.save(update_fields=("apr_percent", "minimum_payment_minor", "payment_day", "updated_at"))
+    if changed:
+        append_event(account=account, action=AuditEvent.Action.DEBT_TERMS_CHANGED, actor=person, changed_fields=changed)
     return account
 
 
@@ -286,7 +316,7 @@ def archive_account(principal, account_id):
 
 
 @transaction.atomic
-def end_current_membership(person):
+def end_current_membership(person, *, audit_actor=None):
     """End this person's current membership and apply shared-account exit rules.
 
     Shared by leave_household and the operator eviction command so the two
@@ -315,20 +345,31 @@ def end_current_membership(person):
     )
     _lock_ledgers(account.pk for account in household_accounts)
     transitioned_at = timezone.now()
-    _apply_shared_account_exit(
+    transitions = _apply_shared_account_exit(
         person,
         household_accounts,
         remaining_memberships,
         transitioned_at,
     )
 
+    if audit_actor is not None:
+        # Append while the leaver still belongs to the household, so each event
+        # is authorized against the account's current access.
+        for account, action, fields in transitions:
+            append_event(account=account, action=action, actor=audit_actor, affected_member=person, changed_fields=fields)
     own_membership.ended_at = transitioned_at
     own_membership.save(update_fields=("ended_at",))
+    if audit_actor is not None:
+        append_event(action=AuditEvent.Action.MEMBER_LEFT, actor=audit_actor, affected_member=person,
+                     household=own_membership.household, target_id=person.pk)
 
 
 def _apply_shared_account_exit(person, household_accounts, remaining_memberships, transitioned_at):
     account_ids = [account.pk for account in household_accounts]
+    transitions = []
+    unshared = (AuditEvent.Action.ACCOUNT_UNSHARED, ("scope", "share_mode"))
     if not remaining_memberships:
+        transitions = [(account, *unshared) for account in household_accounts]
         if account_ids:
             Account.objects.filter(pk__in=account_ids).update(
                 owner_id=person.pk,
@@ -337,18 +378,20 @@ def _apply_shared_account_exit(person, household_accounts, remaining_memberships
                 share_mode="",
                 updated_at=transitioned_at,
             )
-        return
+        return transitions
     successor_id = remaining_memberships[0].person_id
-    lent_ids = [
-        account.pk
-        for account in household_accounts
+    lent = [
+        account for account in household_accounts
         if account.owner_id == person.pk and account.share_mode == Account.ShareMode.LENT
     ]
-    co_owned_ids = [
-        account.pk
-        for account in household_accounts
+    co_owned = [
+        account for account in household_accounts
         if account.owner_id == person.pk and account.share_mode == Account.ShareMode.CO_OWNED
     ]
+    lent_ids = [account.pk for account in lent]
+    co_owned_ids = [account.pk for account in co_owned]
+    transitions = [(account, *unshared) for account in lent]
+    transitions += [(account, AuditEvent.Action.ACCOUNT_OWNER_CHANGED, ("owner",)) for account in co_owned]
     if lent_ids:
         Account.objects.filter(pk__in=lent_ids).update(
             scope=Account.Scope.PRIVATE,
@@ -361,11 +404,13 @@ def _apply_shared_account_exit(person, household_accounts, remaining_memberships
             owner_id=successor_id,
             updated_at=transitioned_at,
         )
+    return transitions
 
 
 def leave_household(principal):
     """End the actor's current membership and apply shared-account exit rules."""
-    end_current_membership(_person_for(principal))
+    person = _person_for(principal)
+    end_current_membership(person, audit_actor=person)
 
 
 def _delete_counterpart_account_ids(account_id):

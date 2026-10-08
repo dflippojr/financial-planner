@@ -6,9 +6,10 @@ from django.db import IntegrityError, transaction
 
 from allauth.socialaccount.models import SocialAccount
 
+from .audit_services import append_event
 from .auth_services import throttle_key
 from .lifecycle_services import lock_actor_household
-from .models import Person
+from .models import AuditEvent, Person
 
 
 GOOGLE_THROTTLE_USERNAME = "\0google"
@@ -168,6 +169,12 @@ def lock_member_for_sign_in_change(user):
     return locked
 
 
+def _audit_sign_in_change(user, action):
+    person = Person.objects.filter(user_id=user.pk).first()
+    if person is not None:
+        append_event(action=action, actor=person, target_id=person.pk)
+
+
 @transaction.atomic
 def disconnect_google_account(user):
     locked = lock_member_for_sign_in_change(user)
@@ -176,6 +183,7 @@ def disconnect_google_account(user):
     if has_usable_google_sign_in(locked) and not locked.has_usable_password():
         return False
     SocialAccount.objects.filter(user=locked, provider="google").delete()
+    _audit_sign_in_change(locked, AuditEvent.Action.GOOGLE_DISCONNECTED)
     return True
 
 
@@ -186,4 +194,5 @@ def remove_member_password(user):
         return False
     locked.set_unusable_password()
     locked.save(update_fields=("password",))
+    _audit_sign_in_change(locked, AuditEvent.Action.PASSWORD_REMOVED)
     return True
