@@ -60,6 +60,14 @@
   {% endfor %}
 </div>
 {% endif %}
+<form method="post" action="{% url 'transaction-export' %}" class="mb-4">
+  {% csrf_token %}
+  {% for name, value in filter_hidden %}
+  <input type="hidden" name="{{ name }}" value="{{ value }}">
+  {% endfor %}
+  <button type="submit" class="btn min-h-11" aria-describedby="transaction-export-help"{% if not export_filters_valid %} disabled{% endif %}>Export filtered CSV</button>
+  <p id="transaction-export-help" class="mt-2 text-sm">Downloads all matching transactions across all pages. Tags are a JSON array of names; splits are a JSON array with category_name, signed amount_minor, and currency. Formula-like text starting with =, +, -, @, tab, or carriage return is prefixed with a single quote. Money columns stay numeric and exact. Identity confirmation may be required; submit again after confirming.</p>
+</form>
 {% if list_totals %}
 <div class="mb-4 grid grid-cols-3 gap-2 md:gap-4">
   <article class="stats bg-base-100 shadow">

@@ -715,6 +715,7 @@ def transaction_list(request):
             "proposed_rule": proposed_rule_from_accepts(person) if show_ai else None,
             "list_query": request.get_full_path(),
             "filter_hidden": filter_hidden,
+            "export_filters_valid": not form.is_bound or form.is_valid(),
             "filter_query": _query_without_page(request),
             "matching_count": matching_count,
             "matching_over_cap": matching_count > BULK_EDIT_CAP,
