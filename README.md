@@ -7,16 +7,16 @@ accounts private inside a shared household.
 
 ![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
 ![Django](https://img.shields.io/badge/Django-5.2-092E20?logo=django&logoColor=white)
-![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-18-4169E1?logo=postgresql&logoColor=white)
 ![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-v4-06B6D4?logo=tailwindcss&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker_Compose-4_services-2496ED?logo=docker&logoColor=white)
 ![Tailscale](https://img.shields.io/badge/Tailscale-HTTPS-242424?logo=tailscale&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-555_pytest-0A9EDC?logo=pytest&logoColor=white)
+![Tests](https://img.shields.io/badge/tests-1900+_pytest-0A9EDC?logo=pytest&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 | Status | Scope | Process |
 |---|---|---|
-| In production on a home server, used daily by a two-person household | ~11.8k lines of application code, ~15k lines of tests, 15 schema migrations | 45+ merged pull requests, each tied to a specified GitHub issue and reviewed before merge |
+| In production on a home server, used daily by a two-person household | ~37k lines of application code, ~41k lines of tests, 59 schema migrations | 100+ merged pull requests, each tied to a specified GitHub issue and reviewed before merge |
 
 ---
 
@@ -64,6 +64,8 @@ mindmap
       Invitations and Google sign-in
       Recovery codes and re-auth
       Full data export
+      Passkey second factor
+      Member-visible audit trail
 ```
 
 | Area | Highlights |
@@ -74,6 +76,7 @@ mindmap
 | **Categorization** | Household-editable categories, rule-based auto-categorization with a reversible audit trail, and automatic pairing of transfers and credit-card payments so they never count as income or spending. |
 | **Recurring charges** | A deterministic detector finds weekly through annual subscriptions, tolerates date drift and varying amounts, and reports monthly and annual cost. |
 | **Net worth and investments** | Monthly net worth from balance snapshots, with carried-forward values flagged. Investment growth versus contributions using the Modified Dietz method. |
+| **Audit trail** | Metadata-only record of account, sharing, sign-in, connection, import and other changes, reviewable under Settings > Audit trail. See the [audit trail](docs/audit-trail.md). |
 | **Planning** | Planned items and confirmed recurring series feed a month-by-month projection; savings goals track progress. |
 
 ---
@@ -125,7 +128,7 @@ flowchart LR
 | UI | Tailwind CSS v4 + daisyUI 5, Chart.js | Modern, themeable UI (light and dark) compiled by Tailwind's standalone binary, so the repo has **no Node toolchain** |
 | Data | PostgreSQL 18 | Durable, constraint-rich storage; integrity rules live in the schema, not just in code |
 | Money | Integer cents (`BigInteger`) + ISO 4217 currency | Exact arithmetic, no floating-point drift anywhere in the pipeline |
-| Auth | Django sessions, django-allauth (Google), recovery codes | Invitation-only household with password or Google sign-in and re-authentication for sensitive actions |
+| Auth | Django sessions, django-allauth (Google), optional passkeys, recovery codes | Invitation-only household with password or Google sign-in and re-authentication for sensitive actions |
 | Ops | Docker Compose, health checks, scripted backup/restore | Self-supervising stack with a documented, rehearsed restore drill |
 
 ---
@@ -204,7 +207,7 @@ flowchart LR
 
 ## Domain model
 
-A simplified view of the core entities (15 migrations, 26 model classes in total).
+A simplified view of the core entities (59 migrations, 54 model classes in total).
 
 ```mermaid
 erDiagram
@@ -261,7 +264,7 @@ erDiagram
 - [`finance/net_worth.py`](finance/net_worth.py): monthly net worth with carry-forward and per-source sign handling.
 
 **Testing and quality**
-- 555 pytest tests across importers, authorization, reporting, deployment scripts, and UI.
+- About 1,900 pytest tests across importers, authorization, reporting, deployment scripts, and UI.
 - The suite runs on in-memory SQLite for speed and on PostgreSQL 18, the production engine, in the `PostgreSQL 18` GitHub Actions workflow on every pull request and push to `main` (it also checks migrations on an empty database). Run the same locally with a throwaway container via [`scripts/test_postgres.sh`](scripts/test_postgres.sh).
 - SonarCloud quality gate in CI on every pull request and push to `main` (coverage, security, maintainability), plus on-demand automated code review on a self-hosted GitHub Actions runner.
 - Supply-chain care: pinned Python dependencies, a checksum-verified Tailwind binary, and vendored front-end assets with recorded SHA-256 sums.
@@ -362,8 +365,9 @@ fresh volume, and upgrades.
 <details>
 <summary><b>Continuous integration</b></summary>
 
-`.github/workflows/review.yml` posts an automated code-bug review as a PR comment. It runs only when a
-maintainer dispatches it (`gh workflow run review.yml -f pr_number=N -f mode=full`), never automatically.
+`.github/workflows/review.yml` posts an automated code-bug review as a PR comment. It runs once when a
+pull request is opened (Dependabot pull requests are skipped); after later commits a maintainer dispatches
+a re-review (`gh workflow run review.yml -f pr_number=N -f mode=full`).
 It refuses pull requests from forks, so untrusted code never reaches the dedicated self-hosted runner
 (`financial-planner-review`, registered with `ops/github/install-runner.ps1`). The workflow is a thin caller of
 the shared reviewer in `dflippojr/agent-harness` (`.github/workflows/review.yml@review-v1`), which holds the review
@@ -388,6 +392,8 @@ check when the SonarCloud quality gate fails (including 80% coverage on new code
 | [Data model](docs/data-model.md) | Storage contract, import, transfer, recurring, and net-worth rules |
 | [Authentication](docs/authentication.md) | Onboarding, invitations, recovery, and session security |
 | [Deployment](docs/deployment.md) | Home server deployment, backup, and restore |
+| [Audit trail](docs/audit-trail.md) | Audited actions, review, retention, and the operator journal |
+| [CSV and OFX shapes](docs/csv-shapes.md) | Supported provider export shapes |
 | [Backlog](docs/backlog.md) | Milestones and issue roadmap |
 | [Account connections research](docs/research/account-connections.md) | SimpleFIN, Plaid, and alternatives |
 | [Sign in with ChatGPT research](docs/research/sign-in-with-chatgpt.md) | Per-member ChatGPT plan as an AI backend (#92) |
@@ -398,4 +404,3 @@ check when the SonarCloud quality gate fails (including 80% coverage on new code
 MIT. See [LICENSE](LICENSE). Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 No real financial data is stored in this repository; all fixtures and examples are synthetic.
 
-The general [audit trail](docs/audit-trail.md) documents member review, metadata policy, retention, deletion and restore limits.
