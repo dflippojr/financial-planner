@@ -3,7 +3,6 @@ import json
 import uuid
 from datetime import date, datetime, timedelta, timezone as utc_timezone
 from io import StringIO
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -273,7 +272,7 @@ def test_publish_and_reviews_and_sync_commands_record_operator_summary(monkeypat
     assert reviews and reviews[0].actor_kind == "operator" and reviews[0].actor_id is None
 
 
-def test_ai_resuming_saved_session_adds_no_new_inference_or_claim(harness, settings, monkeypatch):
+def test_ai_resuming_saved_session_adds_no_new_inference_or_claim(harness, settings):
     from finance.ai_jobs import enqueue_job, process_due_jobs
     from finance.ai_services import connect_harness, set_defaults
 
@@ -321,3 +320,50 @@ def test_chat_claim_and_conditional_finish_and_stale_recovery(harness):
     assert not run_claimed_turn(stale_pk, "dead-worker")
     assert operational_rows(person, "chat_turn")[-1].metadata["failure"] == "stale"
     assert CANARY not in str(list(AuditEvent.objects.values()))
+
+
+def test_shared_inference_names_credential_owner_but_stays_requester_only(harness):
+    from finance.ai_services import connect_harness, set_offer_local_to_household, set_shared_local_use, run_structured
+    from finance.policy_services import current_policy
+
+    state, url = harness
+    state.model_state = "ready"
+    _host_user, host, household = make_member("host")
+    _guest_user, guest, _ = make_member("guest", household=household, policy=current_policy())
+    connection = connect_harness(host, base_url=url, token=TOKEN)
+    set_offer_local_to_household(host, True)
+    set_shared_local_use(guest, chat=False, background=True)
+    with operation():
+        result = run_structured(guest, CANARY, feature="structured", backend="local", sleep=lambda _s: None)
+    assert result.ok
+    rows = operational_rows(guest, "ai_inference")
+    assert len(rows) == 2
+    assert all(row.effective_member_id == host.pk and row.affected_member_id == guest.pk for row in rows)
+    assert all(row.metadata["connection_id"] == connection.pk and row.actor_id is None for row in rows)
+    assert not operational_rows(host, "ai_inference")
+
+
+def test_provider_error_list_does_not_claim_a_clean_sync(monkeypatch):
+    _user, person, _household = make_member("sync")
+    payload = account_payload()
+    payload["errlist"] = [CANARY]
+    connection = connect_owner(person, monkeypatch, payload)
+    sync_connection(person, connection.pk)
+    row, = operational_rows(person, "simplefin_sync")
+    assert row.outcome == "failed" and row.metadata["failure"] == "provider_error"
+    assert CANARY not in str(list(AuditEvent.objects.values()))
+
+
+def test_usage_write_failure_keeps_successful_inference_without_retry(harness, caplog):
+    from finance.ai_services import connect_harness, run_structured
+    from finance.models import AiUsageEvent
+
+    state, url = harness
+    _user, person, _ = make_member("ai")
+    connect_harness(person, base_url=url, token=TOKEN)
+    with patch.object(AiUsageEvent.objects, "create", side_effect=DatabaseError(CANARY)):
+        result = run_structured(person, CANARY, feature="structured", backend="local", sleep=lambda _s: None)
+    assert result.ok
+    assert state.requests.count(("POST", "/api/v1/sessions")) == 1
+    assert len(operational_rows(person, "ai_inference")) == 2
+    assert "Audit write gap" in caplog.text and CANARY not in caplog.text

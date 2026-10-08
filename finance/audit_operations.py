@@ -34,6 +34,16 @@ def member_operation(function):
     return wrapped
 
 
+def scheduled_operation(function):
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        if execution.get() is not None:
+            return function(*args, **kwargs)
+        with operation():
+            return function(*args, **kwargs)
+    return wrapped
+
+
 def journal_run(name):
     """Operation/outcome only for operator-wide work, outside the DB audience."""
     def decorate(function):

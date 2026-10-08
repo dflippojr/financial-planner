@@ -661,7 +661,10 @@ def _sync_connection_locked(principal, connection_id, *, ignore_rate_limit=False
     from finance.alert_services import schedule_after_new_transactions
 
     schedule_after_new_transactions(synced)
-    outcome(person, "simplefin_sync", connection.pk, metadata={"connection_id": connection.pk, "new_count": imported})
+    details = {"connection_id": connection.pk, "new_count": imported}
+    if errors:
+        details["failure"] = "provider_error"
+    outcome(person, "simplefin_sync", connection.pk, phase="failed" if errors else "succeeded", metadata=details)
     return {"imported": imported, "errors": errors, "result": connection.last_sync_result}, None
 
 

@@ -10,7 +10,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from .models import Alert, AlertSettings
-from .audit_operations import outcome
+from .audit_operations import outcome, scheduled_operation, member_operation
 
 logger = logging.getLogger(__name__)
 _notice_run_active = ContextVar("email_notice_run_active", default=False)
@@ -36,16 +36,20 @@ def _send_notice(address, body):
     return False
 
 
+@member_operation
 def send_test_notice(prefs):
     if not email_notices_available() or not prefs.email_enabled or not prefs.notification_email:
         return False
-    return _send_notice(
+    sent = _send_notice(
         prefs.notification_email,
         "This is a test notice from Financial Planner.\n\n"
         f"Open your alerts: {settings.ALERT_EMAIL_BASE_URL.rstrip('/')}/alerts/\n",
     )
+    outcome(prefs.person, "email_delivery", phase="succeeded" if sent else "failed")
+    return sent
 
 
+@scheduled_operation
 def send_run_notices(alert_ids=None):
     from .alert_services import alerts_for
 

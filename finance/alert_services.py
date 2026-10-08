@@ -9,7 +9,7 @@ from django.utils import timezone
 
 from .alert_email import notify_after_alert_run
 from .audit_services import append_event
-from .audit_operations import journal_run, outcome
+from .audit_operations import journal_run, outcome, scheduled_operation
 from .budget_services import progress_snapshot, progress_snapshots
 from .cash_flow import format_minor
 from .models import (
@@ -61,6 +61,7 @@ def _internal_link(link):
 
 
 @transaction.atomic
+@scheduled_operation
 def raise_alert(recipients, kind, title, link, dedupe_key, account=None):
     """Create one inbox row per recipient unless that condition was already raised."""
     if not _internal_link(link):

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from django.conf import settings
 from django.core.exceptions import PermissionDenied
-from django.db import transaction
+from django.db import DatabaseError, transaction
 from django.utils import timezone
 
 from .ai_harness import (
@@ -44,7 +44,7 @@ from .ai_types import (
 from .ai_plan import mark_login_required, plan_end_user, plan_link, plan_links
 from .ai_urls import HarnessUrlError, parse_harness_url
 from .encryption import decrypt_secret, encrypt_secret
-from .audit_services import append_event
+from .audit_services import append_event, report_write_gap
 from .audit_operations import member_operation, outcome
 from .audit_models import METADATA_ENUM_KEYS
 from .lifecycle_services import _DENIED, _person_for
@@ -618,16 +618,18 @@ def run_conversation(
 
 
 def record_usage(person, *, provider, backend, feature, result: ProviderResult, resumed=False):
-    return AiUsageEvent.objects.create(
-        member=person,
-        resumed=resumed,
-        provider=provider,
-        backend=backend,
-        feature=feature,
-        prompt_tokens=result.usage.prompt_tokens,
-        completion_tokens=result.usage.completion_tokens,
-        outcome="ok" if result.ok else (result.failure_code or PROVIDER_ERROR),
-    )
+    try:
+        with transaction.atomic():
+            return AiUsageEvent.objects.create(
+                member=person, resumed=resumed, provider=provider, backend=backend, feature=feature,
+                prompt_tokens=result.usage.prompt_tokens, completion_tokens=result.usage.completion_tokens,
+                outcome="ok" if result.ok else (result.failure_code or PROVIDER_ERROR),
+            )
+    except DatabaseError:
+        # The inference has already happened. Never spend another request just
+        # because its usage linkage could not be stored, or expose bound values.
+        report_write_gap()
+        return None
 
 
 @member_operation

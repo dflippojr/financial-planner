@@ -1,6 +1,6 @@
+"""Explicit maintenance rebuild of transfer suggestions for current members."""
 from finance.audit_operations import outcome
 from finance.audit_commands import AuditedCommand
-"""Explicit maintenance rebuild of transfer suggestions for current members."""
 from django.core.management.base import CommandError
 
 from finance.category_services import refresh_transfer_pairs

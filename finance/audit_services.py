@@ -20,6 +20,14 @@ audit_request = ContextVar("audit_request", default=None)
 GAP_WARNING = "The action completed, but its audit event could not be recorded. Please notify the operator."
 
 
+def report_write_gap(request=None):
+    """Fixed warning only; never interpolate database/provider exception text."""
+    logger.error("Audit write gap: an event could not be recorded")
+    request = request or audit_request.get()
+    if request is not None:
+        messages.warning(request, GAP_WARNING)
+
+
 def append_event(*, action, account=None, actor=None, actor_kind=AuditEvent.ActorKind.MEMBER,
                  effective_member=None, affected_member=None, source=AuditEvent.Source.UI,
                  outcome=AuditEvent.Outcome.SUCCEEDED, correlation_id=None, changed_fields=(),
@@ -116,9 +124,7 @@ def append_event(*, action, account=None, actor=None, actor_kind=AuditEvent.Acto
             # Report only committed actions. A later action rollback discards
             # this callback, so it cannot falsely warn that the action completed.
             # Never log exception text: errors may echo bound parameters.
-            logger.error("Audit write gap: an event could not be recorded")
-            if request is not None:
-                messages.warning(request, GAP_WARNING)
+            report_write_gap(request)
 
         transaction.on_commit(report_gap)
         return None

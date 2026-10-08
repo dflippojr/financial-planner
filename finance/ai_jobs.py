@@ -7,6 +7,7 @@ import uuid
 from dataclasses import replace
 from .audit_operations import execution, operation, outcome
 from concurrent.futures import ThreadPoolExecutor
+from functools import wraps
 from datetime import timedelta
 
 from django.conf import settings
@@ -167,12 +168,16 @@ def _lock_qs(qs):
     return qs.select_for_update(**kwargs)
 
 
+def _job_execution(function):
+    @wraps(function)
+    def wrapped(job, moment):
+        with operation(run_id=job.audit_run_id, job_id=job.pk, attempt=job.attempts):
+            return function(job, moment)
+    return wrapped
+
+
+@_job_execution
 def _process_one(job, moment):
-    with operation(run_id=job.audit_run_id, job_id=job.pk, attempt=job.attempts):
-        return _process_claimed_job(job, moment)
-
-
-def _process_claimed_job(job, moment):
     cutoff = _stale_running_cutoff(moment)
     member_connection, backend = _job_connection(job)
     session_id = _session_for(job, member_connection)
@@ -197,7 +202,7 @@ def _process_claimed_job(job, moment):
     if not resuming and backend == LOCAL_BACKEND and not _local_may_run(member_connection):
         _write_if_unchanged(job, status=AiJob.Status.WAITING_MODEL, next_attempt_at=moment)
         return False
-    claimed = _claim_for_run(job, moment, cutoff)
+    claimed = _claim_for_run(job, moment, cutoff, connection_row=member_connection, backend=backend)
     if claimed is None:
         return False
     job = claimed
@@ -338,7 +343,8 @@ def _wait_for_open_session(job, moment, code):
     return False
 
 
-def _claim_for_run(job, moment, cutoff):
+def _claim_for_run(job, moment, cutoff, *, connection_row=None, backend=""):
+    from .audit_models import METADATA_ENUM_KEYS
     due = Q(status__in=(AiJob.Status.QUEUED, AiJob.Status.WAITING_MODEL), next_attempt_at__lte=moment)
     stale_resume = Q(status=AiJob.Status.RUNNING, updated_at__lte=cutoff) & ~Q(harness_session_id="")
     with transaction.atomic():
@@ -351,7 +357,12 @@ def _claim_for_run(job, moment, cutoff):
             if not (locked.harness_session_id or "").strip():
                 locked.attempts += 1
                 locked.audit_run_id = uuid.uuid4()
-                outcome_for_job(locked, "ai_claim", phase="started")
+                details = {}
+                if connection_row is not None:
+                    details = {"connection_id": connection_row.pk, "provider": connection_row.kind,
+                               "backend": backend if backend in METADATA_ENUM_KEYS["backend"] else "other",
+                               "feature": locked.feature if locked.feature in METADATA_ENUM_KEYS["feature"] else "structured"}
+                outcome_for_job(locked, "ai_claim", phase="started", metadata=details)
         locked.save(update_fields=("status", "attempts", "audit_run_id", "updated_at"))
         current = execution.get()
         if current is not None:
@@ -476,10 +487,10 @@ def _parse_hhmm(text):
     return hour * 60 + minute
 
 
-def outcome_for_job(job, name, *, phase="succeeded", code=None):
+def outcome_for_job(job, name, *, phase="succeeded", code=None, metadata=None):
     from .audit_models import METADATA_ENUM_KEYS
 
-    details = {}
+    details = dict(metadata or {})
     if code is not None:
         details["failure"] = code if code in METADATA_ENUM_KEYS["failure"] else PROVIDER_ERROR
     with operation(run_id=job.audit_run_id, job_id=job.pk, attempt=job.attempts):
