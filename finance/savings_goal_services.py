@@ -5,12 +5,12 @@ from django.db import transaction
 from django.db.models import Case, Value, When
 from django.utils import timezone
 
+from .access import DENIED as _DENIED
+from .access import require_person as _person
 from .cash_flow import format_minor
 from .category_services import current_household
 from .audit_services import changed_names, owned_audience, record, snapshot
 from .models import Account, AuditEvent, BalanceSnapshot, SavingsGoal
-
-_DENIED = "Operation is not permitted."
 
 SOURCE_SNAPSHOT = "snapshot"
 SOURCE_MANUAL = "manual"
@@ -29,17 +29,6 @@ def months_left(today, target_date):
     if target_date >= today:
         months = max(months, 1)
     return months
-
-
-def _person(principal):
-    from .models import Person
-
-    if isinstance(principal, Person):
-        return principal
-    try:
-        return principal.person
-    except Person.DoesNotExist as exc:
-        raise PermissionDenied(_DENIED) from exc
 
 
 def _current_amount(principal, goal, *, as_of):
@@ -126,7 +115,7 @@ GOAL_AUDIT_FIELDS = {
 
 
 def save_savings_goal(principal, payload, *, goal=None):
-    person = _person(principal)
+    person = _person(principal, check_authenticated=False)
     household = current_household(person)
     scope = payload["scope"]
     if scope == SavingsGoal.Scope.HOUSEHOLD:
@@ -175,7 +164,7 @@ def save_savings_goal(principal, payload, *, goal=None):
 
 
 def set_savings_goal_completed(principal, goal, completed):
-    person = _person(principal)
+    person = _person(principal, check_authenticated=False)
     _check_can_edit(person, goal)
     was_completed = goal.completed_at is not None
     goal.completed_at = timezone.now() if completed else None
@@ -187,7 +176,7 @@ def set_savings_goal_completed(principal, goal, completed):
 
 
 def set_savings_goal_archived(principal, goal, archived):
-    person = _person(principal)
+    person = _person(principal, check_authenticated=False)
     _check_can_edit(person, goal)
     was_archived = goal.status == SavingsGoal.Status.ARCHIVED
     if archived:

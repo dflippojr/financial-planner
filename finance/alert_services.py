@@ -7,11 +7,13 @@ from django.db.models import Q, prefetch_related_objects
 from django.urls import reverse
 from django.utils import timezone
 
+from .access import DENIED as _DENIED
 from .alert_email import notify_after_alert_run
 from .audit_services import append_event
 from .audit_operations import journal_run, outcome, scheduled_operation
 from .budget_services import progress_snapshot, progress_snapshots
 from .cash_flow import format_minor
+from .models import _person_for
 from .models import (
     AuditEvent,
     Account,
@@ -24,7 +26,6 @@ from .models import (
 )
 from .months import month_start
 
-_DENIED = "Operation is not permitted."
 _KIND_ENABLED_FIELD = {
     Alert.Kind.SYNC: "sync_enabled",
     Alert.Kind.RECURRING_PRICE: "recurring_price_enabled",
@@ -36,12 +37,6 @@ _KIND_ENABLED_FIELD = {
     Alert.Kind.UNUSUAL_SPENDING: "unusual_spending_enabled",
 }
 READ_RETENTION_DAYS = 180
-
-
-def _person_for(principal):
-    from .models import _person_for as resolve_person
-
-    return resolve_person(principal)
 
 
 def settings_for(person):

@@ -4,6 +4,8 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.db.models import Exists, Max, OuterRef
 
+from .access import DENIED as _DENIED
+from .access import require_person as _person
 from .cash_flow import cash_flow_report, selected_accounts
 from .category_services import current_household, exclusion_exists_for
 from .audit_services import changed_names, owned_audience, record, snapshot
@@ -18,8 +20,6 @@ from .projection import (
 )
 from .scenario import apply_scenario, compare_projected_months
 from .savings_goal_services import goal_progress
-
-_DENIED = "Operation is not permitted."
 
 
 def _planned_input(item):
@@ -77,7 +77,7 @@ def visible_projection_inputs(principal, *, account=None, scope="", accounts=Non
     if scope:
         planned = planned.filter(scope=scope)
     if not include_household:
-        person = _person(principal)
+        person = _person(principal, check_authenticated=False)
         planned = planned.filter(scope=PlannedItem.Scope.PRIVATE, owner=person)
     planned_rows = list(planned.select_related("replaces_series").order_by("start_date", "pk"))
     if account is not None:
@@ -133,7 +133,7 @@ def visible_projection_inputs(principal, *, account=None, scope="", accounts=Non
                 cash_flow_only=True,
                 accounts=Account.objects.visible_to(principal).filter(
                     scope=Account.Scope.PRIVATE,
-                    owner=_person(principal),
+                    owner=_person(principal, check_authenticated=False),
                 ),
             )
         series = confine_recurring_series_to_accounts(series, allowed)
@@ -221,17 +221,6 @@ def cash_flow_with_projection(
     return report
 
 
-def _person(principal):
-    from .models import Person
-
-    if isinstance(principal, Person):
-        return principal
-    try:
-        return principal.person
-    except Person.DoesNotExist as exc:
-        raise PermissionDenied(_DENIED) from exc
-
-
 PLANNED_AUDIT_FIELDS = {
     "scope": "scope", "name": "name", "kind": "kind", "amount": "amount_minor", "date": "start_date",
     "cadence": "cadence", "category": "category_id", "enabled": "enabled", "interval": "end_date",
@@ -239,7 +228,7 @@ PLANNED_AUDIT_FIELDS = {
 
 
 def save_planned_item(principal, payload, *, item=None):
-    person = _person(principal)
+    person = _person(principal, check_authenticated=False)
     household = current_household(person)
     scope = payload["scope"]
     if scope == PlannedItem.Scope.HOUSEHOLD:

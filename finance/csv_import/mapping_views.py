@@ -2,12 +2,13 @@ from dataclasses import replace
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.http import Http404
-from django.shortcuts import get_object_or_404, redirect, render
+from django.shortcuts import redirect, render
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods
 
+from finance.access import request_person as _person
 from finance.category_services import current_household
-from finance.models import Account, Person, SavedCsvMapping
+from finance.models import Account, SavedCsvMapping
 
 from .forms import SavedCsvMappingEditForm
 from .saved_mappings import (
@@ -19,13 +20,8 @@ from .saved_mappings import (
     visible_saved_mapping,
 )
 
-
 LIST_TEMPLATE = "finance/csv_import/mapping_list.html"
 EDIT_TEMPLATE = "finance/csv_import/mapping_edit.html"
-
-
-def _person(request):
-    return get_object_or_404(Person, user=request.user)
 
 
 def _account_choices(request):

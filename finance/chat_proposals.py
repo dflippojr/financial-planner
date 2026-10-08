@@ -15,6 +15,7 @@ from django.db.models.functions import Concat
 from django.urls import reverse
 from django.utils import timezone
 
+from .access import first_message as _first_message
 from .ai_tools import visible_accounts
 from .ai_types import ToolResult, ToolSpec
 from .audit_services import origin, record
@@ -303,7 +304,7 @@ def apply_proposal(principal, proposal_id):
             except PermissionDenied as exc:
                 raise ProposalError(REFUSED) from exc
             except ValidationError as exc:
-                raise ProposalError(_first_message(exc)) from exc
+                raise ProposalError(_first_message(exc, REFUSED, stringify=True)) from exc
             _label_history(person, before)
             proposal.status = AiProposal.Status.APPLIED
             proposal.result = result
@@ -322,11 +323,6 @@ def apply_proposal(principal, proposal_id):
 
 class _Stale(ProposalError):
     pass
-
-
-def _first_message(exc):
-    messages = getattr(exc, "messages", None) or []
-    return str(messages[0]) if messages else REFUSED
 
 
 def _locked_pending(person, proposal_id):

@@ -5,10 +5,11 @@ from __future__ import annotations
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
 from django.http import JsonResponse
-from django.shortcuts import get_object_or_404, redirect, render
+from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_GET, require_POST
 
+from .access import request_person as _person
 from .ai_services import AiError, local_status, member_has_ai, resolve_ai, warm_for_chat
 from .ai_types import LOCAL_BACKEND
 from .chat_proposals import ProposalError, apply_proposal, card_for, dismiss_proposal, proposal_for
@@ -23,12 +24,8 @@ from .chat_services import (
     send_message,
     start_conversation,
 )
-from .models import AiConversationMessage, Person
+from .models import AiConversationMessage
 from .reauth import safe_next_url
-
-
-def _person(request):
-    return get_object_or_404(Person, user=request.user)
 
 
 def _backend_label(backend):

@@ -4,14 +4,15 @@ from django.conf import settings
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
 from django.http import Http404
-from django.shortcuts import get_object_or_404, redirect, render
+from django.shortcuts import redirect, render
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods, require_POST
 
+from .access import request_person as _person
 from .category_services import current_household
 from .forms import SimpleFinSetupForm
-from .models import Account, AccountLink, Person, SimpleFinConnection
+from .models import Account, AccountLink, SimpleFinConnection
 from .reauth import requires_recent_auth
 from .security_services import EVENT_TYPES, record_security_event
 from .simplefin_errors import SimpleFinError, SimpleFinRateLimited
@@ -23,10 +24,6 @@ from .simplefin_services import (
     save_account_links,
     sync_connection,
 )
-
-
-def _person(request):
-    return get_object_or_404(Person, user=request.user)
 
 
 def _linkable_accounts(person):

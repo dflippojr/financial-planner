@@ -8,6 +8,8 @@ from django.urls import reverse
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods, require_POST
 
+from .access import request_person as _person
+from .access import service_or_404 as _service_or_404
 from .budget_services import (
     NEAR_LIMIT_PERCENT,
     amount_for,
@@ -20,19 +22,8 @@ from .budget_services import (
 )
 from .category_services import current_household
 from .forms import BudgetForm
-from .models import Budget, Person
+from .models import Budget
 from .months import add_months
-
-
-def _person(request):
-    return get_object_or_404(Person, user=request.user)
-
-
-def _service_or_404(action):
-    try:
-        return action()
-    except (PermissionDenied, ValidationError) as exc:
-        raise Http404 from exc
 
 
 def _visible_budget(user, budget_id):
@@ -139,7 +130,7 @@ def budget_edit(request, budget_id):
 def budget_archive(request, budget_id):
     budget = _visible_budget(request.user, budget_id)
     month = parse_month(request.POST.get("month"))
-    _service_or_404(lambda: set_budget_archived(request.user, budget, True))
+    _service_or_404(lambda: set_budget_archived(request.user, budget, True), also=(ValidationError,))
     return redirect(_list_url(month))
 
 
@@ -149,7 +140,7 @@ def budget_rollover_toggle(request, budget_id):
     budget = _visible_budget(request.user, budget_id)
     month = parse_month(request.POST.get("month"))
     enabled = request.POST.get("enabled") == "1"
-    _service_or_404(lambda: set_budget_rollover(request.user, budget, enabled, month=month))
+    _service_or_404(lambda: set_budget_rollover(request.user, budget, enabled, month=month), also=(ValidationError,))
     return redirect(_list_url(month))
 
 
@@ -159,7 +150,7 @@ def budget_rollover_reset(request, budget_id):
     budget = _visible_budget(request.user, budget_id)
     month = parse_month(request.GET.get("month") or request.POST.get("month"))
     if request.method == "POST":
-        _service_or_404(lambda: reset_budget_rollover(request.user, budget, month=month))
+        _service_or_404(lambda: reset_budget_rollover(request.user, budget, month=month), also=(ValidationError,))
         return redirect(_list_url(month))
     return render(
         request,

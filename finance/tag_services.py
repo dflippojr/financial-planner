@@ -2,13 +2,12 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models.functions import Lower
 
+from .access import DENIED as _DENIED
 from .audit_services import record
 from .category_services import current_household
 from .lifecycle_services import lock_actor_household
 from .models import Account, AuditEvent, Tag, Transaction, _person_for
 
-
-_DENIED = "Operation is not permitted."
 TAG_NAME_ERROR = "Enter a tag name."
 TAG_EXISTS = "A tag with that name already exists."
 NOTE_TOO_LONG = "Notes must be 2,000 characters or fewer."

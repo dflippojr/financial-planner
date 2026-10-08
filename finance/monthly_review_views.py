@@ -1,18 +1,14 @@
-from django.shortcuts import get_object_or_404, redirect, render
+from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_GET, require_POST
 
-from .models import Person
+from .access import request_person as _person
 from .monthly_review import latest_closed_month, parse_review_month, review_for_viewer
 from .monthly_review_ai import visible_phrasing
 from .months import add_months
 from .unusual_spending_ai import visible_unusual_phrasing
-
-
-def _person(request):
-    return get_object_or_404(Person, user=request.user)
 
 
 def _list_url(month):

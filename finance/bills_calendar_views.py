@@ -1,13 +1,14 @@
 from decimal import Decimal
 
-from django.core.exceptions import PermissionDenied, ValidationError
-from django.http import Http404
-from django.shortcuts import get_object_or_404, redirect, render
+from django.core.exceptions import ValidationError
+from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods
 
+from .access import request_person as _person
+from .access import service_or_404 as _service_or_404
 from .bills_calendar import (
     build_month,
     calendar_settings_for,
@@ -16,18 +17,6 @@ from .bills_calendar import (
     save_calendar_settings,
 )
 from .forms import BillsCalendarForm
-from .models import Person
-
-
-def _person(request):
-    return get_object_or_404(Person, user=request.user)
-
-
-def _service_or_404(action):
-    try:
-        return action()
-    except (PermissionDenied, ValidationError) as exc:
-        raise Http404 from exc
 
 
 def _month_from_params(params, today):
@@ -73,7 +62,7 @@ def bills_calendar(request):
     if request.method == "POST":
         form = _settings_form(request, person, request.POST)
         if form.is_valid():
-            _service_or_404(lambda: save_calendar_settings(request.user, **form.save_payload()))
+            _service_or_404(lambda: save_calendar_settings(request.user, **form.save_payload()), also=(ValidationError,))
             evaluate_expected_balance_alert(person, today=today)
             url = reverse("bills-calendar")
             params = f"?year={year}&month={month}"

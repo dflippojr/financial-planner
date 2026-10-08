@@ -16,6 +16,8 @@ from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_GET, require_http_methods, require_POST, require_safe
 
+from .access import first_message as _first_message
+from .access import service_or_404 as _service_or_404
 from .backup_health import settings_backup_context
 from .auth_services import (
     InvalidOneTimeCode,
@@ -922,13 +924,6 @@ def transaction_note_tags(request, transaction_id):
     return _render_transaction_edit(request, financial_transaction, note_form=form)
 
 
-def _service_or_404(action):
-    try:
-        return action()
-    except PermissionDenied as exc:
-        raise Http404 from exc
-
-
 @require_POST
 @never_cache
 def transaction_categorize(request, transaction_id):
@@ -1017,11 +1012,6 @@ def transaction_split_part_category(request, transaction_id, part_id):
             lambda: assign_split_part_category(request.user, part.pk, form.cleaned_data["category"].pk)
         )
     return redirect("transaction-edit", transaction_id=transaction_id)
-
-
-def _first_message(exc, fallback):
-    messages = getattr(exc, "messages", None)
-    return messages[0] if messages else fallback
 
 
 def _handle_add_category(request, forms):

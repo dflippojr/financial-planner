@@ -1,32 +1,22 @@
 from decimal import Decimal
 
-from django.core.exceptions import PermissionDenied, ValidationError
-from django.http import Http404
+from django.core.exceptions import ValidationError
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods, require_POST
 
+from .access import request_person as _person
+from .access import service_or_404 as _service_or_404
 from .category_services import current_household
 from .forms import SavingsGoalForm
-from .models import Person, SavingsGoal
+from .models import SavingsGoal
 from .savings_goal_services import (
     goal_progress,
     save_savings_goal,
     set_savings_goal_archived,
     set_savings_goal_completed,
 )
-
-
-def _person(request):
-    return get_object_or_404(Person, user=request.user)
-
-
-def _service_or_404(action):
-    try:
-        return action()
-    except (PermissionDenied, ValidationError) as exc:
-        raise Http404 from exc
 
 
 def _visible_goal(user, goal_id):
@@ -65,7 +55,7 @@ def savings_goal_list(request):
     person = _person(request)
     form = _form(request, person, request.POST if request.method == "POST" else None)
     if request.method == "POST" and form.is_valid():
-        _service_or_404(lambda: save_savings_goal(request.user, form.save_payload()))
+        _service_or_404(lambda: save_savings_goal(request.user, form.save_payload()), also=(ValidationError,))
         return redirect("savings-goals")
     today = timezone.localdate()
     goals = SavingsGoal.objects.visible_to(request.user).order_by("target_date", "name", "pk")
@@ -89,7 +79,7 @@ def savings_goal_edit(request, goal_id):
         instance=goal,
     )
     if request.method == "POST" and form.is_valid():
-        _service_or_404(lambda: save_savings_goal(request.user, form.save_payload(), goal=goal))
+        _service_or_404(lambda: save_savings_goal(request.user, form.save_payload(), goal=goal), also=(ValidationError,))
         return redirect("savings-goals")
     return render(
         request,
@@ -102,7 +92,7 @@ def savings_goal_edit(request, goal_id):
 @never_cache
 def savings_goal_complete(request, goal_id):
     goal = _visible_goal(request.user, goal_id)
-    _service_or_404(lambda: set_savings_goal_completed(request.user, goal, True))
+    _service_or_404(lambda: set_savings_goal_completed(request.user, goal, True), also=(ValidationError,))
     return redirect("savings-goals")
 
 
@@ -110,7 +100,7 @@ def savings_goal_complete(request, goal_id):
 @never_cache
 def savings_goal_reopen(request, goal_id):
     goal = _visible_goal(request.user, goal_id)
-    _service_or_404(lambda: set_savings_goal_completed(request.user, goal, False))
+    _service_or_404(lambda: set_savings_goal_completed(request.user, goal, False), also=(ValidationError,))
     return redirect("savings-goals")
 
 
@@ -118,7 +108,7 @@ def savings_goal_reopen(request, goal_id):
 @never_cache
 def savings_goal_archive(request, goal_id):
     goal = _visible_goal(request.user, goal_id)
-    _service_or_404(lambda: set_savings_goal_archived(request.user, goal, True))
+    _service_or_404(lambda: set_savings_goal_archived(request.user, goal, True), also=(ValidationError,))
     return redirect("savings-goals")
 
 
@@ -126,5 +116,5 @@ def savings_goal_archive(request, goal_id):
 @never_cache
 def savings_goal_unarchive(request, goal_id):
     goal = _visible_goal(request.user, goal_id)
-    _service_or_404(lambda: set_savings_goal_archived(request.user, goal, False))
+    _service_or_404(lambda: set_savings_goal_archived(request.user, goal, False), also=(ValidationError,))
     return redirect("savings-goals")

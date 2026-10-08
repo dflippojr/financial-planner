@@ -1,5 +1,4 @@
 from django.contrib import messages
-from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.db.models import Count, Max, OuterRef, Q, Subquery
 from django.http import Http404
@@ -7,6 +6,8 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods, require_POST
 
+from .access import request_person as _person
+from .access import service_or_404 as _service_or_404
 from .cash_flow import format_minor
 from .category_services import current_household
 from .forms import AccountDeleteForm, AccountRenameForm, AddAccountForm, ChangeShareModeForm, ShareAccountForm
@@ -24,22 +25,11 @@ from .reauth import requires_recent_auth
 from .models import Account, BalanceSnapshot, ImportBatch, Person, Transaction
 
 
-def _person(request):
-    return get_object_or_404(Person, user=request.user)
-
-
 def _active_visible_account(user, account_id):
     return get_object_or_404(
         Account.objects.visible_to(user).filter(status=Account.Status.ACTIVE, archived_at__isnull=True),
         pk=account_id,
     )
-
-
-def _service_or_404(action):
-    try:
-        return action()
-    except PermissionDenied as exc:
-        raise Http404 from exc
 
 
 def _visible_accounts(user):

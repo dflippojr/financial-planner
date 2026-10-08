@@ -13,6 +13,7 @@ from .cash_flow import (
     spending_by_category_report,
     spending_category_detail_url,
 )
+from .models import _person_for
 from .models import Account, Alert, Transaction, TransferPair
 from .months import add_months, month_end, month_start
 from .recurring_services import merchant_key
@@ -25,12 +26,6 @@ DEFAULT_CATEGORY_FLOOR_MINOR = 5_000
 MERCHANT_MULTIPLIER = Decimal("2")
 MERCHANT_MIN_PRIOR = 3
 BASELINE_MONTHS = 6
-
-
-def _person_for(principal):
-    from .models import _person_for as resolve_person
-
-    return resolve_person(principal)
 
 
 def _excluded_transfer_ids(principal):

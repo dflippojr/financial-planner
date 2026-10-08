@@ -6,6 +6,7 @@ from django.shortcuts import redirect, render
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods, require_POST
 
+from .access import request_person as _person
 from .auth_services import (
     InvalidOneTimeCode,
     clear_login_failures,
@@ -37,7 +38,6 @@ from .reauth import (
 )
 from .security_services import record_sign_in_failure_for_username
 
-
 PASSKEY_FAILED = "Sign-in failed. Check your credentials and try again later."
 REAUTH_FAILED = "Confirmation failed. Try again later."
 
@@ -59,19 +59,12 @@ def _json_error(message, *, status=400, extra=None):
     return JsonResponse(payload, status=status)
 
 
-def _person(request):
-    person = getattr(request.user, "person", None)
-    if person is None:
-        raise Http404()
-    return person
-
-
 @require_POST
 @never_cache
 def passkey_register_options(request):
     if not recent_auth_is_fresh(request):
         return _json_error("Re-authentication required.", status=403, extra={"reauth": True})
-    return JsonResponse({"ok": True, "options": json.loads(registration_options_json(request, _person(request)))})
+    return JsonResponse({"ok": True, "options": json.loads(registration_options_json(request, _person(request, related=True)))})
 
 
 @require_POST
@@ -85,7 +78,7 @@ def passkey_register(request):
     try:
         passkey = register_passkey(
             request,
-            _person(request),
+            _person(request, related=True),
             payload["credential"],
             name=payload.get("name", ""),
         )
@@ -106,7 +99,7 @@ def passkey_delete(request, passkey_id):
 @never_cache
 @requires_recent_auth("require-passkey", form_url_name="account-settings")
 def passkey_require(request):
-    person = _person(request)
+    person = _person(request, related=True)
     try:
         set_require_passkey_after_password(person, request.POST.get("require_passkey") == "on")
     except PasskeyError:
@@ -197,7 +190,7 @@ def passkey_sign_in_assert(request):
 @require_POST
 @never_cache
 def passkey_reauth_options(request):
-    person = _person(request)
+    person = _person(request, related=True)
     if not passkeys_for(person).exists():
         raise Http404()
     key = throttle_key(request.user.username, request.META.get("REMOTE_ADDR"))
@@ -209,7 +202,7 @@ def passkey_reauth_options(request):
 @require_POST
 @never_cache
 def passkey_reauth_assert(request):
-    person = _person(request)
+    person = _person(request, related=True)
     if not passkeys_for(person).exists():
         raise Http404()
     key = throttle_key(request.user.username, request.META.get("REMOTE_ADDR"))

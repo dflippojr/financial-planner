@@ -1,19 +1,12 @@
 from django.contrib import messages
-from django.core.exceptions import PermissionDenied, ValidationError
-from django.http import Http404
+from django.core.exceptions import ValidationError
 from django.shortcuts import redirect, render
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods, require_POST
 
+from .access import service_or_404 as _service_or_404
 from .forms import ManualTransactionForm
 from .manual_entry_services import add_manual_transaction, delete_manual_transaction
-
-
-def _service_or_404(action):
-    try:
-        return action()
-    except PermissionDenied as exc:
-        raise Http404 from exc
 
 
 def _save_manual_entry(request, form):

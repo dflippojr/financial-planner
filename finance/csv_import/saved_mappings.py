@@ -4,12 +4,12 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.utils import timezone
 
+from finance.access import require_person as _person_for
 from finance.audit_services import record
 from finance.category_services import current_household
 from finance.csv_import.parser import DATE_FORMATS, NUMBER_FORMATS, Mapping
 from finance.lifecycle_services import _DENIED, lock_actor_household
-from finance.models import Account, AuditEvent, ImportBatch, Person, SavedCsvMapping
-
+from finance.models import Account, AuditEvent, ImportBatch, SavedCsvMapping
 
 SAVED_PROFILE_PREFIX = "saved:"
 HEADERS_DO_NOT_MATCH = (
@@ -40,17 +40,6 @@ PARSING_FIELD_NAMES = (
     "source_id_column",
     "excluded_original_columns",
 )
-
-
-def _person_for(principal):
-    if isinstance(principal, Person):
-        return principal
-    if getattr(principal, "is_authenticated", False):
-        try:
-            return principal.person
-        except Person.DoesNotExist:
-            pass
-    raise PermissionDenied(_DENIED)
 
 
 def saved_profile_key(mapping):

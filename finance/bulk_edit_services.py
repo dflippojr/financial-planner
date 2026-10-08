@@ -6,6 +6,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.utils import timezone
 
+from .access import DENIED as _DENIED
 from .category_services import (
     _history_label,
     _record_text_history,
@@ -29,8 +30,6 @@ from .models import (
 )
 from .tag_services import NOTE_TOO_LONG
 
-
-_DENIED = "Operation is not permitted."
 BULK_EDIT_CAP = 500
 UNDO_MINUTES = 10
 ACTION_CATEGORY = "set_category"

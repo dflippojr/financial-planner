@@ -4,6 +4,7 @@ from django.shortcuts import redirect
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_GET, require_POST
 
+from .access import service_or_404 as _service_or_404
 from .audit_services import record_download
 from .forms import ReceiptUploadForm
 from .models import Receipt
@@ -14,13 +15,6 @@ from .receipt_services import (
     visible_receipt_or_none,
 )
 from .views import _render_transaction_edit, _visible_active_transaction
-
-
-def _service_or_404(action):
-    try:
-        return action()
-    except PermissionDenied as exc:
-        raise Http404 from exc
 
 
 @require_POST

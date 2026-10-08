@@ -3,6 +3,8 @@ from django.db import transaction
 from django.db.models import ProtectedError
 from django.utils import timezone
 
+from .access import DENIED as _DENIED
+from .access import require_person as _person_for
 from .audit_services import append_event, cleanup_member_events, prepare_account_deletion
 from .models import (
     AuditEvent,
@@ -10,7 +12,6 @@ from .models import (
     Alert,
     ImportBatch,
     Membership,
-    Person,
     Receipt,
     RecurringExclusion,
     RecurringSeries,
@@ -23,22 +24,9 @@ from .models import (
     clear_invalid_loan_pairings,
 )
 
-
-_DENIED = "Operation is not permitted."
 LENT_HANDOVER = "handover"
 LENT_DELETE = "delete"
 LENT_CHOICES = (LENT_HANDOVER, LENT_DELETE)
-
-
-def _person_for(principal):
-    if isinstance(principal, Person):
-        return principal
-    if getattr(principal, "is_authenticated", False):
-        try:
-            return principal.person
-        except Person.DoesNotExist:
-            pass
-    raise PermissionDenied(_DENIED)
 
 
 # Lock order, for every operation in this module: the household's current
