@@ -11,9 +11,7 @@ python docs/perf/perf_unusual_spending.py
 
 The reference preserves the merchant implementation from
 `04b713a583e1d896c8756cdaaeca0c061cb43af0`; the optimized implementation is
-`e40e37a`. Both reuse `perf_pages.py`'s `seed(72502)` with random seed 42:
-two members, one household, ten accounts, 36 months, six merchant descriptions,
-about 85% categorized and 1,500 tagged. The seed date is fixed in the runner.
+`e40e37a`. Both use the shared seed described in `README.md` (72,502 rows).
 Each sample calls `compute_unusual_flags(perf_a_person, date(2026, 9, 1))`
 with `perf_counter` and `CaptureQueriesContext`. These two three-sample runs
 had no overlapping benchmark or test process; no profiling was mixed in.
