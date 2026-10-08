@@ -53,11 +53,17 @@ def append_event(*, account, action, actor=None, actor_kind=AuditEvent.ActorKind
         with transaction.atomic():
             event.save(force_insert=True)
     except DatabaseError:
-        # Never log exception text: database errors may echo bound parameters.
-        logger.error("Audit write gap: an event could not be recorded")
         request = audit_request.get()
-        if request is not None:
-            messages.warning(request, GAP_WARNING)
+
+        def report_gap():
+            # Report only committed actions. A later action rollback discards
+            # this callback, so it cannot falsely warn that the action completed.
+            # Never log exception text: errors may echo bound parameters.
+            logger.error("Audit write gap: an event could not be recorded")
+            if request is not None:
+                messages.warning(request, GAP_WARNING)
+
+        transaction.on_commit(report_gap)
         return None
     return event
 

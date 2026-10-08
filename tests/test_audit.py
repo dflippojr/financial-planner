@@ -264,6 +264,7 @@ def test_requires_transaction_and_scheduler_identity():
     assert event.effective_member_id == person.pk
 
 
+@pytest.mark.django_db(transaction=True)
 def test_audit_write_failure_preserves_action_and_reports_redacted_gap(caplog):
     user, person, household = make_member()
     account = account_for(person)
@@ -282,6 +283,7 @@ def test_audit_write_failure_preserves_action_and_reports_redacted_gap(caplog):
     assert "token-SYNTHETIC" not in caplog.text
 
 
+@pytest.mark.django_db(transaction=True)
 def test_database_error_rolls_back_only_audit_savepoint(caplog):
     from django.db import connection
 
@@ -301,6 +303,21 @@ def test_database_error_rolls_back_only_audit_savepoint(caplog):
     assert AuditEvent.objects.count() == 0
     assert "Audit write gap" in caplog.text
     assert "synthetic_missing_audit_table" not in caplog.text
+
+
+@pytest.mark.django_db(transaction=True)
+def test_later_action_rollback_discards_audit_gap_report(caplog):
+    _user, person, household = make_member()
+    account = account_for(person)
+    with patch.object(AuditEvent, "save", side_effect=DatabaseError("synthetic insert failure")):
+        with pytest.raises(RuntimeError):
+            with transaction.atomic():
+                share_account(person, account.pk, "co_owned")
+                raise RuntimeError("Synthetic later action failure")
+    account.refresh_from_db()
+    assert account.scope == "private"
+    assert AuditEvent.objects.count() == 0
+    assert "Audit write gap" not in caplog.text
 
 
 def test_reader_omits_arbitrary_query_canaries_and_request_actor_headers():
