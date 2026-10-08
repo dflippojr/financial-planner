@@ -5,11 +5,12 @@ from urllib.parse import urlencode
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, transaction
+from django.db.models import prefetch_related_objects
 from django.urls import reverse
 from django.utils import timezone
 
-from .cash_flow import format_minor, spending_by_category_report
-from .category_services import current_household
+from .cash_flow import _combine_category_spending, format_minor, selected_accounts
+from .category_services import current_household, spending_by_category_by_window
 from .models import Account, Budget, BudgetAmount, BudgetRolloverReset, Category
 
 _DENIED = "Operation is not permitted."
@@ -101,16 +102,22 @@ def _spent_from_report(budget, report):
 
 
 def _reports_for_months(principal, months, scope, accounts=None):
-    cache = {}
-    for month in months:
-        cache[month] = spending_by_category_report(
-            principal,
-            date_from=month,
-            date_to=month_end(month),
-            scope=scope,
-            accounts=accounts,
+    """Budget-only report data, using the report's account and category semantics."""
+    months = list(months)
+    selected = selected_accounts(principal, scope=scope, cash_flow_only=True, accounts=accounts)
+    named = {item.pk: item for item in Category.objects.visible_to(principal)}
+    totals = spending_by_category_by_window(
+        principal, [(month, month_end(month)) for month in months], accounts=selected
+    )
+    reports = {}
+    for month, (total, by_category) in zip(months, totals):
+        combined = _combine_category_spending(by_category, named)
+        reports[month] = SimpleNamespace(
+            total_spending_minor=total,
+            rows=[SimpleNamespace(key=item["filter_value"], spending_minor=item["spending_minor"])
+                  for item in combined.values()],
         )
-    return cache
+    return reports
 
 
 def last_reset_month(budget, month):
@@ -210,14 +217,14 @@ def progress_for(budget, month, reports):
 
 
 def progress_snapshot(budget, month, principal):
-    month = month_start(month)
-    reports = _reports_for_months(principal, _needed_months([budget], month), report_scope_for(budget))
-    return progress_for(budget, month, reports)
+    return progress_snapshots([budget], month, principal)[budget.pk]
 
 
 def progress_snapshots(budgets, month, principal):
     """Share report reads across a member's budgets, keeping scopes separate."""
     month = month_start(month)
+    budgets = list(budgets)
+    prefetch_related_objects(budgets, "category", "amounts", "rollover_resets")
     groups = {}
     for budget in budgets:
         groups.setdefault(report_scope_for(budget), []).append(budget)
@@ -242,7 +249,9 @@ def _needed_months(budgets, month):
 
 def month_budget_cards(principal, month, *, include_archived=False, accounts=None, include_household=True):
     month = month_start(month)
-    budgets = Budget.objects.visible_to(principal).select_related("category")
+    budgets = Budget.objects.visible_to(principal).select_related("category").prefetch_related(
+        "amounts", "rollover_resets"
+    )
     if not include_archived:
         budgets = budgets.filter(status=Budget.Status.ACTIVE)
     if not include_household:
