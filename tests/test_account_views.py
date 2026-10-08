@@ -164,8 +164,8 @@ def test_accounts_page_lists_visible_accounts_only():
     household = make_household(owner, member)
     make_household(outsider, name="Other Household")
     private = make_account(owner, name="Owner Private")
-    shared = make_account(owner, name="Household Card", account_type=Account.Type.CREDIT_CARD, scope=Account.Scope.HOUSEHOLD, household=household)
-    member_private = make_account(member, name="Member Private")
+    make_account(owner, name="Household Card", account_type=Account.Type.CREDIT_CARD, scope=Account.Scope.HOUSEHOLD, household=household)
+    make_account(member, name="Member Private")
     secret = make_account(outsider, name="SECRET OTHER LEDGER")
     batch = ImportBatch.objects.create(
         account=private,

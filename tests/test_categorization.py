@@ -141,7 +141,7 @@ def test_high_confidence_pair_is_auto_marked_with_reasons_and_can_be_undone():
     savings = make_account(owner, name="Synthetic Savings", account_type=Account.Type.SAVINGS)
     groceries = household.categories.get(name="Groceries")
     outflow = make_transaction(owner, checking, amount_minor=-2500, description="Synthetic to savings")
-    inflow = make_transaction(owner, savings, amount_minor=2500, description="Synthetic from checking")
+    make_transaction(owner, savings, amount_minor=2500, description="Synthetic from checking")
     assign_category(owner, outflow.pk, groceries.pk)
 
     refresh_transfer_pairs(owner)

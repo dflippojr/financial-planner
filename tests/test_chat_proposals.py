@@ -31,7 +31,7 @@ from finance.models import (
 )
 from finance.policy_services import current_policy
 from tests.chat_helpers import ask
-from tests.test_chat import TOKEN, add_txn, checking, harness, make_member  # noqa: F401 - harness is a fixture
+from tests.test_chat import TOKEN, add_txn, checking, harness as harness_fixture, make_member  # noqa: F401 - harness is a fixture
 from tests.test_security_headers import assert_page_is_csp_clean
 
 

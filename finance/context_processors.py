@@ -26,10 +26,6 @@ def ai_features(request):
     return {"show_ai_features": ready, "chat_drawer": drawer}
 
 
-def google_signin(_request):
-    return {"google_signin_enabled": google_signin_enabled()}
-
-
 def privacy_policy_prompt(request):
     user = getattr(request, "user", None)
     if not getattr(user, "is_authenticated", False):

@@ -42,14 +42,14 @@ from .ai_types import (
     Usage,
 )
 from .ai_plan import mark_login_required, plan_end_user, plan_link, plan_links
-from .ai_urls import HarnessUrlError, parse_harness_url
+from .ai_urls import parse_harness_url
 from .encryption import decrypt_secret, encrypt_secret
 from .audit_services import append_event, report_write_gap
 from .audit_operations import member_operation, outcome
 from .audit_models import METADATA_ENUM_KEYS
 from .lifecycle_services import _DENIED, _person_for
 from .models import AiJob, AuditEvent, AiProviderConnection, AiUsageEvent, Membership
-from .policy_services import household_ai_allowed, may_use_ai
+from .policy_services import may_use_ai
 from .category_services import current_household
 
 TOKEN_PREFIX = "ha-"
@@ -835,12 +835,6 @@ def _inference_event(person, connection, backend, feature, *, phase=None, result
         details["failure"] = code if code in METADATA_ENUM_KEYS["failure"] else PROVIDER_ERROR
     outcome(person, "ai_inference", connection.pk, phase=phase,
             metadata=details, effective_member=connection.owner)
-
-
-def finance_tools_allowed_for(person):
-    household = current_household(person)
-    include_household = household is None or household_ai_allowed(household)
-    return include_household
 
 
 def _invoke_tool(person, tools, name, args):

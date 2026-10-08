@@ -12,7 +12,7 @@ from finance.alert_services import evaluate_active_budget_alerts
 from finance.cash_flow import spending_by_category_report
 from finance.models import Account, Alert, Budget, BudgetAmount, BudgetRolloverReset, Category, Membership, Transaction
 from tests.test_budgets import add_budget, make_account, make_household, make_person, signed_in
-from tests.test_totals_differential import ledger  # noqa: F401 -- shared synthetic ledger fixture
+from tests.test_totals_differential import ledger as ledger_fixture  # noqa: F401 -- shared synthetic ledger fixture
 
 
 def legacy_reports(principal, months, scope, accounts=None):

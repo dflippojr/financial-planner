@@ -25,7 +25,6 @@ from .ai_types import (
 
 HOSTED_UNAVAILABLE_REASON = "Hosted backends stay unavailable until Agent Harness app-tools-only sessions land."
 LOCAL_WARM_REFUSED = "The local model can't load right now."
-_SLEEPING_STATES = frozenset({"sleeping", "unloaded", "paused", "unreachable"})
 _POLL_INITIAL_DELAY_SECONDS = 0.25
 _POLL_MAX_DELAY_SECONDS = 0.6
 _DEFAULT_SESSION_TIMEOUT_SECONDS = 600
@@ -118,13 +117,6 @@ def local_model_ready(statuses):
     if not local:
         return False
     return any(item.state == "ready" for item in local)
-
-
-def local_model_asleep(statuses):
-    local = [item for item in statuses if item.name]
-    if not local:
-        return True
-    return all(item.state in _SLEEPING_STATES for item in local)
 
 
 def warm_local_model(base_url, token):

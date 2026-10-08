@@ -16,7 +16,6 @@ from .cash_flow import (
     cash_flow_report,
     default_date_range,
     format_minor,
-    selected_accounts,
     spending_by_category_report,
 )
 from .category_services import current_household

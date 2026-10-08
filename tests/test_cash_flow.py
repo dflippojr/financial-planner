@@ -381,7 +381,7 @@ def test_home_is_cash_flow_with_default_range_and_partial_current_month(_localda
 def test_home_empty_state_links_to_csv_import():
     owner = make_person("owner")
     make_household(owner)
-    account = make_account(owner)
+    make_account(owner)
     client = Client()
     client.force_login(owner.user)
 

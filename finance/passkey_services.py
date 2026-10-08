@@ -26,7 +26,7 @@ from webauthn.helpers.structs import (
     UserVerificationRequirement,
 )
 
-from .auth_services import InvalidOneTimeCode, consume_recovery_code
+from .auth_services import consume_recovery_code
 from .audit_services import append_event
 from .models import AuditEvent, Passkey, Person
 from .security_services import EVENT_TYPES, record_security_event

@@ -417,7 +417,7 @@ def test_bulk_apply_and_undo_write_bounded_events_with_one_operation_id():
             make_txn(owner, second_account, day=4)]
     ids = [row.pk for row in rows]
     matching = Transaction.objects.filter(pk__in=ids)
-    _preview, undo = apply_bulk_edit(owner, matching=matching, transaction_ids=ids, select_matching=False,
+    _preview, undo = apply_bulk_edit(owner, matching=matching, transaction_ids=ids,
                                      action=ACTION_CATEGORY, category_id=groceries.pk)
     applied = list(AuditEvent.objects.filter(action=A.BULK_APPLIED).order_by("target_id"))
     assert [(e.target_id, e.metadata["row_count"]) for e in applied] == [(first_account.pk, 2), (second_account.pk, 1)]

@@ -116,7 +116,7 @@ def test_tag_names_are_unique_per_household_ignoring_case():
 @pytest.mark.django_db
 def test_note_and_tags_are_not_recorded_in_correction_history():
     owner = make_person("owner")
-    household = make_household(owner)
+    make_household(owner)
     account = make_account(owner)
     txn = make_transaction(owner, account)
     tag = add_tag(owner, "vacation 2026")
@@ -130,7 +130,7 @@ def test_note_and_tags_are_not_recorded_in_correction_history():
 @pytest.mark.django_db
 def test_archived_tag_stays_applied_but_cannot_be_newly_applied():
     owner = make_person("owner")
-    household = make_household(owner)
+    make_household(owner)
     account = make_account(owner)
     tagged = make_transaction(owner, account, description="Tagged trip")
     other = make_transaction(owner, account, description="Later purchase", fingerprint="c" * 64)
@@ -238,7 +238,7 @@ def test_tag_filter_and_notes_never_leak_another_members_private_transactions():
 @pytest.mark.django_db
 def test_reimport_leaves_notes_and_tags_unchanged():
     owner = make_person("owner")
-    household = make_household(owner)
+    make_household(owner)
     account = make_account(owner)
     csv_bytes = b"When,Memo,Amount,Currency\n01/10/2026,SYNTHETIC GROCER,-12.34,USD\n"
     mapping = Mapping(
@@ -282,7 +282,7 @@ def test_reimport_leaves_notes_and_tags_unchanged():
 @pytest.mark.django_db
 def test_export_includes_notes_and_tags_and_account_deletion_removes_them():
     owner = make_person("owner")
-    household = make_household(owner)
+    make_household(owner)
     account = make_account(owner)
     txn = make_transaction(owner, account, amount_minor=-2500, description="Synthetic tagged spend")
     tag = add_tag(owner, "vacation 2026")

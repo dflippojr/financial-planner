@@ -234,7 +234,7 @@ def test_merchant_and_new_merchant_flags():
 def test_excludes_transfers_investment_and_other_members_private():
     owner = make_person("owner")
     member = make_person("member")
-    household = make_household(owner, member)
+    make_household(owner, member)
     checking = make_account(owner)
     card = make_account(owner, name="Synthetic Card", account_type=Account.Type.CREDIT_CARD)
     brokerage = make_account(owner, name="Synthetic Brokerage", account_type=Account.Type.INVESTMENT)

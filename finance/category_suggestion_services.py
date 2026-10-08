@@ -30,12 +30,6 @@ FEATURE = "category_suggestions"
 BATCH_SIZE = 40
 MIN_RULE_ACCEPTS = 3
 MIN_RULE_CONTAINS = 4
-BACKEND_LABELS = {
-    "local": "Local model",
-    "claude": "Claude",
-    "codex": "Codex",
-    "cursor": "Cursor",
-}
 
 
 def snapshot_hash(txn):
@@ -45,15 +39,6 @@ def snapshot_hash(txn):
 
 def suggestion_is_current(suggestion, txn):
     return suggestion.snapshot_hash == snapshot_hash(txn)
-
-
-def backend_label(backend):
-    return BACKEND_LABELS.get(backend, backend or "Unknown backend")
-
-
-def suggestion_label(suggestion):
-    kind = "Agent Harness" if suggestion.provider == "agent_harness" else suggestion.provider
-    return f"AI · {kind} · {backend_label(suggestion.backend)}"
 
 
 def eligible_uncategorized(person, transaction_ids=None):

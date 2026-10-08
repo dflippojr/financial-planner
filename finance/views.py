@@ -1,4 +1,3 @@
-from datetime import timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from urllib.parse import urlencode
@@ -204,7 +203,6 @@ from .category_services import (
     current_household,
     dismiss_transfer_pair,
     ensure_household_categories,
-    exclusion_exists_for,
     income_and_spending_totals,
     link_refund,
     refresh_transfer_pairs,

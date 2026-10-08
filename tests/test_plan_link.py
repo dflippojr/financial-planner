@@ -8,7 +8,7 @@ from django.test import Client
 from django.urls import reverse
 from tests.chat_helpers import ask
 from tests.helpers import stamp_recent_auth
-from tests.test_chat import TOKEN, harness, make_member  # noqa: F401 - harness is a fixture
+from tests.test_chat import TOKEN, harness as harness_fixture, make_member  # noqa: F401 - harness is a fixture
 from tests.test_security_headers import assert_page_is_csp_clean
 
 from finance.ai_jobs import enqueue_job, process_due_jobs

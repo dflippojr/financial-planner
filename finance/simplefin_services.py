@@ -7,7 +7,7 @@ from decimal import Decimal, InvalidOperation
 from urllib.parse import quote, urlsplit
 
 from django.conf import settings
-from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
+from django.core.exceptions import ImproperlyConfigured, PermissionDenied
 from django.db import transaction
 from django.db.models import Max
 from django.utils import timezone
@@ -35,13 +35,6 @@ MAX_BIGINT = 2**63 - 1
 UNSUPPORTED_CURRENCY = "That SimpleFIN account uses a currency this app does not store."
 UNSTORABLE_AMOUNT = "SimpleFIN sent an amount that could not be stored."
 INVALID_TOKEN = "That setup token is not a valid SimpleFIN token."
-
-
-def _owned_connection(person, connection_id):
-    connection = SimpleFinConnection.objects.filter(pk=connection_id, owner=person).first()
-    if connection is None:
-        raise PermissionDenied(_DENIED)
-    return connection
 
 
 def default_cutover_date(account) -> date:
