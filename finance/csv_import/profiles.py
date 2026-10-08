@@ -107,22 +107,10 @@ def normalize_profile(value):
     return GENERIC
 
 
-def require_huntington_headers(headers):
+def require_headers(headers, expected, error):
     present = set(headers)
-    if any(name not in present for name in HUNTINGTON_HEADERS):
-        raise CsvInputError(HUNTINGTON_HEADER_ERROR)
-
-
-def require_capital_one_headers(headers):
-    present = set(headers)
-    if any(name not in present for name in CAPITAL_ONE_HEADERS):
-        raise CsvInputError(CAPITAL_ONE_HEADER_ERROR)
-
-
-def require_apple_card_headers(headers):
-    present = set(headers)
-    if any(name not in present for name in APPLE_CARD_HEADERS):
-        raise CsvInputError(APPLE_CARD_HEADER_ERROR)
+    if any(name not in present for name in expected):
+        raise CsvInputError(error)
 
 
 OFX_MAPPING = Mapping(
