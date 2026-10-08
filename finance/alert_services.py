@@ -7,18 +7,17 @@ from django.db.models import Q, prefetch_related_objects
 from django.urls import reverse
 from django.utils import timezone
 
-from finance.models import _person_for
-
 from .access import DENIED as _DENIED
 from .alert_email import notify_after_alert_run
 from .audit_services import append_event
 from .budget_services import progress_snapshot, progress_snapshots
 from .cash_flow import format_minor
+from .models import _person_for
 from .models import (
+    AuditEvent,
     Account,
     Alert,
     AlertSettings,
-    AuditEvent,
     Budget,
     Person,
     SimpleFinConnection,
@@ -409,11 +408,8 @@ def run_daily_alert_pass(*, today=None, now=None):
 
     created.extend(evaluate_expected_balance_alerts(today=today))
     purge_old_read_alerts(now=now)
+    from .security_services import purge_old_security_events, purge_stale_member_sessions
     from .receipt_services import sweep_orphan_receipt_files
-    from .security_services import (
-        purge_old_security_events,
-        purge_stale_member_sessions,
-    )
 
     purge_old_security_events(now=now)
     purge_stale_member_sessions(now=now)

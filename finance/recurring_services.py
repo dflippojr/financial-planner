@@ -1,11 +1,11 @@
-import re
 from bisect import bisect_left, bisect_right
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, timedelta
-from decimal import Decimal
 from functools import lru_cache
+from decimal import Decimal
 from hashlib import sha256
+import re
 
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
@@ -13,17 +13,10 @@ from django.utils import timezone
 
 from .access import DENIED as _DENIED
 from .access import require_person as _person_for
-from .audit_services import personal_audience, record
 from .category_services import exclusion_exists_for
+from .audit_services import personal_audience, record
 from .lifecycle_services import lock_actor_household
-from .models import (
-    AuditEvent,
-    Person,
-    RecurringExclusion,
-    RecurringSeries,
-    RecurringSeriesMember,
-    Transaction,
-)
+from .models import AuditEvent, Person, RecurringExclusion, RecurringSeries, RecurringSeriesMember, Transaction
 from .months import add_months_clamped
 
 MANUAL_REASON = "grouping edited manually"

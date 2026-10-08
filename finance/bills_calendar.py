@@ -13,10 +13,10 @@ from .access import require_person as _person
 from .audit_services import append_event
 from .cash_flow import format_minor, selected_accounts
 from .models import (
+    AuditEvent,
     Account,
     Alert,
     AlertSettings,
-    AuditEvent,
     BalanceSnapshot,
     BillsCalendarSettings,
     Transaction,

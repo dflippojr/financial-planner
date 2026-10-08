@@ -1,13 +1,20 @@
 from decimal import Decimal
 
 from django.contrib import messages
-from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.shortcuts import redirect, render
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods, require_POST
 
 from .access import request_person as _person
+from .forms import (
+    SheetColumnMappingForm,
+    SheetComparisonFilterForm,
+    SheetCsvUploadForm,
+    SheetMonthNoteForm,
+    SheetToleranceForm,
+)
 from .csv_import.parser import CsvInputError
 from .csv_import.staging import (
     KIND_SHEET_COMPARISON,
@@ -15,13 +22,6 @@ from .csv_import.staging import (
     create_stage,
     delete_stage,
     load_stage,
-)
-from .forms import (
-    SheetColumnMappingForm,
-    SheetComparisonFilterForm,
-    SheetCsvUploadForm,
-    SheetMonthNoteForm,
-    SheetToleranceForm,
 )
 from .sheet_comparison import (
     DEFAULT_TOLERANCE_MINOR,

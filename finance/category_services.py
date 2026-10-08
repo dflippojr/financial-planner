@@ -6,18 +6,7 @@ from types import SimpleNamespace
 from django.conf import settings
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.db.models import (
-    Case,
-    Count,
-    Exists,
-    F,
-    IntegerField,
-    OuterRef,
-    Q,
-    Sum,
-    Value,
-    When,
-)
+from django.db.models import Case, Count, Exists, F, IntegerField, OuterRef, Q, Sum, Value, When
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 
@@ -26,8 +15,8 @@ from .access import require_person as _person_for
 from .audit_services import record, record_correction
 from .lifecycle_services import lock_actor_household
 from .models import (
-    Account,
     AuditEvent,
+    Account,
     Category,
     Membership,
     Person,

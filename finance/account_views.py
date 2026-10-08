@@ -10,13 +10,7 @@ from .access import request_person as _person
 from .access import service_or_404 as _service_or_404
 from .cash_flow import format_minor
 from .category_services import current_household
-from .forms import (
-    AccountDeleteForm,
-    AccountRenameForm,
-    AddAccountForm,
-    ChangeShareModeForm,
-    ShareAccountForm,
-)
+from .forms import AccountDeleteForm, AccountRenameForm, AddAccountForm, ChangeShareModeForm, ShareAccountForm
 from .lifecycle_services import (
     archive_account,
     change_account_share_mode,
@@ -27,8 +21,8 @@ from .lifecycle_services import (
     share_account,
     unshare_account,
 )
-from .models import Account, BalanceSnapshot, ImportBatch, Person, Transaction
 from .reauth import requires_recent_auth
+from .models import Account, BalanceSnapshot, ImportBatch, Person, Transaction
 
 
 def _active_visible_account(user, account_id):

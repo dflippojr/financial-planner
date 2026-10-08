@@ -16,8 +16,8 @@ from .models import (
     SavedTransactionFilter,
     Tag,
     Transaction,
-    TransactionCorrectionHistory,
     _person_for,
+    TransactionCorrectionHistory,
 )
 from .tag_services import apply_tag_filter
 

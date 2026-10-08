@@ -5,15 +5,11 @@ from django.utils import timezone
 
 from .access import DENIED as _DENIED
 from .access import require_person as _person_for
-from .audit_services import (
-    append_event,
-    cleanup_member_events,
-    prepare_account_deletion,
-)
+from .audit_services import append_event, cleanup_member_events, prepare_account_deletion
 from .models import (
+    AuditEvent,
     Account,
     Alert,
-    AuditEvent,
     ImportBatch,
     Membership,
     Receipt,
@@ -300,10 +296,7 @@ def archive_account(principal, account_id):
         account.archived_at = now
         account.save(update_fields=("status", "archived_at", "updated_at"))
         append_event(account=account, action=AuditEvent.Action.ACCOUNT_ARCHIVED, actor=person, changed_fields=("status",))
-    from finance.category_services import (
-        refresh_transfer_pairs,
-        revalidate_pairs_touching_account,
-    )
+    from finance.category_services import refresh_transfer_pairs, revalidate_pairs_touching_account
 
     revalidate_pairs_touching_account(person, account_id)
     seed_ids = list(Transaction.objects.filter(account_id=account_id).values_list("pk", flat=True))
@@ -601,9 +594,9 @@ def member_deletion_counts(person):
         Budget,
         CategoryRule,
         CategorySuggestion,
-        Passkey,
         PlannedItem,
         PrivacyPolicyAcceptance,
+        Passkey,
         RecoveryCode,
         RecurringSeries,
         RuleApplication,
@@ -712,12 +705,12 @@ def _release_household_owned_rows(person):
 
 def _delete_personal_records(person):
     from .models import (
+        Alert,
+        AlertSettings,
         AiJob,
         AiPlanLink,
         AiProviderConnection,
         AiUsageEvent,
-        Alert,
-        AlertSettings,
         BillsCalendarSettings,
         Budget,
         CategoryRule,

@@ -19,8 +19,8 @@ from .access import first_message as _first_message
 from .ai_tools import visible_accounts
 from .ai_types import ToolResult, ToolSpec
 from .audit_services import origin, record
-from .budget_services import amount_for, parse_month, save_budget
 from .bulk_edit_services import _apply_tags
+from .budget_services import amount_for, parse_month, save_budget
 from .cash_flow import format_minor
 from .category_services import (
     _DENIED,
@@ -31,8 +31,8 @@ from .category_services import (
 )
 from .lifecycle_services import lock_actor_household
 from .models import (
-    Account,
     AiProposal,
+    Account,
     AuditEvent,
     Budget,
     Tag,
@@ -40,12 +40,7 @@ from .models import (
     TransactionCorrectionHistory,
 )
 from .months import month_start
-from .rule_services import (
-    apply_rule,
-    preview_unsaved_rule,
-    save_category_rule,
-    unsaved_rule,
-)
+from .rule_services import apply_rule, preview_unsaved_rule, save_category_rule, unsaved_rule
 from .tag_services import add_tag
 
 VIA_CHAT = " (via chat suggestion)"

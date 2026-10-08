@@ -13,14 +13,7 @@ from .access import require_person as _person
 from .audit_services import owned_audience, record
 from .cash_flow import _combine_category_spending, format_minor, selected_accounts
 from .category_services import current_household, spending_by_category_by_window
-from .models import (
-    Account,
-    AuditEvent,
-    Budget,
-    BudgetAmount,
-    BudgetRolloverReset,
-    Category,
-)
+from .models import Account, AuditEvent, Budget, BudgetAmount, BudgetRolloverReset, Category
 from .months import add_months, month_end, month_start
 
 DUPLICATE_BUDGET = "An active budget already exists for this category and scope."

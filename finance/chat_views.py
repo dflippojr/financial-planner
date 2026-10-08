@@ -12,13 +12,7 @@ from django.views.decorators.http import require_GET, require_POST
 from .access import request_person as _person
 from .ai_services import AiError, local_status, member_has_ai, resolve_ai, warm_for_chat
 from .ai_types import LOCAL_BACKEND
-from .chat_proposals import (
-    ProposalError,
-    apply_proposal,
-    card_for,
-    dismiss_proposal,
-    proposal_for,
-)
+from .chat_proposals import ProposalError, apply_proposal, card_for, dismiss_proposal, proposal_for
 from .chat_runner import recover_stale_turns
 from .chat_services import (
     chat_local_enabled,

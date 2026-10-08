@@ -1,12 +1,10 @@
 """Deterministic unusual-spending flags from visible cash-flow facts."""
 
-from decimal import ROUND_HALF_EVEN, Decimal
 from hashlib import sha256
 from heapq import heappop, heappush
+from decimal import ROUND_HALF_EVEN, Decimal
 
 from django.urls import reverse
-
-from finance.models import _person_for
 
 from .alert_services import raise_alert, settings_for
 from .cash_flow import (
@@ -15,6 +13,7 @@ from .cash_flow import (
     spending_by_category_report,
     spending_category_detail_url,
 )
+from .models import _person_for
 from .models import Account, Alert, Transaction, TransferPair
 from .months import add_months, month_end, month_start
 from .recurring_services import merchant_key

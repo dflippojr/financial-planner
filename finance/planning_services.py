@@ -6,18 +6,10 @@ from django.db.models import Exists, Max, OuterRef
 
 from .access import DENIED as _DENIED
 from .access import require_person as _person
-from .audit_services import changed_names, owned_audience, record, snapshot
 from .cash_flow import cash_flow_report, selected_accounts
 from .category_services import current_household, exclusion_exists_for
-from .models import (
-    Account,
-    AuditEvent,
-    PlannedItem,
-    RecurringSeries,
-    RecurringSeriesMember,
-    SavingsGoal,
-    Transaction,
-)
+from .audit_services import changed_names, owned_audience, record, snapshot
+from .models import Account, AuditEvent, PlannedItem, RecurringSeries, RecurringSeriesMember, SavingsGoal, Transaction
 from .projection import (
     DEFAULT_HORIZON,
     KIND_EXPENSE,
@@ -26,8 +18,8 @@ from .projection import (
     project_cash_flow,
     step_occurrence,
 )
-from .savings_goal_services import goal_progress
 from .scenario import apply_scenario, compare_projected_months
+from .savings_goal_services import goal_progress
 
 
 def _planned_input(item):
