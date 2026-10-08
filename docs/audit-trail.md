@@ -56,7 +56,7 @@ No-op writes, denied requests and rolled-back actions record nothing. Import thr
 
 ## Scheduled work and operator maintenance (#274)
 
-`operation_outcome` is a typed action with an allow-listed `operation` enum. Trusted execution context propagates kind, source and run UUID to nested #272/#273 events, including automatic rules. The web never accepts actor, operator declaration or run context. `--operator-member <Person ID>` on the seven audited commands is a validated **declaration by the trusted host operator**, displayed separately from the authenticated actor. Omit it for operator (unattributed); OS identity is not collected. Background daily commands explicitly run as scheduler/job, while the same command run manually is operator/CLI. An effective member identifies the access used, not the human initiator.
+`operation_outcome` is a typed action with an allow-listed `operation` enum. Trusted execution context propagates the initiating actor and run UUID to nested #272/#273 events. Default UI/job/CLI sources follow that initiator; explicit rule, bulk and chat workflow sources remain distinguishable. The web never accepts actor, operator declaration or run context. `--operator-member <Person ID>` on the seven audited commands is a validated **declaration by the trusted host operator**, displayed separately from the authenticated actor. Omit it for operator (unattributed); OS identity is not collected. Background daily commands explicitly run as scheduler/job, while the same command run manually is operator/CLI. An effective member identifies the access used, not the human initiator.
 
 | Operation | Recorded transitions | Audience / linkage |
 | --- | --- | --- |

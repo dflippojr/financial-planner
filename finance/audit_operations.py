@@ -19,6 +19,7 @@ class Execution:
     job_id: int | None = None
     turn_id: int | None = None
     attempt: int | None = None
+    initiator: object = None
 
 
 execution = ContextVar("audit_execution", default=None)
@@ -29,7 +30,12 @@ def member_operation(function):
     def wrapped(*args, **kwargs):
         if execution.get() is not None:
             return function(*args, **kwargs)
-        with operation(actor_kind=AuditEvent.ActorKind.MEMBER, source=AuditEvent.Source.UI):
+        from .models import _person_for
+
+        principal = args[0] if args else kwargs.get("principal", kwargs.get("prefs"))
+        principal = getattr(principal, "person", principal)
+        with operation(actor_kind=AuditEvent.ActorKind.MEMBER, source=AuditEvent.Source.UI,
+                       initiator=_person_for(principal)):
             return function(*args, **kwargs)
     return wrapped
 
@@ -72,9 +78,9 @@ def journal_run(name):
 
 @contextmanager
 def operation(*, actor_kind=AuditEvent.ActorKind.SCHEDULER, source=AuditEvent.Source.JOB,
-              run_id=None, declared_operator=None, job_id=None, turn_id=None, attempt=None):
+              run_id=None, declared_operator=None, job_id=None, turn_id=None, attempt=None, initiator=None):
     token = execution.set(Execution(actor_kind, source, run_id or uuid.uuid4(), declared_operator,
-                                    job_id, turn_id, attempt))
+                                    job_id, turn_id, attempt, initiator))
     try:
         yield execution.get()
     finally:

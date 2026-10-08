@@ -407,3 +407,30 @@ def test_stale_recovery_has_distinct_claim_id_without_spending_inference_attempt
     assert row.metadata["operation_id"] == str(job.audit_run_id)
     assert _claim_for_run(job, moment, moment - timedelta(minutes=10)) is None
     assert len(operational_rows(person, "ai_recovery")) == 1
+
+
+def test_ui_triggered_alert_retains_requester_instead_of_impersonating_recipient():
+    from finance.alert_services import raise_alert
+    from finance.models import Alert
+
+    _user, requester, household = make_member("requester")
+    _other_user, recipient, _ = make_member("recipient", household=household)
+    with operation(actor_kind="member", source="ui", initiator=requester):
+        raise_alert([recipient], Alert.Kind.MONTHLY_REVIEW, CANARY, "/alerts/", "synthetic-audit-alert")
+    row, = operational_rows(recipient, "alert_delivery")
+    assert row.actor_id == requester.pk and row.effective_member_id == recipient.pk
+    assert row.affected_member_id == recipient.pk and row.actor_id != recipient.pk
+    assert not operational_rows(requester, "alert_delivery")
+
+
+def test_delegated_domain_event_keeps_explicit_rule_source_and_run():
+    from finance.audit_services import record
+
+    _user, person, _ = make_member("member")
+    with operation(actor_kind="operator", source="cli") as run:
+        with transaction.atomic():
+            record(person, AuditEvent.Action.RULE_APPLIED, AuditEvent.TargetType.RULE, 1,
+                   audience={"private_owner": person}, source=AuditEvent.Source.RULE)
+    row = events_for(person).get(action="rule_applied")
+    assert row.source == "rule" and row.actor_kind == "operator"
+    assert row.correlation_id == run.run_id and row.effective_member_id == person.pk

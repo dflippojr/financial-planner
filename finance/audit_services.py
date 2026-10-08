@@ -54,7 +54,12 @@ def append_event(*, action, account=None, actor=None, actor_kind=AuditEvent.Acto
         actor_kind = current.actor_kind
         if actor_kind != AuditEvent.ActorKind.MEMBER:
             actor = None
-        source = current.source
+        elif current.initiator is not None:
+            actor = current.initiator
+        # Preserve explicit workflow paths from #273 while the actor and run
+        # identify their UI/scheduler/operator initiator.
+        if source in (AuditEvent.Source.UI, AuditEvent.Source.JOB, AuditEvent.Source.CLI):
+            source = current.source
         correlation_id = current.run_id
         declared_operator = current.declared_operator
     if not connection.in_atomic_block:

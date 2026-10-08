@@ -16,7 +16,7 @@ from finance.alert_email import notify_after_alert_run
 from finance.csv_import.fingerprint import transaction_fingerprint
 from finance.encryption import decrypt_access_url, encrypt_access_url
 from finance.audit_services import append_event
-from finance.audit_operations import execution, operation, outcome
+from finance.audit_operations import execution, operation, outcome, member_operation
 from finance.lifecycle_services import _DENIED, _person_for, create_account, lock_actor_household
 from finance.models import (
     Account,
@@ -544,6 +544,7 @@ def _sync_one_link(person, connection, link, remote, synced_at, payload) -> int:
     return imported
 
 
+@member_operation
 @notify_after_alert_run
 def sync_connection(principal, connection_id, *, ignore_rate_limit=False) -> dict:
     """Sync one connection. A fetch failure is recorded, then raised.
@@ -552,11 +553,7 @@ def sync_connection(principal, connection_id, *, ignore_rate_limit=False) -> dic
     normally; raising only after the commit keeps that record (last sync time,
     result, and the disabled flag for revoked access) instead of rolling it back.
     """
-    if execution.get() is None:
-        with operation(actor_kind=AuditEvent.ActorKind.MEMBER, source=AuditEvent.Source.UI):
-            result, failure = _sync_connection_locked(principal, connection_id, ignore_rate_limit=ignore_rate_limit)
-    else:
-        result, failure = _sync_connection_locked(principal, connection_id, ignore_rate_limit=ignore_rate_limit)
+    result, failure = _sync_connection_locked(principal, connection_id, ignore_rate_limit=ignore_rate_limit)
     if failure is not None:
         raise failure
     return result
