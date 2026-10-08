@@ -6,15 +6,28 @@ from types import SimpleNamespace
 from django.conf import settings
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.db.models import Case, Count, Exists, F, IntegerField, OuterRef, Q, Sum, Value, When
+from django.db.models import (
+    Case,
+    Count,
+    Exists,
+    F,
+    IntegerField,
+    OuterRef,
+    Q,
+    Sum,
+    Value,
+    When,
+)
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 
+from .access import DENIED as _DENIED
+from .access import require_person as _person_for
 from .audit_services import record, record_correction
 from .lifecycle_services import lock_actor_household
 from .models import (
-    AuditEvent,
     Account,
+    AuditEvent,
     Category,
     Membership,
     Person,
@@ -25,8 +38,6 @@ from .models import (
     TransferPair,
 )
 
-
-_DENIED = "Operation is not permitted."
 REFUND_LINK_RULE = (
     "A refund must be a positive amount linked to a negative original purchase of the same kind."
 )
@@ -62,17 +73,6 @@ STARTER_CUSTOM_NAMES = (
 
 HIGH_CONFIDENCE_UNIQUE_BOTH = "only candidate for both legs in the window"
 LOW_CONFIDENCE_MULTIPLE = "multiple possible counterparts in the window"
-
-
-def _person_for(principal):
-    if isinstance(principal, Person):
-        return principal
-    if getattr(principal, "is_authenticated", False):
-        try:
-            return principal.person
-        except Person.DoesNotExist:
-            pass
-    raise PermissionDenied(_DENIED)
 
 
 def current_household(person):

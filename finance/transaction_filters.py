@@ -7,6 +7,7 @@ from django.db.models import Exists, OuterRef, Q
 from django.db.models.functions import Abs
 from django.urls import reverse
 
+from .access import DENIED as _DENIED
 from .category_services import exclusion_exists_for
 from .models import (
     Account,
@@ -15,13 +16,11 @@ from .models import (
     SavedTransactionFilter,
     Tag,
     Transaction,
-    _person_for,
     TransactionCorrectionHistory,
+    _person_for,
 )
 from .tag_services import apply_tag_filter
 
-
-_DENIED = "Operation is not permitted."
 PAGE_SIZE = 100
 PAYEE_MEMO_KEYS = ("payee", "Payee", "memo", "Memo")
 AMOUNT_MODE_SIGNED = "signed"

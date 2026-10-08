@@ -3,19 +3,20 @@
 from datetime import date, timedelta
 from types import SimpleNamespace
 
-from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Case, Sum, Value, When
 from django.urls import reverse
 from django.utils import timezone
 
+from .access import require_person as _person
 from .audit_services import append_event
 from .cash_flow import format_minor, selected_accounts
 from .models import (
-    AuditEvent,
     Account,
     Alert,
     AlertSettings,
+    AuditEvent,
     BalanceSnapshot,
     BillsCalendarSettings,
     Transaction,
@@ -29,21 +30,12 @@ from .projection import (
     occurrence_dates,
 )
 
-_DENIED = "Operation is not permitted."
 ALERT_TITLE = "Expected balance below threshold in the next 7 days"
 DEPOSIT_TYPES = (Account.Type.CHECKING, Account.Type.SAVINGS)
 
 
 # How far ahead a running expected balance is computed (about two years).
 MAX_FORECAST_DAYS = 731
-
-def _person(principal):
-    from .models import _person_for
-
-    person = _person_for(principal)
-    if person is None:
-        raise PermissionDenied(_DENIED)
-    return person
 
 
 def deposit_accounts(principal, *, scope=""):

@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from django.core.exceptions import PermissionDenied
 from django.http import Http404
 from django.shortcuts import redirect
 from django.urls import reverse
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_POST
 
+from .access import request_person as _person
+from .access import service_or_404 as _service_or_404
 from .category_suggestion_services import (
     accept_suggestion,
     accept_suggestions,
@@ -16,11 +17,7 @@ from .category_suggestion_services import (
     reject_suggestion,
 )
 from .forms import TransactionFilterForm
-from .models import CategorySuggestion, Person
-
-
-def _person(request):
-    return Person.objects.filter(user=request.user).first()
+from .models import CategorySuggestion
 
 
 def _safe_next(request):
@@ -30,17 +27,10 @@ def _safe_next(request):
     return reverse("transaction-list")
 
 
-def _service_or_404(action):
-    try:
-        return action()
-    except PermissionDenied as exc:
-        raise Http404 from exc
-
-
 @require_POST
 @never_cache
 def suggest_categories(request):
-    person = _person(request)
+    person = _person(request, missing_ok=True)
     if person is None:
         raise Http404
     form = TransactionFilterForm(request.POST, principal=request.user)

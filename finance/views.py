@@ -1,4 +1,3 @@
-from datetime import timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from urllib.parse import urlencode
@@ -14,12 +13,21 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
-from django.views.decorators.http import require_GET, require_http_methods, require_POST, require_safe
+from django.views.decorators.http import (
+    require_GET,
+    require_http_methods,
+    require_POST,
+    require_safe,
+)
 
-from .backup_health import settings_backup_context
+from .access import first_message as _first_message
+from .access import service_or_404 as _service_or_404
+from .ai_views import ai_settings_context
+from .alert_services import save_alert_settings, settings_for, unread_alert_count
+from .audit_services import append_event, record_download
 from .auth_services import (
-    InvalidOneTimeCode,
     SETUP_THROTTLE_USERNAME,
+    InvalidOneTimeCode,
     accept_invitation,
     clear_login_failures,
     complete_member_session,
@@ -28,18 +36,48 @@ from .auth_services import (
     invitation_is_usable,
     login_is_blocked,
     normalize_username,
-    recover_account,
     record_login_failure,
+    recover_account,
     seed_first_household,
     setup_code_configured,
     setup_code_matches,
     throttle_key,
     validated_username,
 )
+from .backup_health import settings_backup_context
+from .budget_services import dashboard_budget_summary
+from .cash_flow import (
+    cash_flow_chart_data,
+    date_range_presets,
+    default_date_range,
+    format_minor,
+    selected_accounts,
+    spending_by_category_report,
+    spending_chart_data,
+)
+from .category_services import (
+    add_category,
+    assign_category,
+    assign_split_part_category,
+    confirm_transfer_pair,
+    current_household,
+    dismiss_transfer_pair,
+    ensure_household_categories,
+    income_and_spending_totals,
+    link_refund,
+    refresh_transfer_pairs,
+    rename_category,
+    set_transfer_window_days,
+    split_transaction,
+    transfer_matching_key,
+    undo_transfer_pair,
+    unsplit_transaction,
+)
+from .context_processors import navigation
+from .export import export_filename, write_export_zip
 from .forms import (
-    ReceiptUploadForm,
-    AlertSettingsForm,
     AlertEmailSettingsForm,
+    AlertSettingsForm,
     CashFlowFilterForm,
     CategoryNameForm,
     DeleteMyDataForm,
@@ -48,9 +86,11 @@ from .forms import (
     LoginForm,
     PasswordPairForm,
     ReauthPasswordForm,
+    ReceiptUploadForm,
     RecoveryForm,
     RefundLinkForm,
     RefundSearchForm,
+    SavedTransactionFilterNameForm,
     ScenarioChangeForm,
     SetupForm,
     SetupGoogleForm,
@@ -64,7 +104,6 @@ from .forms import (
     TransactionNoteTagsForm,
     TransferWindowForm,
     UnsplitTransactionForm,
-    SavedTransactionFilterNameForm,
 )
 from .google_auth import (
     disconnect_google_account,
@@ -84,31 +123,9 @@ from .lifecycle_services import (
     lock_actor_household,
     member_deletion_counts,
 )
-from .reauth import (
-    ACCOUNT_SETTINGS_ACTIONS,
-    action_label,
-    reauth_redirect,
-    recent_auth_is_fresh,
-    requires_recent_auth,
-    safe_next_url,
-    stamp_recent_auth,
-)
-from .audit_services import record_download
-from .security_services import (
-    EVENT_TYPES,
-    active_sessions_for,
-    events_for,
-    record_security_event,
-    record_sign_in_failure_for_username,
-    retouch_after_session_cycle,
-    revoke_other_sessions_for,
-    revoke_session_for,
-)
-from .export import export_filename, write_export_zip
-from .audit_services import append_event
 from .models import (
-    AuditEvent,
     Account,
+    AuditEvent,
     Category,
     Membership,
     Person,
@@ -124,20 +141,31 @@ from .models import (
     TransactionSplit,
     TransferPair,
 )
-from .ai_views import ai_settings_context
+from .planning_services import cash_flow_with_projection, visible_projection_inputs
 from .policy_services import (
     accept_shown_version,
     current_policy,
+    decline_shown_version,
     in_acceptance,
     latest_acceptance,
-    decline_shown_version,
     record_onboarding_acceptance,
 )
+from .projection import DEFAULT_HORIZON, SOURCE_PLANNED, SOURCE_SERIES
+from .reauth import (
+    ACCOUNT_SETTINGS_ACTIONS,
+    action_label,
+    reauth_redirect,
+    recent_auth_is_fresh,
+    requires_recent_auth,
+    safe_next_url,
+    stamp_recent_auth,
+)
+from .recurring_review import build_recurring_review
 from .recurring_services import (
     add_recurring_members,
     cancel_recurring_series,
-    confirm_resume_recurring_series,
     confirm_recurring_series,
+    confirm_resume_recurring_series,
     confirmed_totals,
     dismiss_price_change,
     dismiss_recurring_series,
@@ -148,21 +176,6 @@ from .recurring_services import (
     remove_recurring_member,
     undo_cancel_recurring_series,
 )
-from .recurring_review import build_recurring_review
-from .cash_flow import (
-    cash_flow_chart_data,
-    date_range_presets,
-    default_date_range,
-    format_minor,
-    selected_accounts,
-    spending_by_category_report,
-    spending_chart_data,
-)
-from .planning_services import cash_flow_with_projection, visible_projection_inputs
-from .budget_services import dashboard_budget_summary
-from .context_processors import navigation
-from .alert_services import save_alert_settings, settings_for, unread_alert_count
-from .projection import DEFAULT_HORIZON, SOURCE_PLANNED, SOURCE_SERIES
 from .scenario import (
     MAX_CHANGES,
     describe_change,
@@ -171,6 +184,16 @@ from .scenario import (
     make_this_real_url,
     parse_scenario_tokens,
     visible_scenario_changes,
+)
+from .security_services import (
+    EVENT_TYPES,
+    active_sessions_for,
+    events_for,
+    record_security_event,
+    record_sign_in_failure_for_username,
+    retouch_after_session_cycle,
+    revoke_other_sessions_for,
+    revoke_session_for,
 )
 from .spending_trends import (
     category_spending_trend_report,
@@ -194,25 +217,6 @@ from .transaction_filters import (
     query_params_from_cleaned,
     save_transaction_filter,
     visible_transaction_queryset,
-)
-from .category_services import (
-    add_category,
-    assign_category,
-    confirm_transfer_pair,
-    current_household,
-    dismiss_transfer_pair,
-    ensure_household_categories,
-    exclusion_exists_for,
-    income_and_spending_totals,
-    link_refund,
-    refresh_transfer_pairs,
-    transfer_matching_key,
-    rename_category,
-    set_transfer_window_days,
-    split_transaction,
-    assign_split_part_category,
-    unsplit_transaction,
-    undo_transfer_pair,
 )
 
 
@@ -922,13 +926,6 @@ def transaction_note_tags(request, transaction_id):
     return _render_transaction_edit(request, financial_transaction, note_form=form)
 
 
-def _service_or_404(action):
-    try:
-        return action()
-    except PermissionDenied as exc:
-        raise Http404 from exc
-
-
 @require_POST
 @never_cache
 def transaction_categorize(request, transaction_id):
@@ -1017,11 +1014,6 @@ def transaction_split_part_category(request, transaction_id, part_id):
             lambda: assign_split_part_category(request.user, part.pk, form.cleaned_data["category"].pk)
         )
     return redirect("transaction-edit", transaction_id=transaction_id)
-
-
-def _first_message(exc, fallback):
-    messages = getattr(exc, "messages", None)
-    return messages[0] if messages else fallback
 
 
 def _handle_add_category(request, forms):
@@ -1442,7 +1434,10 @@ def sign_in(request):
             if not already_blocked:
                 record_sign_in_failure_for_username(username, request)
         else:
-            from .passkey_services import passkey_required_after_password, store_pending_passkey_login
+            from .passkey_services import (
+                passkey_required_after_password,
+                store_pending_passkey_login,
+            )
 
             if passkey_required_after_password(user):
                 store_pending_passkey_login(request, user, _redirect_target(request))

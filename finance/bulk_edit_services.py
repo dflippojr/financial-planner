@@ -6,6 +6,9 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.utils import timezone
 
+from .access import DENIED as _DENIED
+from .audit_services import origin
+from .audit_services import record as audit_record
 from .category_services import (
     _history_label,
     _record_text_history,
@@ -16,7 +19,6 @@ from .category_services import (
     linked_refunds_for_originals,
     transaction_is_linked_refund,
 )
-from .audit_services import origin, record as audit_record
 from .lifecycle_services import lock_actor_household
 from .models import (
     Account,
@@ -29,8 +31,6 @@ from .models import (
 )
 from .tag_services import NOTE_TOO_LONG
 
-
-_DENIED = "Operation is not permitted."
 BULK_EDIT_CAP = 500
 UNDO_MINUTES = 10
 ACTION_CATEGORY = "set_category"

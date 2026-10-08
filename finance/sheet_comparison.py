@@ -7,21 +7,20 @@ from calendar import month_name
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from types import SimpleNamespace
-
 from urllib.parse import urlencode
 
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.urls import reverse
 from django.db import transaction
+from django.urls import reverse
 from django.utils import timezone
 
+from .access import DENIED as _DENIED
+from .access import require_person as _person_for
 from .cash_flow import default_date_range, format_minor, selected_accounts
 from .category_services import income_and_spending_totals
-from .models import Person, SheetComparisonSettings, SheetMonthTotal
+from .models import SheetComparisonSettings, SheetMonthTotal
 from .months import month_end, month_start
 
-
-_DENIED = "Operation is not permitted."
 MAX_FILE_BYTES = 5 * 1024 * 1024
 MAX_MONTH_ROWS = 240
 DEFAULT_TOLERANCE_MINOR = 100
@@ -41,17 +40,6 @@ MONTH_FORMATS = (
 
 class SheetCsvError(ValidationError):
     """User-facing CSV error that never includes cell contents."""
-
-
-def _person_for(principal):
-    if isinstance(principal, Person):
-        return principal
-    if getattr(principal, "is_authenticated", False):
-        try:
-            return principal.person
-        except Person.DoesNotExist as exc:
-            raise PermissionDenied(_DENIED) from exc
-    raise PermissionDenied(_DENIED)
 
 
 def settings_for(principal):

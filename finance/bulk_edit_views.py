@@ -6,6 +6,8 @@ from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_POST
 
+from .access import first_message as _first_message
+from .access import service_or_404 as _service_or_404
 from .bulk_edit_services import (
     BULK_EDIT_CAP,
     SKIP_LABELS,
@@ -17,11 +19,6 @@ from .bulk_edit_services import (
 from .category_services import exclusion_exists_for
 from .forms import BulkTransactionEditForm, TransactionFilterForm
 from .models import BulkEditUndo, Person, Transaction
-
-
-def _first_message(exc, fallback):
-    items = getattr(exc, "messages", None)
-    return items[0] if items else fallback
 
 
 def _matching_transactions(request):
@@ -55,13 +52,6 @@ def _bulk_kwargs(form):
         "note_line": form.cleaned_data.get("note_line") or "",
         "transaction_ids": form.data.getlist("transaction_id"),
     }
-
-
-def _service_or_404(action):
-    try:
-        return action()
-    except PermissionDenied as exc:
-        raise Http404 from exc
 
 
 @require_POST

@@ -3,14 +3,19 @@ from django.db import transaction
 from django.db.models import ProtectedError
 from django.utils import timezone
 
-from .audit_services import append_event, cleanup_member_events, prepare_account_deletion
+from .access import DENIED as _DENIED
+from .access import require_person as _person_for
+from .audit_services import (
+    append_event,
+    cleanup_member_events,
+    prepare_account_deletion,
+)
 from .models import (
-    AuditEvent,
     Account,
     Alert,
+    AuditEvent,
     ImportBatch,
     Membership,
-    Person,
     Receipt,
     RecurringExclusion,
     RecurringSeries,
@@ -23,22 +28,9 @@ from .models import (
     clear_invalid_loan_pairings,
 )
 
-
-_DENIED = "Operation is not permitted."
 LENT_HANDOVER = "handover"
 LENT_DELETE = "delete"
 LENT_CHOICES = (LENT_HANDOVER, LENT_DELETE)
-
-
-def _person_for(principal):
-    if isinstance(principal, Person):
-        return principal
-    if getattr(principal, "is_authenticated", False):
-        try:
-            return principal.person
-        except Person.DoesNotExist:
-            pass
-    raise PermissionDenied(_DENIED)
 
 
 # Lock order, for every operation in this module: the household's current
@@ -308,7 +300,10 @@ def archive_account(principal, account_id):
         account.archived_at = now
         account.save(update_fields=("status", "archived_at", "updated_at"))
         append_event(account=account, action=AuditEvent.Action.ACCOUNT_ARCHIVED, actor=person, changed_fields=("status",))
-    from finance.category_services import refresh_transfer_pairs, revalidate_pairs_touching_account
+    from finance.category_services import (
+        refresh_transfer_pairs,
+        revalidate_pairs_touching_account,
+    )
 
     revalidate_pairs_touching_account(person, account_id)
     seed_ids = list(Transaction.objects.filter(account_id=account_id).values_list("pk", flat=True))
@@ -606,9 +601,9 @@ def member_deletion_counts(person):
         Budget,
         CategoryRule,
         CategorySuggestion,
+        Passkey,
         PlannedItem,
         PrivacyPolicyAcceptance,
-        Passkey,
         RecoveryCode,
         RecurringSeries,
         RuleApplication,
@@ -717,12 +712,12 @@ def _release_household_owned_rows(person):
 
 def _delete_personal_records(person):
     from .models import (
-        Alert,
-        AlertSettings,
         AiJob,
         AiPlanLink,
         AiProviderConnection,
         AiUsageEvent,
+        Alert,
+        AlertSettings,
         BillsCalendarSettings,
         Budget,
         CategoryRule,

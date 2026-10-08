@@ -8,13 +8,21 @@ from django.db.models import prefetch_related_objects
 from django.urls import reverse
 from django.utils import timezone
 
+from .access import DENIED as _DENIED
+from .access import require_person as _person
 from .audit_services import owned_audience, record
 from .cash_flow import _combine_category_spending, format_minor, selected_accounts
 from .category_services import current_household, spending_by_category_by_window
-from .models import Account, AuditEvent, Budget, BudgetAmount, BudgetRolloverReset, Category
+from .models import (
+    Account,
+    AuditEvent,
+    Budget,
+    BudgetAmount,
+    BudgetRolloverReset,
+    Category,
+)
 from .months import add_months, month_end, month_start
 
-_DENIED = "Operation is not permitted."
 DUPLICATE_BUDGET = "An active budget already exists for this category and scope."
 
 
@@ -31,17 +39,6 @@ def parse_month(raw, *, today=None):
     except (TypeError, ValueError, IndexError):
         return month_start(today)
     return month_start(parsed)
-
-
-def _person(principal):
-    from .models import Person
-
-    if isinstance(principal, Person):
-        return principal
-    try:
-        return principal.person
-    except Person.DoesNotExist as exc:
-        raise PermissionDenied(_DENIED) from exc
 
 
 def _check_can_edit(person, budget):
@@ -241,7 +238,7 @@ def month_budget_cards(principal, month, *, include_archived=False, accounts=Non
     if not include_archived:
         budgets = budgets.filter(status=Budget.Status.ACTIVE)
     if not include_household:
-        person = _person(principal)
+        person = _person(principal, check_authenticated=False)
         budgets = budgets.filter(scope=Budget.Scope.PRIVATE, owner=person)
     budgets = list(budgets.order_by("scope", "category__name", "pk"))
     by_scope = {}
@@ -303,7 +300,7 @@ def _ensure_unique_active(person, *, scope, household, category, budget=None):
 
 
 def save_budget(principal, payload, *, budget=None):
-    person = _person(principal)
+    person = _person(principal, check_authenticated=False)
     if budget is not None:
         _check_can_edit(person, budget)
         if budget.scope != payload["scope"] and budget.owner_id != person.pk:
@@ -373,7 +370,7 @@ def save_budget(principal, payload, *, budget=None):
 
 
 def set_budget_archived(principal, budget, archived):
-    person = _person(principal)
+    person = _person(principal, check_authenticated=False)
     _check_can_edit(person, budget)
     if archived:
         if budget.status == Budget.Status.ARCHIVED:
@@ -420,7 +417,7 @@ def _new_rollover_period_start(budget):
 
 @transaction.atomic
 def set_budget_rollover(principal, budget, enabled, *, month):
-    person = _person(principal)
+    person = _person(principal, check_authenticated=False)
     _check_can_edit(person, budget)
     month = month_start(month)
     was_enabled = budget.rollover_enabled
@@ -444,7 +441,7 @@ def set_budget_rollover(principal, budget, enabled, *, month):
 
 
 def reset_budget_rollover(principal, budget, *, month):
-    person = _person(principal)
+    person = _person(principal, check_authenticated=False)
     _check_can_edit(person, budget)
     month = month_start(month)
     try:

@@ -1,24 +1,31 @@
+import re
 from bisect import bisect_left, bisect_right
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, timedelta
-from functools import lru_cache
 from decimal import Decimal
+from functools import lru_cache
 from hashlib import sha256
-import re
 
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.utils import timezone
 
-from .category_services import exclusion_exists_for
+from .access import DENIED as _DENIED
+from .access import require_person as _person_for
 from .audit_services import personal_audience, record
+from .category_services import exclusion_exists_for
 from .lifecycle_services import lock_actor_household
-from .models import AuditEvent, Person, RecurringExclusion, RecurringSeries, RecurringSeriesMember, Transaction
+from .models import (
+    AuditEvent,
+    Person,
+    RecurringExclusion,
+    RecurringSeries,
+    RecurringSeriesMember,
+    Transaction,
+)
 from .months import add_months_clamped
 
-
-_DENIED = "Operation is not permitted."
 MANUAL_REASON = "grouping edited manually"
 MAX_AMOUNT_VARIANCE = Decimal("0.25")
 # Outlier removal makes the search superlinear in a merchant's charges, so a
@@ -41,17 +48,6 @@ CADENCE_ORDER = (
     RecurringSeries.Cadence.QUARTERLY,
     RecurringSeries.Cadence.ANNUAL,
 )
-
-
-def _person_for(principal):
-    if isinstance(principal, Person):
-        return principal
-    if getattr(principal, "is_authenticated", False):
-        try:
-            return principal.person
-        except Person.DoesNotExist:
-            pass
-    raise PermissionDenied(_DENIED)
 
 
 def merchant_key(description):

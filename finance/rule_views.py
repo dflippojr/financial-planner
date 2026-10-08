@@ -1,11 +1,13 @@
 from decimal import Decimal
 
-from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.exceptions import ValidationError
 from django.http import Http404
 from django.shortcuts import redirect, render
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods, require_POST
 
+from .access import first_message as _first_message
+from .access import service_or_404 as _service_or_404
 from .category_services import current_household, ensure_household_categories
 from .forms import CategoryRuleForm
 from .models import CategoryRule, Person
@@ -20,18 +22,6 @@ from .rule_services import (
     save_category_rule,
     set_rule_enabled,
 )
-
-
-def _service_or_404(action):
-    try:
-        return action()
-    except PermissionDenied as exc:
-        raise Http404 from exc
-
-
-def _first_message(exc, fallback):
-    messages = getattr(exc, "messages", None)
-    return messages[0] if messages else fallback
 
 
 def _form_from_rule(rule, principal, data=None):

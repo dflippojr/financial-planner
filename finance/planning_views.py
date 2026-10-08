@@ -1,26 +1,16 @@
 from decimal import Decimal
 
-from django.core.exceptions import PermissionDenied, ValidationError
-from django.http import Http404
+from django.core.exceptions import ValidationError
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods, require_POST
 
+from .access import request_person as _person
+from .access import service_or_404 as _service_or_404
 from .category_services import current_household
 from .forms import PlannedItemForm
-from .models import Person, PlannedItem
+from .models import PlannedItem
 from .planning_services import save_planned_item, set_planned_item_enabled
-
-
-def _person(request):
-    return get_object_or_404(Person, user=request.user)
-
-
-def _service_or_404(action):
-    try:
-        return action()
-    except (PermissionDenied, ValidationError) as exc:
-        raise Http404 from exc
 
 
 def _visible_item(user, item_id):
@@ -70,7 +60,7 @@ def planned_item_list(request):
     extra = _prefill_from_query(request.GET) if request.method == "GET" else None
     form = _form(request, person, request.POST if request.method == "POST" else None, extra_initial=extra)
     if request.method == "POST" and form.is_valid():
-        _service_or_404(lambda: save_planned_item(request.user, form.save_payload()))
+        _service_or_404(lambda: save_planned_item(request.user, form.save_payload()), also=(ValidationError,))
         return redirect("planned-items")
     items = PlannedItem.objects.visible_to(request.user).order_by("start_date", "name", "pk")
     return render(
@@ -94,7 +84,7 @@ def planned_item_edit(request, item_id):
         extra_initial=extra,
     )
     if request.method == "POST" and form.is_valid():
-        _service_or_404(lambda: save_planned_item(request.user, form.save_payload(), item=item))
+        _service_or_404(lambda: save_planned_item(request.user, form.save_payload(), item=item), also=(ValidationError,))
         return redirect("planned-items")
     return render(
         request,
@@ -107,7 +97,7 @@ def planned_item_edit(request, item_id):
 @never_cache
 def planned_item_disable(request, item_id):
     item = _visible_item(request.user, item_id)
-    _service_or_404(lambda: set_planned_item_enabled(request.user, item, False))
+    _service_or_404(lambda: set_planned_item_enabled(request.user, item, False), also=(ValidationError,))
     return redirect("planned-items")
 
 
@@ -115,5 +105,5 @@ def planned_item_disable(request, item_id):
 @never_cache
 def planned_item_enable(request, item_id):
     item = _visible_item(request.user, item_id)
-    _service_or_404(lambda: set_planned_item_enabled(request.user, item, True))
+    _service_or_404(lambda: set_planned_item_enabled(request.user, item, True), also=(ValidationError,))
     return redirect("planned-items")

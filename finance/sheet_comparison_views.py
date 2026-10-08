@@ -1,19 +1,13 @@
 from decimal import Decimal
 
 from django.contrib import messages
-from django.db import transaction
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.shortcuts import get_object_or_404, redirect, render
+from django.db import transaction
+from django.shortcuts import redirect, render
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods, require_POST
 
-from .forms import (
-    SheetColumnMappingForm,
-    SheetComparisonFilterForm,
-    SheetCsvUploadForm,
-    SheetMonthNoteForm,
-    SheetToleranceForm,
-)
+from .access import request_person as _person
 from .csv_import.parser import CsvInputError
 from .csv_import.staging import (
     KIND_SHEET_COMPARISON,
@@ -22,7 +16,13 @@ from .csv_import.staging import (
     delete_stage,
     load_stage,
 )
-from .models import Person
+from .forms import (
+    SheetColumnMappingForm,
+    SheetComparisonFilterForm,
+    SheetCsvUploadForm,
+    SheetMonthNoteForm,
+    SheetToleranceForm,
+)
 from .sheet_comparison import (
     DEFAULT_TOLERANCE_MINOR,
     SESSION_KEY,
@@ -38,10 +38,6 @@ from .sheet_comparison import (
     settings_for,
     store_month_totals,
 )
-
-
-def _person(request):
-    return get_object_or_404(Person, user=request.user)
 
 
 def _pending(request):

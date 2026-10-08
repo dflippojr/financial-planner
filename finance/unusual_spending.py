@@ -1,10 +1,12 @@
 """Deterministic unusual-spending flags from visible cash-flow facts."""
 
+from decimal import ROUND_HALF_EVEN, Decimal
 from hashlib import sha256
 from heapq import heappop, heappush
-from decimal import ROUND_HALF_EVEN, Decimal
 
 from django.urls import reverse
+
+from finance.models import _person_for
 
 from .alert_services import raise_alert, settings_for
 from .cash_flow import (
@@ -25,12 +27,6 @@ DEFAULT_CATEGORY_FLOOR_MINOR = 5_000
 MERCHANT_MULTIPLIER = Decimal("2")
 MERCHANT_MIN_PRIOR = 3
 BASELINE_MONTHS = 6
-
-
-def _person_for(principal):
-    from .models import _person_for as resolve_person
-
-    return resolve_person(principal)
 
 
 def _excluded_transfer_ids(principal):

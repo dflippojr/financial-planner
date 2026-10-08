@@ -11,11 +11,11 @@ from django.conf import settings
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 
+from .access import DENIED as _DENIED
 from .audit_services import record
 from .lifecycle_services import lock_actor_household
 from .models import Account, AuditEvent, Person, Receipt, Transaction, _person_for
 
-_DENIED = "Operation is not permitted."
 _REJECTED = "That file could not be attached."
 _TOO_MANY = "A transaction can have at most 5 receipts."
 _JPEG = b"\xff\xd8\xff"
