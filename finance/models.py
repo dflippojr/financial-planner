@@ -2504,3 +2504,6 @@ class Passkey(models.Model):
 
     def __str__(self):
         return self.name
+
+# Register the separate metadata-only audit model with Django.
+from .audit_models import AuditEvent  # noqa: E402, F401

@@ -57,6 +57,7 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "finance.middleware.MemberSessionActivityMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
+    "finance.audit_services.AuditWarningMiddleware",
     "allauth.account.middleware.AccountMiddleware",
     "finance.middleware.LoginRequiredExceptStaticMiddleware",
 ]
@@ -318,3 +319,7 @@ EMAIL_USE_TLS = os.environ.get("SMTP_TLS", "true").lower() == "true"
 EMAIL_TIMEOUT = 10
 DEFAULT_FROM_EMAIL = os.environ.get("SMTP_FROM", "")
 ALERT_EMAIL_BASE_URL = os.environ.get("ALERT_EMAIL_BASE_URL", "")
+
+# Metadata-only trail; each daily pass deletes at most this many expired rows.
+AUDIT_RETENTION_DAYS = max(1, int(os.environ.get("AUDIT_RETENTION_DAYS", "90")))
+AUDIT_PURGE_BATCH_SIZE = max(1, int(os.environ.get("AUDIT_PURGE_BATCH_SIZE", "1000")))

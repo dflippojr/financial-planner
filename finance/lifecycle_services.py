@@ -3,7 +3,9 @@ from django.db import transaction
 from django.db.models import ProtectedError
 from django.utils import timezone
 
+from .audit_services import append_event, cleanup_member_events, prepare_account_deletion
 from .models import (
+    AuditEvent,
     Account,
     Alert,
     ImportBatch,
@@ -95,10 +97,14 @@ def _lock_ledgers(account_ids):
     list(Transaction.objects.select_for_update().filter(account_id__in=ids).order_by("pk"))
 
 
-def _make_account_private(account):
+def _make_account_private(account, *, audit_actor=None):
     account.scope = Account.Scope.PRIVATE
     account.household = None
     account.share_mode = ""
+    if audit_actor is not None:
+        # Authorize against the still-shared row before revoking access. The
+        # event follows the account's new scope when this transaction commits.
+        append_event(account=account, action=AuditEvent.Action.ACCOUNT_UNSHARED, actor=audit_actor, changed_fields=("scope", "share_mode"))
     account.save(update_fields=("scope", "household", "share_mode", "updated_at"))
     clear_invalid_loan_pairings(account)
 
@@ -131,6 +137,7 @@ def share_account(principal, account_id, share_mode):
     account.share_mode = mode
     account.save(update_fields=("scope", "household", "share_mode", "updated_at"))
     clear_invalid_loan_pairings(account)
+    append_event(account=account, action=AuditEvent.Action.ACCOUNT_SHARED, actor=person, changed_fields=("scope", "share_mode"))
     return account
 
 
@@ -157,6 +164,7 @@ def change_account_share_mode(principal, account_id, share_mode, *, confirm_give
 
     account.share_mode = mode
     account.save(update_fields=("share_mode", "updated_at"))
+    append_event(account=account, action=AuditEvent.Action.SHARE_MODE_CHANGED, actor=person, changed_fields=("share_mode",))
     return account
 
 
@@ -238,7 +246,7 @@ def unshare_account(principal, account_id):
     ):
         raise PermissionDenied(_DENIED)
 
-    _make_account_private(account)
+    _make_account_private(account, audit_actor=person)
     from finance.category_services import revalidate_pairs_touching_account
 
     revalidate_pairs_touching_account(person, account_id)
@@ -269,6 +277,7 @@ def archive_account(principal, account_id):
         account.status = Account.Status.ARCHIVED
         account.archived_at = now
         account.save(update_fields=("status", "archived_at", "updated_at"))
+        append_event(account=account, action=AuditEvent.Action.ACCOUNT_ARCHIVED, actor=person, changed_fields=("status",))
     from finance.category_services import refresh_transfer_pairs, revalidate_pairs_touching_account
 
     revalidate_pairs_touching_account(person, account_id)
@@ -508,6 +517,8 @@ def delete_account(principal, account_id):
         raise PermissionDenied(_DENIED)
     kept_id = account.pk
     name = account.name
+    append_event(account=account, action=AuditEvent.Action.ACCOUNT_DELETED, actor=person)
+    prepare_account_deletion(account)
     _repair_then_delete_account_rows(person, account)
     from finance.chat_services import delete_conversations_for_account
 
@@ -821,6 +832,7 @@ def delete_member_data(principal, lent_choices=None):
     for account_id in remaining_private_ids:
         delete_account(person, account_id)
     _delete_personal_records(person)
+    cleanup_member_events(person)
     _anonymize_shared_actor_refs(person)
     if household_id is not None:
         _delete_empty_household(household_id)
