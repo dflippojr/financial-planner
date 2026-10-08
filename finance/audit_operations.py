@@ -94,7 +94,7 @@ def outcome(person, operation_name, target_id=None, *, phase="succeeded", metada
             if value is not None:
                 details[key] = value
     target_type = {"simplefin_sync": "connection", "ai_inference": "connection",
-                   "ai_claim": "ai_job", "ai_attempt": "ai_job", "ai_job": "ai_job",
+                   "ai_claim": "ai_job", "ai_attempt": "ai_job", "ai_recovery": "ai_job", "ai_job": "ai_job",
                    "chat_turn": "chat_turn", "monthly_review": "review", "alert_delivery": "alert",
                    "email_delivery": "setting", "transfer_rebuild": "member"}[operation_name]
     audience = {"account": account} if account is not None else {"private_owner": person}

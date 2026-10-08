@@ -354,6 +354,8 @@ def _claim_for_run(job, moment, cutoff, *, connection_row=None, backend=""):
         locked = _lock_qs(AiJob.objects.filter(pk=job.pk).filter(due | stale_resume)).first()
         if locked is None:
             return None
+        if locked.status == AiJob.Status.RUNNING:
+            _record_recovery(locked)
         if locked.status != AiJob.Status.RUNNING:
             locked.status = AiJob.Status.RUNNING
             # Attempts count new harness sessions; resuming an open one is not a new try.
@@ -385,6 +387,7 @@ def _requeue_stale_running(job, moment, cutoff):
         ).first()
         if locked is None:
             return False
+        _record_recovery(locked)
         return _retry_or_fail(locked, moment, locked.failure_code or UNAVAILABLE)
 
 
@@ -492,3 +495,11 @@ def outcome_for_job(job, name, *, phase="succeeded", code=None, metadata=None):
         details["failure"] = code if code in METADATA_ENUM_KEYS["failure"] else PROVIDER_ERROR
     with operation(run_id=job.audit_run_id, job_id=job.pk, attempt=job.attempts):
         outcome(job.member, name, job.pk, phase=phase, metadata=details)
+
+
+def _record_recovery(job):
+    # Recovery is a new worker claim, not another inference. Keep the saved
+    # inference attempt stable and explicitly link this distinct recovery UUID.
+    with operation(job_id=job.pk, attempt=job.attempts):
+        outcome(job.member, "ai_recovery", job.pk, phase="started",
+                metadata={"operation_id": str(job.audit_run_id), "failure": "stale"})

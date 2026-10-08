@@ -390,3 +390,20 @@ def test_late_worker_cannot_duplicate_final_outcomes_or_change_newer_attempt():
     _fail(job, "provider_error")
     job.refresh_from_db()
     assert job.status == "running"
+
+
+def test_stale_recovery_has_distinct_claim_id_without_spending_inference_attempt():
+    from finance.ai_jobs import _claim_for_run
+
+    _user, person, _ = make_member("ai")
+    moment = timezone.now()
+    job = AiJob.objects.create(member=person, feature="structured", status="running", attempts=1,
+                               harness_session_id="synthetic-saved-session")
+    AiJob.objects.filter(pk=job.pk).update(updated_at=moment - timedelta(hours=1))
+    claimed = _claim_for_run(job, moment, moment - timedelta(minutes=10))
+    assert claimed is not None and claimed.attempts == 1 and claimed.audit_run_id == job.audit_run_id
+    row, = operational_rows(person, "ai_recovery")
+    assert row.correlation_id != job.audit_run_id
+    assert row.metadata["operation_id"] == str(job.audit_run_id)
+    assert _claim_for_run(job, moment, moment - timedelta(minutes=10)) is None
+    assert len(operational_rows(person, "ai_recovery")) == 1

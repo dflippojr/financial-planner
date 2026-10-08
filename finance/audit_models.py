@@ -27,7 +27,7 @@ METADATA_INT_KEYS = frozenset({
     "transaction_id", "account_id", "undo_id", "connection_id", "usage_id", "job_id", "turn_id", "attempt",
 })
 METADATA_ENUM_KEYS = {
-    "operation": frozenset({"simplefin_sync", "ai_claim", "ai_attempt", "ai_job", "ai_inference", "chat_turn",
+    "operation": frozenset({"simplefin_sync", "ai_claim", "ai_attempt", "ai_recovery", "ai_job", "ai_inference", "chat_turn",
                             "monthly_review", "alert_delivery", "email_delivery", "transfer_rebuild"}),
     "failure": frozenset({"provider_error", "unavailable", "authorization_required", "limit_reached",
                           "app_tools_only_unsupported", "end_user_login_required", "access_denied", "import_failed", "stale"}),
