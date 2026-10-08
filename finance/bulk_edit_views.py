@@ -98,7 +98,7 @@ def bulk_edit_apply(request):
         messages.error(request, "Choose a bulk edit action and try again.")
         return redirect("transaction-list")
     kwargs = _bulk_kwargs(form)
-    kwargs["select_matching"] = False
+    kwargs.pop("select_matching")
     posted_eligible = form.data.getlist("eligible_id")
     kwargs["expected_eligible_ids"] = posted_eligible or None
     try:

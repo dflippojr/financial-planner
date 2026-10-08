@@ -360,7 +360,6 @@ def apply_bulk_edit(
     *,
     matching,
     transaction_ids,
-    select_matching,
     action,
     category_id=None,
     tag_ids=None,

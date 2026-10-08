@@ -64,11 +64,6 @@ def add_cadence(value: date, cadence: str) -> date:
     raise ValueError("Unknown cadence")
 
 
-def _within_tolerance(actual: date, expected: date, cadence: str) -> bool:
-    _interval, tolerance = CADENCE_DAYS[cadence]
-    return abs((actual - expected).days) <= tolerance
-
-
 def _median_minor(values):
     ordered = sorted(abs(value) for value in values)
     return ordered[len(ordered) // 2]

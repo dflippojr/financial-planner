@@ -51,12 +51,6 @@ def _personal_account_ids(person):
     return set(Account.objects.visible_to(person).values_list("pk", flat=True))
 
 
-def _household_shared_account_ids(household):
-    return set(
-        Account.objects.filter(scope=Account.Scope.HOUSEHOLD, household=household).values_list("pk", flat=True)
-    )
-
-
 def _validate_rule_account(rule, person, household):
     if rule.account_id is None:
         return

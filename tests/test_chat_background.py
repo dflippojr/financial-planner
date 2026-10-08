@@ -23,7 +23,7 @@ from finance.chat_runner import (
 from finance.chat_services import answer_turn, send_message
 from finance.models import AiConversationMessage
 from finance.policy_services import current_policy
-from tests.test_chat import TOKEN, add_txn, checking, harness, make_member  # noqa: F401 - harness is a fixture
+from tests.test_chat import TOKEN, add_txn, checking, harness as harness_fixture, make_member  # noqa: F401 - harness is a fixture
 from tests.test_security_headers import assert_page_is_csp_clean
 
 PENDING = AiConversationMessage.Status.PENDING

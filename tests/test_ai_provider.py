@@ -69,7 +69,7 @@ def make_member(username, household=None, policy=None):
     return user, person, household
 
 
-@pytest.fixture
+@pytest.fixture(name="harness")
 def harness():
     state, url, server = start_fake_harness()
     try:

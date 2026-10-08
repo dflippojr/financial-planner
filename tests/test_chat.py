@@ -114,7 +114,7 @@ def add_txn(account, person, day, amount, description, category=None):
     )
 
 
-@pytest.fixture
+@pytest.fixture(name="harness")
 def harness():
     state, url, server = start_fake_harness()
     try:

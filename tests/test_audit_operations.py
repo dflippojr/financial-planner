@@ -17,7 +17,7 @@ from finance.models import AuditEvent, AiJob, ImportBatch, Membership
 from finance.simplefin_errors import SimpleFinError
 from finance.simplefin_services import sync_connection, sync_all_connections
 from ops.backup.audit_journal import append, query
-from tests.test_ai_provider import TOKEN, make_member, harness  # noqa: F401
+from tests.test_ai_provider import TOKEN, make_member, harness as harness_fixture  # noqa: F401
 from tests.test_simplefin import connect_owner, account_payload, make_account
 
 

@@ -86,7 +86,7 @@ def test_repeated_login_failures_block_correct_password_and_show_generic_error()
     user, _person, _household = make_member()
     client = Client()
     for _ in range(2):
-        response = client.post(reverse("login"), {"username": user.username, "password": "wrong"})
+        client.post(reverse("login"), {"username": user.username, "password": "wrong"})
 
     blocked = client.post(reverse("login"), {"username": user.username, "password": PASSWORD})
 

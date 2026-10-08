@@ -281,7 +281,7 @@ def test_recording_a_statement_entry_parses_net_contribution():
 def test_private_investment_account_performance_is_never_visible_to_another_member():
     owner = make_person("owner")
     member = make_person("member")
-    household = make_household(owner, member)
+    make_household(owner, member)
     private = make_account(owner, name=SECRET_INVESTMENT, scope=Account.Scope.PRIVATE)
     statement(private, date(2026, 1, 31), 10_000, 0)
     statement(private, date(2026, 2, 28), 11_000, 500)

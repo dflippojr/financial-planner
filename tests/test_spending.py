@@ -305,7 +305,7 @@ def test_spending_page_default_range_presets_and_nav(_cash_today, _view_today):
 def test_spending_page_empty_state_and_anonymous_redirect():
     owner = make_person("owner")
     make_household(owner)
-    account = make_account(owner)
+    make_account(owner)
     client = Client()
     client.force_login(owner.user)
     response = client.get(

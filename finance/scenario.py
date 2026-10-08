@@ -288,7 +288,3 @@ def change_applies(change, items):
 
 def visible_scenario_changes(changes, items):
     return tuple(change for change in changes if change_applies(change, items))
-
-
-def scenario_query_pairs(changes):
-    return [(QUERY_KEY, encode_change(change)) for change in changes]

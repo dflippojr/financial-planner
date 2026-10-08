@@ -101,7 +101,7 @@ def as_tuple(totals):
     )
 
 
-@pytest.fixture
+@pytest.fixture(name="ledger")
 def ledger(db):
     owner = make_person("owner")
     partner = make_person("partner")

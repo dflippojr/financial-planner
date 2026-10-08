@@ -331,7 +331,7 @@ def test_export_includes_visible_assets_and_omits_other_private():
         household=household,
     )
     secret = make_account(owner, name=SECRET_HOUSE, account_type=Account.Type.VEHICLE)
-    member_gold = make_account(member, name=MEMBER_GOLD, account_type=Account.Type.PRECIOUS_METALS)
+    make_account(member, name=MEMBER_GOLD, account_type=Account.Type.PRECIOUS_METALS)
     add_snapshot(secret, date(2026, 2, 1), 1_200_000, note="online estimate")
     loan.secured_asset = house
     loan.save()

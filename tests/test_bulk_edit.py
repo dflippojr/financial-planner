@@ -171,7 +171,6 @@ def test_preview_counts_match_applied_category_changes():
         owner,
         matching=matching_qs(owner),
         transaction_ids=ids,
-        select_matching=False,
         action=ACTION_CATEGORY,
         category_id=category.pk,
     )
@@ -231,7 +230,6 @@ def test_skip_reasons_for_category_and_investment():
         owner,
         matching=matching_qs(owner),
         transaction_ids=ids,
-        select_matching=False,
         action=ACTION_CATEGORY,
         category_id=groceries(household).pk,
     )
@@ -248,7 +246,7 @@ def test_skip_reasons_for_category_and_investment():
 @pytest.mark.django_db
 def test_investment_is_skipped_for_tags_and_notes():
     owner = make_person("owner")
-    household = make_household(owner)
+    make_household(owner)
     account = make_account(owner)
     cash = make_transaction(owner, account, description="Synthetic cash", fingerprint="h" * 64)
     investment = make_transaction(
@@ -273,7 +271,6 @@ def test_investment_is_skipped_for_tags_and_notes():
         owner,
         matching=matching_qs(owner),
         transaction_ids=[cash.pk, investment.pk],
-        select_matching=False,
         action=ACTION_APPEND_NOTE,
         note_line="Synthetic note line",
     )
@@ -336,7 +333,6 @@ def test_undo_restores_and_refuses_when_changed():
         owner,
         matching=matching_qs(owner),
         transaction_ids=[txn.pk],
-        select_matching=False,
         action=ACTION_APPEND_NOTE,
         note_line="Second line",
     )
@@ -349,7 +345,6 @@ def test_undo_restores_and_refuses_when_changed():
         owner,
         matching=matching_qs(owner),
         transaction_ids=[txn.pk],
-        select_matching=False,
         action=ACTION_CATEGORY,
         category_id=groceries(household).pk,
     )
@@ -371,7 +366,6 @@ def test_undo_expires_and_other_member_cannot_see_it():
         owner,
         matching=matching_qs(owner),
         transaction_ids=[txn.pk],
-        select_matching=False,
         action=ACTION_CATEGORY,
         category_id=groceries(household).pk,
     )
@@ -392,7 +386,6 @@ def test_rules_and_ai_do_not_override_bulk_set_category():
         owner,
         matching=matching_qs(owner),
         transaction_ids=[txn.pk],
-        select_matching=False,
         action=ACTION_CATEGORY,
         category_id=dining(household).pk,
     )
@@ -427,7 +420,7 @@ def test_rules_and_ai_do_not_override_bulk_set_category():
 @pytest.mark.django_db
 def test_add_and_remove_tags_and_note_too_long_skip():
     owner = make_person("owner")
-    household = make_household(owner)
+    make_household(owner)
     account = make_account(owner)
     txn = make_transaction(owner, account)
     keep = add_tag(owner, "Keep")
@@ -436,7 +429,6 @@ def test_add_and_remove_tags_and_note_too_long_skip():
         owner,
         matching=matching_qs(owner),
         transaction_ids=[txn.pk],
-        select_matching=False,
         action=ACTION_ADD_TAGS,
         tag_ids=[keep.pk, drop.pk],
     )
@@ -446,7 +438,6 @@ def test_add_and_remove_tags_and_note_too_long_skip():
         owner,
         matching=matching_qs(owner),
         transaction_ids=[txn.pk],
-        select_matching=False,
         action=ACTION_REMOVE_TAGS,
         tag_ids=[drop.pk],
     )
@@ -490,7 +481,6 @@ def test_select_matching_respects_cap(monkeypatch):
             owner,
             matching=matching_qs(owner),
             transaction_ids=[],
-            select_matching=True,
             action=ACTION_CATEGORY,
             category_id=groceries(household).pk,
         )
@@ -521,7 +511,6 @@ def test_explicit_ids_respect_cap(monkeypatch):
             owner,
             matching=matching_qs(owner),
             transaction_ids=ids,
-            select_matching=False,
             action=ACTION_CATEGORY,
             category_id=groceries(household).pk,
         )
@@ -538,7 +527,6 @@ def test_uncategorized_and_select_matching_under_cap():
         owner,
         matching=matching_qs(owner),
         transaction_ids=[txn.pk],
-        select_matching=True,
         action=ACTION_CATEGORY,
         category_id=None,
     )
@@ -611,7 +599,6 @@ def test_bulk_category_propagates_to_linked_refunds_and_skips_refund_legs():
         owner,
         matching=matching_qs(owner),
         transaction_ids=[purchase.pk, refund.pk],
-        select_matching=False,
         action=ACTION_CATEGORY,
         category_id=dine.pk,
     )
@@ -698,7 +685,6 @@ def test_apply_refuses_when_a_previewed_row_is_no_longer_eligible():
             owner,
             matching=matching_qs(owner),
             transaction_ids=[first.pk, second.pk],
-            select_matching=False,
             action=ACTION_CATEGORY,
             category_id=dine.pk,
             expected_eligible_ids=preview.eligible_ids,
@@ -722,7 +708,6 @@ def test_undo_category_follows_refund_linked_after_bulk_edit():
         owner,
         matching=matching_qs(owner),
         transaction_ids=[purchase.pk],
-        select_matching=False,
         action=ACTION_CATEGORY,
         category_id=dine.pk,
     )
@@ -763,7 +748,6 @@ def test_undo_category_succeeds_when_linked_refund_is_on_unseen_account():
         member,
         matching=matching_qs(member),
         transaction_ids=[purchase.pk],
-        select_matching=False,
         action=ACTION_CATEGORY,
         category_id=dine.pk,
     )
@@ -808,7 +792,6 @@ def test_refund_linked_just_before_the_locks_still_follows_the_purchase(monkeypa
         owner,
         matching=matching_qs(owner),
         transaction_ids=[purchase.pk],
-        select_matching=False,
         action=ACTION_CATEGORY,
         category_id=dine.pk,
     )
@@ -837,7 +820,6 @@ def test_undo_refuses_when_a_linked_refund_was_recategorized_by_hand():
         owner,
         matching=matching_qs(owner),
         transaction_ids=[purchase.pk],
-        select_matching=False,
         action=ACTION_CATEGORY,
         category_id=dine.pk,
     )

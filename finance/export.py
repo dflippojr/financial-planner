@@ -611,7 +611,7 @@ def _split_rows(person):
     return rows
 
 
-def _transaction_tag_rows(person, visible_txn_ids):
+def _transaction_tag_rows(visible_txn_ids):
     rows = []
     links = (
         TransactionTag.objects.filter(transaction_id__in=visible_txn_ids)
@@ -882,7 +882,7 @@ def collect_export_tables(person) -> dict[str, list[dict]]:
         "import_batches": _import_batch_rows(person),
         "transfer_pairs": _transfer_pair_rows(person),
         "transaction_splits": _split_rows(person),
-        "transaction_tags": _transaction_tag_rows(person, visible_txn_ids),
+        "transaction_tags": _transaction_tag_rows(visible_txn_ids),
         "receipts": _receipt_rows(person),
         "recurring_series": _recurring_series_rows(person),
         "recurring_exclusions": _recurring_exclusion_rows(person),
