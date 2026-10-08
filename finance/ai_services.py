@@ -821,6 +821,10 @@ def _run_api_connection(person, connection, prompt, *, feature, use_chat, tools,
 
 
 def _inference_event(person, connection, backend, feature, *, phase=None, result=None, usage=None):
+    if phase is None:
+        if result is None:
+            raise ValueError("An inference outcome requires a result.")
+        phase = "succeeded" if result.ok else "failed"
     details = {"connection_id": connection.pk, "provider": connection.kind,
                "backend": backend if backend in METADATA_ENUM_KEYS["backend"] else "other",
                "feature": feature if feature in METADATA_ENUM_KEYS["feature"] else "structured"}
@@ -829,7 +833,7 @@ def _inference_event(person, connection, backend, feature, *, phase=None, result
     if result is not None and not result.ok:
         code = result.failure_code
         details["failure"] = code if code in METADATA_ENUM_KEYS["failure"] else PROVIDER_ERROR
-    outcome(person, "ai_inference", connection.pk, phase=phase or ("succeeded" if result.ok else "failed"),
+    outcome(person, "ai_inference", connection.pk, phase=phase,
             metadata=details, effective_member=connection.owner)
 
 

@@ -434,3 +434,17 @@ def test_delegated_domain_event_keeps_explicit_rule_source_and_run():
     row = events_for(person).get(action="rule_applied")
     assert row.source == "rule" and row.actor_kind == "operator"
     assert row.correlation_id == run.run_id and row.effective_member_id == person.pk
+
+
+def test_inference_outcome_requires_result_and_start_does_not(harness):
+    from finance.ai_services import _inference_event, connect_harness
+
+    _state, url = harness
+    _user, person, _ = make_member("member")
+    connection = connect_harness(person, base_url=url, token=TOKEN)
+    with pytest.raises(ValueError, match="requires a result"):
+        _inference_event(person, connection, "local", "structured")
+    assert not operational_rows(person, "ai_inference")
+    _inference_event(person, connection, "local", "structured", phase="started")
+    row, = operational_rows(person, "ai_inference")
+    assert row.outcome == "started"
