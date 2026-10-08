@@ -18,4 +18,9 @@ backups/
 .cache/
 staticfiles/
 tests/
-ops/
+# The app/background import the standalone metadata journal. Keep the other
+# maintenance scripts out of the app image; they belong to the backup image.
+ops/*
+!ops/backup/
+ops/backup/*
+!ops/backup/audit_journal.py
