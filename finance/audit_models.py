@@ -96,16 +96,20 @@ class AuditEvent(models.Model):
         constraints = [
             models.CheckConstraint(condition=Q(target_id__gt=0), name="audit_positive_target"),
             models.CheckConstraint(
-                condition=(Q(private_owner__isnull=False, household__isnull=True)
+                condition=(Q(account__isnull=False, private_owner__isnull=True, household__isnull=True)
+                           | Q(private_owner__isnull=False, household__isnull=True)
                            | Q(private_owner__isnull=True, household__isnull=False)),
-                name="audit_one_audience",
+                name="audit_target_or_deletion_audience",
             ),
         ]
 
     def clean(self):
         super().clean()
-        if bool(self.private_owner_id) == bool(self.household_id):
-            raise ValidationError("Audit event requires one audience.")
+        if self.action == self.Action.ACCOUNT_DELETED:
+            if bool(self.private_owner_id) == bool(self.household_id):
+                raise ValidationError("Deletion event requires one audience.")
+        elif self.private_owner_id is not None or self.household_id is not None:
+            raise ValidationError("Surviving events use the target's current audience.")
         if self.actor_kind == self.ActorKind.MEMBER and self.actor_id is None:
             raise ValidationError("Member actor is required for new events.")
         if self.actor_kind != self.ActorKind.MEMBER and self.actor_id is not None:

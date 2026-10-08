@@ -102,8 +102,8 @@ def _make_account_private(account, *, audit_actor=None):
     account.household = None
     account.share_mode = ""
     if audit_actor is not None:
-        # Check the actor against the still-shared database row, while recording
-        # the new private audience. The enclosing transaction includes both.
+        # Authorize against the still-shared row before revoking access. The
+        # event follows the account's new scope when this transaction commits.
         append_event(account=account, action=AuditEvent.Action.ACCOUNT_UNSHARED, actor=audit_actor, changed_fields=("scope", "share_mode"))
     account.save(update_fields=("scope", "household", "share_mode", "updated_at"))
     clear_invalid_loan_pairings(account)

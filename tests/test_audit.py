@@ -214,19 +214,41 @@ def test_append_only_validation_and_typed_metadata():
 
 
 @pytest.mark.parametrize("invalid", [
-    {"private_owner": None}, {"actor": None}, {"actor_kind": "operator"},
+    {"private_owner_id": 987654}, {"actor": None}, {"actor_kind": "operator"},
     {"target_id": 987654}, {"changed_fields": ["status", "status"]},
     {"changed_fields": "private note"}, {"changed_fields": [{"secret": "private note"}]},
+    {"action": "account_deleted"},
 ])
 def test_model_rejects_invalid_audience_identity_target_and_metadata(invalid):
     _user, person, _household = make_member()
     account = account_for(person)
-    fields = dict(account=account, target_id=account.pk, private_owner=person,
+    fields = dict(account=account, target_id=account.pk,
                   actor=person, actor_kind="member", source="ui", action="account_archived")
     fields.update(invalid)
     with pytest.raises(ValidationError, match="Invalid audit metadata"):
         AuditEvent(**fields).save()
     assert AuditEvent.objects.count() == 0
+
+
+def test_pre_sharing_private_history_survives_co_owned_member_deletion():
+    _user, person, household, _other_user, other = shared_members()
+    account = account_for(person)
+    first = append(account, person)
+    share_account(person, account.pk, "co_owned")
+    delete_member_data(person)
+    assert events_for(other).count() == 2
+    assert events_for(other).get(pk=first.pk).actor_id is None
+
+
+def test_unshared_history_survives_deletion_of_its_former_household():
+    _user, person, household, _other_user, other = shared_members()
+    account = account_for(person, household)
+    first = append(account, person)
+    unshare_account(person, account.pk)
+    leave_household(person)
+    delete_member_data(other)
+    assert events_for(person).count() == 2
+    assert events_for(person).get(pk=first.pk).household_id is None
 
 
 @pytest.mark.django_db(transaction=True)

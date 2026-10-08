@@ -45,8 +45,8 @@ def append_event(*, account, action, actor=None, actor_kind=AuditEvent.ActorKind
     event = AuditEvent(
         account=account, target_id=account.pk, action=action, outcome=outcome,
         actor=actor, actor_kind=actor_kind, effective_member=effective_member,
-        private_owner_id=account.owner_id if account.scope == Account.Scope.PRIVATE else None,
-        household_id=account.household_id if account.scope == Account.Scope.HOUSEHOLD else None,
+        private_owner_id=account.owner_id if action == AuditEvent.Action.ACCOUNT_DELETED and account.scope == Account.Scope.PRIVATE else None,
+        household_id=account.household_id if action == AuditEvent.Action.ACCOUNT_DELETED and account.scope == Account.Scope.HOUSEHOLD else None,
         source=source, correlation_id=correlation_id or uuid.uuid4(), changed_fields=sorted(fields),
     )
     try:
@@ -93,7 +93,9 @@ def prepare_account_deletion(account):
 
 
 def cleanup_member_events(person):
-    _maintenance_rows().filter(private_owner=person).delete()
+    private_accounts = Account.objects.filter(owner=person, scope=Account.Scope.PRIVATE).values("pk")
+    _maintenance_rows().filter(account_id__in=private_accounts).delete()
+    _maintenance_rows().filter(account__isnull=True, private_owner=person).delete()
     _maintenance_rows().filter(actor=person).update(actor=None)
     _maintenance_rows().filter(effective_member=person).update(effective_member=None)
 
