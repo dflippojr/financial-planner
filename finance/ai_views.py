@@ -387,11 +387,9 @@ def ai_plan_code(request, backend):
 def ai_plan_status(request, backend):
     person = get_object_or_404(Person, user=request.user)
     try:
-        state = poll_login(person, _plan_backend(backend))
+        state = poll_login(person, _plan_backend(backend), request=request)
     except PlanLinkError as exc:
         return _json_error(str(exc))
-    if state.get("linked"):
-        record_security_event(person, EVENT_TYPES.AI_CONNECTION_CHANGED, request=request)
     return JsonResponse({"ok": True, **state})
 
 

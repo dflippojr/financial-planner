@@ -123,3 +123,61 @@ def test_link_and_event_roll_back_together(initial):
                 _status(user, "claude")
     assert list(AiPlanLink.objects.values()) == before
     assert not _events(person).exists()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("status", ["pending", "failed", "expired", "cancelled", "denied"])
+def test_unsuccessful_poll_does_not_change_existing_link_or_events(status):
+    user, person, selected, previous = _setup()
+    AiPlanLink.objects.create(person=person, backend="claude", connection=selected)
+    AiPlanLink.objects.create(person=previous.owner, backend="claude", connection=previous)
+    record_security_event(previous.owner, EVENT_TYPES.AI_CONNECTION_CHANGED)
+    links = list(AiPlanLink.objects.values())
+    events = list(MemberSecurityEvent.objects.values())
+    with patch("finance.ai_plan.end_user_login_state", return_value={"attempt": {"status": status}}):
+        assert _status(user, "claude") == (
+            200, {"ok": True, "linked": False, "failed": status != "pending"},
+        )
+    assert list(AiPlanLink.objects.values()) == links
+    assert list(MemberSecurityEvent.objects.values()) == events
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("refusal", ["unknown_backend", "no_connection", "policy"])
+def test_refused_poll_never_contacts_harness_or_changes_another_member(refusal):
+    user, person, selected, previous = _setup()
+    AiPlanLink.objects.create(person=previous.owner, backend="claude", connection=previous)
+    record_security_event(previous.owner, EVENT_TYPES.AI_CONNECTION_CHANGED)
+    if refusal == "no_connection":
+        selected.delete()  # The other member's connection is not offered.
+    elif refusal == "policy":
+        from finance.policy_services import publish_policy
+
+        publish_policy(material=True, body="Synthetic updated policy")
+    links = list(AiPlanLink.objects.values())
+    events = list(MemberSecurityEvent.objects.values())
+    with patch("finance.ai_plan.end_user_login_state") as harness:
+        code, data = _status(user, "unknown" if refusal == "unknown_backend" else "claude")
+    assert code == 400 and data["ok"] is False
+    harness.assert_not_called()
+    assert list(AiPlanLink.objects.values()) == links
+    assert list(MemberSecurityEvent.objects.values()) == events
+
+
+@pytest.mark.django_db
+def test_unlink_then_relink_records_a_new_transition():
+    from finance.ai_plan import unlink
+
+    user, person, _selected, _previous = _setup()
+    with patch("finance.ai_plan.end_user_login_state", return_value={"linked": True}):
+        assert _status(user, "claude")[1]["linked"]
+        first = AiPlanLink.objects.get(person=person).linked_at
+        with patch("finance.ai_plan.unlink_end_user_login"):
+            unlink(person, "claude")
+        assert not AiPlanLink.objects.filter(person=person).exists()
+        later = first + timedelta(hours=1)
+        with patch("finance.ai_plan.timezone.now", return_value=later):
+            assert _status(user, "claude")[1]["linked"]
+            assert _status(user, "claude")[1]["linked"]
+    assert AiPlanLink.objects.get(person=person).linked_at == later
+    assert _events(person).count() == 2

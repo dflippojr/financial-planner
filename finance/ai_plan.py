@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 
 from django.conf import settings
 from django.core.exceptions import PermissionDenied
+from django.db import transaction
 from django.utils import timezone
 
 from .ai_harness import (
@@ -23,8 +24,9 @@ from .ai_types import AUTHORIZATION_REQUIRED, PLAN_BACKENDS, PLAN_REPLACES_API, 
 from .category_services import current_household
 from .encryption import decrypt_secret
 from .lifecycle_services import _DENIED, _person_for
-from .models import AiPlanLink, AiProviderConnection, Membership
+from .models import AiPlanLink, AiProviderConnection, Membership, Person
 from .policy_services import may_use_ai
+from .security_services import EVENT_TYPES, record_security_event
 
 LOGIN_EXPIRY_SECONDS = 600
 LINK_PROMPT = "Link your plan to use this. Open Settings → AI and choose Link under Your Claude / Codex plan."
@@ -175,18 +177,25 @@ def submit_code(principal, backend, *, attempt_id, code):
     return {"ok": True}
 
 
-def poll_login(principal, backend):
+def poll_login(principal, backend, *, request=None):
     person, connection, token = _context(principal, backend)
     try:
         state = end_user_login_state(connection.base_url, token, end_user_id(person), backend)
     except HarnessHttpError as exc:
         raise PlanLinkError(_failure(exc, LINK_FAILED)) from None
     if state.get("linked"):
-        AiPlanLink.objects.update_or_create(
-            person=person,
-            backend=backend,
-            defaults={"connection": connection, "needs_login": False, "linked_at": timezone.now()},
-        )
+        with transaction.atomic():
+            # Lock the member even when no link exists yet. The unique link
+            # constraint alone cannot serialize creation of its security event.
+            Person.objects.select_for_update().get(pk=person.pk)
+            link = AiPlanLink.objects.filter(person=person, backend=backend).first()
+            if link is None or link.needs_login or link.connection_id != connection.pk:
+                AiPlanLink.objects.update_or_create(
+                    person=person,
+                    backend=backend,
+                    defaults={"connection": connection, "needs_login": False, "linked_at": timezone.now()},
+                )
+                record_security_event(person, EVENT_TYPES.AI_CONNECTION_CHANGED, request=request)
         return {"linked": True, "failed": False}
     attempt = state.get("attempt") if isinstance(state.get("attempt"), dict) else {}
     return {"linked": False, "failed": str(attempt.get("status") or "") in _ENDED_STATES}
