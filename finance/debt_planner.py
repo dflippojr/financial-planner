@@ -1,9 +1,10 @@
 """Debt payoff estimates. Projections are estimates, not advice."""
 
 from dataclasses import dataclass
-from datetime import date
 from decimal import ROUND_HALF_EVEN, Decimal
 from types import SimpleNamespace
+
+from .months import add_months
 
 CENTS = Decimal("1")
 MONTHS_PER_YEAR = Decimal("12")
@@ -48,12 +49,6 @@ def monthly_interest_minor(balance_minor, apr_percent):
         return 0
     raw = Decimal(balance_minor) * Decimal(apr_percent) / MONTHS_PER_YEAR / PERCENT
     return int(raw.quantize(CENTS, rounding=ROUND_HALF_EVEN))
-
-
-def add_calendar_months(start, months):
-    year = start.year + (start.month - 1 + months) // 12
-    month = (start.month - 1 + months) % 12 + 1
-    return date(year, month, 1)
 
 
 def month_label(value):
@@ -430,11 +425,11 @@ def simulate_payoff(debts, extra_minor=0, strategy=STRATEGY_MINIMUMS, custom_ord
             balances[debt.account_id] -= paid
             paid_total += paid
             if balances[debt.account_id] <= 0 and debt.account_id not in payoff_months:
-                payoff_months[debt.account_id] = add_calendar_months(start, offset)
+                payoff_months[debt.account_id] = add_months(start, offset)
             if balances[debt.account_id] > GROWTH_CAP_MINOR:
                 frozen.add(debt.account_id)
         remaining_total = sum(max(0, amount) for amount in balances.values())
-        month_date = add_calendar_months(start, offset)
+        month_date = add_months(start, offset)
         months.append(
             SimpleNamespace(
                 month=month_date,

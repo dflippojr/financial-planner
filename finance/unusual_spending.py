@@ -7,7 +7,6 @@ from decimal import ROUND_HALF_EVEN, Decimal
 from django.urls import reverse
 
 from .alert_services import raise_alert, settings_for
-from .budget_services import add_months, month_end, month_start
 from .cash_flow import (
     format_minor,
     selected_accounts,
@@ -15,6 +14,7 @@ from .cash_flow import (
     spending_category_detail_url,
 )
 from .models import Account, Alert, Transaction, TransferPair
+from .months import add_months, month_end, month_start
 from .recurring_services import merchant_key
 
 KIND_CATEGORY = "category"

@@ -19,7 +19,7 @@ from .ai_tools import visible_accounts
 from .ai_types import ToolResult, ToolSpec
 from .audit_services import origin, record
 from .bulk_edit_services import _apply_tags
-from .budget_services import amount_for, month_start, parse_month, save_budget
+from .budget_services import amount_for, parse_month, save_budget
 from .cash_flow import format_minor
 from .category_services import (
     _DENIED,
@@ -38,6 +38,7 @@ from .models import (
     Transaction,
     TransactionCorrectionHistory,
 )
+from .months import month_start
 from .rule_services import apply_rule, preview_unsaved_rule, save_category_rule, unsaved_rule
 from .tag_services import add_tag
 
