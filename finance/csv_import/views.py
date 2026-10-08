@@ -1,4 +1,5 @@
 from collections import namedtuple
+from functools import partial
 
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -26,15 +27,19 @@ from .profiles import (
     OFX_MAPPING,
     require_ofx_headers,
     APPLE_CARD,
+    APPLE_CARD_HEADER_ERROR,
+    APPLE_CARD_HEADERS,
     APPLE_CARD_MAPPING,
     CAPITAL_ONE,
+    CAPITAL_ONE_HEADER_ERROR,
+    CAPITAL_ONE_HEADERS,
     CAPITAL_ONE_MAPPING,
     GENERIC,
     HUNTINGTON,
+    HUNTINGTON_HEADER_ERROR,
+    HUNTINGTON_HEADERS,
     HUNTINGTON_MAPPING,
-    require_apple_card_headers,
-    require_capital_one_headers,
-    require_huntington_headers,
+    require_headers,
 )
 from .saved_mappings import (
     HEADERS_DO_NOT_MATCH,
@@ -58,9 +63,9 @@ FixedProfile = namedtuple("FixedProfile", ("require_headers", "mapping", "source
 
 FIXED_PROFILES = {
     OFX: FixedProfile(require_ofx_headers, OFX_MAPPING, ImportBatch.Source.OFX, OfxImportForm),
-    HUNTINGTON: FixedProfile(require_huntington_headers, HUNTINGTON_MAPPING, ImportBatch.Source.HUNTINGTON, HuntingtonImportForm),
-    CAPITAL_ONE: FixedProfile(require_capital_one_headers, CAPITAL_ONE_MAPPING, ImportBatch.Source.CAPITAL_ONE, CapitalOneImportForm),
-    APPLE_CARD: FixedProfile(require_apple_card_headers, APPLE_CARD_MAPPING, ImportBatch.Source.APPLE_CARD, AppleCardImportForm),
+    HUNTINGTON: FixedProfile(partial(require_headers, expected=HUNTINGTON_HEADERS, error=HUNTINGTON_HEADER_ERROR), HUNTINGTON_MAPPING, ImportBatch.Source.HUNTINGTON, HuntingtonImportForm),
+    CAPITAL_ONE: FixedProfile(partial(require_headers, expected=CAPITAL_ONE_HEADERS, error=CAPITAL_ONE_HEADER_ERROR), CAPITAL_ONE_MAPPING, ImportBatch.Source.CAPITAL_ONE, CapitalOneImportForm),
+    APPLE_CARD: FixedProfile(partial(require_headers, expected=APPLE_CARD_HEADERS, error=APPLE_CARD_HEADER_ERROR), APPLE_CARD_MAPPING, ImportBatch.Source.APPLE_CARD, AppleCardImportForm),
 }
 
 
