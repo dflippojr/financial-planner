@@ -13,6 +13,7 @@ from .forms import AccountDeleteForm, AccountRenameForm, AddAccountForm, ChangeS
 from .lifecycle_services import (
     archive_account,
     change_account_share_mode,
+    create_account,
     delete_account,
     lock_actor_household,
     rename_account,
@@ -109,23 +110,9 @@ def _create_account(person, form):
         if sharing in Account.ShareMode.values:
             if membership is None:
                 raise Http404
-            return Account.objects.create(
-                name=name,
-                account_type=account_type,
-                owner=person,
-                scope=Account.Scope.HOUSEHOLD,
-                share_mode=sharing,
-                household=membership.household,
-                currency="USD",
-            )
-        return Account.objects.create(
-            name=name,
-            account_type=account_type,
-            owner=person,
-            scope=Account.Scope.PRIVATE,
-            household=None,
-            currency="USD",
-        )
+            return create_account(person, name=name, account_type=account_type,
+                                  household=membership.household, share_mode=sharing)
+        return create_account(person, name=name, account_type=account_type)
 
 
 @require_POST

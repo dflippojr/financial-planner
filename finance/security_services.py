@@ -4,11 +4,13 @@ import ipaddress
 from django.conf import settings
 from django.contrib.auth import get_user_model, logout
 from django.contrib.sessions.models import Session
+from django.db import transaction
 from django.http import Http404
 from django.utils import timezone
 
+from .audit_services import append_event
 from .auth_services import normalize_username
-from .models import MemberSecurityEvent, MemberSession, Person
+from .models import AuditEvent, MemberSecurityEvent, MemberSession, Person
 
 AUTH_AT_SESSION_KEY = "auth_at"
 
@@ -197,17 +199,21 @@ def revoke_indexed_sessions_for_user(user):
     _delete_django_sessions(keys)
 
 
+@transaction.atomic
 def revoke_session_for(principal, session_id, *, current_session_key=None):
     row = MemberSession.objects.visible_to(principal).filter(pk=session_id).first()
     if row is None:
         raise Http404()
     was_current = bool(current_session_key) and row.session_key == current_session_key
     _delete_django_sessions([row.session_key])
+    person = _person_from(principal)
+    append_event(action=AuditEvent.Action.SESSION_REVOKED, actor=person, target_id=row.pk)
     if not was_current:
         record_security_event(principal, EVENT_TYPES.SIGN_OUT)
     return was_current
 
 
+@transaction.atomic
 def revoke_other_sessions_for(principal, current_session_key, *, session=None):
     person = _person_from(principal)
     now = timezone.now()
@@ -224,6 +230,9 @@ def revoke_other_sessions_for(principal, current_session_key, *, session=None):
     from .passkey_services import clear_pending_passkey_logins_for_user
 
     clear_pending_passkey_logins_for_user(user)
+    if person is not None:
+        append_event(action=AuditEvent.Action.OTHER_SESSIONS_REVOKED, actor=person, target_id=person.pk,
+                     changed_fields=("session",))
     if rows:
         record_security_event(principal, EVENT_TYPES.SIGN_OUT)
     return len(rows)

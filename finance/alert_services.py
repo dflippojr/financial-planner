@@ -8,9 +8,11 @@ from django.urls import reverse
 from django.utils import timezone
 
 from .alert_email import notify_after_alert_run
+from .audit_services import append_event
 from .budget_services import month_start, progress_snapshot, progress_snapshots
 from .cash_flow import format_minor
 from .models import (
+    AuditEvent,
     Account,
     Alert,
     AlertSettings,
@@ -128,6 +130,15 @@ def mark_all_alerts_read(principal):
     return alerts_for(principal).filter(read_at__isnull=True).update(read_at=now)
 
 
+_ALERT_TOGGLES = (
+    "sync_enabled", "recurring_price_enabled", "recurring_missed_enabled", "budget_enabled",
+    "large_transaction_enabled", "monthly_review_enabled", "monthly_review_ai_enabled",
+    "expected_balance_enabled", "unusual_spending_enabled", "unusual_spending_ai_enabled",
+)
+_ALERT_THRESHOLDS = ("unusual_category_percent", "unusual_category_floor_minor", "large_transaction_minor")
+
+
+@transaction.atomic
 def save_alert_settings(
     principal,
     *,
@@ -149,6 +160,7 @@ def save_alert_settings(
     if person is None:
         raise PermissionDenied(_DENIED)
     prefs = settings_for(person)
+    before = {name: getattr(prefs, name) for name in (*_ALERT_TOGGLES, *_ALERT_THRESHOLDS)}
     prefs.sync_enabled = bool(sync_enabled)
     prefs.recurring_price_enabled = bool(recurring_price_enabled)
     prefs.recurring_missed_enabled = bool(recurring_missed_enabled)
@@ -163,6 +175,13 @@ def save_alert_settings(
     prefs.unusual_category_floor_minor = int(unusual_category_floor_minor)
     prefs.large_transaction_minor = large_transaction_minor
     prefs.save()
+    changed = [
+        label for label, names in (("alert_toggles", _ALERT_TOGGLES), ("thresholds", _ALERT_THRESHOLDS))
+        if any(before[name] != getattr(prefs, name) for name in names)
+    ]
+    if changed:
+        append_event(action=AuditEvent.Action.NOTIFICATION_PREFERENCES_CHANGED, actor=person,
+                     target_id=prefs.pk, changed_fields=changed)
     return prefs
 
 

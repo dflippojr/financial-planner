@@ -27,7 +27,8 @@ from webauthn.helpers.structs import (
 )
 
 from .auth_services import InvalidOneTimeCode, consume_recovery_code
-from .models import Passkey, Person
+from .audit_services import append_event
+from .models import AuditEvent, Passkey, Person
 from .security_services import EVENT_TYPES, record_security_event
 
 
@@ -263,10 +264,17 @@ def delete_passkey(principal, passkey_id):
     if not passkeys_for(person).exists() and person.require_passkey_after_password:
         person.require_passkey_after_password = False
         person.save(update_fields=("require_passkey_after_password", "updated_at"))
+        _audit_requirement(person)
     record_security_event(person, EVENT_TYPES.PASSKEY_REMOVED)
     return passkey
 
 
+def _audit_requirement(person):
+    append_event(action=AuditEvent.Action.PASSKEY_REQUIREMENT_CHANGED, actor=person, target_id=person.pk,
+                 changed_fields=("require_passkey",))
+
+
+@transaction.atomic
 def set_require_passkey_after_password(person, enabled):
     if enabled and not passkeys_for(person).exists():
         raise PasskeyError("Add a passkey before requiring one after password.")
@@ -274,4 +282,5 @@ def set_require_passkey_after_password(person, enabled):
         return person
     person.require_passkey_after_password = bool(enabled)
     person.save(update_fields=("require_passkey_after_password", "updated_at"))
+    _audit_requirement(person)
     return person

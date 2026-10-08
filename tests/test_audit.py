@@ -89,8 +89,8 @@ def test_archived_former_member_and_lent_account_access():
     shared.share_mode = "lent"
     shared.save(update_fields=("share_mode",))
     leave_household(person)
-    assert events_for(other).count() == 0
-    assert events_for(person).count() == 1
+    assert list(events_for(other).values_list("action", flat=True)) == ["member_left"]
+    assert sorted(events_for(person).values_list("action", flat=True)) == ["account_archived", "account_unshared"]
 
 
 def test_co_owned_exit_and_deleted_shared_actor_revoke_former_member():
@@ -99,9 +99,11 @@ def test_co_owned_exit_and_deleted_shared_actor_revoke_former_member():
     append(shared, person)
     leave_household(person)
     assert events_for(person).count() == 0
-    assert events_for(other).count() == 1
+    assert sorted(events_for(other).values_list("action", flat=True)) == [
+        "account_archived", "account_owner_changed", "member_left"]
     delete_member_data(person)
-    assert events_for(other).get().actor_id is None
+    assert not events_for(other).filter(actor__isnull=False).exists()
+    assert events_for(other).count() == 3
 
 
 def test_deleted_shared_event_is_anonymized_while_household_remains():
