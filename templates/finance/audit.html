@@ -10,11 +10,11 @@
 </form>
 <p>{{ page.paginator.count }} event{{ page.paginator.count|pluralize }}</p>
 <div class="overflow-x-auto">
-<table class="table"><thead><tr><th scope="col">Time (UTC)</th><th scope="col">Action / outcome</th><th scope="col">Actor</th><th scope="col">Target</th><th scope="col">Source</th><th scope="col">Changed fields</th><th scope="col">Event / run</th></tr></thead>
+<table class="table"><thead><tr><th scope="col">Time (UTC)</th><th scope="col">Action / outcome</th><th scope="col">Actor</th><th scope="col">Target</th><th scope="col">Source</th><th scope="col">Changed fields / details</th><th scope="col">Event / run</th></tr></thead>
 <tbody>{% for event in page %}
 <tr><td>{% timezone "UTC" %}{{ event.occurred_at|date:"c" }}{% endtimezone %}</td><td>{{ event.get_action_display }} / {{ event.get_outcome_display }}</td>
 <td>{{ event.get_actor_kind_display }}{% if event.actor_id %} #{{ event.actor_id }}{% elif event.actor_kind == 'member' %} (former member){% endif %}{% if event.effective_member_id %}; for member #{{ event.effective_member_id }}{% endif %}</td>
-<td>{{ event.target_type }} #{{ event.target_id }}</td><td>{{ event.get_source_display }}</td><td>{{ event.changed_fields|join:", " }}</td><td>{{ event.id }} / {{ event.correlation_id }}</td></tr>
+<td>{{ event.target_type }} #{{ event.target_id }}</td><td>{{ event.get_source_display }}</td><td>{{ event.changed_fields|join:", " }}{% for key, value in event.metadata.items %}{% if forloop.first and event.changed_fields %}; {% elif not forloop.first %}, {% endif %}{{ key }}={{ value }}{% endfor %}</td><td>{{ event.id }} / {{ event.correlation_id }}</td></tr>
 {% empty %}<tr><td colspan="7">No visible events match these filters.</td></tr>{% endfor %}</tbody></table>
 </div>
 <nav aria-label="Audit pages" class="mt-4 flex gap-4">
