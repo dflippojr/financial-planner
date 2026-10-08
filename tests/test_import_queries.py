@@ -43,7 +43,10 @@ def test_import_request_query_ceiling_and_bulk_scaling(tmp_path, profile):
             writes = [q["sql"].split(" SET ")[0].split(" (")[0]
                       for q in queries if q["sql"].startswith(("INSERT", "UPDATE"))]
             extra_bulk = len(writes) - len(set(writes)) if connection.vendor == "sqlite" else 0
-            assert len(queries) - extra_bulk <= 60, "\n".join(q["sql"][:160] for q in queries)
+            # 58 for the import itself plus three queries for each of its two audit
+            # events (the import and the winning rule's application): savepoint,
+            # insert and release. Audit writes never scale with row count.
+            assert len(queries) - extra_bulk <= 64, "\n".join(q["sql"][:160] for q in queries)
         # SQLite splits bulk writes at its parameter limit; PostgreSQL doesn't.
         # Every other query must have a fixed ceiling, even for the larger file.
         fixed = [q for q in queries if not q["sql"].startswith(("INSERT", "UPDATE"))]

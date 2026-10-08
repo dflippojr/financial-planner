@@ -14,7 +14,7 @@ CHANGED_FIELDS = frozenset({
     # Field names only, never values: the model/form field that changed.
     "name", "amount", "date", "note", "account", "category", "kind", "cadence", "period",
     "rollover", "enabled", "archived", "target", "contribution", "tags", "mapping", "default",
-    "match", "priority", "color", "description", "owner", "currency", "interval", "price",
+    "refund", "split", "match", "priority", "color", "description", "owner", "currency", "interval", "price",
 })
 METADATA_INT_KEYS = frozenset({
     "batch_id", "new_count", "duplicate_count", "invalid_count", "row_count", "history_id",
@@ -214,7 +214,12 @@ class AuditEvent(models.Model):
         if not self._state.adding:
             raise ValidationError(APPEND_ONLY_ERROR)
         try:
-            self.full_clean(exclude=("checksum",))
+            # Foreign keys and uniqueness are enforced by the database; skipping their
+            # validation queries keeps bulk workflows within their query budgets.
+            self.full_clean(
+                exclude=("checksum", "account", "actor", "effective_member", "private_owner", "household"),
+                validate_unique=False, validate_constraints=False,
+            )
         except ValidationError:
             raise ValidationError("Invalid audit metadata.") from None
         self.checksum = self.calculated_checksum()

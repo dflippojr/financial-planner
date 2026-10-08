@@ -161,10 +161,10 @@ def commit_csv_import(
               "invalid_count": preview.invalid_count, "format": source}
     if batch is None:
         record(person, AuditEvent.Action.IMPORT_NO_NEW_ROWS, AuditEvent.TargetType.ACCOUNT, account.pk,
-               audience={"account": account}, metadata=counts)
+               audience={"account": account}, metadata=counts, verified=True)
     else:
         record(person, AuditEvent.Action.IMPORT_COMMITTED, AuditEvent.TargetType.IMPORT_BATCH, batch.pk,
-               audience={"account": account}, metadata={**counts, "batch_id": batch.pk})
+               audience={"account": account}, metadata={**counts, "batch_id": batch.pk}, verified=True)
     return ImportCommitResult(preview.new_count, preview.duplicate_count, preview.invalid_count, batch)
 
 

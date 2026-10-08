@@ -1,6 +1,8 @@
 """Explicit append/query and narrowly scoped audit maintenance."""
 import logging
 import uuid
+from contextlib import contextmanager
+from dataclasses import dataclass
 from contextvars import ContextVar
 from datetime import datetime, time, timedelta, timezone as datetime_timezone
 
@@ -33,7 +35,7 @@ def append_event(*, account=None, action, actor=None, actor_kind=AuditEvent.Acto
                  effective_member=None, source=AuditEvent.Source.UI,
                  outcome=AuditEvent.Outcome.SUCCEEDED, correlation_id=None, changed_fields=(),
                  target_type=AuditEvent.TargetType.ACCOUNT, target_id=None, private_owner=None,
-                 household=None, metadata=None):
+                 household=None, metadata=None, verified=False):
     """Call inside the action transaction with a server-authorized target.
 
     Never pass submitted actor/source metadata. System callers must supply the
@@ -47,7 +49,11 @@ def append_event(*, account=None, action, actor=None, actor_kind=AuditEvent.Acto
     principal = actor if actor_kind == AuditEvent.ActorKind.MEMBER else effective_member
     if (account is not None) + (private_owner is not None) + (household is not None) != 1:
         raise ValidationError("Exactly one audit audience is required.")
-    if account is not None:
+    if verified:
+        # The caller holds a row lock taken through the actor's own visibility
+        # query in this transaction, so the audience check would repeat it.
+        allowed = True
+    elif account is not None:
         allowed = Account.objects.visible_to(principal).filter(pk=account.pk).exists()
         if target_type == AuditEvent.TargetType.ACCOUNT and target_id is None:
             target_id = account.pk
@@ -116,13 +122,70 @@ def changed_names(before, after):
     return sorted(name for name, value in after.items() if before.get(name) != value)
 
 
+@dataclass(frozen=True)
+class Origin:
+    source: str
+    correlation_id: uuid.UUID | None = None
+    proposal_id: int | None = None
+    per_row: bool = True
+
+
+audit_origin = ContextVar("audit_origin", default=None)
+
+
+@contextmanager
+def origin(source=None, *, correlation_id=None, proposal_id=None, per_row=True):
+    """Label events written inside the block (bulk edit, rule run, chat confirmation).
+
+    ``per_row=False`` suppresses per-transaction correction events: the caller
+    records one bounded aggregate event instead. Trusted code only.
+    """
+    current = audit_origin.get()
+    if current is not None:
+        source = source or current.source
+        correlation_id = correlation_id or current.correlation_id
+        proposal_id = proposal_id or current.proposal_id
+    token = audit_origin.set(Origin(source or AuditEvent.Source.UI, correlation_id, proposal_id, per_row))
+    try:
+        yield
+    finally:
+        audit_origin.reset(token)
+
+
 def record(actor, action, target_type, target_id, *, audience, fields=(), metadata=None,
-           source=AuditEvent.Source.UI, correlation_id=None):
+           source=None, correlation_id=None, verified=False):
     """Append a workflow event for an authorized member inside the action transaction."""
+    current = audit_origin.get()
+    metadata = dict(metadata or {})
+    if current is not None:
+        source = source or current.source
+        correlation_id = correlation_id or current.correlation_id
+        if current.proposal_id is not None:
+            metadata.setdefault("proposal_id", current.proposal_id)
     return append_event(
         actor=_person_for(actor), action=action, target_type=target_type, target_id=target_id,
-        changed_fields=fields, metadata=metadata, source=source, correlation_id=correlation_id, **audience,
+        changed_fields=fields, metadata=metadata, source=source or AuditEvent.Source.UI,
+        correlation_id=correlation_id, verified=verified, **audience,
     )
+
+
+CORRECTION_FIELDS = {"category": "category", "refund_link": "refund"}
+
+
+def record_correction(txn, actor, history):
+    """One event per user-driven correction, referencing the existing history row."""
+    field = CORRECTION_FIELDS.get(history.field_name)
+    person = _person_for(actor) if actor is not None else None
+    current = audit_origin.get()
+    if field is None or person is None or (current is not None and not current.per_row):
+        return
+    try:
+        record(person, AuditEvent.Action.TRANSACTION_CORRECTED, AuditEvent.TargetType.TRANSACTION, txn.pk,
+               audience={"account": Account(pk=txn.account_id)}, fields=(field,), metadata={"history_id": history.pk})
+    except PermissionDenied:
+        # Internal restores can touch a counterpart leg the actor cannot see; the
+        # history row remains the record and no event may name a hidden account.
+        return
 
 
 def events_for(principal, *, action="", actor="", source="", date_from=None, date_to=None):
