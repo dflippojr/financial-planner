@@ -107,6 +107,15 @@ def personal_audience(person):
     return {"private_owner": person}
 
 
+def snapshot(obj, fields):
+    """Current values of {audit field name: attribute} for later diffing; never stored."""
+    return {name: getattr(obj, attr) for name, attr in fields.items()}
+
+
+def changed_names(before, after):
+    return sorted(name for name, value in after.items() if before.get(name) != value)
+
+
 def record(actor, action, target_type, target_id, *, audience, fields=(), metadata=None,
            source=AuditEvent.Source.UI, correlation_id=None):
     """Append a workflow event for an authorized member inside the action transaction."""

@@ -1,12 +1,14 @@
 from types import SimpleNamespace
 
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.db import transaction
 from django.db.models import Case, Value, When
 from django.utils import timezone
 
 from .cash_flow import format_minor
 from .category_services import current_household
-from .models import Account, BalanceSnapshot, SavingsGoal
+from .audit_services import changed_names, owned_audience, record, snapshot
+from .models import Account, AuditEvent, BalanceSnapshot, SavingsGoal
 
 _DENIED = "Operation is not permitted."
 
@@ -117,6 +119,12 @@ def _check_can_edit(person, goal):
         raise PermissionDenied(_DENIED)
 
 
+GOAL_AUDIT_FIELDS = {
+    "scope": "scope", "name": "name", "target": "target_amount_minor", "date": "target_date",
+    "account": "linked_account_id", "amount": "manual_amount_minor",
+}
+
+
 def save_savings_goal(principal, payload, *, goal=None):
     person = _person(principal)
     household = current_household(person)
@@ -129,10 +137,12 @@ def save_savings_goal(principal, payload, *, goal=None):
         assigned_household = None
     if goal is None:
         goal = SavingsGoal(owner=person)
+        before = None
     else:
         _check_can_edit(person, goal)
         if goal.scope != scope and goal.owner_id != person.pk:
             raise PermissionDenied(_DENIED)
+        before = snapshot(goal, GOAL_AUDIT_FIELDS)
     linked_account = payload.get("linked_account")
     if linked_account is not None and not Account.objects.visible_to(principal).filter(pk=linked_account.pk).exists():
         raise PermissionDenied(_DENIED)
@@ -151,24 +161,43 @@ def save_savings_goal(principal, payload, *, goal=None):
     goal.linked_account = linked_account
     goal.manual_amount_minor = payload.get("manual_amount_minor")
     goal.manual_amount_date = payload.get("manual_amount_date")
-    goal.save()
+    with transaction.atomic():
+        goal.save()
+        if before is None:
+            record(person, AuditEvent.Action.RECORD_CREATED, AuditEvent.TargetType.GOAL, goal.pk,
+                   audience=owned_audience(goal))
+        else:
+            changed = changed_names(before, snapshot(goal, GOAL_AUDIT_FIELDS))
+            if changed:
+                record(person, AuditEvent.Action.RECORD_EDITED, AuditEvent.TargetType.GOAL, goal.pk,
+                       audience=owned_audience(goal), fields=changed)
     return goal
 
 
 def set_savings_goal_completed(principal, goal, completed):
     person = _person(principal)
     _check_can_edit(person, goal)
+    was_completed = goal.completed_at is not None
     goal.completed_at = timezone.now() if completed else None
-    goal.save(update_fields=["completed_at", "updated_at"])
+    with transaction.atomic():
+        goal.save(update_fields=["completed_at", "updated_at"])
+        if was_completed != bool(completed):
+            record(person, AuditEvent.Action.RECORD_COMPLETED if completed else AuditEvent.Action.RECORD_RESTORED,
+                   AuditEvent.TargetType.GOAL, goal.pk, audience=owned_audience(goal), fields=("status",))
 
 
 def set_savings_goal_archived(principal, goal, archived):
     person = _person(principal)
     _check_can_edit(person, goal)
+    was_archived = goal.status == SavingsGoal.Status.ARCHIVED
     if archived:
         goal.status = SavingsGoal.Status.ARCHIVED
         goal.archived_at = timezone.now()
     else:
         goal.status = SavingsGoal.Status.ACTIVE
         goal.archived_at = None
-    goal.save(update_fields=["status", "archived_at", "updated_at"])
+    with transaction.atomic():
+        goal.save(update_fields=["status", "archived_at", "updated_at"])
+        if was_archived != bool(archived):
+            record(person, AuditEvent.Action.RECORD_ARCHIVED if archived else AuditEvent.Action.RECORD_RESTORED,
+                   AuditEvent.TargetType.GOAL, goal.pk, audience=owned_audience(goal), fields=("status",))

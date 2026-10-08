@@ -9,9 +9,10 @@ from django.db.models import prefetch_related_objects
 from django.urls import reverse
 from django.utils import timezone
 
+from .audit_services import owned_audience, record
 from .cash_flow import _combine_category_spending, format_minor, selected_accounts
 from .category_services import current_household, spending_by_category_by_window
-from .models import Account, Budget, BudgetAmount, BudgetRolloverReset, Category
+from .models import Account, AuditEvent, Budget, BudgetAmount, BudgetRolloverReset, Category
 
 _DENIED = "Operation is not permitted."
 DUPLICATE_BUDGET = "An active budget already exists for this category and scope."
@@ -353,6 +354,8 @@ def save_budget(principal, payload, *, budget=None):
         category=category,
         budget=budget,
     )
+    is_new = budget.pk is None
+    changed = [] if is_new else (["scope"] if budget.scope != scope else [])
     budget.scope = scope
     budget.household = assigned_household
     if budget.pk is None:
@@ -364,6 +367,10 @@ def save_budget(principal, payload, *, budget=None):
     try:
         with transaction.atomic():
             budget.save()
+            if not is_new and BudgetAmount.objects.filter(
+                budget=budget, effective_month=effective_month, amount_minor=amount_minor
+            ).count() == 0:
+                changed.append("amount")
             amount, _created = BudgetAmount.objects.update_or_create(
                 budget=budget,
                 effective_month=effective_month,
@@ -372,6 +379,9 @@ def save_budget(principal, payload, *, budget=None):
             amount.amount_minor = amount_minor
             amount.currency = "USD"
             amount.save()
+            if is_new or changed:
+                record(person, AuditEvent.Action.RECORD_CREATED if is_new else AuditEvent.Action.RECORD_EDITED,
+                       AuditEvent.TargetType.BUDGET, budget.pk, audience=owned_audience(budget), fields=changed)
     except IntegrityError as exc:
         raise ValidationError(DUPLICATE_BUDGET) from exc
     return budget
@@ -398,6 +408,8 @@ def set_budget_archived(principal, budget, archived):
     try:
         with transaction.atomic():
             budget.save(update_fields=("status", "archived_at", "updated_at"))
+            record(person, AuditEvent.Action.RECORD_ARCHIVED if archived else AuditEvent.Action.RECORD_RESTORED,
+                   AuditEvent.TargetType.BUDGET, budget.pk, audience=owned_audience(budget), fields=("status",))
     except IntegrityError as exc:
         raise ValidationError(DUPLICATE_BUDGET) from exc
     return budget
@@ -421,10 +433,12 @@ def _new_rollover_period_start(budget):
     return started
 
 
+@transaction.atomic
 def set_budget_rollover(principal, budget, enabled, *, month):
     person = _person(principal)
     _check_can_edit(person, budget)
     month = month_start(month)
+    was_enabled = budget.rollover_enabled
     if enabled:
         turning_on = not budget.rollover_enabled
         budget.rollover_enabled = True
@@ -438,6 +452,9 @@ def set_budget_rollover(principal, budget, enabled, *, month):
     budget.save(
         update_fields=("rollover_enabled", "rollover_started_month", "rollover_enabled_at", "updated_at")
     )
+    if was_enabled != bool(enabled):
+        record(person, AuditEvent.Action.ROLLOVER_TOGGLED, AuditEvent.TargetType.BUDGET, budget.pk,
+               audience=owned_audience(budget), fields=("rollover",))
     return budget
 
 
@@ -455,6 +472,8 @@ def reset_budget_rollover(principal, budget, *, month):
             # same clock tick as re-enabling still counts in the new period.
             if budget.rollover_enabled_at is not None and reset.created_at < budget.rollover_enabled_at:
                 BudgetRolloverReset.objects.filter(pk=reset.pk).update(created_at=budget.rollover_enabled_at)
+            record(person, AuditEvent.Action.RECORD_EDITED, AuditEvent.TargetType.BUDGET, budget.pk,
+                   audience=owned_audience(budget), fields=("rollover",), metadata={"history_id": reset.pk})
     except IntegrityError as exc:
         raise ValidationError("Could not reset rollover for this month.") from exc
     return budget
