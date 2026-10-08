@@ -45,6 +45,7 @@ def privacy_policy_prompt(request):
 
 
 SETTINGS_TAB_BY_NAME = {
+    "settings-audit": "audit",
     "account-settings": "security",
     "revoke-session": "security",
     "revoke-other-sessions": "security",
@@ -81,6 +82,7 @@ SETTINGS_TABS = (
     ("csv-mappings", "CSV mappings", "csv-mapping-list"),
     ("alerts", "Alerts", "settings-alerts"),
     ("data", "Data", "settings-data"),
+    ("audit", "Audit trail", "settings-audit"),
     ("ai", "AI", "settings-ai"),
 )
 

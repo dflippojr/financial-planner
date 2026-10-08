@@ -3,6 +3,7 @@ from django.views.generic import RedirectView
 
 from finance import (
     account_views,
+    audit_views,
     ai_views,
     alert_views,
     budget_views,
@@ -30,6 +31,7 @@ from finance.csv_import import views as csv_import_views
 
 
 urlpatterns = [
+    path("settings/audit/", audit_views.audit_page, name="settings-audit"),
     path("health/", views.health, name="health"),
     path("chat/", chat_views.chat_page, name="chat"),
     path("more/", views.more, name="more"),

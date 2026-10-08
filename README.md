@@ -397,3 +397,5 @@ check when the SonarCloud quality gate fails (including 80% coverage on new code
 
 MIT. See [LICENSE](LICENSE). Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 No real financial data is stored in this repository; all fixtures and examples are synthetic.
+
+The general [audit trail](docs/audit-trail.md) documents member review, metadata policy, retention, deletion and restore limits.

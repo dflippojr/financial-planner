@@ -1,5 +1,6 @@
 from django.core.management.base import BaseCommand
 
+from finance.audit_services import purge_old_events
 from finance.alert_email import notify_after_alert_run
 from finance.alert_services import run_daily_alert_pass
 from finance.models import SimpleFinConnection
@@ -11,6 +12,8 @@ class Command(BaseCommand):
 
     @notify_after_alert_run
     def handle(self, *args, **options):
+        purged = purge_old_events()
+        self.stdout.write(f"Purged {purged} expired audit event(s).")
         if not SimpleFinConnection.objects.exists():
             self.stdout.write("No SimpleFIN connections.")
         else:
