@@ -12,7 +12,8 @@ from django.test import RequestFactory
 from django.utils import timezone
 
 from finance.ai_views import ai_plan_status
-from finance.models import AiPlanLink, MemberSecurityEvent
+from finance.encryption import encrypt_secret
+from finance.models import AiPlanLink, AiProviderConnection, MemberSecurityEvent
 from finance.policy_services import current_policy
 from finance.security_services import EVENT_TYPES, record_security_event
 from tests.test_chat import make_member
@@ -21,10 +22,12 @@ from tests.test_chat import make_member
 def _setup():
     user, person, household = make_member("poll-member", policy=current_policy())
     _host_user, host, _ = make_member("poll-host", household=household, policy=current_policy())
-    from finance.ai_services import connect_harness
-
-    selected = connect_harness(person, base_url="http://synthetic.invalid", token="synthetic-token")
-    previous = connect_harness(host, base_url="http://previous.invalid", token="synthetic-token")
+    selected = AiProviderConnection.objects.create(
+        owner=person, base_url="http://127.0.0.1:1", encrypted_token=encrypt_secret("synthetic-token"),
+    )
+    previous = AiProviderConnection.objects.create(
+        owner=host, base_url="http://127.0.0.1:2", encrypted_token=encrypt_secret("synthetic-token"),
+    )
     return user, person, selected, previous
 
 
