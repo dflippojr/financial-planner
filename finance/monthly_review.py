@@ -9,7 +9,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from .alert_services import raise_alert, settings_for
-from .budget_services import add_months, month_budget_cards, month_end, month_start
+from .budget_services import month_budget_cards
 from .cash_flow import (
     GROUPING_MONTH,
     cash_flow_report,
@@ -28,6 +28,7 @@ from .models import (
     Transaction,
     TransferPair,
 )
+from .months import add_months, month_end, month_start
 from .net_worth import net_worth_report
 from .recurring_review import build_recurring_review
 from .savings_goal_services import SOURCE_NONE, goal_progress

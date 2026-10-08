@@ -1,5 +1,4 @@
 from bisect import bisect_left, bisect_right
-from calendar import monthrange
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -16,6 +15,7 @@ from .category_services import exclusion_exists_for
 from .audit_services import personal_audience, record
 from .lifecycle_services import lock_actor_household
 from .models import AuditEvent, Person, RecurringExclusion, RecurringSeries, RecurringSeriesMember, Transaction
+from .months import add_months_clamped
 
 
 _DENIED = "Operation is not permitted."
@@ -60,14 +60,6 @@ def merchant_key(description):
     return " ".join(tokens)[: RecurringSeries._meta.get_field("merchant_key").max_length].rstrip()
 
 
-def _add_months(value: date, months: int) -> date:
-    month_index = value.month - 1 + months
-    year = value.year + month_index // 12
-    month = month_index % 12 + 1
-    day = min(value.day, monthrange(year, month)[1])
-    return date(year, month, day)
-
-
 @lru_cache(maxsize=65536)
 def add_cadence(value: date, cadence: str) -> date:
     if cadence == RecurringSeries.Cadence.WEEKLY:
@@ -75,14 +67,11 @@ def add_cadence(value: date, cadence: str) -> date:
     if cadence == RecurringSeries.Cadence.BIWEEKLY:
         return value + timedelta(days=14)
     if cadence == RecurringSeries.Cadence.MONTHLY:
-        return _add_months(value, 1)
+        return add_months_clamped(value, 1)
     if cadence == RecurringSeries.Cadence.QUARTERLY:
-        return _add_months(value, 3)
+        return add_months_clamped(value, 3)
     if cadence == RecurringSeries.Cadence.ANNUAL:
-        try:
-            return value.replace(year=value.year + 1)
-        except ValueError:
-            return value.replace(year=value.year + 1, day=28)
+        return add_months_clamped(value, 12)
     raise ValueError("Unknown cadence")
 
 

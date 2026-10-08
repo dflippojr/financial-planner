@@ -9,6 +9,7 @@ from django.utils import timezone
 
 from .category_services import income_and_spending_by_window, income_and_spending_totals
 from .models import Account, Category, ImportBatch, Transaction
+from .months import add_months
 
 
 MAX_REPORT_DATE = date(9998, 12, 31)
@@ -108,30 +109,18 @@ def _range_summary(current, previous, previous_from, previous_to):
     )
 
 
-def _shift_month_start(value, months):
-    year = value.year
-    month = value.month + months
-    while month <= 0:
-        month += 12
-        year -= 1
-    while month > 12:
-        month -= 12
-        year += 1
-    return date(year, month, 1)
-
-
 def default_date_range(today=None):
     """Last 12 full months plus the current month through today."""
     today = today or timezone.localdate()
     current_month_start = today.replace(day=1)
-    return _shift_month_start(current_month_start, -12), today
+    return add_months(current_month_start, -12), today
 
 
 def date_range_presets(today=None):
     """Named ranges that match the cash-flow filter presets."""
     today = today or timezone.localdate()
     month_start = today.replace(day=1)
-    last_month_start = _shift_month_start(month_start, -1)
+    last_month_start = add_months(month_start, -1)
     return (
         SimpleNamespace(
             key="this-month",
@@ -148,13 +137,13 @@ def date_range_presets(today=None):
         SimpleNamespace(
             key="last-3-months",
             label="Last 3 months",
-            date_from=_shift_month_start(month_start, -2),
+            date_from=add_months(month_start, -2),
             date_to=today,
         ),
         SimpleNamespace(
             key="last-12-months",
             label="Last 12 months",
-            date_from=_shift_month_start(month_start, -11),
+            date_from=add_months(month_start, -11),
             date_to=today,
         ),
         SimpleNamespace(

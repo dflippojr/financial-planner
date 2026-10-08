@@ -2,9 +2,9 @@ from datetime import date
 from decimal import Decimal
 
 from finance import debt_planner
+from finance.months import add_months
 from finance.debt_planner import (
     BEYOND_LIMIT,
-    add_calendar_months,
     NEVER_PAYS_OFF,
     STRATEGY_AVALANCHE,
     STRATEGY_CUSTOM,
@@ -132,7 +132,7 @@ def test_snowball_rolls_a_paid_off_minimum_into_the_next_debt():
     by_id = {row.account_id: row for row in plan.debts}
     assert by_id[1].payoff_month == start
     # 30,000 - 2,000 in month one, then 12,000 a month with the freed 10,000 minimum.
-    assert by_id[2].payoff_month == add_calendar_months(start, 3)
+    assert by_id[2].payoff_month == add_months(start, 3)
     assert [month.paid_minor for month in plan.months] == [12_000, 12_000, 12_000, 4_000]
 
 

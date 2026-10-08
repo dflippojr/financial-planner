@@ -9,7 +9,7 @@ from django.utils import timezone
 
 from .alert_email import notify_after_alert_run
 from .audit_services import append_event
-from .budget_services import month_start, progress_snapshot, progress_snapshots
+from .budget_services import progress_snapshot, progress_snapshots
 from .cash_flow import format_minor
 from .models import (
     AuditEvent,
@@ -21,6 +21,7 @@ from .models import (
     SimpleFinConnection,
     Transaction,
 )
+from .months import month_start
 
 _DENIED = "Operation is not permitted."
 _KIND_ENABLED_FIELD = {

@@ -1,10 +1,10 @@
 """Month-by-month cash-flow projection from planned items and recurring series."""
 
-from calendar import monthrange
-from datetime import date, timedelta
+from datetime import timedelta
 from types import SimpleNamespace
 
 from .cash_flow import GROUPING_MONTH, format_minor, period_label
+from .months import add_months, add_months_clamped, month_end
 
 HORIZONS = (3, 6, 12, 24)
 DEFAULT_HORIZON = 12
@@ -26,24 +26,8 @@ _CALENDAR_MONTHS = {
 }
 
 
-def add_calendar_months(value, months):
-    year = value.year
-    month = value.month + months
-    while month <= 0:
-        month += 12
-        year -= 1
-    while month > 12:
-        month -= 12
-        year += 1
-    return date(year, month, min(value.day, monthrange(year, month)[1]))
-
-
 def first_projection_month(today):
-    return add_calendar_months(today.replace(day=1), 1)
-
-
-def month_end(value):
-    return date(value.year, value.month, monthrange(value.year, value.month)[1])
+    return add_months(today, 1)
 
 
 def step_occurrence(value, cadence):
@@ -52,7 +36,7 @@ def step_occurrence(value, cadence):
         return value + timedelta(days=days)
     months = _CALENDAR_MONTHS.get(cadence)
     if months is not None:
-        return add_calendar_months(value, months)
+        return add_months_clamped(value, months)
     raise ValueError(f"Unknown cadence {cadence}.")
 
 
@@ -69,10 +53,10 @@ def _first_on_or_after(start, cadence, window_start):
         raise ValueError(f"Unknown cadence {cadence}.")
     total_months = (window_start.year - start.year) * 12 + (window_start.month - start.month)
     n = max(total_months // months, 0)
-    candidate = add_calendar_months(start, n * months)
+    candidate = add_months_clamped(start, n * months)
     while candidate < window_start:
         n += 1
-        candidate = add_calendar_months(start, n * months)
+        candidate = add_months_clamped(start, n * months)
     return candidate
 
 
@@ -84,7 +68,7 @@ def _advance_from_start(start, current, cadence):
     if months is None:
         raise ValueError(f"Unknown cadence {cadence}.")
     elapsed = (current.year - start.year) * 12 + (current.month - start.month)
-    return add_calendar_months(start, elapsed + months)
+    return add_months_clamped(start, elapsed + months)
 
 
 def occurrence_dates(start, end, cadence, window_start, window_end):
@@ -148,7 +132,7 @@ def project_cash_flow(items, *, today, horizon=DEFAULT_HORIZON):
     first_month = first_projection_month(today)
     rows = []
     for offset in range(horizon):
-        start = add_calendar_months(first_month, offset)
+        start = add_months(first_month, offset)
         end = month_end(start)
         window = SimpleNamespace(
             grouping=GROUPING_MONTH,

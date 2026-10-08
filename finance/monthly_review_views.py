@@ -4,10 +4,10 @@ from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_GET, require_POST
 
-from .budget_services import add_months
 from .models import Person
 from .monthly_review import latest_closed_month, parse_review_month, review_for_viewer
 from .monthly_review_ai import visible_phrasing
+from .months import add_months
 from .unusual_spending_ai import visible_unusual_phrasing
 
 

@@ -1,4 +1,3 @@
-from calendar import monthrange
 from datetime import date, timedelta
 from types import SimpleNamespace
 from urllib.parse import urlencode
@@ -13,24 +12,10 @@ from .audit_services import owned_audience, record
 from .cash_flow import _combine_category_spending, format_minor, selected_accounts
 from .category_services import current_household, spending_by_category_by_window
 from .models import Account, AuditEvent, Budget, BudgetAmount, BudgetRolloverReset, Category
+from .months import add_months, month_end, month_start
 
 _DENIED = "Operation is not permitted."
 DUPLICATE_BUDGET = "An active budget already exists for this category and scope."
-
-
-def month_start(value):
-    return date(value.year, value.month, 1)
-
-
-def month_end(value):
-    return date(value.year, value.month, monthrange(value.year, value.month)[1])
-
-
-def add_months(start, delta):
-    start = month_start(start)
-    index = start.year * 12 + (start.month - 1) + delta
-    year, month0 = divmod(index, 12)
-    return date(year, month0 + 1, 1)
 
 
 def parse_month(raw, *, today=None):

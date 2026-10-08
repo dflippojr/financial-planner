@@ -10,7 +10,6 @@ from django.views.decorators.http import require_http_methods, require_POST
 
 from .budget_services import (
     NEAR_LIMIT_PERCENT,
-    add_months,
     amount_for,
     month_budget_cards,
     parse_month,
@@ -22,6 +21,7 @@ from .budget_services import (
 from .category_services import current_household
 from .forms import BudgetForm
 from .models import Budget, Person
+from .months import add_months
 
 
 def _person(request):

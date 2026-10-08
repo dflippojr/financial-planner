@@ -1,6 +1,5 @@
 """Month calendar of expected charges and a running expected deposit balance."""
 
-from calendar import monthrange
 from datetime import date, timedelta
 from types import SimpleNamespace
 
@@ -21,12 +20,12 @@ from .models import (
     BillsCalendarSettings,
     Transaction,
 )
+from .months import add_months, month_end
 from .planning_services import visible_projection_inputs
 from .projection import (
     KIND_INCOME,
     SOURCE_PLANNED,
     SOURCE_SERIES,
-    month_end,
     occurrence_dates,
 )
 
@@ -297,16 +296,9 @@ def _balance_delta_on_day(sources, on_date, selected_ids, skip=frozenset()):
     return total
 
 
-def _shift_month(year, month, delta):
-    month += delta
-    year += (month - 1) // 12
-    month = ((month - 1) % 12) + 1
-    return year, month
-
-
 def month_weeks(year, month):
     start = date(year, month, 1)
-    end = date(year, month, monthrange(year, month)[1])
+    end = month_end(start)
     cursor = start - timedelta(days=start.weekday())
     weeks = []
     while True:
@@ -412,8 +404,8 @@ def build_month(
                     )
                 )
         weeks.append(cells)
-    prev_year, prev_month = _shift_month(year, month, -1)
-    next_year, next_month = _shift_month(year, month, 1)
+    previous_month = add_months(month_start, -1)
+    next_month = add_months(month_start, 1)
     return SimpleNamespace(
         year=year,
         month=month,
@@ -427,10 +419,10 @@ def build_month(
         beyond_forecast=start_balance is not None and month_start > today + timedelta(days=MAX_FORECAST_DAYS),
         start_balance_display=format_minor(start_balance) if start_balance is not None else None,
         threshold_minor=threshold_minor,
-        prev_year=prev_year,
-        prev_month=prev_month,
-        next_year=next_year,
-        next_month=next_month,
+        prev_year=previous_month.year,
+        prev_month=previous_month.month,
+        next_year=next_month.year,
+        next_month=next_month.month,
     )
 
 
