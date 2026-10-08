@@ -24,6 +24,7 @@ from finance import (
     bulk_edit_views,
     receipt_views,
     manual_entry_views,
+    transaction_export,
 )
 from finance.csv_import import mapping_views as csv_mapping_views
 from finance.csv_import import views as csv_import_views
@@ -200,6 +201,7 @@ urlpatterns = [
         RedirectView.as_view(pattern_name="csv-mapping-edit", permanent=True, query_string=True),
     ),
     path("transactions/", views.transaction_list, name="transaction-list"),
+    path("transactions/export/", transaction_export.transaction_export, name="transaction-export"),
     path(
         "transactions/saved-filters/",
         views.transaction_saved_filter_create,

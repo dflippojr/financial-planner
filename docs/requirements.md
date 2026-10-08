@@ -304,6 +304,8 @@ Owner decisions:
 - A member exports their own private accounts plus household accounts, never another member's private accounts.
 - The Google Sheet stays a comparison source. There is no Sheet import now.
 
+**Filtered transaction CSV (#263).** Transactions offers a POST download of all active parent rows matching the validated current filters, in list order and across every page. It requires recent authentication and returns to the same validated filters for resubmission. The UTF-8 CSV preserves exact signed minor and decimal amounts and currency, visible categories/tags/splits, notes, import provenance, and the existing exclusion flag. User-controlled text cells starting with `=`, `+`, `-`, `@`, tab, or carriage return get a single-quote prefix; numeric money remains numeric. Tags and splits are JSON arrays. Hidden category names are blank, and private records, original fields, fingerprints, receipts, and relationship identifiers are omitted. Rows stream in bounded chunks with no staging files; downloads are not cached and record only the existing content-free export security event.
+
 **Categorization rules (#16).**
 - A rule matches a case-insensitive "description contains" text. It can optionally be narrowed to one account and a minimum and maximum amount. Its only action is setting a category. There is no regex, and a rule never marks transfers.
 - **Personal and household rules:**
