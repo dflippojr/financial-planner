@@ -10,6 +10,7 @@ from django.utils import timezone
 
 
 CHANGED_FIELDS = frozenset({"scope", "share_mode", "status"})
+APPEND_ONLY_ERROR = "Audit events are append-only."
 
 
 def validate_changed_fields(value):
@@ -34,10 +35,10 @@ class AuditQuerySet(models.QuerySet):
         )
 
     def update(self, **kwargs):
-        raise ValidationError("Audit events are append-only.")
+        raise ValidationError(APPEND_ONLY_ERROR)
 
     def delete(self):
-        raise ValidationError("Audit events are append-only.")
+        raise ValidationError(APPEND_ONLY_ERROR)
 
     def bulk_create(self, *args, **kwargs):
         raise ValidationError("Use the audit append service.")
@@ -122,7 +123,7 @@ class AuditEvent(models.Model):
 
     def save(self, *args, **kwargs):
         if not self._state.adding:
-            raise ValidationError("Audit events are append-only.")
+            raise ValidationError(APPEND_ONLY_ERROR)
         try:
             self.full_clean(exclude=("checksum",))
         except ValidationError:
@@ -132,4 +133,4 @@ class AuditEvent(models.Model):
         return super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
-        raise ValidationError("Audit events are append-only.")
+        raise ValidationError(APPEND_ONLY_ERROR)

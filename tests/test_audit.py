@@ -213,6 +213,22 @@ def test_append_only_validation_and_typed_metadata():
     assert AuditEvent.objects.count() == 1
 
 
+@pytest.mark.parametrize("invalid", [
+    {"private_owner": None}, {"actor": None}, {"actor_kind": "operator"},
+    {"target_id": 987654}, {"changed_fields": ["status", "status"]},
+    {"changed_fields": "private note"}, {"changed_fields": [{"secret": "private note"}]},
+])
+def test_model_rejects_invalid_audience_identity_target_and_metadata(invalid):
+    _user, person, _household = make_member()
+    account = account_for(person)
+    fields = dict(account=account, target_id=account.pk, private_owner=person,
+                  actor=person, actor_kind="member", source="ui", action="account_archived")
+    fields.update(invalid)
+    with pytest.raises(ValidationError, match="Invalid audit metadata"):
+        AuditEvent(**fields).save()
+    assert AuditEvent.objects.count() == 0
+
+
 @pytest.mark.django_db(transaction=True)
 def test_requires_transaction_and_scheduler_identity():
     _user, person, _household = make_member()
