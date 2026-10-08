@@ -49,6 +49,13 @@ A = AuditEvent.Action
 T = AuditEvent.TargetType
 
 
+def dump_events():
+    """Everything an event stores except random IDs, timestamps and the checksum."""
+    rows = AuditEvent.objects.values().iterator()
+    return json.dumps([{k: v for k, v in row.items() if k not in ("id", "correlation_id", "checksum", "occurred_at")}
+                       for row in rows], default=str)
+
+
 def only(action, **filters):
     rows = list(AuditEvent.objects.filter(action=action, **filters))
     assert len(rows) == 1, [row.action for row in AuditEvent.objects.all()]
@@ -113,7 +120,7 @@ def test_import_event_carries_no_file_names_hashes_or_source_text():
     make_household(owner)
     account = make_account(owner)
     import_csv(owner, account)
-    dump = json.dumps(list(AuditEvent.objects.values()), default=str)
+    dump = dump_events()
     for canary in ("SYNTHETIC GROCER", "12.34", "09/27/2026", Transaction.objects.get().fingerprint,
                    ImportBatch.objects.get().source_file_sha256):
         assert canary not in dump
@@ -142,7 +149,7 @@ def test_manual_transaction_create_and_delete_link_existing_history():
     deleted = only(A.RECORD_DELETED, target_type=T.TRANSACTION)
     history = TransactionCorrectionHistory.objects.get(transaction=entry, field_name="deleted")
     assert deleted.metadata["history_id"] == history.pk
-    dump = json.dumps(list(AuditEvent.objects.values()), default=str)
+    dump = dump_events()
     assert "canary" not in dump and "1234" not in dump
 
 
@@ -183,7 +190,7 @@ def test_balance_create_edit_upsert_and_delete_name_fields_not_values():
     assert AuditEvent.objects.filter(action=A.RECORD_EDITED).count() == 2
     delete_manual_snapshot(owner, account.pk, snapshot.pk)
     assert only(A.RECORD_DELETED, target_type=T.BALANCE).target_id == snapshot.pk
-    dump = json.dumps(list(AuditEvent.objects.values()), default=str)
+    dump = dump_events()
     assert "canary" not in dump and "123456789" not in dump
 
 
@@ -263,7 +270,7 @@ def test_planned_item_and_goal_events():
     set_savings_goal_archived(owner, goal, True)
     set_savings_goal_archived(owner, goal, True)
     assert only(A.RECORD_ARCHIVED, target_type=T.GOAL)
-    dump = json.dumps(list(AuditEvent.objects.values()), default=str)
+    dump = dump_events()
     assert "canary" not in dump and "99999" not in dump and "5000000" not in dump
 
 
@@ -294,7 +301,7 @@ def test_category_tag_and_mapping_changes_go_to_the_household():
     outsider = make_person("outsider")
     other_household(outsider)
     assert events_for(outsider).count() == 0
-    dump = json.dumps(list(AuditEvent.objects.values()), default=str)
+    dump = dump_events()
     assert "canary" not in dump
 
 
@@ -312,7 +319,7 @@ def test_note_edits_have_no_event_but_tag_membership_changes_do():
     assert (changed.target_type, changed.target_id, changed.changed_fields) == (T.TRANSACTION, txn.pk, ["tags"])
     set_transaction_note_and_tags(owner, txn.pk, note="Different", tag_ids=[tag.pk])
     assert AuditEvent.objects.filter(action=A.TAGS_CHANGED).count() == 1
-    assert "canary" not in json.dumps(list(AuditEvent.objects.values()), default=str)
+    assert "canary" not in dump_events()
     assert household
 
 
@@ -345,7 +352,7 @@ def test_rule_edit_enable_apply_reverse_and_automatic_application_are_distinguis
     reverse_application(owner, application.pk)
     reversed_event = only(A.RULE_REVERSED)
     assert reversed_event.actor_id == owner.pk and reversed_event.metadata["row_count"] == 1
-    assert "CANARY" not in json.dumps(list(AuditEvent.objects.values()), default=str)
+    assert "CANARY" not in dump_events()
 
 
 def test_automatic_rule_application_after_import_uses_rule_source_and_one_event_per_rule():
@@ -469,7 +476,7 @@ def test_recurring_actions_record_private_events_without_names_or_amounts():
     dismiss_price_change(owner, first.pk)
     only(A.RECURRING_PRICE_ACKNOWLEDGED)
     assert events_for(member).count() == 0
-    dump = json.dumps(list(AuditEvent.objects.values()), default=str)
+    dump = dump_events()
     assert "Canary" not in dump and "1599" not in dump
     assert {add_recurring_members, merge_recurring_series, remove_recurring_member}
 
@@ -506,7 +513,7 @@ def test_receipts_and_downloads_record_authorized_metadata_only(tmp_path, settin
     assert downloaded.actor_id == member.pk and downloaded.metadata == {"export_kind": "receipt", "transaction_id": txn.pk}
     remove_receipt(member, txn.pk, receipt.pk)
     assert only(A.RECEIPT_REMOVED).target_id == receipt.pk
-    assert "canary-name" not in json.dumps(list(AuditEvent.objects.values()), default=str)
+    assert "canary-name" not in dump_events()
     # The receipt's history is shared with the account's household and revoked with access.
     leave_household(member)
     assert events_for(member).count() == 0

@@ -2,7 +2,7 @@
 
 Settings > Audit trail and `python manage.py query_audit --member <app-member-id>` review the same authorized rows, ordered by newest UTC timestamp then event UUID, 50 per page. Use `--page`, `--action`, `--actor` (app member ID), `--source`, `--date-from` and `--date-to` (inclusive UTC dates). The command is read-only JSON, suitable for an offline reader; choosing a member does not grant a larger operator audience. Web responses use no-store. Do not save query output to public places.
 
-This foundation records sharing, unsharing, changing sharing mode, archiving and permanent account deletion. It has no backfill and does not claim comprehensive action coverage. Correction history, sign-in/security records, import provenance and AI usage remain separate and are not copied. Later coverage must extend typed action/target enums and explicit append calls; request/download events must describe only what is known (for example export_generated does not prove delivery).
+Account lifecycle (sharing, unsharing, changing sharing mode, archiving, permanent deletion) was the first slice. The financial-workflow slice below extends the same service and table. There is no backfill and no claim of comprehensive coverage beyond the matrix. Correction history, sign-in/security records, import provenance and AI usage remain separate and are not copied. Later coverage must extend typed action/target enums and explicit append calls; request/download events must describe only what is known (for example export_generated does not prove delivery).
 
 Each event contains a generated UUID and UTC time, enumerated action/outcome, trusted actor kind and nullable member/effective member references, target type and opaque app ID, audience references, source, UUID correlation/run ID, allow-listed changed field names and a SHA-256 checksum. There is no free-form payload, before/after values, actor name, amount, description, URL, raw row, credential or AI text. Correlation IDs must be UUIDs generated in trusted code, never arbitrary request headers. Sources and actors are supplied by trusted callers, never browser input. Use `append_event` inside the authorized action's database transaction, after the changed fields have actually changed. System callers supply their truthful scheduler/operator kind and the effective member whose access authorized the target.
 
@@ -13,3 +13,30 @@ For a surviving account, all its events follow current account authorization, in
 A normal action and its event commit/roll back together. If the audit insert alone fails, its nested transaction rolls back, the action continues, the UI displays a generic warning and the operator receives an ERROR-level "Audit write gap" log. Jobs/CLI report the same generic log. Warnings and gap reports run only after the enclosing action commits; a later action rollback discards them. Database error text and parameters are never included. The missing event cannot be recovered automatically; investigate the database and record the operational gap privately. Never retry an action that already succeeded just to obtain an event. Invalid metadata is a programming error, not this fallback.
 
 The server clock supplies event times; UUID tie-breaking gives deterministic ordering, not causality or a guarantee against clock drift. Monitor the host clock. Committed rows survive restarts and are included in ordinary database dumps. Restoring an older dump rewinds the trail and removes later events, like other application data. There is no independent journal or retention across restores. Synthetic dump/restore and restart verification belongs on disposable test databases only.
+
+## Financial workflow coverage (#273)
+
+Owner decisions: all listed actions are covered; `tags_changed` records a transaction's tag membership change without names; ordinary note edits have no event (#98); a committed import with no new rows records one `import_no_new_rows` event; every download records `download_prepared`. Retention, visibility, deletion and write-failure behavior are exactly those above.
+
+Each row of the matrix is an explicit `record(...)` call inside the action's own transaction, in the service function rather than the view, so every entry path (UI, CLI, chat confirmation, automatic rules) shares one hook.
+
+| Area | Action (target type) | Audience | Notes |
+| --- | --- | --- | --- |
+| Import | `import_committed` (import_batch), `import_no_new_rows` (account), `import_undone` (import_batch) | account | Metadata: batch ID, source `format` enum, new/duplicate/invalid/removed counts. Undo names the undoing member. No file name, hash or row content. SimpleFIN sync is outside this slice. |
+| Manual entry | `record_created` / `record_deleted` (transaction) | account | Deletion references the existing correction-history ID. |
+| Balances | `record_created` / `record_edited` / `record_deleted` (balance) | account | Changed field names only (`date`, `amount`, `contribution`, `note`); same-date upserts are edits. |
+| Budgets | created, edited, archived, restored, `rollover_toggled`, rollover reset (`record_edited`, `rollover`, history ID) (budget) | household for household budgets, else the owner | |
+| Planned items, goals | created, edited, enabled/disabled, completed, archived/restored (planned_item, goal) | as budgets | |
+| Categories, tags | created, renamed, archived (category, tag) | household | |
+| Saved CSV mappings | created, edited, archived, deleted, `default_changed` (csv_mapping) | household; default changes follow the account | |
+| Rules | created, edited, enabled/disabled, `rule_applied`, `rule_reversed` (rule) | household or owner | Applying records one aggregate event with the application ID and row count; automatic application after import uses source `rule`. A former household member reversing rows on their own account is audited privately. |
+| Recurring | confirmed, dismissed, merged (`source_id`, `surviving_id`), added, removed, canceled, resumed, price acknowledged (recurring) | the member | |
+| Corrections | `transaction_corrected` (transaction) | account | One per category/refund-link history row written by a direct action, with `history_id`. Splits, unsplits and refund links appear through their history rows. Transfer confirm/dismiss/undo use `record_enabled`/`record_disabled` with field `kind`. |
+| Bulk edit | `bulk_applied` / `bulk_undone` (account) | account | One event per affected account with a row count; the event correlation ID is the existing bulk-undo UUID and source is `bulk`. Notes are never named. |
+| Chat | any of the above | as above | Source `chat_confirmation`, metadata `proposal_id`, a generated operation UUID as correlation ID, the approving member as actor. Events outlive the conversation and proposal. |
+| Receipts | `receipt_attached`, `receipt_removed` (receipt), `download_prepared` | account | Metadata: receipt ID and transaction ID, never bytes or file names. |
+| Downloads | `download_prepared` (export) | the member | `export_kind` is `data_zip`, `year_end_csv` (with `section`), `transactions_csv` or `receipt`. Records that a response was prepared, not that it arrived. No year or filter values. |
+
+Audience rules are the account's current access for account-bound targets; a household's current members for household-owned rows; and the member alone for private rows. A budget, goal, planned item or rule that changes scope is audited under its new audience. Metadata is a closed set of integer IDs/counts, enum strings and UUIDs (`audit_models.METADATA_*`); anything else is rejected without echoing the value. Changed field names are the allow-listed `CHANGED_FIELDS`. Events from internal restores (a counterpart leg the actor cannot see) are never written for a hidden account.
+
+No-op writes, denied requests and rolled-back actions record nothing. Import throughput is unchanged: an import writes one general event plus one per winning automatic rule, never one per row.
