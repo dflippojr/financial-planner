@@ -6,6 +6,8 @@ from hashlib import sha256
 from urllib.parse import urlencode
 
 from django.urls import reverse
+from django.db import transaction
+from .audit_operations import execution, operation, outcome
 from django.utils import timezone
 
 from .alert_services import raise_alert, settings_for
@@ -429,6 +431,7 @@ def _raise_review_alert(person, month):
     )
 
 
+@transaction.atomic
 def store_monthly_review(principal, month, *, force=False, today=None, raise_inbox=True):
     from .models import _person_for
 
@@ -471,6 +474,7 @@ def store_monthly_review(principal, month, *, force=False, today=None, raise_inb
     if raise_inbox:
         _raise_review_alert(person, month)
         raise_unusual_alerts(person, month, facts.get("unusual") or [])
+    outcome(person, "monthly_review", review.pk)
     return review, True
 
 
@@ -483,7 +487,11 @@ def generate_due_monthly_reviews(*, today=None):
     month = latest_closed_month(today)
     created = []
     for person in Person.objects.order_by("pk"):
-        review, wrote = store_monthly_review(person, month, force=False, today=today)
+        if execution.get() is None:
+            with operation():
+                review, wrote = store_monthly_review(person, month, force=False, today=today)
+        else:
+            review, wrote = store_monthly_review(person, month, force=False, today=today)
         if wrote:
             created.append(review)
     return created

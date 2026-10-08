@@ -16,6 +16,7 @@ from finance.alert_email import notify_after_alert_run
 from finance.csv_import.fingerprint import transaction_fingerprint
 from finance.encryption import decrypt_access_url, encrypt_access_url
 from finance.audit_services import append_event
+from finance.audit_operations import execution, operation, outcome
 from finance.lifecycle_services import _DENIED, _person_for, create_account, lock_actor_household
 from finance.models import (
     Account,
@@ -551,7 +552,11 @@ def sync_connection(principal, connection_id, *, ignore_rate_limit=False) -> dic
     normally; raising only after the commit keeps that record (last sync time,
     result, and the disabled flag for revoked access) instead of rolling it back.
     """
-    result, failure = _sync_connection_locked(principal, connection_id, ignore_rate_limit=ignore_rate_limit)
+    if execution.get() is None:
+        with operation(actor_kind=AuditEvent.ActorKind.MEMBER, source=AuditEvent.Source.UI):
+            result, failure = _sync_connection_locked(principal, connection_id, ignore_rate_limit=ignore_rate_limit)
+    else:
+        result, failure = _sync_connection_locked(principal, connection_id, ignore_rate_limit=ignore_rate_limit)
     if failure is not None:
         raise failure
     return result
@@ -591,6 +596,8 @@ def _sync_connection_locked(principal, connection_id, *, ignore_rate_limit=False
         from finance.alert_services import raise_sync_alert
 
         raise_sync_alert(connection)
+        outcome(person, "simplefin_sync", connection.pk, phase="failed",
+                metadata={"connection_id": connection.pk, "failure": "access_denied" if exc.access_denied else "provider_error"})
         return None, exc
     errors = provider_errors(payload)
     remote_accounts = _accounts_by_simplefin_id(payload)
@@ -622,6 +629,8 @@ def _sync_connection_locked(principal, connection_id, *, ignore_rate_limit=False
         from finance.alert_services import raise_sync_alert
 
         raise_sync_alert(connection)
+        outcome(person, "simplefin_sync", connection.pk, phase="failed",
+                metadata={"connection_id": connection.pk, "failure": "import_failed"})
         return None, exc
     from finance.category_services import refresh_transfer_pairs
     from finance.recurring_services import refresh_recurring_series
@@ -652,6 +661,7 @@ def _sync_connection_locked(principal, connection_id, *, ignore_rate_limit=False
     from finance.alert_services import schedule_after_new_transactions
 
     schedule_after_new_transactions(synced)
+    outcome(person, "simplefin_sync", connection.pk, metadata={"connection_id": connection.pk, "new_count": imported})
     return {"imported": imported, "errors": errors, "result": connection.last_sync_result}, None
 
 
@@ -674,7 +684,11 @@ def sync_all_connections() -> int:
     count = 0
     for connection in SimpleFinConnection.objects.filter(disabled=False).select_related("owner"):
         try:
-            sync_connection(connection.owner, connection.pk, ignore_rate_limit=True)
+            if execution.get() is None:
+                with operation():
+                    sync_connection(connection.owner, connection.pk, ignore_rate_limit=True)
+            else:
+                sync_connection(connection.owner, connection.pk, ignore_rate_limit=True)
         except SimpleFinError:
             pass
         count += 1

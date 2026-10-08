@@ -25,6 +25,7 @@ from .ai_jobs import _lock_qs
 from .ai_types import PROVIDER_ERROR, UNAVAILABLE
 from .chat_services import answer_turn, failed_reply, failure_text
 from .models import AiConversation, AiConversationMessage
+from .audit_operations import operation, outcome
 
 logger = logging.getLogger(__name__)
 
@@ -73,10 +74,22 @@ def claim_next_turn(token, *, now=None):
         claimed = AiConversationMessage.objects.filter(
             pk=row.pk, status=PENDING, claimed_at__isnull=True
         ).update(claim_token=token, claimed_at=moment, heartbeat_at=moment)
+        if claimed:
+            with operation(run_id=_turn_run_id(row.pk, token), turn_id=row.pk):
+                outcome(row.conversation.member, "chat_turn", row.pk, phase="started")
         return row.pk if claimed else None
 
 
 def run_claimed_turn(pk, token, *, sleep=None, monotonic=None):
+    with operation(run_id=_turn_run_id(pk, token), turn_id=pk):
+        return _run_claimed_turn(pk, token, sleep=sleep, monotonic=monotonic)
+
+
+def _turn_run_id(pk, token):
+    return uuid.uuid5(uuid.NAMESPACE_OID, f"chat:{pk}:{token}")
+
+
+def _run_claimed_turn(pk, token, *, sleep=None, monotonic=None):
     """Answer one turn this runner claimed and store the reply. Returns True if it was stored."""
     turn = (
         AiConversationMessage.objects.select_related("conversation__member", "reply_to")
@@ -91,17 +104,23 @@ def run_claimed_turn(pk, token, *, sleep=None, monotonic=None):
         # The conversation was deleted or expired while the harness answered.
         return False
     except Exception:
-        logger.exception("Chat turn %s failed", pk)
+        logger.error("Chat turn execution failed")
         reply = failed_reply(failure_text(PROVIDER_ERROR), backend=turn.backend)
     return _finish(pk, token, reply)
 
 
+@transaction.atomic
 def _finish(pk, token, reply):
     # Only the runner that still holds the claim may answer: a turn already failed
     # as stale keeps its failure rather than flipping back to an answer.
-    return bool(
-        AiConversationMessage.objects.filter(pk=pk, status=PENDING, claim_token=token).update(**reply)
-    )
+    row = AiConversationMessage.objects.filter(pk=pk, status=PENDING, claim_token=token).first()
+    if row is None:
+        return False
+    changed = AiConversationMessage.objects.filter(pk=pk, status=PENDING, claim_token=token).update(**reply)
+    if changed:
+        phase = "failed" if reply["status"] == AiConversationMessage.Status.FAILED else "succeeded"
+        outcome(row.conversation.member, "chat_turn", pk, phase=phase)
+    return bool(changed)
 
 
 def heartbeat(token, *, now=None):
@@ -110,6 +129,7 @@ def heartbeat(token, *, now=None):
     )
 
 
+@transaction.atomic
 def recover_stale_turns(*, now=None, pk=None):
     """Fail pending turns whose runner died or that no runner picked up. Returns how many."""
     moment = now or timezone.now()
@@ -127,11 +147,17 @@ def recover_stale_turns(*, now=None, pk=None):
     query = pending.filter(stale)
     if pk is not None:
         query = query.filter(pk=pk)
-    return query.update(
-        status=AiConversationMessage.Status.FAILED,
-        role=AiConversationMessage.Role.ERROR,
-        content=failure_text(UNAVAILABLE),
-    )
+    changed = 0
+    for row in query.select_related("conversation__member"):
+        updated = pending.filter(pk=row.pk).filter(stale).update(
+            status=AiConversationMessage.Status.FAILED, role=AiConversationMessage.Role.ERROR,
+            content=failure_text(UNAVAILABLE),
+        )
+        if updated:
+            with operation(run_id=_turn_run_id(row.pk, row.claim_token), turn_id=row.pk):
+                outcome(row.conversation.member, "chat_turn", row.pk, phase="failed", metadata={"failure": "stale"})
+            changed += updated
+    return changed
 
 
 def process_pending_turns(*, sleep=None, monotonic=None):
@@ -178,7 +204,7 @@ class ChatLane:
         try:
             run_claimed_turn(pk, self.token)
         except Exception:
-            logger.exception("Chat turn %s could not be stored", pk)
+            logger.error("Chat turn could not be stored")
         finally:
             with self._lock:
                 self._inflight.discard(pk)
@@ -192,5 +218,5 @@ class ChatLane:
             try:
                 self.tick()
             except Exception:
-                logger.exception("Chat lane poll failed")
+                logger.error("Chat lane poll failed")
             stop_event.wait(poll_seconds())

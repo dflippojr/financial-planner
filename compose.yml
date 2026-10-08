@@ -28,6 +28,7 @@ services:
     # A 500-row import into the 72k synthetic ledger peaks above 512 MiB.
     mem_limit: 1g
     environment:
+      OPERATOR_AUDIT_DIR: /operator-audit
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?DJANGO_SECRET_KEY must be set}
       DJANGO_DEBUG: "false"
       DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:?DJANGO_ALLOWED_HOSTS must be set}
@@ -86,6 +87,11 @@ services:
       - /run/csv-staging:size=128m,mode=1777
     volumes:
       - type: bind
+        source: ${BACKUP_DIR:?BACKUP_DIR must be set}/audit/application
+        target: /operator-audit
+        bind:
+          create_host_path: true
+      - type: bind
         source: ${BACKUP_DIR:?BACKUP_DIR must be set}/health
         target: /backup-health
         read_only: true
@@ -107,6 +113,7 @@ services:
     build: ops/backup
     restart: unless-stopped
     environment:
+      OPERATOR_AUDIT_DIR: /operator-audit
       POSTGRES_DB: ${POSTGRES_DB:-financial_planner}
       POSTGRES_USER: ${POSTGRES_USER:-financial_planner}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
@@ -127,6 +134,11 @@ services:
         condition: service_healthy
     volumes:
       - type: bind
+        source: ${BACKUP_DIR:?BACKUP_DIR must be set}/audit/maintenance
+        target: /operator-audit
+        bind:
+          create_host_path: true
+      - type: bind
         source: ${BACKUP_DIR:?BACKUP_DIR must be set}
         target: /backups
       - type: bind
@@ -143,6 +155,7 @@ services:
     # The expanded synthetic ledger reached 286 MiB in a daily pass.
     mem_limit: 512m
     environment:
+      OPERATOR_AUDIT_DIR: /operator-audit
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?DJANGO_SECRET_KEY must be set}
       DJANGO_DEBUG: "false"
       DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:?DJANGO_ALLOWED_HOSTS must be set}
@@ -197,6 +210,11 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
+      - type: bind
+        source: ${BACKUP_DIR:?BACKUP_DIR must be set}/audit/application
+        target: /operator-audit
+        bind:
+          create_host_path: true
       - receipts:/receipts
       - type: bind
         source: ${BACKUP_DIR:?BACKUP_DIR must be set}/health

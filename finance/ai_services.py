@@ -45,6 +45,8 @@ from .ai_plan import mark_login_required, plan_end_user, plan_link, plan_links
 from .ai_urls import HarnessUrlError, parse_harness_url
 from .encryption import decrypt_secret, encrypt_secret
 from .audit_services import append_event
+from .audit_operations import member_operation, outcome
+from .audit_models import METADATA_ENUM_KEYS
 from .lifecycle_services import _DENIED, _person_for
 from .models import AiJob, AuditEvent, AiProviderConnection, AiUsageEvent, Membership
 from .policy_services import household_ai_allowed, may_use_ai
@@ -616,7 +618,7 @@ def run_conversation(
 
 
 def record_usage(person, *, provider, backend, feature, result: ProviderResult, resumed=False):
-    AiUsageEvent.objects.create(
+    return AiUsageEvent.objects.create(
         member=person,
         resumed=resumed,
         provider=provider,
@@ -628,6 +630,7 @@ def record_usage(person, *, provider, backend, feature, result: ProviderResult, 
     )
 
 
+@member_operation
 def _run(
     principal,
     prompt,
@@ -700,6 +703,8 @@ def _run(
         if on_session is not None:
             on_session(new_id)
 
+    if not polling_resume:
+        _inference_event(person, connection, chosen, feature, phase="started")
     try:
         if follow_up and session_id:
             if context:
@@ -752,7 +757,7 @@ def _run(
         )
     if end_user and result.failure_code == LOGIN_REQUIRED:
         mark_login_required(person, chosen)
-    record_usage(
+    usage = record_usage(
         person,
         provider=connection.kind,
         backend=chosen,
@@ -760,6 +765,8 @@ def _run(
         result=result,
         resumed=polling_resume,
     )
+    if not polling_resume:
+        _inference_event(person, connection, chosen, feature, result=result, usage=usage)
     return result
 
 
@@ -791,6 +798,7 @@ def _run_api_connection(person, connection, prompt, *, feature, use_chat, tools,
     system = "\n\n".join(
         f"{block['title']}:\n{block['content']}" for block in (context or ()) if block.get("content")
     )
+    _inference_event(person, connection, connection.kind, feature, phase="started")
     result = run_api(
         connection.kind,
         key,
@@ -805,8 +813,22 @@ def _run_api_connection(person, connection, prompt, *, feature, use_chat, tools,
         tools=tools or (),
         tool_runner=runner,
     )
-    record_usage(person, provider=connection.kind, backend=connection.kind, feature=feature, result=result)
+    usage = record_usage(person, provider=connection.kind, backend=connection.kind, feature=feature, result=result)
+    _inference_event(person, connection, connection.kind, feature, result=result, usage=usage)
     return result
+
+
+def _inference_event(person, connection, backend, feature, *, phase=None, result=None, usage=None):
+    details = {"connection_id": connection.pk, "provider": connection.kind,
+               "backend": backend if backend in METADATA_ENUM_KEYS["backend"] else "other",
+               "feature": feature if feature in METADATA_ENUM_KEYS["feature"] else "structured"}
+    if usage is not None:
+        details["usage_id"] = usage.pk
+    if result is not None and not result.ok:
+        code = result.failure_code
+        details["failure"] = code if code in METADATA_ENUM_KEYS["failure"] else PROVIDER_ERROR
+    outcome(person, "ai_inference", connection.pk, phase=phase or ("succeeded" if result.ok else "failed"),
+            metadata=details, effective_member=connection.owner)
 
 
 def finance_tools_allowed_for(person):

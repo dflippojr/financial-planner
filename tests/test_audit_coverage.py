@@ -370,7 +370,7 @@ def test_member_deletion_removes_personal_events_and_anonymizes_household_events
     assert Household.objects.filter(pk=household.pk).exists()
 
 
-def test_google_connect_signal_records_only_explicit_connects_and_eviction_adds_no_operator_event():
+def test_google_connect_signal_records_only_explicit_connects_and_eviction_records_operator():
     from types import SimpleNamespace
 
     from django.core.management import call_command
@@ -387,5 +387,9 @@ def test_google_connect_signal_records_only_explicit_connects_and_eviction_adds_
     Membership.objects.create(person=other, household=household)
     before = AuditEvent.objects.count()
     call_command("evict_household_member", username=other.user.username)
-    assert AuditEvent.objects.count() == before
+    assert AuditEvent.objects.count() == before + 1
+    event = only(person, "member_left")
+    assert event.actor_kind == "operator"
+    assert event.effective_member_id == other.pk
+    assert event.actor_id is None
     assert not AuditEvent.objects.filter(actor=other).exists()

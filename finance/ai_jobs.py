@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import logging
+import uuid
+from dataclasses import replace
+from .audit_operations import execution, operation, outcome
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 
@@ -125,7 +128,7 @@ class AiJobLane:
             if job is not None:
                 _process_safely(job, moment)
         except Exception:
-            logger.exception("AI job %s could not be stored", pk)
+            logger.error("AI job could not be stored")
         finally:
             connections.close_all()
 
@@ -165,6 +168,11 @@ def _lock_qs(qs):
 
 
 def _process_one(job, moment):
+    with operation(run_id=job.audit_run_id, job_id=job.pk, attempt=job.attempts):
+        return _process_claimed_job(job, moment)
+
+
+def _process_claimed_job(job, moment):
     cutoff = _stale_running_cutoff(moment)
     member_connection, backend = _job_connection(job)
     session_id = _session_for(job, member_connection)
@@ -253,7 +261,20 @@ def _process_one(job, moment):
         job.result_ref = result.session_id or "ok"
         job.failure_code = ""
         job.finished_at = timezone.now()
-        job.save(
+        _save_job_success(job)
+        return True
+    if result.failure_code in (AUTHORIZATION_REQUIRED, LOGIN_REQUIRED):
+        _fail(job, result.failure_code)
+        return True
+    if result.session_open:
+        return _wait_for_open_session(job, moment, result.failure_code or UNAVAILABLE)
+    job.harness_session_id = ""
+    return _retry_or_fail(job, moment, result.failure_code or UNAVAILABLE)
+
+
+@transaction.atomic
+def _save_job_success(job):
+    job.save(
             update_fields=(
                 "status",
                 "result_ref",
@@ -263,14 +284,7 @@ def _process_one(job, moment):
                 "updated_at",
             )
         )
-        return True
-    if result.failure_code in (AUTHORIZATION_REQUIRED, LOGIN_REQUIRED):
-        _fail(job, result.failure_code)
-        return True
-    if result.session_open:
-        return _wait_for_open_session(job, moment, result.failure_code or UNAVAILABLE)
-    job.harness_session_id = ""
-    return _retry_or_fail(job, moment, result.failure_code or UNAVAILABLE)
+    outcome_for_job(job, "ai_job")
 
 
 SESSION_CONNECTION_KEY = "harness_connection"
@@ -336,7 +350,12 @@ def _claim_for_run(job, moment, cutoff):
             # Attempts count new harness sessions; resuming an open one is not a new try.
             if not (locked.harness_session_id or "").strip():
                 locked.attempts += 1
-        locked.save(update_fields=("status", "attempts", "updated_at"))
+                locked.audit_run_id = uuid.uuid4()
+                outcome_for_job(locked, "ai_claim", phase="started")
+        locked.save(update_fields=("status", "attempts", "audit_run_id", "updated_at"))
+        current = execution.get()
+        if current is not None:
+            execution.set(replace(current, run_id=locked.audit_run_id, attempt=locked.attempts))
         return locked
 
 
@@ -386,7 +405,9 @@ def _isolate_job_failure(job, moment, exc):
     _retry_or_fail(job, moment, code)
 
 
+@transaction.atomic
 def _retry_or_fail(job, moment, code):
+    outcome_for_job(job, "ai_attempt", phase="failed", code=code)
     if job.attempts == 0:
         job.attempts = 1
     if job.attempts < int(getattr(settings, "AI_JOB_MAX_ATTEMPTS", 5)):
@@ -418,20 +439,27 @@ def _write_if_unchanged(job, **fields):
     )
 
 
+@transaction.atomic
 def _fail_if_unchanged(job, code):
-    return _write_if_unchanged(
+    changed = _write_if_unchanged(
         job,
         status=AiJob.Status.FAILED,
         failure_code=code,
         finished_at=timezone.now(),
     )
 
+    if changed:
+        outcome_for_job(job, "ai_job", phase="failed", code=code)
+    return changed
 
+
+@transaction.atomic
 def _fail(job, code):
     job.status = AiJob.Status.FAILED
     job.failure_code = code
     job.finished_at = timezone.now()
     job.save(update_fields=("status", "failure_code", "finished_at", "harness_session_id", "updated_at"))
+    outcome_for_job(job, "ai_job", phase="failed", code=code)
 
 
 def _parse_hhmm(text):
@@ -446,3 +474,13 @@ def _parse_hhmm(text):
     if not 0 <= hour <= 23 or not 0 <= minute <= 59:
         return None
     return hour * 60 + minute
+
+
+def outcome_for_job(job, name, *, phase="succeeded", code=None):
+    from .audit_models import METADATA_ENUM_KEYS
+
+    details = {}
+    if code is not None:
+        details["failure"] = code if code in METADATA_ENUM_KEYS["failure"] else PROVIDER_ERROR
+    with operation(run_id=job.audit_run_id, job_id=job.pk, attempt=job.attempts):
+        outcome(job.member, name, job.pk, phase=phase, metadata=details)

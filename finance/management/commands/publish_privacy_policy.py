@@ -1,9 +1,11 @@
-from django.core.management.base import BaseCommand, CommandError
+from finance.audit_commands import AuditedCommand
+from django.core.management.base import CommandError
 
 from finance.policy_services import PolicySourceError, publish_policy
 
 
-class Command(BaseCommand):
+class Command(AuditedCommand):
+    audit_operation = "publish_privacy_policy"
     help = (
         "Publish the configured privacy-policy text as a new version. "
         "Pass --material when members must accept again before using AI."

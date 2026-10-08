@@ -10,6 +10,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from .models import Alert, AlertSettings
+from .audit_operations import outcome
 
 logger = logging.getLogger(__name__)
 _notice_run_active = ContextVar("email_notice_run_active", default=False)
@@ -80,7 +81,10 @@ def _send_member_notice(preference_id, alert_ids, visible_alerts):
             f"You have {len(rows)} new {noun} in Financial Planner: {', '.join(labels)}.\n\n"
             f"Open your alerts: {settings.ALERT_EMAIL_BASE_URL.rstrip('/')}/alerts/\n"
         )
-        if _send_notice(prefs.notification_email, body):
+        sent = _send_notice(prefs.notification_email, body)
+        outcome(prefs.person, "email_delivery", phase="succeeded" if sent else "failed",
+                metadata={"row_count": len(rows)})
+        if sent:
             Alert.objects.filter(pk__in=[row.pk for row in rows]).update(email_notice_sent_at=timezone.now())
 
 

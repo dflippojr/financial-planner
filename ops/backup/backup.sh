@@ -1,6 +1,11 @@
 #!/bin/sh
 set -eu
 
+. "$(dirname "$0")/audit.sh"
+audit_operation=backup
+audit_line "$audit_operation" started
+trap 'audit_end $?' EXIT
+
 require_env() {
   eval "value=\${$1:-}"
   if [ -z "$value" ]; then
@@ -82,6 +87,7 @@ EOF
 }
 
 fail_offsite() {
+  if [ -n "${audit_stage:-}" ]; then audit_line "$audit_stage" failed; audit_stage=""; fi
   offsite_error=$(sanitize_error "$1")
   last_error=""
   write_status
@@ -150,20 +156,20 @@ restore_check_due() {
 # A failed check is recorded but never unpublishes or deletes the dump.
 run_restore_check() {
   if ! check_output=$(sh "$verify_script" "$1" 2>&1 >/dev/null); then
-    restore_check_error=$(sanitize_error "${check_output:-Restore check failed}")
+    restore_check_error="Restore check failed"
     echo "$restore_check_error" >&2
     restore_check_failed=1
     return 0
   fi
   restore_check_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
   restore_check_error=""
-  echo "Restore check passed for $(basename "$1")"
+  echo "Restore check passed"
 }
 
 copy_offsite() {
   src=$1
   dest=$2
-  rclone copyto --config "$rclone_config" "$src" "$dest"
+  rclone copyto --config "$rclone_config" "$src" "$dest" >/dev/null 2>&1
 }
 
 require_env POSTGRES_DB
@@ -232,6 +238,8 @@ cleanup() {
     last_error=$(sanitize_error "Backup run failed")
     write_status
   fi
+  audit_end "$code"
+  trap - EXIT HUP INT TERM
   exit "$code"
 }
 trap cleanup EXIT HUP INT TERM
@@ -251,7 +259,7 @@ if ! pg_dump \
 then
   err=$(cat "$dump_err" 2>/dev/null || true)
   rm -f "$dump_err"
-  fail_run "${err:-pg_dump failed}"
+  fail_run "pg_dump failed"
 fi
 rm -f "$dump_err"
 
@@ -260,7 +268,7 @@ list_err="$backup_root/.restore.err"
 if ! table_list=$(pg_restore --list "$partial" 2>"$list_err"); then
   err=$(cat "$list_err" 2>/dev/null || true)
   rm -f "$list_err"
-  fail_run "${err:-pg_restore --list failed}"
+  fail_run "pg_restore list failed"
 fi
 rm -f "$list_err"
 table_count=$(printf '%s\n' "$table_list" | grep -c 'TABLE DATA' || true)
@@ -311,15 +319,17 @@ if [ -n "$offsite_remote" ] || [ -n "$offsite_recipient" ]; then
   if [ -z "$offsite_remote" ] || [ -z "$offsite_recipient" ]; then
     fail_offsite "Off-site copy is incomplete: set both OFFSITE_RCLONE_REMOTE and OFFSITE_AGE_RECIPIENT"
   fi
+  audit_stage=offsite_upload
+  audit_line offsite_upload started
   encrypted="$nightly_dir/.${filename}.age.partial"
-  if ! age -r "$offsite_recipient" -o "$encrypted" "$nightly"; then
+  if ! age -r "$offsite_recipient" -o "$encrypted" "$nightly" >/dev/null 2>&1; then
     fail_offsite "age encryption failed"
   fi
   if ! copy_offsite "$encrypted" "${remote_base}/nightly/${filename}.age"; then
     fail_offsite "Off-site upload failed"
   fi
   receipts_encrypted="$nightly_dir/.${receipts_name}.age.partial"
-  if ! age -r "$offsite_recipient" -o "$receipts_encrypted" "$receipts_archive"; then
+  if ! age -r "$offsite_recipient" -o "$receipts_encrypted" "$receipts_archive" >/dev/null 2>&1; then
     fail_offsite "age encryption failed"
   fi
   if ! copy_offsite "$receipts_encrypted" "${remote_base}/nightly/${receipts_name}.age"; then
@@ -337,20 +347,26 @@ if [ -n "$offsite_remote" ] || [ -n "$offsite_recipient" ]; then
   encrypted=""
   rm -f "$receipts_encrypted"
   receipts_encrypted=""
+  audit_line offsite_upload succeeded
+  audit_stage=""
   offsite_success_at=$success_at
   offsite_error=""
   dump_age_match='^financial_planner_[0-9TZ]+\.dump\.age$'
   receipts_age_match='^financial_planner_[0-9TZ]+\.receipts\.tar\.gz\.age$'
+  audit_stage=offsite_prune
+  audit_line offsite_prune started
   if ! prune_remote nightly "$nightly_retention" "$dump_age_match" \
     || ! prune_remote weekly "$weekly_retention" "$dump_age_match" \
     || ! prune_remote nightly "$nightly_retention" "$receipts_age_match" \
     || ! prune_remote weekly "$weekly_retention" "$receipts_age_match"; then
     fail_offsite "Off-site retention pruning failed"
   fi
+  audit_line offsite_prune succeeded
+  audit_stage=""
 fi
 
 write_status
-echo "Backup completed: $filename"
+echo "Backup completed"
 if [ "$restore_check_failed" = 1 ]; then
   exit 1
 fi

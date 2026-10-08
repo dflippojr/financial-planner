@@ -1,10 +1,11 @@
-from django.core.management.base import BaseCommand
+from finance.audit_commands import AuditedCommand
 from django.utils import timezone
 
 from finance.monthly_review import generate_due_monthly_reviews, latest_closed_month
 
 
-class Command(BaseCommand):
+class Command(AuditedCommand):
+    audit_operation = "generate_monthly_reviews"
     help = "Generate stored monthly reviews for the latest closed month."
 
     def handle(self, *args, **options):
