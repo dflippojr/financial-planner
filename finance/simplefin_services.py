@@ -15,9 +15,11 @@ from django.utils import timezone
 from finance.alert_email import notify_after_alert_run
 from finance.csv_import.fingerprint import transaction_fingerprint
 from finance.encryption import decrypt_access_url, encrypt_access_url
-from finance.lifecycle_services import _DENIED, _person_for, lock_actor_household
+from finance.audit_services import append_event
+from finance.lifecycle_services import _DENIED, _person_for, create_account, lock_actor_household
 from finance.models import (
     Account,
+    AuditEvent,
     AccountLink,
     BalanceSnapshot,
     ImportBatch,
@@ -177,10 +179,12 @@ def claim_connection(principal, setup_token: str) -> SimpleFinConnection:
         raise SimpleFinError("Disconnect the existing SimpleFIN connection before adding another.")
     claim_url = decode_setup_token(setup_token)
     access_url = claim_access_url(claim_url)
-    return SimpleFinConnection.objects.create(
+    connection = SimpleFinConnection.objects.create(
         owner=person,
         encrypted_access_url=encrypt_access_url(access_url),
     )
+    append_event(action=AuditEvent.Action.SIMPLEFIN_CONNECTED, actor=person, target_id=connection.pk)
+    return connection
 
 
 def load_remote_accounts(connection: SimpleFinConnection) -> tuple[list[dict], list[str]]:
@@ -205,25 +209,11 @@ def _create_linked_account(person, *, name, account_type, sharing):
     if sharing == Account.Scope.HOUSEHOLD:
         if membership is None:
             raise PermissionDenied(_DENIED)
-        return Account.objects.create(
-            name=name,
-            account_type=account_type,
-            owner=person,
-            scope=Account.Scope.HOUSEHOLD,
-            household=membership.household,
-            # Shared accounts need a mode (#30); co-owned matches how sharing
-            # behaved before modes existed.
-            share_mode=Account.ShareMode.CO_OWNED,
-            currency="USD",
-        )
-    return Account.objects.create(
-        name=name,
-        account_type=account_type,
-        owner=person,
-        scope=Account.Scope.PRIVATE,
-        household=None,
-        currency="USD",
-    )
+        # Shared accounts need a mode (#30); co-owned matches how sharing
+        # behaved before modes existed.
+        return create_account(person, name=name, account_type=account_type,
+                              household=membership.household, share_mode=Account.ShareMode.CO_OWNED)
+    return create_account(person, name=name, account_type=account_type)
 
 
 def _link_existing(person, connection, choice, simplefin_account_id):
@@ -281,6 +271,7 @@ def save_account_links(principal, connection_id, choices: list[dict]) -> list[Ac
     if connection is None:
         raise PermissionDenied(_DENIED)
     created = []
+    link_state = _link_state(connection)
     for choice in choices:
         action = choice.get("action")
         simplefin_account_id = str(choice.get("simplefin_account_id") or "")
@@ -302,7 +293,24 @@ def save_account_links(principal, connection_id, choices: list[dict]) -> list[Ac
             created.append(_create_and_link(person, connection, choice, simplefin_account_id))
             continue
         raise SimpleFinError("Choose how to use each SimpleFIN account.")
+    after = _link_state(connection)
+    changed = []
+    if {key: value[0] for key, value in link_state.items()} != {key: value[0] for key, value in after.items()}:
+        changed.append("account_links")
+    if any(key in link_state and link_state[key][1] != value[1] for key, value in after.items()):
+        changed.append("cutover")
+    if changed:
+        append_event(action=AuditEvent.Action.SIMPLEFIN_LINKS_CHANGED, actor=person, target_id=connection.pk,
+                     changed_fields=changed)
     return created
+
+
+def _link_state(connection):
+    return {
+        row["simplefin_account_id"]: (row["account_id"], row["cutover_date"])
+        for row in AccountLink.objects.filter(connection=connection).values(
+            "simplefin_account_id", "account_id", "cutover_date")
+    }
 
 
 def _sync_interval():
@@ -656,7 +664,9 @@ def disconnect_connection(principal, connection_id) -> None:
     )
     if connection is None:
         raise PermissionDenied(_DENIED)
+    connection_id = connection.pk
     connection.delete()
+    append_event(action=AuditEvent.Action.SIMPLEFIN_DISCONNECTED, actor=person, target_id=connection_id)
 
 
 def sync_all_connections() -> int:

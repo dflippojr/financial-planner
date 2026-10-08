@@ -10,7 +10,8 @@ from django.core.exceptions import PermissionDenied
 from django.db import IntegrityError, connection, transaction
 from django.utils import timezone
 
-from .models import Household, Invitation, LoginThrottle, Membership, Person, RecoveryCode
+from .audit_services import append_event
+from .models import AuditEvent, Household, Invitation, LoginThrottle, Membership, Person, RecoveryCode
 
 
 class InvalidOneTimeCode(ValueError):
@@ -64,6 +65,7 @@ def create_recovery_codes(user, count=8):
     return codes
 
 
+@transaction.atomic
 def create_invitation(inviter):
     membership = Membership.objects.filter(
         person=inviter,
@@ -72,12 +74,14 @@ def create_invitation(inviter):
     if membership is None:
         raise PermissionDenied("A current household membership is required.")
     code = secrets.token_urlsafe(24)
-    Invitation.objects.create(
+    invitation = Invitation.objects.create(
         household=membership.household,
         invited_by=inviter,
         token_digest=_digest(code),
         expires_at=timezone.now() + timedelta(hours=settings.INVITATION_TTL_HOURS),
     )
+    append_event(action=AuditEvent.Action.INVITATION_CREATED, actor=inviter, household=membership.household,
+                 target_id=invitation.pk)
     return code
 
 
@@ -114,6 +118,8 @@ def accept_invitation(code, username, display_name, password):
     Membership.objects.create(person=person, household=invitation.household)
     invitation.used_at = now
     invitation.save(update_fields=("used_at",))
+    append_event(action=AuditEvent.Action.INVITATION_ACCEPTED, actor=person, affected_member=person,
+                 household=invitation.household, target_id=invitation.pk)
     return user, create_recovery_codes(user)
 
 
@@ -140,6 +146,9 @@ def recover_account(username, code, password):
     consume_recovery_code(user, code)
     user.set_password(password)
     user.save(update_fields=("password",))
+    person = Person.objects.filter(user_id=user.pk).first()
+    if person is not None:
+        append_event(action=AuditEvent.Action.PASSWORD_CHANGED, actor=person, target_id=person.pk)
     revoke_user_sessions(user)
     return user
 
@@ -260,6 +269,8 @@ def seed_first_household(username, display_name, household_name, password):
     person = Person.objects.create(user=user, display_name=display_name)
     household = Household.objects.create(name=household_name)
     Membership.objects.create(person=person, household=household)
+    append_event(action=AuditEvent.Action.HOUSEHOLD_CREATED, actor=person, affected_member=person,
+                 household=household, target_id=household.pk)
     from .category_services import ensure_household_categories
 
     ensure_household_categories(household)

@@ -2,8 +2,8 @@
 import logging
 import uuid
 from contextlib import contextmanager
-from dataclasses import dataclass
 from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone as datetime_timezone
 
 from django.conf import settings
@@ -11,76 +11,86 @@ from django.contrib import messages
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import DatabaseError, connection, models, transaction
 
-from .audit_models import CHANGED_FIELDS
+from .audit_models import ACTION_SPECS, AUDIENCE_ACCOUNT, AUDIENCE_DELETION, AUDIENCE_FLEXIBLE, AUDIENCE_PERSONAL
 from .models import Account, AuditEvent, Membership, _person_for
 
 
 logger = logging.getLogger(__name__)
 audit_request = ContextVar("audit_request", default=None)
 GAP_WARNING = "The action completed, but its audit event could not be recorded. Please notify the operator."
-ACCOUNT_ACTION_FIELDS = {
-    AuditEvent.Action.ACCOUNT_SHARED: {"scope", "share_mode"},
-    AuditEvent.Action.ACCOUNT_UNSHARED: {"scope", "share_mode"},
-    AuditEvent.Action.SHARE_MODE_CHANGED: {"share_mode"},
-    AuditEvent.Action.ACCOUNT_ARCHIVED: {"status"},
-    AuditEvent.Action.ACCOUNT_DELETED: set(),
-}
-# Workflow actions accept any allow-listed field name; metadata keys are validated
-# by the model. Account lifecycle actions keep their narrower per-action lists.
-ACTION_FIELDS = {action: CHANGED_FIELDS for action in AuditEvent.Action.values}
-ACTION_FIELDS.update({str(action): fields for action, fields in ACCOUNT_ACTION_FIELDS.items()})
 
 
-def append_event(*, account=None, action, actor=None, actor_kind=AuditEvent.ActorKind.MEMBER,
-                 effective_member=None, source=AuditEvent.Source.UI,
+def append_event(*, action, account=None, actor=None, actor_kind=AuditEvent.ActorKind.MEMBER,
+                 effective_member=None, affected_member=None, source=AuditEvent.Source.UI,
                  outcome=AuditEvent.Outcome.SUCCEEDED, correlation_id=None, changed_fields=(),
-                 target_type=AuditEvent.TargetType.ACCOUNT, target_id=None, private_owner=None,
-                 household=None, metadata=None, verified=False):
+                 household=None, target_id=None, target_type=None, private_owner=None, metadata=None,
+                 verified=False):
     """Call inside the action transaction with a server-authorized target.
 
     Never pass submitted actor/source metadata. System callers must supply the
-    effective member whose account access authorized the action. The audience is
-    exactly one of: the target's account, a private owner, or a household. Workflow
-    targets that belong to an account use that account so access loss revokes
-    history with it.
+    effective member whose account access authorized the action. Account actions
+    take `account`; household actions take `household`; personal actions are
+    visible to `actor` (or `effective_member` for system callers) only.
+    `affected_member` names the person acted upon when it differs from the
+    initiator; it is never the operator. Workflow actions (#273) take `target_type`,
+    `target_id` and exactly one audience: `account`, `private_owner` or `household`;
+    `verified=True` skips the audience authorization query when the caller already
+    holds a row lock taken through the actor's own visibility in this transaction.
     """
     if not connection.in_atomic_block:
         raise RuntimeError("Audit append requires the action transaction.")
-    principal = actor if actor_kind == AuditEvent.ActorKind.MEMBER else effective_member
-    if (account is not None) + (private_owner is not None) + (household is not None) != 1:
-        raise ValidationError("Exactly one audit audience is required.")
-    if verified:
-        # The caller holds a row lock taken through the actor's own visibility
-        # query in this transaction, so the audience check would repeat it.
-        allowed = True
-    elif account is not None:
-        allowed = Account.objects.visible_to(principal).filter(pk=account.pk).exists()
-        if target_type == AuditEvent.TargetType.ACCOUNT and target_id is None:
-            target_id = account.pk
-    elif private_owner is not None:
-        person = _person_for(principal)
-        allowed = person is not None and person.pk == private_owner.pk
-    else:
-        person = _person_for(principal)
-        allowed = person is not None and Membership.objects.filter(
-            person=person, household=household, ended_at__isnull=True).exists()
-    if not allowed:
-        raise PermissionDenied("Operation is not permitted.")
-    if not isinstance(changed_fields, (list, tuple)):
-        raise ValidationError("Unsupported audit field names.")
-    fields = list(changed_fields)
-    if action not in ACTION_FIELDS or any(not isinstance(field, str) or field not in ACTION_FIELDS[action] for field in fields):
+    spec = ACTION_SPECS.get(action)
+    if spec is None or not isinstance(changed_fields, (list, tuple)):
         raise ValidationError("Unsupported audit action or field names.")
-    if not isinstance(target_id, int) or isinstance(target_id, bool):
-        raise ValidationError("Unsupported audit target.")
+    spec_target_type, audience, allowed = spec
+    target_type = spec_target_type or target_type
+    fields = list(changed_fields)
+    if any(not isinstance(field, str) or field not in allowed for field in fields):
+        raise ValidationError("Unsupported audit action or field names.")
+    principal = actor if actor_kind == AuditEvent.ActorKind.MEMBER else effective_member
+    private_owner_id = household_id = None
+    if audience == AUDIENCE_FLEXIBLE:
+        if target_type not in AuditEvent.TargetType.values or not isinstance(target_id, int) or isinstance(target_id, bool):
+            raise ValidationError("Unsupported audit target.")
+        if (account is not None) + (private_owner is not None) + (household is not None) != 1:
+            raise ValidationError("Exactly one audit audience is required.")
+        if account is not None:
+            allowed_audience = verified or Account.objects.visible_to(principal).filter(pk=account.pk).exists()
+            if target_type == AuditEvent.TargetType.ACCOUNT:
+                target_id = account.pk
+        elif private_owner is not None:
+            person = _person_for(principal)
+            allowed_audience = verified or (person is not None and person.pk == private_owner.pk)
+            private_owner_id = private_owner.pk
+        else:
+            person = _person_for(principal)
+            allowed_audience = verified or (person is not None and Membership.objects.filter(
+                person=person, household=household, ended_at__isnull=True).exists())
+            household_id = household.pk
+        if not allowed_audience:
+            raise PermissionDenied("Operation is not permitted.")
+    elif audience in (AUDIENCE_ACCOUNT, AUDIENCE_DELETION):
+        if account is None or not Account.objects.visible_to(principal).filter(pk=account.pk).exists():
+            raise PermissionDenied("Operation is not permitted.")
+        target_id = account.pk
+        if audience == AUDIENCE_DELETION:
+            if account.scope == Account.Scope.PRIVATE:
+                private_owner_id = account.owner_id
+            else:
+                household_id = account.household_id
+    else:
+        if account is not None or principal is None or not target_id:
+            raise ValidationError("Unsupported audit target.")
+        if audience == AUDIENCE_PERSONAL:
+            private_owner_id = principal.pk
+        else:
+            if household is None:
+                raise ValidationError("Unsupported audit target.")
+            household_id = household.pk
     event = AuditEvent(
-        account=account, target_type=target_type, target_id=target_id, action=action, outcome=outcome,
-        household_id=(account.household_id if action == AuditEvent.Action.ACCOUNT_DELETED and account.scope == Account.Scope.HOUSEHOLD
-                      else household.pk if household is not None else None),
-        actor=actor, actor_kind=actor_kind, effective_member=effective_member,
-        private_owner_id=(account.owner_id if action == AuditEvent.Action.ACCOUNT_DELETED and account.scope == Account.Scope.PRIVATE
-                          else private_owner.pk if private_owner is not None else None),
-        metadata=metadata or {},
+        account=account, target_id=target_id, target_type=target_type, action=action, outcome=outcome,
+        actor=actor, actor_kind=actor_kind, effective_member=effective_member, affected_member=affected_member,
+        private_owner_id=private_owner_id, household_id=household_id, metadata=metadata or {},
         source=source, correlation_id=correlation_id or uuid.uuid4(), changed_fields=sorted(fields),
     )
     try:
@@ -244,6 +254,7 @@ def cleanup_member_events(person):
     _maintenance_rows().filter(account__isnull=True, private_owner=person).delete()
     _maintenance_rows().filter(actor=person).update(actor=None)
     _maintenance_rows().filter(effective_member=person).update(effective_member=None)
+    _maintenance_rows().filter(affected_member=person).update(affected_member=None)
 
 
 def purge_old_events(*, now=None):

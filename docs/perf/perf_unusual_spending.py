@@ -4,22 +4,17 @@ Run before: python docs/perf/perf_unusual_spending.py --reference
 Run after:  python docs/perf/perf_unusual_spending.py
 Never reads deployment settings or an existing database.
 """
-import os
 import statistics
 import sys
 from datetime import date
 from pathlib import Path
 from time import perf_counter
 
-ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT))
-os.environ["DJANGO_SETTINGS_MODULE"] = "financial_planner.test_settings"
-os.environ.pop("FINANCIAL_PLANNER_TEST_DB", None)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _seed
 
-import django
+_seed.bootstrap()
 
-django.setup()
-from django.core.management import call_command
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 
@@ -32,21 +27,8 @@ if "--reference" in sys.argv:
 
     unusual_spending._merchant_flags = reference_merchant_flags
 
-assert connection.vendor == "sqlite" and connection.settings_dict["NAME"] == ":memory:"
-call_command("migrate", verbosity=0)
-# Reuse exactly the issue's seed, without executing its page benchmarks.
-source = (ROOT / "docs/perf/perf_pages.py").read_text(encoding="utf-8")
-namespace = {}
-exec(source.split("from django.conf import settings")[0], namespace)
-class SeedDate(date):
-    @classmethod
-    def today(cls):
-        return cls(2026, 10, 8)
-
-
-namespace["date"] = SeedDate
 print("seed_rows=72502 random_seed=42 seed_date=2026-10-08 engine=SQLite memory", flush=True)
-namespace["seed"](72502)
+_seed.seed(_seed.SEED_ROWS, today=_seed.SEED_DATE)
 person = Person.objects.get(user__username="perf_a")
 samples = []
 reference = None

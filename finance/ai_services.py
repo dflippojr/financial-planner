@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from django.conf import settings
 from django.core.exceptions import PermissionDenied
+from django.db import transaction
 from django.utils import timezone
 
 from .ai_harness import (
@@ -43,8 +44,9 @@ from .ai_types import (
 from .ai_plan import mark_login_required, plan_end_user, plan_link, plan_links
 from .ai_urls import HarnessUrlError, parse_harness_url
 from .encryption import decrypt_secret, encrypt_secret
+from .audit_services import append_event
 from .lifecycle_services import _DENIED, _person_for
-from .models import AiJob, AiProviderConnection, AiUsageEvent, Membership
+from .models import AiJob, AuditEvent, AiProviderConnection, AiUsageEvent, Membership
 from .policy_services import household_ai_allowed, may_use_ai
 from .category_services import current_household
 
@@ -196,26 +198,28 @@ def connect_harness(principal, *, base_url, token):
     chat, background = default_backends(infos)
     project = _choose_project(projects)
     encrypted = encrypt_secret(secret)
-    existing = connection_for(person)
-    if existing is not None:
-        stop_shared_local_use(existing)
-    connection, _created = AiProviderConnection.objects.update_or_create(
-        owner=person,
-        kind=AiProviderConnection.Kind.AGENT_HARNESS,
-        defaults={
-            "base_url": url,
-            "encrypted_token": encrypted,
-            "harness_project": project,
-            "chat_backend": chat,
-            "background_backend": background,
-            "chat_model": "",
-            "background_model": "",
-            "offer_local_to_household": False,
-            "connected_at": timezone.now(),
-            "last_status": "",
-        },
-    )
-    _forget_saved_sessions(person)
+    with transaction.atomic():
+        existing = connection_for(person)
+        if existing is not None:
+            stop_shared_local_use(existing)
+        connection, _created = AiProviderConnection.objects.update_or_create(
+            owner=person,
+            kind=AiProviderConnection.Kind.AGENT_HARNESS,
+            defaults={
+                "base_url": url,
+                "encrypted_token": encrypted,
+                "harness_project": project,
+                "chat_backend": chat,
+                "background_backend": background,
+                "chat_model": "",
+                "background_model": "",
+                "offer_local_to_household": False,
+                "connected_at": timezone.now(),
+                "last_status": "",
+            },
+        )
+        _forget_saved_sessions(person)
+        append_event(action=AuditEvent.Action.AI_HARNESS_CONNECTED, actor=person, target_id=connection.pk)
     return connection
 
 
@@ -229,29 +233,37 @@ def connect_api_key(principal, *, kind, key, chat_model="", background_model="")
     secret = (key or "").strip()
     if not looks_like_key(kind, secret):
         raise AiError(f"Paste a valid {api_label(kind)} key.")
-    existing = api_connection(person, kind)
-    connection, _created = AiProviderConnection.objects.update_or_create(
-        owner=person,
-        kind=kind,
-        defaults={
-            "base_url": "",
-            "encrypted_token": encrypt_secret(secret),
-            "chat_model": model_for(kind, chat_model, use_chat=True),
-            "background_model": model_for(kind, background_model, use_chat=False),
-            "use_for_chat": existing.use_for_chat if existing else False,
-            "use_for_background": existing.use_for_background if existing else False,
-            "connected_at": timezone.now(),
-            "last_status": "",
-        },
-    )
+    with transaction.atomic():
+        existing = api_connection(person, kind)
+        connection, _created = AiProviderConnection.objects.update_or_create(
+            owner=person,
+            kind=kind,
+            defaults={
+                "base_url": "",
+                "encrypted_token": encrypt_secret(secret),
+                "chat_model": model_for(kind, chat_model, use_chat=True),
+                "background_model": model_for(kind, background_model, use_chat=False),
+                "use_for_chat": existing.use_for_chat if existing else False,
+                "use_for_background": existing.use_for_background if existing else False,
+                "connected_at": timezone.now(),
+                "last_status": "",
+            },
+        )
+        append_event(
+            action=AuditEvent.Action.AI_KEY_REPLACED if existing else AuditEvent.Action.AI_KEY_CONNECTED,
+            actor=person, target_id=connection.pk,
+        )
     return connection
 
 
+@transaction.atomic
 def set_api_defaults(principal, *, kind, chat_model, background_model, use_chat, use_background):
     person = _person_for(principal)
     connection = api_connection(person, kind)
     if connection is None:
         raise AiError("Connect that provider first.")
+    before = _connection_snapshot(connection)
+    before_local = _local_choice_snapshot(person)
     connection.chat_model = model_for(kind, chat_model, use_chat=True)
     connection.background_model = model_for(kind, background_model, use_chat=False)
     connection.use_for_chat = bool(use_chat)
@@ -259,13 +271,39 @@ def set_api_defaults(principal, *, kind, chat_model, background_model, use_chat,
     connection.save(update_fields=("chat_model", "background_model", "use_for_chat", "use_for_background"))
     # One backend per feature: choosing this connection replaces any other choice.
     _clear_other_choices(person, keep=connection, chat=connection.use_for_chat, background=connection.use_for_background)
+    _audit_defaults(person, connection, before, before_local)
     return connection
 
 
+_CONNECTION_FIELDS = ("chat_backend", "background_backend", "chat_model", "background_model",
+                      "use_for_chat", "use_for_background")
+_LOCAL_FIELDS = ("use_shared_local_chat", "use_shared_local_background")
+
+
+def _connection_snapshot(connection):
+    return {name: getattr(connection, name) for name in _CONNECTION_FIELDS}
+
+
+def _local_choice_snapshot(person):
+    return {name: getattr(person, name) for name in _LOCAL_FIELDS}
+
+
+def _audit_defaults(person, connection, before, before_local):
+    changed = [name for name, old in before.items() if getattr(connection, name) != old]
+    changed += [name for name, old in before_local.items() if getattr(person, name) != old]
+    if changed:
+        append_event(action=AuditEvent.Action.AI_DEFAULTS_CHANGED, actor=person, target_id=connection.pk,
+                     changed_fields=changed)
+
+
+@transaction.atomic
 def disconnect_api_key(principal, kind):
     person = _person_for(principal)
     if kind in API_KINDS:
+        rows = list(AiProviderConnection.objects.owned_by(person).filter(kind=kind))
         AiProviderConnection.objects.owned_by(person).filter(kind=kind).delete()
+        for row in rows:
+            append_event(action=AuditEvent.Action.AI_KEY_DISCONNECTED, actor=person, target_id=row.pk)
 
 
 def _clear_other_choices(person, *, keep=None, chat=False, background=False, shared_local=True):
@@ -322,6 +360,7 @@ def _connect_failure_message(exc):
     return HARNESS_FAILED
 
 
+@transaction.atomic
 def disconnect_harness(principal):
     person = _person_for(principal)
     connection = connection_for(person)
@@ -331,6 +370,8 @@ def disconnect_harness(principal):
         kind=AiProviderConnection.Kind.AGENT_HARNESS
     ).delete()
     _forget_saved_sessions(person)
+    if connection is not None:
+        append_event(action=AuditEvent.Action.AI_HARNESS_DISCONNECTED, actor=person, target_id=connection.pk)
 
 
 def _forget_saved_sessions(person):
@@ -345,11 +386,14 @@ def _forget_saved_sessions(person):
     ).exclude(harness_session_id="").update(harness_session_id="", updated_at=timezone.now())
 
 
+@transaction.atomic
 def set_defaults(principal, *, chat_backend, background_backend, chat_model="", background_model=""):
     person = _person_for(principal)
     connection = connection_for(person)
     if connection is None:
         raise AiError("Connect an AI backend first.")
+    before = _connection_snapshot(connection)
+    before_local = _local_choice_snapshot(person)
     backends = {item.id: item for item in discovered_backends(person)}
     chat = (chat_backend or "").strip()
     background = (background_backend or "").strip()
@@ -380,9 +424,19 @@ def set_defaults(principal, *, chat_backend, background_backend, chat_model="", 
             "background_model",
         )
     )
+    _audit_defaults(person, connection, before, before_local)
     return connection
 
 
+def audit_offer_change(person, action, connection, field):
+    """Record a host sharing setting for the host's current household only."""
+    household = current_household(person)
+    if household is not None:
+        append_event(action=action, actor=person, household=household, target_id=connection.pk,
+                     changed_fields=(field,))
+
+
+@transaction.atomic
 def set_offer_local_to_household(principal, offered):
     person = _person_for(principal)
     connection = _own_connection(person)
@@ -392,17 +446,24 @@ def set_offer_local_to_household(principal, offered):
     connection.save(update_fields=("offer_local_to_household",))
     if was and not enabled:
         stop_shared_local_use(connection)
+    if was != enabled:
+        audit_offer_change(person, AuditEvent.Action.AI_LOCAL_OFFER_CHANGED, connection, "offer_local_to_household")
     return connection
 
 
+@transaction.atomic
 def set_offer_local_chat(principal, offered):
     person = _person_for(principal)
     connection = _own_connection(person)
+    was = connection.offer_local_chat
     connection.offer_local_chat = bool(offered)
     connection.save(update_fields=("offer_local_chat",))
+    if was != connection.offer_local_chat:
+        audit_offer_change(person, AuditEvent.Action.AI_LOCAL_OFFER_CHANGED, connection, "offer_local_chat")
     return connection
 
 
+@transaction.atomic
 def set_shared_local_use(principal, *, chat, background):
     person = _person_for(principal)
     if not may_use_ai(person):
@@ -411,10 +472,15 @@ def set_shared_local_use(principal, *, chat, background):
     want_background = bool(background)
     if (want_chat or want_background) and offered_local_connection(person) is None:
         raise AiError(SHARED_LOCAL_NOT_OFFERED, UNAVAILABLE)
+    before = _local_choice_snapshot(person)
     person.use_shared_local_chat = want_chat
     person.use_shared_local_background = want_background
     person.save(update_fields=("use_shared_local_chat", "use_shared_local_background", "updated_at"))
     _clear_other_choices(person, chat=want_chat, background=want_background, shared_local=False)
+    changed = [name for name, old in before.items() if getattr(person, name) != old]
+    if changed:
+        append_event(action=AuditEvent.Action.AI_SHARED_LOCAL_CHANGED, actor=person, target_id=person.pk,
+                     changed_fields=changed)
     return person
 
 

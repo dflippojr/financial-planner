@@ -24,7 +24,7 @@ from .ai_types import AUTHORIZATION_REQUIRED, PLAN_BACKENDS, PLAN_REPLACES_API, 
 from .category_services import current_household
 from .encryption import decrypt_secret
 from .lifecycle_services import _DENIED, _person_for
-from .models import AiPlanLink, AiProviderConnection, Membership, Person
+from .models import AiPlanLink, AiProviderConnection, AuditEvent, Membership, Person
 from .policy_services import may_use_ai
 from .security_services import EVENT_TYPES, record_security_event
 
@@ -97,15 +97,21 @@ def host_connection(person):
     return own if own is not None else offered_plan_connection(person)
 
 
+@transaction.atomic
 def set_offer_plan_links(principal, offered):
+    from .ai_services import audit_offer_change
+
     person = _person_for(principal)
     connection = _own_harness(person)
     if connection is None:
         raise PermissionDenied(_DENIED)
+    was = connection.offer_plan_links
     connection.offer_plan_links = bool(offered)
     connection.save(update_fields=("offer_plan_links",))
     if not offered:
         AiPlanLink.objects.filter(connection=connection).exclude(person=person).delete()
+    if was != connection.offer_plan_links:
+        audit_offer_change(person, AuditEvent.Action.PLAN_LINK_OFFER_CHANGED, connection, "offer_plan_links")
     return connection
 
 
