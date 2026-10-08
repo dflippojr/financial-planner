@@ -681,6 +681,35 @@ def test_restore_and_check_journal_survives_fake_database_restore(tmp_path, monk
     assert str(dump) not in str(rows)
 
 
+@pytest.mark.skipif(NEEDS_BASH, reason="maintenance audit requires a POSIX shell")
+@pytest.mark.parametrize("upload_failed", [False, True])
+def test_offsite_and_nested_check_share_scheduler_run_without_stage_duplicates(tmp_path, upload_failed):
+    from ops.backup.audit_journal import query
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _fake_date(fake_bin)
+    _fake_pg(fake_bin)
+    _fake_age(fake_bin)
+    _fake_rclone(fake_bin, tmp_path / "remote", fail=upload_failed)
+    journal = tmp_path / "journal"
+    result = _run_backup(fake_bin, tmp_path / "backups", {
+        "OPERATOR_AUDIT_DIR": str(journal), "OPERATOR_AUDIT_ACTOR": "scheduler",
+        "OFFSITE_RCLONE_REMOTE": "fake:synthetic-remote", "OFFSITE_AGE_RECIPIENT": "synthetic-age-recipient",
+    })
+    assert result.returncode == int(upload_failed), result.stderr
+    rows = list(query(journal))
+    assert len({row["correlation_id"] for row in rows}) == 1
+    assert all(row["actor_kind"] == "scheduler" and row["source"] == "job" for row in rows)
+    assert [row["outcome"] for row in rows if row["operation"] == "offsite_upload"] == [
+        "started", "failed" if upload_failed else "succeeded",
+    ]
+    assert [row["outcome"] for row in rows if row["operation"] == "restore_check"] == ["started", "succeeded"]
+    assert [row["outcome"] for row in rows if row["operation"] == "offsite_prune"] == ([] if upload_failed else ["started", "succeeded"])
+    assert "synthetic-age-recipient" not in str(rows)
+    assert "synthetic-remote" not in str(rows)
+
+
 @pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
 def test_verify_restore_passes_on_a_good_dump_and_drops_the_scratch_database(tmp_path):
     fake_bin, state, dump = _verify_setup(tmp_path)

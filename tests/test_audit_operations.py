@@ -367,3 +367,26 @@ def test_usage_write_failure_keeps_successful_inference_without_retry(harness, c
     assert state.requests.count(("POST", "/api/v1/sessions")) == 1
     assert len(operational_rows(person, "ai_inference")) == 2
     assert "Audit write gap" in caplog.text and CANARY not in caplog.text
+
+
+def test_late_worker_cannot_duplicate_final_outcomes_or_change_newer_attempt():
+    from finance.ai_jobs import _save_job_success, _fail, _retry_or_fail
+
+    _user, person, _ = make_member("ai")
+    job = AiJob.objects.create(member=person, feature="structured", status="running", attempts=1)
+    job.status = "succeeded"
+    job.finished_at = timezone.now()
+    assert _save_job_success(job)
+    assert not _save_job_success(job)
+    _fail(job, "provider_error")
+    _retry_or_fail(job, timezone.now(), "provider_error")
+    job.refresh_from_db()
+    assert job.status == "succeeded"
+    assert len(operational_rows(person, "ai_job")) == 1
+    old_run = job.audit_run_id
+    AiJob.objects.filter(pk=job.pk).update(status="running", audit_run_id=uuid.uuid4())
+    job.audit_run_id = old_run
+    assert not _save_job_success(job)
+    _fail(job, "provider_error")
+    job.refresh_from_db()
+    assert job.status == "running"
