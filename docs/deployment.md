@@ -11,6 +11,7 @@ This runbook deploys the first release to the Windows basement PC with Docker De
 | PostgreSQL data | Docker named volume selected by `POSTGRES_VOLUME_NAME` | Durable across container replacement; never commit or manually edit it. |
 | Receipt files | Docker named volume selected by `RECEIPTS_VOLUME_NAME` (`RECEIPTS_DIR=/receipts`) | Durable across container replacement. Served only through access-checked views, never as static or media files. Deleting a receipt drops the database row immediately; the file is removed within about two days. Nightly backups archive this directory next to the database dump and keep deleted receipts' files until those copies rotate out. |
 | Logical backups | `BACKUP_DIR` on the second local disk | Keep the 14 newest nightly dumps and 8 newest Sunday weekly copies. |
+| Operator audit journal | `BACKUP_DIR/audit/application` and `BACKUP_DIR/audit/maintenance` (bind-mounted at `/operator-audit`) | Metadata-only JSONL shards kept 90 days. Compose creates the directories if missing; restrict them to the operator. See [the audit trail](audit-trail.md#deploying-and-reading-the-journal). |
 | Source CSV exports | A private folder outside the checkout | The application discards an uploaded source after a successful import; the operator should remove the original export when no longer needed. |
 | Staged CSV uploads | A tmpfs (memory-backed) mount at `/run/csv-staging` inside the app container | Never written to disk. Each upload expires within an hour, is deleted on cancel, and is discarded whenever the container stops or restarts. |
 | Web listener | `127.0.0.1:APP_PORT` on the basement PC | No direct LAN listener. Tailscale Serve exposes HTTPS only inside the tailnet. |
@@ -42,6 +43,8 @@ Prerequisites are Docker Desktop configured to use WSL2 and start when Windows s
    ```powershell
    python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
    ```
+
+   `AUDIT_RETENTION_DAYS` (default 90) and `AUDIT_PURGE_BATCH_SIZE` (default 1000) control how long the in-app audit trail is kept; see [the audit trail](audit-trail.md).
 
    `SIMPLEFIN_SYNC_CRON` defaults to `30 6 * * *` (06:30 in `TZ`). It uses the same five-field cron shape as `BACKUP_CRON`. Optional `OPERATOR_USERNAMES` names who receive backup health alerts. Optional `OFFSITE_RCLONE_REMOTE` and `OFFSITE_AGE_RECIPIENT` enable the encrypted off-site copy; see Backups below.
 

@@ -23,7 +23,7 @@ Out of scope:
 
 - Never commit real statements, CSV exports, account numbers, credentials, tokens, or other personal financial data. Tests and fixtures use clearly synthetic data only.
 - Secrets live in an environment file outside the repository (see `docs/deployment.md`).
-- Pull requests from forks never run on the maintainer's self-hosted runner. The automated review workflow runs only when dispatched by a maintainer, and it refuses pull requests from forks.
+- Pull requests from forks never run on the maintainer's self-hosted runner. The automated review workflow runs on pull requests opened from this repository's branches or when dispatched by a maintainer, and it refuses pull requests from forks.
 
 ## Automated guards
 
