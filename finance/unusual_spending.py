@@ -1,6 +1,7 @@
 """Deterministic unusual-spending flags from visible cash-flow facts."""
 
 from hashlib import sha256
+from heapq import heappop, heappush
 from decimal import ROUND_HALF_EVEN, Decimal
 
 from django.urls import reverse
@@ -144,8 +145,36 @@ def _category_flags(principal, start, end, prefs, *, account=None, scope="", tag
     return flags
 
 
+class _RunningMedian:
+    """Exact integer halves: lower is a max heap, upper a min heap."""
+
+    def __init__(self):
+        self.lower = []
+        self.upper = []
+
+    def __len__(self):
+        return len(self.lower) + len(self.upper)
+
+    def add(self, amount):
+        if not self.lower or amount <= -self.lower[0]:
+            heappush(self.lower, -amount)
+        else:
+            heappush(self.upper, amount)
+        if len(self.lower) > len(self.upper) + 1:
+            heappush(self.upper, -heappop(self.lower))
+        elif len(self.upper) > len(self.lower):
+            heappush(self.lower, -heappop(self.upper))
+
+    def median(self):
+        if not self.lower:
+            return Decimal("0")
+        if len(self.lower) == len(self.upper):
+            return (Decimal(-self.lower[0]) + Decimal(self.upper[0])) / Decimal("2")
+        return Decimal(-self.lower[0])
+
+
 def _charges(principal, accounts, *, date_to, excluded):
-    rows = list(
+    return (
         Transaction.objects.visible_to(principal)
         .filter(
             status=Transaction.Status.ACTIVE,
@@ -154,64 +183,66 @@ def _charges(principal, accounts, *, date_to, excluded):
             transaction_date__lte=date_to,
             account__in=accounts,
         )
-        .select_related("account")
+        .exclude(pk__in=excluded)
         .order_by("transaction_date", "pk")
+        .values_list("pk", "transaction_date", "description", "amount_minor", "currency", "account_id", named=True)
+        .iterator(chunk_size=2000)
     )
-    return [txn for txn in rows if txn.pk not in excluded]
+
+
+def _merchant_flag(txn, key, prior, threshold):
+    amount = abs(txn.amount_minor)
+    if not prior:
+        if threshold is None or threshold <= 0 or amount < threshold:
+            return None
+        return {
+            "kind": KIND_NEW_MERCHANT,
+            "name": txn.description,
+            "merchant_key": key,
+            "amount_minor": amount,
+            "amount_display": format_minor(amount, txn.currency),
+            "date": txn.transaction_date.isoformat(),
+            "url": reverse("transaction-edit", args=[txn.pk]),
+            "transaction_id": txn.pk,
+            "account_id": txn.account_id,
+            "item_id": f"new_merchant:{key}",
+        }
+    baseline = prior.median()
+    if not exceeds_merchant_median(amount, baseline, prior_count=len(prior)):
+        return None
+    return {
+        "kind": KIND_MERCHANT,
+        "name": txn.description,
+        "merchant_key": key,
+        "amount_minor": amount,
+        "median_minor": _whole_minor(baseline),
+        "median_display": format_minor(baseline, txn.currency),
+        "amount_display": format_minor(amount, txn.currency),
+        "date": txn.transaction_date.isoformat(),
+        "url": reverse("transaction-edit", args=[txn.pk]),
+        "transaction_id": txn.pk,
+        "account_id": txn.account_id,
+        "item_id": f"merchant:{txn.pk}",
+    }
 
 
 def _merchant_flags(principal, start, end, prefs, accounts, excluded):
-    threshold = prefs.large_transaction_minor
-    history = _charges(principal, accounts, date_to=end, excluded=excluded)
     by_key = {}
-    for txn in history:
+    flags = []
+    # Ordered by date and ID, so same-day lower IDs are strictly earlier.
+    # Evaluate before insertion: each eligible charge enters its history once.
+    for txn in _charges(principal, accounts, date_to=end, excluded=excluded):
         key = merchant_key(txn.description)
         if not key:
             continue
-        by_key.setdefault(key, []).append(txn)
-    flags = []
-    for key, group in by_key.items():
-        in_month = [txn for txn in group if start <= txn.transaction_date <= end]
-        for txn in in_month:
-            earlier = [item for item in group if (item.transaction_date, item.pk) < (txn.transaction_date, txn.pk)]
-            amount = abs(txn.amount_minor)
-            if not earlier:
-                if threshold is None or threshold <= 0 or amount < threshold:
-                    continue
-                flags.append(
-                    {
-                        "kind": KIND_NEW_MERCHANT,
-                        "name": txn.description,
-                        "merchant_key": key,
-                        "amount_minor": amount,
-                        "amount_display": format_minor(amount, txn.currency),
-                        "date": txn.transaction_date.isoformat(),
-                        "url": reverse("transaction-edit", args=[txn.pk]),
-                        "transaction_id": txn.pk,
-                        "account_id": txn.account_id,
-                        "item_id": f"new_merchant:{key}",
-                    }
-                )
-                continue
-            baseline = _median_minor(abs(item.amount_minor) for item in earlier)
-            if not exceeds_merchant_median(amount, baseline, prior_count=len(earlier)):
-                continue
-            flags.append(
-                {
-                    "kind": KIND_MERCHANT,
-                    "name": txn.description,
-                    "merchant_key": key,
-                    "amount_minor": amount,
-                    "median_minor": _whole_minor(baseline),
-                    "median_display": format_minor(baseline, txn.currency),
-                    "amount_display": format_minor(amount, txn.currency),
-                    "date": txn.transaction_date.isoformat(),
-                    "url": reverse("transaction-edit", args=[txn.pk]),
-                    "transaction_id": txn.pk,
-                    "account_id": txn.account_id,
-                    "item_id": f"merchant:{txn.pk}",
-                }
-            )
+        if key not in by_key:
+            by_key[key] = _RunningMedian()
+        prior = by_key[key]
+        if start <= txn.transaction_date <= end:
+            flag = _merchant_flag(txn, key, prior, prefs.large_transaction_minor)
+            if flag is not None:
+                flags.append(flag)
+        prior.add(abs(txn.amount_minor))
     flags.sort(key=lambda item: (-item["amount_minor"], item["name"], item.get("transaction_id") or 0))
     return flags
 
