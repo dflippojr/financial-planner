@@ -6,6 +6,8 @@ Proposals never touch accounts, sharing, connections, or deletion.
 
 from __future__ import annotations
 
+import uuid
+
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.db.models import F, Max, Value
@@ -15,6 +17,7 @@ from django.utils import timezone
 
 from .ai_tools import visible_accounts
 from .ai_types import ToolResult, ToolSpec
+from .audit_services import origin, record
 from .bulk_edit_services import _apply_tags
 from .budget_services import amount_for, month_start, parse_month, save_budget
 from .cash_flow import format_minor
@@ -28,6 +31,8 @@ from .category_services import (
 from .lifecycle_services import lock_actor_household
 from .models import (
     AiProposal,
+    Account,
+    AuditEvent,
     Budget,
     Tag,
     Transaction,
@@ -290,7 +295,10 @@ def apply_proposal(principal, proposal_id):
             proposal = _locked_pending(person, proposal_id)
             before = TransactionCorrectionHistory.objects.aggregate(top=Max("pk"))["top"] or 0
             try:
-                result = _APPLIERS[proposal.kind](person, proposal.payload)
+                # The approving member is the actor; the proposal and a fresh operation ID
+                # survive the conversation (and its proposals) being deleted.
+                with origin(AuditEvent.Source.CHAT, correlation_id=uuid.uuid4(), proposal_id=proposal.pk):
+                    result = _APPLIERS[proposal.kind](person, proposal.payload)
             except PermissionDenied as exc:
                 raise ProposalError(REFUSED) from exc
             except ValidationError as exc:
@@ -431,7 +439,11 @@ def _apply_add_tags(person, payload):
         found = Tag.objects.visible_to(person).active().filter(name__iexact=name).first()
         tags.append(found or add_tag(person, name))
     for txn in txns:
+        before = set(txn.tags.values_list("pk", flat=True))
         _apply_tags(person, txn, tags, add=True)
+        if before != set(txn.tags.values_list("pk", flat=True)):
+            record(person, AuditEvent.Action.TAGS_CHANGED, AuditEvent.TargetType.TRANSACTION, txn.pk,
+                   audience={"account": Account(pk=txn.account_id)}, fields=("tags",), verified=True)
     return {"count": len(txns)}
 
 

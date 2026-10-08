@@ -13,8 +13,9 @@ from django.db import transaction
 from django.utils import timezone
 
 from .category_services import exclusion_exists_for
+from .audit_services import personal_audience, record
 from .lifecycle_services import lock_actor_household
-from .models import Person, RecurringExclusion, RecurringSeries, RecurringSeriesMember, Transaction
+from .models import AuditEvent, Person, RecurringExclusion, RecurringSeries, RecurringSeriesMember, Transaction
 
 
 _DENIED = "Operation is not permitted."
@@ -963,7 +964,14 @@ def _set_open_series_status(principal, series_id, status):
         series.confirmed_at = timezone.now()
         fields.append("confirmed_at")
     series.save(update_fields=fields)
+    _record_series(person, AuditEvent.Action.RECURRING_CONFIRMED if status == RecurringSeries.Status.CONFIRMED
+                   else AuditEvent.Action.RECURRING_DISMISSED, series)
     return series
+
+
+def _record_series(person, action, series, **metadata):
+    record(person, action, AuditEvent.TargetType.RECURRING, series.pk,
+           audience=personal_audience(person), metadata=metadata)
 
 
 @transaction.atomic
@@ -1069,7 +1077,9 @@ def merge_recurring_series(principal, source_id, target_id):
             target.confirmed_at = timezone.now()
             fields.append("confirmed_at")
         target.save(update_fields=fields)
+    source_pk = source.pk
     source.delete()
+    _record_series(person, AuditEvent.Action.RECURRING_MERGED, target, source_id=source_pk, surviving_id=target.pk)
     return _recompute_series_from_members(target, extra_reasons=(MANUAL_REASON,))
 
 
@@ -1091,6 +1101,7 @@ def remove_recurring_member(principal, series_id, transaction_id):
         raise PermissionDenied(_DENIED)
     RecurringExclusion.objects.get_or_create(person=person, transaction_id=transaction_id)
     member.delete()
+    _record_series(person, AuditEvent.Action.RECURRING_REMOVED, series, transaction_id=transaction_id)
     if not series.members.exists():
         revalidate_series_after_member_removal(person, [series.pk])
         return RecurringSeries.objects.filter(pk=series.pk).first()
@@ -1126,6 +1137,9 @@ def add_recurring_members(principal, series_id, transaction_ids):
         for pk in requested
         if pk not in already
     )
+    added = [pk for pk in requested if pk not in already]
+    if added:
+        _record_series(person, AuditEvent.Action.RECURRING_ADDED, series, row_count=len(added))
     return _recompute_series_from_members(series, extra_reasons=(MANUAL_REASON,))
 
 
@@ -1141,21 +1155,23 @@ def _lock_confirmed_series(principal, series_id):
 
 @transaction.atomic
 def cancel_recurring_series(principal, series_id):
-    _person, series = _lock_confirmed_series(principal, series_id)
+    person, series = _lock_confirmed_series(principal, series_id)
     if series.cancelled_at is not None:
         return series
     series.cancelled_at = timezone.now()
     series.save(update_fields=("cancelled_at", "updated_at"))
+    _record_series(person, AuditEvent.Action.RECURRING_CANCELED, series)
     return series
 
 
 @transaction.atomic
 def undo_cancel_recurring_series(principal, series_id):
-    _person, series = _lock_confirmed_series(principal, series_id)
+    person, series = _lock_confirmed_series(principal, series_id)
     if series.cancelled_at is None:
         return series
     series.cancelled_at = None
     series.save(update_fields=("cancelled_at", "updated_at"))
+    _record_series(person, AuditEvent.Action.RECURRING_RESUMED, series)
     return series
 
 
@@ -1180,6 +1196,7 @@ def keep_cancelled_recurring_series(principal, series_id):
     for pk in later_ids:
         RecurringExclusion.objects.get_or_create(person=person, transaction_id=pk)
     RecurringSeriesMember.objects.filter(series=series, transaction_id__in=later_ids).delete()
+    _record_series(person, AuditEvent.Action.RECURRING_REMOVED, series, row_count=len(later_ids))
     if not series.members.exists():
         revalidate_series_after_member_removal(person, [series.pk])
         return RecurringSeries.objects.filter(pk=series.pk).first()
@@ -1188,7 +1205,7 @@ def keep_cancelled_recurring_series(principal, series_id):
 
 @transaction.atomic
 def dismiss_price_change(principal, series_id):
-    _person, series = _lock_confirmed_series(principal, series_id)
+    person, series = _lock_confirmed_series(principal, series_id)
     latest = (
         RecurringSeriesMember.objects.filter(series=series)
         .select_related("transaction")
@@ -1199,4 +1216,5 @@ def dismiss_price_change(principal, series_id):
         raise PermissionDenied(_DENIED)
     series.acknowledged_amount_minor = latest.transaction.amount_minor
     series.save(update_fields=("acknowledged_amount_minor", "updated_at"))
+    _record_series(person, AuditEvent.Action.RECURRING_PRICE_ACKNOWLEDGED, series)
     return series

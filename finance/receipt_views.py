@@ -4,6 +4,7 @@ from django.shortcuts import redirect
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_GET, require_POST
 
+from .audit_services import record_download
 from .forms import ReceiptUploadForm
 from .models import Receipt
 from .receipt_services import (
@@ -57,6 +58,7 @@ def receipt_download(request, transaction_id, receipt_id):
         raise Http404 from exc
     if not path.is_file():
         raise Http404()
+    record_download(request.user, export_kind="receipt", receipt=receipt)
     response = FileResponse(
         path.open("rb"),
         content_type=receipt.content_type,

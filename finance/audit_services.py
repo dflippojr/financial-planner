@@ -188,6 +188,26 @@ def record_correction(txn, actor, history):
         return
 
 
+def record_download(principal, *, export_kind, section=None, receipt=None):
+    """Note that an authorized download response was prepared (not that it was received).
+
+    Own transaction: downloads are read-only, so only the event is written.
+    """
+    person = _person_for(principal)
+    if person is None:
+        raise PermissionDenied("Operation is not permitted.")
+    metadata = {"export_kind": export_kind}
+    if section is not None:
+        metadata["section"] = section
+    with transaction.atomic():
+        if receipt is not None:
+            metadata["transaction_id"] = receipt.transaction_id
+            return record(person, AuditEvent.Action.DOWNLOAD_PREPARED, AuditEvent.TargetType.RECEIPT, receipt.pk,
+                          audience={"account": Account(pk=receipt.transaction.account_id)}, metadata=metadata)
+        return record(person, AuditEvent.Action.DOWNLOAD_PREPARED, AuditEvent.TargetType.EXPORT, person.pk,
+                      audience=personal_audience(person), metadata=metadata)
+
+
 def events_for(principal, *, action="", actor="", source="", date_from=None, date_to=None):
     rows = AuditEvent.objects.visible_to(principal)
     for field, value, choices in (

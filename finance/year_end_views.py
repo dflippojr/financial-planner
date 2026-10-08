@@ -6,6 +6,7 @@ from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_GET
 
+from .audit_services import record_download
 from .forms import YearEndFilterForm
 from .year_end import (
     CSV_SECTIONS,
@@ -71,6 +72,7 @@ def year_end_csv(request, section):
     if scope not in ("", "private", "household"):
         scope = ""
     report = year_end_report(request.user, year=year, scope=scope, today=today)
+    record_download(request.user, export_kind="year_end_csv", section=section)
     response = StreamingHttpResponse(
         iter_csv_bytes(report, section),
         content_type="text/csv; charset=utf-8",

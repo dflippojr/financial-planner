@@ -24,7 +24,7 @@ METADATA_INT_KEYS = frozenset({
 METADATA_ENUM_KEYS = {
     "format": frozenset({"huntington", "capital_one", "apple_card", "vanguard", "simplefin", "ofx", "manual"}),
     "section": frozenset({"cash-flow", "spending", "income", "accounts", "tags", "recurring", "net-worth", "all"}),
-    "export_kind": frozenset({"data_zip", "year_end_csv", "receipt"}),
+    "export_kind": frozenset({"data_zip", "year_end_csv", "receipt", "transactions_csv"}),
 }
 METADATA_UUID_KEYS = frozenset({"operation_id"})
 MAX_METADATA_INT = 10**15
