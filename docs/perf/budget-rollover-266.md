@@ -5,14 +5,10 @@ fresh in-memory SQLite databases. No production services, containers, volumes
 or data were accessed. No tests or other benchmarks overlapped these runs.
 These are local diagnostic wall times, not PostgreSQL or deployment claims.
 
-Run `python docs/perf/perf_budget_rollover.py`. It reuses the deterministic
-`perf_pages.py` seed: two members, one household, ten accounts and 72,502
-synthetic transactions. The seed date and request date are October 8, 2026.
-There are twelve private category budgets, each with 100,000 minor units
-effective October 2023. Each route gets one warm-up, the median of three GETs,
-and a separate query-count GET. The test-settings overlay replaces the
-database with in-memory SQLite, disables HTTPS redirects and uses unhashed
-static storage.
+Run `python docs/perf/perf_budget_rollover.py` (method and seed: `README.md`).
+The seed date and request date are October 8, 2026. There are twelve private
+category budgets, each with 100,000 minor units effective October 2023. The
+test-settings overlay disables HTTPS redirects and uses unhashed static storage.
 
 Before: `04b713a`. After: `4a2c39b`.
 
