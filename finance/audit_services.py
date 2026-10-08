@@ -9,44 +9,72 @@ from django.contrib import messages
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import DatabaseError, connection, models, transaction
 
-from .models import Account, AuditEvent
+from .audit_models import CHANGED_FIELDS
+from .models import Account, AuditEvent, Membership, _person_for
 
 
 logger = logging.getLogger(__name__)
 audit_request = ContextVar("audit_request", default=None)
 GAP_WARNING = "The action completed, but its audit event could not be recorded. Please notify the operator."
-ACTION_FIELDS = {
+ACCOUNT_ACTION_FIELDS = {
     AuditEvent.Action.ACCOUNT_SHARED: {"scope", "share_mode"},
     AuditEvent.Action.ACCOUNT_UNSHARED: {"scope", "share_mode"},
     AuditEvent.Action.SHARE_MODE_CHANGED: {"share_mode"},
     AuditEvent.Action.ACCOUNT_ARCHIVED: {"status"},
     AuditEvent.Action.ACCOUNT_DELETED: set(),
 }
+# Workflow actions accept any allow-listed field name; metadata keys are validated
+# by the model. Account lifecycle actions keep their narrower per-action lists.
+ACTION_FIELDS = {action: CHANGED_FIELDS for action in AuditEvent.Action.values}
+ACTION_FIELDS.update({str(action): fields for action, fields in ACCOUNT_ACTION_FIELDS.items()})
 
 
-def append_event(*, account, action, actor=None, actor_kind=AuditEvent.ActorKind.MEMBER,
+def append_event(*, account=None, action, actor=None, actor_kind=AuditEvent.ActorKind.MEMBER,
                  effective_member=None, source=AuditEvent.Source.UI,
-                 outcome=AuditEvent.Outcome.SUCCEEDED, correlation_id=None, changed_fields=()):
+                 outcome=AuditEvent.Outcome.SUCCEEDED, correlation_id=None, changed_fields=(),
+                 target_type=AuditEvent.TargetType.ACCOUNT, target_id=None, private_owner=None,
+                 household=None, metadata=None):
     """Call inside the action transaction with a server-authorized target.
 
     Never pass submitted actor/source metadata. System callers must supply the
-    effective member whose account access authorized the action.
+    effective member whose account access authorized the action. The audience is
+    exactly one of: the target's account, a private owner, or a household. Workflow
+    targets that belong to an account use that account so access loss revokes
+    history with it.
     """
     if not connection.in_atomic_block:
         raise RuntimeError("Audit append requires the action transaction.")
     principal = actor if actor_kind == AuditEvent.ActorKind.MEMBER else effective_member
-    if not Account.objects.visible_to(principal).filter(pk=account.pk).exists():
+    if (account is not None) + (private_owner is not None) + (household is not None) != 1:
+        raise ValidationError("Exactly one audit audience is required.")
+    if account is not None:
+        allowed = Account.objects.visible_to(principal).filter(pk=account.pk).exists()
+        if target_type == AuditEvent.TargetType.ACCOUNT and target_id is None:
+            target_id = account.pk
+    elif private_owner is not None:
+        person = _person_for(principal)
+        allowed = person is not None and person.pk == private_owner.pk
+    else:
+        person = _person_for(principal)
+        allowed = person is not None and Membership.objects.filter(
+            person=person, household=household, ended_at__isnull=True).exists()
+    if not allowed:
         raise PermissionDenied("Operation is not permitted.")
     if not isinstance(changed_fields, (list, tuple)):
         raise ValidationError("Unsupported audit field names.")
     fields = list(changed_fields)
     if action not in ACTION_FIELDS or any(not isinstance(field, str) or field not in ACTION_FIELDS[action] for field in fields):
         raise ValidationError("Unsupported audit action or field names.")
+    if not isinstance(target_id, int) or isinstance(target_id, bool):
+        raise ValidationError("Unsupported audit target.")
     event = AuditEvent(
-        account=account, target_id=account.pk, action=action, outcome=outcome,
+        account=account, target_type=target_type, target_id=target_id, action=action, outcome=outcome,
+        household_id=(account.household_id if action == AuditEvent.Action.ACCOUNT_DELETED and account.scope == Account.Scope.HOUSEHOLD
+                      else household.pk if household is not None else None),
         actor=actor, actor_kind=actor_kind, effective_member=effective_member,
-        private_owner_id=account.owner_id if action == AuditEvent.Action.ACCOUNT_DELETED and account.scope == Account.Scope.PRIVATE else None,
-        household_id=account.household_id if action == AuditEvent.Action.ACCOUNT_DELETED and account.scope == Account.Scope.HOUSEHOLD else None,
+        private_owner_id=(account.owner_id if action == AuditEvent.Action.ACCOUNT_DELETED and account.scope == Account.Scope.PRIVATE
+                          else private_owner.pk if private_owner is not None else None),
+        metadata=metadata or {},
         source=source, correlation_id=correlation_id or uuid.uuid4(), changed_fields=sorted(fields),
     )
     try:
@@ -66,6 +94,26 @@ def append_event(*, account, action, actor=None, actor_kind=AuditEvent.ActorKind
         transaction.on_commit(report_gap)
         return None
     return event
+
+
+def owned_audience(obj):
+    """Audience for a private/household-scoped row with owner, scope and household."""
+    if obj.scope == "household":
+        return {"household": obj.household}
+    return {"private_owner": obj.owner}
+
+
+def personal_audience(person):
+    return {"private_owner": person}
+
+
+def record(actor, action, target_type, target_id, *, audience, fields=(), metadata=None,
+           source=AuditEvent.Source.UI, correlation_id=None):
+    """Append a workflow event for an authorized member inside the action transaction."""
+    return append_event(
+        actor=_person_for(actor), action=action, target_type=target_type, target_id=target_id,
+        changed_fields=fields, metadata=metadata, source=source, correlation_id=correlation_id, **audience,
+    )
 
 
 def events_for(principal, *, action="", actor="", source="", date_from=None, date_to=None):

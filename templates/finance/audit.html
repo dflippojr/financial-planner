@@ -3,7 +3,7 @@
 {% block title %}Audit trail · Financial Planner{% endblock %}
 {% block settings_content %}
 <h2 class="mb-4 text-xl font-semibold">Audit trail</h2>
-<p class="mb-4">Recent account sharing, archiving and deletion actions. Only currently authorized events are shown. IDs identify app records; no names or financial values are copied into this trail. Times and date filters use UTC.</p>
+<p class="mb-4">Recent account lifecycle, import, balance, budget, planning, category, rule, recurring, receipt and download actions. Only currently authorized events are shown. IDs identify app records; no names or financial values are copied into this trail. Times and date filters use UTC.</p>
 <form method="get" class="mb-6">
   {% include "finance/_form_fields.html" with form=form %}
   <button class="btn btn-primary" type="submit">Filter events</button>
