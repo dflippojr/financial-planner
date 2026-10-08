@@ -152,4 +152,3 @@ def test_running_median_matches_exact_sorted_prefixes(values):
     for index, value in enumerate(values):
         median.add(value)
         assert median.median() == spending._median_minor(values[:index + 1])
-

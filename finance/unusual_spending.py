@@ -185,7 +185,9 @@ def _charges(principal, accounts, *, date_to, excluded):
         )
         .exclude(pk__in=excluded)
         .order_by("transaction_date", "pk")
-        .values_list("pk", "transaction_date", "description", "amount_minor", "currency", "account_id", named=True)
+        .values_list(
+            "pk", "transaction_date", "description", "amount_minor", "currency", "account_id", named=True
+        )
         .iterator(chunk_size=2000)
     )
 

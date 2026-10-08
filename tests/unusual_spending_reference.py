@@ -66,4 +66,3 @@ def reference_merchant_flags(principal, start, end, prefs, accounts, excluded):
             )
     flags.sort(key=lambda item: (-item["amount_minor"], item["name"], item.get("transaction_id") or 0))
     return flags
-
