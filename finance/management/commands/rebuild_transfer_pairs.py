@@ -1,11 +1,14 @@
 """Explicit maintenance rebuild of transfer suggestions for current members."""
-from django.core.management.base import BaseCommand, CommandError
+from finance.audit_operations import outcome
+from finance.audit_commands import AuditedCommand
+from django.core.management.base import CommandError
 
 from finance.category_services import refresh_transfer_pairs
 from finance.models import Person
 
 
-class Command(BaseCommand):
+class Command(AuditedCommand):
+    audit_operation = "rebuild_transfer_pairs"
     help = "Rebuild transfer matching for one member, or all members (maintenance only)."
 
     def add_arguments(self, parser):
@@ -22,4 +25,5 @@ class Command(BaseCommand):
                 raise CommandError("Member not found.")
         for person in people.iterator():
             refresh_transfer_pairs(person)
+            outcome(person, "transfer_rebuild")
         self.stdout.write(self.style.SUCCESS("Transfer matching rebuilt."))

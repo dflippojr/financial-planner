@@ -9,7 +9,7 @@ if [ "$field_count" -ne 5 ]; then
 fi
 
 umask 077
-printf '%s %s\n' "$schedule" '/opt/financial-planner/backup.sh >>/proc/1/fd/1 2>>/proc/1/fd/2' > /etc/crontabs/root
+printf '%s %s\n' "$schedule" 'OPERATOR_AUDIT_ACTOR=scheduler /opt/financial-planner/backup.sh >>/proc/1/fd/1 2>>/proc/1/fd/2' > /etc/crontabs/root
 
 echo "Backup scheduler started with TZ=${TZ:-UTC} and schedule: $schedule"
 exec crond -f -l 2

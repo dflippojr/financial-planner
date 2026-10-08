@@ -1,14 +1,16 @@
+from finance.audit_commands import AuditedCommand
 import getpass
 
 from django.contrib.auth import password_validation
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.core.management.base import BaseCommand, CommandError
+from django.core.management.base import CommandError
 
 from finance.auth_services import seed_first_household
 
 
-class Command(BaseCommand):
+class Command(AuditedCommand):
+    audit_operation = "seed_first_user"
     help = "Create the first user and household, printing one-time recovery codes."
 
     def add_arguments(self, parser):

@@ -1,11 +1,13 @@
+from finance.audit_commands import AuditedCommand
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.core.management.base import BaseCommand, CommandError
+from django.core.management.base import CommandError
 
 from finance.lifecycle_services import LENT_CHOICES, delete_member_data, lent_household_accounts
 from finance.models import Person
 
 
-class Command(BaseCommand):
+class Command(AuditedCommand):
+    audit_operation = "delete_member_data"
     help = (
         "Permanently delete a member's private data and login. "
         "Household eviction without deleting the login is evict_household_member."

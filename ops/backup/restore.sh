@@ -1,6 +1,11 @@
 #!/bin/sh
 set -eu
 
+. "$(dirname "$0")/audit.sh"
+audit_operation=restore
+audit_line "$audit_operation" started
+trap 'audit_end $?' EXIT
+
 if [ "$#" -ne 1 ]; then
   echo "Usage: restore.sh /backups/nightly/financial_planner_TIMESTAMP.dump" >&2
   exit 2
@@ -16,7 +21,7 @@ done
 
 backup_file=$1
 if [ ! -f "$backup_file" ]; then
-  echo "Backup file does not exist: $backup_file" >&2
+  echo "Backup file does not exist" >&2
   exit 2
 fi
 
@@ -29,7 +34,7 @@ if [ ! -f "$receipts_archive" ]; then
 fi
 
 export PGPASSWORD=$POSTGRES_PASSWORD
-pg_restore --list "$backup_file" >/dev/null
+pg_restore --list "$backup_file" >/dev/null 2>&1
 pg_restore \
   --host "$POSTGRES_HOST" \
   --port "${POSTGRES_PORT:-5432}" \
@@ -40,7 +45,7 @@ pg_restore \
   --no-owner \
   --no-privileges \
   --exit-on-error \
-  "$backup_file"
+  "$backup_file" >/dev/null 2>&1
 
 if [ "$restore_receipts" -eq 1 ]; then
   mkdir -p "$RECEIPTS_DIR"
@@ -49,4 +54,4 @@ if [ "$restore_receipts" -eq 1 ]; then
   tar -xzf "$receipts_archive" -C "$RECEIPTS_DIR"
 fi
 
-echo "Restore completed from $(basename "$backup_file")"
+echo "Restore completed"

@@ -1780,6 +1780,7 @@ class AiJob(models.Model):
     input_refs = models.JSONField(default=dict)
     status = models.CharField(max_length=16, choices=Status, default=Status.QUEUED)
     attempts = models.PositiveIntegerField(default=0)
+    audit_run_id = models.UUIDField(default=uuid.uuid4, editable=False)
     harness_session_id = models.CharField(max_length=120, blank=True, default="")
     next_attempt_at = models.DateTimeField(default=timezone.now)
     result_ref = models.CharField(max_length=120, blank=True, default="")

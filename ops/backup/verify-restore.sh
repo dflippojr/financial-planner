@@ -5,6 +5,11 @@
 # values, so it is discarded. Success prints only a table count.
 set -eu
 
+. "$(dirname "$0")/audit.sh"
+audit_operation=restore_check
+audit_line "$audit_operation" started
+trap 'audit_end $?' EXIT
+
 if [ "$#" -ne 1 ]; then
   echo "Usage: verify-restore.sh /backups/nightly/financial_planner_TIMESTAMP.dump" >&2
   exit 2
@@ -62,6 +67,8 @@ cleanup() {
       code=1
     fi
   fi
+  audit_end "$code"
+  trap - EXIT
   exit "$code"
 }
 

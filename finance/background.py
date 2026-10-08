@@ -14,6 +14,7 @@ from django.core.management import call_command
 from django.db import close_old_connections, connections
 from django.utils import timezone
 
+from .audit_operations import operation
 from .ai_jobs import AiJobLane
 from .chat_runner import ChatLane
 from .simplefin_schedule import next_scheduled_sync, parse_five_field_cron, seconds_until
@@ -30,7 +31,7 @@ def run_ai_jobs(stop_event):
             try:
                 lane.tick()
             except Exception:
-                logger.exception("AI job poll failed")
+                logger.error("AI job poll failed")
             finally:
                 connections.close_all()
             stop_event.wait(poll)
@@ -48,7 +49,8 @@ def run_daily_pass(stop_event):
             continue
         close_old_connections()
         try:
-            call_command("sync_simplefin")
+            with operation():
+                call_command("sync_simplefin")
         finally:
             connections.close_all()
         due = next_scheduled_sync(expression, due)

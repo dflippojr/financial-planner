@@ -360,7 +360,7 @@ def test_backup_status_records_dump_failure_without_publishing(tmp_path):
     assert list((backup_root / "nightly").glob("*.dump")) == []
     status = _read_status(backup_root)
     assert status["last_success_at"] == ""
-    assert "dump refused" in status["last_error"]
+    assert status["last_error"] == "pg_dump failed"
 
 
 @pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
@@ -641,6 +641,75 @@ def _verify_setup(tmp_path, dump_text="synthetic dump", **pg_options):
     return fake_bin, state, dump
 
 
+@pytest.mark.skipif(NEEDS_BASH, reason="maintenance audit requires a POSIX shell")
+@pytest.mark.parametrize("failure", [False, True])
+def test_backup_journal_records_start_outcome_and_no_subprocess_material(tmp_path, failure):
+    from ops.backup.audit_journal import query
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _fake_pg(fake_bin, dump_fail=failure)
+    if failure:
+        _write_executable(fake_bin / "pg_dump", f"#!/bin/sh\necho '{SECRET_ROW_VALUE}' >&2\nexit 1\n")
+    journal = tmp_path / "journal"
+    result = _run_backup(fake_bin, tmp_path / "backups", {"OPERATOR_AUDIT_DIR": str(journal), "RESTORE_CHECK_INTERVAL_DAYS": "0"})
+    assert result.returncode == int(failure), result.stderr
+    rows = list(query(journal))
+    assert [row["outcome"] for row in rows] == ["started", "failed" if failure else "succeeded"]
+    assert all(row["operation"] == "backup" and row["checksum_valid"] for row in rows)
+    assert len({row["correlation_id"] for row in rows}) == 1
+    assert SECRET_ROW_VALUE not in str(rows) + result.stderr + result.stdout
+    assert str(tmp_path) not in str(rows)
+
+
+@pytest.mark.skipif(NEEDS_BASH, reason="maintenance audit requires a POSIX shell")
+def test_restore_and_check_journal_survives_fake_database_restore(tmp_path, monkeypatch):
+    from ops.backup.audit_journal import query
+
+    fake_bin, _state, dump = _verify_setup(tmp_path)
+    journal = tmp_path / "journal"
+    monkeypatch.setenv("OPERATOR_AUDIT_DIR", str(journal))
+    checked = _run_verify(fake_bin, dump)
+    restored = _run_restore(fake_bin, dump, {"RECEIPTS_DIR": tmp_path / "receipts"})
+    assert checked.returncode == restored.returncode == 0
+    rows = list(query(journal))
+    assert [(row["operation"], row["outcome"]) for row in rows] == [
+        ("restore_check", "started"), ("restore_check", "succeeded"),
+        ("restore", "started"), ("restore", "succeeded"),
+    ]
+    assert all(row["checksum_valid"] for row in rows)
+    assert str(dump) not in str(rows)
+
+
+@pytest.mark.skipif(NEEDS_BASH, reason="maintenance audit requires a POSIX shell")
+@pytest.mark.parametrize("upload_failed", [False, True])
+def test_offsite_and_nested_check_share_scheduler_run_without_stage_duplicates(tmp_path, upload_failed):
+    from ops.backup.audit_journal import query
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _fake_date(fake_bin)
+    _fake_pg(fake_bin)
+    _fake_age(fake_bin)
+    _fake_rclone(fake_bin, tmp_path / "remote", fail=upload_failed)
+    journal = tmp_path / "journal"
+    result = _run_backup(fake_bin, tmp_path / "backups", {
+        "OPERATOR_AUDIT_DIR": str(journal), "OPERATOR_AUDIT_ACTOR": "scheduler",
+        "OFFSITE_RCLONE_REMOTE": "fake:synthetic-remote", "OFFSITE_AGE_RECIPIENT": "synthetic-age-recipient",
+    })
+    assert result.returncode == int(upload_failed), result.stderr
+    rows = list(query(journal))
+    assert len({row["correlation_id"] for row in rows}) == 1
+    assert all(row["actor_kind"] == "scheduler" and row["source"] == "job" for row in rows)
+    assert [row["outcome"] for row in rows if row["operation"] == "offsite_upload"] == [
+        "started", "failed" if upload_failed else "succeeded",
+    ]
+    assert [row["outcome"] for row in rows if row["operation"] == "restore_check"] == ["started", "succeeded"]
+    assert [row["outcome"] for row in rows if row["operation"] == "offsite_prune"] == ([] if upload_failed else ["started", "succeeded"])
+    assert "synthetic-age-recipient" not in str(rows)
+    assert "synthetic-remote" not in str(rows)
+
+
 @pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
 def test_verify_restore_passes_on_a_good_dump_and_drops_the_scratch_database(tmp_path):
     fake_bin, state, dump = _verify_setup(tmp_path)
@@ -797,7 +866,7 @@ def test_failed_restore_check_keeps_the_dump_published_and_records_the_error(tmp
     assert status["last_success_at"] == "2026-09-27T06:00:00Z"
     assert status["dump_name"] == dump.name
     assert status["last_error"] == ""
-    assert status["restore_check_error"] == "Restore check failed: pg_restore could not restore the dump"
+    assert status["restore_check_error"] == "Restore check failed"
     assert status["restore_check_at"] == "2026-09-01T06:00:00Z"
     assert SECRET_ROW_VALUE not in (backup_root / "health" / "status").read_text()
 

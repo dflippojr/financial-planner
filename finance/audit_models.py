@@ -24,9 +24,16 @@ CHANGED_FIELDS = frozenset({
 METADATA_INT_KEYS = frozenset({
     "batch_id", "new_count", "duplicate_count", "invalid_count", "row_count", "history_id",
     "bulk_edit_id", "rule_application_id", "surviving_id", "source_id", "proposal_id",
-    "transaction_id", "account_id", "undo_id",
+    "transaction_id", "account_id", "undo_id", "connection_id", "usage_id", "job_id", "turn_id", "attempt",
 })
 METADATA_ENUM_KEYS = {
+    "operation": frozenset({"simplefin_sync", "ai_claim", "ai_attempt", "ai_recovery", "ai_job", "ai_inference", "chat_turn",
+                            "monthly_review", "alert_delivery", "email_delivery", "transfer_rebuild"}),
+    "failure": frozenset({"provider_error", "unavailable", "authorization_required", "limit_reached",
+                          "app_tools_only_unsupported", "end_user_login_required", "access_denied", "import_failed", "stale"}),
+    "provider": frozenset({"agent_harness", "anthropic_api", "openai_api"}),
+    "backend": frozenset({"local", "claude", "codex", "cursor", "anthropic_api", "openai_api", "other"}),
+    "feature": frozenset({"structured", "chat", "category_suggestions", "monthly_review", "unusual_spending"}),
     "format": frozenset({"huntington", "capital_one", "apple_card", "vanguard", "simplefin", "ofx", "manual"}),
     "section": frozenset({"cash-flow", "spending", "income", "accounts", "tags", "recurring", "net-worth", "all"}),
     "export_kind": frozenset({"data_zip", "year_end_csv", "receipt", "transactions_csv"}),
@@ -95,6 +102,7 @@ class AuditQuerySet(models.QuerySet):
 
 class AuditEvent(models.Model):
     class Action(models.TextChoices):
+        OPERATION = "operation_outcome", "Operation outcome"
         ACCOUNT_SHARED = "account_shared", "Account shared"
         ACCOUNT_UNSHARED = "account_unshared", "Account unshared"
         SHARE_MODE_CHANGED = "share_mode_changed", "Sharing mode changed"
@@ -205,6 +213,10 @@ class AuditEvent(models.Model):
         RECEIPT = "receipt", "Receipt"
         EXPORT = "export", "Data download"
         BULK_EDIT = "bulk_edit", "Bulk edit"
+        AI_JOB = "ai_job", "AI job"
+        CHAT_TURN = "chat_turn", "Chat turn"
+        REVIEW = "review", "Monthly review"
+        ALERT = "alert", "Alert"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     occurred_at = models.DateTimeField(default=timezone.now, editable=False)
@@ -215,6 +227,7 @@ class AuditEvent(models.Model):
     effective_member = models.ForeignKey("Person", null=True, blank=True, on_delete=models.SET_NULL, related_name="effective_audit_actions")
     target_type = models.CharField(max_length=16, choices=TargetType, default=TargetType.ACCOUNT)
     affected_member = models.ForeignKey("Person", null=True, blank=True, on_delete=models.SET_NULL, related_name="affected_audit_events")
+    declared_operator = models.ForeignKey("Person", null=True, blank=True, on_delete=models.SET_NULL, related_name="declared_operator_events")
     target_id = models.PositiveBigIntegerField()
     account = models.ForeignKey("Account", null=True, blank=True, on_delete=models.SET_NULL, related_name="audit_events")
     private_owner = models.ForeignKey("Person", null=True, blank=True, on_delete=models.CASCADE, related_name="private_audit_events")
@@ -263,6 +276,8 @@ class AuditEvent(models.Model):
             raise ValidationError("Member actor is required for new events.")
         if self.actor_kind != self.ActorKind.MEMBER and self.actor_id is not None:
             raise ValidationError("System actors cannot claim a member identity.")
+        if self.declared_operator_id is not None and self.actor_kind != self.ActorKind.OPERATOR:
+            raise ValidationError("Only operator events may declare an operator member.")
         if audience in (AUDIENCE_ACCOUNT, AUDIENCE_DELETION) and (self.account_id is None or self.account_id != self.target_id):
             raise ValidationError("Audit target must be a surviving account at append time.")
         if audience in (AUDIENCE_PERSONAL, AUDIENCE_HOUSEHOLD) and self.account_id is not None:
@@ -285,7 +300,7 @@ class AuditEvent(models.Model):
             # Foreign keys and uniqueness are enforced by the database; skipping their
             # validation queries keeps bulk workflows within their query budgets.
             self.full_clean(
-                exclude=("checksum", "account", "actor", "effective_member", "affected_member", "private_owner", "household"),
+                exclude=("checksum", "account", "actor", "effective_member", "affected_member", "declared_operator", "private_owner", "household"),
                 validate_unique=False, validate_constraints=False,
             )
         except ValidationError:
@@ -347,6 +362,7 @@ ACTION_SPECS = {
     _A.BILLS_CALENDAR_CHANGED: (_T.SETTING, AUDIENCE_PERSONAL, {"threshold", "accounts"}),
 }
 _WORKFLOW_ACTIONS = (
+    _A.OPERATION,
     _A.RECORD_CREATED, _A.RECORD_EDITED, _A.RECORD_DELETED, _A.RECORD_ARCHIVED, _A.RECORD_RESTORED,
     _A.RECORD_ENABLED, _A.RECORD_DISABLED, _A.RECORD_COMPLETED, _A.DEFAULT_CHANGED, _A.ROLLOVER_TOGGLED,
     _A.TAGS_CHANGED, _A.IMPORT_COMMITTED, _A.IMPORT_NO_NEW_ROWS, _A.IMPORT_UNDONE, _A.TRANSACTION_CORRECTED,

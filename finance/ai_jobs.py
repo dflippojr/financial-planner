@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import logging
+import uuid
+from dataclasses import replace
+from .audit_operations import execution, operation, outcome
 from concurrent.futures import ThreadPoolExecutor
+from functools import wraps
 from datetime import timedelta
 
 from django.conf import settings
@@ -125,7 +129,7 @@ class AiJobLane:
             if job is not None:
                 _process_safely(job, moment)
         except Exception:
-            logger.exception("AI job %s could not be stored", pk)
+            logger.error("AI job could not be stored")
         finally:
             connections.close_all()
 
@@ -164,6 +168,15 @@ def _lock_qs(qs):
     return qs.select_for_update(**kwargs)
 
 
+def _job_execution(function):
+    @wraps(function)
+    def wrapped(job, moment):
+        with operation(run_id=job.audit_run_id, job_id=job.pk, attempt=job.attempts):
+            return function(job, moment)
+    return wrapped
+
+
+@_job_execution
 def _process_one(job, moment):
     cutoff = _stale_running_cutoff(moment)
     member_connection, backend = _job_connection(job)
@@ -189,16 +202,18 @@ def _process_one(job, moment):
     if not resuming and backend == LOCAL_BACKEND and not _local_may_run(member_connection):
         _write_if_unchanged(job, status=AiJob.Status.WAITING_MODEL, next_attempt_at=moment)
         return False
-    claimed = _claim_for_run(job, moment, cutoff)
+    claimed = _claim_for_run(job, moment, cutoff, connection_row=member_connection, backend=backend)
     if claimed is None:
         return False
+    # Keep the outer failure-isolation caller tied to this exact attempt too.
+    job.audit_run_id = claimed.audit_run_id
     job = claimed
     marker = _connection_marker(member_connection)
 
     def remember_session(new_id):
         job.harness_session_id = new_id
         job.input_refs = {**(job.input_refs or {}), SESSION_CONNECTION_KEY: marker}
-        job.save(update_fields=("harness_session_id", "input_refs", "updated_at"))
+        _write_claimed(job, harness_session_id=job.harness_session_id, input_refs=job.input_refs)
 
     if job.feature == "category_suggestions":
         from .category_suggestion_services import run_category_suggestion_job
@@ -247,23 +262,13 @@ def _process_one(job, moment):
     if result.session_id:
         job.harness_session_id = result.session_id
         job.input_refs = {**(job.input_refs or {}), SESSION_CONNECTION_KEY: marker}
-        job.save(update_fields=("harness_session_id", "input_refs", "updated_at"))
+        _write_claimed(job, harness_session_id=job.harness_session_id, input_refs=job.input_refs)
     if result.ok:
         job.status = AiJob.Status.SUCCEEDED
         job.result_ref = result.session_id or "ok"
         job.failure_code = ""
         job.finished_at = timezone.now()
-        job.save(
-            update_fields=(
-                "status",
-                "result_ref",
-                "failure_code",
-                "finished_at",
-                "harness_session_id",
-                "updated_at",
-            )
-        )
-        return True
+        return _save_job_success(job)
     if result.failure_code in (AUTHORIZATION_REQUIRED, LOGIN_REQUIRED):
         _fail(job, result.failure_code)
         return True
@@ -271,6 +276,24 @@ def _process_one(job, moment):
         return _wait_for_open_session(job, moment, result.failure_code or UNAVAILABLE)
     job.harness_session_id = ""
     return _retry_or_fail(job, moment, result.failure_code or UNAVAILABLE)
+
+
+@transaction.atomic
+def _save_job_success(job):
+    updated = AiJob.objects.filter(pk=job.pk, audit_run_id=job.audit_run_id, status=AiJob.Status.RUNNING).update(
+        status=job.status, result_ref=job.result_ref, failure_code=job.failure_code,
+        finished_at=job.finished_at, harness_session_id=job.harness_session_id, updated_at=timezone.now(),
+    )
+    if updated:
+        outcome_for_job(job, "ai_job")
+    return bool(updated)
+
+
+def _write_claimed(job, **fields):
+    """A late worker may not change a newer attempt or a finished job."""
+    return bool(AiJob.objects.filter(pk=job.pk, audit_run_id=job.audit_run_id).exclude(
+        status__in=(AiJob.Status.SUCCEEDED, AiJob.Status.FAILED),
+    ).update(**fields, updated_at=timezone.now()))
 
 
 SESSION_CONNECTION_KEY = "harness_connection"
@@ -318,25 +341,37 @@ def _wait_for_open_session(job, moment, code):
     job.next_attempt_at = max(moment, timezone.now()) + timedelta(
         seconds=int(getattr(settings, "AI_JOB_RESUME_DELAY_SECONDS", 300))
     )
-    job.save(
-        update_fields=("status", "failure_code", "next_attempt_at", "harness_session_id", "updated_at")
-    )
+    _write_claimed(job, status=job.status, failure_code=job.failure_code,
+                   next_attempt_at=job.next_attempt_at, harness_session_id=job.harness_session_id)
     return False
 
 
-def _claim_for_run(job, moment, cutoff):
+def _claim_for_run(job, moment, cutoff, *, connection_row=None, backend=""):
+    from .audit_models import METADATA_ENUM_KEYS
     due = Q(status__in=(AiJob.Status.QUEUED, AiJob.Status.WAITING_MODEL), next_attempt_at__lte=moment)
     stale_resume = Q(status=AiJob.Status.RUNNING, updated_at__lte=cutoff) & ~Q(harness_session_id="")
     with transaction.atomic():
         locked = _lock_qs(AiJob.objects.filter(pk=job.pk).filter(due | stale_resume)).first()
         if locked is None:
             return None
+        if locked.status == AiJob.Status.RUNNING:
+            _record_recovery(locked)
         if locked.status != AiJob.Status.RUNNING:
             locked.status = AiJob.Status.RUNNING
             # Attempts count new harness sessions; resuming an open one is not a new try.
             if not (locked.harness_session_id or "").strip():
                 locked.attempts += 1
-        locked.save(update_fields=("status", "attempts", "updated_at"))
+                locked.audit_run_id = uuid.uuid4()
+                details = {}
+                if connection_row is not None:
+                    details = {"connection_id": connection_row.pk, "provider": connection_row.kind,
+                               "backend": backend if backend in METADATA_ENUM_KEYS["backend"] else "other",
+                               "feature": locked.feature if locked.feature in METADATA_ENUM_KEYS["feature"] else "structured"}
+                outcome_for_job(locked, "ai_claim", phase="started", metadata=details)
+        locked.save(update_fields=("status", "attempts", "audit_run_id", "updated_at"))
+        current = execution.get()
+        if current is not None:
+            execution.set(replace(current, run_id=locked.audit_run_id, attempt=locked.attempts))
         return locked
 
 
@@ -352,6 +387,7 @@ def _requeue_stale_running(job, moment, cutoff):
         ).first()
         if locked is None:
             return False
+        _record_recovery(locked)
         return _retry_or_fail(locked, moment, locked.failure_code or UNAVAILABLE)
 
 
@@ -368,11 +404,12 @@ def _local_may_run(member_connection):
 
 
 def _isolate_job_failure(job, moment, exc):
+    run_id = job.audit_run_id
     try:
         job.refresh_from_db()
     except Exception:
         return
-    if job.status in (AiJob.Status.SUCCEEDED, AiJob.Status.FAILED):
+    if job.audit_run_id != run_id or job.status in (AiJob.Status.SUCCEEDED, AiJob.Status.FAILED):
         return
     if isinstance(exc, AiError):
         code = exc.failure_code or PROVIDER_ERROR
@@ -386,6 +423,7 @@ def _isolate_job_failure(job, moment, exc):
     _retry_or_fail(job, moment, code)
 
 
+@transaction.atomic
 def _retry_or_fail(job, moment, code):
     if job.attempts == 0:
         job.attempts = 1
@@ -395,16 +433,9 @@ def _retry_or_fail(job, moment, code):
         job.failure_code = code
         # Measured from now: a session wait can outlast the poll that started it.
         job.next_attempt_at = max(moment, timezone.now()) + timedelta(seconds=delay)
-        job.save(
-            update_fields=(
-                "status",
-                "attempts",
-                "failure_code",
-                "next_attempt_at",
-                "harness_session_id",
-                "updated_at",
-            )
-        )
+        if _write_claimed(job, status=job.status, attempts=job.attempts, failure_code=job.failure_code,
+                          next_attempt_at=job.next_attempt_at, harness_session_id=job.harness_session_id):
+            outcome_for_job(job, "ai_attempt", phase="failed", code=code)
         return False
     _fail(job, code)
     return True
@@ -418,20 +449,28 @@ def _write_if_unchanged(job, **fields):
     )
 
 
+@transaction.atomic
 def _fail_if_unchanged(job, code):
-    return _write_if_unchanged(
+    changed = _write_if_unchanged(
         job,
         status=AiJob.Status.FAILED,
         failure_code=code,
         finished_at=timezone.now(),
     )
 
+    if changed:
+        outcome_for_job(job, "ai_job", phase="failed", code=code)
+    return changed
 
+
+@transaction.atomic
 def _fail(job, code):
     job.status = AiJob.Status.FAILED
     job.failure_code = code
     job.finished_at = timezone.now()
-    job.save(update_fields=("status", "failure_code", "finished_at", "harness_session_id", "updated_at"))
+    if _write_claimed(job, status=job.status, failure_code=job.failure_code,
+                      finished_at=job.finished_at, harness_session_id=job.harness_session_id):
+        outcome_for_job(job, "ai_job", phase="failed", code=code)
 
 
 def _parse_hhmm(text):
@@ -446,3 +485,21 @@ def _parse_hhmm(text):
     if not 0 <= hour <= 23 or not 0 <= minute <= 59:
         return None
     return hour * 60 + minute
+
+
+def outcome_for_job(job, name, *, phase="succeeded", code=None, metadata=None):
+    from .audit_models import METADATA_ENUM_KEYS
+
+    details = dict(metadata or {})
+    if code is not None:
+        details["failure"] = code if code in METADATA_ENUM_KEYS["failure"] else PROVIDER_ERROR
+    with operation(run_id=job.audit_run_id, job_id=job.pk, attempt=job.attempts):
+        outcome(job.member, name, job.pk, phase=phase, metadata=details)
+
+
+def _record_recovery(job):
+    # Recovery is a new worker claim, not another inference. Keep the saved
+    # inference attempt stable and explicitly link this distinct recovery UUID.
+    with operation(job_id=job.pk, attempt=job.attempts):
+        outcome(job.member, "ai_recovery", job.pk, phase="started",
+                metadata={"operation_id": str(job.audit_run_id), "failure": "stale"})

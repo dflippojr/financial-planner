@@ -20,6 +20,14 @@ audit_request = ContextVar("audit_request", default=None)
 GAP_WARNING = "The action completed, but its audit event could not be recorded. Please notify the operator."
 
 
+def report_write_gap(request=None):
+    """Fixed warning only; never interpolate database/provider exception text."""
+    logger.error("Audit write gap: an event could not be recorded")
+    request = request or audit_request.get()
+    if request is not None:
+        messages.warning(request, GAP_WARNING)
+
+
 def append_event(*, action, account=None, actor=None, actor_kind=AuditEvent.ActorKind.MEMBER,
                  effective_member=None, affected_member=None, source=AuditEvent.Source.UI,
                  outcome=AuditEvent.Outcome.SUCCEEDED, correlation_id=None, changed_fields=(),
@@ -37,6 +45,23 @@ def append_event(*, action, account=None, actor=None, actor_kind=AuditEvent.Acto
     `verified=True` skips the audience authorization query when the caller already
     holds a row lock taken through the actor's own visibility in this transaction.
     """
+    from .audit_operations import execution
+
+    current = execution.get()
+    declared_operator = None
+    if current is not None:
+        effective_member = effective_member or actor
+        actor_kind = current.actor_kind
+        if actor_kind != AuditEvent.ActorKind.MEMBER:
+            actor = None
+        elif current.initiator is not None:
+            actor = current.initiator
+        # Preserve explicit workflow paths from #273 while the actor and run
+        # identify their UI/scheduler/operator initiator.
+        if source in (AuditEvent.Source.UI, AuditEvent.Source.JOB, AuditEvent.Source.CLI):
+            source = current.source
+        correlation_id = current.run_id
+        declared_operator = current.declared_operator
     if not connection.in_atomic_block:
         raise RuntimeError("Audit append requires the action transaction.")
     spec = ACTION_SPECS.get(action)
@@ -90,6 +115,7 @@ def append_event(*, action, account=None, actor=None, actor_kind=AuditEvent.Acto
     event = AuditEvent(
         account=account, target_id=target_id, target_type=target_type, action=action, outcome=outcome,
         actor=actor, actor_kind=actor_kind, effective_member=effective_member, affected_member=affected_member,
+        declared_operator=declared_operator,
         private_owner_id=private_owner_id, household_id=household_id, metadata=metadata or {},
         source=source, correlation_id=correlation_id or uuid.uuid4(), changed_fields=sorted(fields),
     )
@@ -103,9 +129,7 @@ def append_event(*, action, account=None, actor=None, actor_kind=AuditEvent.Acto
             # Report only committed actions. A later action rollback discards
             # this callback, so it cannot falsely warn that the action completed.
             # Never log exception text: errors may echo bound parameters.
-            logger.error("Audit write gap: an event could not be recorded")
-            if request is not None:
-                messages.warning(request, GAP_WARNING)
+            report_write_gap(request)
 
         transaction.on_commit(report_gap)
         return None
@@ -255,6 +279,7 @@ def cleanup_member_events(person):
     _maintenance_rows().filter(actor=person).update(actor=None)
     _maintenance_rows().filter(effective_member=person).update(effective_member=None)
     _maintenance_rows().filter(affected_member=person).update(affected_member=None)
+    _maintenance_rows().filter(declared_operator=person).update(declared_operator=None)
 
 
 def purge_old_events(*, now=None):
