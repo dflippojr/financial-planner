@@ -208,7 +208,7 @@ class AuditEvent(models.Model):
                    str(self.correlation_id), self.changed_fields]
         if self.metadata:
             payload.append(self.metadata)
-        return hashlib.sha256(json.dumps(payload, separators=(",", ":")).encode()).hexdigest()
+        return hashlib.sha256(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()).hexdigest()
 
     def save(self, *args, **kwargs):
         if not self._state.adding:

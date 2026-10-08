@@ -608,3 +608,15 @@ def test_metadata_allow_list_rejects_free_text_and_unknown_keys():
                              target_id=1, metadata=metadata)
         assert "private" not in str(error.value).lower()
     assert AuditEvent.objects.count() == 0
+
+
+def test_checksum_ignores_metadata_key_order_as_postgres_jsonb_reorders_keys():
+    owner = make_person("owner")
+    make_household(owner)
+    result = import_csv(owner, make_account(owner))
+    event = only(A.IMPORT_COMMITTED)
+    reordered = AuditEvent.objects.get(pk=event.pk)
+    reordered.metadata = dict(reversed(list(event.metadata.items())))
+    assert list(reordered.metadata) != list(event.metadata)
+    assert reordered.calculated_checksum() == event.checksum == event.calculated_checksum()
+    assert result.batch
