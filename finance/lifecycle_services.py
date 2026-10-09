@@ -7,6 +7,7 @@ from .access import DENIED as _DENIED
 from .access import require_person as _person_for
 from .audit_services import append_event, cleanup_member_events, prepare_account_deletion
 from .models import (
+    AiPlanLink,
     AuditEvent,
     Account,
     Alert,
@@ -354,6 +355,9 @@ def end_current_membership(person, *, audit_actor=None):
         household_id=own_membership.household_id,
         used_at__isnull=True,
     ).delete()
+    # Plan links through another member's harness only last while both share a household.
+    AiPlanLink.objects.filter(person=person).exclude(connection__owner=person).delete()
+    AiPlanLink.objects.filter(connection__owner=person).exclude(person=person).delete()
     if audit_actor is not None:
         append_event(action=AuditEvent.Action.MEMBER_LEFT, actor=audit_actor, affected_member=person,
                      household=own_membership.household, target_id=person.pk)

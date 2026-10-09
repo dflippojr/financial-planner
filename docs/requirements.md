@@ -568,7 +568,7 @@ Owner decisions:
 - **AI for other members:**
   - Other members may use the tower's local model through the hosting member's harness connection when the host offers it (#162). Hosted backends on that connection stay usable only by the host.
   - Any member may bring their own Anthropic or OpenAI API key (#147). It is optional and paid by them; no paid key is ever required.
-  - Any member may link their own Claude or Codex plan through a sign-in popup (#237). The login lives in Agent Harness as an end-user login; the app sends only an opaque HMAC id of the Person, a pasted code is forwarded once and never stored, and a linked plan wins over that member's API key for the same backend. Linking goes through the member's own harness connection or one the host offers for plan linking.
+  - Any member may link their own Claude or Codex plan through a sign-in popup (#237). The login lives in Agent Harness as an end-user login; the app sends only an opaque HMAC id of the Person, a pasted code is forwarded once and never stored, and a linked plan wins over that member's API key for the same backend. Linking goes through the member's own harness connection or one the host offers for plan linking. A link through another member's connection is used only while both are current members of the same household and that member still offers plan linking; ending either membership removes it.
   - Per-user subscription logins wait on Agent Harness support ([agent-harness #365](https://github.com/dflippojr/agent-harness/issues/365)).
 
 

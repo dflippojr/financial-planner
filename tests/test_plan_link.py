@@ -6,16 +6,19 @@ import logging
 import pytest
 from django.test import Client
 from django.urls import reverse
+from django.utils import timezone
 from tests.chat_helpers import ask
 from tests.helpers import stamp_recent_auth
 from tests.test_chat import TOKEN, harness as harness_fixture, make_member  # noqa: F401 - harness is a fixture
 from tests.test_security_headers import assert_page_is_csp_clean
 
 from finance.ai_jobs import enqueue_job, process_due_jobs
-from finance.ai_plan import LINK_PROMPT, end_user_id, set_offer_plan_links
-from finance.ai_services import connect_harness, run_structured
+from finance.ai_plan import LINK_PROMPT, end_user_id, plan_end_user, plan_link, set_offer_plan_links
+from finance.ai_services import AiError, connect_harness, resolve_ai, run_structured
 from finance.ai_types import AUTHORIZATION_REQUIRED, LOGIN_REQUIRED
-from finance.models import AiJob, AiPlanLink
+from finance.chat_services import chat_backend_for
+from finance.lifecycle_services import leave_household
+from finance.models import AiJob, AiPlanLink, AiProviderConnection, Membership
 from finance.policy_services import current_policy
 
 CANARY = "canary-code-7f3a9d"
@@ -247,3 +250,67 @@ def test_settings_page_with_plan_popup_is_csp_clean(harness):
     html = response.content.decode()
     assert 'src="/static/js/ai-plan-link.js"' in html
     assert "plan-link-dialog" in html and "Your Claude / Codex plan" in html
+
+
+@pytest.mark.django_db
+def test_leaving_the_household_ends_links_through_the_hosts_harness(harness):
+    state, _url = harness
+    _host, guest, client = _household(harness)
+    _link_claude(client)
+    leave_household(guest)
+    assert not AiPlanLink.objects.exists()
+    assert resolve_ai(guest, use_chat=True) == (None, "")
+    before = len(state.session_creates)
+    result = run_structured(guest, "synthetic", feature="structured", backend="claude")
+    assert not result.ok and result.failure_code == AUTHORIZATION_REQUIRED
+    assert len(state.session_creates) == before
+
+
+@pytest.mark.django_db
+def test_host_leaving_ends_remaining_members_links_for_chat_and_jobs(harness, settings):
+    state, _url = harness
+    settings.AGENT_HARNESS_HOSTED_SESSIONS = True
+    host, guest, client = _household(harness)
+    _link_claude(client)
+    leave_household(host)
+    assert not AiPlanLink.objects.exists()
+    with pytest.raises(AiError):
+        chat_backend_for(guest)
+    before = len(state.session_creates)
+    job = enqueue_job(guest, feature="structured", backend="claude")
+    process_due_jobs()
+    job.refresh_from_db()
+    assert job.status != AiJob.Status.SUCCEEDED
+    assert len(state.session_creates) == before
+
+
+@pytest.mark.django_db
+def test_a_link_is_used_only_while_its_host_is_a_current_co_member(harness, settings):
+    state, _url = harness
+    settings.AGENT_HARNESS_HOSTED_SESSIONS = True
+    host, guest, client = _household(harness)
+    _link_claude(client)
+    link = AiPlanLink.objects.get(person=guest)
+    Membership.objects.filter(person=host, ended_at__isnull=True).update(ended_at=timezone.now())
+    assert AiPlanLink.objects.filter(pk=link.pk).exists()
+    assert plan_link(guest, "claude") is None
+    assert plan_end_user(guest, link.connection, "claude") == ""
+    with pytest.raises(AiError):
+        chat_backend_for(guest)
+    before = len(state.session_creates)
+    job = enqueue_job(guest, feature="structured", backend="claude")
+    process_due_jobs()
+    job.refresh_from_db()
+    assert job.status != AiJob.Status.SUCCEEDED
+    assert len(state.session_creates) == before
+
+
+@pytest.mark.django_db
+def test_a_link_is_used_only_while_the_host_still_offers_plan_links(harness):
+    _state, _url = harness
+    host, guest, client = _household(harness)
+    _link_claude(client)
+    AiProviderConnection.objects.filter(owner=host).update(offer_plan_links=False)
+    assert plan_link(guest, "claude") is None
+    with pytest.raises(AiError):
+        chat_backend_for(guest)
