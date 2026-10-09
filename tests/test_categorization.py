@@ -1101,11 +1101,17 @@ def test_owner_refresh_pairs_shared_row_and_hides_exclusion_history_from_member(
     assert not TransactionCorrectionHistory.objects.visible_to(member).filter(
         transaction=shared_leg, field_name=TransactionCorrectionHistory.Field.EXCLUSION
     ).exists()
-    client = Client()
-    client.force_login(member.user)
-    response = client.get(reverse("transaction-edit", args=(shared_leg.pk,)))
-    assert response.status_code == 200
-    assert b"Transfer exclusion" not in response.content
+    edit_url = reverse("transaction-edit", args=(shared_leg.pk,))
+    owner_client = Client()
+    owner_client.force_login(owner.user)
+    member_client = Client()
+    member_client.force_login(member.user)
+    owner_page = owner_client.get(edit_url)
+    member_page = member_client.get(edit_url)
+    assert owner_page.status_code == 200
+    assert b"Transfer exclusion" in owner_page.content
+    assert member_page.status_code == 200
+    assert b"Transfer exclusion" not in member_page.content
 
 
 @pytest.mark.django_db
