@@ -136,14 +136,18 @@ def _goal_household(person, scope):
 
 
 def _chain_reaches(start, goal_pk):
-    """True when following depends_on links from `start` arrives at `goal_pk`."""
+    """True when following depends_on links from `start` arrives at `goal_pk`.
+
+    Reads each link from the database, because callers may hold copies of goals
+    whose links an earlier save in the same transaction has already changed.
+    """
     seen = set()
-    current = start
-    while current is not None and current.pk not in seen:
-        if current.pk == goal_pk:
+    current_pk = start.pk
+    while current_pk is not None and current_pk not in seen:
+        if current_pk == goal_pk:
             return True
-        seen.add(current.pk)
-        current = current.depends_on
+        seen.add(current_pk)
+        current_pk = SavingsGoal.objects.filter(pk=current_pk).values_list("depends_on_id", flat=True).first()
     return False
 
 

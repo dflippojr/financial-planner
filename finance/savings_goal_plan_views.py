@@ -95,10 +95,13 @@ def _commit_import(request):
         return redirect("savings-goal-import")
     try:
         result = commit_goal_import(request.user, content)
-    except (ValidationError, GoalFileError):
+    except (ValidationError, GoalFileError) as exc:
         # Data changed since the preview: show it again with the current errors.
         try:
-            return _render_import(request, preview=preview_goal_import(request.user, content), token=token)
+            preview = preview_goal_import(request.user, content)
+            if not preview.errors:
+                messages.error(request, exc.messages[0] if isinstance(exc, ValidationError) else STALE_MESSAGE)
+            return _render_import(request, preview=preview, token=token)
         except GoalFileError:
             messages.error(request, STALE_MESSAGE)
             return redirect("savings-goal-import")

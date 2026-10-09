@@ -567,3 +567,19 @@ def test_second_member_confirming_the_same_household_file_changes_nothing():
     again = commit_goal_import(member.user, content)
 
     assert again.counts.unchanged == 1 and SavingsGoal.objects.count() == 1
+
+
+@pytest.mark.django_db
+def test_reversing_a_chain_does_not_trip_on_stale_links_of_unchanged_goals():
+    owner = make_person("owner")
+    commit_goal_import(owner.user, csv_file("X,10,1,,,,", "E,10,2,X,,,", "D,10,3,E,,,"))
+    reversed_chain = csv_file("X,10,1,D,,,", "E,10,2,,,,", "D,10,3,E,,,")
+
+    preview = preview_goal_import(owner.user, reversed_chain)
+    assert preview.errors == []
+
+    commit_goal_import(owner.user, reversed_chain)
+
+    by_name = {goal.name: goal for goal in SavingsGoal.objects.all()}
+    assert by_name["X"].depends_on_id == by_name["D"].pk
+    assert by_name["D"].depends_on_id == by_name["E"].pk and by_name["E"].depends_on_id is None
