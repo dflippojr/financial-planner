@@ -368,8 +368,14 @@ fresh volume, and upgrades.
 `.github/workflows/review.yml` posts an automated code-bug review as a PR comment. It runs once when a
 pull request is opened (Dependabot pull requests are skipped); after later commits a maintainer dispatches
 a re-review (`gh workflow run review.yml -f pr_number=N -f mode=full`).
-It refuses pull requests from forks, so untrusted code never reaches the dedicated self-hosted runner
-(`financial-planner-review`, registered with `ops/github/install-runner.ps1`). The workflow is a thin caller of
+The workflow job guard skips fork heads and Dependabot PRs, and the shared reviewer refuses fork PRs.
+Keep GitHub's fork approval setting at **Require approval for all external contributors**. The dedicated
+self-hosted runner (`financial-planner-review`) also uses a host-side `ACTIONS_RUNNER_HOOK_JOB_STARTED`
+allow-list for this repository's `review.yml` on `main`, with only base-repository `pull_request_target`
+or `workflow_dispatch` events accepted. `ops/github/install-runner.ps1` configures the hook and one-job
+ephemeral registration under a dedicated non-administrator account; the owner applies it to the host
+and reprovisions after each job. These controls do not sandbox untrusted PR text read by the reviewer.
+See [review runner setup](docs/review-runner.md). The workflow is a thin caller of
 the shared reviewer in `dflippojr/agent-harness` (`.github/workflows/review.yml@review-v1`), which holds the review
 logic and posts an `Automated Code Review` check that passes on a clean review and fails on findings.
 

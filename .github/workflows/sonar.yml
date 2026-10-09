@@ -7,8 +7,10 @@ name: SonarCloud
 #
 # Adapted from agent-harness's sonar.yml for this repo's stack (Django +
 # pytest, GitHub-hosted Linux runner -- no Windows-native test dependency
-# here, so ubuntu-latest instead of windows-latest, and no self-hosted
-# runner pool exists for this repo per AGENTS.md). This workflow both runs
+# here, so ubuntu-latest instead of windows-latest). A separate self-hosted
+# Windows pool handles review.yml, with external-contributor approval,
+# a workflow guard, and an owner-installed job-started hook; see
+# docs/review-runner.md. This workflow both runs
 # the tests (for coverage) and performs the SonarCloud analysis; automatic
 # analysis should stay off in the SonarCloud project settings.
 #
