@@ -114,7 +114,7 @@ def test_large_transaction_alerts_batch_reads_and_writes_without_duplicates():
     topped_up = raise_large_transaction_alerts(rows)
     assert len(topped_up) == MAX_LARGE_ALERTS + 1
     assert all(alert.recipient_id != person.pk for alert in topped_up)
-    assert Alert.objects.count() == 1000
+    assert Alert.objects.count() == 2 * (MAX_LARGE_ALERTS + 1)
 
 
 @pytest.mark.django_db(transaction=True)
