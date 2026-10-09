@@ -590,7 +590,7 @@ def _apply_automatic_rule_groups(person, by_rule):
             changed.append(txn)
     for application, payload in zip(applications, by_rule.values()):
         record(person, AuditEvent.Action.RULE_APPLIED, AuditEvent.TargetType.RULE, payload["rule"].pk,
-               audience=_actor_audience(person, payload["rule"]), source=AuditEvent.Source.RULE, verified=True,
+               audience=_actor_audience(person, payload["rule"]), verified=True,
                metadata={"rule_application_id": application.pk, "row_count": len(payload["rows"])})
     if changed:
         # One branch per winning rule rather than three CASE branches per row.
