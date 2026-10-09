@@ -2,6 +2,7 @@
 {% block title %}Recurring charges · Financial Planner{% endblock %}
 {% block content %}
 <h1 class="mb-4 text-2xl font-bold">Recurring charges</h1>
+<p class="mb-4"><a href="{% url 'recurring-create' %}" class="btn btn-sm">Create series from charges</a></p>
 {{ chart_data|json_script:"recurring-chart-data" }}
 {% if skipped_merchants %}
 <p class="mb-4 text-sm text-base-content/70" role="note">

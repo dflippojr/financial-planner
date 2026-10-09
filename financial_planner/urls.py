@@ -287,6 +287,7 @@ urlpatterns = [
     ),
     path("transfers/", views.transfer_review, name="transfer-review"),
     path("recurring/", views.recurring_review, name="recurring-review"),
+    path("recurring/create/", views.recurring_create, name="recurring-create"),
     path("planning/items/", planning_views.planned_item_list, name="planned-items"),
     path("planning/calendar/", bills_calendar_views.bills_calendar, name="bills-calendar"),
     path("planning/debts/", debt_planner_views.debt_payoff, name="debt-payoff"),

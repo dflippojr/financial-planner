@@ -194,6 +194,14 @@ These rules replace the whole-chain median band above. Prices drift with inflati
 - Manual edits survive refresh. Members are marked as detected or manual. Refresh adds detected chains to a series and never drops manual members. A detected chain that shares any charge with an existing active series attaches to that series. Manual members follow the same eligibility and revalidation rules as detected ones, including account deletion and sharing changes.
 - Export includes each member's source and the person's excluded charges.
 
+## Manual recurring series creation (2026-10-09, #264)
+
+- **Create series** on the Recurring page lets a member build a series from past charges when detection found none (for example a merchant above the 600-charge cap or one whose name collides after normalisation). Flow: search eligible charges (a capped page at a time, on demand), enter a name and an existing cadence, preview, then confirm. It works without JavaScript.
+- **Minimum history: 2 past charges** (owner decision). Detection still needs 3; a member choosing the charges by hand is itself a strong signal, so manual creation covers the rest. One charge is rejected.
+- **The member may override the detector.** Irregular dates or amounts are labelled in the preview and in the series reasons, never blocked. The series reason says it was created manually and its confidence is always low, never high-confidence detection.
+- The series is confirmed, belongs to the acting person, and all members are manual, so refresh preserves them. Selected charges must be visible, active, negative cash flow, not excluded as transfers or card payments, one currency, and not claimed by another active non-dismissed series. POST revalidates under the household lock and creates the whole series or nothing, with a generic denial for anything inaccessible. Identical membership cannot be created twice.
+- New charges do not join automatically beyond the existing confirmed-series matching and manual-member preservation; there is no new matcher.
+
 ## Spending by category decisions (2026-09-30, #10)
 
 - The default range and presets match the cash flow view: the last 12 full months plus the current month to date. Presets are this month, last month, last 3 months, last 12 months, and year to date.

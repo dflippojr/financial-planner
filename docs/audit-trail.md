@@ -43,7 +43,7 @@ Each row of the matrix is an explicit `record(...)` call inside the action's own
 | Categories, tags | created, renamed, archived (category, tag) | household | |
 | Saved CSV mappings | created, edited, archived, deleted, `default_changed` (csv_mapping) | household; default changes follow the account | |
 | Rules | created, edited, enabled/disabled, `rule_applied`, `rule_reversed` (rule) | household or owner | Applying records one aggregate event with the application ID and row count; automatic application after import uses source `rule`. A former household member reversing rows on their own account is audited privately. |
-| Recurring | confirmed, dismissed, merged (`source_id`, `surviving_id`), added, removed, canceled, resumed, price acknowledged (recurring) | the member | |
+| Recurring | confirmed, dismissed, merged (`source_id`, `surviving_id`), added (also records a manually created series, with `row_count`), removed, canceled, resumed, price acknowledged (recurring) | the member | |
 | Corrections | `transaction_corrected` (transaction) | account | One per category/refund-link history row written by a direct action, with `history_id`. Splits, unsplits and refund links appear through their history rows. Transfer confirm/dismiss/undo use `record_enabled`/`record_disabled` with field `kind`. |
 | Bulk edit | `bulk_applied` / `bulk_undone` (account) | account | One event per affected account with a row count; the event correlation ID is the existing bulk-undo UUID and source is `bulk`. Notes are never named. |
 | Chat | any of the above | as above | Source `chat_confirmation`, metadata `proposal_id`, a generated operation UUID as correlation ID, the approving member as actor. Events outlive the conversation and proposal. |

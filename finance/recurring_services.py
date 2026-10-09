@@ -20,6 +20,11 @@ from .models import AuditEvent, Person, RecurringExclusion, RecurringSeries, Rec
 from .months import add_months_clamped
 
 MANUAL_REASON = "grouping edited manually"
+MANUAL_CREATED_REASON = "created manually by the member, not detected"
+# Detection needs three occurrences; a member who picks the charges by hand
+# is a strong enough signal for two (2026-10-09, #264).
+MIN_MANUAL_SERIES_CHARGES = 2
+MANUAL_PICKER_PAGE_SIZE = 50
 MAX_AMOUNT_VARIANCE = Decimal("0.25")
 # Outlier removal makes the search superlinear in a merchant's charges, so a
 # merchant with more charges than this is left out of detection (and listed on
@@ -504,7 +509,11 @@ def _inputs_signature(person):
 def grouping_candidate_transactions(principal):
     """Eligible charges for add, including rows excluded only from detection."""
     person = _person_for(principal)
-    return list(
+    return list(_grouping_queryset(person).select_related("account").order_by("transaction_date", "pk"))
+
+
+def _grouping_queryset(person):
+    return (
         Transaction.objects.visible_to(person)
         .filter(
             status=Transaction.Status.ACTIVE,
@@ -513,8 +522,6 @@ def grouping_candidate_transactions(principal):
         )
         .annotate(_excluded=exclusion_exists_for(person))
         .filter(_excluded=False)
-        .select_related("account")
-        .order_by("transaction_date", "pk")
     )
 
 
@@ -555,7 +562,13 @@ def _recompute_series_from_members(series, *, extra_reasons=()):
     for reason in extra_reasons:
         if reason not in reason_list:
             reason_list.append(reason)
-    if (
+    created_manually = MANUAL_CREATED_REASON in (series.reasons or [])
+    if created_manually:
+        # A member's assertion is never high-confidence detection.
+        confidence = RecurringSeries.Confidence.LOW
+        reason_list.append(MANUAL_CREATED_REASON)
+        reason_list.extend(irregular_history_notes(ordered, series.cadence))
+    elif (
         series.members.filter(source=RecurringSeriesMember.Source.MANUAL).exists()
         and MANUAL_REASON not in reason_list
     ):
@@ -570,6 +583,20 @@ def _recompute_series_from_members(series, *, extra_reasons=()):
     _assign_fingerprint(series, [row.pk for row in ordered])
     series.save()
     return series
+
+
+def irregular_history_notes(ordered, cadence):
+    """Plain-language flags for history that detection itself would not accept."""
+    tolerance = CADENCE_DAYS[cadence][1]
+    notes = []
+    if any(
+        abs((right.transaction_date - add_cadence(left.transaction_date, cadence)).days) > tolerance
+        for left, right in zip(ordered, ordered[1:])
+    ):
+        notes.append(f"irregular history: some dates are more than {tolerance} days from a {cadence} interval")
+    if not _chain_passes_rolling_band(ordered):
+        notes.append("irregular history: some amounts change by more than 25%")
+    return notes
 
 
 def _detected_items(detected):
@@ -1114,6 +1141,93 @@ def add_recurring_members(principal, series_id, transaction_ids):
     if added:
         _record_series(person, AuditEvent.Action.RECURRING_ADDED, series, row_count=len(added))
     return _recompute_series_from_members(series, extra_reasons=(MANUAL_REASON,))
+
+
+class ManualSeriesError(ValueError):
+    """A correctable problem with the member's own input (not an access denial)."""
+
+
+def list_manual_series_candidates(principal, query="", page=1):
+    """One capped page of charges a member may hand-group into a new series."""
+    person = _person_for(principal)
+    claimed = _active_member_transaction_ids(person)
+    rows = _grouping_queryset(person).exclude(pk__in=claimed)
+    needle = query.strip()
+    if needle:
+        rows = rows.filter(description__icontains=needle)
+    page = max(page, 1)
+    start = (page - 1) * MANUAL_PICKER_PAGE_SIZE
+    window = list(
+        rows.select_related("account").order_by("-transaction_date", "-pk")[start : start + MANUAL_PICKER_PAGE_SIZE + 1]
+    )
+    return window[:MANUAL_PICKER_PAGE_SIZE], len(window) > MANUAL_PICKER_PAGE_SIZE
+
+
+def _validated_manual_selection(person, name, cadence, transaction_ids):
+    name = (name or "").strip()
+    max_length = RecurringSeries._meta.get_field("display_name").max_length
+    if not name or len(name) > max_length:
+        raise ManualSeriesError(f"Enter a name of 1 to {max_length} characters.")
+    if cadence not in CADENCE_DAYS:
+        raise ManualSeriesError("Choose a cadence.")
+    requested = list(dict.fromkeys(transaction_ids))
+    if len(requested) < MIN_MANUAL_SERIES_CHARGES:
+        raise ManualSeriesError(f"Select at least {MIN_MANUAL_SERIES_CHARGES} charges.")
+    eligible = {
+        txn.pk: txn
+        for txn in _grouping_queryset(person).filter(pk__in=requested).select_related("account")
+    }
+    claimed = _active_member_transaction_ids(person)
+    if any(pk not in eligible or pk in claimed for pk in requested):
+        raise PermissionDenied(_DENIED)
+    ordered = sorted((eligible[pk] for pk in requested), key=lambda row: (row.transaction_date, row.pk))
+    if len({row.currency for row in ordered}) != 1:
+        raise ManualSeriesError("Selected charges must share one currency.")
+    return name, requested, ordered
+
+
+def preview_manual_series(principal, name, cadence, transaction_ids):
+    person = _person_for(principal)
+    name, requested, ordered = _validated_manual_selection(person, name, cadence, transaction_ids)
+    return {
+        "name": name,
+        "cadence": cadence,
+        "transactions": ordered,
+        "transaction_ids": requested,
+        "typical_amount_minor": typical_amount_minor_from(ordered),
+        "currency": ordered[0].currency,
+        "notes": irregular_history_notes(ordered, cadence),
+    }
+
+
+@transaction.atomic
+def create_manual_series(principal, name, cadence, transaction_ids):
+    person = _person_for(principal)
+    lock_actor_household(person)
+    name, requested, ordered = _validated_manual_selection(person, name, cadence, transaction_ids)
+    if _fingerprint_taken(person, _fingerprint(requested), exclude_pk=None):
+        raise PermissionDenied(_DENIED)
+    descriptions = Counter(merchant_key(row.description) for row in ordered)
+    series = RecurringSeries.objects.create(
+        person=person,
+        merchant_key=descriptions.most_common(1)[0][0],
+        display_name=name,
+        cadence=cadence,
+        typical_amount_minor=typical_amount_minor_from(ordered),
+        currency=ordered[0].currency,
+        status=RecurringSeries.Status.CONFIRMED,
+        confirmed_at=timezone.now(),
+        confidence=RecurringSeries.Confidence.LOW,
+        reasons=[MANUAL_CREATED_REASON],
+        fingerprint=_fingerprint(requested),
+    )
+    RecurringExclusion.objects.filter(person=person, transaction_id__in=requested).delete()
+    RecurringSeriesMember.objects.bulk_create(
+        RecurringSeriesMember(series=series, transaction_id=pk, source=RecurringSeriesMember.Source.MANUAL)
+        for pk in requested
+    )
+    _record_series(person, AuditEvent.Action.RECURRING_ADDED, series, row_count=len(requested))
+    return _recompute_series_from_members(series)
 
 
 def _lock_confirmed_series(principal, series_id):

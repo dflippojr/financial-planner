@@ -135,7 +135,11 @@ from .policy_services import (
     record_onboarding_acceptance,
 )
 from .recurring_services import (
+    ManualSeriesError,
     add_recurring_members,
+    create_manual_series,
+    list_manual_series_candidates,
+    preview_manual_series,
     cancel_recurring_series,
     confirm_resume_recurring_series,
     confirm_recurring_series,
@@ -1280,6 +1284,57 @@ def _handle_recurring_post(request):
         raise Http404
     _service_or_404(lambda: refresh_recurring_series(request.user))
     return redirect("recurring-review")
+
+
+def _posted_ids(request):
+    ids = []
+    for raw in request.POST.getlist("transaction_id"):
+        try:
+            ids.append(int(raw))
+        except (TypeError, ValueError) as exc:
+            raise Http404 from exc
+    return ids
+
+
+@require_http_methods(["GET", "POST"])
+@never_cache
+def recurring_create(request):
+    """Create a confirmed series by hand: pick charges, preview, then confirm."""
+    context = {"cadences": RecurringSeries.Cadence.choices, "error": None, "preview": None}
+    if request.method == "POST":
+        step = request.POST.get("step")
+        name = request.POST.get("name", "")
+        cadence = request.POST.get("cadence", "")
+        ids = _posted_ids(request)
+        if step not in ("preview", "confirm"):
+            raise Http404
+        try:
+            if step == "confirm":
+                _service_or_404(lambda: create_manual_series(request.user, name, cadence, ids))
+                return redirect("recurring-review")
+            preview = _service_or_404(lambda: preview_manual_series(request.user, name, cadence, ids))
+            preview["amount_display"] = _money_display(preview["typical_amount_minor"], preview["currency"])
+            context["preview"] = preview
+        except ManualSeriesError as exc:
+            context["error"] = str(exc)
+        context.update(name=name, cadence=cadence)
+    if context["preview"] is None:
+        try:
+            page = int(request.GET.get("page", "1"))
+        except (TypeError, ValueError):
+            page = 1
+        query = request.GET.get("q", "")
+        candidates, has_next = _service_or_404(lambda: list_manual_series_candidates(request.user, query, page))
+        context.update(
+            candidates=candidates,
+            query=query,
+            page=max(page, 1),
+            next_page=max(page, 1) + 1 if has_next else None,
+            previous_page=page - 1 if page > 1 else None,
+        )
+        context.setdefault("name", "")
+        context.setdefault("cadence", "")
+    return render(request, "finance/recurring_create.html", context)
 
 
 def _recurring_merge_selection(raw_merge, grouping_series):
