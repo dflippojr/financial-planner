@@ -252,3 +252,98 @@ def test_a_link_saved_mid_fetch_with_an_earlier_cutover_is_not_applied(monkeypat
     with pytest.raises(SimpleFinError, match="Account links changed"):
         sync_connection(owner, connection.pk, ignore_rate_limit=True)
     assert not Transaction.objects.filter(account=checking).exists()
+
+
+def _member_write_completes_while_provider_blocks(member, provider_call):
+    """Run provider_call in a thread while its outbound request blocks; return member write timing."""
+    import threading
+
+    from django.db import connections, transaction
+
+    from finance.lifecycle_services import lock_actor_household
+
+    blocked = threading.Event()
+    release = threading.Event()
+    member_done = threading.Event()
+    errors = []
+
+    def run(action, done=None):
+        try:
+            action()
+        except Exception as exc:  # noqa: BLE001 - reported to the main thread
+            errors.append(exc)
+        finally:
+            connections.close_all()
+            if done is not None:
+                done.set()
+
+    def member_write():
+        with transaction.atomic():
+            lock_actor_household(member)
+            make_account(member, name="Synthetic Member Savings")
+
+    provider = threading.Thread(target=run, args=(lambda: provider_call(blocked, release),))
+    provider.start()
+    try:
+        assert blocked.wait(timeout=10)
+        writer = threading.Thread(target=run, args=(member_write, member_done))
+        writer.start()
+        finished_while_blocked = member_done.wait(timeout=10)
+    finally:
+        release.set()
+        provider.join(timeout=30)
+    writer.join(timeout=30)
+    assert errors == []
+    return finished_while_blocked
+
+
+@pytest.mark.django_db(transaction=True)
+def test_sync_fetch_does_not_hold_household_locks(monkeypatch):
+    from django.db import connection
+
+    if connection.vendor != "postgresql":
+        pytest.skip("row locks can only be exercised on PostgreSQL")
+    member = make_person("member")
+    owner, checking, sf_connection = _linked_owner_and_checking(monkeypatch)
+    make_household(owner, member)
+    healthy = payload_with(posted_txn(txn_id="sf-ok", day=10, amount="-2.00"))
+
+    def sync(blocked, release):
+        def slow_fetch(*args, **kwargs):
+            blocked.set()
+            release.wait(timeout=20)
+            return healthy
+
+        monkeypatch.setattr("finance.simplefin_services.fetch_accounts", slow_fetch)
+        sync_connection(owner, sf_connection.pk, ignore_rate_limit=True)
+
+    assert _member_write_completes_while_provider_blocks(member, sync)
+    assert Transaction.objects.filter(account=checking).count() == 1
+    sf_connection.refresh_from_db()
+    assert sf_connection.last_sync_result.startswith("Synced 1 ")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_claim_request_does_not_hold_household_locks(monkeypatch):
+    from django.db import connection
+
+    from finance.simplefin_services import claim_connection
+    from tests.test_simplefin import ACCESS_URL, setup_token
+
+    if connection.vendor != "postgresql":
+        pytest.skip("row locks can only be exercised on PostgreSQL")
+    owner = make_person("owner")
+    member = make_person("member")
+    make_household(owner, member)
+
+    def claim(blocked, release):
+        def slow_claim(url):
+            blocked.set()
+            release.wait(timeout=20)
+            return ACCESS_URL
+
+        monkeypatch.setattr("finance.simplefin_services.claim_access_url", slow_claim)
+        claim_connection(owner, setup_token())
+
+    assert _member_write_completes_while_provider_blocks(member, claim)
+    assert SimpleFinConnection.objects.filter(owner=owner).count() == 1

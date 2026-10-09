@@ -479,3 +479,15 @@ and applies the same scoring and revalidation rules as normal refreshes. A full
 rebuild intentionally reads the selected member's complete visible active ledger;
 run it outside busy periods. Changing the household matching window also performs
 a full revalidation, since every historical candidate may change.
+
+## Checking stored dates
+
+Transaction and balance dates must fall between 1900-01-01 and a year past
+today (#308). Rows stored before that check may sit outside the window. Run
+`python manage.py check_activity_dates` in the app environment to list them. It
+is read-only and prints counts and row IDs, never amounts, descriptions or
+account names. A member who can edit a listed row can correct its date in the app.
+
+The SimpleFIN client connects only to public internet addresses and does not
+use proxy settings from the environment. A setup token or Access URL whose host
+resolves to a loopback, private, link-local or shared (100.64.0.0/10) address is refused.
