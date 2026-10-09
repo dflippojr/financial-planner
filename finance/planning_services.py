@@ -88,6 +88,21 @@ def visible_projection_inputs(principal, *, account=None, scope="", accounts=Non
     inputs = [_planned_input(item) for item in planned_rows]
     # Only members still counted in actual cash flow keep a series going: an
     # archived account or transaction must not keep projecting charges.
+    selection = None
+    household_only = False
+    if account is not None or scope or accounts is not None:
+        selection = selected_accounts(
+            principal,
+            account=account,
+            scope=scope,
+            cash_flow_only=True,
+            accounts=accounts,
+        )
+        # A household-only selection judges transfer pairs by their household
+        # legs, as the actual totals do, so every member projects the same.
+        household_only = bool(selection) and all(
+            item.scope == Account.Scope.HOUSEHOLD for item in selection
+        )
     eligible = (
         Transaction.objects.visible_to(principal)
         .filter(
@@ -96,20 +111,12 @@ def visible_projection_inputs(principal, *, account=None, scope="", accounts=Non
             account__status=Account.Status.ACTIVE,
             account__archived_at__isnull=True,
         )
-        .annotate(_excluded=exclusion_exists_for(principal))
+        .annotate(_excluded=exclusion_exists_for(principal, household_only=household_only))
         .filter(_excluded=False)
         .values("pk")
     )
-    if account is not None or scope or accounts is not None:
-        eligible = eligible.filter(
-            account__in=selected_accounts(
-                principal,
-                account=account,
-                scope=scope,
-                cash_flow_only=True,
-                accounts=accounts,
-            )
-        )
+    if selection is not None:
+        eligible = eligible.filter(account__in=selection)
     series = RecurringSeries.objects.visible_to(principal).filter(
         status=RecurringSeries.Status.CONFIRMED,
         is_active=True,

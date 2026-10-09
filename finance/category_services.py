@@ -112,8 +112,18 @@ def assignable_categories(principal):
     return Category.objects.visible_to(person).exclude(code=Category.Code.TRANSFER).order_by("name", "pk")
 
 
-def exclusion_exists_for(principal):
-    visible = Transaction.objects.visible_to(principal).values("pk")
+def exclusion_exists_for(principal, *, household_only=False):
+    """Whether a row is one leg of an excluded transfer pair, as `principal` sees it.
+
+    By default both legs must be visible to the viewer. With `household_only`
+    both legs must sit in household accounts, so a household-scope calculation
+    gives every member the same answer: a pair with one private leg counts its
+    household leg as income or spending, even for the private leg's owner.
+    """
+    visible = Transaction.objects.visible_to(principal)
+    if household_only:
+        visible = visible.filter(account__scope=Account.Scope.HOUSEHOLD)
+    visible = visible.values("pk")
     return Exists(
         TransferPair.objects.excluding_income_and_spending().filter(
             Q(leg_a_id=OuterRef("pk")) | Q(leg_b_id=OuterRef("pk")),
@@ -1348,12 +1358,23 @@ def link_refund(principal, refund_id, original_id, original_part_id=None):
     return refund
 
 
+def _household_only_accounts(accounts):
+    """True when a non-empty account queryset holds household accounts only."""
+    return accounts.exists() and not accounts.exclude(scope=Account.Scope.HOUSEHOLD).exists()
+
+
 def _totals_base(principal, *, date_from=None, date_to=None, accounts=None, tag=None):
-    """Visible, countable cash-flow rows: no transfer legs, with a refund flag."""
+    """Visible, countable cash-flow rows: no transfer legs, with a refund flag.
+
+    A selection of household accounts only is a household-scope calculation,
+    so transfer pairs are judged by their household legs (`exclusion_exists_for`).
+    """
     person = _person_for(principal)
     visible_accounts = Account.objects.visible_to(person)
+    household_only = False
     if accounts is not None:
         visible_accounts = visible_accounts.filter(pk__in=[getattr(item, "pk", item) for item in accounts])
+        household_only = _household_only_accounts(visible_accounts)
     transactions = Transaction.objects.visible_to(person).filter(
         status=Transaction.Status.ACTIVE,
         kind=Transaction.Kind.CASH_FLOW,
@@ -1368,7 +1389,7 @@ def _totals_base(principal, *, date_from=None, date_to=None, accounts=None, tag=
     if date_to:
         transactions = transactions.filter(transaction_date__lte=date_to)
     return transactions.annotate(
-        _is_transfer_leg=exclusion_exists_for(person),
+        _is_transfer_leg=exclusion_exists_for(person, household_only=household_only),
         _is_refund=Exists(RefundLink.objects.filter(refund_id=OuterRef("pk"))),
     ).filter(_is_transfer_leg=False)
 
@@ -1388,7 +1409,9 @@ def _income_spending_sums():
 def income_and_spending_totals(principal, *, date_from=None, date_to=None, accounts=None, tag=None):
     """Access-filtered income and spending for later cash-flow views.
 
-    Transfers are excluded only when both legs are visible. Linked refunds are
+    Transfers are excluded only when both legs are visible, and, when every
+    selected account is a household account, only when both legs are in
+    household accounts. Linked refunds are
     never income; they reduce spending from the refund's own stored category and
     amount even when the original purchase is no longer visible. Unverified
     investment activity is omitted. Optional `accounts` must already be visible;

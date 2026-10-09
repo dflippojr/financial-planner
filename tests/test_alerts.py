@@ -204,7 +204,9 @@ def test_household_budget_alert_goes_to_current_members():
 
 
 @pytest.mark.django_db
-def test_household_budget_alert_uses_each_member_view():
+def test_household_budget_alert_counts_a_cross_scope_household_leg_for_every_member():
+    # #297: household scope judges a pair by its household legs, so the card
+    # owner sees the same household spending as the roommate.
     card_owner = make_person("cardowner")
     roommate = make_person("roommate")
     household = make_household(card_owner, roommate)
@@ -244,18 +246,15 @@ def test_household_budget_alert_uses_each_member_view():
     month = date(2026, 10, 1)
     owner_card = progress_snapshot(budget, month, card_owner)
     roommate_card = progress_snapshot(budget, month, roommate)
-    assert owner_card.spent_minor * 10 < owner_card.available_minor * 9
-    assert roommate_card.spent_minor * 10 >= roommate_card.available_minor * 9
+    assert owner_card.spent_minor == roommate_card.spent_minor == 9000
     evaluate_budget_alert(budget, today=date(2026, 10, 15))
 
     recipients = set(Alert.objects.filter(kind=Alert.Kind.BUDGET).values_list("recipient_id", flat=True))
-    assert recipients == {roommate.pk}
-    assert Alert.objects.filter(recipient=roommate, kind=Alert.Kind.BUDGET).count() == 1
+    assert recipients == {card_owner.pk, roommate.pk}
     assert Alert.objects.get(recipient=roommate).dedupe_key == f"budget:{budget.pk}:2026-10:90"
     Alert.objects.all().delete()
     evaluate_active_budget_alerts(today=date(2026, 10, 15))
-    assert set(Alert.objects.values_list("recipient_id", flat=True)) == {roommate.pk}
-    assert Alert.objects.get().dedupe_key == f"budget:{budget.pk}:2026-10:90"
+    assert set(Alert.objects.values_list("recipient_id", flat=True)) == {card_owner.pk, roommate.pk}
 
 
 @pytest.mark.django_db
