@@ -98,6 +98,7 @@ from .audit_services import record_download
 from .security_services import (
     EVENT_TYPES,
     active_sessions_for,
+    client_ip,
     events_for,
     record_security_event,
     record_sign_in_failure_for_username,
@@ -1477,7 +1478,7 @@ def sign_in(request):
     form = LoginForm(request.POST or None)
     if request.method == "POST" and form.is_valid():
         username = normalize_username(form.cleaned_data["username"])
-        key = throttle_key(username, request.META.get("REMOTE_ADDR"))
+        key = throttle_key(username, client_ip(request))
         already_blocked = login_is_blocked(key)
         user = _authenticate_member(request, username, form.cleaned_data["password"], key)
         if user is None:
@@ -1533,7 +1534,7 @@ def _start_google_join(request, google_form):
 def _start_google_setup(request, google_form):
     if not google_signin_enabled():
         raise Http404()
-    key = throttle_key(SETUP_THROTTLE_USERNAME, request.META.get("REMOTE_ADDR"))
+    key = throttle_key(SETUP_THROTTLE_USERNAME, client_ip(request))
     if login_is_blocked(key):
         google_form.add_error(None, SETUP_FAILED)
         return None
@@ -1562,7 +1563,7 @@ def _start_google_setup(request, google_form):
 
 
 def _complete_password_setup(request, form):
-    key = throttle_key(SETUP_THROTTLE_USERNAME, request.META.get("REMOTE_ADDR"))
+    key = throttle_key(SETUP_THROTTLE_USERNAME, client_ip(request))
     if login_is_blocked(key):
         form.add_error(None, SETUP_FAILED)
         return None
@@ -1647,7 +1648,7 @@ def start_google_sign_in(request):
         raise Http404()
     if not first_member_exists():
         return redirect("setup")
-    key = google_throttle_key(request.META.get("REMOTE_ADDR"))
+    key = google_throttle_key(client_ip(request))
     if login_is_blocked(key):
         return render(
             request,
@@ -2060,7 +2061,7 @@ def reauth(request):
         return _render_reauth(request, form)
     if not request.user.has_usable_password():
         return _render_reauth(request, ReauthPasswordForm(), REAUTH_FAILED)
-    key = throttle_key(request.user.username, request.META.get("REMOTE_ADDR"))
+    key = throttle_key(request.user.username, client_ip(request))
     user = _authenticate_member(request, request.user.username, request.POST.get("password", ""), key)
     if user is None or user.pk != request.user.pk:
         form.add_error(None, REAUTH_FAILED)
@@ -2075,7 +2076,7 @@ def reauth(request):
 def start_google_reauth(request):
     if not has_usable_google_sign_in(request.user):
         raise Http404()
-    key = google_throttle_key(request.META.get("REMOTE_ADDR"))
+    key = google_throttle_key(client_ip(request))
     if login_is_blocked(key):
         return _render_reauth(request, auth_error=REAUTH_FAILED)
     next_url = safe_next_url(request, request.POST.get("next", ""))
