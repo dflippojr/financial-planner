@@ -15,7 +15,8 @@ from django.urls import reverse
 from django.utils import timezone
 
 from tests.helpers import stamp_recent_auth
-from finance.auth_services import create_recovery_codes
+from finance.auth_services import create_invitation, create_recovery_codes, invitation_is_usable
+from finance.lifecycle_services import delete_member_data, leave_household
 from finance.models import (
     Account,
     Category,
@@ -245,6 +246,105 @@ def test_expired_invitation_cannot_be_used():
 
     assert b"could not be used" in response.content
     assert not get_user_model().objects.filter(username="late-member").exists()
+
+
+def make_two_member_household():
+    _user, inviter, household = make_member("inviter")
+    stayer_user = get_user_model().objects.create_user(username="stayer", password=PASSWORD)
+    stayer = Person.objects.create(user=stayer_user, display_name="Stayer Example")
+    Membership.objects.create(person=stayer, household=household)
+    Account.objects.create(
+        name="Synthetic Shared Checking",
+        account_type=Account.Type.CHECKING,
+        owner=stayer,
+        scope=Account.Scope.HOUSEHOLD,
+        household=household,
+        share_mode=Account.ShareMode.CO_OWNED,
+    )
+    return inviter, stayer, household
+
+
+def join_with(code, username):
+    return Client().post(
+        reverse("join"),
+        {
+            "invitation_code": code,
+            "username": username,
+            "display_name": "Joining Example",
+            "password1": PASSWORD,
+            "password2": PASSWORD,
+        },
+    )
+
+
+def _leave(person):
+    leave_household(person)
+
+
+def _evict(person):
+    call_command("evict_household_member", username=person.user.username, stdout=StringIO())
+
+
+def _delete_data(person):
+    delete_member_data(person, {})
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("end_membership", [_leave, _evict, _delete_data], ids=["leave", "eviction", "delete-my-data"])
+def test_unused_invitation_stops_working_when_its_inviter_membership_ends(end_membership):
+    inviter, _stayer, household = make_two_member_household()
+    code = create_invitation(inviter)
+    members_before = Membership.objects.filter(household=household).count()
+
+    end_membership(inviter)
+    response = join_with(code, "late-joiner")
+
+    assert b"could not be used" in response.content
+    assert not get_user_model().objects.filter(username="late-joiner").exists()
+    assert Membership.objects.filter(household=household).count() == members_before
+    assert not Invitation.objects.filter(household=household, used_at__isnull=True).exists()
+
+
+@pytest.mark.django_db
+def test_invitation_requires_its_inviter_to_still_be_a_current_member():
+    # Covers rows whose inviter's membership ended without the usual cleanup,
+    # for example invitations created before that cleanup existed.
+    inviter, _stayer, household = make_two_member_household()
+    code = create_invitation(inviter)
+    Membership.objects.filter(person=inviter).update(ended_at=timezone.now())
+
+    assert not invitation_is_usable(code)
+    response = join_with(code, "late-joiner")
+
+    assert b"could not be used" in response.content
+    assert not get_user_model().objects.filter(username="late-joiner").exists()
+    assert Invitation.objects.get(household=household).used_at is None
+
+
+@pytest.mark.django_db
+def test_invitation_without_a_recorded_inviter_cannot_be_used():
+    inviter, _stayer, _household = make_two_member_household()
+    code = create_invitation(inviter)
+    Invitation.objects.update(invited_by=None)
+
+    assert not invitation_is_usable(code)
+    assert b"could not be used" in join_with(code, "late-joiner").content
+    assert not get_user_model().objects.filter(username="late-joiner").exists()
+
+
+@pytest.mark.django_db
+def test_remaining_member_invitations_still_work_after_another_member_leaves():
+    inviter, stayer, household = make_two_member_household()
+    create_invitation(inviter)
+    code = create_invitation(stayer)
+
+    leave_household(inviter)
+    response = join_with(code, "new-joiner")
+
+    new_user = get_user_model().objects.get(username="new-joiner")
+    assert response.status_code == 200
+    assert Membership.objects.filter(person=new_user.person, household=household, ended_at__isnull=True).exists()
+    assert Account.objects.visible_to(new_user.person).filter(name="Synthetic Shared Checking").exists()
 
 
 @pytest.mark.django_db

@@ -20,7 +20,7 @@ The command works only while no `Person` exists. It prompts twice for a password
 
 Any person with a current household membership can open **Invite a household member** and create a code. The raw code is shown only in that response. Share it outside the app using a trusted channel. The recipient enters it on **Use an invitation**, chooses a username and either a password or **Join with Google**, sees the current privacy and data policy, and receives their own eight recovery codes. Accepting the policy is optional; without it the member can use the app but cannot use an AI backend.
 
-An invitation can be used once and expires after 48 hours. Creating a new invitation does not invalidate older unused invitations. `INVITATION_TTL_HOURS` can change the duration for future codes.
+An invitation can be used once and expires after 48 hours. Creating a new invitation does not invalidate older unused invitations. Unused invitations stop working when the member who created them leaves the household, is removed by the operator, or deletes their data. `INVITATION_TTL_HOURS` can change the duration for future codes.
 
 ## Google sign-in
 
