@@ -284,8 +284,8 @@ def test_transfers_and_investment_activity_are_not_recurring():
     savings = make_account(owner, name="Synthetic Savings", account_type=Account.Type.SAVINGS)
     for index in range(3):
         day = date(2026, 1, 3) + timedelta(days=30 * index)
-        make_transaction(owner, checking, transaction_date=day, amount_minor=-2500, description="Synthetic to savings")
-        make_transaction(owner, savings, transaction_date=day, amount_minor=2500, description="Synthetic from checking")
+        make_transaction(owner, checking, transaction_date=day, amount_minor=-2500, description="Synthetic transfer to savings")
+        make_transaction(owner, savings, transaction_date=day, amount_minor=2500, description="Synthetic transfer from checking")
     invest = make_account(owner, name="Synthetic Brokerage", account_type=Account.Type.INVESTMENT)
     for index in range(3):
         make_transaction(
@@ -402,7 +402,7 @@ def test_refresh_deactivates_confirmed_series_when_occurrences_are_transfers():
     make_household(owner)
     checking = make_account(owner, name="Synthetic Checking")
     savings = make_account(owner, name="Synthetic Savings", account_type=Account.Type.SAVINGS)
-    add_monthly_charges(owner, checking, description="Synthetic to savings", amount_minor=-2500)
+    add_monthly_charges(owner, checking, description="Synthetic transfer to savings", amount_minor=-2500)
     refresh_recurring_series(owner)
     series = RecurringSeries.objects.get()
     confirm_recurring_series(owner, series.pk)
@@ -417,7 +417,7 @@ def test_refresh_deactivates_confirmed_series_when_occurrences_are_transfers():
             savings,
             transaction_date=date(year, month, start.day),
             amount_minor=2500,
-            description="Synthetic from checking",
+            description="Synthetic transfer from checking",
         )
     refresh_transfer_pairs(owner)
     refresh_recurring_series(owner)

@@ -12,7 +12,13 @@ from finance.category_services import (
 )
 from finance.csv_import.services import categorize_imported_batch
 from finance.models import Transaction, TransferPair, TransactionCorrectionHistory
-from tests.test_categorization import make_person, make_household, make_account, make_transaction
+from tests.test_categorization import make_person, make_household, make_account
+from tests.test_categorization import make_transaction as _make_transaction
+
+
+def make_transaction(*args, description='Synthetic transfer row', **kwargs):
+    # Auto-marking needs payment or transfer wording on a leg (issue #294).
+    return _make_transaction(*args, description=description, **kwargs)
 
 
 def snapshot():

@@ -140,8 +140,8 @@ def test_high_confidence_pair_is_auto_marked_with_reasons_and_can_be_undone():
     checking = make_account(owner, name="Synthetic Checking")
     savings = make_account(owner, name="Synthetic Savings", account_type=Account.Type.SAVINGS)
     groceries = household.categories.get(name="Groceries")
-    outflow = make_transaction(owner, checking, amount_minor=-2500, description="Synthetic to savings")
-    make_transaction(owner, savings, amount_minor=2500, description="Synthetic from checking")
+    outflow = make_transaction(owner, checking, amount_minor=-2500, description="Synthetic transfer to savings")
+    make_transaction(owner, savings, amount_minor=2500, description="Synthetic transfer from checking")
     assign_category(owner, outflow.pk, groceries.pk)
 
     refresh_transfer_pairs(owner)
@@ -177,7 +177,7 @@ def test_low_confidence_pairs_are_suggestions_and_can_be_dismissed():
     checking = make_account(owner, name="Synthetic Checking")
     savings = make_account(owner, name="Synthetic Savings", account_type=Account.Type.SAVINGS)
     extra = make_account(owner, name="Synthetic Extra", account_type=Account.Type.SAVINGS)
-    make_transaction(owner, checking, amount_minor=-4000, description="Synthetic split out")
+    make_transaction(owner, checking, amount_minor=-4000, description="Synthetic split transfer out")
     make_transaction(owner, savings, amount_minor=4000, description="Synthetic split in one")
     make_transaction(owner, extra, amount_minor=4000, description="Synthetic split in two")
 
@@ -209,7 +209,7 @@ def test_low_confidence_suggestion_can_be_confirmed():
     checking = make_account(owner, name="Synthetic Checking")
     savings = make_account(owner, name="Synthetic Savings", account_type=Account.Type.SAVINGS)
     extra = make_account(owner, name="Synthetic Extra", account_type=Account.Type.SAVINGS)
-    make_transaction(owner, checking, amount_minor=-4000, description="Synthetic split out")
+    make_transaction(owner, checking, amount_minor=-4000, description="Synthetic split transfer out")
     make_transaction(owner, savings, amount_minor=4000, description="Synthetic split in one")
     make_transaction(owner, extra, amount_minor=4000, description="Synthetic split in two")
     refresh_transfer_pairs(owner)
@@ -347,8 +347,8 @@ def test_exclusion_hidden_when_counterpart_is_not_visible():
     household = make_household(owner, member)
     shared = make_account(owner, name="Shared", scope=Account.Scope.HOUSEHOLD, household=household)
     private = make_account(owner, name="Owner Private")
-    make_transaction(owner, private, amount_minor=-3000)
-    shared_leg = make_transaction(owner, shared, amount_minor=3000)
+    make_transaction(owner, private, amount_minor=-3000, description="Synthetic transfer out")
+    shared_leg = make_transaction(owner, shared, amount_minor=3000, description="Synthetic transfer in")
     refresh_transfer_pairs(owner)
 
     owner_totals = income_and_spending_totals(owner)
@@ -424,8 +424,8 @@ def test_transfer_review_get_does_not_write_pairs():
     make_household(owner)
     checking = make_account(owner, name="Synthetic Checking")
     savings = make_account(owner, name="Synthetic Savings", account_type=Account.Type.SAVINGS)
-    make_transaction(owner, checking, amount_minor=-2500, description="Synthetic to savings")
-    make_transaction(owner, savings, amount_minor=2500, description="Synthetic from checking")
+    make_transaction(owner, checking, amount_minor=-2500, description="Synthetic transfer to savings")
+    make_transaction(owner, savings, amount_minor=2500, description="Synthetic transfer from checking")
     client = Client()
     client.force_login(owner.user)
 
@@ -473,7 +473,7 @@ def test_visible_investment_transfer_does_not_count_as_spending():
     make_household(owner)
     checking = make_account(owner, name="Synthetic Checking")
     brokerage = make_account(owner, name="Synthetic Brokerage", account_type=Account.Type.INVESTMENT)
-    make_transaction(owner, checking, amount_minor=-4000, description="Synthetic contribution")
+    make_transaction(owner, checking, amount_minor=-4000, description="Synthetic transfer contribution")
     make_transaction(
         owner,
         brokerage,
@@ -496,8 +496,8 @@ def test_corrected_amounts_that_no_longer_cancel_restore_original_categories():
     checking = make_account(owner, name="Synthetic Checking")
     savings = make_account(owner, name="Synthetic Savings", account_type=Account.Type.SAVINGS)
     groceries = household.categories.get(name="Groceries")
-    outflow = make_transaction(owner, checking, amount_minor=-10000, description="Synthetic to savings")
-    inflow = make_transaction(owner, savings, amount_minor=10000, description="Synthetic from checking")
+    outflow = make_transaction(owner, checking, amount_minor=-10000, description="Synthetic transfer to savings")
+    inflow = make_transaction(owner, savings, amount_minor=10000, description="Synthetic transfer from checking")
     assign_category(owner, outflow.pk, groceries.pk)
     refresh_transfer_pairs(owner)
     pair = TransferPair.objects.get()
@@ -509,7 +509,7 @@ def test_corrected_amounts_that_no_longer_cancel_restore_original_categories():
         reverse("transaction-edit", args=(inflow.pk,)),
         {
             "transaction_date": "2026-01-02",
-            "description": "Synthetic from checking",
+            "description": "Synthetic transfer from checking",
             "amount": "150.00",
         },
     )
@@ -533,8 +533,8 @@ def test_undoing_one_transfer_leg_restores_the_survivor():
     checking = make_account(owner, name="Synthetic Checking")
     savings = make_account(owner, name="Synthetic Savings", account_type=Account.Type.SAVINGS)
     groceries = household.categories.get(name="Groceries")
-    outflow = make_transaction(owner, checking, amount_minor=-2500, description="Synthetic to savings")
-    inflow = make_transaction(owner, savings, amount_minor=2500, description="Synthetic from checking")
+    outflow = make_transaction(owner, checking, amount_minor=-2500, description="Synthetic transfer to savings")
+    inflow = make_transaction(owner, savings, amount_minor=2500, description="Synthetic transfer from checking")
     assign_category(owner, outflow.pk, groceries.pk)
     refresh_transfer_pairs(owner)
     pair = TransferPair.objects.get()
@@ -565,7 +565,7 @@ def test_stale_suggestion_is_invalidated_so_remaining_unique_pair_can_match():
     checking = make_account(owner, name="Synthetic Checking")
     savings = make_account(owner, name="Synthetic Savings", account_type=Account.Type.SAVINGS)
     extra = make_account(owner, name="Synthetic Extra", account_type=Account.Type.SAVINGS)
-    outflow = make_transaction(owner, checking, amount_minor=-10000, description="Synthetic split out")
+    outflow = make_transaction(owner, checking, amount_minor=-10000, description="Synthetic split transfer out")
     suggested_in = make_transaction(owner, savings, amount_minor=10000, description="Synthetic split in one")
     remaining_in = make_transaction(owner, extra, amount_minor=10000, description="Synthetic split in two")
     refresh_transfer_pairs(owner)
@@ -702,14 +702,14 @@ def test_narrowing_transfer_window_revalidates_pairs_then_refreshes():
         checking,
         amount_minor=-2100,
         transaction_date=date(2026, 1, 1),
-        description="Synthetic auto out",
+        description="Synthetic auto transfer out",
     )
     auto_in = make_transaction(
         owner,
         savings,
         amount_minor=2100,
         transaction_date=date(2026, 1, 4),
-        description="Synthetic auto in",
+        description="Synthetic auto transfer in",
     )
     make_transaction(
         owner,
@@ -737,7 +737,7 @@ def test_narrowing_transfer_window_revalidates_pairs_then_refreshes():
         checking,
         amount_minor=-1300,
         transaction_date=date(2026, 4, 1),
-        description="Synthetic confirm out",
+        description="Synthetic confirm transfer out",
     )
     make_transaction(
         owner,
@@ -796,7 +796,7 @@ def test_narrowing_window_revalidates_other_members_private_pairs():
     make_household(owner, member)
     checking = make_account(member, name="Synthetic Member Checking")
     savings = make_account(member, name="Synthetic Member Savings", account_type=Account.Type.SAVINGS)
-    outflow = make_transaction(member, checking, amount_minor=-2700, transaction_date=date(2026, 1, 1))
+    outflow = make_transaction(member, checking, amount_minor=-2700, transaction_date=date(2026, 1, 1), description="Synthetic transfer out")
     make_transaction(member, savings, amount_minor=2700, transaction_date=date(2026, 1, 4))
     refresh_transfer_pairs(member)
     pair = TransferPair.objects.get()
@@ -866,11 +866,11 @@ def test_category_filter_leaves_out_excluded_transfers():
     checking = make_account(owner, name="Synthetic Checking")
     savings = make_account(owner, name="Synthetic Savings", account_type=Account.Type.SAVINGS)
     groceries = household.categories.get(name="Groceries")
-    outflow = make_transaction(owner, checking, amount_minor=-3100, description="Synthetic moved out")
+    outflow = make_transaction(owner, checking, amount_minor=-3100, description="Synthetic transfer out")
     kept = make_transaction(owner, checking, amount_minor=-900, description="Synthetic market")
     assign_category(owner, outflow.pk, groceries.pk)
     assign_category(owner, kept.pk, groceries.pk)
-    make_transaction(owner, savings, amount_minor=3100, description="Synthetic moved in")
+    make_transaction(owner, savings, amount_minor=3100, description="Synthetic transfer in")
     refresh_transfer_pairs(owner)
     client = Client()
     client.force_login(owner.user)
@@ -893,7 +893,7 @@ def test_undoing_a_transfer_keeps_linked_refunds_with_the_restored_category():
     refund = make_transaction(owner, checking, amount_minor=700, description="Synthetic store refund")
     assign_category(owner, purchase.pk, groceries.pk)
     link_refund(owner, refund.pk, purchase.pk)
-    make_transaction(owner, savings, amount_minor=4200, description="Synthetic matching credit")
+    make_transaction(owner, savings, amount_minor=4200, description="Synthetic transfer matching credit")
     refresh_transfer_pairs(owner)
     pair = TransferPair.objects.get(status=TransferPair.Status.AUTO_MARKED)
     assign_category(owner, purchase.pk, dining.pk)
@@ -915,8 +915,8 @@ def test_undo_records_the_restored_category_in_history():
     dining = household.categories.get(name="Dining")
     checking = make_account(owner, name="Synthetic Checking")
     savings = make_account(owner, name="Synthetic Savings", account_type=Account.Type.SAVINGS)
-    outflow = make_transaction(owner, checking, amount_minor=-3300, description="Synthetic out")
-    make_transaction(owner, savings, amount_minor=3300, description="Synthetic in")
+    outflow = make_transaction(owner, checking, amount_minor=-3300, description="Synthetic transfer out")
+    make_transaction(owner, savings, amount_minor=3300, description="Synthetic transfer in")
     assign_category(owner, outflow.pk, groceries.pk)
     refresh_transfer_pairs(owner)
     pair = TransferPair.objects.get(status=TransferPair.Status.AUTO_MARKED)
@@ -945,8 +945,8 @@ def test_archiving_shared_account_unmarks_pair_with_other_members_private_leg():
     dining = household.categories.get(name="Dining")
     shared = make_account(owner, name="Synthetic Shared Checking", scope=Account.Scope.HOUSEHOLD, household=household)
     private = make_account(member, name="Synthetic Member Savings", account_type=Account.Type.SAVINGS)
-    shared_leg = make_transaction(owner, shared, amount_minor=-2800, description="Synthetic shared out")
-    private_leg = make_transaction(member, private, amount_minor=2800, description="Synthetic private in")
+    shared_leg = make_transaction(owner, shared, amount_minor=-2800, description="Synthetic shared transfer out")
+    private_leg = make_transaction(member, private, amount_minor=2800, description="Synthetic private transfer in")
     assign_category(member, private_leg.pk, groceries.pk)
     refresh_transfer_pairs(member)
     pair = TransferPair.objects.get()
@@ -978,8 +978,8 @@ def test_unsharing_shared_account_unmarks_pair_with_other_members_private_leg():
     household = make_household(owner, member)
     shared = make_account(owner, name="Synthetic Shared Checking", scope=Account.Scope.HOUSEHOLD, household=household)
     private = make_account(member, name="Synthetic Member Savings", account_type=Account.Type.SAVINGS)
-    make_transaction(owner, shared, amount_minor=-2900, description="Synthetic shared out")
-    private_leg = make_transaction(member, private, amount_minor=2900, description="Synthetic private in")
+    make_transaction(owner, shared, amount_minor=-2900, description="Synthetic shared transfer out")
+    private_leg = make_transaction(member, private, amount_minor=2900, description="Synthetic private transfer in")
     refresh_transfer_pairs(member)
     pair = TransferPair.objects.get()
     assert pair.status == TransferPair.Status.AUTO_MARKED
@@ -1008,8 +1008,8 @@ def test_undoing_import_of_shared_leg_restores_other_members_snapshot_category()
     dining = household.categories.get(name="Dining")
     shared = make_account(member, name="Synthetic Shared Checking", scope=Account.Scope.HOUSEHOLD, household=household)
     private = make_account(owner, name="Synthetic Owner Savings", account_type=Account.Type.SAVINGS)
-    shared_leg = make_transaction(member, shared, amount_minor=-3000, description="Synthetic shared out")
-    private_leg = make_transaction(owner, private, amount_minor=3000, description="Synthetic private in")
+    shared_leg = make_transaction(member, shared, amount_minor=-3000, description="Synthetic shared transfer out")
+    private_leg = make_transaction(owner, private, amount_minor=3000, description="Synthetic private transfer in")
     assign_category(owner, private_leg.pk, groceries.pk)
     refresh_transfer_pairs(owner)
     pair = TransferPair.objects.get()

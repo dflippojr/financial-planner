@@ -96,7 +96,7 @@ def test_excluded_transfer_has_no_refund_search():
     from finance.category_services import refresh_transfer_pairs
     owner, _, account, refund, client = setup_refund()
     second = make_account(owner, name='Synthetic Savings')
-    make_transaction(owner, second, amount_minor=-refund.amount_minor)
+    make_transaction(owner, second, amount_minor=-refund.amount_minor, description='Synthetic transfer out')
     refresh_transfer_pairs(owner)
     refund.refresh_from_db()
     assert refund.is_excluded_transfer
