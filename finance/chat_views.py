@@ -24,6 +24,7 @@ from .chat_services import (
     send_message,
     start_conversation,
 )
+from .input_limits import MAX_CHAT_MESSAGES
 from .models import AiConversationMessage
 from .reauth import safe_next_url
 
@@ -48,7 +49,7 @@ def chat_page(request):
 @require_POST
 def chat_send(request):
     person = _person(request)
-    prompt = (request.POST.get("prompt") or "").strip()
+    prompt = request.POST.get("prompt") or ""
     conversation_id = request.POST.get("conversation_id") or None
     page_context = sanitize_page_context(
         {
@@ -240,7 +241,8 @@ def _chat_context(person, conversation, request):
     ))
     messages_qs = []
     if conversation is not None:
-        messages_qs = list(conversation.messages.order_by("created_at", "pk").prefetch_related("proposals"))
+        messages_qs = list(reversed(list(conversation.messages.order_by("-created_at", "-pk")
+                                         .prefetch_related("proposals")[:MAX_CHAT_MESSAGES])))
         for item in messages_qs:
             item.cards = [card_for(person, proposal) for proposal in item.proposals.all()]
     return {

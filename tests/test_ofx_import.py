@@ -1,3 +1,4 @@
+from finance.csv_import.staging import _path as _stage_file_path
 from datetime import date
 from pathlib import Path
 
@@ -254,7 +255,7 @@ def test_import_reimport_and_undo(import_client, name, account_type):
     batch = ImportBatch.objects.get()
     assert batch.source == "ofx"
     assert batch.saved_csv_mapping_id is None
-    assert not list(staging.iterdir())
+    assert not list(staging.glob("*.csvstage"))
     stored = Transaction.objects.order_by("source_row_number").first()
     assert set(stored.original_fields) == set(OFX_HEADERS)
     assert stored.source_transaction_id.startswith("synthetic-")
@@ -268,7 +269,7 @@ def test_import_reimport_and_undo(import_client, name, account_type):
     assert commit(client, account, response).status_code == 302
     assert ImportBatch.objects.count() == 1
     assert Transaction.objects.count() == 2
-    assert not list(staging.iterdir())
+    assert not list(staging.glob("*.csvstage"))
     # A changed FITID still matches by fingerprint; only the extra date is new.
     overlap = content.replace(b"20260927", b"20260929").replace(b"synthetic-2", b"synthetic-changed-id")
     response = upload(client, account, overlap)
@@ -294,7 +295,7 @@ def test_upload_errors_leave_nothing_staged(import_client, content, profile, mes
     client, account, staging = import_client
     response = upload(client, account, content, profile)
     assert message in str(response.context["upload_form"].errors)
-    assert not list(staging.iterdir())
+    assert not list(staging.glob("*.csvstage"))
     assert not client.session.get(SESSION_KEY)
     assert not ImportBatch.objects.exists()
     assert not Transaction.objects.exists()
@@ -325,7 +326,7 @@ def test_replacement_does_not_add_to_an_earlier_import(import_client):
     ).replace(b"<FITID>synthetic-1", b"<FITID>synthetic-correction")
     response = upload(client, account, correction)
     assert "transaction corrections are not supported" in str(response.context["upload_form"].errors)
-    assert not list(staging.iterdir())
+    assert not list(staging.glob("*.csvstage"))
     assert not client.session.get(SESSION_KEY)
     assert ImportBatch.objects.count() == 1
     assert list(Transaction.objects.order_by("pk").values_list("amount_minor", flat=True)) == amounts
@@ -342,7 +343,7 @@ def test_hub_upload_and_cancel(import_client):
     preview = client.get(response.url)
     token = preview.context["mapping_form"].data["token"]
     assert client.post(response.url, {"action": "cancel", "token": token}).status_code == 302
-    assert not list(staging.iterdir())
+    assert not list(staging.glob("*.csvstage"))
 
 
 @pytest.mark.django_db
@@ -359,7 +360,7 @@ def test_csv_description_containing_ofx_imports_normally(import_client):
     transaction = Transaction.objects.get()
     assert transaction.description == "<OFX> SYNTHETIC"
     assert transaction.amount_minor == -1234
-    assert not list(staging.iterdir())
+    assert not list(staging.glob("*.csvstage"))
 
 
 @pytest.mark.django_db
@@ -368,4 +369,4 @@ def test_encoded_xml_chosen_as_csv_has_a_profile_error(import_client):
     content = fixture("synthetic_card.qfx").decode().replace('encoding="UTF-8"', 'encoding="utf-16"')
     response = upload(client, account, content.encode("utf-16"), profile="generic")
     assert "Choose the OFX / QFX profile" in str(response.context["upload_form"].errors)
-    assert not list(staging.iterdir())
+    assert not list(staging.glob("*.csvstage"))

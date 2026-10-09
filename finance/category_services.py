@@ -1,4 +1,8 @@
 from collections import defaultdict
+from bisect import bisect_left, bisect_right
+from contextvars import ContextVar
+from functools import wraps
+from itertools import chain
 from datetime import timedelta
 from decimal import Decimal
 from types import SimpleNamespace
@@ -15,6 +19,7 @@ from .access import require_person as _person_for
 from .audit_services import record, record_correction
 from .lifecycle_services import lock_actor_household
 from .pairing_evidence import has_payment_wording
+from .input_limits import MAX_TRANSFER_CANDIDATES
 from .models import (
     AuditEvent,
     Account,
@@ -27,6 +32,35 @@ from .models import (
     TransactionSplit,
     TransferPair,
 )
+
+
+_PAIR_CACHE = ContextVar("pair_cache", default=None)
+
+
+def _cached_pair_run(function):
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        token = _PAIR_CACHE.set({"memberships": {}, "windows": {}})
+        try:
+            return function(*args, **kwargs)
+        finally:
+            _PAIR_CACHE.reset(token)
+    return wrapped
+
+
+def _prime_pair_cache(rows):
+    cache = _PAIR_CACHE.get()
+    if cache is None:
+        return
+    owner_ids = {row.account.owner_id for row in rows}
+    memberships = Membership.objects.filter(person_id__in=owner_ids, ended_at__isnull=True).select_related("household")
+    cache["memberships"] = {owner_id: None for owner_id in owner_ids}
+    for membership in memberships:
+        cache["memberships"][membership.person_id] = membership.household_id
+        cache["windows"][membership.person_id] = membership.household.transfer_match_window_days
+    for owner_id in owner_ids:
+        cache["windows"].setdefault(owner_id, settings.TRANSFER_MATCH_WINDOW_DAYS)
+
 
 REFUND_LINK_RULE = (
     "A refund must be a positive amount linked to a negative original purchase of the same kind."
@@ -350,6 +384,9 @@ def _accounts_share_a_viewer(account_a, account_b):
     owned = account_b if account_a.scope == household else account_a
     if owned.scope != private or shared.scope != household or shared.household_id is None:
         return False
+    cache = _PAIR_CACHE.get()
+    if cache is not None and owned.owner_id in cache["memberships"]:
+        return cache["memberships"][owned.owner_id] == shared.household_id
     return Membership.objects.filter(
         person_id=owned.owner_id,
         household_id=shared.household_id,
@@ -362,6 +399,9 @@ def _window_days(account_a, account_b):
         if account.scope == Account.Scope.HOUSEHOLD and account.household_id:
             return account.household.transfer_match_window_days
     owner_id = account_a.owner_id
+    cache = _PAIR_CACHE.get()
+    if cache is not None and owner_id in cache["windows"]:
+        return cache["windows"][owner_id]
     membership = (
         Membership.objects.filter(person_id=owner_id, ended_at__isnull=True)
         .select_related("household")
@@ -417,20 +457,43 @@ def _is_split(txn):
 def _is_candidate(tx_a, tx_b):
     if _is_split(tx_a) or _is_split(tx_b):
         return False
-    if not _amounts_and_accounts_can_pair(tx_a, tx_b):
-        return False
     window = _window_days(tx_a.account, tx_b.account)
-    return abs((tx_a.transaction_date - tx_b.transaction_date).days) <= window
+    if abs((tx_a.transaction_date - tx_b.transaction_date).days) > window:
+        return False
+    return _amounts_and_accounts_can_pair(tx_a, tx_b)
+
+
+class _CandidatePairs(list):
+    truncated = False
+
+
+def _group_date_candidates(group):
+    positives = sorted((row for row in group if row.amount_minor > 0),
+                       key=lambda row: (row.transaction_date, row.pk))
+    dates = [row.transaction_date for row in positives]
+    negatives = sorted((row for row in group if row.amount_minor < 0),
+                       key=lambda row: (row.transaction_date, row.pk))
+    for left in negatives:
+        window = _window_days(left.account, left.account)
+        lower = bisect_left(dates, left.transaction_date - timedelta(days=window))
+        upper = bisect_right(dates, left.transaction_date + timedelta(days=window))
+        for index in range(lower, upper):
+            yield left, positives[index]
 
 
 def _candidate_pairs(transactions):
     by_abs = defaultdict(list)
     for item in transactions:
-        by_abs[abs(item.amount_minor)].append(item)
-    raw_pairs = []
-    for group in by_abs.values():
-        for index, left in enumerate(group):
-            raw_pairs.extend(_ordered_legs(left, right) for right in group[index + 1 :] if _is_candidate(left, right))
+        if item.amount_minor and not _is_split(item):
+            by_abs[abs(item.amount_minor)].append(item)
+    raw_pairs = _CandidatePairs()
+    candidates = chain.from_iterable(_group_date_candidates(group) for group in by_abs.values())
+    for index, (left, right) in enumerate(candidates):
+        if index >= MAX_TRANSFER_CANDIDATES:
+            raw_pairs.truncated = True
+            break
+        if _is_candidate(left, right):
+            raw_pairs.append(_ordered_legs(left, right))
     return raw_pairs
 
 
@@ -461,7 +524,8 @@ def _score_pairs(transactions):
         counts[left.pk] += 1
         counts[right.pk] += 1
     return [
-        _scored_pair(left, right, counts[left.pk] == 1 and counts[right.pk] == 1)
+        _scored_pair(left, right, not getattr(raw_pairs, "truncated", False)
+                     and counts[left.pk] == 1 and counts[right.pk] == 1)
         for left, right in raw_pairs
     ]
 
@@ -844,6 +908,7 @@ def _lock_affected_transactions(person, transaction_ids, previous_keys):
 
 
 @transaction.atomic
+@_cached_pair_run
 def refresh_transfer_pairs(principal, *, actor=None, transaction_ids=None, previous_keys=()):
     """Refresh affected candidate components; omit ids for a maintenance rebuild."""
     if transaction_ids is not None:
@@ -859,6 +924,7 @@ def refresh_transfer_pairs(principal, *, actor=None, transaction_ids=None, previ
     )
     if not locked:
         return []
+    _prime_pair_cache(locked)
     tx_ids = [item.pk for item in locked]
     existing = {
         (pair.leg_a_id, pair.leg_b_id): pair

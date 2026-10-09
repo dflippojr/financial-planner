@@ -1,3 +1,4 @@
+from finance.csv_import.staging import _path as _stage_file_path
 import json
 from datetime import date
 from pathlib import Path
@@ -503,7 +504,7 @@ def _session_blob(client):
 
 def _stage_path(staging_dir, client):
     token = client.session["sheet_comparison_pending"]["token"]
-    return Path(staging_dir) / f"{token}.csvstage", token
+    return _stage_file_path(token), token
 
 
 @pytest.mark.django_db

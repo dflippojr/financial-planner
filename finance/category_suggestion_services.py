@@ -12,6 +12,7 @@ from django.db import transaction
 from django.urls import reverse
 from django.utils import timezone
 
+from .input_limits import MAX_DESCRIPTION_CHARS, MAX_PROMPT_CHARS, MAX_PROMPT_LINE_CHARS
 from .ai_jobs import enqueue_jobs
 from .ai_services import member_has_ai, resolve_ai, run_structured
 from .ai_tools import visible_accounts
@@ -243,10 +244,11 @@ def run_category_suggestion_job(person, job, *, backend, session_id="", on_sessi
 
 
 def shared_description_contains(descriptions):
-    texts = [re.sub(r"\s+", " ", item or "").strip() for item in descriptions]
+    texts = [re.sub(r"\s+", " ", (item or "")[:200]).strip() for item in descriptions[:BATCH_SIZE]]
     texts = [item for item in texts if item]
     if len(texts) < MIN_RULE_ACCEPTS:
         return None
+    folded_texts = [item.casefold() for item in texts]
     shortest = min(texts, key=len)
     best = ""
     for start in range(len(shortest)):
@@ -255,7 +257,7 @@ def shared_description_contains(descriptions):
             if len(piece) < MIN_RULE_CONTAINS:
                 continue
             folded = piece.casefold()
-            if all(folded in item.casefold() for item in texts) and len(piece) > len(best):
+            if len(piece) > len(best) and all(folded in item for item in folded_texts):
                 best = piece
     return best or None
 
@@ -333,27 +335,32 @@ def _suggestable_categories(person):
     return assignable_categories(person).exclude(code=Category.Code.UNCATEGORIZED)
 
 
+def _prompt_text(value, limit):
+    return re.sub(r"\s+", " ", str(value or "")[:limit]).strip()
+
+
 def _build_prompt(txns, categories):
-    category_lines = [f"- id={item.pk} name={item.name}" for item in categories]
-    txn_lines = [
-        (
-            f"- id={txn.pk} date={txn.transaction_date.isoformat()} "
-            f"amount_minor={txn.amount_minor} currency={txn.currency} "
-            f"description={txn.description}"
-        )
-        for txn in txns
-    ]
+    category_lines = [f"- id={item.pk} name={_prompt_text(item.name, 150)}" for item in categories]
+    # Reserve space for the entire 40-row batch even with a large category list.
+    category_text = ""
+    for line in category_lines:
+        if len(category_text) + len(line) + 1 > 6_000:
+            break
+        category_text += line + "\n"
+    txn_lines = []
+    for txn in txns[:BATCH_SIZE]:
+        line = (f"- id={txn.pk} date={txn.transaction_date.isoformat()} "
+                f"amount_minor={txn.amount_minor} currency={txn.currency} "
+                f"description={_prompt_text(txn.description, MAX_DESCRIPTION_CHARS)}")
+        txn_lines.append(line[:MAX_PROMPT_LINE_CHARS])
     return (
         "Suggest a household category for each uncategorized transaction.\n"
         "Reply with JSON only, no markdown: "
         '{"suggestions":[{"transaction_id":1,"category_id":2}]}.\n'
         'Use an existing category id from the list, or "unsure". '
-        "Do not invent categories or ids.\n"
-        "Categories:\n"
-        + "\n".join(category_lines)
-        + "\nTransactions:\n"
-        + "\n".join(txn_lines)
-    )
+        "Do not invent categories or ids.\nCategories:\n"
+        + category_text + "Transactions:\n" + "\n".join(txn_lines)
+    )[:MAX_PROMPT_CHARS]
 
 
 def _parse_suggestions(answer):

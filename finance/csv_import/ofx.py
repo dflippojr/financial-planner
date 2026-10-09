@@ -149,11 +149,18 @@ def _value(element, tag):
     return (element.findtext(tag) or "").strip()
 
 
-def _currency_error(statement, transaction):
-    currencies = [_value(statement, "CURDEF")]
-    for container in (statement, transaction):
-        for currency in container.findall("CURRENCY"):
-            currencies.append(_value(currency, "CURSYM") or (currency.text or "").strip())
+MAX_CURRENCY_ELEMENTS = 64
+
+
+def _currencies(container):
+    elements = container.findall("CURRENCY")
+    if len(elements) > MAX_CURRENCY_ELEMENTS:
+        raise CsvInputError("The statement has too many currency elements.")
+    return [_value(item, "CURSYM") or (item.text or "").strip() for item in elements]
+
+
+def _currency_error(statement_currencies, transaction):
+    currencies = statement_currencies + _currencies(transaction)
     if any(value.upper() != "USD" for value in currencies if value):
         return "Currency must be USD."
     return None
@@ -164,16 +171,17 @@ def read_ofx(content: bytes, *, max_rows=MAX_DATA_ROWS) -> CsvDocument:
     rows = []
     for statement_tag in ("STMTRS", "CCSTMTRS"):
         for statement in root.iter(statement_tag):
+            currencies = [_value(statement, "CURDEF")] + _currencies(statement)
             for transaction in statement.findall("BANKTRANLIST/STMTTRN"):
                 if len(rows) >= max_rows:
                     raise CsvInputError(f"The statement file exceeds the {max_rows:,} row limit.")
-                rows.append(_row(statement, transaction, len(rows) + 2))
+                rows.append(_row(currencies, transaction, len(rows) + 2))
     if not rows:
         raise CsvInputError("This file has no bank or card transactions")
     return CsvDocument(OFX_HEADERS, tuple(rows))
 
 
-def _row(statement, transaction, number):
+def _row(statement_currencies, transaction, number):
     if _value(transaction, "CORRECTFITID") or _value(transaction, "CORRECTACTION"):
         # Corrections require matching provider IDs, which this importer does
         # not do. Treating a replacement as a new fingerprint would double count.
@@ -183,7 +191,7 @@ def _row(statement, transaction, number):
     name = _value(transaction, "NAME") or _value(transaction, "PAYEE/NAME") or _value(transaction, "PAYEE2/NAME")
     cells = (date, _value(transaction, "TRNAMT"), name,
              *(_value(transaction, tag) for tag in ("MEMO", "FITID", "TRNTYPE")))
-    error = _currency_error(statement, transaction)
+    error = _currency_error(statement_currencies, transaction)
     if len(cells[4]) > 255:
         error = "FITID exceeds the 255 character limit."
     return CsvRow(number, cells, error)

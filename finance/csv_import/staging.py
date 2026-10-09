@@ -2,6 +2,8 @@ import os
 import re
 import time
 import uuid
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 
 from django.conf import settings
@@ -16,6 +18,54 @@ TOKEN_PATTERN = re.compile(r"[0-9a-f]{32}")
 KIND_CSV_IMPORT = "csv_import"
 KIND_SHEET_COMPARISON = "sheet_comparison"
 KIND_GOAL_IMPORT = "goal_import"
+MAX_USER_STAGES = 5
+MAX_USER_STAGE_BYTES = 15 * 1024 * 1024
+MAX_TOTAL_STAGES = 50
+MAX_TOTAL_STAGE_BYTES = 100 * 1024 * 1024
+_STAGE_LOCK = threading.Lock()
+STORAGE_ERROR = "Upload storage is unavailable. Cancel an earlier upload or try again later."
+
+
+@contextmanager
+def _storage_lock():
+    # Serialize quotas across threads and web workers sharing the tmpfs.
+    with _STAGE_LOCK, (_directory() / ".stage-lock").open("a+b") as handle:
+        if os.name == "nt":
+            import msvcrt
+            if handle.seek(0, os.SEEK_END) == 0:
+                handle.write(b"0")
+                handle.flush()
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if os.name == "nt":
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def _check_quota(user_id, size):
+    total_count = total_bytes = user_count = user_bytes = 0
+    for candidate in _directory().glob("*.csvstage"):
+        try:
+            length = candidate.stat().st_size
+        except FileNotFoundError:
+            continue
+        total_count += 1
+        total_bytes += length
+        if candidate.name.startswith(f"{user_id}-"):
+            user_count += 1
+            user_bytes += length
+    if user_count >= MAX_USER_STAGES or user_bytes + size > MAX_USER_STAGE_BYTES:
+        raise CsvInputError("You have too many staged uploads. Cancel an earlier upload first.")
+    if total_count >= MAX_TOTAL_STAGES or total_bytes + size > MAX_TOTAL_STAGE_BYTES:
+        raise CsvInputError(STORAGE_ERROR)
 
 
 class StageUnavailable(ValueError):
@@ -31,7 +81,9 @@ def _directory():
 def _path(token):
     if not TOKEN_PATTERN.fullmatch(token or ""):
         raise StageUnavailable
-    return _directory() / f"{token}.csvstage"
+    directory = _directory()
+    matches = list(directory.glob(f"*-{token}.csvstage"))
+    return matches[0] if matches else directory / f"{token}.csvstage"
 
 
 def _session_stages(request):
@@ -95,19 +147,31 @@ def cleanup_expired(request):
 
 
 def create_stage(request, account_id, uploaded_file, import_profile="generic", *, kind=KIND_CSV_IMPORT):
-    cleanup_expired(request)
     if uploaded_file.size > MAX_FILE_BYTES:
         raise CsvInputError("The CSV file exceeds the 5 MB limit.")
     content = uploaded_file.read(MAX_FILE_BYTES + 1)
     if len(content) > MAX_FILE_BYTES:
         raise CsvInputError("The CSV file exceeds the 5 MB limit.")
-
-    _delete_account_stages(request, account_id, kind)
     token = uuid.uuid4().hex
-    path = _path(token)
-    with path.open("xb") as staged:
-        staged.write(content)
-    os.chmod(path, 0o600)
+    path = None
+    created = False
+    try:
+        with _storage_lock():
+            cleanup_expired(request)
+            _delete_account_stages(request, account_id, kind)
+            _check_quota(request.user.pk, len(content))
+            path = _directory() / f"{request.user.pk}-{token}.csvstage"
+            with path.open("xb") as staged:
+                created = True
+                staged.write(content)
+            os.chmod(path, 0o600)
+    except OSError as exc:
+        if created:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise CsvInputError(STORAGE_ERROR) from exc
     stages = _session_stages(request)
     stages[token] = {
         "user_id": request.user.pk,

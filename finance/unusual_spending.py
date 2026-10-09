@@ -6,6 +6,7 @@ from decimal import ROUND_HALF_EVEN, Decimal
 
 from django.urls import reverse
 
+from .input_limits import MAX_UNUSUAL_FLAGS, MAX_UNUSUAL_ALERTS, MAX_DESCRIPTION_CHARS
 from .alert_services import raise_alert, settings_for
 from .cash_flow import (
     format_minor,
@@ -26,6 +27,22 @@ DEFAULT_CATEGORY_FLOOR_MINOR = 5_000
 MERCHANT_MULTIPLIER = Decimal("2")
 MERCHANT_MIN_PRIOR = 3
 BASELINE_MONTHS = 6
+
+
+class BoundedFlags(list):
+    def __init__(self, values=(), *, omitted_count=0):
+        super().__init__(values)
+        self.omitted_count = omitted_count
+
+
+def _flag_rank(item):
+    return (-item.get("amount_minor", item.get("month_minor", 0)),
+            item["name"], item.get("transaction_id") or 0)
+
+
+def bounded_flags(flags):
+    omitted = getattr(flags, "omitted_count", 0) + max(0, len(flags) - MAX_UNUSUAL_FLAGS)
+    return BoundedFlags(sorted(flags, key=_flag_rank)[:MAX_UNUSUAL_FLAGS], omitted_count=omitted)
 
 
 def _excluded_transfer_ids(principal):
@@ -194,7 +211,7 @@ def _merchant_flag(txn, key, prior, threshold):
             return None
         return {
             "kind": KIND_NEW_MERCHANT,
-            "name": txn.description,
+            "name": txn.description[:MAX_DESCRIPTION_CHARS],
             "merchant_key": key,
             "amount_minor": amount,
             "amount_display": format_minor(amount, txn.currency),
@@ -209,7 +226,7 @@ def _merchant_flag(txn, key, prior, threshold):
         return None
     return {
         "kind": KIND_MERCHANT,
-        "name": txn.description,
+        "name": txn.description[:MAX_DESCRIPTION_CHARS],
         "merchant_key": key,
         "amount_minor": amount,
         "median_minor": _whole_minor(baseline),
@@ -225,7 +242,7 @@ def _merchant_flag(txn, key, prior, threshold):
 
 def _merchant_flags(principal, start, end, prefs, accounts, excluded):
     by_key = {}
-    flags = []
+    flags = BoundedFlags()
     # Ordered by date and ID, so same-day lower IDs are strictly earlier.
     # Evaluate before insertion: each eligible charge enters its history once.
     for txn in _charges(principal, accounts, date_to=end, excluded=excluded):
@@ -239,6 +256,10 @@ def _merchant_flags(principal, start, end, prefs, accounts, excluded):
             flag = _merchant_flag(txn, key, prior, prefs.large_transaction_minor)
             if flag is not None:
                 flags.append(flag)
+                if len(flags) > MAX_UNUSUAL_FLAGS:
+                    flags.sort(key=_flag_rank)
+                    flags.pop()
+                    flags.omitted_count += 1
         prior.add(abs(txn.amount_minor))
     flags.sort(key=lambda item: (-item["amount_minor"], item["name"], item.get("transaction_id") or 0))
     return flags
@@ -277,7 +298,8 @@ def compute_unusual_flags(
         accounts=chosen,
     )
     merchant_flags = _merchant_flags(principal, start, end, prefs, chosen, excluded)
-    return category_flags + merchant_flags
+    combined = BoundedFlags(category_flags + merchant_flags, omitted_count=merchant_flags.omitted_count)
+    return bounded_flags(combined)
 
 
 def unusual_review_url(month):
@@ -300,6 +322,7 @@ def raise_unusual_alerts(person, month, flags):
     month = month_start(month)
     stamp = month.isoformat()[:7]
     created = []
+    flags = flags[:MAX_UNUSUAL_ALERTS]
     accounts = {row.pk: row for row in Account.objects.filter(pk__in=[flag.get("account_id") for flag in flags if flag.get("account_id")])}
     for flag in flags:
         kind = flag["kind"]

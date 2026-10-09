@@ -37,6 +37,7 @@ def unusual_facts_for_ai(person, facts):
         "month": payload.get("month"),
         "month_label": payload.get("month_label"),
         "unusual": payload.get("unusual") or [],
+        "unusual_omitted_count": payload.get("unusual_omitted_count", 0),
     }
 
 

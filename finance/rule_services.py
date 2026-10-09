@@ -281,8 +281,8 @@ def first_matching_rule(txn, rules=None):
     return None
 
 
-def _is_winning_rule(txn, rule):
-    winner = first_matching_rule(txn)
+def _is_winning_rule(txn, rule, rules=None):
+    winner = first_matching_rule(txn, rules)
     return winner is not None and winner.pk == rule.pk
 
 
@@ -325,13 +325,31 @@ def _matching_queryset(person, rule):
     return qs.filter(pk__in=matching_ids)
 
 
+def _rules_by_account(rows):
+    by_account = {}
+    owner_accounts = {}
+    for txn in rows:
+        if txn.account_id in by_account:
+            continue
+        rules = ordered_rules_for_account(txn.account)
+        for rule in rules:
+            if rule.owner_person_id:
+                if rule.owner_person_id not in owner_accounts:
+                    owner_accounts[rule.owner_person_id] = _personal_account_ids(rule.owner_person)
+                rule._cached_owner_account_ids = owner_accounts[rule.owner_person_id]
+        by_account[txn.account_id] = rules
+    return by_account
+
+
+def _winning_rows(rows, rule):
+    rules_by_account = _rules_by_account(rows)
+    return [txn for txn in rows if _is_winning_rule(txn, rule, rules_by_account[txn.account_id])]
+
+
 def preview_rule(principal, rule_id):
     person, rule = _rule_or_404(principal, rule_id)
-    matches = [
-        txn
-        for txn in _matching_queryset(person, rule).order_by("-transaction_date", "-pk")
-        if _is_winning_rule(txn, rule)
-    ]
+    rows = list(_matching_queryset(person, rule).order_by("-transaction_date", "-pk"))
+    matches = _winning_rows(rows, rule)
     return rule, matches
 
 
@@ -383,8 +401,10 @@ def preview_unsaved_rule(principal, rule):
     """
     person = _person_for(principal)
     matches = []
-    for txn in _matching_queryset(person, rule).order_by("-transaction_date", "-pk"):
-        winner = first_matching_rule(txn)
+    rows = list(_matching_queryset(person, rule).order_by("-transaction_date", "-pk"))
+    rules_by_account = _rules_by_account(rows)
+    for txn in rows:
+        winner = first_matching_rule(txn, rules_by_account[txn.account_id])
         if winner is None or winner.priority > rule.priority:
             matches.append(txn)
     return matches
@@ -443,56 +463,26 @@ def _protected_source(txn):
 def _apply_to_locked(person, rule, locked, *, require_first_match=True):
     changed = []
     skipped_manual = 0
-    refund_ids = set(
-        RefundLink.objects.filter(refund_id__in=[txn.pk for txn in locked]).values_list("refund_id", flat=True)
-    )
+    refund_ids = set(RefundLink.objects.filter(
+        refund_id__in=[txn.pk for txn in locked]
+    ).values_list("refund_id", flat=True))
+    rules_by_account = _rules_by_account(locked) if require_first_match else {}
     for txn in locked:
-        if txn.category_source == Transaction.CategorySource.MANUAL:
-            skipped_manual += 1
-            continue
-        if txn.category_source == Transaction.CategorySource.SPLIT:
+        if txn.category_source in (Transaction.CategorySource.MANUAL, Transaction.CategorySource.SPLIT):
             skipped_manual += 1
             continue
         if txn.category_source == Transaction.CategorySource.INHERITED or txn.pk in refund_ids:
             continue
         if require_first_match:
-            winner = first_matching_rule(txn)
-            if winner is None or winner.pk != rule.pk:
+            if not _is_winning_rule(txn, rule, rules_by_account[txn.account_id]):
                 continue
         elif not rule_matches_transaction(rule, txn):
             continue
-        previous = txn.category
-        previous_source = txn.category_source
-        txn.category = rule.category
-        txn.category_source = Transaction.CategorySource.RULE
-        txn.save(update_fields=("category", "category_source", "updated_at"))
-        _record_text_history(
-            txn,
-            person,
-            TransactionCorrectionHistory.Field.CATEGORY,
-            _history_label(previous),
-            _history_new_label(rule.category, rule),
-        )
-        _restore_refund_categories(txn, person)
-        changed.append((txn, previous, previous_source))
+        changed.append(txn)
     if not changed:
         return None, skipped_manual
-    application = RuleApplication.objects.create(rule=rule, applied_by=person, applied_at=timezone.now())
-    RuleApplicationEntry.objects.bulk_create(
-        [
-            RuleApplicationEntry(
-                application=application,
-                transaction=txn,
-                previous_category=previous,
-                previous_category_source=previous_source,
-            )
-            for txn, previous, previous_source in changed
-        ]
-    )
-    record(person, AuditEvent.Action.RULE_APPLIED, AuditEvent.TargetType.RULE, rule.pk,
-           audience=_actor_audience(person, rule), verified=True,
-           metadata={"rule_application_id": application.pk, "row_count": len(changed)})
-    return application, skipped_manual
+    applications = _apply_automatic_rule_groups(person, {rule.pk: {"rule": rule, "rows": changed}})
+    return applications[0], skipped_manual
 
 
 RULE_CHANGED_SINCE_PREVIEW = "This rule changed since its preview. Check the preview and apply again."
@@ -518,9 +508,7 @@ def apply_rule(principal, rule_id, *, previewed_version=None):
         raise ValidationError(RULE_CHANGED_SINCE_PREVIEW)
     # Applying confirms the preview, so the rule now applies automatically.
     CategoryRule.objects.filter(pk=rule.pk).update(confirmed_at=timezone.now())
-    preview = [
-        txn for txn in _matching_queryset(person, rule).order_by("pk") if _is_winning_rule(txn, rule)
-    ]
+    preview = _winning_rows(list(_matching_queryset(person, rule).order_by("pk")), rule)
     if not preview:
         return None, 0
     locked = _still_eligible(person, _lock_transactions(person, preview))

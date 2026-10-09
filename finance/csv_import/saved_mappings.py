@@ -4,6 +4,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.utils import timezone
 
+from finance.input_limits import MAX_COLUMNS
 from finance.access import require_person as _person_for
 from finance.audit_services import record
 from finance.category_services import current_household
@@ -56,6 +57,8 @@ def parse_saved_profile(value):
 
 
 def mapping_from_saved(saved):
+    if len(saved.headers) > MAX_COLUMNS:
+        raise ValidationError(f"Mappings may have at most {MAX_COLUMNS} columns.")
     return Mapping(
         date_column=saved.date_column,
         description_column=saved.description_column,
@@ -156,6 +159,8 @@ def save_csv_mapping(principal, *, name, headers, mapping, account=None, set_as_
     if _name_taken(household, trimmed):
         raise ValidationError(NAME_TAKEN_MESSAGE)
     header_list = list(headers)
+    if len(header_list) > MAX_COLUMNS:
+        raise ValidationError(f"Mappings may have at most {MAX_COLUMNS} columns.")
     saved = SavedCsvMapping.objects.create(
         household=household,
         name=trimmed,
