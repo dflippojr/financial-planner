@@ -14,9 +14,15 @@ def claim_compromised_message():
     return CLAIM_COMPROMISED
 
 
+def clean_text(value) -> str:
+    """Provider text as storable UTF-8: lone surrogates become "?" and NULs are dropped."""
+    text = value if isinstance(value, str) else str(value)
+    return text.encode("utf-8", "replace").decode("utf-8").replace("\x00", "")
+
+
 def sanitize_provider_message(message: str) -> str:
     """Make a protocol error msg safe to show. Never keep URLs (they could be access URLs)."""
-    text = strip_tags(str(message or ""))
+    text = strip_tags(clean_text(message or ""))
     text = _URL_IN_TEXT.sub("[redacted]", text)
     text = " ".join(text.split())
     return text[:300]

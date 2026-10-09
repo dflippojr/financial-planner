@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 from datetime import date, datetime, timedelta, timezone as dt_timezone
-from decimal import Decimal, InvalidOperation
+from types import SimpleNamespace
+from decimal import Decimal, Inexact, InvalidOperation, localcontext
 from urllib.parse import quote, urlsplit
 
 from django.conf import settings
@@ -14,6 +16,7 @@ from django.utils import timezone
 
 from finance.alert_email import notify_after_alert_run
 from finance.csv_import.fingerprint import transaction_fingerprint
+from finance.date_bounds import activity_date_error
 from finance.encryption import decrypt_access_url, encrypt_access_url
 from finance.audit_services import append_event
 from finance.audit_operations import execution, operation, outcome, member_operation
@@ -29,12 +32,26 @@ from finance.models import (
     Transaction,
 )
 from finance.simplefin_client import claim_access_url, fetch_accounts
-from finance.simplefin_errors import SimpleFinError, SimpleFinRateLimited, provider_errors
+from finance.simplefin_errors import SimpleFinError, SimpleFinRateLimited, clean_text, provider_errors
+
+logger = logging.getLogger(__name__)
 
 MAX_BIGINT = 2**63 - 1
+# Ids are stored in 255-character columns; descriptions are capped so one
+# provider row cannot bloat every page that lists it.
+MAX_ID_CHARS = 255
+MAX_DESCRIPTION_CHARS = 1000
+# Minor units of a signed 64-bit column have at most 19 digits, so an amount
+# with a larger exponent is rejected before any arithmetic.
+MAX_AMOUNT_ADJUSTED_EXPONENT = 18
 UNSUPPORTED_CURRENCY = "That SimpleFIN account uses a currency this app does not store."
 UNSTORABLE_AMOUNT = "SimpleFIN sent an amount that could not be stored."
 INVALID_TOKEN = "That setup token is not a valid SimpleFIN token."
+UNSTORABLE_ID = "SimpleFIN sent a transaction id that could not be stored."
+ALREADY_CONNECTED = "Disconnect the existing SimpleFIN connection before adding another."
+RATE_LIMITED = "Wait 15 minutes between Sync now requests."
+LINKS_CHANGED = "Account links changed while SimpleFIN was syncing. Sync again."
+UNEXPECTED_FAILURE = "The sync could not be completed. It will be retried on the next scheduled run."
 
 
 def default_cutover_date(account) -> date:
@@ -82,11 +99,16 @@ def _iso4217_usd(value: str) -> str:
 def decimal_to_minor(value: str) -> int:
     try:
         amount = Decimal(str(value).strip())
-    except (InvalidOperation, AttributeError) as exc:
+    except (InvalidOperation, AttributeError, ValueError) as exc:
         raise SimpleFinError(UNSTORABLE_AMOUNT) from exc
-    if not amount.is_finite():
+    if not amount.is_finite() or amount.adjusted() > MAX_AMOUNT_ADJUSTED_EXPONENT:
         raise SimpleFinError(UNSTORABLE_AMOUNT)
-    minor = amount * 100
+    with localcontext() as context:
+        context.traps[Inexact] = True
+        try:
+            minor = amount.scaleb(2)
+        except Inexact:
+            raise SimpleFinError(UNSTORABLE_AMOUNT) from None
     if minor != minor.to_integral_value():
         raise SimpleFinError(UNSTORABLE_AMOUNT)
     minor_int = int(minor)
@@ -95,15 +117,27 @@ def decimal_to_minor(value: str) -> int:
     return minor_int
 
 
-def posted_date(posted) -> date | None:
+def _posted_stamp(posted) -> int | None:
+    """A positive epoch-seconds value, or None when missing or malformed."""
+    if isinstance(posted, bool):
+        return None
     try:
         stamp = int(posted)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
-    if stamp <= 0:
+    return stamp if stamp > 0 else None
+
+
+def posted_date(posted) -> date | None:
+    """The local date of a SimpleFIN timestamp, or None when it is unusable or implausible."""
+    stamp = _posted_stamp(posted)
+    if stamp is None:
         return None
-    moment = datetime.fromtimestamp(stamp, tz=dt_timezone.utc)
-    return timezone.localtime(moment).date()
+    try:
+        day = timezone.localtime(datetime.fromtimestamp(stamp, tz=dt_timezone.utc)).date()
+    except (OverflowError, OSError, ValueError):
+        return None
+    return None if activity_date_error(day) else day
 
 
 UNREADABLE_CONNECTION = (
@@ -124,7 +158,7 @@ def _connection_name_by_id(payload: dict) -> dict[str, str]:
     names = {}
     for item in payload.get("connections") or []:
         if isinstance(item, dict) and item.get("conn_id"):
-            names[str(item["conn_id"])] = str(item.get("name") or "")
+            names[clean_text(item["conn_id"])] = clean_text(item.get("name") or "")[:200]
     return names
 
 
@@ -136,43 +170,59 @@ def remote_account_key(item: dict) -> str:
     """
     # Percent-encode each part so a ':' inside an id can never make two
     # different accounts share one key.
-    account_id = quote(str(item["id"]), safe="")
-    conn_id = quote(str(item.get("conn_id") or ""), safe="")
+    account_id = quote(clean_text(item["id"]), safe="")
+    conn_id = quote(clean_text(item.get("conn_id") or ""), safe="")
     return f"{conn_id}:{account_id}" if conn_id else account_id
 
 
-def _account_row(item: dict, names: dict[str, str]) -> dict:
-    conn_id = str(item.get("conn_id") or "")
+def _remote_accounts(payload: dict):
+    """(key, item) for each usable account; one whose key cannot be stored is left out."""
+    for item in payload.get("accounts") or []:
+        if isinstance(item, dict) and item.get("id"):
+            key = remote_account_key(item)
+            if len(key) <= MAX_ID_CHARS:
+                yield key, item
+
+
+def _account_row(key: str, item: dict, names: dict[str, str]) -> dict:
+    conn_id = clean_text(item.get("conn_id") or "")
     extra = item.get("extra") if isinstance(item.get("extra"), dict) else {}
     reported_type = extra.get("type") or extra.get("account-type") or ""
     if not isinstance(reported_type, str):
         reported_type = ""
     return {
-        "id": remote_account_key(item),
-        "name": str(item.get("name") or "Account"),
-        "institution": names.get(conn_id) or str(item.get("conn_name") or ""),
-        "type": reported_type[:80] or "Not provided by SimpleFIN",
-        "currency": str(item.get("currency") or ""),
+        "id": key,
+        "name": clean_text(item.get("name") or "Account")[:200],
+        "institution": names.get(conn_id) or clean_text(item.get("conn_name") or "")[:200],
+        "type": clean_text(reported_type)[:80] or "Not provided by SimpleFIN",
+        "currency": clean_text(item.get("currency") or "")[:10],
     }
 
 
 def listed_accounts(payload: dict) -> list[dict]:
     names = _connection_name_by_id(payload)
-    rows = []
-    for item in payload.get("accounts") or []:
-        if isinstance(item, dict) and item.get("id"):
-            rows.append(_account_row(item, names))
-    return rows
+    return [_account_row(key, item, names) for key, item in _remote_accounts(payload)]
+
+
+def claim_connection(principal, setup_token: str) -> SimpleFinConnection:
+    """Claim a setup token and store the encrypted Access URL.
+
+    The outbound claim runs before any transaction or row lock, so a slow
+    provider never holds up other household members' writes.
+    """
+    person = _person_for(principal)
+    if SimpleFinConnection.objects.filter(owner=person).exists():
+        raise SimpleFinError(ALREADY_CONNECTED)
+    claim_url = decode_setup_token(setup_token)
+    access_url = claim_access_url(claim_url)
+    return _store_claimed_connection(person, access_url)
 
 
 @transaction.atomic
-def claim_connection(principal, setup_token: str) -> SimpleFinConnection:
-    person = _person_for(principal)
+def _store_claimed_connection(person, access_url: str) -> SimpleFinConnection:
     lock_actor_household(person)
     if SimpleFinConnection.objects.filter(owner=person).exists():
-        raise SimpleFinError("Disconnect the existing SimpleFIN connection before adding another.")
-    claim_url = decode_setup_token(setup_token)
-    access_url = claim_access_url(claim_url)
+        raise SimpleFinError(ALREADY_CONNECTED)
     connection = SimpleFinConnection.objects.create(
         owner=person,
         encrypted_access_url=encrypt_access_url(access_url),
@@ -323,20 +373,11 @@ def _batch_hash(connection_id, account_id, synced_at, start) -> str:
 
 
 def _is_pending(item: dict) -> bool:
-    if item.get("pending") is True:
-        return True
-    try:
-        return int(item.get("posted") or 0) <= 0
-    except (TypeError, ValueError):
-        return True
+    return item.get("pending") is True or _posted_stamp(item.get("posted")) is None
 
 
 def _accounts_by_simplefin_id(payload: dict) -> dict[str, dict]:
-    found = {}
-    for item in payload.get("accounts") or []:
-        if isinstance(item, dict) and item.get("id"):
-            found[remote_account_key(item)] = item
-    return found
+    return dict(_remote_accounts(payload))
 
 
 def _upsert_snapshot(account, *, snapshot_date, amount_minor, currency, batch):
@@ -355,7 +396,10 @@ def _posted_source_id(item) -> str:
     """The id of a posted (not pending) transaction item, or "" to skip it."""
     if not isinstance(item, dict) or _is_pending(item):
         return ""
-    return str(item.get("id") or "")
+    source_id = clean_text(item.get("id") or "")
+    if len(source_id) > MAX_ID_CHARS:
+        raise SimpleFinError(UNSTORABLE_ID)
+    return source_id
 
 
 def _new_transaction(account, link, item, source_id, *, row_number):
@@ -363,13 +407,14 @@ def _new_transaction(account, link, item, source_id, *, row_number):
     if txn_date is None or txn_date < link.cutover_date:
         return None
     amount_minor = decimal_to_minor(str(item.get("amount")))
-    description = str(item.get("description") or "SimpleFIN transaction")
+    description = clean_text(item.get("description") or "")[:MAX_DESCRIPTION_CHARS] or "SimpleFIN transaction"
+    pending = item.get("pending")
     original = {
         "id": source_id,
-        "posted": item.get("posted"),
-        "amount": str(item.get("amount")),
+        "posted": _posted_stamp(item.get("posted")),
+        "amount": clean_text(item.get("amount"))[:100],
         "description": description,
-        "pending": item.get("pending"),
+        "pending": pending if isinstance(pending, bool) else None,
     }
     return Transaction(
         account=account,
@@ -540,21 +585,80 @@ def _sync_one_link(person, connection, link, remote, synced_at, payload) -> int:
 @member_operation
 @notify_after_alert_run
 def sync_connection(principal, connection_id, *, ignore_rate_limit=False) -> dict:
-    """Sync one connection. A fetch failure is recorded, then raised.
+    """Sync one connection. A fetch or import failure is recorded, then raised.
 
-    The failure state is saved inside the sync transaction, which then commits
-    normally; raising only after the commit keeps that record (last sync time,
-    result, and the disabled flag for revoked access) instead of rolling it back.
+    The fetch runs before the transaction and household lock, so a slow
+    provider never holds up other members' writes. The results are then
+    applied under the lock after re-checking the connection and its links.
+    A failure record commits on its own, and the error is raised after it.
     """
-    result, failure = _sync_connection_locked(principal, connection_id, ignore_rate_limit=ignore_rate_limit)
+    person = _person_for(principal)
+    plan = _plan_sync(person, connection_id, ignore_rate_limit=ignore_rate_limit)
+    try:
+        payload = fetch_accounts(plan.access_url, start_date=plan.start_epoch, end_date=int(plan.now.timestamp()) + 1)
+    except SimpleFinError as exc:
+        failure = "access_denied" if exc.access_denied else "provider_error"
+        # Only revoked access stops scheduled syncs; a transient failure is
+        # retried on the next run.
+        _record_failure(person, connection_id, plan.now, str(exc), failure=failure, disabled=exc.access_denied)
+        raise
+    result, failure = _apply_sync(person, connection_id, plan, payload, ignore_rate_limit=ignore_rate_limit)
     if failure is not None:
         raise failure
     return result
 
 
+def _start_epoch(cutover_dates):
+    if not cutover_dates:
+        return None
+    start_local = timezone.make_aware(
+        datetime.combine(min(cutover_dates), datetime.min.time()),
+        timezone.get_current_timezone(),
+    )
+    return int(start_local.timestamp())
+
+
+def _plan_sync(person, connection_id, *, ignore_rate_limit):
+    """Everything the outbound fetch needs, read without taking locks."""
+    connection = SimpleFinConnection.objects.filter(pk=connection_id, owner=person).first()
+    if connection is None:
+        raise PermissionDenied(_DENIED)
+    if _rate_limited(connection, ignore_rate_limit=ignore_rate_limit):
+        raise SimpleFinRateLimited(RATE_LIMITED)
+    cutovers = list(AccountLink.objects.filter(connection=connection).values_list("cutover_date", flat=True))
+    return SimpleNamespace(
+        now=timezone.now(),
+        access_url=_readable_access_url(connection),
+        start_epoch=_start_epoch(cutovers),
+    )
+
+
 @transaction.atomic
-def _sync_connection_locked(principal, connection_id, *, ignore_rate_limit=False):
-    person = _person_for(principal)
+def _record_failure(person, connection_id, now, message, *, failure, disabled=None):
+    lock_actor_household(person)
+    connection = SimpleFinConnection.objects.select_for_update().filter(pk=connection_id, owner=person).first()
+    if connection is None:
+        return
+    _save_failure(person, connection, now, message, failure=failure, disabled=disabled)
+
+
+def _save_failure(person, connection, now, message, *, failure, disabled=None):
+    from finance.alert_services import raise_sync_alert
+
+    connection.last_sync_at = now
+    connection.last_sync_result = message[:500]
+    fields = ["last_sync_at", "last_sync_result"]
+    if disabled is not None:
+        connection.disabled = disabled
+        fields.append("disabled")
+    connection.save(update_fields=fields)
+    raise_sync_alert(connection)
+    outcome(person, "simplefin_sync", connection.pk, phase="failed",
+            metadata={"connection_id": connection.pk, "failure": failure})
+
+
+def _locked_connection(person, connection_id, plan, *, ignore_rate_limit):
+    """Lock the household and connection, then re-check what the fetch assumed."""
     lock_actor_household(person)
     connection = (
         SimpleFinConnection.objects.select_for_update().filter(pk=connection_id, owner=person).first()
@@ -562,83 +666,54 @@ def _sync_connection_locked(principal, connection_id, *, ignore_rate_limit=False
     if connection is None:
         raise PermissionDenied(_DENIED)
     if _rate_limited(connection, ignore_rate_limit=ignore_rate_limit):
-        raise SimpleFinRateLimited("Wait 15 minutes between Sync now requests.")
-    now = timezone.now()
-    access_url = _readable_access_url(connection)
+        # Another sync finished while this one was fetching.
+        raise SimpleFinRateLimited(RATE_LIMITED)
     links = list(AccountLink.objects.select_related("account").filter(connection=connection))
-    start_epoch = None
-    if links:
-        earliest = min(link.cutover_date for link in links)
-        start_local = timezone.make_aware(
-            datetime.combine(earliest, datetime.min.time()),
-            timezone.get_current_timezone(),
-        )
-        start_epoch = int(start_local.timestamp())
-    try:
-        payload = fetch_accounts(access_url, start_date=start_epoch, end_date=int(now.timestamp()) + 1)
-    except SimpleFinError as exc:
-        connection.last_sync_at = now
-        connection.last_sync_result = str(exc)
-        # Only revoked access stops scheduled syncs; a transient failure is
-        # retried on the next run.
-        connection.disabled = exc.access_denied
-        connection.save(update_fields=("last_sync_at", "last_sync_result", "disabled"))
-        from finance.alert_services import raise_sync_alert
+    start_epoch = _start_epoch([link.cutover_date for link in links])
+    if start_epoch is not None and (plan.start_epoch is None or start_epoch < plan.start_epoch):
+        # A link with an earlier cut-over was saved after the fetch began, so
+        # the fetched history may not cover it.
+        raise SimpleFinError(LINKS_CHANGED)
+    return connection, links
 
-        raise_sync_alert(connection)
-        outcome(person, "simplefin_sync", connection.pk, phase="failed",
-                metadata={"connection_id": connection.pk, "failure": "access_denied" if exc.access_denied else "provider_error"})
-        return None, exc
-    errors = provider_errors(payload)
+
+def _import_links(person, connection, links, syncable_ids, payload, now):
+    """Apply each linked account. Returns (imported, skipped)."""
     remote_accounts = _accounts_by_simplefin_id(payload)
     imported = 0
+    skipped = 0
+    for link in links:
+        if link.account_id not in syncable_ids:
+            # Archived, or no longer visible to the connection owner
+            # (for example a shared account made private by its owner).
+            skipped += 1
+            continue
+        remote = remote_accounts.get(link.simplefin_account_id)
+        if remote is None:
+            continue
+        imported += _sync_one_link(person, connection, link, remote, now, payload)
+    return imported, skipped
+
+
+@transaction.atomic
+def _apply_sync(person, connection_id, plan, payload, *, ignore_rate_limit):
+    connection, links = _locked_connection(person, connection_id, plan, ignore_rate_limit=ignore_rate_limit)
+    now = plan.now
+    errors = provider_errors(payload)
     syncable_ids = set(
         Account.objects.visible_to(person)
         .filter(pk__in=[link.account_id for link in links], status=Account.Status.ACTIVE, archived_at__isnull=True)
         .values_list("pk", flat=True)
     )
-    skipped = 0
     try:
         # A savepoint: a failure part-way undoes this run's imports while the
         # failure record below still commits.
         with transaction.atomic():
-            for link in links:
-                if link.account_id not in syncable_ids:
-                    # Archived, or no longer visible to the connection owner
-                    # (for example a shared account made private by its owner).
-                    skipped += 1
-                    continue
-                remote = remote_accounts.get(link.simplefin_account_id)
-                if remote is None:
-                    continue
-                imported += _sync_one_link(person, connection, link, remote, now, payload)
+            imported, skipped = _import_links(person, connection, links, syncable_ids, payload, now)
     except SimpleFinError as exc:
-        connection.last_sync_at = now
-        connection.last_sync_result = str(exc)
-        connection.save(update_fields=("last_sync_at", "last_sync_result"))
-        from finance.alert_services import raise_sync_alert
-
-        raise_sync_alert(connection)
-        outcome(person, "simplefin_sync", connection.pk, phase="failed",
-                metadata={"connection_id": connection.pk, "failure": "import_failed"})
+        _save_failure(person, connection, now, str(exc), failure="import_failed")
         return None, exc
-    from finance.category_services import refresh_transfer_pairs
-    from finance.recurring_services import refresh_recurring_series
-    from finance.rule_services import apply_enabled_rules_to_transactions
-
-    synced = list(
-        Transaction.objects.filter(
-            account_id__in=syncable_ids,
-            import_batch__source=ImportBatch.Source.SIMPLEFIN,
-            created_at__gte=now,
-        )
-    )
-    refresh_transfer_pairs(person, transaction_ids=[row.pk for row in synced])
-    apply_enabled_rules_to_transactions(person, synced)
-    from finance.category_suggestion_services import queue_category_suggestions_for
-
-    queue_category_suggestions_for(person, synced)
-    refresh_recurring_series(person)
+    synced = _refresh_after_sync(person, syncable_ids, now)
     summary = f"Synced {imported} new transaction(s)."
     if skipped:
         summary = f"{summary} Skipped {skipped} linked account(s) that are archived or no longer available to you."
@@ -658,6 +733,26 @@ def _sync_connection_locked(principal, connection_id, *, ignore_rate_limit=False
     return {"imported": imported, "errors": errors, "result": connection.last_sync_result}, None
 
 
+def _refresh_after_sync(person, syncable_ids, now):
+    from finance.category_services import refresh_transfer_pairs
+    from finance.category_suggestion_services import queue_category_suggestions_for
+    from finance.recurring_services import refresh_recurring_series
+    from finance.rule_services import apply_enabled_rules_to_transactions
+
+    synced = list(
+        Transaction.objects.filter(
+            account_id__in=syncable_ids,
+            import_batch__source=ImportBatch.Source.SIMPLEFIN,
+            created_at__gte=now,
+        )
+    )
+    refresh_transfer_pairs(person, transaction_ids=[row.pk for row in synced])
+    apply_enabled_rules_to_transactions(person, synced)
+    queue_category_suggestions_for(person, synced)
+    refresh_recurring_series(person)
+    return synced
+
+
 @transaction.atomic
 def disconnect_connection(principal, connection_id) -> None:
     person = _person_for(principal)
@@ -672,17 +767,40 @@ def disconnect_connection(principal, connection_id) -> None:
     append_event(action=AuditEvent.Action.SIMPLEFIN_DISCONNECTED, actor=person, target_id=connection_id)
 
 
+def _sync_scheduled(connection):
+    if execution.get() is None:
+        with operation():
+            sync_connection(connection.owner, connection.pk, ignore_rate_limit=True)
+    else:
+        sync_connection(connection.owner, connection.pk, ignore_rate_limit=True)
+
+
+def _record_unexpected_failure(connection):
+    try:
+        _record_failure(connection.owner, connection.pk, timezone.now(), UNEXPECTED_FAILURE, failure="import_failed")
+    except Exception:  # The daily pass must reach every connection and the alert pass.
+        logger.error("Could not record the failed SimpleFIN sync for connection %s.", connection.pk)
+
+
 def sync_all_connections() -> int:
-    """Daily job: sync every enabled connection. Returns the number attempted."""
+    """Daily job: sync every enabled connection. Returns the number attempted.
+
+    One connection's failure, expected or not, is recorded and the pass moves
+    on, so later connections still sync. Logs name the error type only: an
+    exception message could quote provider data.
+    """
     count = 0
     for connection in SimpleFinConnection.objects.filter(disabled=False).select_related("owner"):
         try:
-            if execution.get() is None:
-                with operation():
-                    sync_connection(connection.owner, connection.pk, ignore_rate_limit=True)
-            else:
-                sync_connection(connection.owner, connection.pk, ignore_rate_limit=True)
+            _sync_scheduled(connection)
         except SimpleFinError:
             pass
+        except Exception as exc:  # The daily pass must reach every connection and the alert pass.
+            logger.error(
+                "Scheduled SimpleFIN sync for connection %s failed unexpectedly (%s).",
+                connection.pk,
+                type(exc).__name__,
+            )
+            _record_unexpected_failure(connection)
         count += 1
     return count
