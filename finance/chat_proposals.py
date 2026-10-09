@@ -106,7 +106,16 @@ def _bound(handler, conversation, turn):
     def call(person, args):
         if AiProposal.objects.filter(message=turn).count() >= MAX_PROPOSALS_PER_TURN:
             return ToolResult(text="Too many suggestions in one answer.", ok=False)
-        return handler(person, args or {}, conversation, turn)
+        args = args or {}
+        account_id = args.get("account_id")
+        if account_id not in (None, ""):
+            try:
+                allowed = visible_accounts(person).filter(pk=int(account_id)).exists()
+            except (TypeError, ValueError):
+                allowed = False
+            if not allowed:
+                return _fail("Nothing could be proposed: that account is not available.")
+        return handler(person, args, conversation, turn)
 
     return call
 
@@ -198,7 +207,8 @@ def _propose_create_rule(person, args, conversation, turn):
         )
     except (ValidationError, PermissionDenied, TypeError, ValueError):
         return _fail("Nothing could be proposed: that rule is not valid for this member.")
-    matches = preview_unsaved_rule(person, rule)
+    usable = set(visible_accounts(person).values_list("pk", flat=True))
+    matches = [txn for txn in preview_unsaved_rule(person, rule) if txn.account_id in usable]
     payload = {
         "owner": owner,
         "description_contains": rule.description_contains,

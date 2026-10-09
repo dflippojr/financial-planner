@@ -34,7 +34,8 @@ from .ai_types import (
 from .chat_proposals import proposal_tools
 from .lifecycle_services import _DENIED, _person_for
 from .models import AiConversation, AiConversationMessage
-from .policy_services import may_use_ai
+from .category_services import current_household
+from .policy_services import household_ai_allowed, may_use_ai
 
 FEATURE = "chat"
 OUT_OF_SCOPE = (
@@ -269,8 +270,11 @@ def answer_turn(turn, *, sleep=None, monotonic=None):
     harness_context = _harness_context(context_payload)
     marker = _connection_marker(connection)
     saved_session = (conversation.harness_session_id or "").strip()
+    household = current_household(person)
+    consent_held = household is None or household_ai_allowed(household)
     follow_up = (
-        bool(saved_session)
+        consent_held
+        and bool(saved_session)
         and (conversation.harness_connection or "") == marker
         and (conversation.backend or "") == backend
     )
@@ -300,7 +304,7 @@ def answer_turn(turn, *, sleep=None, monotonic=None):
         follow_up=follow_up,
         on_tool=on_tool,
         allow_tool=allow_tool,
-        history=_api_history(conversation, question) if connection.kind in API_KINDS else (),
+        history=_api_history(conversation, question) if consent_held and connection.kind in API_KINDS else (),
     )
     with transaction.atomic():
         locked = _lock_conversation(conversation.pk)

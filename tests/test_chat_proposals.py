@@ -323,3 +323,50 @@ def test_confirmed_proposal_audit_event_keeps_approver_and_proposal_after_conver
     conversation.delete()
     assert not AiProposal.objects.exists()
     assert AuditEvent.objects.filter(pk=event.pk).exists()
+
+
+@pytest.mark.django_db
+def test_propose_tools_stay_inside_consented_accounts_until_every_member_accepts(harness):
+    from django.contrib.auth import get_user_model
+
+    from finance.ai_tools import run_tool
+    from finance.models import Membership, Person
+    from finance.policy_services import accept_policy
+    from tests.test_chat import PASSWORD
+
+    _state, _client, person, household = _setup(harness)
+    other_user = get_user_model().objects.create_user(username="housemate", password=PASSWORD)
+    housemate = Person.objects.create(user=other_user, display_name="Housemate Example")
+    Membership.objects.create(person=housemate, household=household)
+    shared = checking(person, household, "HH-SYN-SHARED")
+    private = checking(person, household, "Private Synthetic", private=True)
+    category = _category(household)
+    shared_txn = add_txn(shared, person, date(2026, 3, 4), -4400, "HH-SYN-ONLY-MERCHANT")
+    add_txn(private, person, date(2026, 3, 5), -300, "PRIV-SYN-MERCHANT")
+    conversation = send_message(person, "hello")
+    turn = conversation.messages.get(status="pending")
+    tools = proposal_tools(conversation, turn)
+    rule_args = {"description_contains": "HH-SYN-ONLY", "category": category.name}
+
+    blocked = run_tool(person, tools, "propose_create_rule", rule_args)
+    unmatched = run_tool(person, tools, "propose_create_rule", {**rule_args, "description_contains": "NO-SUCH-TEXT"})
+    assert blocked.ok and blocked.account_ids == ()
+    assert blocked.text.split("The rule")[1] == unmatched.text.split("The rule")[1]
+    refused = run_tool(person, tools, "propose_create_rule", {**rule_args, "account_id": shared.pk})
+    assert not refused.ok and refused.account_ids == ()
+    for name, args in (
+        ("propose_set_category", {"transaction_ids": [shared_txn.pk], "category": category.name}),
+        ("propose_add_tags", {"transaction_ids": [shared_txn.pk], "tags": ["synthetic"]}),
+    ):
+        result = run_tool(person, tools, name, args)
+        assert not result.ok and result.account_ids == (), name
+    private_rule = run_tool(
+        person, tools, "propose_create_rule", {"description_contains": "PRIV-SYN", "category": category.name, "owner": "personal"},
+    )
+    assert private_rule.account_ids == (private.pk,)
+    assert "1 transactions" in private_rule.text
+
+    accept_policy(housemate, current_policy())
+    allowed = run_tool(person, tools, "propose_create_rule", {**rule_args, "account_id": shared.pk})
+    assert allowed.ok and allowed.account_ids == (shared.pk,)
+    assert "1 transactions" in allowed.text
