@@ -125,6 +125,26 @@ def test_chat_follow_up_resends_history(provider):
 
 
 @pytest.mark.django_db
+def test_chat_history_is_not_replayed_while_household_consent_lapsed(provider):
+    from django.contrib.auth import get_user_model
+
+    from finance.models import Membership
+    from tests.test_chat import PASSWORD
+
+    _user, person, household = _member(ANTHROPIC)
+    marker = "SYN-HISTORY-MARKER"
+    conversation = ask(person, f"First question {marker}")
+    late_user = get_user_model().objects.create_user(username="late", password=PASSWORD)
+    late = Person.objects.create(user=late_user, display_name="Late Example")
+    Membership.objects.create(person=late, household=household)
+    ask(person, "Second question", conversation_id=conversation.pk)
+    assert marker not in str(provider.requests[-1]["body"]["messages"])
+    accept_policy(late, current_policy())
+    ask(person, "Third question", conversation_id=conversation.pk)
+    assert marker in str(provider.requests[-1]["body"]["messages"])
+
+
+@pytest.mark.django_db
 @pytest.mark.parametrize(
     ("kind", "status", "payload", "expected"),
     [

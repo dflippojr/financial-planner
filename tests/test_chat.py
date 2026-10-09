@@ -1007,3 +1007,22 @@ def test_send_without_a_chat_backend_explains_what_to_do(harness):
     with pytest.raises(AiError, match="No chat backend is available yet"):
         ask(person, "What did I spend last month?")
     assert not AiConversation.objects.filter(member=person).exists()
+
+
+@pytest.mark.django_db
+def test_harness_follow_up_opens_a_new_session_after_household_consent_lapses(harness):
+    state, url = harness
+    _user, person, household = make_member("owner")
+    connect_harness(person, base_url=url, token=TOKEN)
+    conversation = ask(person, "First question", sleep=lambda _s: None)
+    conversation.refresh_from_db()
+    old_session = conversation.harness_session_id
+    assert old_session
+    late_user = get_user_model().objects.create_user(username="late", password=PASSWORD)
+    late = Person.objects.create(user=late_user, display_name="Late Example")
+    Membership.objects.create(person=late, household=household)
+    creates_before = len(state.session_creates)
+    state.need_tool = False
+    ask(person, "Follow up", conversation_id=conversation.pk, sleep=lambda _s: None)
+    assert ("POST", f"/api/v1/sessions/{old_session}/messages") not in state.requests
+    assert len(state.session_creates) == creates_before + 1
