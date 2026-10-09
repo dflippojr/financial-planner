@@ -143,7 +143,11 @@ def peek_google_pending(request, nonce):
 
 
 def consume_google_pending(request, sociallogin):
-    nonce = (sociallogin.state or {}).get(GOOGLE_FLOW_NONCE_STATE_KEY)
+    return consume_google_pending_for_state(request, sociallogin.state)
+
+
+def consume_google_pending_for_state(request, state):
+    nonce = (state or {}).get(GOOGLE_FLOW_NONCE_STATE_KEY)
     payload = peek_google_pending(request, nonce)
     if not nonce:
         return None

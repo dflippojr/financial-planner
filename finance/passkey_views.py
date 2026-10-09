@@ -36,7 +36,7 @@ from .reauth import (
     safe_next_url,
     stamp_recent_auth,
 )
-from .security_services import record_sign_in_failure_for_username
+from .security_services import client_ip, record_sign_in_failure_for_username
 
 PASSKEY_FAILED = "Sign-in failed. Check your credentials and try again later."
 REAUTH_FAILED = "Confirmation failed. Try again later."
@@ -117,7 +117,7 @@ def passkey_sign_in(request):
     form = RecoveryCodeOnlyForm(request.POST or None)
     error = None
     if request.method == "POST":
-        key = throttle_key(user.username, request.META.get("REMOTE_ADDR"))
+        key = throttle_key(user.username, client_ip(request))
         if login_is_blocked(key):
             error = PASSKEY_FAILED
         elif form.is_valid():
@@ -153,7 +153,7 @@ def passkey_sign_in_options(request):
     user = pending_passkey_user(request)
     if user is None or not hasattr(user, "person"):
         return _json_error(PASSKEY_FAILED, status=403)
-    key = throttle_key(user.username, request.META.get("REMOTE_ADDR"))
+    key = throttle_key(user.username, client_ip(request))
     if login_is_blocked(key):
         return _json_error(PASSKEY_FAILED, status=429)
     return JsonResponse({"ok": True, "options": json.loads(authentication_options_json(request, user.person))})
@@ -166,7 +166,7 @@ def passkey_sign_in_assert(request):
     user = pending_passkey_user(request)
     if user is None or not hasattr(user, "person"):
         return _json_error(PASSKEY_FAILED, status=403)
-    key = throttle_key(user.username, request.META.get("REMOTE_ADDR"))
+    key = throttle_key(user.username, client_ip(request))
     if login_is_blocked(key):
         return _json_error(PASSKEY_FAILED, status=429)
     payload = _json_body(request)
@@ -193,7 +193,7 @@ def passkey_reauth_options(request):
     person = _person(request, related=True)
     if not passkeys_for(person).exists():
         raise Http404()
-    key = throttle_key(request.user.username, request.META.get("REMOTE_ADDR"))
+    key = throttle_key(request.user.username, client_ip(request))
     if login_is_blocked(key):
         return _json_error(REAUTH_FAILED, status=429)
     return JsonResponse({"ok": True, "options": json.loads(authentication_options_json(request, person))})
@@ -205,7 +205,7 @@ def passkey_reauth_assert(request):
     person = _person(request, related=True)
     if not passkeys_for(person).exists():
         raise Http404()
-    key = throttle_key(request.user.username, request.META.get("REMOTE_ADDR"))
+    key = throttle_key(request.user.username, client_ip(request))
     if login_is_blocked(key):
         return _json_error(REAUTH_FAILED, status=429)
     payload = _json_body(request)

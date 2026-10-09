@@ -46,7 +46,7 @@ On **Recover account**, a person enters their username, one unused recovery code
 
 ## Sessions and sign-in protection
 
-Sessions expire 28 days after sign-in and do not extend with activity. Signing out deletes the current server-side session. Five failed attempts for the same normalized username and remote address within 15 minutes block that pair for 15 minutes. Google sign-in failures for a remote address use the same limiter. Responses remain generic so they do not confirm whether a username exists.
+Sessions expire 28 days after sign-in and do not extend with activity. Signing out deletes the current server-side session. Five failed attempts for the same normalized username and client address within 15 minutes block that pair for 15 minutes. Google sign-in failures for a client address use the same limiter; a failed Google callback counts only when it belongs to a Google sign-in this browser session started. The client address is the right-most `X-Forwarded-For` hop when `TRUST_PROXY_FORWARDED_FOR=true` (set it only behind a proxy that appends that header, such as Tailscale Serve), and the connecting address otherwise. Responses remain generic so they do not confirm whether a username exists.
 
 The defaults can be changed with `DJANGO_SESSION_COOKIE_AGE`, `LOGIN_FAILURE_LIMIT`, `LOGIN_FAILURE_WINDOW_SECONDS`, and `LOGIN_BLOCK_SECONDS`. Values are seconds except the invitation duration noted above.
 

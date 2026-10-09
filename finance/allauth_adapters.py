@@ -26,6 +26,7 @@ from .google_auth import (
     bind_google_flow_nonce,
     complete_google_onboarding,
     consume_google_pending,
+    consume_google_pending_for_state,
     google_email_is_verified,
     google_reauth_identity_matches,
     google_reauth_is_recent,
@@ -35,6 +36,7 @@ from .google_auth import (
     has_usable_google_sign_in,
     peek_google_pending,
 )
+from .security_services import client_ip
 from .reauth import reauth_redirect, recent_auth_is_fresh, safe_next_url, stamp_recent_auth
 
 
@@ -80,15 +82,17 @@ class MemberSocialAccountAdapter(DefaultSocialAccountAdapter):
     def on_authentication_error(
         self, request, provider, error=None, exception=None, extra_context=None
     ):
-        # A denied or failed Google round trip is a failed sign-in attempt and
-        # counts toward the same remote-address throttle as a wrong password.
-        record_login_failure(google_throttle_key(request.META.get("REMOTE_ADDR")))
+        # A denied or failed Google round trip that this session started is a
+        # failed sign-in attempt and counts toward the client's throttle like a
+        # wrong password. A callback with no matching pending flow is not.
+        if consume_google_pending_for_state(request, (extra_context or {}).get("state")):
+            record_login_failure(google_throttle_key(client_ip(request)))
         raise ImmediateHttpResponse(self._failed_response(request))
 
     def pre_social_login(self, request, sociallogin):
         if not google_signin_enabled():
             raise ImmediateHttpResponse(self._failed_response(request))
-        key = google_throttle_key(request.META.get("REMOTE_ADDR"))
+        key = google_throttle_key(client_ip(request))
         extra = sociallogin.account.extra_data or {}
         if not google_uid(extra) or not google_email_is_verified(extra):
             record_login_failure(key)
