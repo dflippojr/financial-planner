@@ -1,3 +1,4 @@
+import csv
 from datetime import date
 
 import pytest
@@ -485,8 +486,13 @@ def test_amount_range_limits():
 
 
 def test_oversized_csv_cell_is_a_file_error():
-    with pytest.raises(GoalFileError, match="CSV could not be read"):
-        parse_goal_file(b"name,target_amount,priority\n" + b"A" * 140_000 + b",1,1\n")
+    # The csv module's field limit is process-wide and other code raises it, so pin it here.
+    previous = csv.field_size_limit(131_072)
+    try:
+        with pytest.raises(GoalFileError, match="CSV could not be read"):
+            parse_goal_file(b"name,target_amount,priority\n" + b"A" * 140_000 + b",1,1\n")
+    finally:
+        csv.field_size_limit(previous)
 
 
 @pytest.mark.django_db
