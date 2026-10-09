@@ -166,6 +166,16 @@ run_restore_check() {
   echo "Restore check passed"
 }
 
+# The private key stays in the backup directory and never goes to the remote,
+# so a remote that is overwritten cannot produce a manifest restore.sh accepts.
+ensure_signing_key() {
+  if [ -f "$signing_key" ]; then
+    return 0
+  fi
+  mkdir -p "$(dirname "$signing_key")"
+  ssh-keygen -q -t ed25519 -N '' -C "$signing_namespace" -f "$signing_key" >/dev/null 2>&1
+}
+
 copy_offsite() {
   src=$1
   dest=$2
@@ -192,6 +202,8 @@ offsite_remote=${OFFSITE_RCLONE_REMOTE:-}
 offsite_recipient=${OFFSITE_AGE_RECIPIENT:-}
 rclone_config=${RCLONE_CONFIG:-/config/rclone.conf}
 remote_base=${offsite_remote%/}
+signing_key=${BACKUP_SIGNING_KEY:-$backup_root/signing/backup-signing-key}
+signing_namespace=financial-planner-backup
 
 nightly_dir="$backup_root/nightly"
 weekly_dir="$backup_root/weekly"
@@ -220,6 +232,7 @@ partial="$nightly_dir/.${filename}.partial"
 encrypted=""
 receipts_partial=""
 receipts_encrypted=""
+manifest_partial=""
 nightly="$nightly_dir/$filename"
 
 cleanup() {
@@ -233,6 +246,9 @@ cleanup() {
   fi
   if [ -n "$receipts_encrypted" ]; then
     rm -f "$receipts_encrypted"
+  fi
+  if [ -n "$manifest_partial" ]; then
+    rm -f "$manifest_partial" "$manifest_partial.sig"
   fi
   if [ "$code" -ne 0 ] && [ "${status_written:-0}" != 1 ]; then
     last_error=$(sanitize_error "Backup run failed")
@@ -302,10 +318,37 @@ if [ -n "$weekly" ]; then
   chmod 600 "$weekly_dir/$receipts_name"
 fi
 
+# Sign the SHA-256 of both files so restore.sh can tell this pair from one
+# that was swapped on the off-site remote (age alone does not authenticate).
+manifest_name="financial_planner_${timestamp}.sha256"
+manifest="$nightly_dir/$manifest_name"
+manifest_partial="$nightly_dir/.${manifest_name}.partial"
+if ! ensure_signing_key; then
+  fail_run "Backup signing key could not be created"
+fi
+if ! (cd "$nightly_dir" && sha256sum "$filename" "$receipts_name") > "$manifest_partial"; then
+  fail_run "Backup manifest failed"
+fi
+if ! ssh-keygen -Y sign -q -f "$signing_key" -n "$signing_namespace" "$manifest_partial" >/dev/null 2>&1; then
+  fail_run "Backup manifest signing failed"
+fi
+mv "$manifest_partial.sig" "$manifest.sig"
+mv "$manifest_partial" "$manifest"
+manifest_partial=""
+chmod 600 "$manifest" "$manifest.sig"
+if [ -n "$weekly" ]; then
+  cp "$manifest" "$manifest.sig" "$weekly_dir/"
+  chmod 600 "$weekly_dir/$manifest_name" "$weekly_dir/$manifest_name.sig"
+fi
+
 prune_backups "$nightly_dir" "$nightly_retention" 'financial_planner_*.dump'
 prune_backups "$weekly_dir" "$weekly_retention" 'financial_planner_*.dump'
 prune_backups "$nightly_dir" "$nightly_retention" 'financial_planner_*.receipts.tar.gz'
 prune_backups "$weekly_dir" "$weekly_retention" 'financial_planner_*.receipts.tar.gz'
+for pattern in 'financial_planner_*.sha256' 'financial_planner_*.sha256.sig'; do
+  prune_backups "$nightly_dir" "$nightly_retention" "$pattern"
+  prune_backups "$weekly_dir" "$weekly_retention" "$pattern"
+done
 
 last_success_at=$success_at
 dump_name=$filename
@@ -335,7 +378,18 @@ if [ -n "$offsite_remote" ] || [ -n "$offsite_recipient" ]; then
   if ! copy_offsite "$receipts_encrypted" "${remote_base}/nightly/${receipts_name}.age"; then
     fail_offsite "Off-site upload failed"
   fi
+  # The manifest holds only file names and digests, so it goes up in the clear.
+  for signed in "$manifest" "$manifest.sig"; do
+    if ! copy_offsite "$signed" "${remote_base}/nightly/$(basename "$signed")"; then
+      fail_offsite "Off-site upload failed"
+    fi
+  done
   if [ -n "$weekly" ]; then
+    for signed in "$manifest" "$manifest.sig"; do
+      if ! copy_offsite "$signed" "${remote_base}/weekly/$(basename "$signed")"; then
+        fail_offsite "Off-site weekly upload failed"
+      fi
+    done
     if ! copy_offsite "$encrypted" "${remote_base}/weekly/${filename}.age"; then
       fail_offsite "Off-site weekly upload failed"
     fi
@@ -353,12 +407,14 @@ if [ -n "$offsite_remote" ] || [ -n "$offsite_recipient" ]; then
   offsite_error=""
   dump_age_match='^financial_planner_[0-9TZ]+\.dump\.age$'
   receipts_age_match='^financial_planner_[0-9TZ]+\.receipts\.tar\.gz\.age$'
+  manifest_match='^financial_planner_[0-9TZ]+\.sha256$'
+  signature_match='^financial_planner_[0-9TZ]+\.sha256\.sig$'
   audit_stage=offsite_prune
   audit_line offsite_prune started
   if ! prune_remote nightly "$nightly_retention" "$dump_age_match" \
     || ! prune_remote weekly "$weekly_retention" "$dump_age_match" \
     || ! prune_remote nightly "$nightly_retention" "$receipts_age_match" \
-    || ! prune_remote weekly "$weekly_retention" "$receipts_age_match"; then
+    || ! prune_remote weekly "$weekly_retention" "$receipts_age_match"     || ! prune_remote nightly "$nightly_retention" "$manifest_match"     || ! prune_remote weekly "$weekly_retention" "$manifest_match"     || ! prune_remote nightly "$nightly_retention" "$signature_match"     || ! prune_remote weekly "$weekly_retention" "$signature_match"; then
     fail_offsite "Off-site retention pruning failed"
   fi
   audit_line offsite_prune succeeded

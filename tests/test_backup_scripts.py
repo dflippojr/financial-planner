@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import tarfile
 
 import pytest
 
@@ -244,7 +245,7 @@ def _run_restore(fake_bin, dump_path, extra_env=None):
     if extra_env:
         converted = {}
         for key, value in extra_env.items():
-            if key in {"RECEIPTS_DIR"}:
+            if key in {"RECEIPTS_DIR", "BACKUP_SIGNING_PUBLIC_KEY"}:
                 converted[key] = _unix_path(value) if value else value
             else:
                 converted[key] = value
@@ -384,6 +385,8 @@ def test_offsite_encrypts_uploads_and_prunes_by_name(tmp_path):
         (nightly_remote / f"financial_planner_202609{index:02d}T060000Z.dump.age").write_text("old")
     for index in range(1, 10):
         (weekly_remote / f"financial_planner_202608{index:02d}T060000Z.dump.age").write_text("old")
+    for index in range(1, 16):
+        (nightly_remote / f"financial_planner_202609{index:02d}T060000Z.sha256").write_text("old")
 
     result = _run_backup(
         fake_bin,
@@ -403,6 +406,14 @@ def test_offsite_encrypts_uploads_and_prunes_by_name(tmp_path):
     assert (weekly_remote / "financial_planner_20260927T060000Z.dump.age").is_file()
     assert len(list(nightly_remote.glob("*.dump.age"))) == 14
     assert len(list(weekly_remote.glob("*.dump.age"))) == 8
+    # The signed manifest goes up in the clear; the signing key never does.
+    manifest = "financial_planner_20260927T060000Z.sha256"
+    assert (nightly_remote / manifest).read_bytes() == (backup_root / "nightly" / manifest).read_bytes()
+    assert (nightly_remote / (manifest + ".sig")).is_file()
+    assert (weekly_remote / manifest).is_file()
+    assert (weekly_remote / (manifest + ".sig")).is_file()
+    assert len(list(nightly_remote.glob("*.sha256"))) == 14
+    assert not list(remote.rglob("*signing*"))
     status = _read_status(backup_root)
     assert status["offsite_success_at"] == "2026-09-27T06:00:00Z"
     assert status["offsite_error"] == ""
@@ -601,12 +612,119 @@ def test_restore_replaces_receipts_from_the_sibling_archive(tmp_path):
     restored = _run_restore(
         fake_bin,
         backup_root / "nightly" / "financial_planner_20260927T060000Z.dump",
-        {"RECEIPTS_DIR": live},
+        {"RECEIPTS_DIR": live, "BACKUP_SIGNING_PUBLIC_KEY": _public_key(backup_root)},
     )
 
     assert restored.returncode == 0, restored.stderr
+    assert "WARNING" not in restored.stderr
     assert (live / "synthetic-receipt.bin").read_bytes() == b"synthetic-receipt-bytes"
     assert not (live / "stale.bin").exists()
+    assert (fake_bin / "pgstate" / "restores.log").read_text().split()[-1] == "financial_planner"
+
+
+def _public_key(backup_root):
+    return backup_root / "signing" / "backup-signing-key.pub"
+
+
+def _signed_backup(tmp_path):
+    fake_bin = tmp_path / "bin"
+    backup_root = tmp_path / "backups"
+    fake_bin.mkdir()
+    live = backup_root / "receipts-live"
+    live.mkdir(parents=True)
+    (live / "synthetic-receipt.bin").write_bytes(b"synthetic-receipt-bytes")
+    _fake_date(fake_bin)
+    state = _fake_pg(fake_bin)
+    backed = _run_backup(fake_bin, backup_root, {"RESTORE_CHECK_INTERVAL_DAYS": "0"})
+    assert backed.returncode == 0, backed.stderr
+    return fake_bin, state, backup_root, backup_root / "nightly" / "financial_planner_20260927T060000Z.dump"
+
+
+@pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
+def test_backup_signs_a_manifest_of_the_dump_and_receipts(tmp_path):
+    _fake_bin, _state, backup_root, dump = _signed_backup(tmp_path)
+
+    manifest = dump.with_suffix(".sha256")
+    names = [line.split()[1].lstrip("*") for line in manifest.read_text().splitlines()]
+    assert names == [dump.name, "financial_planner_20260927T060000Z.receipts.tar.gz"]
+    assert manifest.with_name(manifest.name + ".sig").read_text().startswith("-----BEGIN SSH SIGNATURE-----")
+    assert (backup_root / "weekly" / manifest.name).is_file()
+    assert (backup_root / "weekly" / (manifest.name + ".sig")).is_file()
+    assert _public_key(backup_root).is_file()
+
+
+@pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
+def test_restore_refuses_a_dump_that_does_not_match_the_signed_manifest(tmp_path):
+    fake_bin, state, backup_root, dump = _signed_backup(tmp_path)
+    live = backup_root / "receipts-live"
+    dump.write_text("synthetic dump swapped on the remote")
+
+    restored = _run_restore(fake_bin, dump, {"RECEIPTS_DIR": live, "BACKUP_SIGNING_PUBLIC_KEY": _public_key(backup_root)})
+
+    assert restored.returncode == 1
+    assert "Restore refused: the dump does not match its signed manifest" in restored.stderr
+    assert not (state / "restores.log").exists()
+    assert (live / "synthetic-receipt.bin").read_bytes() == b"synthetic-receipt-bytes"
+
+
+@pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
+def test_restore_refuses_a_manifest_signed_by_another_key(tmp_path):
+    fake_bin, state, backup_root, dump = _signed_backup(tmp_path)
+    other = tmp_path / "other-key"
+    generated = subprocess.run(
+        [POSIX_BASH, "-c", f"ssh-keygen -q -t ed25519 -N '' -f \"{_unix_path(other)}\""],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert generated.returncode == 0, generated.stderr
+
+    restored = _run_restore(
+        fake_bin, dump, {"RECEIPTS_DIR": backup_root / "receipts-live", "BACKUP_SIGNING_PUBLIC_KEY": other.with_suffix(".pub")}
+    )
+
+    assert restored.returncode == 1
+    assert "Restore refused: the manifest signature does not verify" in restored.stderr
+    assert not (state / "restores.log").exists()
+
+
+def _hostile_receipts(archive, kind):
+    with tarfile.open(archive, "w:gz") as tar:
+        good = tarfile.TarInfo("./synthetic-receipt.bin")
+        good.size = 0
+        tar.addfile(good)
+        if kind == "parent":
+            bad = tarfile.TarInfo("../x")
+            bad.size = 0
+            tar.addfile(bad)
+        else:
+            bad = tarfile.TarInfo("./escape")
+            bad.type = tarfile.SYMTYPE
+            bad.linkname = "../outside"
+            tar.addfile(bad)
+
+
+@pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
+@pytest.mark.parametrize("kind", ["parent", "symlink"])
+def test_restore_refuses_a_receipts_archive_that_escapes_the_directory(tmp_path, kind):
+    fake_bin, state, backup_root, dump = _signed_backup(tmp_path)
+    live = backup_root / "receipts-live"
+    _hostile_receipts(backup_root / "nightly" / "financial_planner_20260927T060000Z.receipts.tar.gz", kind)
+    before = sorted(str(path) for path in tmp_path.rglob("*"))
+
+    # The override skips the manifest check, so the member filter is what stops it.
+    restored = _run_restore(
+        fake_bin,
+        dump,
+        {"RECEIPTS_DIR": live, "BACKUP_SIGNING_PUBLIC_KEY": _public_key(backup_root), "RESTORE_ALLOW_UNVERIFIED": "1"},
+    )
+
+    assert restored.returncode == 1
+    assert "the receipts archive does not match its signed manifest; restoring anyway" in restored.stderr
+    assert "Receipts archive refused: it has an absolute path, a .. component or a link" in restored.stderr
+    assert not (state / "restores.log").exists()
+    assert sorted(str(path) for path in tmp_path.rglob("*")) == before
+    assert (live / "synthetic-receipt.bin").read_bytes() == b"synthetic-receipt-bytes"
 
 
 @pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
@@ -623,9 +741,10 @@ def test_restore_succeeds_when_the_receipts_archive_is_missing(tmp_path):
     leftover.write_bytes(b"leave-unchanged")
     _fake_pg(fake_bin)
 
-    restored = _run_restore(fake_bin, dump, {"RECEIPTS_DIR": live})
+    restored = _run_restore(fake_bin, dump, {"RECEIPTS_DIR": live, "RESTORE_ALLOW_UNVERIFIED": "1"})
 
     assert restored.returncode == 0, restored.stderr
+    assert "WARNING: no signed manifest for this backup; restoring anyway" in restored.stderr
     assert "no receipts archive for this backup; receipts directory left unchanged" in (
         restored.stderr + restored.stdout
     )
@@ -670,7 +789,7 @@ def test_restore_and_check_journal_survives_fake_database_restore(tmp_path, monk
     journal = tmp_path / "journal"
     monkeypatch.setenv("OPERATOR_AUDIT_DIR", str(journal))
     checked = _run_verify(fake_bin, dump)
-    restored = _run_restore(fake_bin, dump, {"RECEIPTS_DIR": tmp_path / "receipts"})
+    restored = _run_restore(fake_bin, dump, {"RECEIPTS_DIR": tmp_path / "receipts", "RESTORE_ALLOW_UNVERIFIED": "1"})
     assert checked.returncode == restored.returncode == 0
     rows = list(query(journal))
     assert [(row["operation"], row["outcome"]) for row in rows] == [

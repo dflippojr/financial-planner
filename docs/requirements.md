@@ -565,7 +565,7 @@ Owner decisions:
   - backup health and an off-site copy (#155), passkeys (#156), a sign-in log and sessions (#157), and Dependabot (#158);
   - local-model chat (#159), AI for other members (#162 and #147), chat proposals (#160), and unusual spending insights (#161).
 - **Year-end report:** a print-friendly page plus CSV downloads. No generated PDF.
-- **Off-site backups:** each verified dump is encrypted with `age` and copied with rclone to a remote the operator configures. The age private key stays off the tower.
+- **Off-site backups:** each verified dump is encrypted with `age` and copied with rclone to a remote the operator configures. The age private key stays off the tower. Each dump and receipts archive has a SHA-256 manifest signed on the tower with a key that is never uploaded. Restore refuses a file that does not match a verified manifest unless the operator explicitly overrides, and always extracts receipts only as plain files and directories inside the receipts directory (#304).
 - **Second factor:** passkeys (WebAuthn), optional per member, after password sign-in. Recovery codes stay the fallback. Google sign-in is not challenged.
 - **AI for other members:**
   - Other members may use the tower's local model through the hosting member's harness connection when the host offers it (#162). Hosted backends on that connection stay usable only by the host.
