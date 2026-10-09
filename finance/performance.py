@@ -5,7 +5,7 @@ Implements the Modified Dietz calculation recorded in docs/requirements.md,
 """
 
 from datetime import date
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, DivisionByZero, InvalidOperation, Overflow, localcontext
 from types import SimpleNamespace
 
 from .cash_flow import format_minor
@@ -16,6 +16,9 @@ INSUFFICIENT_HISTORY = "Fewer than two statement entries recorded."
 MISSING_RETURN_NOTE = "One or more periods in this range have no return; showing value change only."
 NO_DATA_IN_RANGE = "No statement entries fall in this range yet."
 NON_POSITIVE_AVERAGE = "Average invested balance was not positive."
+# Returns beyond this many percent are shown as a bound, not a number: extreme
+# statement entries can otherwise exceed decimal precision and fail the page.
+PERCENT_DISPLAY_LIMIT = Decimal(1_000_000)
 
 
 def _statement_entries(account, today):
@@ -29,10 +32,29 @@ def _statement_entries(account, today):
 
 
 def _pct_display(fraction):
-    if fraction is None:
+    if fraction is None or fraction.is_nan():
         return None
-    percent = (fraction * 100).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
-    return f"{percent}%"
+    with localcontext() as context:
+        context.traps[Overflow] = False
+        percent = fraction * 100
+    if percent >= PERCENT_DISPLAY_LIMIT:
+        return f"Over {PERCENT_DISPLAY_LIMIT:,}%"
+    if percent <= -PERCENT_DISPLAY_LIMIT:
+        return f"Below -{PERCENT_DISPLAY_LIMIT:,}%"
+    return f"{percent.quantize(Decimal('0.1'), rounding=ROUND_HALF_UP)}%"
+
+
+def _linked_return(periods):
+    """Chain period returns; an unrepresentable result becomes None, not an error."""
+    with localcontext() as context:
+        context.traps[Overflow] = False
+        context.traps[InvalidOperation] = False
+        context.traps[DivisionByZero] = False
+        linked = Decimal(1)
+        for period in periods:
+            linked *= Decimal(1) + period.return_fraction
+        fraction = linked - Decimal(1)
+    return None if fraction.is_nan() else fraction
 
 
 def _build_period(entry0, entry1):
@@ -153,10 +175,7 @@ def _range_summary(entries, periods, *, label, range_start, today, all_time):
         return_display = None
         note = MISSING_RETURN_NOTE
     else:
-        linked = Decimal(1)
-        for period in included:
-            linked *= Decimal(1) + period.return_fraction
-        return_fraction = linked - Decimal(1)
+        return_fraction = _linked_return(included)
         return_display = _pct_display(return_fraction)
         note = "Partial range: no statement entry on or before the start date." if partial else None
 

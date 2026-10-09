@@ -145,7 +145,12 @@ def visible_projection_inputs(principal, *, account=None, scope="", accounts=Non
     for series in series_rows:
         if series.last_on is None:
             continue
-        inputs.append(_series_input(series, series.last_on))
+        try:
+            inputs.append(_series_input(series, series.last_on))
+        except (OverflowError, ValueError):
+            # The next charge would fall past the calendar's end, so it
+            # cannot appear in any projection window.
+            continue
     return inputs
 
 

@@ -54,19 +54,24 @@ def merchant_key(description):
     return " ".join(tokens)[: RecurringSeries._meta.get_field("merchant_key").max_length].rstrip()
 
 
+_CADENCE_STEPS = {
+    RecurringSeries.Cadence.WEEKLY: lambda value: value + timedelta(days=7),
+    RecurringSeries.Cadence.BIWEEKLY: lambda value: value + timedelta(days=14),
+    RecurringSeries.Cadence.MONTHLY: lambda value: add_months_clamped(value, 1),
+    RecurringSeries.Cadence.QUARTERLY: lambda value: add_months_clamped(value, 3),
+    RecurringSeries.Cadence.ANNUAL: lambda value: add_months_clamped(value, 12),
+}
+
+
 @lru_cache(maxsize=65536)
-def add_cadence(value: date, cadence: str) -> date:
-    if cadence == RecurringSeries.Cadence.WEEKLY:
-        return value + timedelta(days=7)
-    if cadence == RecurringSeries.Cadence.BIWEEKLY:
-        return value + timedelta(days=14)
-    if cadence == RecurringSeries.Cadence.MONTHLY:
-        return add_months_clamped(value, 1)
-    if cadence == RecurringSeries.Cadence.QUARTERLY:
-        return add_months_clamped(value, 3)
-    if cadence == RecurringSeries.Cadence.ANNUAL:
-        return add_months_clamped(value, 12)
-    raise ValueError("Unknown cadence")
+def add_cadence(value: date, cadence: str) -> date | None:
+    """The next expected date, or None when it would fall past the calendar's end."""
+    if cadence not in _CADENCE_STEPS:
+        raise ValueError("Unknown cadence")
+    try:
+        return _CADENCE_STEPS[cadence](value)
+    except (OverflowError, ValueError):
+        return None
 
 
 def _median_minor(values):
@@ -185,7 +190,10 @@ def _longest_chain(ordered, dates, cadence):
     for start, source in enumerate(dates):
         # A step can only land within the cadence tolerance, so look at that
         # window of the sorted dates instead of every later charge.
-        expected = add_cadence(source, cadence).toordinal()
+        expected_date = add_cadence(source, cadence)
+        if expected_date is None:
+            continue
+        expected = expected_date.toordinal()
         low = bisect_left(days, expected - tolerance, start + 1)
         high = bisect_right(days, expected + tolerance, low)
         candidate = length[start] + 1

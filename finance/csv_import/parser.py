@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
+from finance.date_bounds import activity_date_error
+
 
 MAX_FILE_BYTES = 5 * 1024 * 1024
 MAX_DATA_ROWS = 10_000
@@ -275,9 +277,11 @@ def _parse_date(row, indexes, mapping):
     """Return (date, error); exactly one of them is None."""
     pattern = DATE_FORMATS[mapping.date_format][1]
     try:
-        return datetime.strptime(_cell(row, indexes, mapping.date_column).strip(), pattern).date(), None
+        parsed = datetime.strptime(_cell(row, indexes, mapping.date_column).strip(), pattern).date()
     except ValueError:
         return None, "Date does not match the selected format."
+    error = activity_date_error(parsed)
+    return (None, error) if error else (parsed, None)
 
 
 def _signed_amount(row, indexes, mapping):
