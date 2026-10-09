@@ -11,6 +11,7 @@ from .models import (
     Account,
     Alert,
     ImportBatch,
+    Invitation,
     Membership,
     Receipt,
     RecurringExclusion,
@@ -347,6 +348,12 @@ def end_current_membership(person, *, audit_actor=None):
             append_event(account=account, action=action, actor=audit_actor, affected_member=person, changed_fields=fields)
     own_membership.ended_at = transitioned_at
     own_membership.save(update_fields=("ended_at",))
+    # A departing member's outstanding codes end with their membership.
+    Invitation.objects.filter(
+        invited_by=person,
+        household_id=own_membership.household_id,
+        used_at__isnull=True,
+    ).delete()
     if audit_actor is not None:
         append_event(action=AuditEvent.Action.MEMBER_LEFT, actor=audit_actor, affected_member=person,
                      household=own_membership.household, target_id=person.pk)

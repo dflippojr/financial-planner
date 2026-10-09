@@ -8,6 +8,7 @@ from django.contrib.auth import get_user_model, login
 from django.contrib.sessions.models import Session
 from django.core.exceptions import PermissionDenied
 from django.db import IntegrityError, connection, transaction
+from django.db.models import Exists, OuterRef
 from django.utils import timezone
 
 from .audit_services import append_event
@@ -85,13 +86,23 @@ def create_invitation(inviter):
     return code
 
 
-def invitation_is_usable(code):
-    now = timezone.now()
+def _usable_invitations(code, now):
+    """Unused, unexpired invitations whose inviter still belongs to the household."""
+    inviter_is_current_member = Membership.objects.filter(
+        person_id=OuterRef("invited_by_id"),
+        household_id=OuterRef("household_id"),
+        ended_at__isnull=True,
+    )
     return Invitation.objects.filter(
+        Exists(inviter_is_current_member),
         token_digest=_digest((code or "").strip()),
         used_at__isnull=True,
         expires_at__gt=now,
-    ).exists()
+    )
+
+
+def invitation_is_usable(code):
+    return _usable_invitations(code, timezone.now()).exists()
 
 
 def _create_member_user(username, password):
@@ -103,11 +114,7 @@ def _create_member_user(username, password):
 @transaction.atomic
 def accept_invitation(code, username, display_name, password):
     now = timezone.now()
-    invitation = Invitation.objects.select_for_update().filter(
-        token_digest=_digest(code.strip()),
-        used_at__isnull=True,
-        expires_at__gt=now,
-    ).first()
+    invitation = _usable_invitations(code, now).select_for_update().first()
     if invitation is None:
         raise InvalidOneTimeCode
     try:
