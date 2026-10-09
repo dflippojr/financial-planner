@@ -208,10 +208,12 @@ from .category_services import (
     current_household,
     dismiss_transfer_pair,
     ensure_household_categories,
+    exclusion_exists_for,
     income_and_spending_totals,
     link_refund,
     refresh_transfer_pairs,
     transfer_matching_key,
+    with_transfer_state,
     rename_category,
     set_transfer_window_days,
     split_transaction,
@@ -773,6 +775,7 @@ def _visible_active_transaction(principal, transaction_id):
     return get_object_or_404(
         Transaction.objects.visible_to(principal)
         .filter(status=Transaction.Status.ACTIVE)
+        .annotate(_excluded=exclusion_exists_for(principal))
         .select_related("account", "import_batch"),
         pk=transaction_id,
     )
@@ -822,6 +825,9 @@ def transaction_edit(request, transaction_id):
 def _render_transaction_edit(
     request, financial_transaction, *, form=None, refund_form=None, split_form=None, note_form=None, receipt_form=None
 ):
+    if getattr(financial_transaction, "_excluded", None) is None:
+        # A locked reload after a failed POST drops the queryset annotation.
+        with_transfer_state(request.user, financial_transaction)
     if form is None:
         form = TransactionCorrectionForm.for_transaction(financial_transaction)
     if note_form is None:

@@ -93,12 +93,12 @@ def test_split_selection_loads_only_selected_purchase_parts():
 
 
 def test_excluded_transfer_has_no_refund_search():
-    from finance.category_services import refresh_transfer_pairs
+    from finance.category_services import refresh_transfer_pairs, with_transfer_state
     owner, _, account, refund, client = setup_refund()
     second = make_account(owner, name='Synthetic Savings')
     make_transaction(owner, second, amount_minor=-refund.amount_minor, description='Synthetic transfer out')
     refresh_transfer_pairs(owner)
     refund.refresh_from_db()
-    assert refund.is_excluded_transfer
+    assert with_transfer_state(owner, refund).is_excluded_transfer
     response = client.get(reverse('transaction-edit', args=(refund.pk,)))
     assert b'Search purchases' not in response.content
