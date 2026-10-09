@@ -1590,6 +1590,7 @@ class SavingsBufferForm(forms.Form):
     buffer = forms.DecimalField(
         required=False,
         min_value=Decimal("0"),
+        max_value=Decimal("10000000000"),
         max_digits=15,
         decimal_places=2,
         label="Safety buffer",

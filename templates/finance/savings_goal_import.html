@@ -81,7 +81,7 @@
     <li><code>target_date</code>: <code>YYYY-MM-DD</code>, or blank for no date.</li>
     <li><code>scope</code>: <code>private</code> (default) or <code>household</code>.</li>
   </ul>
-  <p>Importing the same file again changes nothing. A column you leave out keeps each saved goal as it is, and a blank cell in a column you include clears that value. Goals missing from the file are listed, never deleted.</p>
+  <p>Importing the same file again changes nothing. A column you leave out keeps each saved goal as it is, and a blank cell in a column you include clears that value (in JSON, a key missing from one object counts as blank). A name that matches an archived goal updates it and leaves it archived. Goals missing from the file are listed, never deleted.</p>
 </section>
 {% endif %}
 {% endblock %}

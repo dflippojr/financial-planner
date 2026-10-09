@@ -156,8 +156,7 @@ def _plan_goals(principal, scope):
     return list(goals.select_related("depends_on"))
 
 
-def _goal_row(principal, goal, *, today, household_only, funded_index, months):
-    progress = goal_progress(principal, goal, today=today, household_only=household_only)
+def _goal_row(goal, progress, *, funded_index, months):
     check = target_check(goal.target_date, funded_index, months)
     funded_month = months[funded_index].start if funded_index not in (None, ALREADY_FUNDED) else None
     return SimpleNamespace(
@@ -190,19 +189,15 @@ def build_funding_plan(principal, *, today, scope=SCOPE_ALL, horizon=DEFAULT_HOR
     household_only = scope == SavingsGoal.Scope.HOUSEHOLD
     ordered = order_goals(goals)
     progress_by_id = {
-        goal.pk: goal_progress(principal, goal, today=today, household_only=household_only).remaining_minor
-        for goal in ordered
+        goal.pk: goal_progress(principal, goal, today=today, household_only=household_only) for goal in ordered
     }
     funded, filled = fill_goals(
-        [(goal.pk, progress_by_id[goal.pk]) for goal in ordered],
+        [(goal.pk, progress_by_id[goal.pk].remaining_minor) for goal in ordered],
         [month.net_minor for month in months],
         buffer_minor,
     )
     rows = [
-        _goal_row(
-            principal, goal, today=today, household_only=household_only, funded_index=funded[goal.pk], months=months
-        )
-        for goal in ordered
+        _goal_row(goal, progress_by_id[goal.pk], funded_index=funded[goal.pk], months=months) for goal in ordered
     ]
     return SimpleNamespace(
         scope=scope,

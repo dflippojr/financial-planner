@@ -465,3 +465,99 @@ def test_commit_after_data_changed_shows_the_current_preview(settings, tmp_path)
     again = client.post(reverse("savings-goal-import"), {"action": "commit", "token": page.context["token"]})
 
     assert again.status_code == 200 and "More than one saved goal" in again.content.decode()
+
+
+@pytest.mark.django_db
+def test_dependency_on_a_row_with_errors_is_reported_on_the_dependent_row():
+    owner = make_person("owner")
+
+    rows = preview_goal_import(owner.user, csv_file("Base,abc,1,,,,", "Child,10,2,Base,,,")).rows
+
+    assert "points at row 1" in rows[1].errors[0]
+
+
+@pytest.mark.django_db
+def test_amount_range_limits():
+    owner = make_person("owner")
+    too_big = "92233720368547759"  # one more than the largest minor-unit total after x100
+    rows = preview_goal_import(owner.user, csv_file(f"Big,{too_big},1,,,,", f"Long,{'1' * 41},2,,,,")).rows
+    assert all("outside the supported range" in row.errors[0] or "greater than zero" in row.errors[0] for row in rows)
+
+
+def test_oversized_csv_cell_is_a_file_error():
+    with pytest.raises(GoalFileError, match="CSV could not be read"):
+        parse_goal_file(b"name,target_amount,priority\n" + b"A" * 140_000 + b",1,1\n")
+
+
+@pytest.mark.django_db
+def test_oversized_upload_is_rejected_on_the_page(settings, tmp_path):
+    settings.CSV_IMPORT_STAGING_DIR = tmp_path
+    owner = make_person("owner")
+    client = Client()
+    client.force_login(owner.user)
+
+    page = upload(client, b"a" * (5 * 1024 * 1024 + 1))
+
+    assert page.status_code == 200 and "5 MB" in page.content.decode()
+    assert SavingsGoal.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_active_goal_wins_over_an_archived_one_with_the_same_name():
+    owner = make_person("owner")
+    old = SavingsGoal.objects.create(
+        owner=owner, name="Laptop", target_amount_minor=1, status="archived", archived_at="2026-01-01T00:00:00Z"
+    )
+    current = SavingsGoal.objects.create(owner=owner, name="laptop", target_amount_minor=2)
+
+    commit_goal_import(owner.user, csv_file("Laptop,10,1,,,,"))
+
+    old.refresh_from_db()
+    current.refresh_from_db()
+    assert old.target_amount_minor == 1 and current.target_amount_minor == 1000 and SavingsGoal.objects.count() == 2
+
+
+@pytest.mark.django_db
+def test_a_lone_archived_match_is_updated_and_stays_archived():
+    owner = make_person("owner")
+    old = SavingsGoal.objects.create(
+        owner=owner, name="Laptop", target_amount_minor=1, status="archived", archived_at="2026-01-01T00:00:00Z"
+    )
+
+    commit_goal_import(owner.user, csv_file("Laptop,10,1,,,,"))
+
+    old.refresh_from_db()
+    assert old.target_amount_minor == 1000 and old.status == "archived" and SavingsGoal.objects.count() == 1
+
+
+def test_deeply_nested_json_is_a_file_error_not_a_crash():
+    with pytest.raises(GoalFileError, match="JSON could not be read"):
+        parse_goal_file(b"[" * 100_000)
+
+
+@pytest.mark.django_db
+def test_json_values_are_trimmed_and_colliding_keys_are_rejected():
+    owner = make_person("owner")
+    content = (
+        b'[{"name": " Laptop ", "target_amount": " 10 ", "priority": 1}, '
+        b'{"name": "Monitor", "target_amount": 5, "priority": 2, "depends_on": " laptop"}]'
+    )
+
+    commit_goal_import(owner.user, content)
+
+    assert SavingsGoal.objects.get(name="Monitor").depends_on.name == "Laptop"
+    with pytest.raises(GoalFileError, match="repeats a column"):
+        parse_goal_file(b'[{"Name": "A", "name": "B", "target_amount": 1, "priority": 1}]')
+
+
+@pytest.mark.django_db
+def test_second_member_confirming_the_same_household_file_changes_nothing():
+    owner = make_person("owner")
+    member = make_person("member")
+    make_household(owner, member)
+    content = csv_file("Sofa,500,1,,,,household")
+
+    commit_goal_import(owner.user, content)
+    again = commit_goal_import(member.user, content)
+
+    assert again.counts.unchanged == 1 and SavingsGoal.objects.count() == 1

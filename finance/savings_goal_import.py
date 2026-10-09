@@ -21,6 +21,7 @@ from django.db.models import Q
 from .access import require_person as _person
 from .cash_flow import format_minor
 from .category_services import current_household
+from .lifecycle_services import lock_actor_household
 from .models import SavingsGoal
 from .savings_goal_services import save_savings_goal
 
@@ -90,20 +91,26 @@ def _json_cell(value):
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, (str, int, Decimal)):
-        return str(value)
+        return str(value).strip()
     raise GoalFileError("Each JSON value must be text, a number, true/false or null.")
 
 
 def _json_records(text):
     try:
         data = json.loads(text, parse_float=Decimal, parse_constant=_reject_constant)
-    except ValueError as exc:
+    except (ValueError, RecursionError) as exc:
         raise GoalFileError("The JSON could not be read.") from exc
     if isinstance(data, dict):
         data = data.get("goals")
     if not isinstance(data, list) or not all(isinstance(item, dict) for item in data):
         raise GoalFileError('JSON must be a list of goal objects, or an object with a "goals" list.')
-    return [{str(key).strip().casefold(): _json_cell(value) for key, value in item.items()} for item in data]
+    records = []
+    for item in data:
+        record = {str(key).strip().casefold(): _json_cell(value) for key, value in item.items()}
+        if len(record) != len(item):
+            raise GoalFileError("An object repeats a column name.")
+        records.append(record)
+    return records
 
 
 def _reject_constant(_name):
@@ -263,6 +270,12 @@ def _existing_by_key(person, household, scopes):
     return grouped
 
 
+def _matchable(goals):
+    """Saved goals a row may update: the active ones, or archived ones when none is active."""
+    active = [goal for goal in goals if goal.status == SavingsGoal.Status.ACTIVE]
+    return active or goals
+
+
 def _flag_duplicates_and_matches(rows, existing, household):
     seen = {}
     for row in rows:
@@ -274,7 +287,7 @@ def _flag_duplicates_and_matches(rows, existing, household):
             row.errors.append(f"Same goal name as row {seen[row.key]} (names are not case-sensitive).")
         else:
             seen[row.key] = row.number
-        matches = existing.get(row.key, [])
+        matches = _matchable(existing.get(row.key, []))
         if len(matches) > 1:
             row.errors.append("More than one saved goal has this name; rename them before importing.")
         elif matches:
@@ -440,11 +453,14 @@ def _row_payload(row, saved):
 
 def commit_goal_import(principal, content):
     """Apply the file in one transaction; refuses a file with any error. Returns the preview."""
-    preview = preview_goal_import(principal, content)
-    if preview.errors:
-        raise ValidationError("Fix the rows marked with errors, then import again.")
+    person = _person(principal, check_authenticated=False)
     saved = {}
     with transaction.atomic():
+        # Two members confirming the same household file must not both create its goals.
+        lock_actor_household(person)
+        preview = preview_goal_import(principal, content)
+        if preview.errors:
+            raise ValidationError("Fix the rows marked with errors, then import again.")
         for row in _in_dependency_order(preview.rows):
             if row.action == ACTION_UNCHANGED:
                 saved[row.number] = row.existing

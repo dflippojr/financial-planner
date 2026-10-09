@@ -517,6 +517,18 @@ def test_buffer_form_saves_and_rejects_bad_input():
 
 
 @pytest.mark.django_db
+def test_buffer_form_rejects_an_amount_too_large_to_store_without_an_error_page():
+    owner = make_person("owner")
+    household = make_household(owner)
+
+    response = signed_in(owner).post(reverse("savings-goal-buffer"), {"buffer": "99999999999999.00"})
+
+    assert response.status_code == 302
+    household.refresh_from_db()
+    assert household.savings_buffer_minor is None
+
+
+@pytest.mark.django_db
 def test_buffer_form_needs_a_household():
     owner = make_person("owner")
     assert signed_in(owner).post(reverse("savings-goal-buffer"), {"buffer": "5"}).status_code == 404
@@ -632,3 +644,35 @@ def test_goal_list_shows_goals_without_a_date_and_new_badges():
     assert page.status_code == 200
     assert "No target date" in body and "Priority 1" in body and "Time-sensitive" in body
     assert "Buy after First" in body and "None/month" not in body
+
+
+@pytest.mark.django_db
+def test_unknown_scope_and_horizon_are_rejected_for_a_member():
+    owner = make_person("owner")
+    with pytest.raises(ValueError, match="scope"):
+        build_funding_plan(owner.user, today=TODAY, scope="everyone")
+    with pytest.raises(ValueError, match="Horizon"):
+        build_funding_plan(owner.user, today=TODAY, horizon=5)
+
+
+@pytest.mark.django_db
+def test_plan_page_prefills_a_saved_buffer():
+    owner = make_person("owner")
+    make_household(owner)
+    set_savings_buffer(owner.user, 12_345)
+
+    page = signed_in(owner).get(reverse("savings-goal-plan"))
+
+    assert 'value="123.45"' in page.content.decode()
+
+
+@pytest.mark.django_db
+def test_unarchiving_and_completing_keep_working_with_wishlist_fields():
+    owner = make_person("owner")
+    goal = make_goal(owner, "Laptop", 10_000, priority=1)
+    client = signed_in(owner)
+
+    for name in ("savings-goal-archive", "savings-goal-unarchive", "savings-goal-complete", "savings-goal-reopen"):
+        assert client.post(reverse(name, args=[goal.pk])).status_code == 302
+    goal.refresh_from_db()
+    assert goal.status == "active" and goal.completed_at is None and goal.priority == 1
