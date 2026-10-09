@@ -28,7 +28,7 @@ Google sign-in is off unless both `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` 
 
 A Google identity that is not already linked is refused at sign-in and does not create an account. New members still need a valid invitation (or first-run setup). A signed-in member can connect or disconnect Google and add or remove a password on **Account**, but cannot remove their last remaining method. Recovery codes still work for Google-only members; recovery sets a password.
 
-The OAuth handshake uses `state` and PKCE. The app does not store Google access or refresh tokens. Absolute session expiry is set at sign-in for both methods. Failed Google sign-in attempts for the same remote address use the login throttle. Standalone home-screen mode (issue #103) uses the same redirect; confirm password and Google sign-in on a real iPhone after install. There is no service worker.
+The OAuth handshake uses `state` and PKCE. The app does not store Google access or refresh tokens. Absolute session expiry is set at sign-in for both methods. Failed Google sign-in attempts for the same client address use the login throttle (see Sessions and sign-in protection). Standalone home-screen mode (issue #103) uses the same redirect; confirm password and Google sign-in on a real iPhone after install. There is no service worker.
 
 ## Passkeys
 
