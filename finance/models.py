@@ -127,6 +127,9 @@ class Person(models.Model):
 class Household(models.Model):
     name = models.CharField(max_length=150)
     transfer_match_window_days = models.PositiveSmallIntegerField(default=5)
+    # Savings-goal funding plan reserve in minor units; null means the default
+    # of one month of average actual spending, 0 means no reserve.
+    savings_buffer_minor = models.BigIntegerField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -135,6 +138,10 @@ class Household(models.Model):
             models.CheckConstraint(
                 condition=Q(transfer_match_window_days__lte=366),
                 name="household_transfer_window_days_range",
+            ),
+            models.CheckConstraint(
+                condition=Q(savings_buffer_minor__isnull=True) | Q(savings_buffer_minor__gte=0),
+                name="household_savings_buffer_not_negative",
             ),
         ]
 
@@ -1440,7 +1447,17 @@ class SavingsGoal(ArchivableModel):
     name = models.CharField(max_length=150)
     target_amount_minor = models.BigIntegerField()
     currency = models.CharField(max_length=3, default="USD")
-    target_date = models.DateField()
+    target_date = models.DateField(null=True, blank=True)
+    # Wishlist rank, 1 = first; null sorts after every ranked goal.
+    priority = models.PositiveIntegerField(null=True, blank=True)
+    depends_on = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="dependents",
+    )
+    time_sensitive = models.BooleanField(default=False)
     linked_account = models.ForeignKey(
         Account,
         on_delete=models.SET_NULL,
@@ -1464,6 +1481,14 @@ class SavingsGoal(ArchivableModel):
             ),
             models.CheckConstraint(condition=Q(currency="USD"), name="savings_goal_currency_usd"),
             models.CheckConstraint(condition=Q(target_amount_minor__gt=0), name="savings_goal_target_positive"),
+            models.CheckConstraint(
+                condition=Q(priority__isnull=True) | Q(priority__gte=1),
+                name="savings_goal_priority_positive",
+            ),
+            models.CheckConstraint(
+                condition=Q(depends_on__isnull=True) | ~Q(depends_on=models.F("pk")),
+                name="savings_goal_not_self_dependent",
+            ),
             models.CheckConstraint(
                 condition=(
                     Q(manual_amount_minor__isnull=True, manual_amount_date__isnull=True)

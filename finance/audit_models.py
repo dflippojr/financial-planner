@@ -20,6 +20,8 @@ CHANGED_FIELDS = frozenset({
     "amount", "date", "note", "account", "category", "kind", "cadence", "period", "rollover", "enabled",
     "archived", "target", "contribution", "tags", "mapping", "default", "refund", "split", "match",
     "priority", "color", "description", "currency", "interval", "price",
+    # Savings-goal wishlist (#295): field names only.
+    "dependency", "time_sensitive", "buffer",
 })
 METADATA_INT_KEYS = frozenset({
     "batch_id", "new_count", "duplicate_count", "invalid_count", "row_count", "history_id",

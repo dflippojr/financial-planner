@@ -15,6 +15,7 @@ SESSION_KEY = "csv_import_stages"
 TOKEN_PATTERN = re.compile(r"[0-9a-f]{32}")
 KIND_CSV_IMPORT = "csv_import"
 KIND_SHEET_COMPARISON = "sheet_comparison"
+KIND_GOAL_IMPORT = "goal_import"
 
 
 class StageUnavailable(ValueError):

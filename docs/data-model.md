@@ -70,6 +70,13 @@ The committed `synthetic_demo` fixture contains invented names, hashes, descript
 - The projection engine is a pure month-by-month function. It starts the month after `today`, runs for 3, 6, 12, or 24 months (default 12), and counts discrete occurrences in each calendar month. Confirmed, active recurring series that remain `visible_to` the viewer are expenses at typical amount and cadence, starting after the latest member transaction date. Disabled items, another member's private items, and private-account series the viewer cannot see are omitted.
 - Projected months are appended to the cash-flow chart and table with a Projected label. They are not added into actual summary cards, exports, or historical reports.
 
+## Savings goals and the funding plan (issue #295)
+
+- `SavingsGoal` (private to its owner, or household-shared) keeps its name, `target_amount_minor` (positive USD minor units), optional linked account and manual amount. `target_date` is optional. `priority` is a nullable integer of at least 1 (1 is funded first). `time_sensitive` is a boolean, default false. `depends_on` is a nullable self-reference (`SET_NULL`, related name `dependents`); a database check stops a goal depending on itself, and the services reject loops and links across scopes.
+- `Household.savings_buffer_minor` is nullable. Null means the default buffer (one month of average actual spending over the last 3 complete months); 0 means no buffer; the value cannot be negative.
+- Funding plan calculation, in order: (1) open goals (active, not completed) in the chosen scope; (2) fill order by priority (null last), then eligible-after-dependency, then id, where a dependency that is completed, archived or outside the plan no longer holds a goal back; (3) the surplus for each projected month is `income_minor - spending_minor` from the existing projection; (4) while the buffer is unmet, a positive surplus tops it up first; a negative surplus changes nothing; (5) the rest fills the first unfunded goal up to its remaining amount (`target - current`, never below 0) and any leftover continues to the next goal in the same month. The first month a goal reaches zero remaining is its funded month. Nothing is stored; the plan is recomputed on each view.
+- The wishlist import adds no table. A staged upload lives in the existing import staging directory and is deleted on commit, cancel or expiry. Each created or changed goal records the usual goal audit event; an unchanged goal records none.
+
 ## Budgets
 
 - `Budget` is private (owner only, no household) or household (exactly one household). Current members can see and edit household budgets. Private budgets are owner-only; a former member loses household budget access immediately.
