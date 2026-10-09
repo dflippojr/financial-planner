@@ -18,6 +18,16 @@ POWERSHELL = shutil.which("pwsh") or (shutil.which("powershell") if os.name == "
 pytestmark = pytest.mark.skipif(POWERSHELL is None, reason="runner scripts require PowerShell")
 
 
+def _process_env():
+    # Pass only platform setup, so fixture failures cannot print inherited tokens.
+    keys = {
+        "PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "PSMODULEPATH",
+        "TEMP", "TMP", "USERPROFILE", "USERDOMAIN", "USERNAME", "APPDATA",
+        "LOCALAPPDATA", "HOME", "LANG", "LC_ALL",
+    }
+    return {key: value for key, value in os.environ.items() if key.upper() in keys}
+
+
 def _powershell(script, env):
     return subprocess.run(
         [POWERSHELL, "-NoProfile", "-NonInteractive", "-File", str(script)],
@@ -30,7 +40,7 @@ def _powershell(script, env):
 
 @pytest.fixture
 def job_context(tmp_path):
-    env = {key: value for key, value in os.environ.items() if not key.startswith("GITHUB_")}
+    env = _process_env()
     env.update(
         GITHUB_REPOSITORY=REPO,
         GITHUB_WORKFLOW_REF=f"{REPO}/.github/workflows/review.yml@refs/heads/main",
@@ -150,7 +160,7 @@ def _ps_literal(path):
 @pytest.fixture
 def mock_installation(tmp_path):
     """Replace every network, archive, registration, and task operation."""
-    env = dict(os.environ)
+    env = _process_env()
     env["TEMP"] = str(tmp_path)
     env["INSTALL_TEST_LOG"] = str(tmp_path / "config-args.txt")
     env["INSTALL_TEST_TASK"] = str(tmp_path / "task.json")
