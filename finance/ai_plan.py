@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 from django.conf import settings
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from .ai_harness import (
@@ -47,14 +48,24 @@ def end_user_id(person):
     return f"fp-{digest[:32]}"
 
 
+def _usable_links(person):
+    """Links through the member's own harness, or one a current co-member still offers."""
+    usable = Q(connection__owner=person)
+    household = current_household(person)
+    if household is not None:
+        co_members = Membership.objects.filter(household=household, ended_at__isnull=True).values("person_id")
+        usable |= Q(connection__offer_plan_links=True, connection__owner_id__in=co_members)
+    return AiPlanLink.objects.filter(usable, person=person).select_related("connection")
+
+
 def plan_link(person, backend):
     if backend not in PLAN_BACKENDS:
         return None
-    return AiPlanLink.objects.filter(person=person, backend=backend).select_related("connection").first()
+    return _usable_links(person).filter(backend=backend).first()
 
 
 def plan_links(person):
-    return list(AiPlanLink.objects.filter(person=person).select_related("connection").order_by("backend"))
+    return list(_usable_links(person).order_by("backend"))
 
 
 def plan_end_user(person, connection, backend):
