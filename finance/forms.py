@@ -11,6 +11,7 @@ from django.core.validators import MaxValueValidator
 from django.db.models import Q
 from django.utils import timezone
 
+from .input_limits import MAX_DESCRIPTION_CHARS
 from .date_bounds import EARLIEST_ACTIVITY_DATE, TOO_EARLY_ERROR, activity_date_error
 from .cash_flow import MAX_REPORT_DATE, MAX_REPORT_PERIODS, default_date_range, period_count
 from .projection import DEFAULT_HORIZON, HORIZONS
@@ -672,7 +673,7 @@ def _correction_history_rows(transaction, actor, recorded_at, new_date, new_desc
 
 class TransactionCorrectionForm(forms.Form):
     transaction_date = forms.DateField(label="Date", widget=forms.DateInput(attrs={"type": "date"}))
-    description = forms.CharField(widget=forms.Textarea(attrs={"rows": 3}))
+    description = forms.CharField(max_length=MAX_DESCRIPTION_CHARS, widget=forms.Textarea(attrs={"rows": 3}))
     amount = forms.DecimalField(
         max_digits=19,
         decimal_places=2,

@@ -13,6 +13,7 @@ from .ai_services import member_has_ai, run_structured
 from .ai_types import ProviderResult
 from .alert_services import settings_for
 from .category_services import current_household
+from .input_limits import MAX_AI_FACTS_CHARS, MAX_DESCRIPTION_CHARS, MAX_UNUSUAL_FLAGS
 from .models import Account, MonthlyReview, RecurringSeries, Transaction
 from .policy_services import household_ai_allowed
 
@@ -73,11 +74,42 @@ def monthly_review_ai_on(person):
     return bool(settings_for(person).monthly_review_ai_enabled)
 
 
+
+
+def _bounded_fact_value(value, depth=0):
+    if depth > 12:
+        return None
+    if isinstance(value, str):
+        return value[:MAX_DESCRIPTION_CHARS]
+    if isinstance(value, dict):
+        return {key: _bounded_fact_value(item, depth + 1) for key, item in list(value.items())[:100]}
+    if isinstance(value, list):
+        return [_bounded_fact_value(item, depth + 1) for item in value[:MAX_UNUSUAL_FLAGS]]
+    return value
+
+
+def bound_ai_facts(facts):
+    payload = _bounded_fact_value(facts)
+    flags = facts.get("unusual") or []
+    if flags or "unusual_omitted_count" in facts:
+        payload["unusual_omitted_count"] = facts.get("unusual_omitted_count", 0) + max(0, len(flags) - MAX_UNUSUAL_FLAGS)
+    # Drop whole trailing items so JSON and numeric facts remain intact.
+    while len(json.dumps(payload, default=str)) > MAX_AI_FACTS_CHARS:
+        lists = [items for items in payload.values() if isinstance(items, list) and items]
+        if not lists:
+            return {"month": payload.get("month"), "month_label": payload.get("month_label")}
+        largest = max(lists, key=lambda items: len(json.dumps(items, default=str)))
+        if largest is payload.get("unusual"):
+            payload["unusual_omitted_count"] = payload.get("unusual_omitted_count", 0) + 1
+        largest.pop()
+    return payload
+
+
 def facts_payload_for_ai(person, facts):
     household = current_household(person)
     if household is None or household_ai_allowed(household):
-        return _drop_keys(facts)
-    return _drop_keys(_own_private_facts(person, facts))
+        return bound_ai_facts(_drop_keys(facts))
+    return bound_ai_facts(_drop_keys(_own_private_facts(person, facts)))
 
 
 def queue_monthly_review_phrasing(person, review):
@@ -158,7 +190,9 @@ def _own_private_facts(person, facts):
     filtered["large_transactions"] = [
         item for item in facts.get("large_transactions") or [] if _own_private_transaction(person, item)
     ]
-    filtered["unusual"] = _private_unusual_flags(person, facts)
+    flags = _private_unusual_flags(person, facts)
+    filtered["unusual"] = list(flags)
+    filtered["unusual_omitted_count"] = getattr(flags, "omitted_count", 0)
     for key in RECURRING_LIST_KEYS:
         filtered[key] = [item for item in facts.get(key) or [] if _own_private_series(person, item)]
     return filtered

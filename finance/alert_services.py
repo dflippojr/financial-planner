@@ -3,7 +3,8 @@ from datetime import timedelta
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.db.models import Q, prefetch_related_objects
+from django.db.models import CharField, Exists, F, OuterRef, Q, Value, prefetch_related_objects
+from django.db.models.functions import Cast, Concat
 from django.urls import reverse
 from django.utils import timezone
 
@@ -13,6 +14,7 @@ from .audit_services import append_event
 from .audit_operations import journal_run, outcome, scheduled_operation
 from .budget_services import progress_snapshot, progress_snapshots
 from .cash_flow import format_minor
+from .input_limits import MAX_LARGE_ALERTS
 from .models import _person_for
 from .models import (
     AuditEvent,
@@ -37,6 +39,7 @@ _KIND_ENABLED_FIELD = {
     Alert.Kind.UNUSUAL_SPENDING: "unusual_spending_enabled",
 }
 READ_RETENTION_DAYS = 180
+UNREAD_RETENTION_DAYS = 180
 
 
 def settings_for(person):
@@ -94,21 +97,19 @@ def alerts_for(principal):
     if person is None:
         return Alert.objects.none()
     visible_accounts = Account.objects.visible_to(person).values("pk")
-    visible_budgets = set(Budget.objects.visible_to(person).values_list("pk", flat=True))
-    kept = []
-    rows = (
+    visible_budgets = Budget.objects.visible_to(person).annotate(
+        _alert_key=Cast(OuterRef("dedupe_key"), output_field=CharField()),
+        _key=Concat(Value("budget:"), Cast("pk", output_field=CharField())),
+        _prefix=Concat(Value("budget:"), Cast("pk", output_field=CharField()), Value(":")),
+    ).filter(Q(_alert_key=F("_key")) | Q(_alert_key__startswith=F("_prefix")))
+    return (
         Alert.objects.filter(recipient=person)
         .exclude(kind=Alert.Kind.LARGE_TRANSACTION, account_id__isnull=True)
         .filter(Q(account_id__isnull=True) | Q(account_id__in=visible_accounts))
+        .alias(_budget_visible=Exists(visible_budgets))
+        .filter(~Q(kind=Alert.Kind.BUDGET) | Q(_budget_visible=True))
         .order_by("-created_at", "-pk")
     )
-    for alert in rows:
-        if alert.kind == Alert.Kind.BUDGET:
-            budget_id = _budget_id_from_dedupe(alert.dedupe_key)
-            if budget_id not in visible_budgets:
-                continue
-        kept.append(alert.pk)
-    return Alert.objects.filter(pk__in=kept).order_by("-created_at", "-pk")
 
 
 def unread_alert_count(principal):
@@ -294,6 +295,8 @@ def raise_large_transaction_alerts(transactions):
     if missing:
         preferences = {prefs.person_id: prefs for prefs in AlertSettings.objects.filter(person_id__in=people)}
     pending = {}
+    counts = {}
+    omitted = {}
     for txn in transactions:
         amount = abs(txn.amount_minor)
         link = reverse("transaction-edit", args=[txn.pk])
@@ -304,10 +307,31 @@ def raise_large_transaction_alerts(transactions):
             if not prefs.large_transaction_enabled or threshold is None or threshold <= 0 or amount < threshold:
                 continue
             key = (person.pk, f"large:{txn.pk}")
+            if key in pending:
+                continue
+            if counts.get(person.pk, 0) >= MAX_LARGE_ALERTS:
+                summary_key = (person.pk, txn.account_id)
+                omitted.setdefault(summary_key, txn)
+                continue
+            counts[person.pk] = counts.get(person.pk, 0) + 1
             pending[key] = Alert(
                 recipient=person, kind=Alert.Kind.LARGE_TRANSACTION, title=title,
                 link=link, dedupe_key=key[1], account=txn.account,
             )
+    # One summary per recipient; it is tied to an account so revoked access
+    # cannot leave an accountless large-transaction alert visible.
+    summarized = set()
+    for (person_id, account_id), txn in omitted.items():
+        if person_id in summarized:
+            continue
+        summarized.add(person_id)
+        key = (person_id, f"large-summary:{account_id}:{transactions[0].pk}:{transactions[-1].pk}")
+        pending[key] = Alert(
+            recipient=people[person_id], kind=Alert.Kind.LARGE_TRANSACTION,
+            title="More large transactions are available in your transaction list",
+            link=f"{reverse('transaction-list')}?account={account_id}",
+            dedupe_key=key[1], account=txn.account,
+        )
     if not pending:
         return []
     existing = set(Alert.objects.filter(
@@ -394,7 +418,11 @@ def schedule_after_new_transactions(transactions):
 def purge_old_read_alerts(*, now=None):
     now = now or timezone.now()
     cutoff = now - timedelta(days=READ_RETENTION_DAYS)
-    deleted, _detail = Alert.objects.filter(read_at__isnull=False, created_at__lt=cutoff).delete()
+    unread_cutoff = now - timedelta(days=UNREAD_RETENTION_DAYS)
+    deleted, _detail = Alert.objects.filter(
+        Q(read_at__isnull=False, created_at__lt=cutoff)
+        | Q(read_at__isnull=True, created_at__lt=unread_cutoff)
+    ).delete()
     return deleted
 
 

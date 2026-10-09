@@ -40,7 +40,7 @@ MAX_BIGINT = 2**63 - 1
 # Ids are stored in 255-character columns; descriptions are capped so one
 # provider row cannot bloat every page that lists it.
 MAX_ID_CHARS = 255
-MAX_DESCRIPTION_CHARS = 1000
+from .input_limits import MAX_DESCRIPTION_CHARS
 # Minor units of a signed 64-bit column have at most 19 digits, so an amount
 # with a larger exponent is rejected before any arithmetic.
 MAX_AMOUNT_ADJUSTED_EXPONENT = 18

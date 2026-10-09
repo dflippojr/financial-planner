@@ -108,6 +108,10 @@ def read_sheet_csv(raw_bytes):
         headers = next(reader)
     except (StopIteration, csv.Error) as exc:
         raise SheetCsvError("The CSV needs a header row and one row per month.") from exc
+    from .input_limits import MAX_COLUMNS
+
+    if len(headers) > MAX_COLUMNS:
+        raise SheetCsvError(f"The sheet exceeds the {MAX_COLUMNS} column limit.")
     headers = tuple(item.strip() for item in headers)
     if not headers or any(not item for item in headers) or len(headers) != len(set(headers)):
         raise SheetCsvError("Column names must be unique and non-empty.")
@@ -159,6 +163,10 @@ def save_mapping(principal, *, month_column, income_column, spending_column, spe
     columns = (month_column, income_column, spending_column)
     if len(set(columns)) != 3:
         raise SheetCsvError("Choose three different columns.")
+    from .input_limits import MAX_COLUMNS
+
+    if len(headers) > MAX_COLUMNS:
+        raise SheetCsvError(f"The sheet exceeds the {MAX_COLUMNS} column limit.")
     if any(column not in headers for column in columns):
         raise SheetCsvError("Choose columns from this CSV.")
     if spending_sign not in SheetComparisonSettings.SpendingSign.values:

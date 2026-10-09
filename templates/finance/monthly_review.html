@@ -59,6 +59,9 @@
     <p class="text-sm opacity-70">{{ unusual_label }}</p>
     <p class="mt-2 max-w-3xl">{{ unusual_paragraph }}</p>
     {% endif %}
+    {% if facts.unusual_omitted_count %}
+    <p class="text-sm opacity-70">Showing the largest flags; {{ facts.unusual_omitted_count }} additional flags omitted.</p>
+    {% endif %}
     {% if facts.unusual %}
     <ul class="list-disc pl-6 mt-4">
       {% for item in facts.unusual %}

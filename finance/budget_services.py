@@ -13,8 +13,19 @@ from .access import require_person as _person
 from .audit_services import owned_audience, record
 from .cash_flow import _combine_category_spending, format_minor, selected_accounts
 from .category_services import current_household, spending_by_category_by_window
+from .input_limits import BUDGET_MONTH_FLOOR, BUDGET_FUTURE_MONTHS, MAX_CARRY_MONTHS
 from .models import Account, AuditEvent, Budget, BudgetAmount, BudgetRolloverReset, Category
 from .months import add_months, month_end, month_start
+
+
+
+def validate_budget_month(value, *, today=None):
+    month = month_start(value)
+    latest = add_months(month_start(today or timezone.localdate()), BUDGET_FUTURE_MONTHS)
+    if not BUDGET_MONTH_FLOOR <= month <= latest:
+        raise ValidationError("Budget month must be from January 2000 through the next 24 months.")
+    return month
+
 
 DUPLICATE_BUDGET = "An active budget already exists for this category and scope."
 
@@ -31,7 +42,8 @@ def parse_month(raw, *, today=None):
         parsed = date(year, month, day)
     except (TypeError, ValueError, IndexError):
         return month_start(today)
-    return month_start(parsed)
+    return min(max(month_start(parsed), BUDGET_MONTH_FLOOR),
+               add_months(month_start(today), BUDGET_FUTURE_MONTHS))
 
 
 def _check_can_edit(person, budget):
@@ -113,7 +125,8 @@ def last_reset_month(budget, month):
 def carry_start_month(budget, month):
     if not budget.rollover_enabled or budget.rollover_started_month is None:
         return None
-    start = month_start(budget.rollover_started_month)
+    start = max(month_start(budget.rollover_started_month), BUDGET_MONTH_FLOOR,
+                add_months(month_start(month), -MAX_CARRY_MONTHS))
     reset = last_reset_month(budget, month)
     if reset is not None and reset > start:
         start = reset
@@ -316,7 +329,7 @@ def save_budget(principal, payload, *, budget=None):
             raise PermissionDenied(_DENIED)
         if assigned_household is not None and category.household_id != assigned_household.pk:
             raise PermissionDenied(_DENIED)
-    effective_month = month_start(payload["effective_month"])
+    effective_month = validate_budget_month(payload["effective_month"])
     amount_minor = payload["amount_minor"]
     if amount_minor <= 0:
         raise ValidationError("Budget amount must be greater than zero.")
@@ -412,7 +425,7 @@ def _new_rollover_period_start(budget):
 def set_budget_rollover(principal, budget, enabled, *, month):
     person = _person(principal, check_authenticated=False)
     _check_can_edit(person, budget)
-    month = month_start(month)
+    month = validate_budget_month(month)
     was_enabled = budget.rollover_enabled
     if enabled:
         turning_on = not budget.rollover_enabled
@@ -436,7 +449,7 @@ def set_budget_rollover(principal, budget, enabled, *, month):
 def reset_budget_rollover(principal, budget, *, month):
     person = _person(principal, check_authenticated=False)
     _check_can_edit(person, budget)
-    month = month_start(month)
+    month = validate_budget_month(month)
     try:
         with transaction.atomic():
             # Replace rather than update, so created_at marks this reset and it counts

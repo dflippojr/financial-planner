@@ -6,6 +6,7 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
 from finance.date_bounds import activity_date_error
+from finance.input_limits import MAX_COLUMNS
 
 
 MAX_FILE_BYTES = 5 * 1024 * 1024
@@ -171,6 +172,8 @@ def _open_records(text):
 
 
 def _clean_headers(headers):
+    if len(headers) > MAX_COLUMNS:
+        raise CsvInputError(f"The CSV exceeds the {MAX_COLUMNS} column limit.")
     cleaned = tuple(header.strip() for header in headers)
     if not cleaned or any(not header for header in cleaned):
         raise CsvInputError("Every CSV column must have a header.")

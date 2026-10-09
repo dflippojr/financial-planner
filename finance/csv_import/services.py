@@ -7,6 +7,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from finance.audit_services import record
+from finance.input_limits import MAX_DESCRIPTION_CHARS
 from finance.csv_import.fingerprint import transaction_fingerprint
 from finance.csv_import.parser import Preview, preview_csv
 from finance.lifecycle_services import (
@@ -147,7 +148,7 @@ def commit_csv_import(
                     transaction_date=row.transaction_date,
                     amount_minor=row.amount_minor,
                     currency=row.currency,
-                    description=row.description,
+                    description=row.description[:MAX_DESCRIPTION_CHARS],
                     kind=kind,
                     source_row_number=row.row_number,
                     source_transaction_id=row.source_transaction_id,

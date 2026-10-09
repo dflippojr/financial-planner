@@ -415,7 +415,9 @@ def compute_monthly_review_facts(principal, month, *, today=None):
     facts.update(_large_transaction_facts(principal, start, end))
     from .unusual_spending import compute_unusual_flags, unusual_settings_signature
 
-    facts["unusual"] = compute_unusual_flags(principal, start)
+    flags = compute_unusual_flags(principal, start)
+    facts["unusual"] = list(flags)
+    facts["unusual_omitted_count"] = getattr(flags, "omitted_count", 0)
     facts["unusual_settings"] = unusual_settings_signature(principal)
     return facts
 
@@ -448,6 +450,7 @@ def store_monthly_review(principal, month, *, force=False, today=None, raise_inb
         and not force
         and existing.visibility_key == key
         and "unusual" in (existing.facts or {})
+        and "unusual_omitted_count" in (existing.facts or {})
         and (existing.facts or {}).get("unusual_settings") == unusual_settings_signature(person)
     ):
         return existing, False

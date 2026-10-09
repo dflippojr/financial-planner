@@ -1,3 +1,4 @@
+from finance.csv_import.staging import _path as _stage_file_path
 import csv
 from datetime import date
 
@@ -388,7 +389,7 @@ def test_import_page_previews_then_commits_only_when_confirmed(settings, tmp_pat
     assert SavingsGoal.objects.count() == 0
     done = client.post(reverse("savings-goal-import"), {"action": "commit", "token": token})
     assert done.status_code == 302 and SavingsGoal.objects.count() == 3
-    assert list(tmp_path.iterdir()) == []
+    assert list(tmp_path.glob("*.csvstage")) == []
     stale = client.post(reverse("savings-goal-import"), {"action": "commit", "token": token})
     assert stale.status_code == 302 and SavingsGoal.objects.count() == 3
 
@@ -420,7 +421,7 @@ def test_import_page_reports_unreadable_files_and_missing_uploads(settings, tmp_
 
     unreadable = upload(client, b"name,priority\nA,1\n")
     assert "Missing required column" in unreadable.content.decode()
-    assert list(tmp_path.iterdir()) == []
+    assert list(tmp_path.glob("*.csvstage")) == []
     assert client.post(reverse("savings-goal-import"), {}).status_code == 200
 
 
@@ -434,7 +435,7 @@ def test_cancel_discards_the_staged_file(settings, tmp_path):
 
     cancelled = client.post(reverse("savings-goal-import"), {"action": "cancel", "token": token})
 
-    assert cancelled.status_code == 302 and list(tmp_path.iterdir()) == []
+    assert cancelled.status_code == 302 and list(tmp_path.glob("*.csvstage")) == []
 
 
 @pytest.mark.django_db

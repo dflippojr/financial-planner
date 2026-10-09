@@ -1,4 +1,5 @@
 import uuid
+from .input_limits import BUDGET_MONTH_FLOOR, MAX_DESCRIPTION_CHARS
 from decimal import Decimal
 
 from django.conf import settings
@@ -634,7 +635,7 @@ class Transaction(ArchivableModel):
     transaction_date = models.DateField()
     amount_minor = models.BigIntegerField()
     currency = models.CharField(max_length=3, default="USD")
-    description = models.TextField()
+    description = models.TextField(max_length=MAX_DESCRIPTION_CHARS)
     note = models.CharField(max_length=2000, blank=True, default="")
     kind = models.CharField(max_length=19, choices=Kind, default=Kind.CASH_FLOW)
     tags = models.ManyToManyField(
@@ -2115,6 +2116,10 @@ class Budget(ArchivableModel):
                     | Q(rollover_enabled=True, rollover_started_month__isnull=False)
                 ),
                 name="budget_rollover_start_when_enabled",
+            ),
+            models.CheckConstraint(
+                condition=Q(rollover_started_month__isnull=True) | Q(rollover_started_month__gte=BUDGET_MONTH_FLOOR),
+                name="budget_rollover_month_floor",
             ),
             models.CheckConstraint(
                 condition=(

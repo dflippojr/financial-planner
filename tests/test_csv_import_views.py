@@ -1,3 +1,4 @@
+from finance.csv_import.staging import _path as _stage_file_path
 import logging
 import time
 from pathlib import Path
@@ -156,7 +157,7 @@ def test_upload_stages_privately_then_previews_without_database_writes(staging_s
 
     staged = upload(client, account)
     token = staged.context["mapping_form"].initial["token"]
-    stage_path = Path(staging_settings) / f"{token}.csvstage"
+    stage_path = _stage_file_path(token)
     assert stage_path.read_bytes() == CSV
 
     response = client.post(reverse("csv-import-preview", args=(account.pk,)), mapping_data(token))
@@ -263,7 +264,7 @@ def test_cancel_and_expiry_delete_staged_content(staging_settings):
     client = Client()
     client.force_login(user)
     token = upload(client, account).context["mapping_form"].initial["token"]
-    path = Path(staging_settings) / f"{token}.csvstage"
+    path = _stage_file_path(token)
 
     cancelled = client.post(
         reverse("csv-import-preview", args=(account.pk,)), {"action": "cancel", "token": token}
@@ -272,7 +273,7 @@ def test_cancel_and_expiry_delete_staged_content(staging_settings):
     assert not path.exists()
 
     token = upload(client, account).context["mapping_form"].initial["token"]
-    path = Path(staging_settings) / f"{token}.csvstage"
+    path = _stage_file_path(token)
     with patch("finance.csv_import.staging.time.time", return_value=time.time() + 4000):
         expired = client.post(reverse("csv-import-preview", args=(account.pk,)), mapping_data(token))
     assert expired.status_code == 404
@@ -383,7 +384,7 @@ def test_get_after_upload_restores_mapping_and_cancel_from_live_stage(staging_se
 
     cancelled = client.post(preview_url, {"action": "cancel", "token": token})
     assert cancelled.status_code == 302
-    assert not (Path(staging_settings) / f"{token}.csvstage").exists()
+    assert not (_stage_file_path(token)).exists()
     blank = client.get(preview_url)
     assert blank.context.get("mapping_form") is None
     assert b"Cancel and delete upload" not in blank.content
@@ -404,12 +405,12 @@ def test_reupload_replaces_prior_stage_for_the_same_account(staging_settings):
     files = {path.name for path in Path(staging_settings).glob("*.csvstage")}
     stages = client.session[SESSION_KEY]
     assert first_token != second_token
-    assert files == {f"{second_token}.csvstage", f"{other_token}.csvstage"}
+    assert files == {_stage_file_path(second_token).name, _stage_file_path(other_token).name}
     assert set(stages) == {second_token, other_token}
     assert stages[second_token]["account_id"] == account.pk
     assert stages[other_token]["account_id"] == other.pk
-    assert not (Path(staging_settings) / f"{first_token}.csvstage").exists()
-    assert (Path(staging_settings) / f"{second_token}.csvstage").read_bytes() == second_csv
+    assert not (_stage_file_path(first_token)).exists()
+    assert (_stage_file_path(second_token)).read_bytes() == second_csv
 
 
 @pytest.mark.django_db
@@ -419,7 +420,7 @@ def test_get_does_not_restore_an_expired_stage(staging_settings):
     client = Client()
     client.force_login(user)
     token = upload(client, account).context["mapping_form"].initial["token"]
-    path = Path(staging_settings) / f"{token}.csvstage"
+    path = _stage_file_path(token)
 
     with patch("finance.csv_import.staging.time.time", return_value=time.time() + 4000):
         expired = client.get(reverse("csv-import-preview", args=(account.pk,)))
@@ -469,7 +470,7 @@ def test_commit_imports_new_rows_discards_stage_and_skips_duplicates(staging_set
     client.force_login(user)
     preview_url = reverse("csv-import-preview", args=(account.pk,))
     token = upload(client, account).context["mapping_form"].initial["token"]
-    path = Path(staging_settings) / f"{token}.csvstage"
+    path = _stage_file_path(token)
 
     imported = client.post(preview_url, commit_data(token), follow=True)
     assert imported.status_code == 200

@@ -33,6 +33,7 @@ from .ai_types import (
 )
 from .chat_proposals import proposal_tools
 from .lifecycle_services import _DENIED, _person_for
+from .input_limits import MAX_CHAT_PROMPT_CHARS, MAX_PAGE_CONTEXT_CHARS, MAX_CHAT_MESSAGES
 from .models import AiConversation, AiConversationMessage
 from .category_services import current_household
 from .policy_services import household_ai_allowed, may_use_ai
@@ -115,6 +116,8 @@ def delete_conversations_for_account(account_id):
         AiConversation.objects.filter(pk__in=doomed).delete()
 
 
+
+
 def sanitize_page_context(raw):
     if not raw:
         return {}
@@ -122,6 +125,8 @@ def sanitize_page_context(raw):
         return {}
     route = str(raw.get("route") or raw.get("path") or "").strip()
     query = str(raw.get("query") or raw.get("query_string") or "").strip()
+    if len(route) + len(query) > MAX_PAGE_CONTEXT_CHARS:
+        return {}
     if query.startswith("?"):
         query = query[1:]
     if not route.startswith("/") or "\n" in route or "://" in route:
@@ -147,6 +152,8 @@ def page_context_from_request(request):
 
 def send_message(principal, text, *, conversation_id=None, page_context=None):
     """Store the question and a pending reply; the chat runner answers it in the background."""
+    if len(text or "") > MAX_CHAT_PROMPT_CHARS:
+        raise AiError(f"Questions must be at most {MAX_CHAT_PROMPT_CHARS:,} characters.")
     person = _person_for(principal)
     purge_expired(person)
     _connection, backend = chat_backend_for(person)
@@ -362,7 +369,7 @@ def _api_history(conversation, question):
     )
     if question is not None:
         query = query.filter(pk__lt=question.pk)
-    rows = list(query.order_by("-pk")[: 2 * max_turns()])[::-1]
+    rows = list(query.order_by("-pk")[:min(MAX_CHAT_MESSAGES, 2 * max_turns())])[::-1]
     while rows and rows[0].role != AiConversationMessage.Role.USER:
         rows.pop(0)
     return [{"role": row.role, "content": row.content} for row in rows]
