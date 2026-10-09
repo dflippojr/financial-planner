@@ -14,6 +14,7 @@ from .access import DENIED as _DENIED
 from .access import require_person as _person_for
 from .audit_services import record, record_correction
 from .lifecycle_services import lock_actor_household
+from .pairing_evidence import has_payment_wording
 from .models import (
     AuditEvent,
     Account,
@@ -62,6 +63,10 @@ STARTER_CUSTOM_NAMES = (
 
 HIGH_CONFIDENCE_UNIQUE_BOTH = "only candidate for both legs in the window"
 LOW_CONFIDENCE_MULTIPLE = "multiple possible counterparts in the window"
+EVIDENCE_PRESENT = "payment or transfer wording on a leg"
+EVIDENCE_ABSENT = "no payment or transfer wording on either leg, so it needs confirmation"
+DIRECTION_OK = "money moves in the expected direction"
+DIRECTION_WRONG = "card pair runs the wrong way (bank credit with card debit), so it needs confirmation"
 
 
 def current_household(person):
@@ -377,6 +382,21 @@ def _pair_kind(tx_a, tx_b):
     return TransferPair.Kind.TRANSFER
 
 
+def _direction_is_plausible(tx_a, tx_b):
+    """A card pair must be a bank debit with a card credit; other pairs have no direction rule."""
+    types = {tx_a.account.account_type, tx_b.account.account_type}
+    involves_card = Account.Type.CREDIT_CARD in types and len(types) == 2
+    return not involves_card or _pair_kind(tx_a, tx_b) == TransferPair.Kind.CARD_PAYMENT
+
+
+def _has_payment_evidence(tx_a, tx_b):
+    return has_payment_wording(tx_a.description) or has_payment_wording(tx_b.description)
+
+
+def _meets_auto_mark_evidence(tx_a, tx_b):
+    return _direction_is_plausible(tx_a, tx_b) and _has_payment_evidence(tx_a, tx_b)
+
+
 def _ordered_legs(tx_a, tx_b):
     return (tx_a, tx_b) if tx_a.pk < tx_b.pk else (tx_b, tx_a)
 
@@ -415,16 +435,20 @@ def _candidate_pairs(transactions):
 
 def _scored_pair(left, right, unique):
     window = _window_days(left.account, right.account)
+    direction = _direction_is_plausible(left, right)
+    evidence = _has_payment_evidence(left, right)
     return {
         "left": left,
         "right": right,
-        "confidence": TransferPair.Confidence.HIGH if unique else TransferPair.Confidence.LOW,
+        "confidence": TransferPair.Confidence.HIGH if unique and direction and evidence else TransferPair.Confidence.LOW,
         "kind": _pair_kind(left, right),
         "reasons": [
             "exact opposite amounts",
             f"dates within {window} days",
             "both accounts visible to the same person",
             HIGH_CONFIDENCE_UNIQUE_BOTH if unique else LOW_CONFIDENCE_MULTIPLE,
+            DIRECTION_OK if direction else DIRECTION_WRONG,
+            EVIDENCE_PRESENT if evidence else EVIDENCE_ABSENT,
         ],
     }
 
@@ -600,6 +624,25 @@ def _pair_survives_revalidation(pair, left, right):
     return _legs_still_cancel(left, right)
 
 
+def _downgrade_to_suggested(pair, left, right, actor):
+    """Undo the exclusion of an auto-marked pair and keep it as a low-confidence suggestion."""
+    _unmark_exclusion(pair, left, right, actor)
+    scored = _scored_pair(left, right, unique=True)
+    pair.status = TransferPair.Status.SUGGESTED
+    pair.confidence = TransferPair.Confidence.LOW
+    pair.kind = scored["kind"]
+    pair.reasons = scored["reasons"]
+    pair.save(update_fields=("status", "confidence", "kind", "reasons", "updated_at"))
+
+
+def _auto_mark_no_longer_qualifies(pair, left, right):
+    return (
+        pair.status == TransferPair.Status.AUTO_MARKED
+        and _both_legs_active(left, right)
+        and not _meets_auto_mark_evidence(left, right)
+    )
+
+
 def _revalidate_marked_pairs(existing, locked_by_id, person):
     for pair in existing.values():
         if pair.status not in (
@@ -610,6 +653,8 @@ def _revalidate_marked_pairs(existing, locked_by_id, person):
             continue
         left, right = _pair_legs(pair, locked_by_id)
         if _pair_survives_revalidation(pair, left, right):
+            if _auto_mark_no_longer_qualifies(pair, left, right):
+                _downgrade_to_suggested(pair, left, right, person)
             continue
         if pair.status == TransferPair.Status.SUGGESTED:
             _invalidate_suggestion(pair)
@@ -618,6 +663,28 @@ def _revalidate_marked_pairs(existing, locked_by_id, person):
         else:
             pair.status = TransferPair.Status.UNDONE
             pair.save(update_fields=("status", "updated_at"))
+
+
+def downgrade_unevidenced_auto_marked_pairs():
+    """One-off re-evaluation: auto-marked pairs lacking the evidence rule become suggestions.
+
+    Returns (examined, downgraded) counts. Confirmed, dismissed and undone pairs are untouched,
+    and a second run finds nothing left to downgrade.
+    """
+    pair_ids = list(
+        TransferPair.objects.filter(status=TransferPair.Status.AUTO_MARKED).order_by("pk").values_list("pk", flat=True)
+    )
+    downgraded = 0
+    for pair_id in pair_ids:
+        with transaction.atomic():
+            pair = TransferPair.objects.select_for_update(of=("self",)).filter(pk=pair_id).first()
+            if pair is None or pair.status != TransferPair.Status.AUTO_MARKED:
+                continue
+            left, right = _pair_legs(pair, {})
+            if _auto_mark_no_longer_qualifies(pair, left, right):
+                _downgrade_to_suggested(pair, left, right, None)
+                downgraded += 1
+    return len(pair_ids), downgraded
 
 
 def _pair_rows_touching(leg_ids):

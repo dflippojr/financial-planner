@@ -216,8 +216,8 @@ def test_delete_repairs_transfer_partner_refunds_and_recurring_series():
     shared = make_account(owner, name="Synthetic Shared Checking", scope=Account.Scope.HOUSEHOLD, household=household)
     private = make_account(member, name="Synthetic Member Savings", account_type=Account.Type.SAVINGS)
     kept = make_account(owner, name="Synthetic Kept Card", account_type=Account.Type.CREDIT_CARD)
-    shared_leg = make_transaction(owner, shared, amount_minor=-2800, description="Synthetic shared out")
-    private_leg = make_transaction(member, private, amount_minor=2800, description="Synthetic private in")
+    shared_leg = make_transaction(owner, shared, amount_minor=-2800, description="Synthetic shared transfer out")
+    private_leg = make_transaction(member, private, amount_minor=2800, description="Synthetic private transfer in")
     assign_category(member, private_leg.pk, groceries.pk)
     refresh_transfer_pairs(member)
     pair = TransferPair.objects.get()
@@ -457,8 +457,8 @@ def test_delete_account_races_edit_and_transfer_refresh_without_deadlock():
     household = make_household(owner, member)
     shared = make_account(owner, name="Synthetic Shared", scope=Account.Scope.HOUSEHOLD, household=household)
     private = make_account(member, name="Synthetic Member Savings", account_type=Account.Type.SAVINGS)
-    financial_transaction = make_transaction(owner, shared, amount_minor=-3100, description="Synthetic shared out")
-    make_transaction(member, private, amount_minor=3100, description="Synthetic private in")
+    financial_transaction = make_transaction(owner, shared, amount_minor=-3100, description="Synthetic shared transfer out")
+    make_transaction(member, private, amount_minor=3100, description="Synthetic private transfer in")
     refresh_transfer_pairs(member)
 
     def edit():

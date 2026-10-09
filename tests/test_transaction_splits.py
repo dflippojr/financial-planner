@@ -149,8 +149,8 @@ def test_split_refusals():
     savings = make_account(owner, name="Synthetic Savings", account_type=Account.Type.SAVINGS)
     purchase = make_transaction(owner, checking, amount_minor=-5000, description="Synthetic store")
     refund = make_transaction(owner, checking, amount_minor=1500, description="Synthetic refund")
-    outflow = make_transaction(owner, checking, amount_minor=-3100, description="Synthetic moved out")
-    make_transaction(owner, savings, amount_minor=3100, description="Synthetic moved in")
+    outflow = make_transaction(owner, checking, amount_minor=-3100, description="Synthetic transfer out")
+    make_transaction(owner, savings, amount_minor=3100, description="Synthetic transfer in")
     refresh_transfer_pairs(owner)
     link_refund(owner, refund.pk, purchase.pk)
 
@@ -282,8 +282,8 @@ def test_split_skips_transfer_pairing_and_hides_from_outsiders():
     housing = household.categories.get(name="Housing")
     checking = make_account(owner, name="Synthetic Checking")
     savings = make_account(owner, name="Synthetic Savings", account_type=Account.Type.SAVINGS)
-    outflow = make_transaction(owner, checking, amount_minor=-3100, description="Synthetic moved out")
-    make_transaction(owner, savings, amount_minor=3100, description="Synthetic moved in")
+    outflow = make_transaction(owner, checking, amount_minor=-3100, description="Synthetic transfer out")
+    make_transaction(owner, savings, amount_minor=3100, description="Synthetic transfer in")
     split_transaction(
         owner,
         outflow.pk,
@@ -548,7 +548,7 @@ def test_splitting_suggested_transfer_leg_drops_pair_and_allows_rematch():
     savings = make_account(owner, name="Synthetic Savings", account_type=Account.Type.SAVINGS)
     extra = make_account(owner, name="Synthetic Extra", account_type=Account.Type.SAVINGS)
     outflow_a = make_transaction(owner, checking, amount_minor=-4000, description="Synthetic moved out a")
-    inflow = make_transaction(owner, savings, amount_minor=4000, description="Synthetic moved in")
+    inflow = make_transaction(owner, savings, amount_minor=4000, description="Synthetic transfer in")
     outflow_b = make_transaction(owner, extra, amount_minor=-4000, description="Synthetic moved out b")
     refresh_transfer_pairs(owner)
     pair = TransferPair.objects.get(status=TransferPair.Status.SUGGESTED)
