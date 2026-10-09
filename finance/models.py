@@ -876,7 +876,14 @@ class TransactionCorrectionHistory(models.Model):
     class QuerySet(models.QuerySet):
         def visible_to(self, principal):
             visible_transactions = Transaction.objects.visible_to(principal).values("pk")
-            return self.filter(transaction_id__in=visible_transactions)
+            # An exclusion entry describes a pair, so it is listed only when the
+            # viewer can see every pair the transaction belongs to.
+            pair_with_hidden_leg = TransferPair.objects.filter(
+                Q(leg_a_id=models.OuterRef("transaction_id")) | Q(leg_b_id=models.OuterRef("transaction_id"))
+            ).exclude(leg_a_id__in=visible_transactions, leg_b_id__in=visible_transactions)
+            return self.filter(transaction_id__in=visible_transactions).exclude(
+                Q(field_name=self.model.Field.EXCLUSION) & models.Exists(pair_with_hidden_leg)
+            )
 
     objects = QuerySet.as_manager()
 
