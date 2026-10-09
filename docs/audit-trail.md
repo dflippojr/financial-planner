@@ -39,7 +39,7 @@ Each row of the matrix is an explicit `record(...)` call inside the action's own
 | Manual entry | `record_created` / `record_deleted` (transaction) | account | Deletion references the existing correction-history ID. |
 | Balances | `record_created` / `record_edited` / `record_deleted` (balance) | account | Changed field names only (`date`, `amount`, `contribution`, `note`); same-date upserts are edits. |
 | Budgets | created, edited, archived, restored, `rollover_toggled`, rollover reset (`record_edited`, `rollover`, history ID) (budget) | household for household budgets, else the owner | |
-| Planned items, goals | created, edited, enabled/disabled, completed, archived/restored (planned_item, goal) | as budgets | |
+| Planned items, goals | created, edited, enabled/disabled, completed, archived/restored (planned_item, goal) | as budgets | A wishlist import records one created or edited event per changed goal; changed field names include `priority`, `dependency`, `time_sensitive`. The household savings buffer records `record_edited` on a `setting` with field `buffer` for the household. |
 | Categories, tags | created, renamed, archived (category, tag) | household | |
 | Saved CSV mappings | created, edited, archived, deleted, `default_changed` (csv_mapping) | household; default changes follow the account | |
 | Rules | created, edited, enabled/disabled, `rule_applied`, `rule_reversed` (rule) | household or owner | Applying records one aggregate event with the application ID and row count; automatic application after import uses source `rule`. A former household member reversing rows on their own account is audited privately. |

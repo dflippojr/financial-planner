@@ -6,7 +6,7 @@ from django import forms
 from .ai_api import MODELS as API_MODELS, label as api_label
 from .ai_types import API_KINDS
 from django.contrib.auth import get_user_model, password_validation
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.validators import MaxValueValidator
 from django.db.models import Q
 from django.utils import timezone
@@ -1441,7 +1441,28 @@ class SavingsGoalForm(forms.Form):
         label="Target amount",
         widget=forms.TextInput(attrs={"inputmode": "decimal"}),
     )
-    target_date = forms.DateField(widget=forms.DateInput(attrs={"type": "date"}))
+    target_date = forms.DateField(
+        required=False,
+        widget=forms.DateInput(attrs={"type": "date"}),
+        help_text="Optional. Leave blank for a wishlist goal with no deadline.",
+    )
+    priority = forms.IntegerField(
+        required=False,
+        min_value=1,
+        max_value=1_000_000,
+        help_text="Funding plan rank, 1 is funded first. Leave blank to rank after every numbered goal.",
+    )
+    depends_on = forms.ModelChoiceField(
+        queryset=SavingsGoal.objects.none(),
+        required=False,
+        empty_label="No dependency",
+        label="Buy after",
+        help_text="The funding plan funds this goal only after that goal. It must have the same scope.",
+    )
+    time_sensitive = forms.BooleanField(
+        required=False,
+        help_text="The funding plan flags this goal when it would miss its target date.",
+    )
     scope = forms.ChoiceField(choices=((SavingsGoal.Scope.PRIVATE, "Private"),))
     linked_account = forms.ModelChoiceField(
         queryset=Account.objects.none(),
@@ -1462,9 +1483,20 @@ class SavingsGoalForm(forms.Form):
         widget=forms.DateInput(attrs={"type": "date"}),
     )
 
-    def __init__(self, *args, principal=None, has_household=False, household_only=False, **kwargs):
+    def __init__(self, *args, principal=None, has_household=False, household_only=False, instance=None, **kwargs):
         super().__init__(*args, **kwargs)
+        self.principal = principal
+        self.instance = instance
         self.fields["linked_account"].queryset = Account.objects.visible_to(principal).order_by("name", "pk")
+        # Keep the current dependency selectable even if it has since been
+        # archived, so saving the form does not silently drop the link.
+        offered = Q(status=SavingsGoal.Status.ACTIVE)
+        if instance is not None:
+            offered |= Q(pk=instance.depends_on_id)
+        candidates = SavingsGoal.objects.visible_to(principal).filter(offered)
+        if instance is not None:
+            candidates = candidates.exclude(pk=instance.pk)
+        self.fields["depends_on"].queryset = candidates.order_by("name", "pk")
         if household_only:
             # Only a goal's owner can take a household goal private.
             self.fields["scope"].choices = ((SavingsGoal.Scope.HOUSEHOLD, SavingsGoal.Scope.HOUSEHOLD.label),)
@@ -1499,19 +1531,76 @@ class SavingsGoalForm(forms.Form):
         manual_amount_date = cleaned.get("manual_amount_date")
         if (manual_amount is None) != (manual_amount_date is None):
             self.add_error("manual_amount_date", "Enter both a manual amount and its date, or neither.")
+        self._check_dependency(cleaned)
         return cleaned
+
+    def _check_dependency(self, cleaned):
+        from .access import require_person
+        from .category_services import current_household
+        from .savings_goal_services import DEPENDENTS_SCOPE_ERROR, validate_dependency
+
+        dependency = cleaned.get("depends_on")
+        scope = cleaned.get("scope")
+        if scope is None:
+            return
+        instance = self.instance
+        if instance is not None and instance.scope != scope and instance.dependents.exclude(scope=scope).exists():
+            self.add_error("scope", DEPENDENTS_SCOPE_ERROR)
+        if dependency is None:
+            return
+        person = require_person(self.principal, check_authenticated=False)
+        try:
+            validate_dependency(
+                person,
+                instance if instance is not None else SavingsGoal(),
+                dependency,
+                scope=scope,
+                household=current_household(person),
+            )
+        except (ValidationError, PermissionDenied) as exc:
+            message = exc.messages[0] if isinstance(exc, ValidationError) else "Choose a goal you can see."
+            self.add_error("depends_on", message)
 
     def save_payload(self):
         manual_amount = self.cleaned_data.get("manual_amount")
         return {
             "name": self.cleaned_data["name"],
             "target_amount_minor": int(self.cleaned_data["target_amount"] * 100),
-            "target_date": self.cleaned_data["target_date"],
+            "target_date": self.cleaned_data.get("target_date"),
+            "priority": self.cleaned_data.get("priority"),
+            "depends_on": self.cleaned_data.get("depends_on"),
+            "time_sensitive": self.cleaned_data.get("time_sensitive", False),
             "scope": self.cleaned_data["scope"],
             "linked_account": self.cleaned_data.get("linked_account"),
             "manual_amount_minor": int(manual_amount * 100) if manual_amount is not None else None,
             "manual_amount_date": self.cleaned_data.get("manual_amount_date"),
         }
+
+
+class GoalImportForm(forms.Form):
+    goals_file = forms.FileField(
+        label="Wishlist file",
+        help_text="A .csv or .json file of at most 256 KB.",
+        widget=forms.ClearableFileInput(attrs={"accept": ".csv,.json"}),
+        error_messages={"required": "Choose a CSV or JSON wishlist file."},
+    )
+
+
+class SavingsBufferForm(forms.Form):
+    buffer = forms.DecimalField(
+        required=False,
+        min_value=Decimal("0"),
+        max_value=Decimal("10000000000"),
+        max_digits=15,
+        decimal_places=2,
+        label="Safety buffer",
+        help_text="Held back once before any goal is funded. Leave blank to use one month of average spending.",
+        widget=forms.TextInput(attrs={"inputmode": "decimal"}),
+    )
+
+    def buffer_minor(self):
+        value = self.cleaned_data.get("buffer")
+        return None if value is None else int(value * 100)
 
 
 class BudgetForm(forms.Form):

@@ -1,0 +1,87 @@
+{% extends "finance/base.html" %}
+{% block title %}Import savings goals · Financial Planner{% endblock %}
+{% block content %}
+<h1 class="mb-2 text-2xl font-bold">Import a wishlist</h1>
+<p class="mb-4"><a class="link" href="{% url 'savings-goals' %}">Back to savings goals</a></p>
+{% include "finance/_messages.html" %}
+{% if preview %}
+<section aria-labelledby="import-preview-heading" class="mb-8">
+  <h2 id="import-preview-heading" class="mb-3 text-xl font-semibold">Preview</h2>
+  <p class="mb-3">{{ preview.counts.create }} to add · {{ preview.counts.update }} to update · {{ preview.counts.unchanged }} unchanged{% if preview.counts.error %} · <strong>{{ preview.counts.error }} with errors</strong>{% endif %}</p>
+  {% if preview.errors %}
+  <div role="alert" class="alert alert-error mb-4">Fix the rows marked with errors in your file and upload it again. Nothing is imported until every row is valid.</div>
+  {% endif %}
+  <div class="overflow-x-auto">
+    <table class="table table-zebra">
+      <caption class="sr-only">Rows in the wishlist file and what importing each would do</caption>
+      <thead>
+        <tr>
+          <th scope="col">Row</th>
+          <th scope="col">Goal</th>
+          <th scope="col">Target</th>
+          <th scope="col">Priority</th>
+          <th scope="col">Result</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in preview.rows %}
+        <tr>
+          <td>{{ row.number }}</td>
+          <td class="font-medium">{{ row.name }}{% if row.scope == "household" %} <span class="badge badge-info badge-sm">Household</span>{% endif %}</td>
+          <td class="tabular-nums">{% if not row.errors %}{{ row.amount_display }}{% endif %}</td>
+          <td>{% if not row.errors and "priority" in row.columns %}{{ row.priority }}{% endif %}</td>
+          <td>
+            {% if row.errors %}
+            <ul class="text-error">{% for error in row.errors %}<li>{{ error }}</li>{% endfor %}</ul>
+            {% elif row.action == "create" %}Add
+            {% elif row.action == "update" %}Update ({{ row.changes|join:", " }})
+            {% else %}No change{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if preview.missing %}
+  <div class="mt-4 max-w-2xl">
+    <h3 class="font-semibold">Saved goals not in this file</h3>
+    <p class="text-sm opacity-80">These stay as they are. Importing never deletes goals.</p>
+    <ul class="list-disc pl-6">{% for goal in preview.missing %}<li>{{ goal.name }}{% if goal.scope == "household" %} (household){% endif %}</li>{% endfor %}</ul>
+  </div>
+  {% endif %}
+  <form method="post" class="mt-6 flex flex-wrap gap-2">
+    {% csrf_token %}
+    <input type="hidden" name="token" value="{{ token }}">
+    {% if not preview.errors %}
+    <button type="submit" name="action" value="commit" class="btn btn-primary">Import goals</button>
+    {% endif %}
+    <button type="submit" name="action" value="cancel" class="btn btn-ghost">Cancel</button>
+  </form>
+</section>
+{% else %}
+<section class="card bg-base-100 shadow-sm mb-6 max-w-lg">
+  <div class="card-body">
+    <h2 class="card-title">Upload a file</h2>
+    <form method="post" enctype="multipart/form-data">
+      {% csrf_token %}
+      {% include "finance/_form_fields.html" with form=upload_form %}
+      <button type="submit" class="btn btn-primary">Preview import</button>
+    </form>
+  </div>
+</section>
+<section class="max-w-2xl" aria-labelledby="import-format-heading">
+  <h2 id="import-format-heading" class="mb-2 text-xl font-semibold">File format</h2>
+  <p class="mb-2">A CSV with a header row, or a JSON list of objects with the same keys. Columns:</p>
+  <ul class="mb-3 list-disc space-y-1 pl-6">
+    <li><code>name</code> (required): goals are matched by name, ignoring case, within the same scope.</li>
+    <li><code>target_amount</code> (required): decimal dollars such as <code>1250.00</code>.</li>
+    <li><code>priority</code> (required): a whole number, 1 is funded first.</li>
+    <li><code>depends_on</code>: the name of another row in the file with the same scope. Funded only after that goal.</li>
+    <li><code>time_sensitive</code>: <code>true</code> or <code>false</code>.</li>
+    <li><code>target_date</code>: <code>YYYY-MM-DD</code>, or blank for no date.</li>
+    <li><code>scope</code>: <code>private</code> (default) or <code>household</code>.</li>
+  </ul>
+  <p>Importing the same file again changes nothing. A column you leave out keeps each saved goal as it is, and a blank cell in a column you include clears that value (in JSON, a key missing from one object counts as blank). A name that matches an archived goal updates it and leaves it archived. Goals missing from the file are listed, never deleted.</p>
+</section>
+{% endif %}
+{% endblock %}

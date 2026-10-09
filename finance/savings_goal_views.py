@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from django.core.exceptions import ValidationError
+from django.db.models import F
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
@@ -31,6 +32,9 @@ def _form(request, person, data=None, instance=None):
             "name": instance.name,
             "target_amount": Decimal(instance.target_amount_minor) / Decimal(100),
             "target_date": instance.target_date,
+            "priority": instance.priority,
+            "depends_on": instance.depends_on_id,
+            "time_sensitive": instance.time_sensitive,
             "scope": instance.scope,
             "linked_account": instance.linked_account,
             "manual_amount": (
@@ -45,6 +49,7 @@ def _form(request, person, data=None, instance=None):
         principal=request.user,
         has_household=household is not None,
         household_only=instance is not None and instance.owner_id != person.pk,
+        instance=instance,
         initial=initial,
     )
 
@@ -58,7 +63,9 @@ def savings_goal_list(request):
         _service_or_404(lambda: save_savings_goal(request.user, form.save_payload()), also=(ValidationError,))
         return redirect("savings-goals")
     today = timezone.localdate()
-    goals = SavingsGoal.objects.visible_to(request.user).order_by("target_date", "name", "pk")
+    goals = SavingsGoal.objects.visible_to(request.user).select_related("depends_on").order_by(
+        F("priority").asc(nulls_last=True), F("target_date").asc(nulls_last=True), "name", "pk"
+    )
     cards = [goal_progress(request.user, goal, today=today) for goal in goals]
     return render(
         request,

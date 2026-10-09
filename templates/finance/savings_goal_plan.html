@@ -1,0 +1,138 @@
+{% extends "finance/base.html" %}
+{% block title %}Funding plan · Financial Planner{% endblock %}
+{% block content %}
+<h1 class="mb-2 text-2xl font-bold">Funding plan</h1>
+<p class="mb-4 max-w-2xl opacity-80">When each savings goal could be fully funded from the projected monthly surplus. This is a projection from your planned items and confirmed recurring charges, not a promise, and it never changes the cash-flow projection.</p>
+<p class="mb-4"><a class="link" href="{% url 'savings-goals' %}">Back to savings goals</a></p>
+{% include "finance/_messages.html" %}
+<form method="get" class="mb-6 flex flex-wrap items-end gap-3">
+  <div>
+    <label class="label" for="plan-scope"><span class="label-text">Goals</span></label>
+    <select id="plan-scope" name="scope" class="select select-bordered">
+      {% for value, label in scopes %}
+      <option value="{{ value }}"{% if plan.scope == value %} selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label class="label" for="plan-horizon"><span class="label-text">Horizon</span></label>
+    <select id="plan-horizon" name="horizon" class="select select-bordered">
+      {% for months in horizons %}
+      <option value="{{ months }}"{% if plan.horizon == months %} selected{% endif %}>{{ months }} months</option>
+      {% endfor %}
+    </select>
+  </div>
+  <button type="submit" class="btn btn-primary">Update plan</button>
+</form>
+
+{% if plan.needs_household %}
+<p class="mb-6">Join a household to plan household goals.</p>
+{% else %}
+{% if plan.flagged %}
+<div role="alert" class="alert alert-warning mb-4">
+  <span>{% for row in plan.flagged %}{{ row.goal.name }}{% if not forloop.last %}, {% endif %}{% endfor %} {% if plan.flagged|length == 1 %}is time-sensitive and would miss its target date{% else %}are time-sensitive and would miss their target dates{% endif %}.</span>
+</div>
+{% endif %}
+<section class="mb-8" aria-labelledby="plan-goals-heading">
+  <h2 id="plan-goals-heading" class="mb-3 text-xl font-semibold">Order and funding dates</h2>
+  {% if plan.rows %}
+  <div class="overflow-x-auto">
+    <table class="table table-zebra">
+      <caption class="sr-only">Savings goals in funding order with the projected month each is fully funded</caption>
+      <thead>
+        <tr>
+          <th scope="col">#</th>
+          <th scope="col">Goal</th>
+          <th scope="col">Still needed</th>
+          <th scope="col">Fully funded</th>
+          <th scope="col">Target date</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in plan.rows %}
+        <tr>
+          <td>{{ forloop.counter }}</td>
+          <td class="font-medium">
+            {{ row.goal.name }}
+            {% if row.goal.scope == "household" %}<span class="badge badge-info badge-sm">Household</span>{% endif %}
+            {% if row.goal.priority %}<span class="badge badge-outline badge-sm">Priority {{ row.goal.priority }}</span>{% endif %}
+            {% if row.goal.time_sensitive %}<span class="badge badge-warning badge-sm">Time-sensitive</span>{% endif %}
+            {% if row.depends_on_name %}<span class="block text-sm font-normal opacity-70">Buy after {{ row.depends_on_name }}</span>{% endif %}
+          </td>
+          <td class="tabular-nums">{{ row.remaining_display }} <span class="block text-sm opacity-70">of {{ row.target_display }}</span></td>
+          <td>
+            {% if row.already_funded %}Already funded
+            {% elif row.within_horizon %}{{ row.funded_month|date:"F Y" }}
+            {% else %}Not within horizon{% endif %}
+          </td>
+          <td>
+            {% if row.goal.target_date %}{{ row.goal.target_date|date:"Y-m-d" }}
+              {% if row.check == "on_time" %}<span class="badge badge-success badge-sm">On time</span>
+              {% elif row.check == "late" %}<span class="badge badge-error badge-sm">{% if row.flagged %}Misses target{% else %}Later than target{% endif %}</span>
+              {% else %}<span class="badge badge-ghost badge-sm">After horizon</span>{% endif %}
+            {% else %}No target date{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p>No open savings goals in this view. <a class="link" href="{% url 'savings-goals' %}">Add one</a> or <a class="link" href="{% url 'savings-goal-import' %}">import a wishlist</a>.</p>
+  {% endif %}
+</section>
+
+<section class="mb-8 max-w-2xl" aria-labelledby="plan-assumptions-heading">
+  <h2 id="plan-assumptions-heading" class="mb-3 text-xl font-semibold">Assumptions</h2>
+  <ul class="list-disc space-y-1 pl-6">
+    <li>Horizon: the next {{ plan.horizon }} months, starting next month.</li>
+    <li>Monthly surplus is projected income minus projected expenses. A month with a negative surplus funds nothing and never undoes progress.</li>
+    <li>Safety buffer: {{ plan.buffer_display }}, {% if plan.buffer_source == "household" %}set for your household{% else %}one month of average actual spending over the last 3 complete months{% endif %}. It is set aside once, from the first positive surplus, before any goal is funded.</li>
+    <li>Fill order: priority first (goals without a priority last), a goal never before the goal it depends on, then the order the goals were added. The whole surplus goes to the first unfunded goal before the next.</li>
+    <li>A goal counts as on time when it is fully funded in or before its target month. Current progress comes from the linked account or the manual amount.</li>
+  </ul>
+</section>
+
+{% if plan.months %}
+<section class="mb-8" aria-labelledby="plan-months-heading">
+  <h2 id="plan-months-heading" class="mb-3 text-xl font-semibold">Monthly surplus</h2>
+  <div class="overflow-x-auto">
+    <table class="table table-sm max-w-2xl">
+      <caption class="sr-only">Projected surplus, amount held for the buffer and amount available to goals for each month</caption>
+      <thead>
+        <tr>
+          <th scope="col">Month</th>
+          <th scope="col">Surplus</th>
+          <th scope="col">Held for buffer</th>
+          <th scope="col">Available to goals</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for month in plan.months %}
+        <tr>
+          <td>{{ month.start|date:"M Y" }}</td>
+          <td class="tabular-nums">{{ month.surplus_display }}</td>
+          <td class="tabular-nums">{{ month.held_display }}</td>
+          <td class="tabular-nums">{{ month.available_display }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
+{% if plan.can_set_buffer %}
+<section class="card bg-base-100 shadow-sm max-w-lg" aria-labelledby="plan-buffer-heading">
+  <div class="card-body">
+    <h2 id="plan-buffer-heading" class="card-title">Safety buffer</h2>
+    <form method="post" action="{% url 'savings-goal-buffer' %}">
+      {% csrf_token %}
+      {% include "finance/_form_fields.html" with form=buffer_form %}
+      <button type="submit" class="btn btn-primary">Save buffer</button>
+    </form>
+  </div>
+</section>
+{% endif %}
+{% endif %}
+{% endblock %}

@@ -77,7 +77,7 @@ mindmap
 | **Recurring charges** | A deterministic detector finds weekly through annual subscriptions, tolerates date drift and varying amounts, and reports monthly and annual cost. |
 | **Net worth and investments** | Monthly net worth from balance snapshots, with carried-forward values flagged. Investment growth versus contributions using the Modified Dietz method. |
 | **Audit trail** | Metadata-only record of account, sharing, sign-in, connection, import and other changes, reviewable under Settings > Audit trail. See the [audit trail](docs/audit-trail.md). |
-| **Planning** | Planned items and confirmed recurring series feed a month-by-month projection; savings goals track progress. |
+| **Planning** | Planned items and confirmed recurring series feed a month-by-month projection; savings goals track progress, can be imported as a ranked wishlist, and get a read-only funding plan that dates each purchase. |
 
 ---
 

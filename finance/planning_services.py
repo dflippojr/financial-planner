@@ -167,6 +167,7 @@ def visible_savings_goal_dates(principal, *, today, scope=""):
     goals = SavingsGoal.objects.visible_to(principal).filter(
         status=SavingsGoal.Status.ACTIVE,
         completed_at__isnull=True,
+        target_date__isnull=False,
     )
     if scope:
         goals = goals.filter(scope=scope)
