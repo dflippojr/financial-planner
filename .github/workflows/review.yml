@@ -6,8 +6,9 @@ name: Automated Code Review
 # Reviews a PR once when it is opened; dispatch for a re-review after later commits.
 #
 # Never pull_request: the reviewer reads untrusted PR content with shell access on the self-hosted runner, and a
-# fork's pull_request run would execute the fork's copy of this file. pull_request_target and workflow_dispatch
-# always run main's copy. Fork PRs are skipped before they reach the runner, and the shared job refuses them too.
+# fork's pull_request run would execute the fork's copy of this file. pull_request_target uses the base copy;
+# the owner-installed job-started hook permits only main for either event. The workflow guard skips fork PRs,
+# and the shared job refuses them too. Keep fork approval at all external contributors; see docs/review-runner.md.
 # The PR head is checked out only as review context; nothing from it runs. Dependabot PRs are skipped, and a
 # review on open lets the shared workflow choose the backend: REVIEW_BACKENDS, then its default of codex,claude
 # (GPT leads on purpose: a different model family from the Claude author reviews differently). Models and effort
