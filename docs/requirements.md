@@ -49,6 +49,7 @@ Build a private, self hosted personal finance app that can eventually replace Ro
 
 ## Quality and data handling
 
+- CSV spreadsheet safety (#305): every export prefixes text starting with `=`, `+`, `-`, `@`, TAB or CR with an apostrophe. Signed numeric money columns retain their numeric values; member-export JSON preserves the original text. The ZIP README explains this escaping.
 - Show the source and import time for each transaction so errors can be traced and corrected.
 - Keep monetary values exact (for example, integer minor units or decimal types), with an explicit currency.
 - Support an undo path for an erroneous import.
