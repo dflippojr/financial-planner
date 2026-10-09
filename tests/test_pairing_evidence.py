@@ -9,7 +9,7 @@ from finance.category_services import (
     income_and_spending_totals,
     refresh_transfer_pairs,
 )
-from finance.models import Account, TransferPair
+from finance.models import Account, Transaction, TransferPair
 from finance.pairing_evidence import has_payment_wording
 from tests.test_categorization import make_account, make_household, make_person, make_transaction
 
