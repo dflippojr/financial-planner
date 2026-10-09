@@ -298,7 +298,7 @@ def compute_unusual_flags(
         accounts=chosen,
     )
     merchant_flags = _merchant_flags(principal, start, end, prefs, chosen, excluded)
-    combined = BoundedFlags(category_flags + merchant_flags, omitted_count=merchant_flags.omitted_count)
+    combined = BoundedFlags(category_flags + merchant_flags, omitted_count=getattr(merchant_flags, "omitted_count", 0))
     return bounded_flags(combined)
 
 

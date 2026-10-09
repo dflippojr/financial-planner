@@ -119,7 +119,7 @@ def test_sync_stores_surrogates_and_nuls_as_clean_text(monkeypatch):
     row = Transaction.objects.get(account=checking)
     assert row.source_transaction_id == "sf-?id"
     assert row.description.startswith("Synthetic? Shop")
-    assert len(row.description) == 1000
+    assert len(row.description) == 500
     assert row.original_fields["pending"] is None
     assert row.original_fields["posted"] == epoch(2026, 3, 10)
 

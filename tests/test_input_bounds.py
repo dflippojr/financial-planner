@@ -314,3 +314,36 @@ def test_rule_preview_and_apply_queries_do_not_scale_per_row():
         assert counts[1][2] <= counts[0][2] + 1
     else:
         assert counts[0][2] == counts[1][2]
+
+
+@pytest.mark.django_db
+def test_legacy_wide_mapping_edit_page_remains_bounded():
+    from finance.models import SavedCsvMapping
+    person = make_person("legacy-wide-map")
+    household = make_household(person)
+    saved = SavedCsvMapping.objects.create(
+        household=household, name="Synthetic legacy wide", created_by=person,
+        headers=[f"Synthetic{i}" for i in range(MAX_COLUMNS + 10)],
+        date_column="Synthetic0", description_column="Synthetic1", amount_column="Synthetic2",
+        date_format="iso", number_format="dot_none", amount_mode="signed",
+    )
+    client = Client()
+    client.force_login(person.user)
+    response = client.get(reverse("csv-mapping-edit", args=[saved.pk]))
+    assert response.status_code == 200
+    assert len(response.context["form"].fields["date_column"].choices) == MAX_COLUMNS
+
+
+def test_ai_fact_total_cap_drops_whole_items_and_handles_nested_values():
+    facts = {"month": "2026-09", "unusual": [{"name": "\\" * 10_000, "amount_minor": 100} for _ in range(50)]}
+    bounded = bound_ai_facts(facts)
+    assert len(json.dumps(bounded)) <= MAX_AI_FACTS_CHARS
+    assert bounded["unusual_omitted_count"] == 50 - len(bounded["unusual"])
+    assert bounded["unusual_omitted_count"] > 0
+    nested = {"value": "Synthetic"}
+    for _ in range(14):
+        nested = {"child": nested}
+    assert len(json.dumps(bound_ai_facts({"nested": nested}))) < 500
+    wide = {f"field{i}": "\\" * 500 for i in range(100)}
+    bounded = bound_ai_facts(wide)
+    assert len(json.dumps(bounded)) <= MAX_AI_FACTS_CHARS

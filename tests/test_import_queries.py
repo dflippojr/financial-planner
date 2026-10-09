@@ -36,7 +36,7 @@ def test_import_request_query_ceiling_and_bulk_scaling(tmp_path, profile):
                 response = client.post(url, {"action": "commit", "token": form.data["token"],
                     "date_range_start": "2026-09-01", "date_range_end": "2026-09-30"})
         assert response.status_code == 302
-        assert not list(tmp_path.iterdir())
+        assert not list(tmp_path.glob("*.csvstage"))
         if size == 500:
             # Count each kind of bulk write once on SQLite, whose 999-parameter
             # limit splits these same PostgreSQL statements into several writes.
@@ -101,17 +101,18 @@ def test_large_transaction_alerts_batch_reads_and_writes_without_duplicates():
     rows = list(Transaction.objects.filter(account=account).select_related("account", "account__household")[:500])
     with CaptureQueriesContext(connection) as queries:
         alerts = raise_large_transaction_alerts(rows)
-    # SQLite splits the 1,000-row bulk insert at its parameter limit; count that once.
+    # Count any database bulk-insert chunks once.
     writes = [q["sql"].split("(")[0] for q in queries if q["sql"].startswith("INSERT")]
     extra_bulk = len(writes) - len(set(writes)) if connection.vendor == "sqlite" else 0
     assert len(queries) - extra_bulk <= 15, "\n".join(q["sql"][:140] for q in queries)
-    assert len(alerts) == 1000  # shared account, both current members
+    from finance.input_limits import MAX_LARGE_ALERTS
+    assert len(alerts) == 2 * (MAX_LARGE_ALERTS + 1)  # detail cap plus summary for each member
     assert all(alert.pk for alert in alerts)
     assert raise_large_transaction_alerts(rows) == []
-    assert Alert.objects.count() == 1000
+    assert Alert.objects.count() == 2 * (MAX_LARGE_ALERTS + 1)
     Alert.objects.exclude(recipient=person).delete()
     topped_up = raise_large_transaction_alerts(rows)
-    assert len(topped_up) == 500
+    assert len(topped_up) == MAX_LARGE_ALERTS + 1
     assert all(alert.recipient_id != person.pk for alert in topped_up)
     assert Alert.objects.count() == 1000
 

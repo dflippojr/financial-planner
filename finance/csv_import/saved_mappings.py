@@ -57,8 +57,6 @@ def parse_saved_profile(value):
 
 
 def mapping_from_saved(saved):
-    if len(saved.headers) > MAX_COLUMNS:
-        raise ValidationError(f"Mappings may have at most {MAX_COLUMNS} columns.")
     return Mapping(
         date_column=saved.date_column,
         description_column=saved.description_column,
@@ -202,6 +200,8 @@ def update_csv_mapping(principal, mapping_id, *, name, mapping=None, default_acc
     changed = ["name"] if saved.name != trimmed else []
     saved.name = trimmed
     if mapping is not None:
+        if len(saved.headers) > MAX_COLUMNS:
+            raise ValidationError(f"Mappings may have at most {MAX_COLUMNS} columns.")
         if saved.locked_at is not None and _parsing_changed(saved, mapping):
             raise ValidationError(LOCKED_PARSING_MESSAGE)
         if saved.locked_at is None:

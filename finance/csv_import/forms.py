@@ -1,3 +1,4 @@
+from finance.input_limits import MAX_COLUMNS
 from django import forms
 
 from finance.models import ImportBatch
@@ -112,7 +113,7 @@ class CsvMappingForm(forms.Form):
 
     def __init__(self, *args, headers, **kwargs):
         super().__init__(*args, **kwargs)
-        choices = [(header, header) for header in headers]
+        choices = [(header, header) for header in headers[:MAX_COLUMNS]]
         optional_choices = [("", "Use USD for every row")] + choices
         for field in ("date_column", "description_column", "amount_column", "debit_column", "credit_column"):
             self.fields[field].choices = choices
@@ -179,7 +180,7 @@ class SavedCsvMappingEditForm(forms.Form):
 
     def __init__(self, *args, headers, account_choices, locked=False, **kwargs):
         super().__init__(*args, **kwargs)
-        choices = [(header, header) for header in headers]
+        choices = [(header, header) for header in headers[:MAX_COLUMNS]]
         optional_choices = [("", "Use USD for every row")] + choices
         for field in ("date_column", "description_column", "amount_column", "debit_column", "credit_column"):
             self.fields[field].choices = choices
