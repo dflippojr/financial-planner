@@ -468,10 +468,10 @@ def test_encrypt_roundtrip_does_not_embed_plaintext():
 
 class _FakeResponse:
     def __init__(self, body):
-        self._body = body
+        self._body = BytesIO(body)
 
-    def read(self):
-        return self._body
+    def read(self, size=-1):
+        return self._body.read(size)
 
     def __enter__(self):
         return self
@@ -633,7 +633,7 @@ def test_fetch_sends_access_url_credentials_as_basic_auth(monkeypatch):
         def __exit__(self, *exc):
             return False
 
-    def fake_open(request, timeout=None, context=None):
+    def fake_open(request, timeout=None, context=None, deadline=None):
         seen["url"] = request.full_url
         seen["auth"] = request.get_header("Authorization")
         return FakeResponse(jsonlib.dumps({"accounts": [], "errlist": []}).encode())
@@ -851,7 +851,7 @@ def test_stalled_response_body_becomes_a_safe_error(monkeypatch):
         def __exit__(self, *exc):
             return False
 
-        def read(self):
+        def read(self, size=-1):
             raise TimeoutError("read timed out")
 
     monkeypatch.setattr("finance.simplefin_client.urlopen", lambda *a, **k: StallingResponse())
@@ -1408,7 +1408,7 @@ def test_a_truncated_response_is_a_simplefin_error(monkeypatch):
     from finance.simplefin_client import fetch_accounts
 
     class _TruncatedResponse(_FakeResponse):
-        def read(self):
+        def read(self, size=-1):
             raise IncompleteRead(b"{\"accounts\"", 100)
 
     monkeypatch.setattr("finance.simplefin_client.urlopen", lambda *a, **k: _TruncatedResponse(b""))
