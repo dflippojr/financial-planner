@@ -23,6 +23,7 @@ from .models import RecurringSeries, Tag
 from .net_worth import net_worth_report
 from .planning_services import confine_recurring_series_to_accounts
 from .recurring_services import confirmed_totals
+from .spreadsheet import spreadsheet_text
 
 CSV_SECTIONS = (
     "cash-flow",
@@ -315,14 +316,20 @@ def csv_fieldnames(section):
 
 def iter_csv_bytes(report, section):
     fieldnames = csv_fieldnames(section)
+    # Report money is already formatted as decimal strings, not text cells.
+    money_fields = {"income", "spending", "net", "annual_cost", "assets", "liabilities"}
     buffer = io.StringIO()
-    writer = csv.DictWriter(buffer, fieldnames=fieldnames, lineterminator="\n")
+    # Default CRLF endings ensure csv also quotes carriage returns in text.
+    writer = csv.DictWriter(buffer, fieldnames=fieldnames)
     writer.writeheader()
     yield buffer.getvalue().encode("utf-8")
     buffer.seek(0)
     buffer.truncate(0)
     for row in csv_rows_for_section(report, section):
-        writer.writerow(row)
+        writer.writerow({
+            key: spreadsheet_text(value) if isinstance(value, str) and key not in money_fields else value
+            for key, value in row.items()
+        })
         yield buffer.getvalue().encode("utf-8")
         buffer.seek(0)
         buffer.truncate(0)

@@ -12,6 +12,7 @@ from decimal import Decimal
 from django.apps import apps
 from django.core.exceptions import PermissionDenied
 
+from .spreadsheet import spreadsheet_text
 from .models import (
     FORMER_MEMBER_LABEL,
     Account,
@@ -382,6 +383,10 @@ budget_rollover_resets.csv / budget_rollover_resets.json
 
 JSON files are arrays of objects. CSV uses UTF-8. Nested lists in CSV are JSON
 arrays. Date and datetime values are ISO-8601.
+
+CSV text cells beginning with =, +, -, @, TAB or CR are prefixed with an
+apostrophe so spreadsheets do not interpret them as formulas. Numeric money
+columns keep their signs. JSON files preserve the original text unchanged.
 """
 
 
@@ -405,7 +410,7 @@ def _json_value(value):
     return value
 
 
-def _csv_value(value):
+def _csv_value(value, *, is_money=False):
     if value is None:
         return ""
     if isinstance(value, bool):
@@ -416,14 +421,18 @@ def _csv_value(value):
         return value.isoformat()
     if isinstance(value, date):
         return value.isoformat()
+    if isinstance(value, str) and not is_money:
+        return spreadsheet_text(value)
     return value
 
 
 def _write_csv(buf: io.StringIO, rows: list[dict], fieldnames: tuple[str, ...]) -> None:
-    writer = csv.DictWriter(buf, fieldnames=fieldnames, lineterminator="\n", extrasaction="ignore")
+    # Default CRLF endings ensure csv also quotes carriage returns in text.
+    writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
     writer.writeheader()
     for row in rows:
-        writer.writerow({key: _csv_value(row.get(key)) for key in fieldnames})
+        # Decimal money is serialized as strings; all other strings are text.
+        writer.writerow({key: _csv_value(row.get(key), is_money=key.endswith("_decimal")) for key in fieldnames})
 
 
 def _write_json(buf: io.StringIO, rows: list[dict]) -> None:

@@ -21,11 +21,12 @@ from finance.models import (
     Person,
     RecurringSeries,
     RecurringSeriesMember,
+    Tag,
     Transaction,
 )
 from finance.net_worth import net_worth_report
 from finance.tag_services import add_tag, set_transaction_note_and_tags
-from finance.year_end import last_full_year, year_end_report
+from finance.year_end import CSV_SECTIONS, csv_fieldnames, iter_csv_bytes, last_full_year, year_end_report
 
 
 PASSWORD = "Synthetic-passphrase-42!"
@@ -109,6 +110,26 @@ def signed_client(person):
 def read_csv(response):
     body = b"".join(response.streaming_content).decode("utf-8")
     return list(csv.DictReader(io.StringIO(body)))
+
+
+@pytest.mark.parametrize("prefix", ["=", "+", "-", "@", "\t", "\r", ""])
+@pytest.mark.parametrize("section", CSV_SECTIONS)
+def test_every_year_end_csv_escapes_text_and_preserves_signed_money(prefix, section):
+    text = prefix + 'Synthetic, "雪"\ntext'
+    money_fields = {"income", "spending", "net", "annual_cost", "assets", "liabilities"}
+    row = {
+        field: "-12.34" if field in money_fields else text
+        for field in csv_fieldnames(section)
+    }
+    with patch("finance.year_end.csv_rows_for_section", return_value=iter([row])):
+        payload = b"".join(iter_csv_bytes(None, section)).decode("utf-8")
+    exported = list(csv.DictReader(io.StringIO(payload)))
+    assert len(exported) == 1
+    for field, value in exported[0].items():
+        if field in money_fields:
+            assert minor_from_decimal_string(value) == -1234
+        else:
+            assert value == ("'" if prefix else "") + text
 
 
 @pytest.mark.django_db
@@ -237,19 +258,23 @@ def test_year_end_lists_missing_import_months():
 
 
 @pytest.mark.django_db
-def test_year_end_csv_amounts_round_trip_and_streams():
+@pytest.mark.parametrize("prefix", ["=", "+", "-", "@", "\t", "\r", ""])
+def test_year_end_csv_amounts_round_trip_and_streams(prefix):
     owner = make_person("owner")
     household = make_household(owner)
-    account = make_account(owner)
+    account = make_account(owner, name=prefix + "Synthetic account")
     groceries = household.categories.get(name="Groceries")
+    groceries.name = prefix + "Synthetic category"
+    groceries.save()
     spend = make_transaction(owner, account, amount_minor=-4321, description="Synthetic groceries")
     assign_category(owner, spend.pk, groceries.pk)
-    tag = add_tag(owner, "synthetic-tax")
+    # The export also protects stored/imported names that forms would strip.
+    tag = Tag.objects.create(household=household, name=prefix + "Synthetic tag")
     set_transaction_note_and_tags(owner, spend.pk, note="", tag_ids=[tag.pk])
     RecurringSeries.objects.create(
         person=owner,
         merchant_key="synthetic stream",
-        display_name="Synthetic Stream",
+        display_name=prefix + "Synthetic Stream",
         cadence=RecurringSeries.Cadence.MONTHLY,
         typical_amount_minor=-1599,
         status=RecurringSeries.Status.CONFIRMED,
@@ -277,7 +302,8 @@ def test_year_end_csv_amounts_round_trip_and_streams():
     assert spending_csv.streaming
     assert spending_csv["Content-Type"].startswith("text/csv")
     assert 'filename="year-end-2025-spending.csv"' in spending_csv["Content-Disposition"]
-    grocery_row = next(row for row in read_csv(spending_csv) if row["category"] == "Groceries")
+    escape = "'" if prefix else ""
+    grocery_row = next(row for row in read_csv(spending_csv) if row["category"] == escape + groceries.name)
     assert grocery_row["currency"] == "USD"
     assert minor_from_decimal_string(grocery_row["spending"]) == 4321
 
@@ -285,12 +311,19 @@ def test_year_end_csv_amounts_round_trip_and_streams():
     march = next(row for row in cash_rows if row["month"] == "2025-03")
     assert minor_from_decimal_string(march["spending"]) == 4321
     assert minor_from_decimal_string(march["income"]) == 0
+    assert minor_from_decimal_string(march["net"]) == -4321
+
+    account_rows = read_csv(client.get(reverse("year-end-csv", args=["accounts"]), {"year": "2025"}))
+    assert account_rows[0]["account"] == escape + account.name
+    assert minor_from_decimal_string(account_rows[0]["net"]) == -4321
 
     tag_rows = read_csv(client.get(reverse("year-end-csv", args=["tags"]), {"year": "2025"}))
     assert minor_from_decimal_string(tag_rows[0]["spending"]) == 4321
+    assert tag_rows[0]["tag"] == escape + tag.name
 
     recurring_rows = read_csv(client.get(reverse("year-end-csv", args=["recurring"]), {"year": "2025"}))
     assert minor_from_decimal_string(recurring_rows[0]["annual_cost"]) == 19188
+    assert recurring_rows[0]["name"] == escape + prefix + "Synthetic Stream"
 
     worth = read_csv(client.get(reverse("year-end-csv", args=["net-worth"]), {"year": "2025"}))
     by_point = {row["point"]: row for row in worth}
