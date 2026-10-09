@@ -11,6 +11,7 @@ from django.core.validators import MaxValueValidator
 from django.db.models import Q
 from django.utils import timezone
 
+from .date_bounds import EARLIEST_ACTIVITY_DATE, TOO_EARLY_ERROR, activity_date_error
 from .cash_flow import MAX_REPORT_DATE, MAX_REPORT_PERIODS, default_date_range, period_count
 from .projection import DEFAULT_HORIZON, HORIZONS
 
@@ -40,6 +41,9 @@ MAX_SIGNED_BIGINT = 2**63 - 1
 ALL_VISIBLE_ACCOUNTS = "All visible accounts"
 END_DATE_ORDER_ERROR = "End date must be on or after start date."
 AMOUNT_RANGE_ERROR = "Amount is outside the supported range."
+# A recorded balance or statement contribution beyond $1 trillion is a typo.
+MAX_BALANCE_MINOR = 100_000_000_000_000
+BALANCE_RANGE_ERROR = "Enter an amount between -$1,000,000,000,000 and $1,000,000,000,000."
 
 
 class PasswordPairForm(forms.Form):
@@ -538,22 +542,22 @@ class ManualBalanceForm(forms.Form):
         value = self.cleaned_data["snapshot_date"]
         if value > timezone.localdate():
             raise ValidationError("Balance date cannot be in the future.")
+        if value < EARLIEST_ACTIVITY_DATE:
+            raise ValidationError(TOO_EARLY_ERROR)
         return value
 
     def clean_amount(self):
         amount = self.cleaned_data["amount"]
-        minor_units = int(amount * 100)
-        if not MIN_SIGNED_BIGINT <= minor_units <= MAX_SIGNED_BIGINT:
-            raise ValidationError(AMOUNT_RANGE_ERROR)
+        if abs(int(amount * 100)) > MAX_BALANCE_MINOR:
+            raise ValidationError(BALANCE_RANGE_ERROR)
         return amount
 
     def clean_net_contribution(self):
         amount = self.cleaned_data.get("net_contribution")
         if amount is None:
             return None
-        minor_units = int(amount * 100)
-        if not MIN_SIGNED_BIGINT <= minor_units <= MAX_SIGNED_BIGINT:
-            raise ValidationError(AMOUNT_RANGE_ERROR)
+        if abs(int(amount * 100)) > MAX_BALANCE_MINOR:
+            raise ValidationError(BALANCE_RANGE_ERROR)
         return amount
 
     def amount_minor(self):
@@ -676,6 +680,13 @@ class TransactionCorrectionForm(forms.Form):
         widget=forms.TextInput(attrs={"inputmode": "decimal"}),
     )
 
+    def clean_transaction_date(self):
+        value = self.cleaned_data["transaction_date"]
+        error = activity_date_error(value)
+        if error:
+            raise ValidationError(error)
+        return value
+
     def clean_amount(self):
         amount = self.cleaned_data["amount"]
         minor_units = int(amount * 100)
@@ -769,6 +780,8 @@ class ManualTransactionForm(forms.Form):
         value = self.cleaned_data["transaction_date"]
         if value > timezone.localdate():
             raise ValidationError("Date cannot be in the future. Use a planned item for an expected amount.")
+        if value < EARLIEST_ACTIVITY_DATE:
+            raise ValidationError(TOO_EARLY_ERROR)
         return value
 
     def clean_amount(self):

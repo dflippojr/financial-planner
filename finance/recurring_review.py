@@ -37,7 +37,12 @@ def next_expected_date(series):
     last_on = last_charge_date(series)
     if last_on is None:
         return None
-    return step_occurrence(last_on, series.cadence)
+    try:
+        return step_occurrence(last_on, series.cadence)
+    except (OverflowError, ValueError):
+        # The last charge is so far in the future that the next one would
+        # fall past the end of the calendar.
+        return None
 
 
 def cadence_tolerance_days(cadence):
@@ -177,7 +182,7 @@ def missed_charge(series, principal, *, today):
     expected = next_expected_date(series)
     if expected is None:
         return None
-    if today <= expected + timedelta(days=cadence_tolerance_days(series.cadence)):
+    if (expected - today).days >= -cadence_tolerance_days(series.cadence):
         return None
     if _has_charge_near(series, expected):
         return None
