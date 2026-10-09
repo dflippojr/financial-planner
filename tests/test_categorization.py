@@ -17,7 +17,9 @@ from finance.category_services import (
     refresh_transfer_pairs,
     rename_category,
     set_transfer_window_days,
+    split_transaction,
     undo_transfer_pair,
+    unsplit_transaction,
 )
 from finance.lifecycle_services import archive_account, share_account, unshare_account
 from finance.csv_import.services import undo_import_batch
@@ -1030,3 +1032,92 @@ def test_undoing_import_of_shared_leg_restores_other_members_snapshot_category()
         new_description="Groceries",
         actor=member,
     ).exists()
+
+
+def _shared_and_private_counterparts():
+    owner = make_person("owner")
+    member = make_person("member")
+    household = make_household(owner, member)
+    shared = make_account(owner, name="Shared", scope=Account.Scope.HOUSEHOLD, household=household)
+    private = make_account(owner, name="Owner Private")
+    private_leg = make_transaction(owner, private, amount_minor=-50000, transaction_date=date(2026, 1, 2), description="Synthetic neutral row")
+    shared_leg = make_transaction(member, shared, amount_minor=50000, transaction_date=date(2026, 1, 2), description="Transfer")
+    return owner, member, private_leg, shared_leg
+
+
+def _exclusion_history(transaction):
+    return TransactionCorrectionHistory.objects.filter(
+        transaction=transaction,
+        field_name=TransactionCorrectionHistory.Field.EXCLUSION,
+    )
+
+
+@pytest.mark.django_db
+def test_window_change_by_member_leaves_other_members_private_rows_unpaired():
+    owner, member, private_leg, shared_leg = _shared_and_private_counterparts()
+    totals_before = income_and_spending_totals(owner)
+
+    set_transfer_window_days(member, 30)
+
+    assert not TransferPair.objects.filter(leg_a=private_leg).exists()
+    assert not TransferPair.objects.filter(leg_b=private_leg).exists()
+    assert not _exclusion_history(shared_leg).exists()
+    assert not _exclusion_history(private_leg).exists()
+    assert income_and_spending_totals(owner) == totals_before
+
+
+@pytest.mark.django_db
+def test_unsplit_by_member_leaves_other_members_private_rows_unpaired():
+    owner, member, private_leg, shared_leg = _shared_and_private_counterparts()
+    household = owner.memberships.get().household
+    groceries = household.categories.get(name="Groceries")
+    totals_before = income_and_spending_totals(owner)
+    split_transaction(member, shared_leg.pk, [
+        {"category_id": groceries.pk, "amount_minor": 20000},
+        {"category_id": groceries.pk, "amount_minor": 30000},
+    ])
+
+    unsplit_transaction(member, shared_leg.pk, None)
+
+    assert not TransferPair.objects.filter(leg_a=private_leg).exists()
+    assert not TransferPair.objects.filter(leg_b=private_leg).exists()
+    assert not _exclusion_history(shared_leg).exists()
+    assert income_and_spending_totals(owner) == totals_before
+
+
+@pytest.mark.django_db
+def test_owner_refresh_pairs_shared_row_and_hides_exclusion_history_from_member():
+    owner, member, private_leg, shared_leg = _shared_and_private_counterparts()
+    set_transfer_window_days(member, 30)
+
+    refresh_transfer_pairs(owner)
+
+    pair = TransferPair.objects.get()
+    assert {pair.leg_a_id, pair.leg_b_id} == {private_leg.pk, shared_leg.pk}
+    assert pair.status == TransferPair.Status.AUTO_MARKED
+    assert TransactionCorrectionHistory.objects.visible_to(owner).filter(
+        transaction=shared_leg, field_name=TransactionCorrectionHistory.Field.EXCLUSION
+    ).exists()
+    assert not TransactionCorrectionHistory.objects.visible_to(member).filter(
+        transaction=shared_leg, field_name=TransactionCorrectionHistory.Field.EXCLUSION
+    ).exists()
+    client = Client()
+    client.force_login(member.user)
+    response = client.get(reverse("transaction-edit", args=(shared_leg.pk,)))
+    assert response.status_code == 200
+    assert b"Transfer exclusion" not in response.content
+
+
+@pytest.mark.django_db
+def test_exclusion_history_stays_visible_when_both_legs_are_visible():
+    owner, member, private_leg, shared_leg = _shared_and_private_counterparts()
+    household = owner.memberships.get().household
+    other_shared = make_account(owner, name="Shared Savings", account_type=Account.Type.SAVINGS, scope=Account.Scope.HOUSEHOLD, household=household)
+    outflow = make_transaction(member, other_shared, amount_minor=-1200, description="Synthetic transfer out")
+    inflow = make_transaction(member, shared_leg.account, amount_minor=1200, description="Synthetic transfer in")
+
+    refresh_transfer_pairs(member)
+
+    assert TransactionCorrectionHistory.objects.visible_to(member).filter(
+        transaction__in=(outflow, inflow), field_name=TransactionCorrectionHistory.Field.EXCLUSION
+    ).count() == 2

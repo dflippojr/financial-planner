@@ -314,8 +314,9 @@ def set_transfer_window_days(principal, days):
         raise ValidationError("Choose a match window between 0 and 366 days.")
     household.transfer_match_window_days = days
     household.save(update_fields=("transfer_match_window_days", "updated_at"))
-    # The window applies to every member's pairs, including pairs between a
-    # member's private accounts that the actor cannot see.
+    # The window revalidates every member's pairs, including pairs between a
+    # member's private accounts that the actor cannot see. New pairs are only
+    # detected among rows the actor can see.
     member_ids = Membership.objects.filter(household=household, ended_at__isnull=True).values_list(
         "person_id", flat=True
     )
@@ -872,6 +873,12 @@ def refresh_transfer_pairs(principal, *, actor=None, transaction_ids=None, previ
     visible_ids = set(Transaction.objects.visible_to(person).filter(
         pk__in=tx_ids, status=Transaction.Status.ACTIVE
     ).values_list("pk", flat=True))
+    if actor.pk != person.pk:
+        # Detection on another member's behalf only pairs rows the actor can
+        # also see; that member's own refresh covers the rest.
+        visible_ids &= set(Transaction.objects.visible_to(actor).filter(
+            pk__in=visible_ids
+        ).values_list("pk", flat=True))
     scored_pairs = _score_pairs([row for row in locked if row.pk in visible_ids])
     scored_pairs.sort(
         key=lambda item: (
