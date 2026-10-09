@@ -9,8 +9,9 @@ name: Automated Code Review
 # fork's pull_request run would execute the fork's copy of this file. pull_request_target and workflow_dispatch
 # always run main's copy. Fork PRs are skipped before they reach the runner, and the shared job refuses them too.
 # The PR head is checked out only as review context; nothing from it runs. Dependabot PRs are skipped, and a
-# review on open uses the Claude backend (model from the REVIEW_MODEL_CLAUDE repository
-# variable, claude-sonnet-5-5 since 2026-10-05; Cursor's usage limit ran out).
+# review on open lets the shared workflow choose the backend: REVIEW_BACKENDS, then its default of codex,claude
+# (GPT leads on purpose: a different model family from the Claude author reviews differently). Models and effort
+# come from the REVIEW_MODEL_* and REVIEW_EFFORT_* repository variables, else the shared workflow's defaults.
 on:
   pull_request_target:
     types: [opened]
@@ -46,7 +47,7 @@ jobs:
     uses: dflippojr/agent-harness/.github/workflows/review.yml@review-v1
     with:
       pr_number: ${{ inputs.pr_number || github.event.pull_request.number }}
-      backend: ${{ inputs.backend || 'claude' }}
+      backend: ${{ inputs.backend || 'auto' }}
       mode: ${{ inputs.mode || 'full' }}
       runs_on: '["self-hosted","Windows","X64","financial-planner-review"]'
     secrets: inherit
