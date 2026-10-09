@@ -1931,6 +1931,8 @@ class AiConversationMessage(models.Model):
     claim_token = models.CharField(max_length=64, blank=True, default="")
     claimed_at = models.DateTimeField(null=True, blank=True)
     heartbeat_at = models.DateTimeField(null=True, blank=True)
+    # Set at claim time: past it the turn is failed even while its runner still sends heartbeats.
+    deadline_at = models.DateTimeField(null=True, blank=True)
 
     class QuerySet(models.QuerySet):
         def visible_to(self, principal):

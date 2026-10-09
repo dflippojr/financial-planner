@@ -34,7 +34,7 @@ from .ai_types import (
 from .chat_proposals import proposal_tools
 from .lifecycle_services import _DENIED, _person_for
 from .input_limits import MAX_CHAT_PROMPT_CHARS, MAX_PAGE_CONTEXT_CHARS, MAX_CHAT_MESSAGES
-from .models import AiConversation, AiConversationMessage
+from .models import AiConversation, AiConversationMessage, Person
 from .category_services import current_household
 from .policy_services import household_ai_allowed, may_use_ai
 
@@ -45,6 +45,8 @@ OUT_OF_SCOPE = (
 )
 TURN_LIMIT = "This conversation has reached its turn limit. Start a new one from Chat."
 TOOL_LIMIT = "This conversation has reached its tool-call limit."
+PENDING_LIMIT = "Wait for your earlier questions to be answered before asking another."
+CONVERSATION_LIMIT = "You have reached the limit of open conversations. Delete one from Chat to start another."
 LOCAL_HIDDEN = "Chat on the local model is not offered yet. Choose Claude in Settings → AI."
 NO_CHAT_BACKEND = "No chat backend is available yet. Sign in to Claude on the harness, then choose it in Settings → AI."
 
@@ -59,6 +61,16 @@ def max_turns():
 
 def max_tool_calls():
     return max(1, int(getattr(settings, "AI_CHAT_MAX_TOOL_CALLS", 40)))
+
+
+def max_pending_turns():
+    """Unanswered turns one member may have queued across all of their conversations."""
+    return max(1, int(getattr(settings, "AI_CHAT_MAX_PENDING_PER_MEMBER", 3)))
+
+
+def max_conversations():
+    """Unexpired conversations one member may keep."""
+    return max(1, int(getattr(settings, "AI_CHAT_MAX_CONVERSATIONS", 50)))
 
 
 def chat_local_enabled(connection=None):
@@ -171,7 +183,13 @@ def send_message(principal, text, *, conversation_id=None, page_context=None):
     if conversation is None:
         conversation = _new_conversation(person, backend)
     with transaction.atomic():
+        _lock_member(person)
         conversation = _lock_conversation(conversation.pk)
+        pending = AiConversationMessage.objects.filter(
+            conversation__member=person, status=AiConversationMessage.Status.PENDING
+        ).count()
+        if pending >= max_pending_turns():
+            raise AiError(PENDING_LIMIT, LIMIT_REACHED)
         if conversation.turn_count >= max_turns():
             raise AiError(TURN_LIMIT, LIMIT_REACHED)
         if conversation.tool_call_count >= max_tool_calls():
@@ -248,6 +266,10 @@ def answer_turn(turn, *, sleep=None, monotonic=None):
     collected = []
     cap = max_tool_calls()
 
+    def tool_budget():
+        used = AiConversation.objects.filter(pk=conversation.pk).values_list("tool_call_count", flat=True).first()
+        return 0 if used is None else cap - used
+
     def allow_tool(_name, _args):
         with transaction.atomic():
             locked = _lock_conversation(conversation.pk)
@@ -312,6 +334,7 @@ def answer_turn(turn, *, sleep=None, monotonic=None):
         on_tool=on_tool,
         allow_tool=allow_tool,
         history=_api_history(conversation, question) if consent_held and connection.kind in API_KINDS else (),
+        tool_budget=tool_budget,
     )
     with transaction.atomic():
         locked = _lock_conversation(conversation.pk)
@@ -351,8 +374,17 @@ def _lock_conversation(pk):
     return AiConversation.objects.select_for_update().get(pk=pk)
 
 
+def _lock_member(person):
+    """Serialise one member's quota checks so two requests cannot both pass the cap."""
+    Person.objects.select_for_update().filter(pk=person.pk).first()
+
+
+@transaction.atomic
 def _new_conversation(person, backend):
+    _lock_member(person)
     now = timezone.now()
+    if AiConversation.objects.filter(member=person, expires_at__gt=now).count() >= max_conversations():
+        raise AiError(CONVERSATION_LIMIT, LIMIT_REACHED)
     return AiConversation.objects.create(
         member=person,
         backend=backend,

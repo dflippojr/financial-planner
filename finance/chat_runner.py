@@ -5,7 +5,8 @@ window and back off between attempts; a single batch job can also hold the job l
 the whole harness session timeout. Interactive chat must start within about a second,
 so it runs on its own lane: a short poll in a separate thread that hands each claimed
 turn to a small worker pool. Turns in one conversation run one at a time, oldest
-first, because they share one harness session.
+first, because they share one harness session. Claims rotate across members, so one
+member's queue cannot hold every worker while another member waits.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.db import close_old_connections, connection, transaction
-from django.db.models import Q
+from django.db.models import Count, Min, Q
 from django.utils import timezone
 
 from .ai_jobs import _lock_qs
@@ -52,32 +53,58 @@ def unclaimed_max_age_seconds():
     return timeout + margin
 
 
+def turn_max_seconds():
+    """Wall-clock bound on one claimed turn, enforced even while its runner is alive."""
+    default = unclaimed_max_age_seconds()
+    return max(30, int(getattr(settings, "AI_CHAT_TURN_MAX_SECONDS", default)))
+
+
 def new_token():
     return uuid.uuid4().hex
 
 
 def claim_next_turn(token, *, now=None):
-    """Claim the oldest pending turn in a conversation that has no turn running. Returns its pk."""
+    """Claim a pending turn in a conversation that has no turn running. Returns its pk.
+
+    The member with the fewest running turns goes first, then the member whose oldest
+    waiting turn is oldest; within a member, the oldest turn.
+    """
     moment = now or timezone.now()
-    busy = AiConversationMessage.objects.filter(status=PENDING, claimed_at__isnull=False).values(
-        "conversation_id"
-    )
+    running = AiConversationMessage.objects.filter(status=PENDING, claimed_at__isnull=False)
+    busy = running.values("conversation_id")
     with transaction.atomic():
-        candidates = (
-            AiConversationMessage.objects.filter(status=PENDING, claimed_at__isnull=True)
-            .exclude(conversation_id__in=busy)
-            .order_by("pk")
+        candidates = AiConversationMessage.objects.filter(status=PENDING, claimed_at__isnull=True).exclude(
+            conversation_id__in=busy
         )
-        row = _lock_qs(candidates).first()
+        row = None
+        for member_id in _members_by_turn(candidates, running):
+            row = _lock_qs(candidates.filter(conversation__member_id=member_id).order_by("pk")).first()
+            if row is not None:
+                break
         if row is None:
             return None
         claimed = AiConversationMessage.objects.filter(
             pk=row.pk, status=PENDING, claimed_at__isnull=True
-        ).update(claim_token=token, claimed_at=moment, heartbeat_at=moment)
+        ).update(
+            claim_token=token, claimed_at=moment, heartbeat_at=moment,
+            deadline_at=moment + timedelta(seconds=turn_max_seconds()),
+        )
         if claimed:
             with operation(run_id=_turn_run_id(row.pk, token), turn_id=row.pk):
                 outcome(row.conversation.member, "chat_turn", row.pk, phase="started")
         return row.pk if claimed else None
+
+
+def _members_by_turn(candidates, running):
+    """Members with a claimable turn, fewest running turns first, then oldest waiting turn."""
+    in_flight = dict(
+        running.values("conversation__member_id").annotate(n=Count("pk")).values_list("conversation__member_id", "n")
+    )
+    oldest = candidates.values("conversation__member_id").annotate(first=Min("pk")).values_list(
+        "conversation__member_id", "first"
+    )
+    ranked = sorted(oldest, key=lambda item: (in_flight.get(item[0], 0), item[1]))
+    return [member_id for member_id, _first in ranked]
 
 
 def run_claimed_turn(pk, token, *, sleep=None, monotonic=None):
@@ -135,6 +162,8 @@ def recover_stale_turns(*, now=None, pk=None):
     moment = now or timezone.now()
     heartbeat_cutoff = moment - timedelta(seconds=stale_seconds())
     stale = Q(claimed_at__isnull=False, heartbeat_at__lt=heartbeat_cutoff)
+    # A turn past its own deadline is abandoned even while its runner is alive.
+    stale |= Q(claimed_at__isnull=False, deadline_at__lt=moment)
     pending = AiConversationMessage.objects.filter(status=PENDING)
     # A turn waiting behind a running turn in its conversation, or for a free worker,
     # is only queued. Unclaimed turns are abandoned only when no runner is alive.
