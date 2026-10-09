@@ -347,3 +347,29 @@ def test_claim_request_does_not_hold_household_locks(monkeypatch):
 
     assert _member_write_completes_while_provider_blocks(member, claim)
     assert SimpleFinConnection.objects.filter(owner=owner).count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_database_error_on_one_connection_does_not_stop_the_daily_pass(monkeypatch):
+    from django.db import connection
+
+    if connection.vendor != "postgresql":
+        pytest.skip("only PostgreSQL enforces column lengths")
+    (first, _first_checking), (_second, second_checking) = _two_connections(monkeypatch)
+    # Let an over-long id past validation so the database itself rejects it.
+    monkeypatch.setattr("finance.simplefin_services.MAX_ID_CHARS", 10_000)
+    rows = iter([
+        payload_with(posted_txn(txn_id="x" * 300, day=10, amount="-2.00")),
+        payload_with(posted_txn(txn_id="sf-ok", day=10, amount="-2.00")),
+    ])
+    monkeypatch.setattr("finance.simplefin_services.fetch_accounts", lambda *args, **kwargs: next(rows))
+    alert_passes = []
+    monkeypatch.setattr("finance.management.commands.sync_simplefin.run_daily_alert_pass",
+                        lambda: alert_passes.append(1))
+
+    call_command("sync_simplefin")
+
+    first.refresh_from_db()
+    assert first.last_sync_result == UNEXPECTED_FAILURE
+    assert Transaction.objects.filter(account=second_checking).count() == 1
+    assert alert_passes == [1]

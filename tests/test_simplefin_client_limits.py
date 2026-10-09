@@ -23,7 +23,7 @@ from finance.simplefin_client import (
     fetch_accounts,
     read_capped,
     urlopen,
-    vetted_address,
+    vetted_addresses,
 )
 from finance.simplefin_errors import SimpleFinError
 
@@ -93,6 +93,30 @@ def test_public_destination_connects_to_the_vetted_address(monkeypatch):
     assert 0 < connects[0][1] <= simplefin_client.FETCH_TIMEOUT_SECONDS
 
 
+def test_each_public_answer_is_tried_in_order(monkeypatch):
+    monkeypatch.setattr(socket, "getaddrinfo", answers("2606:4700::1111", "93.184.215.14"))
+    tried = []
+
+    def refuse(address, timeout=None):
+        tried.append(address)
+        raise OSError("synthetic: network unreachable")
+
+    monkeypatch.setattr(socket, "create_connection", refuse)
+
+    with pytest.raises(SimpleFinError, match="could not be reached"):
+        fetch_accounts(ACCESS_URL)
+    assert tried == [("2606:4700::1111", 443), ("93.184.215.14", 443)]
+
+
+def test_connection_attempts_stop_at_the_deadline(monkeypatch):
+    monkeypatch.setattr(socket, "getaddrinfo", answers("93.184.215.14"))
+    monkeypatch.setattr(socket, "create_connection", lambda *a, **k: pytest.fail("connected after the deadline"))
+
+    with pytest.raises(Exception) as caught:
+        urlopen(Request("https://bridge.example.test/accounts"), timeout=5, deadline=time.monotonic() - 1)
+    assert isinstance(getattr(caught.value, "reason", None), TimeoutError)
+
+
 def test_unresolvable_host_is_unreachable(monkeypatch):
     def fail(*args, **kwargs):
         raise socket.gaierror("synthetic")
@@ -105,14 +129,14 @@ def test_unresolvable_host_is_unreachable(monkeypatch):
 def test_vetted_address_rejects_empty_and_unencodable_answers(monkeypatch):
     monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: [])
     with pytest.raises(OSError):
-        vetted_address("bridge.example.test", 443)
+        vetted_addresses("bridge.example.test", 443)
 
     def unencodable(*args, **kwargs):
         raise UnicodeError("label too long")
 
     monkeypatch.setattr(socket, "getaddrinfo", unencodable)
     with pytest.raises(OSError):
-        vetted_address("x" * 300, 443)
+        vetted_addresses("x" * 300, 443)
 
 
 class _Body:
@@ -274,3 +298,24 @@ def test_socket_reads_stop_at_the_total_deadline(monkeypatch, tls_server):
             response.read()
     elapsed = time.monotonic() - started
     assert 0.9 < elapsed < 4
+
+
+def test_a_real_redirect_is_refused_without_a_second_connection(monkeypatch, tls_server):
+    port, context, serve = tls_server
+    _allow_loopback(monkeypatch)
+    monkeypatch.setattr(simplefin_client, "_SSL", context)
+    real_connect = socket.create_connection
+    connects = []
+
+    def counting_connect(address, *args, **kwargs):
+        connects.append(address)
+        return real_connect(address, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "create_connection", counting_connect)
+    serve(lambda tls, stop: tls.sendall(
+        b"HTTP/1.1 302 Found\r\nLocation: https://localhost:%d/elsewhere\r\n"
+        b"Content-Length: 0\r\nConnection: close\r\n\r\n" % port))
+
+    with pytest.raises(SimpleFinError, match="unexpected redirect"):
+        fetch_accounts(f"https://demo:synthetic-access-secret@localhost:{port}/simplefin")
+    assert connects == [("127.0.0.1", port)]

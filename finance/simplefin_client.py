@@ -44,12 +44,13 @@ def _public_address(value: str) -> bool:
     return address.is_global and not address.is_multicast
 
 
-def vetted_address(host: str, port: int):
-    """Resolve host once and return a sockaddr, refusing any non-public answer.
+def vetted_addresses(host: str, port: int) -> list:
+    """Resolve host once and return its sockaddrs, refusing any non-public answer.
 
     Every answer must be public: a mixed answer could otherwise reach an
-    internal service on a retry. The caller connects to the returned address,
-    so a second lookup can never swap in a different one.
+    internal service when the caller falls back to the next address. The
+    caller connects only to these addresses, so a second lookup can never
+    swap in a different one.
     """
     try:
         answers = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
@@ -57,7 +58,7 @@ def vetted_address(host: str, port: int):
         raise OSError("host name could not be encoded") from exc
     if not answers or not all(_public_address(answer[4][0]) for answer in answers):
         raise DisallowedAddress("non-public address")
-    return answers[0][4]
+    return [answer[4] for answer in answers]
 
 
 class _DeadlineReader(io.RawIOBase):
@@ -114,13 +115,21 @@ class _GuardedHTTPSConnection(HTTPSConnection):
         super().__init__(host, **kwargs)
         self._deadline = deadline
 
+    def _connect_any(self, addresses):
+        """Try each vetted address in order, as socket.create_connection does."""
+        error = None
+        for address in addresses:
+            remaining = self._deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("SimpleFIN request deadline passed")
+            try:
+                return socket.create_connection(address[:2], timeout=min(self.timeout, remaining))
+            except OSError as exc:
+                error = exc
+        raise error
+
     def connect(self):
-        address = vetted_address(self.host, self.port)
-        remaining = self._deadline - time.monotonic()
-        if remaining <= 0:
-            raise TimeoutError("SimpleFIN request deadline passed")
-        timeout = min(self.timeout, remaining)
-        raw = socket.create_connection(address[:2], timeout=timeout)
+        raw = self._connect_any(vetted_addresses(self.host, self.port))
         try:
             # Certificate checks still use the host name, not the address.
             secure = self._context.wrap_socket(raw, server_hostname=self.host)

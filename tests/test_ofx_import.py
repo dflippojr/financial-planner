@@ -39,6 +39,8 @@ def test_statement_preview(name, amounts, descriptions):
     (b"-12.34", b"-12.345", "Amount is not valid"),
     (b"20260927120000", b"20260230120000", "Date does not match"),
     (b"20260927120000", b"bad-date", "Date does not match"),
+    (b"20260927120000", b"99990615120000", "more than a year in the future"),
+    (b"20260927120000", b"18991231120000", "on or after January 1, 1900"),
     (b"<CURDEF>USD", b"<CURDEF>EUR", "Currency must be USD"),
     (b"<TRNAMT>-12.34", b"<CURRENCY><CURSYM>CAD</CURRENCY><TRNAMT>-12.34", "Currency must be USD"),
     (b"<FITID>synthetic-1", b"<FITID>" + b"a" * 256, "FITID exceeds"),
