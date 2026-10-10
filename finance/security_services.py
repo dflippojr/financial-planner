@@ -245,6 +245,12 @@ def purge_old_security_events(*, now=None):
     return deleted
 
 
+def purge_expired_sessions(*, now=None):
+    now = now or timezone.now()
+    deleted, _detail = Session.objects.filter(expire_date__lt=now).delete()
+    return deleted
+
+
 def purge_stale_member_sessions(*, now=None):
     now = now or timezone.now()
     live_keys = Session.objects.filter(expire_date__gte=now).values("session_key")

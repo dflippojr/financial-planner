@@ -28,7 +28,7 @@ from webauthn.helpers.structs import (
 
 from .auth_services import consume_recovery_code
 from .audit_services import append_event
-from .models import AuditEvent, Passkey, Person
+from .models import AuditEvent, Passkey, PendingSignInSession, Person
 from .security_services import EVENT_TYPES, record_security_event
 
 
@@ -90,6 +90,12 @@ def store_pending_passkey_login(request, user, next_url):
     request.session[PENDING_AUTH_HASH_KEY] = user.get_session_auth_hash()
     request.session[PENDING_STARTED_KEY] = timezone.now().timestamp()
     request.session.pop(AUTH_CHALLENGE_KEY, None)
+    if not request.session.session_key:
+        request.session.save()
+    PendingSignInSession.objects.update_or_create(
+        session_key=request.session.session_key,
+        defaults={"user": user, "created_at": timezone.now()},
+    )
 
 
 def pending_passkey_user(request):
@@ -124,16 +130,24 @@ def clear_pending_passkey_login(request):
     request.session.pop(PENDING_AUTH_HASH_KEY, None)
     request.session.pop(PENDING_STARTED_KEY, None)
     request.session.pop(AUTH_CHALLENGE_KEY, None)
+    if request.session.session_key:
+        PendingSignInSession.objects.filter(session_key=request.session.session_key).delete()
 
 
 def clear_pending_passkey_logins_for_user(user):
     if user is None or user.pk is None:
         return
-    user_id = str(user.pk)
-    for session in Session.objects.filter(expire_date__gte=timezone.now()).iterator():
-        data = session.get_decoded()
-        if str(data.get(PENDING_USER_KEY, "")) == user_id:
-            session.delete()
+    keys = list(PendingSignInSession.objects.filter(user_id=user.pk).values_list("session_key", flat=True))
+    if keys:
+        Session.objects.filter(session_key__in=keys).delete()
+        PendingSignInSession.objects.filter(session_key__in=keys).delete()
+
+
+def purge_stale_pending_sign_ins(*, now=None):
+    now = now or timezone.now()
+    live_keys = Session.objects.filter(expire_date__gte=now).values("session_key")
+    deleted, _detail = PendingSignInSession.objects.exclude(session_key__in=live_keys).delete()
+    return deleted
 
 
 def _normalized_name(name):

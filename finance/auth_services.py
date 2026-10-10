@@ -5,10 +5,9 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.contrib.auth import get_user_model, login
-from django.contrib.sessions.models import Session
 from django.core.exceptions import PermissionDenied
 from django.db import IntegrityError, connection, transaction
-from django.db.models import Exists, OuterRef
+from django.db.models import Exists, OuterRef, Q
 from django.utils import timezone
 
 from .audit_services import append_event
@@ -136,9 +135,6 @@ def revoke_user_sessions(user):
 
     revoke_indexed_sessions_for_user(user)
     clear_pending_passkey_logins_for_user(user)
-    for session in Session.objects.filter(expire_date__gte=timezone.now()).iterator():
-        if str(session.get_decoded().get("_auth_user_id")) == str(user.pk):
-            session.delete()
 
 
 @transaction.atomic
@@ -203,6 +199,19 @@ def record_login_failure(key):
 
 def clear_login_failures(key):
     LoginThrottle.objects.filter(key_digest=key).delete()
+
+
+def purge_expired_login_throttles(*, now=None):
+    # A row whose window has passed and whose block (if any) has ended no
+    # longer affects record_login_failure or login_is_blocked.
+    now = now or timezone.now()
+    window_cutoff = now - timedelta(seconds=settings.LOGIN_FAILURE_WINDOW_SECONDS)
+    deleted, _detail = (
+        LoginThrottle.objects.filter(window_started_at__lte=window_cutoff)
+        .filter(Q(blocked_until__isnull=True) | Q(blocked_until__lte=now))
+        .delete()
+    )
+    return deleted
 
 
 # Stable PostgreSQL advisory-lock key for first-member creation (issue #53).

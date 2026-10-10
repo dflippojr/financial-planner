@@ -355,6 +355,10 @@ def test_recovery_code_changes_password_is_consumed_and_revokes_all_sessions():
     second_client = Client()
     first_client.force_login(user)
     second_client.force_login(user)
+    # A request through the middleware indexes each session, as every real
+    # sign-in does; revocation finds sessions through that index (#302).
+    first_client.get(reverse("home"))
+    second_client.get(reverse("home"))
     session_keys = {first_client.session.session_key, second_client.session.session_key}
 
     response = Client().post(

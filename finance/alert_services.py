@@ -441,10 +441,15 @@ def run_daily_alert_pass(*, today=None, now=None):
 
     created.extend(evaluate_expected_balance_alerts(today=today))
     purge_old_read_alerts(now=now)
-    from .security_services import purge_old_security_events, purge_stale_member_sessions
+    from .auth_services import purge_expired_login_throttles
+    from .passkey_services import purge_stale_pending_sign_ins
+    from .security_services import purge_expired_sessions, purge_old_security_events, purge_stale_member_sessions
     from .receipt_services import sweep_orphan_receipt_files
 
     purge_old_security_events(now=now)
+    purge_expired_login_throttles(now=now)
+    purge_expired_sessions(now=now)
     purge_stale_member_sessions(now=now)
+    purge_stale_pending_sign_ins(now=now)
     sweep_orphan_receipt_files(now=now)
     return created

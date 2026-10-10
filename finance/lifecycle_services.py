@@ -767,10 +767,13 @@ def _delete_personal_records(person):
     BillsCalendarSettings.objects.filter(person=person).delete()
     SheetMonthTotal.objects.filter(member=person).delete()
     SheetComparisonSettings.objects.filter(member=person).delete()
-    from .models import MemberSecurityEvent, MemberSession, Passkey
+    from .models import MemberSecurityEvent, Passkey
+    from .security_services import revoke_indexed_sessions_for_user
 
     MemberSecurityEvent.objects.filter(member=person).delete()
-    MemberSession.objects.filter(member=person).delete()
+    # Sign the member out through the session index before dropping it;
+    # revoke_user_sessions later finds only pending sign-ins by user.
+    revoke_indexed_sessions_for_user(person.user)
     Passkey.objects.filter(member=person).delete()
     person.privacy_policy_declined_version = None
     person.save(update_fields=("privacy_policy_declined_version", "updated_at"))
