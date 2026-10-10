@@ -739,6 +739,16 @@ def transaction_list(request):
     uncategorized_filter = form.is_valid() and form.cleaned_data.get("category") == "uncategorized"
     suggestions = pending_suggestions_for(person, page.object_list) if show_ai else {}
     filter_hidden = filter_hidden_pairs(form.cleaned_data) if form.is_valid() else []
+    more_filter_count = sum(
+        1
+        for name, _value in filter_hidden
+        if name not in TransactionFilterForm.TOOLBAR_FIELD_NAMES and name != "amount_mode"
+    )
+    if filter_hidden:
+        verb = "matches" if matching_count == 1 else "match"
+        list_helper = f"{matching_count:,} {verb} these filters"
+    else:
+        list_helper = f"{matching_count:,} transaction{'' if matching_count == 1 else 's'}"
     saved_filters = (
         SavedTransactionFilter.objects.visible_to(request.user).order_by("name", "pk")
         if person
@@ -766,6 +776,9 @@ def transaction_list(request):
             "proposed_rule": proposed_rule_from_accepts(person) if show_ai else None,
             "list_query": request.get_full_path(),
             "filter_hidden": filter_hidden,
+            "more_filter_count": more_filter_count,
+            "more_filters_have_errors": any(field.errors for field in form.more_fields()),
+            "list_helper": f"{list_helper} · amounts in USD",
             "export_filters_valid": not form.is_bound or form.is_valid(),
             "filter_query": _query_without_page(request),
             "matching_count": matching_count,
