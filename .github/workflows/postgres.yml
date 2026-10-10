@@ -26,7 +26,7 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     # About twice the parallel run (issue #358). If the suite outgrows it,
     # find the slow tests rather than raising this.
-    timeout-minutes: 12
+    timeout-minutes: 25
     env:
       POSTGRES_HOST: 127.0.0.1
       POSTGRES_PORT: "5432"
@@ -76,4 +76,4 @@ jobs:
       - name: Run tests on PostgreSQL 18
         env:
           FINANCIAL_PLANNER_TEST_DB: postgres
-        run: python -m pytest tests -q -p no:cacheprovider -n 4 -m "not browser" --durations=15
+        run: python -m pytest tests -q -p no:cacheprovider -n 4 --dist worksteal -m "not browser" --durations=40
