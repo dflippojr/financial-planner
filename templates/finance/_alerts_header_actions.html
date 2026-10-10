@@ -1,0 +1,5 @@
+{# The Alerts header's secondary action (issue #337): mark every alert read, shown only when there are alerts. #}
+<form method="post" action="{% url 'alert-mark-all-read' %}">
+  {% csrf_token %}
+  <button type="submit" class="btn btn-outline max-md:min-h-11">Mark all as read</button>
+</form>
