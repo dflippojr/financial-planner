@@ -223,9 +223,9 @@ def test_stored_sheet_totals_are_private_to_the_uploader():
     owner_page = signed_in(owner).get(reverse("sheet-comparison"))
     member_page = signed_in(member).get(reverse("sheet-comparison"))
     assert owner_page.status_code == 200
-    assert "1,000.00 USD" in owner_page.content.decode()
+    assert "+$1,000.00" in owner_page.content.decode()
     assert "synthetic-sheet.csv" not in member_page.content.decode()
-    assert "1,000.00 USD" not in member_page.content.decode()
+    assert "$1,000.00" not in member_page.content.decode()
     assert "0 of 0 recent months" in member_page.content.decode() or "No stored sheet totals" in member_page.content.decode()
 
 
