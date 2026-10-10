@@ -19,6 +19,7 @@ from finance.alert_services import (
     raise_sync_alert,
     unread_alert_count,
 )
+from finance.forms import AlertSettingsForm
 from finance.budget_services import save_budget, progress_snapshot
 from finance.category_services import assign_category, refresh_transfer_pairs
 from finance.lifecycle_services import delete_account, leave_household
@@ -408,6 +409,20 @@ def test_alert_settings_form_saves_threshold():
     assert prefs.sync_enabled is True
     assert prefs.recurring_price_enabled is False
     assert prefs.monthly_review_enabled is False
+
+
+def test_alert_settings_groups_show_every_field_once():
+    grouped = [name for _label, names in AlertSettingsForm.KIND_GROUPS for name in names]
+    assert sorted(grouped) == sorted(AlertSettingsForm.base_fields)
+
+
+@pytest.mark.django_db
+def test_alert_settings_page_groups_fields_under_one_save():
+    owner = make_person("owner")
+    make_household(owner)
+    html = signed_in(owner).get(reverse("settings-alerts")).content.decode()
+    assert html.count("<fieldset") == len(AlertSettingsForm.KIND_GROUPS)
+    assert html.count("Save alert settings") == 1
 
 
 @pytest.mark.django_db

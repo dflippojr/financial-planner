@@ -3,9 +3,17 @@
 {% block settings_content %}
 <h2 class="mb-4 text-xl font-semibold">Alerts</h2>
 <p class="mb-4 text-sm">Choose which in-app alerts you receive. Large-transaction alerts stay off until you set a USD threshold.</p>
-<form method="post" class="max-w-lg space-y-3">
+<form method="post" class="space-y-4">
   {% csrf_token %}
-  {% include "finance/_form_fields.html" with form=alert_settings_form %}
+  {% if alert_settings_form.non_field_errors %}
+  <div role="alert" class="alert alert-error">{{ alert_settings_form.non_field_errors.0 }}</div>
+  {% endif %}
+  {% for group in alert_settings_form.groups %}
+  <fieldset class="rounded-box border border-base-300 bg-base-100 px-4 pt-2 pb-1">
+    <legend class="px-1 font-semibold">{{ group.label }}</legend>
+    {% for field in group.fields %}{% include "finance/_form_field.html" %}{% endfor %}
+  </fieldset>
+  {% endfor %}
   <button type="submit" class="btn btn-primary">Save alert settings</button>
 </form>
 {% if email_notices_available %}
