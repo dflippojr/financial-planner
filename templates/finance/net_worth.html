@@ -1,19 +1,8 @@
 {% extends "finance/base.html" %}
 {% block title %}Net worth · Financial Planner{% endblock %}
 {% block content %}
-<h1 class="mb-4 text-2xl font-bold">Net worth</h1>
-<form method="get" class="mb-4 flex flex-wrap items-end gap-3">
-  {% include "finance/_form_fields.html" with form=filter_form %}
-  <button type="submit" class="btn btn-primary">Update</button>
-  <a class="btn btn-ghost" href="{% url 'net-worth' %}">Reset to default range</a>
-</form>
-{% if presets %}
-<p class="mb-4 flex flex-wrap gap-2">
-  {% for preset in presets %}
-  <a class="btn btn-sm btn-outline" href="{{ preset.url }}">{{ preset.label }}</a>
-  {% endfor %}
-</p>
-{% endif %}
+{% url 'net-worth' as reset_url %}
+{% include "finance/_page_header.html" with title="Net worth" helper="Month-end balances; carried-forward balances are marked. Amounts in USD." more="Physical asset values are estimates, not appraisals or verified facts." actions="finance/_range_filters.html" %}
 {% if report and not report.has_snapshots %}
 <div role="status" class="alert mb-4">
   <span>
@@ -24,140 +13,159 @@
 </div>
 {% endif %}
 {% if report %}
+{% with latest=report.periods|last %}
+<div class="page-columns">
 <div class="flex flex-col gap-4">
-  <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
-    <article class="stats bg-base-100 shadow">
-      <div class="stat">
-        <h2 class="stat-title">Current net worth</h2>
-        <p class="stat-value text-2xl sm:text-3xl">{% include "finance/_amount.html" with value=report.summary.net_display tone="" %}</p>
-      </div>
-    </article>
-    <article class="stats bg-base-100 shadow">
-      <div class="stat">
-        <h2 class="stat-title">Change vs previous month</h2>
-        <p class="stat-value text-2xl sm:text-3xl">{% include "finance/_amount.html" with value=report.summary.month_change.display tone="" %}</p>
-        <p class="stat-desc">{{ report.summary.month_change.label }}</p>
-      </div>
-    </article>
-    <article class="stats bg-base-100 shadow">
-      <div class="stat">
-        <h2 class="stat-title">Change over range</h2>
-        <p class="stat-value text-2xl sm:text-3xl">{% include "finance/_amount.html" with value=report.summary.range_change.display tone="" %}</p>
-        <p class="stat-desc">{{ report.summary.range_change.label }}</p>
-      </div>
-    </article>
-  </div>
+  <section aria-label="Key numbers" class="grid gap-4 rounded-box border border-base-300 bg-base-100 p-5 sm:grid-cols-3 sm:gap-6">
+    <div class="flex min-w-0 flex-col gap-1">
+      <h2 class="text-sm font-semibold opacity-80">Current net worth</h2>
+      <p class="text-3xl font-bold">{% include "finance/_amount.html" with value=report.summary.net_display tone="" %}</p>
+      {% if latest %}<p class="text-sm opacity-80">{{ latest.label }}</p>{% endif %}
+    </div>
+    <div class="flex min-w-0 flex-col gap-1 sm:border-l sm:border-base-300 sm:pl-6">
+      <h2 class="text-sm font-semibold opacity-80">Change vs previous month</h2>
+      <p class="text-2xl font-semibold">{% include "finance/_amount.html" with value=report.summary.month_change.display tone="" %}</p>
+      <p class="text-sm opacity-80">{{ report.summary.month_change.label }}</p>
+    </div>
+    <div class="flex min-w-0 flex-col gap-1 sm:border-l sm:border-base-300 sm:pl-6">
+      <h2 class="text-sm font-semibold opacity-80">Change over range</h2>
+      <p class="text-2xl font-semibold">{% include "finance/_amount.html" with value=report.summary.range_change.display tone="" %}</p>
+      <p class="text-sm opacity-80">{{ report.summary.range_change.label }}</p>
+    </div>
+  </section>
   {{ chart_data|json_script:"net-worth-chart-data" }}
-  <figure>
-    <figcaption class="mb-2 font-medium">Net worth with assets and liabilities by month</figcaption>
-    <div class="h-72 w-full rounded-box bg-base-100 p-2 shadow">
-      <canvas id="net-worth-chart" data-chart="net-worth" data-chart-payload="net-worth-chart-data" role="img" aria-label="Line chart of net worth with stacked assets and liabilities. The table below lists the same numbers."></canvas>
+  <figure class="rounded-box border border-base-300 bg-base-100 p-4">
+    <figcaption class="mb-2 font-semibold">Net worth with assets and liabilities by month</figcaption>
+    <div class="h-72 w-full">
+      <canvas id="net-worth-chart" data-chart="net-worth" data-chart-payload="net-worth-chart-data" role="img" aria-label="Line chart of net worth with stacked assets and liabilities. The By month table lists the same numbers."></canvas>
     </div>
   </figure>
-  {% for period in report.periods %}
-  <section class="card bg-base-100 shadow-sm">
-    <div class="card-body">
-      <h2 class="card-title">
-        {{ period.label }}
-        {% if period.omitted_untracked %}
-        <span class="badge badge-ghost">{{ period.omitted_untracked }} not yet tracked</span>
-        {% endif %}
-      </h2>
-      <p>
-        Assets {% include "finance/_amount.html" with value=period.assets_display tone="in" %}
-        · Liabilities {% include "finance/_amount.html" with value=period.liabilities_display tone="out" %}
-        · Net worth {% include "finance/_amount.html" with value=period.net_display tone="" %}
-      </p>
-<p class="mb-4 text-sm">Physical asset values are estimates, not appraisals or verified facts.</p>
-      <div class="overflow-x-auto">
-        <table class="table table-zebra">
-          <thead class="sticky top-0 z-10 bg-base-200">
-            <tr>
-              <th scope="col">Account</th>
-              <th scope="col" class="text-right">Balance</th>
-              <th scope="col">As of</th>
-              <th scope="col">Source</th>
-            </tr>
-          </thead>
-          <tbody>
-          {% for row in period.accounts %}
-            <tr>
-              <td>{{ row.account_name }}{% if row.is_estimate %} <span class="badge badge-ghost">estimate</span>{% endif %}</td>
-              <td class="text-right">{% include "finance/_amount.html" with value=row.amount_display tone="" %}</td>
-              <td>{{ row.snapshot_date|date:"Y-m-d" }}</td>
-              <td><span class="badge">{{ row.source_badge }}</span></td>
-            </tr>
-          {% empty %}
-            <tr><td colspan="4">No balances on or before this month.</td></tr>
-          {% endfor %}
-          </tbody>
-        </table>
-      </div>
-      {% if period.equity_lines %}
-      <h3 class="mt-4 font-medium">Equity (estimates)</h3>
-      <p class="text-sm">Shown for paired loans. These lines do not change totals.</p>
-      <div class="overflow-x-auto">
-        <table class="table">
-          <thead>
-            <tr>
-              <th scope="col">Pair</th>
-              <th scope="col" class="text-right">Equity</th>
-            </tr>
-          </thead>
-          <tbody>
-          {% for line in period.equity_lines %}
-            <tr>
-              <td>{{ line.label }} <span class="badge badge-ghost">estimate</span> ({{ line.asset_name }} − {{ line.loan_name }})</td>
-              <td class="text-right">{% include "finance/_amount.html" with value=line.equity_display tone="" %}</td>
-            </tr>
-          {% endfor %}
-          </tbody>
-        </table>
-      </div>
-      {% endif %}
+  <section aria-labelledby="net-worth-months" class="rounded-box border border-base-300 bg-base-100">
+    <h2 id="net-worth-months" class="px-4 pt-4 font-semibold">By month</h2>
+    <div class="overflow-x-auto">
+      <table class="table">
+        <thead>
+          <tr>
+            <th scope="col">Month</th>
+            <th scope="col" class="text-right">Assets</th>
+            <th scope="col" class="text-right">Liabilities</th>
+            <th scope="col" class="text-right">Net worth</th>
+            <th scope="col">Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for period in report.periods reversed %}
+          <tr>
+            <td class="font-medium whitespace-nowrap">{{ period.label }}</td>
+            <td class="whitespace-nowrap text-right">{% include "finance/_amount.html" with value=period.assets_display tone="in" %}</td>
+            <td class="whitespace-nowrap text-right">{% include "finance/_amount.html" with value=period.liabilities_display tone="out" %}</td>
+            <td class="whitespace-nowrap text-right font-semibold">{% include "finance/_amount.html" with value=period.net_display tone="" %}</td>
+            <td class="text-sm">
+              {% if period.carried_forward %}
+              <span class="block">{% include "finance/_status.html" with word=period.carried_forward|stringformat:"d"|add:" carried forward" icon="projected" %}</span>
+              {% endif %}
+              {% if period.omitted_untracked %}
+              <span class="block">{% include "finance/_status.html" with word=period.omitted_untracked|stringformat:"d"|add:" not yet tracked" %}</span>
+              {% endif %}
+              {% if not period.carried_forward and not period.omitted_untracked and period.accounts %}
+              <span class="opacity-80">All current</span>
+              {% endif %}
+              {% if period.accounts %}
+              <details class="mt-1">
+                <summary class="link cursor-pointer">{{ period.accounts|length }} account{{ period.accounts|length|pluralize }}</summary>
+                <ul class="mt-2 flex flex-col gap-2">
+                  {% for row in period.accounts %}
+                  <li class="flex flex-wrap items-baseline justify-between gap-x-3">
+                    <span>{{ row.account_name }}{% if row.is_estimate %} <span class="badge badge-ghost badge-sm">estimate</span>{% endif %}</span>
+                    {% include "finance/_amount.html" with value=row.amount_display tone="" %}
+                    <span class="basis-full text-xs opacity-80">As of {{ row.snapshot_date|date:"Y-m-d" }} · {{ row.source_badge }}</span>
+                  </li>
+                  {% endfor %}
+                  {% for line in period.equity_lines %}
+                  <li class="flex flex-wrap items-baseline justify-between gap-x-3">
+                    <span>{{ line.label }} <span class="badge badge-ghost badge-sm">estimate</span></span>
+                    {% include "finance/_amount.html" with value=line.equity_display tone="" %}
+                    <span class="basis-full text-xs opacity-80">{{ line.asset_name }} − {{ line.loan_name }}; does not change totals</span>
+                  </li>
+                  {% endfor %}
+                </ul>
+              </details>
+              {% elif not period.omitted_untracked %}
+              <span class="opacity-80">No balances on or before this month.</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
     </div>
   </section>
-  {% endfor %}
-  {% if performance_rows %}
-  <section class="card bg-base-100 shadow-sm">
-    <div class="card-body">
-      <h2 class="card-title">Investment performance (all time)</h2>
-      <div class="overflow-x-auto">
-        <table class="table table-zebra">
-          <thead class="sticky top-0 z-10 bg-base-200">
-            <tr>
-              <th scope="col">Account</th>
-              <th scope="col" class="text-right">Growth</th>
-              <th scope="col" class="text-right">Return</th>
-            </tr>
-          </thead>
-          <tbody>
-          {% for performance in performance_rows %}
-            <tr>
-              <td><a class="link" href="{% url 'account-balances' performance.account.pk %}">{{ performance.account.name }}</a></td>
-              <td class="text-right">
-                {% if performance.summaries.all_time.has_data %}
-                {% include "finance/_amount.html" with value=performance.summaries.all_time.growth_display tone="" %}
-                {% else %}
-                {{ performance.summaries.all_time.note }}
-                {% endif %}
-              </td>
-              <td class="text-right">
-                {% if performance.summaries.all_time.return_display %}
-                <span class="tooltip" data-tip="{{ performance.estimate_note }}">{{ performance.summaries.all_time.return_display }} <span class="badge badge-ghost">Estimate</span></span>
-                {% else %}
-                —
-                {% endif %}
-              </td>
-            </tr>
-          {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </div>
+</div>
+<aside class="page-side" aria-label="Net worth details">
+  {% if latest %}
+  <section aria-labelledby="net-worth-accounts" class="rounded-box border border-base-300 bg-base-100 px-4 pb-2">
+    <h2 id="net-worth-accounts" class="pt-4 pb-2 font-semibold">By account · {{ latest.label }}</h2>
+    <ul>
+      {% for row in latest.accounts %}
+      <li class="flex min-h-12 items-center justify-between gap-3 border-t border-base-300 py-2">
+        <span class="flex min-w-0 flex-col">
+          <span>{{ row.account_name }}{% if row.is_estimate %} <span class="badge badge-ghost badge-sm">estimate</span>{% endif %}</span>
+          <span class="text-xs opacity-80">{% if row.carried_forward %}Carried forward from {{ row.snapshot_date|date:"M j" }}{% else %}{{ row.snapshot_date|date:"M j" }} · {{ row.source_badge }}{% endif %}</span>
+        </span>
+        <span class="whitespace-nowrap font-semibold">{% include "finance/_amount.html" with value=row.amount_display tone="" %}</span>
+      </li>
+      {% empty %}
+      <li class="border-t border-base-300 py-3 text-sm">No balances on or before this month.</li>
+      {% endfor %}
+    </ul>
+    {% if latest.equity_lines %}
+    <h3 class="mt-2 border-t border-base-300 pt-3 text-sm font-semibold">Equity (estimates)</h3>
+    <p class="text-xs opacity-80">Shown for paired loans. These lines do not change totals.</p>
+    <ul>
+      {% for line in latest.equity_lines %}
+      <li class="flex min-h-10 items-center justify-between gap-3 py-1">
+        <span class="min-w-0">{{ line.label }} <span class="text-xs opacity-80">({{ line.asset_name }} − {{ line.loan_name }})</span></span>
+        <span class="whitespace-nowrap">{% include "finance/_amount.html" with value=line.equity_display tone="" %}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
   </section>
   {% endif %}
+  {% if performance_rows %}
+  <section aria-labelledby="net-worth-performance" class="rounded-box border border-base-300 bg-base-100 px-4 pb-3">
+    <h2 id="net-worth-performance" class="pt-4 pb-2 font-semibold">Investment performance (all time)</h2>
+    <ul>
+      {% for performance in performance_rows %}
+      <li class="border-t border-base-300 py-2">
+        <a class="link" href="{% url 'account-balances' performance.account.pk %}">{{ performance.account.name }}</a>
+        <dl class="mt-1 grid grid-cols-[auto_1fr] gap-x-3 text-sm">
+          <dt class="opacity-80">Growth</dt>
+          <dd class="text-right">
+            {% if performance.summaries.all_time.has_data %}
+            {% include "finance/_amount.html" with value=performance.summaries.all_time.growth_display tone="" %}
+            {% else %}
+            {{ performance.summaries.all_time.note }}
+            {% endif %}
+          </dd>
+          <dt class="opacity-80">Return</dt>
+          <dd class="text-right tabular-nums">
+            {% if performance.summaries.all_time.return_display %}
+            {{ performance.summaries.all_time.return_display }} <span class="badge badge-ghost badge-sm">Estimate</span>
+            {% else %}
+            —
+            {% endif %}
+          </dd>
+        </dl>
+      </li>
+      {% endfor %}
+    </ul>
+    <p class="text-xs opacity-80">{{ performance_rows.0.estimate_note }} Not advice.</p>
+  </section>
+  {% endif %}
+</aside>
 </div>
+{% endwith %}
 {% endif %}
 {% endblock %}
 {% block extra_js %}

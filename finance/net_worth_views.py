@@ -68,6 +68,8 @@ def net_worth(request):
             "chart_data": net_worth_chart_data(report) if report is not None else None,
             "presets": net_worth_preset_links(today, scope=scope or "") if date_from is not None else (),
             "performance_rows": performance_rows,
+            "range_from": date_from,
+            "range_to": date_to,
         },
     )
 
