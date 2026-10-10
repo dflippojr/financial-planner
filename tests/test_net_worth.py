@@ -326,3 +326,21 @@ def test_accounts_page_links_to_record_balance():
     assert "Record balance" in content
     assert reverse("account-balances", args=[account.pk]) in content
     assert "+$2.50" in content
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("source", "amount_minor"),
+    [(BalanceSnapshot.Source.MANUAL, 50_000), (BalanceSnapshot.Source.SIMPLEFIN, -50_000)],
+)
+def test_an_amount_owed_shows_as_negative_whatever_its_source(source, amount_minor):
+    owner = make_person("owner")
+    make_household(owner)
+    card = make_account(owner, name="Synthetic Card", account_type=Account.Type.CREDIT_CARD)
+    add_snapshot(card, timezone.localdate(), amount_minor, source)
+    client = signed_in(owner)
+    pages = (reverse("account-list"), reverse("account-balances", args=[card.pk]), reverse("net-worth"))
+    for url in pages:
+        content = client.get(url).content.decode()
+        assert "\N{MINUS SIGN}$500.00" in content, url
+        assert "+$500.00" not in content, url
