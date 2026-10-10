@@ -5,7 +5,7 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_GET, require_POST
 
 from .access import request_person as _person
-from .monthly_review import latest_closed_month, parse_review_month, review_for_viewer
+from .monthly_review import earliest_review_month, latest_closed_month, parse_review_month, review_for_viewer
 from .monthly_review_ai import visible_phrasing
 from .months import add_months
 from .unusual_spending_ai import visible_unusual_phrasing
@@ -20,7 +20,8 @@ def _list_url(month):
 def monthly_review(request):
     person = _person(request)
     today = timezone.localdate()
-    month = parse_review_month(request.GET.get("month"), today=today)
+    earliest = earliest_review_month(person, today=today)
+    month = parse_review_month(request.GET.get("month"), today=today, earliest=earliest)
     closed = latest_closed_month(today)
     review = review_for_viewer(person, month, today=today)
     previous_month = add_months(month, -1)
@@ -39,7 +40,7 @@ def monthly_review(request):
             "unusual_label": unusual_label,
             "month": month,
             "month_label": review.facts.get("month_label"),
-            "previous_url": _list_url(previous_month),
+            "previous_url": _list_url(previous_month) if previous_month >= earliest else None,
             "next_url": _list_url(next_month) if next_month <= closed else None,
             "regenerate_url": reverse("monthly-review-regenerate"),
         },
@@ -51,6 +52,7 @@ def monthly_review(request):
 def monthly_review_regenerate(request):
     person = _person(request)
     today = timezone.localdate()
-    month = parse_review_month(request.POST.get("month"), today=today)
+    earliest = earliest_review_month(person, today=today)
+    month = parse_review_month(request.POST.get("month"), today=today, earliest=earliest)
     review_for_viewer(person, month, today=today, force=True)
     return redirect(_list_url(month))

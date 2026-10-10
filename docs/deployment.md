@@ -259,6 +259,13 @@ and its 512 MiB limit stays in place. A restart resumes saved sessions after
 the existing session-timeout plus stale-margin window; it does not create a
 replacement session for a job that already has one.
 
+Per-member AI lane limits (#306) add migration 0063, a nullable per-turn chat
+deadline. The new optional settings `AI_CHAT_MAX_PENDING_PER_MEMBER` (3),
+`AI_CHAT_MAX_CONVERSATIONS` (50), `AI_CHAT_TURN_MAX_SECONDS` (session timeout
+plus stale margin) and `AI_JOB_MAX_QUEUED_PER_MEMBER` (12) need no env change.
+Turns already claimed before the upgrade have no deadline and keep the existing
+heartbeat recovery.
+
 Review release notes and take a verified manual backup first. Then fetch the approved revision and run:
 
 ```powershell

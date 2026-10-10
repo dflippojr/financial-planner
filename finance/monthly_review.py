@@ -42,7 +42,18 @@ def latest_closed_month(today=None):
     return add_months(month_start(today), -1)
 
 
-def parse_review_month(raw, *, today=None):
+def earliest_review_month(principal, *, today=None):
+    """The first month a member may review: their earliest visible transaction, else the latest closed month."""
+    closed = latest_closed_month(today)
+    first = (
+        Transaction.objects.visible_to(principal).order_by("transaction_date")
+        .values_list("transaction_date", flat=True).first()
+    )
+    return min(month_start(first), closed) if first else closed
+
+
+def parse_review_month(raw, *, today=None, earliest=None):
+    """A requested month, or the latest closed month when it is missing, malformed, or out of range."""
     today = today or timezone.localdate()
     closed = latest_closed_month(today)
     if not raw:
@@ -53,6 +64,8 @@ def parse_review_month(raw, *, today=None):
     except (TypeError, ValueError, AttributeError):
         return closed
     if parsed > closed:
+        return closed
+    if earliest is not None and parsed < earliest:
         return closed
     return parsed
 

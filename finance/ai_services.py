@@ -595,6 +595,7 @@ def run_conversation(
     on_tool=None,
     allow_tool=None,
     history=(),
+    tool_budget=None,
 ):
     use_tools_only = bool(tools) if tools_only is None else bool(tools_only)
     return _run(
@@ -614,6 +615,7 @@ def run_conversation(
         on_tool=on_tool,
         allow_tool=allow_tool,
         history=history,
+        tool_budget=tool_budget,
     )
 
 
@@ -652,6 +654,7 @@ def _run(
     allow_tool=None,
     connection=None,
     history=(),
+    tool_budget=None,
 ):
     person = _person_for(principal)
     if not may_use_ai(person):
@@ -719,6 +722,7 @@ def _run(
                 tool_runner=runner,
                 sleep=sleep,
                 monotonic=monotonic,
+                tool_budget=tool_budget,
             )
         elif session_id:
             result = wait_for_session(
@@ -728,6 +732,7 @@ def _run(
                 tool_runner=runner,
                 sleep=sleep,
                 monotonic=monotonic,
+                tool_budget=tool_budget,
             )
         else:
             result = run_session(
@@ -745,6 +750,7 @@ def _run(
                 tools_only=tools_only,
                 context=context,
                 end_user=end_user,
+                tool_budget=tool_budget,
             )
     except HarnessHttpError as exc:
         # A transport or server error while polling says nothing about the session

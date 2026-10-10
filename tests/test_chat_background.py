@@ -351,7 +351,9 @@ def test_turn_status_returns_figures_with_local_links_only_and_notices(harness):
 
 
 @pytest.mark.django_db
-def test_a_follow_up_queued_behind_a_long_live_turn_is_not_failed(harness):
+def test_a_follow_up_queued_behind_a_long_live_turn_is_not_failed(harness, settings):
+    # The running turn's own deadline is covered separately; keep it out of the way here.
+    settings.AI_CHAT_TURN_MAX_SECONDS = 24 * 60 * 60
     _state, client, person, _household = _connected_client(harness)
     conversation = send_message(person, "A long first question")
     send_message(person, "A quick follow-up", conversation_id=conversation.pk)

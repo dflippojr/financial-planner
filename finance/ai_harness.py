@@ -28,6 +28,7 @@ LOCAL_WARM_REFUSED = "The local model can't load right now."
 _POLL_INITIAL_DELAY_SECONDS = 0.25
 _POLL_MAX_DELAY_SECONDS = 0.6
 _DEFAULT_SESSION_TIMEOUT_SECONDS = 600
+TOOL_BUDGET_SPENT = "The tool-call limit for this conversation has been reached."
 
 
 def hosted_sessions_enabled():
@@ -152,6 +153,7 @@ def run_session(
     tools_only=False,
     context=None,
     end_user="",
+    tool_budget=None,
 ):
     payload = {
         "prompt": prompt,
@@ -187,6 +189,7 @@ def run_session(
         tool_runner=tool_runner,
         sleep=sleep,
         monotonic=monotonic,
+        tool_budget=tool_budget,
     )
 
 
@@ -225,6 +228,7 @@ def send_session_message(
     tool_runner=None,
     sleep=None,
     monotonic=None,
+    tool_budget=None,
 ):
     json_request(
         urljoin(base_url + "/", f"api/v1/sessions/{session_id}/messages"),
@@ -239,6 +243,7 @@ def send_session_message(
         tool_runner=tool_runner,
         sleep=sleep,
         monotonic=monotonic,
+        tool_budget=tool_budget,
     )
 
 
@@ -260,7 +265,12 @@ def wait_for_session(
     tool_runner=None,
     sleep=None,
     monotonic=None,
+    tool_budget=None,
 ):
+    """Poll a session to its end, answering its app tool calls, until the session timeout.
+
+    tool_budget, when given, returns how many more tool calls the caller allows.
+    """
     sleeper = time.sleep if sleep is None else sleep
     clock = time.monotonic if monotonic is None else monotonic
     timeout = int(getattr(settings, "AGENT_HARNESS_SESSION_TIMEOUT_SECONDS", _DEFAULT_SESSION_TIMEOUT_SECONDS))
@@ -273,7 +283,10 @@ def wait_for_session(
         if status in {"done", "failed", "cancelled"}:
             return _result_from_session(current)
         if status == "waiting_app" and tool_runner is not None:
-            if _answer_tool_calls(base_url, token, session_id, tool_runner):
+            answered = _answer_tool_calls(
+                base_url, token, session_id, tool_runner, deadline=deadline, clock=clock, tool_budget=tool_budget,
+            )
+            if answered:
                 delay = _POLL_INITIAL_DELAY_SECONDS
         if clock() >= deadline:
             return ProviderResult(ok=False, failure_code=UNAVAILABLE, session_id=session_id, session_open=True)
@@ -282,25 +295,41 @@ def wait_for_session(
         current = json_request(urljoin(base_url + "/", path), token=token)
 
 
-def _answer_tool_calls(base_url, token, session_id, tool_runner):
+def _answer_tool_calls(base_url, token, session_id, tool_runner, *, deadline=None, clock=None, tool_budget=None):
+    """Answer one batch of pending calls. Returns how many were answered.
+
+    The batch stops at the session deadline, and calls beyond the remaining tool
+    budget are refused without running, so one oversized batch cannot outlast the
+    session or the conversation's tool limit.
+    """
     pending = _as_list(
         json_request(
             urljoin(base_url + "/", f"api/v1/sessions/{session_id}/tool_calls?status=pending"),
             token=token,
         )
     )
+    remaining = None if tool_budget is None else max(0, int(tool_budget()))
+    answered = 0
     for call in pending:
+        if deadline is not None and clock is not None and clock() >= deadline:
+            break
         call_id = str(call.get("call_id") or call.get("id") or "")
-        name = str(call.get("name") or "")
-        args = call.get("args") if isinstance(call.get("args"), dict) else {}
-        output, ok = tool_runner(name, args)
+        if remaining is not None and remaining <= 0:
+            output, ok = TOOL_BUDGET_SPENT, False
+        else:
+            name = str(call.get("name") or "")
+            args = call.get("args") if isinstance(call.get("args"), dict) else {}
+            output, ok = tool_runner(name, args)
+            if remaining is not None:
+                remaining -= 1
         json_request(
             urljoin(base_url + "/", f"api/v1/sessions/{session_id}/tool_calls/{call_id}"),
             token=token,
             method="POST",
             body={"output": output, "ok": ok},
         )
-    return len(pending)
+        answered += 1
+    return answered
 
 
 def _result_from_session(session):

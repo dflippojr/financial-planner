@@ -8,7 +8,7 @@ from decimal import Decimal, InvalidOperation
 
 from django.urls import Resolver404, resolve
 
-from .ai_jobs import enqueue_job
+from .ai_jobs import enqueue_review_phrasing
 from .ai_services import member_has_ai, run_structured
 from .ai_types import ProviderResult
 from .alert_services import settings_for
@@ -112,17 +112,17 @@ def facts_payload_for_ai(person, facts):
     return bound_ai_facts(_drop_keys(_own_private_facts(person, facts)))
 
 
-def queue_monthly_review_phrasing(person, review):
+def queue_monthly_review_phrasing(person, review, *, exclude_pk=None):
     if review is None or not monthly_review_ai_on(person):
         return None
-    return enqueue_job(
-        person,
-        feature=FEATURE,
-        input_refs={
-            "monthly_review_id": review.pk,
-            "generated_at": review.generated_at.isoformat(),
-        },
-    )
+    return enqueue_review_phrasing(person, feature=FEATURE, review=review, exclude_pk=exclude_pk)
+
+
+def _requeue_if_regenerated(person, job, generated_at):
+    """The review was regenerated after this job read it: phrase the newest generation instead."""
+    current = MonthlyReview.objects.filter(pk=(job.input_refs or {}).get("monthly_review_id"), person=person).first()
+    if current is not None and current.generated_at.isoformat() != generated_at:
+        queue_monthly_review_phrasing(person, current, exclude_pk=job.pk)
 
 
 def visible_phrasing(person, review):
@@ -140,6 +140,7 @@ def run_monthly_review_job(person, job, *, backend, session_id="", on_session=No
     if review is None:
         return ProviderResult(ok=True, answer="", session_id="skipped")
     if refs.get("generated_at") != review.generated_at.isoformat():
+        _requeue_if_regenerated(person, job, refs.get("generated_at"))
         return ProviderResult(ok=True, answer="", session_id="skipped")
     if not monthly_review_ai_on(person):
         return ProviderResult(ok=True, answer="", session_id="skipped")
@@ -166,7 +167,7 @@ def run_monthly_review_job(person, job, *, backend, session_id="", on_session=No
     paragraph = _extract_paragraph(result.answer)
     grounded = bool(paragraph) and paragraph_is_grounded(paragraph, facts)
     # Write only if the review was not regenerated while the call ran.
-    MonthlyReview.objects.filter(
+    written = MonthlyReview.objects.filter(
         pk=review.pk,
         generated_at=review.generated_at,
         visibility_key=review.visibility_key,
@@ -174,6 +175,8 @@ def run_monthly_review_job(person, job, *, backend, session_id="", on_session=No
         ai_paragraph=paragraph if grounded else "",
         ai_backend=(backend or "") if grounded else "",
     )
+    if not written:
+        _requeue_if_regenerated(person, job, review.generated_at.isoformat())
     return result
 
 
