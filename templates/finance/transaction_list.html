@@ -208,11 +208,11 @@
         </td>
         <td class="text-right max-md:col-start-2 max-md:row-start-1 max-md:p-0 max-md:font-semibold">{% include "finance/_amount.html" with value=transaction.amount_display tone="" %}</td>
         <td class="max-md:col-span-2 max-md:row-start-2 max-md:p-0 max-md:text-sm">
-          <span class="{% if transaction.category_id is None %}max-md:badge max-md:badge-warning max-md:badge-sm{% else %}max-md:opacity-80{% endif %}">{{ transaction.category_display }}</span><span class="opacity-80 md:hidden"> · {{ transaction.account.name }}</span>
+          <span class="{% if transaction.category is None %}max-md:badge max-md:badge-warning max-md:badge-sm{% else %}max-md:opacity-80{% endif %}">{{ transaction.category_display }}</span><span class="opacity-80 md:hidden"> · {{ transaction.account.name }}</span>
           {% if transaction.category_source == "split" %}
           <ul class="mt-1 text-sm opacity-80">
             {% for part in transaction.splits.all %}
-            <li>{{ part.category.name }} · {{ part.amount_display }}</li>
+            <li>{{ part.category.name|default:"Uncategorized" }} · {{ part.amount_display }}</li>
             {% endfor %}
           </ul>
           {% endif %}

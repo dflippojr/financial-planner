@@ -729,7 +729,8 @@ class Transaction(ArchivableModel):
         if self.category_source == self.CategorySource.SPLIT:
             count = len(self.splits.all())
             return f"Split ({count})"
-        if self.category_id is None:
+        # A view may prefetch only categories the viewer can still see.
+        if self.category_id is None or self.category is None:
             return "Uncategorized"
         return self.category.name
 

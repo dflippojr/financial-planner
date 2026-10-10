@@ -169,7 +169,21 @@ def drilldown_url(budget, month):
     return f"{reverse('transaction-list')}?{urlencode(query)}"
 
 
-def progress_for(budget, month, reports):
+def budget_label(budget, visible_category_ids):
+    """A budget's name as this viewer may see it; a category that left the
+    viewer's household reads as Uncategorized rather than its live name."""
+    if budget.category_id is None:
+        return "Overall spending"
+    if budget.category_id not in visible_category_ids:
+        return "Uncategorized"
+    return budget.category.name
+
+
+def visible_category_id_set(principal):
+    return set(Category.objects.visible_to(principal).values_list("pk", flat=True))
+
+
+def progress_for(budget, month, reports, visible_category_ids):
     amount_minor = amount_for(budget, month)
     spent_minor = _spent_from_report(budget, reports[month_start(month)])
     carry_minor = carry_for(budget, month, reports)
@@ -182,7 +196,7 @@ def progress_for(budget, month, reports):
         percent = 100
     else:
         percent = 0
-    name = "Overall spending" if budget.category_id is None else budget.category.name
+    name = budget_label(budget, visible_category_ids)
     return SimpleNamespace(
         budget=budget,
         name=name,
@@ -217,10 +231,11 @@ def progress_snapshots(budgets, month, principal):
     groups = {}
     for budget in budgets:
         groups.setdefault(report_scope_for(budget), []).append(budget)
+    visible_category_ids = visible_category_id_set(principal)
     cards = {}
     for scope, group in groups.items():
         reports = _reports_for_months(principal, _needed_months(group, month), scope)
-        cards.update({budget.pk: progress_for(budget, month, reports) for budget in group})
+        cards.update({budget.pk: progress_for(budget, month, reports, visible_category_ids) for budget in group})
     return cards
 
 
@@ -250,12 +265,13 @@ def month_budget_cards(principal, month, *, include_archived=False, accounts=Non
     by_scope = {}
     for budget in budgets:
         by_scope.setdefault(report_scope_for(budget), []).append(budget)
+    visible_category_ids = visible_category_id_set(principal)
     cards = []
     for scope, group in by_scope.items():
         months = _needed_months(group, month)
         reports = _reports_for_months(principal, months, scope, accounts=accounts)
         for budget in group:
-            cards.append(progress_for(budget, month, reports))
+            cards.append(progress_for(budget, month, reports, visible_category_ids))
     cards.sort(key=lambda card: (card.budget.scope, card.name.lower(), card.budget.pk))
     return cards
 
