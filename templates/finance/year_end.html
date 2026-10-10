@@ -1,12 +1,18 @@
 {% extends "finance/base.html" %}
+{% load static ui %}
 {% block title %}Year-end {{ report.year|default:"" }} · Financial Planner{% endblock %}
 {% block content %}
-<h1 class="mb-4 text-2xl font-bold">Year-end report</h1>
-<p class="mb-4 max-w-2xl opacity-80">Annual totals from the same functions as Cash flow, Spending, Recurring, and Net worth. Print this page to save a PDF. This is not tax advice.</p>
-<form method="get" class="no-print mb-4 flex flex-wrap items-end gap-3">
+{% if report %}
+{% include "finance/_page_header.html" with title="Year-end report" helper="Annual totals for one calendar year. Amounts in USD. Not tax advice." more="Annual totals from the same functions as Cash flow, Spending, Recurring, and Net worth. Print this page from the Export menu to save a PDF. This is not tax advice." actions="finance/_year_end_actions.html" %}
+{% else %}
+{% include "finance/_page_header.html" with title="Year-end report" helper="Annual totals for one calendar year. Amounts in USD. Not tax advice." more="Annual totals from the same functions as Cash flow, Spending, Recurring, and Net worth. Print this page from the Export menu to save a PDF. This is not tax advice." %}
+{% endif %}
+<form method="get" class="no-print mb-4 flex flex-wrap items-end gap-x-3">
   {% include "finance/_form_fields.html" with form=filter_form %}
-  <button type="submit" class="btn btn-primary">Update</button>
-  <a class="btn btn-ghost" href="{% url 'year-end' %}">Reset to last full year</a>
+  <div class="mb-3 flex flex-wrap gap-2">
+    <button type="submit" class="btn btn-primary">Update</button>
+    <a class="btn btn-ghost" href="{% url 'year-end' %}">Reset to last full year</a>
+  </div>
 </form>
 {% if report %}
 <header class="year-end-print-header mb-6">
@@ -14,16 +20,22 @@
   <p><strong>Accounts:</strong> {{ report.scope_label }}</p>
   <p><strong>Generated:</strong> {{ report.generated_at|date:"Y-m-d H:i T" }}</p>
 </header>
-<p class="no-print mb-6 flex flex-wrap gap-2">
-  {% for section in csv_sections %}
-  <a class="btn btn-sm btn-outline" href="{% url 'year-end-csv' section %}{% if csv_query %}?{{ csv_query }}{% endif %}">CSV: {{ section }}</a>
-  {% endfor %}
-</p>
 
-<section class="year-end-section card bg-base-100 shadow-sm mb-6">
+<section class="card mb-4 bg-base-100 shadow-sm" aria-labelledby="year-totals-heading">
+  <div class="card-body">
+    <h2 id="year-totals-heading" class="sr-only">Year totals</h2>
+    <div class="grid divide-y divide-base-300 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+      {% include "finance/_report_key_number.html" with label="Income" value=report.cash_flow.summary.income_display tone="" %}
+      {% include "finance/_report_key_number.html" with label="Spending" value=report.cash_flow.summary.spending_display tone="out" %}
+      {% include "finance/_report_key_number.html" with label="Net" value=report.cash_flow.summary.net_display tone="" %}
+    </div>
+  </div>
+</section>
+
+<div class="grid items-start gap-4 *:min-w-0 xl:grid-cols-2">
+<section class="year-end-section card bg-base-100 shadow-sm xl:col-span-2">
   <div class="card-body">
     <h2 class="card-title">Income, spending, and net by month</h2>
-    <p>Income {{ report.cash_flow.summary.income_display }} · Spending {{ report.cash_flow.summary.spending_display }} · Net {{ report.cash_flow.summary.net_display }}</p>
     <div class="overflow-x-auto">
       <table class="table table-zebra">
         <thead>
@@ -39,7 +51,7 @@
           <tr>
             <td>
               {{ period.label }}
-              {% if period.missing_import %}<span class="badge badge-warning">Missing import</span>{% endif %}
+              {% if period.missing_import %}{% include "finance/_status.html" with word="Missing import" %}{% endif %}
             </td>
             <td class="text-right">{% include "finance/_amount.html" with value=period.income_display tone="in" %}</td>
             <td class="text-right">{% include "finance/_amount.html" with value=period.spending_display tone="out" %}</td>
@@ -52,13 +64,13 @@
   </div>
 </section>
 
-<section class="year-end-section card bg-base-100 shadow-sm mb-6">
+<section class="year-end-section card bg-base-100 shadow-sm">
   <div class="card-body">
     <h2 class="card-title">Missing imports</h2>
     {% if report.missing_months %}
     <ul class="list-disc pl-6">
       {% for period in report.missing_months %}
-      <li>{{ period.label }} — Missing import</li>
+      <li>{{ period.label }} — {% include "finance/_status.html" with word="Missing import" %}</li>
       {% endfor %}
     </ul>
     {% else %}
@@ -67,10 +79,10 @@
   </div>
 </section>
 
-<section class="year-end-section card bg-base-100 shadow-sm mb-6">
+<section class="year-end-section card bg-base-100 shadow-sm">
   <div class="card-body">
     <h2 class="card-title">Spending by category</h2>
-    <p>Total {{ report.spending.total_spending_display }}</p>
+    <p class="tabular-nums">Total {{ report.spending.total_spending_display|amount_text:"out" }}</p>
     <div class="overflow-x-auto">
       <table class="table table-zebra">
         <thead>
@@ -94,10 +106,10 @@
   </div>
 </section>
 
-<section class="year-end-section card bg-base-100 shadow-sm mb-6">
+<section class="year-end-section card bg-base-100 shadow-sm">
   <div class="card-body">
     <h2 class="card-title">Income by category</h2>
-    <p>Total {{ report.income.total_income_display }}</p>
+    <p class="tabular-nums">Total {{ report.income.total_income_display|amount_text }}</p>
     <div class="overflow-x-auto">
       <table class="table table-zebra">
         <thead>
@@ -121,7 +133,7 @@
   </div>
 </section>
 
-<section class="year-end-section card bg-base-100 shadow-sm mb-6">
+<section class="year-end-section card bg-base-100 shadow-sm">
   <div class="card-body">
     <h2 class="card-title">Totals by account</h2>
     <div class="overflow-x-auto">
@@ -151,7 +163,7 @@
   </div>
 </section>
 
-<section class="year-end-section card bg-base-100 shadow-sm mb-6">
+<section class="year-end-section card bg-base-100 shadow-sm">
   <div class="card-body">
     <h2 class="card-title">Tag totals</h2>
     <div class="overflow-x-auto">
@@ -181,10 +193,10 @@
   </div>
 </section>
 
-<section class="year-end-section card bg-base-100 shadow-sm mb-6">
+<section class="year-end-section card bg-base-100 shadow-sm">
   <div class="card-body">
     <h2 class="card-title">Confirmed recurring</h2>
-    <p>Annual cost {{ report.recurring.annual_display }}</p>
+    <p class="tabular-nums">Annual cost {{ report.recurring.annual_display|amount_text:"out" }}</p>
     <div class="overflow-x-auto">
       <table class="table table-zebra">
         <thead>
@@ -210,7 +222,7 @@
   </div>
 </section>
 
-<section class="year-end-section card bg-base-100 shadow-sm mb-6">
+<section class="year-end-section card bg-base-100 shadow-sm">
   <div class="card-body">
     <h2 class="card-title">Net worth</h2>
     <dl class="grid gap-3 sm:grid-cols-2">
@@ -237,5 +249,9 @@
     </dl>
   </div>
 </section>
+</div>
 {% endif %}
+{% endblock %}
+{% block extra_js %}
+<script src="{% static 'js/print-page.js' %}" defer></script>
 {% endblock %}

@@ -276,7 +276,7 @@ def test_restricted_ai_does_not_send_shared_category_baseline(harness, monkeypat
     page = signed_in(owner).get(reverse("monthly-review") + "?month=2026-09")
     body = page.content.decode()
     assert "Unusual this month" in body
-    assert "100.00 USD" in body
+    assert "\N{MINUS SIGN}$100.00" in body
 
 
 @pytest.mark.django_db
@@ -301,7 +301,7 @@ def test_restricted_ai_does_not_send_shared_merchant_median(harness, monkeypatch
     assert "10.00" not in prompts
     assert "1000" not in prompts
     page = signed_in(owner).get(reverse("monthly-review") + "?month=2026-09")
-    assert "10.00 USD" in page.content.decode()
+    assert "\N{MINUS SIGN}$10.00" in page.content.decode()
 
 
 @pytest.mark.django_db
