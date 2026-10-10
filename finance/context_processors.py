@@ -143,58 +143,108 @@ def _settings_current(request):
     return ""
 
 
+# The one definition of the main navigation (issue #327): (URL name, label, icon).
+# The lg sidebar shows every group; the phone dock shows the first group plus
+# More, and the More page shows the rest, so the three cannot drift apart. Icons
+# are stroke paths on a 24px box.
+NAV_GROUPS = (
+    (
+        "main",
+        "",
+        (
+            ("home", "Home", "M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"),
+            ("transaction-list", "Activity", "M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"),
+            ("budgets", "Budgets", "M21 12a9 9 0 1 1-9-9v9zM15 3.5A9 9 0 0 1 20.5 9H15z"),
+            ("chat", "Chat", "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"),
+        ),
+    ),
+    (
+        "money",
+        "Money",
+        (
+            ("net-worth", "Net worth", "m3 17 6-6 4 4 8-8M14 7h7v7"),
+            ("spending-by-category", "Spending", "M4 20V11M10 20V5M16 20v-6M2 20h20"),
+            ("account-list", "Accounts", "M3 10h18M5 10v8M9.5 10v8M14.5 10v8M19 10v8M3 20h18M12 3l9 5H3z"),
+            ("alert-list", "Alerts", "M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0"),
+            (
+                "recurring-review",
+                "Recurring",
+                "m17 2 4 4-4 4M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4M21 13v2a3 3 0 0 1-3 3H3",
+            ),
+            ("transfer-review", "Transfers", "M4 7h16l-4-4M20 17H4l4 4"),
+            (
+                "bills-calendar",
+                "Bills",
+                "M5 5h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zM16 3v4M8 3v4M3 10h18",
+            ),
+            (
+                "savings-goals",
+                "Goals",
+                "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10zM12 11.5v1",
+            ),
+            ("csv-import", "Import", "M12 15V3M7 8l5-5 5 5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"),
+        ),
+    ),
+    (
+        "planning",
+        "Planning",
+        (
+            (
+                "planned-items",
+                "Planned items",
+                "M9 2h6a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1zM16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2",
+            ),
+            ("debt-payoff", "Debt payoff", "m3 7 6 6 4-4 8 8M21 10v7h-7"),
+            (
+                "monthly-review",
+                "Monthly review",
+                "M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6M8 13h8M8 17h5",
+            ),
+            (
+                "sheet-comparison",
+                "Sheet comparison",
+                "M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zM12 4v16M3 10h18",
+            ),
+            ("year-end", "Year-end", "M4 21V4h12l-2 4 2 4H4"),
+        ),
+    ),
+)
+
+
 def navigation(request):
     if not getattr(request.user, "is_authenticated", False):
-        return {"dock_tabs": [], "nav_items": [], "nav_current": "", "settings_tabs": [], "settings_current": ""}
+        return {"dock_tabs": [], "nav_items": [], "nav_groups": [], "nav_current": "", "settings_tabs": [], "settings_current": ""}
     current = _nav_current(request)
     settings_current = _settings_current(request)
-    items = (
-        ("home", "Cash flow", reverse("home")),
-        ("net-worth", "Net worth", reverse("net-worth")),
-        ("spending-by-category", "Spending", reverse("spending-by-category")),
-        ("transaction-list", "Transactions", reverse("transaction-list")),
-        ("chat", "Chat", reverse("chat")),
-        ("transfer-review", "Transfers", reverse("transfer-review")),
-        ("recurring-review", "Recurring", reverse("recurring-review")),
-        ("account-list", "Accounts", reverse("account-list")),
-        ("csv-import", "Import", reverse("csv-import")),
-        ("planned-items", "Planned items", reverse("planned-items")),
-        ("bills-calendar", "Bills", reverse("bills-calendar")),
-        ("debt-payoff", "Debt payoff", reverse("debt-payoff")),
-        ("monthly-review", "Monthly review", reverse("monthly-review")),
-        ("sheet-comparison", "Sheet comparison", reverse("sheet-comparison")),
-        ("year-end", "Year-end", reverse("year-end")),
-        ("budgets", "Budgets", reverse("budgets")),
-        ("alert-list", "Alerts", reverse("alert-list")),
-        ("savings-goals", "Goals", reverse("savings-goals")),
-    )
     from .alert_services import unread_alert_count
 
     unread = unread_alert_count(request.user)
+    nav_groups = []
     nav_items = []
-    for key, label, url in items:
-        item = {"key": key, "label": label, "url": url, "active": key == current}
-        if key == "alert-list":
-            item["unread"] = unread
-        nav_items.append(item)
-    tab_keys = {"home": "Home", "transaction-list": "Activity", "budgets": "Budgets", "chat": "Chat"}
-    tab_urls = {"home": reverse("home"), "transaction-list": reverse("transaction-list"), "budgets": reverse("budgets"), "chat": reverse("chat")}
-    dock_tabs = [
-        {"key": key, "label": label, "url": tab_urls[key], "active": key == current}
-        for key, label in tab_keys.items()
-    ]
+    for group_key, group_label, entries in NAV_GROUPS:
+        items = []
+        for key, label, icon in entries:
+            item = {"key": key, "label": label, "url": reverse(key), "icon": icon, "group": group_key, "active": key == current}
+            if key == "alert-list":
+                item["unread"] = unread
+            items.append(item)
+        nav_groups.append({"key": group_key, "label": group_label, "items": items})
+        nav_items.extend(items)
+    main_items = nav_groups[0]["items"]
+    dock_tabs = [dict(item) for item in main_items]
     # Every other page belongs to More, so one tab is always current.
     dock_tabs.append(
         {
             "key": "more",
             "label": "More",
             "url": reverse("more"),
-            "active": current not in tab_keys,
+            "active": all(not item["active"] for item in main_items),
         }
     )
     return {
         "dock_tabs": dock_tabs,
         "nav_items": nav_items,
+        "nav_groups": nav_groups,
         "nav_current": current,
         "settings_current": settings_current,
         "settings_tabs": [

@@ -5,11 +5,13 @@
   <h1 class="text-2xl font-bold">More</h1>
   <p class="text-sm opacity-80">Signed in as {{ user.person.display_name|default:user.username }}</p>
 </header>
-{% for title, items in more_groups %}
-<section aria-labelledby="more-{{ forloop.counter }}" class="mb-4">
-  <h2 id="more-{{ forloop.counter }}" class="mb-2 px-1 text-sm font-semibold opacity-80">{{ title }}</h2>
-  <ul class="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-5">
-    {% for item in items %}
+<p class="hidden text-sm lg:block">Every page is in the sidebar on the left.</p>
+<div class="lg:hidden">
+{% for group in more_groups %}
+<section aria-labelledby="more-{{ group.key }}" class="mb-4">
+  <h2 id="more-{{ group.key }}" class="mb-2 px-1 text-sm font-semibold opacity-80">{{ group.label }}</h2>
+  <ul class="grid grid-cols-3 gap-2 sm:grid-cols-4" data-more-group="{{ group.key }}">
+    {% for item in group.items %}
     <li>
       <a href="{{ item.url }}" class="relative flex h-18 flex-col items-center justify-center gap-1 rounded-box border border-base-300 bg-base-100 px-1 text-center text-sm font-medium leading-tight"{% if item.unread %} aria-label="{{ item.label }}, {{ item.unread }} unread"{% endif %}>
         {{ item.label }}
@@ -37,4 +39,5 @@
     </li>
   </ul>
 </section>
+</div>
 {% endblock %}

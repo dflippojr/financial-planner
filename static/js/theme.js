@@ -41,13 +41,12 @@
   function syncToggle(button) {
     var theme = preferred();
     var dark = theme === "dark";
-    var label = dark ? "Switch to light theme" : "Switch to dark theme";
     button.setAttribute("aria-pressed", dark ? "true" : "false");
-    button.setAttribute("aria-label", label);
-    button.setAttribute("title", label);
-    var tipHost = button.closest("[data-tip]");
-    if (tipHost) {
-      tipHost.setAttribute("data-tip", label);
+    // A labelled switch row keeps its name ("Dark theme"); aria-pressed carries the state.
+    if (!button.hasAttribute("data-theme-switch")) {
+      var label = dark ? "Switch to light theme" : "Switch to dark theme";
+      button.setAttribute("aria-label", label);
+      button.setAttribute("title", label);
     }
     var sun = button.querySelector(".theme-icon-sun");
     var moon = button.querySelector(".theme-icon-moon");

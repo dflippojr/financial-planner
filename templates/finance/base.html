@@ -16,6 +16,7 @@
   <script src="{% static 'js/theme.js' %}"></script>
   <script src="{% static 'js/page-actions.js' %}" defer></script>
   <script src="{% static 'js/responsive-details.js' %}" defer></script>
+  {% if user.is_authenticated and not auth_card_layout %}<script src="{% static 'js/chat-drawer.js' %}" defer></script>{% endif %}
   <link rel="stylesheet" href="{% static 'dist/app.css' %}">
 </head>
 <body class="min-h-screen bg-base-200 text-base-content">
@@ -24,7 +25,8 @@
 <div class="drawer lg:drawer-open">
   <input id="nav-drawer" type="checkbox" class="drawer-toggle">
   <div class="drawer-content flex min-h-screen flex-col">
-    <main id="main-content" tabindex="-1" class="flex-1 p-4 pb-28 lg:p-6 lg:pb-6">
+    <main id="main-content" tabindex="-1" class="flex-1 p-4 pb-28 lg:px-0 lg:py-6">
+      <div class="mx-auto w-full lg:max-w-[1180px] lg:px-8">
       {% if privacy_policy_prompt %}
       <div role="status" class="alert mb-4">
         <div>
@@ -60,60 +62,61 @@
 {% endif %}
       {% block content %}{% endblock %}
 {% if user.is_authenticated and not auth_card_layout %}
+      </div>
     </main>
-    <div class="hidden lg:block">
-      <label for="finance-chat-drawer" class="btn btn-primary btn-sm fixed right-4 top-4 z-30">Chat</label>
-    </div>
   </div>
   <div class="drawer-side z-40">
     <label for="nav-drawer" class="drawer-overlay" aria-label="Close menu"></label>
-    <div class="flex min-h-full w-72 flex-col bg-base-100">
-      <ul class="menu flex-1 p-4" aria-label="Main">
-        <li class="menu-title">Financial Planner</li>
-        {% for item in nav_items %}
-        {% if item.key == "planned-items" %}
-        <li class="menu-title">Planning</li>
-        {% endif %}
-        <li>
-          <a href="{{ item.url }}"{% if item.active %} class="menu-active" aria-current="page"{% endif %}>
-            {{ item.label }}
-            {% if item.unread %}<span class="badge badge-sm">{{ item.unread }}</span>{% endif %}
-          </a>
-        </li>
-        {% endfor %}
-      </ul>
-      <div class="border-t border-base-200 p-4">
-        <p class="px-2 pb-2 text-sm opacity-80">{{ user.person.display_name|default:user.username }}</p>
-        <div class="flex items-center gap-1" role="group" aria-label="Account actions">
-          <span class="tooltip" data-tip="Settings">
-            <a href="{% url 'account-settings' %}" class="btn btn-square btn-ghost{% if settings_current %} btn-active{% endif %}" title="Settings" aria-label="Settings"{% if settings_current %} aria-current="page"{% endif %}>
-              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
+    <div class="flex min-h-full w-72 flex-col border-r border-base-300 bg-base-100 lg:w-54 xl:w-60">
+      <p class="px-5 pt-5 pb-3 text-[15px] font-bold">Financial Planner</p>
+      <nav class="flex-1 px-3 pb-3" aria-label="Main">
+        {% for group in nav_groups %}
+        {% if group.label %}<p id="nav-group-{{ group.key }}" class="px-2.5 pt-3.5 pb-1 text-xs font-semibold tracking-wide uppercase opacity-80">{{ group.label }}</p>{% endif %}
+        <ul class="flex flex-col gap-0.5" data-nav-group="{{ group.key }}"{% if group.label %} aria-labelledby="nav-group-{{ group.key }}"{% endif %}>
+          {% for item in group.items %}
+          <li>
+            <a href="{{ item.url }}" class="nav-row"{% if item.active %} aria-current="page"{% endif %}>
+              <svg xmlns="http://www.w3.org/2000/svg" class="size-4.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="{{ item.icon }}"/></svg>
+              <span class="flex-1">{{ item.label }}</span>
+              {% if item.unread %}<span class="badge badge-primary badge-sm">{{ item.unread }}<span class="sr-only"> unread</span></span>{% endif %}
             </a>
-          </span>
-          <span class="tooltip" data-tip="Switch to dark theme">
-            <button type="button" id="theme-toggle" data-theme-toggle class="btn btn-square btn-ghost" aria-pressed="false" aria-label="Switch to dark theme" title="Switch to dark theme">
-              <svg xmlns="http://www.w3.org/2000/svg" class="theme-icon-sun h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364-.707-.707M6.343 6.343l-.707-.707m12.728 0-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
-              </svg>
-              <svg xmlns="http://www.w3.org/2000/svg" class="theme-icon-moon h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true" hidden>
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
-              </svg>
+          </li>
+          {% endfor %}
+        </ul>
+        {% endfor %}
+      </nav>
+      <div class="border-t border-base-300 p-3">
+        <ul class="flex flex-col gap-0.5" aria-label="Account">
+          <li class="mb-2">
+            <button type="button" class="nav-row border border-base-300" data-chat-drawer-open aria-controls="finance-chat-panel">
+              <svg xmlns="http://www.w3.org/2000/svg" class="size-4.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              Ask about this page
             </button>
-          </span>
-          <form method="post" action="{% url 'logout' %}" class="m-0">
-            {% csrf_token %}
-            <span class="tooltip" data-tip="Sign out">
-              <button type="submit" class="btn btn-square btn-ghost" aria-label="Sign out" title="Sign out">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-                </svg>
+          </li>
+          <li class="px-2.5 pb-1 text-[13px] opacity-80">Signed in as {{ user.person.display_name|default:user.username }}</li>
+          <li>
+            <a href="{% url 'account-settings' %}" class="nav-row"{% if settings_current %} aria-current="page"{% endif %}>
+              <svg xmlns="http://www.w3.org/2000/svg" class="size-4.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+              Settings
+            </a>
+          </li>
+          <li>
+            <button type="button" id="theme-toggle" class="nav-row" data-theme-toggle data-theme-switch aria-pressed="false">
+              <svg xmlns="http://www.w3.org/2000/svg" class="size-4.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.4 15.4A9 9 0 0 1 8.6 3.6 9 9 0 1 0 20.4 15.4z"/></svg>
+              <span class="flex-1">Dark theme</span>
+              <span class="theme-switch" aria-hidden="true"></span>
+            </button>
+          </li>
+          <li>
+            <form method="post" action="{% url 'logout' %}" class="m-0">
+              {% csrf_token %}
+              <button type="submit" class="nav-row">
+                <svg xmlns="http://www.w3.org/2000/svg" class="size-4.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 16l4-4m0 0-4-4m4 4H7m6 4v1a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3h4a3 3 0 0 1 3 3v1"/></svg>
+                Sign out
               </button>
-            </span>
-          </form>
-        </div>
+            </form>
+          </li>
+        </ul>
       </div>
     </div>
   </div>
@@ -122,21 +125,17 @@
   {% for tab in dock_tabs %}
   <a href="{{ tab.url }}" class="{% if tab.active %}dock-active{% endif %}"{% if tab.active %} aria-current="page"{% endif %}>
     <svg xmlns="http://www.w3.org/2000/svg" class="size-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      {% if tab.key == "home" %}<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>
-      {% elif tab.key == "transaction-list" %}<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>
-      {% elif tab.key == "budgets" %}<path d="M21 12a9 9 0 1 1-9-9v9z"/><path d="M15 3.5A9 9 0 0 1 20.5 9H15z"/>
-      {% elif tab.key == "chat" %}<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-      {% else %}<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>{% endif %}
+      {% if tab.icon %}<path d="{{ tab.icon }}"/>{% else %}<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>{% endif %}
     </svg>
     <span class="dock-label text-xs">{{ tab.label }}</span>
   </a>
   {% endfor %}
 </nav>
 <input id="finance-chat-drawer" type="checkbox" class="sr-only" aria-hidden="true">
-<aside id="finance-chat-panel" class="fixed inset-y-0 right-0 z-50 w-full max-w-md overflow-y-auto border-l border-base-300 bg-base-100 p-4 shadow-xl" aria-label="Chat">
+<aside id="finance-chat-panel" tabindex="-1" class="fixed inset-y-0 right-0 z-50 w-full max-w-md overflow-y-auto border-l border-base-300 bg-base-100 p-4 shadow-xl" aria-label="Chat">
   <div class="mb-3 flex items-center justify-between">
     <h2 class="font-semibold">Chat</h2>
-    <label for="finance-chat-drawer" class="btn btn-sm btn-ghost">Close</label>
+    <button type="button" class="btn btn-sm btn-ghost" data-chat-drawer-close>Close</button>
   </div>
   {% if show_ai_features and chat_drawer %}
     {% with conversation=chat_drawer.conversation chat_messages=chat_drawer.chat_messages conversations=chat_drawer.conversations chat_backend_label=chat_drawer.chat_backend_label chat_show_local=chat_drawer.chat_show_local chat_ready=chat_drawer.chat_ready page_context=chat_drawer.page_context chat_next=request.get_full_path %}
