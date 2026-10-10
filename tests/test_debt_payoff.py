@@ -193,7 +193,8 @@ def test_future_snapshot_is_ignored_and_simplefin_owed_sign_is_used():
         payment_day=None,
     )
     html = signed_in(owner).get(reverse("debt-payoff")).content.decode()
-    assert "+$40.00" in html
+    assert "\N{MINUS SIGN}$40.00" in html
+    assert "+$40.00" not in html
     assert "$999.99" not in html
 
 

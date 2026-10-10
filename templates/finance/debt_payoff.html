@@ -29,7 +29,7 @@
               {{ row.name }}
               <a class="link text-sm" href="{% url 'account-balances' row.account_id %}">Details</a>
             </td>
-            <td class="text-right">{% if row.owed_display %}{% include "finance/_amount.html" with value=row.owed_display tone="" %}{% else %}—{% endif %}</td>
+            <td class="text-right">{% if row.owed_display %}{% include "finance/_amount.html" with value=row.owed_display tone="out" %}{% else %}—{% endif %}</td>
             <td>
               <label class="sr-only" for="rank-{{ row.account_id }}">Custom order for {{ row.name }}</label>
               <input id="rank-{{ row.account_id }}" class="input input-bordered input-sm w-20" type="number" name="rank_{{ row.account_id }}" min="1" value="{{ row.rank|default:forloop.counter }}">
@@ -139,7 +139,7 @@
             <td>{{ month.label }}</td>
             <td class="text-right">{% include "finance/_amount.html" with value=month.interest_display tone="out" %}</td>
             <td class="text-right">{% include "finance/_amount.html" with value=month.paid_display tone="out" %}</td>
-            <td class="text-right">{% include "finance/_amount.html" with value=month.remaining_display tone="" %}</td>
+            <td class="text-right">{% include "finance/_amount.html" with value=month.remaining_display tone="out" %}</td>
           </tr>
         {% endfor %}
         </tbody>
