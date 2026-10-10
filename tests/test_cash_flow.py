@@ -563,3 +563,70 @@ def test_home_with_a_range_at_year_one_has_no_comparison_instead_of_failing():
     assert response.status_code == 200
     assert response.context["report"].summary.income_change.label == "No earlier range to compare"
     assert b"No earlier range to compare" in response.content
+
+
+@pytest.mark.django_db
+@patch("finance.views.timezone.localdate", return_value=date(2026, 9, 15))
+def test_home_range_links_keep_the_other_filters_and_mark_the_current_range(_localdate):
+    owner = make_person("owner")
+    make_household(owner)
+    make_account(owner)
+    client = Client()
+    client.force_login(owner.user)
+
+    response = client.get(
+        reverse("home"),
+        {"date_from": "2026-07-01", "date_to": "2026-09-15", "grouping": "week", "scope": "private"},
+    )
+    options = {option.label: option for option in response.context["range_options"]}
+
+    assert list(options) == ["This month", "3 months", "12 months", "Custom"]
+    assert options["3 months"].current and not options["Custom"].current
+    this_month = parse_qs(urlparse(options["This month"].url).query)
+    assert this_month["date_from"] == ["2026-09-01"]
+    assert this_month["date_to"] == ["2026-09-15"]
+    assert this_month["grouping"] == ["week"]
+    assert this_month["scope"] == ["private"]
+    assert response.context["filter_count"] == 2
+    assert 'aria-current="true">3 months</a>' in response.content.decode()
+
+    custom = client.get(reverse("home"), {"date_from": "2026-02-03", "date_to": "2026-03-04", "grouping": "month"})
+    assert [option.label for option in custom.context["range_options"] if option.current] == ["Custom"]
+    assert custom.context["filter_count"] == 0
+
+    default = client.get(reverse("home"))
+    assert not any(option.current for option in default.context["range_options"])
+
+
+@pytest.mark.django_db
+@patch("finance.views.timezone.localdate", return_value=date(2026, 9, 15))
+def test_home_coverage_column_names_the_account_missing_an_import(_localdate):
+    owner = make_person("owner")
+    make_household(owner)
+    covered = make_account(owner, name="Synthetic Covered")
+    make_account(owner, name="Synthetic Uncovered")
+    make_transaction(
+        owner,
+        covered,
+        transaction_date=date(2026, 8, 10),
+        amount_minor=-1200,
+        range_start=date(2026, 8, 1),
+        range_end=date(2026, 8, 31),
+    )
+    client = Client()
+    client.force_login(owner.user)
+
+    response = client.get(reverse("home"), {"date_from": "2026-08-01", "date_to": "2026-08-31", "grouping": "month"})
+    content = response.content.decode()
+    (period,) = response.context["report"].periods
+
+    assert period.missing_accounts == ["Synthetic Uncovered"]
+    assert '<th scope="col">Coverage</th>' in content
+    assert "Synthetic Uncovered</span>" in content
+
+    only_covered = client.get(
+        reverse("home"),
+        {"date_from": "2026-08-01", "date_to": "2026-08-31", "grouping": "month", "account": covered.pk},
+    )
+    assert only_covered.context["report"].periods[0].missing_accounts == []
+    assert "All imported" in only_covered.content.decode()

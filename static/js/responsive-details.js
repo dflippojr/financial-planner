@@ -25,3 +25,17 @@
     });
   });
 })();
+
+(function () {
+  // <a data-open-details="id"> opens that <details> and moves focus to its first field.
+  document.addEventListener("click", function (event) {
+    var link = event.target.closest && event.target.closest("a[data-open-details]");
+    if (!link) return;
+    var details = document.getElementById(link.getAttribute("data-open-details"));
+    if (!details || details.tagName !== "DETAILS") return;
+    event.preventDefault();
+    details.open = true;
+    var field = details.querySelector("input:not([type=hidden]), select, textarea");
+    if (field) field.focus();
+  });
+})();
