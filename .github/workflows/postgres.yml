@@ -24,10 +24,10 @@ jobs:
   postgres:
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    # About twice the parallel run, which took about 9 minutes in October
+    # About twice the parallel job, which took 6.5 to 9 minutes in October
     # 2026 (issue #358). If the suite outgrows it, find the slow tests in the
     # --durations list rather than raising this.
-    timeout-minutes: 18
+    timeout-minutes: 15
     env:
       POSTGRES_HOST: 127.0.0.1
       POSTGRES_PORT: "5432"
