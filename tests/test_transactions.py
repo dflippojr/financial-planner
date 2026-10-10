@@ -84,7 +84,7 @@ def test_transaction_list_shows_columns_provenance_and_newest_first():
     content = response.content.decode()
     for heading in ("Date", "Account", "Description", "Amount", "Category", "Source", "Scope"):
         assert f">{heading}</th>" in content
-    assert "-12.34 USD" in content
+    assert "\N{MINUS SIGN}$12.34" in content
     assert "Uncategorized" in content
     assert "Huntington Bank" in content
     assert "Imported" in content

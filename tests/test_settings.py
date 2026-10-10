@@ -70,6 +70,7 @@ def test_settings_tabs_and_footer_are_active_on_subpages():
         assert 'aria-current="page"' in html
         assert f">{label}<" in html
         assert 'role="tablist"' in html
+        assert 'aria-label="Settings sections"' in html
         assert "menu-active" not in html
         for other in ("Activity", "Accounts", "Import"):
             assert other in html
@@ -124,3 +125,15 @@ def test_csv_mappings_live_on_a_settings_tab_and_old_url_redirects():
     old = client.get("/csv-mappings/")
     assert old.status_code == 301
     assert old["Location"] == reverse("csv-mapping-list")
+
+
+@pytest.mark.django_db
+def test_settings_section_list_marks_only_the_active_section():
+    user = _member()
+    client = Client()
+    client.force_login(user)
+    html = client.get(reverse("settings-audit")).content.decode()
+    section_list = html.split('aria-label="Settings sections"', 1)[1].split("</nav>", 1)[0]
+    assert section_list.count('class="nav-row"') == 10
+    assert section_list.count('aria-current="page"') == 1
+    assert f'href="{reverse("settings-audit")}" class="nav-row" aria-current="page">Audit trail<' in section_list

@@ -1,20 +1,31 @@
 {% extends "finance/settings_base.html" %}
 {% load tz %}
 {% block title %}Audit trail · Financial Planner{% endblock %}
+{% block settings_width %}{% endblock %}
 {% block settings_content %}
-<h2 class="mb-4 text-xl font-semibold">Audit trail</h2>
-<p class="mb-4">Recent account, household access, sign-in, connection, settings, import, balance, budget, planning, category, rule, recurring, receipt and download changes. Only currently authorized events are shown. IDs identify app records; no names or financial values are copied into this trail. Times and date filters use UTC.</p>
-<form method="get" class="mb-6">
+<h2 class="mb-2 text-xl font-semibold">Audit trail</h2>
+<div class="mb-4 flex flex-wrap items-baseline gap-x-1.5 text-sm">
+  <p>Changes you are allowed to see. Times and date filters use UTC.</p>
+  <details class="page-header-more">
+    <summary>More</summary>
+    <p>Recent account, household access, sign-in, connection, settings, import, balance, budget, planning, category, rule, recurring, receipt and download changes. Only currently authorized events are shown. IDs identify app records; no names or financial values are copied into this trail.</p>
+  </details>
+</div>
+{% comment %}Filters sit in one compact grid with the button on the same row from xl (issue #339).{% endcomment %}
+<form method="get" class="mb-6 grid items-end gap-x-3 sm:grid-cols-2 xl:grid-cols-[repeat(5,minmax(0,1fr))_auto] [&>.alert]:col-span-full">
   {% include "finance/_form_fields.html" with form=form %}
-  <button class="btn btn-primary" type="submit">Filter events</button>
+  <button class="btn btn-primary mb-3" type="submit">Filter events</button>
 </form>
 <p>{{ page.paginator.count }} event{{ page.paginator.count|pluralize }}</p>
 <div class="overflow-x-auto">
 <table class="table"><thead><tr><th scope="col">Time (UTC)</th><th scope="col">Action / outcome</th><th scope="col">Actor</th><th scope="col">Target</th><th scope="col">Source</th><th scope="col">Changed fields / details</th><th scope="col">Event / run</th></tr></thead>
 <tbody>{% for event in page %}
-<tr><td>{% timezone "UTC" %}{{ event.occurred_at|date:"c" }}{% endtimezone %}</td><td>{{ event.get_action_display }} / {{ event.get_outcome_display }}</td>
+<tr><td class="whitespace-nowrap tabular-nums">{% timezone "UTC" %}<time datetime="{{ event.occurred_at|date:"c" }}" title="{{ event.occurred_at|date:"c" }}">{{ event.occurred_at|date:"Y-m-d H:i:s" }}</time>{% endtimezone %}</td><td>{{ event.get_action_display }} / {{ event.get_outcome_display }}</td>
 <td>{{ event.get_actor_kind_display }}{% if event.declared_operator_id %} (declared member #{{ event.declared_operator_id }}){% elif event.actor_kind == 'operator' %} (unattributed){% endif %}{% if event.actor_id %} #{{ event.actor_id }}{% elif event.actor_kind == 'member' %} (former member){% endif %}{% if event.effective_member_id %}; for member #{{ event.effective_member_id }}{% endif %}{% if event.affected_member_id %}; affecting member #{{ event.affected_member_id }}{% endif %}</td>
-<td>{{ event.target_type }} #{{ event.target_id }}</td><td>{{ event.get_source_display }}</td><td>{{ event.changed_fields|join:", " }}{% for key, value in event.metadata.items %}{% if forloop.first and event.changed_fields %}; {% elif not forloop.first %}, {% endif %}{{ key }}={{ value }}{% endfor %}</td><td>{{ event.id }} / {{ event.correlation_id }}</td></tr>
+<td class="whitespace-nowrap">{{ event.target_type }} #{{ event.target_id }}</td><td>{{ event.get_source_display }}</td><td>{{ event.changed_fields|join:", " }}{% for key, value in event.metadata.items %}{% if forloop.first and event.changed_fields %}; {% elif not forloop.first %}, {% endif %}{{ key }}={{ value }}{% endfor %}</td>
+{% with run=event.correlation_id|stringformat:"s" %}
+<td class="whitespace-nowrap">{{ event.id }} / <code class="text-sm" title="{{ run }}">{{ run|slice:":8" }}<span class="sr-only">{{ run|slice:"8:" }}</span></code></td></tr>
+{% endwith %}
 {% empty %}<tr><td colspan="7">No visible events match these filters.</td></tr>{% endfor %}</tbody></table>
 </div>
 <nav aria-label="Audit pages" class="mt-4 flex gap-4">

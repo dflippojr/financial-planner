@@ -2,12 +2,7 @@
 {% block title %}Cash flow · Financial Planner{% endblock %}
 {% block content %}
 <div class="relative">
-<div class="mb-3 flex items-end justify-between gap-3">
-  <div>
-    <p class="text-sm opacity-80 md:hidden">Household</p>
-    <h1 class="text-2xl font-bold">Cash flow</h1>
-  </div>
-</div>
+{% include "finance/_page_header.html" with title="Cash flow" eyebrow="Household" helper="Amounts in USD. Projected months are estimates, not advice." more="Projected months are a projection from planned items and confirmed recurring charges, not a forecast or advice. Historical actuals are unchanged." helper_class="max-md:hidden" %}
 <details class="group mb-4 md:mb-4" data-open-from="md">
   <summary class="btn min-h-11 rounded-full md:hidden absolute right-0 top-0">Change range</summary>
   <form method="get" class="mt-3 flex flex-wrap items-end gap-3">
@@ -20,7 +15,6 @@
   </form>
 </details>
 </div>
-<p class="mb-4 hidden max-w-3xl opacity-80 md:block">Projected months are a projection from planned items and confirmed recurring charges, not a forecast or advice. Historical actuals are unchanged.</p>
 {% if report and report.includes_investment %}
 <div role="note" class="alert alert-info mb-4">{{ report.investment_notice }}</div>
 {% endif %}
@@ -36,6 +30,7 @@
   </span>
 </div>
 {% endif %}
+<div class="page-columns">
 {% if report %}
 <div class="flex flex-col gap-4">
   <div class="grid grid-cols-2 gap-3 md:grid-cols-3 md:gap-4">
@@ -160,7 +155,7 @@
         <tr>
           <td>
             {{ period.label }}
-            {% if period.missing_import %}<span class="badge badge-warning">Missing import</span>{% endif %}
+            {% if period.missing_import %}<span class="badge badge-warning">{% include "finance/_status.html" with word="Missing import" %}</span>{% endif %}
           </td>
           <td class="text-right">{% include "finance/_amount.html" with value=period.income_display tone="in" %}</td>
           <td class="text-right">{% include "finance/_amount.html" with value=period.spending_display tone="out" %}</td>
@@ -290,8 +285,8 @@
   </details>
 </div>
 {% endif %}
-<section class="hidden md:block" aria-labelledby="accounts-heading">
-<h2 id="accounts-heading" class="mt-8 mb-3 text-xl font-semibold">Accounts</h2>
+<section class="page-side hidden md:block" aria-labelledby="accounts-heading">
+<h2 id="accounts-heading" class="mt-8 mb-3 text-xl font-semibold xl:mt-0">Accounts</h2>
 <ul class="list-disc pl-6">
   {% for account in accounts %}
   <li>
@@ -305,6 +300,7 @@
   {% endfor %}
 </ul>
 </section>
+</div>
 {% endblock %}
 {% block extra_js %}
 {% if chart_data %}{% include "finance/_chart_scripts.html" %}{% endif %}

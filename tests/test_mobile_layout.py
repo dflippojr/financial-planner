@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 from django.conf import settings
+from django.template import engines
 
 from tests.mobile_seed import seed_phone_data
 
@@ -200,3 +201,89 @@ def test_ask_about_this_page_opens_the_chat_drawer_from_the_keyboard(phone_sessi
         assert switch.get_attribute("aria-pressed") != before
     finally:
         context.close()
+
+
+HEADER_JS = """() => {
+  const header = document.querySelector('main .page-header');
+  const box = (el) => { const r = el.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; };
+  const helper = header.querySelector('.page-header-helper');
+  const side = document.querySelector('main .page-side');
+  const columns = document.querySelector('main .page-columns');
+  return {
+    h1s: document.querySelectorAll('h1').length,
+    header: box(header),
+    helper: helper && helper.offsetParent !== null ? box(helper) : null,
+    main: box(columns.firstElementChild),
+    side: side.offsetParent !== null ? box(side) : null,
+    scroll: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+  };
+}"""
+
+
+@pytest.mark.parametrize("width", [390, 1024, 1440])
+def test_home_page_header_and_side_column(phone_session, width):
+    """Desktop layout skeleton (Desktop 14): the shared header and side column on Home."""
+    size = f"home-{width}"
+    VIEWPORTS[size] = (width, 900)
+    try:
+        context, page = phone_session(size, "light", "/")
+    finally:
+        del VIEWPORTS[size]
+    try:
+        if SCREEN_DIR:
+            page.screenshot(path=str(Path(SCREEN_DIR) / f"home-header-{width}.png"), full_page=True)
+        layout = page.evaluate(HEADER_JS)
+        assert layout["h1s"] == 1
+        assert not layout["scroll"]
+        if width < 768:
+            assert layout["helper"] is None and layout["side"] is None
+            return
+        assert layout["helper"] is not None
+        assert "Amounts in USD" in page.locator("main .page-header-helper").inner_text()
+        main_left, main_top, main_width, _ = layout["main"]
+        side_left, side_top, side_width, _ = layout["side"]
+        if width >= 1280:
+            assert side_width == 340
+            assert side_left >= main_left + main_width
+            assert abs(side_top - main_top) <= 1
+        else:
+            assert side_top > main_top
+            assert abs(side_left - main_left) <= 1
+    finally:
+        context.close()
+
+
+ROW_MENU_ITEMS = """<li><a href="#edit">Edit</a></li>
+<li><form method="post" data-confirm="Archive Dining?"><button type="submit" class="row-menu-danger">Archive</button></form></li>"""
+
+
+def test_row_menu_opens_and_closes_from_the_keyboard(browser):
+    django_engine = engines["django"]
+    markup = django_engine.from_string(
+        '{% include "finance/_row_menu.html" with label="Actions for Dining" items=items %}'
+    ).render({"items": django_engine.from_string(ROW_MENU_ITEMS)})
+    page = browser.new_page()
+    try:
+        page.set_content(f"<main><button>Before</button><table><tr><td>{markup}</td></tr></table></main>")
+        page.add_style_tag(path=str(CSS))
+        page.add_script_tag(path=str(Path(settings.BASE_DIR) / "static" / "js" / "row-menu.js"))
+        toggle = page.get_by_label("Actions for Dining")
+        menu = page.locator("details[data-row-menu]")
+        edit = page.get_by_role("link", name="Edit")
+
+        toggle.focus()
+        page.keyboard.press("Enter")
+        assert menu.evaluate("el => el.open") and edit.is_visible()
+        page.keyboard.press("Tab")
+        assert page.evaluate("document.activeElement.textContent.trim()") == "Edit"
+        page.keyboard.press("Escape")
+        assert not menu.evaluate("el => el.open")
+        assert page.evaluate("document.activeElement.getAttribute('aria-label')") == "Actions for Dining"
+
+        page.keyboard.press(" ")
+        assert menu.evaluate("el => el.open")
+        assert page.locator(".row-menu-danger").evaluate("el => el.closest('form').dataset.confirm") == "Archive Dining?"
+        page.get_by_role("button", name="Before").click()
+        assert not menu.evaluate("el => el.open")
+    finally:
+        page.close()

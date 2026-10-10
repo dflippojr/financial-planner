@@ -1,0 +1,14 @@
+{% comment %}
+Row menu (issue #328): a row's secondary actions in a <details> dropdown, no inline script.
+Pass label (the toggle's name, such as "Actions for Dining") and items, a template of <li>
+entries. A destructive entry is a form with data-confirm and a button.row-menu-danger.
+static/js/row-menu.js closes the menu on Escape (focus returns to the toggle) and outside clicks.
+{% endcomment %}
+<details class="row-menu dropdown dropdown-end" data-row-menu>
+  <summary class="btn btn-ghost btn-sm btn-square" aria-label="{{ label }}">
+    <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 12h.01M12 12h.01M19 12h.01"/></svg>
+  </summary>
+  <ul class="row-menu-list dropdown-content menu rounded-box p-1">
+    {% include items %}
+  </ul>
+</details>

@@ -34,6 +34,12 @@ def contribution_parts(account_type, source, amount_minor):
     return -owed, 0
 
 
+def signed_balance_minor(account_type, source, amount_minor):
+    """A snapshot as its net-worth contribution: an amount owed is negative whatever its source."""
+    assets, liabilities = contribution_parts(account_type, source, amount_minor)
+    return assets - liabilities
+
+
 def _source_rank(source):
     return 1 if source == BalanceSnapshot.Source.SIMPLEFIN else 0
 
@@ -76,7 +82,7 @@ def _account_month_row(account, snapshot, window):
         account_name=account.name,
         account_type=account.account_type,
         amount_minor=snapshot.amount_minor,
-        amount_display=format_minor(snapshot.amount_minor, snapshot.currency),
+        amount_display=format_minor(assets - liabilities, snapshot.currency),
         assets_minor=assets,
         liabilities_minor=liabilities,
         snapshot_date=snapshot.snapshot_date,
