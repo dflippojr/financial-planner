@@ -8,6 +8,8 @@ Build a private, self hosted personal finance app that can eventually replace Ro
 
 ## Confirmed decisions
 
+- Review runner hardening (#303): keep fork workflow approval at all external contributors. Install a host-side job-started allow-list for this repository's `review.yml` on the default branch (`main`), accepting only base-repository `pull_request_target` and `workflow_dispatch` jobs. Prefer one-job ephemeral registration under a dedicated non-administrator Windows account. The owner applies host changes and reprovisions after each job; implementation must not restart or re-register the live runner. See [runner operations](review-runner.md).
+
 - Repository: private GitHub repository with GitHub Issues as the backlog.
 - First usable workflow: import bank and credit card CSV exports, then inspect the resulting transactions.
 - Hosting target: basement PC, reachable from the home network and the existing Tailscale setup.
@@ -47,6 +49,7 @@ Build a private, self hosted personal finance app that can eventually replace Ro
 
 ## Quality and data handling
 
+- CSV spreadsheet safety (#305): every export prefixes text starting with `=`, `+`, `-`, `@`, TAB or CR with an apostrophe. Signed numeric money columns retain their numeric values; member-export JSON preserves the original text. The ZIP README explains this escaping.
 - Show the source and import time for each transaction so errors can be traced and corrected.
 - Keep monetary values exact (for example, integer minor units or decimal types), with an explicit currency.
 - Support an undo path for an erroneous import.

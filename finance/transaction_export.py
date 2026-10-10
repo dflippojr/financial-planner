@@ -17,6 +17,7 @@ from .models import Category, Tag, TransactionSplit
 from .reauth import recent_auth_is_fresh, reauth_redirect
 from .audit_services import record_download
 from .security_services import EVENT_TYPES, record_security_event
+from .spreadsheet import spreadsheet_text
 from .transaction_filters import (
     apply_transaction_filters,
     query_params_from_cleaned,
@@ -36,13 +37,6 @@ CSV_COLUMNS = (
 class _Echo:
     def write(self, value):
         return value
-
-
-def spreadsheet_text(value):
-    """Escape text cells only; signed money remains numeric."""
-    if value.startswith(("=", "+", "-", "@", "\t", "\r")):
-        return "'" + value
-    return value
 
 
 def _category_name(obj):

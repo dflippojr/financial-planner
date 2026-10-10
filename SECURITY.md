@@ -23,7 +23,9 @@ Out of scope:
 
 - Never commit real statements, CSV exports, account numbers, credentials, tokens, or other personal financial data. Tests and fixtures use clearly synthetic data only.
 - Secrets live in an environment file outside the repository (see `docs/deployment.md`).
-- Pull requests from forks never run on the maintainer's self-hosted runner. The automated review workflow runs on pull requests opened from this repository's branches or when dispatched by a maintainer, and it refuses pull requests from forks.
+- Keep GitHub's fork workflow approval setting at **Require approval for all external contributors** (`all_external_contributors`). The automated review workflow's job guard skips fork heads and Dependabot PRs; the shared reviewer also refuses fork PRs.
+- The review runner installer configures `ACTIONS_RUNNER_HOOK_JOB_STARTED` with a host-side allow-list for this repository's `review.yml` on `main`, triggered only by base-repository `pull_request_target` or `workflow_dispatch`. Other jobs and missing or malformed context fail before workflow steps. The owner must apply these host changes; editing the repository does not update a live runner.
+- Review registration is ephemeral (one job), under a dedicated non-administrator Windows account. The hook and registration limit exposure but do not sandbox the reviewer or erase its host. Untrusted PR content is read with shell access. See [runner setup and lifecycle](docs/review-runner.md) for the controls, account isolation, and owner reprovisioning steps.
 
 ## Automated guards
 

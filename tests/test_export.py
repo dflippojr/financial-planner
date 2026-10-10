@@ -20,6 +20,7 @@ from finance.category_services import (
     refresh_transfer_pairs,
 )
 from finance.export import (
+    CSV_FIELDS,
     ENTITY_FILES,
     _balance_snapshot_model,
     _snapshot_rows,
@@ -38,6 +39,7 @@ from finance.models import (
     RecurringSeries,
     RecurringSeriesMember,
     RefundLink,
+    Tag,
     Transaction,
     TransferPair,
 )
@@ -116,6 +118,67 @@ def _json_rows(archive, name):
 def _csv_rows(archive, name):
     text = archive.read(f"{name}.csv").decode()
     return list(csv.DictReader(io.StringIO(text)))
+
+
+@pytest.mark.parametrize("prefix", ["=", "+", "-", "@", "\t", "\r", ""])
+@pytest.mark.parametrize("entity", CSV_FIELDS)
+def test_every_zip_csv_escapes_text_and_preserves_json_and_money(prefix, entity):
+    text = prefix + 'Synthetic, "雪"\ntext'
+    row = {field: text for field in CSV_FIELDS[entity]}
+    for field in row:
+        if field.endswith("_minor"):
+            row[field] = -1234
+        elif field.endswith("_decimal"):
+            row[field] = "-12.34"
+    # Original bank fields occur only in JSON and must stay lossless as well.
+    row["original_fields"] = {"Synthetic description": text}
+    with patch("finance.export.collect_export_tables", return_value={entity: [row]}), patch(
+        "finance.export.Receipt.objects.visible_to",
+    ) as receipts:
+        receipts.return_value.order_by.return_value = []
+        archive = _zip_from_bytes(write_export_zip(None))
+    exported = _csv_rows(archive, entity)
+    assert len(exported) == 1
+    assert _json_rows(archive, entity) == [row]
+    for field in CSV_FIELDS[entity]:
+        value = exported[0][field]
+        if field.endswith("_minor"):
+            assert int(value) == -1234
+        elif field.endswith("_decimal"):
+            assert minor_from_decimal_string(value) == -1234
+        else:
+            assert value == ("'" if prefix else "") + text
+    assert "apostrophe" in archive.read("README.txt").decode()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("prefix", ["=", "+", "-", "@", "\t", "\r", ""])
+def test_zip_exports_stored_description_note_account_category_and_tag(prefix):
+    owner = make_person("owner")
+    household = make_household(owner)
+    category = household.categories.get(name="Groceries")
+    category.name = prefix + "Synthetic category"
+    category.save()
+    account = make_account(owner, name=prefix + "Synthetic account")
+    txn = make_transaction(owner, account, description=prefix + "Synthetic description")
+    txn.note = prefix + "Synthetic note"
+    txn.save()
+    assign_category(owner, txn.pk, category.pk)
+    tag = Tag.objects.create(household=household, name=prefix + "Synthetic tag")
+    txn.tags.add(tag)
+    archive = _zip_from_bytes(write_export_zip(owner))
+    for entity, field, original in (
+        ("accounts", "name", account.name),
+        ("categories", "name", category.name),
+        ("tags", "name", tag.name),
+        ("transaction_tags", "tag_name", tag.name),
+        ("transactions", "description", txn.description),
+        ("transactions", "note", txn.note),
+        ("transactions", "category_name", category.name),
+    ):
+        assert original in [row[field] for row in _json_rows(archive, entity)]
+        assert ("'" if prefix else "") + original in [row[field] for row in _csv_rows(archive, entity)]
+    assert int(_csv_rows(archive, "transactions")[0]["amount_minor"]) == -1000
 
 
 @pytest.mark.django_db
