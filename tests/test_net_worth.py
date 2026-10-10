@@ -325,4 +325,4 @@ def test_accounts_page_links_to_record_balance():
     content = page.content.decode()
     assert "Record balance" in content
     assert reverse("account-balances", args=[account.pk]) in content
-    assert "2.50 USD" in content
+    assert "+$2.50" in content
