@@ -24,9 +24,10 @@ jobs:
   postgres:
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    # About twice the parallel run (issue #358). If the suite outgrows it,
-    # find the slow tests rather than raising this.
-    timeout-minutes: 25
+    # About twice the parallel run, which took about 9 minutes in October
+    # 2026 (issue #358). If the suite outgrows it, find the slow tests in the
+    # --durations list rather than raising this.
+    timeout-minutes: 18
     env:
       POSTGRES_HOST: 127.0.0.1
       POSTGRES_PORT: "5432"
@@ -71,9 +72,10 @@ jobs:
           python manage.py migrate --noinput
 
       # One pytest-django test database per xdist worker (test_..._gw0 and
-      # so on), matching the runner's 4 vCPUs. Browser tests run in
-      # playwright.yml on SQLite.
+      # so on), matching the runner's 4 vCPUs. Work stealing keeps a few slow
+      # tests at the end from leaving three workers idle. Browser tests run
+      # in playwright.yml on SQLite.
       - name: Run tests on PostgreSQL 18
         env:
           FINANCIAL_PLANNER_TEST_DB: postgres
-        run: python -m pytest tests -q -p no:cacheprovider -n 4 --dist worksteal -m "not browser" --durations=40
+        run: python -m pytest tests -q -p no:cacheprovider -n 4 --dist worksteal -m "not browser" --durations=15
