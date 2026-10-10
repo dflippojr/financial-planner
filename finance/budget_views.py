@@ -20,7 +20,7 @@ from .budget_services import (
     save_budget,
     set_budget_archived,
     set_budget_rollover,
-    visible_category_id_set,
+    visible_categories_by_id,
 )
 from .category_services import current_household
 from .forms import BudgetForm
@@ -159,7 +159,7 @@ def budget_rollover_reset(request, budget_id):
         "finance/budget_rollover_reset.html",
         {
             "budget": budget,
-            "budget_label": budget_label(budget, visible_category_id_set(request.user)),
+            "budget_label": budget_label(budget, visible_categories_by_id(request.user)),
             "month": month,
             "month_label": f"{month_name[month.month]} {month.year}",
             "cancel_url": _list_url(month),
