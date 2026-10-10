@@ -20,6 +20,7 @@ from finance.category_services import (
     split_transaction,
     undo_transfer_pair,
     unsplit_transaction,
+    with_transfer_state,
 )
 from finance.lifecycle_services import archive_account, share_account, unshare_account
 from finance.csv_import.services import undo_import_batch
@@ -159,7 +160,7 @@ def test_high_confidence_pair_is_auto_marked_with_reasons_and_can_be_undone():
     assert "only candidate for both legs in the window" in pair.reasons
     assert b"Undo exclusion" in review.content
     outflow.refresh_from_db()
-    assert outflow.category_display == "Transfer"
+    assert with_transfer_state(owner, outflow).category_display == "Transfer"
 
     undo = client.post(reverse("transfer-review"), {"pair_id": pair.pk, "action": "undo"})
     pair.refresh_from_db()

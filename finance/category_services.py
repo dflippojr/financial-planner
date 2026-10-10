@@ -157,6 +157,18 @@ def exclusion_exists_for(principal):
     )
 
 
+def with_transfer_state(principal, financial_transaction):
+    """Attach the viewer-scoped transfer state to an already loaded transaction."""
+    financial_transaction._excluded = (
+        Transaction.objects.filter(pk=financial_transaction.pk)
+        .annotate(_excluded=exclusion_exists_for(principal))
+        .values_list("_excluded", flat=True)
+        .first()
+        or False
+    )
+    return financial_transaction
+
+
 def _history_label(category):
     return "Uncategorized" if category is None else category.name
 
@@ -1189,7 +1201,7 @@ def split_transaction(principal, txn_id, parts, refund_assignments=None):
     financial_transaction = by_id[financial_transaction.pk]
     refunds = [by_id[item.pk] for item in refunds]
     visible_refunds, hidden_refunds = _partition_linked_refunds(person, refunds, financial_transaction)
-    if financial_transaction.is_excluded_transfer:
+    if with_transfer_state(person, financial_transaction).is_excluded_transfer:
         raise ValidationError(SPLIT_TRANSFER_ERROR)
     if RefundLink.objects.filter(refund=financial_transaction).exists():
         raise ValidationError(SPLIT_REFUND_ERROR)

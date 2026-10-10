@@ -3,7 +3,7 @@ from .input_limits import BUDGET_MONTH_FLOOR, MAX_DESCRIPTION_CHARS
 from decimal import Decimal
 
 from django.conf import settings
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.core.validators import RegexValidator
 from django.db import models
 from django.db.models import F, Q
@@ -735,20 +735,15 @@ class Transaction(ArchivableModel):
 
     @property
     def is_excluded_transfer(self):
+        # A pair counts only for a viewer who can see both legs, so the state must
+        # come from a viewer-scoped `_excluded=exclusion_exists_for(person)`
+        # annotation; there is deliberately no unscoped fallback.
         annotated = getattr(self, "_excluded", None)
-        if annotated is not None:
-            return bool(annotated)
-        pairs = getattr(self, "_prefetched_exclusion_pairs", None)
-        if pairs is not None:
-            return any(
-                pair.is_active_exclusion
-                and pair.leg_a.status == Transaction.Status.ACTIVE
-                and pair.leg_b.status == Transaction.Status.ACTIVE
-                for pair in pairs
+        if annotated is None:
+            raise ImproperlyConfigured(
+                "Transaction transfer state needs a viewer-scoped _excluded annotation."
             )
-        return TransferPair.objects.excluding_income_and_spending().filter(
-            Q(leg_a=self) | Q(leg_b=self)
-        ).exists()
+        return bool(annotated)
 
 
 class Receipt(models.Model):

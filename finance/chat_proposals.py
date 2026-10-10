@@ -28,6 +28,7 @@ from .category_services import (
     assign_category,
     assignable_categories,
     current_household,
+    exclusion_exists_for,
 )
 from .lifecycle_services import lock_actor_household
 from .models import (
@@ -491,6 +492,7 @@ def _card_rows(person, items):
         txn.pk: txn
         for txn in Transaction.objects.visible_to(person)
         .filter(pk__in=ids, account_id__in=visible_accounts(person).values("pk"))
+        .annotate(_excluded=exclusion_exists_for(person))
         .select_related("account", "category")
     }
     return [rows[pk] for pk in ids if pk in rows]
