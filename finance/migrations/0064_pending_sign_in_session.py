@@ -9,7 +9,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('finance', '0062_bound_budget_months'),
+        ('finance', '0063_chat_turn_deadline'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
