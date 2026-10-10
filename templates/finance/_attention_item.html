@@ -1,0 +1,14 @@
+{% comment %}A Needs attention row on Home (issue #329): an icon, the title in words, and a detail.{% endcomment %}
+<a href="{{ item.url }}" class="flex min-h-14 items-center gap-3 rounded-box border border-base-300 bg-base-100 px-4 py-2 hover:bg-base-200">
+  <span aria-hidden="true" class="flex size-8 flex-none items-center justify-center rounded-full {% if item.icon == 'warning' %}bg-warning/25{% else %}bg-primary/15{% endif %}">
+    <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      {% if item.icon == "warning" %}<path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/>
+      {% else %}<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0"/>{% endif %}
+    </svg>
+  </span>
+  <span class="flex min-w-0 flex-1 flex-col">
+    <span class="font-medium">{{ item.title }}</span>
+    <span class="text-sm tabular-nums opacity-80">{{ item.detail }}</span>
+  </span>
+  <span aria-hidden="true">›</span>
+</a>

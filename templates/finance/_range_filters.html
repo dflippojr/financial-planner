@@ -1,0 +1,31 @@
+{% comment %}
+Header actions for the report pages (issue #334): range presets as links, then the filter form
+folded into a Filters disclosure that opens on its own when the form has errors. Pass reset_url,
+and keep_tab when the form must keep a tab (Spending's Trends). Uses presets, range_from,
+range_to and filter_form from the page.
+{% endcomment %}
+{% if presets %}
+<nav aria-label="Date range" class="flex flex-wrap gap-1 rounded-box border border-base-300 bg-base-100 p-1">
+  {% for preset in presets %}
+  {% if preset.date_from == range_from and preset.date_to == range_to %}
+  <a class="btn btn-sm btn-neutral" href="{{ preset.url }}" aria-current="true">{{ preset.label }}</a>
+  {% else %}
+  <a class="btn btn-sm btn-ghost" href="{{ preset.url }}">{{ preset.label }}</a>
+  {% endif %}
+  {% endfor %}
+</nav>
+{% endif %}
+<details class="min-w-0 open:basis-full"{% if filter_form.errors %} open{% endif %}>
+  <summary class="btn btn-sm min-h-9">
+    <svg aria-hidden="true" class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
+    Filters
+  </summary>
+  <form method="get" class="mt-2 flex flex-wrap items-end gap-x-3 rounded-box border border-base-300 bg-base-100 p-4">
+    {% include "finance/_form_fields.html" with form=filter_form %}
+    {% if keep_tab %}<input type="hidden" name="tab" value="{{ keep_tab }}">{% endif %}
+    <div class="mb-3 flex flex-wrap gap-2">
+      <button type="submit" class="btn btn-primary">Update</button>
+      <a class="btn btn-ghost" href="{{ reset_url }}">Reset to default range</a>
+    </div>
+  </form>
+</details>
