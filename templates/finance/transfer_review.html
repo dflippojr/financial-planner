@@ -1,69 +1,101 @@
 {% extends "finance/base.html" %}
 {% block title %}Transfers · Financial Planner{% endblock %}
 {% block content %}
-<h1 class="mb-4 text-2xl font-bold">Transfers and card payments</h1>
-<h2 class="mb-3 text-xl font-semibold">Excluded (review and undo)</h2>
-<div class="overflow-x-auto mb-8">
-  <table class="table table-zebra">
-    <thead class="sticky top-0 z-10 bg-base-200">
-      <tr><th scope="col">Dates</th><th scope="col">Accounts</th><th scope="col">Kind</th><th scope="col">Confidence</th><th scope="col">Reasons</th><th scope="col"></th></tr>
-    </thead>
-    <tbody>
-    {% for pair in exclusions %}
-      <tr>
-        <td>{{ pair.leg_a.transaction_date }} / {{ pair.leg_b.transaction_date }}</td>
-        <td>{{ pair.leg_a.account.name }} / {{ pair.leg_b.account.name }}</td>
-        <td>{{ pair.get_kind_display }}</td>
-        <td><span class="badge {% if pair.confidence == 'high' %}badge-success{% else %}badge-warning{% endif %}">{{ pair.get_confidence_display }}</span></td>
-        <td>{{ pair.reasons|join:"; " }}</td>
-        <td>
-          <form method="post">
-            {% csrf_token %}
-            <input type="hidden" name="pair_id" value="{{ pair.pk }}">
-            <input type="hidden" name="action" value="undo">
-            <button type="submit" class="btn btn-sm">Undo exclusion</button>
-          </form>
-        </td>
-      </tr>
-    {% empty %}
-      <tr><td colspan="6">No automatic or confirmed exclusions.</td></tr>
-    {% endfor %}
-    </tbody>
-  </table>
-</div>
-<h2 class="mb-3 text-xl font-semibold">Suggestions</h2>
-<div class="overflow-x-auto">
-  <table class="table table-zebra">
-    <thead class="sticky top-0 z-10 bg-base-200">
-      <tr><th scope="col">Dates</th><th scope="col">Accounts</th><th scope="col">Kind</th><th scope="col">Confidence</th><th scope="col">Reasons</th><th scope="col"></th></tr>
-    </thead>
-    <tbody>
-    {% for pair in suggestions %}
-      <tr>
-        <td>{{ pair.leg_a.transaction_date }} / {{ pair.leg_b.transaction_date }}</td>
-        <td>{{ pair.leg_a.account.name }} / {{ pair.leg_b.account.name }}</td>
-        <td>{{ pair.get_kind_display }}</td>
-        <td><span class="badge {% if pair.confidence == 'high' %}badge-success{% else %}badge-warning{% endif %}">{{ pair.get_confidence_display }}</span></td>
-        <td>{{ pair.reasons|join:"; " }}</td>
-        <td class="flex flex-wrap gap-2">
-          <form method="post">
-            {% csrf_token %}
-            <input type="hidden" name="pair_id" value="{{ pair.pk }}">
-            <input type="hidden" name="action" value="confirm">
-            <button type="submit" class="btn btn-sm btn-primary">Confirm</button>
-          </form>
-          <form method="post">
-            {% csrf_token %}
-            <input type="hidden" name="pair_id" value="{{ pair.pk }}">
-            <input type="hidden" name="action" value="dismiss">
-            <button type="submit" class="btn btn-sm">Dismiss</button>
-          </form>
-        </td>
-      </tr>
-    {% empty %}
-      <tr><td colspan="6">No suggestions.</td></tr>
-    {% endfor %}
-    </tbody>
-  </table>
+{% include "finance/_page_header.html" with title="Transfers and card payments" helper="Pairs moving money between your own accounts. Excluded pairs never count as income or spending." %}
+<div class="page-columns wrap-anywhere">
+  <div class="flex flex-col gap-6">
+    <section aria-labelledby="transfer-suggestions" class="rounded-box border {% if suggestions %}border-warning{% else %}border-base-300{% endif %} bg-base-100">
+      <h2 id="transfer-suggestions" class="flex flex-wrap items-center gap-x-2 px-4 pt-4 text-lg font-semibold sm:px-5">
+        {% if suggestions %}{% include "finance/_status.html" with word="Suggestions to review" %}<span class="font-normal opacity-80">· {{ suggestions|length }}</span>{% else %}Suggestions{% endif %}
+      </h2>
+      {% if suggestions %}
+      <table class="table">
+        <thead>
+          <tr>
+            <th scope="col" class="sm:pl-5">Pair</th>
+            <th scope="col" class="max-md:hidden">Kind</th>
+            <th scope="col" class="max-md:hidden">Confidence</th>
+            <th scope="col"><span class="sr-only">Actions</span></th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for pair in suggestions %}
+          <tr>
+            <td class="sm:pl-5">{% include "finance/_transfer_pair.html" %}</td>
+            <td class="whitespace-nowrap max-md:hidden">{{ pair.get_kind_display }}</td>
+            <td class="whitespace-nowrap max-md:hidden">{{ pair.get_confidence_display }}</td>
+            <td>
+              <div class="flex flex-wrap items-center justify-end gap-2">
+                <form method="post">
+                  {% csrf_token %}
+                  <input type="hidden" name="pair_id" value="{{ pair.pk }}">
+                  <input type="hidden" name="action" value="confirm">
+                  <button type="submit" class="btn btn-sm btn-primary">Confirm</button>
+                </form>
+                <form method="post">
+                  {% csrf_token %}
+                  <input type="hidden" name="pair_id" value="{{ pair.pk }}">
+                  <input type="hidden" name="action" value="dismiss">
+                  <button type="submit" class="btn btn-sm">Not a transfer</button>
+                </form>
+              </div>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="px-4 pb-4 pt-1 opacity-80 sm:px-5">No suggestions to review.</p>
+      {% endif %}
+    </section>
+
+    <section aria-labelledby="transfer-excluded" class="rounded-box border border-base-300 bg-base-100">
+      <h2 id="transfer-excluded" class="px-4 pt-4 text-lg font-semibold sm:px-5">Excluded <span class="font-normal opacity-80">· review and undo</span></h2>
+      {% if exclusions %}
+      <table class="table">
+        <thead>
+          <tr>
+            <th scope="col" class="sm:pl-5">Pair</th>
+            <th scope="col" class="max-md:hidden">Kind</th>
+            <th scope="col" class="max-md:hidden">Confidence</th>
+            <th scope="col"><span class="sr-only">Actions</span></th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for pair in exclusions %}
+          <tr>
+            <td class="sm:pl-5">{% include "finance/_transfer_pair.html" %}</td>
+            <td class="whitespace-nowrap max-md:hidden">{{ pair.get_kind_display }}</td>
+            <td class="whitespace-nowrap max-md:hidden">{{ pair.get_confidence_display }}</td>
+            <td class="text-right">
+              <form method="post">
+                {% csrf_token %}
+                <input type="hidden" name="pair_id" value="{{ pair.pk }}">
+                <input type="hidden" name="action" value="undo">
+                <button type="submit" class="btn btn-sm">Undo exclusion</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="px-4 pb-4 pt-1 opacity-80 sm:px-5">No automatic or confirmed exclusions.</p>
+      {% endif %}
+    </section>
+  </div>
+
+  <aside class="page-side" aria-labelledby="transfer-how">
+    <section class="flex flex-col gap-3 rounded-box border border-base-300 bg-base-100 px-4 py-4">
+      <h2 id="transfer-how" class="font-semibold">How pairing works</h2>
+      <dl class="grid grid-cols-[1fr_auto] gap-x-4 gap-y-1">
+        <dt>To review</dt><dd class="text-right tabular-nums">{{ suggestions|length }}</dd>
+        <dt>Excluded</dt><dd class="text-right tabular-nums">{{ exclusions|length }}</dd>
+      </dl>
+      <p class="text-sm opacity-80">Confirm moves a pair to Excluded, so neither leg counts as income or spending.</p>
+      <p class="text-sm opacity-80">Not a transfer dismisses the pair and keeps both legs as ordinary transactions.</p>
+      <p class="text-sm opacity-80">Undo on an excluded pair puts it back, so both legs count again.</p>
+    </section>
+  </aside>
 </div>
 {% endblock %}
