@@ -502,3 +502,21 @@
     animation: none;
   }
 }
+
+/* Category colour key (issue #334): the swatch beside a category matches its chart colour. */
+.category-swatch {
+  display: inline-block;
+  flex: none;
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 2px;
+  background: var(--chart-category-0);
+}
+
+.category-swatch[data-color="1"] { background: var(--chart-category-1); }
+.category-swatch[data-color="2"] { background: var(--chart-category-2); }
+.category-swatch[data-color="3"] { background: var(--chart-category-3); }
+.category-swatch[data-color="4"] { background: var(--chart-category-4); }
+.category-swatch[data-color="5"] { background: var(--chart-category-5); }
+.category-swatch[data-color="6"] { background: var(--chart-category-6); }
+.category-swatch[data-color="7"] { background: var(--chart-category-7); }
