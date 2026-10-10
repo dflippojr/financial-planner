@@ -44,7 +44,7 @@
     <article class="stats bg-base-100 shadow">
       <div class="stat max-md:px-4">
         <h2 class="stat-title">Spending</h2>
-        <p class="stat-value text-xl sm:text-3xl">{% include "finance/_amount.html" with value=report.summary.spending_display tone="spent" %}</p>
+        <p class="stat-value text-xl sm:text-3xl">{% include "finance/_amount.html" with value=report.summary.spending_display tone="out" %}</p>
         <p class="stat-desc max-md:whitespace-normal">{{ report.summary.spending_change.label }}</p>
       </div>
     </article>
@@ -158,7 +158,7 @@
             {% if period.missing_import %}<span class="badge badge-warning">{% include "finance/_status.html" with word="Missing import" %}</span>{% endif %}
           </td>
           <td class="text-right">{% include "finance/_amount.html" with value=period.income_display tone="in" %}</td>
-          <td class="text-right">{% include "finance/_amount.html" with value=period.spending_display tone="spent" %}</td>
+          <td class="text-right">{% include "finance/_amount.html" with value=period.spending_display tone="out" %}</td>
           <td class="text-right">{% include "finance/_amount.html" with value=period.net_display tone="" %}</td>
           <td><a class="link" href="{{ period.drilldown_url }}">Transactions</a></td>
         </tr>
@@ -170,7 +170,7 @@
             <span class="badge badge-ghost">Projected</span>
           </td>
           <td class="text-right">{% include "finance/_amount.html" with value=period.income_display tone="in" %}</td>
-          <td class="text-right">{% include "finance/_amount.html" with value=period.spending_display tone="spent" %}</td>
+          <td class="text-right">{% include "finance/_amount.html" with value=period.spending_display tone="out" %}</td>
           <td class="text-right">{% include "finance/_amount.html" with value=period.net_display tone="" %}</td>
           <td>
             {% if period.contributions %}

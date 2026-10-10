@@ -35,10 +35,10 @@ class _SampleForm(forms.Form):
         (0, "EUR", "", "0.00 EUR"),
         (MAX_BIGINT, "USD", "", "+$92,233,720,368,547,758.07"),
         (-MAX_BIGINT - 1, "USD", "", f"{MINUS}$92,233,720,368,547,758.08"),
-        (414_000, "USD", "spent", f"{MINUS}$4,140.00"),
-        (-2_500, "USD", "spent", "+$25.00"),
-        (0, "USD", "spent", "$0.00"),
-        (1_200, "USD", "out", "+$12.00"),
+        (414_000, "USD", "out", f"{MINUS}$4,140.00"),
+        (-2_500, "USD", "out", "+$25.00"),
+        (0, "USD", "out", "$0.00"),
+        (1_200, "USD", "in", "+$12.00"),
     ],
 )
 def test_amount_text_shows_sign_and_currency(minor, currency, tone, expected):
@@ -47,7 +47,7 @@ def test_amount_text_shows_sign_and_currency(minor, currency, tone, expected):
 
 def test_amount_text_treats_negative_zero_as_zero():
     assert amount_text("-0.00 USD") == "$0.00"
-    assert amount_text("-0.00 EUR", "spent") == "0.00 EUR"
+    assert amount_text("-0.00 EUR", "out") == "0.00 EUR"
     assert amount_tone_class("-0.00 USD") == "tabular-nums text-right"
 
 
@@ -61,9 +61,8 @@ def test_amount_tone_class_uses_tabular_figures_and_neutral_spending():
     assert "amount-out" in amount_tone_class("-4.00 USD")
     assert "amount-in" not in amount_tone_class("0.00 USD")
     assert "amount-in" in amount_tone_class("-4.00 USD", "in")
-    for tone in ("out", "spent"):
-        assert amount_tone_class("12.00 USD", tone) == "tabular-nums text-right"
-        assert amount_tone_class("-12.00 USD", tone) == "tabular-nums text-right"
+    assert amount_tone_class("12.00 USD", "out") == "tabular-nums text-right"
+    assert amount_tone_class("-12.00 USD", "out") == "tabular-nums text-right"
 
 
 def test_amount_include_renders_the_formatted_value():

@@ -44,14 +44,14 @@ MINUS_SIGN = "\N{MINUS SIGN}"
 def amount_text(display, tone=""):
     """Show a money display string as "+$1,240.00", "-$1,240.00" with U+2212, or "+1,240.00 EUR".
 
-    Zero has no sign. tone "spent" marks a spending total whose positive value is
-    money out, so its sign flips. Anything not in the display shape is left alone.
+    Zero has no sign. tone "out" marks an outflow total (spending, a charge, a liability)
+    whose positive value is money out, so its sign flips. Other text is left alone.
     """
     match = _AMOUNT_DISPLAY.match(str(display).strip())
     if not match:
         return display
     minus, whole, fraction, currency = match.groups()
-    negative = bool(minus) != (tone == "spent")
+    negative = bool(minus) != (tone == "out")
     if _is_zero(whole, fraction):
         sign = ""
     else:
@@ -65,7 +65,7 @@ def amount_text(display, tone=""):
 @register.filter
 def amount_tone_class(display, tone=""):
     # Spending is neutral text: the explicit sign, not colour, says which way money moved.
-    if tone in ("out", "spent"):
+    if tone == "out":
         choice = ""
     else:
         choice = tone or _tone_from_display(display)
