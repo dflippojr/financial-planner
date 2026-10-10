@@ -1,77 +1,77 @@
 {% extends "finance/base.html" %}
 {% block title %}Planned items · Financial Planner{% endblock %}
 {% block content %}
-<h1 class="mb-4 text-2xl font-bold">Planned items</h1>
-<p class="mb-4 max-w-2xl opacity-80">These income and expense items feed the projected months on Cash flow. They never change actual totals.</p>
-<section class="card bg-base-100 shadow-sm mb-6 max-w-lg">
-  <div class="card-body">
-    <h2 class="card-title">Add planned item</h2>
-    <form method="post">
-      {% csrf_token %}
-      {% include "finance/_form_fields.html" with form=add_form %}
-      <button type="submit" class="btn btn-primary">Add item</button>
-    </form>
-  </div>
-</section>
-<div class="overflow-x-auto">
-  <table class="table table-zebra">
-    <thead class="sticky top-0 z-10 bg-base-200">
+{% include "finance/_page_header.html" with title="Planned items" helper="Income and expenses you expect. They feed the projected months on Cash flow and never change actual totals. Amounts in USD." actions="finance/_planned_items_header_actions.html" %}
+<div class="page-columns">
+<section class="card border border-base-300 bg-base-100" aria-labelledby="planned-list-heading">
+  <h2 id="planned-list-heading" class="sr-only">Your planned items</h2>
+  <table class="table">
+    <thead>
       <tr>
-        <th scope="col">Name</th>
-        <th scope="col">Kind</th>
+        <th scope="col">Item</th>
+        <th scope="col" class="max-md:hidden">Cadence</th>
+        <th scope="col" class="max-md:hidden">Dates</th>
+        <th scope="col" class="max-md:hidden">Status</th>
         <th scope="col" class="text-right">Amount</th>
-        <th scope="col">Cadence</th>
-        <th scope="col">Start</th>
-        <th scope="col">End</th>
-        <th scope="col">Scope</th>
-        <th scope="col">Status</th>
-        <th scope="col"></th>
+        <th scope="col"><span class="sr-only">Actions</span></th>
       </tr>
     </thead>
     <tbody>
     {% for item in items %}
       <tr>
-        <td>{{ item.name }}</td>
-        <td>{{ item.get_kind_display }}</td>
-        <td class="text-right">{{ item.amount_display }}</td>
-        <td>{{ item.get_cadence_display }}</td>
-        <td>{{ item.start_date|date:"Y-m-d" }}</td>
-        <td>{% if item.end_date %}{{ item.end_date|date:"Y-m-d" }}{% else %}—{% endif %}</td>
-        <td>
-          {% if item.scope == "household" %}
-          <span class="badge badge-info">Household</span>
-          {% else %}
-          <span class="badge">Private</span>
-          {% endif %}
-        </td>
-        <td>
-          {% if item.enabled %}
-          <span class="badge badge-success">Enabled</span>
-          {% else %}
-          <span class="badge badge-ghost">Disabled</span>
-          {% endif %}
-        </td>
-        <td>
-          <div class="flex flex-wrap items-center gap-2">
-            <a class="btn btn-sm" href="{% url 'planned-item-edit' item.pk %}">Edit</a>
-            {% if item.enabled %}
-            <form method="post" action="{% url 'planned-item-disable' item.pk %}">
-              {% csrf_token %}
-              <button type="submit" class="btn btn-sm btn-outline">Disable</button>
-            </form>
+        <td class="align-top">
+          <span class="font-semibold wrap-anywhere{% if not item.enabled %} opacity-80{% endif %}">{{ item.name }}</span>
+          <span class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm opacity-80">
+            {% if item.scope == "household" %}
+            <span class="badge badge-sm badge-info">Household</span>
             {% else %}
-            <form method="post" action="{% url 'planned-item-enable' item.pk %}">
-              {% csrf_token %}
-              <button type="submit" class="btn btn-sm btn-outline">Enable</button>
-            </form>
+            <span class="badge badge-sm">Private</span>
             {% endif %}
-          </div>
+            <span>{{ item.get_kind_display }}</span>
+          </span>
+          <span class="mt-1 block text-sm opacity-80 md:hidden">
+            {{ item.get_cadence_display }} · {{ item.start_date|date:"Y-m-d" }}{% if item.end_date %} to {{ item.end_date|date:"Y-m-d" }}{% endif %} · {% if item.enabled %}Enabled{% else %}Disabled{% endif %}
+          </span>
+        </td>
+        <td class="max-md:hidden whitespace-nowrap align-top">{{ item.get_cadence_display }}</td>
+        <td class="max-md:hidden align-top">
+          {% if item.end_date %}{{ item.start_date|date:"Y-m-d" }} to {{ item.end_date|date:"Y-m-d" }}{% else %}From {{ item.start_date|date:"Y-m-d" }}{% endif %}
+        </td>
+        <td class="max-md:hidden whitespace-nowrap align-top">
+          {% if item.enabled %}
+          <span class="status-tag font-normal"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg><span>Enabled</span></span>
+          {% else %}
+          <span class="opacity-80">{% include "finance/_status.html" with word="Disabled" icon="projected" %}</span>
+          {% endif %}
+        </td>
+        <td class="whitespace-nowrap text-right align-top font-semibold">
+          {% if item.kind == "expense" %}
+          {% include "finance/_amount.html" with value=item.amount_display tone="out" %}
+          {% else %}
+          {% include "finance/_amount.html" with value=item.amount_display tone="in" %}
+          {% endif %}
+        </td>
+        <td class="align-top text-right">
+          {% include "finance/_row_menu.html" with label="Actions for "|add:item.name items="finance/_planned_item_row_menu_items.html" %}
         </td>
       </tr>
     {% empty %}
-      <tr><td colspan="9">No planned items yet.</td></tr>
+      <tr><td colspan="6">No planned items yet.</td></tr>
     {% endfor %}
     </tbody>
   </table>
+</section>
+<aside class="page-side" aria-label="Add a planned item">
+  <section id="add-item" class="card border border-base-300 bg-base-100" aria-labelledby="add-item-heading">
+    <div class="card-body">
+      <h2 id="add-item-heading" class="card-title text-base">Add planned item</h2>
+      <form method="post">
+        {% csrf_token %}
+        {% include "finance/_form_fields.html" with form=add_form %}
+        <button type="submit" class="btn">Add item</button>
+      </form>
+    </div>
+  </section>
+</aside>
 </div>
 {% endblock %}
