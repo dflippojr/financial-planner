@@ -11,7 +11,13 @@ from pathlib import Path
 import pytest
 from django.conf import settings
 
+from finance.ai_services import connect_harness
+from finance.chat_services import send_message, start_conversation
+from finance.models import Person
+from finance.policy_services import accept_policy, publish_policy
+from tests.chat_helpers import ask
 from tests.mobile_seed import seed_phone_data
+from tests.test_chat import TOKEN, harness  # noqa: F401 - harness is a fixture
 
 # Playwright's sync API keeps an event loop running in this thread, which Django's ORM guard rejects.
 os.environ.setdefault("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
@@ -198,5 +204,102 @@ def test_ask_about_this_page_opens_the_chat_drawer_from_the_keyboard(phone_sessi
         before = switch.get_attribute("aria-pressed")
         switch.click()
         assert switch.get_attribute("aria-pressed") != before
+    finally:
+        context.close()
+
+
+CHAT_JS = """() => {
+  const box = (selector) => {
+    const el = document.querySelector(selector);
+    if (!el || el.offsetParent === null) return null;
+    const r = el.getBoundingClientRect();
+    return { left: r.left, right: r.right, top: r.top, width: r.width };
+  };
+  return {
+    list: box('main nav[aria-label=Conversations]'),
+    thread: box('main section'),
+    messages: box('main section [aria-live]'),
+    composer: box("main #chat-send-form > div"),
+    summary: box('main nav[aria-label=Conversations] summary'),
+    scroll: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+  };
+}"""
+
+
+@pytest.fixture
+def chat_session(phone_session, harness):  # noqa: F811 - pytest fixture injection
+    _state, url = harness
+
+    def open_chat(size, scheme="light"):
+        context, page = phone_session(size, scheme, "/")
+        context.close()
+        person = Person.objects.get(user__username="synthetic_alex")
+        accept_policy(person, publish_policy(material=True, body="Synthetic privacy policy for layout tests"))
+        connect_harness(person, base_url=url, token=TOKEN)
+        ask(person, "Any new subscriptions?")
+        answered = ask(person, "How much went to dining?", conversation_id=start_conversation(person).pk)
+        # No chat lane runs beside the live server, so this reply stays pending.
+        send_message(person, "And groceries?", conversation_id=answered.pk)
+        return phone_session(size, scheme, f"/chat/?c={answered.pk}")
+
+    return open_chat
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_chat_list_sits_beside_the_thread_at_desktop_width(chat_session, scheme):
+    VIEWPORTS["1440"] = (1440, 900)
+    try:
+        context, page = chat_session("1440", scheme)
+    finally:
+        del VIEWPORTS["1440"]
+    try:
+        if SCREEN_DIR:
+            page.screenshot(path=str(Path(SCREEN_DIR) / f"chat-1440-{scheme}.png"))
+        layout = page.evaluate(CHAT_JS)
+        assert not layout["scroll"]
+        assert layout["summary"] is None
+        assert layout["list"]["right"] < layout["thread"]["left"]
+        assert abs(layout["list"]["top"] - layout["thread"]["top"]) <= 1
+        assert layout["list"]["width"] == 260
+        assert layout["messages"]["width"] <= 760
+        assert layout["composer"]["width"] <= 760
+        conversations = page.get_by_role("navigation", name="Conversations")
+        assert conversations.get_by_role("link").count() == 2
+        assert conversations.locator("[aria-current=page]").inner_text().strip() == "How much went to dining?"
+        assert conversations.get_by_role("button", name="New conversation").is_visible()
+        thinking = page.locator("main [data-chat-turn-url]")
+        thinking.locator("[data-chat-thinking]").wait_for(state="visible")
+        assert thinking.get_attribute("aria-busy") == "true"
+        assert "Working on it." in thinking.inner_text()
+        assert page.locator("h1").count() == 1
+    finally:
+        context.close()
+
+
+def test_chat_at_phone_width_keeps_the_picker_and_pinned_composer(chat_session):
+    context, page = chat_session("390x844")
+    try:
+        if SCREEN_DIR:
+            page.screenshot(path=str(Path(SCREEN_DIR) / "chat-390-ready.png"), full_page=True)
+        layout = page.evaluate(CHAT_JS)
+        assert not layout["scroll"]
+        assert layout["summary"] is not None
+        assert page.get_by_role("link", name="How much went to dining?").is_hidden()
+        assert page.locator("main #chat-send-form").evaluate("(el) => getComputedStyle(el).position") == "fixed"
+        assert page.evaluate(TAP_JS) == []
+        page.locator("main [data-chat-turn-url] [data-chat-thinking]").wait_for(state="visible")
+    finally:
+        context.close()
+
+
+def test_thinking_dots_hold_still_when_motion_is_reduced(chat_session):
+    context, page = chat_session("390x844")
+    try:
+        page.emulate_media(reduced_motion="reduce")
+        dot = page.locator("main [data-chat-thinking] > span").first
+        dot.wait_for(state="visible")
+        assert dot.evaluate("(el) => getComputedStyle(el).animationName") == "none"
+        page.emulate_media(reduced_motion="no-preference")
+        assert dot.evaluate("(el) => getComputedStyle(el).animationName") != "none"
     finally:
         context.close()
