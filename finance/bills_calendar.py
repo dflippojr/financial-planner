@@ -36,6 +36,8 @@ DEPOSIT_TYPES = (Account.Type.CHECKING, Account.Type.SAVINGS)
 
 # How far ahead a running expected balance is computed (about two years).
 MAX_FORECAST_DAYS = 731
+# The "Due in the next 7 days" list and the expected-balance alert look this far ahead.
+UPCOMING_DAYS = 7
 
 
 def deposit_accounts(principal, *, scope=""):
@@ -396,6 +398,15 @@ def build_month(
                     )
                 )
         weeks.append(cells)
+    upcoming = []
+    first_below = None
+    for offset in range(UPCOMING_DAYS):
+        day = today + timedelta(days=offset)
+        items = day_map[day].items if day in day_map else _expected_on_day(sources, day)
+        upcoming.extend(SimpleNamespace(date=day, item=item) for item in items)
+        balance = balances.get(day)
+        if first_below is None and balance is not None and threshold_minor is not None and balance < threshold_minor:
+            first_below = SimpleNamespace(date=day, balance_display=format_minor(balance))
     previous_month = add_months(month_start, -1)
     next_month = add_months(month_start, 1)
     return SimpleNamespace(
@@ -411,6 +422,9 @@ def build_month(
         beyond_forecast=start_balance is not None and month_start > today + timedelta(days=MAX_FORECAST_DAYS),
         start_balance_display=format_minor(start_balance) if start_balance is not None else None,
         threshold_minor=threshold_minor,
+        threshold_display=format_minor(threshold_minor) if threshold_minor is not None else None,
+        upcoming=upcoming,
+        first_below=first_below,
         prev_year=previous_month.year,
         prev_month=previous_month.month,
         next_year=next_month.year,

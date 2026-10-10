@@ -357,6 +357,39 @@ def test_calendar_page_and_alert_setting(_localdate):
 
 
 @pytest.mark.django_db
+@patch("finance.bills_calendar_views.timezone.localdate", return_value=TODAY)
+def test_calendar_page_lists_the_next_7_days_flags_low_days_and_only_visible_accounts(_localdate):
+    owner = make_person("owner")
+    member = make_person("member")
+    household = make_household(owner, member)
+    checking = make_account(owner)
+    make_account(member, name="Member Secret Checking")
+    make_account(member, name="Shared Savings", account_type=Account.Type.SAVINGS, scope=Account.Scope.HOUSEHOLD, household=household)
+    add_snapshot(checking, date(2026, 10, 1), 10_000)
+    series = make_series(owner, name="Synthetic rent", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-8_000)
+    RecurringSeriesMember.objects.create(
+        series=series,
+        transaction=make_transaction(owner, checking, transaction_date=date(2026, 9, 10), description="Synthetic rent"),
+    )
+    save_calendar_settings(owner.user, account_ids=[checking.pk], threshold_minor=5_000)
+
+    # A later month still lists what is due from today, not from the month shown.
+    html = signed_in(owner).get(reverse("bills-calendar") + "?year=2026&month=12").content.decode()
+
+    upcoming = html.split('id="bills-upcoming-heading"')[1].split('id="bills-settings-heading"')[0]
+    assert "Synthetic rent" in upcoming
+    assert "Sat, Oct 10" in upcoming
+    assert "−$80.00" in upcoming
+    assert "Below threshold" in upcoming
+    assert "Oct 10: expected balance" in upcoming
+    assert "+$20.00" in upcoming and "+$50.00" in upcoming
+    settings = html.split('id="bills-settings-heading"')[1]
+    assert "Synthetic Checking" in settings
+    assert "Shared Savings" in settings
+    assert "Member Secret Checking" not in html
+
+
+@pytest.mark.django_db
 def test_expected_balance_alert_is_off_by_default():
     owner = make_person("owner")
     make_household(owner)

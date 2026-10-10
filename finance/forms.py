@@ -1897,7 +1897,7 @@ class BillsCalendarForm(forms.Form):
     accounts = forms.ModelMultipleChoiceField(
         queryset=Account.objects.none(),
         required=False,
-        widget=forms.CheckboxSelectMultiple,
+        widget=forms.CheckboxSelectMultiple(attrs={"class": "checkbox"}),
         label="Checking and savings accounts",
         help_text="Expected balance starts from these accounts' latest snapshots.",
     )
