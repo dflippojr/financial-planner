@@ -1,6 +1,7 @@
 {% for member in series.members.all %}
-  <li>
-    {{ member.transaction.transaction_date }} {{ member.transaction.description }}
+  <li class="flex flex-wrap items-center gap-x-3 gap-y-1">
+    <span class="whitespace-nowrap">{{ member.transaction.transaction_date }}</span>
+    <span class="min-w-0 break-words">{{ member.transaction.description }}</span>
     {% include "finance/_amount.html" with value=member.transaction.amount_display tone="" %}
     <form method="post" class="inline">
       {% csrf_token %}
