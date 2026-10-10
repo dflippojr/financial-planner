@@ -45,6 +45,7 @@ PAGES = (
     ("recurring", "/recurring/"),
     ("imports", "/imports/"),
     ("settings", "/settings/security/"),
+    ("bills", "/planning/calendar/"),
 )
 SCREEN_DIR = os.environ.get("MOBILE_SHOTS_DIR")
 
@@ -606,5 +607,65 @@ def test_thinking_dots_hold_still_when_motion_is_reduced(chat_session):
         assert dot.evaluate("(el) => getComputedStyle(el).animationName") == "none"
         page.emulate_media(reduced_motion="no-preference")
         assert dot.evaluate("(el) => getComputedStyle(el).animationName") != "none"
+    finally:
+        context.close()
+
+
+BILLS_JS = """() => {
+  const box = (el) => { const r = el.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width }; };
+  const options = [...document.querySelectorAll('main .bills-account-option')].map((label) => ({
+    box: box(label.querySelector('input[type=checkbox]')),
+    text: box(label.querySelector('span')),
+  }));
+  const columns = document.querySelector('main .page-columns');
+  const side = document.querySelector('main .page-side');
+  return {
+    options,
+    main: box(columns.firstElementChild),
+    side: box(side),
+    scroll: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+  };
+}"""
+
+
+@pytest.mark.parametrize("width", [390, 1024, 1440])
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_bills_calendar_checkboxes_and_side_column(phone_session, width, scheme):
+    """Desktop 10: account checkboxes never overlap their labels, and labels toggle them."""
+    size = f"bills-{width}"
+    VIEWPORTS[size] = (width, 900)
+    try:
+        context, page = phone_session(size, scheme, "/planning/calendar/")
+    finally:
+        del VIEWPORTS[size]
+    try:
+        if SCREEN_DIR:
+            page.screenshot(path=str(Path(SCREEN_DIR) / f"bills-{width}-{scheme}.png"), full_page=True)
+        layout = page.evaluate(BILLS_JS)
+        assert not layout["scroll"]
+        assert layout["options"], "no expected-balance account options"
+        for option in layout["options"]:
+            checkbox, text = option["box"], option["text"]
+            assert checkbox["width"] > 0 and text["width"] > 0
+            overlaps = not (
+                checkbox["right"] <= text["left"]
+                or text["right"] <= checkbox["left"]
+                or checkbox["bottom"] <= text["top"]
+                or text["bottom"] <= checkbox["top"]
+            )
+            assert not overlaps, option
+        main, side = layout["main"], layout["side"]
+        if width >= 1280:
+            assert side["width"] == 340
+            assert side["left"] >= main["right"]
+        elif width >= 768:
+            assert side["top"] > main["top"]
+        else:
+            assert side["top"] < main["top"]
+        label = page.locator("main .bills-account-option").first
+        checkbox = label.locator("input[type=checkbox]")
+        before = checkbox.is_checked()
+        label.locator("span").click()
+        assert checkbox.is_checked() != before
     finally:
         context.close()
