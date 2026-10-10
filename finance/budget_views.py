@@ -78,6 +78,8 @@ def budget_list(request):
         (card for card in cards if card.budget.category_id is not None),
         key=lambda card: (not card.over_budget, card.percent < NEAR_LIMIT_PERCENT, -card.percent, card.name.lower()),
     )
+    # Desktop side column: the same category rows, only those over or near their limit.
+    attention_cards = [card for card in category_cards if card.over_budget or card.percent >= NEAR_LIMIT_PERCENT]
     previous_month = add_months(month, -1)
     next_month = add_months(month, 1)
     return render(
@@ -87,6 +89,7 @@ def budget_list(request):
             "cards": cards,
             "overall_cards": overall_cards,
             "category_cards": category_cards,
+            "attention_cards": attention_cards,
             "add_form": form,
             "month": month,
             "month_label": f"{month_name[month.month]} {month.year}",

@@ -154,6 +154,16 @@ def _two_connections(monkeypatch):
     return (first, first_checking), (second, second_checking)
 
 
+def _failed_and_synced(*pairs):
+    """Split the connections after a pass; the daily job does not promise an order."""
+    for connection, _checking in pairs:
+        connection.refresh_from_db()
+    failed = [pair for pair in pairs if pair[0].last_sync_result == UNEXPECTED_FAILURE]
+    synced = [pair for pair in pairs if pair[0].last_sync_result != UNEXPECTED_FAILURE]
+    assert len(failed) == 1, [connection.last_sync_result for connection, _checking in pairs]
+    return failed[0], synced[0]
+
+
 @pytest.mark.django_db
 def test_unexpected_failure_on_one_connection_does_not_stop_the_daily_pass(monkeypatch):
     (first, first_checking), (second, second_checking) = _two_connections(monkeypatch)
@@ -173,18 +183,16 @@ def test_unexpected_failure_on_one_connection_does_not_stop_the_daily_pass(monke
 
     call_command("sync_simplefin")
 
-    first.refresh_from_db()
-    second.refresh_from_db()
-    assert first.last_sync_result == UNEXPECTED_FAILURE
-    assert not first.disabled
-    assert second.last_sync_result.startswith("Synced 1 ")
-    assert Transaction.objects.filter(account=second_checking).count() == 1
+    (failed, _), (synced, synced_checking) = _failed_and_synced((first, first_checking), (second, second_checking))
+    assert not failed.disabled
+    assert synced.last_sync_result.startswith("Synced 1 ")
+    assert Transaction.objects.filter(account=synced_checking).count() == 1
     assert alert_passes == [1]
 
 
 @pytest.mark.django_db
 def test_failure_during_import_is_contained_per_connection(monkeypatch):
-    (first, _first_checking), (second, second_checking) = _two_connections(monkeypatch)
+    first_pair, second_pair = _two_connections(monkeypatch)
     healthy = payload_with(posted_txn(txn_id="sf-ok", day=10, amount="-2.00"))
     use_payload(monkeypatch, healthy)
     original = Transaction.objects.bulk_create
@@ -200,9 +208,8 @@ def test_failure_during_import_is_contained_per_connection(monkeypatch):
 
     assert sync_all_connections() == 2
 
-    first.refresh_from_db()
-    assert first.last_sync_result == UNEXPECTED_FAILURE
-    assert Transaction.objects.filter(account=second_checking).count() == 1
+    _failed, (_synced, synced_checking) = _failed_and_synced(first_pair, second_pair)
+    assert Transaction.objects.filter(account=synced_checking).count() == 1
 
 
 @pytest.mark.django_db
