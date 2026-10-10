@@ -2418,6 +2418,21 @@ class MemberSession(models.Model):
         return f"Member session {self.pk}"
 
 
+class PendingSignInSession(models.Model):
+    """Index of unauthenticated sessions holding a half-finished sign-in for a user.
+
+    Lets revocation find a user's pending passkey sign-ins without decoding
+    every row in django_session.
+    """
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="pending_sign_ins")
+    session_key = models.CharField(max_length=40, unique=True)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    def __str__(self):
+        return f"Pending sign-in session {self.pk}"
+
+
 class BulkEditUndo(models.Model):
     """Prior values for one bulk edit, held for a short undo window."""
 
