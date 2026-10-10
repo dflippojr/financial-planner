@@ -112,10 +112,10 @@ def test_signed_in_pages_use_shared_nav_and_signed_out_pages_use_a_card():
     login = Client().get(reverse("login")).content.decode()
 
     for label in (
-        "Cash flow",
+        "Home",
         "Net worth",
         "Spending",
-        "Transactions",
+        "Activity",
         "Chat",
         "Transfers",
         "Recurring",
@@ -124,18 +124,20 @@ def test_signed_in_pages_use_shared_nav_and_signed_out_pages_use_a_card():
         "Planning",
         "Planned items",
         "Debt payoff",
+        "Ask about this page",
+        "Dark theme",
+        "Sign out",
     ):
         assert label in home
     assert reverse("category-list") not in home
     assert reverse("invite") not in home
     assert reverse("simplefin-connections") not in home
     assert 'aria-current="page"' in home
-    assert 'aria-label="Settings"' in home
-    assert 'data-tip="Settings"' in home
+    assert reverse("account-settings") in home
     assert 'id="theme-toggle"' in home
-    assert 'aria-label="Switch to dark theme"' in home
     assert 'aria-pressed="false"' in home
-    assert 'aria-label="Sign out"' in home
+    assert "data-chat-drawer-open" in home
+    assert "fixed right-4 top-4" not in home
     assert reverse("logout") in home
     assert "csrfmiddlewaretoken" in home
     assert "/static/vendor/chart.umd.min.js" in home

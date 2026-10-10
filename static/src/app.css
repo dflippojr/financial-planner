@@ -141,3 +141,52 @@
 #finance-chat-drawer:checked ~ #finance-chat-panel {
   display: block;
 }
+
+/* Sidebar rows (issue #327): links, buttons and the sign-out form button share one look. */
+.nav-row {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  width: 100%;
+  min-height: 2.25rem;
+  padding: 0 0.625rem;
+  border-radius: var(--radius-field);
+  font-size: 0.875rem;
+  text-align: left;
+  color: var(--color-base-content);
+  cursor: pointer;
+}
+
+.nav-row:hover {
+  background: color-mix(in oklab, var(--color-base-content) 8%, transparent);
+}
+
+.nav-row[aria-current="page"] {
+  background: color-mix(in oklab, var(--color-primary) 14%, var(--color-base-100));
+  font-weight: 600;
+}
+
+/* The Dark theme row's switch; aria-pressed on the row carries the state. */
+.theme-switch {
+  display: flex;
+  flex: none;
+  align-items: center;
+  width: 2rem;
+  height: 1.125rem;
+  padding: 0.125rem;
+  border-radius: 9999px;
+  background: color-mix(in oklab, var(--color-base-content) 40%, var(--color-base-100));
+}
+
+.theme-switch::after {
+  content: "";
+  width: 0.875rem;
+  height: 0.875rem;
+  border-radius: 9999px;
+  background: #fff;
+}
+
+[aria-pressed="true"] > .theme-switch {
+  justify-content: flex-end;
+  background: var(--color-primary);
+}

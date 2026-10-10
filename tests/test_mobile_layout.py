@@ -127,3 +127,76 @@ def test_bottom_tabs_replace_the_drawer_on_phones(phone_session):
         assert tabs.locator("[aria-current=page]").inner_text().strip() == "Activity"
     finally:
         context.close()
+
+
+DESKTOP_VIEWPORTS = {"1440": (1440, 900), "1280": (1280, 800), "1024": (1024, 768)}
+
+SHELL_JS = """() => {
+  const side = document.querySelector('.drawer-side > div').getBoundingClientRect();
+  const content = document.querySelector('#main-content > div').getBoundingClientRect();
+  const groups = [...document.querySelectorAll('[data-nav-group]')].map((list) => ({
+    key: list.dataset.navGroup,
+    labels: [...list.querySelectorAll('a')].map((a) => a.textContent.trim()),
+    icons: [...list.querySelectorAll('a')].every((a) => a.querySelector('svg path')),
+  }));
+  return {
+    side: side.width,
+    content: [content.left, content.width],
+    scroll: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+    groups,
+    dock: getComputedStyle(document.querySelector('.dock')).display,
+  };
+}"""
+
+
+@pytest.mark.parametrize("size", DESKTOP_VIEWPORTS)
+def test_desktop_sidebar_groups_and_content_width(phone_session, browser, live_server, size):
+    width, height = DESKTOP_VIEWPORTS[size]
+    VIEWPORTS[size] = (width, height)
+    try:
+        context, page = phone_session(size, "light", "/transactions/")
+    finally:
+        del VIEWPORTS[size]
+    try:
+        if SCREEN_DIR:
+            page.screenshot(path=str(Path(SCREEN_DIR) / f"desktop-{size}.png"))
+        shell = page.evaluate(SHELL_JS)
+        assert not shell["scroll"]
+        assert shell["dock"] == "none"
+        assert shell["side"] == (216 if width < 1280 else 240)
+        assert [group["key"] for group in shell["groups"]] == ["main", "money", "planning"]
+        assert shell["groups"][0]["labels"] == ["Home", "Activity", "Budgets", "Chat"]
+        assert all(group["icons"] for group in shell["groups"])
+        assert shell["content"][1] <= 1180
+        if width == 1440:
+            left, content_width = shell["content"]
+            assert abs((left - 240) - (width - left - content_width)) <= 1
+        sidebar = page.get_by_role("navigation", name="Main")
+        assert sidebar.locator("[aria-current=page]").inner_text().strip() == "Activity"
+        assert page.locator("label[for=finance-chat-drawer]").count() == 0
+    finally:
+        context.close()
+
+
+def test_ask_about_this_page_opens_the_chat_drawer_from_the_keyboard(phone_session):
+    VIEWPORTS["1280"] = (1280, 800)
+    try:
+        context, page = phone_session("1280", "light", "/planning/budgets/")
+    finally:
+        del VIEWPORTS["1280"]
+    try:
+        ask = page.get_by_role("button", name="Ask about this page")
+        ask.focus()
+        page.keyboard.press("Enter")
+        panel = page.locator("#finance-chat-panel")
+        assert panel.is_visible()
+        assert ask.get_attribute("aria-expanded") == "true"
+        page.keyboard.press("Escape")
+        assert not panel.is_visible()
+        assert page.evaluate("document.activeElement.textContent.trim()") == "Ask about this page"
+        switch = page.get_by_role("button", name="Dark theme")
+        before = switch.get_attribute("aria-pressed")
+        switch.click()
+        assert switch.get_attribute("aria-pressed") != before
+    finally:
+        context.close()

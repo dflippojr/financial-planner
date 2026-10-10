@@ -66,12 +66,12 @@ def test_settings_tabs_and_footer_are_active_on_subpages():
         page = client.get(url)
         html = page.content.decode()
         assert page.status_code == 200, url
-        assert 'aria-label="Settings"' in html
+        assert f'href="{reverse("account-settings")}" class="nav-row" aria-current="page"' in html
         assert 'aria-current="page"' in html
         assert f">{label}<" in html
         assert 'role="tablist"' in html
         assert "menu-active" not in html
-        for other in ("Cash flow", "Accounts", "Import"):
+        for other in ("Activity", "Accounts", "Import"):
             assert other in html
 
 

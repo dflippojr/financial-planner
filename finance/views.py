@@ -436,16 +436,8 @@ def home(request):
 @require_GET
 def more(request):
     """Phone home for every page the bottom tabs do not cover."""
-    by_key = {item["key"]: item for item in navigation(request)["nav_items"]}
-    groups = (
-        ("Money", ("net-worth", "spending-by-category", "account-list", "alert-list", "recurring-review", "transfer-review", "bills-calendar", "savings-goals", "csv-import")),
-        ("Planning", ("planned-items", "debt-payoff", "monthly-review", "sheet-comparison", "year-end")),
-    )
-    return render(
-        request,
-        "finance/more.html",
-        {"more_groups": [(title, [by_key[key] for key in keys]) for title, keys in groups]},
-    )
+    groups = navigation(request)["nav_groups"][1:]
+    return render(request, "finance/more.html", {"more_groups": groups})
 
 
 def _preset_links(today, *, account=None, scope="", grouping=None, tab=None, extra_query=None, tag=None):
