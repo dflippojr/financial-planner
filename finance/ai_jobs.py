@@ -12,7 +12,7 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.db import close_old_connections, connection, connections, transaction
-from django.db.models import Q
+from django.db.models import Min, Q
 from django.utils import timezone
 
 from .ai_harness import failure_from_http, local_model_ready, model_status
@@ -28,7 +28,7 @@ from .ai_types import (
     SHARED_LOCAL_REF,
     UNAVAILABLE,
 )
-from .models import AiJob
+from .models import AiJob, Person
 from .policy_services import may_use_ai
 
 logger = logging.getLogger(__name__)
@@ -68,6 +68,46 @@ def enqueue_jobs(person, *, feature, input_refs_list, backend=""):
     ) for input_refs in input_refs_list])
 
 
+ACTIVE_STATUSES = (AiJob.Status.QUEUED, AiJob.Status.WAITING_MODEL, AiJob.Status.RUNNING)
+PHRASING_FEATURES = ("monthly_review", "unusual_spending")
+
+
+def max_queued_phrasing_jobs():
+    """Active monthly-review and unusual-spending phrasing jobs one member may hold."""
+    return max(1, int(getattr(settings, "AI_JOB_MAX_QUEUED_PER_MEMBER", 12)))
+
+
+@transaction.atomic
+def enqueue_review_phrasing(person, *, feature, review, exclude_pk=None):
+    """Queue phrasing for one review, reusing an active job for the same review and feature.
+
+    A job that has not started yet is pointed at the review's newest generation. A job
+    already running keeps going; if the review changed under it, it queues the newest
+    generation when it finishes. Returns the active job, or None when the member's
+    phrasing queue is full.
+    """
+    refs = {"monthly_review_id": review.pk, "generated_at": review.generated_at.isoformat()}
+    # Serialise one member's enqueues so two regenerate requests cannot both insert.
+    Person.objects.select_for_update().filter(pk=person.pk).first()
+    active = AiJob.objects.select_for_update().filter(
+        member=person, feature=feature, status__in=ACTIVE_STATUSES
+    ).order_by("pk")
+    if exclude_pk is not None:
+        active = active.exclude(pk=exclude_pk)
+    for job in active:
+        if (job.input_refs or {}).get("monthly_review_id") != review.pk:
+            continue
+        if job.status != AiJob.Status.RUNNING and not job.harness_session_id:
+            _write_if_unchanged(job, input_refs={**(job.input_refs or {}), **refs})
+        return job
+    queued = AiJob.objects.filter(member=person, feature__in=PHRASING_FEATURES, status__in=ACTIVE_STATUSES)
+    if exclude_pk is not None:
+        queued = queued.exclude(pk=exclude_pk)
+    if queued.count() >= max_queued_phrasing_jobs():
+        return None
+    return enqueue_job(person, feature=feature, input_refs=refs)
+
+
 def _due_jobs(moment):
     return AiJob.objects.filter(
         Q(status__in=(AiJob.Status.QUEUED, AiJob.Status.WAITING_MODEL), next_attempt_at__lte=moment)
@@ -99,27 +139,51 @@ class AiJobLane:
 
     The scheduler holds only worker-count IDs, never the entire queue or job
     payloads. Each worker still claims atomically before starting a session.
+    Free workers go round-robin across members, fewest running jobs first, so one
+    member's queue never holds every worker while another member's job waits.
     """
 
     def __init__(self):
         self.workers = max(1, min(3, int(settings.AI_JOB_WORKERS)))
         self.executor = ThreadPoolExecutor(max_workers=self.workers, thread_name_prefix="ai-job")
         self._inflight = {}
+        self._members = {}
 
     def tick(self, *, now=None):
         self._inflight = {pk: future for pk, future in self._inflight.items() if not future.done()}
+        self._members = {pk: member_id for pk, member_id in self._members.items() if pk in self._inflight}
         available = self.workers - len(self._inflight)
         if not available:
             return
         moment = now or timezone.now()
+        for pk, member_id in self._fair_picks(moment, available):
+            self._members[pk] = member_id
+            self._inflight[pk] = self.executor.submit(self._run, pk, moment)
+
+    def _fair_picks(self, moment, available):
+        held = {}
+        for member_id in self._members.values():
+            held[member_id] = held.get(member_id, 0) + 1
+        due = _due_jobs(moment).exclude(pk__in=self._inflight)
         # Waiting-model jobs move their next attempt to the current poll time.
         # Oldest-due ordering lets other jobs progress while that model sleeps.
-        ids = list(
-            _due_jobs(moment).exclude(pk__in=self._inflight)
-            .order_by("next_attempt_at", "pk").values_list("pk", flat=True)[:available]
+        members = due.values("member_id").annotate(first=Min("next_attempt_at"), first_pk=Min("pk")).values_list(
+            "member_id", "first", "first_pk"
         )
-        for pk in ids:
-            self._inflight[pk] = self.executor.submit(self._run, pk, moment)
+        ranked = sorted(members, key=lambda item: (held.get(item[0], 0), item[1], item[2]))
+        # Taking at most `available` per member keeps the scheduler bounded by worker count.
+        queues = {
+            member_id: list(
+                due.filter(member_id=member_id).order_by("next_attempt_at", "pk").values_list("pk", flat=True)[:available]
+            )
+            for member_id, _first, _pk in ranked[:available]
+        }
+        picks = []
+        while len(picks) < available and any(queues.values()):
+            for member_id, queue in queues.items():
+                if queue and len(picks) < available:
+                    picks.append((queue.pop(0), member_id))
+        return picks
 
     @staticmethod
     def _run(pk, moment):

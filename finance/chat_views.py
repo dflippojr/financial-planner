@@ -100,7 +100,11 @@ def chat_delete_all(request):
 @require_POST
 def chat_new(request):
     person = _person(request)
-    conversation = start_conversation(person)
+    try:
+        conversation = start_conversation(person)
+    except AiError as exc:
+        messages.error(request, str(exc))
+        return redirect("chat")
     return redirect(f"{reverse('chat')}?c={conversation.pk}")
 
 

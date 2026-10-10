@@ -4,7 +4,9 @@
 <h1 class="mb-4 text-2xl font-bold">Monthly review</h1>
 <p class="mb-4 max-w-2xl opacity-80">Computed facts for a closed month, using the same totals as Cash flow, Spending, Budgets, Recurring, Goals, and Net worth. This is not advice.</p>
 <nav class="mb-6 flex flex-wrap items-center gap-3" aria-label="Month">
+  {% if previous_url %}
   <a class="btn btn-ghost" href="{{ previous_url }}">Previous month</a>
+  {% endif %}
   <h2 class="text-lg font-semibold">{{ month_label }}</h2>
   {% if next_url %}
   <a class="btn btn-ghost" href="{{ next_url }}">Next month</a>

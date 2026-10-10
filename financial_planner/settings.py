@@ -262,6 +262,13 @@ AI_CHAT_LOCAL_ENABLED = os.environ.get("AI_CHAT_LOCAL_ENABLED", "true").lower() 
 AI_CHAT_POLL_SECONDS = float(os.environ.get("AI_CHAT_POLL_SECONDS", "1"))
 AI_CHAT_WORKERS = int(os.environ.get("AI_CHAT_WORKERS", "4"))
 AI_CHAT_STALE_SECONDS = int(os.environ.get("AI_CHAT_STALE_SECONDS", "60"))
+# Per-member fairness on the shared lanes (#306). An unset turn limit defaults to the
+# harness session timeout plus the stale-job margin.
+AI_CHAT_MAX_PENDING_PER_MEMBER = int(os.environ.get("AI_CHAT_MAX_PENDING_PER_MEMBER", "3"))
+AI_CHAT_MAX_CONVERSATIONS = int(os.environ.get("AI_CHAT_MAX_CONVERSATIONS", "50"))
+if os.environ.get("AI_CHAT_TURN_MAX_SECONDS"):
+    AI_CHAT_TURN_MAX_SECONDS = int(os.environ["AI_CHAT_TURN_MAX_SECONDS"])
+AI_JOB_MAX_QUEUED_PER_MEMBER = int(os.environ.get("AI_JOB_MAX_QUEUED_PER_MEMBER", "12"))
 AI_SHARED_LOCAL_DAILY_CAP = int(os.environ.get("AI_SHARED_LOCAL_DAILY_CAP", "200"))
 
 # Written by ops/backup/backup.sh and mounted read-only into the app.
