@@ -1,33 +1,39 @@
 {% extends "finance/base.html" %}
 {% block title %}Alerts · Financial Planner{% endblock %}
 {% block content %}
-<h1 class="mb-4 text-2xl font-bold">Alerts</h1>
+<div class="mx-auto max-w-[55rem]">
+{# The shared page header's markup, written out so the helper line can link to the alert settings. #}
+<header class="page-header">
+  <div class="page-header-text">
+    <h1 class="text-2xl font-bold">Alerts</h1>
+    <div class="page-header-helper">
+      <p>Choose which alerts you get in <a class="link" href="{% url 'settings-alerts' %}">Settings → Alerts</a>.</p>
+    </div>
+  </div>
+  {% if alerts %}<div class="page-header-actions">{% include "finance/_alerts_header_actions.html" %}</div>{% endif %}
+</header>
 {% if alerts %}
-<form method="post" action="{% url 'alert-mark-all-read' %}" class="mb-4">
-  {% csrf_token %}
-  <button type="submit" class="btn btn-outline btn-sm">Mark all as read</button>
-</form>
-<ul class="space-y-3 max-w-2xl">
+<ul class="card border border-base-300 bg-base-100 divide-y divide-base-300" aria-label="Alerts">
   {% for alert in alerts %}
-  <li class="card bg-base-100 shadow-sm">
-    <div class="card-body py-4">
-      <p class="font-semibold">
-        <a class="link" href="{{ alert.link }}">{{ alert.title }}</a>
-        {% if not alert.read_at %}<span class="badge badge-sm ml-2">Unread</span>{% endif %}
-      </p>
-      <p class="text-sm opacity-70">{{ alert.created_at|date:"Y-m-d H:i" }}</p>
-      {% if not alert.read_at %}
+  <li class="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
+    <span class="flex min-w-0 flex-1 basis-56 flex-col gap-0.5">
+      <a class="link link-hover break-words {% if alert.read_at %}font-normal{% else %}font-semibold{% endif %}" href="{{ alert.link }}">{{ alert.title }}</a>
+      <span class="text-sm opacity-80">{{ alert.created_at|date:"Y-m-d H:i" }}</span>
+    </span>
+    {% if not alert.read_at %}
+    <span class="flex items-center gap-3">
+      {% include "finance/_status.html" with word="Unread" icon="unread" %}
       <form method="post" action="{% url 'alert-mark-read' alert.pk %}">
         {% csrf_token %}
-        <button type="submit" class="btn btn-ghost btn-sm">Mark as read</button>
+        <button type="submit" class="btn btn-sm btn-outline">Mark as read</button>
       </form>
-      {% endif %}
-    </div>
+    </span>
+    {% endif %}
   </li>
   {% endfor %}
 </ul>
 {% else %}
-<p>No alerts yet.</p>
+<p class="card border border-base-300 bg-base-100 p-4">No alerts yet.</p>
 {% endif %}
 {% if page_obj.has_other_pages %}
 <nav aria-label="Alert pages" class="mt-4 flex gap-4">
@@ -36,4 +42,5 @@
   {% if page_obj.has_next %}<a class="link" href="?page={{ page_obj.next_page_number }}">Next</a>{% endif %}
 </nav>
 {% endif %}
+</div>
 {% endblock %}
