@@ -3,24 +3,18 @@
 Needs Playwright with Chromium and a compiled static/dist/app.css; skipped otherwise.
 """
 
-import os
 from datetime import date
-from pathlib import Path
 
 import pytest
-from django.conf import settings
 from django.utils import timezone
 
 from finance.alert_services import raise_alert
 from finance.models import PlannedItem, SavingsGoal
+from tests.browser_support import CSS, browser, sync_api  # noqa: F401
 from tests.mobile_seed import seed_phone_data
 
-os.environ.setdefault("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
-
-sync_api = pytest.importorskip("playwright.sync_api")
 expect = sync_api.expect
 
-CSS = Path(settings.BASE_DIR) / "static" / "dist" / "app.css"
 pytestmark = [
     pytest.mark.django_db(transaction=True),
     pytest.mark.skipif(not CSS.exists(), reason="static/dist/app.css is not built"),
@@ -33,17 +27,6 @@ BOX_JS = """(selector) => {
   return [r.left, r.top, r.width, r.height];
 }"""
 SCROLLS_JS = "() => document.documentElement.scrollWidth > document.documentElement.clientWidth"
-
-
-@pytest.fixture(scope="module")
-def browser():
-    with sync_api.sync_playwright() as playwright:
-        try:
-            instance = playwright.chromium.launch()
-        except Exception as error:  # noqa: BLE001 - browser binaries are optional locally
-            pytest.skip(f"Chromium is not installed: {error}")
-        yield instance
-        instance.close()
 
 
 @pytest.fixture
@@ -145,6 +128,33 @@ def test_planned_amounts_carry_their_sign(open_page):
     expect(table).to_contain_text("+$3,000.00")
     expect(table).to_contain_text("\N{MINUS SIGN}$1,150.00")
     expect(table).to_contain_text("Disabled")
+
+
+@pytest.mark.parametrize("width", [390, 1024, 1280, 1440])
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_planned_rows_and_actions_stay_inside_the_list_column(open_page, width, scheme):
+    page = open_page("/planning/items/", width, scheme=scheme)
+    listing = "section[aria-labelledby=planned-list-heading]"
+    list_left, _, list_width, _ = page.evaluate(BOX_JS, listing)
+    table_left, _, table_width, _ = page.evaluate(BOX_JS, listing + " table")
+
+    assert table_left + table_width <= list_left + list_width + 1
+    assert not page.evaluate(SCROLLS_JS)
+    for menu in page.locator(listing + " details[data-row-menu]").all():
+        summary = menu.locator("summary")
+        assert summary.evaluate(
+            "el => { const r = el.getBoundingClientRect(); "
+            "return el.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)); }"
+        )
+        summary.click()
+        expect(menu.get_by_role("link", name="Edit", exact=True)).to_be_visible()
+        action = menu.get_by_role("button")
+        expect(action).to_be_visible()
+        assert action.evaluate(
+            "el => { const r = el.getBoundingClientRect(); "
+            "return el.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)); }"
+        )
+        summary.click()
 
 
 @pytest.mark.parametrize("width", [390, 1024, 1280, 1440])
