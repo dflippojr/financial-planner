@@ -39,7 +39,7 @@
       </div>
       <div>
         <dt class="opacity-80">Spending</dt>
-        <dd class="text-lg font-semibold">{% include "finance/_amount.html" with value=facts.spending_display tone="" %}</dd>
+        <dd class="text-lg font-semibold">{% include "finance/_amount.html" with value=facts.spending_display tone="out" %}</dd>
         <dd class="text-sm opacity-80">vs prior month {{ facts.prior.spending_delta_display }}; vs last year {{ facts.year_ago.spending_delta_display }}</dd>
       </div>
       <div>

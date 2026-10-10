@@ -88,16 +88,55 @@
 
 @utility tabular-amount {
   font-variant-numeric: tabular-nums;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
-    "Courier New", monospace;
+}
+
+/* Amount tints (issue #328). Stock success and error are 1.96:1 and 2.87:1 on white, so the
+   light theme uses darker shades that reach 4.5:1 on base-100 and base-200; dark keeps stock. */
+:root,
+[data-theme="light"] {
+  --amount-in: #047857;
+  --amount-out: #b91c1c;
+}
+
+[data-theme="dark"] {
+  --amount-in: var(--color-success);
+  --amount-out: var(--color-error);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --amount-in: var(--color-success);
+    --amount-out: var(--color-error);
+  }
+}
+
+/* Attention ink (issue #331) for Over and close-to-limit text: stock warning is 1.6:1 on white,
+   so the light theme uses a dark amber at 4.5:1 or more on base-100 and base-200. */
+:root,
+[data-theme="light"] {
+  --attention-ink: #8a4b00;
+}
+
+[data-theme="dark"] {
+  --attention-ink: var(--color-warning);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --attention-ink: var(--color-warning);
+  }
+}
+
+@utility attention-ink {
+  color: var(--attention-ink);
 }
 
 @utility amount-in {
-  color: var(--color-success);
+  color: var(--amount-in);
 }
 
 @utility amount-out {
-  color: var(--color-error);
+  color: var(--amount-out);
 }
 
 @media print {
@@ -189,6 +228,235 @@
 [aria-pressed="true"] > .theme-switch {
   justify-content: flex-end;
   background: var(--color-primary);
+}
+
+/* Layered so utilities such as hidden and md:block still override these classes. */
+@layer components {
+  /* Page header (issue #328): one h1, one helper line with an optional More, then the actions. */
+  .page-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 0.75rem 1rem;
+    margin-bottom: 1rem;
+  }
+
+  .page-header-text {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .page-header-helper {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    column-gap: 0.375rem;
+    max-width: 48rem;
+    font-size: 0.875rem;
+    color: color-mix(in oklab, var(--color-base-content) 80%, transparent);
+  }
+
+  .page-header-more > summary {
+    display: inline;
+    cursor: pointer;
+    color: var(--color-primary);
+    text-decoration: underline;
+    list-style: none;
+  }
+
+  .page-header-more > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .page-header-more[open] {
+    flex-basis: 100%;
+  }
+
+  .page-header-more[open] > summary {
+    display: block;
+    width: max-content;
+  }
+
+  .page-header-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  /* Main plus a 340 px side column from xl; the side column stacks under the main one below. */
+  .page-columns {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+    gap: 1.5rem;
+  }
+
+  .page-columns > * {
+    min-width: 0;
+  }
+
+  .page-side {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  @media (width >= 80rem) {
+    .page-columns {
+      grid-template-columns: minmax(0, 1fr) 340px;
+    }
+  }
+
+  /* Row menu: a <details> dropdown holding a row's secondary actions (row-menu.js closes it). */
+  .row-menu > summary {
+    list-style: none;
+  }
+
+  .row-menu > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .row-menu-list {
+    z-index: 20;
+    min-width: 12rem;
+    border: 1px solid var(--color-base-300);
+    background: var(--color-base-100);
+    box-shadow: 0 8px 24px color-mix(in oklab, var(--color-base-content) 16%, transparent);
+  }
+
+  .row-menu-list .row-menu-danger {
+    color: var(--amount-out);
+  }
+
+  /* Status is an icon plus a word, never colour alone. */
+  .status-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .status-tag > svg {
+    flex: none;
+    width: 1rem;
+    height: 1rem;
+  }
+}
+
+/* Cash flow chart fills (issue #329): primary for income and orange for spending, each at
+   least 3:1 against base-100 in its theme. The net line uses base-content. */
+:root,
+[data-theme="light"] {
+  --chart-income: #422ad5;
+  --chart-spending: #c2410c;
+}
+
+[data-theme="dark"] {
+  --chart-income: #8b89ff;
+  --chart-spending: #fb923c;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --chart-income: #8b89ff;
+    --chart-spending: #fb923c;
+  }
+}
+
+@layer components {
+  /* Range control (issue #329): links styled as a segmented control; the current one is marked. */
+  .range-control {
+    display: flex;
+    gap: 0.125rem;
+    padding: 0.1875rem;
+    border: 1px solid var(--color-base-300);
+    border-radius: 0.625rem;
+    background: var(--color-base-100);
+  }
+
+  .range-control > a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.25rem;
+    padding: 0 0.75rem;
+    border-radius: 0.4375rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  .range-control > a:hover {
+    background: var(--color-base-200);
+  }
+
+  .range-control > a[aria-current="true"] {
+    background: color-mix(in oklab, var(--color-primary) 12%, var(--color-base-100));
+    color: var(--color-base-content);
+    font-weight: 600;
+    box-shadow: inset 0 -2px 0 var(--color-primary);
+  }
+
+  .filters-disclosure > summary {
+    list-style: none;
+  }
+
+  .filters-disclosure > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  /* On a phone the open form takes the full width under the title, as before. */
+  @media (width < 48rem) {
+    .page-header-actions:has(> .filters-disclosure) {
+      flex-basis: 100%;
+    }
+  }
+
+  /* From md the Filters panel drops down under the header, right-aligned to the nearest
+     positioned wrapper, instead of pushing the page down. */
+  @media (width >= 48rem) {
+    .filters-panel {
+      position: absolute;
+      top: calc(100% + 0.5rem);
+      right: 0;
+      z-index: 20;
+      width: min(40rem, 100%);
+      padding: 1rem;
+      border: 1px solid var(--color-base-300);
+      border-radius: var(--radius-box);
+      background: var(--color-base-100);
+      box-shadow: 0 8px 24px color-mix(in oklab, var(--color-base-content) 16%, transparent);
+    }
+  }
+
+  .chart-legend-swatch {
+    flex: none;
+    width: 0.75rem;
+    height: 0.75rem;
+    border-radius: 0.1875rem;
+  }
+
+  .chart-legend-income {
+    background: var(--chart-income);
+  }
+
+  .chart-legend-spending {
+    background: var(--chart-spending);
+  }
+
+  .chart-legend-net {
+    height: 0.1875rem;
+    background: var(--color-base-content);
+  }
+
+  .chart-legend-projected {
+    border: 1.5px dashed currentColor;
+  }
 }
 
 /* A pending chat reply's Thinking dots (issue #333); still dots when motion is reduced. */

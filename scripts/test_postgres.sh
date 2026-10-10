@@ -6,6 +6,10 @@
 # example SELECT ... FOR UPDATE combined with DISTINCT). Run this before
 # opening or updating a pull request. Requires Docker.
 #
+# Like CI, the server keeps its data in memory with durability off; every
+# database here is thrown away. Pass -n 4 to use 4 xdist workers as CI does
+# (pip install -r requirements-test.txt).
+#
 # Usage: scripts/test_postgres.sh [pytest args...]
 set -euo pipefail
 
@@ -19,9 +23,10 @@ cleanup() { docker rm -f "$name" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 cleanup
 
-docker run -d --name "$name" \
+docker run -d --name "$name" --tmpfs /var/lib/postgresql:rw \
   -e POSTGRES_USER=financial_planner -e POSTGRES_PASSWORD=test -e POSTGRES_DB=financial_planner \
-  -p "127.0.0.1:${port}:5432" postgres:18-alpine >/dev/null
+  -p "127.0.0.1:${port}:5432" postgres:18-alpine \
+  -c fsync=off -c synchronous_commit=off -c full_page_writes=off >/dev/null
 until docker exec "$name" pg_isready -U financial_planner >/dev/null 2>&1; do sleep 1; done
 
 FINANCIAL_PLANNER_TEST_DB=postgres POSTGRES_HOST=127.0.0.1 POSTGRES_PORT="$port" POSTGRES_PASSWORD=test \
