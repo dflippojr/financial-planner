@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from django.conf import settings
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.db.models import Case, Count, Exists, F, IntegerField, OuterRef, Q, Sum, Value, When
+from django.db.models import BooleanField, Case, Count, Exists, F, IntegerField, OuterRef, Q, Sum, Value, When
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 
@@ -1358,11 +1358,6 @@ def link_refund(principal, refund_id, original_id, original_part_id=None):
     return refund
 
 
-def _household_only_accounts(accounts):
-    """True when a non-empty account queryset holds household accounts only."""
-    return accounts.exists() and not accounts.exclude(scope=Account.Scope.HOUSEHOLD).exists()
-
-
 def _totals_base(principal, *, date_from=None, date_to=None, accounts=None, tag=None):
     """Visible, countable cash-flow rows: no transfer legs, with a refund flag.
 
@@ -1371,10 +1366,15 @@ def _totals_base(principal, *, date_from=None, date_to=None, accounts=None, tag=
     """
     person = _person_for(principal)
     visible_accounts = Account.objects.visible_to(person)
-    household_only = False
+    is_transfer_leg = exclusion_exists_for(person)
     if accounts is not None:
         visible_accounts = visible_accounts.filter(pk__in=[getattr(item, "pk", item) for item in accounts])
-        household_only = _household_only_accounts(visible_accounts)
+        # Decided inside the query so totals cost no extra round trip.
+        is_transfer_leg = Case(
+            When(Exists(visible_accounts.exclude(scope=Account.Scope.HOUSEHOLD)), then=is_transfer_leg),
+            default=exclusion_exists_for(person, household_only=True),
+            output_field=BooleanField(),
+        )
     transactions = Transaction.objects.visible_to(person).filter(
         status=Transaction.Status.ACTIVE,
         kind=Transaction.Kind.CASH_FLOW,
@@ -1389,7 +1389,7 @@ def _totals_base(principal, *, date_from=None, date_to=None, accounts=None, tag=
     if date_to:
         transactions = transactions.filter(transaction_date__lte=date_to)
     return transactions.annotate(
-        _is_transfer_leg=exclusion_exists_for(person, household_only=household_only),
+        _is_transfer_leg=is_transfer_leg,
         _is_refund=Exists(RefundLink.objects.filter(refund_id=OuterRef("pk"))),
     ).filter(_is_transfer_leg=False)
 
