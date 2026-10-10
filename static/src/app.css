@@ -327,3 +327,25 @@
     height: 1rem;
   }
 }
+
+/* Category rename (issue #339): the Rename button is a summary; opening it drops the form onto its own line. */
+@layer components {
+  .category-rename > summary {
+    list-style: none;
+  }
+
+  .category-rename > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .category-rename[open] {
+    display: flex;
+    flex-basis: 100%;
+    flex-direction: column;
+    align-items: flex-end;
+  }
+
+  .category-rename[open] > form {
+    width: 100%;
+  }
+}

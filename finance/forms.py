@@ -1785,6 +1785,22 @@ class AlertSettingsForm(forms.Form):
         widget=forms.TextInput(attrs={"inputmode": "decimal"}),
     )
 
+    # The settings page shows the fields grouped by alert kind under one save (issue #339).
+    GROUPS = (
+        ("Accounts and balances", ("sync_enabled", "expected_balance_enabled")),
+        ("Recurring charges", ("recurring_price_enabled", "recurring_missed_enabled")),
+        ("Budgets", ("budget_enabled",)),
+        ("Large transactions", ("large_transaction_enabled", "large_transaction_amount")),
+        ("Unusual spending", (
+            "unusual_spending_enabled", "unusual_spending_ai_enabled",
+            "unusual_category_percent", "unusual_category_amount",
+        )),
+        ("Monthly review", ("monthly_review_enabled", "monthly_review_ai_enabled")),
+    )
+
+    def groups(self):
+        return [{"label": label, "fields": [self[name] for name in names]} for label, names in self.GROUPS]
+
     def save_payload(self):
         amount = self.cleaned_data.get("large_transaction_amount")
         minor = int(amount * 100) if amount is not None else None

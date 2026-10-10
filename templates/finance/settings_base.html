@@ -1,12 +1,24 @@
 {% extends "finance/base.html" %}
 {% block content %}
-<h1 class="mb-4 text-2xl font-bold">Settings</h1>
-<div class="overflow-x-auto mb-4">
+{% include "finance/_page_header.html" with title="Settings" helper="Your sign-in, household, data and AI settings. Household settings apply to every member." helper_class="max-lg:hidden" %}
+{% comment %}Phones keep the horizontal tabs; from lg the same links become a section list (issue #339).{% endcomment %}
+<div class="overflow-x-auto mb-4 lg:hidden">
   <div role="tablist" class="tabs tabs-border min-w-max">
     {% for tab in settings_tabs %}
     <a role="tab" class="tab{% if tab.active %} tab-active{% endif %}" href="{{ tab.url }}"{% if tab.active %} aria-current="page"{% endif %}>{{ tab.label }}</a>
     {% endfor %}
   </div>
 </div>
+<div class="lg:grid lg:grid-cols-[11rem_minmax(0,1fr)] lg:items-start lg:gap-6 xl:grid-cols-[13.5rem_minmax(0,1fr)] xl:gap-8">
+  <nav aria-label="Settings sections" class="max-lg:hidden lg:sticky lg:top-6">
+    <ul class="flex flex-col gap-0.5">
+      {% for tab in settings_tabs %}
+      <li><a href="{{ tab.url }}" class="nav-row"{% if tab.active %} aria-current="page"{% endif %}>{{ tab.label }}</a></li>
+      {% endfor %}
+    </ul>
+  </nav>
+  <div class="min-w-0 {% block settings_width %}lg:max-w-[45rem]{% endblock %}">
 {% block settings_content %}{% endblock %}
+  </div>
+</div>
 {% endblock %}

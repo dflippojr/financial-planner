@@ -1,4 +1,3 @@
-{% load ui %}
 {% if form.non_field_errors %}
 <div role="alert" class="alert alert-error mb-3">{{ form.non_field_errors.0 }}</div>
 {% endif %}
@@ -6,17 +5,6 @@
   {% if field.is_hidden %}
   {{ field }}
   {% else %}
-  <div class="mb-3">
-    <label class="label" for="{{ field.id_for_label }}">
-      <span class="label-text">{{ field.label }}</span>
-    </label>
-    {{ field|daisy_widget }}
-    {% if field.errors %}
-    <p class="errorlist text-error mt-1 text-sm" role="alert">{{ field.errors.0 }}</p>
-    {% endif %}
-    {% if field.help_text %}
-    <p class="label-text-alt mt-1 opacity-70">{{ field.help_text }}</p>
-    {% endif %}
-  </div>
+  {% include "finance/_form_field.html" %}
   {% endif %}
 {% endfor %}
