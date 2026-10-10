@@ -1,7 +1,7 @@
 name: Automated Code Review
 
-# Thin caller for the shared review workflow in dflippojr/agent-harness (pinned to the review-v1 tag), so fixes to
-# the reviewer reach this repository without a copy. See agent-harness docs/CI-CD.md, "Adopting the review workflow".
+# Thin caller for the shared review workflow in dflippojr/agent-harness, so fixes to the reviewer reach this repository
+# without a copy. The workflow and its tooling (tooling_ref) are both pinned to the review-v2 tag. See agent-harness docs/CI-CD.md, "Adopting the review workflow".
 #
 # Reviews a PR once when it is opened; dispatch for a re-review after later commits.
 #
@@ -45,10 +45,11 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.user.login != 'dependabot[bot]')
-    uses: dflippojr/agent-harness/.github/workflows/review.yml@review-v1
+    uses: dflippojr/agent-harness/.github/workflows/review.yml@review-v2
     with:
       pr_number: ${{ inputs.pr_number || github.event.pull_request.number }}
       backend: ${{ inputs.backend || 'auto' }}
       mode: ${{ inputs.mode || 'full' }}
       runs_on: '["self-hosted","Windows","X64","financial-planner-review"]'
+      tooling_ref: review-v2
     secrets: inherit
