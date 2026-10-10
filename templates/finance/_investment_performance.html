@@ -1,18 +1,18 @@
-<section class="card bg-base-100 shadow-sm mb-6">
-  <div class="card-body">
-    <h2 class="card-title">Performance</h2>
+<section aria-labelledby="performance-heading" class="mb-6 rounded-box border border-base-300 bg-base-100 p-5">
+  <div class="flex flex-col gap-4">
+    <h2 id="performance-heading" class="text-lg font-semibold">Performance</h2>
     {% if performance.statement_count < 2 %}
-    <p class="text-sm opacity-70">Record at least two statement entries (ending balance plus net contributions) to see performance.</p>
+    <p class="text-sm opacity-80">Record at least two statement entries (ending balance plus net contributions) to see performance.</p>
     {% endif %}
-    <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
-      {% include "finance/_performance_summary_card.html" with summary=performance.summaries.ytd %}
-      {% include "finance/_performance_summary_card.html" with summary=performance.summaries.one_year %}
-      {% include "finance/_performance_summary_card.html" with summary=performance.summaries.all_time %}
+    <div class="grid grid-cols-1 gap-4 md:grid-cols-3 md:gap-6">
+      {% include "finance/_performance_summary_card.html" with summary=performance.summaries.ytd cell_class="" %}
+      {% include "finance/_performance_summary_card.html" with summary=performance.summaries.one_year cell_class="md:border-l md:border-base-300 md:pl-6" %}
+      {% include "finance/_performance_summary_card.html" with summary=performance.summaries.all_time cell_class="md:border-l md:border-base-300 md:pl-6" %}
     </div>
     {% if performance.periods %}
-    <div class="overflow-x-auto mt-4">
-      <table class="table table-zebra">
-        <thead class="sticky top-0 z-10 bg-base-200">
+    <div class="overflow-x-auto">
+      <table class="table">
+        <thead>
           <tr>
             <th scope="col">Period</th>
             <th scope="col" class="text-right">Start value</th>
@@ -25,12 +25,12 @@
         <tbody>
         {% for period in performance.periods %}
           <tr>
-            <td>{{ period.start_date|date:"Y-m-d" }} – {{ period.end_date|date:"Y-m-d" }}</td>
-            <td class="text-right">{% include "finance/_amount.html" with value=period.start_value_display tone="" %}</td>
-            <td class="text-right">{% include "finance/_amount.html" with value=period.end_value_display tone="" %}</td>
-            <td class="text-right">{% include "finance/_amount.html" with value=period.contribution_display tone="" %}</td>
-            <td class="text-right">{% include "finance/_amount.html" with value=period.growth_display tone="" %}</td>
-            <td class="text-right">
+            <td class="whitespace-nowrap">{{ period.start_date|date:"Y-m-d" }} – {{ period.end_date|date:"Y-m-d" }}</td>
+            <td class="whitespace-nowrap text-right">{% include "finance/_amount.html" with value=period.start_value_display tone="" %}</td>
+            <td class="whitespace-nowrap text-right">{% include "finance/_amount.html" with value=period.end_value_display tone="" %}</td>
+            <td class="whitespace-nowrap text-right">{% include "finance/_amount.html" with value=period.contribution_display tone="" %}</td>
+            <td class="whitespace-nowrap text-right">{% include "finance/_amount.html" with value=period.growth_display tone="" %}</td>
+            <td class="whitespace-nowrap text-right">
               {% if period.return_display %}
               <span class="tooltip" data-tip="{{ performance.estimate_note }}">{{ period.return_display }} <span class="badge badge-ghost">Estimate</span></span>
               {% else %}
@@ -43,6 +43,6 @@
       </table>
     </div>
     {% endif %}
-    <p class="text-xs opacity-70 mt-2">{{ performance.estimate_note }}</p>
+    <p class="text-xs opacity-80">{{ performance.estimate_note }}</p>
   </div>
 </section>

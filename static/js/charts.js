@@ -36,6 +36,8 @@
       income: cssVarColor("--color-success"),
       spending: cssVarColor("--color-error"),
       net: cssVarColor("--color-primary"),
+      cashFlowIncome: cssVarColor("--chart-income"),
+      cashFlowSpending: cssVarColor("--chart-spending"),
       warning: cssVarColor("--color-warning"),
       categories: categories,
     };
@@ -80,22 +82,35 @@
     },
   };
 
-  // Theme colors arrive in whatever syntax the browser computes (rgb() or
-  // oklch() for daisyUI themes). Paint one pixel to read them back as RGB, so
-  // any CSS color can take a new alpha.
-  function withAlpha(color, alpha) {
-    var probe = document.createElement("canvas");
-    probe.width = 1;
-    probe.height = 1;
-    var context = probe.getContext("2d", { willReadFrequently: true });
-    if (!context) {
-      return color;
-    }
-    context.fillStyle = color;
-    context.fillRect(0, 0, 1, 1);
-    var pixel = context.getImageData(0, 0, 1, 1).data;
-    return "rgba(" + pixel[0] + ", " + pixel[1] + ", " + pixel[2] + ", " + alpha + ")";
-  }
+  // Chart.js bars cannot dash their border, so projected bars get a dashed outline here.
+  var projectedBarOutline = {
+    id: "projectedBarOutline",
+    afterDatasetsDraw: function (chart) {
+      var flags = (chart.options.plugins.financialPlanner || {}).projected || [];
+      var ctx = chart.ctx;
+      chart.data.datasets.forEach(function (dataset, datasetIndex) {
+        var meta = chart.getDatasetMeta(datasetIndex);
+        if (dataset.type !== "bar" || meta.hidden) {
+          return;
+        }
+        flags.forEach(function (projected, index) {
+          var bar = meta.data[index];
+          if (!projected || !bar) {
+            return;
+          }
+          var props = bar.getProps(["x", "y", "base", "width"], true);
+          var top = Math.min(props.y, props.base);
+          var height = Math.abs(props.base - props.y);
+          ctx.save();
+          ctx.strokeStyle = dataset.borderColor;
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([4, 3]);
+          ctx.strokeRect(props.x - props.width / 2 + 0.75, top + 0.75, props.width - 1.5, Math.max(height - 1.5, 0));
+          ctx.restore();
+        });
+      });
+    },
+  };
 
   function cashFlowChart(canvas, data, palette) {
     var periods = data.periods || [];
@@ -108,12 +123,10 @@
     var netDisplays = periods.map(function (row) {
       return row.net_display;
     });
+    // Actual months are solid fills; projected months are a dashed outline only.
     function barColor(base) {
       return periods.map(function (row) {
-        if (row.projected) {
-          return withAlpha(base, 0.35);
-        }
-        return base;
+        return row.projected ? "transparent" : base;
       });
     }
     return new window.Chart(canvas, {
@@ -128,12 +141,9 @@
             data: periods.map(function (row) {
               return row.income_minor;
             }),
-            backgroundColor: barColor(palette.income),
-            borderColor: palette.income,
-            borderWidth: periods.map(function (row) {
-              return row.projected ? 1 : 0;
-            }),
-            borderDash: [6, 4],
+            backgroundColor: barColor(palette.cashFlowIncome),
+            borderColor: palette.cashFlowIncome,
+            borderWidth: 0,
             displays: incomeDisplays,
           },
           {
@@ -142,22 +152,19 @@
             data: periods.map(function (row) {
               return row.spending_minor;
             }),
-            backgroundColor: barColor(palette.spending),
-            borderColor: palette.spending,
-            borderWidth: periods.map(function (row) {
-              return row.projected ? 1 : 0;
-            }),
-            borderDash: [6, 4],
+            backgroundColor: barColor(palette.cashFlowSpending),
+            borderColor: palette.cashFlowSpending,
+            borderWidth: 0,
             displays: spendingDisplays,
           },
-            {
+          {
             type: "line",
             label: "Baseline net",
             data: periods.map(function (row) {
               return row.net_minor;
             }),
-            borderColor: palette.net,
-            backgroundColor: palette.net,
+            borderColor: palette.text,
+            backgroundColor: palette.text,
             tension: 0.2,
             displays: netDisplays,
             segment: {
@@ -189,20 +196,9 @@
               },
             },
           },
-          {
-            type: "line",
-            label: "Projected",
-            data: periods.map(function () {
-              return null;
-            }),
-            borderColor: palette.net,
-            backgroundColor: "transparent",
-            borderDash: [6, 4],
-            pointRadius: 0,
-          },
         ],
       },
-      plugins: [missingImportMarker],
+      plugins: [missingImportMarker, projectedBarOutline],
       options: {
         responsive: true,
         maintainAspectRatio: false,
@@ -218,9 +214,14 @@
           }
         },
         plugins: {
-          legend: { labels: { color: palette.text } },
+          // The page draws the legend beside the chart title (issue #329).
+          legend: { display: false },
           tooltip: {
             callbacks: {
+              title: function (items) {
+                var row = items.length ? periods[items[0].dataIndex] : null;
+                return row ? row.label + (row.projected ? " · Projected (estimate)" : "") : "";
+              },
               label: function (context) {
                 var displays = context.dataset.displays || [];
                 var display = displays[context.dataIndex];
@@ -234,6 +235,9 @@
           financialPlanner: {
             missingImport: periods.map(function (row) {
               return row.missing_import;
+            }),
+            projected: periods.map(function (row) {
+              return Boolean(row.projected);
             }),
           },
         },
