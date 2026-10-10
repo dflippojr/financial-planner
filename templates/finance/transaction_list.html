@@ -94,8 +94,10 @@ the bulk-edit panel stay visible from md up, as they were before Select mode (is
 <div class="page-columns">
 <aside class="page-side xl:col-start-2 xl:row-start-1{% if not list_totals %} max-md:hidden max-md:group-data-[select=on]:flex md:group-data-[select=off]:hidden{% endif %}" aria-label="Totals and bulk edit">
   {% if list_totals %}
-  <section aria-labelledby="totals-heading" class="xl:rounded-box xl:border xl:border-base-300 xl:bg-base-100 xl:p-4">
-    <h2 id="totals-heading" class="sr-only mb-2 font-semibold xl:not-sr-only">Totals for these filters</h2>
+  <section aria-labelledby="totals-heading" aria-describedby="totals-scope" class="xl:rounded-box xl:border xl:border-base-300 xl:bg-base-100 xl:p-4">
+    <h2 id="totals-heading" class="sr-only font-semibold xl:not-sr-only">Cash flow totals</h2>
+    {% comment %}income_and_spending_totals uses only the dates, account, scope and tag; say so.{% endcomment %}
+    <p id="totals-scope" class="sr-only mb-2 text-sm opacity-80 xl:not-sr-only">For the dates, account, scope and tag chosen. Search, category and the other filters don't change them.</p>
     <div class="grid grid-cols-3 gap-2 md:gap-4 xl:grid-cols-1 xl:gap-0">
       <article class="stats bg-base-100 shadow xl:rounded-none xl:shadow-none">
         <div class="stat max-md:px-3 max-md:py-2 xl:flex xl:items-baseline xl:justify-between xl:px-0 xl:py-1">

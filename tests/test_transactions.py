@@ -590,3 +590,21 @@ def test_failed_history_write_rolls_back_the_correction():
     assert financial_transaction.description == "Synthetic groceries"
     assert TransactionCorrectionHistory.objects.count() == 0
 
+
+
+@pytest.mark.django_db
+def test_transaction_list_totals_say_which_filters_they_use():
+    # The totals ignore search, category and the other More filters (issue #330 review), so the
+    # side column must not call them totals "for these filters".
+    owner = make_person("owner")
+    make_transaction(owner, description="Synthetic coffee")
+    client = Client()
+    client.force_login(owner.user)
+
+    response = client.get(reverse("transaction-list"), {"q": "coffee", "category": "uncategorized"})
+
+    content = response.content.decode()
+    assert response.context["list_totals"] is not None
+    assert "Totals for these filters" not in content
+    assert "Cash flow totals" in content
+    assert "Search, category and the other filters don't change them." in content
