@@ -110,6 +110,27 @@
   }
 }
 
+/* Attention ink (issue #331) for Over and close-to-limit text: stock warning is 1.6:1 on white,
+   so the light theme uses a dark amber at 4.5:1 or more on base-100 and base-200. */
+:root,
+[data-theme="light"] {
+  --attention-ink: #8a4b00;
+}
+
+[data-theme="dark"] {
+  --attention-ink: var(--color-warning);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --attention-ink: var(--color-warning);
+  }
+}
+
+@utility attention-ink {
+  color: var(--attention-ink);
+}
+
 @utility amount-in {
   color: var(--amount-in);
 }

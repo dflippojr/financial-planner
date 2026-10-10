@@ -11,6 +11,10 @@ from pathlib import Path
 import pytest
 from django.conf import settings
 from django.template import engines
+from django.utils import timezone
+
+from finance.budget_services import save_budget
+from finance.models import Budget, Person
 
 from tests.mobile_seed import seed_phone_data
 
@@ -287,3 +291,71 @@ def test_row_menu_opens_and_closes_from_the_keyboard(browser):
         assert not menu.evaluate("el => el.open")
     finally:
         page.close()
+
+
+BUDGETS_JS = """() => {
+  const box = (el) => { const r = el.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; };
+  const visible = (el) => el.checkVisibility();
+  const table = document.querySelector('main section[aria-label="Category budgets"]');
+  const side = document.querySelector('main aside.page-side');
+  const attention = document.querySelector('#budgets-attention-heading');
+  return {
+    table: box(table),
+    side: box(side),
+    attention: attention !== null && visible(attention),
+    rowButtons: [...table.querySelectorAll('tbody tr')].map(
+      (row) => [...row.querySelectorAll('a.btn, button, summary')].filter(visible).length),
+  };
+}"""
+
+
+@pytest.mark.parametrize("width", [1024, 1440])
+def test_budgets_rows_fit_with_one_menu_and_a_summary_column(phone_session, width):
+    """Desktop 5 (issue #331): no clipped row buttons at 1024; the summary sits beside the table at xl."""
+    size = f"budgets-{width}"
+    VIEWPORTS[size] = (width, 900)
+    try:
+        context, page = phone_session(size, "light", "/planning/budgets/")
+        person = Person.objects.get(user__username="synthetic_alex")
+        save_budget(person.user, {
+            "scope": Budget.Scope.PRIVATE,
+            "category": None,
+            "amount_minor": 300_000,
+            "effective_month": timezone.localdate().replace(day=1),
+            "rollover_enabled": False,
+        })
+        page.reload()
+    finally:
+        del VIEWPORTS[size]
+    try:
+        if SCREEN_DIR:
+            page.screenshot(path=str(Path(SCREEN_DIR) / f"budgets-{width}.png"), full_page=True)
+        fit = page.evaluate(OVERFLOW_JS)
+        assert fit["scroll"] <= fit["width"], fit
+        assert not fit["clipped"], fit["clipped"]
+        assert page.get_by_role("link", name="Previous month", exact=True).is_visible()
+        assert page.get_by_role("link", name="Next month", exact=True).is_visible()
+        layout = page.evaluate(BUDGETS_JS)
+        assert layout["rowButtons"] and all(count == 1 for count in layout["rowButtons"])
+        table_left, table_top, table_width, _ = layout["table"]
+        side_left, side_top, side_width, _ = layout["side"]
+        if width >= 1280:
+            assert side_width == 340 and side_left >= table_left + table_width
+            assert abs(side_top - table_top) <= 1
+            assert layout["attention"]
+        else:
+            assert side_top < table_top and abs(side_left - table_left) <= 1
+            assert not layout["attention"]
+        menu = page.locator("main table details[data-row-menu]").last
+        menu.locator("summary").click()
+        archive = menu.get_by_role("button", name="Archive")
+        assert archive.is_visible()
+        # Nothing clips or covers the open menu: the point under its last entry is that entry.
+        assert archive.evaluate(
+            "el => { const r = el.getBoundingClientRect(); "
+            "return el.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)); }"
+        )
+        right = archive.bounding_box()
+        assert right["x"] >= 0 and right["x"] + right["width"] <= width
+    finally:
+        context.close()
