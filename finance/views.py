@@ -693,7 +693,7 @@ def transaction_list(request):
     more_filter_count = sum(
         1
         for name, _value in filter_hidden
-        if name not in TransactionFilterForm.TOOLBAR_FIELDS and name != "amount_mode"
+        if name not in TransactionFilterForm.TOOLBAR_FIELD_NAMES and name != "amount_mode"
     )
     if filter_hidden:
         verb = "matches" if matching_count == 1 else "match"
