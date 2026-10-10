@@ -287,3 +287,93 @@ def test_row_menu_opens_and_closes_from_the_keyboard(browser):
         assert not menu.evaluate("el => el.open")
     finally:
         page.close()
+
+
+TRANSACTIONS_JS = """() => {
+  const visible = (el) => el && el.offsetParent !== null;
+  const box = (el) => { const r = el.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; };
+  const rows = [...document.querySelectorAll('main tbody tr')].filter(visible);
+  const side = document.querySelector('main .page-side');
+  const table = document.querySelector('main section[aria-label=Transactions]');
+  return {
+    h1s: document.querySelectorAll('h1').length,
+    firstRow: rows.length ? box(rows[0]) : null,
+    headings: [...document.querySelectorAll('main thead th')].filter(visible).map((th) => th.textContent.trim()),
+    boxes: [...document.querySelectorAll('.js-bulk-row')].filter(visible).length,
+    bulk: visible(document.getElementById('bulk-edit-form')),
+    side: visible(side) ? box(side) : null,
+    table: box(table),
+    scroll: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+  };
+}"""
+
+
+def open_transactions(browser, live_server, client, width, height, query="", javascript=True):
+    person = seed_phone_data()
+    client.force_login(person.user)
+    context = browser.new_context(viewport={"width": width, "height": height}, java_script_enabled=javascript)
+    context.add_cookies([{"name": "sessionid", "value": client.cookies["sessionid"].value, "url": live_server.url}])
+    page = context.new_page()
+    page.goto(f"{live_server.url}/transactions/{query}")
+    page.wait_for_load_state("networkidle")
+    return context, page
+
+
+@pytest.mark.parametrize(("width", "height"), [(1440, 900), (1024, 768)])
+def test_transactions_desktop_layout(browser, live_server, client, width, height):
+    """Desktop 4 (issue #330): rows above the fold, four columns, totals beside the list at xl."""
+    context, page = open_transactions(browser, live_server, client, width, height, "?date_from=2000-01-01")
+    try:
+        if SCREEN_DIR:
+            page.screenshot(path=str(Path(SCREEN_DIR) / f"transactions-{width}.png"), full_page=True)
+        layout = page.evaluate(TRANSACTIONS_JS)
+        assert layout["h1s"] == 1
+        assert not layout["scroll"]
+        assert layout["headings"] == ["Date", "Description", "Category", "Amount"]
+        assert layout["boxes"] == 0 and not layout["bulk"]
+        assert layout["firstRow"] is not None and layout["firstRow"][1] < height
+        table_left, table_top, table_width, _ = layout["table"]
+        side_left, side_top, side_width, _ = layout["side"]
+        if width >= 1280:
+            assert side_width == 340
+            assert side_left >= table_left + table_width
+        else:
+            assert side_top < table_top
+        more = page.locator("details[data-open-below]")
+        assert not more.evaluate("el => el.open")
+        more.locator("summary").click()
+        for label in ("Tag", "Scope", "Amount min", "Amount max", "Amount mode", "Has note", "Is split", "Set by"):
+            assert page.get_by_label(label, exact=True).is_visible(), label
+    finally:
+        context.close()
+
+
+def test_transactions_select_mode_and_escape(browser, live_server, client):
+    context, page = open_transactions(browser, live_server, client, 1440, 900)
+    try:
+        select = page.locator("main [data-select-toggle]:visible")
+        select.click()
+        if SCREEN_DIR:
+            page.screenshot(path=str(Path(SCREEN_DIR) / "transactions-1440-select.png"))
+        layout = page.evaluate(TRANSACTIONS_JS)
+        assert layout["boxes"] > 0 and layout["bulk"]
+        assert layout["headings"][1:] == ["Date", "Description", "Category", "Amount"]
+        assert select.get_attribute("aria-pressed") == "true"
+        page.locator(".js-bulk-row").first.focus()
+        page.keyboard.press("Escape")
+        layout = page.evaluate(TRANSACTIONS_JS)
+        assert layout["boxes"] == 0 and not layout["bulk"]
+        assert page.evaluate("document.activeElement.hasAttribute('data-select-toggle')")
+        assert page.evaluate("document.activeElement.getAttribute('aria-pressed')") == "false"
+    finally:
+        context.close()
+
+
+def test_transactions_without_javascript_keep_checkboxes_visible(browser, live_server, client):
+    context, page = open_transactions(browser, live_server, client, 1440, 900, javascript=False)
+    try:
+        assert page.locator(".js-bulk-row").first.is_visible()
+        assert page.locator("#bulk-edit-form").is_visible()
+        assert page.locator("main [data-select-toggle]:visible").count() == 0
+    finally:
+        context.close()

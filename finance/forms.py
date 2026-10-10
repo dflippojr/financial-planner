@@ -171,9 +171,12 @@ class RecoveryCodeOnlyForm(forms.Form):
 
 
 class TransactionFilterForm(forms.Form):
+    # Desktop toolbar fields (issue #330); every other field sits behind More filters.
+    TOOLBAR_FIELDS = ("q", "date_from", "date_to", "account", "category")
+
     date_from = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
     date_to = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
-    account = forms.ModelChoiceField(queryset=Account.objects.none(), required=False)
+    account = forms.ModelChoiceField(queryset=Account.objects.none(), required=False, empty_label="All accounts")
     category = forms.ChoiceField(
         required=False,
         choices=(("", "All categories"), ("uncategorized", "Uncategorized")),
@@ -241,6 +244,12 @@ class TransactionFilterForm(forms.Form):
             for category in assignable_categories(principal).exclude(code=Category.Code.UNCATEGORIZED):
                 choices.append((str(category.pk), category.name))
         self.fields["category"].choices = choices
+
+    def toolbar_fields(self):
+        return [self[name] for name in self.TOOLBAR_FIELDS]
+
+    def more_fields(self):
+        return [field for field in self if field.name not in self.TOOLBAR_FIELDS]
 
     def clean_amount_min(self):
         return self._cleaned_amount("amount_min")

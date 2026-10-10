@@ -82,8 +82,11 @@ def test_transaction_list_shows_columns_provenance_and_newest_first():
     assert response.status_code == 200
     assert list(response.context["transactions"]) == [newer, older]
     content = response.content.decode()
-    for heading in ("Date", "Account", "Description", "Amount", "Category", "Source", "Scope"):
+    # Account, source and scope are the second line of Description (issue #330).
+    for heading in ("Date", "Description", "Category", "Amount"):
         assert f">{heading}</th>" in content
+    for heading in ("Account", "Source", "Scope"):
+        assert f">{heading}</th>" not in content
     assert "\N{MINUS SIGN}$12.34" in content
     assert "Uncategorized" in content
     assert "Huntington Bank" in content
