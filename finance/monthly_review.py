@@ -24,6 +24,8 @@ from .category_services import income_and_spending_totals
 from .models import (
     Account,
     Alert,
+    Budget,
+    Membership,
     MonthlyReview,
     Person,
     RecurringSeries,
@@ -70,9 +72,27 @@ def parse_review_month(raw, *, today=None, earliest=None):
     return parsed
 
 
+def _scoped_ids(queryset):
+    return ",".join(f"{pk}:{scope}" for pk, scope in queryset.order_by("pk").values_list("pk", "scope"))
+
+
 def visibility_key(principal):
-    ids = Account.objects.visible_to(principal).order_by("pk").values_list("pk", flat=True)
-    payload = ",".join(str(pk) for pk in ids)
+    """Stored reviews are reused only while everything they summarize is still visible."""
+    from .models import _person_for
+
+    person = _person_for(principal)
+    accounts = Account.objects.visible_to(principal).order_by("pk").values_list("pk", flat=True)
+    households = Membership.objects.filter(person=person, ended_at__isnull=True).order_by(
+        "household_id"
+    ).values_list("household_id", flat=True)
+    payload = "|".join(
+        (
+            "accounts=" + ",".join(str(pk) for pk in accounts),
+            "households=" + ",".join(str(pk) for pk in households),
+            "budgets=" + _scoped_ids(Budget.objects.visible_to(principal)),
+            "goals=" + _scoped_ids(SavingsGoal.objects.visible_to(principal)),
+        )
+    )
     return sha256(payload.encode()).hexdigest()
 
 

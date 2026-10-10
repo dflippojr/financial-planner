@@ -13,12 +13,14 @@ from .access import service_or_404 as _service_or_404
 from .budget_services import (
     NEAR_LIMIT_PERCENT,
     amount_for,
+    budget_label,
     month_budget_cards,
     parse_month,
     reset_budget_rollover,
     save_budget,
     set_budget_archived,
     set_budget_rollover,
+    visible_categories_by_id,
 )
 from .category_services import current_household
 from .forms import BudgetForm
@@ -157,6 +159,7 @@ def budget_rollover_reset(request, budget_id):
         "finance/budget_rollover_reset.html",
         {
             "budget": budget,
+            "budget_label": budget_label(budget, visible_categories_by_id(request.user)),
             "month": month,
             "month_label": f"{month_name[month.month]} {month.year}",
             "cancel_url": _list_url(month),

@@ -15,7 +15,7 @@ from tests.test_budgets import add_budget, make_account, make_household, make_pe
 from tests.test_totals_differential import ledger as ledger_fixture  # noqa: F401 -- shared synthetic ledger fixture
 
 
-def legacy_reports(principal, months, scope, accounts=None):
+def legacy_reports(principal, months, scope, accounts=None, named=None):
     """The old one-full-report-per-month implementation, kept as the oracle."""
     return {
         month: spending_by_category_report(

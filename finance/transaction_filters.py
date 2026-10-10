@@ -3,7 +3,7 @@ from urllib.parse import urlencode
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.paginator import Paginator
 from django.db import IntegrityError
-from django.db.models import Exists, OuterRef, Q
+from django.db.models import Exists, OuterRef, Prefetch, Q
 from django.db.models.functions import Abs
 from django.urls import reverse
 
@@ -16,6 +16,7 @@ from .models import (
     SavedTransactionFilter,
     Tag,
     Transaction,
+    TransactionSplit,
     _person_for,
     TransactionCorrectionHistory,
 )
@@ -179,12 +180,25 @@ def apply_saved_filter_url(principal, filter_id):
     return f"{path}?{encoded}" if encoded else path
 
 
+def visible_label_prefetches(principal):
+    """Resolve category and tag labels through current visibility, so a former
+    member's retained rows never show a household's live names."""
+    categories = Category.objects.visible_to(principal)
+    return (
+        Prefetch("category", queryset=categories),
+        Prefetch("splits", queryset=TransactionSplit.objects.prefetch_related(
+            Prefetch("category", queryset=categories),
+        )),
+        Prefetch("tags", queryset=Tag.objects.visible_to(principal)),
+    )
+
+
 def visible_transaction_queryset(principal):
     return (
         Transaction.objects.visible_to(principal)
         .filter(status=Transaction.Status.ACTIVE)
-        .select_related("account", "import_batch", "category")
-        .prefetch_related("splits__category", "tags")
+        .select_related("account", "import_batch")
+        .prefetch_related(*visible_label_prefetches(principal))
         .annotate(_excluded=exclusion_exists_for(principal))
         .order_by("-transaction_date", "-pk")
     )
