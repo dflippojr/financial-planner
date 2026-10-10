@@ -5,7 +5,6 @@ Needs Playwright with Chromium and a compiled static/dist/app.css
 full-page screenshot of every page, in light and dark, at both phone sizes.
 """
 
-import os
 from pathlib import Path
 
 import pytest
@@ -19,15 +18,10 @@ from finance.chat_services import send_message, start_conversation
 from finance.models import Budget, Person
 from finance.policy_services import accept_policy, publish_policy
 from tests.chat_helpers import ask
+from tests.browser_support import CSS, SCREEN_DIR, browser, page_session  # noqa: F401
 from tests.mobile_seed import seed_phone_data
 from tests.test_chat import TOKEN, harness  # noqa: F401 - harness is a fixture
 
-# Playwright's sync API keeps an event loop running in this thread, which Django's ORM guard rejects.
-os.environ.setdefault("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
-
-sync_api = pytest.importorskip("playwright.sync_api")
-
-CSS = Path(settings.BASE_DIR) / "static" / "dist" / "app.css"
 pytestmark = [
     pytest.mark.django_db(transaction=True),
     pytest.mark.skipif(not CSS.exists(), reason="static/dist/app.css is not built"),
@@ -47,39 +41,12 @@ PAGES = (
     ("settings", "/settings/security/"),
     ("bills", "/planning/calendar/"),
 )
-SCREEN_DIR = os.environ.get("MOBILE_SHOTS_DIR")
-
-
-@pytest.fixture(scope="module")
-def browser():
-    with sync_api.sync_playwright() as playwright:
-        try:
-            instance = playwright.chromium.launch()
-        except Exception as error:  # noqa: BLE001 - browser binaries are optional locally
-            pytest.skip(f"Chromium is not installed: {error}")
-        yield instance
-        instance.close()
 
 
 @pytest.fixture
-def phone_session(live_server, client, browser):
-    person = seed_phone_data()
-    client.force_login(person.user)
-    cookie = client.cookies["sessionid"].value
-
+def phone_session(page_session):
     def open_page(size, scheme, path):
-        width, height = VIEWPORTS[size]
-        context = browser.new_context(
-            viewport={"width": width, "height": height},
-            color_scheme=scheme,
-            device_scale_factor=2 if SCREEN_DIR else 1,
-            has_touch=True,
-        )
-        context.add_cookies([{"name": "sessionid", "value": cookie, "url": live_server.url}])
-        page = context.new_page()
-        page.goto(live_server.url + path)
-        page.wait_for_load_state("networkidle")
-        return context, page
+        return page_session(VIEWPORTS[size], scheme, path)
 
     return open_page
 
@@ -375,22 +342,6 @@ TRANSACTIONS_JS = """() => {
 }"""
 
 
-BUDGETS_JS = """() => {
-  const box = (el) => { const r = el.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; };
-  const visible = (el) => el.checkVisibility();
-  const table = document.querySelector('main section[aria-label="Category budgets"]');
-  const side = document.querySelector('main aside.page-side');
-  const attention = document.querySelector('#budgets-attention-heading');
-  return {
-    table: box(table),
-    side: box(side),
-    attention: attention !== null && visible(attention),
-    rowButtons: [...table.querySelectorAll('tbody tr')].map(
-      (row) => [...row.querySelectorAll('a.btn, button, summary')].filter(visible).length),
-  };
-}"""
-
-
 def open_transactions(browser, live_server, client, width, height, query="", javascript=True):
     person = seed_phone_data()
     client.force_login(person.user)
@@ -460,6 +411,22 @@ def test_transactions_without_javascript_keep_checkboxes_visible(browser, live_s
         assert page.locator("main [data-select-toggle]:visible").count() == 0
     finally:
         context.close()
+
+
+BUDGETS_JS = """() => {
+  const box = (el) => { const r = el.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; };
+  const visible = (el) => el.checkVisibility();
+  const table = document.querySelector('main section[aria-label="Category budgets"]');
+  const side = document.querySelector('main aside.page-side');
+  const attention = document.querySelector('#budgets-attention-heading');
+  return {
+    table: box(table),
+    side: box(side),
+    attention: attention !== null && visible(attention),
+    rowButtons: [...table.querySelectorAll('tbody tr')].map(
+      (row) => [...row.querySelectorAll('a.btn, button, summary')].filter(visible).length),
+  };
+}"""
 
 
 @pytest.mark.parametrize("width", [1024, 1440])
@@ -578,6 +545,10 @@ def test_chat_list_sits_beside_the_thread_at_desktop_width(chat_session, scheme)
         assert thinking.get_attribute("aria-busy") == "true"
         assert "Working on it." in thinking.inner_text()
         assert page.locator("h1").count() == 1
+        helper = page.locator("main .page-header-helper")
+        assert helper.count() == 1
+        assert "Opinion, not financial advice." in helper.inner_text()
+        assert page.locator("main").inner_text().count("Opinion, not financial advice.") == 1
     finally:
         context.close()
 

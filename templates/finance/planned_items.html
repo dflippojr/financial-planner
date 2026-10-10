@@ -20,7 +20,7 @@
     {% for item in items %}
       <tr>
         <td class="align-top">
-          <span class="font-semibold break-words{% if not item.enabled %} opacity-80{% endif %}">{{ item.name }}</span>
+          <span class="font-semibold wrap-anywhere{% if not item.enabled %} opacity-80{% endif %}">{{ item.name }}</span>
           <span class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm opacity-80">
             {% if item.scope == "household" %}
             <span class="badge badge-sm badge-info">Household</span>
@@ -34,7 +34,7 @@
           </span>
         </td>
         <td class="max-md:hidden whitespace-nowrap align-top">{{ item.get_cadence_display }}</td>
-        <td class="max-md:hidden whitespace-nowrap align-top">
+        <td class="max-md:hidden align-top">
           {% if item.end_date %}{{ item.start_date|date:"Y-m-d" }} to {{ item.end_date|date:"Y-m-d" }}{% else %}From {{ item.start_date|date:"Y-m-d" }}{% endif %}
         </td>
         <td class="max-md:hidden whitespace-nowrap align-top">

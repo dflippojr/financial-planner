@@ -2,7 +2,7 @@
 {% block title %}Transfers · Financial Planner{% endblock %}
 {% block content %}
 {% include "finance/_page_header.html" with title="Transfers and card payments" helper="Pairs moving money between your own accounts. Excluded pairs never count as income or spending." %}
-<div class="page-columns">
+<div class="page-columns wrap-anywhere">
   <div class="flex flex-col gap-6">
     <section aria-labelledby="transfer-suggestions" class="rounded-box border {% if suggestions %}border-warning{% else %}border-base-300{% endif %} bg-base-100">
       <h2 id="transfer-suggestions" class="flex flex-wrap items-center gap-x-2 px-4 pt-4 text-lg font-semibold sm:px-5">

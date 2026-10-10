@@ -9,7 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from tests.test_mobile_layout import CSS, SCREEN_DIR, VIEWPORTS, browser, phone_session  # noqa: F401 - fixtures
+from finance.models import MonthlyReview
+from tests.browser_support import CSS, SCREEN_DIR, browser, page_session  # noqa: F401 - fixtures
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),
@@ -35,19 +36,14 @@ LAYOUT_JS = """() => {
 }"""
 
 
-def _open(phone_session, width, path):  # noqa: F811 - the fixture is passed in
-    size = f"report-{width}"
-    VIEWPORTS[size] = (width, 900)
-    try:
-        return phone_session(size, "light", path)
-    finally:
-        del VIEWPORTS[size]
+def _open(page_session, width, path):  # noqa: F811 - the fixture is passed in
+    return page_session((width, 900), "light", path)
 
 
 @pytest.mark.parametrize("width", [390, 1024, 1440])
 @pytest.mark.parametrize(("name", "path"), REPORT_PAGES)
-def test_report_pages_share_the_header_and_fit(phone_session, width, name, path):  # noqa: F811
-    context, page = _open(phone_session, width, path)
+def test_report_pages_share_the_header_and_fit(page_session, width, name, path):  # noqa: F811
+    context, page = _open(page_session, width, path)
     try:
         if SCREEN_DIR:
             Path(SCREEN_DIR).mkdir(parents=True, exist_ok=True)
@@ -66,8 +62,8 @@ def test_report_pages_share_the_header_and_fit(phone_session, width, name, path)
         context.close()
 
 
-def test_monthly_review_comparisons_are_signed_and_aligned(phone_session):  # noqa: F811
-    context, page = _open(phone_session, 1440, "/planning/review/")
+def test_monthly_review_comparisons_are_signed_and_aligned(page_session):  # noqa: F811
+    context, page = _open(page_session, 1440, "/planning/review/")
     try:
         cells = page.locator("main dl dd")
         assert cells.count() == 6
@@ -81,8 +77,8 @@ def test_monthly_review_comparisons_are_signed_and_aligned(phone_session):  # no
         context.close()
 
 
-def test_year_end_exports_are_reachable_from_the_keyboard(phone_session):  # noqa: F811
-    context, page = _open(phone_session, 1280, "/planning/year-end/")
+def test_year_end_exports_are_reachable_from_the_keyboard(page_session):  # noqa: F811
+    context, page = _open(page_session, 1280, "/planning/year-end/")
     try:
         toggle = page.locator("main summary", has_text="Export")
         menu = page.locator("main details[data-row-menu]")
@@ -114,5 +110,28 @@ def test_year_end_exports_are_reachable_from_the_keyboard(phone_session):  # noq
         page.keyboard.press("Enter")
         page.keyboard.press("Escape")
         assert not menu.evaluate("el => el.open")
+    finally:
+        context.close()
+
+
+@pytest.mark.parametrize("width", [390, 1024, 1440])
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_long_over_budget_category_name_wraps(page_session, width, scheme):  # noqa: F811
+    context, page = page_session((width, 900), scheme, "/planning/review/")
+    try:
+        name = "Home maintenance and repairs including seasonal household improvements"
+        review = MonthlyReview.objects.get(person__user__username="synthetic_alex")
+        review.facts["budgets_over"] = [{
+            "name": name,
+            "url": "/planning/budgets/",
+            "over_by_display": "100.00 USD",
+        }]
+        review.save(update_fields=["facts"])
+        page.reload()
+        link = page.locator('section[aria-labelledby="review-budgets"]').get_by_role("link", name=name)
+        assert link.is_visible()
+        assert page.evaluate(
+            "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+        ), f"Long budget category scrolls sideways at {width} in {scheme}"
     finally:
         context.close()

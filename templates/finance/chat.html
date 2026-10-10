@@ -1,25 +1,13 @@
 {% extends "finance/base.html" %}
 {% block title %}Chat · Financial Planner{% endblock %}
 {% block content %}
-<div class="mb-3 flex items-center justify-between gap-2 lg:mb-1">
-  <h1 class="text-2xl font-bold">Chat</h1>
-  {% if chat_ready %}
-  {# From lg up these actions sit in the conversation list (issue #333). #}
-  <div class="flex flex-wrap gap-2 lg:hidden">
-    <form method="post" action="{% url 'chat-new' %}">
-      {% csrf_token %}
-      <button type="submit" class="btn min-h-11 max-md:btn-square md:btn-sm" aria-label="New conversation">
-        <svg xmlns="http://www.w3.org/2000/svg" class="size-5 md:hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-        <span class="hidden md:inline">New conversation</span>
-      </button>
-    </form>
-    <form method="post" action="{% url 'chat-delete-all' %}" data-confirm="Delete every conversation?" class="max-md:hidden">
-      {% csrf_token %}
-      <button type="submit" class="btn btn-sm btn-outline">Delete all</button>
-    </form>
-  </div>
-  {% endif %}
-</div>
+{% if chat_ready %}
+{% with helper="Answers by "|add:chat_backend_label|add:" from read-only tools. Opinion, not financial advice." %}
+{% include "finance/_page_header.html" with title="Chat" helper=helper actions="finance/_chat_header_actions.html" %}
+{% endwith %}
+{% else %}
+{% include "finance/_page_header.html" with title="Chat" %}
+{% endif %}
 {% if messages %}
   {% for message in messages %}
   <div role="status" class="alert mb-4">{{ message }}</div>
@@ -28,7 +16,6 @@
 {% if not chat_ready %}
 <p class="mb-4">Connect an AI backend in <a class="link" href="{% url 'settings-ai' %}">Settings → AI</a> to chat about your data.</p>
 {% else %}
-<p class="mb-2 text-sm lg:mb-4">Answers by <strong>{{ chat_backend_label }}</strong> from read-only tools. Opinion, not financial advice.</p>
 {% include "finance/_chat_thread.html" with composer_fixed=True %}
 <form method="post" action="{% url 'chat-delete-all' %}" data-confirm="Delete every conversation?" class="mt-4 md:hidden">
   {% csrf_token %}

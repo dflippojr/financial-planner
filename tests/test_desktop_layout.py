@@ -9,16 +9,11 @@ import os
 from pathlib import Path
 
 import pytest
-from django.conf import settings
 
+from finance.policy_services import publish_policy
+from tests.browser_support import CSS, browser  # noqa: F401 - shared fixture
 from tests.desktop_seed import seed_desktop_data
 
-# Playwright's sync API keeps an event loop running in this thread, which Django's ORM guard rejects.
-os.environ.setdefault("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
-
-sync_api = pytest.importorskip("playwright.sync_api")
-
-CSS = Path(settings.BASE_DIR) / "static" / "dist" / "app.css"
 pytestmark = [
     pytest.mark.django_db(transaction=True),
     pytest.mark.skipif(not CSS.exists(), reason="static/dist/app.css is not built"),
@@ -55,17 +50,6 @@ PAGES = (
     ("settings-audit", "/settings/audit/"),
 )
 SCREEN_DIR = os.environ.get("DESKTOP_SHOTS_DIR")
-
-
-@pytest.fixture(scope="module")
-def browser():
-    with sync_api.sync_playwright() as playwright:
-        try:
-            instance = playwright.chromium.launch()
-        except Exception as error:  # noqa: BLE001 - browser binaries are optional locally
-            pytest.skip(f"Chromium is not installed: {error}")
-        yield instance
-        instance.close()
 
 
 @pytest.fixture
@@ -162,6 +146,33 @@ def test_page_fits_desktop(desktop_session, size, scheme, name, path):
     assert layout["fixed"] == [], f"{name} has floating elements {layout['fixed']}"
     low = [amount for amount in page.evaluate(CONTRAST_JS) if amount["ratio"] < 4.5]
     assert low == [], f"{name} has amounts under 4.5:1: {low}"
+    if name.startswith("settings-"):
+        sections = page.get_by_role("navigation", name="Settings sections")
+        links = sections.get_by_role("link")
+        assert links.count() == 10
+        for link in links.all():
+            assert link.is_visible()
+            box = link.bounding_box()
+            assert box is not None and box["x"] >= 0 and box["x"] + box["width"] <= VIEWPORTS[size][0]
+        active = sections.locator('[aria-current="page"]')
+        assert active.count() == 1
+        section_path = "/settings/categories/" if name == "settings-rules" else path
+        assert active.get_attribute("href") == section_path
+        assert not page.get_by_role("tablist").is_visible()
+
+
+@pytest.mark.parametrize("size", VIEWPORTS)
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_settings_ai_has_one_pending_privacy_prompt(desktop_session, size, scheme):
+    publish_policy(material=True, body="Synthetic desktop privacy policy")
+    page = desktop_session(size, scheme, "/settings/ai/")
+    prompt = page.get_by_role("region", name="Privacy and data policy")
+    assert prompt.is_visible()
+    assert page.get_by_text("Privacy and data policy", exact=True).count() == 1
+    assert page.get_by_role("button", name="Accept version", exact=False).count() == 1
+    assert page.get_by_role("button", name="Not now", exact=True).count() == 1
+    assert "needs a response before you can use AI" not in page.locator("main").inner_text()
+    assert not page.evaluate(LAYOUT_JS)["scroll"]
 
 
 def _bottom(locator):

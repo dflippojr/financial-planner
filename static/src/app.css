@@ -349,6 +349,62 @@
   }
 }
 
+/* Category rename (issue #339): the Rename button is a summary; opening it drops the form onto its own line. */
+@layer components {
+  .category-rename > summary {
+    list-style: none;
+  }
+
+  .category-rename > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .category-rename[open] {
+    display: flex;
+    flex-basis: 100%;
+    flex-direction: column;
+    align-items: flex-end;
+  }
+
+  .category-rename[open] > form {
+    width: 100%;
+  }
+}
+/* Report pages (issue #338): a card's sub-headings and name-then-figure rows. */
+@layer components {
+  .report-subhead {
+    margin-top: 0.5rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: color-mix(in oklab, var(--color-base-content) 80%, transparent);
+  }
+
+  .report-rows > li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.25rem 0.75rem;
+    min-height: 2.5rem;
+    padding-block: 0.375rem;
+    border-top: 1px solid var(--color-base-300);
+  }
+
+  .report-figure {
+    margin-left: auto;
+    text-align: right;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .report-empty {
+    padding-block: 0.375rem;
+    color: color-mix(in oklab, var(--color-base-content) 80%, transparent);
+  }
+}
+
 /* Cash flow chart fills (issue #329): primary for income and orange for spending, each at
    least 3:1 against base-100 in its theme. The net line uses base-content. */
 :root,
@@ -520,60 +576,3 @@
 .category-swatch[data-color="5"] { background: var(--chart-category-5); }
 .category-swatch[data-color="6"] { background: var(--chart-category-6); }
 .category-swatch[data-color="7"] { background: var(--chart-category-7); }
-
-/* Report pages (issue #338): a card's sub-headings and name-then-figure rows. */
-@layer components {
-  .report-subhead {
-    margin-top: 0.5rem;
-    font-size: 0.75rem;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: color-mix(in oklab, var(--color-base-content) 80%, transparent);
-  }
-
-  .report-rows > li {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.25rem 0.75rem;
-    min-height: 2.5rem;
-    padding-block: 0.375rem;
-    border-top: 1px solid var(--color-base-300);
-  }
-
-  .report-figure {
-    margin-left: auto;
-    text-align: right;
-    font-weight: 600;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .report-empty {
-    padding-block: 0.375rem;
-    color: color-mix(in oklab, var(--color-base-content) 80%, transparent);
-  }
-}
-
-/* Category rename (issue #339): the Rename button is a summary; opening it drops the form onto its own line. */
-@layer components {
-  .category-rename > summary {
-    list-style: none;
-  }
-
-  .category-rename > summary::-webkit-details-marker {
-    display: none;
-  }
-
-  .category-rename[open] {
-    display: flex;
-    flex-basis: 100%;
-    flex-direction: column;
-    align-items: flex-end;
-  }
-
-  .category-rename[open] > form {
-    width: 100%;
-  }
-}
