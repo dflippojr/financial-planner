@@ -139,7 +139,7 @@
       <tbody>
       {% for period in report.periods %}
         <tr>
-          <th scope="row" class="font-medium"><a class="link link-hover" href="{{ period.drilldown_url }}">{{ period.label }}<span class="sr-only"> transactions</span></a></th>
+          <td class="font-medium"><a class="link link-hover" href="{{ period.drilldown_url }}">{{ period.label }}<span class="sr-only"> transactions</span></a></td>
           <td class="whitespace-nowrap text-right">{% include "finance/_amount.html" with value=period.income_display tone="in" %}</td>
           <td class="whitespace-nowrap text-right">{% include "finance/_amount.html" with value=period.spending_display tone="out" %}</td>
           <td class="whitespace-nowrap text-right">{% include "finance/_amount.html" with value=period.net_display tone="" %}</td>
@@ -155,7 +155,7 @@
       {% endfor %}
       {% for period in report.projected_periods %}
         <tr>
-          <th scope="row" class="font-medium">{{ period.label }}</th>
+          <td class="font-medium">{{ period.label }}</td>
           <td class="whitespace-nowrap text-right">{% include "finance/_amount.html" with value=period.income_display tone="in" %}</td>
           <td class="whitespace-nowrap text-right">{% include "finance/_amount.html" with value=period.spending_display tone="out" %}</td>
           <td class="whitespace-nowrap text-right">{% include "finance/_amount.html" with value=period.net_display tone="" %}</td>
