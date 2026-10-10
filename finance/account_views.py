@@ -23,6 +23,7 @@ from .lifecycle_services import (
 )
 from .reauth import requires_recent_auth
 from .models import Account, BalanceSnapshot, ImportBatch, Person, Transaction
+from .net_worth import signed_balance_minor
 
 
 def _active_visible_account(user, account_id):
@@ -75,7 +76,9 @@ def account_list(request):
         if account.last_snapshot_date is None:
             account.last_snapshot_display = ""
         else:
-            account.last_snapshot_display = format_minor(account.last_snapshot_amount)
+            account.last_snapshot_display = format_minor(
+                signed_balance_minor(account.account_type, account.last_snapshot_source, account.last_snapshot_amount)
+            )
     return render(
         request,
         "finance/accounts.html",
