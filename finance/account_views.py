@@ -84,6 +84,7 @@ def account_list(request):
         "finance/accounts.html",
         {
             "accounts": accounts,
+            "account_groups": _group_by_type(accounts),
             "add_form": form,
             "has_household": household is not None,
             "has_active_accounts": any(
@@ -92,6 +93,16 @@ def account_list(request):
             "viewer_id": person.pk,
         },
     )
+
+
+def _group_by_type(accounts):
+    """Group the visible accounts by type, in the order the types are declared."""
+    groups = []
+    for account_type, label in Account.Type.choices:
+        members = [account for account in accounts if account.account_type == account_type]
+        if members:
+            groups.append({"label": label, "accounts": members})
+    return groups
 
 
 def _create_account(person, form):

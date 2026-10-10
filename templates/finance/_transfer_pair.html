@@ -1,0 +1,3 @@
+{% comment %}Both legs of a transfer pair on one line, then dates and reasons (issue #335).{% endcomment %}
+<span class="font-semibold">{{ pair.leg_a.account.name }} <span aria-hidden="true">↔</span><span class="sr-only">and</span> {{ pair.leg_b.account.name }}</span>
+<span class="block text-sm opacity-80"><span class="md:hidden">{{ pair.get_kind_display }} · {{ pair.get_confidence_display|lower }} confidence · </span>{{ pair.leg_a.transaction_date }} and {{ pair.leg_b.transaction_date }}{% if pair.reasons %} · {{ pair.reasons|join:"; " }}{% endif %}</span>

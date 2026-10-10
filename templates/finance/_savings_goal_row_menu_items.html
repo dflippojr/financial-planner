@@ -1,0 +1,31 @@
+{% comment %}
+Row menu entries for one savings goal (issue #337): Edit, Mark complete or Reopen, and Archive
+or Unarchive, posting to the same views the card's buttons used.
+{% endcomment %}
+<li><a href="{% url 'savings-goal-edit' card.goal.pk %}">Edit</a></li>
+<li>
+  {% if card.completed %}
+  <form method="post" action="{% url 'savings-goal-reopen' card.goal.pk %}">
+    {% csrf_token %}
+    <button type="submit" class="w-full text-left">Reopen</button>
+  </form>
+  {% else %}
+  <form method="post" action="{% url 'savings-goal-complete' card.goal.pk %}">
+    {% csrf_token %}
+    <button type="submit" class="w-full text-left">Mark complete</button>
+  </form>
+  {% endif %}
+</li>
+<li>
+  {% if card.archived %}
+  <form method="post" action="{% url 'savings-goal-unarchive' card.goal.pk %}">
+    {% csrf_token %}
+    <button type="submit" class="w-full text-left">Unarchive</button>
+  </form>
+  {% else %}
+  <form method="post" action="{% url 'savings-goal-archive' card.goal.pk %}">
+    {% csrf_token %}
+    <button type="submit" class="w-full text-left">Archive</button>
+  </form>
+  {% endif %}
+</li>

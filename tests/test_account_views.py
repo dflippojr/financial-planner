@@ -88,17 +88,40 @@ def test_empty_accounts_page_prompts_to_add_first_account():
 
 
 @pytest.mark.django_db
-def test_account_row_actions_use_visible_button_styles():
+def test_account_row_shows_import_and_a_menu_with_the_other_actions():
     owner = make_person("owner")
+    make_household(owner)
     account = make_account(owner, name="Synthetic Checking")
     page = signed_in(owner).get(reverse("account-list")).content.decode()
-    balance_href = reverse("account-balances", args=(account.pk,))
-    delete_href = reverse("account-delete", args=(account.pk,))
+    import_href = reverse("csv-import-preview", args=(account.pk,))
+    menu = page[page.index('aria-label="More actions for Synthetic Checking"'):page.index('id="archive-')]
 
-    assert f'class="btn btn-sm btn-outline" href="{balance_href}"' in page
-    assert f'class="btn btn-sm btn-outline btn-error ms-auto" href="{delete_href}"' in page
-    assert "btn-ghost text-error" not in page
-    assert page.index(balance_href) < page.index(delete_href)
+    assert f'class="btn btn-sm btn-outline whitespace-nowrap" href="{import_href}"' in page
+    assert page.index(import_href) < page.index("More actions for Synthetic Checking")
+    for action in (
+        reverse("account-balances", args=(account.pk,)),
+        reverse("account-rename", args=(account.pk,)),
+        reverse("account-share", args=(account.pk,)),
+        'data-open-dialog="archive-',
+        f'class="row-menu-danger" href="{reverse("account-delete", args=(account.pk,))}"',
+    ):
+        assert action in menu
+    assert menu.index("Record balance") < menu.index("Rename") < menu.index("Sharing") < menu.index("Archive") < menu.index("Delete account")
+
+
+@pytest.mark.django_db
+def test_accounts_are_grouped_by_type_and_the_add_form_follows_the_list():
+    owner = make_person("owner")
+    make_account(owner, name="Synthetic Card", account_type=Account.Type.CREDIT_CARD)
+    make_account(owner, name="Synthetic Checking")
+    response = signed_in(owner).get(reverse("account-list"))
+    page = response.content.decode()
+
+    assert [group["label"] for group in response.context["account_groups"]] == ["Checking", "Credit card"]
+    assert page.index("Synthetic Checking") < page.index("Synthetic Card") < page.index('id="add-account"')
+    assert '<a class="btn btn-primary max-md:min-h-11" href="#id_name">' in page
+    assert 'id="id_name"' in page[page.index('id="add-account"'):]
+    assert page.index('id="add-account"') < page.index(reverse("simplefin-connections"))
 
 
 @pytest.mark.django_db

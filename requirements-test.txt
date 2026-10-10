@@ -1,0 +1,5 @@
+# Test-only tools used by CI on top of the runtime requirements. Not installed
+# in the Docker image.
+-r requirements.txt
+playwright==1.63.0
+pytest-xdist==3.8.0

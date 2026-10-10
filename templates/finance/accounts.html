@@ -1,160 +1,137 @@
 {% extends "finance/base.html" %}
 {% block title %}Accounts · Financial Planner{% endblock %}
 {% block content %}
-<h1 class="mb-4 text-2xl font-bold">Accounts</h1>
-<p class="mb-4"><a class="link" href="{% url 'simplefin-connections' %}">Connections</a></p>
+{% include "finance/_page_header.html" with title="Accounts" helper="Amounts in USD." more="Private accounts stay yours. Household accounts are shared with every member, who can edit them and their transactions." actions="finance/_accounts_header_actions.html" %}
 {% include "finance/_messages.html" %}
 {% if not has_active_accounts %}
 <div role="status" class="alert mb-4">
   <span>Add your first account to import transactions</span>
 </div>
 {% endif %}
-<section class="card bg-base-100 shadow-sm mb-6 max-w-lg">
-  <div class="card-body">
-    <h2 class="card-title">Add account</h2>
-    <form method="post">
-      {% csrf_token %}
-      {% include "finance/_form_fields.html" with form=add_form %}
-      <button type="submit" class="btn btn-primary">Add account</button>
-    </form>
-  </div>
-</section>
-<div class="overflow-x-auto">
-  <table class="table table-zebra">
-    <thead class="sticky top-0 z-10 bg-base-200">
+<div class="page-columns">
+<section class="card border border-base-300 bg-base-100" aria-labelledby="accounts-list-heading">
+  <h2 id="accounts-list-heading" class="sr-only">Your accounts</h2>
+  <table class="table">
+    <thead>
       <tr>
-        <th scope="col">Name</th>
-        <th scope="col">Type</th>
-        <th scope="col">Scope</th>
-        <th scope="col">Status</th>
-        <th scope="col">Last import</th>
-        <th scope="col">Transactions</th>
-        <th scope="col">Latest balance</th>
-        <th scope="col"></th>
+        <th scope="col">Account</th>
+        <th scope="col" class="max-md:hidden">Last import</th>
+        <th scope="col" class="max-md:hidden text-right">Transactions</th>
+        <th scope="col" class="max-md:hidden text-right">Latest balance</th>
+        <th scope="col"><span class="sr-only">Actions</span></th>
       </tr>
     </thead>
+    {% for group in account_groups %}
     <tbody>
-    {% for account in accounts %}
+      <tr class="bg-base-200">
+        <td colspan="5" class="py-2 text-xs font-semibold uppercase tracking-wide">{{ group.label }}</td>
+      </tr>
+      {% for account in group.accounts %}
       <tr>
-        <td>{{ account.name }}</td>
-        <td>{{ account.get_account_type_display }}</td>
-        <td>
-          {% if account.scope == "household" %}
-            {% if account.share_mode == "lent" %}
-            <span class="badge badge-info">Lent</span>
+        <td class="align-top">
+          <span class="font-semibold break-words">{{ account.name }}</span>
+          <span class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm opacity-80">
+            {% if account.scope == "household" %}
+            <span class="badge badge-sm badge-info">Household</span>
+            <span>{% if account.share_mode == "lent" %}Lent{% else %}Co-owned{% endif %}</span>
             {% else %}
-            <span class="badge badge-info">Co-owned</span>
+            <span class="badge badge-sm">Private</span>
             {% endif %}
-          {% else %}
-          <span class="badge">Private</span>
-          {% endif %}
+            {% if account.status != "active" %}
+            <span>{% include "finance/_status.html" with word="Archived" icon="projected" %}</span>
+            {% endif %}
+          </span>
+          <span class="mt-1 block text-sm md:hidden">
+            {% if account.last_snapshot_date %}{% include "finance/_amount.html" with value=account.last_snapshot_display tone="" %} on {{ account.last_snapshot_date|date:"Y-m-d" }} · {% endif %}{{ account.transaction_count }} transaction{{ account.transaction_count|pluralize }} · last import {% if account.last_import_at %}{{ account.last_import_at|date:"Y-m-d" }}{% else %}none{% endif %}
+          </span>
         </td>
-        <td>
-          {% if account.status == "active" %}
-          <span class="badge badge-success">Active</span>
-          {% else %}
-          <span class="badge badge-ghost">Archived</span>
-          {% endif %}
-        </td>
-        <td>{% if account.last_import_at %}{{ account.last_import_at|date:"Y-m-d" }}{% else %}—{% endif %}</td>
-        <td>{{ account.transaction_count }}</td>
-        <td>
+        <td class="max-md:hidden whitespace-nowrap align-top">{% if account.last_import_at %}{{ account.last_import_at|date:"Y-m-d" }}{% else %}—{% endif %}</td>
+        <td class="max-md:hidden text-right tabular-amount align-top">{{ account.transaction_count }}</td>
+        <td class="max-md:hidden text-right whitespace-nowrap align-top">
           {% if account.last_snapshot_date %}
-          {% include "finance/_amount.html" with value=account.last_snapshot_display tone="" %}
-          on {{ account.last_snapshot_date|date:"Y-m-d" }}
-          <span class="badge">{{ account.last_snapshot_source }}</span>
+          <span class="font-semibold">{% include "finance/_amount.html" with value=account.last_snapshot_display tone="" %}</span>
+          <span class="mt-1 block text-xs opacity-80">{{ account.last_snapshot_date|date:"Y-m-d" }} · {{ account.last_snapshot_source }}</span>
           {% else %}
           —
           {% endif %}
         </td>
-        <td>
-          <div class="flex flex-wrap items-center gap-2">
-          {% if account.status == "active" and account.archived_at is None %}
-            <a class="btn btn-sm btn-outline" href="{% url 'account-balances' account.pk %}">{% if account.is_physical_asset %}Record valuation{% else %}Record balance{% endif %}</a>
-            {% if account.accepts_csv_import %}
-            <a class="btn btn-sm btn-primary" href="{% url 'csv-import-preview' account.pk %}">Import CSV</a>
-            {% endif %}
-            <form method="post" action="{% url 'account-rename' account.pk %}" class="flex flex-wrap items-center gap-2">
-              {% csrf_token %}
-              <label class="sr-only" for="rename-{{ account.pk }}">Rename {{ account.name }}</label>
-              <input id="rename-{{ account.pk }}" class="input input-bordered input-sm" type="text" name="name" value="{{ account.name }}" maxlength="150" required>
-              <button type="submit" class="btn btn-sm">Rename</button>
-            </form>
-            {% if account.scope == "private" and has_household %}
-            <form method="post" action="{% url 'account-share' account.pk %}" class="flex flex-wrap items-center gap-2">
-              {% csrf_token %}
-              <label class="sr-only" for="share-mode-{{ account.pk }}">Share as</label>
-              <select id="share-mode-{{ account.pk }}" class="select select-bordered select-sm" name="share_mode" required>
-                <option value="co_owned">Co-owned</option>
-                <option value="lent">Lent</option>
-              </select>
-              <button type="submit" class="btn btn-sm btn-outline">Share with household</button>
-            </form>
-            {% elif account.scope == "household" %}
-              {% if account.share_mode != "lent" or account.owner_id == viewer_id %}
-            <form method="post" action="{% url 'account-unshare' account.pk %}">
-              {% csrf_token %}
-              <button type="submit" class="btn btn-sm btn-outline">Make private</button>
-            </form>
-              {% endif %}
-              {% if account.owner_id == viewer_id %}
-                {% if account.share_mode == "lent" %}
-            <button type="button" class="btn btn-sm btn-outline" data-open-dialog="co-own-{{ account.pk }}">Make co-owned</button>
-            <dialog id="co-own-{{ account.pk }}" class="modal">
-              <div class="modal-box">
-                <h3 class="font-bold text-lg">Give up sole ownership of {{ account.name }}?</h3>
-                <p class="py-4">You give up sole ownership: if you leave, the account stays with the household.</p>
-                <div class="modal-action">
-                  <form method="dialog">
-                    <button class="btn">Cancel</button>
-                  </form>
-                  <form method="post" action="{% url 'account-share-mode' account.pk %}">
-                    {% csrf_token %}
-                    <input type="hidden" name="share_mode" value="co_owned">
-                    <input type="hidden" name="confirm_give_up_ownership" value="on">
-                    <button type="submit" class="btn btn-primary">Make co-owned</button>
-                  </form>
-                </div>
-              </div>
-            </dialog>
-                {% else %}
-            <form method="post" action="{% url 'account-share-mode' account.pk %}">
-              {% csrf_token %}
-              <input type="hidden" name="share_mode" value="lent">
-              <button type="submit" class="btn btn-sm btn-outline">Make lent</button>
-            </form>
-                {% endif %}
-              {% endif %}
-            {% endif %}
-            {% if account.scope != "household" or account.share_mode != "lent" or account.owner_id == viewer_id %}
-            <button type="button" class="btn btn-sm btn-error" data-open-dialog="archive-{{ account.pk }}">Archive</button>
-            <dialog id="archive-{{ account.pk }}" class="modal">
-              <div class="modal-box">
-                <h3 class="font-bold text-lg">Archive {{ account.name }}?</h3>
-                <p class="py-4">Transactions are kept. This does not erase the account or its history.</p>
-                <div class="modal-action">
-                  <form method="dialog">
-                    <button class="btn">Cancel</button>
-                  </form>
-                  <form method="post" action="{% url 'account-archive' account.pk %}">
-                    {% csrf_token %}
-                    <button type="submit" class="btn btn-error">Archive</button>
-                  </form>
-                </div>
-              </div>
-            </dialog>
-            {% endif %}
+        <td class="align-top">
+          <div class="flex items-center justify-end gap-1">
+          {% if account.status == "active" and account.archived_at is None and account.accepts_csv_import %}
+            <a class="btn btn-sm btn-outline whitespace-nowrap" href="{% url 'csv-import-preview' account.pk %}">Import CSV</a>
           {% endif %}
-          {% if account.owner_id == viewer_id %}
-            <a class="btn btn-sm btn-outline btn-error ms-auto" href="{% url 'account-delete' account.pk %}">Delete account</a>
+          {% if account.status == "active" and account.archived_at is None or account.owner_id == viewer_id %}
+            {% include "finance/_row_menu.html" with label="More actions for "|add:account.name items="finance/_account_row_menu_items.html" %}
           {% endif %}
           </div>
+          {% if account.status == "active" and account.archived_at is None %}
+          {% if account.scope == "household" and account.share_mode == "lent" and account.owner_id == viewer_id %}
+          <dialog id="co-own-{{ account.pk }}" class="modal">
+            <div class="modal-box">
+              <h3 class="font-bold text-lg">Give up sole ownership of {{ account.name }}?</h3>
+              <p class="py-4">You give up sole ownership: if you leave, the account stays with the household.</p>
+              <div class="modal-action">
+                <form method="dialog">
+                  <button class="btn">Cancel</button>
+                </form>
+                <form method="post" action="{% url 'account-share-mode' account.pk %}">
+                  {% csrf_token %}
+                  <input type="hidden" name="share_mode" value="co_owned">
+                  <input type="hidden" name="confirm_give_up_ownership" value="on">
+                  <button type="submit" class="btn btn-primary">Make co-owned</button>
+                </form>
+              </div>
+            </div>
+          </dialog>
+          {% endif %}
+          {% if account.scope != "household" or account.share_mode != "lent" or account.owner_id == viewer_id %}
+          <dialog id="archive-{{ account.pk }}" class="modal">
+            <div class="modal-box">
+              <h3 class="font-bold text-lg">Archive {{ account.name }}?</h3>
+              <p class="py-4">Transactions are kept. This does not erase the account or its history.</p>
+              <div class="modal-action">
+                <form method="dialog">
+                  <button class="btn">Cancel</button>
+                </form>
+                <form method="post" action="{% url 'account-archive' account.pk %}">
+                  {% csrf_token %}
+                  <button type="submit" class="btn btn-error">Archive</button>
+                </form>
+              </div>
+            </div>
+          </dialog>
+          {% endif %}
+          {% endif %}
         </td>
       </tr>
-    {% empty %}
-      <tr><td colspan="8">No accounts yet.</td></tr>
-    {% endfor %}
+      {% endfor %}
     </tbody>
+    {% empty %}
+    <tbody>
+      <tr><td colspan="5">No accounts yet.</td></tr>
+    </tbody>
+    {% endfor %}
   </table>
+</section>
+<aside class="page-side" aria-label="Add an account and bank connections">
+  <section id="add-account" class="card border border-base-300 bg-base-100" aria-labelledby="add-account-heading">
+    <div class="card-body">
+      <h2 id="add-account-heading" class="card-title text-base">Add account</h2>
+      <form method="post">
+        {% csrf_token %}
+        {% include "finance/_form_fields.html" with form=add_form %}
+        <button type="submit" class="btn">Add account</button>
+      </form>
+    </div>
+  </section>
+  <a class="card border border-base-300 bg-base-100 flex flex-row items-center gap-3 p-4 hover:bg-base-200" href="{% url 'simplefin-connections' %}">
+    <svg aria-hidden="true" class="size-5 flex-none text-primary" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>
+    <span class="flex flex-1 flex-col">
+      <span class="font-semibold">Connections</span>
+      <span class="text-sm opacity-80">SimpleFIN bank sync</span>
+    </span>
+    <svg aria-hidden="true" class="size-4 flex-none opacity-80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 18 6-6-6-6"/></svg>
+  </a>
+</aside>
 </div>
 {% endblock %}

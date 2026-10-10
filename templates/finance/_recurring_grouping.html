@@ -15,15 +15,13 @@
   </label>
   <button type="submit" class="btn btn-sm">Merge</button>
 </form>
-{% else %}
-<a href="?merge_series={{ series.pk }}#series-{{ series.pk }}" class="btn btn-sm mb-2" aria-label="Merge {{ series.display_name }} into another series">Merge…</a>
 {% endif %}
 {% endif %}
-<form method="get" class="mb-2 flex flex-wrap items-end gap-2">
+<form method="get" action="#series-{{ series.pk }}-charges" class="mb-2 flex flex-wrap items-end gap-2">
   <input type="hidden" name="add_series" value="{{ series.pk }}">
   <label class="form-control w-full max-w-xs">
     <span class="label-text">Add charges</span>
-    <input type="search" name="q" value="{% if add_series_id == series.pk %}{{ add_query }}{% endif %}" class="input input-bordered input-sm" placeholder="Search descriptions">
+    <input type="search" id="series-{{ series.pk }}-add" name="q" value="{% if add_series_id == series.pk %}{{ add_query }}{% endif %}" class="input input-bordered input-sm" placeholder="Search descriptions">
   </label>
   <button type="submit" class="btn btn-sm">Find charges</button>
 </form>

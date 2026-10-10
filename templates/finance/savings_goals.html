@@ -1,98 +1,94 @@
 {% extends "finance/base.html" %}
+{% load ui %}
 {% block title %}Savings goals · Financial Planner{% endblock %}
 {% block content %}
-<h1 class="mb-4 text-2xl font-bold">Savings goals</h1>
-<p class="mb-4 max-w-2xl opacity-80">Progress toward a target amount, optionally by a target date. This is informational and never changes the projection.</p>
-<div class="mb-4 flex flex-wrap gap-2">
-  <a class="btn btn-sm btn-primary" href="{% url 'savings-goal-plan' %}">Funding plan</a>
-  <a class="btn btn-sm" href="{% url 'savings-goal-import' %}">Import a wishlist</a>
-</div>
-<section class="card bg-base-100 shadow-sm mb-6 max-w-lg">
-  <div class="card-body">
-    <h2 class="card-title">Add savings goal</h2>
-    <form method="post">
-      {% csrf_token %}
-      {% include "finance/_form_fields.html" with form=add_form %}
-      <button type="submit" class="btn btn-primary">Add goal</button>
-    </form>
-  </div>
-</section>
-<div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-{% for card in cards %}
-  <div class="card bg-base-100 shadow-sm">
-    <div class="card-body">
-      <div class="flex items-start justify-between gap-2">
-        <h2 class="card-title">{{ card.goal.name }}</h2>
-        <div class="flex flex-wrap gap-1">
-          {% if card.goal.scope == "household" %}
-          <span class="badge badge-info">Household</span>
-          {% else %}
-          <span class="badge">Private</span>
-          {% endif %}
-          {% if card.goal.priority %}
-          <span class="badge badge-outline">Priority {{ card.goal.priority }}</span>
-          {% endif %}
-          {% if card.goal.time_sensitive %}
-          <span class="badge badge-warning">Time-sensitive</span>
-          {% endif %}
-          {% if card.archived %}
-          <span class="badge badge-ghost">Archived</span>
-          {% endif %}
-          {% if card.completed %}
-          <span class="badge badge-success">Complete</span>
-          {% elif card.reached %}
-          <span class="badge badge-success">Reached</span>
-          {% elif card.past_due %}
-          <span class="badge badge-error">Past due</span>
-          {% endif %}
-        </div>
-      </div>
-      <progress class="progress {% if card.reached or card.completed %}progress-success{% elif card.past_due %}progress-error{% else %}progress-primary{% endif %} w-full" value="{{ card.percent }}" max="100"></progress>
-      <p class="text-sm opacity-80">{{ card.percent }}% complete · {{ card.current_amount_display }} of {{ card.target_amount_display }}</p>
-      <p class="text-sm opacity-80">
-        {% if card.goal.target_date %}Target date {{ card.goal.target_date|date:"Y-m-d" }}{% else %}No target date{% endif %}
-        {% if card.goal.depends_on %}· Buy after {{ card.goal.depends_on.name }}{% endif %}
-        ·
-        {% if card.source == "snapshot" %}
-        from linked account{% if card.linked_account %} {{ card.linked_account.name }}{% endif %} as of {{ card.as_of|date:"Y-m-d" }}
-        {% elif card.source == "manual" %}
-        manual amount as of {{ card.as_of|date:"Y-m-d" }}
-        {% else %}
-        no current amount recorded yet
-        {% endif %}
-      </p>
-      {% if not card.reached and not card.past_due %}
-      <p class="text-sm opacity-80">{{ card.remaining_display }} remaining{% if card.monthly_needed_display %} · {{ card.monthly_needed_display }}/month needed{% endif %}</p>
-      {% endif %}
-      <div class="card-actions mt-2 flex flex-wrap gap-2">
-        <a class="btn btn-sm" href="{% url 'savings-goal-edit' card.goal.pk %}">Edit</a>
-        {% if card.completed %}
-        <form method="post" action="{% url 'savings-goal-reopen' card.goal.pk %}">
-          {% csrf_token %}
-          <button type="submit" class="btn btn-sm btn-outline">Reopen</button>
-        </form>
-        {% else %}
-        <form method="post" action="{% url 'savings-goal-complete' card.goal.pk %}">
-          {% csrf_token %}
-          <button type="submit" class="btn btn-sm btn-outline">Mark complete</button>
-        </form>
-        {% endif %}
-        {% if card.archived %}
-        <form method="post" action="{% url 'savings-goal-unarchive' card.goal.pk %}">
-          {% csrf_token %}
-          <button type="submit" class="btn btn-sm btn-outline">Unarchive</button>
-        </form>
-        {% else %}
-        <form method="post" action="{% url 'savings-goal-archive' card.goal.pk %}">
-          {% csrf_token %}
-          <button type="submit" class="btn btn-sm btn-outline">Archive</button>
-        </form>
-        {% endif %}
-      </div>
+{# The shared page header's markup, written out so the helper line can carry its two secondary links. #}
+<header class="page-header">
+  <div class="page-header-text">
+    <h1 class="text-2xl font-bold">Savings goals</h1>
+    <div class="page-header-helper">
+      <p>Progress toward a target, optionally by a date. Never changes the projection. Amounts in USD.</p>
+      <p><a class="link" href="{% url 'savings-goal-plan' %}">Funding plan</a> · <a class="link" href="{% url 'savings-goal-import' %}">Import a wishlist</a></p>
     </div>
   </div>
-{% empty %}
-  <p>No savings goals yet.</p>
-{% endfor %}
+  <div class="page-header-actions">{% include "finance/_savings_goals_header_actions.html" %}</div>
+</header>
+<div class="page-columns">
+<section aria-labelledby="goals-list-heading">
+  <h2 id="goals-list-heading" class="sr-only">Your savings goals</h2>
+  {% if cards %}
+  <ul class="grid gap-4 md:grid-cols-2">
+  {% for card in cards %}
+    <li class="card border border-base-300 bg-base-100">
+      <div class="card-body gap-2 p-4">
+        <div class="flex items-start justify-between gap-2">
+          <h3 class="text-base font-semibold break-words">{{ card.goal.name }}</h3>
+          {% include "finance/_row_menu.html" with label="Actions for "|add:card.goal.name items="finance/_savings_goal_row_menu_items.html" %}
+        </div>
+        <div class="flex flex-wrap gap-1">
+          {% if card.goal.scope == "household" %}
+          <span class="badge badge-sm badge-info">Household</span>
+          {% else %}
+          <span class="badge badge-sm">Private</span>
+          {% endif %}
+          {% if card.goal.priority %}
+          <span class="badge badge-sm badge-outline">Priority {{ card.goal.priority }}</span>
+          {% endif %}
+          {% if card.goal.time_sensitive %}
+          <span class="badge badge-sm badge-warning">Time-sensitive</span>
+          {% endif %}
+          {% if card.archived %}
+          <span class="badge badge-sm badge-ghost">Archived</span>
+          {% endif %}
+          {% if card.completed %}
+          <span class="badge badge-sm badge-success">Complete</span>
+          {% elif card.reached %}
+          <span class="badge badge-sm badge-success">Reached</span>
+          {% elif card.past_due %}
+          <span class="badge badge-sm badge-error">Past due</span>
+          {% endif %}
+        </div>
+        <p class="flex flex-wrap items-baseline justify-between gap-x-2">
+          <span class="text-xl font-bold tabular-nums">{{ card.current_amount_display|amount_text|cut:"+" }}</span>
+          <span class="text-sm tabular-nums opacity-80">of {{ card.target_amount_display|amount_text|cut:"+" }}</span>
+        </p>
+        <progress class="progress {% if card.reached or card.completed %}progress-success{% elif card.past_due %}progress-error{% else %}progress-primary{% endif %} w-full" value="{{ card.percent }}" max="100" aria-label="{{ card.goal.name }}: {{ card.percent }} percent saved"></progress>
+        <p class="text-sm opacity-80">
+          {% if card.goal.target_date %}Target date {{ card.goal.target_date|date:"Y-m-d" }}{% else %}No target date{% endif %}
+          {% if card.goal.depends_on %}· Buy after {{ card.goal.depends_on.name }}{% endif %}
+          · {{ card.percent }}% complete
+        </p>
+        {% if not card.reached and not card.past_due %}
+        <p class="text-sm tabular-nums opacity-80">{{ card.remaining_display|amount_text|cut:"+" }} remaining{% if card.monthly_needed_display %} · {{ card.monthly_needed_display|amount_text|cut:"+" }}/month needed{% endif %}</p>
+        {% endif %}
+        <p class="text-xs opacity-80">
+          {% if card.source == "snapshot" %}
+          From linked account{% if card.linked_account %} {{ card.linked_account.name }}{% endif %} as of {{ card.as_of|date:"Y-m-d" }}
+          {% elif card.source == "manual" %}
+          Manual amount as of {{ card.as_of|date:"Y-m-d" }}
+          {% else %}
+          No current amount recorded yet
+          {% endif %}
+        </p>
+      </div>
+    </li>
+  {% endfor %}
+  </ul>
+  {% else %}
+  <p class="card border border-base-300 bg-base-100 p-4">No savings goals yet.</p>
+  {% endif %}
+</section>
+<aside class="page-side" aria-label="Add a savings goal">
+  <section id="add-goal" class="card border border-base-300 bg-base-100" aria-labelledby="add-goal-heading">
+    <div class="card-body">
+      <h2 id="add-goal-heading" class="card-title text-base">Add savings goal</h2>
+      <form method="post">
+        {% csrf_token %}
+        {% include "finance/_form_fields.html" with form=add_form %}
+        <button type="submit" class="btn">Add goal</button>
+      </form>
+    </div>
+  </section>
+</aside>
 </div>
 {% endblock %}

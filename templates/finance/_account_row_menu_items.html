@@ -1,0 +1,63 @@
+{% comment %}
+Row menu entries for one account on the Accounts page (issue #332): Record balance, Rename,
+Sharing, Archive and Delete account, each only where today's row offers it. Archive and
+Make co-owned open dialogs that sit outside the menu, after it in the same cell.
+{% endcomment %}
+{% if account.status == "active" and account.archived_at is None %}
+<li><a href="{% url 'account-balances' account.pk %}">{% if account.is_physical_asset %}Record valuation{% else %}Record balance{% endif %}</a></li>
+<li>
+  <details>
+    <summary>Rename</summary>
+    <form method="post" action="{% url 'account-rename' account.pk %}" class="flex flex-col gap-2 p-2">
+      {% csrf_token %}
+      <label class="text-sm" for="rename-{{ account.pk }}">New name for {{ account.name }}</label>
+      <input id="rename-{{ account.pk }}" class="input input-bordered input-sm w-full" type="text" name="name" value="{{ account.name }}" maxlength="150" required>
+      <button type="submit" class="btn btn-sm self-start">Rename</button>
+    </form>
+  </details>
+</li>
+{% if account.scope == "private" and has_household %}
+<li>
+  <details>
+    <summary>Sharing</summary>
+    <form method="post" action="{% url 'account-share' account.pk %}" class="flex flex-col gap-2 p-2">
+      {% csrf_token %}
+      <label class="text-sm" for="share-mode-{{ account.pk }}">Share as</label>
+      <select id="share-mode-{{ account.pk }}" class="select select-bordered select-sm w-full" name="share_mode" required>
+        <option value="co_owned">Co-owned</option>
+        <option value="lent">Lent</option>
+      </select>
+      <button type="submit" class="btn btn-sm btn-outline self-start">Share with household</button>
+    </form>
+  </details>
+</li>
+{% elif account.scope == "household" %}
+{% if account.share_mode != "lent" or account.owner_id == viewer_id %}
+<li>
+  <form method="post" action="{% url 'account-unshare' account.pk %}">
+    {% csrf_token %}
+    <button type="submit" class="w-full text-left">Make private</button>
+  </form>
+</li>
+{% endif %}
+{% if account.owner_id == viewer_id %}
+{% if account.share_mode == "lent" %}
+<li><button type="button" data-open-dialog="co-own-{{ account.pk }}">Make co-owned</button></li>
+{% else %}
+<li>
+  <form method="post" action="{% url 'account-share-mode' account.pk %}">
+    {% csrf_token %}
+    <input type="hidden" name="share_mode" value="lent">
+    <button type="submit" class="w-full text-left">Make lent</button>
+  </form>
+</li>
+{% endif %}
+{% endif %}
+{% endif %}
+{% if account.scope != "household" or account.share_mode != "lent" or account.owner_id == viewer_id %}
+<li><button type="button" class="row-menu-danger" data-open-dialog="archive-{{ account.pk }}">Archive</button></li>
+{% endif %}
+{% endif %}
+{% if account.owner_id == viewer_id %}
+<li><a class="row-menu-danger" href="{% url 'account-delete' account.pk %}">Delete account</a></li>
+{% endif %}

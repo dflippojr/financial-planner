@@ -4,14 +4,12 @@
 {% block title %}Transactions · Financial Planner{% endblock %}
 {% block content %}
 {% include "finance/_messages.html" %}
-<div class="group" data-select="off" id="transaction-list-root">
-<div class="mb-3 flex items-center justify-between gap-2">
-  <h1 class="text-2xl font-bold">Transactions</h1>
-  <div class="flex items-center gap-2">
-    <button type="button" class="btn min-h-11 rounded-full md:hidden" data-select-toggle aria-pressed="false" aria-controls="bulk-edit-form">Select</button>
-    <a class="btn btn-primary min-h-11" href="{% url 'transaction-add' %}"><span class="md:hidden">Add</span><span class="hidden md:inline">Add transaction</span></a>
-  </div>
-</div>
+{% comment %}
+data-select is "nojs" until bulk-select.js turns Select mode on: without JS the row checkboxes and
+the bulk-edit panel stay visible from md up, as they were before Select mode (issue #330).
+{% endcomment %}
+<div class="group" data-select="nojs" id="transaction-list-root">
+{% include "finance/_page_header.html" with title="Transactions" helper=list_helper helper_class="max-md:hidden" more="Export CSV downloads all matching transactions across all pages. Tags are a JSON array of names; splits are a JSON array with category_name, signed amount_minor, and currency. Formula-like text starting with =, +, -, @, tab, or carriage return is prefixed with a single quote. Money columns stay numeric and exact. Identity confirmation may be required; submit again after confirming." actions="finance/_transaction_list_actions.html" %}
 {% if bulk_undo %}
 <form method="post" action="{% url 'transaction-bulk-undo' bulk_undo.pk %}" class="mb-4">
   {% csrf_token %}
@@ -31,65 +29,131 @@
   </label>
   <button type="submit" class="btn min-h-11">Search</button>
 </form>
-<details class="mb-4" data-open-from="md">
+<details class="mb-4 md:mb-3" data-open-from="md">
   <summary class="btn min-h-11 md:hidden">Filters{% if filter_hidden %} <span class="badge badge-primary badge-sm">{{ filter_hidden|length }}</span>{% endif %}</summary>
-  <form method="get" class="mt-3 flex flex-wrap items-end gap-3 md:mt-0">
-    {% include "finance/_form_fields.html" with form=filter_form %}
-    <button type="submit" class="btn btn-primary">Filter</button>
-    <a class="btn btn-ghost" href="{% url 'transaction-list' %}">Clear</a>
-  </form>
-  <form method="post" action="{% url 'transaction-saved-filter-create' %}" class="mt-3 flex flex-wrap items-end gap-3">
-    {% csrf_token %}
-    {% for name, value in filter_hidden %}
-      <input type="hidden" name="{{ name }}" value="{{ value }}">
-    {% endfor %}
-    {% include "finance/_form_fields.html" with form=save_filter_form %}
-    <button type="submit" class="btn">Save filters</button>
+  <form method="get" role="search" aria-label="Filter transactions" class="mt-3 flex flex-wrap items-end gap-3 md:mt-0 md:gap-x-2">
+    {% if filter_form.non_field_errors %}
+    <div role="alert" class="alert alert-error w-full">{{ filter_form.non_field_errors.0 }}</div>
+    {% endif %}
+    {% include "finance/_form_fields.html" with form=filter_form.toolbar_fields %}
+    <details class="open:basis-full md:mb-3" data-open-below="md"{% if more_filters_have_errors %} open data-keep-open{% endif %}>
+      <summary class="btn">
+        <svg aria-hidden="true" class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
+        More filters{% if more_filter_count %} <span class="badge badge-primary badge-sm">{{ more_filter_count }}<span class="sr-only"> on</span></span>{% endif %}
+      </summary>
+      <div class="mt-3 flex flex-wrap items-end gap-3 md:rounded-box md:border md:border-base-300 md:bg-base-100 md:px-4 md:pt-3">
+        {% include "finance/_form_fields.html" with form=filter_form.more_fields %}
+      </div>
+    </details>
+    <div class="flex items-center gap-2 md:mb-3">
+      <button type="submit" class="btn btn-primary">Filter</button>
+      <a class="btn btn-ghost" href="{% url 'transaction-list' %}">Clear</a>
+    </div>
   </form>
 </details>
-{% if saved_filters %}
-<div class="mb-4 flex items-center gap-2 overflow-x-auto md:flex-wrap">
-  {% for saved in saved_filters %}
-  <span class="badge badge-lg h-11 shrink-0 gap-1">
-    <a class="link" href="{% url 'transaction-saved-filter-apply' saved.pk %}">{{ saved.name }}</a>
-    <form method="post" action="{% url 'transaction-saved-filter-delete' saved.pk %}" class="inline">
+<div class="mb-4 flex flex-wrap items-start gap-2 md:justify-between">
+  {% if saved_filters %}
+  <nav aria-label="Saved filters" class="flex min-w-0 max-w-full items-center gap-2 overflow-x-auto md:flex-wrap">
+    {% for saved in saved_filters %}
+    <span class="badge badge-lg h-11 shrink-0 gap-1 md:h-9">
+      <a class="link" href="{% url 'transaction-saved-filter-apply' saved.pk %}">{{ saved.name }}</a>
+      <form method="post" action="{% url 'transaction-saved-filter-delete' saved.pk %}" class="inline">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-ghost btn-xs" aria-label="Delete saved filter {{ saved.name }}">×</button>
+      </form>
+    </span>
+    {% endfor %}
+  </nav>
+  {% endif %}
+  <div class="flex flex-wrap items-start gap-2 md:ml-auto">
+    <details>
+      <summary class="btn min-h-11 md:min-h-10">Save current filters</summary>
+      <form method="post" action="{% url 'transaction-saved-filter-create' %}" class="mt-2 flex flex-wrap items-end gap-3">
+        {% csrf_token %}
+        {% for name, value in filter_hidden %}
+          <input type="hidden" name="{{ name }}" value="{{ value }}">
+        {% endfor %}
+        {% include "finance/_form_fields.html" with form=save_filter_form %}
+        <button type="submit" class="btn mb-3">Save filters</button>
+      </form>
+    </details>
+    <button type="button" class="btn min-h-10 max-md:hidden md:group-data-[select=nojs]:hidden" data-select-toggle aria-pressed="false" aria-controls="bulk-edit-form">Select</button>
+    <form method="post" action="{% url 'transaction-export' %}">
       {% csrf_token %}
-      <button type="submit" class="btn btn-ghost btn-xs" aria-label="Delete saved filter {{ saved.name }}">×</button>
+      {% for name, value in filter_hidden %}
+      <input type="hidden" name="{{ name }}" value="{{ value }}">
+      {% endfor %}
+      <button type="submit" class="btn min-h-11 md:min-h-10" aria-describedby="transaction-export-help"{% if not export_filters_valid %} disabled{% endif %}>
+        <svg aria-hidden="true" class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+        Export CSV
+      </button>
+      <p id="transaction-export-help" hidden>Downloads all matching transactions across all pages. The page header's More explains the file's format.</p>
     </form>
-  </span>
-  {% endfor %}
+  </div>
 </div>
-{% endif %}
-<form method="post" action="{% url 'transaction-export' %}" class="mb-4">
-  {% csrf_token %}
-  {% for name, value in filter_hidden %}
-  <input type="hidden" name="{{ name }}" value="{{ value }}">
-  {% endfor %}
-  <button type="submit" class="btn min-h-11" aria-describedby="transaction-export-help"{% if not export_filters_valid %} disabled{% endif %}>Export filtered CSV</button>
-  <p id="transaction-export-help" class="mt-2 text-sm">Downloads all matching transactions across all pages. Tags are a JSON array of names; splits are a JSON array with category_name, signed amount_minor, and currency. Formula-like text starting with =, +, -, @, tab, or carriage return is prefixed with a single quote. Money columns stay numeric and exact. Identity confirmation may be required; submit again after confirming.</p>
-</form>
-{% if list_totals %}
-<div class="mb-4 grid grid-cols-3 gap-2 md:gap-4">
-  <article class="stats bg-base-100 shadow">
-    <div class="stat max-md:px-3 max-md:py-2">
-      <h2 class="stat-title">Income</h2>
-      <p class="stat-value text-base md:text-xl">{{ list_totals.income_display }}</p>
+<div class="page-columns">
+<aside class="page-side xl:col-start-2 xl:row-start-1{% if not list_totals %} max-md:hidden max-md:group-data-[select=on]:flex md:group-data-[select=off]:hidden{% endif %}" aria-label="Totals and bulk edit">
+  {% if list_totals %}
+  <section aria-labelledby="totals-heading" aria-describedby="totals-scope" class="xl:rounded-box xl:border xl:border-base-300 xl:bg-base-100 xl:p-4">
+    <h2 id="totals-heading" class="sr-only font-semibold xl:not-sr-only">Cash flow totals</h2>
+    {% comment %}income_and_spending_totals uses only the dates, account, scope and tag; say so.{% endcomment %}
+    <p id="totals-scope" class="sr-only mb-2 text-sm opacity-80 xl:not-sr-only">For the dates, account, scope and tag chosen. Search, category and the other filters don't change them.</p>
+    <div class="grid grid-cols-3 gap-2 md:gap-4 xl:grid-cols-1 xl:gap-0">
+      <article class="stats bg-base-100 shadow xl:rounded-none xl:shadow-none">
+        <div class="stat max-md:px-3 max-md:py-2 xl:flex xl:items-baseline xl:justify-between xl:px-0 xl:py-1">
+          <h3 class="stat-title">Income</h3>
+          <p class="stat-value text-base md:text-xl xl:text-base">{% include "finance/_amount.html" with value=list_totals.income_display tone="in" %}</p>
+        </div>
+      </article>
+      <article class="stats bg-base-100 shadow xl:rounded-none xl:shadow-none">
+        <div class="stat max-md:px-3 max-md:py-2 xl:flex xl:items-baseline xl:justify-between xl:px-0 xl:py-1">
+          <h3 class="stat-title">Spending</h3>
+          <p class="stat-value text-base md:text-xl xl:text-base">{% include "finance/_amount.html" with value=list_totals.spending_display tone="out" %}</p>
+        </div>
+      </article>
+      <article class="stats bg-base-100 shadow xl:rounded-none xl:border-t xl:border-base-300 xl:shadow-none">
+        <div class="stat max-md:px-3 max-md:py-2 xl:flex xl:items-baseline xl:justify-between xl:px-0 xl:pb-0 xl:pt-2">
+          <h3 class="stat-title">Net</h3>
+          <p class="stat-value text-base md:text-xl xl:text-lg">{% include "finance/_amount.html" with value=list_totals.net_display tone="" %}</p>
+        </div>
+      </article>
     </div>
-  </article>
-  <article class="stats bg-base-100 shadow">
-    <div class="stat max-md:px-3 max-md:py-2">
-      <h2 class="stat-title">Spending</h2>
-      <p class="stat-value text-base md:text-xl">{{ list_totals.spending_display }}</p>
-    </div>
-  </article>
-  <article class="stats bg-base-100 shadow">
-    <div class="stat max-md:px-3 max-md:py-2">
-      <h2 class="stat-title">Net</h2>
-      <p class="stat-value text-base md:text-xl">{{ list_totals.net_display }}</p>
-    </div>
-  </article>
-</div>
-{% endif %}
+  </section>
+  {% endif %}
+  <form method="post" action="{% url 'transaction-bulk-preview' %}" id="bulk-edit-form" class="max-md:hidden max-md:group-data-[select=on]:block md:group-data-[select=off]:hidden">
+    {% csrf_token %}
+    <input type="hidden" name="filter_query" value="{{ filter_query }}">
+    <section aria-labelledby="bulk-edit-heading" class="flex flex-wrap items-end gap-3 rounded-box bg-base-100 p-4 shadow xl:flex-col xl:items-stretch xl:border xl:border-base-300 xl:shadow-none">
+      <h2 id="bulk-edit-heading" class="w-full font-semibold">Bulk edit</h2>
+      <label class="flex flex-col gap-1">
+        <span class="label-text">Bulk action</span>
+        {{ bulk_form.action|daisy_widget }}
+      </label>
+      <label class="flex flex-col gap-1">
+        <span class="label-text">Category</span>
+        {{ bulk_form.category|daisy_widget }}
+      </label>
+      <fieldset class="flex flex-col gap-1">
+        <legend class="label-text">Tags</legend>
+        {{ bulk_form.tags }}
+      </fieldset>
+      <label class="flex flex-col gap-1">
+        <span class="label-text">Note line</span>
+        {{ bulk_form.note_line|daisy_widget }}
+      </label>
+      <button type="submit" class="btn btn-primary">Preview bulk edit</button>
+      {% if matching_over_cap %}
+      <p class="w-full text-sm opacity-80">Narrow the filters to select all {{ matching_count }} matching rows (cap {{ bulk_select_cap }}).</p>
+      {% else %}
+      <label class="label cursor-pointer gap-2">
+        {{ bulk_form.select_matching }}
+        <span>Select all {{ matching_count }} matching</span>
+      </label>
+      {% endif %}
+    </section>
+  </form>
+</aside>
+<div class="xl:col-start-1 xl:row-start-1">
 {% if show_ai_suggestions and uncategorized_filter %}
 <form method="post" action="{% url 'suggest-categories' %}" class="mb-4">
   {% csrf_token %}
@@ -119,80 +183,49 @@
   <button type="submit" class="btn btn-primary">Accept all shown</button>
 </form>
 {% endif %}
-<form method="post" action="{% url 'transaction-bulk-preview' %}" id="bulk-edit-form" class="mb-4 max-md:hidden max-md:group-data-[select=on]:block">
-  {% csrf_token %}
-  <input type="hidden" name="filter_query" value="{{ filter_query }}">
-  <div class="mb-4 flex flex-wrap items-end gap-3 rounded-box bg-base-100 p-4 shadow">
-    <label class="form-control">
-      <span class="label-text">Bulk action</span>
-      {{ bulk_form.action }}
-    </label>
-    <label class="form-control">
-      <span class="label-text">Category</span>
-      {{ bulk_form.category }}
-    </label>
-    <fieldset class="form-control">
-      <legend class="label-text">Tags</legend>
-      {{ bulk_form.tags }}
-    </fieldset>
-    <label class="form-control">
-      <span class="label-text">Note line</span>
-      {{ bulk_form.note_line }}
-    </label>
-    <button type="submit" class="btn btn-primary">Preview bulk edit</button>
-    {% if matching_over_cap %}
-    <p class="w-full text-sm opacity-80">Narrow the filters to select all {{ matching_count }} matching rows (cap {{ bulk_select_cap }}).</p>
-    {% else %}
-    <label class="label cursor-pointer gap-2">
-      {{ bulk_form.select_matching }}
-      <span>Select all {{ matching_count }} matching</span>
-    </label>
-    {% endif %}
-  </div>
-</form>
-<div class="md:overflow-x-auto">
-  <table class="table md:table-zebra max-md:block">
-    <thead class="sticky top-0 z-10 bg-base-200 max-md:hidden">
+<section aria-label="Transactions" class="md:overflow-x-auto md:rounded-box md:border md:border-base-300 md:bg-base-100">
+  <table class="table max-md:block">
+    <thead class="sticky top-0 z-10 bg-base-200 max-md:hidden md:bg-base-100">
       <tr>
-        <th scope="col">
+        <th scope="col" class="w-10 group-data-[select=off]:hidden">
           <label>
             <input type="checkbox" id="select-page" class="checkbox">
             <span class="sr-only">Select all on this page</span>
           </label>
         </th>
-        <th scope="col">Date</th>
-        <th scope="col">Account</th>
+        <th scope="col" class="w-28">Date</th>
         <th scope="col">Description</th>
-        <th scope="col" class="text-right">Amount</th>
-        <th scope="col">Category</th>
-        <th scope="col">Source</th>
-        <th scope="col">Scope</th>
-        <th scope="col"></th>
+        <th scope="col" class="w-48">Category</th>
+        <th scope="col" class="w-32 text-right">Amount</th>
       </tr>
     </thead>
     <tbody class="max-md:block">
     {% for transaction in transactions %}
       {% ifchanged transaction.transaction_date %}
-      <tr class="md:hidden max-md:block"><td colspan="9" class="max-md:block max-md:px-1 max-md:pb-1 max-md:pt-3 max-md:text-sm max-md:font-semibold max-md:opacity-80">{{ transaction.transaction_date|date:"D, M j" }}</td></tr>
+      <tr class="md:hidden max-md:block"><td colspan="5" class="max-md:block max-md:px-1 max-md:pb-1 max-md:pt-3 max-md:text-sm max-md:font-semibold max-md:opacity-80">{{ transaction.transaction_date|date:"D, M j" }}</td></tr>
       {% endifchanged %}
-      <tr class="max-md:relative max-md:grid max-md:[&>td]:border-0 max-md:min-h-16 max-md:grid-cols-[minmax(0,1fr)_auto] max-md:gap-x-3 max-md:border-b max-md:border-base-300 max-md:py-2">
-        <td class="max-md:hidden max-md:group-data-[select=on]:relative max-md:group-data-[select=on]:z-10 max-md:group-data-[select=on]:order-last max-md:group-data-[select=on]:col-span-2 max-md:group-data-[select=on]:block max-md:p-0">
+      <tr class="align-top max-md:relative max-md:grid max-md:[&>td]:border-0 max-md:min-h-16 max-md:grid-cols-[minmax(0,1fr)_auto] max-md:gap-x-3 max-md:border-b max-md:border-base-300 max-md:py-2">
+        <td class="max-md:hidden max-md:group-data-[select=on]:relative max-md:group-data-[select=on]:z-10 max-md:group-data-[select=on]:order-last max-md:group-data-[select=on]:col-span-2 max-md:group-data-[select=on]:block max-md:p-0 md:group-data-[select=off]:hidden">
           <label>
             <input type="checkbox" form="bulk-edit-form" name="transaction_id" value="{{ transaction.pk }}" class="checkbox js-bulk-row">
             <span class="sr-only">Select transaction</span>
           </label>
         </td>
-        <td class="max-md:hidden">{{ transaction.transaction_date }}</td>
-        <td class="max-md:hidden">{{ transaction.account.name }}</td>
+        <td class="whitespace-nowrap tabular-nums opacity-80 max-md:hidden">{{ transaction.transaction_date|date:"M j, Y" }}</td>
         <td class="max-md:col-start-1 max-md:row-start-1 max-md:min-w-0 max-md:p-0">
-          <span class="block font-medium max-md:truncate md:font-normal">{{ transaction.description }}</span>
+          <span class="block font-medium max-md:truncate md:hidden">{{ transaction.description }}</span>
+          <a class="link link-hover font-medium max-md:hidden" href="{% url 'transaction-edit' transaction.pk %}">{{ transaction.description }}</a>
           {% if transaction.tags.all %}
-          <div class="mt-1 flex flex-wrap gap-1">
+          <div class="mt-1 flex flex-wrap gap-1 md:ml-1 md:mt-0 md:inline-flex md:align-text-bottom">
             {% for tag in transaction.tags.all %}
             <span class="badge badge-outline">{{ tag.name }}</span>
             {% endfor %}
           </div>
           {% endif %}
+          <div class="mt-0.5 text-sm opacity-80 max-md:hidden">
+            {{ transaction.account.name }} · {{ transaction.account.get_scope_display }} ·
+            {% if transaction.is_manual_entry %}Manual · Added {{ transaction.import_batch.imported_at|date:"M j, Y" }}{% else %}{{ transaction.import_batch.get_source_display }} · Imported {{ transaction.import_batch.imported_at|date:"M j, Y" }}{% endif %}
+          </div>
           {% if transaction.note %}
           <div class="mt-1 text-sm opacity-80">
             {% if transaction.note|length > 80 %}
@@ -206,7 +239,6 @@
           </div>
           {% endif %}
         </td>
-        <td class="text-right max-md:col-start-2 max-md:row-start-1 max-md:p-0 max-md:font-semibold">{% include "finance/_amount.html" with value=transaction.amount_display tone="" %}</td>
         <td class="max-md:col-span-2 max-md:row-start-2 max-md:p-0 max-md:text-sm">
           <span class="{% if transaction.category is None %}max-md:badge max-md:badge-warning max-md:badge-sm{% else %}max-md:opacity-80{% endif %}">{{ transaction.category_display }}</span><span class="opacity-80 md:hidden"> · {{ transaction.account.name }}</span>
           {% if transaction.category_source == "split" %}
@@ -234,31 +266,30 @@
           {% endif %}
           {% endwith %}
         </td>
-        {% if transaction.is_manual_entry %}
-        <td class="max-md:hidden">Manual<br><small>Added {{ transaction.import_batch.imported_at }}</small></td>
-        {% else %}
-        <td class="max-md:hidden">{{ transaction.import_batch.get_source_display }}<br><small>Imported {{ transaction.import_batch.imported_at }}</small></td>
-        {% endif %}
-        <td class="max-md:hidden">{{ transaction.account.get_scope_display }}</td>
-        <td class="max-md:contents"><a class="link max-md:absolute max-md:inset-0 max-md:overflow-hidden max-md:text-[0px]" href="{% url 'transaction-edit' transaction.pk %}"><span class="max-md:sr-only">Correct</span><span class="sr-only md:hidden"> {{ transaction.description }}</span></a></td>
+        <td class="whitespace-nowrap text-right font-semibold max-md:col-start-2 max-md:row-start-1 max-md:p-0">{% include "finance/_amount.html" with value=transaction.amount_display tone="" %}</td>
+        <td class="max-md:contents md:hidden"><a class="link max-md:absolute max-md:inset-0 max-md:overflow-hidden max-md:text-[0px]" href="{% url 'transaction-edit' transaction.pk %}"><span class="max-md:sr-only">Correct</span><span class="sr-only md:hidden"> {{ transaction.description }}</span></a></td>
       </tr>
     {% empty %}
-      <tr><td colspan="9">No matching transactions.</td></tr>
+      <tr><td colspan="5">No matching transactions.</td></tr>
     {% endfor %}
     </tbody>
   </table>
+  {% if page and page.paginator.num_pages > 1 %}
+  <nav class="mt-4 flex flex-wrap items-center gap-2 md:mt-0 md:justify-between md:border-t md:border-base-300 md:px-4 md:py-3" aria-label="Transaction pages">
+    <span class="text-sm opacity-80">Showing {{ page.start_index }}–{{ page.end_index }} of {{ page.paginator.count }} · page {{ page.number }} of {{ page.paginator.num_pages }}</span>
+    <span class="flex gap-2">
+      {% if page.has_previous %}
+      <a class="btn btn-sm max-md:min-h-11" href="?{{ filter_query }}{% if filter_query %}&{% endif %}page={{ page.previous_page_number }}">Previous</a>
+      {% endif %}
+      {% if page.has_next %}
+      <a class="btn btn-sm max-md:min-h-11" href="?{{ filter_query }}{% if filter_query %}&{% endif %}page={{ page.next_page_number }}">Next page</a>
+      {% endif %}
+    </span>
+  </nav>
+  {% endif %}
+</section>
 </div>
 </div>
-{% if page and page.paginator.num_pages > 1 %}
-<nav class="mt-4 flex flex-wrap items-center gap-2" aria-label="Transaction pages">
-  {% if page.has_previous %}
-  <a class="btn btn-sm max-md:min-h-11" href="?{{ filter_query }}{% if filter_query %}&{% endif %}page={{ page.previous_page_number }}">Previous</a>
-  {% endif %}
-  <span>Page {{ page.number }} of {{ page.paginator.num_pages }}</span>
-  {% if page.has_next %}
-  <a class="btn btn-sm max-md:min-h-11" href="?{{ filter_query }}{% if filter_query %}&{% endif %}page={{ page.next_page_number }}">Next</a>
-  {% endif %}
-</nav>
-{% endif %}
+</div>
 <script src="{% static 'js/bulk-select.js' %}"></script>
 {% endblock %}

@@ -1,0 +1,27 @@
+{% comment %}Row menu entries for a cancelled series (issue #335); item is a cancelled_series row.{% endcomment %}
+{% if item.resumed %}
+<li>
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="series_id" value="{{ item.series.pk }}">
+    <input type="hidden" name="action" value="confirm_resume">
+    <button type="submit">Confirm resume</button>
+  </form>
+</li>
+<li>
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="series_id" value="{{ item.series.pk }}">
+    <input type="hidden" name="action" value="keep_cancelled">
+    <button type="submit">Keep cancelled</button>
+  </form>
+</li>
+{% endif %}
+<li>
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="series_id" value="{{ item.series.pk }}">
+    <input type="hidden" name="action" value="undo_cancel">
+    <button type="submit">Undo cancel</button>
+  </form>
+</li>

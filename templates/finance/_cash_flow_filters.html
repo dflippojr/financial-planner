@@ -1,0 +1,28 @@
+{% comment %}
+Home header actions (issue #329): a range control and a Filters disclosure that holds every
+field of the cash-flow filter form. On a phone the range control is hidden and the disclosure
+reads Change range, as before.
+{% endcomment %}
+<nav aria-label="Range" class="range-control max-md:hidden">
+  {% for option in range_options %}
+  <a href="{{ option.url }}"{% if option.current %} aria-current="true"{% endif %}{% if option.opens_filters %} data-open-details="cash-flow-filters"{% endif %}>{{ option.label }}</a>
+  {% endfor %}
+</nav>
+<details id="cash-flow-filters" class="filters-disclosure"{% if filter_form.errors %} open{% endif %}>
+  <summary class="btn min-h-11 rounded-full max-md:absolute max-md:right-0 max-md:top-0 md:min-h-10 md:rounded-field">
+    <span class="md:hidden">Change range</span>
+    <span class="inline-flex items-center gap-1.5 max-md:hidden">
+      <svg aria-hidden="true" class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
+      Filters
+      {% if filter_count %}<span class="badge badge-primary badge-sm">{{ filter_count }}<span class="sr-only"> on</span></span>{% endif %}
+    </span>
+  </summary>
+  <form method="get" class="filters-panel mt-3 flex flex-wrap items-end gap-3 md:mt-0">
+    {% include "finance/_form_fields.html" with form=filter_form %}
+    {% for token in scenario_tokens %}
+    <input type="hidden" name="sc" value="{{ token }}">
+    {% endfor %}
+    <button type="submit" class="btn btn-primary">Update</button>
+    <a class="btn btn-ghost" href="{% url 'home' %}">Reset range</a>
+  </form>
+</details>

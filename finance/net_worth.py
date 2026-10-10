@@ -121,6 +121,7 @@ def _month_period(window, accounts, indexed, today):
         liabilities_display=format_minor(liabilities),
         net_display=format_minor(net),
         omitted_untracked=omitted,
+        carried_forward=sum(1 for row in rows if row.carried_forward),
         accounts=rows,
         equity_lines=_equity_lines(accounts, rows),
     )
@@ -281,5 +282,12 @@ def net_worth_preset_links(today, *, scope=""):
         query = {"date_from": preset.date_from.isoformat(), "date_to": preset.date_to.isoformat()}
         if scope:
             query["scope"] = scope
-        links.append(SimpleNamespace(label=preset.label, url=f"{reverse('net-worth')}?{urlencode(query)}"))
+        links.append(
+            SimpleNamespace(
+                label=preset.label,
+                url=f"{reverse('net-worth')}?{urlencode(query)}",
+                date_from=preset.date_from,
+                date_to=preset.date_to,
+            )
+        )
     return links

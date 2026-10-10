@@ -1,26 +1,22 @@
 {% extends "finance/base.html" %}
 {% block title %}Spending by category · Financial Planner{% endblock %}
 {% block content %}
-<h1 class="mb-4 text-2xl font-bold">Spending by category</h1>
-<form method="get" class="mb-4 flex flex-wrap items-end gap-3">
-  {% include "finance/_form_fields.html" with form=filter_form %}
-  {% if active_tab == "trends" %}
-  <input type="hidden" name="tab" value="trends">
-  {% endif %}
-  <button type="submit" class="btn btn-primary">Update</button>
-  <a class="btn btn-ghost" href="{% url 'spending-by-category' %}">Reset to default range</a>
-</form>
-{% if presets %}
-<p class="mb-4 flex flex-wrap gap-2">
-  {% for preset in presets %}
-  <a class="btn btn-sm btn-outline" href="{{ preset.url }}">{{ preset.label }}</a>
-  {% endfor %}
-</p>
+{% url 'spending-by-category' as reset_url %}
+{% load i18n %}
+{% if range_from and range_to %}
+{% blocktranslate asvar range_helper with start=range_from|date:"M j, Y" end=range_to|date:"M j, Y" %}{{ start }} – {{ end }} · Amounts in USD.{% endblocktranslate %}
+{% else %}
+{% blocktranslate asvar range_helper %}Amounts in USD.{% endblocktranslate %}
 {% endif %}
-<div role="tablist" class="tabs tabs-border mb-4">
-  <a role="tab" class="tab{% if active_tab != 'trends' %} tab-active{% endif %}" href="{{ overview_url }}">Overview</a>
-  <a role="tab" class="tab{% if active_tab == 'trends' %} tab-active{% endif %}" href="{{ trends_url }}">Trends</a>
-</div>
+{% if active_tab == "trends" %}
+{% include "finance/_page_header.html" with title="Spending by category" helper=range_helper actions="finance/_range_filters.html" keep_tab="trends" %}
+{% else %}
+{% include "finance/_page_header.html" with title="Spending by category" helper=range_helper actions="finance/_range_filters.html" %}
+{% endif %}
+<nav aria-label="Spending views" class="tabs tabs-border mb-4">
+  <a class="tab{% if active_tab != 'trends' %} tab-active{% endif %}" href="{{ overview_url }}"{% if active_tab != 'trends' %} aria-current="page"{% endif %}>Overview</a>
+  <a class="tab{% if active_tab == 'trends' %} tab-active{% endif %}" href="{{ trends_url }}"{% if active_tab == 'trends' %} aria-current="page"{% endif %}>Trends</a>
+</nav>
 {% if report and report.includes_investment %}
 <div role="note" class="alert alert-info mb-4">{{ report.investment_notice }}</div>
 {% endif %}
@@ -36,16 +32,16 @@
 {% if active_tab == "trends" and trend_report %}
 <div class="flex flex-col gap-4">
   {{ chart_data|json_script:"spending-trend-chart-data" }}
-  <figure>
-    <figcaption class="mb-2 font-medium">Spending by category over time</figcaption>
-    <div class="h-72 w-full rounded-box bg-base-100 p-2 shadow">
+  <figure class="rounded-box border border-base-300 bg-base-100 p-4">
+    <figcaption class="mb-2 font-semibold">Spending by category over time</figcaption>
+    <div class="h-72 w-full">
       <canvas id="spending-trend-chart" data-chart="spending-trend" data-chart-payload="spending-trend-chart-data" role="img" aria-label="Stacked bar chart of spending by category for each period. The top eight categories in the range are drawn separately; remaining categories are grouped as Other. The table below lists every category's amount for each period."></canvas>
     </div>
     <p class="mt-2 text-sm opacity-80">The chart shows the top 8 categories by spending in this range, plus Other. The table lists every category, including Uncategorized.</p>
   </figure>
-  <div class="overflow-x-auto">
-    <table class="table table-zebra">
-      <thead class="sticky top-0 z-10 bg-base-200">
+  <div class="overflow-x-auto rounded-box border border-base-300 bg-base-100">
+    <table class="table">
+      <thead>
         <tr>
           <th scope="col">Period</th>
           {% for category in trend_report.categories %}
@@ -57,11 +53,11 @@
       <tbody>
       {% for period in trend_report.periods %}
         <tr>
-          <td>{{ period.label }}</td>
+          <td class="font-medium whitespace-nowrap">{{ period.label }}</td>
           {% for display in period.displays %}
-          <td class="text-right">{% include "finance/_amount.html" with value=display tone="out" %}</td>
+          <td class="whitespace-nowrap text-right">{% include "finance/_amount.html" with value=display tone="out" %}</td>
           {% endfor %}
-          <td class="text-right">{% include "finance/_amount.html" with value=period.total_spending_display tone="out" %}</td>
+          <td class="whitespace-nowrap text-right font-semibold">{% include "finance/_amount.html" with value=period.total_spending_display tone="out" %}</td>
         </tr>
       {% endfor %}
       </tbody>
@@ -69,62 +65,85 @@
   </div>
 </div>
 {% elif report %}
+{{ chart_data|json_script:"spending-chart-data" }}
+<div class="page-columns">
 <div class="flex flex-col gap-4">
-  {{ chart_data|json_script:"spending-chart-data" }}
-  <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-    {% for row in report.rows %}
-    <a href="{{ row.detail_url }}" class="card bg-base-100 shadow-sm" style="border-left-width: 0.5rem; border-left-color: var(--chart-category-{{ row.color_index }});">
-      <div class="card-body gap-1 p-4">
-        <h2 class="card-title text-base">{{ row.name }}</h2>
-        <p class="text-lg font-semibold">{% include "finance/_amount.html" with value=row.spending_display tone="out" %}</p>
-        <p class="tabular-amount text-sm opacity-80">{{ row.percent_display }} of total</p>
-        {% if row.is_net_refund %}<span class="badge badge-info">Net refund</span>{% endif %}
-      </div>
-    </a>
-    {% endfor %}
-  </div>
-  <figure>
-    <figcaption class="mb-2 font-medium">Spending share by category</figcaption>
-    <div class="h-72 w-full rounded-box bg-base-100 p-2 shadow">
-      <canvas id="spending-chart" data-chart="spending" data-chart-payload="spending-chart-data" role="img" aria-label="Donut chart of spending by category, showing categories with positive spending. Category tiles and the table below list every category's amount, percent, and net-refund label."></canvas>
+  <section aria-labelledby="spending-total" class="flex flex-wrap items-baseline gap-x-4 gap-y-1 rounded-box border border-base-300 bg-base-100 px-5 py-4">
+    <h2 id="spending-total" class="text-sm font-semibold opacity-80">Total spending</h2>
+    <p class="text-3xl font-bold">{% include "finance/_amount.html" with value=report.total_spending_display tone="out" %}</p>
+  </section>
+  <section aria-labelledby="spending-categories" class="rounded-box border border-base-300 bg-base-100">
+    <h2 id="spending-categories" class="px-4 pt-4 font-semibold">Categories</h2>
+    <div class="overflow-x-auto">
+      <table class="table max-sm:table-sm">
+        <thead>
+          <tr>
+            <th scope="col">Category</th>
+            <th scope="col" class="sm:w-2/5">Share<span class="max-sm:hidden"> of spending</span></th>
+            <th scope="col" class="text-right">Spending</th>
+            <th scope="col" class="max-sm:hidden"><span class="sr-only">Transactions</span></th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for row in report.rows %}
+          <tr>
+            <td>
+              <span class="flex items-center gap-2">
+                <span aria-hidden="true" class="category-swatch" data-color="{{ row.color_index }}"></span>
+                <a class="link font-medium" href="{{ row.detail_url }}">{{ row.name }}</a>
+              </span>
+              {% if row.is_net_refund %}<span class="badge badge-info badge-sm mt-1">Net refund</span>{% endif %}
+            </td>
+            <td>
+              <span class="flex items-center gap-3">
+                {% if report.total_spending_minor > 0 and row.spending_minor > 0 %}
+                <progress class="progress min-w-16 flex-1 max-sm:hidden" value="{{ row.spending_minor }}" max="{{ report.total_spending_minor }}" aria-hidden="true"></progress>
+                {% else %}
+                <span class="flex-1 max-sm:hidden"></span>
+                {% endif %}
+                <span class="w-14 text-right text-sm tabular-nums">{{ row.percent_display }}</span>
+              </span>
+            </td>
+            <td class="whitespace-nowrap text-right font-semibold">{% include "finance/_amount.html" with value=row.spending_display tone="out" %}</td>
+            <td class="max-sm:hidden"><a class="link whitespace-nowrap" href="{{ row.drilldown_url }}">Transactions<span class="sr-only"> for {{ row.name }}</span></a></td>
+          </tr>
+        {% endfor %}
+        </tbody>
+        <tfoot>
+          <tr>
+            <td class="font-semibold">Total</td>
+            <td></td>
+            <td class="whitespace-nowrap text-right font-semibold">{% include "finance/_amount.html" with value=report.total_spending_display tone="out" %}</td>
+            <td class="max-sm:hidden"></td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  </section>
+</div>
+<aside class="page-side" aria-label="Spending summary">
+  <figure class="rounded-box border border-base-300 bg-base-100 p-4">
+    <figcaption class="mb-2 font-semibold">Share by category</figcaption>
+    <div class="h-72 w-full">
+      <canvas id="spending-chart" data-chart="spending" data-chart-payload="spending-chart-data" role="img" aria-label="Donut chart of spending by category, showing categories with positive spending. The Categories table lists every category's amount, percent, and net-refund label."></canvas>
     </div>
     {% if chart_data.has_net_refund %}
-    <p class="mt-2 text-sm opacity-80">Categories where refunds exceed spending are not drawn in the chart. They appear in the tiles and the table with their negative totals.</p>
+    <p class="mt-2 text-sm opacity-80">Categories where refunds exceed spending are not drawn in the chart. They appear in the table with their negative totals.</p>
     {% endif %}
   </figure>
-  <div class="overflow-x-auto">
-    <table class="table table-zebra">
-      <thead class="sticky top-0 z-10 bg-base-200">
-        <tr>
-          <th scope="col">Category</th>
-          <th scope="col" class="text-right">Spending</th>
-          <th scope="col" class="text-right">Percent of total</th>
-          <th scope="col"></th>
-        </tr>
-      </thead>
-      <tbody>
-      {% for row in report.rows %}
-        <tr>
-          <td>
-            <a class="link" href="{{ row.detail_url }}">{{ row.name }}</a>
-            {% if row.is_net_refund %}<span class="badge badge-info">Net refund</span>{% endif %}
-          </td>
-          <td class="text-right">{% include "finance/_amount.html" with value=row.spending_display tone="out" %}</td>
-          <td class="text-right tabular-amount">{{ row.percent_display }}</td>
-          <td><a class="link" href="{{ row.drilldown_url }}">Transactions</a></td>
-        </tr>
-      {% endfor %}
-      </tbody>
-      <tfoot>
-        <tr>
-          <th scope="col">Total</th>
-          <td class="text-right">{% include "finance/_amount.html" with value=report.total_spending_display tone="out" %}</td>
-          <td></td>
-          <td></td>
-        </tr>
-      </tfoot>
-    </table>
-  </div>
+  {% for row in report.rows %}
+  {% if row.key == "uncategorized" and row.spending_minor > 0 %}
+  <a href="{{ row.drilldown_url }}" class="flex min-h-14 items-center gap-3 rounded-box border border-warning bg-base-100 px-4 py-2">
+    <span class="flex min-w-0 flex-1 flex-col gap-1">
+      {% include "finance/_status.html" with word="Uncategorized" %}
+      <span class="font-medium">{{ row.percent_display }} of spending has no category</span>
+      <span class="text-sm opacity-80">Categorize in Transactions</span>
+    </span>
+    <span aria-hidden="true">›</span>
+  </a>
+  {% endif %}
+  {% endfor %}
+</aside>
 </div>
 {% endif %}
 {% endblock %}

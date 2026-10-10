@@ -1,23 +1,21 @@
-<article class="stats bg-base-100 shadow">
-  <div class="stat">
-    <h2 class="stat-title">
-      {{ summary.label }}
-      {% if summary.return_display %}<span class="badge badge-ghost">Estimate</span>{% endif %}
-    </h2>
-    {% if summary.return_display %}
-    <p class="stat-value text-2xl sm:text-3xl">{{ summary.return_display }}</p>
+<div class="flex min-w-0 flex-col gap-1 {{ cell_class }}">
+  <h3 class="flex flex-wrap items-center gap-2 text-sm font-semibold opacity-80">
+    {{ summary.label }}
+    {% if summary.return_display %}<span class="badge badge-ghost badge-sm">Estimate</span>{% endif %}
+  </h3>
+  {% if summary.return_display %}
+  <p class="text-2xl font-semibold tabular-nums">{{ summary.return_display }}</p>
+  {% else %}
+  <p class="text-2xl font-semibold">{% include "finance/_amount.html" with value=summary.growth_display tone="" %}</p>
+  {% endif %}
+  <p class="text-sm opacity-80">
+    {% if summary.has_data %}
+    Growth {% include "finance/_amount.html" with value=summary.growth_display tone="" %}
+    · Contributions {% include "finance/_amount.html" with value=summary.contributions_display tone="" %}
+    {% if summary.partial %}· partial range{% endif %}
     {% else %}
-    <p class="stat-value text-2xl sm:text-3xl">{% include "finance/_amount.html" with value=summary.growth_display tone="" %}</p>
+    {{ summary.note }}
     {% endif %}
-    <p class="stat-desc">
-      {% if summary.has_data %}
-      Growth {% include "finance/_amount.html" with value=summary.growth_display tone="" %}
-      · Contributions {% include "finance/_amount.html" with value=summary.contributions_display tone="" %}
-      {% if summary.partial %}· partial range{% endif %}
-      {% else %}
-      {{ summary.note }}
-      {% endif %}
-    </p>
-    {% if summary.note and summary.has_data %}<p class="stat-desc">{{ summary.note }}</p>{% endif %}
-  </div>
-</article>
+  </p>
+  {% if summary.note and summary.has_data %}<p class="text-sm opacity-80">{{ summary.note }}</p>{% endif %}
+</div>

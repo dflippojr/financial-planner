@@ -1,0 +1,98 @@
+name: Playwright layout
+
+# Runs the browser layout and page tests (every test that uses the "browser"
+# fixture; tests/conftest.py marks them "browser") in headless Chromium.
+# The other workflows skip them because Playwright is not installed there.
+# The whole set takes well under a minute on 4 workers, so every PR runs all
+# of it rather than a smoke subset. Uses no secrets and the in-memory SQLite
+# test settings; layout does not depend on the database engine.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: playwright-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-test.txt
+
+      - name: Cache the Tailwind binary
+        uses: actions/cache@v6
+        with:
+          path: .cache/tailwindcss
+          key: tailwindcss-${{ runner.os }}-${{ hashFiles('scripts/css_pins.env') }}
+
+      - name: Build CSS
+        run: bash scripts/build_css.sh
+
+      - name: Read the Playwright version
+        id: playwright
+        run: echo "version=$(python -c 'from importlib.metadata import version; print(version("playwright"))')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        id: browsers
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+
+      - name: Install Chromium
+        if: steps.browsers.outputs.cache-hit != 'true'
+        run: python -m playwright install --with-deps chromium
+
+      - name: Install Chromium system libraries
+        if: steps.browsers.outputs.cache-hit == 'true'
+        run: python -m playwright install-deps chromium
+
+      - name: Run browser tests
+        env:
+          PLAYWRIGHT_TRACE_DIR: test-results/traces
+        run: >
+          python -m pytest tests -q -p no:cacheprovider -m browser -n 4 -rs
+          --junitxml=test-results/junit.xml
+
+      # The tests skip themselves when Chromium or the CSS is missing, which
+      # would turn this job green while checking nothing.
+      - name: Fail if browser tests were skipped
+        run: |
+          python - <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          root = ET.parse("test-results/junit.xml").getroot()
+          suite = root if root.tag == "testsuite" else root.find("testsuite")
+          tests, skipped = int(suite.get("tests")), int(suite.get("skipped"))
+          print(f"{tests} browser tests, {skipped} skipped")
+          sys.exit(1 if tests == 0 or skipped else 0)
+          PY
+
+      - name: Upload report and traces
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: test-results/
+          retention-days: 14
+          if-no-files-found: ignore

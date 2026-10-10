@@ -1,260 +1,189 @@
 {% extends "finance/base.html" %}
 {% block title %}Recurring charges · Financial Planner{% endblock %}
 {% block content %}
-<h1 class="mb-4 text-2xl font-bold">Recurring charges</h1>
-<p class="mb-4"><a href="{% url 'recurring-create' %}" class="btn btn-sm">Create series from charges</a></p>
+{% include "finance/_page_header.html" with title="Recurring charges" helper="Weekly to annual charges found in your transactions. Amounts in USD." more="Confirmed series feed the cash flow projection. Use a series' menu to see its charges and reasons, merge it into another series, add charges by hand or mark it cancelled." actions="finance/_recurring_header_actions.html" %}
 {{ chart_data|json_script:"recurring-chart-data" }}
 {% if skipped_merchants %}
-<p class="mb-4 text-sm text-base-content/70" role="note">
+<p class="mb-4 text-sm opacity-80" role="note">
   Left out of detection because they have too many charges to check: {{ skipped_merchants|join:", " }}. Group their charges by hand if one is a subscription.
 </p>
 {% endif %}
-<div class="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2">
-  <article class="stats bg-base-100 shadow">
-    <div class="stat">
-      <h2 class="stat-title">Confirmed monthly total</h2>
-      <p class="stat-value text-2xl sm:text-3xl">{% include "finance/_amount.html" with value=monthly_display tone="out" %}</p>
-      <p class="stat-desc">{{ monthly_minor }} minor units</p>
-    </div>
-  </article>
-  <article class="stats bg-base-100 shadow">
-    <div class="stat">
-      <h2 class="stat-title">Confirmed annual total</h2>
-      <p class="stat-value text-2xl sm:text-3xl">{% include "finance/_amount.html" with value=annual_display tone="out" %}</p>
-      <p class="stat-desc">{{ annual_minor }} minor units</p>
-    </div>
-  </article>
-</div>
-<h2 class="mb-3 text-xl font-semibold">Upcoming</h2>
-<div class="overflow-x-auto mb-8">
-  <table class="table table-zebra">
-    <thead class="sticky top-0 z-10 bg-base-200">
-      <tr>
-        <th scope="col">Name</th>
-        <th scope="col">Expected</th>
-        <th scope="col">Cadence</th>
-        <th scope="col" class="text-right">Typical amount</th>
-      </tr>
-    </thead>
-    <tbody>
-    {% for item in upcoming %}
-      <tr>
-        <td>{{ item.series.display_name }}</td>
-        <td>{{ item.expected_on }}</td>
-        <td>{{ item.series.get_cadence_display }}</td>
-        <td class="text-right">{% include "finance/_amount.html" with value=item.amount_display tone="" %}</td>
-      </tr>
-    {% empty %}
-      <tr><td colspan="4">No upcoming charges in the next 30 days.</td></tr>
-    {% endfor %}
-    </tbody>
-  </table>
-</div>
-<h2 class="mb-3 text-xl font-semibold">Price changes</h2>
-<div class="overflow-x-auto mb-8">
-  <table class="table table-zebra">
-    <thead class="sticky top-0 z-10 bg-base-200">
-      <tr>
-        <th scope="col">Name</th>
-        <th scope="col">Charge date</th>
-        <th scope="col" class="text-right">Previous typical</th>
-        <th scope="col" class="text-right">New amount</th>
-        <th scope="col">Change</th>
-        <th scope="col"></th>
-      </tr>
-    </thead>
-    <tbody>
-    {% for item in price_changes %}
-      <tr>
-        <td>{{ item.series.display_name }}</td>
-        <td>{{ item.charge_date }}</td>
-        <td class="text-right">{% include "finance/_amount.html" with value=item.previous_display tone="out" %}</td>
-        <td class="text-right">{% include "finance/_amount.html" with value=item.new_display tone="out" %}</td>
-        <td>{{ item.percent_display }}</td>
-        <td>
+<section aria-label="Confirmed totals" class="mb-6 grid grid-cols-2 gap-4 rounded-box border border-base-300 bg-base-100 p-4 sm:p-5">
+  <div class="flex min-w-0 flex-col gap-1">
+    <h2 class="text-sm font-semibold opacity-80">Confirmed monthly total</h2>
+    <p class="text-2xl font-bold sm:text-3xl">{% include "finance/_amount.html" with value=monthly_display tone="out" %}</p>
+  </div>
+  <div class="flex min-w-0 flex-col gap-1 border-l border-base-300 pl-4 sm:pl-5">
+    <h2 class="text-sm font-semibold opacity-80">Confirmed annual total</h2>
+    <p class="text-2xl font-bold sm:text-3xl">{% include "finance/_amount.html" with value=annual_display tone="out" %}</p>
+  </div>
+</section>
+<div class="page-columns wrap-anywhere">
+  <div class="flex flex-col gap-6">
+    <section aria-labelledby="recurring-confirmed" class="rounded-box border border-base-300 bg-base-100">
+      <h2 id="recurring-confirmed" class="px-4 pt-4 text-lg font-semibold sm:px-5">Confirmed</h2>
+      {% if confirmed %}
+      <table class="table">
+        <thead>
+          <tr>
+            <th scope="col" class="sm:pl-5">Series</th>
+            <th scope="col" class="max-md:hidden">Cadence</th>
+            <th scope="col" class="text-right max-md:hidden">Typical amount</th>
+            <th scope="col" class="text-right">Monthly</th>
+            <th scope="col" class="text-right max-md:hidden">Annual</th>
+            <th scope="col" class="w-12"><span class="sr-only">Actions</span></th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for series in confirmed %}
+          <tr id="series-{{ series.pk }}">
+            <td class="sm:pl-5">
+              <span class="font-semibold">{{ series.display_name }}</span>
+              <span class="block text-sm opacity-80"><span class="md:hidden">{{ series.get_cadence_display }} · typical {% include "finance/_amount.html" with value=series.amount_display tone="" %} · </span>{{ series.members.all|length }} charge{{ series.members.all|length|pluralize }} · {{ series.get_confidence_display|lower }} confidence</span>
+            </td>
+            <td class="whitespace-nowrap max-md:hidden">{{ series.get_cadence_display }}</td>
+            <td class="whitespace-nowrap text-right max-md:hidden">{% include "finance/_amount.html" with value=series.amount_display tone="" %}</td>
+            <td class="whitespace-nowrap text-right">{% include "finance/_amount.html" with value=series.monthly_display tone="out" %}</td>
+            <td class="whitespace-nowrap text-right max-md:hidden">{% include "finance/_amount.html" with value=series.annual_display tone="out" %}</td>
+            <td class="text-right">{% with label="Actions for "|add:series.display_name %}{% include "finance/_row_menu.html" with items="finance/_recurring_menu_items.html" %}{% endwith %}</td>
+          </tr>
+          {% include "finance/_recurring_charges_row.html" with colspan=6 %}
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="px-4 pb-4 pt-1 opacity-80 sm:px-5">No confirmed recurring charges.</p>
+      {% endif %}
+    </section>
+
+    <section aria-labelledby="recurring-suggestions" class="rounded-box border border-base-300 bg-base-100">
+      <h2 id="recurring-suggestions" class="px-4 pt-4 text-lg font-semibold sm:px-5">Suggestions{% if suggestions %} <span class="font-normal opacity-80">· {{ suggestions|length }} found</span>{% endif %}</h2>
+      {% if suggestions %}
+      <table class="table">
+        <thead>
+          <tr>
+            <th scope="col" class="sm:pl-5">Series</th>
+            <th scope="col" class="max-md:hidden">Cadence</th>
+            <th scope="col" class="text-right max-md:hidden">Typical amount</th>
+            <th scope="col"><span class="sr-only">Actions</span></th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for series in suggestions %}
+          <tr id="series-{{ series.pk }}">
+            <td class="sm:pl-5">
+              <span class="font-semibold">{{ series.display_name }}</span>{% if series.status == "possible" %} <span class="badge badge-ghost">possible</span>{% endif %}
+              <span class="block text-sm opacity-80"><span class="md:hidden">{{ series.get_cadence_display }} · typical {% include "finance/_amount.html" with value=series.amount_display tone="" %} · </span>{{ series.members.all|length }} charge{{ series.members.all|length|pluralize }} · {{ series.get_confidence_display|lower }} confidence</span>
+            </td>
+            <td class="whitespace-nowrap max-md:hidden">{{ series.get_cadence_display }}</td>
+            <td class="whitespace-nowrap text-right max-md:hidden">{% include "finance/_amount.html" with value=series.amount_display tone="" %}</td>
+            <td>
+              <div class="flex flex-wrap items-center justify-end gap-2">
+                <form method="post">
+                  {% csrf_token %}
+                  <input type="hidden" name="series_id" value="{{ series.pk }}">
+                  <input type="hidden" name="action" value="confirm">
+                  <button type="submit" class="btn btn-sm btn-primary">Confirm</button>
+                </form>
+                <form method="post">
+                  {% csrf_token %}
+                  <input type="hidden" name="series_id" value="{{ series.pk }}">
+                  <input type="hidden" name="action" value="dismiss">
+                  <button type="submit" class="btn btn-sm">Dismiss</button>
+                </form>
+                {% with label="More actions for "|add:series.display_name %}{% include "finance/_row_menu.html" with items="finance/_recurring_menu_items.html" %}{% endwith %}
+              </div>
+            </td>
+          </tr>
+          {% include "finance/_recurring_charges_row.html" with colspan=4 %}
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="px-4 pb-4 pt-1 opacity-80 sm:px-5">No suggestions.</p>
+      {% endif %}
+    </section>
+
+    <section aria-labelledby="recurring-cancelled" class="rounded-box border border-base-300 bg-base-100">
+      <h2 id="recurring-cancelled" class="px-4 pt-4 text-lg font-semibold sm:px-5">Cancelled</h2>
+      {% if cancelled_series %}
+      <table class="table">
+        <thead>
+          <tr>
+            <th scope="col" class="sm:pl-5">Series</th>
+            <th scope="col" class="max-md:hidden">Cadence</th>
+            <th scope="col" class="text-right max-md:hidden">Typical amount</th>
+            <th scope="col">Status</th>
+            <th scope="col" class="w-12"><span class="sr-only">Actions</span></th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for item in cancelled_series %}
+          <tr>
+            <td class="sm:pl-5"><span class="font-semibold">{{ item.series.display_name }}</span><span class="block text-sm opacity-80 md:hidden">{{ item.series.get_cadence_display }} · typical {% include "finance/_amount.html" with value=item.series.amount_display tone="" %}</span></td>
+            <td class="whitespace-nowrap max-md:hidden">{{ item.series.get_cadence_display }}</td>
+            <td class="whitespace-nowrap text-right max-md:hidden">{% include "finance/_amount.html" with value=item.series.amount_display tone="" %}</td>
+            <td>{% if item.resumed %}{% include "finance/_status.html" with word="May have resumed" %}{% else %}Cancelled{% endif %}</td>
+            <td class="text-right">{% with label="Actions for "|add:item.series.display_name %}{% include "finance/_row_menu.html" with items="finance/_recurring_cancelled_items.html" %}{% endwith %}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="px-4 pb-4 pt-1 opacity-80 sm:px-5">No cancelled series.</p>
+      {% endif %}
+    </section>
+  </div>
+
+  <aside class="page-side max-xl:order-first" aria-label="Needs attention and upcoming charges">
+    <section aria-labelledby="recurring-attention" class="flex flex-col gap-2">
+      <h2 id="recurring-attention" class="px-1 text-lg font-semibold">Needs attention</h2>
+      {% if price_changes or missed_charges %}
+      <ul class="flex flex-col gap-2">
+        {% for item in price_changes %}
+        <li class="flex items-start gap-3 rounded-box border border-warning bg-base-100 px-4 py-3">
+          <span class="min-w-0 flex-1">
+            <span class="block font-semibold">{% include "finance/_status.html" with word="Price change" %} {{ item.series.display_name }} {{ item.percent_display }}</span>
+            <span class="block text-sm opacity-80">{% include "finance/_amount.html" with value=item.previous_display tone="out" %} to {% include "finance/_amount.html" with value=item.new_display tone="out" %} on {{ item.charge_date }}</span>
+          </span>
           <form method="post">
             {% csrf_token %}
             <input type="hidden" name="series_id" value="{{ item.series.pk }}">
             <input type="hidden" name="action" value="dismiss_price">
-            <button type="submit" class="btn btn-sm">Dismiss</button>
+            <button type="submit" class="btn btn-sm" aria-label="Dismiss the price change for {{ item.series.display_name }}">Dismiss</button>
           </form>
-        </td>
-      </tr>
-    {% empty %}
-      <tr><td colspan="6">No price changes of 10% or more.</td></tr>
-    {% endfor %}
-    </tbody>
-  </table>
-</div>
-<h2 class="mb-3 text-xl font-semibold">Missed charges</h2>
-<div class="overflow-x-auto mb-8">
-  <table class="table table-zebra">
-    <thead class="sticky top-0 z-10 bg-base-200">
-      <tr>
-        <th scope="col">Name</th>
-        <th scope="col">Expected</th>
-        <th scope="col" class="text-right">Typical amount</th>
-        <th scope="col">Status</th>
-        <th scope="col">Import</th>
-      </tr>
-    </thead>
-    <tbody>
-    {% for item in missed_charges %}
-      <tr>
-        <td>{{ item.series.display_name }}</td>
-        <td>{{ item.expected_on }}</td>
-        <td class="text-right">{% include "finance/_amount.html" with value=item.amount_display tone="" %}</td>
-        <td>expected, not seen</td>
-        <td>{% if item.missing_import %}<span class="badge badge-warning">Missing import</span>{% else %}<span class="badge badge-ghost">Import present</span>{% endif %}</td>
-      </tr>
-    {% empty %}
-      <tr><td colspan="5">No missed charges.</td></tr>
-    {% endfor %}
-    </tbody>
-  </table>
-</div>
-<h2 class="mb-3 text-xl font-semibold">Cancelled</h2>
-<div class="overflow-x-auto mb-8">
-  <table class="table table-zebra">
-    <thead class="sticky top-0 z-10 bg-base-200">
-      <tr>
-        <th scope="col">Name</th>
-        <th scope="col">Cadence</th>
-        <th scope="col" class="text-right">Typical amount</th>
-        <th scope="col">Status</th>
-        <th scope="col"></th>
-      </tr>
-    </thead>
-    <tbody>
-    {% for item in cancelled_series %}
-      <tr>
-        <td>{{ item.series.display_name }}</td>
-        <td>{{ item.series.get_cadence_display }}</td>
-        <td class="text-right">{% include "finance/_amount.html" with value=item.series.amount_display tone="" %}</td>
-        <td>{% if item.resumed %}resumed?{% else %}Cancelled{% endif %}</td>
-        <td>
-          {% if item.resumed %}
-            <form method="post" class="mb-1">
-              {% csrf_token %}
-              <input type="hidden" name="series_id" value="{{ item.series.pk }}">
-              <input type="hidden" name="action" value="confirm_resume">
-              <button type="submit" class="btn btn-sm btn-primary">Confirm resume</button>
-            </form>
-            <form method="post" class="mb-1">
-              {% csrf_token %}
-              <input type="hidden" name="series_id" value="{{ item.series.pk }}">
-              <input type="hidden" name="action" value="keep_cancelled">
-              <button type="submit" class="btn btn-sm">Keep cancelled</button>
-            </form>
-          {% endif %}
-          <form method="post">
-            {% csrf_token %}
-            <input type="hidden" name="series_id" value="{{ item.series.pk }}">
-            <input type="hidden" name="action" value="undo_cancel">
-            <button type="submit" class="btn btn-sm">Undo cancel</button>
-          </form>
-        </td>
-      </tr>
-    {% empty %}
-      <tr><td colspan="5">No cancelled series.</td></tr>
-    {% endfor %}
-    </tbody>
-  </table>
-</div>
-<h2 class="mb-3 text-xl font-semibold">Confirmed</h2>
-<div class="overflow-x-auto mb-8">
-  <table class="table table-zebra">
-    <thead class="sticky top-0 z-10 bg-base-200">
-      <tr>
-        <th scope="col">Name</th>
-        <th scope="col">Cadence</th>
-        <th scope="col" class="text-right">Typical amount</th>
-        <th scope="col" class="text-right">Monthly</th>
-        <th scope="col" class="text-right">Annual</th>
-        <th scope="col">Confidence</th>
-        <th scope="col">Reasons</th>
-        <th scope="col">Transactions</th>
-        <th scope="col"></th>
-      </tr>
-    </thead>
-    <tbody>
-    {% for series in confirmed %}
-      <tr id="series-{{ series.pk }}">
-        <td>{{ series.display_name }}</td>
-        <td>{{ series.get_cadence_display }}</td>
-        <td class="text-right">{% include "finance/_amount.html" with value=series.amount_display tone="" %}</td>
-        <td class="text-right">{% include "finance/_amount.html" with value=series.monthly_display tone="out" %}</td>
-        <td class="text-right">{% include "finance/_amount.html" with value=series.annual_display tone="out" %}</td>
-        <td><span class="badge {% if series.confidence == 'high' %}badge-success{% elif series.confidence == 'medium' %}badge-warning{% else %}badge-ghost{% endif %}">{{ series.get_confidence_display }}</span></td>
-        <td>{{ series.reasons|join:"; " }}</td>
-        <td>
-          <ul class="list-disc pl-4">
-            {% include "finance/_recurring_members.html" %}
-          </ul>
-          {% include "finance/_recurring_grouping.html" %}
-        </td>
-        <td>
-          <form method="post">
-            {% csrf_token %}
-            <input type="hidden" name="series_id" value="{{ series.pk }}">
-            <input type="hidden" name="action" value="cancel">
-            <button type="submit" class="btn btn-sm">Mark cancelled</button>
-          </form>
-        </td>
-      </tr>
-    {% empty %}
-      <tr><td colspan="9">No confirmed recurring charges.</td></tr>
-    {% endfor %}
-    </tbody>
-  </table>
-</div>
-<h2 class="mb-3 text-xl font-semibold">Suggestions</h2>
-<div class="overflow-x-auto">
-  <table class="table table-zebra">
-    <thead class="sticky top-0 z-10 bg-base-200">
-      <tr>
-        <th scope="col">Name</th>
-        <th scope="col">Cadence</th>
-        <th scope="col" class="text-right">Typical amount</th>
-        <th scope="col">Confidence</th>
-        <th scope="col">Reasons</th>
-        <th scope="col">Transactions</th>
-        <th scope="col"></th>
-      </tr>
-    </thead>
-    <tbody>
-    {% for series in suggestions %}
-      <tr id="series-{{ series.pk }}">
-        <td>{{ series.display_name }}{% if series.status == "possible" %} <span class="badge badge-ghost">possible</span>{% endif %}</td>
-        <td>{{ series.get_cadence_display }}</td>
-        <td class="text-right">{% include "finance/_amount.html" with value=series.amount_display tone="" %}</td>
-        <td><span class="badge {% if series.confidence == 'high' %}badge-success{% elif series.confidence == 'medium' %}badge-warning{% else %}badge-ghost{% endif %}">{{ series.get_confidence_display }}</span></td>
-        <td>{{ series.reasons|join:"; " }}</td>
-        <td>
-          <ul class="list-disc pl-4">
-            {% include "finance/_recurring_members.html" %}
-          </ul>
-          {% include "finance/_recurring_grouping.html" %}
-        </td>
-        <td class="flex flex-wrap gap-2">
-          <form method="post">
-            {% csrf_token %}
-            <input type="hidden" name="series_id" value="{{ series.pk }}">
-            <input type="hidden" name="action" value="confirm">
-            <button type="submit" class="btn btn-sm btn-primary">Confirm</button>
-          </form>
-          <form method="post">
-            {% csrf_token %}
-            <input type="hidden" name="series_id" value="{{ series.pk }}">
-            <input type="hidden" name="action" value="dismiss">
-            <button type="submit" class="btn btn-sm">Dismiss</button>
-          </form>
-        </td>
-      </tr>
-    {% empty %}
-      <tr><td colspan="7">No suggestions.</td></tr>
-    {% endfor %}
-    </tbody>
-  </table>
+        </li>
+        {% endfor %}
+        {% for item in missed_charges %}
+        <li class="flex flex-col gap-1 rounded-box border border-warning bg-base-100 px-4 py-3">
+          <span class="font-semibold">{% include "finance/_status.html" with word="Missed" %} {{ item.series.display_name }}</span>
+          <span class="text-sm opacity-80">Expected {{ item.expected_on }}, not seen · {% include "finance/_amount.html" with value=item.amount_display tone="" %}</span>
+          <span class="text-sm">{% if item.missing_import %}{% include "finance/_status.html" with word="Missing import" %}{% else %}Import present{% endif %}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="px-1 opacity-80">No price changes of 10% or more and no missed charges.</p>
+      {% endif %}
+    </section>
+    <section aria-labelledby="recurring-upcoming" class="rounded-box border border-base-300 bg-base-100 px-4 py-3">
+      <h2 id="recurring-upcoming" class="font-semibold">Upcoming · next 30 days</h2>
+      {% if upcoming %}
+      <ul>
+        {% for item in upcoming %}
+        <li class="flex items-center justify-between gap-3 border-t border-base-300 py-2 first:mt-2">
+          <span class="flex min-w-0 flex-col">
+            <span>{{ item.series.display_name }}</span>
+            <span class="text-sm opacity-80">{{ item.expected_on }} · {{ item.series.get_cadence_display|lower }}</span>
+          </span>
+          <span class="whitespace-nowrap font-semibold">{% include "finance/_amount.html" with value=item.amount_display tone="" %}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="opacity-80">No upcoming charges in the next 30 days.</p>
+      {% endif %}
+    </section>
+  </aside>
 </div>
 {% endblock %}

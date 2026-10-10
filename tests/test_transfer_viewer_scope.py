@@ -128,3 +128,14 @@ def test_transfer_state_never_falls_back_to_pairs_the_viewer_cannot_see():
 
     assert with_transfer_state(member, Transaction.objects.get(pk=shared_leg.pk)).is_excluded_transfer is False
     assert with_transfer_state(owner, Transaction.objects.get(pk=shared_leg.pk)).is_excluded_transfer is True
+
+
+def test_transfer_review_lists_a_pair_only_for_a_viewer_who_sees_both_legs():
+    owner, member, _household, _private_leg, _shared_leg = _cross_scope_pair()
+
+    owner_page = _client(owner).get(reverse("transfer-review")).content.decode()
+    member_page = _client(member).get(reverse("transfer-review")).content.decode()
+
+    assert "Owner Private" in owner_page and "Shared Checking" in owner_page
+    assert "Owner Private" not in member_page and "Shared Checking" not in member_page
+    assert "No automatic or confirmed exclusions." in member_page

@@ -1,56 +1,39 @@
 {% extends "finance/base.html" %}
 {% block title %}{{ category.name }} · Spending · Financial Planner{% endblock %}
 {% block content %}
+{% if category.key == 'uncategorized' %}{% url 'spending-category-uncategorized' as reset_url %}{% else %}{% url 'spending-category-detail' category.key as reset_url %}{% endif %}
 <p class="mb-2"><a class="link" href="{% url 'spending-by-category' %}">Spending by category</a></p>
-<h1 class="mb-4 text-2xl font-bold">{{ category.name }}</h1>
-<form method="get" class="mb-4 flex flex-wrap items-end gap-3">
-  {% include "finance/_form_fields.html" with form=filter_form %}
-  <button type="submit" class="btn btn-primary">Update</button>
-  <a class="btn btn-ghost" href="{% if category.key == 'uncategorized' %}{% url 'spending-category-uncategorized' %}{% else %}{% url 'spending-category-detail' category.key %}{% endif %}">Reset to default range</a>
-</form>
-{% if presets %}
-<p class="mb-4 flex flex-wrap gap-2">
-  {% for preset in presets %}
-  <a class="btn btn-sm btn-outline" href="{{ preset.url }}">{{ preset.label }}</a>
-  {% endfor %}
-</p>
-{% endif %}
+{% include "finance/_page_header.html" with title=category.name helper="Spending in this category for each period. Amounts in USD." actions="finance/_range_filters.html" %}
 {% if report and report.includes_investment %}
 <div role="note" class="alert alert-info mb-4">{{ report.investment_notice }}</div>
 {% endif %}
 {% if report %}
 <div class="flex flex-col gap-4">
-  <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
-    <article class="stats bg-base-100 shadow" style="border-left-width: 0.5rem; border-left-color: var(--chart-category-{{ report.color_index }});">
-      <div class="stat">
-        <h2 class="stat-title">Spending</h2>
-        <p class="stat-value text-2xl sm:text-3xl">{% include "finance/_amount.html" with value=report.total_spending_display tone="out" %}</p>
-        <p class="stat-desc">{{ report.spending_change.label }}</p>
-      </div>
-    </article>
-    <article class="stats bg-base-100 shadow">
-      <div class="stat">
-        <h2 class="stat-title">Average per period</h2>
-        <p class="stat-value text-2xl sm:text-3xl">{% include "finance/_amount.html" with value=report.average_display tone="out" %}</p>
-      </div>
-    </article>
-    <article class="stats bg-base-100 shadow">
-      <div class="stat">
-        <h2 class="stat-title">Transactions</h2>
-        <p class="stat-value text-xl sm:text-2xl"><a class="link" href="{{ report.drilldown_url }}">View transactions</a></p>
-      </div>
-    </article>
-  </div>
+  <section aria-label="Key numbers" class="grid gap-4 rounded-box border border-base-300 bg-base-100 p-5 sm:grid-cols-3 sm:gap-6">
+    <div class="flex min-w-0 flex-col gap-1">
+      <h2 class="flex items-center gap-2 text-sm font-semibold opacity-80"><span aria-hidden="true" class="category-swatch" data-color="{{ report.color_index }}"></span>Spending</h2>
+      <p class="text-3xl font-bold">{% include "finance/_amount.html" with value=report.total_spending_display tone="out" %}</p>
+      <p class="text-sm opacity-80">{{ report.spending_change.label }}</p>
+    </div>
+    <div class="flex min-w-0 flex-col gap-1 sm:border-l sm:border-base-300 sm:pl-6">
+      <h2 class="text-sm font-semibold opacity-80">Average per period</h2>
+      <p class="text-2xl font-semibold">{% include "finance/_amount.html" with value=report.average_display tone="out" %}</p>
+    </div>
+    <div class="flex min-w-0 flex-col gap-1 sm:border-l sm:border-base-300 sm:pl-6">
+      <h2 class="text-sm font-semibold opacity-80">Transactions</h2>
+      <p class="text-lg font-semibold"><a class="link" href="{{ report.drilldown_url }}">View transactions</a></p>
+    </div>
+  </section>
   {{ chart_data|json_script:"category-trend-chart-data" }}
-  <figure>
-    <figcaption class="mb-2 font-medium">{{ category.name }} over time</figcaption>
-    <div class="h-72 w-full rounded-box bg-base-100 p-2 shadow">
+  <figure class="rounded-box border border-base-300 bg-base-100 p-4">
+    <figcaption class="mb-2 font-semibold">{{ category.name }} over time</figcaption>
+    <div class="h-72 w-full">
       <canvas id="category-trend-chart" data-chart="category-trend" data-chart-payload="category-trend-chart-data" role="img" aria-label="Bar chart of spending in this category by period. The table below lists the same numbers."></canvas>
     </div>
   </figure>
-  <div class="overflow-x-auto">
-    <table class="table table-zebra">
-      <thead class="sticky top-0 z-10 bg-base-200">
+  <div class="overflow-x-auto rounded-box border border-base-300 bg-base-100 lg:max-w-xl">
+    <table class="table">
+      <thead>
         <tr>
           <th scope="col">Period</th>
           <th scope="col" class="text-right">Spending</th>
@@ -59,8 +42,8 @@
       <tbody>
       {% for period in report.periods %}
         <tr>
-          <td>{{ period.label }}</td>
-          <td class="text-right">{% include "finance/_amount.html" with value=period.spending_display tone="out" %}</td>
+          <td class="font-medium whitespace-nowrap">{{ period.label }}</td>
+          <td class="whitespace-nowrap text-right">{% include "finance/_amount.html" with value=period.spending_display tone="out" %}</td>
         </tr>
       {% endfor %}
       </tbody>

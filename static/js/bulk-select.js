@@ -1,13 +1,39 @@
 (function () {
-  // Phones keep the row checkboxes and the bulk-edit bar behind a Select button.
-  var toggle = document.querySelector("[data-select-toggle]");
+  // Select mode (issues #221 and #330): the row checkboxes and the bulk-edit panel stay hidden
+  // behind a Select button. The page renders data-select="nojs" so that, without this script,
+  // they stay visible from md up; this script starts Select mode off.
   var root = document.getElementById("transaction-list-root");
-  if (toggle && root) {
-    toggle.addEventListener("click", function () {
-      var on = root.getAttribute("data-select") !== "on";
+  var toggles = document.querySelectorAll("[data-select-toggle]");
+  if (root && toggles.length) {
+    root.setAttribute("data-select", "off");
+
+    var setMode = function (on) {
       root.setAttribute("data-select", on ? "on" : "off");
-      toggle.setAttribute("aria-pressed", on ? "true" : "false");
-      toggle.textContent = on ? "Done" : "Select";
+      toggles.forEach(function (toggle) {
+        toggle.setAttribute("aria-pressed", on ? "true" : "false");
+        toggle.textContent = on ? "Done" : "Select";
+      });
+    };
+
+    toggles.forEach(function (toggle) {
+      toggle.addEventListener("click", function () {
+        setMode(root.getAttribute("data-select") !== "on");
+      });
+    });
+
+    // Escape leaves Select mode and returns focus to the Select button the person can see,
+    // unless something else (an open menu or dialog) already handled the key.
+    document.addEventListener("keydown", function (event) {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (root.getAttribute("data-select") !== "on") return;
+      if (event.target instanceof Element && event.target.closest("details[data-row-menu][open], dialog[open]")) return;
+      setMode(false);
+      for (var i = 0; i < toggles.length; i += 1) {
+        if (toggles[i].offsetParent !== null) {
+          toggles[i].focus();
+          break;
+        }
+      }
     });
   }
 

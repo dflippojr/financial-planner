@@ -52,16 +52,20 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+          cache-dependency-path: requirements*.txt
 
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt pytest-cov
+          python -m pip install -r requirements-test.txt pytest-cov
 
+      # 4 xdist workers, as in postgres.yml; pytest-cov merges their coverage.
+      # Serially this step took 12 to 19 minutes depending on the runner.
+      # Browser tests run in playwright.yml (no Chromium here).
       - name: Run tests with coverage
         timeout-minutes: 20
         run: >
-          python -m pytest tests -q
+          python -m pytest tests -q -n 4 --dist worksteal -m "not browser"
           --cov=.
           --cov-report=xml:coverage.xml --cov-report=term
 
