@@ -1,7 +1,8 @@
 name: Automated Code Review
 
 # Thin caller for the shared review workflow in dflippojr/agent-harness, so fixes to the reviewer reach this repository
-# without a copy. The workflow and its tooling (tooling_ref) are both pinned to the review-v2 tag. See agent-harness docs/CI-CD.md, "Adopting the review workflow".
+# without a copy. The workflow and its tooling (tooling_ref) are both pinned to the review-v2 tag. See agent-harness
+# docs/CI-CD.md, "Adopting the review workflow".
 #
 # Reviews a PR once when it is opened; dispatch for a re-review after later commits.
 #
