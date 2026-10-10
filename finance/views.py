@@ -456,7 +456,14 @@ def _preset_links(today, *, account=None, scope="", grouping=None, tab=None, ext
             query["tag"] = str(tag.pk)
         if extra_query:
             query.update(extra_query)
-        links.append(SimpleNamespace(label=preset.label, url=f"?{urlencode(query)}"))
+        links.append(
+            SimpleNamespace(
+                label=preset.label,
+                url=f"?{urlencode(query)}",
+                date_from=preset.date_from,
+                date_to=preset.date_to,
+            )
+        )
     return links
 
 
@@ -560,6 +567,8 @@ def spending_by_category(request):
             "trend_report": trend_report,
             "chart_data": chart_data,
             "active_tab": tab,
+            "range_from": date_from,
+            "range_to": date_to,
             "overview_url": f"{reverse('spending-by-category')}?{urlencode(query)}" if query else reverse("spending-by-category"),
             "trends_url": (
                 f"{reverse('spending-by-category')}?{urlencode({**query, 'tab': 'trends'})}"
@@ -628,6 +637,8 @@ def spending_category_detail(request, category_id=None):
             "report": report,
             "chart_data": chart_data,
             "category": category,
+            "range_from": date_from,
+            "range_to": date_to,
             "presets": (
                 _preset_links(today, account=account, scope=scope, grouping=grouping, tag=tag)
                 if date_from is not None
