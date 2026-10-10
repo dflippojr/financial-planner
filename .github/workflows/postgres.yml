@@ -24,21 +24,10 @@ jobs:
   postgres:
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    timeout-minutes: 20
-    services:
-      postgres:
-        image: postgres:18
-        env:
-          POSTGRES_USER: financial_planner
-          POSTGRES_PASSWORD: test
-          POSTGRES_DB: financial_planner
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U financial_planner -d financial_planner"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
+    # About twice the parallel job, which took 6.5 to 9 minutes in October
+    # 2026 (issue #358). If the suite outgrows it, find the slow tests in the
+    # --durations list rather than raising this.
+    timeout-minutes: 15
     env:
       POSTGRES_HOST: 127.0.0.1
       POSTGRES_PORT: "5432"
@@ -50,11 +39,30 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+          cache-dependency-path: requirements*.txt
+
+      # Started by hand rather than as a service container because services
+      # cannot pass server flags. The data directory is in memory and
+      # durability is off: every database here is thrown away, and the suite
+      # spends most of its time committing and truncating.
+      - name: Start PostgreSQL 18 tuned for throwaway test databases
+        run: |
+          docker run -d --name postgres \
+            --tmpfs /var/lib/postgresql:rw \
+            -e POSTGRES_USER=financial_planner -e POSTGRES_PASSWORD=test -e POSTGRES_DB=financial_planner \
+            -p 127.0.0.1:5432:5432 postgres:18 \
+            -c fsync=off -c synchronous_commit=off -c full_page_writes=off
+          for _ in $(seq 60); do
+            docker exec postgres pg_isready -U financial_planner -d financial_planner && exit 0
+            sleep 1
+          done
+          docker logs postgres
+          exit 1
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+          python -m pip install -r requirements-test.txt
 
       - name: Check migrations are complete and apply to an empty database
         env:
@@ -63,7 +71,11 @@ jobs:
           python manage.py makemigrations --check --dry-run
           python manage.py migrate --noinput
 
+      # One pytest-django test database per xdist worker (test_..._gw0 and
+      # so on), matching the runner's 4 vCPUs. Work stealing keeps a few slow
+      # tests at the end from leaving three workers idle. Browser tests run
+      # in playwright.yml on SQLite.
       - name: Run tests on PostgreSQL 18
         env:
           FINANCIAL_PLANNER_TEST_DB: postgres
-        run: python -m pytest tests -q -p no:cacheprovider
+        run: python -m pytest tests -q -p no:cacheprovider -n 4 --dist worksteal -m "not browser" --durations=15
