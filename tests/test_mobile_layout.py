@@ -239,7 +239,7 @@ def test_home_page_header_and_side_column(phone_session, width):
             assert layout["helper"] is None and layout["side"] is None
             return
         assert layout["helper"] is not None
-        assert "Amounts in USD" in page.locator("main .page-header-helper").inner_text()
+        assert "amounts in usd" in page.locator("main .page-header-helper").inner_text().lower()
         main_left, main_top, main_width, _ = layout["main"]
         side_left, side_top, side_width, _ = layout["side"]
         if width >= 1280:
@@ -249,6 +249,64 @@ def test_home_page_header_and_side_column(phone_session, width):
         else:
             assert side_top > main_top
             assert abs(side_left - main_left) <= 1
+    finally:
+        context.close()
+
+
+CASH_FLOW_FOLD_JS = """() => {
+  const visible = (el) => el && el.offsetParent !== null;
+  const bottom = (selector, text) => {
+    const el = [...document.querySelectorAll(selector)].find((node) => visible(node) && node.textContent.trim() === text);
+    return el ? el.getBoundingClientRect().bottom : null;
+  };
+  return {
+    net: bottom('main h2', 'Net cash flow'),
+    income: bottom('main h2', 'Income'),
+    spending: bottom('main h2', 'Spending'),
+    attention: bottom('main h2', 'Needs attention'),
+    scroll: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+  };
+}"""
+
+
+@pytest.mark.parametrize(("width", "height", "attention_on_screen"), [(1440, 900, True), (1024, 768, False)])
+def test_cash_flow_key_numbers_and_attention_are_above_the_fold(phone_session, width, height, attention_on_screen):
+    """Desktop 3 (#329): key numbers first; Needs attention shows from lg, in the side column at xl."""
+    size = f"cash-flow-{width}"
+    VIEWPORTS[size] = (width, height)
+    try:
+        context, page = phone_session(size, "light", "/")
+    finally:
+        del VIEWPORTS[size]
+    try:
+        if SCREEN_DIR:
+            page.screenshot(path=str(Path(SCREEN_DIR) / f"cash-flow-{width}.png"), full_page=True)
+        fold = page.evaluate(CASH_FLOW_FOLD_JS)
+        assert not fold["scroll"]
+        for name in ("net", "income", "spending"):
+            assert fold[name] is not None and fold[name] <= height, name
+        assert fold["attention"] is not None
+        if attention_on_screen:
+            assert fold["attention"] <= height
+    finally:
+        context.close()
+
+
+def test_cash_flow_filters_keep_every_field(phone_session):
+    VIEWPORTS["cash-flow-filters"] = (1280, 800)
+    try:
+        context, page = phone_session("cash-flow-filters", "light", "/")
+    finally:
+        del VIEWPORTS["cash-flow-filters"]
+    try:
+        panel = page.locator("#cash-flow-filters form")
+        assert not panel.is_visible()
+        page.get_by_role("link", name="Custom").click()
+        assert panel.is_visible()
+        for name in ("date_from", "date_to", "grouping", "horizon", "account", "tag", "scope"):
+            assert panel.locator(f"[name={name}]").count() == 1, name
+        assert page.evaluate("document.activeElement.name") == "date_from"
+        assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
     finally:
         context.close()
 
