@@ -412,7 +412,7 @@ def test_alert_settings_form_saves_threshold():
 
 
 def test_alert_settings_groups_show_every_field_once():
-    grouped = [name for _label, names in AlertSettingsForm.GROUPS for name in names]
+    grouped = [name for _label, names in AlertSettingsForm.KIND_GROUPS for name in names]
     assert sorted(grouped) == sorted(AlertSettingsForm.base_fields)
 
 
@@ -421,7 +421,7 @@ def test_alert_settings_page_groups_fields_under_one_save():
     owner = make_person("owner")
     make_household(owner)
     html = signed_in(owner).get(reverse("settings-alerts")).content.decode()
-    assert html.count("<fieldset") == len(AlertSettingsForm.GROUPS)
+    assert html.count("<fieldset") == len(AlertSettingsForm.KIND_GROUPS)
     assert html.count("Save alert settings") == 1
 
 

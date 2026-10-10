@@ -1786,7 +1786,7 @@ class AlertSettingsForm(forms.Form):
     )
 
     # The settings page shows the fields grouped by alert kind under one save (issue #339).
-    GROUPS = (
+    KIND_GROUPS = (
         ("Accounts and balances", ("sync_enabled", "expected_balance_enabled")),
         ("Recurring charges", ("recurring_price_enabled", "recurring_missed_enabled")),
         ("Budgets", ("budget_enabled",)),
@@ -1799,7 +1799,7 @@ class AlertSettingsForm(forms.Form):
     )
 
     def groups(self):
-        return [{"label": label, "fields": [self[name] for name in names]} for label, names in self.GROUPS]
+        return [{"label": label, "fields": [self[name] for name in names]} for label, names in self.KIND_GROUPS]
 
     def save_payload(self):
         amount = self.cleaned_data.get("large_transaction_amount")
