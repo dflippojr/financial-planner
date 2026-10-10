@@ -3,29 +3,23 @@
 Needs Playwright with Chromium and a compiled static/dist/app.css; skipped otherwise.
 """
 
-import os
 from datetime import timedelta
 from pathlib import Path
 
 import pytest
-from django.conf import settings
 from django.utils import timezone
 
 from finance.models import Account, RecurringSeries, TransferPair
+from tests.browser_support import CSS, SCREEN_DIR, browser, sync_api  # noqa: F401 - browser is a fixture
 from tests.mobile_seed import seed_phone_data
 from tests.test_recurring_review import add_member, make_account, make_series, make_transaction
 
-os.environ.setdefault("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
-
-sync_api = pytest.importorskip("playwright.sync_api")
 expect = sync_api.expect
 
-CSS = Path(settings.BASE_DIR) / "static" / "dist" / "app.css"
 pytestmark = [
     pytest.mark.django_db(transaction=True),
     pytest.mark.skipif(not CSS.exists(), reason="static/dist/app.css is not built"),
 ]
-SCREEN_DIR = os.environ.get("MOBILE_SHOTS_DIR")
 
 LAYOUT_JS = """() => {
   const box = (el) => { const r = el.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; };
@@ -73,17 +67,6 @@ def _seed_review_data():
         reasons=["same amount", "same day"],
     )
     return person
-
-
-@pytest.fixture(scope="module")
-def browser():
-    with sync_api.sync_playwright() as playwright:
-        try:
-            instance = playwright.chromium.launch()
-        except Exception as error:  # noqa: BLE001 - browser binaries are optional locally
-            pytest.skip(f"Chromium is not installed: {error}")
-        yield instance
-        instance.close()
 
 
 @pytest.fixture
@@ -158,3 +141,42 @@ def test_transfer_suggestion_shows_both_legs_and_its_actions(open_page):
     expect(row.get_by_role("button", name="Confirm")).to_be_visible()
     expect(row.get_by_role("button", name="Not a transfer")).to_be_visible()
     expect(page.get_by_text("No automatic or confirmed exclusions.")).to_be_visible()
+
+
+@pytest.mark.parametrize("state", ["confirmed", "suggested", "cancelled"])
+@pytest.mark.parametrize("width", [390, 1024, 1280, 1440])
+def test_unbroken_recurring_name_keeps_amounts_and_actions_in_view(open_page, state, width):
+    page = open_page("/recurring/", width)
+    series = RecurringSeries.objects.filter(display_name__startswith="Synthetic Streaming Service").get()
+    name = "X" * 200
+    series.display_name = name
+    series.status = RecurringSeries.Status.SUGGESTED if state == "suggested" else RecurringSeries.Status.CONFIRMED
+    series.cancelled_at = timezone.now() if state == "cancelled" else None
+    series.save(update_fields=["display_name", "status", "cancelled_at"])
+    # The transactions are unchanged, so detection preserves this valid stored name.
+    page.reload()
+    row = page.locator("main tbody tr").filter(has=page.get_by_text(name, exact=True)).first
+    expect(row).to_be_visible()
+    assert not page.evaluate(LAYOUT_JS)["scroll"]
+    actions = row.locator("summary")
+    expect(actions).to_be_visible()
+    box = actions.bounding_box()
+    assert box["x"] >= 0 and box["x"] + box["width"] <= width
+    if state == "confirmed":
+        expect(row).to_contain_text("\N{MINUS SIGN}$17.99")
+        actions.click()
+        row.get_by_role("link", name="Show charges and reasons").click()
+        expect(page.get_by_role("heading", name=f"Charges in {name}")).to_be_visible()
+        assert not page.evaluate(LAYOUT_JS)["scroll"]
+
+
+@pytest.mark.parametrize("width", [390, 1024, 1280, 1440])
+def test_unbroken_transfer_account_names_keep_actions_in_view(open_page, width):
+    Account.objects.filter(name__in=["Synthetic Checking", "Synthetic Savings"]).update(name="X" * 150)
+    page = open_page("/transfers/", width)
+    assert not page.evaluate(LAYOUT_JS)["scroll"]
+    for name in ("Confirm", "Not a transfer"):
+        button = page.get_by_role("button", name=name, exact=True)
+        expect(button).to_be_visible()
+        box = button.bounding_box()
+        assert box["x"] >= 0 and box["x"] + box["width"] <= width
