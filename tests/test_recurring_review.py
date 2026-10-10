@@ -328,6 +328,9 @@ def test_recurring_page_shows_review_sections_and_actions(_refresh_today, _view_
     expected_dates = [item.expected_on for item in page.context["upcoming"]]
     assert date(2026, 10, 15) in expected_dates
     assert "Mark cancelled" in html
+    # A charge is stored negative and reads as money out; the monthly total is a positive outflow.
+    assert "+$10.00" not in html
+    assert html.count("\N{MINUS SIGN}$10.00") >= 3
 
     cancel = client.post(reverse("recurring-review"), {"series_id": series.pk, "action": "cancel"})
     assert cancel.status_code == 302

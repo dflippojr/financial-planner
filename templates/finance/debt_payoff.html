@@ -68,13 +68,13 @@
   <article class="stats bg-base-100 shadow">
     <div class="stat">
       <h2 class="stat-title">Estimated total interest</h2>
-      <p class="stat-value text-2xl sm:text-3xl">{% include "finance/_amount.html" with value=plan.comparison.chosen.total_interest_display tone="" %}</p>
+      <p class="stat-value text-2xl sm:text-3xl">{% include "finance/_amount.html" with value=plan.comparison.chosen.total_interest_display tone="out" %}</p>
     </div>
   </article>
   <article class="stats bg-base-100 shadow">
     <div class="stat">
       <h2 class="stat-title">Minimums-only interest</h2>
-      <p class="stat-value text-2xl sm:text-3xl">{% include "finance/_amount.html" with value=plan.comparison.baseline.total_interest_display tone="" %}</p>
+      <p class="stat-value text-2xl sm:text-3xl">{% include "finance/_amount.html" with value=plan.comparison.baseline.total_interest_display tone="out" %}</p>
     </div>
   </article>
   <article class="stats bg-base-100 shadow">
@@ -137,8 +137,8 @@
         {% for month in plan.comparison.chosen.months %}
           <tr>
             <td>{{ month.label }}</td>
-            <td class="text-right">{% include "finance/_amount.html" with value=month.interest_display tone="" %}</td>
-            <td class="text-right">{% include "finance/_amount.html" with value=month.paid_display tone="" %}</td>
+            <td class="text-right">{% include "finance/_amount.html" with value=month.interest_display tone="out" %}</td>
+            <td class="text-right">{% include "finance/_amount.html" with value=month.paid_display tone="out" %}</td>
             <td class="text-right">{% include "finance/_amount.html" with value=month.remaining_display tone="" %}</td>
           </tr>
         {% endfor %}

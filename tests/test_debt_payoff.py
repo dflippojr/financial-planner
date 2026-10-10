@@ -79,7 +79,7 @@ def test_planner_matches_hand_computed_interest_and_lists_needs_details():
     page = client.get(reverse("debt-payoff"), {"include": ready.pk, "strategy": "minimums"})
     html = page.content.decode()
     assert page.status_code == 200
-    assert "+$1.53" in html
+    assert "\N{MINUS SIGN}$1.53" in html
     assert "needs details" in html
     assert "Synthetic Incomplete Card" in html
     assert "not financial advice" in html

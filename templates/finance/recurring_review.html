@@ -42,7 +42,7 @@
         <td>{{ item.series.display_name }}</td>
         <td>{{ item.expected_on }}</td>
         <td>{{ item.series.get_cadence_display }}</td>
-        <td class="text-right">{% include "finance/_amount.html" with value=item.amount_display tone="out" %}</td>
+        <td class="text-right">{% include "finance/_amount.html" with value=item.amount_display tone="" %}</td>
       </tr>
     {% empty %}
       <tr><td colspan="4">No upcoming charges in the next 30 days.</td></tr>
@@ -103,7 +103,7 @@
       <tr>
         <td>{{ item.series.display_name }}</td>
         <td>{{ item.expected_on }}</td>
-        <td class="text-right">{% include "finance/_amount.html" with value=item.amount_display tone="out" %}</td>
+        <td class="text-right">{% include "finance/_amount.html" with value=item.amount_display tone="" %}</td>
         <td>expected, not seen</td>
         <td>{% if item.missing_import %}<span class="badge badge-warning">Missing import</span>{% else %}<span class="badge badge-ghost">Import present</span>{% endif %}</td>
       </tr>
@@ -130,7 +130,7 @@
       <tr>
         <td>{{ item.series.display_name }}</td>
         <td>{{ item.series.get_cadence_display }}</td>
-        <td class="text-right">{% include "finance/_amount.html" with value=item.series.amount_display tone="out" %}</td>
+        <td class="text-right">{% include "finance/_amount.html" with value=item.series.amount_display tone="" %}</td>
         <td>{% if item.resumed %}resumed?{% else %}Cancelled{% endif %}</td>
         <td>
           {% if item.resumed %}
@@ -182,7 +182,7 @@
       <tr id="series-{{ series.pk }}">
         <td>{{ series.display_name }}</td>
         <td>{{ series.get_cadence_display }}</td>
-        <td class="text-right">{% include "finance/_amount.html" with value=series.amount_display tone="out" %}</td>
+        <td class="text-right">{% include "finance/_amount.html" with value=series.amount_display tone="" %}</td>
         <td class="text-right">{% include "finance/_amount.html" with value=series.monthly_display tone="out" %}</td>
         <td class="text-right">{% include "finance/_amount.html" with value=series.annual_display tone="out" %}</td>
         <td><span class="badge {% if series.confidence == 'high' %}badge-success{% elif series.confidence == 'medium' %}badge-warning{% else %}badge-ghost{% endif %}">{{ series.get_confidence_display }}</span></td>
@@ -227,7 +227,7 @@
       <tr id="series-{{ series.pk }}">
         <td>{{ series.display_name }}{% if series.status == "possible" %} <span class="badge badge-ghost">possible</span>{% endif %}</td>
         <td>{{ series.get_cadence_display }}</td>
-        <td class="text-right">{% include "finance/_amount.html" with value=series.amount_display tone="out" %}</td>
+        <td class="text-right">{% include "finance/_amount.html" with value=series.amount_display tone="" %}</td>
         <td><span class="badge {% if series.confidence == 'high' %}badge-success{% elif series.confidence == 'medium' %}badge-warning{% else %}badge-ghost{% endif %}">{{ series.get_confidence_display }}</span></td>
         <td>{{ series.reasons|join:"; " }}</td>
         <td>
