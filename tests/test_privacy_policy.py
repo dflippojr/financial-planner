@@ -577,3 +577,29 @@ def test_policy_page_rejects_post():
     response = Client().post(reverse("privacy-policy"))
 
     assert response.status_code == 405
+
+
+@pytest.mark.django_db
+def test_settings_ai_shows_one_privacy_prompt_and_can_decline():
+    user, person, _household = make_member("owner")
+    current = publish_policy(material=True, body="Synthetic policy v1")
+    client = Client()
+    client.force_login(user)
+    stamp_recent_auth(client)
+    page = client.get(reverse("settings-ai")).content.decode()
+    assert "needs a response before you can use AI" not in page
+    assert page.count("Privacy and data policy") == 1
+    assert f"Accept version {current.version}" in page
+    assert "Not now" in page
+    # Other pages, including other settings tabs, keep the banner.
+    assert "needs a response before you can use AI" in client.get(reverse("settings-alerts")).content.decode()
+    posted = client.post(
+        reverse("privacy-policy-respond"),
+        {"action": "decline", "version": str(current.version), "next": reverse("settings-ai")},
+    )
+    assert posted.url == reverse("settings-ai")
+    person.refresh_from_db()
+    assert person.privacy_policy_declined_version_id == current.pk
+    after = client.get(reverse("settings-ai")).content.decode()
+    assert "Not now" not in after
+    assert f"Accept version {current.version}" in after

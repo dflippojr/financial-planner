@@ -28,7 +28,8 @@
   <div class="drawer-content flex min-h-screen flex-col">
     <main id="main-content" tabindex="-1" class="flex-1 p-4 pb-28 lg:px-0 lg:py-6">
       <div class="mx-auto w-full lg:max-w-[1180px] lg:px-8">
-      {% if privacy_policy_prompt %}
+      {% comment %}Settings → AI shows its own privacy section, so the banner would prompt twice there (issue #339).{% endcomment %}
+      {% if privacy_policy_prompt and settings_current != "ai" %}
       <div role="status" class="alert mb-4">
         <div>
           <p class="font-semibold">Privacy and data policy</p>
