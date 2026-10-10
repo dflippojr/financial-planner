@@ -1,0 +1,18 @@
+<form method="get" class="flex items-end gap-2">
+  <div>
+    <label class="mb-1 block text-sm" for="id_scope">Scope</label>
+    <select name="scope" id="id_scope" class="select select-bordered">
+      <option value=""{% if not scope %} selected{% endif %}>All visible accounts</option>
+      <option value="private"{% if scope == "private" %} selected{% endif %}>Private</option>
+      <option value="household"{% if scope == "household" %} selected{% endif %}>Household</option>
+    </select>
+  </div>
+  <input type="hidden" name="year" value="{{ calendar.year }}">
+  <input type="hidden" name="month" value="{{ calendar.month }}">
+  <button type="submit" class="btn">Update</button>
+</form>
+<nav class="flex items-center gap-1" aria-label="Month">
+  <a class="btn btn-square" href="?year={{ calendar.prev_year }}&amp;month={{ calendar.prev_month }}{% if scope %}&amp;scope={{ scope }}{% endif %}" aria-label="Previous month"><svg aria-hidden="true" class="size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg></a>
+  <h2 class="min-w-36 text-center text-lg font-semibold">{{ calendar.label }}</h2>
+  <a class="btn btn-square" href="?year={{ calendar.next_year }}&amp;month={{ calendar.next_month }}{% if scope %}&amp;scope={{ scope }}{% endif %}" aria-label="Next month"><svg aria-hidden="true" class="size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg></a>
+</nav>

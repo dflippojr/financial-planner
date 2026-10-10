@@ -34,6 +34,12 @@ def contribution_parts(account_type, source, amount_minor):
     return -owed, 0
 
 
+def signed_balance_minor(account_type, source, amount_minor):
+    """A snapshot as its net-worth contribution: an amount owed is negative whatever its source."""
+    assets, liabilities = contribution_parts(account_type, source, amount_minor)
+    return assets - liabilities
+
+
 def _source_rank(source):
     return 1 if source == BalanceSnapshot.Source.SIMPLEFIN else 0
 
@@ -76,7 +82,7 @@ def _account_month_row(account, snapshot, window):
         account_name=account.name,
         account_type=account.account_type,
         amount_minor=snapshot.amount_minor,
-        amount_display=format_minor(snapshot.amount_minor, snapshot.currency),
+        amount_display=format_minor(assets - liabilities, snapshot.currency),
         assets_minor=assets,
         liabilities_minor=liabilities,
         snapshot_date=snapshot.snapshot_date,
@@ -115,6 +121,7 @@ def _month_period(window, accounts, indexed, today):
         liabilities_display=format_minor(liabilities),
         net_display=format_minor(net),
         omitted_untracked=omitted,
+        carried_forward=sum(1 for row in rows if row.carried_forward),
         accounts=rows,
         equity_lines=_equity_lines(accounts, rows),
     )
@@ -275,5 +282,12 @@ def net_worth_preset_links(today, *, scope=""):
         query = {"date_from": preset.date_from.isoformat(), "date_to": preset.date_to.isoformat()}
         if scope:
             query["scope"] = scope
-        links.append(SimpleNamespace(label=preset.label, url=f"{reverse('net-worth')}?{urlencode(query)}"))
+        links.append(
+            SimpleNamespace(
+                label=preset.label,
+                url=f"{reverse('net-worth')}?{urlencode(query)}",
+                date_from=preset.date_from,
+                date_to=preset.date_to,
+            )
+        )
     return links

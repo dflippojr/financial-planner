@@ -1,15 +1,16 @@
 {% extends "finance/base.html" %}
 {% block title %}Import · Financial Planner{% endblock %}
 {% block content %}
-<h1 class="mb-4 text-2xl font-bold">Import</h1>
-<p class="mb-4 max-w-2xl opacity-80">Choose an account and a CSV, OFX or QFX file to continue into the existing preview and mapping flow. Per-account Import CSV on Accounts still works.</p>
-{% include "finance/_messages.html" %}
 {% if has_linked_accounts %}
-<p class="mb-4 max-w-2xl">Accounts marked Linked are connected through SimpleFIN. CSV history before the cut-over date stays; SimpleFIN supplies activity from that date forward. CSV rows on or after the cut-over can overlap linked data for that account.</p>
+{% include "finance/_page_header.html" with title="Import" helper="Upload a CSV, OFX or QFX statement. You map and preview its rows before anything is saved, and any import can be undone." more="Per-account Import CSV on Accounts still works. Accounts marked Linked are connected through SimpleFIN. CSV history before the cut-over date stays; SimpleFIN supplies activity from that date forward. CSV rows on or after the cut-over can overlap linked data for that account." %}
+{% else %}
+{% include "finance/_page_header.html" with title="Import" helper="Upload a CSV, OFX or QFX statement. You map and preview its rows before anything is saved, and any import can be undone." more="Per-account Import CSV on Accounts still works." %}
 {% endif %}
-<section class="card bg-base-100 shadow-sm mb-8 max-w-lg">
+{% include "finance/_messages.html" %}
+<div class="grid items-start gap-6 xl:grid-cols-[minmax(0,28rem)_minmax(0,1fr)]">
+<section class="card border border-base-300 bg-base-100 min-w-0" aria-labelledby="import-form-heading">
   <div class="card-body">
-    <h2 class="card-title">Import statement</h2>
+    <h2 id="import-form-heading" class="card-title text-base">Import statement</h2>
     {% if accounts %}
     <form method="post" enctype="multipart/form-data">
       {% csrf_token %}
@@ -43,23 +44,44 @@
     {% endif %}
   </div>
 </section>
-<section class="mb-6">
-  <h2 class="mb-3 text-xl font-semibold">Recent imports</h2>
-  <p class="mb-3 max-w-2xl text-sm opacity-80">Undoing an import deletes receipts attached to the transactions it removes.</p>
-  {% if recent_batches %}
-  <ul class="space-y-3">
-    {% for batch in recent_batches %}
-    <li class="flex flex-wrap items-center gap-3">
-      <span>{{ batch.account.name }} · {{ batch.get_source_display }} {{ batch.date_range_start }}–{{ batch.date_range_end }}</span>
-      <form method="post" action="{% url 'csv-import-undo' batch.account_id batch.pk %}" data-confirm="Undoing this import deletes receipts on the rows it removes.">
-        {% csrf_token %}
-        <button type="submit" class="btn btn-sm btn-outline">Undo this import</button>
-      </form>
-    </li>
-    {% endfor %}
-  </ul>
-  {% else %}
-  <p class="opacity-80">No active imports yet.</p>
-  {% endif %}
+<section class="card border border-base-300 bg-base-100 min-w-0" aria-labelledby="recent-imports-heading">
+  <div class="card-body gap-0 p-0">
+    <h2 id="recent-imports-heading" class="card-title px-4 pt-4 pb-2 text-base">Recent imports</h2>
+    {% if recent_batches %}
+    <div class="overflow-x-auto">
+      <table class="table">
+        <thead>
+          <tr>
+            <th scope="col">Account</th>
+            <th scope="col" class="max-md:hidden">Dates covered</th>
+            <th scope="col"><span class="sr-only">Actions</span></th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for batch in recent_batches %}
+          <tr>
+            <td class="align-top">
+              <span class="font-semibold break-words">{{ batch.account.name }}</span>
+              <span class="mt-1 block text-sm opacity-80">{{ batch.get_source_display }}</span>
+              <span class="mt-1 block text-sm md:hidden">{{ batch.date_range_start|date:"Y-m-d" }} to {{ batch.date_range_end|date:"Y-m-d" }}</span>
+            </td>
+            <td class="max-md:hidden whitespace-nowrap align-top">{{ batch.date_range_start|date:"Y-m-d" }} to {{ batch.date_range_end|date:"Y-m-d" }}</td>
+            <td class="align-top text-right">
+              <form method="post" action="{% url 'csv-import-undo' batch.account_id batch.pk %}" data-confirm="Undoing this import deletes receipts on the rows it removes.">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-sm btn-outline whitespace-nowrap">Undo this import</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="px-4 pb-4 opacity-80">No active imports yet.</p>
+    {% endif %}
+    <p class="border-t border-base-300 px-4 py-3 text-sm opacity-80">Undoing an import deletes receipts attached to the transactions it removes.</p>
+  </div>
 </section>
+</div>
 {% endblock %}

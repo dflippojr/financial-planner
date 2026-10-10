@@ -82,9 +82,12 @@ def test_transaction_list_shows_columns_provenance_and_newest_first():
     assert response.status_code == 200
     assert list(response.context["transactions"]) == [newer, older]
     content = response.content.decode()
-    for heading in ("Date", "Account", "Description", "Amount", "Category", "Source", "Scope"):
+    # Account, source and scope are the second line of Description (issue #330).
+    for heading in ("Date", "Description", "Category", "Amount"):
         assert f">{heading}</th>" in content
-    assert "-12.34 USD" in content
+    for heading in ("Account", "Source", "Scope"):
+        assert f">{heading}</th>" not in content
+    assert "\N{MINUS SIGN}$12.34" in content
     assert "Uncategorized" in content
     assert "Huntington Bank" in content
     assert "Imported" in content
@@ -587,3 +590,21 @@ def test_failed_history_write_rolls_back_the_correction():
     assert financial_transaction.description == "Synthetic groceries"
     assert TransactionCorrectionHistory.objects.count() == 0
 
+
+
+@pytest.mark.django_db
+def test_transaction_list_totals_say_which_filters_they_use():
+    # The totals ignore search, category and the other More filters (issue #330 review), so the
+    # side column must not call them totals "for these filters".
+    owner = make_person("owner")
+    make_transaction(owner, description="Synthetic coffee")
+    client = Client()
+    client.force_login(owner.user)
+
+    response = client.get(reverse("transaction-list"), {"q": "coffee", "category": "uncategorized"})
+
+    content = response.content.decode()
+    assert response.context["list_totals"] is not None
+    assert "Totals for these filters" not in content
+    assert "Cash flow totals" in content
+    assert "Search, category and the other filters don't change them." in content

@@ -13,8 +13,10 @@ from html.parser import HTMLParser
 class Element:
     tag: str
     attrs: dict
-    ancestors: tuple
-    children: list = field(default_factory=list)
+    # Kept out of repr: each node links to its ancestors and children, so a failing assert
+    # that shows one node would otherwise render the whole tree many times over (gigabytes).
+    ancestors: tuple = field(repr=False)
+    children: list = field(default_factory=list, repr=False)
 
     @property
     def hidden(self):

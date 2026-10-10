@@ -1,13 +1,13 @@
 {% extends "finance/base.html" %}
 {% block title %}Debt payoff · Financial Planner{% endblock %}
 {% block content %}
-<h1 class="mb-4 text-2xl font-bold">Debt payoff planner</h1>
-<p class="mb-4 max-w-2xl">Payoff months and interest are estimates from the balances and APR you recorded. They are not financial advice or verified facts.</p>
-<form method="get" class="card bg-base-100 shadow-sm mb-6">
+{% include "finance/_page_header.html" with title="Debt payoff planner" helper="Estimates from your recorded balances and APR, not financial advice or verified facts. Amounts in USD." more="Payoff months and interest are estimates from the balances and APR you recorded. They are not financial advice or verified facts." %}
+<form method="get" class="page-columns mb-6">
+<section class="card bg-base-100 shadow-sm" aria-labelledby="debts-heading">
   <div class="card-body">
-    <h2 class="card-title">Debts to include</h2>
+    <h2 id="debts-heading" class="card-title text-base">Debts to include</h2>
     {% if plan.catalog %}
-    <div class="overflow-x-auto mb-4">
+    <div class="overflow-x-auto">
       <table class="table">
         <thead class="sticky top-0 z-10 bg-base-200">
           <tr>
@@ -29,7 +29,7 @@
               {{ row.name }}
               <a class="link text-sm" href="{% url 'account-balances' row.account_id %}">Details</a>
             </td>
-            <td class="text-right">{% if row.owed_display %}{% include "finance/_amount.html" with value=row.owed_display tone="" %}{% else %}—{% endif %}</td>
+            <td class="text-right">{% if row.owed_display %}{% include "finance/_amount.html" with value=row.owed_display tone="out" %}{% else %}—{% endif %}</td>
             <td>
               <label class="sr-only" for="rank-{{ row.account_id }}">Custom order for {{ row.name }}</label>
               <input id="rank-{{ row.account_id }}" class="input input-bordered input-sm w-20" type="number" name="rank_{{ row.account_id }}" min="1" value="{{ row.rank|default:forloop.counter }}">
@@ -38,7 +38,7 @@
               {% if row.ready %}
               {{ row.payoff_label }}
               {% else %}
-              <span class="badge badge-warning">needs details</span>
+              {% include "finance/_status.html" with word="needs details" %}
               {% endif %}
             </td>
           </tr>
@@ -49,9 +49,15 @@
     {% else %}
     <p>No visible loans or credit cards. Add one from Accounts, then record a balance, APR, and minimum payment.</p>
     {% endif %}
+  </div>
+</section>
+<section class="page-side card bg-base-100 shadow-sm" aria-labelledby="strategy-heading">
+  <div class="card-body">
+    <h2 id="strategy-heading" class="card-title text-base">Strategy and extra payment</h2>
     {% include "finance/_form_fields.html" with form=form %}
     <button type="submit" class="btn btn-primary">Compare payoff</button>
   </div>
+</section>
 </form>
 {% if plan.comparison %}
 {% if plan.comparison.chosen.beyond_limit %}
@@ -64,17 +70,17 @@
   <span>At least one included debt never pays off because the payment does not cover the monthly interest.</span>
 </div>
 {% endif %}
-<div class="grid grid-cols-1 gap-4 md:grid-cols-3 mb-6">
+<div class="mb-6 grid grid-cols-1 gap-4 md:grid-cols-3">
   <article class="stats bg-base-100 shadow">
     <div class="stat">
       <h2 class="stat-title">Estimated total interest</h2>
-      <p class="stat-value text-2xl sm:text-3xl">{% include "finance/_amount.html" with value=plan.comparison.chosen.total_interest_display tone="" %}</p>
+      <p class="stat-value text-2xl sm:text-3xl">{% include "finance/_amount.html" with value=plan.comparison.chosen.total_interest_display tone="out" %}</p>
     </div>
   </article>
   <article class="stats bg-base-100 shadow">
     <div class="stat">
       <h2 class="stat-title">Minimums-only interest</h2>
-      <p class="stat-value text-2xl sm:text-3xl">{% include "finance/_amount.html" with value=plan.comparison.baseline.total_interest_display tone="" %}</p>
+      <p class="stat-value text-2xl sm:text-3xl">{% include "finance/_amount.html" with value=plan.comparison.baseline.total_interest_display tone="out" %}</p>
     </div>
   </article>
   <article class="stats bg-base-100 shadow">
@@ -97,9 +103,10 @@
     <canvas id="debt-payoff-chart" data-chart="debt-payoff" data-chart-payload="debt-payoff-chart-data" role="img" aria-label="Line chart of remaining debt with monthly interest bars. The table below lists the same numbers."></canvas>
   </div>
 </figure>
-<section class="card bg-base-100 shadow-sm mb-6">
+<div class="grid items-start gap-4 *:min-w-0 xl:grid-cols-2">
+<section class="card bg-base-100 shadow-sm" aria-labelledby="payoff-by-debt-heading">
   <div class="card-body">
-    <h2 class="card-title">Payoff by debt</h2>
+    <h2 id="payoff-by-debt-heading" class="card-title text-base">Payoff by debt</h2>
     <div class="overflow-x-auto">
       <table class="table table-zebra">
         <thead class="sticky top-0 z-10 bg-base-200">
@@ -120,9 +127,9 @@
     </div>
   </div>
 </section>
-<section class="card bg-base-100 shadow-sm mb-6">
+<section class="card bg-base-100 shadow-sm" aria-labelledby="month-by-month-heading">
   <div class="card-body">
-    <h2 class="card-title">Month by month</h2>
+    <h2 id="month-by-month-heading" class="card-title text-base">Month by month</h2>
     <div class="overflow-x-auto">
       <table class="table table-zebra">
         <thead class="sticky top-0 z-10 bg-base-200">
@@ -137,9 +144,9 @@
         {% for month in plan.comparison.chosen.months %}
           <tr>
             <td>{{ month.label }}</td>
-            <td class="text-right">{% include "finance/_amount.html" with value=month.interest_display tone="" %}</td>
-            <td class="text-right">{% include "finance/_amount.html" with value=month.paid_display tone="" %}</td>
-            <td class="text-right">{% include "finance/_amount.html" with value=month.remaining_display tone="" %}</td>
+            <td class="text-right">{% include "finance/_amount.html" with value=month.interest_display tone="out" %}</td>
+            <td class="text-right">{% include "finance/_amount.html" with value=month.paid_display tone="out" %}</td>
+            <td class="text-right">{% include "finance/_amount.html" with value=month.remaining_display tone="out" %}</td>
           </tr>
         {% endfor %}
         </tbody>
@@ -147,6 +154,7 @@
     </div>
   </div>
 </section>
+</div>
 {% endif %}
 {% endblock %}
 {% block extra_js %}

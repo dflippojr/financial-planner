@@ -1,0 +1,16 @@
+{% comment %}Row menu entries for an active series (issue #335): every grouping action opens its charges panel.{% endcomment %}
+<li><a href="#series-{{ series.pk }}-charges">Show charges and reasons</a></li>
+{% if can_merge and series.is_active and not series.cancelled_at %}
+<li><a href="?merge_series={{ series.pk }}#series-{{ series.pk }}-charges">Merge into another series…</a></li>
+{% endif %}
+<li><a href="#series-{{ series.pk }}-add">Add charges…</a></li>
+{% if series.status == "confirmed" %}
+<li>
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="series_id" value="{{ series.pk }}">
+    <input type="hidden" name="action" value="cancel">
+    <button type="submit" class="row-menu-danger">Mark cancelled</button>
+  </form>
+</li>
+{% endif %}

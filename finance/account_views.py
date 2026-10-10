@@ -23,6 +23,7 @@ from .lifecycle_services import (
 )
 from .reauth import requires_recent_auth
 from .models import Account, BalanceSnapshot, ImportBatch, Person, Transaction
+from .net_worth import signed_balance_minor
 
 
 def _active_visible_account(user, account_id):
@@ -75,12 +76,15 @@ def account_list(request):
         if account.last_snapshot_date is None:
             account.last_snapshot_display = ""
         else:
-            account.last_snapshot_display = format_minor(account.last_snapshot_amount)
+            account.last_snapshot_display = format_minor(
+                signed_balance_minor(account.account_type, account.last_snapshot_source, account.last_snapshot_amount)
+            )
     return render(
         request,
         "finance/accounts.html",
         {
             "accounts": accounts,
+            "account_groups": _group_by_type(accounts),
             "add_form": form,
             "has_household": household is not None,
             "has_active_accounts": any(
@@ -89,6 +93,16 @@ def account_list(request):
             "viewer_id": person.pk,
         },
     )
+
+
+def _group_by_type(accounts):
+    """Group the visible accounts by type, in the order the types are declared."""
+    groups = []
+    for account_type, label in Account.Type.choices:
+        members = [account for account in accounts if account.account_type == account_type]
+        if members:
+            groups.append({"label": label, "accounts": members})
+    return groups
 
 
 def _create_account(person, form):

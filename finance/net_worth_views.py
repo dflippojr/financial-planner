@@ -13,7 +13,7 @@ from .cash_flow import default_date_range, format_minor
 from .forms import DebtTermsForm, ManualBalanceForm, NetWorthFilterForm, PairLoanForm
 from .lifecycle_services import update_debt_terms
 from .models import Account, BalanceSnapshot
-from .net_worth import net_worth_chart_data, net_worth_preset_links, net_worth_report
+from .net_worth import net_worth_chart_data, net_worth_preset_links, net_worth_report, signed_balance_minor
 from .performance import account_performance
 from .pairing_services import PairingError, set_loan_secured_asset
 from .snapshot_services import SnapshotError, delete_manual_snapshot, record_manual_snapshot, update_manual_snapshot
@@ -68,6 +68,8 @@ def net_worth(request):
             "chart_data": net_worth_chart_data(report) if report is not None else None,
             "presets": net_worth_preset_links(today, scope=scope or "") if date_from is not None else (),
             "performance_rows": performance_rows,
+            "range_from": date_from,
+            "range_to": date_to,
         },
     )
 
@@ -127,7 +129,9 @@ def account_balances(request, account_id):
             return redirect("account-balances", account.pk)
     snapshots = list(account.balance_snapshots.order_by("-snapshot_date", "-source", "-pk"))
     for snapshot in snapshots:
-        snapshot.amount_display = format_minor(snapshot.amount_minor, snapshot.currency)
+        snapshot.amount_display = format_minor(
+            signed_balance_minor(account.account_type, snapshot.source, snapshot.amount_minor), snapshot.currency
+        )
         if snapshot.net_contribution_minor is not None:
             snapshot.net_contribution_display = format_minor(snapshot.net_contribution_minor)
     performance = None

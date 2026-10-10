@@ -1,0 +1,19 @@
+{% comment %}Monthly review header actions (issue #338): the month switcher and Regenerate.{% endcomment %}
+<nav class="flex items-center gap-1" aria-label="Month">
+  {% if previous_url %}
+  <a class="btn btn-square btn-outline border-base-300 min-h-11 max-md:size-11" href="{{ previous_url }}" aria-label="Previous month"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg></a>
+  {% else %}
+  <span class="btn btn-square btn-disabled min-h-11 max-md:size-11" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg></span>
+  {% endif %}
+  <h2 class="min-w-36 px-1 text-center text-lg font-semibold">{{ month_label }}</h2>
+  {% if next_url %}
+  <a class="btn btn-square btn-outline border-base-300 min-h-11 max-md:size-11" href="{{ next_url }}" aria-label="Next month"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg></a>
+  {% else %}
+  <span class="btn btn-square btn-disabled min-h-11 max-md:size-11" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg></span>
+  {% endif %}
+</nav>
+<form method="post" action="{{ regenerate_url }}">
+  {% csrf_token %}
+  <input type="hidden" name="month" value="{{ month|date:'Y-m' }}">
+  <button type="submit" class="btn btn-outline min-h-11">Regenerate</button>
+</form>

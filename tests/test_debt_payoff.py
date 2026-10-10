@@ -79,7 +79,7 @@ def test_planner_matches_hand_computed_interest_and_lists_needs_details():
     page = client.get(reverse("debt-payoff"), {"include": ready.pk, "strategy": "minimums"})
     html = page.content.decode()
     assert page.status_code == 200
-    assert "1.53 USD" in html
+    assert "\N{MINUS SIGN}$1.53" in html
     assert "needs details" in html
     assert "Synthetic Incomplete Card" in html
     assert "not financial advice" in html
@@ -193,8 +193,9 @@ def test_future_snapshot_is_ignored_and_simplefin_owed_sign_is_used():
         payment_day=None,
     )
     html = signed_in(owner).get(reverse("debt-payoff")).content.decode()
-    assert "40.00 USD" in html
-    assert "999.99 USD" not in html
+    assert "\N{MINUS SIGN}$40.00" in html
+    assert "+$40.00" not in html
+    assert "$999.99" not in html
 
 
 @pytest.mark.django_db

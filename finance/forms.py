@@ -171,9 +171,12 @@ class RecoveryCodeOnlyForm(forms.Form):
 
 
 class TransactionFilterForm(forms.Form):
+    # Desktop toolbar fields (issue #330); every other field sits behind More filters.
+    TOOLBAR_FIELD_NAMES = ("q", "date_from", "date_to", "account", "category")
+
     date_from = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
     date_to = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
-    account = forms.ModelChoiceField(queryset=Account.objects.none(), required=False)
+    account = forms.ModelChoiceField(queryset=Account.objects.none(), required=False, empty_label="All accounts")
     category = forms.ChoiceField(
         required=False,
         choices=(("", "All categories"), ("uncategorized", "Uncategorized")),
@@ -241,6 +244,12 @@ class TransactionFilterForm(forms.Form):
             for category in assignable_categories(principal).exclude(code=Category.Code.UNCATEGORIZED):
                 choices.append((str(category.pk), category.name))
         self.fields["category"].choices = choices
+
+    def toolbar_fields(self):
+        return [self[name] for name in self.TOOLBAR_FIELD_NAMES]
+
+    def more_fields(self):
+        return [field for field in self if field.name not in self.TOOLBAR_FIELD_NAMES]
 
     def clean_amount_min(self):
         return self._cleaned_amount("amount_min")
@@ -1785,6 +1794,22 @@ class AlertSettingsForm(forms.Form):
         widget=forms.TextInput(attrs={"inputmode": "decimal"}),
     )
 
+    # The settings page shows the fields grouped by alert kind under one save (issue #339).
+    KIND_GROUPS = (
+        ("Accounts and balances", ("sync_enabled", "expected_balance_enabled")),
+        ("Recurring charges", ("recurring_price_enabled", "recurring_missed_enabled")),
+        ("Budgets", ("budget_enabled",)),
+        ("Large transactions", ("large_transaction_enabled", "large_transaction_amount")),
+        ("Unusual spending", (
+            "unusual_spending_enabled", "unusual_spending_ai_enabled",
+            "unusual_category_percent", "unusual_category_amount",
+        )),
+        ("Monthly review", ("monthly_review_enabled", "monthly_review_ai_enabled")),
+    )
+
+    def groups(self):
+        return [{"label": label, "fields": [self[name] for name in names]} for label, names in self.KIND_GROUPS]
+
     def save_payload(self):
         amount = self.cleaned_data.get("large_transaction_amount")
         minor = int(amount * 100) if amount is not None else None
@@ -1888,7 +1913,7 @@ class BillsCalendarForm(forms.Form):
     accounts = forms.ModelMultipleChoiceField(
         queryset=Account.objects.none(),
         required=False,
-        widget=forms.CheckboxSelectMultiple,
+        widget=forms.CheckboxSelectMultiple(attrs={"class": "checkbox"}),
         label="Checking and savings accounts",
         help_text="Expected balance starts from these accounts' latest snapshots.",
     )

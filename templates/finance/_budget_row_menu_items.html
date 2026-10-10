@@ -1,0 +1,20 @@
+{% comment %}Row menu entries for one budget card (issue #331); the POST endpoints are unchanged.{% endcomment %}
+<li><a href="{% url 'budget-edit' card.budget.pk %}?month={{ month|date:'Y-m' }}">Edit</a></li>
+<li>
+  <form method="post" action="{% url 'budget-rollover-toggle' card.budget.pk %}" class="p-0">
+    {% csrf_token %}
+    <input type="hidden" name="month" value="{{ month|date:'Y-m' }}">
+    <input type="hidden" name="enabled" value="{% if card.rollover_enabled %}0{% else %}1{% endif %}">
+    <button type="submit" class="w-full px-3 py-1.5 text-left">Turn rollover {% if card.rollover_enabled %}off{% else %}on{% endif %}</button>
+  </form>
+</li>
+{% if card.rollover_enabled %}
+<li><a href="{% url 'budget-rollover-reset' card.budget.pk %}?month={{ month|date:'Y-m' }}">Reset rollover</a></li>
+{% endif %}
+<li>
+  <form method="post" action="{% url 'budget-archive' card.budget.pk %}" class="p-0">
+    {% csrf_token %}
+    <input type="hidden" name="month" value="{{ month|date:'Y-m' }}">
+    <button type="submit" class="w-full px-3 py-1.5 text-left">Archive</button>
+  </form>
+</li>

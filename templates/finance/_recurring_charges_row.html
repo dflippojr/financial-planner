@@ -1,0 +1,22 @@
+{% comment %}
+A series' charges, reasons and grouping forms (issue #335), in a table row under the series.
+Hidden until the row menu links to it (:target) or the page opens it for a merge or a charge search.
+Pass colspan.
+{% endcomment %}
+<tr id="series-{{ series.pk }}-charges" class="bg-base-200/60 {% if merge_series_id == series.pk or add_series_id == series.pk %}table-row{% else %}hidden target:table-row has-[:target]:table-row{% endif %}">
+  <td colspan="{{ colspan }}">
+    <div class="flex flex-col gap-3 lg:flex-row lg:gap-8">
+      <div class="min-w-0 flex-1">
+        <h3 class="font-semibold">Charges in {{ series.display_name }}</h3>
+        {% if series.reasons %}<p class="text-sm opacity-80">{{ series.reasons|join:"; " }}</p>{% endif %}
+        <ul class="mt-2 flex flex-col gap-1">
+          {% include "finance/_recurring_members.html" %}
+        </ul>
+      </div>
+      <div class="min-w-0 lg:w-80">
+        {% include "finance/_recurring_grouping.html" %}
+        <a href="{% url 'recurring-review' %}#series-{{ series.pk }}" class="link text-sm">Hide charges</a>
+      </div>
+    </div>
+  </td>
+</tr>

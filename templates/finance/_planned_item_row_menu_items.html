@@ -1,0 +1,18 @@
+{% comment %}
+Row menu entries for one planned item (issue #337): Edit, then Disable or Enable, posting to the
+same views the row's buttons used.
+{% endcomment %}
+<li><a href="{% url 'planned-item-edit' item.pk %}">Edit</a></li>
+<li>
+  {% if item.enabled %}
+  <form method="post" action="{% url 'planned-item-disable' item.pk %}">
+    {% csrf_token %}
+    <button type="submit" class="w-full text-left">Disable</button>
+  </form>
+  {% else %}
+  <form method="post" action="{% url 'planned-item-enable' item.pk %}">
+    {% csrf_token %}
+    <button type="submit" class="w-full text-left">Enable</button>
+  </form>
+  {% endif %}
+</li>

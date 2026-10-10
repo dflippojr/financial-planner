@@ -262,16 +262,17 @@ def _batches_by_account(principal, accounts):
     return grouped
 
 
-def _period_missing_import(window, accounts, batches_by_account):
+def _period_missing_accounts(window, accounts, batches_by_account):
+    """Names of the selected accounts with no import covering any of the window, by name."""
+    missing = []
     for account in accounts:
-        covered = False
-        for batch in batches_by_account.get(account.pk, ()):
-            if batch.date_range_start <= window.end and batch.date_range_end >= window.start:
-                covered = True
-                break
+        covered = any(
+            batch.date_range_start <= window.end and batch.date_range_end >= window.start
+            for batch in batches_by_account.get(account.pk, ())
+        )
         if not covered:
-            return True
-    return False
+            missing.append(account.name)
+    return sorted(missing, key=str.casefold)
 
 
 def _filter_query(date_from, date_to, *, account=None, scope="", category=None, tag=None):
@@ -524,7 +525,7 @@ def cash_flow_report(
             spending_minor=spending_minor,
             net_minor=income_minor - spending_minor,
         )
-        missing = bool(accounts) and _period_missing_import(window, accounts, batches_by_account)
+        missing_accounts = _period_missing_accounts(window, accounts, batches_by_account) if accounts else []
         periods.append(
             SimpleNamespace(
                 start=window.start,
@@ -536,7 +537,8 @@ def cash_flow_report(
                 income_display=format_minor(totals.income_minor),
                 spending_display=format_minor(totals.spending_minor),
                 net_display=format_minor(totals.net_minor),
-                missing_import=missing,
+                missing_import=bool(missing_accounts),
+                missing_accounts=missing_accounts,
                 drilldown_url=_drilldown_url(window, account=account, scope=scope, tag=tag),
             )
         )
