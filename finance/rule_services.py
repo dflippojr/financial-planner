@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.db.models import Case, Exists, OuterRef, Q, Value, When
+from django.db.models import Case, Exists, OuterRef, Prefetch, Q, Value, When
 from django.utils import timezone
 
 from .category_services import (
@@ -346,9 +346,21 @@ def _winning_rows(rows, rule):
     return [txn for txn in rows if _is_winning_rule(txn, rule, rules_by_account[txn.account_id])]
 
 
+def _preview_rows(person, rule):
+    """Matching rows for display, with current-category labels limited to what
+    the viewer can still see (a category from a household they left stays hidden)."""
+    return list(
+        _matching_queryset(person, rule)
+        .select_related(None)
+        .select_related("account", "account__owner", "account__household")
+        .prefetch_related(Prefetch("category", queryset=Category.objects.visible_to(person)))
+        .order_by("-transaction_date", "-pk")
+    )
+
+
 def preview_rule(principal, rule_id):
     person, rule = _rule_or_404(principal, rule_id)
-    rows = list(_matching_queryset(person, rule).order_by("-transaction_date", "-pk"))
+    rows = _preview_rows(person, rule)
     matches = _winning_rows(rows, rule)
     return rule, matches
 
@@ -401,7 +413,7 @@ def preview_unsaved_rule(principal, rule):
     """
     person = _person_for(principal)
     matches = []
-    rows = list(_matching_queryset(person, rule).order_by("-transaction_date", "-pk"))
+    rows = _preview_rows(person, rule)
     rules_by_account = _rules_by_account(rows)
     for txn in rows:
         winner = first_matching_rule(txn, rules_by_account[txn.account_id])

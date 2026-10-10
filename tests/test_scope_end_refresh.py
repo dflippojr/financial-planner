@@ -8,7 +8,8 @@ from django.urls import reverse
 from finance.budget_services import save_budget
 from finance.category_services import assign_category, rename_category, split_transaction
 from finance.lifecycle_services import leave_household
-from finance.models import Budget, SavingsGoal
+from finance.rule_services import save_category_rule
+from finance.models import Budget, SavingsGoal, Transaction
 from finance.monthly_review import store_monthly_review
 from tests.test_monthly_review import (
     SEP,
@@ -127,3 +128,37 @@ def test_former_member_never_sees_household_category_names_after_rename():
     ).content.decode()
     assert "Synthetic New Pantry" in owner_body
     assert "Synthetic whole row" not in owner_body
+
+
+@pytest.mark.django_db
+def test_rule_preview_hides_category_from_a_household_the_member_left():
+    owner = make_person("owner")
+    member = make_person("member")
+    household = make_household(owner, member)
+    groceries = household.categories.get(name="Groceries")
+    rename_category(owner, groceries.pk, "Synthetic Old Pantry")
+    private = make_account(member, name="Member Private")
+    row = make_transaction(member, private, amount_minor=-1_000, description="SYNTHETIC CANARY STORE")
+    assign_category(member, row.pk, groceries.pk)
+    Transaction.objects.filter(pk=row.pk).update(category_source=Transaction.CategorySource.RULE)
+
+    leave_household(member)
+    rename_category(owner, groceries.pk, "Synthetic New Pantry")
+    new_household = make_household(member, name="Synthetic Second Household")
+    rule = save_category_rule(
+        member,
+        owner_kind="personal",
+        description_contains="SYNTHETIC CANARY",
+        account_id=None,
+        min_amount_minor=None,
+        max_amount_minor=None,
+        category_id=new_household.categories.get(name="Dining").pk,
+        priority=1,
+    )
+
+    page = signed_in(member).get(reverse("category-rule-detail", args=[rule.pk]))
+    body = page.content.decode()
+    assert page.status_code == 200
+    assert "SYNTHETIC CANARY STORE" in body
+    assert "Synthetic Old Pantry" not in body
+    assert "Synthetic New Pantry" not in body
