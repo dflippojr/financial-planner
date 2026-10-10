@@ -68,11 +68,11 @@
       <h2 id="review-budgets" class="card-title text-base">Budgets</h2>
       <a class="link text-sm" href="{{ facts.budgets_url }}">Open budgets</a>
     </div>
-    <h3 class="report-subhead">Over limit</h3>
+    <h3 class="report-subhead">{% include "finance/_status.html" with word="Over limit" %}</h3>
     {% if facts.budgets_over %}
     <ul class="report-rows">
       {% for item in facts.budgets_over %}
-      <li><a class="link" href="{{ item.url }}">{% include "finance/_status.html" with word=item.name %}</a><span class="report-figure">over by {{ item.over_by_display }}</span></li>
+      <li><a class="link min-w-0" href="{{ item.url }}">{{ item.name }}</a><span class="report-figure">over by {{ item.over_by_display }}</span></li>
       {% endfor %}
     </ul>
     {% else %}

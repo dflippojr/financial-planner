@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from finance.models import MonthlyReview
 from tests.browser_support import CSS, SCREEN_DIR, browser, page_session  # noqa: F401 - fixtures
 
 pytestmark = [
@@ -109,5 +110,28 @@ def test_year_end_exports_are_reachable_from_the_keyboard(page_session):  # noqa
         page.keyboard.press("Enter")
         page.keyboard.press("Escape")
         assert not menu.evaluate("el => el.open")
+    finally:
+        context.close()
+
+
+@pytest.mark.parametrize("width", [390, 1024, 1440])
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_long_over_budget_category_name_wraps(page_session, width, scheme):  # noqa: F811
+    context, page = page_session((width, 900), scheme, "/planning/review/")
+    try:
+        name = "Home maintenance and repairs including seasonal household improvements"
+        review = MonthlyReview.objects.get(person__user__username="synthetic_alex")
+        review.facts["budgets_over"] = [{
+            "name": name,
+            "url": "/planning/budgets/",
+            "over_by_display": "100.00 USD",
+        }]
+        review.save(update_fields=["facts"])
+        page.reload()
+        link = page.locator('section[aria-labelledby="review-budgets"]').get_by_role("link", name=name)
+        assert link.is_visible()
+        assert page.evaluate(
+            "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+        ), f"Long budget category scrolls sideways at {width} in {scheme}"
     finally:
         context.close()
