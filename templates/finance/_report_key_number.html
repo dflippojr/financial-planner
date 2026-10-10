@@ -1,0 +1,17 @@
+{% load ui %}{% comment %}
+One column of a report's key-numbers card (issue #338). Pass label, value (a money display string)
+and tone, and optionally change, a monthly review change pair: prior and year_ago blocks plus the
+*_delta field names to read. more_less adds "more" or "less" after a spending change.
+{% endcomment %}
+<div class="flex min-w-0 flex-col gap-1.5 py-3 first:pt-0 last:pb-0 sm:px-6 sm:py-0 sm:first:pl-0 sm:last:pr-0">
+  <p class="text-sm font-semibold opacity-80">{{ label }}</p>
+  <p class="text-2xl font-bold">{% include "finance/_amount.html" with value=value tone=tone %}</p>
+  {% if prior %}
+  <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-sm">
+    <dt class="opacity-80">vs prior month</dt>
+    <dd class="tabular-nums text-right">{{ prior|lookup:display_key|amount_text }}{% if more_less %}{% with minor=prior|lookup:minor_key %}{% if minor > 0 %} more{% elif minor < 0 %} less{% endif %}{% endwith %}{% endif %}</dd>
+    <dt class="opacity-80">vs same month last year</dt>
+    <dd class="tabular-nums text-right">{{ year_ago|lookup:display_key|amount_text }}{% if more_less %}{% with minor=year_ago|lookup:minor_key %}{% if minor > 0 %} more{% elif minor < 0 %} less{% endif %}{% endwith %}{% endif %}</dd>
+  </dl>
+  {% endif %}
+</div>
