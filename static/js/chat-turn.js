@@ -39,7 +39,10 @@
         li.textContent = notice;
       }));
     }
+    var dots = article.querySelector("[data-chat-thinking]");
+    if (dots) dots.remove();
     article.removeAttribute("data-chat-turn-url");
+    article.removeAttribute("aria-busy");
     // Proposal cards are rendered by the server, so load the page to show them.
     if (data.proposals) window.location.reload();
   }
@@ -47,14 +50,18 @@
   function watch(article) {
     var url = article.getAttribute("data-chat-turn-url");
     var body = article.querySelector("[data-chat-turn-body]");
+    var dots = article.querySelector("[data-chat-thinking]");
     article.setAttribute("data-chat-turn-polling", "true");
-    if (body) body.textContent = "Thinking…";
+    // The phone design's Thinking state: animated dots plus a line of text (issue #333).
+    if (body) body.textContent = "Working on it. Answers can take a minute.";
+    if (dots) dots.hidden = false;
     var failures = 0;
     function retry() {
       // A signed-out session or a server error page: stop after about a minute.
       failures += 1;
       if (failures >= MAX_FAILURES) {
         if (body) body.textContent = "Thinking… refresh to see the answer.";
+        if (dots) dots.hidden = true;
         return;
       }
       setTimeout(poll, POLL_MS);

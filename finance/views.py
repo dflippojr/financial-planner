@@ -272,6 +272,7 @@ def _home_attention_items(principal, budget_summary):
                 title=f"{unread} unread alert{'s' if unread != 1 else ''}",
                 detail="Open your alerts",
                 url=reverse("alert-list"),
+                icon="unread",
             )
         )
     for card in budget_summary.attention_cards:
@@ -279,8 +280,38 @@ def _home_attention_items(principal, budget_summary):
             title, detail = f"{card.name} is over budget", f"{card.spent_display} of {card.amount_display}"
         else:
             title, detail = f"{card.name} is close to its limit", f"{card.spent_display} of {card.amount_display}"
-        items.append(SimpleNamespace(title=title, detail=detail, url=reverse("budgets")))
+        items.append(SimpleNamespace(title=title, detail=detail, url=reverse("budgets"), icon="warning"))
     return items
+
+
+HOME_RANGES = (("This month", "this-month"), ("3 months", "last-3-months"), ("12 months", "last-12-months"))
+
+
+def _home_range_options(today, *, date_from, date_to, explicit, pair_kwargs):
+    """Range control links for Home: each keeps the other filters and the scenario."""
+    presets = {preset.key: preset for preset in date_range_presets(today)}
+    options = []
+    for label, key in HOME_RANGES:
+        preset = presets[key]
+        pairs = _cash_flow_pairs(date_from=preset.date_from, date_to=preset.date_to, **pair_kwargs)
+        current = (preset.date_from, preset.date_to) == (date_from, date_to)
+        options.append(SimpleNamespace(label=label, url=f"?{urlencode(pairs)}", current=current))
+    custom = explicit and date_from is not None and not any(option.current for option in options)
+    options.append(SimpleNamespace(label="Custom", url="#cash-flow-filters", current=custom, opens_filters=True))
+    return options
+
+
+def _home_filter_count(*, grouping, horizon, account, scope, tag):
+    """Filters set away from their defaults; the range control shows the dates."""
+    return sum(
+        (
+            account is not None,
+            tag is not None,
+            bool(scope),
+            bool(grouping) and grouping != "month",
+            horizon != DEFAULT_HORIZON,
+        )
+    )
 
 
 @require_GET
@@ -412,12 +443,30 @@ def home(request):
         tag=tag,
         changes=(),
     )
+    range_options = _home_range_options(
+        today,
+        date_from=date_from,
+        date_to=date_to,
+        explicit=bool(request.GET.get("date_from") or request.GET.get("date_to")),
+        pair_kwargs={
+            "grouping": grouping or "month",
+            "horizon": horizon,
+            "account": account,
+            "scope": scope or "",
+            "tag": tag,
+            "changes": changes,
+        },
+    )
     return render(
         request,
         "finance/home.html",
         {
             "filter_form": form,
             "filter_pairs": filter_pairs,
+            "range_options": range_options,
+            "filter_count": _home_filter_count(
+                grouping=grouping, horizon=horizon, account=account, scope=scope, tag=tag
+            ),
             "scenario_form": scenario_form,
             "scenario_tokens": scenario_tokens,
             "scenario_listed_changes": listed_changes,
@@ -701,6 +750,16 @@ def transaction_list(request):
     uncategorized_filter = form.is_valid() and form.cleaned_data.get("category") == "uncategorized"
     suggestions = pending_suggestions_for(person, page.object_list) if show_ai else {}
     filter_hidden = filter_hidden_pairs(form.cleaned_data) if form.is_valid() else []
+    more_filter_count = sum(
+        1
+        for name, _value in filter_hidden
+        if name not in TransactionFilterForm.TOOLBAR_FIELD_NAMES and name != "amount_mode"
+    )
+    if filter_hidden:
+        verb = "matches" if matching_count == 1 else "match"
+        list_helper = f"{matching_count:,} {verb} these filters"
+    else:
+        list_helper = f"{matching_count:,} transaction{'' if matching_count == 1 else 's'}"
     saved_filters = (
         SavedTransactionFilter.objects.visible_to(request.user).order_by("name", "pk")
         if person
@@ -728,6 +787,9 @@ def transaction_list(request):
             "proposed_rule": proposed_rule_from_accepts(person) if show_ai else None,
             "list_query": request.get_full_path(),
             "filter_hidden": filter_hidden,
+            "more_filter_count": more_filter_count,
+            "more_filters_have_errors": any(field.errors for field in form.more_fields()),
+            "list_helper": f"{list_helper} · amounts in USD",
             "export_filters_valid": not form.is_bound or form.is_valid(),
             "filter_query": _query_without_page(request),
             "matching_count": matching_count,

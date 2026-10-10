@@ -1,6 +1,6 @@
 """Net worth and Spending at phone and desktop widths (issue #334), in a real browser.
 
-Shares the browser fixtures with test_mobile_layout.py, so it skips the same way when Playwright,
+Uses the shared browser fixtures in browser_support.py, so it skips the same way when Playwright,
 Chromium or static/dist/app.css is missing. Set MOBILE_SHOTS_DIR to save screenshots.
 """
 
@@ -11,7 +11,7 @@ import pytest
 from django.utils import timezone
 
 from finance.models import Account, BalanceSnapshot
-from tests.test_mobile_layout import CSS, SCREEN_DIR, VIEWPORTS, browser, phone_session  # noqa: F401
+from tests.browser_support import CSS, SCREEN_DIR, browser, page_session  # noqa: F401
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),
@@ -32,14 +32,9 @@ LAYOUT_JS = """() => {
 
 
 @pytest.fixture
-def open_report(phone_session):  # noqa: F811
+def open_report(page_session):
     def open_page(path, width, scheme="light"):
-        size = f"report-{width}"
-        VIEWPORTS[size] = (width, 900)
-        try:
-            return phone_session(size, scheme, path)
-        finally:
-            del VIEWPORTS[size]
+        return page_session((width, 900), scheme, path)
 
     return open_page
 

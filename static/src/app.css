@@ -110,6 +110,27 @@
   }
 }
 
+/* Attention ink (issue #331) for Over and close-to-limit text: stock warning is 1.6:1 on white,
+   so the light theme uses a dark amber at 4.5:1 or more on base-100 and base-200. */
+:root,
+[data-theme="light"] {
+  --attention-ink: #8a4b00;
+}
+
+[data-theme="dark"] {
+  --attention-ink: var(--color-warning);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --attention-ink: var(--color-warning);
+  }
+}
+
+@utility attention-ink {
+  color: var(--attention-ink);
+}
+
 @utility amount-in {
   color: var(--amount-in);
 }
@@ -325,6 +346,160 @@
     flex: none;
     width: 1rem;
     height: 1rem;
+  }
+}
+
+/* Cash flow chart fills (issue #329): primary for income and orange for spending, each at
+   least 3:1 against base-100 in its theme. The net line uses base-content. */
+:root,
+[data-theme="light"] {
+  --chart-income: #422ad5;
+  --chart-spending: #c2410c;
+}
+
+[data-theme="dark"] {
+  --chart-income: #8b89ff;
+  --chart-spending: #fb923c;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --chart-income: #8b89ff;
+    --chart-spending: #fb923c;
+  }
+}
+
+@layer components {
+  /* Range control (issue #329): links styled as a segmented control; the current one is marked. */
+  .range-control {
+    display: flex;
+    gap: 0.125rem;
+    padding: 0.1875rem;
+    border: 1px solid var(--color-base-300);
+    border-radius: 0.625rem;
+    background: var(--color-base-100);
+  }
+
+  .range-control > a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.25rem;
+    padding: 0 0.75rem;
+    border-radius: 0.4375rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  .range-control > a:hover {
+    background: var(--color-base-200);
+  }
+
+  .range-control > a[aria-current="true"] {
+    background: color-mix(in oklab, var(--color-primary) 12%, var(--color-base-100));
+    color: var(--color-base-content);
+    font-weight: 600;
+    box-shadow: inset 0 -2px 0 var(--color-primary);
+  }
+
+  .filters-disclosure > summary {
+    list-style: none;
+  }
+
+  .filters-disclosure > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  /* On a phone the open form takes the full width under the title, as before. */
+  @media (width < 48rem) {
+    .page-header-actions:has(> .filters-disclosure) {
+      flex-basis: 100%;
+    }
+  }
+
+  /* From md the Filters panel drops down under the header, right-aligned to the nearest
+     positioned wrapper, instead of pushing the page down. */
+  @media (width >= 48rem) {
+    .filters-panel {
+      position: absolute;
+      top: calc(100% + 0.5rem);
+      right: 0;
+      z-index: 20;
+      width: min(40rem, 100%);
+      padding: 1rem;
+      border: 1px solid var(--color-base-300);
+      border-radius: var(--radius-box);
+      background: var(--color-base-100);
+      box-shadow: 0 8px 24px color-mix(in oklab, var(--color-base-content) 16%, transparent);
+    }
+  }
+
+  .chart-legend-swatch {
+    flex: none;
+    width: 0.75rem;
+    height: 0.75rem;
+    border-radius: 0.1875rem;
+  }
+
+  .chart-legend-income {
+    background: var(--chart-income);
+  }
+
+  .chart-legend-spending {
+    background: var(--chart-spending);
+  }
+
+  .chart-legend-net {
+    height: 0.1875rem;
+    background: var(--color-base-content);
+  }
+
+  .chart-legend-projected {
+    border: 1.5px dashed currentColor;
+  }
+}
+
+/* A pending chat reply's Thinking dots (issue #333); still dots when motion is reduced. */
+.chat-thinking {
+  display: inline-flex;
+  flex: none;
+  gap: 0.25rem;
+}
+
+.chat-thinking[hidden] {
+  display: none;
+}
+
+.chat-thinking > span {
+  width: 0.4375rem;
+  height: 0.4375rem;
+  border-radius: 9999px;
+  background: var(--color-primary);
+  animation: chat-thinking-pulse 1.2s ease-in-out infinite;
+}
+
+.chat-thinking > span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.chat-thinking > span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes chat-thinking-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-thinking > span {
+    animation: none;
   }
 }
 
