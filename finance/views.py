@@ -272,6 +272,7 @@ def _home_attention_items(principal, budget_summary):
                 title=f"{unread} unread alert{'s' if unread != 1 else ''}",
                 detail="Open your alerts",
                 url=reverse("alert-list"),
+                icon="unread",
             )
         )
     for card in budget_summary.attention_cards:
@@ -279,8 +280,38 @@ def _home_attention_items(principal, budget_summary):
             title, detail = f"{card.name} is over budget", f"{card.spent_display} of {card.amount_display}"
         else:
             title, detail = f"{card.name} is close to its limit", f"{card.spent_display} of {card.amount_display}"
-        items.append(SimpleNamespace(title=title, detail=detail, url=reverse("budgets")))
+        items.append(SimpleNamespace(title=title, detail=detail, url=reverse("budgets"), icon="warning"))
     return items
+
+
+HOME_RANGES = (("This month", "this-month"), ("3 months", "last-3-months"), ("12 months", "last-12-months"))
+
+
+def _home_range_options(today, *, date_from, date_to, explicit, pair_kwargs):
+    """Range control links for Home: each keeps the other filters and the scenario."""
+    presets = {preset.key: preset for preset in date_range_presets(today)}
+    options = []
+    for label, key in HOME_RANGES:
+        preset = presets[key]
+        pairs = _cash_flow_pairs(date_from=preset.date_from, date_to=preset.date_to, **pair_kwargs)
+        current = (preset.date_from, preset.date_to) == (date_from, date_to)
+        options.append(SimpleNamespace(label=label, url=f"?{urlencode(pairs)}", current=current))
+    custom = explicit and date_from is not None and not any(option.current for option in options)
+    options.append(SimpleNamespace(label="Custom", url="#cash-flow-filters", current=custom, opens_filters=True))
+    return options
+
+
+def _home_filter_count(*, grouping, horizon, account, scope, tag):
+    """Filters set away from their defaults; the range control shows the dates."""
+    return sum(
+        (
+            account is not None,
+            tag is not None,
+            bool(scope),
+            bool(grouping) and grouping != "month",
+            horizon != DEFAULT_HORIZON,
+        )
+    )
 
 
 @require_GET
@@ -412,12 +443,30 @@ def home(request):
         tag=tag,
         changes=(),
     )
+    range_options = _home_range_options(
+        today,
+        date_from=date_from,
+        date_to=date_to,
+        explicit=bool(request.GET.get("date_from") or request.GET.get("date_to")),
+        pair_kwargs={
+            "grouping": grouping or "month",
+            "horizon": horizon,
+            "account": account,
+            "scope": scope or "",
+            "tag": tag,
+            "changes": changes,
+        },
+    )
     return render(
         request,
         "finance/home.html",
         {
             "filter_form": form,
             "filter_pairs": filter_pairs,
+            "range_options": range_options,
+            "filter_count": _home_filter_count(
+                grouping=grouping, horizon=horizon, account=account, scope=scope, tag=tag
+            ),
             "scenario_form": scenario_form,
             "scenario_tokens": scenario_tokens,
             "scenario_listed_changes": listed_changes,
