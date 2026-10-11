@@ -68,6 +68,8 @@ test('Note and tag add/remove persist; tag membership has an audit event', async
   await page.goto(edit);
   await expect(page.getByLabel('Note', { exact: true })).toHaveValue('');
   await expect(page.getByLabel('synthetic-ui', { exact: true })).not.toBeChecked();
+  await audit(page, 'tags_changed', 'transaction', edit.split('/')[2]);
+  await expect(page.locator('tbody tr').filter({ hasText: 'transaction #' + edit.split('/')[2] }).filter({ hasText: 'Member #1' })).toHaveCount(2);
   // Ordinary note edits deliberately do not create audit events (#98).
 });
 
@@ -86,12 +88,16 @@ test('Split validates total, persists exact parts, and unsplits', async ({ page 
   await page.goto(edit);
   await expect(page.getByRole('heading', { name: 'Split parts', exact: true })).toBeVisible();
   await expect(page.locator('ol li').filter({ hasText: 'Category:' })).toContainText('Transportation $20.00, Dining $21.18');
+  await audit(page, 'transaction_corrected', 'transaction', edit.split('/')[2]);
+  await page.goto(edit);
   const unsplit = page.locator('form[action$="/unsplit/"]');
   await unsplit.getByLabel('Category', { exact: true }).selectOption({ label: 'Transportation' });
   await submit(page, unsplit.getByRole('button', { name: 'Unsplit', exact: true }));
   await page.goto(edit);
   await expect(page.getByRole('heading', { name: 'Split parts', exact: true })).toHaveCount(0);
   await expect(page.locator('form[action$="/category/"] option:checked')).toHaveText('Transportation');
+  await audit(page, 'transaction_corrected', 'transaction', edit.split('/')[2]);
+  await expect(page.locator('tbody tr').filter({ hasText: 'transaction #' + edit.split('/')[2] }).filter({ hasText: 'Member #1' })).toHaveCount(2);
 });
 
 test('Receipt rejects text, then upload/download/remove persist and are audited', async ({ page }) => {

@@ -6,7 +6,7 @@ import { test, expect, signIn, submit } from './fixtures';
 test('Invitation join and one-time recovery revoke the guest session', async ({ page, browser, uiURL }, info) => {
   await signIn(page);
   await page.goto('/settings/household/');
-  let invitation = '', recovery = '', stage = 'create invitation';
+  let invitation = '', recovery = '', invitationID = '', stage = 'create invitation';
   const contextOptions = { ...(info.project.name.startsWith('phone') ? devices['iPhone SE'] : devices['Desktop Chrome']), baseURL: uiURL, colorScheme: info.project.use.colorScheme };
   const guestContext = await browser.newContext(contextOptions);
   const recoveryContext = await browser.newContext(contextOptions);
@@ -22,6 +22,10 @@ test('Invitation join and one-time recovery revoke the guest session', async ({ 
     await page.goto('/settings/household/');
     await page.reload();
     if (await page.locator('#invitation-code').count()) throw new Error('Invitation redisplayed');
+    await page.goto('/settings/audit/?action=invitation_created');
+    const created = page.locator('tbody tr').filter({ hasText: 'Invitation created / Succeeded' }).filter({ hasText: 'Member #1' }).first();
+    invitationID = ((await created.locator('td').nth(3).innerText()).match(/invitation #(\d+)/) || [])[1];
+    if (!invitationID) throw new Error('Missing invitation audit');
     stage = 'join guest';
     const guest = await guestContext.newPage();
     await guest.goto('/join/');
@@ -80,7 +84,12 @@ test('Invitation join and one-time recovery revoke the guest session', async ({ 
     await page.goto('/settings/household/');
     await expect(page.locator('main')).toContainText('Synthetic UI Guest');
     await page.goto('/settings/audit/?action=invitation_accepted');
-    await expect(page.locator('tbody')).toContainText('Invitation accepted / Succeeded');
+    const accepted = page.locator('tbody tr').filter({ hasText: 'invitation #' + invitationID }).filter({ hasText: 'Invitation accepted / Succeeded' }).first();
+    const member = ((await accepted.locator('td').nth(2).innerText()).match(/Member #(\d+)/) || [])[1];
+    if (!member) throw new Error('Missing guest actor');
+    await expect(accepted).toContainText('affecting member #' + member);
+    await guest.goto('/settings/audit/?action=password_changed');
+    await expect(guest.locator('tbody tr').filter({ hasText: 'Member #' + member }).filter({ hasText: 'member #' + member }).first()).toContainText('Password changed / Succeeded');
     stage = 'security event';
     await guest.goto('/settings/security/');
     await expect(guest.locator('main')).toContainText('Password changed');
