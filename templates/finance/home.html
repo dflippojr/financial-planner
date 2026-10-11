@@ -46,7 +46,7 @@
   {% if attention_items %}
   <section aria-labelledby="attention-heading" class="xl:hidden">
     <h2 id="attention-heading" class="mb-2 px-1 font-semibold">Needs attention</h2>
-    <ul class="grid gap-2 md:grid-cols-2 lg:grid-cols-3">
+    <ul class="grid grid-cols-1 gap-2 wrap-anywhere md:grid-cols-2 lg:grid-cols-3">
       {% for item in attention_items %}
       <li>{% include "finance/_attention_item.html" %}</li>
       {% endfor %}
@@ -67,7 +67,7 @@
       <ul class="flex flex-col gap-3 md:hidden">
         {% for card in budget_summary.top_cards %}
         <li>
-          <div class="flex justify-between gap-2 text-sm">
+          <div class="flex flex-wrap justify-between gap-2 text-sm">
             <span>{{ card.name }}</span>
             <span class="tabular-nums{% if card.over_budget %} font-semibold{% endif %}">{{ card.spent_display }} of {{ card.amount_display }}{% if card.over_budget %} · Over by {{ card.over_by_display }}{% endif %}</span>
           </div>
