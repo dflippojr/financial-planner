@@ -43,14 +43,14 @@
               {% csrf_token %}
               <input type="hidden" name="action" value="accept">
               <input type="hidden" name="version" value="{{ privacy_policy_prompt.version }}">
-              <input type="hidden" name="next" value="{{ request.path }}">
+              <input type="hidden" name="next" value="{{ request.get_full_path }}">
               <button type="submit" class="btn btn-primary btn-sm max-md:min-h-11">Accept</button>
             </form>
             <form method="post" action="{% url 'privacy-policy-respond' %}">
               {% csrf_token %}
               <input type="hidden" name="action" value="decline">
               <input type="hidden" name="version" value="{{ privacy_policy_prompt.version }}">
-              <input type="hidden" name="next" value="{{ request.path }}">
+              <input type="hidden" name="next" value="{{ request.get_full_path }}">
               <button type="submit" class="btn btn-sm max-md:min-h-11">Deny</button>
             </form>
             <form method="post" action="{% url 'privacy-policy-respond' %}">

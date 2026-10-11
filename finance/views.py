@@ -2268,9 +2268,9 @@ def privacy_policy_respond(request):
     if wants_json:
         # Middleware may already have cached the reverse one-to-one relation.
         request.user.person = person
-        from .context_processors import ai_features
+        from .context_processors import ai_consent_context
 
-        context = ai_features(request, return_url=safe_next_url(request, request.POST.get("next", "")))
+        context = ai_consent_context(request, return_url=safe_next_url(request, request.POST.get("next", "")))
         return JsonResponse({
             "ai_slot": context["ai_slot"],
             "slot_html": render_to_string("finance/_ai_slot.html", context, request=request),

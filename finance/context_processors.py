@@ -10,7 +10,11 @@ def google_signin(_request):
     return {"google_signin_enabled": google_signin_enabled()}
 
 
-def ai_features(request, *, return_url=None):
+def ai_features(request):
+    return ai_consent_context(request)
+
+
+def ai_consent_context(request, *, return_url=None):
     user = getattr(request, "user", None)
     if not getattr(user, "is_authenticated", False):
         return {"show_ai_features": False, "ai_slot": None}
