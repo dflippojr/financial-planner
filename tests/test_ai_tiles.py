@@ -492,3 +492,47 @@ def test_cash_flow_period_citations_preserve_the_selected_grouping(member, group
             figure = next(figure for figure in result.figures if figure["label"] == f'{period["label"]} {label}')
             assert figure["url"] == payload["page_url"]
             assert figure["amount_minor"] == getattr(row, field)
+
+
+@pytest.mark.parametrize("first_shared", [False, True])
+@pytest.mark.parametrize("household_consented", [False, True])
+@pytest.mark.parametrize("first_archived", [False, True])
+def test_account_projection_retains_migrated_series_without_bypassing_consent(
+    member, first_shared, household_consented, first_archived
+):
+    user, person, household = member
+    _other_user, other, _household = make_member("tile_other", household=household, policy=current_policy())
+    if not household_consented:
+        other.privacy_policy_acceptances.all().delete()
+    previous = checking(person, household, "Synthetic former account", private=not first_shared)
+    current = checking(person, household, "Synthetic current account", private=True)
+    series = RecurringSeries.objects.create(
+        person=person, merchant_key="synthetic migrated subscription", display_name="Synthetic migrated subscription",
+        cadence="monthly", typical_amount_minor=-1111, status="confirmed", confidence="high",
+        reasons=["synthetic"], fingerprint="e" * 64,
+    )
+    for account, day in ((previous, date(2026, 8, 4)), (current, date(2026, 9, 4))):
+        transaction = add_txn(account, person, day, -1111, "Synthetic migrated subscription")
+        RecurringSeriesMember.objects.create(series=series, transaction=transaction)
+    if first_archived:
+        previous.status = Account.Status.ARCHIVED
+        previous.archived_at = timezone.now()
+        previous.save(update_fields=["status", "archived_at"])
+    client = Client()
+    client.force_login(user)
+    with patch("django.utils.timezone.localdate", return_value=date(2026, 10, 1)):
+        result = projected_cash_flow_tool(person, {"account_id": current.pk, "horizon": 3, "scope": "private"})
+        payload = json.loads(result.text)
+        response = client.get(payload["page_url"])
+    assert result.ok
+    assert response.status_code == 200
+    actual = response.context["report"].projected_periods
+    assert [month.spending_minor for month in actual] == [1111, 1111, 1111]
+    if first_shared and not household_consented:
+        assert all(month["spending_minor"] == 0 for month in payload["months"])
+        assert previous.pk not in result.account_ids
+    else:
+        assert [(month["income_minor"], month["spending_minor"], month["net_minor"]) for month in payload["months"]] == [
+            (month.income_minor, month.spending_minor, month.net_minor) for month in actual
+        ]
+        assert all(figure["amount_minor"] == -1111 and figure["url"] == payload["page_url"] for figure in result.figures)
