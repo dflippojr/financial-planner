@@ -14,6 +14,7 @@ import uuid
 import pytest
 
 from scripts.ui_instance import PASSWORD, ROOT, isolated_environment, refuse_database_environment, run_css_builder, teardown
+from tests.ui_diagnostics import diagnostic_summary
 
 
 @pytest.mark.parametrize("key", ["DATABASE_URL", "DATABASE", "POSTGRES_HOST", "POSTGRES_DB", "PGHOST", "DB_URL"])
@@ -100,7 +101,7 @@ def ui_process(tmp_path, command=None, startup_timeout=90, env=None):
         instance = None
         try:
             instance = ready.get(timeout=startup_timeout)
-            assert instance is not None, log.read_text()
+            assert instance is not None, diagnostic_summary(log.read_text())
             yield instance
         finally:
             directory = Path(instance["directory"]) if instance else None
@@ -120,10 +121,10 @@ def ui_process(tmp_path, command=None, startup_timeout=90, env=None):
                     if process.poll() is not None:
                         reader.join(timeout=5)
                         process.stdout.close()
-            assert process.returncode == 0, log.read_text()
             if directory is not None:
                 assert not directory.exists(), "Teardown left synthetic storage behind"
             handle.unlink(missing_ok=True)
+            assert process.returncode == 0, diagnostic_summary(log.read_text())
 
 
 @pytest.fixture
