@@ -8,6 +8,8 @@ Build a private, self hosted personal finance app that can eventually replace Ro
 
 ## Confirmed decisions
 
+- Disposable UI testing (#361): `scripts/ui_instance.py` runs on loopback with a fresh temporary SQLite database, synthetic phone seed, known test sign-in and an in-process fake chat provider. It refuses inherited database connection variables and isolates uploads and audit storage without reading `.env`. The start/sign-in/flows/teardown contract is [docs/ui-testing.md](ui-testing.md); the persistence smoke check uses the private-repository tower Linux runner.
+
 - Review runner hardening (#303): keep fork workflow approval at all external contributors. Install a host-side job-started allow-list for this repository's `review.yml` on the default branch (`main`), accepting only base-repository `pull_request_target` and `workflow_dispatch` jobs. Prefer one-job ephemeral registration under a dedicated non-administrator Windows account. The owner applies host changes and reprovisions after each job; implementation must not restart or re-register the live runner. See [runner operations](review-runner.md).
 
 - Repository: private GitHub repository with GitHub Issues as the backlog.

@@ -70,8 +70,8 @@ class PasswordPairForm(forms.Form):
 
 
 class LoginForm(forms.Form):
-    username = forms.CharField(max_length=150)
-    password = forms.CharField(widget=forms.PasswordInput)
+    username = forms.CharField(max_length=150, widget=forms.TextInput(attrs={"autocomplete": "username"}))
+    password = forms.CharField(widget=forms.PasswordInput(attrs={"autocomplete": "current-password"}))
 
 
 class ReauthPasswordForm(forms.Form):
