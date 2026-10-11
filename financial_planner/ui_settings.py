@@ -1,5 +1,6 @@
 """Isolated development settings used by scripts/ui_instance.py."""
 import os
+from copy import deepcopy
 from pathlib import Path
 
 instance = Path(os.environ["FINANCIAL_PLANNER_UI_DIR"])
@@ -15,3 +16,5 @@ STORAGES = {
 }
 EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
 EMAIL_HOST = ""
+LOGGING = deepcopy(LOGGING)
+LOGGING["handlers"]["console"]["stream"] = "ext://sys.stderr"

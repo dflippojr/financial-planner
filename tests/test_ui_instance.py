@@ -1,5 +1,6 @@
 """Disposable-instance guards and a real sign-in/category-persistence smoke check."""
 import json
+import io
 import os
 from pathlib import Path
 import queue
@@ -44,6 +45,37 @@ def test_cli_refuses_database_before_startup():
     assert not result.stdout
 
 
+def read_startup(output, log, ready):
+    """Signal readiness once, then keep draining diagnostics until the child exits."""
+    signaled = False
+    for line in output:
+        log.write(line)
+        log.flush()
+        if signaled:
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict) and "url" in value:
+            ready.put(value)
+            signaled = True
+    if not signaled:
+        ready.put(None)
+
+
+def test_startup_reader_drains_output_after_readiness():
+    ready = queue.Queue()
+    log = io.StringIO()
+    code = 'print(\'{"url": "synthetic-loopback"}\', flush=True); print("synthetic-log-" * 20000, flush=True)'
+    with subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True) as process:
+        read_startup(process.stdout, log, ready)
+        assert process.wait(timeout=5) == 0
+    assert ready.get_nowait() == {"url": "synthetic-loopback"}
+    assert ready.empty()
+    assert log.getvalue().count("synthetic-log-") == 20000
+
+
 @pytest.fixture
 def ui_instance(tmp_path):
     env = dict(os.environ)
@@ -55,18 +87,7 @@ def ui_instance(tmp_path):
         process = subprocess.Popen([sys.executable, str(ROOT / "scripts/ui_instance.py")],
                                    cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=errors, text=True)
 
-        def read_ready():
-            for line in process.stdout:
-                try:
-                    value = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if "url" in value:
-                    ready.put(value)
-                    return
-            ready.put(None)
-
-        reader = threading.Thread(target=read_ready, daemon=True)
+        reader = threading.Thread(target=read_startup, args=(process.stdout, errors, ready), daemon=True)
         reader.start()
         instance = None
         try:
@@ -84,8 +105,8 @@ def ui_instance(tmp_path):
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait()
+                reader.join(timeout=5)
                 process.stdout.close()
-                reader.join(timeout=1)
             if instance:
                 assert process.returncode == 0, log.read_text()
                 assert not Path(instance["directory"]).exists(), "Teardown left synthetic storage behind"
@@ -135,5 +156,10 @@ def test_sign_in_and_category_persist(browser, ui_instance):
         expect(reply).to_be_visible(timeout=15000)
         page.reload()
         expect(reply).to_be_visible()
+        page.get_by_label("Question", exact=True).filter(visible=True).fill("A synthetic follow-up question")
+        page.get_by_role("button", name="Send", exact=True).filter(visible=True).click()
+        expect(reply).to_have_count(2, timeout=15000)
+        page.reload()
+        expect(reply).to_have_count(2)
     finally:
         context.close()

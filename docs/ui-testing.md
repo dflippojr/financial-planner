@@ -13,8 +13,9 @@ CSS, migrates a fresh SQLite file under the system temp directory, and seeds
 synthetic data. The final startup line is JSON containing `url` and `directory`.
 Open that URL; its free port changes on every start. Keep the command running.
 The server binds only to `127.0.0.1`. No Docker, production database, or `.env`
-is used. Start in a shell without `DATABASE*`, `POSTGRES_*`, `PG*`, or `DB_*`
-database connection variables; the script refuses configured databases.
+is used. Start in a shell without `DATABASE*`, `POSTGRES_*`, `PG*`, `DB_HOST`,
+`DB_NAME`, `DB_URL` or `DB_PASSWORD` connection variables; the script refuses
+configured databases.
 Uploads, receipts and operator audit files are also temporary. Inherited AI,
 SMTP, Google sign-in and policy settings are discarded.
 

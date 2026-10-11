@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta, timezone as dt_timezone
+from datetime import date, datetime, timezone as dt_timezone
 from hashlib import sha256
 from unittest.mock import patch
 
@@ -7,7 +7,6 @@ from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.test import Client
 from django.urls import reverse
-from django.utils import timezone
 
 from finance.alert_services import run_daily_alert_pass
 from finance.budget_services import save_budget
@@ -328,7 +327,7 @@ def test_recurring_facts_include_price_missed_cancel_and_new():
         confidence=RecurringSeries.Confidence.HIGH,
         reasons=["synthetic"],
         fingerprint=sha256(b"rise").hexdigest(),
-        confirmed_at=timezone.now() - timedelta(days=40),
+        confirmed_at=datetime(2026, 8, 1, tzinfo=dt_timezone.utc),
     )
     for day, amount in ((date(2026, 7, 10), -1000), (date(2026, 8, 10), -1000), (date(2026, 9, 10), -1100)):
         RecurringSeriesMember.objects.create(
@@ -347,7 +346,7 @@ def test_recurring_facts_include_price_missed_cancel_and_new():
         confidence=RecurringSeries.Confidence.HIGH,
         reasons=["synthetic"],
         fingerprint=sha256(b"missed").hexdigest(),
-        confirmed_at=timezone.now() - timedelta(days=40),
+        confirmed_at=datetime(2026, 8, 1, tzinfo=dt_timezone.utc),
     )
     RecurringSeriesMember.objects.create(
         series=missed,
@@ -370,7 +369,7 @@ def test_recurring_facts_include_price_missed_cancel_and_new():
         confidence=RecurringSeries.Confidence.HIGH,
         reasons=["synthetic"],
         fingerprint=sha256(b"cancel").hexdigest(),
-        confirmed_at=timezone.now() - timedelta(days=40),
+        confirmed_at=datetime(2026, 8, 1, tzinfo=dt_timezone.utc),
     )
     RecurringSeriesMember.objects.create(
         series=cancelled,

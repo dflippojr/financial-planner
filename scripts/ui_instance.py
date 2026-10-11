@@ -20,6 +20,8 @@ ROOT = Path(__file__).resolve().parents[1]
 USERNAME = "synthetic_alex"
 PASSWORD = "Synthetic-passphrase-42!"
 PREFIX = "financial-planner-ui-"
+ENV_ALLOWLIST = {"PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "TEMP", "TMP", "TMPDIR",
+                 "HOME", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "LANG", "LC_ALL"}
 logger = logging.getLogger(__name__)
 
 
@@ -36,9 +38,7 @@ def refuse_database_environment(environ):
 def isolated_environment(directory):
     # Retain OS/runtime essentials only. Operator AI, SMTP, receipt, policy, and
     # audit settings cannot point this process at live services or storage.
-    keep = {"PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "TEMP", "TMP", "TMPDIR",
-            "HOME", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "LANG", "LC_ALL"}
-    env = {key: value for key, value in os.environ.items() if key.upper() in keep}
+    env = {key: value for key, value in os.environ.items() if key.upper() in ENV_ALLOWLIST}
     env.update({
         "DJANGO_SETTINGS_MODULE": "financial_planner.ui_settings",
         "FINANCIAL_PLANNER_UI_DIR": str(directory),
@@ -114,6 +114,7 @@ def serve(directory):
     accept_policy(person, publish_policy(material=True, body="Synthetic UI testing policy."))
     harness_state, fake_url, harness_server = start_fake_harness()
     harness_state.session_answer = "Synthetic UI reply. No real provider was contacted."
+    harness_state.followup_answer = harness_state.session_answer
     stop = threading.Event()
     worker = None
     server = None

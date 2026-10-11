@@ -79,6 +79,7 @@ def test_http_lifecycle_seeds_sign_in_chat_and_authenticated_teardown(monkeypatc
 
 
 def test_ui_settings_force_temporary_sqlite_and_disable_email(monkeypatch, tmp_path):
+    from financial_planner import settings as production_settings
     directory = tmp_path / (ui_instance.PREFIX + "settings")
     monkeypatch.setenv("FINANCIAL_PLANNER_UI_DIR", str(directory))
     values = runpy.run_module("financial_planner.ui_settings")
@@ -86,6 +87,9 @@ def test_ui_settings_force_temporary_sqlite_and_disable_email(monkeypatch, tmp_p
     assert values["DATABASES"]["default"]["NAME"] == directory / "db.sqlite3"
     assert values["EMAIL_BACKEND"] == "django.core.mail.backends.locmem.EmailBackend"
     assert values["EMAIL_HOST"] == ""
+    assert values["LOGGING"]["handlers"]["console"]["stream"] == "ext://sys.stderr"
+    assert values["LOGGING"] is not production_settings.LOGGING
+    assert production_settings.LOGGING["handlers"]["console"]["stream"] == "ext://sys.stdout"
     monkeypatch.setenv("FINANCIAL_PLANNER_UI_DIR", "relative-directory")
     with pytest.raises(RuntimeError, match="disposable UI directory"):
         runpy.run_module("financial_planner.ui_settings")
