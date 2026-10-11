@@ -203,6 +203,9 @@ def ai_tile(context, kind, *, has_data=False, **values):
     if filters is None:
         return {}
     tile_context = sanitize_tile({"kind": kind, "filters": filters}, person)
+    if any(key in TILES[kind].filters and value not in (None, "") and key not in tile_context["filters"]
+           for key, value in filters.items()):
+        return {}
     share_cache = context.render_context.setdefault("ai_bead_sharing", {})
     key = (person.pk, tile_context["filters"].get("account_id"), tile_context["filters"].get("scope"))
     if key not in share_cache:

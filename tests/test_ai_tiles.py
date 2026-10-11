@@ -435,3 +435,34 @@ def test_report_tiles_keep_visible_archived_history_in_their_totals(member):
     assert json.loads(net_worth_series(person, bounds).text)["net_minor"] == 1000
     rows = json.loads(list_budgets(person, {"month": "2020-01", "scope": "private"}).text)["rows"]
     assert [row["spent_minor"] for row in rows] == [100]
+
+
+@pytest.mark.parametrize("kind", ["transactions", "transaction-totals", "cash-flow-totals", "cash-flow-chart", "cash-flow-months", "spending-categories"])
+def test_bead_is_omitted_when_applied_account_filter_is_rejected(member, kind):
+    user, person, household = member
+    account = checking(person, household, "Synthetic historical filter", private=True)
+    account.status = Account.Status.ARCHIVED
+    account.archived_at = timezone.now()
+    account.save()
+    assert not render_bead(user, kind=kind, filters={"account_id": account.pk})
+
+
+@pytest.mark.parametrize("route,kinds", [
+    ("transaction-list", ("transactions", "transaction-totals")),
+    ("home", ("cash-flow-totals", "cash-flow-chart", "cash-flow-months")),
+])
+def test_archived_account_page_filter_never_renders_an_unfiltered_bead(member, route, kinds):
+    user, person, household = member
+    account = checking(person, household, "Synthetic archived history", private=True)
+    add_txn(account, person, timezone.localdate(), -100, "Synthetic expense")
+    account.status = "archived"
+    account.archived_at = timezone.now()
+    account.save()
+    client = Client()
+    client.force_login(user)
+    response = client.get(reverse(route), {"account": account.pk})
+    assert response.status_code == 200
+    assert response.context["filter_form"].is_valid()
+    html = response.content.decode()
+    for kind in kinds:
+        assert f'&quot;kind&quot;: &quot;{kind}&quot;' not in html
