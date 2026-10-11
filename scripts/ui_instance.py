@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 from pathlib import Path
 import secrets
@@ -12,13 +13,14 @@ import subprocess
 import sys
 import tempfile
 import threading
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, build_opener
 from wsgiref.simple_server import WSGIServer, make_server
 
 ROOT = Path(__file__).resolve().parents[1]
 USERNAME = "synthetic_alex"
 PASSWORD = "Synthetic-passphrase-42!"
 PREFIX = "financial-planner-ui-"
+logger = logging.getLogger(__name__)
 
 
 def refuse_database_environment(environ):
@@ -78,7 +80,8 @@ def teardown(directory):
         raise RuntimeError("Invalid disposable port.")
     request = Request(f"http://127.0.0.1:{port}/__ui_teardown__/", method="POST",
                       headers={"Authorization": "Bearer " + state["token"]})
-    with urlopen(request, timeout=10) as response:
+    # Teardown must stay on loopback even in an operator shell with HTTP_PROXY.
+    with build_opener(ProxyHandler({})).open(request, timeout=10) as response:
         if response.status != 200:
             raise RuntimeError("Disposable server refused teardown.")
 
@@ -98,9 +101,8 @@ def serve(directory):
     from django.contrib.staticfiles.handlers import StaticFilesHandler
     from django.core.management import call_command
     from django.core.wsgi import get_wsgi_application
-    from django.db import connections, close_old_connections
+    from django.db import connections
     from finance.ai_services import connect_harness, set_defaults, set_offer_local_chat
-    from finance.chat_runner import process_pending_turns
     from finance.policy_services import accept_policy, publish_policy
     from tests.fake_harness import start_fake_harness
     from tests.mobile_seed import seed_phone_data
@@ -110,13 +112,13 @@ def serve(directory):
     person.user.set_password(PASSWORD)
     person.user.save(update_fields=["password"])
     accept_policy(person, publish_policy(material=True, body="Synthetic UI testing policy."))
-    fake, fake_url, harness = start_fake_harness()
-    fake.session_answer = "Synthetic UI reply. No real provider was contacted."
+    harness_state, fake_url, harness_server = start_fake_harness()
+    harness_state.session_answer = "Synthetic UI reply. No real provider was contacted."
     stop = threading.Event()
     worker = None
     server = None
     try:
-        connect_harness(person, base_url=fake_url, token=fake.token)
+        connect_harness(person, base_url=fake_url, token=harness_state.token)
         set_offer_local_chat(person, True)
         set_defaults(person, chat_backend="local", background_backend="local")
         app = StaticFilesHandler(get_wsgi_application())
@@ -137,15 +139,7 @@ def serve(directory):
         port = server.server_port
         (directory / "instance.json").write_text(json.dumps({"port": port, "token": token}))
 
-        def chat_worker():
-            try:
-                while not stop.wait(0.2):
-                    close_old_connections()
-                    process_pending_turns(sleep=lambda _seconds: None)
-            finally:
-                connections.close_all()
-
-        worker = threading.Thread(target=chat_worker, name="synthetic-chat")
+        worker = threading.Thread(target=poll_chat, args=(stop,), name="synthetic-chat")
         worker.start()
         print(json.dumps({"url": f"http://127.0.0.1:{port}", "directory": str(directory),
                           "username": USERNAME, "password": PASSWORD}), flush=True)
@@ -156,8 +150,26 @@ def serve(directory):
             server.server_close()
         if worker:
             worker.join()
-        harness.shutdown()
-        harness.server_close()
+        harness_server.shutdown()
+        harness_server.server_close()
+        connections.close_all()
+
+
+def poll_chat(stop):
+    from django.db import close_old_connections, connections
+    from finance.chat_runner import process_pending_turns, recover_stale_turns
+
+    try:
+        while not stop.wait(0.2):
+            try:
+                close_old_connections()
+                recover_stale_turns()
+                process_pending_turns(sleep=lambda _seconds: None)
+            except Exception:
+                # Like ChatLane.run_forever: a transient SQLite lock must not
+                # permanently disable chat for this disposable instance.
+                logger.exception("Synthetic chat poll failed; continuing")
+    finally:
         connections.close_all()
 
 
