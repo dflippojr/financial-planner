@@ -107,6 +107,15 @@ for (const device of ['iPhone 15', 'Pixel 7', 'Desktop Chrome']) {
         await to.fill('2026-10-04');
         await submit(page, panel.getByRole('button', { name: 'Update', exact: true }));
         await expect(panel).toContainText('End date must be on or after start date.');
+        const close = panel.getByRole('button', { name: 'Close filters', exact: true });
+        await reachable(close);
+        await close.click();
+        await expect(panel).not.toHaveAttribute('open', '');
+        await expect(panel.locator('summary')).toBeFocused();
+        await panel.locator('summary').press('Enter');
+        await expect(from).toHaveValue('2026-10-05');
+        await expect(to).toHaveValue('2026-10-04');
+        await expect(panel).toContainText('End date must be on or after start date.');
         const reset = panel.getByRole('link', { name: 'Reset range', exact: true });
         await reachable(reset);
         await reset.focus();
@@ -124,6 +133,12 @@ for (const device of ['iPhone 15', 'Pixel 7', 'Desktop Chrome']) {
         await expect(to).toHaveValue('2026-10-05');
         await expect(from).toBeFocused();
         await page.setViewportSize(viewport);
+        await from.press('Escape');
+        await expect(panel).not.toHaveAttribute('open', '');
+        await expect(panel.locator('summary')).toBeFocused();
+        await panel.locator('summary').press('Enter');
+        await expect(from).toHaveValue('2026-10-01');
+        await expect(to).toHaveValue('2026-10-05');
         await reachable(panel.getByRole('button', { name: 'Update', exact: true }));
         await submit(page, panel.getByRole('button', { name: 'Update', exact: true }));
         await page.reload();
