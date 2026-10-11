@@ -6,7 +6,6 @@ import runpy
 import socket
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from types import SimpleNamespace
@@ -84,32 +83,15 @@ ui_instance.main()
             child.communicate(timeout=10)
 
 
-@pytest.mark.django_db(transaction=True)
-def test_http_lifecycle_seeds_sign_in_chat_and_authenticated_teardown(monkeypatch, settings):
-    # Django is already initialized by pytest. Use its disposable test database;
-    # the separate browser check verifies the CLI's fresh on-disk SQLite overlay.
-    settings.DEBUG = True
-    settings.ALLOWED_HOSTS = ["127.0.0.1"]
-    errors = []
-    with tempfile.TemporaryDirectory(prefix=ui_instance.PREFIX) as directory:
-        directory = Path(directory)
-        monkeypatch.setattr(os, "environ", dict(os.environ))
+def test_http_lifecycle_seeds_sign_in_chat_and_authenticated_teardown(monkeypatch, tmp_path):
+    from tests.test_ui_instance import ui_process
 
-        def run_server():
-            try:
-                ui_instance.serve(directory)
-            except Exception as error:
-                errors.append(error)
-
-        thread = threading.Thread(target=run_server, daemon=True)
-        thread.start()
-        state_path = directory / "instance.json"
-        deadline = time.monotonic() + 30
-        while not state_path.exists() and thread.is_alive() and time.monotonic() < deadline:
-            time.sleep(0.05)
-        assert state_path.exists(), errors
-        state = json.loads(state_path.read_text())
-        base = f"http://127.0.0.1:{state['port']}"
+    # Use the launcher's private file-backed database, as browser tests do. The
+    # background chat worker can race writes in pytest's shared in-memory SQLite.
+    with ui_process(tmp_path) as instance:
+        directory = Path(instance["directory"])
+        state = json.loads((directory / "instance.json").read_text())
+        base = instance["url"]
         try:
             with requests.Session() as client:
                 login = client.get(base + "/sign-in/", timeout=5)
@@ -126,6 +108,7 @@ def test_http_lifecycle_seeds_sign_in_chat_and_authenticated_teardown(monkeypatc
                     "prompt": "A synthetic lifecycle question",
                     "csrfmiddlewaretoken": client.cookies["csrftoken"],
                 })
+                assert response.status_code == 200
                 deadline = time.monotonic() + 10
                 while time.monotonic() < deadline:
                     response = client.get(response.url, timeout=5)
@@ -137,15 +120,12 @@ def test_http_lifecycle_seeds_sign_in_chat_and_authenticated_teardown(monkeypatc
                 assert client.get(base + "/__ui_teardown__/", timeout=5,
                                   headers={"Authorization": "Bearer " + state["token"]}).status_code == 403
         finally:
-            # A configured proxy must not receive or block the loopback teardown.
+            # The fixture's authenticated teardown must bypass configured proxies.
             monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:1")
             monkeypatch.setenv("http_proxy", "http://127.0.0.1:1")
             monkeypatch.setenv("NO_PROXY", "")
             monkeypatch.setenv("no_proxy", "")
-            ui_instance.teardown(directory)
-            thread.join(timeout=15)
-        assert not thread.is_alive(), "Server or synthetic chat worker did not stop"
-        assert not errors
+    assert not directory.exists(), "Server or synthetic chat worker left storage behind"
 
 
 def test_instance_state_is_visible_only_after_the_write_finishes(monkeypatch, tmp_path):
