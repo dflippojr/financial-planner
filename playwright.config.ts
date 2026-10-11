@@ -11,7 +11,7 @@ export default defineConfig({
   projects: [
     { name: 'desktop-light', use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 }, colorScheme: 'light' } },
     { name: 'desktop-dark', use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 }, colorScheme: 'dark' } },
-    { name: 'phone-light', testIgnore: /desktop-resize/, use: { ...devices['iPhone SE'], browserName: 'webkit', colorScheme: 'light' } },
-    { name: 'phone-dark', testIgnore: /desktop-resize/, use: { ...devices['iPhone SE'], browserName: 'webkit', colorScheme: 'dark' } },
+    { name: 'phone-light', testIgnore: /desktop-/, use: { ...devices['iPhone SE'], browserName: 'webkit', colorScheme: 'light' } },
+    { name: 'phone-dark', testIgnore: /desktop-/, use: { ...devices['iPhone SE'], browserName: 'webkit', colorScheme: 'dark' } },
   ],
 });

@@ -1,6 +1,6 @@
 import { test, expect, signIn, shellEdit } from './fixtures';
 
-// Failing AI/alert-settings reflow is tracked separately by the UI-pass defects.
+// Failing AI/alert-settings reflow is tracked by #365.
 // Those pages are not asserted passing, skipped, or hidden with retries.
 const pages = [
   ['Home', '/'], ['Activity', '/transactions/'], ['Budgets', '/planning/budgets/'],

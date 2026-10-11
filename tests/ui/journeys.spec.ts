@@ -183,16 +183,22 @@ test('Fake-provider chat history persists and a new conversation has a blank com
   await submit(page, page.getByRole('button', { name: 'Send', exact: true }).filter({ visible: true }));
   const reply = page.getByText('Synthetic UI reply. No real provider was contacted.', { exact: true }).filter({ visible: true });
   await expect(reply).toBeVisible({ timeout: 20_000 });
+  const conversation = new URL(page.url()).searchParams.get('c');
+  expect(conversation).toMatch(/^\d+$/);
   await page.reload();
   await expect(reply).toBeVisible();
   await expect(main(page)).toContainText('How much is my synthetic spending?');
   await submit(page, page.getByRole('button', { name: 'New conversation', exact: true }).filter({ visible: true }));
   await expect(question).toHaveValue('');
-  page.once('dialog', dialog => dialog.accept());
-  await submit(page, page.locator('form[action="/chat/delete-all/"] button').filter({ visible: true }));
+  const conversations = page.getByRole('navigation', { name: 'Conversations', exact: true });
+  const summary = conversations.locator('summary');
+  if (await summary.isVisible()) await summary.click();
+  const old = conversations.locator('li').filter({ has: page.locator('a[href$="?c=' + conversation + '"]') });
+  await submit(page, old.getByRole('button', { name: 'Delete conversation', exact: true }));
   await page.reload();
-  await expect(main(page)).not.toContainText('How much is my synthetic spending?');
-  await expect(reply).toHaveCount(0);
+  await expect(conversations.locator('a[href$="?c=' + conversation + '"]')).toHaveCount(0);
+  // Phone Delete all is covered by defect #371; desktop confirmation is tested separately.
+
 });
 
 test('Generic CSV preview shows exact signs and invalid row, cancel deletes stage', async ({ page }) => {

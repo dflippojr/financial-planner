@@ -25,12 +25,17 @@ test('Invitation join and one-time recovery revoke the guest session', async ({ 
     stage = 'join guest';
     const guest = await guestContext.newPage();
     await guest.goto('/join/');
-    await guest.getByLabel('Invitation code', { exact: true }).fill(invitation);
+    await guest.getByLabel('Invitation code', { exact: true }).fill('INVALID-SYNTHETIC-INVITATION');
     await guest.getByLabel('Username', { exact: true }).fill('synthetic_ui_guest');
     await guest.getByLabel('Display name', { exact: true }).fill('Synthetic UI Guest');
     await guest.getByLabel('New password', { exact: true }).fill('Synthetic-guest-passphrase-72!');
     await guest.getByLabel('Confirm new password', { exact: true }).fill('Synthetic-guest-passphrase-72!');
     await guest.getByLabel('I accept the privacy and data policy', { exact: true }).check();
+    await submit(guest, guest.getByRole('button', { name: 'Create account', exact: true }));
+    if (await guest.locator('#recovery-codes').count()) throw new Error('Invalid invitation accepted');
+    await guest.getByLabel('Invitation code', { exact: true }).fill(invitation);
+    await guest.getByLabel('New password', { exact: true }).fill('Synthetic-guest-passphrase-72!');
+    await guest.getByLabel('Confirm new password', { exact: true }).fill('Synthetic-guest-passphrase-72!');
     await submit(guest, guest.getByRole('button', { name: 'Create account', exact: true }));
     stage = 'read recovery codes';
     const codes = (await guest.locator('#recovery-codes').textContent())!.trim().split(/\s+/);
@@ -45,7 +50,6 @@ test('Invitation join and one-time recovery revoke the guest session', async ({ 
     await signIn(guest, 'synthetic_ui_guest', 'Synthetic-guest-passphrase-72!');
     stage = 'recover guest';
     const recover = await recoveryContext.newPage();
-    stage = 'reuse recovery';
     await recover.goto('/recover/');
     await recover.getByLabel('Username', { exact: true }).fill('synthetic_ui_guest');
     await recover.getByLabel('Recovery code', { exact: true }).fill(recovery);
@@ -56,6 +60,11 @@ test('Invitation join and one-time recovery revoke the guest session', async ({ 
     stage = 'session revocation';
     await guest.goto('/transactions/');
     if (new URL(guest.url()).pathname !== '/sign-in/') throw new Error('Prior session not revoked');
+    stage = 'old password rejected';
+    await guest.getByLabel('Username', { exact: true }).fill('synthetic_ui_guest');
+    await guest.getByLabel('Password', { exact: true }).fill('Synthetic-guest-passphrase-72!');
+    await submit(guest, guest.getByRole('button', { name: 'Sign in', exact: true }));
+    if (new URL(guest.url()).pathname !== '/sign-in/') throw new Error('Old password accepted');
     stage = 'new password login';
     await signIn(guest, 'synthetic_ui_guest', 'Synthetic-recovered-passphrase-83!');
     await recover.goto('/recover/');
