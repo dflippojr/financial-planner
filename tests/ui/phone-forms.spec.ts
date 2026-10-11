@@ -37,8 +37,11 @@ async function focusVisible(page: Page) {
     const target = active.closest('.form-check-label, .form-choices label') || active;
     const box = target.getBoundingClientRect();
     const dock = document.querySelector('.dock')!.getBoundingClientRect();
-    const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
-    const visible = box.top >= 4 && box.bottom <= dock.top - 4 && !!hit && target.contains(hit);
+    // Inline links can wrap into disjoint fragments; their bounding-box centre
+    // can land on the paragraph between fragments rather than the link.
+    const hits = [...target.getClientRects()].map(rect => document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2));
+    const hit = hits.find(element => element && target.contains(element));
+    const visible = box.top >= 4 && box.bottom <= dock.top - 4 && !!hit;
     return visible ? 'visible' : JSON.stringify({ path: location.pathname, id: active.id, tag: active.tagName, top: box.top, bottom: box.bottom, dock: dock.top, hit: hit?.tagName, viewport: { width: innerWidth, height: innerHeight } });
   }), { message: 'Focused activation region and outline stay above dock (#373)' }).toBe('visible');
 }
