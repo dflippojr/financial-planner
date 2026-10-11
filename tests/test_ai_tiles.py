@@ -13,12 +13,12 @@ from django.utils import timezone
 
 from finance.ai_services import AiError, connect_harness
 from finance.ai_tiles import TILES, sanitize_tile, tile_data_shareable
-from finance.ai_tools import cash_flow_totals, default_tools, list_planned_items, search_transactions
+from finance.ai_tools import cash_flow_totals, default_tools, list_planned_items, projected_cash_flow_tool, search_transactions
 from finance.category_services import ensure_household_categories
 from finance.chat_proposals import proposal_tools
 from finance.chat_services import _harness_context, sanitize_page_context
 from finance.models import BalanceSnapshot, Budget, Category, Membership, Person, PlannedItem, RecurringSeries, RecurringSeriesMember
-from finance.policy_services import accept_policy, current_policy, publish_policy
+from finance.policy_services import accept_policy, current_policy, decline_policy, publish_policy
 from tests.chat_helpers import ask
 from tests.test_chat import TOKEN, add_txn, checking, harness, make_member  # noqa: F401
 
@@ -148,6 +148,13 @@ def test_no_backend_member_has_no_bead():
     assert render_bead(user) == ""
 
 
+def test_denied_member_has_no_bead_even_with_a_connection(member):
+    user, person, _household = member
+    person.privacy_policy_acceptances.all().delete()
+    decline_policy(person)
+    assert render_bead(user) == ""
+
+
 def test_connected_but_unusable_chat_backend_has_no_bead(member):
     user, _person, _household = member
     with patch("finance.chat_services.chat_backend_for", side_effect=AiError("No chat backend")):
@@ -221,6 +228,30 @@ def test_planned_tool_includes_disabled_items_without_other_private_data(member)
     rows = json.loads(list_planned_items(person, {}).text)["rows"]
     assert len(rows) == 1
     assert rows[0]["enabled"] is False
+    other.privacy_policy_acceptances.all().delete()
+    PlannedItem.objects.create(owner=other, household=household, scope="household", name="Synthetic household plan",
+                               kind="expense", amount_minor=99000, cadence="monthly", start_date=date(2026, 1, 1))
+    rows = json.loads(list_planned_items(person, {}).text)["rows"]
+    assert len(rows) == 1
+    assert rows[0]["scope"] == "private"
+
+
+def test_projection_filters_keep_the_same_accounts_and_scope_as_the_tile(member):
+    _user, person, household = member
+    today = timezone.localdate()
+    private = checking(person, household, "Private", private=True)
+    for scope, amount in (("private", 100), ("household", 900)):
+        PlannedItem.objects.create(owner=person, household=household if scope == "household" else None,
+            scope=scope, name=f"Synthetic {scope} plan", kind="expense", amount_minor=amount,
+            cadence="monthly", start_date=today)
+    result = projected_cash_flow_tool(person, {"horizon": 3, "scope": "private"})
+    payload = json.loads(result.text)
+    assert len(payload["months"]) == 3
+    assert [item["amount_minor"] for item in payload["planned_items"]] == [100]
+    payload = json.loads(projected_cash_flow_tool(person, {"account_id": private.pk, "horizon": 3}).text)
+    assert payload["planned_items"] == []
+    assert all(month["spending_minor"] == 0 for month in payload["months"])
+    assert not projected_cash_flow_tool(person, {"account_id": 2**63 - 1}).ok
 
 
 def test_real_pages_render_only_their_supported_data_tiles(harness):
@@ -269,5 +300,8 @@ def test_real_pages_render_only_their_supported_data_tiles(harness):
         beads = [node for node in parser.elements if "data-ai-bead" in node.attrs]
         actual = {json.loads(node.attrs["data-tile-context"])["kind"] for node in beads}
         assert actual == kinds, (name, actual)
+        if name == "transaction-list":
+            for bead in beads:
+                assert json.loads(bead.attrs["data-tile-context"])["filters"]["date_from"] == previous.isoformat()
     for name in ("account-list", "transfer-review", "alert-list", "savings-goals", "csv-import"):
         assert b"data-ai-bead" not in client.get(reverse(name)).content

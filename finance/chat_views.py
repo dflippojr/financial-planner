@@ -87,7 +87,7 @@ def _posted_tile(request):
         return {"oversize": raw}
     try:
         return json.loads(raw) if raw else {}
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         return {}
 
 

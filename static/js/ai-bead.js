@@ -41,13 +41,13 @@
     bead.addEventListener("pointerenter", function () { onBead = true; });
     bead.addEventListener("pointerleave", function () { onBead = false; });
     tile.addEventListener("keydown", function (event) {
-      if (event.key === "Tab") { keyboard = true; home(); }
+      if (event.key === "Tab") { keyboard = true; tile.classList.add("ai-bead-keyboard"); home(); }
     });
     tile.addEventListener("focusin", function (event) {
-      if (event.target.matches(":focus-visible")) { keyboard = true; home(); }
+      if (event.target.matches(":focus-visible")) { keyboard = true; tile.classList.add("ai-bead-keyboard"); home(); }
     });
     tile.addEventListener("focusout", function (event) {
-      if (!tile.contains(event.relatedTarget)) keyboard = false;
+      if (!tile.contains(event.relatedTarget)) { keyboard = false; tile.classList.remove("ai-bead-keyboard"); }
     });
     bead.addEventListener("click", function () {
       if (!window.AiPopover) return;

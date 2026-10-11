@@ -141,7 +141,7 @@ def sanitize_page_context(raw, person=None):
     try:
         if len(json.dumps(raw)) > MAX_PAGE_CONTEXT_CHARS:
             return {}
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         return {}
     route = str(raw.get("route") or raw.get("path") or "").strip()
     query = str(raw.get("query") or raw.get("query_string") or "").strip()

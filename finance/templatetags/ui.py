@@ -124,10 +124,27 @@ def _bead_member(context):
     return person
 
 
-def _bead_filters(context, kind, values):
-    from datetime import date
+def _bead_form_filters(kind, values, cleaned):
     from finance.ai_tiles import TILES
 
+    filters = dict(values)
+    for source, target in (("account", "account_id"), ("scope", "scope"), ("category", "category_id"), ("grouping", "grouping"), ("horizon", "horizon")):
+        if source in cleaned and target in TILES[kind].filters:
+            value = cleaned[source]
+            filters.setdefault(target, getattr(value, "pk", value))
+    return filters
+
+
+def _bead_date_filters(filters):
+    from datetime import date
+
+    for key, value in list(filters.items()):
+        if isinstance(value, date):
+            filters[key] = value.isoformat()[:7] if key == "month" else value.isoformat()
+    return filters
+
+
+def _bead_filters(context, kind, values):
     form = context.get("filter_form")
     if form is not None and form.is_bound and not form.is_valid():
         return None
@@ -140,20 +157,13 @@ def _bead_filters(context, kind, values):
         return None
     if kind in {"cash-flow-chart", "cash-flow-months"} and getattr(context.get("report"), "scenario_changes", ()):
         return None
-    filters = dict(values)
-    for source, target in (("account", "account_id"), ("scope", "scope"), ("category", "category_id"), ("grouping", "grouping"), ("horizon", "horizon")):
-        if source in cleaned and target in TILES[kind].filters:
-            value = cleaned[source]
-            filters.setdefault(target, getattr(value, "pk", value))
+    filters = _bead_form_filters(kind, values, cleaned)
     if kind in {"transactions", "transaction-totals"}:
         filters.update({key: cleaned.get(key) for key in ("date_from", "date_to")})
         filters["all_dates"] = True
         if kind == "transactions" and cleaned.get("category") in ("transfer", "uncategorized"):
             return None
-    for key, value in list(filters.items()):
-        if isinstance(value, date):
-            filters[key] = value.isoformat()[:7] if key == "month" else value.isoformat()
-    return filters
+    return _bead_date_filters(filters)
 
 
 @register.inclusion_tag("finance/_ai_bead.html", takes_context=True)
@@ -170,7 +180,11 @@ def ai_tile(context, kind, *, has_data=False, **values):
     if filters is None:
         return {}
     tile_context = sanitize_tile({"kind": kind, "filters": filters}, person)
-    if not tile_data_shareable(person, tile_context["filters"]):
+    share_cache = context.render_context.setdefault("ai_bead_sharing", {})
+    key = (person.pk, tile_context["filters"].get("account_id"), tile_context["filters"].get("scope"))
+    if key not in share_cache:
+        share_cache[key] = tile_data_shareable(person, tile_context["filters"])
+    if not share_cache[key]:
         return {}
     return {"tile": TILES[kind], "tile_context": json.dumps(tile_context),
             "tile_prompts": json.dumps(TILES[kind].prompts)}
