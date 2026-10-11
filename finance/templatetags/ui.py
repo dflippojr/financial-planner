@@ -1,7 +1,7 @@
 import re
 
 from django import template
-from django.forms.widgets import CheckboxInput, CheckboxSelectMultiple, FileInput, Select, Textarea
+from django.forms.widgets import CheckboxInput, CheckboxSelectMultiple, FileInput, RadioSelect, Select, Textarea
 
 
 register = template.Library()
@@ -11,7 +11,11 @@ register = template.Library()
 def daisy_widget(field):
     widget = field.field.widget
     existing = widget.attrs.get("class", "")
-    if isinstance(widget, Select):
+    if isinstance(widget, (CheckboxSelectMultiple, RadioSelect)):
+        # Group layout belongs on the container, not the checkbox-sized class.
+        existing = " ".join(name for name in existing.split() if name not in {"checkbox", "radio", "input"})
+        classes = "form-choices"
+    elif isinstance(widget, Select):
         classes = "select select-bordered w-full"
         if field.errors:
             classes += " select-error"
@@ -24,8 +28,6 @@ def daisy_widget(field):
         if field.errors:
             classes += " file-input-error"
     elif isinstance(widget, CheckboxInput):
-        classes = "checkbox"
-    elif isinstance(widget, CheckboxSelectMultiple):
         classes = "checkbox"
     else:
         classes = "input input-bordered w-full"

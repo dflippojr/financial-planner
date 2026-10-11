@@ -70,8 +70,10 @@ def test_sidebar_uses_dock_names_and_marks_the_current_page(member_client):
 def test_no_page_renders_the_floating_chat_button(member_client):
     html = member_client.get(reverse("home")).content.decode()
     assert 'label for="finance-chat-drawer"' not in html
-    assert 'data-chat-drawer-open aria-controls="finance-chat-panel"' in html
-    assert 'name="page_route"' in html or "Settings → AI" in html
+    assert "finance-chat-panel" not in html
+    assert "data-chat-drawer-open" not in html
+    assert "Ask about this page" not in html
+    assert "Enable AI Features" in html
 
 
 def test_more_page_points_to_the_sidebar_on_wide_screens(member_client):

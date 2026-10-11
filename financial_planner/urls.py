@@ -39,6 +39,7 @@ urlpatterns = [
     path("health/", views.health, name="health"),
     path("chat/", chat_views.chat_page, name="chat"),
     path("more/", views.more, name="more"),
+    path("chat/popover/", chat_views.chat_popover, name="chat-popover"),
     path("chat/send/", chat_views.chat_send, name="chat-send"),
     path("chat/new/", chat_views.chat_new, name="chat-new"),
     path("chat/delete-all/", chat_views.chat_delete_all, name="chat-delete-all"),

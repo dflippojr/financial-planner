@@ -1,12 +1,11 @@
 import { test, expect, signIn, openShellCorrection } from './fixtures';
 
-// Failing AI/alert-settings reflow is tracked by #365.
-// Those pages are not asserted passing, skipped, or hidden with retries.
 const pages = [
   ['Home', '/'], ['Activity', '/transactions/'], ['Budgets', '/planning/budgets/'],
   ['Alerts', '/alerts/'], ['Chat', '/chat/'], ['Security', '/settings/security/'],
   ['Categories', '/settings/categories/'], ['Tags', '/settings/tags/'],
   ['Data', '/settings/data/'], ['Audit', '/settings/audit/'],
+  ['AI settings (#365)', '/settings/ai/'], ['Alert settings (#365)', '/settings/alerts/'],
   ['Household', '/settings/household/'], ['Import', '/imports/'], ['More', '/more/'],
 ];
 

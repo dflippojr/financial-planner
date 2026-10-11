@@ -94,5 +94,7 @@ def test_single_series_has_no_merge_control(review_client):
     for params in [{}, {"merge_series": source.pk}]:
         page = client.get(url, params)
         assert page.status_code == 200
-        assert b'?merge_series=' not in page.content
+        # Return URLs in the consent dialog may preserve this query parameter.
+        # Check the merge control itself rather than every echoed URL.
+        assert b'>Merge into another series' not in page.content
         assert b'name="target_id"' not in page.content

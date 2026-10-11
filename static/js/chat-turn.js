@@ -44,7 +44,11 @@
     article.removeAttribute("data-chat-turn-url");
     article.removeAttribute("aria-busy");
     // Proposal cards are rendered by the server, so load the page to show them.
-    if (data.proposals) window.location.reload();
+    article.dispatchEvent(new CustomEvent("chat:answered", {bubbles: true}));
+    if (data.proposals) {
+      if (article.closest("#ai-popover")) article.dispatchEvent(new CustomEvent("chat:proposals", {bubbles: true}));
+      else window.location.reload();
+    }
   }
 
   function watch(article) {
@@ -67,6 +71,7 @@
       setTimeout(poll, POLL_MS);
     }
     function poll() {
+      if (!article.isConnected) return;
       fetch(url, {headers: {"Accept": "application/json"}, credentials: "same-origin", redirect: "error"})
         .then(function (response) {
           // Gone (deleted or expired): stop asking.
@@ -75,7 +80,10 @@
           return response.json();
         })
         .then(function (data) {
-          if (data && data.gone) return;
+          if (data && data.gone) {
+            article.dispatchEvent(new CustomEvent("chat:gone", {bubbles: true}));
+            return;
+          }
           failures = 0;
           if (data && data.ok && data.status !== "pending") render(article, data);
           else setTimeout(poll, POLL_MS);
@@ -85,5 +93,9 @@
     setTimeout(poll, FIRST_POLL_MS);
   }
 
-  document.querySelectorAll("[data-chat-turn-url]:not([data-chat-turn-polling])").forEach(watch);
+  function start(root) {
+    root.querySelectorAll("[data-chat-turn-url]:not([data-chat-turn-polling])").forEach(watch);
+  }
+  window.ChatTurns = {start: start};
+  start(document);
 })();

@@ -162,7 +162,7 @@ def page_context_from_request(request):
     )
 
 
-def send_message(principal, text, *, conversation_id=None, page_context=None):
+def send_message(principal, text, *, conversation_id=None, page_context=None, start_new=False):
     """Store the question and a pending reply; the chat runner answers it in the background."""
     if len(text or "") > MAX_CHAT_PROMPT_CHARS:
         raise AiError(f"Questions must be at most {MAX_CHAT_PROMPT_CHARS:,} characters.")
@@ -178,7 +178,8 @@ def send_message(principal, text, *, conversation_id=None, page_context=None):
         conversation = conversation_for(person, conversation_id)
         if conversation is None:
             raise PermissionDenied(_DENIED)
-    else:
+    elif not start_new:
+        # Plain Chat forms keep their latest-thread fallback; a fresh popover has shown no history.
         conversation = conversations_for(person).first()
     if conversation is None:
         conversation = _new_conversation(person, backend)

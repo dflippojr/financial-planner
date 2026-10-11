@@ -8,7 +8,8 @@ from django.contrib.auth.decorators import login_not_required
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import DatabaseError, connections
 from django.db import transaction as database_transaction
-from django.http import Http404, HttpResponse
+from django.http import Http404, HttpResponse, JsonResponse
+from django.template.loader import render_to_string
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
@@ -133,6 +134,7 @@ from .policy_services import (
     in_acceptance,
     latest_acceptance,
     decline_shown_version,
+    dismiss_shown_version,
     record_onboarding_acceptance,
 )
 from .recurring_services import (
@@ -2247,11 +2249,33 @@ def privacy_policy(request, version=None):
 def privacy_policy_respond(request):
     person = get_object_or_404(Person, user=request.user)
     action = request.POST.get("action")
+    wants_json = "application/json" in request.headers.get("Accept", "")
     if action == "accept":
-        if not accept_shown_version(person, request.POST.get("version"), request=request):
-            return redirect("privacy-policy")
+        responded = accept_shown_version(person, request.POST.get("version"), request=request)
     elif action == "decline":
-        decline_shown_version(person, request.POST.get("version"))
+        responded = decline_shown_version(person, request.POST.get("version"))
+    elif action == "dismiss":
+        responded = dismiss_shown_version(person, request.POST.get("version"))
+    else:
+        if wants_json:
+            return JsonResponse({"error": "Choose Accept, Deny or Not now."}, status=400)
+        return redirect(safe_next_url(request, request.POST.get("next", "")))
+    if not responded:
+        if wants_json:
+            return JsonResponse({"error": "The policy has changed. Read the current policy before responding.",
+                                 "policy_url": reverse("privacy-policy")}, status=409)
+        return redirect("privacy-policy")
+    if wants_json:
+        # Middleware may already have cached the reverse one-to-one relation.
+        request.user.person = person
+        from .context_processors import ai_consent_context
+
+        context = ai_consent_context(request, return_url=safe_next_url(request, request.POST.get("next", "")))
+        return JsonResponse({
+            "ai_slot": context["ai_slot"],
+            "slot_html": render_to_string("finance/_ai_slot.html", context, request=request),
+            "dialog_html": render_to_string("finance/_ai_consent_dialog.html", context, request=request),
+        })
     return redirect(safe_next_url(request, request.POST.get("next", "")))
 
 

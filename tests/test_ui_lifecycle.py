@@ -9,6 +9,7 @@ import sys
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 import requests
@@ -235,11 +236,9 @@ def test_missing_css_requires_bash_and_runs_the_pinned_builder(monkeypatch, tmp_
         ui_instance.build_css()
     monkeypatch.setattr(ui_instance.shutil, "which", lambda _name: "/synthetic/bash")
     calls = []
-    monkeypatch.setattr(ui_instance.subprocess, "run", lambda *args, **kwargs: calls.append((args, kwargs)))
+    monkeypatch.setattr(ui_instance, "run_css_builder", calls.append)
     ui_instance.build_css()
-    assert calls[0][0][0] == ["/synthetic/bash", "scripts/build_css.sh"]
-    assert calls[0][1]["cwd"] == tmp_path
-    assert calls[0][1]["check"] is True
+    assert calls == [["/synthetic/bash", "scripts/build_css.sh"]]
     css = tmp_path / "static/dist/app.css"
     css.parent.mkdir(parents=True)
     css.write_text("synthetic CSS")
@@ -271,3 +270,38 @@ def test_chat_poll_survives_a_database_lock_and_closes_connections(monkeypatch):
     assert len(attempts) == 2
     assert len(recoveries) == 2
     assert closed == [True]
+
+
+@pytest.mark.parametrize("tree_reaped", [True, False])
+def test_windows_builder_shutdown_stops_only_its_owned_process_tree(monkeypatch, tree_reaped):
+    class Builder:
+        pid = 123456789  # Synthetic: every OS operation is replaced below.
+        alive = True
+        forced = False
+
+        def poll(self):
+            return None if self.alive else 0
+
+        def wait(self, timeout):
+            if self.alive:
+                raise subprocess.TimeoutExpired("synthetic builder", timeout)
+            return 0
+
+        def kill(self):
+            self.forced = True
+            self.alive = False
+
+    builder = Builder()
+    commands = []
+
+    def stop_tree(command, **options):
+        commands.append(command)
+        assert options["timeout"] == 5
+        builder.alive = not tree_reaped
+
+    monkeypatch.setattr(ui_instance, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(ui_instance.subprocess, "run", stop_tree)
+    ui_instance.stop_css_builder(builder)
+    assert not builder.alive
+    assert builder.forced is (not tree_reaped)
+    assert commands == [["taskkill", "/PID", str(builder.pid), "/T", "/F"]]

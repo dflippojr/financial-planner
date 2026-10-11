@@ -8,6 +8,7 @@ import logging
 import os
 from pathlib import Path
 import secrets
+import signal
 import shutil
 from socketserver import ThreadingMixIn
 import subprocess
@@ -67,7 +68,48 @@ def build_css():
             bash = str(git_bash)
     if not bash:
         raise RuntimeError("Install Bash (Git Bash on Windows) to build CSS.")
-    subprocess.run([bash, "scripts/build_css.sh"], cwd=ROOT, check=True, stdout=sys.stderr)
+    run_css_builder([bash, "scripts/build_css.sh"])
+
+
+def run_css_builder(command):
+    # Short waits let cancellation interrupt a stalled builder. Own its process
+    # group so cancellation also stops the tools it started.
+    options = ({"creationflags": subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP}
+               if os.name == "nt" else {"start_new_session": True})
+    process = subprocess.Popen(command, cwd=ROOT, stdout=sys.stderr, **options)
+    try:
+        while True:
+            try:
+                returncode = process.wait(timeout=0.1)
+                break
+            except subprocess.TimeoutExpired:
+                continue
+        if returncode:
+            raise subprocess.CalledProcessError(returncode, command)
+    finally:
+        stop_css_builder(process)
+
+
+def stop_css_builder(process):
+    if process.poll() is not None:
+        return
+    # This is only the builder just spawned here, never a UI server.
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False, timeout=5)
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        if os.name == "nt":
+            process.kill()
+        else:
+            os.killpg(process.pid, signal.SIGKILL)
+        process.wait(timeout=5)
 
 
 def disposable_directory(directory):

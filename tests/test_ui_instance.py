@@ -1,17 +1,19 @@
 """Disposable-instance guards and a real sign-in/category-persistence smoke check."""
+from contextlib import contextmanager
 import json
 import io
 import os
-from contextlib import contextmanager
 from pathlib import Path
 import queue
+import socket
 import subprocess
 import sys
 import threading
+import uuid
 
 import pytest
 
-from scripts.ui_instance import PASSWORD, ROOT, isolated_environment, refuse_database_environment, teardown
+from scripts.ui_instance import PASSWORD, ROOT, isolated_environment, refuse_database_environment, run_css_builder, teardown
 
 
 @pytest.mark.parametrize("key", ["DATABASE_URL", "DATABASE", "POSTGRES_HOST", "POSTGRES_DB", "PGHOST", "DB_URL"])
@@ -78,17 +80,19 @@ def test_startup_reader_drains_output_after_readiness():
 
 
 @contextmanager
-def running_ui_instance(tmp_path, startup_timeout=90):
+def ui_process(tmp_path, command=None, startup_timeout=90, env=None):
     # The launcher owns its SQLite storage, independent of the CI database job.
-    env = isolated_environment(tmp_path)
+    env = isolated_environment(tmp_path) if env is None else dict(env)
     # pytest-django's settings must not carry over into the standalone process.
     env.pop("DJANGO_SETTINGS_MODULE", None)
     ready = queue.Queue()
     log = tmp_path / "ui-instance.log"
-    handle = tmp_path / "startup.json"
+    registry = ROOT / "test-results" / "ui-instances"
+    registry.mkdir(parents=True, exist_ok=True)
+    handle = registry / f"pytest-{uuid.uuid4().hex}.json"
+    command = command or [sys.executable, str(ROOT / "scripts/ui_instance.py")]
     with log.open("w") as errors:
-        process = subprocess.Popen([sys.executable, str(ROOT / "scripts/ui_instance.py"),
-                                    "--startup-handle", str(handle)],
+        process = subprocess.Popen([*command, "--startup-handle", str(handle)],
                                    cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=errors, text=True)
 
         reader = threading.Thread(target=read_startup, args=(process.stdout, errors, ready), daemon=True)
@@ -103,9 +107,11 @@ def running_ui_instance(tmp_path, startup_timeout=90):
             if directory is None and handle.exists():
                 directory = Path(json.loads(handle.read_text())["directory"])
             try:
-                if directory is not None and process.poll() is None:
-                    teardown(directory)
+                if directory is not None and directory.exists() and process.poll() is None:
+                    subprocess.run([sys.executable, str(ROOT / "scripts/ui_instance.py"),
+                                    "--teardown", str(directory)], check=True, timeout=15)
             finally:
+                # Unwind in the launcher; retain failed cleanup handles for recovery.
                 try:
                     process.wait(timeout=30)
                 except subprocess.TimeoutExpired:
@@ -117,53 +123,13 @@ def running_ui_instance(tmp_path, startup_timeout=90):
             assert process.returncode == 0, log.read_text()
             if directory is not None:
                 assert not directory.exists(), "Teardown left synthetic storage behind"
-                handle.unlink()
+            handle.unlink(missing_ok=True)
 
 
 @pytest.fixture
 def ui_instance(tmp_path):
-    with running_ui_instance(tmp_path) as instance:
+    with ui_process(tmp_path) as instance:
         yield instance
-
-
-def test_startup_timeout_cancels_and_removes_storage(monkeypatch, tmp_path):
-    """Exercise cancellation before readiness, with a real launcher and temp storage."""
-    monkeypatch.setenv("POSTGRES_HOST", "synthetic.invalid")
-    monkeypatch.setenv("POSTGRES_PORT", "5432")
-    monkeypatch.setenv("POSTGRES_PASSWORD", "synthetic-test-password")
-    monkeypatch.setenv("FINANCIAL_PLANNER_TEST_DB", "postgres")
-    launch = subprocess.Popen
-    drain = read_startup
-    children = []
-    directory = []
-    handle = tmp_path / "startup.json"
-
-    def slow_launch(command, **kwargs):
-        code = ("from scripts import ui_instance; import time; "
-                "ui_instance.build_css = lambda: [time.sleep(.05) for _ in range(600)]; "
-                "ui_instance.main()")
-        child = launch([command[0], "-c", code, *command[2:]], **kwargs)
-        children.append(child)
-        return child
-
-    def timeout_after_handle(output, log, ready):
-        import time
-        deadline = time.monotonic() + 10
-        while not handle.exists() and time.monotonic() < deadline:
-            time.sleep(.05)
-        if handle.exists():
-            directory.append(Path(json.loads(handle.read_text())["directory"]))
-        drain(output, log, ready)
-
-    monkeypatch.setattr(subprocess, "Popen", slow_launch)
-    monkeypatch.setattr(sys.modules[__name__], "read_startup", timeout_after_handle)
-    with pytest.raises(queue.Empty):
-        with running_ui_instance(tmp_path, startup_timeout=10):
-            pytest.fail("The deliberately blocked startup must not become ready")
-    assert len(directory) == 1
-    assert not directory[0].exists()
-    assert children[0].returncode == 0
-    assert not handle.exists()
 
 
 @pytest.fixture
@@ -217,3 +183,55 @@ def test_sign_in_and_category_persist(browser, ui_instance):
         expect(reply).to_have_count(2)
     finally:
         context.close()
+
+
+def test_readiness_timeout_cancels_stalled_builder_and_its_child(monkeypatch, tmp_path):
+    monkeypatch.setenv("POSTGRES_HOST", "synthetic.invalid")
+    monkeypatch.setenv("POSTGRES_PORT", "5432")
+    monkeypatch.setenv("POSTGRES_PASSWORD", "synthetic-test-password")
+    monkeypatch.setenv("FINANCIAL_PLANNER_TEST_DB", "postgres")
+    port_record = tmp_path / "builder-child-port.json"
+    allocation = tmp_path / "allocation.json"
+    child = tmp_path / "builder_child.py"
+    child.write_text("""import json, socket, sys, time
+from pathlib import Path
+with socket.socket() as listener:
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    Path(sys.argv[1]).write_text(json.dumps(listener.getsockname()[1]))
+    while True:
+        time.sleep(0.1)
+""")
+    builder = tmp_path / "stalled_builder.py"
+    builder.write_text("""import subprocess, sys
+subprocess.run([sys.executable, sys.argv[1], sys.argv[2]], check=True)
+""")
+    bootstrap = tmp_path / "startup.py"
+    bootstrap.write_text(f"""import sys
+from pathlib import Path
+sys.path.insert(0, {str(ROOT)!r})
+from scripts import ui_instance
+
+def stalled_css():
+    Path({str(allocation)!r}).write_text(Path(sys.argv[-1]).read_text())
+    ui_instance.run_css_builder([sys.executable, {str(builder)!r}, {str(child)!r}, {str(port_record)!r}])
+
+ui_instance.build_css = stalled_css
+ui_instance.main()
+""")
+    with pytest.raises(queue.Empty):
+        with ui_process(tmp_path, command=[sys.executable, str(bootstrap)], startup_timeout=3):
+            pytest.fail("Stalled startup unexpectedly reported readiness")
+    directory = Path(json.loads(allocation.read_text())["directory"])
+    assert not directory.exists(), "Cancelled startup left disposable storage behind"
+    port = json.loads(port_record.read_text())
+    with socket.socket() as client:
+        client.settimeout(1)
+        assert client.connect_ex(("127.0.0.1", port)) != 0, "Builder child survived cancellation"
+
+
+def test_css_builder_reports_success_and_failure():
+    run_css_builder([sys.executable, "-c", "import time; time.sleep(0.2)"])
+    with pytest.raises(subprocess.CalledProcessError) as failure:
+        run_css_builder([sys.executable, "-c", "raise SystemExit(7)"])
+    assert failure.value.returncode == 7

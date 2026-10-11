@@ -1,4 +1,4 @@
-"""Chat page, drawer, and local-model warm endpoints."""
+"""Chat page, popover, and local-model warm endpoints."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from django.contrib import messages
 from django.core.exceptions import PermissionDenied
 from django.http import JsonResponse
 from django.shortcuts import redirect, render
+from django.template.loader import render_to_string
 from django.urls import reverse
 from django.views.decorators.http import require_GET, require_POST
 
@@ -26,6 +27,7 @@ from .chat_services import (
 )
 from .input_limits import MAX_CHAT_MESSAGES
 from .models import AiConversationMessage
+from .policy_services import may_use_ai
 from .reauth import safe_next_url
 
 
@@ -49,6 +51,7 @@ def chat_page(request):
 @require_POST
 def chat_send(request):
     person = _person(request)
+    wants_json = request.headers.get("Accept") == "application/json"
     prompt = request.POST.get("prompt") or ""
     conversation_id = request.POST.get("conversation_id") or None
     page_context = sanitize_page_context(
@@ -58,24 +61,78 @@ def chat_send(request):
         }
     )
     next_url = safe_next_url(request, request.POST.get("next"), default=reverse("chat"))
-    if conversation_id:
-        try:
-            conversation_id = int(conversation_id)
-        except (TypeError, ValueError):
-            conversation_id = None
     try:
-        conversation = send_message(person, prompt, conversation_id=conversation_id, page_context=page_context)
-    except PermissionDenied:
-        messages.error(request, "That conversation is not available.")
-        return redirect("chat")
-    except AiError as exc:
-        messages.error(request, str(exc))
-        if "chat" in next_url:
-            return redirect("chat")
-        return redirect(next_url)
+        conversation_id = _send_conversation_id(conversation_id, wants_json)
+        conversation = send_message(
+            person, prompt, conversation_id=conversation_id, page_context=page_context,
+            start_new=wants_json and conversation_id is None,
+        )
+    except (PermissionDenied, AiError) as exc:
+        return _chat_send_error(request, exc, next_url, wants_json)
+    if wants_json:
+        return _popover_response(person, conversation, request)
     if next_url.rstrip("/").endswith("chat") or next_url.startswith(reverse("chat")):
         return redirect(f"{reverse('chat')}?c={conversation.pk}")
     return redirect(next_url)
+
+
+def _parse_conversation_id(raw_id):
+    conversation_id = int(raw_id)
+    if not 0 < conversation_id <= 2**63 - 1:
+        raise ValueError
+    return conversation_id
+
+
+def _send_conversation_id(raw_id, wants_json):
+    if not raw_id:
+        return None
+    try:
+        return _parse_conversation_id(raw_id) if wants_json else int(raw_id)
+    except (TypeError, ValueError):
+        if wants_json:
+            raise PermissionDenied("That conversation is not available.") from None
+        return None
+
+
+def _chat_send_error(request, exc, next_url, wants_json):
+    denied = isinstance(exc, PermissionDenied)
+    error = "That conversation is not available." if denied else str(exc)
+    if wants_json:
+        return JsonResponse({"ok": False, "error": error}, status=404 if denied else 409)
+    messages.error(request, error)
+    if denied or "chat" in next_url:
+        return redirect("chat")
+    return redirect(next_url)
+
+
+def _popover_response(person, conversation, request):
+    context = _chat_context(person, conversation, request)
+    context["popover"] = True
+    return JsonResponse({
+        "ok": True,
+        "conversationId": conversation.pk if conversation else None,
+        "html": render_to_string("finance/_chat_messages.html", context, request=request),
+        "messageCount": len(context["chat_messages"]),
+    }, headers={"Cache-Control": "no-store"})
+
+
+@require_GET
+def chat_popover(request):
+    """Restore only the current member's unexpired conversation; never pick a fallback."""
+    person = _person(request)
+    if not may_use_ai(person) or not member_has_ai(person):
+        return JsonResponse({"ok": False}, status=403)
+    raw_id = request.GET.get("c")
+    conversation = None
+    if raw_id:
+        try:
+            conversation_id = _parse_conversation_id(raw_id)
+        except (TypeError, ValueError):
+            return JsonResponse({"ok": False}, status=404)
+        conversation = conversations_for(person).filter(pk=conversation_id).first()
+        if conversation is None:
+            return JsonResponse({"ok": False}, status=404)
+    return _popover_response(person, conversation, request)
 
 
 @require_POST
