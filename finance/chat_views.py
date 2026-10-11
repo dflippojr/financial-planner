@@ -23,7 +23,6 @@ from .chat_services import (
     delete_all_conversations,
     delete_conversation,
     page_context_from_request,
-    sanitize_page_context,
     send_message,
     start_conversation,
 )
@@ -56,7 +55,7 @@ def chat_send(request):
     wants_json = request.headers.get("Accept") == "application/json"
     prompt = request.POST.get("prompt") or ""
     conversation_id = request.POST.get("conversation_id") or None
-    page_context = _posted_page_context(request, person)
+    page_context = _posted_page_context(request)
     next_url = safe_next_url(request, request.POST.get("next"), default=reverse("chat"))
     try:
         conversation_id = _send_conversation_id(conversation_id, wants_json)
@@ -73,15 +72,15 @@ def chat_send(request):
     return redirect(next_url)
 
 
-def _posted_page_context(request, person):
+def _posted_page_context(request):
     raw = request.POST.get("tile_context") or ""
     if len(raw) > MAX_PAGE_CONTEXT_CHARS:
         return {}
-    return sanitize_page_context({
+    return {
         "tile": _posted_tile(raw),
         "route": request.POST.get("page_route") or "",
         "query": request.POST.get("page_query") or "",
-    }, person)
+    }
 
 
 def _posted_tile(raw):

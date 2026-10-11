@@ -48,6 +48,7 @@ TURN_LIMIT = "This conversation has reached its turn limit. Start a new one from
 TOOL_LIMIT = "This conversation has reached its tool-call limit."
 PENDING_LIMIT = "Wait for your earlier questions to be answered before asking another."
 CONVERSATION_LIMIT = "You have reached the limit of open conversations. Delete one from Chat to start another."
+TILE_UNAVAILABLE = "This tile or its filters are no longer available to AI. Reopen the tile and ask again."
 LOCAL_HIDDEN = "Chat on the local model is not offered yet. Choose Claude in Settings → AI."
 NO_CHAT_BACKEND = "No chat backend is available yet. Sign in to Claude on the harness, then choose it in Settings → AI."
 
@@ -164,6 +165,32 @@ def sanitize_page_context(raw, person=None):
     return cleaned
 
 
+def _validated_page_context(raw, person):
+    """Keep supplied tile constraints intact at send time and queued execution."""
+    cleaned = sanitize_page_context(raw, person)
+    supplied_tile = raw.get("tile") if isinstance(raw, dict) else None
+    if not isinstance(supplied_tile, dict):
+        return cleaned
+    from .ai_tiles import TILES, tile_data_shareable
+
+    kind = supplied_tile.get("kind")
+    spec = TILES.get(kind) if isinstance(kind, str) else None
+    if spec is None:
+        return cleaned
+    tile = cleaned.get("tile")
+    if not tile or not tile_data_shareable(person, tile["filters"], kind=kind):
+        raise AiError(TILE_UNAVAILABLE)
+    supplied = supplied_tile.get("filters")
+    supplied = supplied if isinstance(supplied, dict) else {}
+    for key in spec.filters:
+        value = supplied.get(key)
+        if key == "all_dates" and value is False:
+            continue
+        if value not in (None, "") and key not in tile["filters"]:
+            raise AiError(TILE_UNAVAILABLE)
+    return cleaned
+
+
 def page_context_from_request(request):
     return sanitize_page_context(
         {
@@ -183,7 +210,7 @@ def send_message(principal, text, *, conversation_id=None, page_context=None, st
     prompt = (text or "").strip()
     if not prompt:
         raise AiError("Enter a question.")
-    context_payload = sanitize_page_context(page_context, person)
+    context_payload = _validated_page_context(page_context, person)
     conversation = None
     if conversation_id:
         conversation = conversation_for(person, conversation_id)
@@ -273,7 +300,14 @@ def answer_turn(turn, *, sleep=None, monotonic=None):
         return failed_reply(str(exc), backend=turn.backend)
     question = turn.reply_to
     prompt = question.content if question is not None else ""
-    context_payload = sanitize_page_context(question.page_context if question is not None else None, person)
+    saved_context = question.page_context if question is not None else None
+    try:
+        context_payload = _validated_page_context(saved_context, person)
+        saved_tile = saved_context.get("tile") if isinstance(saved_context, dict) else None
+        if saved_tile and saved_tile != context_payload.get("tile"):
+            raise AiError(TILE_UNAVAILABLE)
+    except AiError as exc:
+        return failed_reply(str(exc), backend=backend)
 
     collected = []
     cap = max_tool_calls()

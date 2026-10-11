@@ -584,3 +584,91 @@ def test_consent_cache_distinguishes_private_account_data_from_private_budget_ow
     html = Template(source).render(Context({"request": request}))
     assert 'Ask AI about Key numbers' in html
     assert 'Ask AI about Monthly total' not in html
+
+
+@pytest.mark.parametrize("change", ["archive", "membership", "category", "consent"])
+def test_queued_tile_losing_a_constraint_fails_before_the_harness(member, harness, change):
+    from finance.chat_runner import process_pending_turns
+    from finance.chat_services import send_message
+    from finance.models import AiConversationMessage
+
+    _user, person, household = member
+    state, _url = harness
+    _other_user, other, _household = make_member("stale_tile_other", household=household, policy=current_policy())
+    selected = checking(person, household, "Synthetic selected account", private=change not in {"membership", "consent"})
+    broader = checking(person, household, "Synthetic broader account", private=True)
+    add_txn(selected, person, date(2026, 1, 1), -100, "Synthetic selected expense")
+    add_txn(broader, person, date(2026, 1, 1), -900, "Synthetic unrelated expense")
+    filters = {"account_id": selected.pk, "all_dates": True}
+    if change == "category":
+        ensure_household_categories(household)
+        filters["category_id"] = Category.objects.filter(household=household).first().pk
+    context = {"route": "/transactions/", "tile": {"kind": "transactions", "filters": filters}}
+    conversation = send_message(person, "Explain this tile", page_context=context)
+    question = conversation.messages.get(role="user")
+    assert question.page_context["tile"]["filters"]["account_id"] == selected.pk
+    if change == "archive":
+        selected.status = Account.Status.ARCHIVED
+        selected.archived_at = timezone.now()
+        selected.save(update_fields=["status", "archived_at"])
+    elif change in {"membership", "category"}:
+        Membership.objects.filter(person=person).update(ended_at=timezone.now())
+    else:
+        other.privacy_policy_acceptances.all().delete()
+    state.need_tool = True
+    state.pending_tool_calls = [[{"call_id": "broader", "name": "cash_flow_totals", "args": {"all_dates": True}}]]
+    assert process_pending_turns(sleep=lambda _s: None) == 1
+    reply = conversation.messages.get(reply_to=question)
+    assert reply.status == AiConversationMessage.Status.FAILED
+    assert 'Reopen the tile' in reply.content
+    assert reply.figures == []
+    assert state.session_creates == []
+    conversation.refresh_from_db()
+    assert conversation.tool_call_count == 0
+    assert conversation.used_account_ids == []
+
+
+def test_posted_stale_account_context_is_rejected_without_creating_a_broader_question(member):
+    user, person, household = member
+    account = checking(person, household, "Synthetic stale selected account", private=True)
+    account.status = Account.Status.ARCHIVED
+    account.archived_at = timezone.now()
+    account.save(update_fields=["status", "archived_at"])
+    client = Client()
+    client.force_login(user)
+    response = client.post(reverse("chat-send"), {"prompt": "Explain this tile", "tile_context": json.dumps({
+        "kind": "transactions", "filters": {"account_id": account.pk, "all_dates": True}
+    })}, HTTP_ACCEPT="application/json")
+    assert response.status_code == 409
+    assert 'Reopen the tile' in response.json()["error"]
+    assert not person.ai_conversations.exists()
+
+
+
+def test_queued_private_tile_retains_its_filter_after_household_consent_is_withdrawn(member, harness):
+    from finance.chat_runner import process_pending_turns
+    from finance.chat_services import send_message
+    from finance.models import AiConversationMessage
+
+    _user, person, household = member
+    state, _url = harness
+    _other_user, other, _household = make_member("private_stale_control", household=household, policy=current_policy())
+    selected = checking(person, household, "Synthetic selected private account", private=True)
+    broader = checking(person, household, "Synthetic unrelated private account", private=True)
+    for account, amount in ((selected, -100), (broader, -900)):
+        add_txn(account, person, date(2026, 1, 1), amount, "Synthetic private expense")
+    filters = {"account_id": selected.pk, "all_dates": True}
+    conversation = send_message(person, "Explain this tile", page_context={
+        "tile": {"kind": "transaction-totals", "filters": filters}
+    })
+    other.privacy_policy_acceptances.all().delete()
+    state.need_tool = True
+    state.pending_tool_calls = [[{"call_id": "selected", "name": "cash_flow_totals", "args": filters}]]
+    assert process_pending_turns(sleep=lambda _s: None) == 1
+    reply = conversation.messages.get(reply_to__role="user")
+    assert reply.status == AiConversationMessage.Status.DONE
+    assert any(figure["label"] == "Spending" and figure["amount_minor"] == 100 for figure in reply.figures)
+    tile_context = next(block for block in state.session_creates[-1]["context"] if block["title"] == "Current tile")
+    assert f'account_id={selected.pk}' in tile_context["content"]
+    conversation.refresh_from_db()
+    assert conversation.used_account_ids == [selected.pk]
