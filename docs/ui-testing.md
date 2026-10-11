@@ -53,7 +53,7 @@ it never uses paid provider credentials. Its reply is
 The first automated flow runs with
 `python -m pytest tests/test_ui_instance.py -q -m browser`.
 It performs real sign-in and a category save, then checks the reloaded form,
-audit history and Activity list. CI uses the tower Linux runner, with no skips
+audit history and Activity list. CI uses GitHub-hosted `ubuntu-latest`, with no skips
 allowed for a missing browser. Use synthetic data only in reports and traces.
 
 ## Teardown
