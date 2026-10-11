@@ -1,5 +1,5 @@
 {% extends "finance/base.html" %}
-{% load ui %}
+{% load ui static %}
 {% block title %}Budgets · Financial Planner{% endblock %}
 {% block content %}
 {% include "finance/_page_header.html" with title="Budgets" helper="Monthly limits by category, with an optional overall total. Amounts in USD." more="Progress uses the same spending totals as the Spending page. Budgets do not change the cash-flow projection." actions="finance/_budgets_actions.html" %}
@@ -61,7 +61,7 @@
 </div>
 <div class="page-columns max-md:hidden">
   <section class="rounded-box border border-base-300 bg-base-100" aria-label="Category budgets">
-    <div class="overflow-x-auto" tabindex="0" role="region" aria-label="Budget amounts and actions">
+    <div class="overflow-x-auto" tabindex="0" role="region" aria-label="Budget amounts and actions" data-budget-table>
     <table class="table">
       <thead>
         <tr>
@@ -154,4 +154,7 @@
   </aside>
   {% endif %}
 </div>
+{% endblock %}
+{% block extra_js %}
+<script src="{% static 'js/budget-row-menu.js' %}" defer></script>
 {% endblock %}

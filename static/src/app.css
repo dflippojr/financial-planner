@@ -405,6 +405,16 @@
   min-width: 0;
 }
 
+/* Budget dropdowns escape the table scroller while its rows stay contained. */
+.budget-menu-popover:popover-open {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  max-width: calc(100vw - 1rem);
+  max-height: calc(100dvh - 1rem);
+  overflow: auto;
+}
+
 /* Category rename (issue #339): the Rename button is a summary; opening it drops the form onto its own line. */
 @layer components {
   .category-rename > summary {
