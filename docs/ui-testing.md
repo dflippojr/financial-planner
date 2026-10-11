@@ -1,69 +1,76 @@
-# UI testing
+# UI testing contract
 
-## Start command and URL
+Contract version: 1
 
-Use this checkout with Python 3.12+ and Bash (Git Bash on Windows). Install pinned
-dependencies once: `python -m venv .venv`, then use the venv's Python to run
-`python -m pip install -r requirements-test.txt` and
-`python -m playwright install chromium`. On Windows, create the venv with
-`py -3.13 -m venv .venv` and use `.venv/Scripts/python.exe`.
+## Scope and isolation
 
-Start: `python scripts/ui_instance.py` (with the venv active). It builds missing
-CSS, migrates a fresh SQLite file under the system temp directory, and seeds
-synthetic data. The final startup line is JSON containing `url` and `directory`.
-Open that URL; its free port changes on every start. Keep the command running.
-The server binds only to `127.0.0.1`. No Docker, production database, or `.env`
-is used. Start in a shell without `DATABASE*`, `POSTGRES_*`, `PG*`, `DB_HOST`,
-`DB_NAME`, `DB_URL` or `DB_PASSWORD` connection variables; the script refuses
-configured databases.
-Uploads, receipts and operator audit files are also temporary. Inherited AI,
-SMTP, Google sign-in and policy settings are discarded.
+Public repo dflippojr/financial-planner. Use only scripts/ui_instance.py from this checkout. Never use Docker, financial-planner production compose, live Postgres, .env, a reused server or an existing browser profile. Python 3.12+, Node 22+, Bash (Git Bash on Windows), gh 2.99+ and playwright-cli are required.
 
-## Seed data and sign-in
+Setup: create .venv (py -3.13 -m venv .venv on Windows), install requirements-test.txt with its Python, python -m playwright install chromium webkit, npm ci, npx playwright install chromium webkit, bash scripts/build_css.sh. Windows Python: .venv/Scripts/python.exe; Linux: .venv/bin/python. No real bank, Google, SMTP or paid AI credentials are needed.
 
-Sign in at `/sign-in/` as `synthetic_alex` with
-`Synthetic-passphrase-42!`. These are disposable test credentials.
-The seed uses `tests.mobile_seed.seed_phone_data()`: Synthetic Checking,
-recent payroll and purchases (including Shell Oil 5741, Corner Bistro and
-Kroger), categories, three budgets and a budget alert. Dates track today.
-The synthetic privacy policy is already accepted. Chat uses an in-process
-fake Agent Harness on another free loopback port, with a local chat worker;
-it never uses paid provider credentials. Its reply is
-`Synthetic UI reply. No real provider was contacted.`
+The launcher refuses inherited DATABASE*, POSTGRES_*, PG*, DB_HOST/DB_NAME/DB_URL/DB_PASSWORD before startup. It uses an allowlisted environment, ui_settings, fresh SQLite db.sqlite3 under system-temp financial-planner-ui-*, and isolated receipts/csv-staging/operator-audit storage. No .env loading. Email is in-memory; operator AI/Google settings are discarded. A fresh loopback fake Agent Harness and owned chat worker replace external models. Do not link providers or sync accounts. Inspect launcher/ui_settings and run python -m pytest tests/test_ui_instance.py -q -m "not browser" before sign-in.
 
-## Flows
+## Start
 
-1. Sign in: submit the credentials and reach Home (`/`), headed Cash flow.
-   Verify Income, Spending and Net cash flow appear at desktop and phone widths.
-2. Activity (`/transactions/`): find Shell Oil 5741; open Correct. Select
-   Transportation and Save category. Reload the correction page and Activity:
-   the selection, category audit row and list category must persist.
-3. Correct transaction: change the description and Save correction. Save a
-   synthetic note and a new tag with Save note and tags, then reload. Split
-   the Shell purchase into USD 20.00 and 21.18 with distinct categories; the
-   parts must total USD 41.18. Verify both parts after reload, then Unsplit.
-4. Budgets (`/planning/budgets/`): inspect the seeded Dining, Groceries and
-   Transportation budgets; edit a limit and verify it persists after reload.
-5. Chat (`/chat/`): send a synthetic question and wait for the fake reply above.
-   Reload to verify conversation history; no external provider setup is needed.
-6. Settings (`/settings/security/`): inspect sessions and visit the categories,
-   tags, alerts, data and AI tabs. AI shows the loopback fake connection.
-7. Sign out using the application button, then visit Activity directly; it
-   must return to sign-in.
+One command from repo root, venv active:
 
-The first automated flow runs with
-`python -m pytest tests/test_ui_instance.py -q -m browser`.
-It performs real sign-in and a category save, then checks the reloaded form,
-audit history and Activity list. CI uses GitHub-hosted `ubuntu-latest`, with no skips
-allowed for a missing browser. Use synthetic data only in reports and traces.
+```bash
+python scripts/ui_instance.py
+```
+
+Keep running. Builds missing CSS, migrates and seeds, binds 127.0.0.1 on a fresh OS-allocated port, then prints JSON readiness containing url and directory plus disposable sign-in details. Directory is the instance handle. Logs go to stderr; keep separate from readiness. The fake provider has its own free loopback port. Never reuse an occupied port. TemporaryDirectory/finally cleanup removes storage and closes connections/server/fake/worker on failure. Install finally cleanup and maintain an owned process/port/directory/browser ledger before launching.
+
+## Seed and sign-in
+
+tests.mobile_seed.seed_phone_data loads synthetic_demo and adds current-date payroll/purchases, Shell Oil 5741 (-4118 USD minor units), Kroger, Corner Bistro, Dining 500.00, Groceries 600.00 and Transportation 250.00 budgets and unread Dining is over budget. Synthetic Alex belongs to the household and edits visible accounts. Synthetic policy is accepted. Sign in at /sign-in/ as synthetic_alex with Synthetic-passphrase-42!. Fake chat replies exactly: Synthetic UI reply. No real provider was contacted.
+
+Reset: Teardown, wait for process exit and directory removal, then Start. Every mutating device/theme/orientation case and automated test gets a fresh instance. No concurrent writers on seeded rows. Resolve IDs from UI links. tests/fixtures/ui-pass/synthetic.csv is a generic synthetic shape, not any provider schema. Negative means outflow, positive income, explicit USD. The adjacent PNG is a synthetic pixel upload asset.
+
+## Journeys
+
+Headings below are readiness signals unless specified. Reload after every write, verify changed value/absence and matching audit event. /settings/audit/ shows IDs and changed field names, not financial values: match synthetic actor member ID, target ID, action and success. Correction history additionally identifies Synthetic Alex and old/new values. Scenario GET, preview and read markers have no financial correction history.
+
+| ID | Path/readiness | Actions and reload/audit expectations |
+| --- | --- | --- |
+| AUTH | /sign-in/, Sign in | One invalid password gives generic error; seed sign-in reaches Cash flow. Fresh context deep-linked to Activity returns there after sign-in. Tab/Shift+Tab/Enter work. App Sign out revokes session; direct Activity redirects. Match sign-in/out audit where authorized. |
+| HOME | /, Cash flow | Income, Spending, Net cash flow. Filters (Change range on phone): first day this month to today, Week, Update. Reload retains URL/selection. Reset range clears filters. Reversed dates validate without changing actuals. Read-only: no audit. |
+| SCENARIO | /, What-if scenario summary | One-off amount on a date, Synthetic scenario expense, Expense, 10.00, next month first day. Add, reload same URL retains change/comparison and unchanged actuals. Remove clears it. Missing name/amount validates. Do not Make this real. URL-only state: no audit. |
+| ACTIVITY | /transactions/, Activity | Shell Oil 5741 Correct, Category Transportation, Save category. Reload edit and list retain category; history actor Synthetic Alex, Category Transportation. Cancel unsaved description preserves original. |
+| CORRECT | Correct transaction | Description Synthetic corrected Shell, Save correction, reload field/history. Save note Synthetic UI note and Create tag synthetic-ui, reload note/tag/history; clear note and selected tag and reload absence. Keep -41.18 USD. |
+| SPLIT | Correct transaction, Split | -20.00/-20.00 Transportation/Dining rejects mismatch. -20.00/-21.18 saves total -41.18. Reload parts/history. Unsplit with Transportation, reload removes parts and retains category/history. Match negative parent sign. |
+| RECEIPT | Correct transaction, Receipts | Attach synthetic-receipt.png, reload filename, download image/png. Match receipt-added actor/transaction audit. Remove, reload absent, receipt-deleted audit. Unsupported synthetic text rejected. |
+| BUDGET | /planning/budgets/, Budgets | Inspect three seeded budgets. Dining Actions/Edit, Monthly amount 550.00, Save, reload list/edit and budget change actor/target audit. Cancel unsaved edit preserves 550.00. Add unique category budget via dialog, reload, archive with confirmation, reload absence/audit. Zero validates. |
+| ALERT | /alerts/, Alerts | Seed Dining link reaches Budgets. Mark as read, reload no Unread/Mark as read for row. Mark all read consistent. Read marker has no correction audit. |
+| CHAT | /chat/, Chat | Send How much is my synthetic spending?, wait exact fake reply, reload question/reply. New conversation blank. Delete with confirmation and reload absence. Fake does not verify financial answers; no correction audit for text. |
+| SETTINGS | /settings/security/, Settings | Inspect session. Visit categories, tags, alerts, data, AI, audit paths under /settings/; effective tab and fake loopback connection. Toggle Budgets near or over the limit, Save, reload, settings audit actor/changed fields. No provider linking/export/data deletion. |
+| INVITE | /settings/household/, Household | Create invitation, hold code only in memory, reload no redisplay; invitation audit. Fresh /join/ context: code, synthetic_ui_guest, Synthetic UI Guest, strong synthetic password, accept policy. Eight recovery codes once, hold one only in memory. NEVER snapshot/log/trace/screenshot code pages. Reload hides codes; guest sign-in/member list persists. Invalid invitation creates nobody. |
+| RECOVERY | /recover/, Recover account | Guest in-memory code, new strong synthetic password: updated status, prior guest session revoked, new password works, old password/reused code fail. No artifacts; clear code variables. Screenshot empty form or safe success only. Recovery actor/target audit. Seed Alex has no plaintext recovery code: no hash inspection/bypass. |
+| CSV | Synthetic Checking Import CSV from /accounts/, Preview import | Generic profile upload synthetic.csv. Map Date/Description/Amount/Currency, YYYY-MM-DD, dot decimal, One signed amount column, no inversion. 2 new/0 duplicate/1 invalid, -12.34/+56.78 USD. Preview/reload does not change Activity. Cancel and delete upload returns upload form and removes stage. No commit/import audit in preview-only journey. |
+
+CRUD applies only to entities named above. Current UI labels/source fields are authoritative. Record failed and untested branches individually; page visits alone do not complete flows.
+
+## Theme and layout
+
+Fresh contexts honor colorScheme; verify html data-theme. More (/more/) and desktop account controls expose Dark theme with aria-pressed. App switch stores financial-planner-theme in localStorage. Check switch, discard contexts between themes. Do not edit sidebar (#345 in flight).
+
+Desktop 1440x900; iPhone SE WebKit 375x667; iPhone 15 WebKit 393x852; Pixel 7 Chromium 412x915; iPad Mini WebKit 768x1024. Light/dark, phones portrait/landscape. Verify actual innerWidth, UA, touch and DPR. Retain device emulation during rotation. All primary pages: 320/360/375/390/414/600/768/820/1024/1280/1440/1920; short 1280x600, 1024x500; wide 2560. No root horizontal overflow. Check text, contained charts/tables, focus, 44x44 targets and 8px gaps.
+
+Live resize: Budgets Add budget dialog, partly fill Monthly amount, choose category/scope and focus amount. 1440 -> 768 -> 375 -> 1440 without reload; retain input/options/focus and reachable actions, internal scrolling. Escape closes/restores trigger focus, Cancel creates nothing. Repeat Dining row Actions menu separately, no stale backdrop. Shrink phone height to 60% for simulated keyboard; check focused field and submit reachable, restore. Rotate partly filled form; Back subpages and fresh-session deep links. Root font size 200% is text approximation, not browser zoom; inspect fixed-pixel text separately and real 320px reflow independently.
+
+PWA /static/manifest.webmanifest: valid start_url/scope/display/icons. No native installation automation; scoped standalone matchMedia override tests only a simulated branch. Offline plus 503 routes, restore/discard. Chromium performance: 150ms latency, 1.6Mbps down/750Kbps up, 4x CPU; time to useful content and CLS through next interaction. Physical notch/safe-area, native keyboard/installation/OS require hardware and are not verified by emulation. No swipe/drag features in specified flows; tap/keyboard alternatives required.
+
+## Playwright and CI
+
+Python browser tests remain intact. Lock-in: Playwright Test 1.63.0, npm lockfile, playwright.config.ts and tests/ui/*.spec.ts. npm ci, install browsers, npm run test:ui. Each test starts a fresh documented instance with finally teardown, never reused server. UI_PYTHON selects venv interpreter. Only verified 127.0.0.1 readiness baseURL. Projects include desktop light/dark and real phone descriptors; workers bounded, mutations isolated.
+
+Public repo: GitHub-hosted ubuntu-latest only, existing Playwright workflow; browser install, new tests, always cleanup. Pytest capped at -n 4; full Python suite before push. Reports test-results/ and playwright-report/. No automatic screenshot/trace/video for code-bearing auth/recovery. Sanitized explicit evidence output/ui-pass/financial-planner/YYYY-MM-DD, attach defects via gh. Never commit raw output/auth state/cookies/logs. No skips/retries to make known bugs or missing browsers pass.
 
 ## Teardown
 
-Press Ctrl-C in the start terminal, or run
-`python scripts/ui_instance.py --teardown "<directory from startup JSON>"`
-in another terminal. Wait for the start command to exit: it stops the fake
-provider and chat worker, closes SQLite, and removes the whole temporary
-directory. Teardown sends a token-protected request to that instance only;
-it never kills an arbitrary PID or deletes a user-supplied directory.
-If the process is forcibly killed, its temporary directory may remain; remove
-only the exact printed directory after verifying the process has stopped.
+One command, venv/root, exact readiness directory:
+
+```bash
+python scripts/ui_instance.py --teardown "<directory from readiness JSON>"
+```
+
+Validates system-temp prefix and sends authenticated loopback request, never arbitrary PID kill/deletion. Wait starter exit; verify directory gone and owned ports closed. Repeating after removal is already clean (currently FileNotFoundError): check absence before repeating. Partial startup uses finally cleanup. Forced kill: verify owned PID/port stopped before removing exact resolved temp directory. Preserve evidence. Close only owned CLI sessions when another worker is present, never global close-all then. Clean on failure/interruption/success; reconcile ledger.

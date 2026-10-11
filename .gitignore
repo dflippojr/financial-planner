@@ -40,3 +40,9 @@ __pycache__/
 .coverage
 coverage.xml
 .scannerwork/
+
+# Disposable UI evidence and browser artifacts
+output/ui-pass/
+.playwright-cli/
+playwright-report/
+test-results/
