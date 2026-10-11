@@ -1,6 +1,8 @@
 {% extends "finance/base.html" %}
 {% block title %}Chat · Financial Planner{% endblock %}
 {% block content %}
+{% load static %}
+<div class="chat-page">
 {% if chat_ready %}
 {% with helper="Answers by "|add:chat_backend_label|add:" from read-only tools. Opinion, not financial advice." %}
 {% include "finance/_page_header.html" with title="Chat" helper=helper actions="finance/_chat_header_actions.html" %}
@@ -22,4 +24,6 @@
   <button type="submit" class="btn btn-outline min-h-11">Delete all conversations</button>
 </form>
 {% endif %}
+</div>
+<script src="{% static 'js/chat-page-layout.js' %}" defer></script>
 {% endblock %}
