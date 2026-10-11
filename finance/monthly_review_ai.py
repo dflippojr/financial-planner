@@ -118,11 +118,11 @@ def queue_monthly_review_phrasing(person, review, *, exclude_pk=None):
     return enqueue_review_phrasing(person, feature=FEATURE, review=review, exclude_pk=exclude_pk)
 
 
-def _requeue_if_regenerated(person, job, generated_at):
+def _requeue_if_regenerated(person, job, generated_at, queue):
     """The review was regenerated after this job read it: phrase the newest generation instead."""
     current = MonthlyReview.objects.filter(pk=(job.input_refs or {}).get("monthly_review_id"), person=person).first()
     if current is not None and current.generated_at.isoformat() != generated_at:
-        queue_monthly_review_phrasing(person, current, exclude_pk=job.pk)
+        queue(person, current, exclude_pk=job.pk)
 
 
 def visible_phrasing(person, review):
@@ -134,29 +134,45 @@ def visible_phrasing(person, review):
     return paragraph, phrasing_label(review.ai_backend)
 
 
-def run_monthly_review_job(person, job, *, backend, session_id="", on_session=None, connection=None):
+def run_monthly_review_job(person, job, **provider_kwargs):
+    return _run_review_phrasing_job(
+        person,
+        job,
+        feature=FEATURE,
+        prompt=PROMPT,
+        enabled=monthly_review_ai_on,
+        payload=facts_payload_for_ai,
+        queue=queue_monthly_review_phrasing,
+        fields=("ai_paragraph", "ai_backend"),
+        provider=run_structured,
+        **provider_kwargs,
+    )
+
+
+def _run_review_phrasing_job(
+    person, job, *, feature, prompt, enabled, payload, queue, fields, provider,
+    skip_empty_unusual=False, backend, session_id="", on_session=None, connection=None,
+):
+    """Check runtime access/consent and phrase only the still-current review generation."""
+    from .monthly_review import visibility_key
+
+    skipped = ProviderResult(ok=True, answer="", session_id="skipped")
     refs = job.input_refs or {}
     review = MonthlyReview.objects.filter(pk=refs.get("monthly_review_id"), person=person).first()
     if review is None:
-        return ProviderResult(ok=True, answer="", session_id="skipped")
+        return skipped
     if refs.get("generated_at") != review.generated_at.isoformat():
-        _requeue_if_regenerated(person, job, refs.get("generated_at"))
-        return ProviderResult(ok=True, answer="", session_id="skipped")
-    if not monthly_review_ai_on(person):
-        return ProviderResult(ok=True, answer="", session_id="skipped")
-    # Stored facts reflect the accounts visible when they were computed. If access has
-    # changed since, send nothing; the next view regenerates the review and queues again.
-    from .monthly_review import visibility_key
-
-    if review.visibility_key != visibility_key(person):
-        return ProviderResult(ok=True, answer="", session_id="skipped")
-    # Filter at run time: household acceptance can change while the job waits.
-    facts = facts_payload_for_ai(person, review.facts)
-    prompt = PROMPT + json.dumps(facts, default=str)
-    result = run_structured(
+        _requeue_if_regenerated(person, job, refs.get("generated_at"), queue)
+        return skipped
+    if not enabled(person) or review.visibility_key != visibility_key(person):
+        return skipped
+    facts = payload(person, review.facts)
+    if skip_empty_unusual and not facts.get("unusual"):
+        return skipped
+    result = provider(
         person,
-        prompt,
-        feature=FEATURE,
+        prompt + json.dumps(facts, default=str),
+        feature=feature,
         backend=backend,
         session_id=session_id,
         on_session=on_session,
@@ -166,17 +182,16 @@ def run_monthly_review_job(person, job, *, backend, session_id="", on_session=No
         return result
     paragraph = _extract_paragraph(result.answer)
     grounded = bool(paragraph) and paragraph_is_grounded(paragraph, facts)
-    # Write only if the review was not regenerated while the call ran.
     written = MonthlyReview.objects.filter(
         pk=review.pk,
         generated_at=review.generated_at,
         visibility_key=review.visibility_key,
-    ).update(
-        ai_paragraph=paragraph if grounded else "",
-        ai_backend=(backend or "") if grounded else "",
-    )
+    ).update(**{
+        fields[0]: paragraph if grounded else "",
+        fields[1]: (backend or "") if grounded else "",
+    })
     if not written:
-        _requeue_if_regenerated(person, job, review.generated_at.isoformat())
+        _requeue_if_regenerated(person, job, review.generated_at.isoformat(), queue)
     return result
 
 
