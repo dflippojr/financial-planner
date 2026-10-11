@@ -14,7 +14,8 @@ test('Home values and expanded chart reflow with 200 percent root text size', as
     const canvas = document.querySelector<HTMLCanvasElement>('#cash-flow-chart')!;
     const box = canvas.getBoundingClientRect();
     const parent = canvas.parentElement!.getBoundingClientRect();
-    return box.width > 0 && box.left >= parent.left && box.right <= parent.right && box.right <= innerWidth;
+    return box.width > 0 && box.left >= parent.left && box.right <= parent.right && box.right <= innerWidth
+      && Math.abs(canvas.width / devicePixelRatio - box.width) < 1;
   })).toBe(true);
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await expect(page.getByRole('region', { name: 'Key numbers' })).toContainText('+$3,245.01');
