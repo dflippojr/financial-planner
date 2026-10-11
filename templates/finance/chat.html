@@ -19,6 +19,7 @@
 <p class="mb-4">Connect an AI backend in <a class="link" href="{% url 'settings-ai' %}">Settings → AI</a> to chat about your data.</p>
 {% else %}
 {% include "finance/_chat_thread.html" with composer_fixed=True %}
+{# The md-to-lg delete action is supplied by _chat_header_actions.html above. #}
 <form method="post" action="{% url 'chat-delete-all' %}" data-confirm="Delete every conversation?" class="mt-4 md:hidden">
   {% csrf_token %}
   <button type="submit" class="btn btn-outline min-h-11">Delete all conversations</button>

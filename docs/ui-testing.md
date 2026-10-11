@@ -69,7 +69,10 @@ Enlarged Home #368, Budgets #369 and Categories/Audit #370 are asserted by `text
 
 Phone Chat delete-all (#371) and short-landscape Home reset (#375) are asserted in
 `tests/ui/desktop-responsive-defects.spec.ts`, alongside the enabled original journey
-branches. The spec owns fresh WebKit/Chromium device contexts on the two desktop
+branches. Between md and lg, including 852px and 915px landscape, Chat uses the
+Delete all action in `_chat_header_actions.html` (`max-md:hidden` inside `lg:hidden`).
+The footer copy is below md and the conversation-list copy starts at lg.
+The spec owns fresh WebKit/Chromium device contexts on the two desktop
 light/dark projects. It explicitly uses issue viewport dimensions (375x667, 393x852,
 412x915 and rotations; 1024x500) because device presets subtract browser chrome and
 the iPhone SE preset is 320x568. Short/long/new chat threads, confirmation cancel,
