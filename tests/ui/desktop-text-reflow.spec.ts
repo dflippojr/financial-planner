@@ -11,10 +11,11 @@ test('Budget rows and settings actions remain accessible with 200 percent text',
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), { message: path }).toBe(true);
     if (path.includes('budgets')) {
       const rows = page.getByRole('region', { name: 'Budget amounts and actions' });
-      const attention = page.getByRole('heading', { name: 'Needs attention', exact: true });
-      await expect(attention).toBeVisible();
+      // The month summary remains present when no category currently needs attention.
+      const summary = page.getByRole('complementary', { name: 'Month summary' });
+      await expect(summary).toBeVisible();
       const bounds = await rows.boundingBox();
-      const side = await attention.boundingBox();
+      const side = await summary.boundingBox();
       expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(side!.x);
       await expect(rows).toContainText('$500.00');
       await rows.focus();

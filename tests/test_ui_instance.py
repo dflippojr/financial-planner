@@ -2,6 +2,7 @@
 import json
 import io
 import os
+from contextlib import contextmanager
 from pathlib import Path
 import queue
 import subprocess
@@ -76,40 +77,88 @@ def test_startup_reader_drains_output_after_readiness():
     assert log.getvalue().count("synthetic-log-") == 20000
 
 
-@pytest.fixture
-def ui_instance(tmp_path):
+@contextmanager
+def running_ui_instance(tmp_path, startup_timeout=90):
     env = dict(os.environ)
     # pytest-django's settings must not carry over into the standalone process.
     env.pop("DJANGO_SETTINGS_MODULE", None)
     ready = queue.Queue()
     log = tmp_path / "ui-instance.log"
+    handle = tmp_path / "startup.json"
     with log.open("w") as errors:
-        process = subprocess.Popen([sys.executable, str(ROOT / "scripts/ui_instance.py")],
+        process = subprocess.Popen([sys.executable, str(ROOT / "scripts/ui_instance.py"),
+                                    "--startup-handle", str(handle)],
                                    cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=errors, text=True)
 
         reader = threading.Thread(target=read_startup, args=(process.stdout, errors, ready), daemon=True)
         reader.start()
         instance = None
         try:
-            instance = ready.get(timeout=90)
+            instance = ready.get(timeout=startup_timeout)
             assert instance is not None, log.read_text()
             yield instance
         finally:
+            directory = Path(instance["directory"]) if instance else None
+            if directory is None and handle.exists():
+                directory = Path(json.loads(handle.read_text())["directory"])
             try:
-                if instance is not None and process.poll() is None:
-                    subprocess.run([sys.executable, str(ROOT / "scripts/ui_instance.py"),
-                                    "--teardown", instance["directory"]], check=True, timeout=15)
+                if directory is not None and process.poll() is None:
+                    teardown(directory)
             finally:
                 try:
-                    process.wait(timeout=15)
+                    process.wait(timeout=30)
                 except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
-                reader.join(timeout=5)
-                process.stdout.close()
-            if instance:
-                assert process.returncode == 0, log.read_text()
-                assert not Path(instance["directory"]).exists(), "Teardown left synthetic storage behind"
+                    raise RuntimeError(f"Disposable process did not exit; cleanup handle retained at {handle}") from None
+                finally:
+                    if process.poll() is not None:
+                        reader.join(timeout=5)
+                        process.stdout.close()
+            assert process.returncode == 0, log.read_text()
+            if directory is not None:
+                assert not directory.exists(), "Teardown left synthetic storage behind"
+                handle.unlink()
+
+
+@pytest.fixture
+def ui_instance(tmp_path):
+    with running_ui_instance(tmp_path) as instance:
+        yield instance
+
+
+def test_startup_timeout_cancels_and_removes_storage(monkeypatch, tmp_path):
+    """Exercise cancellation before readiness, with a real launcher and temp storage."""
+    launch = subprocess.Popen
+    drain = read_startup
+    children = []
+    directory = []
+    handle = tmp_path / "startup.json"
+
+    def slow_launch(command, **kwargs):
+        code = ("from scripts import ui_instance; import time; "
+                "ui_instance.build_css = lambda: [time.sleep(.05) for _ in range(600)]; "
+                "ui_instance.main()")
+        child = launch([command[0], "-c", code, *command[2:]], **kwargs)
+        children.append(child)
+        return child
+
+    def timeout_after_handle(output, log, ready):
+        import time
+        deadline = time.monotonic() + 10
+        while not handle.exists() and time.monotonic() < deadline:
+            time.sleep(.05)
+        if handle.exists():
+            directory.append(Path(json.loads(handle.read_text())["directory"]))
+        drain(output, log, ready)
+
+    monkeypatch.setattr(subprocess, "Popen", slow_launch)
+    monkeypatch.setattr(sys.modules[__name__], "read_startup", timeout_after_handle)
+    with pytest.raises(queue.Empty):
+        with running_ui_instance(tmp_path, startup_timeout=10):
+            pytest.fail("The deliberately blocked startup must not become ready")
+    assert len(directory) == 1
+    assert not directory[0].exists()
+    assert children[0].returncode == 0
+    assert not handle.exists()
 
 
 @pytest.fixture

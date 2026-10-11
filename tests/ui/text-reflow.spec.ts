@@ -5,6 +5,9 @@ test('Home values and expanded chart reflow with 200 percent root text size', as
   await signIn(page);
   const phone = info.project.name.startsWith('phone');
   await page.setViewportSize({ width: phone ? 375 : 1280, height: phone ? 667 : 900 });
+  const amounts = page.locator('[aria-label="Key numbers"] p > span');
+  await expect(amounts).toHaveCount(3);
+  const originalAmounts = await amounts.allTextContents();
   await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
   await expect(page.locator('html')).toHaveAttribute('data-theme', info.project.use.colorScheme as string);
   if (phone) await page.getByText('Income, spending, and net by period', { exact: true }).click();
@@ -18,8 +21,8 @@ test('Home values and expanded chart reflow with 200 percent root text size', as
       && Math.abs(canvas.width / devicePixelRatio - box.width) < 1;
   })).toBe(true);
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await expect(page.getByRole('region', { name: 'Key numbers' })).toContainText('+$3,245.01');
-  expect(await page.locator('[aria-label="Key numbers"] p > span').evaluateAll(elements => elements.every(element => {
+  await expect(amounts).toHaveText(originalAmounts);
+  expect(await amounts.evaluateAll(elements => elements.every(element => {
     const box = element.getBoundingClientRect();
     const parent = element.parentElement!.getBoundingClientRect();
     return box.left >= parent.left && box.right <= parent.right;
