@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from urllib.request import ProxyHandler, Request, build_opener
 from wsgiref.simple_server import WSGIServer, make_server
 
@@ -72,18 +73,16 @@ def build_css():
 
 
 def run_css_builder(command):
-    # Short waits let cancellation interrupt a stalled builder. Own its process
-    # group so cancellation also stops the tools it started.
+    # Poll instead of Popen.wait: its KeyboardInterrupt handler can pass an
+    # expired timeout to the Windows wait API, delaying cancellation indefinitely.
+    # Own the process group so cancellation also stops the tools it started.
     options = ({"creationflags": subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP}
                if os.name == "nt" else {"start_new_session": True})
     process = subprocess.Popen(command, cwd=ROOT, stdout=sys.stderr, **options)
     try:
-        while True:
-            try:
-                returncode = process.wait(timeout=0.1)
-                break
-            except subprocess.TimeoutExpired:
-                continue
+        while process.poll() is None:
+            time.sleep(0.1)
+        returncode = process.returncode
         if returncode:
             raise subprocess.CalledProcessError(returncode, command)
     finally:
