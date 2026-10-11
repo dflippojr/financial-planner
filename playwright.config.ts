@@ -17,7 +17,7 @@ export default defineConfig({
       (['light', 'dark'] as const).map(colorScheme => ({
         name: 'forms-' + device.replaceAll(' ', '-') + '-' + colorScheme,
         testMatch: /phone-forms\.spec\.ts/,
-        use: { ...devices[device], ...(device === 'iPhone SE' ? { viewport: { width: 375, height: 667 } } : {}), colorScheme },
+        use: { ...devices[device], viewport: device === 'iPhone SE' ? { width: 375, height: 667 } : device === 'iPhone 15' ? { width: 393, height: 852 } : { width: 412, height: 915 }, colorScheme },
       }))),
     { name: 'desktop-light', testIgnore: /phone-forms\.spec\.ts/, use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 }, colorScheme: 'light' } },
     { name: 'desktop-dark', testIgnore: /phone-forms\.spec\.ts/, use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 }, colorScheme: 'dark' } },
