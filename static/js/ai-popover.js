@@ -29,6 +29,7 @@
   let draggedClick = false;
   let timer = null;
   let count = 0;
+  let draftVersion = 0;
   let answerReady = false;
   let sending = false;
   let restoring = false;
@@ -230,8 +231,10 @@
     }
   };
   pop.addEventListener("click", function (event) {
-    if (draggedClick) { draggedClick = false; return; }
     const button = event.target.closest("[data-pop-action]");
+    const ignoreMoveClick = draggedClick && button && button.dataset.popAction === "move";
+    draggedClick = false;
+    if (ignoreMoveClick) return;
     if (!button) return;
     switch (button.dataset.popAction) {
       case "pin": state.pinned = !state.pinned; draw(); announce(state.pinned ? "Pinned" : "Unpinned"); activity(); break;
@@ -289,10 +292,10 @@
   ["pointerdown", "keydown", "wheel", "scroll", "focusin"].forEach(function (name) {
     pop.addEventListener(name, activity, {capture: true, passive: true});
   });
-  composer.addEventListener("input", activity);
+  composer.addEventListener("input", function () { draftVersion += 1; activity(); });
   pop.querySelectorAll("[data-pop-followup]").forEach(function (button) {
     button.addEventListener("click", function () {
-      composer.value = button.textContent.trim(); composer.focus(); activity();
+      composer.value = button.textContent.trim(); draftVersion += 1; composer.focus(); activity();
     });
   });
   form.addEventListener("submit", async function (event) {
@@ -303,13 +306,17 @@
     form.querySelector('[type="submit"]').disabled = true;
     activity();
     const version = generation;
+    const submittedDraftVersion = draftVersion;
     try {
       const response = await fetch(form.action, {method: "POST", body: new FormData(form),
         headers: {Accept: "application/json", "X-CSRFToken": form.elements.csrfmiddlewaretoken.value},
         credentials: "same-origin", redirect: "error"});
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || "Chat could not send your question.");
-      if (version === generation) { composer.value = ""; install(data); }
+      if (version === generation) {
+        if (draftVersion === submittedDraftVersion) composer.value = "";
+        install(data);
+      }
     } catch (failure) { error.textContent = failure.message || "Chat could not send your question."; }
     finally { sending = false; form.querySelector('[type="submit"]').disabled = false; activity(); }
   });

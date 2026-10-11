@@ -1113,3 +1113,22 @@ def test_popover_consent_backend_and_csrf_gates(harness):
     assert 'id="ai-popover"' not in client.get(reverse("home")).content.decode()
     assert client.get(reverse("chat-popover")).status_code == 403
     assert client.post(reverse("chat-send"), {"prompt": "Synthetic"}, HTTP_ACCEPT="application/json").status_code == 409
+
+
+@pytest.mark.django_db
+def test_fresh_popover_send_starts_a_new_thread_even_if_latest_is_full(harness, settings):
+    _state, url = harness
+    user, person, _ = make_member("popover-new-thread")
+    connect_harness(person, base_url=url, token=TOKEN)
+    settings.AI_CHAT_MAX_TURNS = 1
+    previous = ask(person, "Synthetic earlier conversation")
+    client = Client()
+    client.force_login(user)
+    assert client.get(reverse("chat-popover")).json()["conversationId"] is None
+    response = client.post(reverse("chat-send"), {"prompt": "Synthetic new window question"},
+                           HTTP_ACCEPT="application/json")
+    assert response.status_code == 200
+    assert response.json()["conversationId"] != previous.pk
+    assert "Synthetic earlier conversation" not in response.json()["html"]
+    previous.refresh_from_db()
+    assert previous.turn_count == 1

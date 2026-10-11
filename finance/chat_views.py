@@ -63,7 +63,10 @@ def chat_send(request):
     next_url = safe_next_url(request, request.POST.get("next"), default=reverse("chat"))
     try:
         conversation_id = _send_conversation_id(conversation_id, wants_json)
-        conversation = send_message(person, prompt, conversation_id=conversation_id, page_context=page_context)
+        conversation = send_message(
+            person, prompt, conversation_id=conversation_id, page_context=page_context,
+            start_new=wants_json and conversation_id is None,
+        )
     except (PermissionDenied, AiError) as exc:
         return _chat_send_error(request, exc, next_url, wants_json)
     if wants_json:
@@ -73,15 +76,18 @@ def chat_send(request):
     return redirect(next_url)
 
 
+def _parse_conversation_id(raw_id):
+    conversation_id = int(raw_id)
+    if not 0 < conversation_id <= 2**63 - 1:
+        raise ValueError
+    return conversation_id
+
 
 def _send_conversation_id(raw_id, wants_json):
     if not raw_id:
         return None
     try:
-        conversation_id = int(raw_id)
-        if wants_json and not 0 < conversation_id <= 2**63 - 1:
-            raise ValueError
-        return conversation_id
+        return _parse_conversation_id(raw_id) if wants_json else int(raw_id)
     except (TypeError, ValueError):
         if wants_json:
             raise PermissionDenied("That conversation is not available.") from None
@@ -120,9 +126,7 @@ def chat_popover(request):
     conversation = None
     if raw_id:
         try:
-            conversation_id = int(raw_id)
-            if not 0 < conversation_id <= 2**63 - 1:
-                raise ValueError
+            conversation_id = _parse_conversation_id(raw_id)
         except (TypeError, ValueError):
             return JsonResponse({"ok": False}, status=404)
         conversation = conversations_for(person).filter(pk=conversation_id).first()

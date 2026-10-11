@@ -233,3 +233,26 @@ def test_polled_proposal_cards_arrive_without_reloading_the_page(popover_session
         expect(page.locator("main")).to_contain_text("Dismissed.")
     finally:
         context.close()
+
+
+@pytest.mark.parametrize("next_draft", ["Second synthetic draft", "First synthetic question"])
+def test_send_preserves_a_draft_edited_while_the_post_is_pending(popover_session, next_draft):
+    context, page, _person = popover_session()
+    try:
+        open_popover(page)
+        requests = []
+        page.route("**/chat/send/", lambda route: requests.append(route))
+        composer = page.locator("#ai-popover textarea")
+        composer.fill("First synthetic question")
+        page.locator("#ai-popover-form").get_by_role("button", name="Send").click()
+        page.wait_for_timeout(100)
+        assert len(requests) == 1
+        # Editing and then retyping the sent text is still a new, unsent draft.
+        composer.fill("Edited intermediate draft")
+        composer.fill(next_draft)
+        requests[0].continue_()
+        expect(page.locator("#ai-popover [data-chat-turn-url]")).to_have_count(1)
+        expect(page.locator("#ai-popover-form").get_by_role("button", name="Send")).to_be_enabled()
+        expect(composer).to_have_value(next_draft)
+    finally:
+        context.close()
