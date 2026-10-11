@@ -407,19 +407,19 @@ def test_delete_enforces_csrf():
     assert not Account.objects.filter(pk=account.pk).exists()
 
 
-def _run_delete_race(other_action, owner, account, *, delay_competitor):
+def _run_delete_race(other_action, owner, account, *, start_competitor_first):
     run_account_lock_race(
         lambda: delete_account(owner, account.pk),
         other_action,
-        delay_competitor=delay_competitor,
+        start_competitor_first=start_competitor_first,
     )
     assert_no_rows_reference(account.pk)
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("delay_competitor", [False, True], ids=["immediate", "gated"])
+@pytest.mark.parametrize("start_competitor_first", [False, True], ids=["after-lock", "before-lock-gated"])
 @pytest.mark.parametrize("competing_kind", ["edit", "transfer-refresh"])
-def test_delete_account_races_edit_and_transfer_refresh_without_deadlock(delay_competitor, competing_kind):
+def test_delete_account_races_edit_and_transfer_refresh_without_deadlock(start_competitor_first, competing_kind):
     if connection.vendor != "postgresql":
         pytest.skip("row-lock ordering can only be exercised on PostgreSQL")
 
@@ -441,7 +441,7 @@ def test_delete_account_races_edit_and_transfer_refresh_without_deadlock(delay_c
         )
 
     other_action = edit if competing_kind == "edit" else lambda: refresh_transfer_pairs(member)
-    _run_delete_race(other_action, owner, shared, delay_competitor=delay_competitor)
+    _run_delete_race(other_action, owner, shared, start_competitor_first=start_competitor_first)
 
 
 @pytest.mark.django_db

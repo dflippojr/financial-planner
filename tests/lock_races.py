@@ -38,12 +38,13 @@ def _wait_for_membership_lock(first_pid, competing_pid, competing_done, errors):
     raise AssertionError("Competing operation never blocked on the first worker's membership lock")
 
 
-def run_account_lock_race(first_action, competing_action, *, delay_competitor=False):
+def run_account_lock_race(first_action, competing_action, *, start_competitor_first=False):
     """Hold the first account lock until PostgreSQL proves actual contention.
 
-    The optional gate starts the competitor first but prevents its service
-    call until the first worker holds its locks, simulating delayed scheduling
-    without a timing sleep. Each worker has its own bounded database session.
+    Both modes gate the competing service call until the first worker holds
+    its locks. Starting the competitor first holds it at that gate while the
+    first worker acquires its locks, simulating delayed scheduling without a
+    timing sleep. Each worker has its own bounded database session.
     """
     first_lock_held = threading.Event()
     release_first = threading.Event()
@@ -59,7 +60,8 @@ def run_account_lock_race(first_action, competing_action, *, delay_competitor=Fa
         locked = original_lock(principal, account_id)
         if threading.current_thread() is first:
             first_lock_held.set()
-            assert release_first.wait(timeout=JOIN_SECONDS), "First worker was never released"
+            if not release_first.wait(timeout=JOIN_SECONDS):
+                raise TimeoutError("First worker was never released")
         return locked
 
     def run(action, role):
@@ -73,7 +75,8 @@ def run_account_lock_race(first_action, competing_action, *, delay_competitor=Fa
                 pids[role] = cursor.fetchone()[0]
             if role == "competing":
                 competing_ready.set()
-                assert allow_competitor.wait(timeout=JOIN_SECONDS), "Competing worker was never released"
+                if not allow_competitor.wait(timeout=JOIN_SECONDS):
+                    raise TimeoutError("Competing worker was never released")
             action()
         except Exception as exc:  # noqa: BLE001 - reported to the main thread
             errors.append(exc)
@@ -96,12 +99,12 @@ def run_account_lock_race(first_action, competing_action, *, delay_competitor=Fa
 
     with patch.object(lifecycle_services, "_visible_account_for_update", lock_then_pause):
         try:
-            if delay_competitor:
+            if start_competitor_first:
                 start(competing)
                 assert competing_ready.wait(timeout=WAIT_SECONDS), f"Competing worker did not connect: {errors}"
             start(first)
             assert first_lock_held.wait(timeout=WAIT_SECONDS), f"First worker did not acquire its locks: {errors}"
-            if not delay_competitor:
+            if not start_competitor_first:
                 start(competing)
                 assert competing_ready.wait(timeout=WAIT_SECONDS), f"Competing worker did not connect: {errors}"
             assert not competing_done.is_set()
