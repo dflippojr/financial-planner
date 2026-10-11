@@ -1,9 +1,17 @@
-import { test, expect, signIn } from './fixtures';
+import { test, expect, signIn, submit } from './fixtures';
 
 // #369 and #370: these 200% cases now join the passing assertions, without retries/skips.
 test('Budget rows and settings actions remain accessible with 200 percent text', async ({ page }, info) => {
   await signIn(page);
   await page.setViewportSize({ width: 1280, height: 900 });
+  // Own an overall budget so the sidebar exists even at the start of a month,
+  // when the seed's recent category spending can belong to the previous month.
+  await page.goto('/planning/budgets/');
+  await page.getByRole('button', { name: 'Add budget', exact: true }).filter({ visible: true }).click();
+  const setupDialog = page.locator('#add-budget-dialog');
+  await setupDialog.getByLabel('Category', { exact: true }).selectOption('');
+  await setupDialog.getByLabel('Monthly amount').fill('1000.00');
+  await submit(page, setupDialog.getByRole('button', { name: 'Add budget', exact: true }));
   for (const path of ['/planning/budgets/', '/settings/categories/', '/settings/audit/']) {
     await page.goto(path);
     await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
@@ -11,7 +19,7 @@ test('Budget rows and settings actions remain accessible with 200 percent text',
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), { message: path }).toBe(true);
     if (path.includes('budgets')) {
       const rows = page.getByRole('region', { name: 'Budget amounts and actions' });
-      // The month summary remains present when no category currently needs attention.
+      // The test-owned overall budget keeps this present without attention cards.
       const summary = page.getByRole('complementary', { name: 'Month summary' });
       await expect(summary).toBeVisible();
       const bounds = await rows.boundingBox();
