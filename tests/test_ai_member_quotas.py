@@ -12,6 +12,7 @@ from finance import ai_harness, ai_jobs
 from finance.ai_jobs import enqueue_review_phrasing
 from finance.ai_services import AiError, connect_harness
 from finance.ai_types import UNAVAILABLE
+from finance.category_services import assign_category
 from finance.chat_runner import claim_next_turn, heartbeat, recover_stale_turns, turn_max_seconds
 from finance.chat_services import CONVERSATION_LIMIT, PENDING_LIMIT, send_message, start_conversation
 from finance.models import AiConversation, AiConversationMessage, AiJob, MonthlyReview
@@ -240,13 +241,22 @@ def test_job_lane_reaches_the_quiet_member_within_the_worker_count(monkeypatch):
     assert quiet_job.pk in submitted
 
 
-def _review_member(harness, username="owner"):
+def _review_member(harness, username="owner", *, unusual=False):
     _state, url = harness
     owner = make_person(username)
-    make_household(owner)
+    household = make_household(owner)
     connect_ai(owner, url)
     checking = make_account(owner)
     make_transaction(owner, checking, transaction_date=latest_closed_month())
+    if unusual:
+        groceries = household.categories.get(name="Groceries")
+        for back in range(7):
+            row = make_transaction(
+                owner, checking, amount_minor=-15000 if back == 0 else -10000,
+                description=f"Synthetic groceries {back}",
+                transaction_date=add_months(latest_closed_month(), -back),
+            )
+            assign_category(owner, row.pk, groceries.pk)
     store_monthly_review(owner, latest_closed_month())
     return owner
 
@@ -290,31 +300,95 @@ def test_unusual_phrasing_coalesces_per_review(review_harness):
 
 
 @pytest.mark.django_db
-def test_regenerate_while_phrasing_runs_queues_the_newest_generation_after(review_harness, monkeypatch):
+@pytest.mark.parametrize("feature", ["monthly_review", "unusual_spending"])
+def test_regenerate_while_phrasing_runs_queues_the_newest_generation_after(review_harness, monkeypatch, settings, feature):
+    settings.AI_JOB_MAX_QUEUED_PER_MEMBER = 2
     state, _url = review_harness
-    owner = _review_member(review_harness)
+    owner = _review_member(review_harness, unusual=feature == "unusual_spending")
     month = latest_closed_month()
     state.session_answer = "A synthetic summary."
-    from finance import monthly_review_ai
+    from finance import monthly_review_ai, unusual_spending_ai
 
-    real_run = monthly_review_ai.run_structured
+    module = monthly_review_ai if feature == "monthly_review" else unusual_spending_ai
+    real_run = module.run_structured
+    if feature == "monthly_review":
+        # Fill the shared quota with the other feature, too.
+        review = MonthlyReview.objects.get(person=owner, month=month)
+        enqueue_review_phrasing(owner, feature="unusual_spending", review=review)
+    assert AiJob.objects.filter(member=owner, status__in=ACTIVE).count() == 2
 
     def regenerate_mid_call(*args, **kwargs):
         result = real_run(*args, **kwargs)
         store_monthly_review(owner, month, force=True)
         # The running job absorbs the regenerate instead of a second job starting.
-        assert AiJob.objects.filter(member=owner, feature="monthly_review", status__in=ACTIVE).count() == 1
+        assert AiJob.objects.filter(member=owner, feature=feature, status__in=ACTIVE).count() == 1
         return result
 
-    monkeypatch.setattr(monthly_review_ai, "run_structured", regenerate_mid_call)
+    monkeypatch.setattr(module, "run_structured", regenerate_mid_call)
     monkeypatch.setattr("finance.ai_jobs.in_quiet_window", lambda moment=None: True)
-    job = AiJob.objects.get(member=owner, feature="monthly_review")
+    job = AiJob.objects.get(member=owner, feature=feature)
     ai_jobs._process_one(job, timezone.now())
 
     review = MonthlyReview.objects.get(person=owner, month=month)
-    follow_up = AiJob.objects.get(member=owner, feature="monthly_review", status=AiJob.Status.QUEUED)
+    follow_up = AiJob.objects.get(member=owner, feature=feature, status=AiJob.Status.QUEUED)
     assert follow_up.pk != job.pk
     assert follow_up.input_refs["generated_at"] == review.generated_at.isoformat()
+    job.refresh_from_db()
+    assert job.status == AiJob.Status.SUCCEEDED
+    paragraph_field = "ai_paragraph" if feature == "monthly_review" else "unusual_ai_paragraph"
+    assert getattr(review, paragraph_field) == ""
+    monkeypatch.setattr(module, "run_structured", real_run)
+    assert ai_jobs._process_one(follow_up, timezone.now())
+    review.refresh_from_db()
+    follow_up.refresh_from_db()
+    assert follow_up.status == AiJob.Status.SUCCEEDED
+    assert getattr(review, paragraph_field) == state.session_answer
+    assert not AiJob.objects.filter(member=owner, feature=feature, status__in=ACTIVE).exists()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("feature", ["monthly_review", "unusual_spending"])
+def test_regenerate_after_paragraph_write_before_success_keeps_newest_phrasing(review_harness, monkeypatch, feature):
+    state, _url = review_harness
+    owner = _review_member(review_harness, unusual=feature == "unusual_spending")
+    month = latest_closed_month()
+    state.session_answer = "A synthetic summary."
+    paragraph_field = "ai_paragraph" if feature == "monthly_review" else "unusual_ai_paragraph"
+    real_save = ai_jobs._save_job_success
+
+    def regenerate_before_success(job):
+        # This hook runs after the conditional paragraph UPDATE and session write,
+        # while the persisted job is still RUNNING. No clock or thread timing.
+        review = MonthlyReview.objects.get(person=owner, month=month)
+        assert getattr(review, paragraph_field) == state.session_answer
+        assert AiJob.objects.get(pk=job.pk).status == AiJob.Status.RUNNING
+        next_generation = review.generated_at + timedelta(seconds=1)
+        with monkeypatch.context() as generation_clock:
+            generation_clock.setattr("finance.monthly_review.timezone.now", lambda: next_generation)
+            newer, _wrote = store_monthly_review(owner, month, force=True)
+        assert newer.generated_at == next_generation
+        assert getattr(newer, paragraph_field) == ""
+        assert AiJob.objects.filter(member=owner, feature=feature, status__in=ACTIVE).count() == 1
+        return real_save(job)
+
+    monkeypatch.setattr(ai_jobs, "_save_job_success", regenerate_before_success)
+    monkeypatch.setattr(ai_jobs, "in_quiet_window", lambda moment=None: True)
+    job = AiJob.objects.get(member=owner, feature=feature)
+    assert ai_jobs._process_one(job, timezone.now())
+
+    review = MonthlyReview.objects.get(person=owner, month=month)
+    follow_up = AiJob.objects.get(member=owner, feature=feature, status=AiJob.Status.QUEUED)
+    assert follow_up.pk != job.pk
+    assert follow_up.input_refs["generated_at"] == review.generated_at.isoformat()
+    job.refresh_from_db()
+    assert job.status == AiJob.Status.SUCCEEDED
+    monkeypatch.setattr(ai_jobs, "_save_job_success", real_save)
+    assert ai_jobs._process_one(follow_up, timezone.now())
+    review.refresh_from_db()
+    follow_up.refresh_from_db()
+    assert follow_up.status == AiJob.Status.SUCCEEDED
+    assert getattr(review, paragraph_field) == state.session_answer
+    assert not AiJob.objects.filter(member=owner, feature=feature, status__in=ACTIVE).exists()
 
 
 @pytest.mark.django_db
