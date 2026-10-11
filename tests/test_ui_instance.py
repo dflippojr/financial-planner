@@ -34,6 +34,16 @@ def test_teardown_refuses_non_disposable_directory(tmp_path):
         teardown(tmp_path)
 
 
+def test_cli_refuses_database_before_startup():
+    env = dict(os.environ, DATABASE_URL="postgresql://synthetic.invalid/test")
+    result = subprocess.run([sys.executable, str(ROOT / "scripts/ui_instance.py")],
+                            env=env, capture_output=True, text=True, timeout=10)
+    assert result.returncode != 0
+    assert "Refusing database environment variables: DATABASE_URL" in result.stderr
+    assert "synthetic.invalid" not in result.stderr
+    assert not result.stdout
+
+
 @pytest.fixture
 def ui_instance(tmp_path):
     env = dict(os.environ)
@@ -64,16 +74,18 @@ def ui_instance(tmp_path):
             assert instance is not None, log.read_text()
             yield instance
         finally:
-            if instance is not None and process.poll() is None:
-                subprocess.run([sys.executable, str(ROOT / "scripts/ui_instance.py"),
-                                "--teardown", instance["directory"]], check=True, timeout=15)
             try:
-                process.wait(timeout=15)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
-            process.stdout.close()
-            reader.join(timeout=1)
+                if instance is not None and process.poll() is None:
+                    subprocess.run([sys.executable, str(ROOT / "scripts/ui_instance.py"),
+                                    "--teardown", instance["directory"]], check=True, timeout=15)
+            finally:
+                try:
+                    process.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+                process.stdout.close()
+                reader.join(timeout=1)
             if instance:
                 assert process.returncode == 0, log.read_text()
                 assert not Path(instance["directory"]).exists(), "Teardown left synthetic storage behind"

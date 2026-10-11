@@ -99,7 +99,7 @@ def serve(directory):
     from django.core.management import call_command
     from django.core.wsgi import get_wsgi_application
     from django.db import connections, close_old_connections
-    from finance.ai_services import connect_harness, set_defaults
+    from finance.ai_services import connect_harness, set_defaults, set_offer_local_chat
     from finance.chat_runner import process_pending_turns
     from finance.policy_services import accept_policy, publish_policy
     from tests.fake_harness import start_fake_harness
@@ -117,6 +117,7 @@ def serve(directory):
     server = None
     try:
         connect_harness(person, base_url=fake_url, token=fake.token)
+        set_offer_local_chat(person, True)
         set_defaults(person, chat_backend="local", background_backend="local")
         app = StaticFilesHandler(get_wsgi_application())
         token = secrets.token_urlsafe(32)
