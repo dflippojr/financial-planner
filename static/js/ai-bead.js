@@ -4,7 +4,6 @@
   const coarse = window.matchMedia("(hover: none)");
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
   document.querySelectorAll("[data-ai-bead]").forEach(function (bead) {
-    if (!desktop.matches) { bead.parentElement.remove(); return; }
     const tile = bead.closest("section, article, figure");
     if (!tile) return;
     tile.classList.add("ai-tile");

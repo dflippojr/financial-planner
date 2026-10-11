@@ -207,7 +207,11 @@ def test_keyboard_skip_escape_context_removal_a11y_and_reduced_motion(popover_se
 def test_popover_does_not_render_below_lg(popover_session):
     context, page, _person = popover_session(width=390)
     try:
-        assert page.locator("#ai-popover").count() == 0
+        expect(page.locator("#ai-popover")).to_be_hidden()
+        assert page.get_by_role("dialog", name="Ask AI").count() == 0
+        assert page.get_by_role("link", name="Skip to AI chat").count() == 0
+        page.evaluate("window.AiPopover.open()")
+        expect(page.locator("#ai-popover")).to_be_hidden()
         expect(page.get_by_role("navigation", name="Main tabs")).to_be_visible()
     finally:
         context.close()

@@ -174,6 +174,30 @@ def test_fixed_home_for_touch_and_reduced_motion(bead_session, touch, reduced):
         context.close()
 
 
+@pytest.mark.parametrize("width", [390, 1023])
+def test_narrow_load_restores_openers_when_resized_to_desktop(bead_session, width):
+    context, page = bead_session(width=width)
+    try:
+        bead = page.get_by_role("button", name="Ask AI about Key numbers")
+        assert bead.count() == 0
+        page.set_viewport_size({"width": 1024, "height": 800})
+        expect(bead).to_be_visible()
+        bead.focus()
+        expect(bead).to_be_focused()
+        bead.press("Enter")
+        expect(page.locator("#ai-popover")).to_be_visible()
+        page.locator("#ai-popover textarea").press("Escape")
+        page.set_viewport_size({"width": 390, "height": 844})
+        assert bead.count() == 0
+        page.keyboard.press("Tab")
+        assert not page.evaluate("document.activeElement.matches('[data-ai-bead]')")
+        page.set_viewport_size({"width": 1280, "height": 800})
+        bead.click()
+        expect(page.locator("#ai-popover")).to_be_visible()
+    finally:
+        context.close()
+
+
 def test_tall_transactions_sticky_track_and_mobile_absence(bead_session):
     context, page = bead_session("/transactions/")
     try:
@@ -188,6 +212,6 @@ def test_tall_transactions_sticky_track_and_mobile_absence(bead_session):
         page.set_viewport_size({"width": 390, "height": 844})
         expect(bead).to_be_hidden()
         page.reload()
-        assert page.locator("[data-ai-bead]").count() == 0
+        assert page.get_by_role("button", name="Ask AI about Transactions", exact=True).count() == 0
     finally:
         context.close()

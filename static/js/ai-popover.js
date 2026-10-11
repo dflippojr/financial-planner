@@ -11,7 +11,6 @@
     form.addEventListener("submit", clearStored);
   });
   if (!pop) { clearStored(); return; }
-  if (!desktop.matches) { pop.remove(); return; }
   const form = pop.querySelector("#ai-popover-form");
   const composer = form.elements.prompt;
   const thread = pop.querySelector("[data-pop-thread]");
