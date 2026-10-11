@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import time
 
-from ui_instance import PREFIX, ROOT, teardown
+from scripts.ui_instance import PREFIX, ROOT, teardown
 
 
 def main():
