@@ -2,24 +2,28 @@ import { test as base, expect, type Page } from '@playwright/test';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createInterface } from 'node:readline';
-import { mkdir, writeFile, unlink, access } from 'node:fs/promises';
+import { mkdir, readFile, unlink, access } from 'node:fs/promises';
 import path from 'node:path';
-import { once } from 'node:events';
 
 const execute = promisify(execFile);
 process.env.PLAYWRIGHT_NO_COPY_PROMPT = '1';
 const python = process.env.UI_PYTHON || path.resolve(process.platform === 'win32' ? '.venv/Scripts/python.exe' : '.venv/bin/python');
 export const test = base.extend<{ uiURL: string }>({
   uiURL: async ({}, use, testInfo) => {
-    const child = spawn(python, ['scripts/ui_instance.py'], { cwd: process.cwd(), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    const exited = once(child, 'exit');
+    const registry = path.resolve('test-results/ui-instances', testInfo.testId.replace(/[^a-zA-Z0-9_-]/g, '_') + '.json');
+    await mkdir(path.dirname(registry), { recursive: true });
+    try {
+      await access(registry);
+      throw new Error('Previous cleanup handle remains; run scripts.cleanup_ui_tests before restarting');
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+    const child = spawn(python, ['scripts/ui_instance.py', '--startup-handle', registry], { cwd: process.cwd(), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const exited = new Promise(resolve => child.once('close', resolve));
     let directory: string | undefined;
     let log = '';
     child.stderr.on('data', data => { log += data; });
-    const registry = path.resolve('test-results/ui-instances', testInfo.testId.replace(/[^a-zA-Z0-9_-]/g, '_') + '.json');
     try {
       const instance = await new Promise<{ url: string; directory: string }>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error('Disposable UI startup timed out')), 90_000);
+        const timer = setTimeout(() => reject(new Error('Disposable UI startup timed out')), 60_000);
         const lines = createInterface({ input: child.stdout });
         lines.on('line', line => {
           try {
@@ -33,16 +37,16 @@ export const test = base.extend<{ uiURL: string }>({
       directory = instance.directory;
       const url = new URL(instance.url);
       if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || !url.port || url.pathname !== '/') throw new Error('Non-disposable readiness URL');
-      await mkdir(path.dirname(registry), { recursive: true });
-      await writeFile(registry, JSON.stringify({ directory })); // No cookies, passwords or teardown tokens.
       await use(url.origin);
     } finally {
+      if (!directory) {
+        try { directory = JSON.parse(await readFile(registry, 'utf8')).directory; }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+      }
       if (directory && child.exitCode === null) {
         await execute(python, ['scripts/ui_instance.py', '--teardown', directory], { windowsHide: true, timeout: 15_000 });
-      } else if (child.exitCode === null) {
-        child.kill(); // Only the process this fixture just created, before readiness.
       }
-      await Promise.race([exited, new Promise((_, reject) => setTimeout(() => reject(new Error('Disposable process did not exit')), 15_000).unref())]);
+      await Promise.race([exited, new Promise((_, reject) => setTimeout(() => reject(new Error('Disposable process did not exit; cleanup handle retained')), 30_000).unref())]);
       if (directory) {
         await expect.poll(async () => { try { await access(directory!); return false; } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true; throw error; } }).toBe(true);
         await unlink(registry);
@@ -60,7 +64,7 @@ export async function signIn(page: Page, user = 'synthetic_alex', password = 'Sy
   await submit(page, page.getByRole('button', { name: 'Sign in', exact: true }));
   await expect(page.getByRole('heading', { name: 'Cash flow', exact: true })).toBeVisible();
 }
-export async function shellEdit(page: Page) {
+export async function openShellCorrection(page: Page) {
   await page.goto('/transactions/');
   await page.getByRole('link', { name: /^(Correct )?Shell Oil 5741$/ }).filter({ visible: true }).click();
   await expect(page.getByRole('heading', { name: 'Correct transaction', exact: true })).toBeVisible();

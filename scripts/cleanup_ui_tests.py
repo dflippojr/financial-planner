@@ -1,18 +1,15 @@
 """Stop only disposable instances registered by the Playwright Test fixture."""
 import json
 from pathlib import Path
-import tempfile
 import time
 
-from scripts.ui_instance import PREFIX, ROOT, teardown
+from scripts.ui_instance import ROOT, disposable_directory, teardown
 
 
 def main():
     registry = ROOT / "test-results" / "ui-instances"
     for record in sorted(registry.glob("*.json")):
-        directory = Path(json.loads(record.read_text())["directory"]).resolve()
-        if directory.parent != Path(tempfile.gettempdir()).resolve() or not directory.name.startswith(PREFIX):
-            raise RuntimeError("Invalid disposable instance registry entry")
+        directory = disposable_directory(json.loads(record.read_text())["directory"])
         if directory.exists():
             teardown(directory)
             deadline = time.monotonic() + 15

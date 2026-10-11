@@ -1,4 +1,4 @@
-import { test, expect, signIn, shellEdit, audit, submit } from './fixtures';
+import { test, expect, signIn, openShellCorrection, audit, submit } from './fixtures';
 import type { Page } from '@playwright/test';
 
 const main = (page: Page) => page.locator('main');
@@ -7,12 +7,19 @@ test.beforeEach(async ({ page }) => { await signIn(page); });
 test('Home range and URL-only scenario retain state without changing actuals', async ({ page }) => {
   const actuals = await page.getByRole('region', { name: 'Key numbers' }).innerText();
   await page.locator('#cash-flow-filters summary').click();
+  const rangeToday = new Date();
+  const rangeEnd = [rangeToday.getFullYear(), String(rangeToday.getMonth() + 1).padStart(2, '0'), String(rangeToday.getDate()).padStart(2, '0')].join('-');
+  const rangeStart = rangeEnd.slice(0, 8) + '01';
+  await page.locator('#cash-flow-filters [name=date_from]').fill(rangeStart);
+  await page.locator('#cash-flow-filters [name=date_to]').fill(rangeEnd);
   await page.locator('#cash-flow-filters [name=grouping]').selectOption('week');
   await submit(page, page.locator('#cash-flow-filters').getByRole('button', { name: 'Update', exact: true }));
   await expect(page).toHaveURL(/grouping=week/);
   await page.reload();
   await page.locator('#cash-flow-filters summary').click();
   await expect(page.locator('#cash-flow-filters [name=grouping]')).toHaveValue('week');
+  await expect(page.locator('#cash-flow-filters [name=date_from]')).toHaveValue(rangeStart);
+  await expect(page.locator('#cash-flow-filters [name=date_to]')).toHaveValue(rangeEnd);
   await page.getByRole('link', { name: 'Reset range', exact: true }).click();
   await page.locator('summary').filter({ hasText: 'What-if scenario' }).click();
   const form = page.locator('form').filter({ has: page.locator('[name=scenario_action]') });
@@ -33,7 +40,7 @@ test('Home range and URL-only scenario retain state without changing actuals', a
 });
 
 test('Category and description corrections persist with synthetic actor history', async ({ page }) => {
-  const edit = await shellEdit(page);
+  const edit = await openShellCorrection(page);
   const id = edit.split('/')[2];
   const category = page.locator('form[action$="/category/"]');
   await category.getByLabel('Category', { exact: true }).selectOption({ label: 'Transportation' });
@@ -53,7 +60,7 @@ test('Category and description corrections persist with synthetic actor history'
 });
 
 test('Note and tag add/remove persist; tag membership has an audit event', async ({ page }) => {
-  const edit = await shellEdit(page);
+  const edit = await openShellCorrection(page);
   await page.getByLabel('Note', { exact: true }).fill('Synthetic UI note');
   await page.getByLabel('Create tag', { exact: true }).fill('synthetic-ui');
   await submit(page, page.getByRole('button', { name: 'Save note and tags' }));
@@ -74,7 +81,7 @@ test('Note and tag add/remove persist; tag membership has an audit event', async
 });
 
 test('Split validates total, persists exact parts, and unsplits', async ({ page }) => {
-  const edit = await shellEdit(page);
+  const edit = await openShellCorrection(page);
   const form = page.locator('#split-form');
   await form.getByLabel('Part 1 category').selectOption({ label: 'Transportation' });
   await form.getByLabel('Part 2 category').selectOption({ label: 'Dining' });
@@ -101,7 +108,7 @@ test('Split validates total, persists exact parts, and unsplits', async ({ page 
 });
 
 test('Receipt rejects text, then upload/download/remove persist and are audited', async ({ page }) => {
-  const edit = await shellEdit(page);
+  const edit = await openShellCorrection(page);
   await page.getByLabel('Receipt photo or PDF').setInputFiles({ name: 'synthetic.txt', mimeType: 'text/plain', buffer: Buffer.from('synthetic invalid receipt') });
   await submit(page, page.getByRole('button', { name: 'Attach receipt' }));
   await expect(main(page).getByRole('alert')).toBeVisible();

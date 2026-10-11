@@ -1,5 +1,16 @@
 import { devices } from '@playwright/test';
 import { test, expect, signIn, submit } from './fixtures';
+import type { Locator } from '@playwright/test';
+
+async function enterRuntimeCode(input: Locator, code: string) {
+  // fill(code) embeds its argument in the HTML report's step title. evaluate
+  // reports only the method name; runtime arguments remain inside the browser.
+  await input.evaluate((element: HTMLInputElement, value) => {
+    element.value = value;
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+  }, code);
+}
 
 // No screenshots, traces, DOM snapshots or code-bearing assertion diagnostics.
 // Codes stay in memory, and errors in the sensitive section are replaced below.
@@ -37,7 +48,7 @@ test('Invitation join and one-time recovery revoke the guest session', async ({ 
     await guest.getByLabel('I accept the privacy and data policy', { exact: true }).check();
     await submit(guest, guest.getByRole('button', { name: 'Create account', exact: true }));
     if (await guest.locator('#recovery-codes').count()) throw new Error('Invalid invitation accepted');
-    await guest.getByLabel('Invitation code', { exact: true }).fill(invitation);
+    await enterRuntimeCode(guest.getByLabel('Invitation code', { exact: true }), invitation);
     await guest.getByLabel('New password', { exact: true }).fill('Synthetic-guest-passphrase-72!');
     await guest.getByLabel('Confirm new password', { exact: true }).fill('Synthetic-guest-passphrase-72!');
     await submit(guest, guest.getByRole('button', { name: 'Create account', exact: true }));
@@ -56,7 +67,7 @@ test('Invitation join and one-time recovery revoke the guest session', async ({ 
     const recover = await recoveryContext.newPage();
     await recover.goto('/recover/');
     await recover.getByLabel('Username', { exact: true }).fill('synthetic_ui_guest');
-    await recover.getByLabel('Recovery code', { exact: true }).fill(recovery);
+    await enterRuntimeCode(recover.getByLabel('Recovery code', { exact: true }), recovery);
     await recover.getByLabel('New password', { exact: true }).fill('Synthetic-recovered-passphrase-83!');
     await recover.getByLabel('Confirm new password', { exact: true }).fill('Synthetic-recovered-passphrase-83!');
     await submit(recover, recover.getByRole('button', { name: 'Update password', exact: true }));
@@ -73,7 +84,7 @@ test('Invitation join and one-time recovery revoke the guest session', async ({ 
     await signIn(guest, 'synthetic_ui_guest', 'Synthetic-recovered-passphrase-83!');
     await recover.goto('/recover/');
     await recover.getByLabel('Username', { exact: true }).fill('synthetic_ui_guest');
-    await recover.getByLabel('Recovery code', { exact: true }).fill(recovery);
+    await enterRuntimeCode(recover.getByLabel('Recovery code', { exact: true }), recovery);
     await recover.getByLabel('New password', { exact: true }).fill('Synthetic-another-passphrase-94!');
     await recover.getByLabel('Confirm new password', { exact: true }).fill('Synthetic-another-passphrase-94!');
     await submit(recover, recover.getByRole('button', { name: 'Update password', exact: true }));

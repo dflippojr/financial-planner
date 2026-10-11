@@ -1,4 +1,4 @@
-import { test, expect, signIn, shellEdit } from './fixtures';
+import { test, expect, signIn, openShellCorrection } from './fixtures';
 
 // Failing AI/alert-settings reflow is tracked by #365.
 // Those pages are not asserted passing, skipped, or hidden with retries.
@@ -13,7 +13,7 @@ const pages = [
 test('Passing primary pages reflow at 320/375/768/1440 CSS pixels', async ({ page }, info) => {
   test.setTimeout(180_000);
   await signIn(page);
-  const edit = await shellEdit(page);
+  const edit = await openShellCorrection(page);
   for (const [name, path] of [...pages, ['Correction', edit]]) {
     const response = await page.goto(path);
     expect(response!.status(), name).toBe(200);

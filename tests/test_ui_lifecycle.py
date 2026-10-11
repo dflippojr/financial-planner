@@ -3,6 +3,8 @@ import json
 import os
 from pathlib import Path
 import runpy
+import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -12,6 +14,73 @@ import pytest
 import requests
 
 from scripts import ui_instance
+
+
+def test_idle_browser_preconnection_does_not_block_shutdown():
+    accepted = threading.Event()
+
+    class ObservedServer(ui_instance.ThreadedServer):
+        def get_request(self):
+            result = super().get_request()
+            accepted.set()
+            return result
+
+    server = ui_instance.make_server("127.0.0.1", 0, lambda _env, _start: [], server_class=ObservedServer)
+    serving = threading.Thread(target=server.serve_forever)
+    serving.start()
+    connection = socket.create_connection(("127.0.0.1", server.server_port), timeout=5)
+    try:
+        assert accepted.wait(timeout=5)
+        started = time.monotonic()
+        server.shutdown()
+        server.server_close()
+        serving.join(timeout=1)
+        assert not serving.is_alive()
+        assert time.monotonic() - started < 7
+    finally:
+        connection.close()
+        server.shutdown()
+        server.server_close()
+        serving.join(timeout=5)
+
+
+def test_cancel_before_readiness_removes_partial_storage_and_exits(tmp_path):
+    handle = tmp_path / "startup.json"
+    code = """
+import sys, time
+from scripts import ui_instance
+ui_instance.build_css = lambda: None
+def slow_start(directory):
+    (directory / 'db.sqlite3').write_text('synthetic partial startup')
+    while True:
+        time.sleep(0.1)
+ui_instance.serve = slow_start
+sys.argv = ['ui_instance.py', '--startup-handle', sys.argv[1]]
+ui_instance.main()
+"""
+    child = subprocess.Popen([sys.executable, "-c", code, str(handle)], cwd=ui_instance.ROOT,
+                             env=ui_instance.isolated_environment(tmp_path),
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    directory = None
+    try:
+        deadline = time.monotonic() + 10
+        while not handle.exists() and child.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert handle.exists(), "Cleanup handle missing before readiness"
+        value = json.loads(handle.read_text())
+        assert set(value) == {"directory"}  # Never publish credentials or tokens.
+        directory = ui_instance.disposable_directory(value["directory"])
+        assert not (directory / "instance.json").exists()
+        ui_instance.teardown(directory)
+        stdout, stderr = child.communicate(timeout=10)
+        assert child.returncode == 0, stderr.decode()
+        assert not stdout
+        assert not directory.exists()
+    finally:
+        if child.poll() is None:
+            if directory:
+                ui_instance.teardown(directory)
+            child.communicate(timeout=10)
 
 
 @pytest.mark.django_db(transaction=True)
