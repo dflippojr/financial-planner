@@ -31,13 +31,13 @@
       <button type="submit" class="btn btn-primary">Accept version {{ privacy_policy.version }}</button>
     </form>
     {% if privacy_policy_prompt %}
-    {% comment %}The global banner is hidden on this tab, so its decline lives here.{% endcomment %}
+    {% comment %}The global banner is hidden on this tab, so its Deny action lives here.{% endcomment %}
     <form method="post" action="{% url 'privacy-policy-respond' %}">
       {% csrf_token %}
       <input type="hidden" name="action" value="decline">
       <input type="hidden" name="version" value="{{ privacy_policy_prompt.version }}">
       <input type="hidden" name="next" value="{{ request.path }}">
-      <button type="submit" class="btn">Not now</button>
+      <button type="submit" class="btn">Deny</button>
     </form>
     {% endif %}
   </div>

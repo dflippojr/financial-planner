@@ -124,7 +124,7 @@ def test_signed_in_pages_use_shared_nav_and_signed_out_pages_use_a_card():
         "Planning",
         "Planned items",
         "Debt payoff",
-        "Ask about this page",
+        "Enable AI Features",
         "Dark theme",
         "Sign out",
     ):
@@ -136,7 +136,10 @@ def test_signed_in_pages_use_shared_nav_and_signed_out_pages_use_a_card():
     assert reverse("account-settings") in home
     assert 'id="theme-toggle"' in home
     assert 'aria-pressed="false"' in home
-    assert "data-chat-drawer-open" in home
+    assert "data-chat-drawer-open" not in home
+    assert "finance-chat-panel" not in home
+    assert "/static/js/chat-drawer.js" not in home
+    assert "/static/js/ai-consent.js" in home
     assert "fixed right-4 top-4" not in home
     assert reverse("logout") in home
     assert "csrfmiddlewaretoken" in home

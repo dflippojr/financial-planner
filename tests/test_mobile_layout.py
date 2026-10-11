@@ -15,7 +15,7 @@ from django.utils import timezone
 from finance.ai_services import connect_harness
 from finance.budget_services import save_budget
 from finance.chat_services import send_message, start_conversation
-from finance.models import Budget, Person
+from finance.models import Budget, Person, Household, Membership
 from finance.policy_services import accept_policy, publish_policy
 from tests.chat_helpers import ask
 from tests.browser_support import CSS, SCREEN_DIR, browser, page_session  # noqa: F401
@@ -155,26 +155,120 @@ def test_desktop_sidebar_groups_and_content_width(phone_session, browser, live_s
         context.close()
 
 
-def test_ask_about_this_page_opens_the_chat_drawer_from_the_keyboard(phone_session):
-    VIEWPORTS["1280"] = (1280, 800)
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_enable_ai_dialog_keyboard_escape_and_close(page_session, scheme):
+    from finance.models import PrivacyPolicyAcceptance
+    from tests.a11y import assert_accessible
+    context, page = page_session((1280, 800), scheme, "/planning/budgets/")
     try:
-        context, page = phone_session("1280", "light", "/planning/budgets/")
-    finally:
-        del VIEWPORTS["1280"]
-    try:
-        ask = page.get_by_role("button", name="Ask about this page")
-        ask.focus()
+        trigger = page.get_by_role("link", name="Enable AI Features", exact=True)
+        trigger.focus()
         page.keyboard.press("Enter")
-        panel = page.locator("#finance-chat-panel")
-        assert panel.is_visible()
-        assert ask.get_attribute("aria-expanded") == "true"
+        dialog = page.get_by_role("dialog", name="Enable AI features?")
+        assert dialog.is_visible()
+        assert page.evaluate("document.activeElement.id") == "ai-consent-heading"
+        assert_accessible(page.content())
+        assert dialog.bounding_box()["width"] == 360
+        assert page.locator("#finance-chat-panel").count() == 0
         page.keyboard.press("Escape")
-        assert not panel.is_visible()
-        assert page.evaluate("document.activeElement.textContent.trim()") == "Ask about this page"
+        assert not dialog.is_visible()
+        assert trigger.evaluate("el => el === document.activeElement")
+        trigger.click()
+        dialog.get_by_role("link", name="Close AI dialog").click()
+        assert not dialog.is_visible()
+        assert trigger.evaluate("el => el === document.activeElement")
+        assert not PrivacyPolicyAcceptance.objects.exists()
+        person = Person.objects.get(user__username="synthetic_alex")
+        assert person.privacy_policy_declined_version_id is None
+        assert person.privacy_policy_dismissed_version_id is None
         switch = page.get_by_role("button", name="Dark theme")
         before = switch.get_attribute("aria-pressed")
         switch.click()
         assert switch.get_attribute("aria-pressed") != before
+    finally:
+        context.close()
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+@pytest.mark.parametrize("reduced", [False, True])
+def test_dialog_accept_shows_members_and_reopens_from_slot(page_session, scheme, reduced):
+    context, page = page_session((1280, 800), scheme, "/transactions/?date_from=2000-01-01")
+    from tests.test_privacy_policy import make_member
+    make_member("pending-synthetic", Household.objects.get())
+    page.reload()
+    try:
+        page.emulate_media(reduced_motion="reduce" if reduced else "no-preference")
+        page.get_by_role("link", name="Enable AI Features", exact=True).click()
+        with page.expect_response("**/privacy-policy/respond/") as response:
+            page.get_by_role("dialog").get_by_role("button", name="Accept", exact=True).click()
+        assert response.value.status == 200, response.value.text()
+        heading = page.get_by_role("heading", name="AI is on for you")
+        heading.wait_for()
+        assert heading.evaluate("el => el === document.activeElement")
+        dialog = page.get_by_role("dialog")
+        assert "1 of 2 members still to accept" in dialog.inner_text()
+        members = dialog.get_by_role("list", name="Household policy status").get_by_role("listitem")
+        assert "(you)" in members.nth(0).inner_text()
+        assert "Accepted" in members.nth(0).inner_text()
+        assert "Not answered yet" in members.nth(1).inner_text()
+        assert page.locator("[data-ai-consent-announcement]").inner_text().strip() == "Household AI: 1 of 2 members still to accept"
+        assert page.locator("[data-policy-prompt]").count() == 0
+        dialog.get_by_role("link", name="Done", exact=True).click()
+        setup = page.get_by_role("link", name="Finish AI setup", exact=True)
+        assert setup.evaluate("el => el === document.activeElement")
+        pending = page.locator("[data-ai-slot]").get_by_role("link", name="Household AI:")
+        pending.click()
+        assert page.get_by_role("dialog", name="AI is on for you").is_visible()
+        page.keyboard.press("Escape")
+        assert pending.evaluate("el => el === document.activeElement")
+        assert "date_from=2000-01-01" in pending.get_attribute("href")
+    finally:
+        context.close()
+
+
+def test_dialog_deny_removes_slot_and_focuses_settings(page_session):
+    context, page = page_session((1280, 800), "light", "/")
+    try:
+        page.get_by_role("link", name="Enable AI Features", exact=True).click()
+        page.get_by_role("dialog").get_by_role("button", name="Deny", exact=True).click()
+        page.locator("#ai-consent").wait_for(state="detached")
+        assert page.locator("[data-ai-slot]").count() == 0
+        assert page.evaluate("document.activeElement.id") == "sidebar-settings"
+        assert "AI is off" in page.locator("#ai-consent-announcement").inner_text()
+        person = Person.objects.get(user__username="synthetic_alex")
+        assert person.privacy_policy_declined_version_id is not None
+    finally:
+        context.close()
+
+
+@pytest.mark.parametrize("action", ["Accept", "Deny"])
+def test_consent_dialog_plain_forms_without_javascript(page_session, browser, action):
+    context, page = page_session((1280, 800), "dark", "/")
+    from tests.test_privacy_policy import make_member
+    make_member("pending-synthetic", Household.objects.get())
+    cookies = context.cookies()
+    base = page.url
+    context.close()
+    context = browser.new_context(viewport={"width": 1280, "height": 800}, java_script_enabled=False)
+    context.add_cookies(cookies)
+    page = context.new_page()
+    try:
+        page.goto(base)
+        page.get_by_role("link", name="Enable AI Features", exact=True).click()
+        dialog = page.get_by_role("dialog", name="Enable AI features?")
+        assert dialog.is_visible()
+        dialog.get_by_role("button", name=action, exact=True).click()
+        page.wait_for_load_state("networkidle")
+        if action == "Accept":
+            assert page.get_by_role("dialog", name="AI is on for you").is_visible()
+            assert page.get_by_role("list", name="Household policy status").is_visible()
+            page.get_by_role("dialog").get_by_role("link", name="Done", exact=True).click()
+            pending = page.locator("[data-ai-slot]").get_by_role("link", name="Household AI:")
+            pending.click()
+            assert page.get_by_role("dialog", name="AI is on for you").is_visible()
+        else:
+            assert page.locator("[data-ai-slot]").count() == 0
+            assert page.locator("#ai-consent").count() == 0
     finally:
         context.close()
 

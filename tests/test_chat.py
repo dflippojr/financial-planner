@@ -395,8 +395,9 @@ def test_warm_refusals_are_shown_as_cannot_load(harness, settings):
     assert status.json()["state"] == "unloaded"
     assert status.json()["asleep"] is True
     home = client.get(reverse("home"))
-    assert b'name="page_route"' in home.content
-    assert b'id="finance-chat-drawer"' in home.content
+    assert b"Chat with my money" in home.content
+    assert b'id="finance-chat-drawer"' not in home.content
+    assert b'id="finance-chat-panel"' not in home.content
 
 
 def _tool_blob(result):

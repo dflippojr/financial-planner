@@ -104,3 +104,10 @@ def test_all_template_column_headers_have_scope(template):
     for node in parser.elements:
         if node.tag == "th":
             assert node.attrs.get("scope") == "col", f"{template.name}: column header needs scope=col"
+
+
+@pytest.mark.parametrize("query", ["?ai=enable", "?ai=household"])
+def test_open_consent_dialog_is_accessible(member_client, query):
+    html = member_client.get(reverse("home") + query).content.decode()
+    assert 'aria-labelledby="ai-consent-heading" open' in html
+    assert_accessible(html)

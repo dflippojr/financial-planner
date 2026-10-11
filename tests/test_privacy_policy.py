@@ -534,7 +534,7 @@ def test_google_setup_stale_shown_version_finishes_without_acceptance():
 
 
 @pytest.mark.django_db
-def test_not_now_on_a_stale_prompt_does_not_decline_the_new_version():
+def test_deny_on_a_stale_prompt_does_not_decline_the_new_version():
     user, person, _household = make_member("owner")
     shown = publish_policy(material=True, body="Synthetic policy v1")
     later = publish_policy(material=True, body="Synthetic policy v2")
@@ -552,7 +552,7 @@ def test_not_now_on_a_stale_prompt_does_not_decline_the_new_version():
 
 
 @pytest.mark.django_db
-def test_not_now_on_the_current_prompt_declines_that_version():
+def test_deny_on_the_current_prompt_declines_that_version():
     user, person, _household = make_member("owner")
     current = publish_policy(material=True, body="Synthetic policy v1")
     client = Client()
@@ -590,7 +590,7 @@ def test_settings_ai_shows_one_privacy_prompt_and_can_decline():
     assert "needs a response before you can use AI" not in page
     assert page.count("Privacy and data policy") == 1
     assert f"Accept version {current.version}" in page
-    assert "Not now" in page
+    assert "Deny" in page
     # Other pages, including other settings tabs, keep the banner.
     assert "needs a response before you can use AI" in client.get(reverse("settings-alerts")).content.decode()
     posted = client.post(
@@ -601,5 +601,205 @@ def test_settings_ai_shows_one_privacy_prompt_and_can_decline():
     person.refresh_from_db()
     assert person.privacy_policy_declined_version_id == current.pk
     after = client.get(reverse("settings-ai")).content.decode()
-    assert "Not now" not in after
+    assert ">Deny</button>" not in after
     assert f"Accept version {current.version}" in after
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(("response", "state", "banner"), [
+    (None, "undecided", True), ("dismiss", "undecided", False),
+    ("decline", "denied", False), ("accept", "no_backend", False),
+])
+def test_sidebar_consent_states_and_bar_responses(response, state, banner):
+    user, person, _ = make_member("owner")
+    policy = current_policy()
+    client = Client()
+    client.force_login(user)
+    if response:
+        posted = client.post(reverse("privacy-policy-respond"),
+            {"action": response, "version": policy.version, "next": reverse("home")})
+        assert posted.url == reverse("home")
+    page = client.get(reverse("home"))
+    assert page.context["ai_slot"]["state"] == state
+    assert bool(page.context["privacy_policy_prompt"]) == banner
+    assert not page.context["show_ai_features"]
+    html = page.content.decode()
+    assert "finance-chat-panel" not in html
+    if state == "denied":
+        assert "data-ai-slot" not in html
+        assert 'id="ai-consent"' not in html
+    elif state == "undecided":
+        assert "Enable AI Features" in html
+    else:
+        assert "Finish AI setup" in html
+    person.refresh_from_db()
+    if response == "dismiss":
+        assert person.privacy_policy_dismissed_version_id == policy.pk
+        assert person.privacy_policy_declined_version_id is None
+
+
+@pytest.mark.django_db
+def test_pending_complete_and_solo_sidebar_states(monkeypatch):
+    from finance.policy_services import ai_slot_state
+    monkeypatch.setattr("finance.ai_services.member_has_ai", lambda person: True)
+    user, person, household = make_member("owner")
+    _other_user, other, _ = make_member("other", household)
+    policy = current_policy()
+    accept_policy(person, policy)
+    client = Client()
+    client.force_login(user)
+    pending = client.get(reverse("home"))
+    assert pending.context["ai_slot"]["state"] == "household_pending"
+    assert "Chat with my money" in pending.content.decode()
+    assert "1 of 2 members still to accept" in pending.content.decode()
+    accept_policy(other, policy)
+    ready = client.get(reverse("home"))
+    assert ready.context["ai_slot"]["state"] == "ready"
+    assert "members still to accept" not in ready.content.decode()
+    Membership.objects.filter(person=other).update(ended_at=timezone.now())
+    assert ai_slot_state(person)["state"] == "ready"
+    Membership.objects.filter(person=person).update(ended_at=timezone.now())
+    assert ai_slot_state(person)["state"] == "ready"
+
+
+@pytest.mark.django_db
+def test_accept_json_swaps_to_current_members_without_account_data():
+    from finance.models import Account
+    user, person, household = make_member("owner")
+    _other_user, other, _ = make_member("other", household)
+    _former_user, former, _ = make_member("former", household)
+    _outside_user, outsider, _ = make_member("outsider")
+    Membership.objects.filter(person=former).update(ended_at=timezone.now())
+    Account.objects.create(name="Sensitive synthetic private account", owner=other,
+        account_type=Account.Type.CHECKING)
+    policy = current_policy()
+    other.privacy_policy_declined_version = policy
+    other.save()
+    client = Client()
+    client.force_login(user)
+    reply = client.post(reverse("privacy-policy-respond"),
+        {"action": "accept", "version": policy.version, "next": "/transactions/?account=7&ai=household"},
+        HTTP_ACCEPT="application/json")
+    assert reply.status_code == 200
+    data = reply.json()
+    assert data["ai_slot"]["state"] == "no_backend"
+    assert data["ai_slot"]["household"]["pending"] == 1
+    assert [member["id"] for member in data["ai_slot"]["household"]["members"]] == [person.pk, other.pk]
+    assert [member["status"] for member in data["ai_slot"]["household"]["members"]] == ["accepted", "not_answered"]
+    assert "AI is on for you" in data["dialog_html"]
+    assert "Not answered yet" in data["dialog_html"]
+    assert 'href="/transactions/?account=7"' in data["dialog_html"]
+    for hidden in (former.display_name, outsider.display_name, "Sensitive synthetic private account", "Declined"):
+        assert hidden not in reply.content.decode()
+    former_client = Client()
+    former_client.force_login(_former_user)
+    old_page = former_client.get(reverse("home") + "?ai=household")
+    assert old_page.context["ai_slot"]["household"]["members"] == []
+    assert other.display_name not in old_page.content.decode()
+
+
+@pytest.mark.django_db
+def test_household_status_query_count_does_not_grow_with_members(django_assert_num_queries):
+    from finance.policy_services import household_consent_status
+    _user, person, household = make_member("owner")
+    policy = current_policy()
+    accept_policy(person, policy)
+    for i in range(8):
+        _user, other, _ = make_member(f"member{i}", household)
+        if i % 2 == 0:
+            accept_policy(other, policy)
+    with django_assert_num_queries(2):
+        status = household_consent_status(household)
+    assert status["total"] == 9 and status["pending"] == 4
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("action", ["accept", "decline", "dismiss"])
+def test_json_rejects_stale_policy_and_does_not_store_a_response(action):
+    user, person, _ = make_member("owner")
+    old = current_policy()
+    publish_policy(material=True, body="Synthetic new material policy")
+    client = Client()
+    client.force_login(user)
+    reply = client.post(reverse("privacy-policy-respond"),
+        {"action": action, "version": old.version}, HTTP_ACCEPT="application/json")
+    assert reply.status_code == 409
+    assert reply.json()["policy_url"] == reverse("privacy-policy")
+    assert not PrivacyPolicyAcceptance.objects.filter(person=person).exists()
+    person.refresh_from_db()
+    assert person.privacy_policy_declined_version_id is None
+    assert person.privacy_policy_dismissed_version_id is None
+
+
+@pytest.mark.django_db
+def test_policy_json_requires_csrf_and_rejects_unknown_actions():
+    user, _person, _ = make_member("owner")
+    protected = Client(enforce_csrf_checks=True)
+    protected.force_login(user)
+    assert protected.post(reverse("privacy-policy-respond"),
+        {"action": "accept", "version": current_policy().version},
+        HTTP_ACCEPT="application/json").status_code == 403
+    ordinary = Client()
+    ordinary.force_login(user)
+    assert ordinary.post(reverse("privacy-policy-respond"),
+        {"action": "unknown"}, HTTP_ACCEPT="application/json").status_code == 400
+
+
+@pytest.mark.django_db
+def test_new_material_policy_reprompts_dismissed_and_denied_members():
+    from finance.policy_services import ai_slot_state, should_prompt_privacy_policy
+    user, person, _ = make_member("owner")
+    policy = current_policy()
+    client = Client()
+    client.force_login(user)
+    for action in ("dismiss", "decline"):
+        client.post(reverse("privacy-policy-respond"), {"action": action, "version": policy.version})
+    person.refresh_from_db()
+    assert not should_prompt_privacy_policy(person)
+    publish_policy(material=False, body="Synthetic typo fix")
+    assert ai_slot_state(person)["state"] == "denied"
+    publish_policy(material=True, body="Synthetic new policy")
+    assert should_prompt_privacy_policy(person)
+    assert ai_slot_state(person)["state"] == "undecided"
+
+
+@pytest.mark.django_db
+def test_settings_accept_restores_slot_after_denial():
+    user, person, _ = make_member("owner")
+    client = Client()
+    client.force_login(user)
+    client.post(reverse("privacy-policy-respond"), {"action": "decline", "version": current_policy().version})
+    stamp_recent_auth(client)
+    client.post(reverse("settings-ai"), {"action": "accept-privacy-policy", "version": current_policy().version})
+    assert client.get(reverse("home")).context["ai_slot"]["state"] == "no_backend"
+    person.refresh_from_db()
+    assert person.privacy_policy_declined_version_id is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_migration_converts_existing_not_now_declines_to_dismissals():
+    from django.db import connection
+    from django.db.migrations.executor import MigrationExecutor
+    before = [("finance", "0064_pending_sign_in_session")]
+    after = [("finance", "0065_privacy_policy_dismissal")]
+    executor = MigrationExecutor(connection)
+    executor.migrate(before)
+    try:
+        apps = executor.loader.project_state(before).apps
+        User = apps.get_model("auth", "User")
+        Policy = apps.get_model("finance", "PrivacyPolicyVersion")
+        OldPerson = apps.get_model("finance", "Person")
+        policy = Policy.objects.create(version=1, body="Synthetic migration policy", is_material=True, published_at=timezone.now())
+        user = User.objects.create(username="legacy")
+        old = OldPerson.objects.create(user=user, display_name="Legacy Example", privacy_policy_declined_version=policy)
+        blank = OldPerson.objects.create(user=User.objects.create(username="blank"), display_name="Blank Example")
+        executor = MigrationExecutor(connection)
+        executor.migrate(after)
+        NewPerson = executor.loader.project_state(after).apps.get_model("finance", "Person")
+        converted = NewPerson.objects.get(pk=old.pk)
+        assert converted.privacy_policy_declined_version_id is None
+        assert converted.privacy_policy_dismissed_version_id == policy.pk
+        assert NewPerson.objects.get(pk=blank.pk).privacy_policy_dismissed_version_id is None
+    finally:
+        executor = MigrationExecutor(connection)
+        executor.migrate(executor.loader.graph.leaf_nodes())

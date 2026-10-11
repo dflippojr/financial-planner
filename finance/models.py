@@ -112,6 +112,13 @@ class Person(models.Model):
         blank=True,
         related_name="declined_by",
     )
+    privacy_policy_dismissed_version = models.ForeignKey(
+        "PrivacyPolicyVersion",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="dismissed_by",
+    )
     require_passkey_after_password = models.BooleanField(default=False)
     # Fingerprint of the charges the last recurring detection ran on; a page
     # view detects again only when it changes. See recurring_services.
