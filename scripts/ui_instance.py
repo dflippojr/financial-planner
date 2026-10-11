@@ -115,8 +115,11 @@ def run_css_builder(command):
             if initial_error is None:
                 raise
             initial_error.css_cleanup_error = error
-            initial_error.add_note(str(error))
-            logger.error("%s", error)
+            try:
+                initial_error.add_note(str(error))
+                logger.error("%s", error)
+            except BaseException:
+                raise initial_error
 
 
 def finish_css_builder(process, tree):
@@ -144,10 +147,21 @@ def finish_css_builder(process, tree):
 class CssBuilderCleanupError(RuntimeError):
     def __init__(self, pid, job, reason, owned_pids=()):
         reason = str(reason) or type(reason).__name__
+        owned_pids = list(owned_pids)
         self.recovery = {"builder_pid": pid, "job": job, "reason": reason,
-                         "last_known_owned_pids": list(owned_pids)}
-        super().__init__(f"CSS builder cleanup unverified (PID {pid}, job {job}): {reason}. "
+                         "last_known_owned_pids": owned_pids}
+        super().__init__(f"CSS builder cleanup unverified (PID {pid}, job {job}, "
+                         f"last known owned PIDs {owned_pids}): {reason}. "
                          "Retain the startup handle; verify the owned tree has stopped before removing storage.")
+
+
+def css_cleanup_failure(error):
+    return error if isinstance(error, CssBuilderCleanupError) else getattr(error, "css_cleanup_error", None)
+
+
+def secondary_failure_note(prefix, error, cleanup_error=None):
+    reason = str(error) or type(error).__name__
+    return prefix + ": " + reason + ("; " + str(cleanup_error) if cleanup_error else "")
 
 
 def stop_css_builder(process, tree=None):
@@ -336,40 +350,84 @@ def main():
         return
     refuse_database_environment(os.environ)
     directory = Path(tempfile.mkdtemp(prefix=PREFIX))
-    cleanup_error = None
+    initial_error = None
+    startup_failures = []
     try:
         if args.startup_handle:
             args.startup_handle.parent.mkdir(parents=True, exist_ok=True)
             pending = args.startup_handle.with_suffix(".tmp")
             pending.write_text(json.dumps({"directory": str(directory)}))
             pending.replace(args.startup_handle)
-        stopped = threading.Event()
-        watcher = threading.Thread(target=watch_startup_cancellation, args=(directory, stopped),
-                                   name="synthetic-startup-cancellation")
-        try:
-            watcher.start()
-            build_css()
-            serve(directory)
-        except KeyboardInterrupt as error:
-            if getattr(error, "css_cleanup_error", None):
-                raise
-        finally:
-            stopped.set()
-            watcher.join()
-            # Also close connections if seeding failed before serve's cleanup block.
-            if "django.db" in sys.modules:
-                from django.db import connections
-                connections.close_all()
+        run_ui_startup(directory, startup_failures)
     except BaseException as error:
-        cleanup_error = (error if isinstance(error, CssBuilderCleanupError)
-                         else getattr(error, "css_cleanup_error", None))
+        initial_error = startup_failures[0] if startup_failures else error
+        if initial_error is not error:
+            initial_error.add_note(secondary_failure_note("UI finalization also failed", error))
+            raise initial_error
         raise
     finally:
-        if cleanup_error:
+        # The primary failure is captured before watcher finalization. Even an
+        # interruption entering that block cannot clear the retention decision.
+        if startup_failures:
+            initial_error = startup_failures[0]
+        try:
+            finish_ui_storage(directory, initial_error)
+        except BaseException as error:
+            if initial_error is None:
+                raise
+            cleanup_error = css_cleanup_failure(initial_error)
+            initial_error.add_note(secondary_failure_note("UI storage cleanup also failed", error, cleanup_error))
+            raise initial_error
+
+
+def finish_ui_storage(directory, initial_error):
+    cleanup_error = css_cleanup_failure(initial_error)
+    if cleanup_error:
+        try:
             (directory / "css-cleanup-failed.json").write_text(json.dumps(cleanup_error.recovery))
-            logger.error("CSS cleanup recovery retained in %s", directory)
-        else:
-            shutil.rmtree(directory)
+        except BaseException as error:
+            initial_error.add_note(secondary_failure_note("CSS recovery record could not be written", error, cleanup_error))
+        logger.error("CSS cleanup storage retained in %s", directory)
+    else:
+        shutil.rmtree(directory)
+
+
+def run_ui_startup(directory, startup_failures):
+    stopped = threading.Event()
+    watcher = threading.Thread(target=watch_startup_cancellation, args=(directory, stopped),
+                               name="synthetic-startup-cancellation")
+    initial_error = None
+    try:
+        watcher.start()
+        build_css()
+        serve(directory)
+    except KeyboardInterrupt as error:
+        if getattr(error, "css_cleanup_error", None):
+            startup_failures.append(error)
+            initial_error = error
+            raise
+    except BaseException as error:
+        startup_failures.append(error)
+        initial_error = error
+        raise
+    finally:
+        finalize_ui_startup(stopped, watcher, initial_error)
+
+
+def finalize_ui_startup(stopped, watcher, initial_error):
+    try:
+        stopped.set()
+        watcher.join()
+        # Also close connections if seeding failed before serve's cleanup block.
+        if "django.db" in sys.modules:
+            from django.db import connections
+            connections.close_all()
+    except BaseException as error:
+        if initial_error is None:
+            raise
+        note = secondary_failure_note("UI finalization also failed", error)
+        initial_error.add_note(note)
+        logger.error("%s", note)
 
 
 def watch_startup_cancellation(directory, stopped):

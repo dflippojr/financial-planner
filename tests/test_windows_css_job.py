@@ -64,6 +64,18 @@ def owned(monkeypatch):
     return builder, job
 
 
+@pytest.fixture
+def gated(monkeypatch, owned):
+    builder, job = owned
+    builder.stdin = io.BytesIO()
+    monkeypatch.setattr(windows, "WindowsCssJob", lambda: job)
+    monkeypatch.setattr(ui.subprocess, "Popen", lambda *_a, **_k: builder)
+    monkeypatch.setattr(ui.subprocess, "CREATE_NO_WINDOW", 0x8000000, raising=False)
+    monkeypatch.setattr(ui.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, raising=False)
+    yield builder, job
+    builder.stdin.close()
+
+
 @pytest.mark.parametrize("result", ["timeout", "launch-error", "nonzero", "parent-only", "success"])
 def test_taskkill_outcomes_verify_descendants_and_use_owned_fallback(monkeypatch, owned, result):
     builder, job = owned
@@ -144,18 +156,15 @@ def test_missing_job_cannot_claim_parent_cleanup_succeeded(owned):
 
 
 @pytest.mark.parametrize("error_type", [KeyboardInterrupt, RuntimeError])
-def test_original_startup_error_survives_cleanup_failure(monkeypatch, owned, error_type, caplog):
-    builder, job = owned
-    builder.stdin = io.BytesIO()
+@pytest.mark.parametrize("report_interrupted", [False, True])
+def test_original_startup_error_survives_cleanup_failure(monkeypatch, gated, error_type, caplog, report_interrupted):
+    builder, job = gated
     original = error_type("synthetic startup failure")
     def popen(command, **options):
         assert command[0] == sys._base_executable
         assert options["stdin"] == subprocess.PIPE
         return builder
-    monkeypatch.setattr(windows, "WindowsCssJob", lambda: job)
     monkeypatch.setattr(ui.subprocess, "Popen", popen)
-    monkeypatch.setattr(ui.subprocess, "CREATE_NO_WINDOW", 0x8000000, raising=False)
-    monkeypatch.setattr(ui.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, raising=False)
     def sleep(_seconds):
         assert job.assigned
         assert builder.stdin.getvalue() == b"1"
@@ -165,16 +174,22 @@ def test_original_startup_error_survives_cleanup_failure(monkeypatch, owned, err
     def fail():
         raise OSError("synthetic termination failure")
     monkeypatch.setattr(job, "terminate", fail)
+    if report_interrupted:
+        def interrupt_report(*_a, **_k):
+            raise KeyboardInterrupt()
+        monkeypatch.setattr(ui.logger, "error", interrupt_report)
     with pytest.raises(error_type) as raised:
         ui.run_css_builder(["synthetic-bash"])
     assert raised.value is original
     assert original.css_cleanup_error.recovery["last_known_owned_pids"] == job.pids()
-    assert "cleanup unverified" in caplog.text
+    assert "cleanup unverified" in original.__notes__[-1]
+    if not report_interrupted:
+        assert "cleanup unverified" in caplog.text
     assert builder.stdin.closed and job.closed
 
 
-def test_assignment_failure_never_releases_builder_gate(monkeypatch, owned):
-    builder, job = owned
+def test_assignment_failure_never_releases_builder_gate(monkeypatch, gated):
+    builder, job = gated
     class Gate(io.BytesIO):
         released = False
 
@@ -186,15 +201,12 @@ def test_assignment_failure_never_releases_builder_gate(monkeypatch, owned):
             builder.returncode = 1  # EOF exits without spawning the command.
             super().close()
 
+    builder.stdin.close()
     builder.stdin = Gate()
     job.remaining = 0
     def deny(_pid):
         raise OSError("synthetic assignment denied")
     monkeypatch.setattr(job, "assign", deny)
-    monkeypatch.setattr(windows, "WindowsCssJob", lambda: job)
-    monkeypatch.setattr(ui.subprocess, "Popen", lambda *_a, **_k: builder)
-    monkeypatch.setattr(ui.subprocess, "CREATE_NO_WINDOW", 0x8000000, raising=False)
-    monkeypatch.setattr(ui.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, raising=False)
     monkeypatch.setattr(ui.subprocess, "run", lambda *_a, **_k: pytest.fail("No released builder"))
     with pytest.raises(OSError, match="assignment denied"):
         ui.run_css_builder(["synthetic-bash"])
@@ -202,14 +214,9 @@ def test_assignment_failure_never_releases_builder_gate(monkeypatch, owned):
     assert builder.stdin.closed and job.closed
 
 
-def test_cleanup_failure_after_success_is_not_hidden(monkeypatch, owned):
-    builder, job = owned
+def test_cleanup_failure_after_success_is_not_hidden(monkeypatch, gated):
+    builder, job = gated
     builder.returncode = 0
-    builder.stdin = io.BytesIO()
-    monkeypatch.setattr(windows, "WindowsCssJob", lambda: job)
-    monkeypatch.setattr(ui.subprocess, "Popen", lambda *_a, **_k: builder)
-    monkeypatch.setattr(ui.subprocess, "CREATE_NO_WINDOW", 0x8000000, raising=False)
-    monkeypatch.setattr(ui.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, raising=False)
     def fail():
         raise OSError("synthetic surviving descendant")
     monkeypatch.setattr(job, "terminate", fail)
@@ -232,10 +239,9 @@ def test_close_failure_is_reported_after_verified_tree_exit(owned):
 @pytest.mark.parametrize("phase", ["taskkill", "verification", "close"])
 @pytest.mark.parametrize("initial_type", [None, KeyboardInterrupt, RuntimeError])
 def test_cancellation_during_cleanup_retains_storage_and_initial_error(
-    monkeypatch, owned, tmp_path, phase, initial_type
+    monkeypatch, gated, tmp_path, phase, initial_type
 ):
-    builder, job = owned
-    builder.stdin = io.BytesIO()
+    builder, job = gated
     initial = initial_type("synthetic initial error") if initial_type else None
     builder.returncode = None if initial else 0
     directory = tmp_path / (ui.PREFIX + "interrupted-cleanup")
@@ -243,10 +249,6 @@ def test_cancellation_during_cleanup_retains_storage_and_initial_error(
     handle = tmp_path / "startup.json"
     monkeypatch.setattr(ui.tempfile, "mkdtemp", lambda **_k: str(directory))
     monkeypatch.setattr(sys, "argv", ["ui_instance.py", "--startup-handle", str(handle)])
-    monkeypatch.setattr(windows, "WindowsCssJob", lambda: job)
-    monkeypatch.setattr(ui.subprocess, "Popen", lambda *_a, **_k: builder)
-    monkeypatch.setattr(ui.subprocess, "CREATE_NO_WINDOW", 0x8000000, raising=False)
-    monkeypatch.setattr(ui.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, raising=False)
     def interrupt():
         raise KeyboardInterrupt()
     def taskkill(*_args, **_kwargs):
@@ -327,6 +329,79 @@ def test_main_retains_storage_and_handle_when_tree_cleanup_is_unverified(monkeyp
         assert raised.value is original
         assert json.loads(handle.read_text()) == {"directory": str(directory)}
         assert json.loads((directory / "css-cleanup-failed.json").read_text()) == error.recovery
+    finally:
+        ui.shutil.rmtree(directory)
+
+
+@pytest.mark.parametrize("phase", ["watcher-join", "connections", "record", "finalizer-call", "finalizer-log",
+                                  "storage-call", "storage-log"])
+@pytest.mark.parametrize("initial", ["cleanup", "interrupt", "startup"])
+def test_finalization_interruption_cannot_erase_css_cleanup_failure(monkeypatch, tmp_path, phase, initial):
+    directory = tmp_path / (ui.PREFIX + "interrupted-finalization")
+    directory.mkdir()
+    handle = tmp_path / "startup.json"
+    monkeypatch.setattr(ui.tempfile, "mkdtemp", lambda **_k: str(directory))
+    monkeypatch.setattr(ui.os, "environ", {})
+    monkeypatch.setattr(sys, "argv", ["ui_instance.py", "--startup-handle", str(handle)])
+    cleanup_error = ui.CssBuilderCleanupError(123, "synthetic-job", "synthetic failure", [123, 124])
+    original = {"cleanup": cleanup_error, "interrupt": KeyboardInterrupt(), "startup": RuntimeError()}[initial]
+    if original is not cleanup_error:
+        original.css_cleanup_error = cleanup_error
+    def fail():
+        raise original
+    monkeypatch.setattr(ui, "build_css", fail)
+    def interrupt():
+        raise KeyboardInterrupt()
+    class Watcher:
+        def __init__(self, **_kwargs):
+            pass
+
+        def start(self):
+            pass
+
+        def join(self):
+            if phase in {"watcher-join", "finalizer-log"}:
+                interrupt()
+    monkeypatch.setattr(ui.threading, "Thread", Watcher)
+    if phase == "connections":
+        from django.db import connections
+        monkeypatch.setattr(connections, "close_all", interrupt)
+    if phase == "finalizer-call":
+        monkeypatch.setattr(ui, "finalize_ui_startup", lambda *_a: interrupt())
+    if phase == "storage-call":
+        monkeypatch.setattr(ui, "finish_ui_storage", lambda *_a: interrupt())
+    if phase in {"finalizer-log", "storage-log"}:
+        original_log = ui.logger.error
+        def log(message, *args):
+            if ((phase == "finalizer-log" and message == "%s")
+                    or (phase == "storage-log" and message == "CSS cleanup storage retained in %s")):
+                interrupt()
+            original_log(message, *args)
+        monkeypatch.setattr(ui.logger, "error", log)
+    original_write = ui.Path.write_text
+    def write(path, content):
+        if phase == "record" and path.name == "css-cleanup-failed.json":
+            interrupt()
+        return original_write(path, content)
+    monkeypatch.setattr(ui.Path, "write_text", write)
+    try:
+        with pytest.raises(type(original)) as raised:
+            ui.main()
+        assert raised.value is original
+        assert directory.is_dir() and json.loads(handle.read_text())["directory"] == str(directory)
+        record = directory / "css-cleanup-failed.json"
+        if phase in {"record", "storage-call"}:
+            assert not record.exists()
+            prefix = "CSS recovery record could not be written" if phase == "record" else "UI storage cleanup also failed"
+            assert prefix + ": KeyboardInterrupt" in original.__notes__[-1]
+            assert "synthetic-job" in original.__notes__[-1]
+            assert "[123, 124]" in original.__notes__[-1]
+        else:
+            assert json.loads(record.read_text()) == cleanup_error.recovery
+            if phase == "storage-log":
+                assert original.__notes__[-1].startswith("UI storage cleanup also failed: KeyboardInterrupt")
+            else:
+                assert original.__notes__[-1] == "UI finalization also failed: KeyboardInterrupt"
     finally:
         ui.shutil.rmtree(directory)
 
