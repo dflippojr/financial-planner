@@ -803,3 +803,21 @@ def test_migration_converts_existing_not_now_declines_to_dismissals():
     finally:
         executor = MigrationExecutor(connection)
         executor.migrate(executor.loader.graph.leaf_nodes())
+
+
+@pytest.mark.django_db
+def test_json_denial_uses_fresh_person_even_after_relation_was_cached():
+    from django.test import RequestFactory
+    from finance.views import privacy_policy_respond
+    user, person, _ = make_member("owner")
+    policy = current_policy()
+    assert user.person.privacy_policy_declined_version_id is None
+    request = RequestFactory().post(reverse("privacy-policy-respond"),
+        {"action": "decline", "version": policy.version, "next": reverse("home")},
+        HTTP_ACCEPT="application/json")
+    request.user = user
+    reply = privacy_policy_respond(request)
+    data = json.loads(reply.content)
+    assert data["ai_slot"]["state"] == "denied"
+    assert "data-ai-slot" not in data["slot_html"]
+    assert 'id="ai-consent"' not in data["dialog_html"]

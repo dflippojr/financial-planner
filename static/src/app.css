@@ -576,10 +576,13 @@
   padding: 1.25rem;
   margin: auto;
 }
-.ai-consent:open { height: auto; }
+.ai-consent:open { height: fit-content; }
 .ai-consent::backdrop { background: rgb(0 0 0 / 40%); }
 .ai-consent-meter { display: flex; gap: 0.25rem; }
 .ai-consent-meter > span { flex: 1; height: 0.375rem; border-radius: 9999px; }
 @media (prefers-reduced-motion: reduce) {
   .ai-consent { transition: none; }
 }
+
+/* Stock dark primary-content is 4.13:1 on primary; white passes small-text contrast. */
+.ai-consent .btn-primary { color: #fff; }

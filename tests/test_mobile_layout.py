@@ -168,7 +168,15 @@ def test_enable_ai_dialog_keyboard_escape_and_close(page_session, scheme):
         assert dialog.is_visible()
         assert page.evaluate("document.activeElement.id") == "ai-consent-heading"
         assert_accessible(page.content())
+        from tests.test_desktop_layout import CONTRAST_JS
+        contrast = CONTRAST_JS.replace(".amount-in, .amount-out", "#ai-consent h2, #ai-consent p, #ai-consent a, #ai-consent button")
+        low_contrast = [row for row in page.evaluate(contrast) if row["ratio"] < 4.5]
+        assert not low_contrast, low_contrast
+        if SCREEN_DIR:
+            Path(SCREEN_DIR).mkdir(parents=True, exist_ok=True)
+            page.screenshot(path=str(Path(SCREEN_DIR) / f"ai-consent-{scheme}.png"))
         assert dialog.bounding_box()["width"] == 360
+        assert dialog.bounding_box()["height"] < 600
         assert page.locator("#finance-chat-panel").count() == 0
         page.keyboard.press("Escape")
         assert not dialog.is_visible()
