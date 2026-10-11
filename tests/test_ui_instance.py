@@ -185,13 +185,15 @@ def test_sign_in_and_category_persist(browser, ui_instance):
         context.close()
 
 
-def test_readiness_timeout_cancels_stalled_builder_and_its_child(monkeypatch, tmp_path):
+@pytest.mark.parametrize("taskkill_failure", [None, "timeout", "launch-error"])
+def test_readiness_timeout_cancels_stalled_builder_and_its_child(monkeypatch, tmp_path, taskkill_failure):
     monkeypatch.setenv("POSTGRES_HOST", "synthetic.invalid")
     monkeypatch.setenv("POSTGRES_PORT", "5432")
     monkeypatch.setenv("POSTGRES_PASSWORD", "synthetic-test-password")
     monkeypatch.setenv("FINANCIAL_PLANNER_TEST_DB", "postgres")
     port_record = tmp_path / "builder-child-port.json"
     allocation = tmp_path / "allocation.json"
+    failure_record = tmp_path / "taskkill-failure.txt"
     child = tmp_path / "builder_child.py"
     child.write_text("""import json, socket, sys, time
 from pathlib import Path
@@ -212,6 +214,16 @@ from pathlib import Path
 sys.path.insert(0, {str(ROOT)!r})
 from scripts import ui_instance
 
+original_run = ui_instance.subprocess.run
+def taskkill_probe(command, **options):
+    if command[0] == 'taskkill' and {taskkill_failure!r} is not None:
+        Path({str(failure_record)!r}).write_text({taskkill_failure!r})
+        if {taskkill_failure!r} == 'timeout':
+            raise ui_instance.subprocess.TimeoutExpired(command, options['timeout'])
+        raise OSError('Synthetic taskkill launch failure')
+    return original_run(command, **options)
+ui_instance.subprocess.run = taskkill_probe
+
 def stalled_css():
     Path({str(allocation)!r}).write_text(Path(sys.argv[-1]).read_text())
     ui_instance.run_css_builder([sys.executable, {str(builder)!r}, {str(child)!r}, {str(port_record)!r}])
@@ -228,6 +240,8 @@ ui_instance.main()
     with socket.socket() as client:
         client.settimeout(1)
         assert client.connect_ex(("127.0.0.1", port)) != 0, "Builder child survived cancellation"
+    if os.name == "nt" and taskkill_failure:
+        assert failure_record.read_text() == taskkill_failure, "Native fallback was not exercised"
 
 
 def test_css_builder_reports_success_and_failure():

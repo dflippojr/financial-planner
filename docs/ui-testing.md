@@ -69,6 +69,10 @@ Enlarged Home #368, Budgets #369 and Categories/Audit #370 are asserted by `text
 
 ## Teardown
 
+On Windows the CSS builder waits behind a startup gate until it belongs to a private Job Object; descendants inherit that job without breakaway permission. Cleanup bounds `taskkill` to five seconds, falls back to terminating the owned job on timeout, launch failure, nonzero exit or remaining descendants, and checks the job's active-process count for at most five seconds before reaping the parent. Closing the last job handle also terminates members if the launcher exits. Parent exit alone never confirms tree cleanup.
+
+If cleanup cannot be verified, startup preserves the original error/cancellation, exits unsuccessfully, and retains the disposable directory and startup registry handle. `css-cleanup-failed.json` records the builder PID, unique job name, last known owned PIDs and failure reason, without credentials. Keep this record; verify those processes have exited (check identity before acting on a PID that may have been reused) before removing the exact disposable directory and its registry handle. Automated registry recovery cannot declare that retained directory clean.
+
 One command, venv/root, exact readiness directory:
 
 ```bash
