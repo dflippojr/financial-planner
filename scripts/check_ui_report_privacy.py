@@ -7,6 +7,21 @@ import re
 import zipfile
 
 
+def check_values(value, location="$"):
+    if isinstance(value, dict):
+        for key, child in value.items():
+            check_values(key, location + ".<key>")
+            check_values(child, location + "." + key)
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            check_values(child, f"{location}[{index}]")
+    elif isinstance(value, str):
+        if re.search(r"(?<![a-f0-9])[a-f0-9]{6}-[a-f0-9]{6}(?![a-f0-9])", value):
+            raise RuntimeError(f"Recovery-code-shaped report content at {location} (length {len(value)}); upload refused")
+        if re.search(r'Fill "[A-Za-z0-9_-]{32}"', value):
+            raise RuntimeError(f"Runtime invitation fill step at {location}; upload refused")
+
+
 def check_report(report=Path("playwright-report/index.html")):
     html = report.read_text(encoding="utf-8")
     match = re.search(r"data:application/zip;base64,([A-Za-z0-9+/=]+)", html)
@@ -18,14 +33,11 @@ def check_report(report=Path("playwright-report/index.html")):
             if not name.endswith(".json"):
                 continue
             contents = archive.read(name).decode("utf-8")
-            json.loads(contents)
+            value = json.loads(contents)
             # Actual recovery format from auth_services; never print the match.
-            if re.search(r"(?<![a-f0-9])[a-f0-9]{6}-[a-f0-9]{6}(?![a-f0-9])", contents):
-                raise RuntimeError("Recovery-code-shaped report content; upload refused")
             # Invitation token_urlsafe(24) is 32 characters. Playwright fill
             # titles contain the argument, whereas evaluate titles do not.
-            if re.search(r'Fill \\"[A-Za-z0-9_-]{32}\\"', contents):
-                raise RuntimeError("Runtime invitation fill step; upload refused")
+            check_values(value)
             checked += 1
     if not checked:
         raise RuntimeError("UI report contains no test records; upload refused")

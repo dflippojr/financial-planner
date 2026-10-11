@@ -3,6 +3,10 @@ import { defineConfig, devices } from '@playwright/test';
 // Recovery/invitation codes must never appear in failure DOM snapshots.
 process.env.PLAYWRIGHT_NO_COPY_PROMPT = '1';
 export default defineConfig({
+  // CI otherwise embeds the entire PR patch, including the privacy tests'
+  // deliberately code-shaped synthetic sentinels. Evidence needs the commit,
+  // not source patches. Keep the privacy gate strict for every report value.
+  captureGitInfo: { commit: true, diff: false },
   testDir: './tests/ui', fullyParallel: true, workers: 2, retries: 0,
   timeout: 120_000, expect: { timeout: 10_000 },
   outputDir: 'test-results/ui',
