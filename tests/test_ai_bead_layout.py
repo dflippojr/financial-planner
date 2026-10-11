@@ -112,6 +112,47 @@ def test_keyboard_home_enter_escape_and_pin_context_switch(bead_session):
         context.close()
 
 
+def test_touch_on_hover_capable_device_stays_reachable_then_resumes_mouse(bead_session):
+    context, page = bead_session(clock=True)
+    try:
+        assert page.evaluate("matchMedia('(hover: hover)').matches")
+        bead = page.get_by_role("button", name="Ask AI about Key numbers")
+        tile = bead.locator("xpath=ancestor::section[1]")
+        box = tile.bounding_box()
+        # Native touch events without replacing the device's hover-capable pointer.
+        session = context.new_cdp_session(page)
+
+        def tap(x, y):
+            session.send("Input.dispatchTouchEvent", {
+                "type": "touchStart", "touchPoints": [{"x": x, "y": y}],
+            })
+            session.send("Input.dispatchTouchEvent", {
+                "type": "touchEnd", "touchPoints": [],
+            })
+
+        tap(box["x"] + 80, box["y"] + 70)
+        page.clock.run_for(400)
+        expect(bead).to_have_css("opacity", "1")
+        assert abs(center(bead)[0] - (box["x"] + box["width"] - 24)) <= 2
+        assert bead.bounding_box()["width"] == 30
+        page.mouse.move(box["x"] + 100, box["y"] + 70)
+        page.clock.run_for(16)
+        page.wait_for_timeout(180)
+        assert abs(center(bead)[0] - (box["x"] + 100)) <= 2
+        page.mouse.move(1, 1)
+        page.clock.run_for(300)
+        expect(bead).to_have_css("opacity", "0")
+        tap(box["x"] + 80, box["y"] + 70)
+        page.clock.run_for(400)
+        expect(bead).to_have_css("opacity", "1")
+        assert abs(center(bead)[0] - (box["x"] + box["width"] - 24)) <= 2
+        tap(*center(bead))
+        expect(page.locator("#ai-popover")).to_be_visible()
+        expect(bead).to_have_css("width", "30px")
+    finally:
+        context.close()
+
+
 @pytest.mark.parametrize("touch,reduced", [(True, False), (False, True)])
 def test_fixed_home_for_touch_and_reduced_motion(bead_session, touch, reduced):
     context, page = bead_session(touch=touch, reduced=reduced)

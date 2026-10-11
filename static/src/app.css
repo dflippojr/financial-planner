@@ -783,6 +783,7 @@ form fieldset {
   .ai-bead svg { width: 18px; height: 18px; flex: none; }
   .ai-bead-visible .ai-bead, .ai-bead-keyboard:focus-within .ai-bead { opacity: 1; }
   .ai-bead:hover, .ai-bead:focus-visible { width: 40px; height: 40px; margin-top: -5px; background: var(--color-primary); color: var(--color-primary-content); }
+  .ai-bead-touch .ai-bead:hover { width: 30px; height: 30px; margin-top: 0; }
   .ai-bead:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 6px; }
   .ai-bead-tooltip { position: absolute; top: calc(100% + 8px); right: 0; width: max-content; max-width: 230px; padding: 6px 10px; border-radius: 6px; background: var(--color-base-content); color: var(--color-base-100); font-size: 12px; opacity: 0; pointer-events: none; }
   .ai-bead:hover .ai-bead-tooltip, .ai-bead:focus-visible .ai-bead-tooltip { opacity: 1; }

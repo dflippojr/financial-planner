@@ -13,29 +13,34 @@
     let pointerX = 0;
     let onBead = false;
     let keyboard = false;
+    let touch = false;
     function home() {
       tile.style.setProperty("--ai-bead-x", (tile.clientWidth - 24) + "px");
     }
     function track() {
       frame = null;
-      if (onBead || keyboard || coarse.matches || reduced.matches) return;
+      if (onBead || keyboard || touch || coarse.matches || reduced.matches) return;
       const rect = tile.getBoundingClientRect();
       tile.style.setProperty("--ai-bead-x", Math.max(36, Math.min(pointerX - rect.left, rect.width - 36)) + "px");
     }
     function show(event) {
       clearTimeout(hiding);
+      touch = event.pointerType === "touch";
+      tile.classList.toggle("ai-bead-touch", touch);
       pointerX = event.clientX;
-      if (coarse.matches || reduced.matches || keyboard) home();
+      if (touch || coarse.matches || reduced.matches || keyboard) home();
       else track();
       tile.classList.add("ai-bead-visible");
     }
     home();
     tile.addEventListener("pointerenter", show);
     tile.addEventListener("pointermove", function (event) {
+      if (event.pointerType === "touch" || touch) { show(event); return; }
       pointerX = event.clientX;
       if (frame === null) frame = requestAnimationFrame(track);
     });
-    tile.addEventListener("pointerleave", function () {
+    tile.addEventListener("pointerleave", function (event) {
+      if (touch || event.pointerType === "touch") return;
       hiding = setTimeout(function () { tile.classList.remove("ai-bead-visible"); }, 300);
     });
     bead.addEventListener("pointerenter", function () { onBead = true; });
