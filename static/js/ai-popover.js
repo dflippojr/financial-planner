@@ -63,7 +63,8 @@
   function animate(frames, duration, target) {
     if (transition) transition.cancel();
     const element = target || pop;
-    const motionFrames = reduced.matches ? [{opacity: 0.3}, {opacity: 1}] : frames;
+    const motionFrames = reduced.matches ? [{opacity: frames[0].opacity ?? 0},
+      {opacity: frames[frames.length - 1].opacity ?? 1}] : frames;
     transition = element.animate(motionFrames, {duration: reduced.matches ? 100 : duration,
       easing: "cubic-bezier(0.2, 0, 0, 1)"});
     return transition.finished.catch(function () {});
@@ -201,7 +202,7 @@
     const rect = pop.getBoundingClientRect();
     const origin = opener && opener.isConnected ? opener.getBoundingClientRect() : null;
     await animate([{opacity: 1, transform: "scale(1)"},
-      {opacity: 0, transform: origin ? "translate(" + (origin.x - rect.x) + "px," + (origin.y - rect.y) + "px) scale(0.1)" : "scale(0.95)"}], 160);
+      {opacity: 0, transform: origin ? "translate(" + (origin.x + origin.width / 2 - rect.x - rect.width / 2) + "px," + (origin.y + origin.height / 2 - rect.y - rect.height / 2) + "px) scale(0.1)" : "scale(0.95)"}], 160);
     if (!state.open) { draw(); returnFocus(); announce("Closed"); }
   }
   window.AiPopover = {
@@ -221,8 +222,8 @@
       }
       draw();
       if (!wasOpen) {
-        const rect = opener instanceof Element ? opener.getBoundingClientRect() : {x: state.x, y: state.y};
-        animate([{opacity: 0, transform: "translate(" + (rect.x - state.x) + "px," + (rect.y - state.y) + "px) scale(0.1)"},
+        const rect = opener instanceof Element ? opener.getBoundingClientRect() : {x: state.x, y: state.y, width: 0, height: 0};
+        animate([{opacity: 0, transform: "translate(" + (rect.x + rect.width / 2 - state.x - pop.offsetWidth / 2) + "px," + (rect.y + rect.height / 2 - state.y - pop.offsetHeight / 2) + "px) scale(0.1)"},
           {opacity: 1, transform: "none"}], 240);
       }
       composer.focus();

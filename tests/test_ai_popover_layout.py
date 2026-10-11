@@ -256,3 +256,32 @@ def test_send_preserves_a_draft_edited_while_the_post_is_pending(popover_session
         expect(composer).to_have_value(next_draft)
     finally:
         context.close()
+
+
+def test_swoop_uses_the_origin_center_and_reduced_close_fades_out(popover_session):
+    context, page, _person = popover_session()
+    try:
+        data = page.evaluate("""() => {
+          const origin = document.querySelector('#sidebar-settings');
+          const button = origin.getBoundingClientRect();
+          window.AiPopover.open({origin});
+          const pop = document.getElementById('ai-popover');
+          const frames = pop.getAnimations()[0].effect.getKeyframes();
+          const matrix = new DOMMatrix(frames[0].transform);
+          return {originX: button.x + button.width / 2, originY: button.y + button.height / 2,
+                  centerX: parseFloat(pop.style.getPropertyValue('--ai-pop-x')) + pop.offsetWidth / 2 + matrix.e,
+                  centerY: parseFloat(pop.style.getPropertyValue('--ai-pop-y')) + pop.offsetHeight / 2 + matrix.f};
+        }""")
+        assert abs(data["centerX"] - data["originX"]) < 1
+        assert abs(data["centerY"] - data["originY"]) < 1
+        page.wait_for_timeout(260)
+        page.emulate_media(reduced_motion="reduce")
+        frames = page.evaluate("""() => {
+          document.querySelector('[data-pop-action=close]').click();
+          return document.getElementById('ai-popover').getAnimations()[0].effect.getKeyframes();
+        }""")
+        assert float(frames[0]["opacity"]) == 1
+        assert float(frames[-1]["opacity"]) == 0
+        assert all("transform" not in frame for frame in frames)
+    finally:
+        context.close()
