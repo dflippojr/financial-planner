@@ -77,6 +77,8 @@ keyboard activation, persisted deletion, 60% keyboard shrink, invalid/valid rang
 reset and rotation with retained input are covered. At 1024x500, 852x393 and
 915x412, reverse keyboard navigation from Reset range checks every field stays
 fully below the sticky Filters header and receives hit tests in both themes.
+At 375x667, a partly covered date field is reverse-focused while the form scrolls
+with the page; its full activation region must clear the header and dock in both themes.
 
 ## Teardown
 

@@ -1,8 +1,8 @@
-import { devices, chromium, webkit, type Locator, type Page } from '@playwright/test';
+import { devices, chromium, webkit, firefox, type Locator, type Page } from '@playwright/test';
 import { test, expect, signIn, submit } from './fixtures';
 
 async function withDevice(device: string, viewport: { width: number; height: number }, colorScheme: 'light' | 'dark', baseURL: string, check: (page: Page) => Promise<void>) {
-  const browser = await (device.startsWith('iPhone') ? webkit : chromium).launch();
+  const browser = await ({ chromium, webkit, firefox }[devices[device].defaultBrowserType]).launch();
   try {
     const context = await browser.newContext({ ...devices[device], viewport, colorScheme, baseURL });
     try { await check(await context.newPage()); }
@@ -183,3 +183,40 @@ for (const device of ['iPhone 15', 'Pixel 7', 'Desktop Chrome']) {
     });
   });
 }
+
+
+test('375px portrait Filters reveal reverse focus below the sticky page header', async ({ uiURL }, info) => {
+  await withDevice('iPhone SE', { width: 375, height: 667 }, info.project.use.colorScheme as 'light' | 'dark', uiURL, async page => {
+    await signIn(page);
+    const panel = page.locator('#cash-flow-filters');
+    await panel.locator('summary').click();
+    const from = panel.locator('[name=date_from]');
+    const to = panel.locator('[name=date_to]');
+    await to.focus();
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolve)))));
+    await from.evaluate(element => {
+      const header = document.querySelector('[data-filters-header]')!;
+      window.scrollBy(0, element.getBoundingClientRect().top - header.getBoundingClientRect().height / 2);
+    });
+    const geometry = await from.evaluate(element => {
+      const form = element.closest('form')!;
+      const box = element.getBoundingClientRect();
+      const header = form.querySelector('[data-filters-header]')!.getBoundingClientRect();
+      return { pageScrolled: scrollY > 0, noPanelScroll: form.scrollHeight === form.clientHeight,
+        partlyCovered: box.top < header.bottom && box.bottom > header.bottom && box.top >= 0 };
+    });
+    expect(geometry).toEqual({ pageScrolled: true, noPanelScroll: true, partlyCovered: true });
+    for (let step = 0; step < 10 && !(await from.evaluate(element => element === document.activeElement)); step++) {
+      await page.keyboard.press('Shift+Tab');
+    }
+    await expect(from).toBeFocused();
+    await expect.poll(() => from.evaluate(element => {
+      const box = element.getBoundingClientRect();
+      const header = element.closest('form')!.querySelector('[data-filters-header]')!.getBoundingClientRect();
+      const dock = document.querySelector('nav.dock')!.getBoundingClientRect();
+      return { belowHeader: box.top >= header.bottom, aboveDock: box.bottom <= dock.top,
+        receivesHits: [box.top + 2, box.top + box.height / 2, box.bottom - 2]
+          .every(y => element.contains(document.elementFromPoint(box.left + box.width / 2, y))) };
+    })).toEqual({ belowHeader: true, aboveDock: true, receivesHits: true });
+  });
+});

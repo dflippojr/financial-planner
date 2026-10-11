@@ -21,13 +21,20 @@
     // Apply the panel's scroll padding before handling the viewport/dock below.
     if (panel && !active.closest('[data-filters-header]')) {
       const panelBox = panel.getBoundingClientRect();
-      const paddingTop = parseFloat(getComputedStyle(panel).scrollPaddingTop) || 0;
+      const panelStyle = getComputedStyle(panel);
+      const paddingTop = parseFloat(panelStyle.scrollPaddingTop) || 0;
       const header = panel.querySelector('[data-filters-header]');
       const panelTop = Math.max(panelBox.top + panel.clientTop + paddingTop, header.getBoundingClientRect().bottom);
       const panelBottom = panelBox.top + panel.clientTop + panel.clientHeight;
       const targetBox = target.getBoundingClientRect();
       if (targetBox.top < panelTop) {
-        panel.scrollTop += targetBox.top - panelTop;
+        const distance = targetBox.top - panelTop;
+        // Below md the form flows with the page; its header sticks to the viewport.
+        if (['auto', 'scroll'].includes(panelStyle.overflowY)) {
+          panel.scrollTop += distance;
+        } else {
+          window.scrollBy(0, distance);
+        }
       } else if (targetBox.bottom > panelBottom) {
         panel.scrollTop += targetBox.bottom - panelBottom;
       }
