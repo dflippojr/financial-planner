@@ -1,0 +1,44 @@
+<section id="ai-popover" class="ai-popover border border-base-300 bg-base-100 shadow-xl" role="dialog" aria-modal="false" aria-labelledby="ai-popover-title" tabindex="-1" hidden
+  data-thread-url="{% url 'chat-popover' %}" data-chat-url="{% url 'chat' %}" data-page-route="{{ request.path }}" data-page-query="{{ request.GET.urlencode }}">
+  <header class="ai-popover-header">
+    <button type="button" class="btn btn-ghost btn-xs ai-popover-grip" data-pop-action="move" aria-label="Move AI chat" aria-pressed="false"><span aria-hidden="true">⠿</span></button>
+    <div class="ai-popover-heading">
+      <h2 id="ai-popover-title" class="text-sm font-semibold"><span aria-hidden="true">✦</span> Ask AI</h2>
+      <p data-pill-status role="status" class="text-xs" hidden></p>
+    </div>
+    <button type="button" class="btn btn-ghost btn-xs" data-pop-action="pin" aria-label="Pin AI chat" aria-pressed="false"><svg xmlns="http://www.w3.org/2000/svg" class="size-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m16 3 5 5-4 1-4 4v4l-2 2-6-6 2-2h4l4-4zM5 19l-2 2"/></svg></button>
+    <button type="button" class="btn btn-ghost btn-xs" data-pop-action="collapse" aria-label="Collapse AI chat" aria-expanded="true" aria-controls="ai-popover-body"><span aria-hidden="true">−</span></button>
+    <a class="btn btn-ghost btn-xs" data-pop-chat href="{% url 'chat' %}" aria-label="Open in Chat"><svg xmlns="http://www.w3.org/2000/svg" class="size-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 3h7v7M10 14 21 3M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/></svg></a>
+    <button type="button" class="btn btn-ghost btn-xs" data-pop-action="expand" aria-label="Expand AI chat" aria-expanded="false" aria-controls="ai-popover-body" hidden><span aria-hidden="true">⌄</span></button>
+    <button type="button" class="btn btn-ghost btn-xs" data-pop-action="close" aria-label="Close AI chat"><span aria-hidden="true">×</span></button>
+  </header>
+  <div id="ai-popover-body" class="ai-popover-body">
+    <p data-pin-status class="text-xs px-3 pb-2" hidden>Pinned. It stays open here until you close it.</p>
+    <div data-pop-context class="flex items-center gap-2 border-y border-base-300 px-3 py-2 text-xs">
+      <span class="flex-1">About: <span data-pop-subject>This page</span></span>
+      <button type="button" class="btn btn-ghost btn-xs" data-pop-action="context" aria-label="Remove page context">Remove</button>
+    </div>
+    <div data-pop-scroll class="ai-popover-thread">
+      <p data-page-divider class="mb-3 border-b border-base-300 pb-2 text-xs" hidden></p>
+      <div data-pop-thread aria-live="polite" aria-busy="false"></div>
+    </div>
+    <div class="flex flex-wrap gap-1 border-t border-base-300 px-3 pt-2" aria-label="Suggested follow-ups">
+      <button type="button" class="btn btn-xs btn-outline" data-pop-followup>Explain this</button>
+      <button type="button" class="btn btn-xs btn-outline" data-pop-followup>What changed?</button>
+    </div>
+    <form id="ai-popover-form" method="post" action="{% url 'chat-send' %}" class="p-3 space-y-2">
+      {% csrf_token %}
+      <input type="hidden" name="conversation_id" value="">
+      <input type="hidden" name="page_route" value="{{ request.path }}">
+      <input type="hidden" name="page_query" value="{{ request.GET.urlencode }}">
+      <input type="hidden" name="next" value="{% url 'chat' %}">
+      <label class="block"><span class="sr-only">Question about your data</span><textarea name="prompt" rows="2" class="textarea textarea-bordered w-full" required></textarea></label>
+      <div class="flex items-center justify-between gap-2">
+        <p class="text-xs">Opinion, not financial advice.</p>
+        <button type="submit" class="btn btn-primary btn-sm">Send</button>
+      </div>
+      <p data-pop-error role="status" class="text-sm"></p>
+    </form>
+  </div>
+  <p data-pop-status role="status" class="sr-only"></p>
+</section>

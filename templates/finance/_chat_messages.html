@@ -1,0 +1,38 @@
+<div class="space-y-3 mb-4{% if composer_fixed %} lg:mb-0 lg:flex lg:flex-col lg:gap-4 lg:space-y-0{% endif %}"{% if not popover %} aria-live="polite"{% endif %}>
+  {% for item in chat_messages %}
+  <article class="rounded-box border border-base-300 p-3 {% if item.role == "user" %}bg-base-200 max-md:ml-8{% if composer_fixed %} lg:max-w-[520px] lg:self-end{% endif %}{% else %}bg-base-100 max-md:mr-8{% endif %}"{% if item.status == "pending" %} data-chat-turn-url="{% url 'chat-turn' item.pk %}" aria-busy="true"{% endif %}>
+    {% if item.role == "user" %}
+    <p class="text-sm font-semibold">You</p>
+    {% elif item.role == "error" %}
+    <p class="text-sm font-semibold">{{ chat_backend_label }} (error)</p>
+    {% else %}
+    <p class="text-sm font-semibold" data-chat-turn-label>{{ chat_backend_label }}</p>
+    {% endif %}
+    {% if item.status == "pending" %}
+    <div class="flex items-center gap-2.5">
+      <span class="chat-thinking" data-chat-thinking hidden aria-hidden="true"><span></span><span></span><span></span></span>
+      <p class="whitespace-pre-wrap" data-chat-turn-body>Thinking… refresh to see the answer.</p>
+    </div>
+    {% else %}
+    <p class="whitespace-pre-wrap">{{ item.content }}</p>
+    {% endif %}
+    {% if item.figures %}
+    <ul class="mt-2 list-disc pl-5 text-sm">
+      {% for figure in item.figures %}
+      <li><a class="link inline-flex min-h-11 items-center" href="{{ figure.url }}">{{ figure.label }}: {{ figure.amount_display }}</a></li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    {% for card in item.cards %}{% include "finance/_chat_proposal.html" %}{% endfor %}
+    {% if item.notices %}
+    <ul class="mt-2 text-sm opacity-80">
+      {% for notice in item.notices %}
+      <li>{{ notice }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </article>
+  {% empty %}
+  <p class="text-sm opacity-80">Ask a question about income, spending, transactions, budgets, or net worth.</p>
+  {% endfor %}
+</div>
