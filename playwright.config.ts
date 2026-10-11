@@ -13,9 +13,15 @@ export default defineConfig({
   reporter: [['list'], ['html', { open: 'never' }]],
   use: { actionTimeout: 15_000, navigationTimeout: 20_000, trace: 'off', screenshot: 'off', video: 'off' },
   projects: [
-    { name: 'desktop-light', use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 }, colorScheme: 'light' } },
-    { name: 'desktop-dark', use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 }, colorScheme: 'dark' } },
-    { name: 'phone-light', testIgnore: /desktop-/, use: { ...devices['iPhone SE'], browserName: 'webkit', colorScheme: 'light' } },
-    { name: 'phone-dark', testIgnore: /desktop-/, use: { ...devices['iPhone SE'], browserName: 'webkit', colorScheme: 'dark' } },
+    ...(['iPhone SE', 'iPhone 15', 'Pixel 7'] as const).flatMap(device =>
+      (['light', 'dark'] as const).map(colorScheme => ({
+        name: 'forms-' + device.replaceAll(' ', '-') + '-' + colorScheme,
+        testMatch: /phone-forms\.spec\.ts/,
+        use: { ...devices[device], ...(device === 'iPhone SE' ? { viewport: { width: 375, height: 667 } } : {}), colorScheme },
+      }))),
+    { name: 'desktop-light', testIgnore: /phone-forms\.spec\.ts/, use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 }, colorScheme: 'light' } },
+    { name: 'desktop-dark', testIgnore: /phone-forms\.spec\.ts/, use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 }, colorScheme: 'dark' } },
+    { name: 'phone-light', testIgnore: /desktop-|phone-forms\.spec\.ts/, use: { ...devices['iPhone SE'], browserName: 'webkit', colorScheme: 'light' } },
+    { name: 'phone-dark', testIgnore: /desktop-|phone-forms\.spec\.ts/, use: { ...devices['iPhone SE'], browserName: 'webkit', colorScheme: 'dark' } },
   ],
 });

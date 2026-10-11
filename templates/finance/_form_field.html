@@ -1,9 +1,16 @@
 {% load ui %}
-<div class="mb-3">
+<div class="form-field mb-3">
+  {% if field.field.widget.template_name == "django/forms/widgets/checkbox.html" %}
+  <label class="label form-check-label" for="{{ field.id_for_label }}">
+    {{ field|daisy_widget }}
+    <span class="label-text">{{ field.label }}</span>
+  </label>
+  {% else %}
   <label class="label" for="{{ field.id_for_label }}">
     <span class="label-text">{{ field.label }}</span>
   </label>
   {{ field|daisy_widget }}
+  {% endif %}
   {% if field.errors %}
   <p class="errorlist text-error mt-1 text-sm" role="alert">{{ field.errors.0 }}</p>
   {% endif %}

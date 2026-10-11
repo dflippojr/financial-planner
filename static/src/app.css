@@ -623,3 +623,73 @@
 .ai-popover :focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
 
 .ai-popover [data-pop-action="pin"][aria-pressed="true"] svg { fill: currentColor; }
+
+/* Shared forms (#365): component labels must wrap, including Django choice lists. */
+.form-field {
+  min-width: 0;
+}
+
+.form-field .label {
+  max-width: 100%;
+  white-space: normal;
+}
+
+.form-field .label-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.form-field div.form-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.form-field .form-choices label,
+.form-field .form-check-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 44px;
+  cursor: pointer;
+  white-space: normal;
+}
+
+.form-field input[type="checkbox"],
+.form-field input[type="radio"] {
+  flex: none;
+}
+
+form fieldset {
+  min-width: 0;
+}
+
+/* Phones retain readable editable text and full tap regions (#366, #367). */
+@media (width < 48rem) {
+  .input,
+  .select,
+  .textarea,
+  .file-input {
+    min-width: 44px;
+    min-height: 44px;
+    font-size: max(16px, 1rem);
+  }
+}
+
+/* Reserve the fixed dock plus room for the focus outline (#373). */
+@media (width < 64rem) {
+  html:has(.dock) {
+    scroll-padding-bottom: calc(4rem + env(safe-area-inset-bottom) + 8px);
+  }
+
+  main :is(input, select, textarea, button, a, summary) {
+    scroll-margin-block: 8px;
+  }
+}
+
+.form-choices input[type="checkbox"],
+.form-choices input[type="radio"] {
+  width: 24px;
+  height: 24px;
+  accent-color: var(--color-primary);
+}
