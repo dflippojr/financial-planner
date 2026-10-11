@@ -1,3 +1,4 @@
+import csv
 import importlib.util
 from pathlib import Path
 
@@ -880,3 +881,14 @@ def test_command_line_reads_only_csv_files(tmp_path, capsys):
     assert csv_shape.main([str(secret)]) == 1
     assert csv_shape.main([str(folder)]) == 1
     assert "give the path of a .csv export file" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("field_length", [10, 500])
+def test_profiling_restores_the_process_csv_field_limit(monkeypatch, field_length):
+    previous = csv.field_size_limit()
+    monkeypatch.setattr(csv_shape, "FIELD_LIMIT", 100)
+    try:
+        csv_shape.describe_csv(_file_with_a_huge_field(field_length))
+        assert csv.field_size_limit() == previous
+    finally:
+        csv.field_size_limit(previous)
