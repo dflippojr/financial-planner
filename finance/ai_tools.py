@@ -266,8 +266,11 @@ def cash_flow_totals(person, args):
             account=account, scope=scope, accounts=accounts,
         )
     query = _range_query(date_from, date_to, account=account, scope=scope)
-    page_url = f"{reverse('home')}?{urlencode(query)}"
+    if args.get("all_dates") is True:
+        query.setdefault("date_from", "")
+        query.setdefault("date_to", "")
     txn_url = f"{reverse('transaction-list')}?{urlencode(query)}"
+    page_url = txn_url if args.get("all_dates") is True else f"{reverse('home')}?{urlencode(query)}"
     summary = report.summary
     payload = {
         "date_from": date_from.isoformat() if date_from else None,
@@ -377,7 +380,9 @@ def search_transactions(person, args):
         if match is None:
             return ToolResult(text="That category is not visible.", ok=False)
         category = str(match.pk)
-    elif category and category.lower() != "uncategorized":
+    elif category.lower() == "uncategorized":
+        category = "uncategorized"
+    elif category:
         match = Category.objects.visible_to(person).filter(name__iexact=category).first()
         if match is None:
             return ToolResult(text="That category is not visible.", ok=False)

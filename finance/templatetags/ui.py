@@ -153,7 +153,7 @@ def _bead_filters(context, kind, values):
     unsupported = ("tag", "q", "amount_min", "amount_max", "has_note", "is_split", "set_by")
     if kind == "transaction-totals":
         unsupported = ("tag",)
-    if any(cleaned.get(key) for key in unsupported):
+    if any(cleaned.get(key) not in (None, "") for key in unsupported):
         return None
     if kind in {"cash-flow-chart", "cash-flow-months"} and getattr(context.get("report"), "scenario_changes", ()):
         return None

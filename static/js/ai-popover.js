@@ -151,6 +151,7 @@
     scroll.scrollTop = scroll.scrollHeight;
   }
   async function loadThread() {
+    if (sending) return;
     const version = ++generation;
     restoring = true;
     schedule();
@@ -203,7 +204,8 @@
   async function close() {
     if (!state.open) return;
     state.open = false;
-    generation += 1;
+    // Hiding the window must not discard an accepted send or its conversation.
+    if (!sending) generation += 1;
     save();
     clearTimeout(timer);
     const rect = pop.getBoundingClientRect();

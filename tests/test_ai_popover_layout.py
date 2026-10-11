@@ -301,3 +301,36 @@ def test_non_json_send_error_is_readable_and_keeps_the_draft(popover_session):
         expect(composer).to_have_value("Synthetic question to retry")
     finally:
         context.close()
+
+
+@pytest.mark.parametrize("reopen_pending", [False, True])
+def test_closing_during_first_send_keeps_the_conversation(popover_session, reopen_pending):
+    context, page, person = popover_session()
+    try:
+        open_popover(page)
+        requests = []
+        page.route("**/chat/send/", lambda route: requests.append(route))
+        composer = page.locator("#ai-popover textarea")
+        composer.fill("Synthetic first question")
+        send = page.locator('#ai-popover-form [type="submit"]')
+        send.click()
+        page.wait_for_timeout(100)
+        assert len(requests) == 1
+        page.get_by_role("button", name="Close AI chat").click()
+        expect(page.locator("#ai-popover")).to_be_hidden()
+        if reopen_pending:
+            open_popover(page)
+        requests[0].continue_()
+        expect(send).to_be_enabled()
+        expect(composer).to_have_value("")
+        conversation_id = stored(page)["conversationId"]
+        assert conversation_id is not None
+        assert person.ai_conversations.count() == 1
+        if not reopen_pending:
+            expect(page.locator("#ai-popover")).to_be_hidden()
+        open_popover(page)
+        assert stored(page)["conversationId"] == conversation_id
+        expect(page.locator("#ai-popover [data-chat-turn-url]")).to_have_count(1)
+        expect(page.locator("#ai-popover [data-pop-thread]")).to_contain_text("Synthetic first question")
+    finally:
+        context.close()

@@ -163,6 +163,8 @@ def test_connected_but_unusable_chat_backend_has_no_bead(member):
 
 @pytest.mark.parametrize("kind,cleaned,report", [
     ("transactions", {"q": "Synthetic search"}, None),
+    ("transactions", {"amount_min": 0}, None),
+    ("transactions", {"amount_max": 0}, None),
     ("cash-flow-totals", {"tag": 1}, None),
     ("transactions", {"category": "transfer"}, None),
     ("transactions", {"category": "uncategorized"}, None),
@@ -184,7 +186,7 @@ def test_invalid_form_and_valid_filters(member):
 
 
 @pytest.mark.parametrize("kind", TILES)
-def test_every_registered_tile_renders_after_its_heading(member, kind):
+def test_every_registered_tile_renders_with_its_registry_label(member, kind):
     user, _person, _household = member
     result = render_bead(user, kind=kind, filters={"month": date(2026, 1, 1)})
     assert "data-ai-bead" in result
@@ -305,3 +307,48 @@ def test_real_pages_render_only_their_supported_data_tiles(harness):
                 assert json.loads(bead.attrs["data-tile-context"])["filters"]["date_from"] == previous.isoformat()
     for name in ("account-list", "transfer-review", "alert-list", "savings-goals", "csv-import"):
         assert b"data-ai-bead" not in client.get(reverse(name)).content
+
+
+@pytest.mark.parametrize("key", ["amount_min", "amount_max"])
+def test_zero_amount_bound_hides_only_the_filtered_transaction_bead(member, key):
+    user, person, household = member
+    account = checking(person, household, "Synthetic private", private=True)
+    add_txn(account, person, date(2020, 1, 1), -100, "Synthetic expense")
+    add_txn(account, person, date(2020, 1, 2), 200, "Synthetic income")
+    client = Client()
+    client.force_login(user)
+    response = client.get(reverse("transaction-list"), {key: "0", "scope": "private"})
+    assert response.context["matching_count"] == 1
+    html = response.content.decode()
+    assert 'Ask AI about Transactions' not in html
+    assert 'Ask AI about Cash flow totals' in html
+
+
+@pytest.mark.parametrize("category", ["Uncategorized", "UNCATEGORIZED", "uncategorized"])
+def test_uncategorized_tool_is_case_insensitive(member, category):
+    _user, person, household = member
+    account = checking(person, household, "Synthetic private", private=True)
+    add_txn(account, person, date(2020, 1, 1), -100, "Synthetic unassigned")
+    result = search_transactions(person, {"all_dates": True, "category": category})
+    assert result.ok
+    assert [row["description"] for row in json.loads(result.text)["rows"]] == ["Synthetic unassigned"]
+
+
+@pytest.mark.parametrize("filters", [{}, {"date_to": "2020-01-31"}, {"scope": "private"}])
+def test_all_date_figure_links_show_the_same_totals(member, filters):
+    user, person, household = member
+    account = checking(person, household, "Synthetic private", private=True)
+    add_txn(account, person, date(2020, 1, 1), -100, "Synthetic old expense")
+    add_txn(account, person, date(2020, 1, 2), 200, "Synthetic old income")
+    result = cash_flow_totals(person, {"all_dates": True, **filters})
+    payload = json.loads(result.text)
+    client = Client()
+    client.force_login(user)
+    for url in {figure["url"] for figure in result.figures}:
+        response = client.get(url)
+        assert response.status_code == 200
+        totals = response.context["list_totals"]
+        assert totals is not None
+        assert totals.income_minor == payload["income_minor"] == 200
+        assert totals.spending_minor == payload["spending_minor"] == 100
+        assert totals.net_minor == payload["net_minor"] == 100
