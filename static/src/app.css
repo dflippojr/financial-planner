@@ -664,8 +664,9 @@ form fieldset {
   min-width: 0;
 }
 
-/* Phones retain readable editable text and full tap regions (#366, #367). */
-@media (width < 48rem) {
+/* Phones retain readable editable text and full tap regions, including landscape
+   touch layouts wider than md (#366, #367). Desktop controls keep their density. */
+@media (width < 48rem), (pointer: coarse) and (width < 64rem) {
   .input,
   .select,
   .textarea,

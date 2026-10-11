@@ -102,6 +102,7 @@ test('Sequential focus stays above dock through portrait, landscape and keyboard
     await page.setViewportSize(size);
     for (const path of [edit, '/settings/alerts/', '/settings/ai/', '/settings/categories/', '/more/']) {
       await page.goto(path);
+      if ([edit, '/settings/alerts/', '/settings/ai/'].includes(path)) await fieldGeometry(page);
       await walkFocus(page);
     }
   }
