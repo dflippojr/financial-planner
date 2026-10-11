@@ -21,8 +21,7 @@ def ai_consent_context(request, *, return_url=None):
     person = getattr(user, "person", None)
     if person is None:
         return {"show_ai_features": False, "ai_slot": None}
-    from .policy_services import ai_slot_state, current_policy, may_use_ai
-    from .ai_services import member_has_ai
+    from .policy_services import ai_slot_state, current_policy
 
     slot = ai_slot_state(person)
     target = urlsplit(return_url or request.get_full_path())
@@ -35,7 +34,7 @@ def ai_consent_context(request, *, return_url=None):
     return_url = target.path + ("?" + query.urlencode() if query else "")
     return {
         "show_ai_features": slot["has_backend"], "ai_slot": slot,
-        "ai_popover_allowed": may_use_ai(person) and member_has_ai(person),
+        "ai_popover_allowed": slot["in_acceptance"] and slot["has_backend"],
         "ai_consent_policy": current_policy(), "ai_enable_url": enable_url,
         "ai_household_url": household_url, "ai_return_url": return_url,
         "ai_dialog_open": request.GET.get("ai") in {"enable", "household"},

@@ -1,4 +1,4 @@
-<section id="proposal-{{ card.proposal.pk }}" class="mt-3 rounded-box border border-primary/40 bg-base-100 p-3" data-chat-proposal="{{ card.kind }}" data-proposal-status="{{ card.proposal.status }}" aria-label="Suggested change">
+<section id="{% if popover %}popover-{% endif %}proposal-{{ card.proposal.pk }}" class="mt-3 rounded-box border border-primary/40 bg-base-100 p-3" data-chat-proposal="{{ card.kind }}" data-proposal-status="{{ card.proposal.status }}" aria-label="Suggested change">
   <p class="text-sm font-semibold">Suggested change · not applied yet</p>
   {% if card.kind == "set_category" %}
   <p>Set the category to <strong>{{ card.category_name }}</strong> on {{ card.count }} transaction{{ card.count|pluralize }}:</p>

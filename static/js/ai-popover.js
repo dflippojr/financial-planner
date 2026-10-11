@@ -40,7 +40,7 @@
   function pending() { return sending || restoring || !!thread.querySelector("[data-chat-turn-url]"); }
   function schedule() {
     clearTimeout(timer);
-    if (!state.open || state.collapsed || state.pinned || pending() || composer.value.trim()) return;
+    if (!state.open || state.collapsed || state.pinned || pending() || composer.value) return;
     timer = setTimeout(function () { collapse(true); }, Math.max(0, IDLE_MS - (Date.now() - state.lastActivityAt)));
   }
   function activity() { state.lastActivityAt = Date.now(); save(); schedule(); }
@@ -123,6 +123,8 @@
   function unavailable() {
     generation += 1;
     state.open = false;
+    state.conversationId = null;
+    count = 0;
     thread.replaceChildren();
     draw();
     clearStored();
@@ -155,21 +157,29 @@
     finally { restoring = false; schedule(); }
   }
   function collapse(automatic) {
-    if (state.collapsed || (automatic && (state.pinned || pending() || composer.value.trim()))) return;
+    if (state.collapsed || (automatic && (state.pinned || pending() || composer.value))) return;
     const focused = pop.contains(document.activeElement);
-    const height = pop.getBoundingClientRect().height;
+    const height = pop.offsetHeight;
     state.collapsed = true;
-    draw();
-    animate([{height: height + "px"}, {height: "52px"}], 200);
-    if (focused) expand.focus();
-    announce(automatic ? "Chat collapsed after 5 minutes" : "Collapsed");
+    save();
+    animate([{height: height + "px", width: "380px", borderRadius: "16px"},
+      {height: "52px", width: "320px", borderRadius: "26px"}], 200);
+    body.animate([{opacity: 1}, {opacity: 0}], {duration: reduced.matches ? 100 : 80}).finished.then(function () {
+      if (!state.collapsed) return;
+      draw();
+      if (focused) expand.focus();
+      announce(automatic ? "Chat collapsed after 5 minutes" : "Collapsed");
+    }).catch(function () {});
     schedule();
   }
   function openExpanded() {
     state.collapsed = false;
     answerReady = false;
     draw();
-    animate([{height: "52px"}, {height: pop.getBoundingClientRect().height + "px"}], 200);
+    animate([{height: "52px", width: "320px", borderRadius: "26px"},
+      {height: pop.offsetHeight + "px", width: "380px", borderRadius: "16px"}], 200);
+    body.animate([{opacity: 0}, {opacity: 1}], {duration: reduced.matches ? 100 : 80,
+      delay: reduced.matches ? 0 : 120, fill: "backwards"});
     composer.focus();
     activity();
   }

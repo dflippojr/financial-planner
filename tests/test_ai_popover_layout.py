@@ -3,6 +3,7 @@ import pytest
 from playwright.sync_api import expect
 
 from finance.ai_services import connect_harness
+from finance.chat_runner import process_pending_turns
 from finance.models import AiConversationMessage, Person
 from finance.policy_services import accept_policy, publish_policy
 from tests.a11y import assert_accessible
@@ -106,6 +107,7 @@ def test_pin_idle_draft_activity_and_collapse_focus(popover_session):
         page.clock.fast_forward(4 * 60 * 1000)
         expect(page.locator("#ai-popover-body")).to_be_visible()
         page.clock.fast_forward(60 * 1000 + 1)
+        page.clock.fast_forward(250)
         expect(page.get_by_role("button", name="Expand AI chat")).to_be_focused()
         expect(page.locator("[data-pop-status]")).to_have_text("Chat collapsed after 5 minutes")
     finally:
@@ -207,5 +209,27 @@ def test_popover_does_not_render_below_lg(popover_session):
     try:
         assert page.locator("#ai-popover").count() == 0
         expect(page.get_by_role("navigation", name="Main tabs")).to_be_visible()
+    finally:
+        context.close()
+
+
+def test_polled_proposal_cards_arrive_without_reloading_the_page(popover_session, harness):
+    state, _url = harness
+    context, page, _person = popover_session()
+    try:
+        state.need_tool = True
+        state.pending_tool_calls = [[{"call_id": "p1", "name": "propose_set_budget",
+                                     "args": {"category": "Dining", "month": "2026-10", "amount_minor": 45000}}]]
+        open_popover(page)
+        page.evaluate("() => { window.popoverPageIdentity = 'same-document'; }")
+        page.locator("#ai-popover textarea").fill("Suggest a dining budget")
+        page.locator("#ai-popover-form").get_by_role("button", name="Send").click()
+        expect(page.locator("#ai-popover [data-chat-turn-url]")).to_have_count(1)
+        process_pending_turns(sleep=lambda _seconds: None)
+        expect(page.locator("#ai-popover [data-chat-proposal]")).to_have_count(1)
+        assert page.evaluate("() => window.popoverPageIdentity") == "same-document"
+        expect(page.locator("#ai-popover").get_by_role("button", name="Apply", exact=True)).to_be_visible()
+        page.locator("#ai-popover").get_by_role("button", name="Dismiss", exact=True).click()
+        expect(page.locator("main")).to_contain_text("Dismissed.")
     finally:
         context.close()
