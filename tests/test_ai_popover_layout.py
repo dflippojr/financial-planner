@@ -285,3 +285,19 @@ def test_swoop_uses_the_origin_center_and_reduced_close_fades_out(popover_sessio
         assert all("transform" not in frame for frame in frames)
     finally:
         context.close()
+
+
+def test_non_json_send_error_is_readable_and_keeps_the_draft(popover_session):
+    context, page, _person = popover_session()
+    try:
+        open_popover(page)
+        page.route("**/chat/send/", lambda route: route.fulfill(
+            status=403, content_type="text/html", body="<h1>Synthetic CSRF refusal</h1>"))
+        composer = page.locator("#ai-popover textarea")
+        composer.fill("Synthetic question to retry")
+        page.locator("#ai-popover-form").get_by_role("button", name="Send").click()
+        expect(page.locator("[data-pop-error]")).to_have_text(
+            "Chat could not send your question. Reopen chat and try again.")
+        expect(composer).to_have_value("Synthetic question to retry")
+    finally:
+        context.close()

@@ -312,6 +312,9 @@
       const response = await fetch(form.action, {method: "POST", body: new FormData(form),
         headers: {Accept: "application/json", "X-CSRFToken": form.elements.csrfmiddlewaretoken.value},
         credentials: "same-origin", redirect: "error"});
+      if (!(response.headers.get("Content-Type") || "").includes("application/json")) {
+        throw new Error("Chat could not send your question. Reopen chat and try again.");
+      }
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || "Chat could not send your question.");
       if (version === generation) {
