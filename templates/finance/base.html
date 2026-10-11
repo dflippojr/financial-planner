@@ -17,7 +17,7 @@
   <script src="{% static 'js/page-actions.js' %}" defer></script>
   <script src="{% static 'js/responsive-details.js' %}" defer></script>
   <script src="{% static 'js/row-menu.js' %}" defer></script>
-  {% if user.is_authenticated and not auth_card_layout %}<script src="{% static 'js/chat-drawer.js' %}" defer></script>{% endif %}
+  {% if user.is_authenticated and not auth_card_layout %}<script src="{% static 'js/ai-consent.js' %}" defer></script>{% endif %}
   <link rel="stylesheet" href="{% static 'dist/app.css' %}">
 </head>
 <body class="min-h-screen bg-base-200 text-base-content">
@@ -30,7 +30,7 @@
       <div class="mx-auto w-full lg:max-w-[1180px] lg:px-8">
       {% comment %}Settings → AI shows its own privacy section, so the banner would prompt twice there (issue #339).{% endcomment %}
       {% if privacy_policy_prompt and settings_current != "ai" %}
-      <div role="status" class="alert mb-4">
+      <div role="status" class="alert mb-4" data-policy-prompt>
         <div>
           <p class="font-semibold">Privacy and data policy</p>
           <p class="text-sm">
@@ -43,14 +43,21 @@
               {% csrf_token %}
               <input type="hidden" name="action" value="accept">
               <input type="hidden" name="version" value="{{ privacy_policy_prompt.version }}">
-              <input type="hidden" name="next" value="{{ request.path }}">
+              <input type="hidden" name="next" value="{{ request.get_full_path }}">
               <button type="submit" class="btn btn-primary btn-sm max-md:min-h-11">Accept</button>
             </form>
             <form method="post" action="{% url 'privacy-policy-respond' %}">
               {% csrf_token %}
               <input type="hidden" name="action" value="decline">
               <input type="hidden" name="version" value="{{ privacy_policy_prompt.version }}">
-              <input type="hidden" name="next" value="{{ request.path }}">
+              <input type="hidden" name="next" value="{{ request.get_full_path }}">
+              <button type="submit" class="btn btn-sm max-md:min-h-11">Deny</button>
+            </form>
+            <form method="post" action="{% url 'privacy-policy-respond' %}">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="dismiss">
+              <input type="hidden" name="version" value="{{ privacy_policy_prompt.version }}">
+              <input type="hidden" name="next" value="{{ request.get_full_path }}">
               <button type="submit" class="btn btn-sm max-md:min-h-11">Not now</button>
             </form>
           </div>
@@ -88,16 +95,11 @@
         {% endfor %}
       </nav>
       <div class="border-t border-base-300 p-3">
+        <div id="ai-slot-container">{% include "finance/_ai_slot.html" %}</div>
         <ul class="flex flex-col gap-0.5" aria-label="Account">
-          <li class="mb-2">
-            <button type="button" class="nav-row border border-base-300" data-chat-drawer-open aria-controls="finance-chat-panel">
-              <svg xmlns="http://www.w3.org/2000/svg" class="size-4.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-              Ask about this page
-            </button>
-          </li>
           <li class="px-2.5 pb-1 text-[13px] opacity-80">Signed in as {{ user.person.display_name|default:user.username }}</li>
           <li>
-            <a href="{% url 'account-settings' %}" class="nav-row"{% if settings_current %} aria-current="page"{% endif %}>
+            <a href="{% url 'account-settings' %}" class="nav-row"{% if settings_current %} aria-current="page"{% endif %} id="sidebar-settings">
               <svg xmlns="http://www.w3.org/2000/svg" class="size-4.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
               Settings
             </a>
@@ -133,20 +135,8 @@
   </a>
   {% endfor %}
 </nav>
-<input id="finance-chat-drawer" type="checkbox" class="sr-only" aria-hidden="true">
-<aside id="finance-chat-panel" tabindex="-1" class="fixed inset-y-0 right-0 z-50 w-full max-w-md overflow-y-auto border-l border-base-300 bg-base-100 p-4 shadow-xl" aria-label="Chat">
-  <div class="mb-3 flex items-center justify-between">
-    <h2 class="font-semibold">Chat</h2>
-    <button type="button" class="btn btn-sm btn-ghost" data-chat-drawer-close>Close</button>
-  </div>
-  {% if show_ai_features and chat_drawer %}
-    {% with conversation=chat_drawer.conversation chat_messages=chat_drawer.chat_messages conversations=chat_drawer.conversations chat_backend_label=chat_drawer.chat_backend_label chat_show_local=chat_drawer.chat_show_local chat_ready=chat_drawer.chat_ready page_context=chat_drawer.page_context chat_next=request.get_full_path %}
-    {% include "finance/_chat_thread.html" %}
-    {% endwith %}
-  {% else %}
-    <p class="text-sm">Connect an AI backend in <a class="link" href="{% url 'settings-ai' %}">Settings → AI</a> to chat about your data.</p>
-  {% endif %}
-</aside>
+{% include "finance/_ai_consent_dialog.html" %}
+<p id="ai-consent-announcement" role="status" class="sr-only"></p>
 {% else %}
     </div>
   </div>

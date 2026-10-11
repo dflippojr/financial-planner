@@ -576,3 +576,19 @@ def test_last_member_can_delete_data_while_a_former_member_still_uses_household_
     # The household is kept whole: none of its other rows are partly deleted.
     assert Household.objects.filter(pk=household.pk).exists()
     assert PlannedItem.objects.filter(pk=former_plan.pk).exists()
+
+
+@pytest.mark.django_db
+def test_personal_policy_cleanup_clears_dismissals_and_denials():
+    from finance.lifecycle_services import _delete_personal_records
+    from finance.policy_services import current_policy
+
+    person = make_person("dismissed")
+    policy = current_policy()
+    person.privacy_policy_declined_version = policy
+    person.privacy_policy_dismissed_version = policy
+    person.save(update_fields=("privacy_policy_declined_version", "privacy_policy_dismissed_version"))
+    _delete_personal_records(person)
+    person.refresh_from_db()
+    assert person.privacy_policy_declined_version_id is None
+    assert person.privacy_policy_dismissed_version_id is None

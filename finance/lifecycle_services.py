@@ -776,7 +776,8 @@ def _delete_personal_records(person):
     revoke_indexed_sessions_for_user(person.user)
     Passkey.objects.filter(member=person).delete()
     person.privacy_policy_declined_version = None
-    person.save(update_fields=("privacy_policy_declined_version", "updated_at"))
+    person.privacy_policy_dismissed_version = None
+    person.save(update_fields=("privacy_policy_declined_version", "privacy_policy_dismissed_version", "updated_at"))
 
 
 def _anonymize_shared_actor_refs(person):

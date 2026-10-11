@@ -6,10 +6,11 @@ from pathlib import Path
 
 from django.conf import settings
 from django.db import IntegrityError, transaction
+from django.db.models import Exists, OuterRef
 from django.utils import timezone
 
 from .audit_services import append_event
-from .models import AuditEvent, Membership, Person, PrivacyPolicyAcceptance, PrivacyPolicyVersion
+from .models import AuditEvent, Person, PrivacyPolicyAcceptance, PrivacyPolicyVersion
 
 DEFAULT_POLICY_PATH = Path(__file__).resolve().parent / "policy" / "default.md"
 DIRECTORY_FILENAMES = ("privacy-policy.md", "privacy_policy.md", "policy.md")
@@ -105,15 +106,62 @@ def may_use_ai(member):
     return in_acceptance(member)
 
 
+def household_consent_status(household):
+    """Current members' consent only; denials deliberately look unanswered."""
+    material = latest_material_policy()
+    if material is None:
+        current_policy()
+        material = latest_material_policy()
+    accepted = PrivacyPolicyAcceptance.objects.filter(
+        person_id=OuterRef("pk"), policy_version__version__gte=material.version,
+    )
+    people = Person.objects.filter(
+        memberships__household=household, memberships__ended_at__isnull=True,
+    ).annotate(policy_accepted=Exists(accepted)).order_by("display_name", "pk")
+    members = [
+        {"id": person.pk, "name": person.display_name,
+         "status": "accepted" if person.policy_accepted else "not_answered"}
+        for person in people
+    ]
+    pending = sum(member["status"] != "accepted" for member in members)
+    return {"members": members, "total": len(members), "pending": pending,
+            "accepted": len(members) - pending}
+
+
 def household_ai_allowed(household):
-    member_ids = Membership.objects.filter(
-        household=household,
-        ended_at__isnull=True,
-    ).values_list("person_id", flat=True)
-    people = list(Person.objects.filter(pk__in=member_ids))
-    if not people:
-        return True
-    return all(in_acceptance(person) for person in people)
+    return household_consent_status(household)["pending"] == 0
+
+
+def ai_slot_state(person):
+    """The sidebar state and the current viewer's household consent summary."""
+    from .ai_services import member_has_ai
+    from .category_services import current_household
+
+    person = _as_person(person)
+    accepted = in_acceptance(person)
+    material = latest_material_policy()
+    declined = person.privacy_policy_declined_version
+    denied = not accepted and declined is not None and declined.version >= material.version
+    household = current_household(person)
+    summary = household_consent_status(household) if household else {
+        "members": [], "total": 0, "pending": 0, "accepted": 0,
+    }
+    summary["members"].sort(key=lambda member: member["id"] != person.pk)
+    for member in summary["members"]:
+        member["is_you"] = member["id"] == person.pk
+    backend = member_has_ai(person) if accepted else False
+    if denied:
+        state = "denied"
+    elif not accepted:
+        state = "undecided"
+    elif not backend:
+        state = "no_backend"
+    elif summary["pending"]:
+        state = "household_pending"
+    else:
+        state = "ready"
+    return {"state": state, "in_acceptance": accepted, "has_backend": backend,
+            "household": summary}
 
 
 def accept_policy(person, version, *, request=None):
@@ -126,6 +174,9 @@ def accept_policy(person, version, *, request=None):
             policy_version=version,
             defaults={"accepted_at": timezone.now()},
         )
+        person.privacy_policy_declined_version = None
+        person.privacy_policy_dismissed_version = None
+        person.save(update_fields=("privacy_policy_declined_version", "privacy_policy_dismissed_version"))
         if created:
             append_event(action=AuditEvent.Action.PRIVACY_ACCEPTED, actor=person, target_id=person.pk)
     if created:
@@ -171,6 +222,20 @@ def decline_shown_version(person, shown_version):
     return True
 
 
+def dismiss_shown_version(person, shown_version):
+    try:
+        shown = int(shown_version)
+    except (TypeError, ValueError):
+        return False
+    policy = current_policy()
+    if shown != policy.version:
+        return False
+    person = _as_person(person)
+    person.privacy_policy_dismissed_version = policy
+    person.save(update_fields=("privacy_policy_dismissed_version",))
+    return True
+
+
 def should_prompt_privacy_policy(person):
     person = _as_person(person)
     if in_acceptance(person):
@@ -179,9 +244,11 @@ def should_prompt_privacy_policy(person):
     if material is None:
         return True
     declined = person.privacy_policy_declined_version
-    if declined is not None and declined.version >= material.version:
-        return False
-    return True
+    dismissed = person.privacy_policy_dismissed_version
+    return not any(
+        version is not None and version.version >= material.version
+        for version in (declined, dismissed)
+    )
 
 
 def latest_acceptance(person):

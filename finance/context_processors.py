@@ -1,7 +1,9 @@
+from urllib.parse import urlsplit
+
+from django.http import QueryDict
 from django.urls import reverse
 
 from .google_auth import google_signin_enabled
-from .ai_services import member_has_ai
 
 
 def google_signin(_request):
@@ -9,21 +11,33 @@ def google_signin(_request):
 
 
 def ai_features(request):
+    return ai_consent_context(request)
+
+
+def ai_consent_context(request, *, return_url=None):
     user = getattr(request, "user", None)
     if not getattr(user, "is_authenticated", False):
-        return {"show_ai_features": False, "chat_drawer": None}
+        return {"show_ai_features": False, "ai_slot": None}
     person = getattr(user, "person", None)
     if person is None:
-        return {"show_ai_features": False, "chat_drawer": None}
-    ready = member_has_ai(person)
-    drawer = None
-    if ready:
-        from .chat_views import _chat_context
-        from .chat_services import conversations_for
+        return {"show_ai_features": False, "ai_slot": None}
+    from .policy_services import ai_slot_state, current_policy
 
-        conversation = conversations_for(person).first()
-        drawer = _chat_context(person, conversation, request)
-    return {"show_ai_features": ready, "chat_drawer": drawer}
+    slot = ai_slot_state(person)
+    target = urlsplit(return_url or request.get_full_path())
+    query = QueryDict(target.query, mutable=True)
+    query["ai"] = "enable"
+    enable_url = target.path + "?" + query.urlencode()
+    query["ai"] = "household"
+    household_url = target.path + "?" + query.urlencode()
+    query.pop("ai", None)
+    return_url = target.path + ("?" + query.urlencode() if query else "")
+    return {
+        "show_ai_features": slot["has_backend"], "ai_slot": slot,
+        "ai_consent_policy": current_policy(), "ai_enable_url": enable_url,
+        "ai_household_url": household_url, "ai_return_url": return_url,
+        "ai_dialog_open": request.GET.get("ai") in {"enable", "household"},
+    }
 
 
 def privacy_policy_prompt(request):

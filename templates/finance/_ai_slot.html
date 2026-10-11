@@ -1,0 +1,14 @@
+{% if ai_slot and ai_slot.state != "denied" %}
+<div class="mb-2 hidden lg:block" data-ai-slot data-state="{{ ai_slot.state }}">
+  {% if ai_slot.state == "undecided" %}
+  <a href="{{ ai_enable_url }}#ai-consent" class="nav-row border border-base-300" data-ai-consent-open aria-controls="ai-consent" aria-haspopup="dialog">Enable AI Features</a>
+  {% elif ai_slot.state == "no_backend" %}
+  <a href="{% url 'settings-ai' %}" class="nav-row border border-base-300">Finish AI setup</a>
+  {% else %}
+  <a href="{% url 'chat' %}" class="nav-row border border-base-300">Chat with my money</a>
+  {% endif %}
+  {% if ai_slot.in_acceptance and ai_slot.household.pending %}
+  <a href="{{ ai_household_url }}#ai-consent" class="link mt-2 block px-2.5 text-xs" data-ai-consent-open aria-controls="ai-consent" aria-haspopup="dialog">Household AI: {{ ai_slot.household.pending }} of {{ ai_slot.household.total }} members still to accept</a>
+  {% endif %}
+</div>
+{% endif %}

@@ -1,0 +1,48 @@
+{% if ai_slot and ai_slot.state != "denied" %}
+<dialog id="ai-consent" class="ai-consent bg-base-100 text-base-content border border-base-300 rounded-box shadow-xl" aria-labelledby="ai-consent-heading"{% if ai_dialog_open %} open{% endif %}>
+  <div data-ai-consent-content>
+    <div class="mb-4 flex items-start justify-between gap-3">
+      <h2 id="ai-consent-heading" tabindex="-1" class="text-lg font-semibold">{% if ai_slot.in_acceptance %}AI is on for you{% else %}Enable AI features?{% endif %}</h2>
+      <a href="{{ ai_return_url }}" class="btn btn-ghost btn-sm" data-ai-consent-close aria-label="Close AI dialog">Close</a>
+    </div>
+    {% if ai_slot.in_acceptance %}
+      {% if ai_slot.household.pending %}
+      <p data-ai-consent-status class="text-sm">Household AI: {{ ai_slot.household.pending }} of {{ ai_slot.household.total }} members still to accept</p>
+      <div class="ai-consent-meter my-3" role="img" aria-label="{{ ai_slot.household.accepted }} accepted, {{ ai_slot.household.pending }} still to accept">
+        {% for member in ai_slot.household.members %}<span{% if member.status == "accepted" %} class="bg-primary"{% else %} class="bg-base-300"{% endif %}></span>{% endfor %}
+      </div>
+      <ul class="mb-4 divide-y divide-base-300" aria-label="Household policy status">
+        {% for member in ai_slot.household.members %}
+        <li class="flex items-center justify-between gap-3 py-2 text-sm">
+          <span>{{ member.name }}{% if member.is_you %} (you){% endif %}</span>
+          <span class="shrink-0"><span aria-hidden="true">{% if member.status == "accepted" %}&#10003;{% else %}&#9675;{% endif %}</span> {% if member.status == "accepted" %}Accepted{% else %}Not answered yet{% endif %}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      <p class="mb-4 text-sm">Household tiles show no AI bead until everyone accepts. You can ask about your private accounts once you finish AI setup.</p>
+      {% else %}
+      <p data-ai-consent-status class="mb-4 text-sm">Your policy acceptance is up to date.</p>
+      {% endif %}
+      {% if not ai_slot.has_backend %}<p class="mb-4 text-sm"><a class="link" href="{% url 'settings-ai' %}">Finish AI setup in Settings &rsaquo; AI</a> to connect a backend.</p>{% endif %}
+      <div class="flex flex-wrap gap-2">
+        <a href="{% url 'chat' %}" class="btn btn-primary btn-sm">Chat with my money</a>
+        <a href="{{ ai_return_url }}" class="btn btn-sm" data-ai-consent-close>Done</a>
+      </div>
+    {% else %}
+      <p class="mb-3 text-sm">AI sends your questions and the financial data you ask about to your connected model. Your private accounts can be used once you accept. Household accounts can be used only after every current member accepts. Nothing changes without your confirmation.</p>
+      <p class="mb-4 text-sm">Version {{ ai_consent_policy.version }} ({{ ai_consent_policy.published_at|date:"Y-m-d" }}) &middot; <a class="link" href="{% url 'privacy-policy' %}">Read the policy</a></p>
+      <form method="post" action="{% url 'privacy-policy-respond' %}" data-ai-consent-form>
+        {% csrf_token %}
+        <input type="hidden" name="version" value="{{ ai_consent_policy.version }}">
+        <input type="hidden" name="next" value="{{ ai_household_url }}">
+        <div class="flex gap-2">
+          <button type="submit" name="action" value="accept" class="btn btn-primary btn-sm">Accept</button>
+          <button type="submit" name="action" value="decline" class="btn btn-sm">Deny</button>
+        </div>
+      </form>
+    {% endif %}
+    <p role="alert" class="mt-3 text-sm" data-ai-consent-error hidden></p>
+  </div>
+  <p data-ai-consent-announcement role="status" class="sr-only"></p>
+</dialog>
+{% endif %}
