@@ -31,7 +31,8 @@ test('Budget rows and settings actions remain accessible with 200 percent text',
       await expect.poll(() => rows.evaluate(element => element.scrollLeft)).toBeGreaterThan(0);
       for (const name of ['Dining', 'Transportation']) {
         const action = rows.getByLabel('Actions for ' + name, { exact: true });
-        await action.click();
+        await action.focus();
+        await page.keyboard.press(name === 'Dining' ? 'Enter' : 'Space');
         await expect(action.locator('..').getByRole('link', { name: 'Edit', exact: true })).toBeInViewport();
         const archive = action.locator('..').getByRole('button', { name: 'Archive', exact: true });
         await expect(archive).toBeInViewport();
