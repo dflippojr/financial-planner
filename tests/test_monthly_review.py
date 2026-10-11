@@ -328,7 +328,7 @@ def test_recurring_facts_include_price_missed_cancel_and_new():
         confidence=RecurringSeries.Confidence.HIGH,
         reasons=["synthetic"],
         fingerprint=sha256(b"rise").hexdigest(),
-        confirmed_at=timezone.now() - timedelta(days=40),
+        confirmed_at=datetime(2026, 8, 1, tzinfo=dt_timezone.utc),
     )
     for day, amount in ((date(2026, 7, 10), -1000), (date(2026, 8, 10), -1000), (date(2026, 9, 10), -1100)):
         RecurringSeriesMember.objects.create(
@@ -347,7 +347,7 @@ def test_recurring_facts_include_price_missed_cancel_and_new():
         confidence=RecurringSeries.Confidence.HIGH,
         reasons=["synthetic"],
         fingerprint=sha256(b"missed").hexdigest(),
-        confirmed_at=timezone.now() - timedelta(days=40),
+        confirmed_at=datetime(2026, 8, 1, tzinfo=dt_timezone.utc),
     )
     RecurringSeriesMember.objects.create(
         series=missed,
@@ -370,7 +370,7 @@ def test_recurring_facts_include_price_missed_cancel_and_new():
         confidence=RecurringSeries.Confidence.HIGH,
         reasons=["synthetic"],
         fingerprint=sha256(b"cancel").hexdigest(),
-        confirmed_at=timezone.now() - timedelta(days=40),
+        confirmed_at=datetime(2026, 8, 1, tzinfo=dt_timezone.utc),
     )
     RecurringSeriesMember.objects.create(
         series=cancelled,
