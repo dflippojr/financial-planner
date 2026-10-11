@@ -104,7 +104,7 @@ def signed_in(person):
     return client
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def staging_settings(tmp_path):
     with override_settings(CSV_IMPORT_STAGING_DIR=tmp_path, CSV_IMPORT_STAGE_TTL_SECONDS=3600):
         yield tmp_path

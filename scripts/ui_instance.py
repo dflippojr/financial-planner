@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import _thread
 import json
 import logging
 import os
@@ -69,10 +70,20 @@ def build_css():
     subprocess.run([bash, "scripts/build_css.sh"], cwd=ROOT, check=True, stdout=sys.stderr)
 
 
-def teardown(directory):
+def disposable_directory(directory):
     directory = Path(directory).resolve()
     if directory.parent != Path(tempfile.gettempdir()).resolve() or not directory.name.startswith(PREFIX):
         raise RuntimeError("Teardown requires the printed disposable directory under the system temp folder.")
+    return directory
+
+
+def teardown(directory):
+    directory = disposable_directory(directory)
+    # Publish cancellation even before the HTTP listener exists. The launcher's
+    # watcher interrupts startup in-process, so its finally blocks remove storage.
+    if not (directory / "instance.json").exists():
+        (directory / "cancel-startup").touch()
+        return
     state = json.loads((directory / "instance.json").read_text())
     # State controls only a loopback request, never a PID kill or deletion.
     port = int(state["port"])
@@ -89,6 +100,13 @@ def teardown(directory):
 class ThreadedServer(ThreadingMixIn, WSGIServer):
     daemon_threads = False
     block_on_close = True
+
+    def get_request(self):
+        connection, address = super().get_request()
+        # Browsers preconnect without sending a request. Closing the listener
+        # must also finish those request threads before deleting their database.
+        connection.settimeout(5)
+        return connection, address
 
 
 def publish_instance_state(directory, state):
@@ -118,13 +136,14 @@ def serve(directory):
     person.user.set_password(PASSWORD)
     person.user.save(update_fields=["password"])
     accept_policy(person, publish_policy(material=True, body="Synthetic UI testing policy."))
-    harness_state, fake_url, harness_server = start_fake_harness()
-    harness_state.session_answer = "Synthetic UI reply. No real provider was contacted."
-    harness_state.followup_answer = harness_state.session_answer
     stop = threading.Event()
     worker = None
     server = None
+    harness_server = None
     try:
+        harness_state, fake_url, harness_server = start_fake_harness()
+        harness_state.session_answer = "Synthetic UI reply. No real provider was contacted."
+        harness_state.followup_answer = harness_state.session_answer
         connect_harness(person, base_url=fake_url, token=harness_state.token)
         set_offer_local_chat(person, True)
         set_defaults(person, chat_backend="local", background_backend="local")
@@ -157,8 +176,9 @@ def serve(directory):
             server.server_close()
         if worker:
             worker.join()
-        harness_server.shutdown()
-        harness_server.server_close()
+        if harness_server:
+            harness_server.shutdown()
+            harness_server.server_close()
         connections.close_all()
 
 
@@ -183,22 +203,42 @@ def poll_chat(stop):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--teardown", metavar="DIRECTORY", help="Stop the instance printed at startup")
+    parser.add_argument("--startup-handle", type=Path, help="Publish a token-free cleanup handle before startup")
     args = parser.parse_args()
     if args.teardown:
         teardown(args.teardown)
         return
     refuse_database_environment(os.environ)
-    build_css()
     with tempfile.TemporaryDirectory(prefix=PREFIX) as directory:
+        directory = Path(directory)
+        if args.startup_handle:
+            args.startup_handle.parent.mkdir(parents=True, exist_ok=True)
+            pending = args.startup_handle.with_suffix(".tmp")
+            pending.write_text(json.dumps({"directory": str(directory)}))
+            pending.replace(args.startup_handle)
+        stopped = threading.Event()
+        watcher = threading.Thread(target=watch_startup_cancellation, args=(directory, stopped),
+                                   name="synthetic-startup-cancellation")
         try:
-            serve(Path(directory))
+            watcher.start()
+            build_css()
+            serve(directory)
         except KeyboardInterrupt:
             pass
         finally:
+            stopped.set()
+            watcher.join()
             # Also close connections if seeding failed before serve's cleanup block.
             if "django.db" in sys.modules:
                 from django.db import connections
                 connections.close_all()
+
+
+def watch_startup_cancellation(directory, stopped):
+    while not stopped.wait(0.1):
+        if (directory / "cancel-startup").exists():
+            _thread.interrupt_main()
+            return
 
 
 if __name__ == "__main__":
