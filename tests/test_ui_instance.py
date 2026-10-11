@@ -13,7 +13,7 @@ import uuid
 
 import pytest
 
-from scripts.ui_instance import ENV_ALLOWLIST, PASSWORD, ROOT, isolated_environment, refuse_database_environment, run_css_builder, teardown
+from scripts.ui_instance import PASSWORD, ROOT, isolated_environment, refuse_database_environment, run_css_builder, teardown
 
 
 @pytest.mark.parametrize("key", ["DATABASE_URL", "DATABASE", "POSTGRES_HOST", "POSTGRES_DB", "PGHOST", "DB_URL"])
@@ -81,7 +81,8 @@ def test_startup_reader_drains_output_after_readiness():
 
 @contextmanager
 def ui_process(tmp_path, command=None, startup_timeout=90, env=None):
-    env = dict(os.environ) if env is None else dict(env)
+    # The launcher owns its SQLite storage, independent of the CI database job.
+    env = isolated_environment(tmp_path) if env is None else dict(env)
     # pytest-django's settings must not carry over into the standalone process.
     env.pop("DJANGO_SETTINGS_MODULE", None)
     ready = queue.Queue()
@@ -111,9 +112,14 @@ def ui_process(tmp_path, command=None, startup_timeout=90, env=None):
                                     "--teardown", str(directory)], check=True, timeout=15)
             finally:
                 # Unwind in the launcher; retain failed cleanup handles for recovery.
-                process.wait(timeout=30)
-                reader.join(timeout=5)
-                process.stdout.close()
+                try:
+                    process.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    raise RuntimeError(f"Disposable process did not exit; cleanup handle retained at {handle}") from None
+                finally:
+                    if process.poll() is not None:
+                        reader.join(timeout=5)
+                        process.stdout.close()
             assert process.returncode == 0, log.read_text()
             if directory is not None:
                 assert not directory.exists(), "Teardown left synthetic storage behind"
@@ -179,7 +185,11 @@ def test_sign_in_and_category_persist(browser, ui_instance):
         context.close()
 
 
-def test_readiness_timeout_cancels_stalled_builder_and_its_child(tmp_path):
+def test_readiness_timeout_cancels_stalled_builder_and_its_child(monkeypatch, tmp_path):
+    monkeypatch.setenv("POSTGRES_HOST", "synthetic.invalid")
+    monkeypatch.setenv("POSTGRES_PORT", "5432")
+    monkeypatch.setenv("POSTGRES_PASSWORD", "synthetic-test-password")
+    monkeypatch.setenv("FINANCIAL_PLANNER_TEST_DB", "postgres")
     port_record = tmp_path / "builder-child-port.json"
     allocation = tmp_path / "allocation.json"
     child = tmp_path / "builder_child.py"
@@ -209,9 +219,8 @@ def stalled_css():
 ui_instance.build_css = stalled_css
 ui_instance.main()
 """)
-    env = {key: value for key, value in os.environ.items() if key.upper() in ENV_ALLOWLIST}
     with pytest.raises(queue.Empty):
-        with ui_process(tmp_path, command=[sys.executable, str(bootstrap)], startup_timeout=3, env=env):
+        with ui_process(tmp_path, command=[sys.executable, str(bootstrap)], startup_timeout=3):
             pytest.fail("Stalled startup unexpectedly reported readiness")
     directory = Path(json.loads(allocation.read_text())["directory"])
     assert not directory.exists(), "Cancelled startup left disposable storage behind"

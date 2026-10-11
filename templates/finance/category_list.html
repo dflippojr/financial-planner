@@ -5,7 +5,7 @@
 <h2 class="mb-4 text-xl font-semibold">Categories</h2>
 <div role="status" class="alert">Join or create a household to edit the shared category list.</div>
 {% else %}
-<section class="mb-6 rounded-box border border-base-300 bg-base-100 p-4" aria-labelledby="categories-heading">
+<section class="category-settings mb-6 rounded-box border border-base-300 bg-base-100 p-4" aria-labelledby="categories-heading">
   <div class="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
     <h2 id="categories-heading" class="text-xl font-semibold">Categories</h2>
     <a class="link" href="{% url 'category-rule-list' %}">Categorization rules</a>
@@ -39,7 +39,7 @@
     <button type="submit" class="btn">Add category</button>
   </form>
 </section>
-<section class="rounded-box border border-base-300 bg-base-100 p-4" aria-labelledby="match-window-heading">
+<section class="category-settings rounded-box border border-base-300 bg-base-100 p-4" aria-labelledby="match-window-heading">
   <h2 id="match-window-heading" class="mb-2 font-semibold">Match window</h2>
   <form method="post">
     {% csrf_token %}

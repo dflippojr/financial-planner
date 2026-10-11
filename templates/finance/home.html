@@ -19,9 +19,10 @@
   </span>
 </div>
 {% endif %}
+<div class="home-chart-layout">
 <div class="page-columns">
 {% if report %}
-<div class="flex flex-col gap-4">
+<div class="home-chart-main flex flex-col gap-4">
   <section aria-label="Key numbers" class="card bg-base-100 shadow">
     <div class="grid grid-cols-2 gap-x-4 gap-y-3 p-4 md:grid-cols-[1.3fr_1fr_1fr] md:gap-6 md:px-6 md:py-5">
       <div class="col-span-2 flex flex-col gap-1 md:col-span-1">
@@ -108,9 +109,9 @@
     </ul>
   </section>
   {{ chart_data|json_script:"cash-flow-chart-data" }}
-  <details class="flex flex-col gap-4 max-md:rounded-box max-md:border max-md:border-base-300 max-md:bg-base-100 max-md:px-4" data-open-from="md">
+  <details class="min-w-0 flex flex-col gap-4 max-md:rounded-box max-md:border max-md:border-base-300 max-md:bg-base-100 max-md:px-4" data-open-from="md">
     <summary class="flex min-h-12 cursor-pointer items-center font-medium md:hidden">Income, spending, and net by period</summary>
-  <figure>
+  <figure class="min-w-0">
     <div class="mb-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
       <figcaption class="font-medium">Income, spending, and net cash flow by period</figcaption>
       <ul aria-label="Chart legend" class="flex flex-wrap gap-x-4 gap-y-1 text-sm opacity-80">
@@ -121,7 +122,7 @@
         {% if report.projected_periods %}<li class="flex items-center gap-1.5"><span aria-hidden="true" class="chart-legend-swatch chart-legend-projected"></span>Projected (estimate)</li>{% endif %}
       </ul>
     </div>
-    <div class="h-72 w-full rounded-box bg-base-100 p-2 shadow">
+    <div class="relative h-72 min-w-0 w-full rounded-box bg-base-100 p-2 shadow">
       <canvas id="cash-flow-chart" data-chart="cash-flow" data-chart-payload="cash-flow-chart-data" role="img" aria-label="Bar chart of income and spending by period with baseline and scenario net cash flow lines. Projected months use a dashed outline. Periods missing an import are marked. The table below lists the same numbers."></canvas>
     </div>
   </figure>
@@ -300,6 +301,7 @@
       {% endfor %}
     </ul>
   </section>
+</div>
 </div>
 </div>
 {% endblock %}
