@@ -88,7 +88,8 @@ def enqueue_review_phrasing(person, *, feature, review, exclude_pk=None):
     """
     refs = {"monthly_review_id": review.pk, "generated_at": review.generated_at.isoformat()}
     # Serialise one member's enqueues so two regenerate requests cannot both insert.
-    Person.objects.select_for_update().filter(pk=person.pk).first()
+    # Keep audit/job foreign-key checks compatible with this serialization lock.
+    Person.objects.select_for_update(no_key=True).filter(pk=person.pk).first()
     active = AiJob.objects.select_for_update().filter(
         member=person, feature=feature, status__in=ACTIVE_STATUSES
     ).order_by("pk")
@@ -348,7 +349,9 @@ def _save_job_success(job):
         # Use the enqueue lock before taking the job lock. An enqueue that saw
         # RUNNING must finish before we check for a newer generation; one that
         # arrives later sees SUCCEEDED and can queue it itself.
-        Person.objects.select_for_update().filter(pk=job.member_id).first()
+        # Connection changes may hold a job lock while checking an audit FK to
+        # Person. NO KEY UPDATE lets that check commit and release the job.
+        Person.objects.select_for_update(no_key=True).filter(pk=job.member_id).first()
     updated = AiJob.objects.filter(pk=job.pk, audit_run_id=job.audit_run_id, status=AiJob.Status.RUNNING).update(
         status=job.status, result_ref=job.result_ref, failure_code=job.failure_code,
         finished_at=job.finished_at, harness_session_id=job.harness_session_id, updated_at=timezone.now(),
