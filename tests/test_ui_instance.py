@@ -1,16 +1,19 @@
 """Disposable-instance guards and a real sign-in/category-persistence smoke check."""
+from contextlib import contextmanager
 import json
 import io
 import os
 from pathlib import Path
 import queue
+import socket
 import subprocess
 import sys
 import threading
+import uuid
 
 import pytest
 
-from scripts.ui_instance import PASSWORD, ROOT, isolated_environment, refuse_database_environment, teardown
+from scripts.ui_instance import ENV_ALLOWLIST, PASSWORD, ROOT, isolated_environment, refuse_database_environment, run_css_builder, teardown
 
 
 @pytest.mark.parametrize("key", ["DATABASE_URL", "DATABASE", "POSTGRES_HOST", "POSTGRES_DB", "PGHOST", "DB_URL"])
@@ -76,40 +79,51 @@ def test_startup_reader_drains_output_after_readiness():
     assert log.getvalue().count("synthetic-log-") == 20000
 
 
-@pytest.fixture
-def ui_instance(tmp_path):
-    env = dict(os.environ)
+@contextmanager
+def ui_process(tmp_path, command=None, startup_timeout=90, env=None):
+    env = dict(os.environ) if env is None else dict(env)
     # pytest-django's settings must not carry over into the standalone process.
     env.pop("DJANGO_SETTINGS_MODULE", None)
     ready = queue.Queue()
     log = tmp_path / "ui-instance.log"
+    registry = ROOT / "test-results" / "ui-instances"
+    registry.mkdir(parents=True, exist_ok=True)
+    handle = registry / f"pytest-{uuid.uuid4().hex}.json"
+    command = command or [sys.executable, str(ROOT / "scripts/ui_instance.py")]
     with log.open("w") as errors:
-        process = subprocess.Popen([sys.executable, str(ROOT / "scripts/ui_instance.py")],
+        process = subprocess.Popen([*command, "--startup-handle", str(handle)],
                                    cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=errors, text=True)
 
         reader = threading.Thread(target=read_startup, args=(process.stdout, errors, ready), daemon=True)
         reader.start()
         instance = None
         try:
-            instance = ready.get(timeout=90)
+            instance = ready.get(timeout=startup_timeout)
             assert instance is not None, log.read_text()
             yield instance
         finally:
+            directory = Path(instance["directory"]) if instance else None
+            if directory is None and handle.exists():
+                directory = Path(json.loads(handle.read_text())["directory"])
             try:
-                if instance is not None and process.poll() is None:
+                if directory is not None and directory.exists() and process.poll() is None:
                     subprocess.run([sys.executable, str(ROOT / "scripts/ui_instance.py"),
-                                    "--teardown", instance["directory"]], check=True, timeout=15)
+                                    "--teardown", str(directory)], check=True, timeout=15)
             finally:
-                try:
-                    process.wait(timeout=15)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
+                # Unwind in the launcher; retain failed cleanup handles for recovery.
+                process.wait(timeout=30)
                 reader.join(timeout=5)
                 process.stdout.close()
-            if instance:
-                assert process.returncode == 0, log.read_text()
-                assert not Path(instance["directory"]).exists(), "Teardown left synthetic storage behind"
+            assert process.returncode == 0, log.read_text()
+            if directory is not None:
+                assert not directory.exists(), "Teardown left synthetic storage behind"
+            handle.unlink(missing_ok=True)
+
+
+@pytest.fixture
+def ui_instance(tmp_path):
+    with ui_process(tmp_path) as instance:
+        yield instance
 
 
 @pytest.fixture
@@ -163,3 +177,52 @@ def test_sign_in_and_category_persist(browser, ui_instance):
         expect(reply).to_have_count(2)
     finally:
         context.close()
+
+
+def test_readiness_timeout_cancels_stalled_builder_and_its_child(tmp_path):
+    port_record = tmp_path / "builder-child-port.json"
+    allocation = tmp_path / "allocation.json"
+    child = tmp_path / "builder_child.py"
+    child.write_text("""import json, socket, sys, time
+from pathlib import Path
+with socket.socket() as listener:
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    Path(sys.argv[1]).write_text(json.dumps(listener.getsockname()[1]))
+    while True:
+        time.sleep(0.1)
+""")
+    builder = tmp_path / "stalled_builder.py"
+    builder.write_text("""import subprocess, sys
+subprocess.run([sys.executable, sys.argv[1], sys.argv[2]], check=True)
+""")
+    bootstrap = tmp_path / "startup.py"
+    bootstrap.write_text(f"""import sys
+from pathlib import Path
+sys.path.insert(0, {str(ROOT)!r})
+from scripts import ui_instance
+
+def stalled_css():
+    Path({str(allocation)!r}).write_text(Path(sys.argv[-1]).read_text())
+    ui_instance.run_css_builder([sys.executable, {str(builder)!r}, {str(child)!r}, {str(port_record)!r}])
+
+ui_instance.build_css = stalled_css
+ui_instance.main()
+""")
+    env = {key: value for key, value in os.environ.items() if key.upper() in ENV_ALLOWLIST}
+    with pytest.raises(queue.Empty):
+        with ui_process(tmp_path, command=[sys.executable, str(bootstrap)], startup_timeout=3, env=env):
+            pytest.fail("Stalled startup unexpectedly reported readiness")
+    directory = Path(json.loads(allocation.read_text())["directory"])
+    assert not directory.exists(), "Cancelled startup left disposable storage behind"
+    port = json.loads(port_record.read_text())
+    with socket.socket() as client:
+        client.settimeout(1)
+        assert client.connect_ex(("127.0.0.1", port)) != 0, "Builder child survived cancellation"
+
+
+def test_css_builder_reports_success_and_failure():
+    run_css_builder([sys.executable, "-c", "import time; time.sleep(0.2)"])
+    with pytest.raises(subprocess.CalledProcessError) as failure:
+        run_css_builder([sys.executable, "-c", "raise SystemExit(7)"])
+    assert failure.value.returncode == 7

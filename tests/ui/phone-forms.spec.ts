@@ -38,8 +38,9 @@ async function focusVisible(page: Page) {
     const box = target.getBoundingClientRect();
     const dock = document.querySelector('.dock')!.getBoundingClientRect();
     const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
-    return { visible: box.top >= 4 && box.bottom <= dock.top - 4 && !!hit && target.contains(hit), path: location.pathname, id: active.id, tag: active.tagName, top: box.top, bottom: box.bottom, dock: dock.top, hit: hit?.tagName };
-  }), { message: 'Focused activation region and outline stay above dock (#373)' }).toMatchObject({ visible: true });
+    const visible = box.top >= 4 && box.bottom <= dock.top - 4 && !!hit && target.contains(hit);
+    return visible ? 'visible' : JSON.stringify({ path: location.pathname, id: active.id, tag: active.tagName, top: box.top, bottom: box.bottom, dock: dock.top, hit: hit?.tagName, viewport: { width: innerWidth, height: innerHeight } });
+  }), { message: 'Focused activation region and outline stay above dock (#373)' }).toBe('visible');
 }
 
 async function walkFocus(page: Page) {

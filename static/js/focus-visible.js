@@ -11,6 +11,9 @@
     if (!dockBox.height) return;
     // A checkbox's label is its effective activation region, not just the glyph.
     const target = active.closest('.form-check-label, .form-choices label') || active;
+    // Also reveal controls inside horizontally scrolling settings sections.
+    // Native keyboard scrolling does not consistently expose those in WebKit.
+    if (active !== main) target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     const box = target.getBoundingClientRect();
     const viewport = window.visualViewport;
     const top = (viewport ? viewport.offsetTop : 0) + 8;
