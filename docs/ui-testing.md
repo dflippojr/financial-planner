@@ -79,6 +79,13 @@ reset and rotation with retained input are covered. At 1024x500, 852x393 and
 fully below the sticky Filters header and receives hit tests in both themes.
 At 375x667, a partly covered date field is reverse-focused while the form scrolls
 with the page; its full activation region must clear the header and dock in both themes.
+At 320x667 with 200% root text, the header and Close filters action must remain
+inside the viewport, receive hit tests and close from the keyboard in both themes. Opening Filters must not add horizontal overflow.
+
+Known limitation beyond the recorded first-pass cases: at 320px with 200% root text,
+Home shortcut links and some summary amounts overflow even with Filters closed.
+The enlarged Home regression from #368 covers 375px; the 320px filter regression
+checks the header and close action and preserves the closed-page width.
 
 ## Teardown
 

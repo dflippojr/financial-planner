@@ -184,7 +184,6 @@ for (const device of ['iPhone 15', 'Pixel 7', 'Desktop Chrome']) {
   });
 }
 
-
 test('375px portrait Filters reveal reverse focus below the sticky page header', async ({ uiURL }, info) => {
   await withDevice('iPhone SE', { width: 375, height: 667 }, info.project.use.colorScheme as 'light' | 'dark', uiURL, async page => {
     await signIn(page);
@@ -218,5 +217,32 @@ test('375px portrait Filters reveal reverse focus below the sticky page header',
         receivesHits: [box.top + 2, box.top + box.height / 2, box.bottom - 2]
           .every(y => element.contains(document.elementFromPoint(box.left + box.width / 2, y))) };
     })).toEqual({ belowHeader: true, aboveDock: true, receivesHits: true });
+  });
+});
+
+test('320px enlarged Filters keep the close action within the viewport', async ({ uiURL }, info) => {
+  await withDevice('iPhone SE', { width: 320, height: 667 }, info.project.use.colorScheme as 'light' | 'dark', uiURL, async page => {
+    await signIn(page);
+    await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
+    const panel = page.locator('#cash-flow-filters');
+    const closedWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+    await panel.locator('summary').click();
+    const close = panel.getByRole('button', { name: 'Close filters', exact: true });
+    await close.evaluate(element => element.scrollIntoView({ block: 'center' }));
+    await expect.poll(() => close.evaluate(element => {
+      const header = element.closest('[data-filters-header]')!.getBoundingClientRect();
+      const box = element.getBoundingClientRect();
+      const dock = document.querySelector('nav.dock')!.getBoundingClientRect();
+      return { headerContained: header.left >= 0 && header.right <= innerWidth,
+        actionContained: box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= dock.top,
+        receivesHits: [box.top + 2, box.top + box.height / 2, box.bottom - 2]
+          .every(y => element.contains(document.elementFromPoint(box.left + box.width / 2, y))) };
+    })).toEqual({ headerContained: true, actionContained: true, receivesHits: true });
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBe(closedWidth);
+    await close.focus();
+    await close.press('Enter');
+    await expect(panel).not.toHaveAttribute('open', '');
+    await expect(panel.locator('summary')).toBeFocused();
+    expect(await page.evaluate(() => getComputedStyle(document.documentElement).fontSize)).toBe('32px');
   });
 });
