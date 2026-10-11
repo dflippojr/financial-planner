@@ -14,7 +14,7 @@ pytestmark = [pytest.mark.django_db(transaction=True),
 
 @pytest.fixture
 def bead_session(page_session, harness, browser):
-    def open_page(path="/", *, touch=False, reduced=False, width=1280):
+    def open_page(path="/", *, touch=False, reduced=False, width=1280, clock=False):
         initial, initial_page = page_session((width, 800), "light", "/")
         _state, url = harness
         person = Person.objects.get(user__username="synthetic_alex")
@@ -29,8 +29,12 @@ def bead_session(page_session, harness, browser):
                                       reduced_motion="reduce" if reduced else "no-preference",
                                       storage_state=storage)
         page = context.new_page()
+        if clock:
+            page.clock.install(time="2026-01-01T00:00:00Z")
         page.goto(base_url + path)
         page.wait_for_load_state("networkidle")
+        if clock:
+            page.clock.pause_at("2026-01-01T00:01:00Z")
         return context, page
     return open_page
 
@@ -42,7 +46,7 @@ def center(locator):
 
 @pytest.mark.parametrize("width", [1024, 1280, 1440])
 def test_pointer_tracks_border_clamps_and_freezes_on_bead(bead_session, width):
-    context, page = bead_session(width=width)
+    context, page = bead_session(width=width, clock=True)
     try:
         bead = page.get_by_role("button", name="Ask AI about Key numbers")
         tile = bead.locator("xpath=ancestor::section[1]")
@@ -51,6 +55,7 @@ def test_pointer_tracks_border_clamps_and_freezes_on_bead(bead_session, width):
         for offset in (4, 100, box["width"] / 2, box["width"] - 4):
             x = box["x"] + offset
             page.mouse.move(x, box["y"] + 65)
+            page.clock.run_for(16)
             page.wait_for_timeout(180)
             expected = max(box["x"] + 36, min(x, box["x"] + box["width"] - 36))
             assert abs(center(bead)[0] - expected) <= 2
@@ -62,11 +67,14 @@ def test_pointer_tracks_border_clamps_and_freezes_on_bead(bead_session, width):
         page.wait_for_timeout(160)
         assert abs(center(bead)[0] - x) <= 2
         assert bead.bounding_box()["width"] == 40
+        # Assert the delay at its boundary without host scheduling or IPC jitter.
         page.mouse.move(1, 1)
-        page.wait_for_timeout(200)
+        page.clock.run_for(299)
         assert bead.evaluate("el => getComputedStyle(el).opacity") == "1"
-        page.wait_for_timeout(250)
-        assert bead.evaluate("el => getComputedStyle(el).opacity") == "0"
+        assert tile.evaluate("el => el.classList.contains('ai-bead-visible')")
+        page.clock.run_for(1)
+        assert not tile.evaluate("el => el.classList.contains('ai-bead-visible')")
+        expect(bead).to_have_css("opacity", "0")
     finally:
         context.close()
 
