@@ -1,3 +1,4 @@
+import json
 import re
 
 from django import template
@@ -124,11 +125,18 @@ def _bead_member(context):
     return person
 
 
+BEAD_FILTER_FIELDS = {
+    "date_from": "date_from", "date_to": "date_to", "month": "month",
+    "account": "account_id", "scope": "scope", "category": "category_id",
+    "grouping": "grouping", "horizon": "horizon",
+}
+
+
 def _bead_form_filters(kind, values, cleaned):
     from finance.ai_tiles import TILES
 
     filters = dict(values)
-    for source, target in (("account", "account_id"), ("scope", "scope"), ("category", "category_id"), ("grouping", "grouping"), ("horizon", "horizon")):
+    for source, target in BEAD_FILTER_FIELDS.items():
         if source in cleaned and target in TILES[kind].filters:
             value = cleaned[source]
             filters.setdefault(target, getattr(value, "pk", value))
@@ -144,16 +152,32 @@ def _bead_date_filters(filters):
     return filters
 
 
+BEAD_IGNORED_FIELDS = {
+    "cash-flow-totals": ("grouping", "horizon"),
+    "home-budgets": ("date_from", "date_to", "account", "scope", "grouping", "horizon", "tag"),
+    "spending-categories": ("grouping",),
+    "transaction-totals": ("q", "category", "amount_min", "amount_max", "has_note", "is_split", "set_by"),
+}
+
+
+def _bead_unsupported_filters(form, kind, cleaned):
+    from finance.ai_tiles import TILES
+
+    supported = {key for key, target in BEAD_FILTER_FIELDS.items() if target in TILES[kind].filters}
+    # Amount mode has no effect without an amount bound, which is excluded below.
+    supported.add("amount_mode")
+    # These controls affect other tiles on the same page, not this tile.
+    supported.update(BEAD_IGNORED_FIELDS.get(kind, ()))
+    fields = getattr(form, "fields", cleaned)
+    return any(cleaned.get(key) not in (None, "") for key in fields if key not in supported)
+
+
 def _bead_filters(context, kind, values):
     form = context.get("filter_form")
     if form is not None and form.is_bound and not form.is_valid():
         return None
     cleaned = getattr(form, "cleaned_data", {}) or getattr(form, "initial", {})
-    # A filter without a corresponding read-tool argument cannot reproduce this tile.
-    unsupported = ("tag", "q", "amount_min", "amount_max", "has_note", "is_split", "set_by")
-    if kind == "transaction-totals":
-        unsupported = ("tag",)
-    if any(cleaned.get(key) not in (None, "") for key in unsupported):
+    if _bead_unsupported_filters(form, kind, cleaned):
         return None
     if kind in {"cash-flow-chart", "cash-flow-months"} and getattr(context.get("report"), "scenario_changes", ()):
         return None
@@ -168,7 +192,6 @@ def _bead_filters(context, kind, values):
 
 @register.inclusion_tag("finance/_ai_bead.html", takes_context=True)
 def ai_tile(context, kind, *, has_data=False, **values):
-    import json
     from finance.ai_tiles import TILES, sanitize_tile, tile_data_shareable
 
     if not has_data or kind not in TILES:

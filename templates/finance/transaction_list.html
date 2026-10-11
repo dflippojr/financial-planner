@@ -185,7 +185,7 @@ the bulk-edit panel stay visible from md up, as they were before Select mode (is
 </form>
 {% endif %}
 <section aria-label="Transactions" class="md:rounded-box md:border md:border-base-300 md:bg-base-100">
-  <h2 class="sr-only">Transactions</h2>
+  <h2 class="sr-only">Transaction history</h2>
   {% ai_tile "transactions" has_data=matching_count  %}
   <div class="md:overflow-x-auto">
   <table class="table max-md:block">
@@ -278,6 +278,7 @@ the bulk-edit panel stay visible from md up, as they were before Select mode (is
     {% endfor %}
     </tbody>
   </table>
+  </div>
   {% if page and page.paginator.num_pages > 1 %}
   <nav class="mt-4 flex flex-wrap items-center gap-2 md:mt-0 md:justify-between md:border-t md:border-base-300 md:px-4 md:py-3" aria-label="Transaction pages">
     <span class="text-sm opacity-80">Showing {{ page.start_index }}–{{ page.end_index }} of {{ page.paginator.count }} · page {{ page.number }} of {{ page.paginator.num_pages }}</span>

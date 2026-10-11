@@ -27,7 +27,7 @@ from .chat_services import (
     send_message,
     start_conversation,
 )
-from .input_limits import MAX_CHAT_MESSAGES
+from .input_limits import MAX_CHAT_MESSAGES, MAX_PAGE_CONTEXT_CHARS
 from .models import AiConversationMessage
 from .policy_services import may_use_ai
 from .reauth import safe_next_url
@@ -56,13 +56,7 @@ def chat_send(request):
     wants_json = request.headers.get("Accept") == "application/json"
     prompt = request.POST.get("prompt") or ""
     conversation_id = request.POST.get("conversation_id") or None
-    page_context = sanitize_page_context(
-        {
-            "tile": _posted_tile(request),
-            "route": request.POST.get("page_route") or "",
-            "query": request.POST.get("page_query") or "",
-        }, person
-    )
+    page_context = _posted_page_context(request, person)
     next_url = safe_next_url(request, request.POST.get("next"), default=reverse("chat"))
     try:
         conversation_id = _send_conversation_id(conversation_id, wants_json)
@@ -79,12 +73,18 @@ def chat_send(request):
     return redirect(next_url)
 
 
-def _posted_tile(request):
+def _posted_page_context(request, person):
     raw = request.POST.get("tile_context") or ""
-    from .input_limits import MAX_PAGE_CONTEXT_CHARS
-
     if len(raw) > MAX_PAGE_CONTEXT_CHARS:
-        return {"oversize": raw}
+        return {}
+    return sanitize_page_context({
+        "tile": _posted_tile(raw),
+        "route": request.POST.get("page_route") or "",
+        "query": request.POST.get("page_query") or "",
+    }, person)
+
+
+def _posted_tile(raw):
     try:
         return json.loads(raw) if raw else {}
     except (ValueError, TypeError, RecursionError):

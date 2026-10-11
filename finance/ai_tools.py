@@ -68,7 +68,7 @@ def default_tools():
                 "properties": {
                     "date_from": {"type": "string"},
                     "date_to": {"type": "string"},
-                    "all_dates": {"type": "boolean"},
+                    "all_dates": {"type": "boolean", "description": "Leave unspecified date bounds open; retain any explicit bounds."},
                     "grouping": {"type": "string", "enum": list(GROUPINGS)},
                     "account_id": {"type": "integer"},
                     "account_name": {"type": "string"},
@@ -106,7 +106,7 @@ def default_tools():
                     "category": {"type": "string"},
                     "category_id": {"type": "integer"},
                     "scope": {"type": "string"},
-                    "all_dates": {"type": "boolean"},
+                    "all_dates": {"type": "boolean", "description": "Leave unspecified date bounds open; retain any explicit bounds."},
                     "account_id": {"type": "integer"},
                     "account_name": {"type": "string"},
                     "limit": {"type": "integer"},
@@ -180,18 +180,21 @@ def run_tool(person, tools, name, args):
         return ToolResult(text="That tool could not run.", ok=False)
 
 
-def visible_accounts(person):
-    query = Account.objects.visible_to(person).filter(status=Account.Status.ACTIVE)
+def visible_accounts(person, *, include_archived=False):
+    query = Account.objects.visible_to(person)
+    if not include_archived:
+        query = query.filter(status=Account.Status.ACTIVE)
     household = current_household(person)
     if household is not None and not household_ai_allowed(household):
         query = query.filter(scope=Account.Scope.PRIVATE, owner=person)
     return query
 
 
-def _ai_scope(person):
+def _ai_scope(person, *, include_archived=True):
+    """Report tiles retain visible archived history and enforce household consent."""
     household = current_household(person)
     include_household = household is None or household_ai_allowed(household)
-    return visible_accounts(person), include_household
+    return visible_accounts(person, include_archived=include_archived), include_household
 
 
 def list_accounts(person, args):
@@ -241,17 +244,23 @@ def list_transactions(person, args):
     return ToolResult(text=_format_rows(rows), account_ids=tuple(sorted(account_ids)))
 
 
+def _transaction_scope(person, args):
+    accounts, include_household = _ai_scope(person)
+    scope = _scope(args.get("scope"))
+    if not scope and not include_household:
+        scope = Account.Scope.PRIVATE
+    return accounts, scope
+
+
 def cash_flow_totals(person, args):
-    date_from, date_to = _dates(args)
+    all_dates = args.get("all_dates") is True
+    date_from, date_to = _dates(args, all_dates=all_dates)
     account, error = _visible_account(person, args.get("account_id"), args.get("account_name"))
     if error:
         return ToolResult(text=error, ok=False)
-    scope = _scope(args.get("scope"))
-    accounts, _include_household = _ai_scope(person)
-    if args.get("all_dates") is True:
-        date_from = _parse_date(args.get("date_from"), None)
-        date_to = _parse_date(args.get("date_to"), None)
-        accounts = selected_accounts(person, account=account, scope=scope, cash_flow_only=True, accounts=accounts)
+    accounts, scope = _transaction_scope(person, args)
+    if all_dates:
+        accounts = selected_accounts(person, account=account, scope=scope, accounts=accounts)
         totals = income_and_spending_totals(person, date_from=date_from, date_to=date_to, accounts=accounts)
         summary = SimpleNamespace(
             income_minor=totals.income_minor, spending_minor=totals.spending_minor, net_minor=totals.net_minor,
@@ -266,11 +275,11 @@ def cash_flow_totals(person, args):
             account=account, scope=scope, accounts=accounts,
         )
     query = _range_query(date_from, date_to, account=account, scope=scope)
-    if args.get("all_dates") is True:
+    if all_dates:
         query.setdefault("date_from", "")
         query.setdefault("date_to", "")
     txn_url = f"{reverse('transaction-list')}?{urlencode(query)}"
-    page_url = txn_url if args.get("all_dates") is True else f"{reverse('home')}?{urlencode(query)}"
+    page_url = txn_url if all_dates else f"{reverse('home')}?{urlencode(query)}"
     summary = report.summary
     payload = {
         "date_from": date_from.isoformat() if date_from else None,
@@ -363,16 +372,15 @@ def spending_by_category(person, args):
 
 
 def search_transactions(person, args):
-    date_from, date_to = _dates(args)
+    all_dates = args.get("all_dates") is True
+    date_from, date_to = _dates(args, all_dates=all_dates)
     account, error = _visible_account(person, args.get("account_id"), args.get("account_name"))
     if error:
         return ToolResult(text=error, ok=False)
     from .transaction_filters import apply_transaction_filters, visible_transaction_queryset
 
-    if args.get("all_dates") is True:
-        date_from = _parse_date(args.get("date_from"), None)
-        date_to = _parse_date(args.get("date_to"), None)
-    query = visible_transaction_queryset(person).filter(account_id__in=visible_accounts(person).values("pk"))
+    accounts, scope = _transaction_scope(person, args)
+    query = visible_transaction_queryset(person).filter(account_id__in=accounts.values("pk"))
     needle = (args.get("q") or "").strip()
     category = (args.get("category") or "").strip()
     if args.get("category_id") is not None:
@@ -389,7 +397,7 @@ def search_transactions(person, args):
         category = str(match.pk)
     query = apply_transaction_filters(query, {
         "date_from": date_from, "date_to": date_to, "account": account,
-        "scope": _scope(args.get("scope")), "category": category, "q": needle,
+        "scope": scope, "category": category, "q": needle,
     }, person)
     limit = _limit(args.get("limit"))
     rows = []
@@ -408,7 +416,7 @@ def search_transactions(person, args):
                 "description": txn.description,
             }
         )
-    list_query = _range_query(date_from, date_to, account=account, scope=_scope(args.get("scope")))
+    list_query = _range_query(date_from, date_to, account=account, scope=scope)
     if needle:
         list_query["q"] = needle
     if category:
@@ -625,9 +633,9 @@ def _visible_account(person, account_id, name):
     return account, ""
 
 
-def _dates(args):
+def _dates(args, *, all_dates=False):
     today = timezone.localdate()
-    default_from, default_to = default_date_range(today)
+    default_from, default_to = (None, None) if all_dates else default_date_range(today)
     return _parse_date(args.get("date_from"), default_from), _parse_date(args.get("date_to"), default_to)
 
 

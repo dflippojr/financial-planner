@@ -13,11 +13,11 @@ from django.utils import timezone
 
 from finance.ai_services import AiError, connect_harness
 from finance.ai_tiles import TILES, sanitize_tile, tile_data_shareable
-from finance.ai_tools import cash_flow_totals, default_tools, list_planned_items, projected_cash_flow_tool, search_transactions
+from finance.ai_tools import cash_flow_totals, default_tools, list_budgets, list_planned_items, net_worth_series, spending_by_category, projected_cash_flow_tool, search_transactions
 from finance.category_services import ensure_household_categories
 from finance.chat_proposals import proposal_tools
 from finance.chat_services import _harness_context, sanitize_page_context
-from finance.models import BalanceSnapshot, Budget, Category, Membership, Person, PlannedItem, RecurringSeries, RecurringSeriesMember
+from finance.models import Account, BalanceSnapshot, Budget, Category, Membership, Person, PlannedItem, RecurringSeries, RecurringSeriesMember
 from finance.policy_services import accept_policy, current_policy, decline_policy, publish_policy
 from tests.chat_helpers import ask
 from tests.test_chat import TOKEN, add_txn, checking, harness, make_member  # noqa: F401
@@ -165,6 +165,7 @@ def test_connected_but_unusable_chat_backend_has_no_bead(member):
     ("transactions", {"q": "Synthetic search"}, None),
     ("transactions", {"amount_min": 0}, None),
     ("transactions", {"amount_max": 0}, None),
+    ("transactions", {"future_filter": "selected"}, None),
     ("cash-flow-totals", {"tag": 1}, None),
     ("transactions", {"category": "transfer"}, None),
     ("transactions", {"category": "uncategorized"}, None),
@@ -352,3 +353,85 @@ def test_all_date_figure_links_show_the_same_totals(member, filters):
         assert totals.income_minor == payload["income_minor"] == 200
         assert totals.spending_minor == payload["spending_minor"] == 100
         assert totals.net_minor == payload["net_minor"] == 100
+
+
+
+def test_transaction_tile_tools_match_archived_loan_and_asset_history(member):
+    user, person, household = member
+    _other_user, other, _ = make_member("tile_history_other", household=household, policy=current_policy())
+    own_ids = []
+    for kind, amount in ((Account.Type.CHECKING, 100), (Account.Type.LOAN, 200), (Account.Type.VEHICLE, 300)):
+        account = checking(person, household, f"Synthetic {kind}", private=True)
+        account.account_type = kind
+        account.save()
+        add_txn(account, person, date(2020, 1, 1), -amount, f"Synthetic {kind} history")
+        if kind == Account.Type.CHECKING:
+            account.status = Account.Status.ARCHIVED
+            account.archived_at = timezone.now()
+            account.save()
+        own_ids.append(account.pk)
+    other_private = checking(other, household, "Other private archive", private=True)
+    add_txn(other_private, other, date(2020, 1, 1), -999, "Other private history")
+    other_private.status = Account.Status.ARCHIVED
+    other_private.archived_at = timezone.now()
+    other_private.save()
+    shared = checking(person, household, "Synthetic shared archive")
+    add_txn(shared, person, date(2020, 1, 1), -900, "Synthetic shared history")
+    shared.status = Account.Status.ARCHIVED
+    shared.archived_at = timezone.now()
+    shared.save()
+    client = Client()
+    client.force_login(user)
+    for scope, expected, ids in (("", 1500, own_ids + [shared.pk]), ("private", 600, own_ids)):
+        args = {"all_dates": True, "scope": scope}
+        result = cash_flow_totals(person, args)
+        payload = json.loads(result.text)
+        assert payload["spending_minor"] == expected
+        response = client.get(payload["page_url"])
+        assert response.context["list_totals"].spending_minor == expected
+        assert set(result.account_ids) == set(ids)
+        searched = search_transactions(person, args)
+        assert set(searched.account_ids) == set(ids)
+        assert len(json.loads(searched.text)["rows"]) == len(ids)
+        assert "Other private history" not in searched.text
+    other.privacy_policy_acceptances.all().delete()
+    result = cash_flow_totals(person, {"all_dates": True})
+    payload = json.loads(result.text)
+    assert payload["spending_minor"] == 600
+    assert client.get(payload["page_url"]).context["list_totals"].spending_minor == 600
+    assert set(result.account_ids) == set(own_ids)
+    searched = search_transactions(person, {"all_dates": True})
+    assert set(searched.account_ids) == set(own_ids)
+    assert "Synthetic shared history" not in searched.text
+
+
+def test_oversized_posted_tile_explicitly_drops_all_page_context(member):
+    user, person, _household = member
+    client = Client()
+    client.force_login(user)
+    response = client.post(reverse("chat-send"), {"prompt": "Synthetic question", "tile_context": "x" * 2001,
+                           "page_route": "/transactions/", "page_query": "scope=private"}, HTTP_ACCEPT="application/json")
+    assert response.status_code == 200
+    question = person.ai_conversations.get().messages.get(role="user")
+    assert question.page_context == {}
+
+
+
+def test_report_tiles_keep_visible_archived_history_in_their_totals(member):
+    from finance.budget_services import save_budget
+
+    _user, person, household = member
+    account = checking(person, household, "Synthetic closed checking", private=True)
+    add_txn(account, person, date(2020, 1, 2), -100, "Synthetic historical expense")
+    BalanceSnapshot.objects.create(account=account, snapshot_date=date(2020, 1, 31), amount_minor=1000, source="manual")
+    account.status = Account.Status.ARCHIVED
+    account.archived_at = timezone.now()
+    account.save()
+    save_budget(person, {"scope": "private", "category": None, "amount_minor": 1000,
+                         "effective_month": date(2020, 1, 1), "rollover_enabled": False})
+    bounds = {"date_from": "2020-01-01", "date_to": "2020-01-31", "scope": "private"}
+    assert json.loads(cash_flow_totals(person, bounds).text)["spending_minor"] == 100
+    assert json.loads(spending_by_category(person, bounds).text)["total_spending_minor"] == 100
+    assert json.loads(net_worth_series(person, bounds).text)["net_minor"] == 1000
+    rows = json.loads(list_budgets(person, {"month": "2020-01", "scope": "private"}).text)["rows"]
+    assert [row["spent_minor"] for row in rows] == [100]
