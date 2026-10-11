@@ -3,6 +3,8 @@
   const main = document.getElementById('main-content');
   const dock = document.querySelector('nav.dock');
   if (!main || !dock) return;
+  let keyboardNavigation = false;
+  let revealVersion = 0;
 
   function revealFocus() {
     const active = document.activeElement;
@@ -27,13 +29,28 @@
 
   function scheduleReveal() {
     // Native focus scrolling runs first; then measure its settled geometry.
-    requestAnimationFrame(() => requestAnimationFrame(revealFocus));
+    const version = ++revealVersion;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (version === revealVersion) revealFocus();
+    }));
   }
 
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Tab') keyboardNavigation = true;
+  });
+  function allowManualScroll() {
+    keyboardNavigation = false;
+    ++revealVersion;
+  }
+  for (const event of ['pointerdown', 'touchstart', 'touchmove', 'wheel']) {
+    document.addEventListener(event, allowManualScroll, { capture: true, passive: true });
+  }
+  function revealAfterKeyboardResize() {
+    if (keyboardNavigation) scheduleReveal();
+  }
   document.addEventListener('focusin', scheduleReveal);
-  window.addEventListener('resize', scheduleReveal);
+  window.addEventListener('resize', revealAfterKeyboardResize);
   if (window.visualViewport) {
-    window.visualViewport.addEventListener('resize', scheduleReveal);
-    window.visualViewport.addEventListener('scroll', scheduleReveal);
+    window.visualViewport.addEventListener('resize', revealAfterKeyboardResize);
   }
 }());

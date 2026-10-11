@@ -115,6 +115,26 @@ test('Sequential focus stays above dock through portrait, landscape and keyboard
   await amount.focus();
   await focusVisible(page);
   await noOverflow(page, original.width);
+
+  // Touch must take over even after recent keyboard navigation.
+  await page.keyboard.press('Tab');
+  await focusVisible(page);
+  await page.keyboard.press('Shift+Tab');
+  await focusVisible(page);
+  expect(await amount.evaluate(el => el === document.activeElement)).toBe(true);
+  await amount.tap();
+  await focusVisible(page);
+  const manualPosition = await page.evaluate(() => {
+    window.scrollBy(0, 180);
+    const position = scrollY;
+    visualViewport?.dispatchEvent(new Event('scroll'));
+    visualViewport?.dispatchEvent(new Event('resize'));
+    dispatchEvent(new Event('resize'));
+    return position;
+  });
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolve)))));
+  expect(await amount.evaluate(el => el === document.activeElement)).toBe(true);
+  expect(await page.evaluate(() => scrollY)).toBeCloseTo(manualPosition, 0);
 });
 
 test('Long settings and CSV choice labels reflow with contained AI table (#365)', async ({ page }) => {
