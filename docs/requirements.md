@@ -8,9 +8,11 @@ Build a private, self hosted personal finance app that can eventually replace Ro
 
 ## Confirmed decisions
 
+- Disposable UI testing (#361): `scripts/ui_instance.py` runs on loopback with a fresh temporary SQLite database, synthetic phone seed, known test sign-in and an in-process fake chat provider. It refuses inherited database connection variables and isolates uploads and audit storage without reading `.env`. The start/sign-in/flows/teardown contract is [docs/ui-testing.md](ui-testing.md); the persistence smoke check uses GitHub-hosted `ubuntu-latest`. Dispatcher correction, 2026-10-10: this repository remains public; self-hosted test runners are reserved for private repositories.
+
 - Review runner hardening (#303): keep fork workflow approval at all external contributors. Install a host-side job-started allow-list for this repository's `review.yml` on the default branch (`main`), accepting only base-repository `pull_request_target` and `workflow_dispatch` jobs. Prefer one-job ephemeral registration under a dedicated non-administrator Windows account. The owner applies host changes and reprovisions after each job; implementation must not restart or re-register the live runner. See [runner operations](review-runner.md).
 
-- Repository: private GitHub repository with GitHub Issues as the backlog.
+- Repository: public GitHub repository with GitHub Issues as the backlog.
 - First usable workflow: import bank and credit card CSV exports, then inspect the resulting transactions.
 - Hosting target: basement PC, reachable from the home network and the existing Tailscale setup.
 - The app will support multiple people, with both private data and an explicitly shared household view. All household members can edit shared accounts and transactions.

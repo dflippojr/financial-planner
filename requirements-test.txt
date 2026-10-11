@@ -3,3 +3,5 @@
 -r requirements.txt
 playwright==1.63.0
 pytest-xdist==3.8.0
+# Used directly by the disposable HTTP lifecycle tests.
+requests==2.34.2

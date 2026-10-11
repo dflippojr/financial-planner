@@ -1,5 +1,6 @@
 from django.urls import path
 from django.views.generic import RedirectView
+from django.contrib.auth.decorators import login_not_required
 
 from finance import (
     account_views,
@@ -33,6 +34,7 @@ from finance.csv_import import views as csv_import_views
 
 
 urlpatterns = [
+    path("favicon.ico", login_not_required(RedirectView.as_view(url="/static/icons/icon.svg")), name="favicon"),
     path("settings/audit/", audit_views.audit_page, name="settings-audit"),
     path("health/", views.health, name="health"),
     path("chat/", chat_views.chat_page, name="chat"),

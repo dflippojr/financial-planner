@@ -71,6 +71,7 @@ jobs:
           PLAYWRIGHT_TRACE_DIR: test-results/traces
         run: >
           python -m pytest tests -q -p no:cacheprovider -m browser -n 4 -rs
+          --ignore=tests/test_ui_instance.py
           --junitxml=test-results/junit.xml
 
       # The tests skip themselves when Chromium or the CSS is missing, which
@@ -93,6 +94,37 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: playwright-report
+          path: test-results/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  disposable-ui:
+    name: Disposable UI smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install isolated test tools
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install -r requirements-test.txt
+          .venv/bin/python -m playwright install --with-deps chromium
+      - name: Build CSS
+        run: bash scripts/build_css.sh
+      - name: Sign in and persist a category in a disposable instance
+        env:
+          PLAYWRIGHT_TRACE_DIR: test-results/ui-traces
+        run: >
+          .venv/bin/python -m pytest tests/test_ui_instance.py -q
+          -p no:cacheprovider --junitxml=test-results/ui-junit.xml
+      - name: Upload synthetic report and traces
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: disposable-ui-report
           path: test-results/
           retention-days: 14
           if-no-files-found: ignore
