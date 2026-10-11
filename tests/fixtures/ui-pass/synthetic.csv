@@ -1,0 +1,4 @@
+Date,Description,Amount,Currency
+2026-10-01,Synthetic preview purchase,-12.34,USD
+2026-10-02,Synthetic preview income,56.78,USD
+invalid,Synthetic invalid row,-1.00,USD

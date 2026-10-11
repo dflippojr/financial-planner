@@ -1,0 +1,10 @@
+{
+  "name": "financial-planner-ui-tests",
+  "private": true,
+  "scripts": {
+    "test:ui": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0"
+  }
+}
