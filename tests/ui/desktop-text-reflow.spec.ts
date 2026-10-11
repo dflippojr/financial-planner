@@ -20,17 +20,19 @@ test('Budget rows and settings actions remain accessible with 200 percent text',
       await rows.focus();
       await page.keyboard.press('ArrowRight');
       await expect.poll(() => rows.evaluate(element => element.scrollLeft)).toBeGreaterThan(0);
-      const action = rows.getByLabel('Actions for Dining', { exact: true });
-      await action.click();
-      await expect(action.locator('..').getByRole('link', { name: 'Edit', exact: true })).toBeInViewport();
-      const archive = action.locator('..').getByRole('button', { name: 'Archive', exact: true });
-      await expect(archive).toBeInViewport();
-      expect(await archive.evaluate(element => {
-        const box = element.getBoundingClientRect();
-        return element.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
-      })).toBe(true);
-      await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-      await page.keyboard.press('Escape');
+      for (const name of ['Dining', 'Transportation']) {
+        const action = rows.getByLabel('Actions for ' + name, { exact: true });
+        await action.click();
+        await expect(action.locator('..').getByRole('link', { name: 'Edit', exact: true })).toBeInViewport();
+        const archive = action.locator('..').getByRole('button', { name: 'Archive', exact: true });
+        await expect(archive).toBeInViewport();
+        await expect.poll(() => archive.evaluate(element => {
+          const box = element.getBoundingClientRect();
+          return element.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
+        })).toBe(true);
+        await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        await page.keyboard.press('Escape');
+      }
       await page.getByRole('button', { name: 'Add budget', exact: true }).filter({ visible: true }).click();
       const dialog = page.locator('#add-budget-dialog');
       await expect(dialog.getByLabel('Monthly amount')).toBeVisible();
