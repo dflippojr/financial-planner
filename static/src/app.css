@@ -370,6 +370,14 @@
   }
 }
 
+/* Chart-range fields can exceed a phone's content width with enlarged input text. */
+.page-header-actions:has(> #cash-flow-filters),
+#cash-flow-filters,
+#cash-flow-filters .form-field {
+  min-width: 0;
+  max-width: 100%;
+}
+
 .category-settings .label,
 .category-settings .label-text,
 .audit-filters .label,
