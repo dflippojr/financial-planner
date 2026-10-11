@@ -60,7 +60,7 @@ class Job:
 def owned(monkeypatch):
     builder = Builder()
     job = Job(builder)
-    monkeypatch.setattr(ui, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(ui, "os", SimpleNamespace(name="nt", environ={}))
     return builder, job
 
 
@@ -227,6 +227,62 @@ def test_close_failure_is_reported_after_verified_tree_exit(owned):
     job.close = fail
     with pytest.raises(ui.CssBuilderCleanupError, match="close failure"):
         ui.finish_css_builder(builder, job)
+
+
+@pytest.mark.parametrize("phase", ["taskkill", "verification", "close"])
+@pytest.mark.parametrize("initial_type", [None, KeyboardInterrupt, RuntimeError])
+def test_cancellation_during_cleanup_retains_storage_and_initial_error(
+    monkeypatch, owned, tmp_path, phase, initial_type
+):
+    builder, job = owned
+    builder.stdin = io.BytesIO()
+    initial = initial_type("synthetic initial error") if initial_type else None
+    builder.returncode = None if initial else 0
+    directory = tmp_path / (ui.PREFIX + "interrupted-cleanup")
+    directory.mkdir()
+    handle = tmp_path / "startup.json"
+    monkeypatch.setattr(ui.tempfile, "mkdtemp", lambda **_k: str(directory))
+    monkeypatch.setattr(sys, "argv", ["ui_instance.py", "--startup-handle", str(handle)])
+    monkeypatch.setattr(windows, "WindowsCssJob", lambda: job)
+    monkeypatch.setattr(ui.subprocess, "Popen", lambda *_a, **_k: builder)
+    monkeypatch.setattr(ui.subprocess, "CREATE_NO_WINDOW", 0x8000000, raising=False)
+    monkeypatch.setattr(ui.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, raising=False)
+    def interrupt():
+        raise KeyboardInterrupt()
+    def taskkill(*_args, **_kwargs):
+        if phase == "taskkill":
+            interrupt()
+        return SimpleNamespace(returncode=1)
+    monkeypatch.setattr(ui.subprocess, "run", taskkill)
+    if phase == "taskkill":
+        builder.poll = lambda: None  # Interrupt before parent exit.
+    def sleep(seconds):
+        if seconds == 0.1 and initial:
+            raise initial
+        interrupt()
+    if phase == "taskkill" and not initial:
+        # Let the builder's ordinary polling finish, then interrupt taskkill.
+        builder.poll = iter([0, None]).__next__
+        builder.returncode = 0
+    if phase == "verification":
+        monkeypatch.setattr(job, "terminate", lambda: None)
+    if phase == "close":
+        monkeypatch.setattr(job, "close", interrupt)
+    monkeypatch.setattr(ui.time, "sleep", sleep)
+    monkeypatch.setattr(ui, "build_css", lambda: ui.run_css_builder(["synthetic-bash"]))
+    try:
+        with pytest.raises(initial_type or ui.CssBuilderCleanupError) as raised:
+            ui.main()
+        if initial:
+            assert raised.value is initial
+        assert json.loads(handle.read_text()) == {"directory": str(directory)}
+        recovery = json.loads((directory / "css-cleanup-failed.json").read_text())
+        assert recovery["reason"] == "KeyboardInterrupt"
+        assert recovery["builder_pid"] == builder.pid and recovery["job"] == job.name
+        assert builder.stdin.closed
+        assert job.closed is (phase != "close")
+    finally:
+        ui.shutil.rmtree(directory)
 
 
 @pytest.mark.parametrize("state", ["exited", "term", "missing", "kill"])

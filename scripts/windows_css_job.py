@@ -3,6 +3,13 @@ import ctypes
 from ctypes import wintypes
 import uuid
 
+JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION = 1
+JOB_OBJECT_BASIC_PROCESS_ID_LIST = 3
+JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
+JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+PROCESS_TERMINATE = 0x0001
+PROCESS_SET_QUOTA = 0x0100
+
 
 class Accounting(ctypes.Structure):
     _fields_ = [(name, ctypes.c_int64) for name in (
@@ -49,9 +56,10 @@ class WindowsCssJob:
             limits = ExtendedLimits()
             # KILL_ON_JOB_CLOSE, with no breakaway permission. If the launcher
             # itself exits, its last job handle still stops every descendant.
-            limits.basic.flags = 0x2000
+            limits.basic.flags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
             self._check(self.api.SetInformationJobObject(
-                self.handle, 9, ctypes.byref(limits), ctypes.sizeof(limits)))
+                self.handle, JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+                ctypes.byref(limits), ctypes.sizeof(limits)))
         except BaseException:
             self.close()
             raise
@@ -64,7 +72,7 @@ class WindowsCssJob:
 
     def assign(self, pid):
         # SET_QUOTA | TERMINATE: the rights required by AssignProcessToJobObject.
-        handle = self._check(self.api.OpenProcess(0x0101, False, pid))
+        handle = self._check(self.api.OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, False, pid))
         try:
             self._check(self.api.AssignProcessToJobObject(self.handle, handle))
         finally:
@@ -76,7 +84,8 @@ class WindowsCssJob:
     def active(self):
         accounting = Accounting()
         self._check(self.api.QueryInformationJobObject(
-            self.handle, 1, ctypes.byref(accounting), ctypes.sizeof(accounting), None))
+            self.handle, JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION,
+            ctypes.byref(accounting), ctypes.sizeof(accounting), None))
         return accounting.active
 
     def pids(self):
@@ -88,7 +97,8 @@ class WindowsCssJob:
 
         processes = ProcessList()
         self._check(self.api.QueryInformationJobObject(
-            self.handle, 3, ctypes.byref(processes), ctypes.sizeof(processes), None))
+            self.handle, JOB_OBJECT_BASIC_PROCESS_ID_LIST,
+            ctypes.byref(processes), ctypes.sizeof(processes), None))
         return list(processes.ids[:processes.count])
 
     def close(self):

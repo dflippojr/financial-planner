@@ -126,13 +126,13 @@ def finish_css_builder(process, tree):
             if process.stdin is not None:
                 process.stdin.close()
             stop_css_builder(process, tree)
-    except (OSError, CssBuilderCleanupError) as error:
+    except (OSError, CssBuilderCleanupError, KeyboardInterrupt) as error:
         cleanup_error = error
     finally:
         if tree is not None:
             try:
                 tree.close()
-            except OSError as error:
+            except (OSError, KeyboardInterrupt) as error:
                 cleanup_error = cleanup_error or error
     if cleanup_error:
         if isinstance(cleanup_error, CssBuilderCleanupError):
@@ -143,7 +143,8 @@ def finish_css_builder(process, tree):
 
 class CssBuilderCleanupError(RuntimeError):
     def __init__(self, pid, job, reason, owned_pids=()):
-        self.recovery = {"builder_pid": pid, "job": job, "reason": str(reason),
+        reason = str(reason) or type(reason).__name__
+        self.recovery = {"builder_pid": pid, "job": job, "reason": reason,
                          "last_known_owned_pids": list(owned_pids)}
         super().__init__(f"CSS builder cleanup unverified (PID {pid}, job {job}): {reason}. "
                          "Retain the startup handle; verify the owned tree has stopped before removing storage.")
@@ -191,7 +192,7 @@ def stop_windows_css_builder(process, tree):
                     raise TimeoutError("Owned Windows job still has active descendants after 5 seconds")
                 time.sleep(0.05)
         process.wait(timeout=5)
-    except (OSError, subprocess.TimeoutExpired) as error:
+    except (OSError, subprocess.TimeoutExpired, KeyboardInterrupt) as error:
         raise CssBuilderCleanupError(process.pid, tree.name, error, owned_pids) from error
 
 
