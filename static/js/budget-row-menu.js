@@ -20,19 +20,34 @@
     list.style.top = top + "px";
   }
 
-  table.addEventListener("toggle", function (event) {
-    var menu = event.target;
-    if (!(menu instanceof HTMLDetailsElement) || !menu.hasAttribute("data-row-menu")) return;
+  function update(menu) {
     var list = menu.querySelector(".row-menu-list");
     if (typeof list.showPopover !== "function") return;
     if (menu.open) {
       list.classList.add("budget-menu-popover");
       list.setAttribute("popover", "manual");
-      list.showPopover();
+      if (!list.matches(":popover-open")) list.showPopover();
       position(menu, list);
     } else if (list.matches(":popover-open")) {
       list.hidePopover();
     }
+  }
+
+  // Summary activation also covers Enter/Space. Open in the top layer in the
+  // same event, before a native details frame can be clipped by the scroller.
+  table.addEventListener("click", function (event) {
+    var summary = event.target instanceof Element ? event.target.closest("summary") : null;
+    var menu = summary && summary.parentElement;
+    if (!(menu instanceof HTMLDetailsElement) || !menu.hasAttribute("data-row-menu")) return;
+    if (typeof menu.querySelector(".row-menu-list").showPopover !== "function") return;
+    event.preventDefault();
+    menu.open = !menu.open;
+    update(menu);
+  });
+
+  table.addEventListener("toggle", function (event) {
+    var menu = event.target;
+    if (menu instanceof HTMLDetailsElement && menu.hasAttribute("data-row-menu")) update(menu);
   }, true);
 
   var pending = false;

@@ -405,6 +405,11 @@
 
 /* Budget dropdowns escape the table scroller while its rows stay contained. */
 .budget-menu-popover:popover-open {
+  /* Measure the final box: dropdown scale animation shifts viewport placement. */
+  animation: none;
+  transition: none;
+  scale: 1;
+  opacity: 1;
   position: fixed;
   inset: auto;
   margin: 0;
