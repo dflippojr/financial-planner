@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
 from django.http import JsonResponse
@@ -56,9 +58,10 @@ def chat_send(request):
     conversation_id = request.POST.get("conversation_id") or None
     page_context = sanitize_page_context(
         {
+            "tile": _posted_tile(request),
             "route": request.POST.get("page_route") or "",
             "query": request.POST.get("page_query") or "",
-        }
+        }, person
     )
     next_url = safe_next_url(request, request.POST.get("next"), default=reverse("chat"))
     try:
@@ -74,6 +77,18 @@ def chat_send(request):
     if next_url.rstrip("/").endswith("chat") or next_url.startswith(reverse("chat")):
         return redirect(f"{reverse('chat')}?c={conversation.pk}")
     return redirect(next_url)
+
+
+def _posted_tile(request):
+    raw = request.POST.get("tile_context") or ""
+    from .input_limits import MAX_PAGE_CONTEXT_CHARS
+
+    if len(raw) > MAX_PAGE_CONTEXT_CHARS:
+        return {"oversize": raw}
+    try:
+        return json.loads(raw) if raw else {}
+    except (ValueError, TypeError):
+        return {}
 
 
 def _parse_conversation_id(raw_id):

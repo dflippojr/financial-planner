@@ -7,6 +7,7 @@
 <section class="card mb-4 bg-base-100 shadow-sm" aria-labelledby="key-numbers-heading">
   <div class="card-body gap-4">
     <h2 id="key-numbers-heading" class="sr-only">Income, spending, and net</h2>
+      {% if facts.income_minor or facts.spending_minor %}{% ai_tile "review-totals" has_data=True month=month %}{% endif %}
     <div class="grid divide-y divide-base-300 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
       {% include "finance/_report_key_number.html" with label="Income" value=facts.income_display tone="" prior=facts.prior year_ago=facts.year_ago display_key="income_delta_display" %}
       {% include "finance/_report_key_number.html" with label="Spending" value=facts.spending_display tone="out" prior=facts.prior year_ago=facts.year_ago display_key="spending_delta_display" minor_key="spending_delta_minor" more_less=True %}
@@ -37,6 +38,7 @@
   <div class="card-body gap-1">
     <div class="mb-1 flex flex-wrap items-center justify-between gap-2">
       <h2 id="review-categories" class="card-title text-base">Category changes</h2>
+      {% if facts.category_increases or facts.category_decreases %}{% ai_tile "review-categories" has_data=True month=month %}{% endif %}
       <a class="link text-sm" href="{{ facts.spending_url }}">Open spending</a>
     </div>
     <h3 class="report-subhead">Largest increases</h3>
@@ -66,6 +68,7 @@
   <div class="card-body gap-1">
     <div class="mb-1 flex flex-wrap items-center justify-between gap-2">
       <h2 id="review-budgets" class="card-title text-base">Budgets</h2>
+      {% if facts.budgets_over or facts.largest_remaining %}{% ai_tile "review-budgets" has_data=True month=month %}{% endif %}
       <a class="link text-sm" href="{{ facts.budgets_url }}">Open budgets</a>
     </div>
     <h3 class="report-subhead">{% include "finance/_status.html" with word="Over limit" %}</h3>

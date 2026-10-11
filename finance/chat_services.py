@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+import json
 
 from django.conf import settings
 from django.core.exceptions import PermissionDenied
@@ -130,10 +131,17 @@ def delete_conversations_for_account(account_id):
 
 
 
-def sanitize_page_context(raw):
+def sanitize_page_context(raw, person=None):
     if not raw:
         return {}
     if not isinstance(raw, dict):
+        return {}
+    from .ai_tiles import sanitize_tile
+
+    try:
+        if len(json.dumps(raw)) > MAX_PAGE_CONTEXT_CHARS:
+            return {}
+    except (TypeError, ValueError):
         return {}
     route = str(raw.get("route") or raw.get("path") or "").strip()
     query = str(raw.get("query") or raw.get("query_string") or "").strip()
@@ -150,6 +158,9 @@ def sanitize_page_context(raw):
         cleaned["route"] = route
     if query:
         cleaned["query"] = query
+    tile = sanitize_tile(raw.get("tile"), person)
+    if tile:
+        cleaned["tile"] = tile
     return cleaned
 
 
@@ -172,7 +183,7 @@ def send_message(principal, text, *, conversation_id=None, page_context=None, st
     prompt = (text or "").strip()
     if not prompt:
         raise AiError("Enter a question.")
-    context_payload = sanitize_page_context(page_context)
+    context_payload = sanitize_page_context(page_context, person)
     conversation = None
     if conversation_id:
         conversation = conversation_for(person, conversation_id)
@@ -262,7 +273,7 @@ def answer_turn(turn, *, sleep=None, monotonic=None):
         return failed_reply(str(exc), backend=turn.backend)
     question = turn.reply_to
     prompt = question.content if question is not None else ""
-    context_payload = sanitize_page_context(question.page_context if question is not None else None)
+    context_payload = sanitize_page_context(question.page_context if question is not None else None, person)
 
     collected = []
     cap = max_tool_calls()
@@ -410,13 +421,23 @@ def _api_history(conversation, question):
 
 def _harness_context(page_context):
     blocks = [{"title": "How to answer", "content": INSTRUCTION_CONTEXT}]
-    if page_context:
+    if page_context.get("route") or page_context.get("query"):
         parts = []
         if page_context.get("route"):
             parts.append(f"route={page_context['route']}")
         if page_context.get("query"):
             parts.append(f"query={page_context['query']}")
         blocks.append({"title": "Current page", "content": "\n".join(parts)})
+    from .ai_tiles import TILES
+
+    context_tile = page_context.get("tile", {})
+    tile = TILES.get(context_tile.get("kind"))
+    if tile:
+        parts = [f"kind={context_tile['kind']}", f"label={tile.label}"]
+        parts.extend(f"{key}={value}" for key, value in context_tile["filters"].items())
+        parts.append("tools=" + ", ".join(tile.tools))
+        parts.append("Use these filters with the named tools. A month means its full date range; compare prior months where needed.")
+        blocks.append({"title": "Current tile", "content": "\n".join(parts)})
     return blocks
 
 

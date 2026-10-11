@@ -773,3 +773,22 @@ form fieldset {
   height: 24px;
   accent-color: var(--color-primary);
 }
+/* Tile questions remain in reading order; the track spans the tile for sticky reach. */
+.ai-tile { position: relative; }
+.ai-bead-track { display: none; }
+@media (min-width: 1024px) {
+  .ai-tile { border: 1px solid var(--color-base-300); border-radius: var(--radius-box); }
+  .ai-bead-track { display: block; position: absolute; inset: -15px 0 0; pointer-events: none; z-index: 20; }
+  .ai-bead { position: sticky; top: 8px; display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 5px; border: 1px solid var(--color-primary); border-radius: 50%; background: var(--color-base-100); color: var(--color-primary); box-shadow: 0 0 0 4px var(--color-base-200); pointer-events: auto; opacity: 0; transform: translateX(calc(var(--ai-bead-x, 100%) - 50%)); transition: transform 80ms ease-out, opacity 120ms, width 120ms, height 120ms; }
+  .ai-bead svg { width: 18px; height: 18px; flex: none; }
+  .ai-bead-visible .ai-bead, .ai-tile:focus-within .ai-bead { opacity: 1; }
+  .ai-bead:hover, .ai-bead:focus-visible { width: 40px; height: 40px; margin-top: -5px; background: var(--color-primary); color: var(--color-primary-content); }
+  .ai-bead:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 6px; }
+  .ai-bead-tooltip { position: absolute; top: calc(100% + 8px); right: 0; width: max-content; max-width: 230px; padding: 6px 10px; border-radius: 6px; background: var(--color-base-content); color: var(--color-base-100); font-size: 12px; opacity: 0; pointer-events: none; }
+  .ai-bead:hover .ai-bead-tooltip, .ai-bead:focus-visible .ai-bead-tooltip { opacity: 1; }
+  @media (hover: none) { .ai-bead { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) {
+    .ai-bead { transition: opacity 120ms; }
+    .ai-bead:hover, .ai-bead:focus-visible { width: 30px; height: 30px; margin-top: 0; box-shadow: 0 0 0 6px var(--color-base-200); }
+  }
+}

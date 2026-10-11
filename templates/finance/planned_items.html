@@ -1,10 +1,12 @@
 {% extends "finance/base.html" %}
+{% load ui %}
 {% block title %}Planned items · Financial Planner{% endblock %}
 {% block content %}
 {% include "finance/_page_header.html" with title="Planned items" helper="Income and expenses you expect. They feed the projected months on Cash flow and never change actual totals. Amounts in USD." actions="finance/_planned_items_header_actions.html" %}
 <div class="page-columns">
 <section class="card border border-base-300 bg-base-100" aria-labelledby="planned-list-heading">
   <h2 id="planned-list-heading" class="sr-only">Your planned items</h2>
+      {% ai_tile "planned-items" has_data=items  %}
   <table class="table">
     <thead>
       <tr>

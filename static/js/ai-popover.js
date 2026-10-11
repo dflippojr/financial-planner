@@ -105,6 +105,9 @@
     pop.querySelector("[data-pin-status]").hidden = !state.pinned;
     form.elements.conversation_id.value = state.conversationId || "";
     pop.querySelector("[data-pop-chat]").href = pop.dataset.chatUrl + (state.conversationId ? "?c=" + state.conversationId : "");
+    document.querySelectorAll("[data-ai-bead]").forEach(function (bead) {
+      bead.setAttribute("aria-expanded", String(state.open && !state.collapsed && bead === opener));
+    });
     pillStatus();
     if (!pop.hidden) position(true);
     save();
@@ -114,12 +117,16 @@
     const params = new URLSearchParams(pop.dataset.pageQuery);
     const dates = [params.get("date_from"), params.get("date_to")].filter(Boolean).join(" – ");
     subject = (heading ? heading.textContent.trim() : "This page") + (dates ? " · " + dates : "");
-    // #342 supplies a registry tile through this hook; route/query remain the only sent context here.
+    form.elements.tile_context.value = tile ? JSON.stringify({kind: tile.kind, filters: tile.filters}) : "";
     if (tile && typeof tile.label === "string") subject = tile.label;
     pop.querySelector("[data-pop-subject]").textContent = subject;
     pop.querySelector("[data-pop-context]").hidden = false;
     form.elements.page_route.value = pop.dataset.pageRoute;
     form.elements.page_query.value = pop.dataset.pageQuery;
+    const prompts = tile && Array.isArray(tile.prompts) ? tile.prompts : ["Explain this", "What changed?"];
+    pop.querySelectorAll("[data-pop-followup]").forEach(function (button, index) {
+      button.textContent = prompts[index] || "Explain this";
+    });
     pillStatus();
   }
   function unavailable() {
@@ -212,12 +219,14 @@
       opener = args.origin instanceof Element ? args.origin : document.activeElement;
       const wasOpen = state.open;
       state.open = true;
+      const wasCollapsed = state.collapsed;
       state.collapsed = false;
       answerReady = false;
       setContext(args.tile);
-      if (!state.dragged && opener instanceof Element) {
+      if (!state.dragged && !state.pinned && !wasCollapsed && opener instanceof Element) {
         const rect = opener.getBoundingClientRect();
         state.x = rect.right + 12;
+        if (state.x + 380 > innerWidth - 8) state.x = rect.left - 380 - 12;
         state.y = rect.top;
       }
       draw();
@@ -246,6 +255,7 @@
       case "context":
         form.elements.page_route.value = "";
         form.elements.page_query.value = "";
+        form.elements.tile_context.value = "";
         subject = "No page context";
         pop.querySelector("[data-pop-context]").hidden = true;
         pillStatus(); announce("Context removed"); break;
