@@ -35,7 +35,7 @@ def test_untrusted_registry_path_is_preserved(registry, monkeypatch):
     unrelated.mkdir()
     entry = record(registry, unrelated)
     monkeypatch.setattr(cleanup, "teardown", lambda _: pytest.fail("Untrusted path must not be contacted"))
-    with pytest.raises(RuntimeError, match="Teardown requires"):
+    with pytest.raises(RuntimeError, match=r"instance.json \(RuntimeError\)"):
         cleanup.main()
     assert unrelated.is_dir() and entry.is_file()
 
@@ -64,6 +64,32 @@ def test_failed_shutdown_keeps_handle_for_recovery(registry, monkeypatch):
     times = iter([0, 1, 16])
     monkeypatch.setattr(cleanup.time, "monotonic", lambda: next(times))
     monkeypatch.setattr(cleanup.time, "sleep", lambda _: None)
-    with pytest.raises(RuntimeError, match="storage remains"):
+    with pytest.raises(RuntimeError, match=r"instance.json \(RuntimeError\)"):
         cleanup.main()
     assert directory.is_dir() and entry.is_file()
+
+
+@pytest.mark.parametrize("failure", ["invalid-json", "teardown-error"])
+def test_registry_continues_after_failed_record(registry, monkeypatch, failure):
+    bad = registry.parents[1] / (ui_instance.PREFIX + "unavailable")
+    good = registry.parents[1] / (ui_instance.PREFIX + "healthy")
+    bad.mkdir()
+    good.mkdir()
+    failed = registry / "01-failed.json"
+    failed.write_text("invalid" if failure == "invalid-json" else json.dumps({"directory": str(bad)}))
+    healthy = registry / "02-healthy.json"
+    healthy.write_text(json.dumps({"directory": str(good)}))
+    stopped = []
+
+    def stop(directory):
+        if directory == bad:
+            raise OSError("Synthetic unavailable endpoint")
+        stopped.append(directory)
+        directory.rmdir()
+
+    monkeypatch.setattr(cleanup, "teardown", stop)
+    with pytest.raises(RuntimeError, match="01-failed.json"):
+        cleanup.main()
+    assert stopped == [good]
+    assert failed.exists() and bad.exists()
+    assert not healthy.exists() and not good.exists()

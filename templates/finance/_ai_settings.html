@@ -24,7 +24,8 @@
     <p class="mb-2 text-sm">Connected to {{ ai_connection.base_url }}.</p>
     <p class="mb-4 text-sm">Chat can use a hosted backend that supports app-tools-only sessions (Claude). Background jobs still need hosted sessions enabled by the operator before they can use Claude, Codex, or Cursor. Chat on the local model is offered only when the setting below is on. Other household members never use hosted backends on this connection.</p>
     {% if ai_backends %}
-    <table class="table table-sm mb-4">
+    <div class="mb-4 overflow-x-auto" role="region" aria-label="AI backend availability" tabindex="0">
+    <table class="table table-sm">
       <thead>
         <tr><th scope="col">Backend</th><th scope="col">Status</th><th scope="col">Live</th><th scope="col">Background</th></tr>
       </thead>
@@ -39,6 +40,7 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
     {% endif %}
     {% if ai_offer_form %}
     <form method="post" action="{% url 'ai-offer-local' %}" class="max-w-lg space-y-3 mb-4">
@@ -138,6 +140,7 @@
   {% if ai_connected or ai_key_cards %}
   <h3 class="mb-2 font-semibold">Usage</h3>
   {% if ai_usage %}
+  <div class="overflow-x-auto" role="region" aria-label="AI usage" tabindex="0">
   <table class="table table-sm">
     <thead>
       <tr><th scope="col">When</th><th scope="col">Backend</th><th scope="col">Feature</th><th scope="col">Tokens</th><th scope="col">Outcome</th></tr>
@@ -154,6 +157,7 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
   {% else %}
   <p class="text-sm">No AI usage yet.</p>
   {% endif %}
