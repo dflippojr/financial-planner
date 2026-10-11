@@ -344,13 +344,29 @@ def _process_one(job, moment):
 
 @transaction.atomic
 def _save_job_success(job):
+    if job.feature in PHRASING_FEATURES:
+        # Use the enqueue lock before taking the job lock. An enqueue that saw
+        # RUNNING must finish before we check for a newer generation; one that
+        # arrives later sees SUCCEEDED and can queue it itself.
+        Person.objects.select_for_update().filter(pk=job.member_id).first()
     updated = AiJob.objects.filter(pk=job.pk, audit_run_id=job.audit_run_id, status=AiJob.Status.RUNNING).update(
         status=job.status, result_ref=job.result_ref, failure_code=job.failure_code,
         finished_at=job.finished_at, harness_session_id=job.harness_session_id, updated_at=timezone.now(),
     )
     if updated:
+        if job.feature in PHRASING_FEATURES:
+            _requeue_completed_phrasing(job)
         outcome_for_job(job, "ai_job")
     return bool(updated)
+
+
+def _requeue_completed_phrasing(job):
+    """Finish and hand off newer review facts in the same enqueue-locked transaction."""
+    from .monthly_review_ai import _requeue_if_regenerated, queue_monthly_review_phrasing
+    from .unusual_spending_ai import queue_unusual_phrasing
+
+    queue = queue_monthly_review_phrasing if job.feature == "monthly_review" else queue_unusual_phrasing
+    _requeue_if_regenerated(job.member, job, (job.input_refs or {}).get("generated_at"), queue)
 
 
 def _write_claimed(job, **fields):
