@@ -120,6 +120,36 @@ for (const device of ['iPhone 15', 'Pixel 7', 'Desktop Chrome']) {
         await reachable(reset);
         await reset.focus();
         await expect(reset).toBeFocused();
+        const fields = panel.locator('input:not([type=hidden]), select, textarea');
+        const expectedFields = await fields.evaluateAll(elements => elements.map(element => element.id));
+        const visitedFields = new Set<string>();
+        for (let step = 0; step < 40; step++) {
+          await page.keyboard.press('Shift+Tab');
+          // Date inputs may have several native keyboard stops within one field.
+          await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolve)))));
+          if (await close.evaluate(element => element === document.activeElement)) break;
+          await expect.poll(() => panel.evaluate(details => {
+            const active = document.activeElement!;
+            const form = details.querySelector('form')!;
+            const header = form.firstElementChild!.getBoundingClientRect();
+            const box = active.getBoundingClientRect();
+            const formBox = form.getBoundingClientRect();
+            const hits = [box.top + 2, box.top + box.height / 2, box.bottom - 2]
+              .map(y => document.elementFromPoint(box.left + box.width / 2, y));
+            return {
+              insidePanel: form.contains(active),
+              belowHeader: box.top >= header.bottom,
+              insideBottom: box.bottom <= Math.min(formBox.bottom - form.clientTop, innerHeight),
+              receivesHit: hits.every(hit => !!hit && active.contains(hit)),
+            };
+          }), { message: 'Reverse-Tab focus is fully below the sticky Filters header and receives hits' })
+            .toEqual({ insidePanel: true, belowHeader: true, insideBottom: true, receivesHit: true });
+          visitedFields.add(await page.evaluate(() => document.activeElement!.id));
+        }
+        await expect(close).toBeFocused();
+        expect([...visitedFields].filter(id => expectedFields.includes(id)).sort()).toEqual(expectedFields.sort());
+        await reachable(reset);
+        await reset.focus();
         await Promise.all([page.waitForEvent('framenavigated', { predicate: frame => frame === page.mainFrame() }), reset.press('Enter')]);
         await page.waitForLoadState('domcontentloaded');
         await page.reload();
