@@ -349,6 +349,62 @@
   }
 }
 
+/* Reflow follows the available column and user text size, not only viewport breakpoints.
+   Scoped rules follow utilities so the desktop grid can yield to a narrow chart column. */
+.home-chart-layout,
+.home-chart-main {
+  container-type: inline-size;
+}
+
+@container (width < 50rem) {
+  .home-chart-layout > .page-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@container (width < 32rem) {
+  .home-chart-main [aria-label="Key numbers"] > div {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .home-chart-main [aria-label="Key numbers"] > div > div {
+    grid-column: auto;
+    border-left: 0;
+    padding-left: 0;
+  }
+}
+
+@container (width < 16rem) {
+  .home-chart-main [aria-label="Key numbers"] .text-4xl {
+    font-size: 1.5rem;
+  }
+}
+
+.category-settings .label,
+.category-settings .label-text,
+.audit-filters .label,
+.audit-filters .label-text {
+  max-width: 100%;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.category-settings li > span,
+.category-rename {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.audit-filters {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
+}
+
+.audit-filters > * {
+  min-width: 0;
+}
+
 /* Category rename (issue #339): the Rename button is a summary; opening it drops the form onto its own line. */
 @layer components {
   .category-rename > summary {

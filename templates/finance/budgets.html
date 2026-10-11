@@ -61,6 +61,7 @@
 </div>
 <div class="page-columns max-md:hidden">
   <section class="rounded-box border border-base-300 bg-base-100" aria-label="Category budgets">
+    <div class="overflow-x-auto" tabindex="0" role="region" aria-label="Budget amounts and actions">
     <table class="table">
       <thead>
         <tr>
@@ -106,6 +107,7 @@
       {% endfor %}
       </tbody>
     </table>
+    </div>
   </section>
   {% if overall_cards or attention_cards %}
   {# Below xl the summary sits above the table; Needs attention only shows beside it, since the rows say Over too. #}
