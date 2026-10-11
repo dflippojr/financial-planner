@@ -78,6 +78,38 @@ def test_http_lifecycle_seeds_sign_in_chat_and_authenticated_teardown(monkeypatc
         assert not errors
 
 
+def test_instance_state_is_visible_only_after_the_write_finishes(monkeypatch, tmp_path):
+    opened = threading.Event()
+    finish = threading.Event()
+    original_write = Path.write_text
+    errors = []
+
+    def paused_write(path, content):
+        path.touch()
+        opened.set()
+        assert finish.wait(timeout=5)
+        return original_write(path, content)
+
+    def publish():
+        try:
+            ui_instance.publish_instance_state(tmp_path, {"port": 12345, "token": "synthetic"})
+        except Exception as error:
+            errors.append(error)
+
+    monkeypatch.setattr(Path, "write_text", paused_write)
+    thread = threading.Thread(target=publish)
+    thread.start()
+    try:
+        assert opened.wait(timeout=5)
+        assert not (tmp_path / "instance.json").exists()
+    finally:
+        finish.set()
+        thread.join(timeout=5)
+    assert not thread.is_alive()
+    assert not errors
+    assert json.loads((tmp_path / "instance.json").read_text()) == {"port": 12345, "token": "synthetic"}
+
+
 def test_ui_settings_force_temporary_sqlite_and_disable_email(monkeypatch, tmp_path):
     from financial_planner import settings as production_settings
     directory = tmp_path / (ui_instance.PREFIX + "settings")

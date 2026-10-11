@@ -91,6 +91,12 @@ class ThreadedServer(ThreadingMixIn, WSGIServer):
     block_on_close = True
 
 
+def publish_instance_state(directory, state):
+    pending = directory / "instance.json.tmp"
+    pending.write_text(json.dumps(state))
+    pending.replace(directory / "instance.json")
+
+
 def serve(directory):
     env = isolated_environment(directory)
     os.environ.clear()
@@ -138,7 +144,7 @@ def serve(directory):
 
         server = make_server("127.0.0.1", 0, application, server_class=ThreadedServer)
         port = server.server_port
-        (directory / "instance.json").write_text(json.dumps({"port": port, "token": token}))
+        publish_instance_state(directory, {"port": port, "token": token})
 
         worker = threading.Thread(target=poll_chat, args=(stop,), name="synthetic-chat")
         worker.start()
