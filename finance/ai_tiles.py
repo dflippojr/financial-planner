@@ -15,18 +15,19 @@ class AiTile:
     tools: tuple[str, ...]
     filters: tuple[str, ...]
     prompts: tuple[str, ...] = ("Explain this", "What changed?")
+    requires_household_consent: bool = False
 
 
 RANGE = ("date_from", "date_to", "account_id", "scope")
 TILES = {
     "cash-flow-totals": AiTile("Key numbers", ("cash_flow_totals",), RANGE),
     "cash-flow-chart": AiTile("Cash flow by period", ("cash_flow_totals", "projected_cash_flow"), RANGE + ("grouping", "horizon")),
-    "cash-flow-months": AiTile("By month", ("cash_flow_totals", "projected_cash_flow"), RANGE + ("grouping", "horizon")),
+    "cash-flow-months": AiTile("By period", ("cash_flow_totals", "projected_cash_flow"), RANGE + ("grouping", "horizon")),
     "home-budgets": AiTile("Budgets", ("list_budgets", "propose_set_budget"), ("month",)),
     "transactions": AiTile("Transactions", ("search_transactions", "propose_set_category", "propose_add_tags"), RANGE + ("category_id", "all_dates")),
     "transaction-totals": AiTile("Cash flow totals", ("cash_flow_totals",), RANGE + ("all_dates",)),
     "budgets": AiTile("Category budgets", ("list_budgets", "propose_set_budget"), ("month",)),
-    "budget-total": AiTile("Monthly total", ("list_budgets", "propose_set_budget"), ("month", "scope")),
+    "budget-total": AiTile("Monthly total", ("list_budgets", "propose_set_budget"), ("month", "scope"), requires_household_consent=True),
     "spending-categories": AiTile("Categories", ("spending_by_category",), RANGE),
     "net-worth-totals": AiTile("Current net worth", ("net_worth_series",), ("date_from", "date_to", "scope")),
     "net-worth-months": AiTile("By month", ("net_worth_series",), ("date_from", "date_to", "scope")),
@@ -96,8 +97,13 @@ def sanitize_tile(raw, person=None):
     return {"kind": kind, "filters": filters}
 
 
-def tile_data_shareable(person, filters):
-    """A private-only tile remains usable while household consent is incomplete."""
+def tile_data_shareable(person, filters, *, kind):
+    """Consent follows the data summarized, rather than budget ownership."""
+    tile = TILES.get(kind)
+    if tile is None:
+        return False
+    if tile.requires_household_consent:
+        return _household_allowed(person)
     account_id = filters.get("account_id")
     if account_id:
         return Account.objects.visible_to(person).filter(pk=account_id, scope=Account.Scope.PRIVATE).exists() or _household_allowed(person)

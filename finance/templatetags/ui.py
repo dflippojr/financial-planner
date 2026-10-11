@@ -207,9 +207,9 @@ def ai_tile(context, kind, *, has_data=False, **values):
            for key, value in filters.items()):
         return {}
     share_cache = context.render_context.setdefault("ai_bead_sharing", {})
-    key = (person.pk, tile_context["filters"].get("account_id"), tile_context["filters"].get("scope"))
+    key = (person.pk, kind, tile_context["filters"].get("account_id"), tile_context["filters"].get("scope"))
     if key not in share_cache:
-        share_cache[key] = tile_data_shareable(person, tile_context["filters"])
+        share_cache[key] = tile_data_shareable(person, tile_context["filters"], kind=kind)
     if not share_cache[key]:
         return {}
     return {"tile": TILES[kind], "tile_context": json.dumps(tile_context),

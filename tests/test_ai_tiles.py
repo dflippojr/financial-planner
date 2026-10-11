@@ -46,6 +46,7 @@ def test_registry_tools_are_real_and_ineligible_tiles_are_absent():
     assert all(set(tile.tools) <= tools for tile in TILES.values())
     assert all(tile.label and tile.prompts for tile in TILES.values())
     assert not set(TILES) & {"attention", "accounts", "bills", "goals", "transfers", "alerts", "import", "year-end", "debt-payoff"}
+    assert not tile_data_shareable(None, {}, kind="bills")
 
 
 @pytest.mark.parametrize("raw", [None, [], {}, {"kind": []}, {"kind": "injected"}])
@@ -134,11 +135,11 @@ def test_bead_rendering_states_and_household_gate(member):
     assert render_bead(user) == ""
     private = checking(person, household, "Own private", private=True)
     assert "data-ai-bead" in render_bead(user, kind="cash-flow-totals", filters={"account_id": private.pk})
-    assert "data-ai-bead" in render_bead(user, kind="budget-total", filters={"scope": "private"})
+    assert render_bead(user, kind="budget-total", filters={"scope": "private"}) == ""
     shared = checking(person, household, "Shared")
-    assert not tile_data_shareable(person, {"account_id": shared.pk})
+    assert not tile_data_shareable(person, {"account_id": shared.pk}, kind="cash-flow-totals")
     Membership.objects.filter(person=person).delete()
-    assert tile_data_shareable(person, {})
+    assert tile_data_shareable(person, {}, kind="cash-flow-totals")
     publish_policy(material=True, body="New synthetic policy")
     assert render_bead(user) == ""
 
@@ -536,3 +537,50 @@ def test_account_projection_retains_migrated_series_without_bypassing_consent(
             (month.income_minor, month.spending_minor, month.net_minor) for month in actual
         ]
         assert all(figure["amount_minor"] == -1111 and figure["url"] == payload["page_url"] for figure in result.figures)
+
+
+@pytest.mark.parametrize("budget_scope", ["private", "household"])
+@pytest.mark.parametrize("consented", [False, True])
+def test_monthly_budget_bead_requires_consent_for_the_spending_it_displays(member, budget_scope, consented):
+    from finance.budget_services import save_budget
+
+    user, person, household = member
+    _other_user, other, _household = make_member("budget_tile_other", household=household, policy=current_policy())
+    if not consented:
+        other.privacy_policy_acceptances.all().delete()
+    private = checking(person, household, "Synthetic private budget spending", private=True)
+    shared = checking(person, household, "Synthetic household budget spending")
+    month = date(2026, 1, 1)
+    for account, amount in ((private, -100), (shared, -900)):
+        add_txn(account, person, month, amount, "Synthetic budget expense")
+    save_budget(person, {"scope": budget_scope, "category": None, "amount_minor": 5000,
+                        "effective_month": month, "rollover_enabled": False})
+    client = Client()
+    client.force_login(user)
+    response = client.get(reverse("budgets"), {"month": "2026-01"})
+    card = response.context["overall_cards"][0]
+    assert card.spent_minor == (1000 if budget_scope == "private" else 900)
+    rows = json.loads(list_budgets(person, {"month": "2026-01", "scope": budget_scope}).text)["rows"]
+    html = response.content.decode()
+    if consented:
+        assert 'Ask AI about Monthly total' in html
+        assert [row["spent_minor"] for row in rows] == [card.spent_minor]
+    else:
+        assert 'Ask AI about Monthly total' not in html
+        assert [row["spent_minor"] for row in rows] == ([100] if budget_scope == "private" else [])
+        assert 'data-ai-bead' in render_bead(user, kind="cash-flow-totals", filters={"scope": "private"})
+
+
+@pytest.mark.parametrize("budget_first", [False, True])
+def test_consent_cache_distinguishes_private_account_data_from_private_budget_ownership(member, budget_first):
+    user, _person, household = member
+    _other_user, other, _household = make_member("budget_cache_other", household=household, policy=current_policy())
+    other.privacy_policy_acceptances.all().delete()
+    budget = '{% ai_tile "budget-total" has_data=True scope="private" %}'
+    cash_flow = '{% ai_tile "cash-flow-totals" has_data=True scope="private" %}'
+    request = RequestFactory().get("/")
+    request.user = user
+    source = '{% load ui %}' + (budget + cash_flow if budget_first else cash_flow + budget)
+    html = Template(source).render(Context({"request": request}))
+    assert 'Ask AI about Key numbers' in html
+    assert 'Ask AI about Monthly total' not in html
