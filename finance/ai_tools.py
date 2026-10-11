@@ -254,6 +254,7 @@ def _transaction_scope(person, args):
 
 def cash_flow_totals(person, args):
     all_dates = args.get("all_dates") is True
+    grouping = args.get("grouping") if args.get("grouping") in GROUPINGS else GROUPING_MONTH
     date_from, date_to = _dates(args, all_dates=all_dates)
     account, error = _visible_account(person, args.get("account_id"), args.get("account_name"))
     if error:
@@ -271,7 +272,7 @@ def cash_flow_totals(person, args):
     else:
         report = cash_flow_report(
             person, date_from=date_from, date_to=date_to,
-            grouping=args.get("grouping") if args.get("grouping") in GROUPINGS else GROUPING_MONTH,
+            grouping=grouping,
             account=account, scope=scope, accounts=accounts,
         )
     query = _range_query(date_from, date_to, account=account, scope=scope)
@@ -279,6 +280,8 @@ def cash_flow_totals(person, args):
         query.setdefault("date_from", "")
         query.setdefault("date_to", "")
     txn_url = f"{reverse('transaction-list')}?{urlencode(query)}"
+    if not all_dates:
+        query["grouping"] = grouping
     page_url = txn_url if all_dates else f"{reverse('home')}?{urlencode(query)}"
     summary = report.summary
     payload = {

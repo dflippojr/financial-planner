@@ -466,3 +466,29 @@ def test_archived_account_page_filter_never_renders_an_unfiltered_bead(member, r
     html = response.content.decode()
     for kind in kinds:
         assert f'&quot;kind&quot;: &quot;{kind}&quot;' not in html
+
+
+@pytest.mark.parametrize("grouping", ["week", "month", "quarter", "year"])
+def test_cash_flow_period_citations_preserve_the_selected_grouping(member, grouping):
+    user, person, household = member
+    account = checking(person, household, "Synthetic grouping history", private=True)
+    for day, amount in [(date(2020, 1, 2), 200), (date(2020, 2, 2), -100), (date(2020, 4, 2), 300)]:
+        add_txn(account, person, day, amount, "Synthetic period entry")
+    result = cash_flow_totals(person, {"date_from": "2020-01-01", "date_to": "2020-12-31",
+                                       "account_id": account.pk, "scope": "private", "grouping": grouping})
+    payload = json.loads(result.text)
+    client = Client()
+    client.force_login(user)
+    response = client.get(payload["page_url"])
+    assert response.status_code == 200
+    report = response.context["report"]
+    assert response.context["filter_form"].cleaned_data["grouping"] == grouping
+    expected = {period.label: period for period in report.periods}
+    for period in payload["periods"]:
+        row = expected[period["label"]]
+        assert (row.income_minor, row.spending_minor, row.net_minor) == (
+            period["income_minor"], period["spending_minor"], period["net_minor"])
+        for label, field in [("income", "income_minor"), ("spending", "spending_minor"), ("net", "net_minor")]:
+            figure = next(figure for figure in result.figures if figure["label"] == f'{period["label"]} {label}')
+            assert figure["url"] == payload["page_url"]
+            assert figure["amount_minor"] == getattr(row, field)
