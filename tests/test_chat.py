@@ -1027,3 +1027,89 @@ def test_harness_follow_up_opens_a_new_session_after_household_consent_lapses(ha
     ask(person, "Follow up", conversation_id=conversation.pk, sleep=lambda _s: None)
     assert ("POST", f"/api/v1/sessions/{old_session}/messages") not in state.requests
     assert len(state.session_creates) == creates_before + 1
+
+
+@pytest.mark.django_db
+def test_popover_restore_is_member_checked_and_expired_ids_do_not_fall_back(harness):
+    _state, url = harness
+    user, person, household = make_member("popover-owner")
+    _other_user, other, _ = make_member("popover-other", household, current_policy())
+    connect_harness(person, base_url=url, token=TOKEN)
+    own = ask(person, "Synthetic spending question")
+    foreign = AiConversation.objects.create(member=other, expires_at=timezone.now() + timedelta(days=1))
+    expired = AiConversation.objects.create(member=person, expires_at=timezone.now() - timedelta(seconds=1))
+    client = Client()
+    client.force_login(user)
+    response = client.get(reverse("chat-popover"), {"c": own.pk})
+    assert response.status_code == 200
+    assert response["Cache-Control"] == "no-store"
+    assert response.json()["conversationId"] == own.pk
+    assert "Synthetic spending question" in response.json()["html"]
+    for value in (foreign.pk, expired.pk, "bad", 2**64, -1):
+        response = client.get(reverse("chat-popover"), {"c": value})
+        assert response.status_code == 404
+        assert "Synthetic spending question" not in response.content.decode()
+
+
+@pytest.mark.django_db
+def test_popover_fetch_send_queues_reply_and_retains_plain_form_redirect(harness):
+    _state, url = harness
+    user, person, _ = make_member("popover-send")
+    connect_harness(person, base_url=url, token=TOKEN)
+    client = Client()
+    client.force_login(user)
+    response = client.post(reverse("chat-send"), {
+        "prompt": "Synthetic income question",
+        "page_route": "/transactions/", "page_query": "date_from=2026-01-01",
+    }, HTTP_ACCEPT="application/json")
+    assert response.status_code == 200
+    data = response.json()
+    conversation = AiConversation.objects.get(pk=data["conversationId"])
+    question = conversation.messages.get(role="user")
+    assert question.page_context == {"route": "/transactions/", "query": "date_from=2026-01-01"}
+    assert 'data-chat-turn-url=' in data["html"]
+    assert data["messageCount"] == 2
+    response = client.post(reverse("chat-send"), {
+        "prompt": "No context question", "conversation_id": conversation.pk,
+    }, HTTP_ACCEPT="application/json")
+    assert response.status_code == 200
+    assert conversation.messages.filter(role="user").last().page_context == {}
+    response = client.post(reverse("chat-send"), {"prompt": "Plain form question"})
+    assert response.status_code == 302
+    assert response.url.startswith(reverse("chat") + "?c=")
+
+
+@pytest.mark.django_db
+def test_popover_fetch_errors_do_not_redirect_or_select_another_conversation(harness):
+    _state, url = harness
+    user, person, _ = make_member("popover-errors")
+    connect_harness(person, base_url=url, token=TOKEN)
+    client = Client()
+    client.force_login(user)
+    for value in ("bad", -1, 2**64, 987654):
+        response = client.post(reverse("chat-send"), {
+            "prompt": "Synthetic question", "conversation_id": value,
+        }, HTTP_ACCEPT="application/json")
+        assert response.status_code == 404
+    assert client.post(reverse("chat-send"), {"prompt": ""}, HTTP_ACCEPT="application/json").status_code == 409
+    assert not AiConversation.objects.filter(member=person).exists()
+
+
+@pytest.mark.django_db
+def test_popover_consent_backend_and_csrf_gates(harness):
+    _state, url = harness
+    user, person, _ = make_member("popover-gated")
+    client = Client()
+    client.force_login(user)
+    assert 'id="ai-popover"' not in client.get(reverse("home")).content.decode()
+    assert client.get(reverse("chat-popover")).status_code == 403
+    connect_harness(person, base_url=url, token=TOKEN)
+    assert 'id="ai-popover"' in client.get(reverse("home")).content.decode()
+    assert client.get(reverse("chat-popover")).json()["conversationId"] is None
+    strict = Client(enforce_csrf_checks=True)
+    strict.force_login(user)
+    assert strict.post(reverse("chat-send"), {"prompt": "Synthetic"}, HTTP_ACCEPT="application/json").status_code == 403
+    publish_policy(material=True, body="Synthetic renewed policy")
+    assert 'id="ai-popover"' not in client.get(reverse("home")).content.decode()
+    assert client.get(reverse("chat-popover")).status_code == 403
+    assert client.post(reverse("chat-send"), {"prompt": "Synthetic"}, HTTP_ACCEPT="application/json").status_code == 409
