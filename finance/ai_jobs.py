@@ -469,7 +469,7 @@ def _local_may_run(member_connection):
 
 
 def _isolate_job_failure(job, moment, exc, *, claimed=False):
-    if job.status in (AiJob.Status.SUCCEEDED, AiJob.Status.FAILED):
+    if not claimed and job.status in (AiJob.Status.SUCCEEDED, AiJob.Status.FAILED):
         return
     if claimed:
         run_id = job.audit_run_id

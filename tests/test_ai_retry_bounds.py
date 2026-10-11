@@ -5,6 +5,7 @@ from datetime import date, timedelta
 from unittest.mock import Mock
 
 import pytest
+from django.db import DatabaseError
 from django.utils import timezone
 
 from finance import ai_harness, ai_jobs
@@ -241,3 +242,27 @@ def test_claimed_new_session_exceptions_spend_one_attempt_each(connected_member,
     assert job.status == AiJob.Status.FAILED
     assert job.finished_at is not None
     assert run.call_count == 3
+
+
+@pytest.mark.parametrize("expired", [False, True])
+def test_success_write_failure_recovers_the_stored_claimed_state(connected_member, monkeypatch, settings, expired):
+    person, connection = connected_member
+    settings.AI_JOB_RESUME_MAX_AGE_SECONDS = 60
+    moment = timezone.now()
+    job = saved_job(person, connection, moment=moment, age=60 if expired else 0)
+    monkeypatch.setattr(ai_jobs, "run_structured", Mock(return_value=ProviderResult(
+        ok=True, session_id=job.harness_session_id,
+    )))
+    monkeypatch.setattr(ai_jobs, "_save_job_success", Mock(side_effect=DatabaseError("synthetic deadlock")))
+    ai_jobs.process_due_jobs(now=moment)
+    job.refresh_from_db()
+    assert job.status == (AiJob.Status.FAILED if expired else AiJob.Status.QUEUED)
+    assert job.failure_code == PROVIDER_ERROR
+    assert job.attempts == 1
+    if expired:
+        assert job.harness_session_id == ""
+        assert job.finished_at is not None
+    else:
+        assert job.harness_session_id == "synthetic-saved-session"
+        assert job.next_attempt_at > moment
+        assert job.finished_at is None
