@@ -151,7 +151,7 @@ def run_monthly_review_job(person, job, **provider_kwargs):
 
 def _run_review_phrasing_job(
     person, job, *, feature, prompt, enabled, payload, queue, fields, provider,
-    skip_empty_unusual=False, backend, session_id="", on_session=None, connection=None,
+    backend, session_id="", on_session=None, connection=None,
 ):
     """Check runtime access/consent and phrase only the still-current review generation."""
     from .monthly_review import visibility_key
@@ -167,7 +167,7 @@ def _run_review_phrasing_job(
     if not enabled(person) or review.visibility_key != visibility_key(person):
         return skipped
     facts = payload(person, review.facts)
-    if skip_empty_unusual and not facts.get("unusual"):
+    if feature == "unusual_spending" and not facts.get("unusual"):
         return skipped
     result = provider(
         person,

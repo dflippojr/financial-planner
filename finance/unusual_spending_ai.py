@@ -66,6 +66,5 @@ def run_unusual_spending_job(person, job, **provider_kwargs):
         queue=queue_unusual_phrasing,
         fields=("unusual_ai_paragraph", "unusual_ai_backend"),
         provider=run_structured,
-        skip_empty_unusual=True,
         **provider_kwargs,
     )
