@@ -12,11 +12,26 @@ async function withDevice(device: string, viewport: { width: number; height: num
 
 async function reachable(control: Locator) {
   await control.evaluate(element => element.scrollIntoView({ block: 'start' }));
-  await expect.poll(() => control.evaluate(element => {
-    const rect = element.getBoundingClientRect();
-    const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
-    return rect.y >= 0 && rect.bottom <= innerHeight && !!hit && element.contains(hit);
-  }), { message: 'Reachable ' + await control.evaluate(el => el.outerHTML) }).toBe(true);
+  try {
+    await expect.poll(() => control.evaluate(element => {
+      const rect = element.getBoundingClientRect();
+      const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+      return { visible: rect.y >= 0 && rect.bottom <= innerHeight, receivesHit: !!hit && element.contains(hit) };
+    }), { message: 'Reachable ' + await control.evaluate(el => el.tagName) }).toMatchObject({ visible: true, receivesHit: true });
+  } catch (error) {
+    const geometry = await control.evaluate(element => {
+      const rect = element.getBoundingClientRect();
+      const panel = element.closest('.filters-panel');
+      return {
+        top: rect.top, bottom: rect.bottom, width: innerWidth, height: innerHeight, scroll: scrollY,
+        panel: panel ? {
+          top: panel.getBoundingClientRect().top, height: panel.getBoundingClientRect().height,
+          scrollTop: panel.scrollTop, scrollHeight: panel.scrollHeight, position: getComputedStyle(panel).position,
+        } : null,
+      };
+    });
+    throw new Error('Unreachable control geometry: ' + JSON.stringify(geometry), { cause: error });
+  }
   await control.click({ trial: true });
 }
 

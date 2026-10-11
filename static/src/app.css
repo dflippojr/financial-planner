@@ -590,7 +590,7 @@
       right: 1rem;
       bottom: calc(5rem + env(safe-area-inset-bottom));
       width: min(40rem, calc(100% - 2rem));
-      max-height: none;
+      max-height: calc(100dvh - 6rem - env(safe-area-inset-bottom));
       align-content: start;
     }
   }
@@ -598,6 +598,7 @@
   @media (width >= 64rem) and (height <= 32rem) {
     .filters-panel {
       bottom: 1rem;
+      max-height: calc(100dvh - 2rem);
     }
   }
 
