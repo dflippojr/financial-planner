@@ -79,7 +79,8 @@ def test_startup_reader_drains_output_after_readiness():
 
 @contextmanager
 def running_ui_instance(tmp_path, startup_timeout=90):
-    env = dict(os.environ)
+    # The launcher owns its SQLite storage, independent of the CI database job.
+    env = isolated_environment(tmp_path)
     # pytest-django's settings must not carry over into the standalone process.
     env.pop("DJANGO_SETTINGS_MODULE", None)
     ready = queue.Queue()
@@ -127,6 +128,10 @@ def ui_instance(tmp_path):
 
 def test_startup_timeout_cancels_and_removes_storage(monkeypatch, tmp_path):
     """Exercise cancellation before readiness, with a real launcher and temp storage."""
+    monkeypatch.setenv("POSTGRES_HOST", "synthetic.invalid")
+    monkeypatch.setenv("POSTGRES_PORT", "5432")
+    monkeypatch.setenv("POSTGRES_PASSWORD", "synthetic-test-password")
+    monkeypatch.setenv("FINANCIAL_PLANNER_TEST_DB", "postgres")
     launch = subprocess.Popen
     drain = read_startup
     children = []
