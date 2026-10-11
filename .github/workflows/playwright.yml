@@ -128,3 +128,40 @@ jobs:
           path: test-results/
           retention-days: 14
           if-no-files-found: ignore
+
+  ui-pass:
+    name: UI journeys (desktop and phone)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install pinned UI tools
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install -r requirements-test.txt
+          npm ci
+          npx playwright install --with-deps chromium webkit
+      - name: Build CSS
+        run: bash scripts/build_css.sh
+      - name: Run isolated passing journeys and reflow checks
+        run: npm run test:ui
+      - name: Clean registered synthetic instances
+        if: always()
+        run: .venv/bin/python scripts/cleanup_ui_tests.py
+      - name: Upload sanitized UI reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ui-journeys-report
+          path: |
+            playwright-report/
+            test-results/ui/
+          retention-days: 14
+          if-no-files-found: ignore

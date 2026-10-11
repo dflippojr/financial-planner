@@ -52,7 +52,7 @@ def seed_phone_data():
     for name, amount in (("Dining", 50_000), ("Groceries", 60_000), ("Transportation", 25_000)):
         category = categories.get(name)
         if category is not None:
-            save_budget(
+            budget = save_budget(
                 person.user,
                 {
                     "scope": Budget.Scope.PRIVATE,
@@ -62,5 +62,8 @@ def seed_phone_data():
                     "rollover_enabled": False,
                 },
             )
-    raise_alert([person], "budget", "Dining is over budget", "/planning/budgets/", "phone-seed-1")
+            if name == "Dining":
+                dining_budget = budget
+    raise_alert([person], "budget", "Dining is over budget", "/planning/budgets/",
+                f"budget:{dining_budget.pk}:phone-seed-1")
     return person
