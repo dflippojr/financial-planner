@@ -148,11 +148,12 @@ def test_smoke_cleanup_preserves_recovery_handle_when_shutdown_times_out(tmp_pat
             raise subprocess.TimeoutExpired("synthetic launcher", timeout)
 
     monkeypatch.setattr(subprocess, "Popen", StuckLauncher)
-    with pytest.raises(subprocess.TimeoutExpired):
+    with pytest.raises(RuntimeError, match="Disposable process did not exit; cleanup handle retained") as error:
         with ui_process(tmp_path):
             pytest.fail("Unready launcher unexpectedly reported readiness")
     assert calls[0][-2:] == ["--teardown", str(directory)]
     assert handles[0].exists() and directory.exists()
+    assert str(handles[0]) in str(error.value)
 
 
 @pytest.fixture
