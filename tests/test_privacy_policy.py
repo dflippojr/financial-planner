@@ -821,3 +821,18 @@ def test_json_denial_uses_fresh_person_even_after_relation_was_cached():
     assert data["ai_slot"]["state"] == "denied"
     assert "data-ai-slot" not in data["slot_html"]
     assert 'id="ai-consent"' not in data["dialog_html"]
+
+
+@pytest.mark.django_db
+def test_denial_from_an_old_tab_does_not_withdraw_append_only_acceptance():
+    user, person, _ = make_member("owner")
+    policy = current_policy()
+    accept_policy(person, policy)
+    client = Client()
+    client.force_login(user)
+    reply = client.post(reverse("privacy-policy-respond"),
+        {"action": "decline", "version": policy.version}, HTTP_ACCEPT="application/json")
+    assert reply.status_code == 200
+    assert reply.json()["ai_slot"]["state"] == "no_backend"
+    assert "AI is on for you" in reply.json()["dialog_html"]
+    assert PrivacyPolicyAcceptance.objects.filter(person=person, policy_version=policy).exists()

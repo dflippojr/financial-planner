@@ -66,7 +66,7 @@
       }
       slot.innerHTML = result.slot_html;
       document.querySelectorAll("[data-policy-prompt]").forEach((prompt) => prompt.remove());
-      if (action === "decline") {
+      if (result.ai_slot.state === "denied") {
         opener = document.getElementById("sidebar-settings");
         dialog.close();
         dialog.remove();
