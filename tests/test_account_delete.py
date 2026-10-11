@@ -417,7 +417,7 @@ def _run_delete_race(other_action, owner, account, *, start_competitor_first):
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("start_competitor_first", [False, True], ids=["after-lock", "before-lock-gated"])
+@pytest.mark.parametrize("start_competitor_first", [False, True], ids=["after-lock", "competitor-started-first-gated"])
 @pytest.mark.parametrize("competing_kind", ["edit", "transfer-refresh"])
 def test_delete_account_races_edit_and_transfer_refresh_without_deadlock(start_competitor_first, competing_kind):
     if connection.vendor != "postgresql":
@@ -435,10 +435,12 @@ def test_delete_account_races_edit_and_transfer_refresh_without_deadlock(start_c
     def edit():
         client = Client()
         client.force_login(member.user)
-        client.post(
+        response = client.post(
             reverse("transaction-edit", args=(financial_transaction.pk,)),
             {"transaction_date": "2026-01-05", "description": "Late correction", "amount": "-31.00"},
         )
+
+        assert response.status_code == 404
 
     other_action = edit if competing_kind == "edit" else lambda: refresh_transfer_pairs(member)
     _run_delete_race(other_action, owner, shared, start_competitor_first=start_competitor_first)
