@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import runpy
 import socket
 import subprocess
@@ -14,6 +15,8 @@ import pytest
 import requests
 
 from scripts import ui_instance
+from tests.test_ui_instance import ui_process
+from tests.ui_diagnostics import diagnostic_summary
 
 
 def test_idle_browser_preconnection_does_not_block_shutdown():
@@ -84,48 +87,69 @@ ui_instance.main()
 
 
 def test_http_lifecycle_seeds_sign_in_chat_and_authenticated_teardown(monkeypatch, tmp_path):
-    from tests.test_ui_instance import ui_process
-
-    # Use the launcher's private file-backed database, as browser tests do. The
-    # background chat worker can race writes in pytest's shared in-memory SQLite.
+    # Run the real launcher in a separate interpreter: pytest's initialized
+    # Django settings must never replace its fresh file-backed SQLite database.
     with ui_process(tmp_path) as instance:
-        directory = Path(instance["directory"])
-        state = json.loads((directory / "instance.json").read_text())
+        directory = ui_instance.disposable_directory(instance["directory"])
         base = instance["url"]
+        assert (directory / "db.sqlite3").is_file()
+        state = json.loads((directory / "instance.json").read_text())
         try:
             with requests.Session() as client:
+                client.trust_env = False
                 login = client.get(base + "/sign-in/", timeout=5)
                 assert login.status_code == 200
                 response = client.post(base + "/sign-in/", timeout=5, data={
-                    "username": ui_instance.USERNAME, "password": ui_instance.PASSWORD,
-                    "csrfmiddlewaretoken": client.cookies["csrftoken"],
-                })
-                assert "Cash flow" in response.text
-                assert response.url == base + "/"
-                for path in ["/transactions/", "/planning/budgets/", "/settings/security/"]:
-                    assert client.get(base + path, timeout=5).status_code == 200
-                response = client.post(base + "/chat/send/", timeout=5, data={
-                    "prompt": "A synthetic lifecycle question",
+                    "username": instance["username"], "password": instance["password"],
                     "csrfmiddlewaretoken": client.cookies["csrftoken"],
                 })
                 assert response.status_code == 200
+                if "Cash flow" not in response.text:
+                    pytest.fail("Sign-in did not show Cash flow")
+                assert response.url == base + "/"
+                for path in ["/transactions/", "/planning/budgets/", "/settings/security/"]:
+                    assert client.get(base + path, timeout=5).status_code == 200
+                response = client.post(base + "/chat/send/", timeout=5, allow_redirects=False, data={
+                    "prompt": "A synthetic lifecycle question",
+                    "csrfmiddlewaretoken": client.cookies["csrftoken"],
+                })
+                assert response.status_code == 302, "Chat send must redirect before polling"
+                location = response.headers.get("Location", "")
+                if not re.fullmatch(r"/chat/\?c=[1-9][0-9]*", location):
+                    pytest.fail("Chat send did not redirect to a conversation")
+                conversation_url = base + location
+                answer = "Synthetic UI reply. No real provider was contacted."
                 deadline = time.monotonic() + 10
                 while time.monotonic() < deadline:
-                    response = client.get(response.url, timeout=5)
-                    if "Synthetic UI reply. No real provider was contacted." in response.text:
+                    response = client.get(conversation_url, timeout=5)
+                    assert response.status_code == 200
+                    if answer in response.text:
                         break
                     time.sleep(0.1)
-                assert "Synthetic UI reply. No real provider was contacted." in response.text
+                if answer not in response.text:
+                    pytest.fail("Conversation did not show the synthetic reply within ten seconds")
+                persisted = client.get(conversation_url, timeout=5)
+                assert persisted.status_code == 200
+                if answer not in persisted.text or "A synthetic lifecycle question" not in persisted.text:
+                    pytest.fail("Reload did not preserve the synthetic question and reply")
                 assert client.post(base + "/__ui_teardown__/", timeout=5).status_code == 403
                 assert client.get(base + "/__ui_teardown__/", timeout=5,
                                   headers={"Authorization": "Bearer " + state["token"]}).status_code == 403
+        except (AssertionError, pytest.fail.Exception):
+            # Report database exception types and operation frames only, never
+            # debug HTML, SQL values, readiness credentials or teardown tokens.
+            print(diagnostic_summary((tmp_path / "ui-instance.log").read_text()))
+            raise
         finally:
             # The fixture's authenticated teardown must bypass configured proxies.
             monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:1")
             monkeypatch.setenv("http_proxy", "http://127.0.0.1:1")
             monkeypatch.setenv("NO_PROXY", "")
             monkeypatch.setenv("no_proxy", "")
-    assert not directory.exists(), "Server or synthetic chat worker left storage behind"
+    assert not directory.exists()
+    with socket.socket() as client:
+        client.settimeout(1)
+        assert client.connect_ex(("127.0.0.1", state["port"])) != 0
 
 
 def test_instance_state_is_visible_only_after_the_write_finishes(monkeypatch, tmp_path):
@@ -294,3 +318,57 @@ def test_windows_builder_shutdown_stops_only_its_owned_process_tree(monkeypatch,
     assert not builder.alive
     assert builder.forced is (not tree_reaped)
     assert commands == [["taskkill", "/PID", str(builder.pid), "/T", "/F"]]
+
+
+def test_disposable_diagnostics_report_operation_without_values_or_tokens():
+    log = '''{"url": "http://127.0.0.1:1234", "password": "synthetic-secret"}
+  File "/checkout/finance/chat_services.py", line 42, in send_message
+    create(prompt="synthetic-private-prompt")
+  File "C:\\checkout\\.venv\\Lib\\site-packages\\django\\db\\models\\query.py", line 99, in create
+    self.save(token="synthetic-token")
+django.db.utils.OperationalError: database is locked
+<html>synthetic-sensitive-html</html>
+'''
+    summary = diagnostic_summary(log)
+    assert "finance/chat_services.py:42 in send_message" in summary
+    assert "django/db/models/query.py:99 in create" in summary
+    assert "OperationalError" in summary
+    assert "SQLite lock" in summary
+    for value in ["synthetic-secret", "synthetic-private-prompt", "synthetic-token", "synthetic-sensitive-html"]:
+        assert value not in summary
+
+
+def test_http_instance_cleanup_on_assertion_failure(tmp_path):
+    with pytest.raises(AssertionError, match="Synthetic journey failure"):
+        with ui_process(tmp_path) as instance:
+            directory = ui_instance.disposable_directory(instance["directory"])
+            port = json.loads((directory / "instance.json").read_text())["port"]
+            raise AssertionError("Synthetic journey failure")
+    assert not directory.exists()
+    with socket.socket() as client:
+        client.settimeout(1)
+        assert client.connect_ex(("127.0.0.1", port)) != 0
+
+
+def test_http_instance_cleanup_on_startup_failure(tmp_path):
+    allocation = tmp_path / "allocation.json"
+    code = """
+import json, sys
+from scripts import ui_instance
+ui_instance.build_css = lambda: None
+from pathlib import Path
+allocation = Path(sys.argv[1])
+def fail_start(directory):
+    allocation.write_text(json.dumps({"directory": str(directory)}))
+    (directory / 'db.sqlite3').write_text('synthetic partial startup')
+    raise RuntimeError('synthetic-startup-secret')
+ui_instance.serve = fail_start
+sys.argv = ['ui_instance.py', *sys.argv[2:]]
+ui_instance.main()
+"""
+    with pytest.raises(AssertionError, match="RuntimeError") as failure:
+        with ui_process(tmp_path, command=[sys.executable, "-c", code, str(allocation)]):
+            pytest.fail("Failed startup unexpectedly reported readiness")
+    assert "synthetic-startup-secret" not in str(failure.value)
+    directory = ui_instance.disposable_directory(json.loads(allocation.read_text())["directory"])
+    assert not directory.exists()
