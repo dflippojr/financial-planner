@@ -40,7 +40,7 @@ from .ai_services import (
     set_shared_local_use,
 )
 from .ai_types import API_KINDS, PLAN_BACKENDS, SHARED_LOCAL_CHOICE
-from .ai_urls import HarnessUrlError
+from .ai_urls import HarnessUrlError, harness_enabled
 from .forms import (
     AiDefaultsForm,
     AiOfferLocalChatForm,
@@ -123,6 +123,7 @@ def ai_settings_context(person):
     return {
         "show_ai_settings": True,
         "ai_connected": connection is not None,
+        "ai_harness_enabled": harness_enabled(),
         "ai_connection": connection,
         "ai_backends": backends,
         "ai_connect_form": HarnessConnectForm(),

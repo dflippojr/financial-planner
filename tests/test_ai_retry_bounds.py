@@ -16,6 +16,11 @@ from finance.models import AiJob, AiProviderConnection, MonthlyReview
 from tests.test_ai_provider import make_member
 
 
+@pytest.fixture(autouse=True)
+def allowed_harness(settings):
+    settings.AGENT_HARNESS_ALLOWED_ORIGINS = ["http://127.0.0.1:12345"]
+
+
 @pytest.fixture
 def connected_member(db):
     _user, person, _household = make_member("retry-owner")

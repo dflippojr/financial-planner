@@ -8,6 +8,8 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
+from django.conf import settings
+
 
 class FakeHarnessState:
     def __init__(self):
@@ -152,8 +154,7 @@ def start_fake_harness(state=None):
             parsed = urlparse(self.path)
             harness.requests.append(("GET", parsed.path))
             if parsed.path == "/api/v1":
-                if not self._auth():
-                    return
+                # Like the real harness, the discovery document needs no token.
                 self._json(
                     200,
                     {
@@ -467,4 +468,7 @@ def start_fake_harness(state=None):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     host, port = server.server_address
-    return harness, f"http://{host}:{port}", server
+    url = f"http://{host}:{port}"
+    # The operator allow-list (#409) admits only this fake; conftest restores it after each test.
+    settings.AGENT_HARNESS_ALLOWED_ORIGINS = [*settings.AGENT_HARNESS_ALLOWED_ORIGINS, url]
+    return harness, url, server

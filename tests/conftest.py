@@ -18,6 +18,16 @@ def disposable_operator_journal(tmp_path_factory):
             os.environ[key] = value
 
 
+@pytest.fixture(autouse=True)
+def restore_harness_origins():
+    # Fake harnesses add their random-port origin to the allow-list (#409).
+    from django.conf import settings
+
+    before = list(settings.AGENT_HARNESS_ALLOWED_ORIGINS)
+    yield
+    settings.AGENT_HARNESS_ALLOWED_ORIGINS = before
+
+
 def _uses_browser(item):
     return "browser" in getattr(item, "fixturenames", ())
 
