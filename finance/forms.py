@@ -1746,6 +1746,14 @@ class CategoryRuleForm(forms.Form):
 class AlertSettingsForm(forms.Form):
     sync_enabled = forms.BooleanField(required=False, label="Sync failures and re-linking")
     recurring_price_enabled = forms.BooleanField(required=False, label="Recurring price changes")
+    recurring_price_percent = forms.IntegerField(
+        required=False,
+        min_value=1,
+        max_value=100,
+        initial=10,
+        label="Recurring price change percent",
+        help_text="Flag a recurring charge when it differs from the median of up to 12 earlier charges by more than this percent.",
+    )
     recurring_missed_enabled = forms.BooleanField(required=False, label="Missed recurring charges")
     budget_enabled = forms.BooleanField(required=False, label="Budgets near or over the limit")
     large_transaction_enabled = forms.BooleanField(required=False, label="Large transactions")
@@ -1797,7 +1805,7 @@ class AlertSettingsForm(forms.Form):
     # The settings page shows the fields grouped by alert kind under one save (issue #339).
     KIND_GROUPS = (
         ("Accounts and balances", ("sync_enabled", "expected_balance_enabled")),
-        ("Recurring charges", ("recurring_price_enabled", "recurring_missed_enabled")),
+        ("Recurring charges", ("recurring_price_enabled", "recurring_price_percent", "recurring_missed_enabled")),
         ("Budgets", ("budget_enabled",)),
         ("Large transactions", ("large_transaction_enabled", "large_transaction_amount")),
         ("Unusual spending", (
@@ -1819,9 +1827,13 @@ class AlertSettingsForm(forms.Form):
         percent = self.cleaned_data.get("unusual_category_percent")
         if percent is None:
             percent = 50
+        recurring_percent = self.cleaned_data.get("recurring_price_percent")
+        if recurring_percent is None:
+            recurring_percent = 10
         return {
             "sync_enabled": self.cleaned_data["sync_enabled"],
             "recurring_price_enabled": self.cleaned_data["recurring_price_enabled"],
+            "recurring_price_percent": recurring_percent,
             "recurring_missed_enabled": self.cleaned_data["recurring_missed_enabled"],
             "budget_enabled": self.cleaned_data["budget_enabled"],
             "large_transaction_enabled": self.cleaned_data["large_transaction_enabled"],

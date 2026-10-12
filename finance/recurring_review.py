@@ -9,11 +9,15 @@ from django.urls import reverse
 from django.utils import timezone
 
 from .cash_flow import format_minor
-from .models import Account, Alert, ImportBatch, RecurringSeries
+from .models import Account, Alert, AlertSettings, ImportBatch, RecurringSeries, _person_for
 from .projection import step_occurrence
-from .recurring_services import CADENCE_DAYS, typical_amount_minor_from
+from .recurring_services import CADENCE_DAYS
 
-PRICE_CHANGE_RATIO = Decimal("0.10")
+# A member's AlertSettings.recurring_price_percent; this is its default.
+DEFAULT_PRICE_CHANGE_PERCENT = 10
+# The usual price is the median of at most this many charges before the latest.
+PRICE_BASELINE_CHARGES = 12
+MIN_PRIOR_CHARGES = 2
 UPCOMING_DAYS = 30
 
 
@@ -92,11 +96,12 @@ def _has_charge_near(series, expected):
     )
 
 
-def _ratio(previous_minor, new_minor):
-    previous = abs(previous_minor)
-    if previous == 0:
-        return None
-    return (Decimal(abs(new_minor) - previous)) / Decimal(previous)
+def _median_abs(values):
+    ordered = sorted(abs(value) for value in values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return Decimal(ordered[middle])
+    return (Decimal(ordered[middle - 1]) + Decimal(ordered[middle])) / 2
 
 
 def _percent_display(ratio):
@@ -149,31 +154,59 @@ def upcoming_charge(series, *, today):
     )
 
 
-def price_change(series):
+def price_drift(series):
+    """The latest charge measured against the median of the charges before it.
+
+    Returns a PriceChange whatever the size of the drift, or None when there is
+    no baseline (fewer than two prior charges or a zero median) or the member
+    already dismissed this amount. Callers apply a threshold with exceeds_percent.
+    """
     if not _counts_in_review(series):
         return None
     rows = _ordered_transactions(series)
-    if len(rows) < 2:
+    prior = rows[:-1][-PRICE_BASELINE_CHARGES:]
+    if len(prior) < MIN_PRIOR_CHARGES:
         return None
     latest = rows[-1]
-    typical = typical_amount_minor_from(rows)
-    ratio = _ratio(typical, latest.amount_minor)
-    if ratio is None or abs(ratio) < PRICE_CHANGE_RATIO:
-        return None
     if series.acknowledged_amount_minor == latest.amount_minor:
         return None
-    previous = typical_amount_minor_from(rows[:-1])
-    display_ratio = _ratio(previous, latest.amount_minor) or ratio
+    median = _median_abs(item.amount_minor for item in prior)
+    if median == 0:
+        return None
+    ratio = (Decimal(abs(latest.amount_minor)) - median) / median
+    usual = int(median.to_integral_value(rounding=ROUND_HALF_UP))
     return PriceChange(
         series=series,
-        previous_minor=previous,
+        previous_minor=-usual,
         new_minor=latest.amount_minor,
-        previous_display=format_minor(abs(previous), series.currency),
+        previous_display=format_minor(usual, series.currency),
         new_display=format_minor(abs(latest.amount_minor), series.currency),
-        percent_display=_percent_display(display_ratio),
+        percent_display=_percent_display(ratio),
         charge_date=latest.transaction_date,
-        ratio=display_ratio,
+        ratio=ratio,
     )
+
+
+def exceeds_percent(change, percent):
+    """Strictly greater: a drift of exactly the threshold does not flag."""
+    return abs(change.ratio) * 100 > percent
+
+
+def price_change(series, percent=DEFAULT_PRICE_CHANGE_PERCENT):
+    change = price_drift(series)
+    if change is None or not exceeds_percent(change, percent):
+        return None
+    return change
+
+
+def price_change_percent_for(principal):
+    person = _person_for(principal)
+    if person is None:
+        return DEFAULT_PRICE_CHANGE_PERCENT
+    value = (
+        AlertSettings.objects.filter(person=person).values_list("recurring_price_percent", flat=True).first()
+    )
+    return value or DEFAULT_PRICE_CHANGE_PERCENT
 
 
 def missed_charge(series, principal, *, today):
@@ -212,8 +245,8 @@ def upcoming_charges(series_list, *, today):
     return rows
 
 
-def price_changes(series_list):
-    rows = [item for series in series_list if (item := price_change(series))]
+def price_changes(series_list, percent=DEFAULT_PRICE_CHANGE_PERCENT):
+    rows = [item for series in series_list if (item := price_change(series, percent))]
     rows.sort(key=lambda item: (item.charge_date, item.series.display_name, item.series.pk), reverse=True)
     return rows
 
@@ -238,12 +271,23 @@ def _alert_audience(series):
 
 
 def raise_recurring_review_alerts(principal, series_list, *, today):
-    from .alert_services import raise_alert
+    from .alert_services import raise_alert, settings_for
 
     created = []
     link = reverse("recurring-review")
-    for change in price_changes(series_list):
-        recipients, account = _alert_audience(change.series)
+    percents = {}
+
+    def recipient_percent(person):
+        if person.pk not in percents:
+            percents[person.pk] = settings_for(person).recurring_price_percent
+        return percents[person.pk]
+
+    drifts = [item for series in series_list if (item := price_drift(series))]
+    for change in drifts:
+        audience, account = _alert_audience(change.series)
+        recipients = [person for person in audience if exceeds_percent(change, recipient_percent(person))]
+        if not recipients:
+            continue
         title = (
             f"{change.series.display_name} changed from {change.previous_display} to {change.new_display}"
         )
@@ -275,7 +319,7 @@ def raise_recurring_review_alerts(principal, series_list, *, today):
 
 def build_recurring_review(principal, series_list, *, today):
     upcoming = upcoming_charges(series_list, today=today)
-    changes = price_changes(series_list)
+    changes = price_changes(series_list, price_change_percent_for(principal))
     missed = missed_charges(series_list, principal, today=today)
     cancelled = [
         SimpleNamespace(series=series, resumed=is_resumed(series), resumed_transactions=resumed_transactions(series))

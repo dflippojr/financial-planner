@@ -3,6 +3,7 @@ from datetime import date, timedelta
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
+from django.db import IntegrityError, transaction
 from django.test import Client
 from django.urls import reverse
 from django.utils import timezone
@@ -409,6 +410,39 @@ def test_alert_settings_form_saves_threshold():
     assert prefs.sync_enabled is True
     assert prefs.recurring_price_enabled is False
     assert prefs.monthly_review_enabled is False
+
+
+@pytest.mark.parametrize("value", ["0", "101"])
+def test_alert_settings_form_rejects_recurring_percent_outside_range(value):
+    form = AlertSettingsForm({"recurring_price_percent": value})
+    assert not form.is_valid()
+    assert "recurring_price_percent" in form.errors
+
+
+@pytest.mark.django_db
+def test_alert_settings_recurring_percent_round_trips():
+    owner = make_person("owner")
+    make_household(owner)
+    client = signed_in(owner)
+    response = client.post(
+        reverse("settings-alerts"),
+        {"recurring_price_enabled": "on", "recurring_price_percent": "25"},
+    )
+    assert response.status_code == 302
+    assert AlertSettings.objects.get(person=owner).recurring_price_percent == 25
+    page = client.get(reverse("settings-alerts"))
+    assert page.context["alert_settings_form"]["recurring_price_percent"].value() == 25
+    rejected = client.post(reverse("settings-alerts"), {"recurring_price_percent": "101"})
+    assert rejected.status_code == 200
+    assert AlertSettings.objects.get(person=owner).recurring_price_percent == 25
+
+
+@pytest.mark.django_db
+def test_recurring_percent_database_constraint():
+    owner = make_person("owner")
+    with pytest.raises(IntegrityError), transaction.atomic():
+        AlertSettings.objects.create(person=owner, recurring_price_percent=0)
+    assert AlertSettings.objects.create(person=owner).recurring_price_percent == 10
 
 
 def test_alert_settings_groups_show_every_field_once():

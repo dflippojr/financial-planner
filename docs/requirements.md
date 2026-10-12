@@ -533,7 +533,7 @@ Owner decisions:
 - Merge selection (#254): load the target selector only for the series the member chooses to merge. Keep the existing member-authorized merge action and exclude the source, inactive, dismissed, cancelled, and inaccessible series from its targets.
 
 Owner decisions:
-- **Price changes.** A change is flagged when the latest charge differs from the series' recent typical amount (#124) by 10% or more.
+- **Price changes.** A change is flagged when the latest charge differs from the series' usual price by more than the member's threshold. Owner approved 2026-10-12 (#418): the usual price is the median of up to 12 charges before the latest, and each member sets the threshold under Settings › Alerts (`recurring_price_percent`, 1-100, default 10). The boundary is strict: a drift of exactly the threshold does not flag. Household series apply each recipient's own threshold.
 - **Cancelling.** A member can mark a series cancelled. It leaves totals and the projection, and its history stays. If a new matching charge arrives, it shows as "resumed?" for the member to confirm.
 - **Step changes** are covered by #124: a confirmed series follows step changes and gradual drift.
 

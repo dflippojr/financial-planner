@@ -329,7 +329,7 @@ def test_recurring_facts_include_price_missed_cancel_and_new():
         fingerprint=sha256(b"rise").hexdigest(),
         confirmed_at=datetime(2026, 8, 1, tzinfo=dt_timezone.utc),
     )
-    for day, amount in ((date(2026, 7, 10), -1000), (date(2026, 8, 10), -1000), (date(2026, 9, 10), -1100)):
+    for day, amount in ((date(2026, 7, 10), -1000), (date(2026, 8, 10), -1000), (date(2026, 9, 10), -1200)):
         RecurringSeriesMember.objects.create(
             series=flagged,
             transaction=make_transaction(
