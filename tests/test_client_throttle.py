@@ -5,19 +5,17 @@ behind Tailscale Serve, and is told apart only by the proxy-appended
 X-Forwarded-For hop.
 """
 
-import threading
-import time
 from datetime import timedelta
 from urllib.parse import parse_qs, urlparse
 
 import pytest
 from django.contrib.auth import get_user_model
-from django.db import connection, connections, transaction
+from django.db import connection
 from django.test import Client, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from finance.auth_services import clear_login_failures, create_recovery_codes, record_login_failure, throttle_key
+from finance.auth_services import create_recovery_codes, login_is_blocked, throttle_key
 from finance.models import LoginThrottle
 from finance.reauth import RECENT_AUTH_SESSION_KEY
 from financial_planner.trusted_proxies import parse_trusted_proxies
@@ -244,47 +242,42 @@ def test_google_failures_have_no_shared_cap_across_clients():
     assert LoginThrottle.objects.count() == 1
 
 
-def _wait_for_a_lock_waiter(timeout=10):
-    deadline = time.monotonic() + timeout
+@pytest.mark.django_db
+@THROTTLE_SETTINGS
+@override_settings(LOGIN_USERNAME_FAILURE_LIMIT=5)
+def test_a_successful_sign_in_keeps_failures_other_clients_sent_against_the_name():
+    user, _person, _household = make_member()
+    _fail_from_rotating_clients(user.username, 3)
+
+    member = _client_at("100.64.2.1")
+    member.post(reverse("login"), {"username": user.username, "password": "wrong"})
+    assert member.post(reverse("login"), {"username": user.username, "password": PASSWORD}).status_code == 302
+
+    key = throttle_key(user.username, "100.64.2.1")
+    assert not LoginThrottle.objects.filter(key_digest=key.pair_digest).exists()
+    assert LoginThrottle.objects.get(key_digest=key.username_digest).failure_count == 4
+    _fail_from_rotating_clients(user.username, 1)
+    assert login_is_blocked(throttle_key(user.username, "100.64.9.9"))
+
+
+@pytest.mark.django_db
+@THROTTLE_SETTINGS
+@override_settings(LOGIN_USERNAME_FAILURE_LIMIT=3)
+def test_a_lookalike_spelling_of_a_capped_name_does_not_sign_in():
+    # PostgreSQL's UPPER() maps a dotless i (U+0131) to I, so a case-insensitive
+    # lookup would accept "alıce" for "alice" under its own throttle buckets.
+    # SQLite folds ASCII only, so this test proves the fix on PostgreSQL.
+    user, _person, _household = make_member("alice")
+    lookalike = "alıce"
     with connection.cursor() as cursor:
-        while time.monotonic() < deadline:
-            # pg_locks, unlike pg_stat_activity, isn't frozen for the caller's transaction.
-            cursor.execute("SELECT count(*) FROM pg_locks WHERE NOT granted")
-            if cursor.fetchone()[0]:
-                return True
-            time.sleep(0.05)
-    return False
+        cursor.execute("SELECT UPPER(%s) = UPPER(%s)", [lookalike, user.username])
+        folds_together = bool(cursor.fetchone()[0])
+    if connection.vendor == "postgresql":
+        assert folds_together, "the regression needs a database whose UPPER() folds the dotless i"
+    _fail_from_rotating_clients(user.username, 3)
 
+    fresh = _client_at("100.64.2.1")
+    response = fresh.post(reverse("login"), {"username": lookalike, "password": PASSWORD})
 
-@pytest.mark.django_db(transaction=True)
-def test_clearing_failures_takes_row_locks_in_the_order_failures_do():
-    # record_login_failure locks the pair row, then the username row. If a
-    # clear took the username row first, a concurrent failure holding the pair
-    # row would deadlock with it.
-    if connection.vendor != "postgresql":
-        pytest.skip("row lock order only matters on PostgreSQL")
-    key = throttle_key("synthetic-member", "100.64.0.11")
-    record_login_failure(key)
-    errors = []
-
-    def clear():
-        try:
-            clear_login_failures(key)
-        except Exception as exc:  # noqa: BLE001 - reported to the main thread
-            errors.append(exc)
-        finally:
-            connections.close_all()
-
-    with transaction.atomic():
-        LoginThrottle.objects.select_for_update().get(key_digest=key.pair_digest)
-        clearer = threading.Thread(target=clear)
-        clearer.start()
-        assert _wait_for_a_lock_waiter()
-        # The clear is now queued on the pair row, so it must not hold the
-        # username row: NOWAIT would raise if it did.
-        LoginThrottle.objects.select_for_update(nowait=True).get(key_digest=key.username_digest)
-    clearer.join(timeout=30)
-
-    assert errors == []
-    assert not clearer.is_alive()
-    assert LoginThrottle.objects.count() == 0
+    assert b"Sign-in failed" in response.content
+    assert "_auth_user_id" not in fresh.session

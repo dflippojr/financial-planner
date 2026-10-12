@@ -182,6 +182,12 @@ ACCOUNT_ADAPTER = "finance.allauth_adapters.MemberAccountAdapter"
 SOCIALACCOUNT_ADAPTER = "finance.allauth_adapters.MemberSocialAccountAdapter"
 ACCOUNT_EMAIL_VERIFICATION = "none"
 ACCOUNT_LOGIN_METHODS = {"username"}
+# Stored usernames are already normalize_username()'s casefolded output, so
+# allauth's password backend matches them exactly. Its default, a
+# case-insensitive match, is UPPER() = UPPER() on PostgreSQL, which would let a
+# lookalike spelling such as a dotless i (U+0131) sign in as the member
+# under a throttle bucket of its own.
+ACCOUNT_PRESERVE_USERNAME_CASING = False
 ACCOUNT_DEFAULT_HTTP_PROTOCOL = "https" if SECURE_SSL_REDIRECT else "http"
 SOCIALACCOUNT_AUTO_SIGNUP = True
 SOCIALACCOUNT_EMAIL_AUTHENTICATION = False

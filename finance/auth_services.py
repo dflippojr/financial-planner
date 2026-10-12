@@ -233,13 +233,11 @@ def record_login_failure(key):
         throttle.save(update_fields=("failure_count", "window_started_at", "blocked_until"))
 
 
-@transaction.atomic
 def clear_login_failures(key):
-    # One delete per bucket, in record_login_failure's order: a single
-    # DELETE ... IN could lock the username row first and deadlock with a
-    # concurrent failure that holds the pair row.
-    for digest in key.digests():
-        LoginThrottle.objects.filter(key_digest=digest).delete()
+    # Only the pair bucket: one client's success says nothing about failures
+    # other clients sent against the name, so the username bucket runs to the
+    # end of its window instead of resetting whenever the member signs in.
+    LoginThrottle.objects.filter(key_digest=key.pair_digest).delete()
 
 
 @transaction.atomic
