@@ -1,5 +1,5 @@
 cryptography==50.0.2
-Django==5.2.17
+Django==5.2.18
 django-allauth[socialaccount]==65.19.7
 gunicorn==26.2.0
 psycopg[binary]==3.3.6
