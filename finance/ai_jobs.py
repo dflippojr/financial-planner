@@ -270,9 +270,14 @@ def _process_one(job, moment):
     claimed = _claim_for_run(job, moment, cutoff, connection_row=member_connection, backend=backend)
     if claimed is None:
         return False
-    # Keep the outer failure-isolation caller tied to this exact attempt too.
-    job.audit_run_id = claimed.audit_run_id
-    job = claimed
+    try:
+        return _run_claimed_job(claimed, moment, member_connection, backend, session_id)
+    except Exception as exc:
+        _isolate_job_failure(claimed, moment, exc, claimed=True)
+        return False
+
+
+def _run_claimed_job(job, moment, member_connection, backend, session_id):
     marker = _connection_marker(member_connection)
 
     def remember_session(new_id):
@@ -412,20 +417,19 @@ def _session_for(job, connection):
     return saved
 
 
-def _wait_for_open_session(job, moment, code):
+def _wait_for_open_session(job, moment, code, *, claimed=True):
     """Check the open session again later without spending an attempt, up to a maximum job age."""
     max_age = int(getattr(settings, "AI_JOB_RESUME_MAX_AGE_SECONDS", 24 * 60 * 60))
-    if job.created_at <= moment - timedelta(seconds=max_age):
+    if job.created_at <= max(moment, timezone.now()) - timedelta(seconds=max_age):
         job.harness_session_id = ""
-        _fail(job, code)
+        _fail(job, code, claimed=claimed)
         return True
-    job.status = AiJob.Status.QUEUED
-    job.failure_code = code
-    job.next_attempt_at = max(moment, timezone.now()) + timedelta(
+    next_attempt_at = max(moment, timezone.now()) + timedelta(
         seconds=int(getattr(settings, "AI_JOB_RESUME_DELAY_SECONDS", 300))
     )
-    _write_claimed(job, status=job.status, failure_code=job.failure_code,
-                   next_attempt_at=job.next_attempt_at, harness_session_id=job.harness_session_id)
+    write = _write_claimed if claimed else _write_if_unchanged
+    write(job, status=AiJob.Status.QUEUED, failure_code=code,
+          next_attempt_at=next_attempt_at, harness_session_id=job.harness_session_id)
     return False
 
 
@@ -475,25 +479,27 @@ def _requeue_stale_running(job, moment, cutoff):
 
 
 def _local_may_run(member_connection):
-    try:
-        statuses = model_status(member_connection.base_url, _token(member_connection))
-    except HarnessHttpError as exc:
-        if failure_from_http(exc) == AUTHORIZATION_REQUIRED:
-            raise
-        return in_quiet_window()
+    # Failed readiness requests use the retry budget; only a valid sleeping
+    # model waits for the quiet window without spending an attempt.
+    statuses = model_status(member_connection.base_url, _token(member_connection))
     if local_model_ready(statuses):
         return True
     return in_quiet_window()
 
 
-def _isolate_job_failure(job, moment, exc):
-    run_id = job.audit_run_id
-    try:
-        job.refresh_from_db()
-    except Exception:
+def _isolate_job_failure(job, moment, exc, *, claimed=False):
+    if not claimed and job.status in (AiJob.Status.SUCCEEDED, AiJob.Status.FAILED):
         return
-    if job.audit_run_id != run_id or job.status in (AiJob.Status.SUCCEEDED, AiJob.Status.FAILED):
-        return
+    if claimed:
+        run_id = job.audit_run_id
+        try:
+            job.refresh_from_db()
+        except Exception:
+            return
+        if job.audit_run_id != run_id or job.status in (AiJob.Status.SUCCEEDED, AiJob.Status.FAILED):
+            return
+    # Before claim, retain the original status/timestamp for conditional writes.
+    # Refreshing here would let a losing worker spend another worker's budget.
     if isinstance(exc, AiError):
         code = exc.failure_code or PROVIDER_ERROR
     elif isinstance(exc, HarnessHttpError):
@@ -501,26 +507,29 @@ def _isolate_job_failure(job, moment, exc):
     else:
         code = PROVIDER_ERROR
     if code == AUTHORIZATION_REQUIRED:
-        _fail(job, AUTHORIZATION_REQUIRED)
-        return
-    _retry_or_fail(job, moment, code)
+        _fail(job, code, claimed=claimed)
+    elif job.harness_session_id:
+        _wait_for_open_session(job, moment, code, claimed=claimed)
+    else:
+        _retry_or_fail(job, moment, code, claimed=claimed)
 
 
 @transaction.atomic
-def _retry_or_fail(job, moment, code):
-    if job.attempts == 0:
-        job.attempts = 1
+def _retry_or_fail(job, moment, code, *, claimed=True):
+    # Failed readiness/connection work spends the same budget as new sessions.
+    # A claimed inference already spent its attempt in _claim_for_run.
+    if not claimed or job.attempts == 0:
+        job.attempts += 1
     if job.attempts < int(getattr(settings, "AI_JOB_MAX_ATTEMPTS", 5)):
         delay = min(2 ** job.attempts, 32) * 60
-        job.status = AiJob.Status.QUEUED
-        job.failure_code = code
         # Measured from now: a session wait can outlast the poll that started it.
-        job.next_attempt_at = max(moment, timezone.now()) + timedelta(seconds=delay)
-        if _write_claimed(job, status=job.status, attempts=job.attempts, failure_code=job.failure_code,
-                          next_attempt_at=job.next_attempt_at, harness_session_id=job.harness_session_id):
+        next_attempt_at = max(moment, timezone.now()) + timedelta(seconds=delay)
+        write = _write_claimed if claimed else _write_if_unchanged
+        if write(job, status=AiJob.Status.QUEUED, attempts=job.attempts, failure_code=code,
+                 next_attempt_at=next_attempt_at, harness_session_id=job.harness_session_id):
             outcome_for_job(job, "ai_attempt", phase="failed", code=code)
         return False
-    _fail(job, code)
+    _fail(job, code, claimed=claimed)
     return True
 
 
@@ -532,28 +541,18 @@ def _write_if_unchanged(job, **fields):
     )
 
 
-@transaction.atomic
 def _fail_if_unchanged(job, code):
-    changed = _write_if_unchanged(
-        job,
-        status=AiJob.Status.FAILED,
-        failure_code=code,
-        finished_at=timezone.now(),
-    )
+    return _fail(job, code, claimed=False)
 
+
+@transaction.atomic
+def _fail(job, code, *, claimed=True):
+    write = _write_claimed if claimed else _write_if_unchanged
+    changed = write(job, status=AiJob.Status.FAILED, failure_code=code, attempts=job.attempts,
+                    finished_at=timezone.now(), harness_session_id=job.harness_session_id)
     if changed:
         outcome_for_job(job, "ai_job", phase="failed", code=code)
     return changed
-
-
-@transaction.atomic
-def _fail(job, code):
-    job.status = AiJob.Status.FAILED
-    job.failure_code = code
-    job.finished_at = timezone.now()
-    if _write_claimed(job, status=job.status, failure_code=job.failure_code,
-                      finished_at=job.finished_at, harness_session_id=job.harness_session_id):
-        outcome_for_job(job, "ai_job", phase="failed", code=code)
 
 
 def _parse_hhmm(text):
