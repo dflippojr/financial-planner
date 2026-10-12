@@ -16,6 +16,8 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 _OPENER = urllib.request.build_opener(_NoRedirect)
+# Larger than any harness or provider reply; a bigger body is refused, not buffered.
+MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 
 
 class HarnessHttpError(Exception):
@@ -35,7 +37,7 @@ def json_request(url, *, token, method="GET", body=None, timeout=30, headers=Non
     try:
         request = urllib.request.Request(url, data=data, headers=headers, method=method)
         with _OPENER.open(request, timeout=timeout) as response:
-            raw = response.read()
+            raw = _read_capped(response)
             if not raw:
                 return {}
             return json.loads(raw.decode("utf-8"))
@@ -49,12 +51,19 @@ def json_request(url, *, token, method="GET", body=None, timeout=30, headers=Non
         raise HarnessHttpError(0, {}) from None
 
 
+def _read_capped(response):
+    raw = response.read(MAX_RESPONSE_BYTES + 1)
+    if len(raw) > MAX_RESPONSE_BYTES:
+        raise ValueError("response body too large")
+    return raw
+
+
 def _read_error_payload(exc):
     try:
-        raw = exc.read()
+        raw = _read_capped(exc)
         if not raw:
             return {}
         parsed = json.loads(raw.decode("utf-8"))
         return parsed if isinstance(parsed, dict) else {}
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+    except (OSError, ValueError):
         return {}

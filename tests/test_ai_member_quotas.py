@@ -52,6 +52,7 @@ class _FakeSession:
 
 
 def test_session_stops_tool_calls_once_the_deadline_passes(monkeypatch, settings):
+    settings.AGENT_HARNESS_ALLOWED_ORIGINS = ["http://harness.invalid"]
     settings.AGENT_HARNESS_SESSION_TIMEOUT_SECONDS = 60
     session = _FakeSession(25)
     monkeypatch.setattr(ai_harness, "json_request", session.request)
@@ -74,7 +75,8 @@ def test_session_stops_tool_calls_once_the_deadline_passes(monkeypatch, settings
     assert not result.ok and result.failure_code == UNAVAILABLE and result.session_open
 
 
-def test_a_batch_larger_than_the_tool_budget_runs_only_the_budget(monkeypatch):
+def test_a_batch_larger_than_the_tool_budget_runs_only_the_budget(monkeypatch, settings):
+    settings.AGENT_HARNESS_ALLOWED_ORIGINS = ["http://harness.invalid"]
     session = _FakeSession(10)
     monkeypatch.setattr(ai_harness, "json_request", session.request)
     ran = []

@@ -272,16 +272,17 @@ def test_settings_connect_requires_reauth_and_hides_token(harness):
     assert b'data-ai-ui="connected"' in page.content
 
 
-@pytest.mark.django_db
-def test_harness_url_rejects_off_host_and_plain_http_tailnet():
-    with pytest.raises(HarnessUrlError):
-        parse_harness_url("https://example.invalid")
-    with pytest.raises(HarnessUrlError):
-        parse_harness_url("http://tower.example.ts.net")
-    with pytest.raises(HarnessUrlError):
-        parse_harness_url("https://user:pass@127.0.0.1:8100")
-    with pytest.raises(HarnessUrlError):
-        parse_harness_url("http://127.0.0.1:8100/path?x=1")
+def test_harness_url_must_be_an_allowed_origin(settings):
+    settings.AGENT_HARNESS_ALLOWED_ORIGINS = ["https://tower.example.ts.net"]
+    for raw in (
+        "https://example.invalid",
+        "http://tower.example.ts.net",
+        "https://tower.example.ts.net:8443",
+        "https://user:pass@tower.example.ts.net",
+        "https://tower.example.ts.net/path?x=1",
+    ):
+        with pytest.raises(HarnessUrlError):
+            parse_harness_url(raw)
     assert parse_harness_url("https://tower.example.ts.net") == "https://tower.example.ts.net"
 
 

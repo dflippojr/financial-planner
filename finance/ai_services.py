@@ -9,6 +9,7 @@ from django.utils import timezone
 
 from .ai_harness import (
     LOCAL_WARM_REFUSED,
+    NotAHarness,
     add_session_context,
     default_backends,
     hosted_sessions_enabled,
@@ -63,13 +64,11 @@ TOKEN_REJECTED = (
     "That token isn't valid for this Agent Harness. Create an App token in that "
     "harness's Settings → Apps, then connect again."
 )
-HARNESS_NOT_FOUND = (
-    "That URL doesn't point at an Agent Harness API. Use the harness's own address, "
-    "without /api/v1 or a page path."
-)
-HARNESS_UNREACHABLE = (
-    "The app can't reach that Agent Harness. Inside Docker, localhost is the app's "
-    "own container, so use the harness's tailnet URL."
+# One message for refused, unreachable and not-a-harness endpoints, so connect
+# reveals nothing about other ports or paths (#409).
+HARNESS_UNAVAILABLE = (
+    "The app couldn't reach an Agent Harness at that address. Check that the harness is "
+    "running and that the URL is the harness's own address."
 )
 HARNESS_FAILED = "Agent Harness couldn't finish connecting. Try again in a moment."
 
@@ -353,12 +352,10 @@ def _looks_like_app_token(secret):
 
 
 def _connect_failure_message(exc):
+    if isinstance(exc, NotAHarness):
+        return HARNESS_UNAVAILABLE
     if exc.status in {401, 403}:
         return TOKEN_REJECTED
-    if exc.status == 404:
-        return HARNESS_NOT_FOUND
-    if exc.status == 0:
-        return HARNESS_UNREACHABLE
     return HARNESS_FAILED
 
 

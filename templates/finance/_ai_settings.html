@@ -4,12 +4,16 @@
   <h2 id="ai-backends-heading" class="mb-2 font-semibold">AI backends</h2>
   {% if ai_error %}<div role="alert" class="alert alert-error mb-4">{{ ai_error }}</div>{% endif %}
   {% if not ai_connected %}
-  <p class="mb-4 text-sm">Connect an Agent Harness Server on this computer or the tailnet. The App token is stored encrypted and is never shown again.</p>
+  {% if ai_harness_enabled %}
+  <p class="mb-4 text-sm">Connect the Agent Harness Server this server allows. The App token is stored encrypted and is never shown again.</p>
   <form method="post" action="{% url 'ai-connect' %}" class="max-w-lg space-y-3">
     {% csrf_token %}
     {% include "finance/_form_fields.html" with form=ai_connect_form %}
     <button type="submit" class="btn btn-primary">Connect Agent Harness</button>
   </form>
+  {% else %}
+  <p class="mb-4 text-sm">Agent Harness isn't enabled on this server.</p>
+  {% endif %}
   {% if ai_shared_local_form %}
   <h3 class="mb-2 mt-6 font-semibold">Local model (shared)</h3>
   <p class="mb-4 text-sm">The hosting member offered the tower's local model. Requests use that connection with the local backend only. Hosted backends on that connection cannot be used.</p>

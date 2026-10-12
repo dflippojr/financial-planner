@@ -243,6 +243,11 @@ FIELD_ENCRYPTION_KEY = os.environ.get("FIELD_ENCRYPTION_KEY", "").strip()
 SIMPLEFIN_SYNC_CRON = os.environ.get("SIMPLEFIN_SYNC_CRON", "30 6 * * *").strip()
 SIMPLEFIN_SYNC_MIN_INTERVAL_SECONDS = int(os.environ.get("SIMPLEFIN_SYNC_MIN_INTERVAL_SECONDS", "900"))
 
+# Origins (scheme, host, port) a member may connect as their Agent Harness; every
+# harness request is checked against it. Empty disables the harness integration.
+AGENT_HARNESS_ALLOWED_ORIGINS = (
+    os.environ.get("AGENT_HARNESS_ALLOWED_ORIGINS", "http://host.docker.internal:8100").replace(",", " ").split()
+)
 AGENT_HARNESS_PROJECT = os.environ.get("AGENT_HARNESS_PROJECT", "financial-planner").strip() or "financial-planner"
 AGENT_HARNESS_HOSTED_SESSIONS = os.environ.get("AGENT_HARNESS_HOSTED_SESSIONS", "false").lower() == "true"
 AGENT_HARNESS_SESSION_TIMEOUT_SECONDS = int(os.environ.get("AGENT_HARNESS_SESSION_TIMEOUT_SECONDS", "600"))

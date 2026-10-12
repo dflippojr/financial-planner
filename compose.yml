@@ -62,6 +62,8 @@ services:
       # Staged CSV uploads live on the tmpfs below, so they never reach disk.
       CSV_IMPORT_STAGING_DIR: /run/csv-staging/uploads
       AI_LOCAL_QUIET_WINDOW: ${AI_LOCAL_QUIET_WINDOW:-22:00-06:00}
+      # Unset uses the harness on this host; set it empty to disable the harness integration.
+      AGENT_HARNESS_ALLOWED_ORIGINS: ${AGENT_HARNESS_ALLOWED_ORIGINS-http://host.docker.internal:8100}
       AGENT_HARNESS_PROJECT: ${AGENT_HARNESS_PROJECT:-financial-planner}
       AGENT_HARNESS_HOSTED_SESSIONS: ${AGENT_HARNESS_HOSTED_SESSIONS:-false}
       AGENT_HARNESS_SESSION_TIMEOUT_SECONDS: ${AGENT_HARNESS_SESSION_TIMEOUT_SECONDS:-600}
@@ -83,6 +85,9 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    # The app still calls the harness inside requests (connect discovery, the
+    # settings backend list, local-model warm-up and plan linking), so it keeps
+    # the host route. Every call is limited to AGENT_HARNESS_ALLOWED_ORIGINS.
     extra_hosts:
       - "host.docker.internal:host-gateway"
     tmpfs:
@@ -185,6 +190,8 @@ services:
       AI_CHAT_TURN_MAX_SECONDS: ${AI_CHAT_TURN_MAX_SECONDS:-}
       AI_JOB_MAX_QUEUED_PER_MEMBER: ${AI_JOB_MAX_QUEUED_PER_MEMBER:-12}
       AI_SHARED_LOCAL_DAILY_CAP: ${AI_SHARED_LOCAL_DAILY_CAP:-200}
+      # Unset uses the harness on this host; set it empty to disable the harness integration.
+      AGENT_HARNESS_ALLOWED_ORIGINS: ${AGENT_HARNESS_ALLOWED_ORIGINS-http://host.docker.internal:8100}
       AGENT_HARNESS_PROJECT: ${AGENT_HARNESS_PROJECT:-financial-planner}
       AGENT_HARNESS_HOSTED_SESSIONS: ${AGENT_HARNESS_HOSTED_SESSIONS:-false}
       AGENT_HARNESS_SESSION_TIMEOUT_SECONDS: ${AGENT_HARNESS_SESSION_TIMEOUT_SECONDS:-600}

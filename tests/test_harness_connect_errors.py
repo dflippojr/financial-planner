@@ -13,8 +13,8 @@ from tests.helpers import stamp_recent_auth
 from tests.test_ai_provider import TOKEN, make_member
 
 from finance.ai_services import (
-    HARNESS_NOT_FOUND,
-    HARNESS_UNREACHABLE,
+    HARNESS_FAILED,
+    HARNESS_UNAVAILABLE,
     TOKEN_FORMAT,
     TOKEN_REJECTED,
     AiError,
@@ -50,9 +50,9 @@ def _connect_message(client, base_url, token=TOKEN):
 
 
 @pytest.mark.parametrize("suffix", ["/api/v1", "/api/v1/"])
-def test_parse_drops_trailing_api_path(suffix):
+def test_parse_drops_trailing_api_path(settings, suffix):
+    settings.AGENT_HARNESS_ALLOWED_ORIGINS = ["https://tower.example.ts.net"]
     assert parse_harness_url(f"https://tower.example.ts.net{suffix}") == "https://tower.example.ts.net"
-    assert parse_harness_url(f"http://localhost:8000/harness{suffix}") == "http://localhost:8000/harness"
 
 
 @pytest.mark.django_db
@@ -76,23 +76,20 @@ def test_rejected_token_names_the_harness_settings(harness):
 
 
 @pytest.mark.django_db
-def test_wrong_path_says_the_url_is_not_a_harness_api(harness):
-    _state, url = harness
+def test_page_path_is_refused_before_any_request(harness):
+    state, url = harness
     user, _person, _household = make_member("owner")
     messages = _connect_message(_signed_in_client(user), f"{url}/not-the-harness")
-    assert messages == [HARNESS_NOT_FOUND]
+    assert messages == ["Use the harness's own address, without a page path."]
+    assert state.requests == []
 
 
 @pytest.mark.django_db
-def test_unreachable_harness_explains_localhost_in_docker():
+def test_unreachable_harness_gets_the_generic_message(settings):
+    settings.AGENT_HARNESS_ALLOWED_ORIGINS = ["http://127.0.0.1:1"]
     user, _person, _household = make_member("owner")
     messages = _connect_message(_signed_in_client(user), "http://127.0.0.1:1")
-    assert messages == [HARNESS_UNREACHABLE]
-    assert "tailnet" in HARNESS_UNREACHABLE
-
-
-def test_the_three_failures_have_distinct_messages():
-    assert len({TOKEN_REJECTED, HARNESS_NOT_FOUND, HARNESS_UNREACHABLE}) == 3
+    assert messages == [HARNESS_UNAVAILABLE]
 
 
 @pytest.mark.parametrize(
@@ -108,7 +105,8 @@ def test_the_three_failures_have_distinct_messages():
         "https://tést.ts.net",
     ],
 )
-def test_malformed_urls_are_refused_with_a_message(raw):
+def test_malformed_urls_are_refused_with_a_message(settings, raw):
+    settings.AGENT_HARNESS_ALLOWED_ORIGINS = ["http://localhost:8100", "https://tower.example.ts.net"]
     with pytest.raises(HarnessUrlError):
         parse_harness_url(raw)
 
@@ -118,7 +116,8 @@ def test_malformed_urls_are_refused_with_a_message(raw):
     "raw",
     ["http://[::1", "http://localhost:abc", "http://localhost/ space", "http://localhost/café"],
 )
-def test_malformed_url_post_is_a_message_not_a_500(raw):
+def test_malformed_url_post_is_a_message_not_a_500(settings, raw):
+    settings.AGENT_HARNESS_ALLOWED_ORIGINS = ["http://localhost:8100"]
     user, person, _household = make_member("owner")
     messages = _connect_message(_signed_in_client(user), raw)
     assert len(messages) == 1
@@ -137,13 +136,14 @@ def test_badly_pasted_token_is_a_message_not_a_500(harness, token):
 
 
 @pytest.mark.django_db
-def test_header_the_client_refuses_is_reported_as_unreachable(harness):
+def test_header_the_client_refuses_is_a_safe_message(harness):
     _state, url = harness
     _user, person, _household = make_member("owner")
     with patch("finance.ai_services._looks_like_app_token", return_value=True):
         with pytest.raises(AiError) as caught:
             connect_harness(person, base_url=url, token="ha-synthetic\ntoken")
-    assert str(caught.value) == HARNESS_UNREACHABLE
+    # Discovery sends no token, so the bad header fails only after the harness answered.
+    assert str(caught.value) == HARNESS_FAILED
     printed = "".join(traceback.format_exception(caught.value))
     assert "Bearer" not in printed
     assert "Invalid header" not in printed

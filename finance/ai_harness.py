@@ -8,6 +8,7 @@ from urllib.parse import quote, urljoin
 from django.conf import settings
 
 from .ai_http import HarnessHttpError, json_request
+from .ai_urls import is_allowed_url
 from .ai_types import (
     APP_TOOLS_ONLY_UNSUPPORTED,
     AUTHORIZATION_REQUIRED,
@@ -35,12 +36,40 @@ def hosted_sessions_enabled():
     return bool(getattr(settings, "AGENT_HARNESS_HOSTED_SESSIONS", False))
 
 
+class NotAHarness(HarnessHttpError):
+    """The endpoint is unreachable, refused, or did not answer like an Agent Harness."""
+
+    def __init__(self):
+        super().__init__(0)
+
+
+def _url(base_url, path):
+    # Every request re-checks the operator allow-list, so a URL saved before it
+    # changed (or a later bug) cannot reach another origin.
+    url = urljoin(base_url + "/", path)
+    if not is_allowed_url(url):
+        raise NotAHarness()
+    return url
+
+
+def _is_discovery_document(payload):
+    return isinstance(payload, dict) and isinstance(payload.get("api_version"), str) and bool(payload["api_version"])
+
+
 def discover(base_url, token):
-    root = json_request(urljoin(base_url + "/", "api/v1"), token=token)
-    backends = json_request(urljoin(base_url + "/", "api/v1/backends"), token=token)
+    # Until the unauthenticated discovery document answers, every failure looks the
+    # same to the caller, so connect can't be used to tell open ports from closed ones.
+    try:
+        # The discovery document is public, so the App token is not sent until it answers.
+        root = json_request(_url(base_url, "api/v1"), token=None, headers={})
+    except HarnessHttpError:
+        raise NotAHarness() from None
+    if not _is_discovery_document(root):
+        raise NotAHarness()
+    backends = json_request(_url(base_url, "api/v1/backends"), token=token)
     projects = []
     try:
-        projects = json_request(urljoin(base_url + "/", "api/v1/projects"), token=token)
+        projects = json_request(_url(base_url, "api/v1/projects"), token=token)
     except HarnessHttpError:
         projects = root.get("projects") or []
     return root, backends, projects
@@ -101,7 +130,7 @@ def default_backends(backends):
 
 
 def model_status(base_url, token):
-    payload = json_request(urljoin(base_url + "/", "api/v1/models/status"), token=token)
+    payload = json_request(_url(base_url, "api/v1/models/status"), token=token)
     rows = _as_list(payload)
     try:
         return [
@@ -127,7 +156,7 @@ def local_model_ready(statuses):
 def warm_local_model(base_url, token):
     try:
         json_request(
-            urljoin(base_url + "/", "api/v1/models/warm"),
+            _url(base_url, "api/v1/models/warm"),
             token=token,
             method="POST",
             body={},
@@ -175,7 +204,7 @@ def run_session(
     if end_user:
         payload["end_user"] = end_user
     created = json_request(
-        urljoin(base_url + "/", "api/v1/sessions"),
+        _url(base_url, "api/v1/sessions"),
         token=token,
         method="POST",
         body=payload,
@@ -198,7 +227,7 @@ def run_session(
 
 
 def _login_url(base_url, end_user, backend, suffix=""):
-    return urljoin(base_url + "/", f"api/v1/end-users/{quote(end_user, safe='')}/logins/{quote(backend, safe='')}{suffix}")
+    return _url(base_url, f"api/v1/end-users/{quote(end_user, safe='')}/logins/{quote(backend, safe='')}{suffix}")
 
 
 def start_end_user_login(base_url, token, end_user, backend):
@@ -235,7 +264,7 @@ def send_session_message(
     tool_budget=None,
 ):
     json_request(
-        urljoin(base_url + "/", f"api/v1/sessions/{session_id}/messages"),
+        _url(base_url, f"api/v1/sessions/{session_id}/messages"),
         token=token,
         method="POST",
         body={"content": content},
@@ -253,7 +282,7 @@ def send_session_message(
 
 def add_session_context(base_url, token, session_id, context):
     json_request(
-        urljoin(base_url + "/", f"api/v1/sessions/{session_id}/context"),
+        _url(base_url, f"api/v1/sessions/{session_id}/context"),
         token=token,
         method="POST",
         body={"context": context},
@@ -281,7 +310,7 @@ def wait_for_session(
     deadline = clock() + timeout
     delay = _POLL_INITIAL_DELAY_SECONDS
     path = f"api/v1/sessions/{session_id}"
-    current = session if session is not None else json_request(urljoin(base_url + "/", path), token=token)
+    current = session if session is not None else json_request(_url(base_url, path), token=token)
     while True:
         status = str(current.get("status") or "")
         if status in {"done", "failed", "cancelled"}:
@@ -296,7 +325,7 @@ def wait_for_session(
             return ProviderResult(ok=False, failure_code=UNAVAILABLE, session_id=session_id, session_open=True)
         sleeper(delay)
         delay = min(delay * 2, _POLL_MAX_DELAY_SECONDS)
-        current = json_request(urljoin(base_url + "/", path), token=token)
+        current = json_request(_url(base_url, path), token=token)
 
 
 def _answer_tool_calls(base_url, token, session_id, tool_runner, *, deadline=None, clock=None, tool_budget=None):
@@ -308,7 +337,7 @@ def _answer_tool_calls(base_url, token, session_id, tool_runner, *, deadline=Non
     """
     pending = _as_list(
         json_request(
-            urljoin(base_url + "/", f"api/v1/sessions/{session_id}/tool_calls?status=pending"),
+            _url(base_url, f"api/v1/sessions/{session_id}/tool_calls?status=pending"),
             token=token,
         )
     )
@@ -327,7 +356,7 @@ def _answer_tool_calls(base_url, token, session_id, tool_runner, *, deadline=Non
             if remaining is not None:
                 remaining -= 1
         json_request(
-            urljoin(base_url + "/", f"api/v1/sessions/{session_id}/tool_calls/{call_id}"),
+            _url(base_url, f"api/v1/sessions/{session_id}/tool_calls/{call_id}"),
             token=token,
             method="POST",
             body={"output": output, "ok": ok},
