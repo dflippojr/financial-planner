@@ -140,8 +140,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # desktop-responsive-defects.spec.ts launches WebKit for its iPhone
+          # device cases inside the desktop projects, so both legs need WebKit.
           - leg: desktop
-            browsers: chromium
+            browsers: chromium webkit
             projects: "--project=desktop-light --project=desktop-dark"
           - leg: phone
             browsers: chromium webkit
