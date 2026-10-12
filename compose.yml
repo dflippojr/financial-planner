@@ -40,7 +40,7 @@ services:
       # on Docker Desktop). Docker picks the subnet, so the app reads the gateway
       # from its route table. X-Forwarded-For counts only on connections from
       # it; other containers on the network connect from their own addresses.
-      TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-default-gateway}
+      TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS-default-gateway}
       SETUP_CODE: ${SETUP_CODE:-}
       PRIVACY_POLICY_PATH: ${PRIVACY_POLICY_PATH:-}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}

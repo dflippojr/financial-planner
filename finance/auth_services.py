@@ -191,7 +191,7 @@ class ThrottleKey:
             yield self.username, settings.LOGIN_USERNAME_FAILURE_LIMIT, settings.LOGIN_USERNAME_FAILURE_WINDOW_SECONDS, None
 
     def digests(self):
-        return [digest for digest, *_limits in self.buckets()]
+        return [digest for digest in (self.client, self.username) if digest is not None]
 
 
 def throttle_key(username, remote_address, *, per_username=True):
