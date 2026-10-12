@@ -29,6 +29,7 @@
     <form id="ai-popover-form" method="post" action="{% url 'chat-send' %}" class="p-3 space-y-2">
       {% csrf_token %}
       <input type="hidden" name="conversation_id" value="">
+      <input type="hidden" name="tile_context" value="">
       <input type="hidden" name="page_route" value="{{ request.path }}">
       <input type="hidden" name="page_query" value="{{ request.GET.urlencode }}">
       <input type="hidden" name="next" value="{% url 'chat' %}">

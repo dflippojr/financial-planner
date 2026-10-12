@@ -12,12 +12,12 @@ test('Invalid date range and incomplete scenario preserve historical actuals', a
   await submit(page, page.locator('#cash-flow-filters').getByRole('link', { name: 'Reset range', exact: true }));
   await page.reload();
   await expect(page).not.toHaveURL(/date_(from|to)=/);
-  await expect(numbers).toHaveText(actuals);
+  await expect(numbers).toHaveText(actuals, { useInnerText: true });
   await page.locator('summary').filter({ hasText: 'What-if scenario' }).click();
   const form = page.locator('form').filter({ has: page.locator('[name=scenario_action]') });
   await form.locator('[name=change_type]').selectOption('oneoff');
   await submit(page, form.getByRole('button', { name: 'Add to scenario' }));
   await expect(form).toContainText('This field is required.');
-  await expect(numbers).toHaveText(actuals);
+  await expect(numbers).toHaveText(actuals, { useInnerText: true });
   await expect(page).not.toHaveURL(/sc=/);
 });

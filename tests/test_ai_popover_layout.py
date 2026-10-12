@@ -207,7 +207,11 @@ def test_keyboard_skip_escape_context_removal_a11y_and_reduced_motion(popover_se
 def test_popover_does_not_render_below_lg(popover_session):
     context, page, _person = popover_session(width=390)
     try:
-        assert page.locator("#ai-popover").count() == 0
+        expect(page.locator("#ai-popover")).to_be_hidden()
+        assert page.get_by_role("dialog", name="Ask AI").count() == 0
+        assert page.get_by_role("link", name="Skip to AI chat").count() == 0
+        page.evaluate("window.AiPopover.open()")
+        expect(page.locator("#ai-popover")).to_be_hidden()
         expect(page.get_by_role("navigation", name="Main tabs")).to_be_visible()
     finally:
         context.close()
@@ -299,5 +303,38 @@ def test_non_json_send_error_is_readable_and_keeps_the_draft(popover_session):
         expect(page.locator("[data-pop-error]")).to_have_text(
             "Chat could not send your question. Reopen chat and try again.")
         expect(composer).to_have_value("Synthetic question to retry")
+    finally:
+        context.close()
+
+
+@pytest.mark.parametrize("reopen_pending", [False, True])
+def test_closing_during_first_send_keeps_the_conversation(popover_session, reopen_pending):
+    context, page, person = popover_session()
+    try:
+        open_popover(page)
+        requests = []
+        page.route("**/chat/send/", lambda route: requests.append(route))
+        composer = page.locator("#ai-popover textarea")
+        composer.fill("Synthetic first question")
+        send = page.locator('#ai-popover-form [type="submit"]')
+        send.click()
+        page.wait_for_timeout(100)
+        assert len(requests) == 1
+        page.get_by_role("button", name="Close AI chat").click()
+        expect(page.locator("#ai-popover")).to_be_hidden()
+        if reopen_pending:
+            open_popover(page)
+        requests[0].continue_()
+        expect(send).to_be_enabled()
+        expect(composer).to_have_value("")
+        conversation_id = stored(page)["conversationId"]
+        assert conversation_id is not None
+        assert person.ai_conversations.count() == 1
+        if not reopen_pending:
+            expect(page.locator("#ai-popover")).to_be_hidden()
+        open_popover(page)
+        assert stored(page)["conversationId"] == conversation_id
+        expect(page.locator("#ai-popover [data-chat-turn-url]")).to_have_count(1)
+        expect(page.locator("#ai-popover [data-pop-thread]")).to_contain_text("Synthetic first question")
     finally:
         context.close()

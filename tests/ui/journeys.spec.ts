@@ -34,7 +34,7 @@ test('Home range and URL-only scenario retain state without changing actuals', a
   await expect(page).toHaveURL(/sc=/);
   await page.reload();
   await expect(main(page)).toContainText('Synthetic scenario expense');
-  await expect(page.getByRole('region', { name: 'Key numbers' })).toHaveText(actuals);
+  await expect(page.getByRole('region', { name: 'Key numbers' })).toHaveText(actuals, { useInnerText: true });
   await page.getByRole('link', { name: 'Remove', exact: true }).click();
   await expect(main(page)).not.toContainText('Synthetic scenario expense');
 });

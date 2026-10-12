@@ -96,6 +96,7 @@ the bulk-edit panel stay visible from md up, as they were before Select mode (is
   {% if list_totals %}
   <section aria-labelledby="totals-heading" aria-describedby="totals-scope" class="xl:rounded-box xl:border xl:border-base-300 xl:bg-base-100 xl:p-4">
     <h2 id="totals-heading" class="sr-only font-semibold xl:not-sr-only">Cash flow totals</h2>
+      {% ai_tile "transaction-totals" has_data=matching_count  %}
     {% comment %}income_and_spending_totals uses only the dates, account, scope and tag; say so.{% endcomment %}
     <p id="totals-scope" class="sr-only mb-2 text-sm opacity-80 xl:not-sr-only">For the dates, account, scope and tag chosen. Search, category and the other filters don't change them.</p>
     <div class="grid grid-cols-3 gap-2 md:gap-4 xl:grid-cols-1 xl:gap-0">
@@ -183,7 +184,10 @@ the bulk-edit panel stay visible from md up, as they were before Select mode (is
   <button type="submit" class="btn btn-primary">Accept all shown</button>
 </form>
 {% endif %}
-<section aria-label="Transactions" class="md:overflow-x-auto md:rounded-box md:border md:border-base-300 md:bg-base-100">
+<section aria-label="Transactions" class="md:rounded-box md:border md:border-base-300 md:bg-base-100">
+  <h2 class="sr-only">Transaction history</h2>
+  {% ai_tile "transactions" has_data=matching_count  %}
+  <div class="md:overflow-x-auto">
   <table class="table max-md:block">
     <thead class="sticky top-0 z-10 bg-base-200 max-md:hidden md:bg-base-100">
       <tr>
@@ -274,6 +278,7 @@ the bulk-edit panel stay visible from md up, as they were before Select mode (is
     {% endfor %}
     </tbody>
   </table>
+  </div>
   {% if page and page.paginator.num_pages > 1 %}
   <nav class="mt-4 flex flex-wrap items-center gap-2 md:mt-0 md:justify-between md:border-t md:border-base-300 md:px-4 md:py-3" aria-label="Transaction pages">
     <span class="text-sm opacity-80">Showing {{ page.start_index }}–{{ page.end_index }} of {{ page.paginator.count }} · page {{ page.number }} of {{ page.paginator.num_pages }}</span>

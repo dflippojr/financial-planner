@@ -61,6 +61,8 @@
 </div>
 <div class="page-columns max-md:hidden">
   <section class="rounded-box border border-base-300 bg-base-100" aria-label="Category budgets">
+  <h2 class="sr-only">Category budgets</h2>
+  {% ai_tile "budgets" has_data=category_cards month=month %}
     <div class="overflow-x-auto" tabindex="0" role="region" aria-label="Budget amounts and actions" data-budget-table>
     <table class="table">
       <thead>
@@ -117,6 +119,7 @@
       <div class="flex flex-col gap-1">
         <div class="flex items-start justify-between gap-2">
           <p class="text-sm font-semibold opacity-80">{{ card.name }} · {{ card.budget.get_scope_display }}</p>
+      {% ai_tile "budget-total" has_data=overall_cards month=month scope=card.budget.scope %}
           <span class="-mr-2 -mt-1">{% include "finance/_row_menu.html" with label="Actions for "|add:card.name|add:", "|add:card.budget.get_scope_display items="finance/_budget_row_menu_items.html" %}</span>
         </div>
         <p class="flex flex-wrap items-baseline justify-between gap-x-2"><span class="text-3xl font-bold">{% include "finance/_amount.html" with value=card.spent_display tone="out" %}</span><span class="text-sm tabular-nums opacity-80">of {{ card.amount_display|amount_text|cut:"+" }}</span></p>

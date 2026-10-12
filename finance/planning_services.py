@@ -124,25 +124,15 @@ def visible_projection_inputs(principal, *, account=None, scope="", accounts=Non
         members__transaction__in=eligible,
     )
     if not include_household or accounts is not None:
-        if accounts is not None:
-            allowed = selected_accounts(
-                principal,
-                account=account,
-                scope=scope,
-                cash_flow_only=True,
-                accounts=accounts,
-            )
-        else:
-            allowed = selected_accounts(
-                principal,
-                account=account,
-                scope=scope,
-                cash_flow_only=True,
-                accounts=Account.objects.visible_to(principal).filter(
-                    scope=Account.Scope.PRIVATE,
-                    owner=_person(principal, check_authenticated=False),
-                ),
-            )
+        # Report filters select eligible charges; the allowed account set
+        # independently protects every member behind a series's typical amount.
+        # Earlier charges on another authorized account must not erase a series
+        # that still has an eligible charge on the selected account.
+        allowed = selected_accounts(
+            principal,
+            scope=Account.Scope.PRIVATE if not include_household else "",
+            accounts=accounts,
+        )
         series = confine_recurring_series_to_accounts(series, allowed)
     series_rows = (
         series.exclude(pk__in=replaced)
