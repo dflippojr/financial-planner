@@ -453,7 +453,7 @@ def test_visible_accounts_query_is_lockable_and_never_duplicates_rows():
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("exit_kind", ["leave", "evict"])
-@pytest.mark.parametrize("start_competitor_first", [False, True], ids=["after-lock", "before-lock-gated"])
+@pytest.mark.parametrize("start_competitor_first", [False, True], ids=["after-lock", "competitor-started-first-gated"])
 def test_unshare_and_membership_exit_concurrently_do_not_deadlock(exit_kind, start_competitor_first):
     # Lock order must be the same everywhere: memberships, then accounts.
     # unshare_account used to lock the account first and a membership second
