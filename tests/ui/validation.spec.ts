@@ -9,9 +9,9 @@ test('Invalid date range and incomplete scenario preserve historical actuals', a
   await page.locator('#cash-flow-filters [name=date_to]').fill('2026-10-04');
   await submit(page, page.locator('#cash-flow-filters').getByRole('button', { name: 'Update', exact: true }));
   await expect(page.locator('#cash-flow-filters')).toContainText('End date must be on or after start date.');
-  // The landscape invalid-range reset is tracked in #375; validate this
-  // independent scenario from a fresh GET rather than asserting that bug.
-  await page.goto('/');
+  await submit(page, page.locator('#cash-flow-filters').getByRole('link', { name: 'Reset range', exact: true }));
+  await page.reload();
+  await expect(page).not.toHaveURL(/date_(from|to)=/);
   await expect(numbers).toHaveText(actuals);
   await page.locator('summary').filter({ hasText: 'What-if scenario' }).click();
   const form = page.locator('form').filter({ has: page.locator('[name=scenario_action]') });

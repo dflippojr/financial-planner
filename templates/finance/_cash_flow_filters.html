@@ -18,6 +18,10 @@ reads Change range, as before.
     </span>
   </summary>
   <form method="get" class="filters-panel mt-3 flex flex-wrap items-end gap-3 md:mt-0">
+    <div class="sticky top-0 z-10 flex w-full flex-wrap items-center justify-between gap-3 bg-base-100" data-filters-header>
+      <span class="font-medium">Filters</span>
+      <button type="button" class="btn btn-ghost min-h-11" data-close-filters>Close filters</button>
+    </div>
     {% include "finance/_form_fields.html" with form=filter_form %}
     {% for token in scenario_tokens %}
     <input type="hidden" name="sc" value="{{ token }}">

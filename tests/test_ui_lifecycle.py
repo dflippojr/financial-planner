@@ -141,7 +141,7 @@ def test_http_lifecycle_seeds_sign_in_chat_and_authenticated_teardown(monkeypatc
             print(diagnostic_summary((tmp_path / "ui-instance.log").read_text()))
             raise
         finally:
-            # A configured proxy must not receive or block the loopback teardown.
+            # The fixture's authenticated teardown must bypass configured proxies.
             monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:1")
             monkeypatch.setenv("http_proxy", "http://127.0.0.1:1")
             monkeypatch.setenv("NO_PROXY", "")
