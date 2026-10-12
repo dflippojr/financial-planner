@@ -1,10 +1,18 @@
 import { test, expect, signIn } from './fixtures';
 
+function chartContained() {
+  const canvas = document.querySelector<HTMLCanvasElement>('#cash-flow-chart')!;
+  const box = canvas.getBoundingClientRect();
+  const parent = canvas.parentElement!.getBoundingClientRect();
+  return box.width > 0 && box.left >= parent.left && box.right <= parent.right && box.right <= innerWidth
+    && Math.abs(canvas.width / devicePixelRatio - box.width) < 1;
+}
+
 // #368: assert the previously untested enlarged-text branch on desktop and iPhone SE.
 test('Home values and expanded chart reflow with 200 percent root text size', async ({ page }, info) => {
   await signIn(page);
   const phone = info.project.name.startsWith('phone');
-  // Temporary #386 investigation: capture the Linux-only failure before choosing a fix.
+  // #386 regression check: thirty fresh reflows, with chart state attached on failure.
   for (let repetition = 0; repetition < 30; repetition++) {
     if (repetition) await page.goto('/');
     await page.setViewportSize({ width: phone ? 375 : 1280, height: phone ? 667 : 900 });
@@ -17,13 +25,7 @@ test('Home values and expanded chart reflow with 200 percent root text size', as
     const chart = page.locator('#cash-flow-chart');
     await expect(chart).toBeVisible();
     try {
-      await expect.poll(() => page.evaluate(() => {
-        const canvas = document.querySelector<HTMLCanvasElement>('#cash-flow-chart')!;
-        const box = canvas.getBoundingClientRect();
-        const parent = canvas.parentElement!.getBoundingClientRect();
-        return box.width > 0 && box.left >= parent.left && box.right <= parent.right && box.right <= innerWidth
-          && Math.abs(canvas.width / devicePixelRatio - box.width) < 1;
-      })).toBe(true);
+      await expect.poll(() => page.evaluate(chartContained)).toBe(true);
     } catch (error) {
       await info.attach('chart-resize-state', {
         contentType: 'application/json',
@@ -56,4 +58,36 @@ test('Home values and expanded chart reflow with 200 percent root text size', as
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await expect.poll(() => page.evaluate(() => getComputedStyle(document.documentElement).fontSize)).toBe('32px');
   }
+});
+
+// #386: Chart.js defers a resize that arrives while finished animations are still queued
+// and applies it on the next draw. Land the container's resize in the final animation frame.
+test('Home chart applies a resize observed in its last animation frame', async ({ page }, info) => {
+  await signIn(page);
+  if (info.project.name.startsWith('phone')) await page.getByText('Income, spending, and net by period', { exact: true }).click();
+  await expect(page.locator('#cash-flow-chart')).toBeVisible();
+  await page.evaluate(() => new Promise<void>(resolve => {
+    const Chart = (window as any).Chart;
+    const realNow = Date.now;
+    let narrowed = false;
+    let done = false;
+    Chart.defaults.animation.onProgress = ({ chart, currentStep, numSteps }: any) => {
+      if (done || chart.canvas.id !== 'cash-flow-chart') return;
+      if (narrowed) {
+        if (currentStep < numSteps) return;
+        done = true;
+        Date.now = realNow;
+        delete Chart.defaults.animation.onProgress;
+        resolve();
+        return;
+      }
+      // The ResizeObserver reports this in the next frame, which the clock jump makes the last.
+      narrowed = true;
+      const parent = chart.canvas.parentElement;
+      parent.style.width = parent.getBoundingClientRect().width - 40 + 'px';
+      Date.now = () => realNow() + 60_000;
+    };
+    window.dispatchEvent(new Event('financial-planner:themechange'));
+  }));
+  await expect.poll(() => page.evaluate(chartContained)).toBe(true);
 });

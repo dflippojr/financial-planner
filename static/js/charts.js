@@ -578,6 +578,17 @@
     });
   }
 
+  // Chart.js defers a resize that arrives while its animator still holds
+  // animations and applies it on the next draw. Finished animations stay queued
+  // for one frame after their last draw, so a resize in that frame waited for a
+  // draw that never came and left the canvas overflowing its container (#386).
+  // Draw once more when an animation completes; the draw applies the resize.
+  function applyDeferredResize(context) {
+    if (context.chart._resizeBeforeDraw) {
+      context.chart.draw();
+    }
+  }
+
   function destroyCharts() {
     charts.forEach(function (chart) {
       chart.destroy();
@@ -593,6 +604,7 @@
     var palette = themePalette();
     window.Chart.defaults.color = palette.text;
     window.Chart.defaults.borderColor = palette.grid;
+    window.Chart.defaults.animation.onComplete = applyDeferredResize;
     document.querySelectorAll("canvas[data-chart]").forEach(function (canvas) {
       var data = payloadFrom(canvas.getAttribute("data-chart-payload"));
       var kind = canvas.getAttribute("data-chart");
