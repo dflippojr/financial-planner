@@ -129,10 +129,25 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
+  # Two legs split the journeys by Playwright project group so each finishes
+  # well inside the 20-minute cap. Together they run every project in
+  # playwright.config.ts exactly once; keep these lists in step with it.
   ui-pass:
-    name: UI journeys (desktop and phone)
+    name: UI journeys (${{ matrix.leg }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # desktop-responsive-defects.spec.ts launches WebKit for its iPhone
+          # device cases inside the desktop projects, so both legs need WebKit.
+          - leg: desktop
+            browsers: chromium webkit
+            projects: "--project=desktop-light --project=desktop-dark"
+          - leg: phone
+            browsers: chromium webkit
+            projects: "--project=phone-light --project=phone-dark --project='forms-*'"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -147,11 +162,11 @@ jobs:
           python -m venv .venv
           .venv/bin/python -m pip install -r requirements-test.txt
           npm ci
-          npx playwright install --with-deps chromium webkit
+          npx playwright install --with-deps ${{ matrix.browsers }}
       - name: Build CSS
         run: bash scripts/build_css.sh
-      - name: Run isolated passing journeys and reflow checks
-        run: npm run test:ui
+      - name: Run ${{ matrix.leg }} isolated passing journeys and reflow checks
+        run: npm run test:ui -- ${{ matrix.projects }}
       - name: Clean registered synthetic instances
         if: always()
         run: .venv/bin/python -m scripts.cleanup_ui_tests
@@ -163,7 +178,7 @@ jobs:
         if: always() && steps.report-privacy.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
-          name: ui-journeys-report
+          name: ui-journeys-report-${{ matrix.leg }}
           path: |
             playwright-report/
             test-results/ui/
