@@ -2279,21 +2279,34 @@ def privacy_policy_respond(request):
     return redirect(safe_next_url(request, request.POST.get("next", "")))
 
 
+RECOVERY_FAILED = "Recovery failed. Check the supplied details."
+
+
 @login_not_required
 @never_cache
 def recover(request):
     form = RecoveryForm(request.POST or None)
     recovered = False
     if request.method == "POST" and form.is_valid():
-        try:
-            recovered_user = recover_account(
-                form.cleaned_data["username"],
-                form.cleaned_data["recovery_code"],
-                form.cleaned_data["password1"],
-            )
-            recovered = True
-            record_security_event(recovered_user, EVENT_TYPES.RECOVERY_CODE_USED, request=request)
-            record_security_event(recovered_user, EVENT_TYPES.PASSWORD_CHANGED, request=request)
-        except InvalidOneTimeCode:
-            form.add_error(None, "Recovery failed. Check the supplied details.")
+        username = normalize_username(form.cleaned_data["username"])
+        key = throttle_key(username, client_ip(request))
+        if login_is_blocked(key):
+            # Not counted as a failure: that would let retries reset the window.
+            form.add_error(None, RECOVERY_FAILED)
+        else:
+            try:
+                recovered_user = recover_account(
+                    form.cleaned_data["username"],
+                    form.cleaned_data["recovery_code"],
+                    form.cleaned_data["password1"],
+                )
+            except InvalidOneTimeCode:
+                record_login_failure(key)
+                record_sign_in_failure_for_username(username, request)
+                form.add_error(None, RECOVERY_FAILED)
+            else:
+                clear_login_failures(key)
+                recovered = True
+                record_security_event(recovered_user, EVENT_TYPES.RECOVERY_CODE_USED, request=request)
+                record_security_event(recovered_user, EVENT_TYPES.PASSWORD_CHANGED, request=request)
     return render(request, "finance/recover.html", {"form": form, "recovered": recovered})
