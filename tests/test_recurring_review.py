@@ -12,6 +12,7 @@ from finance.category_services import ensure_household_categories
 from finance.models import (
     Account,
     Alert,
+    AlertSettings,
     Household,
     ImportBatch,
     Membership,
@@ -161,58 +162,136 @@ def test_upcoming_lists_next_dates_for_each_cadence():
     assert dates == sorted(dates)
 
 
+def make_priced_series(owner, account, name, amounts, *, start=date(2025, 1, 10)):
+    series = make_series(owner, name=name, cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-1000)
+    for index, amount in enumerate(amounts):
+        day = date(start.year + (start.month - 1 + index) // 12, (start.month - 1 + index) % 12 + 1, start.day)
+        add_member(
+            series,
+            make_transaction(owner, account, transaction_date=day, amount_minor=amount, description=name),
+        )
+    return series
+
+
 @pytest.mark.django_db
-def test_ten_percent_price_rise_is_flagged_and_nine_percent_is_not():
+def test_drift_just_under_at_and_over_the_threshold():
+    # The boundary is strict (>): a drift of exactly the threshold does not flag.
     owner = make_person("owner")
     make_household(owner)
     account = make_account(owner)
-    flagged = make_series(
-        owner, name="Synthetic Rise", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-1000
-    )
-    stable = make_series(
-        owner, name="Synthetic Stable", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-1000
-    )
-    for day, amount in (
-        (date(2026, 7, 10), -1000),
-        (date(2026, 8, 10), -1000),
-        (date(2026, 9, 10), -1100),
-    ):
-        add_member(
-            flagged,
-            make_transaction(
-                owner, account, transaction_date=day, amount_minor=amount, description="Synthetic Rise"
-            ),
-        )
-    for day, amount in (
-        (date(2026, 7, 10), -1000),
-        (date(2026, 8, 10), -1000),
-        (date(2026, 9, 10), -1090),
-    ):
-        add_member(
-            stable,
-            make_transaction(
-                owner, account, transaction_date=day, amount_minor=amount, description="Synthetic Stable"
-            ),
-        )
+    under = make_priced_series(owner, account, "Synthetic Under", (-1000, -1000, -1099))
+    at = make_priced_series(owner, account, "Synthetic At", (-1000, -1000, -1100))
+    over = make_priced_series(owner, account, "Synthetic Over", (-1000, -1000, -1101))
+    drop = make_priced_series(owner, account, "Synthetic Drop", (-1000, -1000, -899))
 
-    change = price_change(flagged)
+    assert price_change(under) is None
+    assert price_change(at) is None
+    change = price_change(over)
     assert change is not None
     assert change.previous_minor == -1000
-    assert change.new_minor == -1100
-    assert change.percent_display == "10.0%"
-    assert change.charge_date == date(2026, 9, 10)
-    assert price_change(stable) is None
+    assert change.previous_display == "10.00 USD"
+    assert change.new_minor == -1101
+    assert change.percent_display == "10.1%"
+    assert price_change(drop).percent_display == "-10.1%"
+    assert price_change(at, 9) is not None
+    assert price_change(over, 11) is None
+
+
+@pytest.mark.django_db
+def test_drift_baseline_is_the_median_of_up_to_twelve_prior_charges():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    # One old outlier among the prior charges does not move the median, so the
+    # real increase is still measured against $10.00.
+    outlier = make_priced_series(owner, account, "Synthetic Outlier", (-5000, -1000, -1000, -1000, -1200))
+    change = price_change(outlier)
+    assert change is not None
+    assert change.previous_minor == -1000
+    assert change.percent_display == "20.0%"
+    # Only the 12 charges before the latest count: three old $50.00 charges fall
+    # out of the window, leaving a $10.00 median.
+    windowed = make_priced_series(owner, account, "Synthetic Window", (-5000,) * 3 + (-1000,) * 12 + (-1200,))
+    assert price_change(windowed).previous_minor == -1000
+    # The latest charge is not part of its own baseline: a steady creep still flags.
+    creep = make_priced_series(owner, account, "Synthetic Creep", (-1000, -1000, -1000, -1150))
+    assert price_change(creep).previous_minor == -1000
+    # An even number of prior charges averages the two middle values.
+    even = make_priced_series(owner, account, "Synthetic Even", (-1000, -1100, -1300))
+    assert price_change(even).previous_minor == -1050
+
+
+@pytest.mark.django_db
+def test_no_baseline_never_flags():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    single = make_priced_series(owner, account, "Synthetic Single", (-1000, -5000))
+    zero = make_priced_series(owner, account, "Synthetic Zero", (0, 0, -5000))
+    assert price_change(single) is None
+    assert price_change(zero) is None
+
+
+@pytest.mark.django_db
+def test_acknowledged_amount_suppresses_until_the_amount_changes():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    flagged = make_priced_series(owner, account, "Synthetic Rise", (-1000, -1000, -1200))
+    assert price_change(flagged) is not None
 
     dismiss_price_change(owner, flagged.pk)
     flagged.refresh_from_db()
     assert price_change(flagged) is None
+    raise_recurring_review_alerts(owner, [flagged], today=TODAY)
+    assert not Alert.objects.filter(kind=Alert.Kind.RECURRING_PRICE).exists()
     extra = make_transaction(
-        owner, account, transaction_date=date(2026, 10, 10), amount_minor=-1210, description="Synthetic Rise later"
+        owner, account, transaction_date=date(2026, 10, 10), amount_minor=-1400, description="Synthetic Rise later"
     )
     add_member(flagged, extra)
     again = price_change(flagged)
     assert again is not None
-    assert again.new_minor == -1210
+    assert again.new_minor == -1400
+
+
+@pytest.mark.django_db
+def test_household_alert_uses_each_recipient_threshold():
+    owner = make_person("owner")
+    member = make_person("member")
+    household = make_household(owner, member)
+    shared = make_account(owner, name="Shared", scope=Account.Scope.HOUSEHOLD, household=household)
+    AlertSettings.objects.create(person=owner, recurring_price_percent=10)
+    AlertSettings.objects.create(person=member, recurring_price_percent=25)
+    series = make_priced_series(owner, shared, "Synthetic Shared Rise", (-1000, -1000, -1200))
+
+    first = raise_recurring_review_alerts(owner, [series], today=TODAY)
+    second = raise_recurring_review_alerts(owner, [series], today=TODAY)
+
+    price_alerts = Alert.objects.filter(kind=Alert.Kind.RECURRING_PRICE)
+    assert [alert.recipient_id for alert in first if alert.kind == Alert.Kind.RECURRING_PRICE] == [owner.pk]
+    assert list(price_alerts.values_list("recipient_id", "dedupe_key")) == [
+        (owner.pk, f"recurring:{series.pk}:-1200")
+    ]
+    assert second == []
+    assert "10.00 USD to 12.00 USD" in price_alerts.get().title
+
+
+@pytest.mark.django_db
+def test_review_page_shows_usual_price_drift_and_viewer_threshold():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    AlertSettings.objects.create(person=owner, recurring_price_percent=20)
+    make_priced_series(owner, account, "Synthetic Small Rise", (-1000, -1000, -1150), start=date(2026, 7, 10))
+    big = make_priced_series(owner, account, "Synthetic Big Rise", (-1000, -1000, -1240), start=date(2026, 7, 11))
+    client = Client()
+    client.force_login(owner.user)
+    page = client.get(reverse("recurring-review"))
+    html = page.content.decode()
+    assert [item.series.pk for item in page.context["price_changes"]] == [big.pk]
+    assert "Usual price" in html
+    assert "Drift 24.0% from the usual price" in html
+    assert "No price changes over 20%" not in html
 
 
 @pytest.mark.django_db
@@ -358,7 +437,7 @@ def test_price_and_missed_alerts_dedupe_and_follow_account_visibility():
     for day, amount in (
         (date(2026, 7, 10), -1000),
         (date(2026, 8, 10), -1000),
-        (date(2026, 9, 10), -1100),
+        (date(2026, 9, 10), -1200),
     ):
         add_member(
             private_series,
@@ -393,8 +472,8 @@ def test_price_and_missed_alerts_dedupe_and_follow_account_visibility():
     missed_keys = list(
         Alert.objects.filter(kind=Alert.Kind.RECURRING_MISSED).values_list("recipient_id", "dedupe_key")
     )
-    assert (owner.pk, f"recurring:{private_series.pk}:-1100") in price_keys
-    assert (member.pk, f"recurring:{private_series.pk}:-1100") not in price_keys
+    assert (owner.pk, f"recurring:{private_series.pk}:-1200") in price_keys
+    assert (member.pk, f"recurring:{private_series.pk}:-1200") not in price_keys
     assert (owner.pk, f"recurring:{shared_series.pk}:missed:2026-09-15") in missed_keys
     assert (member.pk, f"recurring:{shared_series.pk}:missed:2026-09-15") in missed_keys
     assert len(first) >= 2

@@ -156,7 +156,7 @@ from .recurring_services import (
     remove_recurring_member,
     undo_cancel_recurring_series,
 )
-from .recurring_review import build_recurring_review
+from .recurring_review import build_recurring_review, price_change_percent_for
 from .cash_flow import (
     cash_flow_chart_data,
     date_range_presets,
@@ -1486,6 +1486,7 @@ def recurring_review(request):
             "confirmed": confirmed,
             "upcoming": upcoming,
             "price_changes": price_change_rows,
+            "price_change_percent": price_change_percent_for(request.user),
             "missed_charges": missed,
             "cancelled_series": cancelled,
             "monthly_display": monthly_display,
@@ -1894,6 +1895,7 @@ def _alert_settings_form(person, data=None):
         initial={
             "sync_enabled": prefs.sync_enabled,
             "recurring_price_enabled": prefs.recurring_price_enabled,
+            "recurring_price_percent": prefs.recurring_price_percent,
             "recurring_missed_enabled": prefs.recurring_missed_enabled,
             "budget_enabled": prefs.budget_enabled,
             "large_transaction_enabled": prefs.large_transaction_enabled,

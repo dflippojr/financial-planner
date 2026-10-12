@@ -136,7 +136,9 @@ _ALERT_TOGGLES = (
     "large_transaction_enabled", "monthly_review_enabled", "monthly_review_ai_enabled",
     "expected_balance_enabled", "unusual_spending_enabled", "unusual_spending_ai_enabled",
 )
-_ALERT_THRESHOLDS = ("unusual_category_percent", "unusual_category_floor_minor", "large_transaction_minor")
+_ALERT_THRESHOLDS = (
+    "unusual_category_percent", "unusual_category_floor_minor", "large_transaction_minor", "recurring_price_percent",
+)
 
 
 @transaction.atomic
@@ -156,6 +158,7 @@ def save_alert_settings(
     unusual_spending_ai_enabled=True,
     unusual_category_percent=50,
     unusual_category_floor_minor=5_000,
+    recurring_price_percent=10,
 ):
     person = _person_for(principal)
     if person is None:
@@ -164,6 +167,7 @@ def save_alert_settings(
     before = {name: getattr(prefs, name) for name in (*_ALERT_TOGGLES, *_ALERT_THRESHOLDS)}
     prefs.sync_enabled = bool(sync_enabled)
     prefs.recurring_price_enabled = bool(recurring_price_enabled)
+    prefs.recurring_price_percent = int(recurring_price_percent)
     prefs.recurring_missed_enabled = bool(recurring_missed_enabled)
     prefs.budget_enabled = bool(budget_enabled)
     prefs.large_transaction_enabled = bool(large_transaction_enabled)

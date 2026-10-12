@@ -145,8 +145,9 @@
         {% for item in price_changes %}
         <li class="flex items-start gap-3 rounded-box border border-warning bg-base-100 px-4 py-3">
           <span class="min-w-0 flex-1">
-            <span class="block font-semibold">{% include "finance/_status.html" with word="Price change" %} {{ item.series.display_name }} {{ item.percent_display }}</span>
-            <span class="block text-sm opacity-80">{% include "finance/_amount.html" with value=item.previous_display tone="out" %} to {% include "finance/_amount.html" with value=item.new_display tone="out" %} on {{ item.charge_date }}</span>
+            <span class="block font-semibold">{% include "finance/_status.html" with word="Price change" %} {{ item.series.display_name }}</span>
+            <span class="block text-sm opacity-80">Usual price {% include "finance/_amount.html" with value=item.previous_display tone="out" %}, charged {% include "finance/_amount.html" with value=item.new_display tone="out" %} on {{ item.charge_date }}</span>
+            <span class="block text-sm">Drift {{ item.percent_display }} from the usual price</span>
           </span>
           <form method="post">
             {% csrf_token %}
@@ -165,7 +166,7 @@
         {% endfor %}
       </ul>
       {% else %}
-      <p class="px-1 opacity-80">No price changes of 10% or more and no missed charges.</p>
+      <p class="px-1 opacity-80">No price changes over {{ price_change_percent }}% and no missed charges.</p>
       {% endif %}
     </section>
     <section aria-labelledby="recurring-upcoming" class="rounded-box border border-base-300 bg-base-100 px-4 py-3">

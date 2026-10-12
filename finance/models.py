@@ -2265,6 +2265,7 @@ class AlertSettings(models.Model):
     person = models.OneToOneField(Person, on_delete=models.PROTECT, related_name="alert_settings")
     sync_enabled = models.BooleanField(default=True)
     recurring_price_enabled = models.BooleanField(default=True)
+    recurring_price_percent = models.PositiveIntegerField(default=10)
     recurring_missed_enabled = models.BooleanField(default=True)
     budget_enabled = models.BooleanField(default=True)
     large_transaction_enabled = models.BooleanField(default=True)
@@ -2294,6 +2295,10 @@ class AlertSettings(models.Model):
             models.CheckConstraint(
                 condition=Q(unusual_category_floor_minor__gte=0),
                 name="alert_settings_unusual_floor_non_negative",
+            ),
+            models.CheckConstraint(
+                condition=Q(recurring_price_percent__gte=1, recurring_price_percent__lte=100),
+                name="alert_settings_recurring_price_percent_range",
             ),
         ]
 
