@@ -54,18 +54,29 @@ def enforce_session_validity(request):
     return False
 
 
+def _is_trusted_proxy(remote_addr):
+    try:
+        address = ipaddress.ip_address(remote_addr)
+    except ValueError:
+        return False
+    return any(address in network for network in getattr(settings, "TRUSTED_PROXY_IPS", ()))
+
+
 def client_ip(request):
+    # Anything that can reach the app port can send X-Forwarded-For, so the
+    # header counts only on a connection from the configured proxy. The
+    # right-most hop is the one that proxy appended.
     if request is None:
         return ""
-    if getattr(settings, "TRUST_PROXY_FORWARDED_FOR", False):
+    remote_addr = request.META.get("REMOTE_ADDR") or ""
+    if _is_trusted_proxy(remote_addr):
         parts = [part.strip() for part in (request.META.get("HTTP_X_FORWARDED_FOR") or "").split(",") if part.strip()]
         if parts:
-            candidate = parts[-1]
             try:
-                return str(ipaddress.ip_address(candidate))[:45]
+                return str(ipaddress.ip_address(parts[-1]))[:45]
             except ValueError:
                 pass
-    return (request.META.get("REMOTE_ADDR") or "")[:45]
+    return remote_addr[:45]
 
 
 def client_user_agent(request):
