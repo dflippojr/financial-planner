@@ -18,6 +18,7 @@ from finance.security_services import (
     purge_old_security_events,
     record_security_event,
 )
+from financial_planner.trusted_proxies import parse_trusted_proxies
 from tests.helpers import stamp_recent_auth
 from tests.test_auth_flows import PASSWORD, make_member
 
@@ -249,22 +250,32 @@ def _client_ip_request(*, remote="127.0.0.1", forwarded=None):
     return RequestFactory().get("/sign-in/", REMOTE_ADDR=remote, **extra)
 
 
-def test_client_ip_ignores_forwarded_for_unless_proxy_trust_is_enabled():
+def test_client_ip_honors_forwarded_for_only_from_a_trusted_proxy():
     request = _client_ip_request(remote="203.0.113.20", forwarded="198.51.100.1, 192.0.2.60")
-    with override_settings(TRUST_PROXY_FORWARDED_FOR=False):
+    with override_settings(TRUSTED_PROXY_IPS=()):
         assert client_ip(request) == "203.0.113.20"
-    with override_settings(TRUST_PROXY_FORWARDED_FOR=True):
+    with override_settings(TRUSTED_PROXY_IPS=parse_trusted_proxies("203.0.113.21")):
+        assert client_ip(request) == "203.0.113.20"
+    with override_settings(TRUSTED_PROXY_IPS=parse_trusted_proxies("203.0.113.20")):
+        assert client_ip(request) == "192.0.2.60"
+    with override_settings(TRUSTED_PROXY_IPS=parse_trusted_proxies("10.0.0.1, 203.0.113.0/24")):
         assert client_ip(request) == "192.0.2.60"
 
 
 def test_client_ip_falls_back_when_the_trusted_forwarded_address_is_invalid():
     request = _client_ip_request(remote="203.0.113.20", forwarded="198.51.100.1, not-an-ip")
-    with override_settings(TRUST_PROXY_FORWARDED_FOR=True):
+    with override_settings(TRUSTED_PROXY_IPS=parse_trusted_proxies("203.0.113.20")):
         assert client_ip(request) == "203.0.113.20"
 
 
+def test_client_ip_ignores_forwarded_for_when_the_connecting_address_is_unparseable():
+    request = _client_ip_request(remote="", forwarded="192.0.2.60")
+    with override_settings(TRUSTED_PROXY_IPS=parse_trusted_proxies("0.0.0.0/0")):
+        assert client_ip(request) == ""
+
+
 @pytest.mark.django_db
-@override_settings(TRUST_PROXY_FORWARDED_FOR=False)
+@override_settings(TRUSTED_PROXY_IPS=parse_trusted_proxies("127.0.0.1"))
 def test_sign_in_log_does_not_trust_spoofed_forwarded_for():
     user, person, _household = make_member()
     client = Client(REMOTE_ADDR="203.0.113.20")
@@ -278,7 +289,7 @@ def test_sign_in_log_does_not_trust_spoofed_forwarded_for():
 
 
 @pytest.mark.django_db
-@override_settings(TRUST_PROXY_FORWARDED_FOR=True)
+@override_settings(TRUSTED_PROXY_IPS=parse_trusted_proxies("127.0.0.1"))
 def test_sign_in_log_uses_rightmost_forwarded_for_when_proxy_is_trusted():
     user, person, _household = make_member()
     client = Client(REMOTE_ADDR="127.0.0.1")

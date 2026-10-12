@@ -35,9 +35,12 @@ services:
       DJANGO_CSRF_TRUSTED_ORIGINS: ${DJANGO_CSRF_TRUSTED_ORIGINS:?DJANGO_CSRF_TRUSTED_ORIGINS must be set}
       DJANGO_SECURE_COOKIES: "true"
       DJANGO_SECURE_SSL_REDIRECT: "true"
-      # App port is published on 127.0.0.1 only, behind Tailscale Serve, so
-      # REMOTE_ADDR is the proxy. Trust the right-most X-Forwarded-For hop.
-      TRUST_PROXY_FORWARDED_FOR: "true"
+      # Tailscale Serve reaches the 127.0.0.1-published port, and Docker hands
+      # that connection to the app from the compose network's gateway (checked
+      # on Docker Desktop). Docker picks the subnet, so the app reads the gateway
+      # from its route table. X-Forwarded-For counts only on connections from
+      # it; other containers on the network connect from their own addresses.
+      TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-default-gateway}
       SETUP_CODE: ${SETUP_CODE:-}
       PRIVACY_POLICY_PATH: ${PRIVACY_POLICY_PATH:-}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}

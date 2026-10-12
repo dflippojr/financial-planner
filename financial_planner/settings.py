@@ -7,6 +7,8 @@ mimetypes.add_type("application/manifest+json", ".webmanifest")
 
 from django.core.exceptions import ImproperlyConfigured
 
+from financial_planner.trusted_proxies import parse_trusted_proxies
+
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -142,10 +144,11 @@ SESSION_COOKIE_SECURE = os.environ.get("DJANGO_SECURE_COOKIES", "true").lower() 
 SESSION_COOKIE_SAMESITE = "Lax"
 CSRF_COOKIE_SECURE = SESSION_COOKIE_SECURE
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
-# True only when the app port is loopback-only behind a trusted proxy such as
-# Tailscale Serve. When on, client IP comes from the right-most X-Forwarded-For
-# hop the proxy added; when off, X-Forwarded-For is ignored.
-TRUST_PROXY_FORWARDED_FOR = os.environ.get("TRUST_PROXY_FORWARDED_FOR", "false").lower() == "true"
+# Addresses or CIDRs of the proxy (Tailscale Serve) in front of the app, plus
+# the literal default-gateway. The right-most X-Forwarded-For hop is the client
+# IP only when the connection itself comes from one of these; otherwise the
+# header is ignored. Empty trusts no proxy.
+TRUSTED_PROXY_IPS = parse_trusted_proxies(os.environ.get("TRUSTED_PROXY_IPS", ""))
 SECURE_SSL_REDIRECT = os.environ.get("DJANGO_SECURE_SSL_REDIRECT", "true").lower() == "true"
 SECURE_HSTS_SECONDS = int(os.environ.get("DJANGO_SECURE_HSTS_SECONDS", "31536000"))
 SECURE_HSTS_INCLUDE_SUBDOMAINS = True
@@ -208,6 +211,10 @@ INVITATION_TTL_HOURS = int(os.environ.get("INVITATION_TTL_HOURS", "48"))
 LOGIN_FAILURE_LIMIT = int(os.environ.get("LOGIN_FAILURE_LIMIT", "5"))
 LOGIN_FAILURE_WINDOW_SECONDS = int(os.environ.get("LOGIN_FAILURE_WINDOW_SECONDS", "900"))
 LOGIN_BLOCK_SECONDS = int(os.environ.get("LOGIN_BLOCK_SECONDS", "900"))
+# A cap per username, whatever the client address, so rotating addresses can't
+# buy unlimited guesses. The block ends with its window to keep any lockout short.
+LOGIN_USERNAME_FAILURE_LIMIT = int(os.environ.get("LOGIN_USERNAME_FAILURE_LIMIT", "20"))
+LOGIN_USERNAME_FAILURE_WINDOW_SECONDS = int(os.environ.get("LOGIN_USERNAME_FAILURE_WINDOW_SECONDS", "900"))
 PASSKEY_PENDING_MAX_AGE_SECONDS = int(os.environ.get("PASSKEY_PENDING_MAX_AGE_SECONDS", "300"))
 REAUTH_WINDOW_SECONDS = int(os.environ.get("REAUTH_WINDOW_SECONDS", "600"))
 GOOGLE_REAUTH_MAX_AGE_SECONDS = int(os.environ.get("GOOGLE_REAUTH_MAX_AGE_SECONDS", "300"))

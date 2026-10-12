@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import secrets
+from dataclasses import dataclass
 from datetime import timedelta
 
 from django.conf import settings
@@ -170,42 +171,78 @@ def consume_recovery_code(user, code):
     return recovery_code
 
 
-def throttle_key(username, remote_address):
-    return _digest(f"{username.casefold()}\0{remote_address or ''}")
+@dataclass(frozen=True)
+class ThrottleKey:
+    """The login-throttle buckets one attempt counts against.
+
+    `client` limits a (username, client address) pair. `username` caps the
+    name across every address, so a client that rotates addresses still runs
+    out of guesses; it is None where no secret is tied to a name (Google).
+    """
+
+    client: str
+    username: str | None = None
+
+    def buckets(self):
+        yield self.client, settings.LOGIN_FAILURE_LIMIT, settings.LOGIN_FAILURE_WINDOW_SECONDS, settings.LOGIN_BLOCK_SECONDS
+        if self.username is not None:
+            # The block lasts only to the end of its window, so failures sent to
+            # lock a member out hold for at most that window.
+            yield self.username, settings.LOGIN_USERNAME_FAILURE_LIMIT, settings.LOGIN_USERNAME_FAILURE_WINDOW_SECONDS, None
+
+    def digests(self):
+        return [digest for digest, *_limits in self.buckets()]
+
+
+def throttle_key(username, remote_address, *, per_username=True):
+    name = username.casefold()
+    # The \x01 prefix keeps a username digest from matching any pair digest.
+    return ThrottleKey(
+        client=_digest(f"{name}\0{remote_address or ''}"),
+        username=_digest(f"\x01{name}") if per_username else None,
+    )
 
 
 def login_is_blocked(key):
-    throttle = LoginThrottle.objects.filter(key_digest=key).first()
-    return bool(throttle and throttle.blocked_until and throttle.blocked_until > timezone.now())
+    return LoginThrottle.objects.filter(
+        key_digest__in=key.digests(), blocked_until__gt=timezone.now()
+    ).exists()
 
 
 @transaction.atomic
 def record_login_failure(key):
     now = timezone.now()
-    window = timedelta(seconds=settings.LOGIN_FAILURE_WINDOW_SECONDS)
-    throttle, _ = LoginThrottle.objects.select_for_update().get_or_create(
-        key_digest=key,
-        defaults={"window_started_at": now},
-    )
-    if now - throttle.window_started_at >= window:
-        throttle.failure_count = 0
-        throttle.window_started_at = now
-        throttle.blocked_until = None
-    throttle.failure_count += 1
-    if throttle.failure_count >= settings.LOGIN_FAILURE_LIMIT:
-        throttle.blocked_until = now + timedelta(seconds=settings.LOGIN_BLOCK_SECONDS)
-    throttle.save(update_fields=("failure_count", "window_started_at", "blocked_until"))
+    # Buckets are locked in the same order on every call, so two concurrent
+    # failures can't deadlock on each other's rows.
+    for digest, limit, window_seconds, block_seconds in key.buckets():
+        throttle, _ = LoginThrottle.objects.select_for_update().get_or_create(
+            key_digest=digest,
+            defaults={"window_started_at": now},
+        )
+        window = timedelta(seconds=window_seconds)
+        if now - throttle.window_started_at >= window:
+            throttle.failure_count = 0
+            throttle.window_started_at = now
+            throttle.blocked_until = None
+        throttle.failure_count += 1
+        if throttle.failure_count >= limit:
+            if block_seconds is None:
+                throttle.blocked_until = throttle.window_started_at + window
+            else:
+                throttle.blocked_until = now + timedelta(seconds=block_seconds)
+        throttle.save(update_fields=("failure_count", "window_started_at", "blocked_until"))
 
 
 def clear_login_failures(key):
-    LoginThrottle.objects.filter(key_digest=key).delete()
+    LoginThrottle.objects.filter(key_digest__in=key.digests()).delete()
 
 
 def purge_expired_login_throttles(*, now=None):
     # A row whose window has passed and whose block (if any) has ended no
     # longer affects record_login_failure or login_is_blocked.
     now = now or timezone.now()
-    window_cutoff = now - timedelta(seconds=settings.LOGIN_FAILURE_WINDOW_SECONDS)
+    longest_window = max(settings.LOGIN_FAILURE_WINDOW_SECONDS, settings.LOGIN_USERNAME_FAILURE_WINDOW_SECONDS)
+    window_cutoff = now - timedelta(seconds=longest_window)
     deleted, _detail = (
         LoginThrottle.objects.filter(window_started_at__lte=window_cutoff)
         .filter(Q(blocked_until__isnull=True) | Q(blocked_until__lte=now))

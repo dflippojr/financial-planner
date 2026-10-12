@@ -9,6 +9,7 @@ from django.urls import reverse
 from django.utils import timezone
 from allauth.socialaccount.models import SocialAccount
 
+from finance.auth_services import throttle_key
 from finance.models import Invitation, LoginThrottle, Membership
 from finance.reauth import RECENT_AUTH_SESSION_KEY, action_label
 from tests.helpers import stamp_recent_auth
@@ -84,7 +85,7 @@ def test_reauth_failures_use_the_login_throttle():
     first = client.post(reverse("reauth"), {"password": "wrong-password", "next": reverse("invite")})
     second = client.post(reverse("reauth"), {"password": "wrong-password", "next": reverse("invite")})
     assert first.status_code == second.status_code == 200
-    assert LoginThrottle.objects.get().blocked_until is not None
+    assert LoginThrottle.objects.get(key_digest=throttle_key(user.username, "127.0.0.1").client).blocked_until is not None
 
     blocked = client.post(reverse("reauth"), {"password": PASSWORD, "next": reverse("invite")})
     assert blocked.status_code == 200

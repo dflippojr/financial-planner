@@ -31,7 +31,7 @@ def google_signin_enabled():
 
 
 def google_throttle_key(remote_address):
-    return throttle_key(GOOGLE_THROTTLE_USERNAME, remote_address)
+    return throttle_key(GOOGLE_THROTTLE_USERNAME, remote_address, per_username=False)
 
 
 def google_email_is_verified(extra_data):

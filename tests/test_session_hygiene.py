@@ -48,20 +48,21 @@ def test_daily_pass_purges_expired_throttles_and_keeps_active_blocks():
     client = Client()
     for index in range(12):
         _fail(client, f"unknown-synthetic-{index}")
-    assert LoginThrottle.objects.count() == 12
+    # Each failure counts against its (name, address) pair and its name.
+    assert LoginThrottle.objects.count() == 24
     past = timezone.now() - timedelta(seconds=1801)
     LoginThrottle.objects.update(window_started_at=past)
 
-    blocked_key = throttle_key("blocked-synthetic", "127.0.0.1")
+    blocked_key = throttle_key("blocked-synthetic", "127.0.0.1").client
     LoginThrottle.objects.create(
         key_digest=blocked_key,
         failure_count=2,
         window_started_at=past,
         blocked_until=timezone.now() + timedelta(minutes=5),
     )
-    open_window_key = throttle_key("recent-synthetic", "127.0.0.1")
+    open_window_key = throttle_key("recent-synthetic", "127.0.0.1").client
     LoginThrottle.objects.create(key_digest=open_window_key, failure_count=1, window_started_at=timezone.now())
-    ended_block_key = throttle_key("ended-synthetic", "127.0.0.1")
+    ended_block_key = throttle_key("ended-synthetic", "127.0.0.1").client
     LoginThrottle.objects.create(
         key_digest=ended_block_key, failure_count=2, window_started_at=past, blocked_until=past + timedelta(seconds=900)
     )
@@ -78,13 +79,13 @@ def test_successful_sign_in_clears_only_its_own_throttle_key():
     client = Client()
     _fail(client, user.username)
     _fail(client, "unknown-synthetic")
-    assert LoginThrottle.objects.count() == 2
+    assert LoginThrottle.objects.count() == 4
 
     _signed_in(user)
 
-    assert list(LoginThrottle.objects.values_list("key_digest", flat=True)) == [
-        throttle_key("unknown-synthetic", "127.0.0.1")
-    ]
+    assert set(LoginThrottle.objects.values_list("key_digest", flat=True)) == set(
+        throttle_key("unknown-synthetic", "127.0.0.1").digests()
+    )
 
 
 @pytest.mark.django_db
