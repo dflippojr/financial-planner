@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+import json
 
 from django.conf import settings
 from django.core.exceptions import PermissionDenied
@@ -47,6 +48,7 @@ TURN_LIMIT = "This conversation has reached its turn limit. Start a new one from
 TOOL_LIMIT = "This conversation has reached its tool-call limit."
 PENDING_LIMIT = "Wait for your earlier questions to be answered before asking another."
 CONVERSATION_LIMIT = "You have reached the limit of open conversations. Delete one from Chat to start another."
+TILE_UNAVAILABLE = "This tile or its filters are no longer available to AI. Reopen the tile and ask again."
 LOCAL_HIDDEN = "Chat on the local model is not offered yet. Choose Claude in Settings → AI."
 NO_CHAT_BACKEND = "No chat backend is available yet. Sign in to Claude on the harness, then choose it in Settings → AI."
 
@@ -130,10 +132,17 @@ def delete_conversations_for_account(account_id):
 
 
 
-def sanitize_page_context(raw):
+def sanitize_page_context(raw, person=None):
     if not raw:
         return {}
     if not isinstance(raw, dict):
+        return {}
+    from .ai_tiles import sanitize_tile
+
+    try:
+        if len(json.dumps(raw)) > MAX_PAGE_CONTEXT_CHARS:
+            return {}
+    except (TypeError, ValueError, RecursionError):
         return {}
     route = str(raw.get("route") or raw.get("path") or "").strip()
     query = str(raw.get("query") or raw.get("query_string") or "").strip()
@@ -150,6 +159,35 @@ def sanitize_page_context(raw):
         cleaned["route"] = route
     if query:
         cleaned["query"] = query
+    tile = sanitize_tile(raw.get("tile"), person)
+    if tile:
+        cleaned["tile"] = tile
+    return cleaned
+
+
+def _validated_page_context(raw, person):
+    """Keep supplied tile constraints intact at send time and queued execution."""
+    cleaned = sanitize_page_context(raw, person)
+    supplied_tile = raw.get("tile") if isinstance(raw, dict) else None
+    if not isinstance(supplied_tile, dict):
+        return cleaned
+    from .ai_tiles import TILES, tile_data_shareable
+
+    kind = supplied_tile.get("kind")
+    spec = TILES.get(kind) if isinstance(kind, str) else None
+    if spec is None:
+        return cleaned
+    tile = cleaned.get("tile")
+    if not tile or not tile_data_shareable(person, tile["filters"], kind=kind):
+        raise AiError(TILE_UNAVAILABLE)
+    supplied = supplied_tile.get("filters")
+    supplied = supplied if isinstance(supplied, dict) else {}
+    for key in spec.filters:
+        value = supplied.get(key)
+        if key == "all_dates" and value is False:
+            continue
+        if value not in (None, "") and key not in tile["filters"]:
+            raise AiError(TILE_UNAVAILABLE)
     return cleaned
 
 
@@ -172,7 +210,7 @@ def send_message(principal, text, *, conversation_id=None, page_context=None, st
     prompt = (text or "").strip()
     if not prompt:
         raise AiError("Enter a question.")
-    context_payload = sanitize_page_context(page_context)
+    context_payload = _validated_page_context(page_context, person)
     conversation = None
     if conversation_id:
         conversation = conversation_for(person, conversation_id)
@@ -262,7 +300,14 @@ def answer_turn(turn, *, sleep=None, monotonic=None):
         return failed_reply(str(exc), backend=turn.backend)
     question = turn.reply_to
     prompt = question.content if question is not None else ""
-    context_payload = sanitize_page_context(question.page_context if question is not None else None)
+    saved_context = question.page_context if question is not None else None
+    try:
+        context_payload = _validated_page_context(saved_context, person)
+        saved_tile = saved_context.get("tile") if isinstance(saved_context, dict) else None
+        if saved_tile and saved_tile != context_payload.get("tile"):
+            raise AiError(TILE_UNAVAILABLE)
+    except AiError as exc:
+        return failed_reply(str(exc), backend=backend)
 
     collected = []
     cap = max_tool_calls()
@@ -410,13 +455,23 @@ def _api_history(conversation, question):
 
 def _harness_context(page_context):
     blocks = [{"title": "How to answer", "content": INSTRUCTION_CONTEXT}]
-    if page_context:
+    if page_context.get("route") or page_context.get("query"):
         parts = []
         if page_context.get("route"):
             parts.append(f"route={page_context['route']}")
         if page_context.get("query"):
             parts.append(f"query={page_context['query']}")
         blocks.append({"title": "Current page", "content": "\n".join(parts)})
+    from .ai_tiles import TILES
+
+    context_tile = page_context.get("tile", {})
+    tile = TILES.get(context_tile.get("kind"))
+    if tile:
+        parts = [f"kind={context_tile['kind']}", f"label={tile.label}"]
+        parts.extend(f"{key}={value}" for key, value in context_tile["filters"].items())
+        parts.append("tools=" + ", ".join(tile.tools))
+        parts.append("Use these filters with the named tools. A month means its full date range; compare prior months where needed.")
+        blocks.append({"title": "Current tile", "content": "\n".join(parts)})
     return blocks
 
 

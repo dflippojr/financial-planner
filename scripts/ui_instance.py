@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from urllib.request import ProxyHandler, Request, build_opener
 from wsgiref.simple_server import WSGIServer, make_server
 
@@ -72,44 +73,141 @@ def build_css():
 
 
 def run_css_builder(command):
-    # Short waits let cancellation interrupt a stalled builder. Own its process
-    # group so cancellation also stops the tools it started.
+    # Poll instead of Popen.wait: its KeyboardInterrupt handler can pass an
+    # expired timeout to the Windows wait API, delaying cancellation indefinitely.
+    # Own the process group so cancellation also stops the tools it started.
     options = ({"creationflags": subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP}
                if os.name == "nt" else {"start_new_session": True})
-    process = subprocess.Popen(command, cwd=ROOT, stdout=sys.stderr, **options)
+    tree = None
+    process = None
+    initial_error = None
     try:
-        while True:
-            try:
-                returncode = process.wait(timeout=0.1)
-                break
-            except subprocess.TimeoutExpired:
-                continue
+        if os.name == "nt":
+            # This gate cannot spawn Bash until it belongs to our job. Use the
+            # base interpreter, avoiding the Windows venv launcher's own child.
+            if __package__:
+                from .windows_css_job import WindowsCssJob
+            else:
+                from windows_css_job import WindowsCssJob
+            tree = WindowsCssJob()
+            gate = ("import subprocess,sys; "
+                    "token=sys.stdin.buffer.read(1); "
+                    "sys.exit(subprocess.call(sys.argv[1:]) if token == b'1' else 1)")
+            process = subprocess.Popen([sys._base_executable, "-c", gate, *command],
+                                       cwd=ROOT, stdout=sys.stderr, stdin=subprocess.PIPE, **options)
+            tree.assign(process.pid)
+            process.stdin.write(b"1")
+            process.stdin.flush()
+        else:
+            process = subprocess.Popen(command, cwd=ROOT, stdout=sys.stderr, **options)
+        while process.poll() is None:
+            time.sleep(0.1)
+        returncode = process.returncode
         if returncode:
             raise subprocess.CalledProcessError(returncode, command)
+    except BaseException as error:
+        initial_error = error
+        raise
     finally:
-        stop_css_builder(process)
+        try:
+            finish_css_builder(process, tree)
+        except CssBuilderCleanupError as error:
+            if initial_error is None:
+                raise
+            initial_error.css_cleanup_error = error
+            try:
+                initial_error.add_note(str(error))
+                logger.error("%s", error)
+            except BaseException:
+                raise initial_error
 
 
-def stop_css_builder(process):
-    if process.poll() is not None:
-        return
+def finish_css_builder(process, tree):
+    cleanup_error = None
+    try:
+        if process is not None:
+            if process.stdin is not None:
+                process.stdin.close()
+            stop_css_builder(process, tree)
+    except (OSError, CssBuilderCleanupError, KeyboardInterrupt) as error:
+        cleanup_error = error
+    finally:
+        if tree is not None:
+            try:
+                tree.close()
+            except (OSError, KeyboardInterrupt) as error:
+                cleanup_error = cleanup_error or error
+    if cleanup_error:
+        if isinstance(cleanup_error, CssBuilderCleanupError):
+            raise cleanup_error
+        raise CssBuilderCleanupError(process.pid if process else None,
+                                     tree.name if tree else None, cleanup_error) from cleanup_error
+
+
+class CssBuilderCleanupError(RuntimeError):
+    def __init__(self, pid, job, reason, owned_pids=()):
+        reason = str(reason) or type(reason).__name__
+        owned_pids = list(owned_pids)
+        self.recovery = {"builder_pid": pid, "job": job, "reason": reason,
+                         "last_known_owned_pids": owned_pids}
+        super().__init__(f"CSS builder cleanup unverified (PID {pid}, job {job}, "
+                         f"last known owned PIDs {owned_pids}): {reason}. "
+                         "Retain the startup handle; verify the owned tree has stopped before removing storage.")
+
+
+def css_cleanup_failure(error):
+    return error if isinstance(error, CssBuilderCleanupError) else getattr(error, "css_cleanup_error", None)
+
+
+def secondary_failure_note(prefix, error, cleanup_error=None):
+    reason = str(error) or type(error).__name__
+    return prefix + ": " + reason + ("; " + str(cleanup_error) if cleanup_error else "")
+
+
+def stop_css_builder(process, tree=None):
     # This is only the builder just spawned here, never a UI server.
     if os.name == "nt":
-        subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False, timeout=5)
-    else:
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
+        stop_windows_css_builder(process, tree)
+        return
+    if process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
     try:
         process.wait(timeout=5)
     except subprocess.TimeoutExpired:
-        if os.name == "nt":
-            process.kill()
-        else:
-            os.killpg(process.pid, signal.SIGKILL)
+        os.killpg(process.pid, signal.SIGKILL)
         process.wait(timeout=5)
+
+
+def stop_windows_css_builder(process, tree):
+    if tree is None:
+        raise CssBuilderCleanupError(process.pid, None, "Missing owned Windows job")
+    owned_pids = ()
+    try:
+        owned_pids = tree.pids()
+        if tree.active():
+            # A dead parent PID may already have been reused. Only taskkill a
+            # live parent; the job remains authoritative even after parent exit.
+            if process.poll() is None:
+                try:
+                    subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                   check=False, timeout=5)
+                except (subprocess.TimeoutExpired, OSError):
+                    pass  # The job fallback below does not depend on taskkill.
+            if tree.active():
+                tree.terminate()
+            deadline = time.monotonic() + 5
+            while tree.active():
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("Owned Windows job still has active descendants after 5 seconds")
+                time.sleep(0.05)
+        process.wait(timeout=5)
+    except (OSError, subprocess.TimeoutExpired, KeyboardInterrupt) as error:
+        raise CssBuilderCleanupError(process.pid, tree.name, error, owned_pids) from error
 
 
 def disposable_directory(directory):
@@ -251,29 +349,85 @@ def main():
         teardown(args.teardown)
         return
     refuse_database_environment(os.environ)
-    with tempfile.TemporaryDirectory(prefix=PREFIX) as directory:
-        directory = Path(directory)
+    directory = Path(tempfile.mkdtemp(prefix=PREFIX))
+    initial_error = None
+    startup_failures = []
+    try:
         if args.startup_handle:
             args.startup_handle.parent.mkdir(parents=True, exist_ok=True)
             pending = args.startup_handle.with_suffix(".tmp")
             pending.write_text(json.dumps({"directory": str(directory)}))
             pending.replace(args.startup_handle)
-        stopped = threading.Event()
-        watcher = threading.Thread(target=watch_startup_cancellation, args=(directory, stopped),
-                                   name="synthetic-startup-cancellation")
+        run_ui_startup(directory, startup_failures)
+    except BaseException as error:
+        initial_error = startup_failures[0] if startup_failures else error
+        if initial_error is not error:
+            initial_error.add_note(secondary_failure_note("UI finalization also failed", error))
+            raise initial_error
+        raise
+    finally:
+        # The primary failure is captured before watcher finalization. Even an
+        # interruption entering that block cannot clear the retention decision.
+        if startup_failures:
+            initial_error = startup_failures[0]
         try:
-            watcher.start()
-            build_css()
-            serve(directory)
-        except KeyboardInterrupt:
-            pass
-        finally:
-            stopped.set()
-            watcher.join()
-            # Also close connections if seeding failed before serve's cleanup block.
-            if "django.db" in sys.modules:
-                from django.db import connections
-                connections.close_all()
+            finish_ui_storage(directory, initial_error)
+        except BaseException as error:
+            if initial_error is None:
+                raise
+            cleanup_error = css_cleanup_failure(initial_error)
+            initial_error.add_note(secondary_failure_note("UI storage cleanup also failed", error, cleanup_error))
+            raise initial_error
+
+
+def finish_ui_storage(directory, initial_error):
+    cleanup_error = css_cleanup_failure(initial_error)
+    if cleanup_error:
+        try:
+            (directory / "css-cleanup-failed.json").write_text(json.dumps(cleanup_error.recovery))
+        except BaseException as error:
+            initial_error.add_note(secondary_failure_note("CSS recovery record could not be written", error, cleanup_error))
+        logger.error("CSS cleanup storage retained in %s", directory)
+    else:
+        shutil.rmtree(directory)
+
+
+def run_ui_startup(directory, startup_failures):
+    stopped = threading.Event()
+    watcher = threading.Thread(target=watch_startup_cancellation, args=(directory, stopped),
+                               name="synthetic-startup-cancellation")
+    initial_error = None
+    try:
+        watcher.start()
+        build_css()
+        serve(directory)
+    except KeyboardInterrupt as error:
+        if getattr(error, "css_cleanup_error", None):
+            startup_failures.append(error)
+            initial_error = error
+            raise
+    except BaseException as error:
+        startup_failures.append(error)
+        initial_error = error
+        raise
+    finally:
+        finalize_ui_startup(stopped, watcher, initial_error)
+
+
+def finalize_ui_startup(stopped, watcher, initial_error):
+    try:
+        stopped.set()
+        watcher.join()
+        # Also close connections if seeding failed before serve's cleanup block.
+        if "django.db" in sys.modules:
+            from django.db import connections
+            connections.close_all()
+    except BaseException as error:
+        if initial_error is None:
+            raise
+        note = secondary_failure_note("UI finalization also failed", error)
+        initial_error.add_note(note)
+        logger.error("%s", note)
 
 
 def watch_startup_cancellation(directory, stopped):

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
 from django.http import JsonResponse
@@ -21,11 +23,10 @@ from .chat_services import (
     delete_all_conversations,
     delete_conversation,
     page_context_from_request,
-    sanitize_page_context,
     send_message,
     start_conversation,
 )
-from .input_limits import MAX_CHAT_MESSAGES
+from .input_limits import MAX_CHAT_MESSAGES, MAX_PAGE_CONTEXT_CHARS
 from .models import AiConversationMessage
 from .policy_services import may_use_ai
 from .reauth import safe_next_url
@@ -54,12 +55,7 @@ def chat_send(request):
     wants_json = request.headers.get("Accept") == "application/json"
     prompt = request.POST.get("prompt") or ""
     conversation_id = request.POST.get("conversation_id") or None
-    page_context = sanitize_page_context(
-        {
-            "route": request.POST.get("page_route") or "",
-            "query": request.POST.get("page_query") or "",
-        }
-    )
+    page_context = _posted_page_context(request)
     next_url = safe_next_url(request, request.POST.get("next"), default=reverse("chat"))
     try:
         conversation_id = _send_conversation_id(conversation_id, wants_json)
@@ -74,6 +70,24 @@ def chat_send(request):
     if next_url.rstrip("/").endswith("chat") or next_url.startswith(reverse("chat")):
         return redirect(f"{reverse('chat')}?c={conversation.pk}")
     return redirect(next_url)
+
+
+def _posted_page_context(request):
+    raw = request.POST.get("tile_context") or ""
+    if len(raw) > MAX_PAGE_CONTEXT_CHARS:
+        return {}
+    return {
+        "tile": _posted_tile(raw),
+        "route": request.POST.get("page_route") or "",
+        "query": request.POST.get("page_query") or "",
+    }
+
+
+def _posted_tile(raw):
+    try:
+        return json.loads(raw) if raw else {}
+    except (ValueError, TypeError, RecursionError):
+        return {}
 
 
 def _parse_conversation_id(raw_id):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import date, datetime
+from types import SimpleNamespace
 from urllib.parse import urlencode
 
 from django.urls import reverse
@@ -13,9 +14,12 @@ from .ai_types import ToolResult, ToolSpec
 from .budget_services import month_budget_cards, parse_month
 from .cash_flow import (
     GROUPING_MONTH,
+    GROUPINGS,
     cash_flow_report,
     default_date_range,
     format_minor,
+    income_and_spending_totals,
+    selected_accounts,
     spending_by_category_report,
 )
 from .category_services import current_household
@@ -64,6 +68,8 @@ def default_tools():
                 "properties": {
                     "date_from": {"type": "string"},
                     "date_to": {"type": "string"},
+                    "all_dates": {"type": "boolean", "description": "Leave unspecified date bounds open; retain any explicit bounds."},
+                    "grouping": {"type": "string", "enum": list(GROUPINGS)},
                     "account_id": {"type": "integer"},
                     "account_name": {"type": "string"},
                     "scope": {"type": "string"},
@@ -98,6 +104,9 @@ def default_tools():
                     "date_to": {"type": "string"},
                     "q": {"type": "string"},
                     "category": {"type": "string"},
+                    "category_id": {"type": "integer"},
+                    "scope": {"type": "string"},
+                    "all_dates": {"type": "boolean", "description": "Leave unspecified date bounds open; retain any explicit bounds."},
                     "account_id": {"type": "integer"},
                     "account_name": {"type": "string"},
                     "limit": {"type": "integer"},
@@ -131,17 +140,23 @@ def default_tools():
             description="Budget amounts and spending for a calendar month.",
             parameters={
                 "type": "object",
-                "properties": {"month": {"type": "string"}},
+                "properties": {"month": {"type": "string"}, "scope": {"type": "string"}},
                 "required": [],
             },
             handler=list_budgets,
+        ),
+        ToolSpec(
+            name="list_planned_items",
+            description="Visible planned items including disabled items, dates and cadence.",
+            parameters={"type": "object", "properties": {}, "required": []},
+            handler=list_planned_items,
         ),
         ToolSpec(
             name="projected_cash_flow",
             description="Planned items and projected months after today.",
             parameters={
                 "type": "object",
-                "properties": {"horizon": {"type": "integer"}},
+                "properties": {"horizon": {"type": "integer"}, "account_id": {"type": "integer"}, "scope": {"type": "string"}},
                 "required": [],
             },
             handler=projected_cash_flow_tool,
@@ -165,18 +180,21 @@ def run_tool(person, tools, name, args):
         return ToolResult(text="That tool could not run.", ok=False)
 
 
-def visible_accounts(person):
-    query = Account.objects.visible_to(person).filter(status=Account.Status.ACTIVE)
+def visible_accounts(person, *, include_archived=False):
+    query = Account.objects.visible_to(person)
+    if not include_archived:
+        query = query.filter(status=Account.Status.ACTIVE)
     household = current_household(person)
     if household is not None and not household_ai_allowed(household):
         query = query.filter(scope=Account.Scope.PRIVATE, owner=person)
     return query
 
 
-def _ai_scope(person):
+def _ai_scope(person, *, include_archived=True):
+    """Report tiles retain visible archived history and enforce household consent."""
     household = current_household(person)
     include_household = household is None or household_ai_allowed(household)
-    return visible_accounts(person), include_household
+    return visible_accounts(person, include_archived=include_archived), include_household
 
 
 def list_accounts(person, args):
@@ -226,29 +244,52 @@ def list_transactions(person, args):
     return ToolResult(text=_format_rows(rows), account_ids=tuple(sorted(account_ids)))
 
 
+def _transaction_scope(person, args):
+    accounts, include_household = _ai_scope(person)
+    scope = _scope(args.get("scope"))
+    if not scope and not include_household:
+        scope = Account.Scope.PRIVATE
+    return accounts, scope
+
+
 def cash_flow_totals(person, args):
-    date_from, date_to = _dates(args)
+    all_dates = args.get("all_dates") is True
+    grouping = args.get("grouping") if args.get("grouping") in GROUPINGS else GROUPING_MONTH
+    date_from, date_to = _dates(args, all_dates=all_dates)
     account, error = _visible_account(person, args.get("account_id"), args.get("account_name"))
     if error:
         return ToolResult(text=error, ok=False)
-    scope = _scope(args.get("scope"))
-    accounts, _include_household = _ai_scope(person)
-    report = cash_flow_report(
-        person,
-        date_from=date_from,
-        date_to=date_to,
-        grouping=GROUPING_MONTH,
-        account=account,
-        scope=scope,
-        accounts=accounts,
-    )
+    accounts, scope = _transaction_scope(person, args)
+    if all_dates:
+        accounts = selected_accounts(person, account=account, scope=scope, accounts=accounts)
+        totals = income_and_spending_totals(person, date_from=date_from, date_to=date_to, accounts=accounts)
+        summary = SimpleNamespace(
+            income_minor=totals.income_minor, spending_minor=totals.spending_minor, net_minor=totals.net_minor,
+            income_display=format_minor(totals.income_minor), spending_display=format_minor(totals.spending_minor),
+            net_display=format_minor(totals.net_minor),
+        )
+        report = SimpleNamespace(summary=summary, accounts=accounts, periods=())
+    else:
+        report = cash_flow_report(
+            person, date_from=date_from, date_to=date_to,
+            grouping=grouping,
+            account=account, scope=scope, accounts=accounts,
+        )
     query = _range_query(date_from, date_to, account=account, scope=scope)
-    page_url = f"{reverse('home')}?{urlencode(query)}"
+    if all_dates:
+        query.setdefault("date_from", "")
+        query.setdefault("date_to", "")
     txn_url = f"{reverse('transaction-list')}?{urlencode(query)}"
+    if not all_dates:
+        query["grouping"] = grouping
+    page_url = txn_url if all_dates else f"{reverse('home')}?{urlencode(query)}"
     summary = report.summary
     payload = {
-        "date_from": date_from.isoformat(),
-        "date_to": date_to.isoformat(),
+        "date_from": date_from.isoformat() if date_from else None,
+        "date_to": date_to.isoformat() if date_to else None,
+        "periods": [{"label": period.label, "income_minor": period.income_minor,
+                     "spending_minor": period.spending_minor, "net_minor": period.net_minor}
+                    for period in report.periods[:MAX_TOOL_ROWS]],
         "income_minor": summary.income_minor,
         "spending_minor": summary.spending_minor,
         "net_minor": summary.net_minor,
@@ -263,6 +304,16 @@ def cash_flow_totals(person, args):
         _figure("Spending", summary.spending_minor, txn_url),
         _figure("Net cash flow", summary.net_minor, page_url),
     )
+    figures += tuple(
+        _figure(f"{period.label} {label}", getattr(period, field), page_url)
+        for period in report.periods[:MAX_TOOL_ROWS]
+        for label, field in (("income", "income_minor"), ("spending", "spending_minor"), ("net", "net_minor"))
+    )
+    if hasattr(summary, "net_change"):
+        payload["previous_income_minor"] = summary.previous_income_minor
+        payload["previous_spending_minor"] = summary.previous_spending_minor
+        payload["previous_net_minor"] = summary.previous_net_minor
+        payload["net_change"] = summary.net_change.label
     return ToolResult(
         text=json.dumps(payload),
         figures=figures,
@@ -324,30 +375,33 @@ def spending_by_category(person, args):
 
 
 def search_transactions(person, args):
-    date_from, date_to = _dates(args)
+    all_dates = args.get("all_dates") is True
+    date_from, date_to = _dates(args, all_dates=all_dates)
     account, error = _visible_account(person, args.get("account_id"), args.get("account_name"))
     if error:
         return ToolResult(text=error, ok=False)
-    query = Transaction.objects.visible_to(person).filter(
-        status=Transaction.Status.ACTIVE,
-        account_id__in=visible_accounts(person).values("pk"),
-        transaction_date__gte=date_from,
-        transaction_date__lte=date_to,
-    )
-    if account is not None:
-        query = query.filter(account_id=account.pk)
+    from .transaction_filters import apply_transaction_filters, visible_transaction_queryset
+
+    accounts, scope = _transaction_scope(person, args)
+    query = visible_transaction_queryset(person).filter(account_id__in=accounts.values("pk"))
     needle = (args.get("q") or "").strip()
-    if needle:
-        query = query.filter(description__icontains=needle)
     category = (args.get("category") or "").strip()
-    if category:
-        match = Category.objects.visible_to(person).filter(name__iexact=category).first()
-        if match is None and category.lower() == "uncategorized":
-            query = query.filter(category__isnull=True)
-        elif match is None:
+    if args.get("category_id") is not None:
+        match = Category.objects.visible_to(person).filter(pk=args["category_id"]).first()
+        if match is None:
             return ToolResult(text="That category is not visible.", ok=False)
-        else:
-            query = query.filter(category_id=match.pk)
+        category = str(match.pk)
+    elif category.lower() == "uncategorized":
+        category = "uncategorized"
+    elif category:
+        match = Category.objects.visible_to(person).filter(name__iexact=category).first()
+        if match is None:
+            return ToolResult(text="That category is not visible.", ok=False)
+        category = str(match.pk)
+    query = apply_transaction_filters(query, {
+        "date_from": date_from, "date_to": date_to, "account": account,
+        "scope": scope, "category": category, "q": needle,
+    }, person)
     limit = _limit(args.get("limit"))
     rows = []
     account_ids = set()
@@ -365,16 +419,11 @@ def search_transactions(person, args):
                 "description": txn.description,
             }
         )
-    list_query = _range_query(date_from, date_to, account=account)
+    list_query = _range_query(date_from, date_to, account=account, scope=scope)
     if needle:
         list_query["q"] = needle
     if category:
-        if category.lower() == "uncategorized":
-            list_query["category"] = "uncategorized"
-        else:
-            match = Category.objects.visible_to(person).filter(name__iexact=category).first()
-            if match is not None:
-                list_query["category"] = str(match.pk)
+        list_query["category"] = category
     url = f"{reverse('transaction-list')}?{urlencode(list_query)}"
     figures = tuple(
         _figure(row["description"][:80], row["amount_minor"], url, row["currency"]) for row in rows
@@ -439,10 +488,17 @@ def net_worth_series(person, args):
                 "label": period.label,
                 "net_minor": period.net_minor,
                 "net_display": period.net_display,
+                "assets_minor": period.assets_minor,
+                "liabilities_minor": period.liabilities_minor,
                 "url": url,
             }
         )
-    payload = {"page_url": url, "net_minor": report.summary.net_minor, "net_display": report.summary.net_display, "periods": periods}
+        figures.extend((_figure(f"{period.label} assets", period.assets_minor, url),
+                        _figure(f"{period.label} liabilities", period.liabilities_minor, url),
+                        _figure(f"{period.label} net worth", period.net_minor, url)))
+    payload = {"page_url": url, "net_minor": report.summary.net_minor, "net_display": report.summary.net_display,
+               "month_change_minor": report.summary.month_change.minor,
+               "range_change_minor": report.summary.range_change.minor, "periods": periods}
     return ToolResult(text=json.dumps(payload), figures=tuple(figures), account_ids=_account_ids(None, report.accounts))
 
 
@@ -452,6 +508,9 @@ def list_budgets(person, args):
     cards = month_budget_cards(
         person, month, accounts=accounts, include_household=include_household
     )
+    scope = _scope(args.get("scope"))
+    if scope:
+        cards = [card for card in cards if card.budget.scope == scope]
     url = f"{reverse('budgets')}?{urlencode({'month': month.isoformat()[:7]})}"
     rows = []
     figures = []
@@ -484,14 +543,25 @@ def projected_cash_flow_tool(person, args):
     if horizon not in {3, 6, 12, 24}:
         horizon = 12
     accounts, include_household = _ai_scope(person)
+    account, error = _visible_account(person, args.get("account_id"), None)
+    if error:
+        return ToolResult(text=error, ok=False)
+    scope = _scope(args.get("scope"))
     months = projected_months_for(
         person,
         today=today,
         horizon=horizon,
+        account=account,
+        scope=scope,
         accounts=accounts,
         include_household=include_household,
     )
-    url = f"{reverse('home')}?{urlencode({'horizon': horizon})}"
+    query = {"horizon": horizon}
+    if account is not None:
+        query["account"] = account.pk
+    if scope:
+        query["scope"] = scope
+    url = f"{reverse('home')}?{urlencode(query)}"
     rows = []
     figures = []
     for month in months[:MAX_TOOL_ROWS]:
@@ -508,6 +578,10 @@ def projected_cash_flow_tool(person, args):
         )
         figures.append(_figure(f"Projected {month.label} net", month.net_minor, url))
     planned_query = PlannedItem.objects.visible_to(person).filter(enabled=True)
+    if account is not None:
+        planned_query = planned_query.none()
+    if scope:
+        planned_query = planned_query.filter(scope=scope)
     if not include_household:
         planned_query = planned_query.filter(scope=PlannedItem.Scope.PRIVATE, owner=person)
     planned = list(planned_query.order_by("start_date", "pk")[:MAX_TOOL_ROWS])
@@ -529,6 +603,20 @@ def projected_cash_flow_tool(person, args):
     )
 
 
+def list_planned_items(person, _args):
+    _accounts, include_household = _ai_scope(person)
+    query = PlannedItem.objects.visible_to(person)
+    if not include_household:
+        query = query.filter(scope=PlannedItem.Scope.PRIVATE, owner=person)
+    url = reverse("planned-items")
+    rows = [{"id": item.pk, "name": item.name, "kind": item.kind, "amount_minor": item.amount_minor,
+             "currency": item.currency, "cadence": item.cadence, "start_date": str(item.start_date),
+             "end_date": str(item.end_date) if item.end_date else None, "enabled": item.enabled,
+             "scope": item.scope} for item in query.order_by("start_date", "pk")[:MAX_TOOL_ROWS]]
+    return ToolResult(text=json.dumps({"page_url": url, "rows": rows}),
+                      figures=tuple(_figure(row["name"], row["amount_minor"], url, row["currency"]) for row in rows))
+
+
 def _visible_account(person, account_id, name):
     if account_id is None and not name:
         return None, ""
@@ -548,9 +636,9 @@ def _visible_account(person, account_id, name):
     return account, ""
 
 
-def _dates(args):
+def _dates(args, *, all_dates=False):
     today = timezone.localdate()
-    default_from, default_to = default_date_range(today)
+    default_from, default_to = (None, None) if all_dates else default_date_range(today)
     return _parse_date(args.get("date_from"), default_from), _parse_date(args.get("date_to"), default_to)
 
 
@@ -573,7 +661,11 @@ def _scope(value):
 
 
 def _range_query(date_from, date_to, account=None, scope=""):
-    query = {"date_from": date_from.isoformat(), "date_to": date_to.isoformat()}
+    query = {}
+    if date_from:
+        query["date_from"] = date_from.isoformat()
+    if date_to:
+        query["date_to"] = date_to.isoformat()
     if account is not None:
         query["account"] = str(account.pk)
     if scope:

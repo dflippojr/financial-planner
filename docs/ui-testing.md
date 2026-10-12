@@ -63,11 +63,38 @@ PWA /static/manifest.webmanifest: valid start_url/scope/display/icons. No native
 
 Python browser tests remain intact. Lock-in: Playwright Test 1.63.0, npm lockfile, playwright.config.ts and tests/ui/*.spec.ts. npm ci, install browsers, npm run test:ui. Each test starts a fresh documented instance with finally teardown, never reused server. UI_PYTHON selects venv interpreter. Only verified 127.0.0.1 readiness baseURL. Projects include desktop light/dark and real phone descriptors; workers bounded, mutations isolated.
 
-Public repo: GitHub-hosted ubuntu-latest only, existing Playwright workflow; browser install, new tests, always cleanup via .venv/bin/python -m scripts.cleanup_ui_tests. Pytest capped at -n 4; full Python suite before push. Reports test-results/ and playwright-report/. No automatic screenshot/trace/video or failure DOM snapshot for code-bearing auth/recovery. Runtime invitation/recovery inputs use browser evaluate because Playwright fill embeds its value in HTML step titles. scripts/check_ui_report_privacy.py inspects the embedded archive in memory and gates uploads; it prints only counts or diagnostic field paths/lengths, never matched codes. Playwright captureGitInfo keeps commit metadata and disables PR diff capture: source patches include the privacy tests' explicitly synthetic code-shaped sentinels and are not UI evidence. The gate remains strict for every report value. Sanitized explicit evidence output/ui-pass/financial-planner/YYYY-MM-DD, attach defects via gh. Never commit raw output/auth state/cookies/logs. No skips/retries to make known bugs or missing browsers pass. Phone form regressions (#365, #366, #367, #373) are asserted in tests/ui/phone-forms.spec.ts on iPhone SE (375x667), iPhone 15 and Pixel 7 in both themes: wrapping settings/CSV labels, table containment, 44px activation regions with 8px field gaps, 16px editable text, and settled forward/reverse focus geometry and hit tests above the dock in portrait, landscape and 60% height. AI/alert-settings are included in the primary reflow assertions. Known failures remaining from the first pass: covered phone Chat delete-all #371 and short-landscape invalid-range reset #375.
+Public repo: GitHub-hosted ubuntu-latest only, existing Playwright workflow; browser install, new tests, always cleanup via .venv/bin/python -m scripts.cleanup_ui_tests. Pytest capped at -n 4; full Python suite before push. Reports test-results/ and playwright-report/. No automatic screenshot/trace/video or failure DOM snapshot for code-bearing auth/recovery. Runtime invitation/recovery inputs use browser evaluate because Playwright fill embeds its value in HTML step titles. scripts/check_ui_report_privacy.py inspects the embedded archive in memory and gates uploads; it prints only counts or diagnostic field paths/lengths, never matched codes. Playwright captureGitInfo keeps commit metadata and disables PR diff capture: source patches include the privacy tests' explicitly synthetic code-shaped sentinels and are not UI evidence. The gate remains strict for every report value. Sanitized explicit evidence output/ui-pass/financial-planner/YYYY-MM-DD, attach defects via gh. Never commit raw output/auth state/cookies/logs. No skips/retries to make known bugs or missing browsers pass. Phone form regressions (#365, #366, #367, #373) are asserted in tests/ui/phone-forms.spec.ts on iPhone SE (375x667), iPhone 15 and Pixel 7 in both themes: wrapping settings/CSV labels, table containment, 44px activation regions with 8px field gaps, 16px editable text, and settled forward/reverse focus geometry and hit tests above the dock in portrait, landscape and 60% height. AI/alert-settings are included in the primary reflow assertions. No known failures remain in the recorded first-pass list; the regressions below cover the previously listed issues #368, #369, #370, #371 and #375.
 
 Enlarged Home #368, Budgets #369 and Categories/Audit #370 are asserted by `text-reflow.spec.ts` and `desktop-text-reflow.spec.ts`: 200% root font at 1280x900 in both desktop themes, plus Home at 375x667 in both WebKit phone themes. Checks cover chart containment, unchanged summary amounts, root width, budget/sidebar separation, keyboard scrolling and reachable actions while retaining a 32px root font. A test-owned overall budget keeps the sidebar present across month boundaries. The ordinary 320/375/768/1440 checks remain enabled. Chart.js canvas labels use its fixed-pixel font; the enlarged HTML legend and contained table provide the same labels and exact amounts. This is a root-text-size approximation, not native browser zoom or a physical-device claim.
 
+Phone Chat delete-all (#371) and short-landscape Home reset (#375) are asserted in
+`tests/ui/desktop-responsive-defects.spec.ts`, alongside the enabled original journey
+branches. Between md and lg, including 852px and 915px landscape, Chat uses the
+Delete all action in `_chat_header_actions.html` (`max-md:hidden` inside `lg:hidden`).
+The footer copy is below md and the conversation-list copy starts at lg.
+The spec owns fresh WebKit/Chromium device contexts on the two desktop
+light/dark projects. It explicitly uses issue viewport dimensions (375x667, 393x852,
+412x915 and rotations; 1024x500) because device presets subtract browser chrome and
+the iPhone SE preset is 320x568. Short/long/new chat threads, confirmation cancel,
+keyboard activation, persisted deletion, 60% keyboard shrink, invalid/valid ranges,
+reset and rotation with retained input are covered. At 1024x500, 852x393 and
+915x412, reverse keyboard navigation from Reset range checks every field stays
+fully below the sticky Filters header and receives hit tests in both themes.
+At 375x667, a partly covered date field is reverse-focused while the form scrolls
+with the page; its full activation region must clear the header and dock in both themes.
+At 320x667 with 200% root text, the header and Close filters action must remain
+inside the viewport, receive hit tests and close from the keyboard in both themes. Opening Filters must not add horizontal overflow.
+
+Known limitation beyond the recorded first-pass cases: at 320px with 200% root text,
+Home shortcut links and some summary amounts overflow even with Filters closed.
+The enlarged Home regression from #368 covers 375px; the 320px filter regression
+checks the header and close action and preserves the closed-page width.
+
 ## Teardown
+
+On Windows the CSS builder waits behind a startup gate until it belongs to a private Job Object; descendants inherit that job without breakaway permission. Cleanup bounds `taskkill` to five seconds, falls back to terminating the owned job on timeout, launch failure, nonzero exit or remaining descendants, and checks the job's active-process count for at most five seconds before reaping the parent. Closing the last job handle also terminates members if the launcher exits. Parent exit alone never confirms tree cleanup.
+
+If cleanup cannot be verified, startup preserves the original error/cancellation, exits unsuccessfully, and retains the disposable directory and startup registry handle. `css-cleanup-failed.json` records the builder PID, unique job name, last known owned PIDs and failure reason, without credentials. Keep this record; verify those processes have exited (check identity before acting on a PID that may have been reused) before removing the exact disposable directory and its registry handle. Automated registry recovery cannot declare that retained directory clean.
 
 One command, venv/root, exact readiness directory:
 

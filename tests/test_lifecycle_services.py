@@ -1,5 +1,4 @@
 import threading
-import time
 from datetime import date, timedelta
 from io import StringIO
 from unittest.mock import patch
@@ -24,6 +23,7 @@ from finance.lifecycle_services import (
     unshare_account,
 )
 from finance.models import Account, Household, ImportBatch, Membership, Person, Transaction
+from tests.lock_races import run_account_lock_race
 
 
 def make_person(username):
@@ -453,7 +453,8 @@ def test_visible_accounts_query_is_lockable_and_never_duplicates_rows():
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("exit_kind", ["leave", "evict"])
-def test_unshare_and_membership_exit_concurrently_do_not_deadlock(exit_kind):
+@pytest.mark.parametrize("start_competitor_first", [False, True], ids=["after-lock", "competitor-started-first-gated"])
+def test_unshare_and_membership_exit_concurrently_do_not_deadlock(exit_kind, start_competitor_first):
     # Lock order must be the same everywhere: memberships, then accounts.
     # unshare_account used to lock the account first and a membership second
     # while leaving and eviction lock every membership first and the owner's
@@ -477,45 +478,17 @@ def test_unshare_and_membership_exit_concurrently_do_not_deadlock(exit_kind):
         share_mode=Account.ShareMode.CO_OWNED,
     )
 
-    first_lock_held = threading.Event()
-    other_is_waiting = threading.Event()
-    errors = []
-    original_lock = lifecycle_services._visible_account_for_update
-
-    def lock_then_pause(principal, account_id):
-        locked = original_lock(principal, account_id)
-        first_lock_held.set()
-        other_is_waiting.wait(timeout=10)
-        return locked
-
-    def run(action):
-        try:
-            action()
-        except Exception as exc:  # noqa: BLE001 - reported to the main thread
-            errors.append(exc)
-        finally:
-            connections.close_all()
-
     def exit_membership():
         if exit_kind == "leave":
             leave_household(owner)
         else:
             call_command("evict_household_member", username="owner")
 
-    with patch.object(lifecycle_services, "_visible_account_for_update", lock_then_pause):
-        unsharing = threading.Thread(target=run, args=(lambda: unshare_account(member, account.pk),))
-        unsharing.start()
-        assert first_lock_held.wait(timeout=10)
-        exiting = threading.Thread(target=run, args=(exit_membership,))
-        exiting.start()
-        time.sleep(1.5)  # let the second transaction reach whatever it blocks on
-        other_is_waiting.set()
-        unsharing.join(timeout=30)
-        exiting.join(timeout=30)
-
-    assert not unsharing.is_alive()
-    assert not exiting.is_alive()
-    assert errors == []
+    run_account_lock_race(
+        lambda: unshare_account(member, account.pk),
+        exit_membership,
+        start_competitor_first=start_competitor_first,
+    )
 
 
 def _household_with_shared_account(*, share_mode, with_history=True):

@@ -1,17 +1,13 @@
-import threading
-import time
 from datetime import date
-from unittest.mock import patch
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
-from django.db import connection, connections
+from django.db import connection
 from django.db.models import Q
 from django.test import Client
 from django.urls import reverse
 
-from finance import lifecycle_services
 from finance.category_services import assign_category, ensure_household_categories, link_refund, refresh_transfer_pairs
 from finance.lifecycle_services import delete_account
 from finance.models import (
@@ -30,6 +26,7 @@ from finance.models import (
     TransferPair,
 )
 from tests.helpers import stamp_recent_auth
+from tests.lock_races import run_account_lock_race
 from finance.recurring_services import confirm_recurring_series, refresh_recurring_series
 
 
@@ -410,45 +407,19 @@ def test_delete_enforces_csrf():
     assert not Account.objects.filter(pk=account.pk).exists()
 
 
-def _run_delete_race(other_action, owner, account):
-    first_lock_held = threading.Event()
-    other_is_waiting = threading.Event()
-    errors = []
-    original_lock = lifecycle_services._visible_account_for_update
-
-    def lock_then_pause(principal, account_id):
-        locked = original_lock(principal, account_id)
-        first_lock_held.set()
-        other_is_waiting.wait(timeout=10)
-        return locked
-
-    def run(action):
-        try:
-            action()
-        except Exception as exc:  # noqa: BLE001 - reported to the main thread
-            errors.append(exc)
-        finally:
-            connections.close_all()
-
-    with patch.object(lifecycle_services, "_visible_account_for_update", lock_then_pause):
-        deleting = threading.Thread(target=run, args=(lambda: delete_account(owner, account.pk),))
-        deleting.start()
-        assert first_lock_held.wait(timeout=10)
-        other = threading.Thread(target=run, args=(other_action,))
-        other.start()
-        time.sleep(1.5)
-        other_is_waiting.set()
-        deleting.join(timeout=30)
-        other.join(timeout=30)
-
-    assert not deleting.is_alive()
-    assert not other.is_alive()
-    assert errors == []
+def _run_delete_race(other_action, owner, account, *, start_competitor_first):
+    run_account_lock_race(
+        lambda: delete_account(owner, account.pk),
+        other_action,
+        start_competitor_first=start_competitor_first,
+    )
     assert_no_rows_reference(account.pk)
 
 
 @pytest.mark.django_db(transaction=True)
-def test_delete_account_races_edit_and_transfer_refresh_without_deadlock():
+@pytest.mark.parametrize("start_competitor_first", [False, True], ids=["after-lock", "competitor-started-first-gated"])
+@pytest.mark.parametrize("competing_kind", ["edit", "transfer-refresh"])
+def test_delete_account_races_edit_and_transfer_refresh_without_deadlock(start_competitor_first, competing_kind):
     if connection.vendor != "postgresql":
         pytest.skip("row-lock ordering can only be exercised on PostgreSQL")
 
@@ -464,23 +435,15 @@ def test_delete_account_races_edit_and_transfer_refresh_without_deadlock():
     def edit():
         client = Client()
         client.force_login(member.user)
-        client.post(
+        response = client.post(
             reverse("transaction-edit", args=(financial_transaction.pk,)),
             {"transaction_date": "2026-01-05", "description": "Late correction", "amount": "-31.00"},
         )
 
-    _run_delete_race(edit, owner, shared)
+        assert response.status_code == 404
 
-    owner = make_person("owner-two")
-    member = make_person("member-two")
-    household = make_household(owner, member, name="Second Household")
-    shared = make_account(owner, name="Synthetic Shared Two", scope=Account.Scope.HOUSEHOLD, household=household)
-    private = make_account(member, name="Synthetic Member Savings Two", account_type=Account.Type.SAVINGS)
-    make_transaction(owner, shared, amount_minor=-3200, description="Synthetic shared out two")
-    make_transaction(member, private, amount_minor=3200, description="Synthetic private in two")
-    refresh_transfer_pairs(member)
-
-    _run_delete_race(lambda: refresh_transfer_pairs(member), owner, shared)
+    other_action = edit if competing_kind == "edit" else lambda: refresh_transfer_pairs(member)
+    _run_delete_race(other_action, owner, shared, start_competitor_first=start_competitor_first)
 
 
 @pytest.mark.django_db

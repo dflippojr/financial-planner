@@ -168,8 +168,11 @@ def _reader(text, delimiter):
     "34" became 1234 and looked like money) and also split on Unicode line
     separators that are not row breaks.
     """
-    csv.field_size_limit(FIELD_LIMIT)
-    return csv.reader(io.StringIO(text, newline=""), delimiter=delimiter)
+    previous = csv.field_size_limit(FIELD_LIMIT)
+    try:
+        yield from csv.reader(io.StringIO(text, newline=""), delimiter=delimiter)
+    finally:
+        csv.field_size_limit(previous)
 
 
 def choose_delimiter(text):

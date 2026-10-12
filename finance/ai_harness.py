@@ -103,14 +103,18 @@ def default_backends(backends):
 def model_status(base_url, token):
     payload = json_request(urljoin(base_url + "/", "api/v1/models/status"), token=token)
     rows = _as_list(payload)
-    return [
-        ModelStatus(
-            name=str(item.get("name") or ""),
-            state=str(item.get("state") or "unreachable"),
-            waking_seconds=int(item.get("waking_seconds") or 0),
-        )
-        for item in rows
-    ]
+    try:
+        return [
+            ModelStatus(
+                name=str(item.get("name") or ""),
+                state=str(item.get("state") or "unreachable"),
+                waking_seconds=int(item.get("waking_seconds") or 0),
+            )
+            for item in rows
+        ]
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        # Never expose a malformed field through the conversion's exception text.
+        raise HarnessHttpError(502) from None
 
 
 def local_model_ready(statuses):

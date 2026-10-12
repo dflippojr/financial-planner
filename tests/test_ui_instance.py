@@ -14,6 +14,7 @@ import uuid
 import pytest
 
 from scripts.ui_instance import PASSWORD, ROOT, isolated_environment, refuse_database_environment, run_css_builder, teardown
+from tests.ui_diagnostics import diagnostic_summary
 
 
 @pytest.mark.parametrize("key", ["DATABASE_URL", "DATABASE", "POSTGRES_HOST", "POSTGRES_DB", "PGHOST", "DB_URL"])
@@ -100,7 +101,7 @@ def ui_process(tmp_path, command=None, startup_timeout=90, env=None):
         instance = None
         try:
             instance = ready.get(timeout=startup_timeout)
-            assert instance is not None, log.read_text()
+            assert instance is not None, diagnostic_summary(log.read_text())
             yield instance
         finally:
             directory = Path(instance["directory"]) if instance else None
@@ -120,10 +121,40 @@ def ui_process(tmp_path, command=None, startup_timeout=90, env=None):
                     if process.poll() is not None:
                         reader.join(timeout=5)
                         process.stdout.close()
-            assert process.returncode == 0, log.read_text()
             if directory is not None:
                 assert not directory.exists(), "Teardown left synthetic storage behind"
             handle.unlink(missing_ok=True)
+            assert process.returncode == 0, diagnostic_summary(log.read_text())
+
+
+def test_smoke_cleanup_preserves_recovery_handle_when_shutdown_times_out(tmp_path, monkeypatch):
+    directory = tmp_path / "synthetic-unready-instance"
+    directory.mkdir()
+    handles = []
+    calls = []
+    monkeypatch.setattr("tests.test_ui_instance.ROOT", tmp_path)
+    monkeypatch.setattr(subprocess, "run", lambda command, **_kwargs: calls.append(command))
+
+    class StuckLauncher:
+        def __init__(self, command, **_kwargs):
+            handle = Path(command[-1])
+            handle.write_text(json.dumps({"directory": str(directory)}))
+            handles.append(handle)
+            self.stdout = io.StringIO()
+
+        def poll(self):
+            return None
+
+        def wait(self, timeout):
+            raise subprocess.TimeoutExpired("synthetic launcher", timeout)
+
+    monkeypatch.setattr(subprocess, "Popen", StuckLauncher)
+    with pytest.raises(RuntimeError, match="Disposable process did not exit; cleanup handle retained") as error:
+        with ui_process(tmp_path):
+            pytest.fail("Unready launcher unexpectedly reported readiness")
+    assert calls[0][-2:] == ["--teardown", str(directory)]
+    assert handles[0].exists() and directory.exists()
+    assert str(handles[0]) in str(error.value)
 
 
 @pytest.fixture
@@ -185,13 +216,15 @@ def test_sign_in_and_category_persist(browser, ui_instance):
         context.close()
 
 
-def test_readiness_timeout_cancels_stalled_builder_and_its_child(monkeypatch, tmp_path):
+@pytest.mark.parametrize("taskkill_failure", [None, "timeout", "launch-error"])
+def test_readiness_timeout_cancels_stalled_builder_and_its_child(monkeypatch, tmp_path, taskkill_failure):
     monkeypatch.setenv("POSTGRES_HOST", "synthetic.invalid")
     monkeypatch.setenv("POSTGRES_PORT", "5432")
     monkeypatch.setenv("POSTGRES_PASSWORD", "synthetic-test-password")
     monkeypatch.setenv("FINANCIAL_PLANNER_TEST_DB", "postgres")
     port_record = tmp_path / "builder-child-port.json"
     allocation = tmp_path / "allocation.json"
+    failure_record = tmp_path / "taskkill-failure.txt"
     child = tmp_path / "builder_child.py"
     child.write_text("""import json, socket, sys, time
 from pathlib import Path
@@ -212,6 +245,16 @@ from pathlib import Path
 sys.path.insert(0, {str(ROOT)!r})
 from scripts import ui_instance
 
+original_run = ui_instance.subprocess.run
+def taskkill_probe(command, **options):
+    if command[0] == 'taskkill' and {taskkill_failure!r} is not None:
+        Path({str(failure_record)!r}).write_text({taskkill_failure!r})
+        if {taskkill_failure!r} == 'timeout':
+            raise ui_instance.subprocess.TimeoutExpired(command, options['timeout'])
+        raise OSError('Synthetic taskkill launch failure')
+    return original_run(command, **options)
+ui_instance.subprocess.run = taskkill_probe
+
 def stalled_css():
     Path({str(allocation)!r}).write_text(Path(sys.argv[-1]).read_text())
     ui_instance.run_css_builder([sys.executable, {str(builder)!r}, {str(child)!r}, {str(port_record)!r}])
@@ -228,6 +271,8 @@ ui_instance.main()
     with socket.socket() as client:
         client.settimeout(1)
         assert client.connect_ex(("127.0.0.1", port)) != 0, "Builder child survived cancellation"
+    if os.name == "nt" and taskkill_failure:
+        assert failure_record.read_text() == taskkill_failure, "Native fallback was not exercised"
 
 
 def test_css_builder_reports_success_and_failure():

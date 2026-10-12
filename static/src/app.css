@@ -171,6 +171,25 @@
   }
 }
 
+/* Reserve space after every phone Chat action, including Delete all (#371).
+   The measured composer height also follows textarea resizing and text scaling. */
+@media (width < 48rem) {
+  .chat-page {
+    padding-bottom: var(--chat-composer-height, 10rem);
+  }
+
+  .chat-page :is(button, a, textarea) {
+    scroll-margin-bottom: calc(var(--chat-composer-height, 10rem) + 5rem + env(safe-area-inset-bottom));
+  }
+}
+
+@media (pointer: coarse) {
+  .chat-page form[action="/chat/delete-all/"] button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
 /* Sidebar rows (issue #327): links, buttons and the sign-out form button share one look. */
 .nav-row {
   display: flex;
@@ -551,11 +570,36 @@
       right: 0;
       z-index: 20;
       width: min(40rem, 100%);
+      max-height: calc(100dvh - 12rem);
+      overflow-y: auto;
+      scroll-padding-top: calc(var(--filters-header-height, 2.75rem) + 0.75rem);
+      overscroll-behavior: contain;
       padding: 1rem;
       border: 1px solid var(--color-base-300);
       border-radius: var(--radius-box);
       background: var(--color-base-100);
       box-shadow: 0 8px 24px color-mix(in oklab, var(--color-base-content) 16%, transparent);
+    }
+  }
+
+  /* Short landscape viewports cannot fit the dropdown under the header (#375).
+     Keep the same form in a bounded panel above the phone/tablet dock. */
+  @media (width >= 48rem) and (height <= 32rem) {
+    .filters-panel {
+      position: fixed;
+      top: 1rem;
+      right: 1rem;
+      bottom: calc(5rem + env(safe-area-inset-bottom));
+      width: min(40rem, calc(100% - 2rem));
+      max-height: calc(100dvh - 6rem - env(safe-area-inset-bottom));
+      align-content: start;
+    }
+  }
+
+  @media (width >= 64rem) and (height <= 32rem) {
+    .filters-panel {
+      bottom: 1rem;
+      max-height: calc(100dvh - 2rem);
     }
   }
 
@@ -772,4 +816,27 @@ form fieldset {
   width: 24px;
   height: 24px;
   accent-color: var(--color-primary);
+}
+/* Tile questions remain in reading order; the track spans the tile for sticky reach. */
+.ai-tile { position: relative; }
+.ai-bead-track { display: none; }
+@media (min-width: 1024px) {
+  .ai-tile { border: 1px solid var(--color-base-300); border-radius: var(--radius-box); }
+  .ai-bead-track { display: block; position: absolute; inset: -15px 0 0; pointer-events: none; z-index: 20; }
+  .ai-bead { position: sticky; top: 8px; display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 5px; border: 1px solid var(--color-primary); border-radius: 50%; background: var(--color-base-100); color: var(--color-primary); box-shadow: 0 0 0 4px var(--color-base-200); pointer-events: auto; opacity: 0; transform: translateX(calc(var(--ai-bead-x, 100%) - 50%)); transition: transform 80ms ease-out, opacity 120ms, width 120ms, height 120ms; }
+  .ai-bead svg { width: 18px; height: 18px; flex: none; }
+  .ai-bead-visible .ai-bead, .ai-bead-keyboard:focus-within .ai-bead { opacity: 1; }
+  .ai-bead:hover, .ai-bead:focus-visible { width: 40px; height: 40px; margin-top: -5px; background: var(--color-primary); color: var(--color-primary-content); }
+  .ai-bead-touch .ai-bead:hover { width: 30px; height: 30px; margin-top: 0; }
+  .ai-bead:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 6px; }
+  .ai-bead-tooltip { position: absolute; top: calc(100% + 8px); right: 0; width: max-content; max-width: 230px; padding: 6px 10px; border-radius: 6px; background: var(--color-base-content); color: var(--color-base-100); font-size: 12px; opacity: 0; pointer-events: none; }
+  .ai-bead:hover .ai-bead-tooltip, .ai-bead:focus-visible .ai-bead-tooltip { opacity: 1; }
+  @media (hover: none) {
+    .ai-bead { opacity: 1; }
+    .ai-bead:hover { width: 30px; height: 30px; margin-top: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ai-bead { transition: opacity 120ms; }
+    .ai-bead:hover, .ai-bead:focus-visible { width: 30px; height: 30px; margin-top: 0; border-width: 2px; }
+  }
 }
