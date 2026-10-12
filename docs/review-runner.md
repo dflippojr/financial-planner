@@ -37,9 +37,11 @@ update the hook's explicit `main` allow-list before provisioning replacements.
    other local users must not be able to replace the hook.
 2. Copy these scripts from the trusted default branch. Use a new, empty runner
    directory and a separate hook directory outside the checkout. The installer
-   verifies the pinned runner archive's SHA-256 and refuses `.runner` files that
-   indicate an existing registration. It also refuses an elevated administrator
-   token; the account must still be a standard account even when not elevated.
+   verifies the pinned runner archive's SHA-256. It refuses an existing
+   `-InstallDir` that is not empty, and it refuses a `.runner` file that indicates
+   an existing registration, so an old runner, registration, or `.env` never
+   carries into a reinstall. It also refuses an elevated administrator token; the
+   account must still be a standard account even when not elevated.
 3. Obtain a fresh repository registration token through an authorized operator.
    Supply it in memory to the account running the installer; never save it in
    source, shell history, task arguments, or logs. For example, where that account
@@ -55,8 +57,9 @@ update the hook's explicit `main` allow-list before provisioning replacements.
    `financial-planner-review`, and task `FinancialPlanner-GitHubRunner-Review`.
    The installer copies the hook to `D:\Agents\financial-planner-review-hooks`
    and writes its absolute path as `ACTIONS_RUNNER_HOOK_JOB_STARTED` in the
-   runner's `.env`. Other `.env` keys are preserved. Custom `-InstallDir`,
-   `-HookDir`, `-Name`, and `-TaskName` allow separate pool members.
+   runner's `.env`. That file contains only this line; keys from earlier installs
+   are not carried over. Custom `-InstallDir`, `-HookDir`, `-Name`, and `-TaskName`
+   allow separate pool members.
 4. The hidden task starts immediately and at logon under this same account,
    with `RunLevel Limited` and an interactive logon. It does not install a
    system service or run as SYSTEM. The account must remain signed in.
