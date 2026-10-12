@@ -181,7 +181,7 @@ function Get-FileHash { param($Algorithm, $LiteralPath)
 }
 function Expand-Archive { param($LiteralPath, $DestinationPath, [switch]$Force)
     Set-Content -LiteralPath (Join-Path $DestinationPath '.env') -Value @(
-        'SYNTHETIC_KEY=preserved', 'ACTIONS_RUNNER_HOOK_JOB_STARTED=old-hook')
+        'SYNTHETIC_KEY=stale', 'ACTIONS_RUNNER_HOOK_JOB_STARTED=old-hook')
     Set-Content -LiteralPath (Join-Path $DestinationPath 'config.cmd') -Value @(
         '@echo off', 'echo %* > "%INSTALL_TEST_LOG%"', 'exit /b %INSTALL_TEST_EXIT%')
 }
@@ -239,10 +239,7 @@ def test_installer_sets_hook_ephemeral_registration_and_limited_task(mock_instal
     assert installed_hook.read_bytes() == HOOK.read_bytes()
     env_bytes = (install_dir / ".env").read_bytes()
     assert not env_bytes.startswith(b"\xef\xbb\xbf")
-    assert env_bytes.decode("utf-8").splitlines() == [
-        "SYNTHETIC_KEY=preserved",
-        f"ACTIONS_RUNNER_HOOK_JOB_STARTED={installed_hook}",
-    ]
+    assert env_bytes.decode("utf-8").splitlines() == [f"ACTIONS_RUNNER_HOOK_JOB_STARTED={installed_hook}"]
     task = json.loads(Path(env["INSTALL_TEST_TASK"]).read_text(encoding="utf-8-sig"))
     assert task["Principal"]["RunLevel"] == "Limited"
     assert task["Principal"]["LogonType"] == "Interactive"
@@ -267,3 +264,19 @@ def test_installer_refuses_unsafe_setup_without_starting_a_task(mock_installatio
     assert message in result.stderr
     assert not Path(env["INSTALL_TEST_TASK"]).exists()
     assert not Path(env["INSTALL_TEST_STARTED"]).exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="installer uses Windows identity and config.cmd")
+@pytest.mark.parametrize("leftover", [".env", "stray-file.txt"])
+def test_installer_refuses_non_empty_install_dir_before_extracting(mock_installation, leftover):
+    execute, install_dir, _, env = mock_installation
+    install_dir.mkdir()
+    stale = install_dir / leftover
+    stale.write_text("NODE_OPTIONS=--require synthetic-stale.js\n", encoding="utf-8")
+    result = execute()
+    assert result.returncode != 0
+    assert "is not empty" in result.stderr
+    assert stale.read_text(encoding="utf-8") == "NODE_OPTIONS=--require synthetic-stale.js\n"
+    assert not (install_dir / "config.cmd").exists()
+    assert not Path(env["INSTALL_TEST_LOG"]).exists()
+    assert not Path(env["INSTALL_TEST_TASK"]).exists()

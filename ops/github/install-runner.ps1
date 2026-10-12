@@ -9,7 +9,8 @@
   hook is installed outside the runner directory and the checkout. Registration
   accepts one job; the owner preserves diagnostics, cleans the work directory,
   and provisions a fresh registration before the next review. See
-  docs/review-runner.md. This script refuses an already configured runner.
+  docs/review-runner.md. This script refuses a non-empty install directory, so a
+  reinstall always starts from a clean runner directory.
 
 .EXAMPLE
   $token = gh api -X POST repos/dflippojr/financial-planner/actions/runners/registration-token --jq .token
@@ -49,6 +50,12 @@ $url = "https://github.com/actions/runner/releases/download/v$Version/actions-ru
 if (Test-Path -LiteralPath (Join-Path $InstallDir '.runner')) {
     throw "a runner is already configured in $InstallDir"
 }
+if (Test-Path -LiteralPath $InstallDir) {
+    # Refuse any leftover file, including an old .env that could carry injected settings.
+    if (Get-ChildItem -LiteralPath $InstallDir -Force | Select-Object -First 1) {
+        throw "install directory $InstallDir is not empty; use a new, empty directory"
+    }
+}
 New-Item -ItemType Directory -Force $InstallDir | Out-Null
 if (-not (Test-Path -LiteralPath $zip)) { Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $zip }
 $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
@@ -58,13 +65,10 @@ Expand-Archive -LiteralPath $zip -DestinationPath $InstallDir -Force
 New-Item -ItemType Directory -Force $HookDir | Out-Null
 $hook = Join-Path $HookDir 'review-job-started.ps1'
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'review-job-started.ps1') -Destination $hook -Force
-$runnerEnv = Join-Path $InstallDir '.env'
-$envLines = @()
-if (Test-Path -LiteralPath $runnerEnv) {
-    $envLines = @(Get-Content -LiteralPath $runnerEnv | Where-Object { $_ -notmatch '^ACTIONS_RUNNER_HOOK_JOB_STARTED=' })
-}
+# Written fresh, never merged, so no key from an earlier install or the archive survives.
 # UTF-8 without a BOM: the runner reads .env as key=value, not PowerShell.
-[IO.File]::WriteAllLines($runnerEnv, [string[]]($envLines + "ACTIONS_RUNNER_HOOK_JOB_STARTED=$hook"),
+$runnerEnv = Join-Path $InstallDir '.env'
+[IO.File]::WriteAllLines($runnerEnv, [string[]]@("ACTIONS_RUNNER_HOOK_JOB_STARTED=$hook"),
     (New-Object Text.UTF8Encoding($false)))
 
 Push-Location $InstallDir
