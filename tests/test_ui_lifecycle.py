@@ -267,11 +267,20 @@ def test_windows_builder_shutdown_stops_only_its_owned_process_tree(monkeypatch,
                 raise subprocess.TimeoutExpired("synthetic builder", timeout)
             return 0
 
-        def kill(self):
-            self.forced = True
-            self.alive = False
-
     builder = Builder()
+    class OwnedJob:
+        name = "synthetic-job"
+
+        def pids(self):
+            return [builder.pid, builder.pid + 1]
+
+        def active(self):
+            return 2 if builder.alive else 0
+
+        def terminate(self):
+            builder.forced = True
+            builder.alive = False
+
     commands = []
 
     def stop_tree(command, **options):
@@ -281,7 +290,7 @@ def test_windows_builder_shutdown_stops_only_its_owned_process_tree(monkeypatch,
 
     monkeypatch.setattr(ui_instance, "os", SimpleNamespace(name="nt"))
     monkeypatch.setattr(ui_instance.subprocess, "run", stop_tree)
-    ui_instance.stop_css_builder(builder)
+    ui_instance.stop_css_builder(builder, OwnedJob())
     assert not builder.alive
     assert builder.forced is (not tree_reaped)
     assert commands == [["taskkill", "/PID", str(builder.pid), "/T", "/F"]]
