@@ -85,10 +85,12 @@ with the page; its full activation region must clear the header and dock in both
 At 320x667 with 200% root text, the header and Close filters action must remain
 inside the viewport, receive hit tests and close from the keyboard in both themes. Opening Filters must not add horizontal overflow.
 
-Known limitation beyond the recorded first-pass cases: at 320px with 200% root text,
-Home shortcut links and some summary amounts overflow even with Filters closed.
-The enlarged Home regression from #368 covers 375px; the 320px filter regression
-checks the header and close action and preserves the closed-page width.
+The strict #390 case in `text-reflow.spec.ts` runs at 320x667 with 200% root text in
+all four phone/desktop light/dark projects. It asserts root width against the viewport
+while Filters is open and after closing, unchanged key amounts, full header/action
+containment, a 44px touch target, hit testing, pointer and keyboard closing, restored
+summary focus, and a retained 32px root font. Home attention rows shrink within their
+grid and budget amounts wrap below their labels when needed.
 
 ## Teardown
 
