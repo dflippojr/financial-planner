@@ -83,9 +83,11 @@ def test_successful_sign_in_clears_only_its_own_throttle_key():
 
     _signed_in(user)
 
-    assert set(LoginThrottle.objects.values_list("key_digest", flat=True)) == set(
-        throttle_key("unknown-synthetic", "127.0.0.1").digests()
-    )
+    # The member's username bucket stays: it counts failures from every client.
+    assert set(LoginThrottle.objects.values_list("key_digest", flat=True)) == {
+        throttle_key(user.username, "127.0.0.1").username_digest,
+        *throttle_key("unknown-synthetic", "127.0.0.1").digests(),
+    }
 
 
 @pytest.mark.django_db
