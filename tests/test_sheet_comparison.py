@@ -24,6 +24,7 @@ from finance.models import (
 )
 from finance.csv_import.staging import SESSION_KEY as STAGE_SESSION_KEY
 from finance.sheet_comparison import (
+    SheetCsvError,
     comparison_rows,
     mapping_matches_headers,
     parse_sheet_month,
@@ -629,3 +630,20 @@ def test_an_oversized_tolerance_is_a_form_error_not_a_server_error():
 
     assert not SheetToleranceForm({"tolerance": "21474836.48"}).is_valid()
     assert SheetToleranceForm({"tolerance": "1000000.00"}).is_valid()
+
+
+@pytest.mark.parametrize("cell", ["9e999990", "1e9999999", "1E16", "10000000000000000"])
+def test_out_of_range_amounts_are_rejected_quickly(cell):
+    with pytest.raises(ValueError):
+        spending_minor_from_cell(cell, SheetComparisonSettings.SpendingSign.UNSIGNED)
+
+
+def test_large_in_range_amount_still_parses():
+    assert spending_minor_from_cell("999999999999999.99", SheetComparisonSettings.SpendingSign.UNSIGNED) == 99999999999999999
+
+
+def test_out_of_range_amount_is_a_csv_error_not_a_server_error():
+    headers, rows = read_sheet_csv(b"Month,Income,Spending\n2026-01,1e9999999,1.00\n")
+    mapping = type("Mapping", (), {"month_column": "Month", "income_column": "Income", "spending_column": "Spending", "spending_sign": "unsigned"})()
+    with pytest.raises(SheetCsvError):
+        parsed_month_totals(rows, mapping)

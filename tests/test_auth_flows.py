@@ -380,6 +380,35 @@ def test_recovery_code_changes_password_is_consumed_and_revokes_all_sessions():
 
 
 @pytest.mark.django_db
+@override_settings(LOGIN_FAILURE_LIMIT=2, LOGIN_BLOCK_SECONDS=900, LOGIN_FAILURE_WINDOW_SECONDS=900)
+def test_repeated_recovery_failures_block_a_valid_code():
+    user, _person, _household = make_member()
+    code = create_recovery_codes(user, count=1)[0]
+    client = Client()
+    for _ in range(2):
+        client.post(
+            reverse("recover"),
+            {"username": user.username, "recovery_code": "000000-000000", "password1": NEW_PASSWORD, "password2": NEW_PASSWORD},
+        )
+    throttle = LoginThrottle.objects.get()
+    blocked_until_before = throttle.blocked_until
+    assert blocked_until_before is not None
+
+    blocked = client.post(
+        reverse("recover"),
+        {"username": user.username, "recovery_code": code, "password1": NEW_PASSWORD, "password2": NEW_PASSWORD},
+    )
+
+    assert b"Recovery failed" in blocked.content
+    assert blocked.context["recovered"] is False
+    user.refresh_from_db()
+    assert user.check_password(PASSWORD)
+    assert RecoveryCode.objects.get().used_at is None
+    throttle.refresh_from_db()
+    assert throttle.blocked_until == blocked_until_before
+
+
+@pytest.mark.django_db
 def test_recovery_succeeds_with_the_original_unnormalized_username():
     user, _person, _household = make_member()
     client = Client()

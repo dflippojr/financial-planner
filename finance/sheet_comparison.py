@@ -24,6 +24,7 @@ from .months import month_end, month_start
 
 MAX_FILE_BYTES = 5 * 1024 * 1024
 MAX_MONTH_ROWS = 240
+MAX_MONEY_DIGITS = 15
 DEFAULT_TOLERANCE_MINOR = 100
 SESSION_KEY = "sheet_comparison_pending"
 SAFE_FILENAME = re.compile(r"^[A-Za-z0-9._ -]{1,255}$")
@@ -77,7 +78,9 @@ def _parse_money(value):
         normalized = normalized[1:-1]
     normalized = normalized.replace(",", "")
     amount = Decimal(normalized)
-    if not amount.is_finite():
+    # Bound the magnitude before scaling: an exponent like "9e999999" would
+    # otherwise build a huge integer below (or overflow the context).
+    if not amount.is_finite() or amount.adjusted() > MAX_MONEY_DIGITS:
         raise ValueError
     if negative:
         amount = -amount
