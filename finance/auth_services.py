@@ -175,31 +175,31 @@ def consume_recovery_code(user, code):
 class ThrottleKey:
     """The login-throttle buckets one attempt counts against.
 
-    `client` limits a (username, client address) pair. `username` caps the
+    `pair_digest` limits a (username, client address) pair. `username_digest` caps the
     name across every address, so a client that rotates addresses still runs
     out of guesses; it is None where no secret is tied to a name (Google).
     """
 
-    client: str
-    username: str | None = None
+    pair_digest: str
+    username_digest: str | None = None
 
     def buckets(self):
-        yield self.client, settings.LOGIN_FAILURE_LIMIT, settings.LOGIN_FAILURE_WINDOW_SECONDS, settings.LOGIN_BLOCK_SECONDS
-        if self.username is not None:
+        yield self.pair_digest, settings.LOGIN_FAILURE_LIMIT, settings.LOGIN_FAILURE_WINDOW_SECONDS, settings.LOGIN_BLOCK_SECONDS
+        if self.username_digest is not None:
             # The block lasts only to the end of its window, so failures sent to
             # lock a member out hold for at most that window.
-            yield self.username, settings.LOGIN_USERNAME_FAILURE_LIMIT, settings.LOGIN_USERNAME_FAILURE_WINDOW_SECONDS, None
+            yield self.username_digest, settings.LOGIN_USERNAME_FAILURE_LIMIT, settings.LOGIN_USERNAME_FAILURE_WINDOW_SECONDS, None
 
     def digests(self):
-        return [digest for digest in (self.client, self.username) if digest is not None]
+        return [digest for digest in (self.pair_digest, self.username_digest) if digest is not None]
 
 
 def throttle_key(username, remote_address, *, per_username=True):
     name = username.casefold()
     # The \x01 prefix keeps a username digest from matching any pair digest.
     return ThrottleKey(
-        client=_digest(f"{name}\0{remote_address or ''}"),
-        username=_digest(f"\x01{name}") if per_username else None,
+        pair_digest=_digest(f"{name}\0{remote_address or ''}"),
+        username_digest=_digest(f"\x01{name}") if per_username else None,
     )
 
 
@@ -233,21 +233,31 @@ def record_login_failure(key):
         throttle.save(update_fields=("failure_count", "window_started_at", "blocked_until"))
 
 
+@transaction.atomic
 def clear_login_failures(key):
-    LoginThrottle.objects.filter(key_digest__in=key.digests()).delete()
+    # One delete per bucket, in record_login_failure's order: a single
+    # DELETE ... IN could lock the username row first and deadlock with a
+    # concurrent failure that holds the pair row.
+    for digest in key.digests():
+        LoginThrottle.objects.filter(key_digest=digest).delete()
 
 
+@transaction.atomic
 def purge_expired_login_throttles(*, now=None):
     # A row whose window has passed and whose block (if any) has ended no
-    # longer affects record_login_failure or login_is_blocked.
+    # longer affects record_login_failure or login_is_blocked. Rows a sign-in
+    # holds are skipped rather than waited on, so the purge can't take part in
+    # a lock cycle with record_login_failure; the next pass removes them.
     now = now or timezone.now()
     longest_window = max(settings.LOGIN_FAILURE_WINDOW_SECONDS, settings.LOGIN_USERNAME_FAILURE_WINDOW_SECONDS)
     window_cutoff = now - timedelta(seconds=longest_window)
-    deleted, _detail = (
-        LoginThrottle.objects.filter(window_started_at__lte=window_cutoff)
+    expired = list(
+        LoginThrottle.objects.select_for_update(skip_locked=True)
+        .filter(window_started_at__lte=window_cutoff)
         .filter(Q(blocked_until__isnull=True) | Q(blocked_until__lte=now))
-        .delete()
+        .values_list("pk", flat=True)
     )
+    deleted, _detail = LoginThrottle.objects.filter(pk__in=expired).delete()
     return deleted
 
 

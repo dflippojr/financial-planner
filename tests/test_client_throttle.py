@@ -5,16 +5,19 @@ behind Tailscale Serve, and is told apart only by the proxy-appended
 X-Forwarded-For hop.
 """
 
+import threading
+import time
 from datetime import timedelta
 from urllib.parse import parse_qs, urlparse
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.db import connection, connections, transaction
 from django.test import Client, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from finance.auth_services import create_recovery_codes, throttle_key
+from finance.auth_services import clear_login_failures, create_recovery_codes, record_login_failure, throttle_key
 from finance.models import LoginThrottle
 from finance.reauth import RECENT_AUTH_SESSION_KEY
 from financial_planner.trusted_proxies import parse_trusted_proxies
@@ -198,7 +201,7 @@ def test_username_cap_trips_across_rotating_client_addresses_and_then_expires():
     assert neighbour.post(reverse("login"), {"username": other.username, "password": PASSWORD}).status_code == 302
 
     # The block ends with its window, so a lockout lasts at most that long.
-    username_row = LoginThrottle.objects.get(key_digest=throttle_key(user.username, "").username)
+    username_row = LoginThrottle.objects.get(key_digest=throttle_key(user.username, "").username_digest)
     assert username_row.blocked_until == username_row.window_started_at + timedelta(seconds=900)
     earlier = timedelta(seconds=901)
     LoginThrottle.objects.update(
@@ -224,7 +227,7 @@ def test_username_cap_also_blocks_recovery_codes():
     assert b"Recovery failed" in response.content
     user.refresh_from_db()
     assert user.check_password(PASSWORD)
-    username_row = LoginThrottle.objects.get(key_digest=throttle_key(user.username, "").username)
+    username_row = LoginThrottle.objects.get(key_digest=throttle_key(user.username, "").username_digest)
     # A blocked attempt is not counted, so it can't push the window along.
     assert username_row.failure_count == 3
 
@@ -239,3 +242,49 @@ def test_google_failures_have_no_shared_cap_across_clients():
 
     assert _client_at("100.64.0.12").post(reverse("google-sign-in")).status_code == 302
     assert LoginThrottle.objects.count() == 1
+
+
+def _wait_for_a_lock_waiter(timeout=10):
+    deadline = time.monotonic() + timeout
+    with connection.cursor() as cursor:
+        while time.monotonic() < deadline:
+            # pg_locks, unlike pg_stat_activity, isn't frozen for the caller's transaction.
+            cursor.execute("SELECT count(*) FROM pg_locks WHERE NOT granted")
+            if cursor.fetchone()[0]:
+                return True
+            time.sleep(0.05)
+    return False
+
+
+@pytest.mark.django_db(transaction=True)
+def test_clearing_failures_takes_row_locks_in_the_order_failures_do():
+    # record_login_failure locks the pair row, then the username row. If a
+    # clear took the username row first, a concurrent failure holding the pair
+    # row would deadlock with it.
+    if connection.vendor != "postgresql":
+        pytest.skip("row lock order only matters on PostgreSQL")
+    key = throttle_key("synthetic-member", "100.64.0.11")
+    record_login_failure(key)
+    errors = []
+
+    def clear():
+        try:
+            clear_login_failures(key)
+        except Exception as exc:  # noqa: BLE001 - reported to the main thread
+            errors.append(exc)
+        finally:
+            connections.close_all()
+
+    with transaction.atomic():
+        LoginThrottle.objects.select_for_update().get(key_digest=key.pair_digest)
+        clearer = threading.Thread(target=clear)
+        clearer.start()
+        assert _wait_for_a_lock_waiter()
+        # The clear is now queued on the pair row, so it must not hold the
+        # username row: NOWAIT would raise if it did.
+        LoginThrottle.objects.select_for_update(nowait=True).get(key_digest=key.username_digest)
+    clearer.join(timeout=30)
+
+    assert errors == []
+    assert not clearer.is_alive()
+    assert LoginThrottle.objects.count() == 0

@@ -110,7 +110,7 @@ def test_retrying_a_blocked_login_does_not_extend_or_clear_the_block():
     for _ in range(2):
         client.post(reverse("login"), {"username": user.username, "password": "wrong"})
 
-    throttle = LoginThrottle.objects.get(key_digest=throttle_key(user.username, "127.0.0.1").client)
+    throttle = LoginThrottle.objects.get(key_digest=throttle_key(user.username, "127.0.0.1").pair_digest)
     assert throttle.blocked_until is not None
     failure_count_before = throttle.failure_count
     window_started_before = throttle.window_started_at
@@ -396,7 +396,7 @@ def test_repeated_recovery_failures_block_a_valid_code():
             reverse("recover"),
             {"username": user.username, "recovery_code": "000000-000000", "password1": NEW_PASSWORD, "password2": NEW_PASSWORD},
         )
-    throttle = LoginThrottle.objects.get(key_digest=throttle_key(user.username, "127.0.0.1").client)
+    throttle = LoginThrottle.objects.get(key_digest=throttle_key(user.username, "127.0.0.1").pair_digest)
     blocked_until_before = throttle.blocked_until
     assert blocked_until_before is not None
 
@@ -646,8 +646,8 @@ def test_setup_failures_use_the_login_throttle():
     assert get_user_model().objects.count() == 0
     assert b"Setup could not be completed" in blocked.content
     setup_key = throttle_key(SETUP_THROTTLE_USERNAME, "127.0.0.1")
-    assert LoginThrottle.objects.get(key_digest=setup_key.client).blocked_until is not None
-    assert LoginThrottle.objects.get(key_digest=setup_key.username).failure_count == 2
+    assert LoginThrottle.objects.get(key_digest=setup_key.pair_digest).blocked_until is not None
+    assert LoginThrottle.objects.get(key_digest=setup_key.username_digest).failure_count == 2
 
 
 @pytest.mark.django_db
