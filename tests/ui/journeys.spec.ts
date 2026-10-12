@@ -210,7 +210,11 @@ test('Fake-provider chat history persists and a new conversation has a blank com
   await submit(page, old.getByRole('button', { name: 'Delete conversation', exact: true }));
   await page.reload();
   await expect(conversations.locator('a[href$="?c=' + conversation + '"]')).toHaveCount(0);
-  // Phone Delete all is covered by defect #371; desktop confirmation is tested separately.
+  // Keep the newly empty phone conversation's Delete all branch enabled (#371).
+  page.once('dialog', dialog => dialog.accept());
+  await submit(page, page.locator('main form[action="/chat/delete-all/"] button').filter({ visible: true }));
+  await page.reload();
+  await expect(conversations.locator('li')).toHaveCount(0);
 
 });
 

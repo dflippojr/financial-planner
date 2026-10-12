@@ -1,5 +1,5 @@
 {% if chat_ready %}
-  {# From lg up these actions sit in the conversation list (issue #333). #}
+  {# Delete all uses the footer below md, this header from md until lg, and the list from lg. #}
   <div class="flex flex-wrap gap-2 lg:hidden">
     <form method="post" action="{% url 'chat-new' %}">
       {% csrf_token %}

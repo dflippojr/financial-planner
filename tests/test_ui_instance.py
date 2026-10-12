@@ -126,6 +126,36 @@ def ui_process(tmp_path, command=None, startup_timeout=90, env=None):
             handle.unlink(missing_ok=True)
 
 
+def test_smoke_cleanup_preserves_recovery_handle_when_shutdown_times_out(tmp_path, monkeypatch):
+    directory = tmp_path / "synthetic-unready-instance"
+    directory.mkdir()
+    handles = []
+    calls = []
+    monkeypatch.setattr("tests.test_ui_instance.ROOT", tmp_path)
+    monkeypatch.setattr(subprocess, "run", lambda command, **_kwargs: calls.append(command))
+
+    class StuckLauncher:
+        def __init__(self, command, **_kwargs):
+            handle = Path(command[-1])
+            handle.write_text(json.dumps({"directory": str(directory)}))
+            handles.append(handle)
+            self.stdout = io.StringIO()
+
+        def poll(self):
+            return None
+
+        def wait(self, timeout):
+            raise subprocess.TimeoutExpired("synthetic launcher", timeout)
+
+    monkeypatch.setattr(subprocess, "Popen", StuckLauncher)
+    with pytest.raises(RuntimeError, match="Disposable process did not exit; cleanup handle retained") as error:
+        with ui_process(tmp_path):
+            pytest.fail("Unready launcher unexpectedly reported readiness")
+    assert calls[0][-2:] == ["--teardown", str(directory)]
+    assert handles[0].exists() and directory.exists()
+    assert str(handles[0]) in str(error.value)
+
+
 @pytest.fixture
 def ui_instance(tmp_path):
     with ui_process(tmp_path) as instance:
