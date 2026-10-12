@@ -7,7 +7,6 @@ from unittest.mock import patch
 from django.db import connection, connections
 
 from finance import lifecycle_services
-from finance.models import Membership
 
 
 WAIT_SECONDS = 10
@@ -17,25 +16,29 @@ JOIN_SECONDS = 30
 def _wait_for_membership_lock(first_pid, competing_pid, competing_done, errors):
     """Observe a real blocked query, not merely a thread about to execute it."""
     deadline = monotonic() + WAIT_SECONDS
+    waiting = None
     with connection.cursor() as cursor:
         while monotonic() < deadline:
             assert not competing_done.is_set(), f"Competing operation finished before blocking: {errors}"
             cursor.execute(
-                "SELECT query, pg_blocking_pids(pid) FROM pg_stat_activity "
-                "WHERE pid = %s AND wait_event_type = 'Lock'",
-                [competing_pid],
+                "SELECT query, wait_event, pg_blocking_pids(pid), "
+                "EXISTS (SELECT 1 FROM pg_locks WHERE pid = %s "
+                "AND locktype = 'tuple' AND granted "
+                "AND relation = 'finance_membership'::regclass) "
+                "FROM pg_stat_activity WHERE pid = %s",
+                [competing_pid, competing_pid],
             )
             waiting = cursor.fetchone()
-            if waiting is not None and first_pid in waiting[1]:
-                # Inspect the outer query's table; an account query may also
-                # contain a membership subquery used for visibility.
-                query = waiting[0]
-                assert "FOR UPDATE" in query, query
-                assert f'FROM "{Membership._meta.db_table}"' in query.split(" WHERE ", 1)[0], (
-                    f"Competing operation blocked outside the membership lock boundary: {query}"
+            if waiting is not None and first_pid in waiting[2]:
+                assert waiting[3], (
+                    f"Competing operation blocked outside the membership lock boundary: {waiting!r}; errors={errors!r}"
                 )
                 return
-    raise AssertionError("Competing operation never blocked on the first worker's membership lock")
+            competing_done.wait(0.02)
+    raise AssertionError(
+        "Competing operation never blocked on the first worker's membership lock; "
+        f"last observed row={waiting!r}; errors={errors!r}"
+    )
 
 
 def run_account_lock_race(first_action, competing_action, *, start_competitor_first=False):
@@ -46,6 +49,9 @@ def run_account_lock_race(first_action, competing_action, *, start_competitor_fi
     first worker acquires its locks, simulating delayed scheduling without a
     timing sleep. Each worker has its own bounded database session.
     """
+    assert connection.vendor == "postgresql" and not connection.in_atomic_block, (
+        "run_account_lock_race requires PostgreSQL and django_db(transaction=True)"
+    )
     first_lock_held = threading.Event()
     release_first = threading.Event()
     competing_ready = threading.Event()
