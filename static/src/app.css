@@ -171,6 +171,25 @@
   }
 }
 
+/* Reserve space after every phone Chat action, including Delete all (#371).
+   The measured composer height also follows textarea resizing and text scaling. */
+@media (width < 48rem) {
+  .chat-page {
+    padding-bottom: var(--chat-composer-height, 10rem);
+  }
+
+  .chat-page :is(button, a, textarea) {
+    scroll-margin-bottom: calc(var(--chat-composer-height, 10rem) + 5rem + env(safe-area-inset-bottom));
+  }
+}
+
+@media (pointer: coarse) {
+  .chat-page form[action="/chat/delete-all/"] button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
 /* Sidebar rows (issue #327): links, buttons and the sign-out form button share one look. */
 .nav-row {
   display: flex;
@@ -551,11 +570,36 @@
       right: 0;
       z-index: 20;
       width: min(40rem, 100%);
+      max-height: calc(100dvh - 12rem);
+      overflow-y: auto;
+      scroll-padding-top: calc(var(--filters-header-height, 2.75rem) + 0.75rem);
+      overscroll-behavior: contain;
       padding: 1rem;
       border: 1px solid var(--color-base-300);
       border-radius: var(--radius-box);
       background: var(--color-base-100);
       box-shadow: 0 8px 24px color-mix(in oklab, var(--color-base-content) 16%, transparent);
+    }
+  }
+
+  /* Short landscape viewports cannot fit the dropdown under the header (#375).
+     Keep the same form in a bounded panel above the phone/tablet dock. */
+  @media (width >= 48rem) and (height <= 32rem) {
+    .filters-panel {
+      position: fixed;
+      top: 1rem;
+      right: 1rem;
+      bottom: calc(5rem + env(safe-area-inset-bottom));
+      width: min(40rem, calc(100% - 2rem));
+      max-height: calc(100dvh - 6rem - env(safe-area-inset-bottom));
+      align-content: start;
+    }
+  }
+
+  @media (width >= 64rem) and (height <= 32rem) {
+    .filters-panel {
+      bottom: 1rem;
+      max-height: calc(100dvh - 2rem);
     }
   }
 

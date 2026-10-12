@@ -10,6 +10,7 @@ from django.urls import reverse
 from .access import DENIED as _DENIED
 from .category_services import exclusion_exists_for
 from .models import (
+    SAVED_FILTER_QUERY_KEYS,
     Account,
     Category,
     CategorySuggestion,
@@ -30,22 +31,6 @@ SET_BY_HAND = "hand"
 SET_BY_RULE = "rule"
 SET_BY_SUGGESTION = "suggestion"
 FLAG_YES = "1"
-FILTER_PARAM_KEYS = (
-    "date_from",
-    "date_to",
-    "account",
-    "category",
-    "q",
-    "tag",
-    "scope",
-    "amount_min",
-    "amount_max",
-    "amount_mode",
-    "has_note",
-    "is_split",
-    "set_by",
-)
-
 
 def apply_transaction_filters(transactions, filters, principal):
     if filters.get("date_from"):
@@ -132,7 +117,7 @@ def query_params_from_cleaned(cleaned):
 def sanitize_saved_query(principal, query):
     if not isinstance(query, dict):
         return {}
-    params = {key: value for key, value in query.items() if key in FILTER_PARAM_KEYS and isinstance(value, str)}
+    params = {key: value for key, value in query.items() if key in SAVED_FILTER_QUERY_KEYS and isinstance(value, str)}
     account = params.get("account")
     if account and not Account.objects.visible_to(principal).filter(pk=account).exists():
         params.pop("account", None)
