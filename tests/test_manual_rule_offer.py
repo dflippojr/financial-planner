@@ -216,3 +216,30 @@ def test_matching_folds_case_like_the_rule_preview():
     )
     assert len(preview_unsaved_rule(owner, rule)) == 2
     assert manual_rule_offer(owner, edited)["count"] == 2
+
+
+@pytest.mark.django_db
+def test_household_rules_never_block_a_new_personal_rule():
+    owner = make_person("offer-household-rule")
+    household = make_household(owner)
+    shared = make_account(owner, name="Synthetic Shared", scope=Account.Scope.HOUSEHOLD, household=household)
+    edited = make_transaction(owner, shared, amount_minor=-450, description=COFFEE)
+    others = [
+        make_transaction(owner, shared, amount_minor=-500 - index, description=f"{COFFEE} {index}")
+        for index in range(2)
+    ]
+    CategoryRule.objects.create(owner_household=household, description_contains="coffee", category=groceries(household))
+    assign_category(owner, edited.pk, dining(household).pk)
+    edited.refresh_from_db()
+    edited._excluded = False
+    personal = unsaved_rule(owner, owner_kind="personal", description_contains=COFFEE, category_id=dining(household).pk)
+    assert {txn.pk for txn in preview_unsaved_rule(owner, personal)} == {txn.pk for txn in others}
+    assert manual_rule_offer(owner, edited)["count"] == 2
+    # The reverse holds for a household rule: any matching personal rule runs first.
+    CategoryRule.objects.create(
+        owner_person=owner, description_contains="coffee 0", category=groceries(household), priority=9
+    )
+    household_rule = unsaved_rule(
+        owner, owner_kind="household", description_contains=COFFEE, category_id=dining(household).pk, priority=-1
+    )
+    assert {txn.pk for txn in preview_unsaved_rule(owner, household_rule)} == {others[1].pk}

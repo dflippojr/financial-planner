@@ -265,16 +265,20 @@ def _rule_owner_matches_transaction(rule, txn):
     return txn.account.household_id == rule.category.household_id
 
 
+def _rule_fields_match(rule, description, account_id, amount_minor):
+    if rule.description_contains.casefold() not in description.casefold():
+        return False
+    if rule.account_id and account_id != rule.account_id:
+        return False
+    if rule.min_amount_minor is not None and amount_minor < rule.min_amount_minor:
+        return False
+    return rule.max_amount_minor is None or amount_minor <= rule.max_amount_minor
+
+
 def rule_matches_transaction(rule, txn):
-    if rule.description_contains.casefold() not in txn.description.casefold():
-        return False
-    if rule.account_id and txn.account_id != rule.account_id:
-        return False
-    if rule.min_amount_minor is not None and txn.amount_minor < rule.min_amount_minor:
-        return False
-    if rule.max_amount_minor is not None and txn.amount_minor > rule.max_amount_minor:
-        return False
-    return _rule_owner_matches_transaction(rule, txn)
+    return _rule_fields_match(rule, txn.description, txn.account_id, txn.amount_minor) and (
+        _rule_owner_matches_transaction(rule, txn)
+    )
 
 
 def first_matching_rule(txn, rules=None):
@@ -390,8 +394,9 @@ def _offer_rows(person, txn, contains):
 
 
 def _offer_rules(person, household_id):
-    """Visible rules (for the duplicate check) and every enabled rule that could
-    take precedence on the viewer's private or this household's rows."""
+    """Visible rules (for the duplicate check) and every enabled personal rule that
+    could run before a new personal rule on the viewer's private or this household's
+    rows. Household rules run after all personal rules, so they never take precedence."""
     current = Membership.objects.filter(ended_at__isnull=True)
     return list(
         CategoryRule.objects.filter(
@@ -411,22 +416,14 @@ def _offer_rules(person, household_id):
     )
 
 
-def _offer_rule_applies(rule, row, person, household_id):
-    """rule_matches_transaction for an in-scope row, without per-owner account lookups."""
-    if not rule.enabled or rule.description_contains.casefold() not in row["description"].casefold():
+def _offer_personal_rule_applies(rule, row, person, household_id):
+    """rule_matches_transaction for a personal rule and an in-scope row, without
+    per-owner account lookups."""
+    if not rule.enabled or rule.owner_household_id or rule._cached_inactive:
         return False
-    if rule.account_id and rule.account_id != row["account_id"]:
+    if not _rule_fields_match(rule, row["description"], row["account_id"], row["amount_minor"]):
         return False
-    if rule.min_amount_minor is not None and row["amount_minor"] < rule.min_amount_minor:
-        return False
-    if rule.max_amount_minor is not None and row["amount_minor"] > rule.max_amount_minor:
-        return False
-    household_row = row["account__scope"] == Account.Scope.HOUSEHOLD
-    if rule.owner_household_id:
-        return household_row and rule.owner_household_id == row["account__household_id"]
-    if rule._cached_inactive:
-        return False
-    if household_row:
+    if row["account__scope"] == Account.Scope.HOUSEHOLD:
         # Every current member sees the household's accounts.
         return rule._member and rule.category.household_id == household_id
     # A private row in scope is the viewer's own.
@@ -434,10 +431,8 @@ def _offer_rule_applies(rule, row, person, household_id):
 
 
 def _offer_row_blocked(row, rules, person, household_id):
-    """Whether an existing rule wins over a new priority-0 rule, as preview_unsaved_rule decides."""
-    matching = [rule for rule in rules if _offer_rule_applies(rule, row, person, household_id)]
-    personal = [rule for rule in matching if not rule.owner_household_id]
-    winner = (personal or matching or [None])[0]
+    """Whether an existing rule wins over a new priority-0 personal rule, as preview_unsaved_rule decides."""
+    winner = next((rule for rule in rules if _offer_personal_rule_applies(rule, row, person, household_id)), None)
     return winner is not None and winner.priority <= 0
 
 
@@ -557,10 +552,20 @@ def preview_unsaved_rule(principal, rule):
     rows = _preview_rows(person, rule)
     rules_by_account = _rules_by_account(rows)
     for txn in rows:
-        winner = first_matching_rule(txn, rules_by_account[txn.account_id])
-        if winner is None or winner.priority > rule.priority:
+        if _new_rule_wins(rule, first_matching_rule(txn, rules_by_account[txn.account_id])):
             matches.append(txn)
     return matches
+
+
+def _new_rule_wins(rule, winner):
+    """Whether an unsaved rule beats the existing first match. Personal rules all run
+    before household rules, so a household winner never blocks a personal rule and a
+    personal winner always blocks a household one."""
+    if winner is None:
+        return True
+    if bool(winner.owner_household_id) != bool(rule.owner_household_id):
+        return not rule.owner_household_id
+    return winner.priority > rule.priority
 
 
 def _history_new_label(category, rule):
