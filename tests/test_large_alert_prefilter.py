@@ -126,7 +126,7 @@ def test_prefilter_matches_reference_for_both_entry_points(django_capture_on_com
 
 @pytest.mark.django_db
 def test_no_enabled_threshold_reads_no_transaction_rows(django_capture_on_commit_callbacks):
-    owner, member = mixed_household()
+    owner, _member = mixed_household()
     AlertSettings.objects.update(large_transaction_minor=None)
     AlertSettings.objects.filter(person=owner).update(large_transaction_minor=1, large_transaction_enabled=False)
     rows = list(Transaction.objects.all())
@@ -134,16 +134,19 @@ def test_no_enabled_threshold_reads_no_transaction_rows(django_capture_on_commit
         assert evaluate_recent_large_transactions() == []
     assert not [q for q in queries if "finance_transaction" in q["sql"]], [q["sql"] for q in queries]
     with patch.object(alert_services, "evaluate_active_budget_alerts", return_value=[]):
-        with django_capture_on_commit_callbacks(execute=True):
-            with CaptureQueriesContext(connection) as queries:
+        # Callbacks run when the inner context exits, inside the capture.
+        with CaptureQueriesContext(connection) as queries:
+            with django_capture_on_commit_callbacks(execute=True) as callbacks:
                 schedule_after_new_transactions(rows)
+    assert len(callbacks) == 1
+    assert any("finance_alertsettings" in q["sql"] for q in queries), "the scheduled run did not execute"
     assert not [q for q in queries if "finance_transaction" in q["sql"]], [q["sql"] for q in queries]
     assert not Alert.objects.exists()
 
 
 @pytest.mark.django_db
 def test_rows_below_every_threshold_are_never_instantiated():
-    owner, member = mixed_household()
+    mixed_household()
     AlertSettings.objects.update(large_transaction_minor=1_000_000)
     built = []
     original = Transaction.from_db.__func__
