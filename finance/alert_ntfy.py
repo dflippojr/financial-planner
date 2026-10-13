@@ -20,6 +20,8 @@ from .models import NTFY_TOPIC_PATTERN, Alert, AlertSettings
 logger = logging.getLogger(__name__)
 _TOPIC = re.compile(NTFY_TOPIC_PATTERN)
 MAX_PRICE_LINES = 10
+# ntfy turns a body over 4,096 bytes into an attachment; leave room for the link lines.
+MAX_PRICE_BYTES = 3_000
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -130,12 +132,19 @@ def send_run_ntfy():
 
 
 def _price_message(rows):
-    lines = [row.title for row in rows[:MAX_PRICE_LINES]]
-    if len(rows) > MAX_PRICE_LINES:
-        lines.append(f"and {len(rows) - MAX_PRICE_LINES} more")
+    """Title, body and link for the rows that fit; the rest wait for the next push."""
+    included, size = [], 0
+    for row in rows[:MAX_PRICE_LINES]:
+        size += len(row.title.encode("utf-8")) + 1
+        if included and size > MAX_PRICE_BYTES:
+            break
+        included.append(row)
+    lines = [row.title for row in included]
+    if len(rows) > len(included):
+        lines.append(f"and {len(rows) - len(included)} more")
     review_url = _absolute(reverse("recurring-review"))
     title = "Recurring price change" if len(rows) == 1 else f"{len(rows)} recurring price changes"
-    return title, "\n".join(lines) + _link_line("Review recurring charges", review_url), review_url
+    return included, title, "\n".join(lines) + _link_line("Review recurring charges", review_url), review_url
 
 
 def _plural(count, singular, plural):
@@ -172,12 +181,12 @@ def _send_member_ntfy(preference_id):
                 .order_by("created_at", "pk")
             )
             if rows:
-                title, body, click = _price_message(rows)
+                included, title, body, click = _price_message(rows)
                 sent = _send(prefs.ntfy_topic, title, body, click, "money_with_wings")
                 outcome(prefs.person, "ntfy_delivery", phase="succeeded" if sent else "failed",
-                        metadata={"row_count": len(rows)})
+                        metadata={"row_count": len(included)})
                 if sent:
-                    Alert.objects.filter(pk__in=[row.pk for row in rows]).update(ntfy_notice_sent_at=timezone.now())
+                    Alert.objects.filter(pk__in=[row.pk for row in included]).update(ntfy_notice_sent_at=timezone.now())
         digest = build_weekly_digest(prefs.person, today=timezone.localdate(), week=WEEK_LAST)
         if digest.total and prefs.ntfy_digest_week != digest.start:
             title, body, click = _digest_message(digest)

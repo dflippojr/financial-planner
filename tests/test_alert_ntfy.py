@@ -143,6 +143,25 @@ def test_long_lists_are_capped(ntfy, outbox):
     lines = outbox[0]["body"].split("\n")
     assert lines[10] == "and 2 more"
     assert outbox[0]["title"] == "12 recurring price changes"
+    assert Alert.objects.filter(ntfy_notice_sent_at__isnull=True).count() == 2
+    send_run_ntfy()
+    assert outbox[1]["title"] == "2 recurring price changes"
+    assert outbox[1]["body"].split("\n")[:2] == [
+        "Series 10 changed from $1.00 to $2.00", "Series 11 changed from $1.00 to $2.00",
+    ]
+    assert not Alert.objects.filter(ntfy_notice_sent_at__isnull=True).exists()
+
+
+def test_body_stays_under_ntfy_text_limit(ntfy, outbox):
+    person = make_person("synthetic")
+    opt_in(person)
+    for index in range(10):
+        price_alert(person, f"wide{index}", f"{index}" + "简" * 199)
+    send_run_ntfy()
+    assert len(outbox[0]["body"].encode("utf-8")) < 4096
+    sent = Alert.objects.filter(ntfy_notice_sent_at__isnull=False).count()
+    assert 0 < sent < 10
+    assert outbox[0]["body"].split("\n")[sent] == f"and {10 - sent} more"
 
 
 def test_without_base_url_messages_have_no_link(ntfy, settings, outbox):

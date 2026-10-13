@@ -517,8 +517,9 @@ recent authentication. Save first, then use **Send a test push**.
 
 After a daily alert pass or sync, an opted-in member receives at most one push
 listing unread, visible recurring price-change alerts that have not been pushed:
-series name, old and new price, and a link to Recurring. The per-kind recurring
-price setting applies. Once a week, when the previous Monday-Sunday weekly digest
+series name, old and new price, and a link to Recurring. A push names at most ten
+changes and stays under ntfy's 4,096-byte text limit; the rest are counted and
+named in the next run's push. The per-kind recurring price setting applies. Once a week, when the previous Monday-Sunday weekly digest
 has any items, a second push gives its counts with a link to the digest. Pushes
 never include account names, numbers or balances. A failed push is logged only as
 `Alert ntfy delivery failed.`, without the token, topic or message, and never breaks
