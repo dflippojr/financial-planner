@@ -2218,6 +2218,7 @@ class Alert(models.Model):
         UNUSUAL_SPENDING = "unusual_spending", "Unusual spending"
         BACKUP = "backup", "Backup"
         EXPECTED_BALANCE = "expected_balance", "Expected balance"
+        IMPORT_DUE = "import_due", "Import due"
 
     recipient = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="alerts")
     kind = models.CharField(max_length=20, choices=Kind)
@@ -2251,6 +2252,7 @@ class Alert(models.Model):
                         "unusual_spending",
                         "backup",
                         "expected_balance",
+                        "import_due",
                     )
                 ),
                 name="alert_kind_valid",
@@ -2281,6 +2283,7 @@ class AlertSettings(models.Model):
     monthly_review_enabled = models.BooleanField(default=True)
     monthly_review_ai_enabled = models.BooleanField(default=True)
     expected_balance_enabled = models.BooleanField(default=False)
+    import_due_enabled = models.BooleanField(default=True)
     unusual_spending_enabled = models.BooleanField(default=True)
     unusual_spending_ai_enabled = models.BooleanField(default=True)
     unusual_category_percent = models.PositiveIntegerField(default=50)

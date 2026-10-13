@@ -39,6 +39,7 @@ _KIND_ENABLED_FIELD = {
     Alert.Kind.LARGE_TRANSACTION: "large_transaction_enabled",
     Alert.Kind.MONTHLY_REVIEW: "monthly_review_enabled",
     Alert.Kind.EXPECTED_BALANCE: "expected_balance_enabled",
+    Alert.Kind.IMPORT_DUE: "import_due_enabled",
     Alert.Kind.UNUSUAL_SPENDING: "unusual_spending_enabled",
 }
 READ_RETENTION_DAYS = 180
@@ -137,7 +138,7 @@ def mark_all_alerts_read(principal):
 _ALERT_TOGGLES = (
     "sync_enabled", "recurring_price_enabled", "recurring_missed_enabled", "budget_enabled",
     "large_transaction_enabled", "monthly_review_enabled", "monthly_review_ai_enabled",
-    "expected_balance_enabled", "unusual_spending_enabled", "unusual_spending_ai_enabled",
+    "expected_balance_enabled", "unusual_spending_enabled", "unusual_spending_ai_enabled", "import_due_enabled",
 )
 _ALERT_THRESHOLDS = (
     "unusual_category_percent", "unusual_category_floor_minor", "large_transaction_minor", "recurring_price_percent",
@@ -162,6 +163,7 @@ def save_alert_settings(
     unusual_category_percent=50,
     unusual_category_floor_minor=5_000,
     recurring_price_percent=10,
+    import_due_enabled=True,
 ):
     person = _person_for(principal)
     if person is None:
@@ -177,6 +179,7 @@ def save_alert_settings(
     prefs.monthly_review_enabled = bool(monthly_review_enabled)
     prefs.monthly_review_ai_enabled = bool(monthly_review_ai_enabled)
     prefs.expected_balance_enabled = bool(expected_balance_enabled)
+    prefs.import_due_enabled = bool(import_due_enabled)
     prefs.unusual_spending_enabled = bool(unusual_spending_enabled)
     prefs.unusual_spending_ai_enabled = bool(unusual_spending_ai_enabled)
     prefs.unusual_category_percent = int(unusual_category_percent)
@@ -470,6 +473,9 @@ def run_daily_alert_pass(*, today=None, now=None):
     from .bills_calendar import evaluate_expected_balance_alerts
 
     created.extend(evaluate_expected_balance_alerts(today=today))
+    from .import_due import evaluate_import_due_alerts
+
+    created.extend(evaluate_import_due_alerts(today=today))
     purge_old_read_alerts(now=now)
     from .auth_services import purge_expired_login_throttles
     from .passkey_services import purge_stale_pending_sign_ins
