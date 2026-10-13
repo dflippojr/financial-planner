@@ -536,6 +536,7 @@ Owner decisions:
 - **Price changes.** A change is flagged when the latest charge differs from the series' usual price by more than the member's threshold. Owner approved 2026-10-12 (#418): the usual price is the median of up to 12 charges before the latest, and each member sets the threshold under Settings › Alerts (`recurring_price_percent`, 1-100, default 10). The boundary is strict: a drift of exactly the threshold does not flag. Household series apply each recipient's own threshold.
 - **Cancelling.** A member can mark a series cancelled. It leaves totals and the projection, and its history stays. If a new matching charge arrives, it shows as "resumed?" for the member to confirm.
 - **Step changes** are covered by #124: a confirmed series follows step changes and gradual drift.
+- **Daily pass (#426).** The daily alert pass refreshes every active member's series (skipping detection when their charges are unchanged) and raises price-change and missed-charge alerts, so they and their email notices arrive without a Recurring page visit. A failure for one member is logged by member id and error type only, and the pass moves on.
 
 ## Weekly digest (2026-10-12, #419)
 
