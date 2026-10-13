@@ -16,6 +16,7 @@ from pathlib import Path
 import re
 import socket
 import sqlite3
+import subprocess
 import sys
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
@@ -57,13 +58,43 @@ def check_ready(url):
         return False, f"/health/ unreachable ({type(error).__name__})"
 
 
-def non_loopback_addresses():
-    try:
-        infos = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
-    except OSError:
-        return []
-    addresses = {str(info[4][0]) for info in infos}
-    return sorted(address for address in addresses if not address.startswith("127."))
+def proc_address(field):
+    host, port = field.split(":")
+    raw = bytes.fromhex(host)
+    if len(raw) == 4:
+        return socket.inet_ntop(socket.AF_INET, raw[::-1]), int(port, 16)
+    # /proc stores IPv6 as four host-order (little-endian) 32-bit words.
+    words = b"".join(raw[index:index + 4][::-1] for index in range(0, 16, 4))
+    return socket.inet_ntop(socket.AF_INET6, words), int(port, 16)
+
+
+def listener_addresses(port):
+    """Local addresses with a TCP listener on port, from the OS socket table.
+
+    Reading listeners rather than probing interfaces also catches a wildcard
+    bind (0.0.0.0 or ::) that no hostname lookup would reveal.
+    """
+    found = set()
+    tables = [Path("/proc/net/tcp"), Path("/proc/net/tcp6")]
+    if tables[0].exists():
+        for table in tables:
+            if not table.exists():
+                continue
+            for line in table.read_text().splitlines()[1:]:
+                fields = line.split()
+                if len(fields) > 3 and fields[3] == "0A":  # TCP_LISTEN
+                    address, listening = proc_address(fields[1])
+                    if listening == port:
+                        found.add(address)
+        return found
+    output = subprocess.run(["netstat", "-an"], capture_output=True, text=True, timeout=15, check=False).stdout
+    for line in output.splitlines():
+        fields = line.split()
+        if len(fields) >= 4 and fields[0].upper().startswith("TCP") and fields[-1].startswith("LISTEN"):
+            address, _, listening = fields[1].rpartition(":")
+            if listening.isdigit() and int(listening) == port:
+                found.add(address.strip("[]"))
+    return found
 
 
 def check_loopback(url, directory):
@@ -76,15 +107,12 @@ def check_loopback(url, directory):
         return False, f"instance.json unreadable ({type(error).__name__})"
     if int(state.get("port", 0)) != parts.port:
         return False, f"URL port {parts.port} does not match the instance port"
-    exposed = []
-    for address in non_loopback_addresses():
-        try:
-            with socket.create_connection((address, parts.port), timeout=1):
-                exposed.append(address)
-        except OSError:
-            pass
+    listeners = listener_addresses(parts.port)
+    if not listeners:
+        return False, f"no TCP listener found on port {parts.port}"
+    exposed = sorted(listeners - {"127.0.0.1"})
     if exposed:
-        return False, f"port {parts.port} also answers on {', '.join(exposed)}"
+        return False, f"port {parts.port} also listens on {', '.join(exposed)}"
     return True, f"127.0.0.1:{parts.port} only"
 
 

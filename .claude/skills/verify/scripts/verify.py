@@ -73,6 +73,7 @@ class OwnedTree:
         if os.name == "nt":
             from scripts.windows_css_job import WindowsCssJob
             self.job = WindowsCssJob()
+            self.process = None
             try:
                 self.process = subprocess.Popen([sys._base_executable, "-c", GATE, *command], stdin=subprocess.PIPE,
                                                 creationflags=subprocess.CREATE_NO_WINDOW, **options)
@@ -80,6 +81,12 @@ class OwnedTree:
                 self.process.stdin.write(b"1")
                 self.process.stdin.close()
             except BaseException:
+                # The gate may still be outside the job; it has not started the command yet.
+                if self.process is not None:
+                    self.process.kill()
+                    self.process.wait(timeout=10)
+                    if self.process.stdin:
+                        self.process.stdin.close()
                 self.job.terminate()
                 self.job.close()
                 raise
@@ -385,7 +392,8 @@ def await_launcher(launcher, checks):
         forced = True
     if forced or launcher.alive():
         launcher.stop()
-    checks.append(("launcher exited", not forced,
+    clean_exit = not forced and launcher.process.returncode == 0
+    checks.append(("launcher exited", clean_exit,
                    f"exit {launcher.process.returncode}" + (" after forced stop" if forced else "")))
     if launcher.process.stdout:
         launcher.process.stdout.close()

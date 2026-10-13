@@ -38,8 +38,8 @@ report it; on failure, read `drive.log`, `log-excerpts.txt` and
    path and startup handle; after readiness it adds URL, port and instance
    directory. The readiness sign-in is not written to evidence.
 2. **Doctor.** `scripts/doctor.py` checks `/health/`, that the URL is
-   `127.0.0.1` on the instance's own port and does not answer on non-loopback
-   addresses, that storage is the disposable SQLite directory, that the
+   `127.0.0.1` on the instance's own port and that the OS listener table shows no
+   other bind for it (a wildcard bind fails), that storage is the disposable SQLite directory, that the
    contract's "Seed and sign-in" data is present, and that the launch
    environment holds no credential or data-path variables (names only, never
    values). One PASS/FAIL line per check; non-zero exit on any failure.

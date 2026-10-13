@@ -39,7 +39,6 @@ def health_server(status):
 def instance(tmp_path, monkeypatch):
     """A synthetic instance directory and a loopback health endpoint, with no Django."""
     monkeypatch.setattr(ui_instance.tempfile, "gettempdir", lambda: str(tmp_path))
-    monkeypatch.setattr(doctor, "non_loopback_addresses", lambda: [])
     directory = tmp_path / (ui_instance.PREFIX + "doctor")
     directory.mkdir()
     database = sqlite3.connect(directory / "db.sqlite3")
@@ -93,9 +92,18 @@ def test_non_loopback_instance_fails(instance, monkeypatch):
     (instance["directory"] / "instance.json").write_text(json.dumps({"port": port + 1}))
     assert "does not match" in failures(doctor.run_checks(instance["url"], instance["directory"], {}))["loopback"]
     (instance["directory"] / "instance.json").write_text(json.dumps({"port": port}))
-    # Stand in for a listener that also answers on a LAN address.
-    monkeypatch.setattr(doctor, "non_loopback_addresses", lambda: ["127.0.0.1"])
-    assert "also answers" in failures(doctor.run_checks(instance["url"], instance["directory"], {}))["loopback"]
+    # Stand in for a wildcard bind; binding one for real could raise a host firewall prompt.
+    monkeypatch.setattr(doctor, "listener_addresses", lambda _port: {"127.0.0.1", "0.0.0.0"})
+    assert "also listens on 0.0.0.0" in failures(doctor.run_checks(instance["url"], instance["directory"], {}))["loopback"]
+    monkeypatch.setattr(doctor, "listener_addresses", lambda _port: set())
+    assert "no TCP listener" in failures(doctor.run_checks(instance["url"], instance["directory"], {}))["loopback"]
+
+
+def test_listener_table_addresses_decode():
+    assert doctor.proc_address("0100007F:1F90") == ("127.0.0.1", 8080)
+    assert doctor.proc_address("00000000:0050") == ("0.0.0.0", 80)
+    assert doctor.proc_address("00000000000000000000000001000000:1F90") == ("::1", 8080)
+    assert doctor.proc_address("00000000000000000000000000000000:0050") == ("::", 80)
 
 
 def test_missing_seed_fails(instance):
