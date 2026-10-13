@@ -483,6 +483,47 @@ remain pending for a later pass. SMTP has a ten-second timeout.
 For development or tests, use Django's console or locmem email backend. Never
 point a test suite at a real SMTP server.
 
+## Optional ntfy push notices
+
+ntfy pushes are off per member by default and are offered only when `NTFY_URL`
+is set in `production.env`. Set it to the self-hosted ntfy server's origin
+without a topic or trailing slash (for example `https://ntfy.example.invalid`).
+The containers must be able to reach that address. Optional settings:
+
+- `NTFY_TOKEN`: bearer token sent only in the `Authorization` header.
+- `NTFY_TIMEOUT_SECONDS` (default 5): one attempt per push, no retries.
+- `NTFY_TRANSPORT` (default `http`): `fake` keeps messages in memory. The test
+  suite and disposable UI instances force `fake`; never set it in production.
+
+Pushes link back to the app through `ALERT_EMAIL_BASE_URL`; without it they carry
+no link. Keep the token out of Git. Recreate the app and background containers
+after changing these values.
+
+Give the app a write-only ntfy user rather than an admin token. With the server's
+access control set to deny by default (`auth-default-access: deny-all`), run on the
+ntfy host:
+
+```sh
+ntfy user add financial-planner
+ntfy access financial-planner 'planner-*' write-only
+ntfy token add financial-planner
+```
+
+Put the printed token in `NTFY_TOKEN`. Each member then picks a topic matching that
+pattern (for example `planner-alex`) under Settings > Alerts and grants their own
+phone's ntfy user read access to it (`ntfy access <phone-user> planner-alex read-only`).
+Topics are 1-64 letters, digits, hyphens or underscores; changing one requires
+recent authentication. Save first, then use **Send a test push**.
+
+After a daily alert pass or sync, an opted-in member receives at most one push
+listing unread, visible recurring price-change alerts that have not been pushed:
+series name, old and new price, and a link to Recurring. The per-kind recurring
+price setting applies. Once a week, when the previous Monday-Sunday weekly digest
+has any items, a second push gives its counts with a link to the digest. Pushes
+never include account names, numbers or balances. A failed push is logged only as
+`Alert ntfy delivery failed.`, without the token, topic or message, and never breaks
+the alert run or the request; the alerts stay pending for a later pass.
+
 ## Transfer matching maintenance
 
 Routine edits, imports, undo and sync refresh only affected transfer candidates.

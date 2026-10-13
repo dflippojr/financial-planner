@@ -208,6 +208,31 @@ test('Alert read markers and settings persist after reload', async ({ page }) =>
   await audit(page, 'notification_preferences_changed', 'member', '1');
 });
 
+test('ntfy toggle and topic persist and a test push reports success on the fake transport', async ({ page }) => {
+  await page.goto('/settings/alerts/');
+  const toggle = page.getByLabel('Push recurring price changes and the weekly digest to ntfy', { exact: true });
+  const topic = page.getByLabel('ntfy topic', { exact: true });
+  await expect(toggle).not.toBeChecked();
+  await submit(page, page.getByRole('button', { name: 'Send a test push', exact: true }));
+  await expect(main(page).getByRole('status')).toHaveText('Test push could not be sent. Check your saved topic or ask the operator.');
+  await toggle.check();
+  await topic.fill('bad topic');
+  await submit(page, page.getByRole('button', { name: 'Save ntfy settings', exact: true }));
+  await expect(page.getByText('Use 1-64 letters, digits, hyphens or underscores.')).toBeVisible();
+  await topic.fill('planner-synthetic');
+  await submit(page, page.getByRole('button', { name: 'Save ntfy settings', exact: true }));
+  await page.reload();
+  await expect(toggle).toBeChecked();
+  await expect(topic).toHaveValue('planner-synthetic');
+  await submit(page, page.getByRole('button', { name: 'Send a test push', exact: true }));
+  await expect(main(page).getByRole('status')).toHaveText('Test push sent.');
+  await toggle.uncheck();
+  await submit(page, page.getByRole('button', { name: 'Save ntfy settings', exact: true }));
+  await page.reload();
+  await expect(toggle).not.toBeChecked();
+  await audit(page, 'notification_address_changed', 'setting', '1');
+});
+
 test('Fake-provider chat history persists and a new conversation has a blank composer', async ({ page }) => {
   await page.goto('/chat/');
   const question = page.getByLabel('Question', { exact: true }).filter({ visible: true });
