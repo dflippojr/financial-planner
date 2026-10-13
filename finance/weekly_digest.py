@@ -9,13 +9,13 @@ threshold (AlertSettings).
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 
-from django.db.models import Q
+from django.db.models import Exists, OuterRef, Prefetch, Q
 from django.urls import reverse
 from django.utils import timezone
 
 from .cash_flow import format_minor
 from .category_services import exclusion_exists_for
-from .models import AlertSettings, RecurringSeries, Transaction, _person_for
+from .models import AlertSettings, RecurringSeries, RecurringSeriesMember, Transaction, _person_for
 from .recurring_review import DEFAULT_PRICE_CHANGE_PERCENT, price_changes
 
 WEEK_CURRENT = "current"
@@ -70,12 +70,22 @@ def _series_url(series):
     return f"{reverse('recurring-review')}#series-{series.pk}"
 
 
+def _active_members():
+    """Members whose charge is still active.
+
+    Undoing an import archives its charges, but their memberships stay until the
+    Recurring page next refreshes the series; the digest must not count them meanwhile.
+    """
+    return RecurringSeriesMember.objects.filter(transaction__status=Transaction.Status.ACTIVE)
+
+
 def _new_series(principal, start, end):
     since, until = _local_bounds(start, end)
     rows = (
         RecurringSeries.objects.visible_to(principal)
         # An inactive series has lost its members, possibly to revoked access, so it is left out.
         .filter(status__in=_NEW_SERIES_STATUSES, is_active=True, created_at__gte=since, created_at__lt=until)
+        .filter(Exists(_active_members().filter(series_id=OuterRef("pk"))))
         .order_by("-created_at", "display_name", "pk")
     )
     return [
@@ -96,11 +106,12 @@ def _price_changes(principal, start, end, percent):
         RecurringSeries.objects.visible_to(principal)
         .filter(
             status=RecurringSeries.Status.CONFIRMED,
+            members__transaction__status=Transaction.Status.ACTIVE,
             members__transaction__transaction_date__gte=start,
             members__transaction__transaction_date__lte=end,
         )
         .distinct()
-        .prefetch_related("members__transaction__account")
+        .prefetch_related(Prefetch("members", queryset=_active_members().select_related("transaction__account")))
     )
     return [
         DigestItem(

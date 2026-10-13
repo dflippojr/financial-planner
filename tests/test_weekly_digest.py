@@ -8,7 +8,7 @@ from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 
-from finance.models import Account, AlertSettings, RecurringSeries, TransferPair
+from finance.models import Account, AlertSettings, RecurringSeries, Transaction, TransferPair
 from finance.weekly_digest import build_weekly_digest, week_window
 from tests.test_recurring_review import (
     add_member,
@@ -39,10 +39,16 @@ def first_seen(series, day, at=time(12, 0)):
     RecurringSeries.objects.filter(pk=series.pk).update(created_at=stamp)
 
 
+def with_charge(series):
+    account = make_account(series.person, name=f"Synthetic Card {series.pk}")
+    add_member(series, make_transaction(series.person, account, amount_minor=-1299, description=series.display_name))
+    return series
+
+
 def suggested(person, name):
     series = make_series(person, name=name, cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-1299)
     RecurringSeries.objects.filter(pk=series.pk).update(status=RecurringSeries.Status.SUGGESTED)
-    return series
+    return with_charge(series)
 
 
 def titles(items):
@@ -65,7 +71,7 @@ def test_new_series_inside_outside_and_across_the_sunday_monday_boundary():
     make_household(owner)
     sunday_late = suggested(owner, "Synthetic Sunday Stream")
     first_seen(sunday_late, date(2026, 10, 11), time(23, 59))
-    monday_early = make_series(owner, name="Synthetic Monday Gym", cadence=RecurringSeries.Cadence.WEEKLY)
+    monday_early = with_charge(make_series(owner, name="Synthetic Monday Gym", cadence=RecurringSeries.Cadence.WEEKLY))
     first_seen(monday_early, date(2026, 10, 12), time(0, 0))
     before = suggested(owner, "Synthetic Old Box")
     first_seen(before, date(2026, 10, 4), time(23, 59))
@@ -88,7 +94,7 @@ def test_new_series_inside_outside_and_across_the_sunday_monday_boundary():
 def test_inactive_series_is_left_out():
     owner = make_person("owner")
     make_household(owner)
-    series = make_series(owner, name="Synthetic Unshared", cadence=RecurringSeries.Cadence.MONTHLY)
+    series = with_charge(make_series(owner, name="Synthetic Unshared", cadence=RecurringSeries.Cadence.MONTHLY))
     RecurringSeries.objects.filter(pk=series.pk).update(is_active=False)
     first_seen(series, date(2026, 10, 7))
 
@@ -114,6 +120,26 @@ def test_price_change_counts_in_the_week_of_its_latest_charge():
     assert change.detail == "Usually 10.00 USD · 50.0%"
     assert change.url == f"{reverse('recurring-review')}#series-{rise.pk}"
     assert current.price_changes == []
+
+
+@pytest.mark.django_db
+def test_archived_charges_do_not_count_until_refresh_catches_up():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    series = make_priced_series(owner, account, "Synthetic Undone", (-1000, -1000, -1000, -1500), start=date(2026, 7, 8))
+    first_seen(series, date(2026, 10, 8))
+    latest = series.members.order_by("-transaction__transaction_date").first().transaction
+    # Undoing the import archives the charge; the membership stays until the next refresh.
+    Transaction.objects.filter(pk=latest.pk).update(status=Transaction.Status.ARCHIVED, archived_at=timezone.now())
+
+    last = build_weekly_digest(owner, today=TODAY, week="last")
+    assert last.price_changes == []
+    assert titles(last.new_series) == ["Synthetic Undone"]
+    Transaction.objects.filter(recurring_memberships__series=series).update(
+        status=Transaction.Status.ARCHIVED, archived_at=timezone.now()
+    )
+    assert build_weekly_digest(owner, today=TODAY, week="last").new_series == []
 
 
 @pytest.mark.django_db

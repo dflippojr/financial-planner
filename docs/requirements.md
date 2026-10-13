@@ -546,7 +546,7 @@ Owner approved 2026-10-12. Cash flow shows a "This week" card listing what start
   - **New recurring charges:** the member's suggested or confirmed series first detected (created) in the week, with cadence and typical amount.
   - **Price changes:** the recurring price-change flags (#418, the member's own threshold) whose latest charge falls in the week.
   - **Large transactions:** active cash-flow transactions in the week whose absolute amount is at or above the member's large-transaction amount (Settings › Alerts). Transfers between visible accounts are left out. With no amount set, the group asks the member to set one.
-- **Access.** The digest uses only series, transactions and accounts the viewer may already see; a series with a charge on an account the viewer cannot see is left out, and so is an inactive series (one whose charges are gone, for example after an account stopped being shared).
+- **Access.** The digest uses only series, transactions and accounts the viewer may already see; a series with a charge on an account the viewer cannot see is left out, and so is an inactive series (one whose charges are gone, for example after an account stopped being shared). Archived charges (for example from an undone import) do not count toward a new series or a price change, even before the Recurring page refreshes the series.
 - **Storage.** The digest is computed on each request from existing data; there is no digest table. Home's query count does not grow with the number of series. Sending the digest anywhere is out of scope.
 
 ## Monthly review (2026-10-03, #95)
