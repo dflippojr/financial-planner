@@ -77,6 +77,12 @@
   {% include "finance/_form_fields.html" with form=category_form %}
   <button type="submit" class="btn btn-primary">Save category</button>
 </form>
+{% if rule_offer %}
+<div role="status" class="alert mb-8 max-w-lg flex flex-wrap">
+  <span class="min-w-0 break-words">{{ rule_offer.count }} other transaction{{ rule_offer.count|pluralize }} contain “{{ rule_offer.description_contains }}” and aren't in {{ rule_offer.category_name }}.</span>
+  <a class="btn btn-sm min-h-11 h-auto max-w-full whitespace-normal break-words" href="{{ rule_offer.url }}">Preview a rule for “{{ rule_offer.description_contains }}”</a>
+</div>
+{% endif %}
 <p class="mb-8 max-w-lg text-sm"><a class="btn btn-link min-h-11" href="{% url 'category-list' %}">Manage categories</a></p>
 {% endif %}
 {% if not refund_link and not transaction.is_excluded_transfer %}

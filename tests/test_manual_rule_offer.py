@@ -1,0 +1,165 @@
+from unittest.mock import patch
+
+import pytest
+from django.db import connection
+from django.test import Client
+from django.test.utils import CaptureQueriesContext
+from django.urls import reverse
+
+from finance.category_services import assign_category, split_transaction
+from finance.models import Account, Category, CategoryRule, CategorySuggestion, Membership, Transaction
+from finance.rule_services import manual_rule_offer, preview_unsaved_rule, unsaved_rule
+from tests.test_category_rules import dining, groceries, make_account, make_household, make_person, make_transaction
+
+
+COFFEE = "SYNTHETIC COFFEE"
+
+
+def _setup(others=2):
+    owner = make_person("offer-owner")
+    household = make_household(owner)
+    account = make_account(owner)
+    edited = make_transaction(owner, account, amount_minor=-450, description=COFFEE)
+    rest = [
+        make_transaction(owner, account, amount_minor=-500 - index, description=f"{COFFEE} #{index}")
+        for index in range(others)
+    ]
+    client = Client()
+    client.force_login(owner.user)
+    return owner, household, account, edited, rest, client
+
+
+def _categorize(client, txn, category):
+    return client.post(
+        reverse("transaction-categorize", args=(txn.pk,)), {"category": str(category.pk)}, follow=True
+    )
+
+
+@pytest.mark.django_db
+def test_manual_category_offers_a_prefilled_rule():
+    owner, household, account, edited, rest, client = _setup()
+    response = _categorize(client, edited, dining(household))
+    assert response.status_code == 200
+    offer = response.context["rule_offer"]
+    assert offer["count"] == 2
+    html = response.content.decode()
+    assert "2 other transactions contain “SYNTHETIC COFFEE” and aren't in Dining." in html
+    assert "Preview a rule for “SYNTHETIC COFFEE”" in html
+    form = client.get(offer["url"]).context["form"]
+    assert form.initial["description_contains"] == COFFEE
+    assert str(form.initial["category"]) == str(dining(household).pk)
+
+
+@pytest.mark.django_db
+def test_count_matches_unsaved_rule_preview_and_skips_manual_rows():
+    owner, household, account, edited, rest, client = _setup(others=3)
+    rest[0].category = dining(household)
+    rest[0].category_source = Transaction.CategorySource.RULE
+    rest[0].save()
+    hand_set = make_transaction(owner, account, amount_minor=-777, description=COFFEE.lower())
+    assign_category(owner, hand_set.pk, groceries(household).pk)
+    assign_category(owner, edited.pk, dining(household).pk)
+    edited.refresh_from_db()
+    edited._excluded = False
+    offer = manual_rule_offer(owner, edited)
+    rule = unsaved_rule(
+        owner, owner_kind="personal", description_contains=offer["description_contains"],
+        category_id=dining(household).pk,
+    )
+    changed = [txn for txn in preview_unsaved_rule(owner, rule) if txn.category_id != rule.category_id]
+    assert {txn.pk for txn in changed} == {rest[1].pk, rest[2].pk}
+    assert offer["count"] == len(changed) == 2
+
+
+@pytest.mark.django_db
+def test_no_offer_with_fewer_than_two_changeable_others():
+    owner, household, account, edited, rest, client = _setup(others=1)
+    assert _categorize(client, edited, dining(household)).context["rule_offer"] is None
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("code", [Category.Code.TRANSFER, Category.Code.UNCATEGORIZED])
+def test_no_offer_for_transfer_or_uncategorized(code):
+    owner, household, account, edited, rest, client = _setup()
+    category = Category.objects.get(household=household, code=code)
+    Transaction.objects.filter(pk=edited.pk).update(
+        category=category, category_source=Transaction.CategorySource.MANUAL
+    )
+    response = client.get(reverse("transaction-edit", args=(edited.pk,)))
+    assert response.context["rule_offer"] is None
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("source", [
+    Transaction.CategorySource.RULE,
+    Transaction.CategorySource.INHERITED,
+    Transaction.CategorySource.UNSET,
+])
+def test_no_offer_unless_the_category_was_set_by_hand(source):
+    owner, household, account, edited, rest, client = _setup()
+    Transaction.objects.filter(pk=edited.pk).update(category=dining(household), category_source=source)
+    response = client.get(reverse("transaction-edit", args=(edited.pk,)))
+    assert response.context["rule_offer"] is None
+
+
+@pytest.mark.django_db
+def test_no_offer_for_a_split_transaction():
+    owner, household, account, edited, rest, client = _setup()
+    assign_category(owner, edited.pk, dining(household).pk)
+    split_transaction(owner, edited.pk, [
+        {"category_id": dining(household).pk, "amount_minor": -200},
+        {"category_id": groceries(household).pk, "amount_minor": -250},
+    ])
+    assert client.get(reverse("transaction-edit", args=(edited.pk,))).context["rule_offer"] is None
+
+
+@pytest.mark.django_db
+def test_no_offer_for_an_accepted_ai_suggestion():
+    owner, household, account, edited, rest, client = _setup()
+    CategorySuggestion.objects.create(
+        member=owner, transaction=edited, category=dining(household), provider="synthetic", backend="synthetic",
+        status=CategorySuggestion.Status.ACCEPTED, snapshot_hash="c" * 64,
+    )
+    assert _categorize(client, edited, dining(household)).context["rule_offer"] is None
+
+
+@pytest.mark.django_db
+def test_no_offer_when_an_identical_visible_rule_exists():
+    owner, household, account, edited, rest, client = _setup()
+    CategoryRule.objects.create(
+        owner_person=owner, description_contains="synthetic coffee", category=dining(household), enabled=False
+    )
+    assert _categorize(client, edited, dining(household)).context["rule_offer"] is None
+    assert _categorize(client, edited, groceries(household)).context["rule_offer"]["count"] == 2
+
+
+@pytest.mark.django_db
+def test_another_members_private_rows_never_count():
+    owner, household, account, edited, rest, client = _setup(others=1)
+    other = make_person("offer-other")
+    Membership.objects.create(person=other, household=household)
+    private = make_account(other, name="Synthetic Private Card")
+    for index in range(3):
+        make_transaction(other, private, amount_minor=-900 - index, description=f"{COFFEE} PRIVATE {index}")
+    shared = make_account(other, name="Synthetic Shared", scope=Account.Scope.HOUSEHOLD, household=household)
+    response = _categorize(client, edited, dining(household))
+    assert response.context["rule_offer"] is None
+    make_transaction(other, shared, amount_minor=-901, description=f"{COFFEE} SHARED")
+    response = _categorize(client, edited, groceries(household))
+    assert response.context["rule_offer"]["count"] == 2
+    html = response.content.decode()
+    assert "PRIVATE" not in html
+    assert "Synthetic Private Card" not in html
+
+
+@pytest.mark.django_db
+def test_offer_adds_at_most_two_queries():
+    owner, household, account, edited, rest, client = _setup()
+    assign_category(owner, edited.pk, dining(household).pk)
+    url = reverse("transaction-edit", args=(edited.pk,))
+    client.get(url)
+    with CaptureQueriesContext(connection) as with_offer:
+        assert client.get(url).context["rule_offer"]["count"] == 2
+    with patch("finance.views.manual_rule_offer", return_value=None), CaptureQueriesContext(connection) as without:
+        client.get(url)
+    assert len(with_offer) - len(without) <= 2

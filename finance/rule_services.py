@@ -1,8 +1,11 @@
 from dataclasses import dataclass
+import re
+from urllib.parse import urlencode
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.db.models import Case, Exists, OuterRef, Prefetch, Q, Value, When
+from django.urls import reverse
 from django.utils import timezone
 
 from .category_services import (
@@ -23,6 +26,7 @@ from .models import (
     AuditEvent,
     Category,
     CategoryRule,
+    CategorySuggestion,
     Household,
     Membership,
     RefundLink,
@@ -298,6 +302,73 @@ def _candidate_queryset(person):
         .filter(_excluded=False)
         .select_related("account", "category", "account__owner", "account__household")
     )
+
+
+MIN_OFFER_CONTAINS = 3
+MIN_OFFER_OTHERS = 2
+
+
+def manual_rule_offer(principal, txn):
+    """A rule-form prefill for a hand-set category that other rows' descriptions share.
+
+    Counts only rows a personal rule with this text and category could change, so
+    another member's private rows never contribute. At most two queries.
+    """
+    if (
+        txn.status != Transaction.Status.ACTIVE
+        or txn.category_source != Transaction.CategorySource.MANUAL
+        or txn.category_id is None
+        or txn.is_excluded_transfer
+    ):
+        return None
+    contains = re.sub(r"\s+", " ", txn.description or "").strip()[:200].strip()
+    if len(contains) < MIN_OFFER_CONTAINS:
+        return None
+    person = _person_for(principal)
+    category = (
+        Category.objects.visible_to(person)
+        .filter(pk=txn.category_id)
+        .exclude(code__in=(Category.Code.TRANSFER, Category.Code.UNCATEGORIZED))
+        .annotate(
+            _has_rule=Exists(
+                CategoryRule.objects.visible_to(person).filter(
+                    category_id=OuterRef("pk"), description_contains__iexact=contains
+                )
+            ),
+            # Accepting an AI suggestion saves the category as manual; that path
+            # has its own rule proposal.
+            _from_suggestion=Exists(
+                CategorySuggestion.objects.filter(
+                    transaction_id=txn.pk, category_id=OuterRef("pk"), status=CategorySuggestion.Status.ACCEPTED
+                )
+            ),
+        )
+        .first()
+    )
+    if category is None or category._has_rule or category._from_suggestion:
+        return None
+    count = (
+        _candidate_queryset(person)
+        .select_related(None)
+        .filter(description__icontains=contains)
+        .filter(
+            Q(account__scope=Account.Scope.PRIVATE)
+            | Q(account__scope=Account.Scope.HOUSEHOLD, account__household_id=category.household_id)
+        )
+        .exclude(pk=txn.pk)
+        .exclude(category_id=category.pk)
+        .count()
+    )
+    if count < MIN_OFFER_OTHERS:
+        return None
+    return {
+        "description_contains": contains,
+        "category_name": category.name,
+        "count": count,
+        "url": reverse("category-rule-list")
+        + "?"
+        + urlencode({"description_contains": contains, "category": category.pk}),
+    }
 
 
 def _matching_queryset(person, rule):
