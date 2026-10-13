@@ -14,8 +14,8 @@ from finance.alert_ntfy import (
     FakeTransport, HttpTransport, fake_transport, get_transport, ntfy_notices_available, send_run_ntfy,
     send_test_ntfy, valid_topic,
 )
-from finance.alert_services import raise_alert, settings_for
-from finance.models import Alert, AuditEvent
+from finance.alert_services import raise_alert, save_alert_settings, settings_for
+from finance.models import Alert, AlertSettings, AuditEvent
 from finance.reauth import RECENT_AUTH_SESSION_KEY
 from finance.weekly_digest import DigestItem, WeeklyDigest
 from tests.test_alerts import make_account, make_household, make_person
@@ -360,3 +360,19 @@ def test_test_push_reports_success_and_failure(ntfy, outbox):
     prefs.save()
     assert b"Test push could not be sent." in client.post(url, {"action": "test-ntfy"}).content
     assert len(outbox) == 1
+
+
+def test_alert_settings_save_keeps_concurrent_digest_marker(ntfy):
+    person = make_person("synthetic")
+    stale = opt_in(person)
+    AlertSettings.objects.filter(pk=stale.pk).update(ntfy_digest_week=date(2026, 10, 5), ntfy_topic="newer-topic")
+    with patch("finance.alert_services.settings_for", return_value=stale):
+        save_alert_settings(
+            person, sync_enabled=True, recurring_price_enabled=True, recurring_missed_enabled=True,
+            budget_enabled=False, large_transaction_enabled=True, monthly_review_enabled=True,
+            monthly_review_ai_enabled=True, large_transaction_minor=None,
+        )
+    current = AlertSettings.objects.get(pk=stale.pk)
+    assert current.ntfy_digest_week == date(2026, 10, 5)
+    assert current.ntfy_topic == "newer-topic"
+    assert not current.budget_enabled

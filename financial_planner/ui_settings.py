@@ -17,7 +17,7 @@ STORAGES = {
 EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
 EMAIL_HOST = ""
 # Offer the ntfy channel, but keep every message in memory.
-NTFY_URL = "http://ntfy.invalid"
+NTFY_URL = "https://ntfy.invalid"
 NTFY_TOKEN = ""
 NTFY_TRANSPORT = "fake"
 LOGGING = deepcopy(LOGGING)
