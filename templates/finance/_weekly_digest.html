@@ -6,9 +6,9 @@ the rest in place. The switch keeps the other Home filters.
 <article id="weekly-digest" class="card bg-base-100 shadow" aria-labelledby="weekly-digest-heading">
   <div class="card-body max-md:p-4">
     <div class="flex flex-wrap items-center justify-between gap-3">
-      <div>
+      <div class="min-w-0">
         <h2 id="weekly-digest-heading" class="card-title">{{ digest.label }}</h2>
-        <p class="stat-desc">{{ digest.digest.start|date:"M j" }} – {{ digest.digest.end|date:"M j, Y" }} · {{ digest.digest.total }} item{{ digest.digest.total|pluralize }}</p>
+        <p class="text-sm opacity-80">{{ digest.digest.start|date:"M j" }} – {{ digest.digest.end|date:"M j, Y" }} · {{ digest.digest.total }} item{{ digest.digest.total|pluralize }}</p>
       </div>
       <nav aria-label="Digest week" class="flex flex-wrap gap-2 rounded-box border border-base-300 bg-base-100 p-1">
         {% for option in digest.options %}
