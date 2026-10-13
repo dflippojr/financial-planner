@@ -10,7 +10,7 @@ from django.utils import timezone
 
 from finance.alert_services import alerts_for, run_daily_alert_pass, save_alert_settings, settings_for
 from finance.import_due import due_import_accounts, evaluate_import_due_alerts
-from finance.models import Account, AccountLink, Alert, ImportBatch
+from finance.models import Account, AccountLink, Alert, ImportBatch, Transaction
 from tests.test_alerts import make_account, make_household, make_person, signed_in
 from tests.test_csv_import_page import link_account
 
@@ -29,6 +29,20 @@ def add_batch(account, *, ends, source=ImportBatch.Source.APPLE_CARD, status=Imp
         date_range_end=ends,
         status=status,
         archived_at=timezone.now() if status == ImportBatch.Status.ARCHIVED else None,
+    )
+
+
+def add_transaction(batch):
+    return Transaction.objects.create(
+        account=batch.account,
+        import_batch=batch,
+        transaction_date=batch.date_range_end,
+        amount_minor=-1234,
+        description="SYNTHETIC MERCHANT",
+        kind=Transaction.Kind.CASH_FLOW,
+        source_row_number=2,
+        fingerprint=f"{batch.pk:x}".ljust(64, "f"),
+        original_fields={"Synthetic Amount": "-12.34"},
     )
 
 
@@ -96,13 +110,28 @@ def test_balances_only_link_still_counts_as_due():
     assert (due.name, due.last_covered) == ("Synthetic Balances Only", csv_end)
 
 
-def test_simplefin_batches_count_once_the_account_has_no_link():
+def test_balance_sync_batches_stay_out_of_coverage_after_unlinking():
+    owner = make_person("owner")
+    account = make_account(owner, name="Synthetic Formerly Balances Only")
+    csv_end = TODAY - timedelta(days=100)
+    add_batch(account, ends=csv_end)
+    link = link_account(owner, account)
+    link.mode = AccountLink.Mode.BALANCES_ONLY
+    link.save()
+    add_batch(account, ends=TODAY, source=ImportBatch.Source.SIMPLEFIN)
+    link.delete()
+
+    [due] = due_import_accounts(Account.objects.visible_to(owner), today=TODAY)
+    assert due.last_covered == csv_end
+
+
+def test_simplefin_batches_with_transactions_count_as_coverage():
     owner = make_person("owner")
     account = make_account(owner, name="Synthetic Formerly Linked")
-    add_batch(account, ends=TODAY - timedelta(days=40), source=ImportBatch.Source.SIMPLEFIN)
+    add_transaction(add_batch(account, ends=TODAY - timedelta(days=40), source=ImportBatch.Source.SIMPLEFIN))
 
     assert due_names(owner) == ["Synthetic Formerly Linked"]
-    add_batch(account, ends=TODAY - timedelta(days=1), source=ImportBatch.Source.SIMPLEFIN)
+    add_transaction(add_batch(account, ends=TODAY - timedelta(days=1), source=ImportBatch.Source.SIMPLEFIN))
     assert due_names(owner) == []
 
 

@@ -4,7 +4,9 @@ An account is due when it is active, takes CSV imports, has no SimpleFIN link
 in transactions mode, and its newest active non-manual batch covers through a
 date more than IMPORT_DUE_DAYS before today. Accounts never imported are not due.
 A balances-only link still syncs SimpleFIN batches through today without any
-transactions, so a linked account's SimpleFIN batches do not count as coverage.
+transactions, and a batch does not record its link's mode, so a SimpleFIN batch
+counts as coverage only when it holds a transaction. That holds after the link is
+removed too.
 """
 
 from datetime import timedelta
@@ -14,7 +16,7 @@ from django.db.models import Exists, OuterRef, Subquery
 from django.urls import reverse
 from django.utils import dateformat, timezone
 
-from .models import Account, AccountLink, Alert, ImportBatch
+from .models import Account, AccountLink, Alert, ImportBatch, Transaction
 
 
 def import_due_cutoff(today):
@@ -29,8 +31,8 @@ def due_import_accounts(accounts, *, today=None):
     newest_coverage = (
         ImportBatch.objects.filter(account_id=OuterRef("pk"), status=ImportBatch.Status.ACTIVE)
         .exclude(source=ImportBatch.Source.MANUAL)
-        .alias(_linked=Exists(AccountLink.objects.filter(account_id=OuterRef("account_id"))))
-        .exclude(source=ImportBatch.Source.SIMPLEFIN, _linked=True)
+        .alias(_has_transactions=Exists(Transaction.objects.filter(import_batch_id=OuterRef("pk"))))
+        .exclude(source=ImportBatch.Source.SIMPLEFIN, _has_transactions=False)
         .order_by("-date_range_end")
         .values("date_range_end")[:1]
     )
