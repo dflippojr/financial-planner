@@ -226,6 +226,21 @@ def test_new_import_clears_and_a_later_lapse_raises_again():
     ])
 
 
+def test_no_new_alert_once_the_first_could_have_been_purged():
+    owner = make_person("owner")
+    account = make_account(owner, name="Synthetic Long Stale Card")
+    ends = TODAY - timedelta(days=36)
+    add_batch(account, ends=ends)
+    first_due = ends + timedelta(days=36)
+    last_kept = first_due + timedelta(days=179)
+
+    assert len(evaluate_import_due_alerts(today=last_kept)) == 1
+    Alert.objects.all().delete()  # As the 180-day retention purge would.
+
+    assert evaluate_import_due_alerts(today=last_kept + timedelta(days=1)) == []
+    assert due_names(owner, today=last_kept + timedelta(days=1)) == ["Synthetic Long Stale Card"]
+
+
 def test_members_with_the_toggle_off_get_none():
     owner = make_person("owner")
     member = make_person("member")

@@ -56,12 +56,20 @@ def import_due_link(account):
 
 
 def evaluate_import_due_alerts(*, today=None):
-    """Raise one alert per due account and coverage end, to that account's audience."""
-    from .alert_services import audience_for_account, raise_alert
+    """Raise one alert per due account and coverage end, to that account's audience.
 
+    Dedupe rests on the alert row, which retention purges, so a coverage end is
+    alerted only while its first possible alert would still be kept. Home's
+    Needs attention row stays for as long as the account is due.
+    """
+    from .alert_services import READ_RETENTION_DAYS, UNREAD_RETENTION_DAYS, audience_for_account, raise_alert
+
+    today = today or timezone.localdate()
+    oldest_alerted = import_due_cutoff(today) - timedelta(days=min(READ_RETENTION_DAYS, UNREAD_RETENTION_DAYS))
     created = []
     audiences = {}
-    for account in due_import_accounts(Account.objects.select_related("owner", "household"), today=today):
+    due = due_import_accounts(Account.objects.select_related("owner", "household"), today=today)
+    for account in due.filter(last_covered__gte=oldest_alerted):
         key = (account.scope, account.household_id if account.scope == Account.Scope.HOUSEHOLD else account.owner_id)
         if key not in audiences:
             audiences[key] = audience_for_account(account)
