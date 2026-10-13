@@ -3,12 +3,14 @@
 An account is due when it is active, takes CSV imports, has no SimpleFIN link
 in transactions mode, and its newest active non-manual batch covers through a
 date more than IMPORT_DUE_DAYS before today. Accounts never imported are not due.
+A balances-only link still syncs SimpleFIN batches through today without any
+transactions, so a linked account's SimpleFIN batches do not count as coverage.
 """
 
 from datetime import timedelta
 
 from django.conf import settings
-from django.db.models import Exists, Max, OuterRef, Q
+from django.db.models import Exists, OuterRef, Subquery
 from django.urls import reverse
 from django.utils import dateformat, timezone
 
@@ -24,18 +26,20 @@ def due_import_accounts(accounts, *, today=None):
     """Filter an account queryset to due accounts, annotated with ``last_covered``, in one query."""
     today = today or timezone.localdate()
     transaction_links = AccountLink.objects.filter(account_id=OuterRef("pk"), mode=AccountLink.Mode.TRANSACTIONS)
+    newest_coverage = (
+        ImportBatch.objects.filter(account_id=OuterRef("pk"), status=ImportBatch.Status.ACTIVE)
+        .exclude(source=ImportBatch.Source.MANUAL)
+        .alias(_linked=Exists(AccountLink.objects.filter(account_id=OuterRef("account_id"))))
+        .exclude(source=ImportBatch.Source.SIMPLEFIN, _linked=True)
+        .order_by("-date_range_end")
+        .values("date_range_end")[:1]
+    )
     return (
         accounts.filter(status=Account.Status.ACTIVE, archived_at__isnull=True)
         .exclude(account_type__in=Account.NON_CASH_FLOW_TYPES)
         .alias(_transactions_linked=Exists(transaction_links))
         .filter(_transactions_linked=False)
-        .annotate(
-            last_covered=Max(
-                "import_batches__date_range_end",
-                filter=Q(import_batches__status=ImportBatch.Status.ACTIVE)
-                & ~Q(import_batches__source=ImportBatch.Source.MANUAL),
-            )
-        )
+        .annotate(last_covered=Subquery(newest_coverage))
         .filter(last_covered__lt=import_due_cutoff(today))
         .order_by("name", "pk")
     )

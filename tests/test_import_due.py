@@ -84,12 +84,26 @@ def test_linked_archived_asset_and_never_imported_accounts_are_never_due():
 def test_balances_only_link_still_counts_as_due():
     owner = make_person("owner")
     account = make_account(owner, name="Synthetic Balances Only")
-    add_batch(account, ends=TODAY - timedelta(days=40))
+    csv_end = TODAY - timedelta(days=40)
+    add_batch(account, ends=csv_end)
     link = link_account(owner, account)
     link.mode = AccountLink.Mode.BALANCES_ONLY
     link.save()
+    # Balances-only syncs still record a SimpleFIN batch through the sync date.
+    add_batch(account, ends=TODAY, source=ImportBatch.Source.SIMPLEFIN)
 
-    assert due_names(owner) == ["Synthetic Balances Only"]
+    [due] = due_import_accounts(Account.objects.visible_to(owner), today=TODAY)
+    assert (due.name, due.last_covered) == ("Synthetic Balances Only", csv_end)
+
+
+def test_simplefin_batches_count_once_the_account_has_no_link():
+    owner = make_person("owner")
+    account = make_account(owner, name="Synthetic Formerly Linked")
+    add_batch(account, ends=TODAY - timedelta(days=40), source=ImportBatch.Source.SIMPLEFIN)
+
+    assert due_names(owner) == ["Synthetic Formerly Linked"]
+    add_batch(account, ends=TODAY - timedelta(days=1), source=ImportBatch.Source.SIMPLEFIN)
+    assert due_names(owner) == []
 
 
 def test_needs_attention_lists_only_visible_due_accounts():
