@@ -875,26 +875,27 @@ def revalidate_series_after_member_removal(principal, series_ids):
     RecurringSeries.objects.filter(pk__in=open_ids).exclude(pk__in=still_membered).update(is_active=False)
 
 
-def refresh_recurring_series(principal, *, only_if_changed=False):
+def refresh_recurring_series(principal, *, only_if_changed=False, today=None):
     """Detect recurring series and bring the stored ones in line.
 
     Detection runs before the household lock is taken; only the writes hold it.
     With only_if_changed, a call is cheap when none of the charges detection
-    reads changed since the last run (the page view uses this).
+    reads changed since the last run (the page view and daily pass use this).
+    today sets the date review alerts are judged on (default: local today).
     """
     person = _person_for(principal)
     signature = _inputs_signature(person)
     if only_if_changed and signature == Person.objects.values_list("recurring_inputs_signature", flat=True).get(
         pk=person.pk
     ):
-        return _raise_review_alerts(person)
+        return _raise_review_alerts(person, today=today)
     candidates = candidate_transactions(person)
     detected, skipped = detect_recurring_series_with_skips(candidates)
-    return _write_detected(person, candidates, detected, skipped, signature)
+    return _write_detected(person, candidates, detected, skipped, signature, today=today)
 
 
 @transaction.atomic
-def _write_detected(person, candidates, detected, skipped, signature):
+def _write_detected(person, candidates, detected, skipped, signature, *, today=None):
     lock_actor_household(person)
     existing = list(RecurringSeries.objects.select_for_update(of=("self",)).filter(person=person).order_by("pk"))
     dismissed_fingerprints = {
@@ -933,15 +934,15 @@ def _write_detected(person, candidates, detected, skipped, signature):
     Person.objects.filter(pk=person.pk).update(
         recurring_inputs_signature=signature, recurring_skipped_merchants=skipped
     )
-    return _raise_review_alerts(person)
+    return _raise_review_alerts(person, today=today)
 
 
 @transaction.atomic
-def _raise_review_alerts(person):
+def _raise_review_alerts(person, *, today=None):
     visible = RecurringSeries.objects.visible_to(person).prefetch_related("members__transaction__account")
     from .recurring_review import raise_recurring_review_alerts
 
-    raise_recurring_review_alerts(person, list(visible), today=timezone.localdate())
+    raise_recurring_review_alerts(person, list(visible), today=today or timezone.localdate())
     return visible
 
 

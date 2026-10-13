@@ -1,3 +1,4 @@
+import logging
 from calendar import month_name
 from datetime import timedelta
 
@@ -27,6 +28,8 @@ from .models import (
     Transaction,
 )
 from .months import month_start
+
+logger = logging.getLogger(__name__)
 
 _KIND_ENABLED_FIELD = {
     Alert.Kind.SYNC: "sync_enabled",
@@ -430,10 +433,33 @@ def purge_old_read_alerts(*, now=None):
     return deleted
 
 
+def refresh_all_recurring_series(*, today=None):
+    """Bring every active member's series in line and raise their review alerts.
+
+    Each member runs in its own transaction, so one failure (a lock timeout,
+    say) rolls back only that member and the pass moves on. Logs name the
+    member and error type only: a message could quote financial values.
+    """
+    from .recurring_services import refresh_recurring_series
+
+    for person in Person.objects.filter(user__is_active=True).order_by("pk"):
+        try:
+            with transaction.atomic():
+                refresh_recurring_series(person, only_if_changed=True, today=today)
+        except Exception as exc:  # The pass must reach every member and its later steps.
+            logger.error(
+                "Daily recurring refresh for member %s failed (%s).",
+                person.pk,
+                type(exc).__name__,
+            )
+
+
 @notify_after_alert_run
 @journal_run("daily_alerts")
 def run_daily_alert_pass(*, today=None, now=None):
     created = evaluate_sync_alerts()
+    # Before the monthly review and expected-balance steps, which read series.
+    refresh_all_recurring_series(today=today)
     created.extend(evaluate_active_budget_alerts(today=today))
     created.extend(evaluate_recent_large_transactions())
     from .backup_health import evaluate_backup_alerts
