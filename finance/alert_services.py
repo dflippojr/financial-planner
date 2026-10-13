@@ -4,7 +4,7 @@ from datetime import timedelta
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.db.models import CharField, Exists, F, OuterRef, Q, Value, prefetch_related_objects
+from django.db.models import CharField, Exists, F, Max, Min, OuterRef, Q, Value, prefetch_related_objects
 from django.db.models.functions import Cast, Concat
 from django.urls import reverse
 from django.utils import timezone
@@ -293,7 +293,54 @@ def evaluate_active_budget_alerts(*, today=None):
 
 def raise_large_transaction_alerts(transactions):
     transactions = [txn for txn in transactions if txn.status == Transaction.Status.ACTIVE]
+    if not transactions:
+        return []
+    rows = [(txn.pk, txn.account_id, txn.amount_minor, txn.currency) for txn in transactions]
     accounts = {txn.account_id: txn.account for txn in transactions}
+    return _raise_large_alerts(rows, accounts, lambda: (transactions[0].pk, transactions[-1].pk))
+
+
+def _smallest_large_threshold():
+    """The lowest enabled positive threshold any member has, or None.
+
+    Members without a settings row have no threshold, so they cannot receive
+    a large-transaction alert and need not be considered.
+    """
+    return AlertSettings.objects.filter(
+        large_transaction_enabled=True, large_transaction_minor__gt=0,
+    ).aggregate(smallest=Min("large_transaction_minor"))["smallest"]
+
+
+def _raise_large_alerts_for(rows):
+    """Raise large-transaction alerts for active rows of a queryset.
+
+    Only rows that could cross some member's threshold are read, as plain
+    values; rows below every threshold never become model instances.
+    """
+    smallest = _smallest_large_threshold()
+    if smallest is None:
+        return []
+    rows = rows.filter(status=Transaction.Status.ACTIVE).order_by("pk")
+    candidates = list(rows.filter(
+        Q(amount_minor__gte=smallest) | Q(amount_minor__lte=-smallest),
+    ).values_list("pk", "account_id", "amount_minor", "currency"))
+    if not candidates:
+        return []
+    accounts = Account.objects.filter(
+        pk__in={account_id for _pk, account_id, _amount, _currency in candidates},
+    ).select_related("owner", "household").in_bulk()
+
+    def bounds():
+        # The summary key names the whole run, not just the candidate rows.
+        span = rows.aggregate(first=Min("pk"), last=Max("pk"))
+        return span["first"], span["last"]
+
+    return _raise_large_alerts(candidates, accounts, bounds)
+
+
+def _raise_large_alerts(rows, accounts, bounds):
+    """rows are (pk, account_id, amount_minor, currency) tuples in run order;
+    bounds() returns the first and last pk of the whole run for summary keys."""
     people = {}
     audience = {}
     for account in accounts.values():
@@ -307,40 +354,39 @@ def raise_large_transaction_alerts(transactions):
     pending = {}
     counts = {}
     omitted = {}
-    for txn in transactions:
-        amount = abs(txn.amount_minor)
-        link = reverse("transaction-edit", args=[txn.pk])
-        title = f"Large transaction of {format_minor(amount, txn.currency)}"
-        for person in audience[txn.account_id]:
+    for pk, account_id, amount_minor, currency in rows:
+        amount = abs(amount_minor)
+        for person in audience[account_id]:
             prefs = preferences[person.pk]
             threshold = prefs.large_transaction_minor
             if not prefs.large_transaction_enabled or threshold is None or threshold <= 0 or amount < threshold:
                 continue
-            key = (person.pk, f"large:{txn.pk}")
+            key = (person.pk, f"large:{pk}")
             if key in pending:
                 continue
             if counts.get(person.pk, 0) >= MAX_LARGE_ALERTS:
-                summary_key = (person.pk, txn.account_id)
-                omitted.setdefault(summary_key, txn)
+                omitted.setdefault((person.pk, account_id), True)
                 continue
             counts[person.pk] = counts.get(person.pk, 0) + 1
             pending[key] = Alert(
-                recipient=person, kind=Alert.Kind.LARGE_TRANSACTION, title=title,
-                link=link, dedupe_key=key[1], account=txn.account,
+                recipient=person, kind=Alert.Kind.LARGE_TRANSACTION,
+                title=f"Large transaction of {format_minor(amount, currency)}",
+                link=reverse("transaction-edit", args=[pk]), dedupe_key=key[1], account=accounts[account_id],
             )
     # One summary per recipient; it is tied to an account so revoked access
     # cannot leave an accountless large-transaction alert visible.
     summarized = set()
-    for (person_id, account_id), txn in omitted.items():
+    span = bounds() if omitted else None
+    for person_id, account_id in omitted:
         if person_id in summarized:
             continue
         summarized.add(person_id)
-        key = (person_id, f"large-summary:{account_id}:{transactions[0].pk}:{transactions[-1].pk}")
+        key = (person_id, f"large-summary:{account_id}:{span[0]}:{span[1]}")
         pending[key] = Alert(
             recipient=people[person_id], kind=Alert.Kind.LARGE_TRANSACTION,
             title="More large transactions are available in your transaction list",
             link=f"{reverse('transaction-list')}?account={account_id}",
-            dedupe_key=key[1], account=txn.account,
+            dedupe_key=key[1], account=accounts[account_id],
         )
     if not pending:
         return []
@@ -359,11 +405,7 @@ def raise_large_transaction_alerts(transactions):
 
 def evaluate_recent_large_transactions(*, since=None):
     since = since or (timezone.now() - timedelta(days=1))
-    rows = Transaction.objects.filter(
-        status=Transaction.Status.ACTIVE,
-        created_at__gte=since,
-    ).select_related("account")
-    return raise_large_transaction_alerts(rows)
+    return _raise_large_alerts_for(Transaction.objects.filter(created_at__gte=since))
 
 
 def sync_needs_attention(connection):
@@ -401,8 +443,9 @@ def evaluate_sync_alerts():
     return created
 
 
-def after_new_transactions(transactions):
-    created = raise_large_transaction_alerts(transactions)
+def after_new_transactions(rows):
+    """Run alerts for a queryset of newly created transactions."""
+    created = _raise_large_alerts_for(rows)
     created.extend(evaluate_active_budget_alerts())
     return created
 
@@ -419,8 +462,7 @@ def schedule_after_new_transactions(transactions):
     pks = [txn.pk for txn in transactions]
 
     def _run():
-        rows = list(Transaction.objects.filter(pk__in=pks).select_related("account", "account__owner", "account__household"))
-        after_new_transactions(rows)
+        after_new_transactions(Transaction.objects.filter(pk__in=pks))
 
     transaction.on_commit(_run)
 
