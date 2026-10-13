@@ -46,3 +46,6 @@ output/ui-pass/
 .playwright-cli/
 playwright-report/
 test-results/
+
+# Verify skill evidence (.claude/skills/verify)
+.verify/

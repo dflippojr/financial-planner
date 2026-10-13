@@ -77,6 +77,18 @@ export async function audit(page: Page, action: string, target: string, id: stri
   await expect(row).toContainText('UI');
 }
 
+// Generic-profile upload and mapping of the synthetic CSV, stopping at Preview results.
+export async function previewSyntheticCsv(page: Page) {
+  await page.getByLabel('Import profile').selectOption('generic');
+  await page.getByLabel('CSV, OFX or QFX file').setInputFiles('tests/fixtures/ui-pass/synthetic.csv');
+  await submit(page, page.getByRole('button', { name: 'Upload and map' }));
+  for (const [name, value] of [['date_column', 'Date'], ['description_column', 'Description'], ['amount_column', 'Amount'], ['currency_column', 'Currency']]) await page.locator('[name=' + name + ']').selectOption(value);
+  await page.locator('[name=date_format]').selectOption('iso');
+  await page.locator('[name=number_format]').selectOption('dot_none');
+  await page.getByLabel('One signed amount column').check();
+  await submit(page, page.getByRole('button', { name: 'Preview rows' }));
+}
+
 export async function submit(page: Page, button: import('@playwright/test').Locator) {
   // WebKit clicks can return before a form navigation commits. Wait before reloading.
   await Promise.all([page.waitForEvent('framenavigated', { predicate: frame => frame === page.mainFrame() }), button.click()]);

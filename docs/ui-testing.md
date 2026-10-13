@@ -47,7 +47,7 @@ Headings below are readiness signals unless specified. Reload after every write,
 | RECOVERY | /recover/, Recover account | Guest in-memory code, new strong synthetic password: updated status, prior guest session revoked, new password works, old password/reused code fail. No artifacts; clear code variables. Screenshot empty form or safe success only. Recovery actor/target audit. Seed Alex has no plaintext recovery code: no hash inspection/bypass. |
 | CSV | Synthetic Checking Import CSV from /accounts/, Preview import | Generic profile upload synthetic.csv. Map Date/Description/Amount/Currency, YYYY-MM-DD, dot decimal, One signed amount column, no inversion. 2 new/0 duplicate/1 invalid, -12.34/+56.78 USD. Preview/reload does not change Activity. Cancel and delete upload returns Home; revisit import to verify upload form and removed stage. No commit/import audit in preview-only journey. |
 
-CRUD applies only to entities named above. Current UI labels/source fields are authoritative. Record failed and untested branches individually; page visits alone do not complete flows.
+The verify skill (.claude/skills/verify/SKILL.md) uses this CSV upload and mapping on its own fresh instance, then also selects Import new rows: Activity gains the two valid rows at -12.34/+56.78 USD in Synthetic Checking. CRUD applies only to entities named above. Current UI labels/source fields are authoritative. Record failed and untested branches individually; page visits alone do not complete flows.
 
 ## Theme and layout
 
