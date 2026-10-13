@@ -1,6 +1,7 @@
 {% comment %}
 Weekly digest card (issue #419): new recurring series, price changes and large transactions in
-one Monday-Sunday week, up to five rows per group. The switch keeps the other Home filters.
+one Monday-Sunday week, up to five rows per group. Groups without a matching list page expand
+the rest in place. The switch keeps the other Home filters.
 {% endcomment %}
 <article id="weekly-digest" class="card bg-base-100 shadow" aria-labelledby="weekly-digest-heading">
   <div class="card-body max-md:p-4">
@@ -28,19 +29,13 @@ one Monday-Sunday week, up to five rows per group. The switch keeps the other Ho
           {% endif %}
         </div>
         {% if group.items %}
-        <ul class="flex flex-col">
-          {% for item in group.items|slice:":5" %}
-          <li class="border-t border-base-300 first:border-t-0">
-            <a class="flex min-h-11 items-center justify-between gap-3 py-1 hover:underline" href="{{ item.url }}">
-              <span class="min-w-0">
-                <span class="block truncate">{{ item.title }}</span>
-                <span class="block text-sm opacity-80">{{ item.on|date:"D M j" }} · {{ item.detail }}</span>
-              </span>
-              <span class="flex-none tabular-nums">{{ item.amount_display }}</span>
-            </a>
-          </li>
-          {% endfor %}
-        </ul>
+        {% include "finance/_weekly_digest_rows.html" with items=group.items|slice:":5" %}
+        {% if group.items|length > 5 and not group.see_all_url %}
+        <details>
+          <summary class="link inline-flex min-h-11 cursor-pointer items-center text-sm">See all {{ group.items|length }}<span class="sr-only"> {{ group.title|lower }}</span></summary>
+          {% include "finance/_weekly_digest_rows.html" with items=group.items|slice:"5:" %}
+        </details>
+        {% endif %}
         {% elif group.settings_url %}
         <p class="text-sm opacity-80">Set a large-transaction amount in <a class="link" href="{{ group.settings_url }}">alert settings</a> to list them here.</p>
         {% else %}

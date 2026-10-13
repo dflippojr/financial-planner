@@ -1,6 +1,5 @@
 from datetime import date, datetime, time
 from unittest.mock import patch
-from urllib.parse import parse_qs, urlparse
 
 import pytest
 from django.db import connection
@@ -9,7 +8,7 @@ from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 
-from finance.models import Account, AlertSettings, RecurringSeries
+from finance.models import Account, AlertSettings, RecurringSeries, TransferPair
 from finance.weekly_digest import build_weekly_digest, week_window
 from tests.test_recurring_review import (
     add_member,
@@ -113,14 +112,29 @@ def test_large_transactions_at_threshold_not_just_under_and_only_in_window():
     assert last.large_transactions[1].amount_display == "-100.00 USD"
     assert last.large_transactions[1].url == reverse("transaction-edit", args=[at.pk])
     assert last.large_threshold_display == "100.00 USD"
-    query = parse_qs(urlparse(last.large_transactions_url).query)
-    assert query == {
-        "date_from": ["2026-10-05"],
-        "date_to": ["2026-10-11"],
-        "amount_min": ["100.00"],
-        "amount_mode": ["absolute"],
-    }
     assert titles(build_weekly_digest(owner, today=TODAY, week="current").large_transactions) == ["Synthetic Monday"]
+
+
+@pytest.mark.django_db
+def test_large_transactions_leave_out_transfers_between_visible_accounts():
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner)
+    savings = make_account(owner, name="Synthetic Savings", account_type=Account.Type.SAVINGS)
+    AlertSettings.objects.create(person=owner, large_transaction_minor=10_000)
+    out_leg = make_transaction(owner, checking, transaction_date=date(2026, 10, 7), amount_minor=-50_000, description="Synthetic Move Out")
+    in_leg = make_transaction(owner, savings, transaction_date=date(2026, 10, 7), amount_minor=50_000, description="Synthetic Move In")
+    TransferPair.objects.create(
+        leg_a=out_leg,
+        leg_b=in_leg,
+        status=TransferPair.Status.CONFIRMED,
+        kind=TransferPair.Kind.TRANSFER,
+        confidence=TransferPair.Confidence.HIGH,
+        reasons=["synthetic"],
+    )
+    make_transaction(owner, checking, transaction_date=date(2026, 10, 8), amount_minor=-20_000, description="Synthetic Sofa")
+
+    assert titles(build_weekly_digest(owner, today=TODAY, week="last").large_transactions) == ["Synthetic Sofa"]
 
 
 @pytest.mark.django_db
@@ -134,7 +148,6 @@ def test_no_threshold_lists_no_large_transactions():
 
     assert digest.large_transactions == []
     assert digest.large_threshold_display is None
-    assert digest.large_transactions_url is None
 
 
 @pytest.mark.django_db
@@ -257,6 +270,27 @@ def test_home_shows_five_items_per_group_with_see_all(_localdate):
     assert content.count("Synthetic Stream") == 5
     assert f"{reverse('recurring-review')}#recurring-suggestions" in content
     assert "See all<span" in content
+
+
+@pytest.mark.django_db
+@patch("finance.views.timezone.localdate", return_value=TODAY)
+def test_home_expands_extra_large_transactions_in_place(_localdate):
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    AlertSettings.objects.create(person=owner, large_transaction_minor=10_000)
+    for index in range(7):
+        make_transaction(
+            owner, account, transaction_date=date(2026, 10, 13), amount_minor=-20_000 - index, description=f"Synthetic Big {index}"
+        )
+
+    content = home_client(owner).get(reverse("home")).content.decode()
+    shown, extra = content.split("See all 7", 1)
+
+    assert shown.count("Synthetic Big") == 5
+    assert extra.count("Synthetic Big") == 2
+    card = content.split('id="weekly-digest"', 1)[1].split("</article>", 1)[0]
+    assert f'href="{reverse("transaction-list")}?' not in card
 
 
 def _home_query_count(client):

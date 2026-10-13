@@ -321,7 +321,9 @@ def _home_digest(principal, query, week, *, today):
                 key="large-transactions",
                 title="Large transactions",
                 items=digest.large_transactions,
-                see_all_url=digest.large_transactions_url,
+                # The transaction list cannot repeat the digest's transfer exclusions,
+                # so the extra rows expand in place instead of linking there.
+                see_all_url=None,
                 settings_url=None if digest.large_threshold_display else reverse("settings-alerts"),
             ),
         ],

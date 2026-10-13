@@ -8,15 +8,14 @@ threshold (AlertSettings).
 
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
-from decimal import Decimal
-from urllib.parse import urlencode
 
 from django.db.models import Q
 from django.urls import reverse
 from django.utils import timezone
 
 from .cash_flow import format_minor
-from .models import AlertSettings, RecurringSeries, Transaction, TransferPair, _person_for
+from .category_services import exclusion_exists_for
+from .models import AlertSettings, RecurringSeries, Transaction, _person_for
 from .recurring_review import DEFAULT_PRICE_CHANGE_PERCENT, price_changes
 
 WEEK_CURRENT = "current"
@@ -43,7 +42,6 @@ class WeeklyDigest:
     price_changes: list
     large_transactions: list
     large_threshold_display: str | None
-    large_transactions_url: str | None
 
     @property
     def total(self):
@@ -119,7 +117,6 @@ def _price_changes(principal, start, end, percent):
 def _large_transactions(principal, start, end, threshold):
     if threshold is None or threshold <= 0:
         return []
-    transfers = TransferPair.objects.excluding_income_and_spending().visible_to(principal)
     rows = (
         Transaction.objects.visible_to(principal)
         .filter(
@@ -129,8 +126,7 @@ def _large_transactions(principal, start, end, threshold):
             transaction_date__gte=start,
             transaction_date__lte=end,
         )
-        .exclude(pk__in=transfers.values("leg_a_id"))
-        .exclude(pk__in=transfers.values("leg_b_id"))
+        .exclude(exclusion_exists_for(principal))
         .select_related("account")
         .order_by("-transaction_date", "-pk")
     )
@@ -161,18 +157,6 @@ def _member_settings(principal):
     return threshold, percent or DEFAULT_PRICE_CHANGE_PERCENT
 
 
-def _large_list_url(start, end, threshold):
-    query = urlencode(
-        {
-            "date_from": start.isoformat(),
-            "date_to": end.isoformat(),
-            "amount_min": f"{Decimal(threshold) / 100:.2f}",
-            "amount_mode": "absolute",
-        }
-    )
-    return f"{reverse('transaction-list')}?{query}"
-
-
 def build_weekly_digest(principal, *, today, week=WEEK_LAST):
     """What started charging the viewer and what looked unusual in one week.
 
@@ -191,5 +175,4 @@ def build_weekly_digest(principal, *, today, week=WEEK_LAST):
         price_changes=_price_changes(principal, start, end, percent),
         large_transactions=_large_transactions(principal, start, end, threshold),
         large_threshold_display=format_minor(threshold) if has_threshold else None,
-        large_transactions_url=_large_list_url(start, end, threshold) if has_threshold else None,
     )

@@ -542,7 +542,7 @@ Owner decisions:
 Owner approved 2026-10-12. Cash flow shows a "This week" card listing what started charging the member and what looked unusual in one Monday-Sunday week (local dates).
 
 - **Weeks.** This week runs from Monday through today; last week is the previous complete Monday-Sunday week. The card opens on this week, and a switch (`?digest_week=last`) selects last week while keeping the other Cash flow filters.
-- **Groups.** Each group shows a count and up to five rows, newest first, with a "See all" link when there are more. Every row links to its existing page.
+- **Groups.** Each group shows a count and up to five rows, newest first, and a "See all" control when there are more. Every row links to its existing page. The recurring groups link to the Recurring page; large transactions expand in place, because the transaction list cannot repeat the digest's transfer exclusions.
   - **New recurring charges:** the member's suggested or confirmed series first detected (created) in the week, with cadence and typical amount.
   - **Price changes:** the recurring price-change flags (#418, the member's own threshold) whose latest charge falls in the week.
   - **Large transactions:** active cash-flow transactions in the week whose absolute amount is at or above the member's large-transaction amount (Settings › Alerts). Transfers between visible accounts are left out. With no amount set, the group asks the member to set one.
