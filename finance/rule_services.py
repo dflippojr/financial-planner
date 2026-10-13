@@ -4,7 +4,7 @@ from urllib.parse import urlencode
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.db.models import Case, Exists, OuterRef, Prefetch, Q, Value, When
+from django.db.models import Case, Exists, OuterRef, Prefetch, Q, Subquery, Value, When
 from django.urls import reverse
 from django.utils import timezone
 
@@ -311,9 +311,40 @@ MIN_OFFER_OTHERS = 2
 def manual_rule_offer(principal, txn):
     """A rule-form prefill for a hand-set category that other rows' descriptions share.
 
-    Counts only rows a personal rule with this text and category could change, so
-    another member's private rows never contribute. At most two queries.
+    The count is what preview_unsaved_rule would change for a new personal rule
+    with this text, this category and priority 0: same candidates, casefold
+    matching and rule precedence. Another member's private rows never count.
+    At most two queries.
     """
+    contains = _offer_text(txn)
+    if contains is None:
+        return None
+    person = _person_for(principal)
+    rows = _offer_rows(person, txn, contains)
+    if len(rows) < MIN_OFFER_OTHERS:
+        return None
+    household_id = rows[0]["_household_id"]
+    rules = _offer_rules(person, household_id)
+    needle = contains.casefold()
+    if any(
+        rule._visible and rule.category_id == txn.category_id and rule.description_contains.casefold() == needle
+        for rule in rules
+    ):
+        return None
+    count = sum(1 for row in rows if not _offer_row_blocked(row, rules, person, household_id))
+    if count < MIN_OFFER_OTHERS:
+        return None
+    return {
+        "description_contains": contains,
+        "category_name": rows[0]["_category_name"],
+        "count": count,
+        "url": reverse("category-rule-list")
+        + "?"
+        + urlencode({"description_contains": contains, "category": txn.category_id}),
+    }
+
+
+def _offer_text(txn):
     if (
         txn.status != Transaction.Status.ACTIVE
         or txn.category_source != Transaction.CategorySource.MANUAL
@@ -322,53 +353,92 @@ def manual_rule_offer(principal, txn):
     ):
         return None
     contains = re.sub(r"\s+", " ", txn.description or "").strip()[:200].strip()
-    if len(contains) < MIN_OFFER_CONTAINS:
-        return None
-    person = _person_for(principal)
+    return contains if len(contains) >= MIN_OFFER_CONTAINS else None
+
+
+def _offer_rows(person, txn, contains):
+    """Rows a personal rule in this category could change, matched like a rule matches."""
     category = (
         Category.objects.visible_to(person)
         .filter(pk=txn.category_id)
         .exclude(code__in=(Category.Code.TRANSFER, Category.Code.UNCATEGORIZED))
-        .annotate(
-            _has_rule=Exists(
-                CategoryRule.objects.visible_to(person).filter(
-                    category_id=OuterRef("pk"), description_contains__iexact=contains
-                )
-            ),
-            # Accepting an AI suggestion saves the category as manual; that path
-            # has its own rule proposal.
-            _from_suggestion=Exists(
-                CategorySuggestion.objects.filter(
-                    transaction_id=txn.pk, category_id=OuterRef("pk"), status=CategorySuggestion.Status.ACCEPTED
-                )
-            ),
-        )
-        .first()
     )
-    if category is None or category._has_rule or category._from_suggestion:
-        return None
-    count = (
+    # Accepting an AI suggestion saves the category as manual; that path has its
+    # own rule proposal.
+    accepted = CategorySuggestion.objects.filter(
+        transaction_id=txn.pk, category_id=txn.category_id, status=CategorySuggestion.Status.ACCEPTED
+    )
+    household_id = Subquery(category.values("household_id")[:1])
+    rows = (
         _candidate_queryset(person)
         .select_related(None)
-        .filter(description__icontains=contains)
+        .filter(Exists(category), ~Exists(accepted))
         .filter(
             Q(account__scope=Account.Scope.PRIVATE)
-            | Q(account__scope=Account.Scope.HOUSEHOLD, account__household_id=category.household_id)
+            | Q(account__scope=Account.Scope.HOUSEHOLD, account__household_id=household_id)
         )
         .exclude(pk=txn.pk)
-        .exclude(category_id=category.pk)
-        .count()
+        .exclude(category_id=txn.category_id)
+        .annotate(_household_id=household_id, _category_name=Subquery(category.values("name")[:1]))
+        .values(
+            "account_id", "account__scope", "account__household_id", "description", "amount_minor",
+            "_household_id", "_category_name",
+        )
     )
-    if count < MIN_OFFER_OTHERS:
-        return None
-    return {
-        "description_contains": contains,
-        "category_name": category.name,
-        "count": count,
-        "url": reverse("category-rule-list")
-        + "?"
-        + urlencode({"description_contains": contains, "category": category.pk}),
-    }
+    needle = contains.casefold()
+    return [row for row in rows if needle in row["description"].casefold()]
+
+
+def _offer_rules(person, household_id):
+    """Visible rules (for the duplicate check) and every enabled rule that could
+    take precedence on the viewer's private or this household's rows."""
+    current = Membership.objects.filter(ended_at__isnull=True)
+    return list(
+        CategoryRule.objects.filter(
+            Q(owner_person=person)
+            | Q(owner_household_id=household_id)
+            | Q(enabled=True, owner_person_id__in=current.filter(household_id=household_id).values("person_id"))
+        )
+        .select_related("category")
+        .annotate(
+            _visible=Q(owner_person=person) | Q(owner_household_id=household_id),
+            _member=Exists(current.filter(person_id=OuterRef("owner_person_id"), household_id=household_id)),
+            _cached_inactive=~Exists(current.filter(
+                person_id=OuterRef("owner_person_id"), household_id=OuterRef("category__household_id")
+            )),
+        )
+        .order_by("priority", "pk")
+    )
+
+
+def _offer_rule_applies(rule, row, person, household_id):
+    """rule_matches_transaction for an in-scope row, without per-owner account lookups."""
+    if not rule.enabled or rule.description_contains.casefold() not in row["description"].casefold():
+        return False
+    if rule.account_id and rule.account_id != row["account_id"]:
+        return False
+    if rule.min_amount_minor is not None and row["amount_minor"] < rule.min_amount_minor:
+        return False
+    if rule.max_amount_minor is not None and row["amount_minor"] > rule.max_amount_minor:
+        return False
+    household_row = row["account__scope"] == Account.Scope.HOUSEHOLD
+    if rule.owner_household_id:
+        return household_row and rule.owner_household_id == row["account__household_id"]
+    if rule._cached_inactive:
+        return False
+    if household_row:
+        # Every current member sees the household's accounts.
+        return rule._member and rule.category.household_id == household_id
+    # A private row in scope is the viewer's own.
+    return rule.owner_person_id == person.pk
+
+
+def _offer_row_blocked(row, rules, person, household_id):
+    """Whether an existing rule wins over a new priority-0 rule, as preview_unsaved_rule decides."""
+    matching = [rule for rule in rules if _offer_rule_applies(rule, row, person, household_id)]
+    personal = [rule for rule in matching if not rule.owner_household_id]
+    winner = (personal or matching or [None])[0]
+    return winner is not None and winner.priority <= 0
 
 
 def _matching_queryset(person, rule):

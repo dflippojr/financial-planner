@@ -163,3 +163,56 @@ def test_offer_adds_at_most_two_queries():
     with patch("finance.views.manual_rule_offer", return_value=None), CaptureQueriesContext(connection) as without:
         client.get(url)
     assert len(with_offer) - len(without) <= 2
+
+
+@pytest.mark.django_db
+def test_count_follows_existing_rule_precedence_like_the_preview():
+    owner, household, account, edited, rest, client = _setup(others=3)
+    other = make_person("offer-housemate")
+    Membership.objects.create(person=other, household=household)
+    shared = make_account(owner, name="Synthetic Shared", scope=Account.Scope.HOUSEHOLD, household=household)
+    shared_rows = [
+        make_transaction(owner, shared, amount_minor=-600 - index, description=f"{COFFEE} SHARED {index}")
+        for index in range(2)
+    ]
+    # Wins on every private row: an earlier personal rule at priority 0.
+    CategoryRule.objects.create(
+        owner_person=owner, account=account, description_contains="coffee", category=groceries(household)
+    )
+    # Loses: priority 5 sorts after the new rule.
+    CategoryRule.objects.create(
+        owner_person=owner, description_contains="coffee #1", category=groceries(household), priority=5
+    )
+    # A housemate's personal rule reaches the shared rows only.
+    CategoryRule.objects.create(
+        owner_person=other, description_contains="shared 0", category=groceries(household)
+    )
+    assign_category(owner, edited.pk, dining(household).pk)
+    edited.refresh_from_db()
+    edited._excluded = False
+    rule = unsaved_rule(owner, owner_kind="personal", description_contains=COFFEE, category_id=dining(household).pk)
+    expected = {txn.pk for txn in preview_unsaved_rule(owner, rule) if txn.category_id != rule.category_id}
+    assert expected == {shared_rows[1].pk}
+    assert manual_rule_offer(owner, edited) is None
+    make_transaction(owner, shared, amount_minor=-700, description=f"{COFFEE} SHARED 9")
+    expected = {txn.pk for txn in preview_unsaved_rule(owner, rule) if txn.category_id != rule.category_id}
+    assert len(expected) == 2
+    assert manual_rule_offer(owner, edited)["count"] == 2
+
+
+@pytest.mark.django_db
+def test_matching_folds_case_like_the_rule_preview():
+    owner = make_person("offer-fold")
+    household = make_household(owner)
+    account = make_account(owner)
+    edited = make_transaction(owner, account, amount_minor=-450, description="SYNTHETIC STRASSE CAFE")
+    for index in range(2):
+        make_transaction(owner, account, amount_minor=-500 - index, description=f"Synthetic Straße Cafe {index}")
+    assign_category(owner, edited.pk, dining(household).pk)
+    edited.refresh_from_db()
+    edited._excluded = False
+    rule = unsaved_rule(
+        owner, owner_kind="personal", description_contains="SYNTHETIC STRASSE CAFE", category_id=dining(household).pk
+    )
+    assert len(preview_unsaved_rule(owner, rule)) == 2
+    assert manual_rule_offer(owner, edited)["count"] == 2
