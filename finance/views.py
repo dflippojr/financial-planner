@@ -225,6 +225,7 @@ from .category_services import (
     unsplit_transaction,
     undo_transfer_pair,
 )
+from .rule_services import manual_rule_offer
 
 
 @login_not_required
@@ -1014,6 +1015,7 @@ def _render_transaction_edit(
             "unsplit_form": UnsplitTransactionForm(principal=request.user),
             "part_forms": part_forms,
             "is_split": financial_transaction.category_source == Transaction.CategorySource.SPLIT,
+            "rule_offer": manual_rule_offer(request.user, financial_transaction),
             "transaction": financial_transaction,
             "correction_history": correction_history,
             "receipt_form": receipt_form,

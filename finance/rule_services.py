@@ -1,8 +1,11 @@
 from dataclasses import dataclass
+import re
+from urllib.parse import urlencode
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.db.models import Case, Exists, OuterRef, Prefetch, Q, Value, When
+from django.db.models import Case, Exists, OuterRef, Prefetch, Q, Subquery, Value, When
+from django.urls import reverse
 from django.utils import timezone
 
 from .category_services import (
@@ -23,6 +26,7 @@ from .models import (
     AuditEvent,
     Category,
     CategoryRule,
+    CategorySuggestion,
     Household,
     Membership,
     RefundLink,
@@ -261,16 +265,20 @@ def _rule_owner_matches_transaction(rule, txn):
     return txn.account.household_id == rule.category.household_id
 
 
+def _rule_fields_match(rule, description, account_id, amount_minor):
+    if rule.description_contains.casefold() not in description.casefold():
+        return False
+    if rule.account_id and account_id != rule.account_id:
+        return False
+    if rule.min_amount_minor is not None and amount_minor < rule.min_amount_minor:
+        return False
+    return rule.max_amount_minor is None or amount_minor <= rule.max_amount_minor
+
+
 def rule_matches_transaction(rule, txn):
-    if rule.description_contains.casefold() not in txn.description.casefold():
-        return False
-    if rule.account_id and txn.account_id != rule.account_id:
-        return False
-    if rule.min_amount_minor is not None and txn.amount_minor < rule.min_amount_minor:
-        return False
-    if rule.max_amount_minor is not None and txn.amount_minor > rule.max_amount_minor:
-        return False
-    return _rule_owner_matches_transaction(rule, txn)
+    return _rule_fields_match(rule, txn.description, txn.account_id, txn.amount_minor) and (
+        _rule_owner_matches_transaction(rule, txn)
+    )
 
 
 def first_matching_rule(txn, rules=None):
@@ -298,6 +306,134 @@ def _candidate_queryset(person):
         .filter(_excluded=False)
         .select_related("account", "category", "account__owner", "account__household")
     )
+
+
+MIN_OFFER_CONTAINS = 3
+MIN_OFFER_OTHERS = 2
+
+
+def manual_rule_offer(principal, txn):
+    """A rule-form prefill for a hand-set category that other rows' descriptions share.
+
+    The count is what preview_unsaved_rule would change for a new personal rule
+    with this text, this category and priority 0: same candidates, casefold
+    matching and rule precedence. Another member's private rows never count.
+    At most two queries.
+    """
+    contains = _offer_text(txn)
+    if contains is None:
+        return None
+    person = _person_for(principal)
+    rows = _offer_rows(person, txn, contains)
+    if len(rows) < MIN_OFFER_OTHERS:
+        return None
+    household_id = rows[0]["_household_id"]
+    rules = _offer_rules(person, household_id)
+    needle = contains.casefold()
+    if any(
+        rule._visible and rule.category_id == txn.category_id and rule.description_contains.casefold() == needle
+        for rule in rules
+    ):
+        return None
+    count = sum(1 for row in rows if not _offer_row_blocked(row, rules, person, household_id))
+    if count < MIN_OFFER_OTHERS:
+        return None
+    return {
+        "description_contains": contains,
+        "category_name": rows[0]["_category_name"],
+        "count": count,
+        "url": reverse("category-rule-list")
+        + "?"
+        + urlencode({"description_contains": contains, "category": txn.category_id}),
+    }
+
+
+def _offer_text(txn):
+    if (
+        txn.status != Transaction.Status.ACTIVE
+        or txn.category_source != Transaction.CategorySource.MANUAL
+        or txn.category_id is None
+        or txn.is_excluded_transfer
+    ):
+        return None
+    contains = re.sub(r"\s+", " ", txn.description or "").strip()[:200].strip()
+    return contains if len(contains) >= MIN_OFFER_CONTAINS else None
+
+
+def _offer_rows(person, txn, contains):
+    """Rows a personal rule in this category could change, matched like a rule matches."""
+    category = (
+        Category.objects.visible_to(person)
+        .filter(pk=txn.category_id)
+        .exclude(code__in=(Category.Code.TRANSFER, Category.Code.UNCATEGORIZED))
+    )
+    # Accepting an AI suggestion saves the category as manual; that path has its
+    # own rule proposal.
+    accepted = CategorySuggestion.objects.filter(
+        transaction_id=txn.pk, category_id=txn.category_id, status=CategorySuggestion.Status.ACCEPTED
+    )
+    household_id = Subquery(category.values("household_id")[:1])
+    rows = (
+        _candidate_queryset(person)
+        .select_related(None)
+        .filter(Exists(category), ~Exists(accepted))
+        .filter(
+            Q(account__scope=Account.Scope.PRIVATE)
+            | Q(account__scope=Account.Scope.HOUSEHOLD, account__household_id=household_id)
+        )
+        .exclude(pk=txn.pk)
+        .exclude(category_id=txn.category_id)
+        .annotate(_household_id=household_id, _category_name=Subquery(category.values("name")[:1]))
+        .values(
+            "account_id", "account__scope", "account__household_id", "description", "amount_minor",
+            "_household_id", "_category_name",
+        )
+    )
+    needle = contains.casefold()
+    return [row for row in rows if needle in row["description"].casefold()]
+
+
+def _offer_rules(person, household_id):
+    """Visible rules (for the duplicate check) and every enabled personal rule that
+    could run before a new personal rule on the viewer's private or this household's
+    rows. Household rules run after all personal rules, so they never take precedence."""
+    current = Membership.objects.filter(ended_at__isnull=True)
+    return list(
+        CategoryRule.objects.filter(
+            Q(owner_person=person)
+            | Q(owner_household_id=household_id)
+            | Q(enabled=True, owner_person_id__in=current.filter(household_id=household_id).values("person_id"))
+        )
+        .select_related("category")
+        .annotate(
+            _visible=Q(owner_person=person) | Q(owner_household_id=household_id),
+            _member=Exists(current.filter(person_id=OuterRef("owner_person_id"), household_id=household_id)),
+            _cached_inactive=~Exists(current.filter(
+                person_id=OuterRef("owner_person_id"), household_id=OuterRef("category__household_id")
+            )),
+        )
+        .order_by("priority", "pk")
+    )
+
+
+def _offer_personal_rule_applies(rule, row, person, household_id):
+    """rule_matches_transaction for a personal rule and an in-scope row, without
+    per-owner account lookups."""
+    if not rule.enabled or rule.owner_household_id or rule._cached_inactive:
+        return False
+    if not _rule_fields_match(rule, row["description"], row["account_id"], row["amount_minor"]):
+        return False
+    if row["account__scope"] == Account.Scope.HOUSEHOLD:
+        # Every current member sees the household's accounts.
+        return rule._member and rule.category.household_id == household_id
+    # A private row in scope is the viewer's own.
+    return rule.owner_person_id == person.pk
+
+
+def _offer_row_blocked(row, rules, person, household_id):
+    """Whether an existing rule wins over a new priority-0 personal rule, as preview_unsaved_rule decides."""
+    winner = next((rule for rule in rules if _offer_personal_rule_applies(rule, row, person, household_id)), None)
+    return winner is not None and winner.priority <= 0
 
 
 def _matching_queryset(person, rule):
@@ -416,10 +552,20 @@ def preview_unsaved_rule(principal, rule):
     rows = _preview_rows(person, rule)
     rules_by_account = _rules_by_account(rows)
     for txn in rows:
-        winner = first_matching_rule(txn, rules_by_account[txn.account_id])
-        if winner is None or winner.priority > rule.priority:
+        if _new_rule_wins(rule, first_matching_rule(txn, rules_by_account[txn.account_id])):
             matches.append(txn)
     return matches
+
+
+def _new_rule_wins(rule, winner):
+    """Whether an unsaved rule beats the existing first match. Personal rules all run
+    before household rules, so a household winner never blocks a personal rule and a
+    personal winner always blocks a household one."""
+    if winner is None:
+        return True
+    if bool(winner.owner_household_id) != bool(rule.owner_household_id):
+        return not rule.owner_household_id
+    return winner.priority > rule.priority
 
 
 def _history_new_label(category, rule):
