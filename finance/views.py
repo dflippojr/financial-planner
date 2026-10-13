@@ -108,6 +108,7 @@ from .security_services import (
     revoke_session_for,
 )
 from .export import export_filename, write_export_zip
+from .weekly_digest import WEEK_CURRENT, WEEK_LAST, WEEKS, build_weekly_digest
 from .audit_services import append_event
 from .models import (
     AuditEvent,
@@ -286,6 +287,49 @@ def _home_attention_items(principal, budget_summary):
     return items
 
 
+def _home_digest(principal, query, week, *, today):
+    """The "This week" card: the digest plus switch links that keep the other Home filters."""
+    if week not in WEEKS:
+        week = WEEK_CURRENT
+    digest = build_weekly_digest(principal, today=today, week=week)
+    options = []
+    for label, key in (("This week", WEEK_CURRENT), ("Last week", WEEK_LAST)):
+        params = query.copy()
+        if key != WEEK_CURRENT:
+            params["digest_week"] = key
+        encoded = params.urlencode()
+        url = f"?{encoded}#weekly-digest" if encoded else "?#weekly-digest"
+        options.append(SimpleNamespace(label=label, url=url, current=key == week))
+    return SimpleNamespace(
+        digest=digest,
+        label="This week" if week == WEEK_CURRENT else "Last week",
+        options=options,
+        groups=[
+            SimpleNamespace(
+                key="new-series",
+                title="New recurring charges",
+                items=digest.new_series,
+                see_all_url=f"{reverse('recurring-review')}#recurring-suggestions",
+            ),
+            SimpleNamespace(
+                key="price-changes",
+                title="Price changes",
+                items=digest.price_changes,
+                see_all_url=f"{reverse('recurring-review')}#recurring-attention",
+            ),
+            SimpleNamespace(
+                key="large-transactions",
+                title="Large transactions",
+                items=digest.large_transactions,
+                # The transaction list cannot repeat the digest's transfer exclusions,
+                # so the extra rows expand in place instead of linking there.
+                see_all_url=None,
+                settings_url=None if digest.large_threshold_display else reverse("settings-alerts"),
+            ),
+        ],
+    )
+
+
 HOME_RANGES = (("This month", "this-month"), ("3 months", "last-3-months"), ("12 months", "last-12-months"))
 
 
@@ -321,11 +365,14 @@ def _home_filter_count(*, grouping, horizon, account, scope, tag):
 def home(request):
     today = timezone.localdate()
     default_from, default_to = default_date_range(today)
-    form = CashFlowFilterForm(request.GET or None, principal=request.user)
+    # The digest week switch is not a cash-flow filter; keep it out of the filter form.
+    query = request.GET.copy()
+    digest_week = query.pop("digest_week", [WEEK_CURRENT])[-1]
+    form = CashFlowFilterForm(query or None, principal=request.user)
     if form.is_bound and form.has_error("grouping"):
         # A missing or invalid grouping falls back to months; validate again with it so
         # the period-limit check still applies.
-        data = request.GET.copy()
+        data = query.copy()
         data["grouping"] = "month"
         form = CashFlowFilterForm(data, principal=request.user)
     if not form.is_bound:
@@ -480,6 +527,7 @@ def home(request):
             "attention_items": attention_items,
             "range_from": date_from,
             "range_to": date_to,
+            "digest": _home_digest(request.user, query, digest_week, today=today),
         },
     )
 

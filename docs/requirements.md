@@ -537,6 +537,18 @@ Owner decisions:
 - **Cancelling.** A member can mark a series cancelled. It leaves totals and the projection, and its history stays. If a new matching charge arrives, it shows as "resumed?" for the member to confirm.
 - **Step changes** are covered by #124: a confirmed series follows step changes and gradual drift.
 
+## Weekly digest (2026-10-12, #419)
+
+Owner approved 2026-10-12. Cash flow shows a "This week" card listing what started charging the member and what looked unusual in one Monday-Sunday week (local dates).
+
+- **Weeks.** This week runs from Monday through today; last week is the previous complete Monday-Sunday week. The card opens on this week, and a switch (`?digest_week=last`) selects last week while keeping the other Cash flow filters.
+- **Groups.** Each group shows a count and up to five rows, newest first, and a "See all" control when there are more. Every row links to its existing page. The recurring groups link to the Recurring page; large transactions expand in place, because the transaction list cannot repeat the digest's transfer exclusions.
+  - **New recurring charges:** the member's suggested or confirmed series first detected (created) in the week, with cadence and typical amount.
+  - **Price changes:** the recurring price-change flags (#418, the member's own threshold) whose latest charge falls in the week.
+  - **Large transactions:** active cash-flow transactions in the week whose absolute amount is at or above the member's large-transaction amount (Settings › Alerts). Transfers between visible accounts are left out. With no amount set, the group asks the member to set one.
+- **Access.** The digest uses only series, transactions and accounts the viewer may already see; a series with a charge on an account the viewer cannot see is left out, and so is an inactive series (one whose charges are gone, for example after an account stopped being shared). Archived charges (for example from an undone import) do not count toward a new series or a price change, even before the Recurring page refreshes the series.
+- **Storage.** The digest is computed on each request from existing data; there is no digest table. Home's query count does not grow with the number of series. Sending the digest anywhere is out of scope.
+
 ## Monthly review (2026-10-03, #95)
 
 Owner decisions:
