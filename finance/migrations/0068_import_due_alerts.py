@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('finance', '0066_recurring_price_percent'),
+        ('finance', '0067_ntfy_alerts'),
     ]
 
     operations = [
