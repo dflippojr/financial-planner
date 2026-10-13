@@ -74,7 +74,8 @@ def _new_series(principal, start, end):
     since, until = _local_bounds(start, end)
     rows = (
         RecurringSeries.objects.visible_to(principal)
-        .filter(status__in=_NEW_SERIES_STATUSES, created_at__gte=since, created_at__lt=until)
+        # An inactive series has lost its members, possibly to revoked access, so it is left out.
+        .filter(status__in=_NEW_SERIES_STATUSES, is_active=True, created_at__gte=since, created_at__lt=until)
         .order_by("-created_at", "display_name", "pk")
     )
     return [

@@ -24,6 +24,16 @@ from tests.test_recurring_review import (
 TODAY = date(2026, 10, 14)
 
 
+_real_localdate = timezone.localdate
+
+
+def fake_localdate(value=None, timezone=None):
+    """Pin only "today"; converting a stored timestamp keeps working."""
+    if value is None:
+        return TODAY
+    return _real_localdate(value, timezone)
+
+
 def first_seen(series, day, at=time(12, 0)):
     stamp = timezone.make_aware(datetime.combine(day, at))
     RecurringSeries.objects.filter(pk=series.pk).update(created_at=stamp)
@@ -72,6 +82,17 @@ def test_new_series_inside_outside_and_across_the_sunday_monday_boundary():
     assert last.new_series[0].url == f"{reverse('recurring-review')}#series-{sunday_late.pk}"
     assert titles(current.new_series) == ["Synthetic Monday Gym"]
     assert current.new_series[0].detail == "Weekly · Confirmed"
+
+
+@pytest.mark.django_db
+def test_inactive_series_is_left_out():
+    owner = make_person("owner")
+    make_household(owner)
+    series = make_series(owner, name="Synthetic Unshared", cadence=RecurringSeries.Cadence.MONTHLY)
+    RecurringSeries.objects.filter(pk=series.pk).update(is_active=False)
+    first_seen(series, date(2026, 10, 7))
+
+    assert build_weekly_digest(owner, today=TODAY, week="last").new_series == []
 
 
 @pytest.mark.django_db
@@ -197,7 +218,7 @@ def home_client(person):
 
 
 @pytest.mark.django_db
-@patch("finance.views.timezone.localdate", return_value=TODAY)
+@patch("finance.views.timezone.localdate", side_effect=fake_localdate)
 def test_home_card_shows_groups_links_and_the_current_week_by_default(_localdate):
     owner = make_person("owner")
     make_household(owner)
@@ -215,6 +236,7 @@ def test_home_card_shows_groups_links_and_the_current_week_by_default(_localdate
     assert 'id="weekly-digest-heading" class="card-title">This week</h2>' in content
     assert "Oct 12 – Oct 14, 2026 · 2 items" in content
     assert "Synthetic Laptop" in content
+    assert "Tue Oct 13 · Monthly · Suggested" in content
     assert reverse("transaction-edit", args=[big.pk]) in content
     assert f"{reverse('recurring-review')}#series-{series.pk}" in content
     assert "Nothing new this" not in content
@@ -222,7 +244,7 @@ def test_home_card_shows_groups_links_and_the_current_week_by_default(_localdate
 
 
 @pytest.mark.django_db
-@patch("finance.views.timezone.localdate", return_value=TODAY)
+@patch("finance.views.timezone.localdate", side_effect=fake_localdate)
 def test_home_card_empty_state_and_threshold_hint(_localdate):
     owner = make_person("owner")
     make_household(owner)
@@ -235,7 +257,7 @@ def test_home_card_empty_state_and_threshold_hint(_localdate):
 
 
 @pytest.mark.django_db
-@patch("finance.views.timezone.localdate", return_value=TODAY)
+@patch("finance.views.timezone.localdate", side_effect=fake_localdate)
 def test_home_switch_selects_last_week_and_keeps_other_filters(_localdate):
     owner = make_person("owner")
     make_household(owner)
@@ -258,7 +280,7 @@ def test_home_switch_selects_last_week_and_keeps_other_filters(_localdate):
 
 
 @pytest.mark.django_db
-@patch("finance.views.timezone.localdate", return_value=TODAY)
+@patch("finance.views.timezone.localdate", side_effect=fake_localdate)
 def test_home_shows_five_items_per_group_with_see_all(_localdate):
     owner = make_person("owner")
     make_household(owner)
@@ -273,7 +295,7 @@ def test_home_shows_five_items_per_group_with_see_all(_localdate):
 
 
 @pytest.mark.django_db
-@patch("finance.views.timezone.localdate", return_value=TODAY)
+@patch("finance.views.timezone.localdate", side_effect=fake_localdate)
 def test_home_expands_extra_large_transactions_in_place(_localdate):
     owner = make_person("owner")
     make_household(owner)
@@ -301,7 +323,7 @@ def _home_query_count(client):
 
 
 @pytest.mark.django_db
-@patch("finance.views.timezone.localdate", return_value=TODAY)
+@patch("finance.views.timezone.localdate", side_effect=fake_localdate)
 def test_home_query_count_does_not_grow_with_series(_localdate):
     owner = make_person("owner")
     make_household(owner)
