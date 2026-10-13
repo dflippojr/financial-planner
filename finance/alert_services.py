@@ -185,7 +185,7 @@ def save_alert_settings(
     prefs.unusual_category_percent = int(unusual_category_percent)
     prefs.unusual_category_floor_minor = int(unusual_category_floor_minor)
     prefs.large_transaction_minor = large_transaction_minor
-    prefs.save()
+    prefs.save(update_fields=(*_ALERT_TOGGLES, *_ALERT_THRESHOLDS))
     changed = [
         label for label, names in (("alert_toggles", _ALERT_TOGGLES), ("thresholds", _ALERT_THRESHOLDS))
         if any(before[name] != getattr(prefs, name) for name in names)

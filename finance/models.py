@@ -2203,6 +2203,10 @@ class BudgetRolloverReset(models.Model):
         return f"Rollover reset {self.budget_id} {self.month}"
 
 
+NTFY_TOPIC_PATTERN = r"\A[A-Za-z0-9_-]{1,64}\Z"
+NTFY_TOPIC_VALIDATOR = RegexValidator(NTFY_TOPIC_PATTERN, "Use 1-64 letters, digits, hyphens or underscores.")
+
+
 class Alert(models.Model):
     class Kind(models.TextChoices):
         SYNC = "sync", "Sync"
@@ -2231,6 +2235,7 @@ class Alert(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     read_at = models.DateTimeField(null=True, blank=True)
     email_notice_sent_at = models.DateTimeField(null=True, blank=True)
+    ntfy_notice_sent_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         constraints = [
@@ -2264,6 +2269,10 @@ class Alert(models.Model):
 class AlertSettings(models.Model):
     email_enabled = models.BooleanField(default=False)
     notification_email = models.EmailField(blank=True, default="")
+    ntfy_enabled = models.BooleanField(default=False)
+    ntfy_topic = models.CharField(max_length=64, blank=True, default="", validators=[NTFY_TOPIC_VALIDATOR])
+    # Monday of the last weekly digest pushed over ntfy, so each week is sent once.
+    ntfy_digest_week = models.DateField(null=True, blank=True)
     person = models.OneToOneField(Person, on_delete=models.PROTECT, related_name="alert_settings")
     sync_enabled = models.BooleanField(default=True)
     recurring_price_enabled = models.BooleanField(default=True)
@@ -2303,6 +2312,7 @@ class AlertSettings(models.Model):
                 condition=Q(recurring_price_percent__gte=1, recurring_price_percent__lte=100),
                 name="alert_settings_recurring_price_percent_range",
             ),
+
         ]
 
     def __str__(self):

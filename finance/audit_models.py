@@ -14,7 +14,8 @@ CHANGED_FIELDS = frozenset({
     "secured_asset", "require_passkey", "session", "chat_backend", "background_backend", "chat_model",
     "background_model", "use_for_chat", "use_for_background", "use_shared_local_chat",
     "use_shared_local_background", "offer_local_to_household", "offer_local_chat", "offer_plan_links",
-    "alert_toggles", "thresholds", "notification_email", "email_enabled", "threshold", "accounts",
+    "alert_toggles", "thresholds", "notification_email", "email_enabled", "ntfy_topic", "ntfy_enabled",
+    "threshold", "accounts",
     "account_links", "cutover",
     # Workflow slice (#273): field names only, never values.
     "amount", "date", "note", "account", "category", "kind", "cadence", "period", "rollover", "enabled",
@@ -30,7 +31,7 @@ METADATA_INT_KEYS = frozenset({
 })
 METADATA_ENUM_KEYS = {
     "operation": frozenset({"simplefin_sync", "ai_claim", "ai_attempt", "ai_recovery", "ai_job", "ai_inference", "chat_turn",
-                            "monthly_review", "alert_delivery", "email_delivery", "transfer_rebuild"}),
+                            "monthly_review", "alert_delivery", "email_delivery", "ntfy_delivery", "transfer_rebuild"}),
     "failure": frozenset({"provider_error", "unavailable", "authorization_required", "limit_reached",
                           "app_tools_only_unsupported", "end_user_login_required", "access_denied", "import_failed", "stale"}),
     "provider": frozenset({"agent_harness", "anthropic_api", "openai_api"}),
@@ -360,7 +361,7 @@ ACTION_SPECS = {
     _A.AI_SHARED_LOCAL_CHANGED: (_T.SETTING, AUDIENCE_PERSONAL, {"use_shared_local_chat", "use_shared_local_background"}),
     _A.PLAN_LINK_OFFER_CHANGED: (_T.CONNECTION, AUDIENCE_HOUSEHOLD, {"offer_plan_links"}),
     _A.NOTIFICATION_PREFERENCES_CHANGED: (_T.SETTING, AUDIENCE_PERSONAL, {"alert_toggles", "thresholds"}),
-    _A.NOTIFICATION_ADDRESS_CHANGED: (_T.SETTING, AUDIENCE_PERSONAL, {"notification_email", "email_enabled"}),
+    _A.NOTIFICATION_ADDRESS_CHANGED: (_T.SETTING, AUDIENCE_PERSONAL, {"notification_email", "email_enabled", "ntfy_topic", "ntfy_enabled"}),
     _A.BILLS_CALENDAR_CHANGED: (_T.SETTING, AUDIENCE_PERSONAL, {"threshold", "accounts"}),
 }
 _WORKFLOW_ACTIONS = (

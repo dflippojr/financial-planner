@@ -22,6 +22,7 @@ from .models import (
     Account,
     Budget,
     Category,
+    NTFY_TOPIC_VALIDATOR,
     Tag,
     PlannedItem,
     RecurringSeries,
@@ -1971,6 +1972,21 @@ class ReceiptUploadForm(forms.Form):
         ),
         help_text="JPEG, PNG, WebP, HEIC, or PDF. Up to 10 MB, 5 per transaction.",
     )
+
+
+class AlertNtfySettingsForm(forms.Form):
+    ntfy_enabled = forms.BooleanField(required=False, label="Push recurring price changes and the weekly digest to ntfy")
+    ntfy_topic = forms.CharField(
+        required=False, max_length=64, label="ntfy topic", validators=[NTFY_TOPIC_VALIDATOR],
+        help_text="1-64 letters, digits, hyphens or underscores. Pushes name the series and its old and new price, "
+                  "never accounts or balances.",
+    )
+
+    def clean(self):
+        cleaned = super().clean()
+        if cleaned.get("ntfy_enabled") and not cleaned.get("ntfy_topic"):
+            self.add_error("ntfy_topic", "Enter a topic to enable ntfy notices.")
+        return cleaned
 
 
 class AlertEmailSettingsForm(forms.Form):

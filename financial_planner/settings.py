@@ -347,6 +347,15 @@ EMAIL_TIMEOUT = 10
 DEFAULT_FROM_EMAIL = os.environ.get("SMTP_FROM", "")
 ALERT_EMAIL_BASE_URL = os.environ.get("ALERT_EMAIL_BASE_URL", "")
 
+# Optional, operator-configured ntfy server for opt-in push notices. The channel
+# is offered only when NTFY_URL is set. "fake" keeps messages in memory (tests).
+NTFY_URL = os.environ.get("NTFY_URL", "").strip().rstrip("/")
+NTFY_TOKEN = os.environ.get("NTFY_TOKEN", "")
+NTFY_TIMEOUT_SECONDS = float(os.environ.get("NTFY_TIMEOUT_SECONDS", "5"))
+NTFY_TRANSPORT = os.environ.get("NTFY_TRANSPORT", "http").strip().lower()
+if NTFY_TRANSPORT not in ("http", "fake"):
+    raise ImproperlyConfigured("NTFY_TRANSPORT must be http or fake.")
+
 # Metadata-only trail; each daily pass deletes at most this many expired rows.
 AUDIT_RETENTION_DAYS = max(1, int(os.environ.get("AUDIT_RETENTION_DAYS", "90")))
 AUDIT_PURGE_BATCH_SIZE = max(1, int(os.environ.get("AUDIT_PURGE_BATCH_SIZE", "1000")))

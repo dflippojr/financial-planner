@@ -551,6 +551,15 @@ Owner approved 2026-10-12. Cash flow shows a "This week" card listing what start
 - **Access.** The digest uses only series, transactions and accounts the viewer may already see; a series with a charge on an account the viewer cannot see is left out, and so is an inactive series (one whose charges are gone, for example after an account stopped being shared). Archived charges (for example from an undone import) do not count toward a new series or a price change, even before the Recurring page refreshes the series.
 - **Storage.** The digest is computed on each request from existing data; there is no digest table. Home's query count does not grow with the number of series. Sending the digest anywhere is out of scope.
 
+## ntfy push notices (2026-10-12, #420)
+
+Owner approved 2026-10-12. An opt-in ntfy channel sits alongside email notices.
+
+- **Off by default.** The channel exists only when the operator sets `NTFY_URL`; each member opts in under Settings › Alerts with a topic of 1-64 letters, digits, hyphens or underscores. Changing the topic requires recent authentication, like the email address.
+- **Content.** Unlike email notices, a price-change push names each series with its old and new price (the alert titles) and links to Recurring. Pushes never carry account names, numbers or balances. The weekly digest push gives only the counts per group of the previous complete week, with a link to the card.
+- **Cadence.** After each alert run, a member gets at most one push for unread, visible recurring price-change alerts not yet pushed (respecting the per-kind setting), and at most one digest push per week, sent on the first run after the week ends that finds digest items.
+- **Delivery.** One attempt per push, no retry queue. A failure leaves the alerts pending for a later run and is logged without the token, topic or message.
+
 ## Monthly review (2026-10-03, #95)
 
 Owner decisions:

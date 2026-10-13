@@ -26,6 +26,7 @@ The local launcher is D:/Projects/agent-loop, configured as project financial-pl
 - Check status with status.sh --project financial-planner. Once a branch is reviewable, open-pr.sh --project financial-planner --issue N creates or finds the PR. Use run-pr.sh for work on an existing PR branch when needed.
 - Link the PR to its issue with Closes #N. The owner approves every merge; agents must not merge, close issues early, or publish financial data.
 - Keep changes scoped to the issue. If a prerequisite is not on main, or a decision is missing, stop at a clean checkpoint and record the blocker instead of implementing a guess.
+- To prove a change works in the running app, use the verify skill in .claude/skills/verify/SKILL.md (launch, doctor, drive, evidence and cleanup on a disposable instance per docs/ui-testing.md).
 - For code changes, run focused checks while working and the existing full suite before pushing, as agent-loop requires. If no suite exists yet, report that accurately. Do not add tests that merely copy implementation logic.
 
 Do not assume agent-harness CI, deployment, or review infrastructure exists in this new repository. Add only what a financial-planner issue calls for.

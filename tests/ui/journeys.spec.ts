@@ -1,4 +1,4 @@
-import { test, expect, signIn, openShellCorrection, audit, submit } from './fixtures';
+import { test, expect, signIn, openShellCorrection, audit, submit, previewSyntheticCsv } from './fixtures';
 import type { Page } from '@playwright/test';
 
 const main = (page: Page) => page.locator('main');
@@ -208,6 +208,31 @@ test('Alert read markers and settings persist after reload', async ({ page }) =>
   await audit(page, 'notification_preferences_changed', 'member', '1');
 });
 
+test('ntfy toggle and topic persist and a test push reports success on the fake transport', async ({ page }) => {
+  await page.goto('/settings/alerts/');
+  const toggle = page.getByLabel('Push recurring price changes and the weekly digest to ntfy', { exact: true });
+  const topic = page.getByLabel('ntfy topic', { exact: true });
+  await expect(toggle).not.toBeChecked();
+  await submit(page, page.getByRole('button', { name: 'Send a test push', exact: true }));
+  await expect(main(page).getByRole('status')).toHaveText('Test push could not be sent. Check your saved topic or ask the operator.');
+  await toggle.check();
+  await topic.fill('bad topic');
+  await submit(page, page.getByRole('button', { name: 'Save ntfy settings', exact: true }));
+  await expect(page.getByText('Use 1-64 letters, digits, hyphens or underscores.')).toBeVisible();
+  await topic.fill('planner-synthetic');
+  await submit(page, page.getByRole('button', { name: 'Save ntfy settings', exact: true }));
+  await page.reload();
+  await expect(toggle).toBeChecked();
+  await expect(topic).toHaveValue('planner-synthetic');
+  await submit(page, page.getByRole('button', { name: 'Send a test push', exact: true }));
+  await expect(main(page).getByRole('status')).toHaveText('Test push sent.');
+  await toggle.uncheck();
+  await submit(page, page.getByRole('button', { name: 'Save ntfy settings', exact: true }));
+  await page.reload();
+  await expect(toggle).not.toBeChecked();
+  await audit(page, 'notification_address_changed', 'setting', '1');
+});
+
 test('Fake-provider chat history persists and a new conversation has a blank composer', async ({ page }) => {
   await page.goto('/chat/');
   const question = page.getByLabel('Question', { exact: true }).filter({ visible: true });
@@ -243,14 +268,7 @@ test('Generic CSV preview shows exact signs and invalid row, cancel deletes stag
   const href = await main(page).getByRole('link', { name: 'Import CSV', exact: true }).first().getAttribute('href');
   await page.goto(href!);
   const importURL = new URL(page.url()).pathname;
-  await page.getByLabel('Import profile').selectOption('generic');
-  await page.getByLabel('CSV, OFX or QFX file').setInputFiles('tests/fixtures/ui-pass/synthetic.csv');
-  await submit(page, page.getByRole('button', { name: 'Upload and map' }));
-  for (const [name, value] of [['date_column', 'Date'], ['description_column', 'Description'], ['amount_column', 'Amount'], ['currency_column', 'Currency']]) await page.locator('[name=' + name + ']').selectOption(value);
-  await page.locator('[name=date_format]').selectOption('iso');
-  await page.locator('[name=number_format]').selectOption('dot_none');
-  await page.getByLabel('One signed amount column').check();
-  await submit(page, page.getByRole('button', { name: 'Preview rows' }));
+  await previewSyntheticCsv(page);
   await expect(page.getByRole('heading', { name: 'Preview results' })).toBeVisible();
   await expect(main(page)).toContainText('2 new; 0 duplicate; 1 invalid.');
   await expect(page.locator('tr').filter({ hasText: 'Synthetic preview purchase' })).toContainText('12.34');

@@ -92,6 +92,12 @@ def _send_member_notice(preference_id, alert_ids, visible_alerts):
             Alert.objects.filter(pk__in=[row.pk for row in rows]).update(email_notice_sent_at=timezone.now())
 
 
+def _send_run_ntfy():
+    from .alert_ntfy import send_run_ntfy
+
+    send_run_ntfy()
+
+
 def notify_after_alert_run(function):
     """Nested sync/daily passes share a batch; delivery waits for DB commit."""
     @wraps(function)
@@ -104,6 +110,7 @@ def notify_after_alert_run(function):
         finally:
             _notice_run_active.reset(token)
             transaction.on_commit(send_run_notices)
+            transaction.on_commit(_send_run_ntfy)
         return result
 
     return wrapped

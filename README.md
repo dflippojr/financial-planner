@@ -267,6 +267,7 @@ erDiagram
 - About 1,900 pytest tests across importers, authorization, reporting, deployment scripts, and UI.
 - The suite runs on in-memory SQLite for speed and on PostgreSQL 18, the production engine, in the `PostgreSQL 18` GitHub Actions workflow on every pull request and push to `main` (it also checks migrations on an empty database). Run the same locally with a throwaway container via [`scripts/test_postgres.sh`](scripts/test_postgres.sh).
 - Browser layout tests drive headless Chromium through Playwright at phone and desktop widths, in the `Playwright layout` workflow on every pull request and push to `main`.
+- An agent verification skill ([`.claude/skills/verify`](.claude/skills/verify/SKILL.md)) launches a disposable synthetic instance, health-checks it, drives the main path in a browser and saves evidence, then verifies cleanup.
 - SonarCloud quality gate in CI on every pull request and push to `main` (coverage, security, maintainability), plus on-demand automated code review on a self-hosted GitHub Actions runner.
 - Supply-chain care: pinned Python dependencies, a checksum-verified Tailwind binary, and vendored front-end assets with recorded SHA-256 sums.
 
