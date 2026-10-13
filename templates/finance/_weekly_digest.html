@@ -1,0 +1,53 @@
+{% comment %}
+Weekly digest card (issue #419): new recurring series, price changes and large transactions in
+one Monday-Sunday week, up to five rows per group. The switch keeps the other Home filters.
+{% endcomment %}
+<article id="weekly-digest" class="card bg-base-100 shadow" aria-labelledby="weekly-digest-heading">
+  <div class="card-body max-md:p-4">
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <div>
+        <h2 id="weekly-digest-heading" class="card-title">{{ digest.label }}</h2>
+        <p class="stat-desc">{{ digest.digest.start|date:"M j" }} – {{ digest.digest.end|date:"M j, Y" }} · {{ digest.digest.total }} item{{ digest.digest.total|pluralize }}</p>
+      </div>
+      <nav aria-label="Digest week" class="flex flex-wrap gap-2 rounded-box border border-base-300 bg-base-100 p-1">
+        {% for option in digest.options %}
+        <a class="btn btn-sm max-md:min-h-11 {% if option.current %}btn-neutral{% else %}btn-ghost{% endif %}" href="{{ option.url }}"{% if option.current %} aria-current="true"{% endif %}>{{ option.label }}</a>
+        {% endfor %}
+      </nav>
+    </div>
+    {% if digest.digest.total == 0 %}
+    <p>Nothing new this {% if digest.digest.week == "current" %}week so far{% else %}week{% endif %}: no new recurring charges, price changes or large transactions.</p>
+    {% endif %}
+    <div class="grid grid-cols-1 gap-4 wrap-anywhere lg:grid-cols-3">
+      {% for group in digest.groups %}
+      <section aria-labelledby="digest-{{ group.key }}-heading" class="min-w-0">
+        <div class="flex items-center justify-between gap-2">
+          <h3 id="digest-{{ group.key }}-heading" class="font-semibold">{{ group.title }} <span class="font-normal opacity-80">· {{ group.items|length }}</span></h3>
+          {% if group.items|length > 5 and group.see_all_url %}
+          <a class="link inline-flex min-h-11 items-center text-sm" href="{{ group.see_all_url }}">See all<span class="sr-only"> {{ group.title|lower }}</span></a>
+          {% endif %}
+        </div>
+        {% if group.items %}
+        <ul class="flex flex-col">
+          {% for item in group.items|slice:":5" %}
+          <li class="border-t border-base-300 first:border-t-0">
+            <a class="flex min-h-11 items-center justify-between gap-3 py-1 hover:underline" href="{{ item.url }}">
+              <span class="min-w-0">
+                <span class="block truncate">{{ item.title }}</span>
+                <span class="block text-sm opacity-80">{{ item.on|date:"D M j" }} · {{ item.detail }}</span>
+              </span>
+              <span class="flex-none tabular-nums">{{ item.amount_display }}</span>
+            </a>
+          </li>
+          {% endfor %}
+        </ul>
+        {% elif group.settings_url %}
+        <p class="text-sm opacity-80">Set a large-transaction amount in <a class="link" href="{{ group.settings_url }}">alert settings</a> to list them here.</p>
+        {% else %}
+        <p class="text-sm opacity-80">None.</p>
+        {% endif %}
+      </section>
+      {% endfor %}
+    </div>
+  </div>
+</article>

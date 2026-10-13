@@ -39,6 +39,25 @@ test('Home range and URL-only scenario retain state without changing actuals', a
   await expect(main(page)).not.toContainText('Synthetic scenario expense');
 });
 
+test('Home weekly digest switches weeks and keeps the selection on reload', async ({ page }) => {
+  const card = page.locator('#weekly-digest');
+  const weeks = card.getByRole('navigation', { name: 'Digest week' });
+  await expect(card.getByRole('heading', { level: 2 })).toHaveText('This week');
+  await expect(weeks.getByRole('link', { name: 'This week', exact: true })).toHaveAttribute('aria-current', 'true');
+  for (const group of ['New recurring charges', 'Price changes', 'Large transactions']) {
+    await expect(card.getByRole('heading', { level: 3, name: new RegExp('^' + group) })).toBeVisible();
+  }
+  await weeks.getByRole('link', { name: 'Last week', exact: true }).click();
+  await expect(page).toHaveURL(/digest_week=last/);
+  await page.reload();
+  await expect(card.getByRole('heading', { level: 2 })).toHaveText('Last week');
+  await expect(weeks.getByRole('link', { name: 'Last week', exact: true })).toHaveAttribute('aria-current', 'true');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await weeks.getByRole('link', { name: 'This week', exact: true }).click();
+  await expect(page).not.toHaveURL(/digest_week=/);
+  await expect(card.getByRole('heading', { level: 2 })).toHaveText('This week');
+});
+
 test('Category and description corrections persist with synthetic actor history', async ({ page }) => {
   const edit = await openShellCorrection(page);
   const id = edit.split('/')[2];
