@@ -1768,6 +1768,11 @@ class AlertSettingsForm(forms.Form):
         label="Expected balance below threshold in the next 7 days",
         help_text="Off by default. Uses the accounts and threshold from the bills calendar. Figures are expected, not guaranteed.",
     )
+    import_due_enabled = forms.BooleanField(
+        required=False,
+        label="Accounts due for a CSV import",
+        help_text="On by default. For accounts without a SimpleFIN transactions link whose newest import is over a month old.",
+    )
     unusual_spending_enabled = forms.BooleanField(required=False, label="Unusual spending")
     unusual_spending_ai_enabled = forms.BooleanField(
         required=False,
@@ -1804,7 +1809,7 @@ class AlertSettingsForm(forms.Form):
 
     # The settings page shows the fields grouped by alert kind under one save (issue #339).
     KIND_GROUPS = (
-        ("Accounts and balances", ("sync_enabled", "expected_balance_enabled")),
+        ("Accounts and balances", ("sync_enabled", "expected_balance_enabled", "import_due_enabled")),
         ("Recurring charges", ("recurring_price_enabled", "recurring_price_percent", "recurring_missed_enabled")),
         ("Budgets", ("budget_enabled",)),
         ("Large transactions", ("large_transaction_enabled", "large_transaction_amount")),
@@ -1840,6 +1845,7 @@ class AlertSettingsForm(forms.Form):
             "monthly_review_enabled": self.cleaned_data["monthly_review_enabled"],
             "monthly_review_ai_enabled": self.cleaned_data["monthly_review_ai_enabled"],
             "expected_balance_enabled": self.cleaned_data["expected_balance_enabled"],
+            "import_due_enabled": self.cleaned_data["import_due_enabled"],
             "unusual_spending_enabled": self.cleaned_data["unusual_spending_enabled"],
             "unusual_spending_ai_enabled": self.cleaned_data["unusual_spending_ai_enabled"],
             "unusual_category_percent": percent,

@@ -213,6 +213,8 @@ SOCIALACCOUNT_PROVIDERS = {
         ),
     }
 }
+# Days after an account's newest import coverage ends before it is due for import (#428).
+IMPORT_DUE_DAYS = int(os.environ.get("IMPORT_DUE_DAYS", "35"))
 INVITATION_TTL_HOURS = int(os.environ.get("INVITATION_TTL_HOURS", "48"))
 LOGIN_FAILURE_LIMIT = int(os.environ.get("LOGIN_FAILURE_LIMIT", "5"))
 LOGIN_FAILURE_WINDOW_SECONDS = int(os.environ.get("LOGIN_FAILURE_WINDOW_SECONDS", "900"))

@@ -171,6 +171,7 @@ from .planning_services import cash_flow_with_projection, visible_projection_inp
 from .budget_services import dashboard_budget_summary
 from .context_processors import navigation
 from .alert_services import save_alert_settings, settings_for, unread_alert_count
+from .import_due import due_import_accounts, import_due_link, last_covered_display
 from .projection import DEFAULT_HORIZON, SOURCE_PLANNED, SOURCE_SERIES
 from .scenario import (
     MAX_CHANGES,
@@ -265,8 +266,8 @@ def _scenario_choice_querysets(principal, inputs):
     return planned, series
 
 
-def _home_attention_items(principal, budget_summary):
-    """Phone "Needs attention" rows: unread alerts, then budgets over or near their limit."""
+def _home_attention_items(principal, budget_summary, *, today):
+    """Phone "Needs attention" rows: unread alerts, budgets over or near their limit, then imports due."""
     items = []
     unread = unread_alert_count(principal)
     if unread:
@@ -284,6 +285,15 @@ def _home_attention_items(principal, budget_summary):
         else:
             title, detail = f"{card.name} is close to its limit", f"{card.spent_display} of {card.amount_display}"
         items.append(SimpleNamespace(title=title, detail=detail, url=reverse("budgets"), icon="warning"))
+    for account in due_import_accounts(Account.objects.visible_to(principal), today=today):
+        items.append(
+            SimpleNamespace(
+                title=f"Import {account.name}",
+                detail=f"Last covered {last_covered_display(account.last_covered)}",
+                url=import_due_link(account),
+                icon="warning",
+            )
+        )
     return items
 
 
@@ -481,7 +491,7 @@ def home(request):
         )
     scenario_tokens = encode_changes(changes)
     budget_summary = dashboard_budget_summary(request.user, today=today)
-    attention_items = _home_attention_items(request.user, budget_summary)
+    attention_items = _home_attention_items(request.user, budget_summary, today=today)
     filter_pairs = _cash_flow_pairs(
         date_from=date_from or default_from,
         date_to=date_to or default_to,
@@ -1950,6 +1960,7 @@ def _alert_settings_form(person, data=None):
             "monthly_review_enabled": prefs.monthly_review_enabled,
             "monthly_review_ai_enabled": prefs.monthly_review_ai_enabled,
             "expected_balance_enabled": prefs.expected_balance_enabled,
+            "import_due_enabled": prefs.import_due_enabled,
             "unusual_spending_enabled": prefs.unusual_spending_enabled,
             "unusual_spending_ai_enabled": prefs.unusual_spending_ai_enabled,
             "unusual_category_percent": prefs.unusual_category_percent,
