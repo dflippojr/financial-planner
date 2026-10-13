@@ -1,4 +1,4 @@
-import { test, expect, signIn, openShellCorrection, audit, submit } from './fixtures';
+import { test, expect, signIn, openShellCorrection, audit, submit, previewSyntheticCsv } from './fixtures';
 import type { Page } from '@playwright/test';
 
 const main = (page: Page) => page.locator('main');
@@ -224,14 +224,7 @@ test('Generic CSV preview shows exact signs and invalid row, cancel deletes stag
   const href = await main(page).getByRole('link', { name: 'Import CSV', exact: true }).first().getAttribute('href');
   await page.goto(href!);
   const importURL = new URL(page.url()).pathname;
-  await page.getByLabel('Import profile').selectOption('generic');
-  await page.getByLabel('CSV, OFX or QFX file').setInputFiles('tests/fixtures/ui-pass/synthetic.csv');
-  await submit(page, page.getByRole('button', { name: 'Upload and map' }));
-  for (const [name, value] of [['date_column', 'Date'], ['description_column', 'Description'], ['amount_column', 'Amount'], ['currency_column', 'Currency']]) await page.locator('[name=' + name + ']').selectOption(value);
-  await page.locator('[name=date_format]').selectOption('iso');
-  await page.locator('[name=number_format]').selectOption('dot_none');
-  await page.getByLabel('One signed amount column').check();
-  await submit(page, page.getByRole('button', { name: 'Preview rows' }));
+  await previewSyntheticCsv(page);
   await expect(page.getByRole('heading', { name: 'Preview results' })).toBeVisible();
   await expect(main(page)).toContainText('2 new; 0 duplicate; 1 invalid.');
   await expect(page.locator('tr').filter({ hasText: 'Synthetic preview purchase' })).toContainText('12.34');

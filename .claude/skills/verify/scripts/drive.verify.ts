@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { signIn, submit } from '../../../../tests/ui/fixtures';
+import { signIn, submit, previewSyntheticCsv } from '../../../../tests/ui/fixtures';
 import { selected, shot } from './features';
 
 // The main path from SKILL.md's feature map, in order, on one disposable instance.
@@ -11,14 +11,7 @@ if (selected('import')) test('import: synthetic CSV commits two new rows', async
   await page.goto('/accounts/');
   const href = await main(page).getByRole('link', { name: 'Import CSV', exact: true }).first().getAttribute('href');
   await page.goto(href!);
-  await page.getByLabel('Import profile').selectOption('generic');
-  await page.getByLabel('CSV, OFX or QFX file').setInputFiles('tests/fixtures/ui-pass/synthetic.csv');
-  await submit(page, page.getByRole('button', { name: 'Upload and map' }));
-  for (const [name, value] of [['date_column', 'Date'], ['description_column', 'Description'], ['amount_column', 'Amount'], ['currency_column', 'Currency']]) await page.locator('[name=' + name + ']').selectOption(value);
-  await page.locator('[name=date_format]').selectOption('iso');
-  await page.locator('[name=number_format]').selectOption('dot_none');
-  await page.getByLabel('One signed amount column').check();
-  await submit(page, page.getByRole('button', { name: 'Preview rows' }));
+  await previewSyntheticCsv(page);
   await expect(main(page)).toContainText('2 new; 0 duplicate; 1 invalid.');
   await submit(page, page.getByRole('button', { name: 'Import new rows' }));
   await page.goto('/transactions/');

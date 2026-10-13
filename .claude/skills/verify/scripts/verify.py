@@ -42,8 +42,9 @@ EXTRA_ALLOWLIST = {"SYSTEMDRIVE", "PROGRAMFILES", "PROGRAMDATA", "PATHEXT", "NUM
                    "PROCESSOR_ARCHITECTURE", "OS", "PLAYWRIGHT_BROWSERS_PATH", "CI", "XDG_CACHE_HOME",
                    "XDG_RUNTIME_DIR", "DISPLAY"}
 LOG_SIGNAL = re.compile(r"Traceback|ERROR|CRITICAL|Exception|WARNING| 5\d\d ")
-GROUP: dict = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW}
-         if os.name == "nt" else {"start_new_session": True})
+# Windows: a gate that cannot start the real command until it belongs to our job.
+GATE = ("import subprocess,sys; token=sys.stdin.buffer.read(1); "
+        "sys.exit(subprocess.call(sys.argv[1:], stdin=subprocess.DEVNULL) if token == b'1' else 1)")
 
 
 class StepFailed(RuntimeError):
@@ -54,6 +55,68 @@ def scrubbed_environment(environ=None):
     environ = os.environ if environ is None else environ
     allowed = ENV_ALLOWLIST | EXTRA_ALLOWLIST
     return {key: value for key, value in environ.items() if key.upper() in allowed}
+
+
+class OwnedTree:
+    """A started process with every descendant: a process group on POSIX, a Job Object on Windows.
+
+    Ownership outlives the parent, so a browser or worker left behind by an exited
+    parent is still stopped and still counted when cleanup verifies.
+    """
+
+    def __init__(self, command, **options):
+        self.job = None
+        if os.name == "nt":
+            from scripts.windows_css_job import WindowsCssJob
+            self.job = WindowsCssJob()
+            try:
+                self.process = subprocess.Popen([sys._base_executable, "-c", GATE, *command], stdin=subprocess.PIPE,
+                                                creationflags=subprocess.CREATE_NO_WINDOW, **options)
+                self.job.assign(self.process.pid)
+                self.process.stdin.write(b"1")
+                self.process.stdin.close()
+            except BaseException:
+                self.job.terminate()
+                self.job.close()
+                raise
+        else:
+            self.process = subprocess.Popen(command, stdin=subprocess.DEVNULL, start_new_session=True, **options)
+        self.pid = self.process.pid
+
+    def running(self):
+        return self.process.poll() is None
+
+    def alive(self):
+        self.process.poll()  # Reap our own child so it does not count as a group member.
+        if self.job is not None:
+            return self.job.active() > 0
+        try:
+            os.killpg(self.pid, 0)
+        except ProcessLookupError:
+            return False
+        return True
+
+    def stop(self):
+        """Stop the whole tree, whether or not the parent has already exited."""
+        if self.job is not None:
+            if self.job.active():
+                self.job.terminate()
+        else:
+            try:
+                os.killpg(self.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        deadline = time.monotonic() + 5
+        while self.alive() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        if self.alive() and self.job is None:
+            os.killpg(self.pid, signal.SIGKILL)
+        self.process.wait(timeout=10)
+
+    def close(self):
+        if self.job is not None:
+            self.job.close()  # KILL_ON_JOB_CLOSE: nothing in the job survives this.
+            self.job = None
 
 
 class Ledger:
@@ -68,9 +131,9 @@ class Ledger:
     def save(self):
         (self.evidence / "ledger.json").write_text(json.dumps(self.data, indent=2))
 
-    def own(self, name, process, **details):
-        self.processes[name] = process
-        self.data["processes"][name] = {"pid": process.pid, **details}
+    def own(self, name, tree, **details):
+        self.processes[name] = tree
+        self.data["processes"][name] = {"pid": tree.pid, **details}
         self.save()
 
     def step(self, name, status, detail=""):
@@ -83,14 +146,12 @@ def launch(ledger, env):
     log = (ledger.evidence / "instance.log").open("w", encoding="utf-8")
     ledger.data["instance"]["handle"] = str(handle)
     try:
-        process = subprocess.Popen(
-            [sys.executable, "scripts/ui_instance.py", "--startup-handle", str(handle)],
-            cwd=ROOT, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=log,
-            text=True, encoding="utf-8", **GROUP)
+        tree = OwnedTree([sys.executable, "scripts/ui_instance.py", "--startup-handle", str(handle)],
+                         cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=log)
     finally:
         log.close()  # The child holds its own handle.
-    ledger.own("launcher", process, log=str(ledger.evidence / "instance.log"))
-    readiness = wait_for_readiness(process)
+    ledger.own("launcher", tree, log=str(ledger.evidence / "instance.log"))
+    readiness = wait_for_readiness(tree.process)
     port = int(readiness["url"].rsplit(":", 1)[1].rstrip("/"))
     # The readiness line also carries the disposable sign-in; keep it out of evidence.
     ledger.data["instance"].update(url=readiness["url"], port=port, directory=readiness["directory"])
@@ -103,8 +164,8 @@ def wait_for_readiness(process):
 
     def drain():
         # Keep reading after readiness so the launcher never blocks on stdout.
-        for line in process.stdout:
-            lines.put(line)
+        for raw in process.stdout:
+            lines.put(raw.decode("utf-8", errors="replace"))
         lines.put(None)
 
     threading.Thread(target=drain, daemon=True, name="verify-readiness").start()
@@ -142,34 +203,15 @@ def drive(ledger, env, feature):
     env = dict(env, VERIFY_URL=ledger.data["instance"]["url"], VERIFY_EVIDENCE=str(ledger.evidence),
                VERIFY_FEATURE=feature)
     with (ledger.evidence / "drive.log").open("w", encoding="utf-8") as log:
-        process = subprocess.Popen([node, str(cli), "test", "--config", str(HERE / "playwright.verify.config.ts")],
-                                   cwd=ROOT, env=env, stdin=subprocess.DEVNULL, stdout=log,
-                                   stderr=subprocess.STDOUT, **GROUP)
-    ledger.own("drive", process, log=str(ledger.evidence / "drive.log"))
+        tree = OwnedTree([node, str(cli), "test", "--config", str(HERE / "playwright.verify.config.ts")],
+                         cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
+    ledger.own("drive", tree, log=str(ledger.evidence / "drive.log"))
     try:
-        returncode = process.wait(timeout=DRIVE_TIMEOUT)
+        returncode = tree.process.wait(timeout=DRIVE_TIMEOUT)
     except subprocess.TimeoutExpired as error:
         raise StepFailed(f"drive exceeded {DRIVE_TIMEOUT}s") from error
     if returncode:
         raise StepFailed(f"drive exited {returncode}; see drive.log and drive-results.json")
-
-
-def stop_tree(process):
-    """Stop a process this run started, with its descendants, by its recorded PID."""
-    if process.poll() is not None:
-        return
-    if os.name == "nt":
-        subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False, timeout=10)
-    else:
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-    process.wait(timeout=10)
 
 
 def port_free(port):
@@ -189,51 +231,78 @@ def instance_directory(ledger):
 
 
 def cleanup(ledger):
-    """Teardown per docs/ui-testing.md, stop owned processes and verify nothing remains."""
+    """Teardown per docs/ui-testing.md, stop owned trees and verify nothing remains.
+
+    Each action is attempted independently: a failure is recorded as a FAIL check
+    and the remaining teardown, stops and verification still run.
+    """
     checks = []
-    for name, process in ledger.processes.items():
-        if name != "launcher" and process.poll() is None:
-            stop_tree(process)
-    directory = instance_directory(ledger)
-    launcher = ledger.processes.get("launcher")
-    if directory and directory.exists() and launcher and launcher.poll() is None:
-        result = subprocess.run([sys.executable, "scripts/ui_instance.py", "--teardown", str(directory)],
-                                cwd=ROOT, capture_output=True, text=True, timeout=30, check=False)
-        checks.append(("teardown request", result.returncode == 0,
-                       "accepted" if result.returncode == 0 else f"exit {result.returncode}"))
-    if launcher:
+
+    def attempt(name, action):
         try:
-            launcher.wait(timeout=EXIT_TIMEOUT)
-            forced = False
-        except subprocess.TimeoutExpired:
-            stop_tree(launcher)
-            forced = True
-        checks.append(("launcher exited", not forced,
-                       f"exit {launcher.returncode}" + (" after forced stop" if forced else "")))
-        if launcher.stdout:
-            launcher.stdout.close()
+            return action()
+        except Exception as error:
+            checks.append((name, False, f"{type(error).__name__}: {error}"))
+            return None
+
+    for name, tree in ledger.processes.items():
+        if name != "launcher":
+            attempt(f"stop {name} tree", tree.stop)
+    directory = attempt("instance directory lookup", lambda: instance_directory(ledger))
+    launcher = ledger.processes.get("launcher")
+    if directory and directory.exists() and launcher and launcher.running():
+        attempt("teardown request", lambda: request_teardown(directory, checks))
+    if launcher:
+        attempt("launcher exit", lambda: await_launcher(launcher, checks))
     if directory:
-        deadline = time.monotonic() + 15
-        while directory.exists() and time.monotonic() < deadline:
-            time.sleep(0.2)
-        retained = directory.exists() and (directory / "css-cleanup-failed.json").exists()
-        if directory.exists() and not retained and all(p.poll() is not None for p in ledger.processes.values()):
-            # Forced recovery: the owned launcher is confirmed stopped, so remove the exact directory.
-            shutil.rmtree(directory, ignore_errors=True)
-            checks.append(("forced directory removal", False, "launcher had not removed its storage"))
-        checks.append(("instance directory removed", not directory.exists(),
-                       "gone" if not directory.exists() else "retained; see docs/ui-testing.md Teardown"))
-    for name, process in ledger.processes.items():
-        checks.append((f"{name} process stopped", process.poll() is not None, f"PID {process.pid}"))
+        attempt("instance directory removal", lambda: await_directory(ledger, directory, checks))
+    for name, tree in ledger.processes.items():
+        alive = attempt(f"{name} tree query", tree.alive)
+        checks.append((f"{name} process tree stopped", alive is False, f"PID {tree.pid} and descendants"))
+        attempt(f"{name} job close", tree.close)
     port = ledger.data["instance"].get("port")
     if port:
         checks.append(("port free", port_free(port), f"127.0.0.1:{port}"))
     handle = ledger.evidence / "startup-handle.json"
     if handle.exists() and not (directory and directory.exists()):
-        handle.unlink()
+        attempt("startup handle removal", handle.unlink)
     ledger.data["cleanup"] = [{"check": name, "ok": ok, "detail": detail} for name, ok, detail in checks]
     ledger.save()
     return checks
+
+
+def request_teardown(directory, checks):
+    result = subprocess.run([sys.executable, "scripts/ui_instance.py", "--teardown", str(directory)],
+                            cwd=ROOT, capture_output=True, text=True, timeout=30, check=False)
+    checks.append(("teardown request", result.returncode == 0,
+                   "accepted" if result.returncode == 0 else f"exit {result.returncode}"))
+
+
+def await_launcher(launcher, checks):
+    try:
+        launcher.process.wait(timeout=EXIT_TIMEOUT)
+        forced = False
+    except subprocess.TimeoutExpired:
+        forced = True
+    if forced or launcher.alive():
+        launcher.stop()
+    checks.append(("launcher exited", not forced,
+                   f"exit {launcher.process.returncode}" + (" after forced stop" if forced else "")))
+    if launcher.process.stdout:
+        launcher.process.stdout.close()
+
+
+def await_directory(ledger, directory, checks):
+    deadline = time.monotonic() + 15
+    while directory.exists() and time.monotonic() < deadline:
+        time.sleep(0.2)
+    retained = directory.exists() and (directory / "css-cleanup-failed.json").exists()
+    if directory.exists() and not retained and not any(tree.alive() for tree in ledger.processes.values()):
+        # Forced recovery: every owned tree is confirmed stopped, so remove the exact directory.
+        shutil.rmtree(directory, ignore_errors=True)
+        checks.append(("forced directory removal", False, "launcher had not removed its storage"))
+    checks.append(("instance directory removed", not directory.exists(),
+                   "gone" if not directory.exists() else "retained; see docs/ui-testing.md Teardown"))
 
 
 def log_excerpts(evidence):

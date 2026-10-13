@@ -1,6 +1,7 @@
 """The verify skill's doctor checks and its cleanup after a failed drive step."""
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -127,36 +128,94 @@ def test_launch_environment_is_allowlisted():
     assert env == {"PATH": "/usr/bin"}
 
 
+
+
+class FakeProcess:
+    returncode = 0
+    stdout = None
+
+    def wait(self, timeout=None):
+        return 0
+
+
+class FakeTree:
+    def __init__(self, pid, stop_error=None):
+        self.pid, self.process, self.stop_error = pid, FakeProcess(), stop_error
+        self.calls = []
+
+    def running(self):
+        return False
+
+    def alive(self):
+        self.calls.append("alive")
+        return False
+
+    def stop(self):
+        self.calls.append("stop")
+        if self.stop_error:
+            raise self.stop_error
+
+    def close(self):
+        self.calls.append("close")
+
+
+def test_failed_stop_does_not_abort_the_rest_of_cleanup(tmp_path):
+    ledger = verify.Ledger(tmp_path)
+    drive = FakeTree(2, subprocess.TimeoutExpired("taskkill", 10))
+    launcher = FakeTree(1)
+    ledger.own("launcher", launcher)
+    ledger.own("drive", drive)
+    checks = {name: ok for name, ok, _ in verify.cleanup(ledger)}
+    assert checks["stop drive tree"] is False
+    assert checks["launcher exited"] and checks["launcher process tree stopped"]
+    assert checks["drive process tree stopped"]
+    assert "close" in launcher.calls and "close" in drive.calls
+    assert json.loads((tmp_path / "ledger.json").read_text())["cleanup"]
+
+
+def pid_alive(pid):
+    if sys.platform == "win32":
+        listing = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True).stdout
+        return str(pid) in listing.split()
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
 # Launches a real disposable instance, which needs the built CSS that the
 # browser CI job prepares; the drive step itself is replaced by a failure.
 @pytest.mark.browser
 def test_cleanup_after_failed_drive_leaves_nothing_running(tmp_path, monkeypatch):
-    started = []
+    evidence_root = tmp_path / "evidence"
+    marker = tmp_path / "grandchild.pid"
+    orphans = []
 
     def failing_drive(ledger, env, feature):
-        # Stands in for a browser or worker the drive step started and left behind.
-        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"], **verify.GROUP)
-        started.append(child)
-        ledger.own("drive", child)
+        # The parent exits at once and leaves a "browser" behind, as a crashed runner would.
+        spawn = ("import pathlib, subprocess, sys; "
+                 "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(600)']); "
+                 f"pathlib.Path({str(marker)!r}).write_text(str(child.pid))")
+        tree = verify.OwnedTree([sys.executable, "-c", spawn])
+        ledger.own("drive", tree)
+        tree.process.wait(timeout=30)
+        orphans.append(int(marker.read_text()))
         raise verify.StepFailed("deliberate drive failure")
 
     monkeypatch.setattr(verify, "drive", failing_drive)
-    try:
-        assert verify.run("alert", tmp_path) == 1
-    finally:
-        for child in started:
-            if child.poll() is None:
-                child.kill()
-    evidence = next(tmp_path.iterdir())
+    assert verify.run("alert", evidence_root) == 1
+    evidence = next(evidence_root.iterdir())
     ledger = json.loads((evidence / "ledger.json").read_text())
     assert ledger["steps"]["launch"]["status"] == "pass"
     assert ledger["steps"]["doctor"]["status"] == "pass"
     assert ledger["steps"]["drive"] == {"status": "FAIL", "detail": "deliberate drive failure"}
     assert ledger["cleanup"] and all(check["ok"] for check in ledger["cleanup"])
-    assert started[0].returncode is not None
+    assert orphans and not pid_alive(orphans[0])
     assert not Path(ledger["instance"]["directory"]).exists()
     assert verify.port_free(ledger["instance"]["port"])
     assert not (evidence / "startup-handle.json").exists()
     summary = (evidence / "summary.md").read_text()
     assert "| drive | FAIL | deliberate drive failure |" in summary
+    assert "| drive process tree stopped | pass |" in summary
     assert "password" not in (evidence / "ledger.json").read_text().lower()

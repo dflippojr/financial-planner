@@ -32,6 +32,8 @@ report it; on failure, read `drive.log`, `log-excerpts.txt` and
 1. **Launch.** Starts `scripts/ui_instance.py` exactly as the contract's
    "Start" section describes, as an owned background process with
    `--startup-handle` (see "Teardown"), from an allowlisted environment.
+   Each process the skill starts is owned with all its descendants: a
+   process group on Linux, a Job Object on Windows.
    Before reading readiness it writes `ledger.json` with the launcher PID, log
    path and startup handle; after readiness it adds URL, port and instance
    directory. The readiness sign-in is not written to evidence.
@@ -52,11 +54,12 @@ report it; on failure, read `drive.log`, `log-excerpts.txt` and
    `drive-results.json`, `drive.log`, `instance.log`, `log-excerpts.txt`
    (errors, warnings and 5xx lines plus the log tail) and `ledger.json`.
    Never commit or paste it anywhere public beyond `summary.md`.
-5. **Cleanup.** Stops the drive process tree by its recorded PID, runs the
-   contract's "Teardown" command for the recorded directory, waits for the
-   launcher PID to exit, then verifies: every owned PID stopped, the port
-   refuses connections, the instance directory is gone and the startup handle
-   is removed. A forced stop or retained directory is a cleanup FAIL; follow
+5. **Cleanup.** Stops the drive's process group or job (even if its parent
+   already exited), runs the contract's "Teardown" command for the recorded
+   directory, waits for the launcher to exit, then verifies: no process
+   remains in any owned group or job, the port refuses connections, the
+   instance directory is gone and the startup handle is removed. Each action
+   runs even when an earlier one fails; failures become FAIL rows. A forced stop or retained directory is a cleanup FAIL; follow
    the contract's "Teardown" recovery rules for it. Never stop processes by
    name or by guessing a port.
 
@@ -79,5 +82,6 @@ belong in `tests/ui/*.spec.ts` per the contract's "Journeys", not here.
 
 `tests/test_verify_skill.py` covers the doctor checks (healthy, not ready,
 non-loopback, missing seed, credentials, storage) and runs the whole skill with
-a deliberately failed drive step to prove cleanup leaves nothing behind (marked
-`browser` because it needs built CSS).
+a deliberately failed drive step whose parent exits and leaves a child behind,
+proving cleanup leaves nothing running (marked `browser` because it needs built
+CSS). A unit test checks that a failing stop does not abort the rest of cleanup.
