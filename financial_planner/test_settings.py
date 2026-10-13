@@ -36,3 +36,8 @@ if os.environ.get("FINANCIAL_PLANNER_TEST_DB") != "postgres":
 # Never contact SMTP from the test suite, even if operator variables are set.
 EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
 EMAIL_HOST = ""
+
+# Never contact an ntfy server from the test suite, even if operator variables are set.
+NTFY_URL = ""
+NTFY_TOKEN = ""
+NTFY_TRANSPORT = "fake"

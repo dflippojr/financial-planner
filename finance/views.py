@@ -42,6 +42,7 @@ from .forms import (
     ReceiptUploadForm,
     AlertSettingsForm,
     AlertEmailSettingsForm,
+    AlertNtfySettingsForm,
     CashFlowFilterForm,
     CategoryNameForm,
     DeleteMyDataForm,
@@ -2056,10 +2057,46 @@ def _save_alert_email_form(request, prefs, form):
     return redirect("settings-alerts")
 
 
+def _save_alert_ntfy_form(request, prefs, form):
+    if not form.is_valid():
+        return None
+    topic = form.cleaned_data["ntfy_topic"]
+    if topic != prefs.ntfy_topic and not recent_auth_is_fresh(request):
+        return reauth_redirect(request, "alert-ntfy-topic", reverse("settings-alerts"))
+    enabled = form.cleaned_data["ntfy_enabled"]
+    changed = [name for name, old, new in (
+        ("ntfy_enabled", prefs.ntfy_enabled, enabled),
+        ("ntfy_topic", prefs.ntfy_topic, topic),
+    ) if old != new]
+    with database_transaction.atomic():
+        prefs.ntfy_enabled = enabled
+        prefs.ntfy_topic = topic
+        prefs.save(update_fields=("ntfy_enabled", "ntfy_topic"))
+        if changed:
+            append_event(action=AuditEvent.Action.NOTIFICATION_ADDRESS_CHANGED, actor=prefs.person,
+                         target_id=prefs.pk, changed_fields=changed)
+    return redirect("settings-alerts")
+
+
+def _ntfy_settings_post(request, prefs, action):
+    """Returns (response, form, notice) for the ntfy save and test actions."""
+    from .alert_ntfy import ntfy_notices_available, send_test_ntfy
+
+    if not ntfy_notices_available():
+        return redirect("settings-alerts"), None, None
+    if action == "test-ntfy":
+        notice = ("Test push sent." if send_test_ntfy(prefs)
+                  else "Test push could not be sent. Check your saved topic or ask the operator.")
+        return None, None, notice
+    form = AlertNtfySettingsForm(request.POST)
+    return _save_alert_ntfy_form(request, prefs, form), form, None
+
+
 @require_http_methods(["GET", "HEAD", "POST"])
 @never_cache
 def settings_alerts(request):
     from .alert_email import email_notices_available, send_test_notice
+    from .alert_ntfy import ntfy_notices_available
 
     person = get_object_or_404(Person, user=request.user)
     prefs = settings_for(person)
@@ -2069,9 +2106,15 @@ def settings_alerts(request):
         "email_enabled": prefs.email_enabled,
         "notification_email": prefs.notification_email,
     })
-    notice = None
+    ntfy_form = AlertNtfySettingsForm(initial={"ntfy_enabled": prefs.ntfy_enabled, "ntfy_topic": prefs.ntfy_topic})
+    notice = ntfy_notice = None
     action = request.POST.get("action", "")
-    if request.method == "POST" and action in ("save-email", "test-email"):
+    if request.method == "POST" and action in ("save-ntfy", "test-ntfy"):
+        response, posted_form, ntfy_notice = _ntfy_settings_post(request, prefs, action)
+        if response is not None:
+            return response
+        ntfy_form = posted_form or ntfy_form
+    elif request.method == "POST" and action in ("save-email", "test-email"):
         if not available:
             return redirect("settings-alerts")
         if action == "test-email":
@@ -2090,6 +2133,8 @@ def settings_alerts(request):
     return render(request, "finance/settings_alerts.html", {
         "alert_settings_form": form, "email_notices_available": available,
         "email_settings_form": email_form, "email_notice": notice,
+        "ntfy_notices_available": ntfy_notices_available(), "ntfy_settings_form": ntfy_form,
+        "ntfy_notice": ntfy_notice,
     })
 
 
