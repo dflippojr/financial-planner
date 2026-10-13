@@ -1,0 +1,7 @@
+{
+  "import": { "page": "/transactions/", "heading": "Transactions" },
+  "cashflow": { "page": "/", "heading": "Cash flow" },
+  "recurring": { "page": "/recurring/", "heading": "Recurring charges" },
+  "dashboard": { "page": "/", "heading": "Cash flow" },
+  "alert": { "page": "/alerts/", "heading": "Alerts" }
+}

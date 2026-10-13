@@ -59,7 +59,10 @@ report it; on failure, read `drive.log`, `log-excerpts.txt` and
    directory, waits for the launcher to exit, then verifies: no process
    remains in any owned group or job, the port refuses connections, the
    instance directory is gone and the startup handle is removed. Each action
-   runs even when an earlier one fails; failures become FAIL rows. A forced stop or retained directory is a cleanup FAIL; follow
+   runs even when an earlier one fails; failures become FAIL rows. On Linux
+   the run is a child subreaper, so a descendant that escaped its group (the
+   launcher's own CSS builder session, if the launcher died) is adopted,
+   stopped and reported as a FAIL. A forced stop or retained directory is a cleanup FAIL; follow
    the contract's "Teardown" recovery rules for it. Never stop processes by
    name or by guessing a port.
 
@@ -74,8 +77,9 @@ report it; on failure, read `drive.log`, `log-excerpts.txt` and
 | `dashboard` | `/` side panels | Open Home | Budgets panel lists Dining; Needs attention panel visible |
 | `alert` | `/alerts/` | Mark the seeded "Dining is over budget" alert read, reload, follow its link | Row loses Unread and Mark as read; link reaches Budgets |
 
-Add a row (and a test in `scripts/drive.verify.ts`, plus its phone page in
-`scripts/features.ts`) when a new area joins the main path. Deeper journeys
+Add a row (an entry in `scripts/features.json`, which also sets the
+`--feature` choices and the phone page, plus a test in
+`scripts/drive.verify.ts`) when a new area joins the main path. Deeper journeys
 belong in `tests/ui/*.spec.ts` per the contract's "Journeys", not here.
 
 ## Tests

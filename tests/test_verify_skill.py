@@ -184,6 +184,44 @@ def pid_alive(pid):
     return True
 
 
+def test_relative_evidence_root_keeps_one_absolute_folder(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    def failing_launch(ledger, env):
+        raise verify.StepFailed("deliberate launch failure")
+
+    monkeypatch.setattr(verify, "launch", failing_launch)
+    assert verify.run("alert", "relative/evidence") == 1
+    evidence = next((tmp_path / "relative" / "evidence").iterdir())
+    ledger = json.loads((evidence / "ledger.json").read_text())
+    assert ledger["steps"] == {"launch": {"status": "FAIL", "detail": "deliberate launch failure"}}
+    assert (evidence / "summary.md").exists()
+
+
+def test_feature_choices_come_from_the_shared_registry():
+    registry = json.loads((SKILL_SCRIPTS / "features.json").read_text())
+    assert verify.FEATURES == tuple(registry)
+    assert all(entry["page"].startswith("/") and entry["heading"] for entry in registry.values())
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="PR_SET_CHILD_SUBREAPER is Linux-only; Windows owns descendants with a job")
+def test_orphan_in_its_own_session_is_adopted_and_stopped(tmp_path):
+    marker = tmp_path / "orphan.pid"
+    # Like the launcher's CSS builder: a new session, then its parent dies without cleanup.
+    spawn = ("import pathlib, subprocess, sys; "
+             "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(600)'], start_new_session=True); "
+             f"pathlib.Path({str(marker)!r}).write_text(str(child.pid))")
+    assert verify.set_subreaper(True)
+    try:
+        subprocess.run([sys.executable, "-c", spawn], check=True, timeout=30)
+        orphan = int(marker.read_text())
+        assert orphan in verify.adopted_orphans(set())
+        assert orphan in verify.sweep_orphans(set())
+        assert not pid_alive(orphan)
+    finally:
+        verify.set_subreaper(False)
+
+
 # Launches a real disposable instance, which needs the built CSS that the
 # browser CI job prepares; the drive step itself is replaced by a failure.
 @pytest.mark.browser

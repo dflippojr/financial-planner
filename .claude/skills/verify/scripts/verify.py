@@ -33,7 +33,8 @@ for path in (ROOT, HERE):
 import doctor  # noqa: E402
 from scripts.ui_instance import ENV_ALLOWLIST, disposable_directory  # noqa: E402
 
-FEATURES = ("import", "cashflow", "recurring", "dashboard", "alert")
+# One registry with features.ts; SKILL.md's feature map documents each entry.
+FEATURES = tuple(json.loads((HERE / "features.json").read_text(encoding="utf-8")))
 READY_TIMEOUT = 180  # A first run may build CSS before migrating and seeding.
 DRIVE_TIMEOUT = 600
 EXIT_TIMEOUT = 30
@@ -55,6 +56,9 @@ def scrubbed_environment(environ=None):
     environ = os.environ if environ is None else environ
     allowed = ENV_ALLOWLIST | EXTRA_ALLOWLIST
     return {key: value for key, value in environ.items() if key.upper() in allowed}
+
+
+OWNED_PIDS = set()  # Popen children; reaping is left to Popen so exit codes stay real.
 
 
 class OwnedTree:
@@ -82,12 +86,15 @@ class OwnedTree:
         else:
             self.process = subprocess.Popen(command, stdin=subprocess.DEVNULL, start_new_session=True, **options)
         self.pid = self.process.pid
+        OWNED_PIDS.add(self.pid)
 
     def running(self):
         return self.process.poll() is None
 
     def alive(self):
-        self.process.poll()  # Reap our own child so it does not count as a group member.
+        # Reap our own child, and adopted zombies, so neither counts as a live group member.
+        self.process.poll()
+        adopted_orphans(OWNED_PIDS)
         if self.job is not None:
             return self.job.active() > 0
         try:
@@ -101,22 +108,108 @@ class OwnedTree:
         if self.job is not None:
             if self.job.active():
                 self.job.terminate()
+            self._await_exit(5)
         else:
-            try:
-                os.killpg(self.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-        deadline = time.monotonic() + 5
-        while self.alive() and time.monotonic() < deadline:
-            time.sleep(0.1)
-        if self.alive() and self.job is None:
-            os.killpg(self.pid, signal.SIGKILL)
+            # SIGINT first: the launcher's KeyboardInterrupt path stops its own
+            # CSS builder session, which lives outside this process group.
+            for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGKILL):
+                try:
+                    os.killpg(self.pid, sig)
+                except ProcessLookupError:
+                    break
+                if self._await_exit(5):
+                    break
         self.process.wait(timeout=10)
+
+    def _await_exit(self, seconds):
+        deadline = time.monotonic() + seconds
+        while self.alive():
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.1)
+        return True
 
     def close(self):
         if self.job is not None:
             self.job.close()  # KILL_ON_JOB_CLOSE: nothing in the job survives this.
             self.job = None
+
+
+PR_SET_CHILD_SUBREAPER = 36
+
+
+def set_subreaper(enabled):
+    """On Linux, adopt orphaned descendants so cleanup can still find them.
+
+    The launcher runs its CSS builder in a separate session; if the launcher
+    dies without its own cleanup, that builder is reparented here instead of
+    to init. Windows needs no equivalent: the job holds nested descendants.
+    """
+    if not sys.platform.startswith("linux"):
+        return False
+    import ctypes
+    return ctypes.CDLL(None, use_errno=True).prctl(PR_SET_CHILD_SUBREAPER, int(enabled), 0, 0, 0) == 0
+
+
+def adopted_orphans(known, reap=True):
+    """Live direct children this process did not start itself; exited ones are reaped."""
+    if not sys.platform.startswith("linux"):
+        return []
+    found = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit() or int(entry.name) in known:
+            continue
+        try:
+            state, parent = (entry / "stat").read_text().rsplit(")", 1)[1].split()[:2]
+        except (OSError, ValueError):
+            continue
+        if int(parent) != os.getpid():
+            continue
+        if state == "Z":
+            if reap:
+                try:
+                    os.waitpid(int(entry.name), os.WNOHANG)
+                except ChildProcessError:
+                    pass  # Already reaped elsewhere.
+        else:
+            found.append(int(entry.name))
+    return found
+
+
+def sweep_orphans(known):
+    """Stop descendants reparented to this process. Being our unreaped children, their PIDs cannot be reused."""
+    stopped = []
+    for _ in range(3):  # A stopped orphan's own children are adopted in turn.
+        orphans = adopted_orphans(known)
+        if not orphans:
+            break
+        for pid in orphans:
+            stopped.append(pid)
+            leader = os.getpgid(pid) == pid
+            for sig in (signal.SIGTERM, signal.SIGKILL):
+                try:
+                    if leader:
+                        os.killpg(pid, sig)
+                    else:
+                        os.kill(pid, sig)
+                except ProcessLookupError:
+                    break
+                if reaped(pid, 5):
+                    break
+    return stopped
+
+
+def reaped(pid, seconds):
+    deadline = time.monotonic() + seconds
+    while True:
+        try:
+            if os.waitpid(pid, os.WNOHANG)[0]:
+                return True
+        except ChildProcessError:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.1)
 
 
 class Ledger:
@@ -126,6 +219,8 @@ class Ledger:
         self.evidence = evidence
         self.data = {"processes": {}, "instance": {}, "steps": {}}
         self.processes = {}
+        # Children that predate this run (a host such as a test worker) are never swept.
+        self.preexisting = set(adopted_orphans(set(), reap=False))
         self.save()
 
     def save(self):
@@ -260,6 +355,10 @@ def cleanup(ledger):
         alive = attempt(f"{name} tree query", tree.alive)
         checks.append((f"{name} process tree stopped", alive is False, f"PID {tree.pid} and descendants"))
         attempt(f"{name} job close", tree.close)
+    swept = attempt("orphan sweep", lambda: sweep_orphans(ledger.preexisting | {tree.pid for tree in ledger.processes.values()}))
+    if swept is not None:
+        checks.append(("no orphaned descendants", not swept,
+                       "none" if not swept else "stopped adopted PIDs " + ", ".join(map(str, swept))))
     port = ledger.data["instance"].get("port")
     if port:
         checks.append(("port free", port_free(port), f"127.0.0.1:{port}"))
@@ -360,12 +459,14 @@ def write_summary(ledger, feature, checks):
 
 
 def run(feature="all", evidence_root=None):
-    evidence_root = Path(evidence_root or ROOT / ".verify")
+    # Absolute, because Playwright resolves configured paths from its config directory.
+    evidence_root = Path(evidence_root or ROOT / ".verify").resolve()
     evidence = evidence_root / f"{datetime.now():%Y%m%d-%H%M%S}-{feature}"
     evidence.mkdir(parents=True)
     ledger = Ledger(evidence)
     env = scrubbed_environment()
     current = "launch"
+    set_subreaper(True)
     try:
         for current, action in (("launch", lambda: launch(ledger, env)),
                                 ("doctor", lambda: run_doctor(ledger, env)),
@@ -376,6 +477,7 @@ def run(feature="all", evidence_root=None):
         ledger.step(current, "FAIL", str(error) or type(error).__name__)
     finally:
         checks = cleanup(ledger)
+        set_subreaper(False)
         write_summary(ledger, feature, checks)
     passed = all(step["status"] == "pass" for step in ledger.data["steps"].values())
     clean = all(ok for _, ok, _ in checks)
