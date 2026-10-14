@@ -132,7 +132,7 @@ def test_harness_session_is_not_resumed_once_a_used_account_is_out_of_sight(harn
 
 
 @pytest.mark.django_db
-def test_reply_is_dropped_when_unshare_lands_before_the_turn_records_its_account(harness, monkeypatch):
+def test_reply_is_dropped_when_access_is_revoked_after_the_turn_recorded_its_account(harness, monkeypatch):
     import finance.chat_runner as chat_runner
 
     state, url = harness
