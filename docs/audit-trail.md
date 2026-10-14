@@ -29,13 +29,13 @@ The server clock supplies event times; UUID tie-breaking gives deterministic ord
 
 ## Financial workflow coverage (#273)
 
-Owner decisions: all listed actions are covered; `tags_changed` records a transaction's tag membership change without names; ordinary note edits have no event (#98); a committed import with no new rows records one `import_no_new_rows` event; every download records `download_prepared`. Retention, visibility, deletion and write-failure behavior are exactly those above.
+Owner decisions: all listed actions are covered; `tags_changed` records a transaction's tag membership change without names; ordinary note edits have no event (#98); a committed import with no new rows still creates an empty coverage batch (#437) and records one `import_no_new_rows` event carrying its `batch_id`; every download records `download_prepared`. Retention, visibility, deletion and write-failure behavior are exactly those above.
 
 Each row of the matrix is an explicit `record(...)` call inside the action's own transaction, in the service function rather than the view, so every entry path (UI, CLI, chat confirmation, automatic rules) shares one hook.
 
 | Area | Action (target type) | Audience | Notes |
 | --- | --- | --- | --- |
-| Import | `import_committed` (import_batch), `import_no_new_rows` (account), `import_undone` (import_batch) | account | Metadata: batch ID, source `format` enum, new/duplicate/invalid/removed counts. Undo names the undoing member. No file name, hash or row content. SimpleFIN sync is outside this slice. |
+| Import | `import_committed` (import_batch), `import_no_new_rows` (account), `import_undone` (import_batch) | account | Metadata: batch ID (also on `import_no_new_rows`), source `format` enum, new/duplicate/invalid/removed counts. Undo names the undoing member. No file name, hash or row content. SimpleFIN sync is outside this slice. |
 | Manual entry | `record_created` / `record_deleted` (transaction) | account | Deletion references the existing correction-history ID. |
 | Balances | `record_created` / `record_edited` / `record_deleted` (balance) | account | Changed field names only (`date`, `amount`, `contribution`, `note`); same-date upserts are edits. |
 | Budgets | created, edited, archived, restored, `rollover_toggled`, rollover reset (`record_edited`, `rollover`, history ID) (budget) | household for household budgets, else the owner | |
