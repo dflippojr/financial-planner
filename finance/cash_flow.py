@@ -509,7 +509,9 @@ def cash_flow_report(
     accounts = selected_accounts(
         principal, account=account, scope=scope, cash_flow_only=True, accounts=accounts
     )
-    batches_by_account = _batches_by_account(principal, accounts)
+    # An archived account's batches are archived with it, so it can never show coverage.
+    coverage_accounts = [item for item in accounts if item.status == Account.Status.ACTIVE]
+    batches_by_account = _batches_by_account(principal, coverage_accounts)
     account_filter = accounts
     periods = []
     windows = list(iter_period_windows(date_from, date_to, grouping))
@@ -525,7 +527,7 @@ def cash_flow_report(
             spending_minor=spending_minor,
             net_minor=income_minor - spending_minor,
         )
-        missing_accounts = _period_missing_accounts(window, accounts, batches_by_account) if accounts else []
+        missing_accounts = _period_missing_accounts(window, coverage_accounts, batches_by_account)
         periods.append(
             SimpleNamespace(
                 start=window.start,
