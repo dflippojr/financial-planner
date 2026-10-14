@@ -173,3 +173,48 @@ def test_delimiter_is_detected_for_quoted_and_unquoted_headers(content, first_ro
     assert len(document.headers) == 3
     assert document.rows[0].cells == first_row
     assert document.rows[0].structural_error is None
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        b"When,Memo,Amount\n09/27/2026,SYNTHETIC\x00GROCER,-12.34\n",
+        b"When,Me\x00mo,Amount\n09/27/2026,SYNTHETIC GROCER,-12.34\n",
+        b"When,Memo,Amount\n09/27/2026,SYNTHETIC GROCER,-12.34\x00\n",
+    ],
+    ids=["cell", "header", "amount"],
+)
+def test_nul_bytes_are_rejected_before_any_row_or_header_is_read(content):
+    with pytest.raises(CsvInputError, match="NUL bytes"):
+        read_csv(content)
+
+
+def source_id_preview(source_id):
+    header = "When,Memo,Amount,Reference\n"
+    document = read_csv(f"{header}09/27/2026,SYNTHETIC GROCER,-1.00,{source_id}\n".encode())
+    return preview_csv(document, mapping(source_id_column="Reference")).rows[0]
+
+
+def test_source_id_at_the_column_limit_is_valid():
+    row = source_id_preview("9" * 255)
+
+    assert row.is_valid
+    assert len(row.source_transaction_id) == 255
+
+
+def test_source_id_over_the_column_limit_is_a_row_error():
+    row = source_id_preview("9" * 256)
+
+    assert not row.is_valid
+    assert row.errors == ("Transaction ID exceeds the 255 character limit.",)
+
+
+def test_huntington_transaction_number_over_255_chars_is_a_row_error_not_a_db_error():
+    from finance.csv_import.profiles import HUNTINGTON_MAPPING
+
+    header = "Date,Reference Number,Payee Name,Memo,Amount,Category Name,Transaction Number\n"
+    content = (header + "09/27/2026,1,SYNTHETIC,MEMO,-1.00,," + "9" * 300 + "\n").encode()
+
+    row = preview_csv(read_csv(content), HUNTINGTON_MAPPING).rows[0]
+
+    assert not row.is_valid
