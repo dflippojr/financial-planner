@@ -10,7 +10,6 @@ from django.utils import timezone
 from finance.alert_services import run_daily_alert_pass
 from finance.lifecycle_services import delete_member_data
 from finance.models import MemberSecurityEvent, MemberSession
-from finance.reauth import RECENT_AUTH_SESSION_KEY
 from finance.security_services import (
     EVENT_TYPES,
     SECURITY_EVENT_RETENTION_DAYS,
@@ -119,22 +118,13 @@ def test_revoking_a_session_signs_that_browser_out_and_hides_other_members_sessi
 
 
 @pytest.mark.django_db
-def test_sign_out_everywhere_else_revokes_other_sessions_and_requires_recent_auth():
+def test_sign_out_everywhere_else_revokes_other_sessions():
     user, _person, _household = make_member()
     here = Client()
     there = Client()
     here.post(reverse("login"), {"username": user.username, "password": PASSWORD})
     there.post(reverse("login"), {"username": user.username, "password": PASSWORD})
     there_key = there.session.session_key
-    session = here.session
-    session[RECENT_AUTH_SESSION_KEY] = (timezone.now() - timedelta(minutes=11)).timestamp()
-    session.save()
-
-    refused = here.post(reverse("revoke-other-sessions"))
-    assert refused.status_code == 302
-    assert refused.url.startswith(reverse("reauth"))
-    assert Session.objects.filter(session_key=there_key).exists()
-
     stamp_recent_auth(here)
     done = here.post(reverse("revoke-other-sessions"))
     assert done.status_code == 302

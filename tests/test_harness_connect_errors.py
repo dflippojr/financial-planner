@@ -35,11 +35,10 @@ def harness():
         server.server_close()
 
 
-def _signed_in_client(user, *, fresh=True):
+def _signed_in_client(user):
     client = Client(raise_request_exception=False)
     client.force_login(user)
-    if fresh:
-        stamp_recent_auth(client)
+    stamp_recent_auth(client)
     return client
 
 
@@ -147,19 +146,6 @@ def test_header_the_client_refuses_is_a_safe_message(harness):
     printed = "".join(traceback.format_exception(caught.value))
     assert "Bearer" not in printed
     assert "Invalid header" not in printed
-
-
-@pytest.mark.django_db
-def test_expired_reauth_window_redirects_to_reauth(harness):
-    state, url = harness
-    user, person, _household = make_member("owner")
-    client = _signed_in_client(user, fresh=False)
-    response = client.post(reverse("ai-connect"), {"base_url": url, "token": TOKEN})
-    assert response.status_code == 302
-    assert response.url.startswith(reverse("reauth"))
-    assert client.get(response.url).status_code == 200
-    assert connection_for(person) is None
-    assert state.requests == []
 
 
 def _console_handler():

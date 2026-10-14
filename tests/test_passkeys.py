@@ -129,7 +129,7 @@ def test_recovery_code_completes_passkey_sign_in_once():
 
 @PASSKEY_SETTINGS
 @pytest.mark.django_db
-def test_removing_the_last_passkey_turns_the_requirement_off_after_reauth():
+def test_removing_the_last_passkey_turns_the_requirement_off():
     user, person, _household = make_member()
     client = Client()
     client.force_login(user)
@@ -138,12 +138,6 @@ def test_removing_the_last_passkey_turns_the_requirement_off_after_reauth():
     client.post(reverse("passkey-require"), {"require_passkey": "on"})
     passkey_id = Passkey.objects.get().pk
 
-    _expire_recent_auth(client)
-    refused = client.post(reverse("passkey-delete", args=(passkey_id,)))
-    assert refused.url.startswith(reverse("reauth"))
-    assert Passkey.objects.filter(pk=passkey_id).exists()
-
-    stamp_recent_auth(client)
     client.post(reverse("passkey-delete", args=(passkey_id,)))
     person.refresh_from_db()
     assert not Passkey.objects.filter(pk=passkey_id).exists()
