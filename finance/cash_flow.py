@@ -263,9 +263,14 @@ def _batches_by_account(principal, accounts):
 
 
 def _period_missing_accounts(window, accounts, batches_by_account):
-    """Names of the selected accounts with no import covering any of the window, by name."""
+    """Names of the selected accounts with no import covering any of the window, by name.
+
+    Investment accounts are balance-only (no importer), so they never carry the flag.
+    """
     missing = []
     for account in accounts:
+        if account.account_type == Account.Type.INVESTMENT:
+            continue
         covered = any(
             batch.date_range_start <= window.end and batch.date_range_end >= window.start
             for batch in batches_by_account.get(account.pk, ())

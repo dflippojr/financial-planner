@@ -28,7 +28,7 @@ from finance.category_services import (
     link_refund,
     refresh_transfer_pairs,
 )
-from finance.models import Account, Household, ImportBatch, Membership, Person, Transaction
+from finance.models import Account, BalanceSnapshot, Household, ImportBatch, Membership, Person, Transaction
 
 
 PASSWORD = "Synthetic-passphrase-42!"
@@ -630,3 +630,39 @@ def test_home_coverage_column_names_the_account_missing_an_import(_localdate):
     )
     assert only_covered.context["report"].periods[0].missing_accounts == []
     assert "All imported" in only_covered.content.decode()
+
+
+@pytest.mark.django_db
+def test_balance_only_investment_account_is_never_flagged_missing_import():
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner, name="Synthetic Checking")
+    make_transaction(
+        owner,
+        checking,
+        transaction_date=date(2026, 9, 10),
+        range_start=date(2026, 7, 1),
+        range_end=date(2026, 9, 30),
+    )
+    uncovered = make_account(owner, name="Synthetic Uncovered")
+    retirement = make_account(owner, name="Synthetic 401k", account_type=Account.Type.INVESTMENT)
+    for month_end in (date(2026, 7, 31), date(2026, 8, 31), date(2026, 9, 30)):
+        BalanceSnapshot.objects.create(
+            account=retirement,
+            snapshot_date=month_end,
+            amount_minor=1_000_000,
+            currency="USD",
+            source=BalanceSnapshot.Source.MANUAL,
+            net_contribution_minor=0,
+        )
+
+    report = cash_flow_report(
+        owner.user,
+        date_from=date(2026, 7, 1),
+        date_to=date(2026, 9, 30),
+        grouping="month",
+        today=date(2026, 10, 13),
+    )
+
+    # Only the uncovered cash account is flagged; the investment account never is.
+    assert [period.missing_accounts for period in report.periods] == [[uncovered.name]] * 3
