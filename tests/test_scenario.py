@@ -8,7 +8,7 @@ from django.urls import reverse
 from django.http import QueryDict
 
 from finance.cash_flow import cash_flow_chart_data, format_minor
-from finance.models import PlannedItem, SavingsGoal
+from finance.models import Account, PlannedItem, RecurringSeries, RecurringSeriesMember, SavingsGoal
 from finance.planning_services import visible_projection_inputs
 from finance.projection import KIND_EXPENSE, KIND_INCOME, SOURCE_SERIES, project_cash_flow
 from finance.scenario import (
@@ -471,3 +471,36 @@ def test_scenario_form_builds_add_and_one_off_changes():
     once = oneoff.to_change()
     assert (added.type, added.amount_minor, added.cadence, added.end) == (CHANGE_ADD, 123_456, "monthly", None)
     assert (once.type, once.amount_minor, once.start) == (CHANGE_ONEOFF, 1_000, date(2026, 11, 1))
+
+
+@pytest.mark.django_db
+def test_a_member_can_pause_a_household_bill_another_member_confirmed():
+    owner = make_person("owner")
+    member = make_person("member")
+    household = make_household(owner, member)
+    shared = make_account(owner, name="Synthetic Joint", scope=Account.Scope.HOUSEHOLD, household=household)
+    series = RecurringSeries.objects.create(
+        person=owner, merchant_key="synthetic electric", display_name="Synthetic Electric",
+        cadence=RecurringSeries.Cadence.MONTHLY, typical_amount_minor=-300_000,
+        status=RecurringSeries.Status.CONFIRMED, confidence=RecurringSeries.Confidence.HIGH,
+        reasons=["synthetic"], fingerprint="f" * 64,
+    )
+    for month, tag in ((7, "1"), (8, "2"), (9, "3")):
+        row = make_transaction(
+            owner, shared, transaction_date=date(2026, month, 20), amount_minor=-300_000, fingerprint=tag * 64
+        )
+        RecurringSeriesMember.objects.create(series=series, transaction=row)
+    client = Client()
+    client.force_login(member.user)
+    query = {"scope": "household", "horizon": "3"}
+
+    page = client.get(reverse("home"), query)
+    assert page.status_code == 200
+    assert f'value="{series.pk}"' in page.content.decode()
+
+    response = client.get(
+        reverse("home"),
+        {**query, "scenario_action": "add", "change_type": "pause", "series": series.pk, "pause_from": "2026-12-01"},
+    )
+    assert response.status_code == 302
+    assert "sc=" in response["Location"]
