@@ -591,7 +591,7 @@ def test_a_household_bill_that_moved_between_accounts_survives_a_single_account_
 
     for person in (owner, member):
         names = [
-            i.name for i in visible_projection_inputs(person.user, account=new_account) if i.source == "series"
+            i.name for i in visible_projection_inputs(person.user, account=new_account, scope="household") if i.source == "series"
         ]
         assert names == ["Synthetic Electric"]
 
@@ -869,3 +869,35 @@ def test_unarchiving_and_completing_keep_working_with_wishlist_fields():
         assert client.post(reverse(name, args=[goal.pk])).status_code == 302
     goal.refresh_from_db()
     assert goal.status == "active" and goal.completed_at is None and goal.priority == 1
+
+
+@pytest.mark.django_db
+def test_household_projection_counts_a_bill_once_when_histories_chain_through_a_third_series():
+    owner, member, household = household_fixture()
+    shared = Account.objects.get(name="Synthetic Joint")
+    early = make_confirmed_series(owner, "Synthetic Electric", shared, months=(1, 2, 3, 4))
+    middle = make_confirmed_series(member, "Synthetic Electric", shared, months=(4,))
+    RecurringSeriesMember.objects.filter(series=middle).delete()
+    RecurringSeriesMember.objects.create(
+        series=middle, transaction=early.members.order_by("transaction__transaction_date").last().transaction
+    )
+    late = make_confirmed_series(owner, "Synthetic Electric", shared, months=(7, 8, 9), amount_minor=310_000)
+    RecurringSeriesMember.objects.create(
+        series=middle, transaction=late.members.order_by("transaction__transaction_date").first().transaction
+    )
+
+    for person in (owner, member):
+        items = [i for i in visible_projection_inputs(person.user, scope="household") if i.source == "series"]
+        assert len(items) == 1
+
+
+@pytest.mark.django_db
+def test_a_combined_view_of_only_household_accounts_keeps_the_viewers_own_series():
+    owner, member, household = household_fixture()
+    shared = Account.objects.get(name="Synthetic Joint")
+    make_confirmed_series(owner, "Synthetic Electric", shared)
+    accounts = Account.objects.visible_to(member.user).filter(scope=Account.Scope.HOUSEHOLD)
+
+    items = visible_projection_inputs(member.user, accounts=accounts)
+
+    assert [i for i in items if i.source == "series"] == []

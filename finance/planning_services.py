@@ -99,29 +99,41 @@ def _one_series_per_bill(rows, replaced):
     """Collapse members' series for one joint bill into a single series.
 
     Two members may each confirm the same household bill; it must project
-    once. Series are the same bill when they share a merchant, a cadence and
-    at least one charge, so two distinct bills from one merchant both stay.
-    The series with the latest charge wins (it holds the current price), then
-    the lowest id. A planned item replacing a series replaces the bill, even
-    when that series is no longer active, because its charges still identify
-    the bill.
+    once. Series belong to one bill when they share a merchant and cadence and
+    are linked by shared charges, directly or through a third series, so two
+    distinct bills from one merchant both stay. The series with the latest
+    charge wins (it holds the current price), then the lowest id. A planned
+    item replacing a series replaces the whole bill, even when that series is
+    no longer active, because its charges still identify the bill.
     """
     charges = _charge_ids_by_series([row.pk for row in rows] + list(replaced))
     replaced_charges = set().union(*(charges.get(pk, set()) for pk in replaced)) if replaced else set()
+    parent = {row.pk: row.pk for row in rows}
+
+    def find(pk):
+        while parent[pk] != pk:
+            parent[pk] = parent[parent[pk]]
+            pk = parent[pk]
+        return pk
+
+    first_owner = {}
+    for row in rows:
+        for charge_id in charges.get(row.pk, ()):
+            key = (row.merchant_key, row.cadence, charge_id)
+            if key in first_owner:
+                parent[find(row.pk)] = find(first_owner[key])
+            else:
+                first_owner[key] = row.pk
+    bills = {}
+    for row in rows:
+        bills.setdefault(find(row.pk), []).append(row)
     chosen = []
-    ordered = sorted(rows, key=lambda row: (row.last_on is None, -(row.last_on.toordinal() if row.last_on else 0), row.pk))
-    for row in ordered:
-        row_charges = charges.get(row.pk, set())
-        if row.pk in replaced or row_charges & replaced_charges:
+    for members in bills.values():
+        if any(row.pk in replaced or charges.get(row.pk, set()) & replaced_charges for row in members):
             continue
-        duplicate = any(
-            other.person_id != row.person_id
-            and (other.merchant_key, other.cadence) == (row.merchant_key, row.cadence)
-            and row_charges & charges.get(other.pk, set())
-            for other in chosen
+        chosen.append(
+            min(members, key=lambda row: (row.last_on is None, -(row.last_on.toordinal() if row.last_on else 0), row.pk))
         )
-        if not duplicate:
-            chosen.append(row)
     return sorted(chosen, key=lambda row: (row.display_name, row.pk))
 
 
@@ -176,7 +188,10 @@ def visible_projection_inputs(principal, *, account=None, scope="", accounts=Non
     )
     if selection is not None:
         eligible = eligible.filter(account__in=selection)
-    if household_only:
+    # Only an explicit household scope shares series between members; a combined
+    # view that happens to hold only household accounts stays the viewer's own.
+    shared_series = household_only and scope == Account.Scope.HOUSEHOLD
+    if shared_series:
         # Series are stored per person, so a household selection reads every
         # member's series whose charges all sit in the selected household
         # accounts. Every member then projects the same bills.
@@ -189,7 +204,7 @@ def visible_projection_inputs(principal, *, account=None, scope="", accounts=Non
         cancelled_at__isnull=True,
         members__transaction__in=eligible,
     )
-    if household_only:
+    if shared_series:
         # Judge every charge against all household accounts, not just the
         # selected one, so a bill that moved between accounts stays whole.
         series = confine_recurring_series_to_accounts(
@@ -209,7 +224,7 @@ def visible_projection_inputs(principal, *, account=None, scope="", accounts=Non
     series_rows = list(
         series.annotate(last_on=Max("members__transaction__transaction_date")).order_by("display_name", "pk")
     )
-    if household_only:
+    if shared_series:
         series_rows = _one_series_per_bill(series_rows, replaced)
     else:
         series_rows = [row for row in series_rows if row.pk not in replaced]
