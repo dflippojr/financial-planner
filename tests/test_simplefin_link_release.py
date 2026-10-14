@@ -62,13 +62,12 @@ def test_resharing_does_not_restart_released_feed():
 
 
 @pytest.mark.django_db
-def test_release_is_audited_for_link_owner_only():
+def test_release_is_audited_to_link_owner_with_unsharer_as_actor():
     owner, member, shared, member_connection = _setup()
-    before = AuditEvent.objects.filter(action=AuditEvent.Action.SIMPLEFIN_LINKS_CHANGED).count()
     unshare_account(owner, shared.pk)
-    events = AuditEvent.objects.filter(action=AuditEvent.Action.SIMPLEFIN_LINKS_CHANGED).order_by("pk")[before:]
-    assert [(e.private_owner_id, e.target_id, e.changed_fields) for e in events] == [
-        (member.pk, member_connection.pk, ["account_links"])
+    events = AuditEvent.objects.filter(action=AuditEvent.Action.SIMPLEFIN_LINKS_CHANGED, affected_member=member)
+    assert [(e.private_owner_id, e.actor_id, e.affected_member_id, e.target_id, e.changed_fields) for e in events] == [
+        (member.pk, owner.pk, member.pk, member_connection.pk, ["account_links"])
     ]
 
 

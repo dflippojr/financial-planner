@@ -107,7 +107,10 @@ def append_event(*, action, account=None, actor=None, actor_kind=AuditEvent.Acto
         if account is not None or principal is None or not target_id:
             raise ValidationError("Unsupported audit target.")
         if audience == AUDIENCE_PERSONAL:
-            private_owner_id = principal.pk
+            # A verified trusted caller may file a personal event in the audience of
+            # the member it affects while the actor stays the initiator.
+            audience_person = private_owner if verified and private_owner is not None else principal
+            private_owner_id = audience_person.pk
         else:
             if household is None:
                 raise ValidationError("Unsupported audit target.")
