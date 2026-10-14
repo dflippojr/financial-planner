@@ -321,6 +321,36 @@ def test_archived_import_batch_does_not_cover_a_period():
 
 
 @pytest.mark.django_db
+def test_archived_account_is_not_flagged_missing_import():
+    from finance.lifecycle_services import archive_account
+
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner)
+    old_card = make_account(owner, name="Synthetic Old Card", account_type=Account.Type.CREDIT_CARD)
+    for account in (checking, old_card):
+        for month in range(1, 4):
+            make_transaction(
+                owner,
+                account,
+                transaction_date=date(2026, month, 10),
+                range_start=date(2026, month, 1),
+                range_end=date(2026, month, 28),
+            )
+    archive_account(owner.user, old_card.pk)
+    report = cash_flow_report(
+        owner,
+        date_from=date(2026, 1, 1),
+        date_to=date(2026, 3, 31),
+        grouping=GROUPING_MONTH,
+        today=date(2026, 4, 15),
+    )
+
+    assert [period.missing_accounts for period in report.periods] == [[], [], []]
+    assert not any(period.missing_import for period in report.periods)
+
+
+@pytest.mark.django_db
 def test_quarter_and_year_windows_cover_selected_range():
     windows = list(iter_period_windows(date(2026, 2, 1), date(2026, 8, 1), GROUPING_QUARTER))
     years = list(iter_period_windows(date(2025, 6, 1), date(2026, 2, 1), GROUPING_YEAR))
