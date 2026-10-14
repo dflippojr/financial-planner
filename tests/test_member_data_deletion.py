@@ -18,12 +18,16 @@ from finance.models import (
     Account,
     Household,
     ImportBatch,
+    MemberSession,
     Membership,
+    Passkey,
     Person,
     PlannedItem,
     Transaction,
     TransactionCorrectionHistory,
 )
+from finance.policy_services import current_policy
+from finance.security_services import EVENT_TYPES, record_security_event
 from tests.helpers import stamp_recent_auth
 
 
@@ -128,6 +132,13 @@ def test_delete_member_data_removes_owned_rows_and_anonymizes_shared_history():
         new_description="Synthetic shared",
     )
     create_recovery_codes(owner.user)
+    Passkey.objects.create(member=owner, name="Synthetic", credential_id=b"cred", public_key=b"key")
+    record_security_event(owner, EVENT_TYPES.MEMBER_DATA_EXPORT)
+    MemberSession.objects.create(member=owner, session_key="synthetic-session-key")
+    policy = current_policy()
+    owner.privacy_policy_declined_version = policy
+    owner.privacy_policy_dismissed_version = policy
+    owner.save(update_fields=("privacy_policy_declined_version", "privacy_policy_dismissed_version"))
     person_id = owner.pk
     user_id = owner.user_id
     member_private = make_account(member, name="Member Private")
@@ -576,19 +587,3 @@ def test_last_member_can_delete_data_while_a_former_member_still_uses_household_
     # The household is kept whole: none of its other rows are partly deleted.
     assert Household.objects.filter(pk=household.pk).exists()
     assert PlannedItem.objects.filter(pk=former_plan.pk).exists()
-
-
-@pytest.mark.django_db
-def test_personal_policy_cleanup_clears_dismissals_and_denials():
-    from finance.lifecycle_services import _delete_personal_records
-    from finance.policy_services import current_policy
-
-    person = make_person("dismissed")
-    policy = current_policy()
-    person.privacy_policy_declined_version = policy
-    person.privacy_policy_dismissed_version = policy
-    person.save(update_fields=("privacy_policy_declined_version", "privacy_policy_dismissed_version"))
-    _delete_personal_records(person)
-    person.refresh_from_db()
-    assert person.privacy_policy_declined_version_id is None
-    assert person.privacy_policy_dismissed_version_id is None

@@ -8,7 +8,6 @@ from django.urls import reverse
 from django.utils import timezone
 
 from finance.auth_services import create_recovery_codes
-from finance.lifecycle_services import delete_member_data
 from finance.models import Passkey, RecoveryCode
 from finance.reauth import RECENT_AUTH_SESSION_KEY
 from tests.helpers import stamp_recent_auth
@@ -171,20 +170,6 @@ def test_passkey_assertion_stamps_recent_auth():
     )
     assert result.json()["ok"] is True
     assert client.session["recent_auth_at"] > 1
-
-
-@PASSKEY_SETTINGS
-@pytest.mark.django_db
-def test_member_data_deletion_removes_passkeys():
-    user, person, _household = make_member()
-    client = Client()
-    client.force_login(user)
-    stamp_recent_auth(client)
-    _register_passkey(client)
-    assert Passkey.objects.filter(member=person).count() == 1
-    person_id = person.pk
-    delete_member_data(person, {})
-    assert not Passkey.objects.filter(member_id=person_id).exists()
 
 
 @PASSKEY_SETTINGS

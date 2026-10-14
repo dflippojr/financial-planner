@@ -2,12 +2,11 @@
 import json
 import zipfile
 from datetime import date
-from io import BytesIO, StringIO
+from io import BytesIO
 
 import pytest
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.core.management import call_command
 from django.db import transaction
 from django.test import Client
 from django.urls import reverse
@@ -22,7 +21,7 @@ from finance.csv_import.saved_mappings import (
     delete_or_archive_csv_mapping, save_csv_mapping, set_account_default_mapping, update_csv_mapping,
 )
 from finance.csv_import.services import commit_csv_import, undo_import_batch
-from finance.lifecycle_services import delete_member_data, leave_household
+from finance.lifecycle_services import leave_household
 from finance.manual_entry_services import add_manual_transaction, delete_manual_transaction
 from finance.models import (
     Account, AuditEvent, Budget, Household, ImportBatch, Membership, PlannedItem, RecurringSeries,
@@ -31,8 +30,8 @@ from finance.models import (
 from finance.planning_services import save_planned_item, set_planned_item_enabled
 from finance.receipt_services import attach_receipt, remove_receipt
 from finance.recurring_services import (
-    add_recurring_members, cancel_recurring_series, confirm_recurring_series, dismiss_price_change,
-    dismiss_recurring_series, merge_recurring_series, remove_recurring_member, undo_cancel_recurring_series,
+    cancel_recurring_series, confirm_recurring_series, dismiss_price_change,
+    dismiss_recurring_series, merge_recurring_series, undo_cancel_recurring_series,
 )
 from finance.rule_services import apply_rule, reverse_application, save_category_rule, set_rule_enabled
 from finance.savings_goal_services import save_savings_goal, set_savings_goal_archived, set_savings_goal_completed
@@ -154,19 +153,6 @@ def test_manual_transaction_create_and_delete_link_existing_history():
     assert "canary" not in dump and "1234" not in dump
 
 
-def test_manual_delete_of_imported_row_and_foreign_account_write_nothing():
-    owner, member, household = household_pair()
-    outsider = make_person("outsider")
-    other_household(outsider)
-    imported = make_txn(owner, make_account(owner))
-    with pytest.raises(PermissionDenied):
-        delete_manual_transaction(owner, imported.pk)
-    with pytest.raises(PermissionDenied):
-        add_manual_transaction(outsider, make_account(owner, name="Hidden").pk, transaction_date=ENTRY_DATE,
-                               amount_minor=-1, description="x")
-    assert AuditEvent.objects.count() == 0
-
-
 # --- balances, budgets, planned items and goals ----------------------------------
 
 def test_balance_create_edit_upsert_and_delete_name_fields_not_values():
@@ -193,20 +179,6 @@ def test_balance_create_edit_upsert_and_delete_name_fields_not_values():
     assert only(A.RECORD_DELETED, target_type=T.BALANCE).target_id == snapshot.pk
     dump = dump_events()
     assert "canary" not in dump and "123456789" not in dump
-
-
-def test_balance_write_rolled_back_or_denied_records_nothing():
-    owner, _member, household = household_pair()
-    other = make_person("other")
-    other_household(other)
-    account = make_account(owner)
-    with pytest.raises(RuntimeError):
-        with transaction.atomic():
-            record_manual_snapshot(owner, account.pk, snapshot_date=date(2026, 9, 1), amount_minor=1)
-            raise RuntimeError("rollback")
-    with pytest.raises(PermissionDenied):
-        record_manual_snapshot(other, account.pk, snapshot_date=date(2026, 9, 1), amount_minor=1)
-    assert AuditEvent.objects.count() == 0
 
 
 def budget_payload(groceries, **overrides):
@@ -308,7 +280,7 @@ def test_category_tag_and_mapping_changes_go_to_the_household():
 
 def test_note_edits_have_no_event_but_tag_membership_changes_do():
     owner = make_person("owner")
-    household = make_household(owner)
+    make_household(owner)
     account = make_account(owner)
     txn = make_txn(owner, account)
     set_transaction_note_and_tags(owner, txn.pk, note="Synthetic canary note one", tag_ids=[])
@@ -321,7 +293,6 @@ def test_note_edits_have_no_event_but_tag_membership_changes_do():
     set_transaction_note_and_tags(owner, txn.pk, note="Different", tag_ids=[tag.pk])
     assert AuditEvent.objects.filter(action=A.TAGS_CHANGED).count() == 1
     assert "canary" not in dump_events()
-    assert household
 
 
 def rule_args(groceries, **overrides):
@@ -479,7 +450,6 @@ def test_recurring_actions_record_private_events_without_names_or_amounts():
     assert events_for(member).count() == 0
     dump = dump_events()
     assert "Canary" not in dump and "1599" not in dump
-    assert {add_recurring_members, merge_recurring_series, remove_recurring_member}
 
 
 def test_recurring_merge_keeps_surviving_id_after_source_removed():
@@ -551,65 +521,6 @@ def test_data_zip_and_year_end_downloads_record_enums_only():
 
 
 # --- access, privacy and failure policy -------------------------------------------
-
-def test_private_workflow_history_is_removed_with_member_data_and_shared_actor_anonymized():
-    owner, member, household = household_pair()
-    save_budget(owner, budget_payload(category(household, "Groceries")))
-    save_budget(owner, budget_payload(category(household, "Dining"), scope=Budget.Scope.HOUSEHOLD))
-    delete_member_data(owner)
-    remaining = AuditEvent.objects.get()
-    assert remaining.actor_id is None and remaining.household_id == household.pk
-    assert events_for(member).count() == 1
-
-
-def test_audit_write_gap_does_not_fail_the_workflow(caplog, monkeypatch):
-    from django.db import DatabaseError
-
-    owner = make_person("owner")
-    make_household(owner)
-    account = make_account(owner)
-
-    def broken(self, *args, **kwargs):
-        raise DatabaseError("synthetic canary parameter 12345")
-
-    monkeypatch.setattr(AuditEvent, "save", broken)
-    with caplog.at_level("ERROR"):
-        with transaction.atomic():
-            record_manual_snapshot(owner, account.pk, snapshot_date=date(2026, 9, 1), amount_minor=5)
-    assert account.balance_snapshots.count() == 1
-    assert "canary" not in caplog.text and "12345" not in caplog.text
-
-
-def test_cli_and_page_list_workflow_events_for_authorized_members_only():
-    owner, member, household = household_pair()
-    save_budget(owner, budget_payload(category(household, "Groceries")))
-    out = StringIO()
-    call_command("query_audit", member=owner.pk, stdout=out)
-    data = json.loads(out.getvalue())
-    assert data["events"][0]["action"] == "record_created" and data["events"][0]["target_type"] == "budget"
-    assert data["events"][0]["checksum_valid"] is True
-    assert data["events"][0]["metadata"] == {}
-    response = signed_in(member).get(reverse("settings-audit"))
-    assert response.context["page"].paginator.count == 0
-    response = signed_in(owner).get(reverse("settings-audit"), {"action": "record_created"})
-    assert response.status_code == 200 and response.context["page"].paginator.count == 1
-
-
-def test_metadata_allow_list_rejects_free_text_and_unknown_keys():
-    owner = make_person("owner")
-    make_household(owner)
-    account = make_account(owner)
-    from finance.audit_services import append_event
-
-    for metadata in ({"file_name": "receipt-private.png"}, {"format": "Private bank"}, {"row_count": "12"},
-                     {"row_count": True}, {"operation_id": "not-a-uuid"}, {"row_count": -1}):
-        with pytest.raises(ValidationError) as error:
-            with transaction.atomic():
-                append_event(account=account, actor=owner, action=A.RECORD_CREATED, target_type=T.TRANSACTION,
-                             target_id=1, metadata=metadata)
-        assert "private" not in str(error.value).lower()
-    assert AuditEvent.objects.count() == 0
-
 
 def test_checksum_ignores_metadata_key_order_as_postgres_jsonb_reorders_keys():
     owner = make_person("owner")

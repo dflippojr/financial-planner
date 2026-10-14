@@ -8,7 +8,6 @@ from django.urls import reverse
 from django.utils import timezone
 
 from finance.alert_services import run_daily_alert_pass
-from finance.lifecycle_services import delete_member_data
 from finance.models import MemberSecurityEvent, MemberSession
 from finance.reauth import RECENT_AUTH_SESSION_KEY
 from finance.security_services import (
@@ -183,18 +182,6 @@ def test_ninety_day_purge_removes_old_events_and_runs_from_the_daily_pass():
     )
     run_daily_alert_pass()
     assert not MemberSecurityEvent.objects.filter(pk=kept.pk).exists()
-
-
-@pytest.mark.django_db
-def test_member_data_deletion_removes_events_and_session_index():
-    user, person, _household = make_member("gone")
-    client = Client()
-    client.post(reverse("login"), {"username": user.username, "password": PASSWORD})
-    record_security_event(person, EVENT_TYPES.MEMBER_DATA_EXPORT)
-    assert MemberSession.objects.filter(member=person).exists()
-    delete_member_data(user)
-    assert not MemberSecurityEvent.objects.filter(member_id=person.pk).exists()
-    assert not MemberSession.objects.filter(member_id=person.pk).exists()
 
 
 @pytest.mark.django_db

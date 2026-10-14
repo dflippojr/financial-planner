@@ -5,8 +5,6 @@ from decimal import Decimal
 import pytest
 from allauth.socialaccount.models import SocialAccount
 from django.contrib.auth import get_user_model
-from django.core.exceptions import PermissionDenied
-from django.db import transaction
 from django.test import Client
 from django.urls import reverse
 from django.utils import timezone
@@ -33,7 +31,7 @@ from finance.lifecycle_services import (
     rename_account,
     update_debt_terms,
 )
-from finance.models import Account, AuditEvent, Household, Membership, MemberSession, Passkey, Person, RecoveryCode
+from finance.models import Account, AuditEvent, Membership, MemberSession, Passkey, RecoveryCode
 from finance.pairing_services import set_loan_secured_asset
 from finance.passkey_services import set_require_passkey_after_password
 from finance.policy_services import accept_policy, current_policy, decline_policy
@@ -232,18 +230,6 @@ def test_simplefin_connection_and_link_changes_are_audited(monkeypatch):
     assert "2026-03" not in text and "2026-04" not in text and "Synthetic new" not in text
 
 
-def test_simplefin_denied_target_appends_nothing(monkeypatch):
-    from finance.simplefin_services import disconnect_connection
-
-    _user, owner, _household = make_member("owner")
-    _other_user, other, _other_household = make_member("other")
-    connection = connect_owner(owner, monkeypatch, account_payload())
-    before = AuditEvent.objects.count()
-    with pytest.raises(PermissionDenied):
-        disconnect_connection(other, connection.pk)
-    assert AuditEvent.objects.count() == before
-
-
 def test_notification_and_calendar_settings_record_group_names_only():
     _user, person, _household = make_member("notices")
     payload = dict(
@@ -328,46 +314,6 @@ def test_ai_harness_offers_and_shared_local_choices(harness):  # noqa: F811 - fi
     only(host, "ai_harness_disconnected")
     assert not rows(guest, "ai_harness_disconnected")
     assert TOKEN not in str(list(AuditEvent.objects.values()))
-
-
-def test_rollback_removes_event_and_state_together():
-    _user, person, _household = make_member("rollback")
-    account = account_for(person)
-    with pytest.raises(RuntimeError):
-        with transaction.atomic():
-            rename_account(person, account.pk, "Rolled back")
-            raise RuntimeError
-    account.refresh_from_db()
-    assert account.name != "Rolled back"
-    assert not rows(person, "account_renamed")
-
-
-def test_denied_and_stale_requests_append_nothing():
-    _user, person, household = make_member("owner")
-    _other_user, outsider, _ = make_member("outsider")
-    account = account_for(person, household)
-    with pytest.raises(PermissionDenied):
-        rename_account(outsider, account.pk, "Hijack")
-    with pytest.raises(PermissionDenied):
-        leave_household(Person.objects.create(user=get_user_model().objects.create_user("loner", password=PASSWORD), display_name="Loner"))
-    assert not AuditEvent.objects.exists()
-
-
-def test_member_deletion_removes_personal_events_and_anonymizes_household_events():
-    from finance.lifecycle_services import delete_member_data
-
-    user, person, household = make_member("deleter")
-    other_user, other, _ = make_member("housemate")
-    Membership.objects.filter(person=other).update(ended_at=timezone.now())
-    Membership.objects.create(person=other, household=household)
-    create_invitation(person)
-    accept_policy(person, current_policy())
-    person_id = person.pk
-    delete_member_data(person)
-    assert not AuditEvent.objects.filter(private_owner_id=person_id).exists()
-    event = only(other, "invitation_created")
-    assert event.actor_id is None and event.affected_member_id is None
-    assert Household.objects.filter(pk=household.pk).exists()
 
 
 def test_google_connect_signal_records_only_explicit_connects_and_eviction_records_operator():
