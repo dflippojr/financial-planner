@@ -83,6 +83,28 @@ def test_row_limit_and_legacy_encoding():
     assert document.rows[0].cells[3] == "Synthetic café"
 
 
+def sgml_statement(name):
+    return (
+        "OFXHEADER:100\nDATA:OFXSGML\nVERSION:102\n"
+        "<OFX><BANKMSGSRSV1><STMTTRNRS><STMTRS><CURDEF>USD\n"
+        "<BANKTRANLIST><DTSTART>20260901<DTEND>20260930\n"
+        f"<STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20260927<TRNAMT>-12.34<FITID>s-1<NAME>{name}</STMTTRN>\n"
+        "</BANKTRANLIST></STMTRS></STMTTRNRS></BANKMSGSRSV1></OFX>\n"
+    ).encode()
+
+
+@pytest.mark.parametrize("raw", [
+    "FEDEX OFFICE PRINT&COPY", "PB&LTD SUPPLY", "B&GT GRILL", "A&REG B", "R&D &#xZZ; &#0; &#55296;",
+])
+def test_sgml_raw_ampersand_in_name_is_kept(raw):
+    assert preview_csv(read_ofx(sgml_statement(raw)), OFX_MAPPING).rows[0].description == raw
+
+
+def test_sgml_defined_entities_still_decode():
+    document = read_ofx(sgml_statement("A &amp; B &lt;C&gt; &#65;&#x42;"))
+    assert preview_csv(document, OFX_MAPPING).rows[0].description == "A & B <C> AB"
+
+
 def test_sgml_explicit_scalar_end_tags_and_empty_memo():
     content = fixture().replace(b"<CURDEF>USD", b"<CURDEF>USD</CURDEF>")
     content = content.replace(b"<NAME>SYNTHETIC PAY", b"<MEMO></MEMO><NAME>SYNTHETIC PAY</NAME>")
