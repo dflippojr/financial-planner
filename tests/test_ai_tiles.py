@@ -227,17 +227,17 @@ def test_all_dates_and_category_scope_tools_match_the_page(member):
 def test_cash_flow_tool_leaves_future_periods_to_the_projection_like_home(member):
     _user, person, household = member
     account = checking(person, household, "Private", private=True)
-    today = timezone.localdate()
-    # Only the full-length previous range reaches back to here.
-    add_txn(account, person, date(today.year - 3, 1, 15), 700, "Synthetic old pay")
-    args = {"date_from": f"{today.year - 1}-01-01", "date_to": f"{today.year + 1}-12-31", "grouping": "month"}
-    payload = json.loads(cash_flow_totals(person, args).text)
+    today = date(2026, 10, 13)
+    # Only the full 36-month previous range (2022-2024) reaches back to here.
+    add_txn(account, person, date(2023, 1, 15), 700, "Synthetic old pay")
+    args = {"date_from": "2025-01-01", "date_to": "2027-12-31", "grouping": "month"}
+    with patch("django.utils.timezone.localdate", return_value=today):
+        payload = json.loads(cash_flow_totals(person, args).text)
     expected = cash_flow_with_projection(
-        person.user, date_from=date(today.year - 1, 1, 1), date_to=date(today.year + 1, 12, 31),
-        grouping="month", today=today,
+        person.user, date_from=date(2025, 1, 1), date_to=date(2027, 12, 31), grouping="month", today=today,
     )
     assert [row["label"] for row in payload["periods"]] == [item.label for item in expected.periods]
-    assert payload["periods"][-1]["label"].startswith(today.strftime("%B %Y"))
+    assert payload["periods"][-1]["label"] == "October 2026 (partial)"
     assert payload["previous_net_minor"] == expected.summary.previous_net_minor == 0
 
 
