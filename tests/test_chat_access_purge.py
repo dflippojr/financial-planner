@@ -202,3 +202,80 @@ def test_next_api_turn_after_unshare_starts_without_earlier_history(provider):  
     assert fresh.pk != conversation.pk
     messages = provider.requests[-1]["body"]["messages"]
     assert [m["content"] for m in messages] == ["Second question"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_applying_a_proposal_while_its_account_is_unshared_does_not_deadlock(monkeypatch):
+    # Unsharing locks memberships and then purges the conversation, deleting its
+    # proposals; Apply must take the memberships before the proposal, not after.
+    import threading
+    from time import monotonic
+
+    from django.db import connection, connections
+
+    import finance.chat_proposals as chat_proposals
+    from finance.models import AiProposal
+
+    if connection.vendor != "postgresql":
+        pytest.skip("row-lock ordering can only be exercised on PostgreSQL")
+    _a, owner, household = make_member("owner")
+    _b, member, _ = make_member("member", household=household, policy=current_policy())
+    shared = checking(owner, household, "Synthetic shared checking")
+    txn = add_txn(shared, owner, date(2026, 1, 4), -800, "Synthetic shared coffee")
+    conversation = _conversation(member, [shared.pk], "ZQPROPOSAL")
+    proposal = AiProposal.objects.create(
+        conversation=conversation, message=conversation.messages.last(), kind="add_tags",
+        payload={"items": [{"id": txn.pk}], "tags": ["Synthetic"]},
+    )
+    proposal_locked = threading.Event()
+    release_apply = threading.Event()
+    errors = []
+    pids = {}
+    original = chat_proposals._locked_pending
+
+    def lock_then_pause(person, proposal_id):
+        locked = original(person, proposal_id)
+        proposal_locked.set()
+        if not release_apply.wait(timeout=30):
+            raise TimeoutError("Apply was never released")
+        return locked
+
+    def run(role, action):
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SET lock_timeout = '15s'")
+                cursor.execute("SELECT pg_backend_pid()")
+                pids[role] = cursor.fetchone()[0]
+            action()
+        except Exception as exc:  # noqa: BLE001 - reported to the main thread
+            errors.append((role, exc))
+        finally:
+            connections.close_all()
+
+    applying = threading.Thread(target=run, args=("apply", lambda: chat_proposals.apply_proposal(member, proposal.pk)),
+                                daemon=True)
+    unsharing = threading.Thread(target=run, args=("unshare", lambda: unshare_account(owner, shared.pk)), daemon=True)
+    monkeypatch.setattr(chat_proposals, "_locked_pending", lock_then_pause)
+    try:
+        applying.start()
+        assert proposal_locked.wait(timeout=10), errors
+        unsharing.start()
+        deadline = monotonic() + 10
+        blocked = False
+        with connection.cursor() as cursor:
+            while monotonic() < deadline and not blocked:
+                if "unshare" in pids and "apply" in pids:
+                    cursor.execute("SELECT pg_blocking_pids(%s)", [pids["unshare"]])
+                    blocked = pids["apply"] in (cursor.fetchone()[0] or [])
+                if not blocked:
+                    release_apply.wait(0.02)
+        assert blocked, f"Unshare never waited on Apply: {errors}"
+    finally:
+        release_apply.set()
+        applying.join(timeout=30)
+        unsharing.join(timeout=30)
+
+    assert not applying.is_alive() and not unsharing.is_alive()
+    assert errors == []
+    assert txn.tags.filter(name="Synthetic").exists()
+    assert not AiConversation.objects.filter(pk=conversation.pk).exists()

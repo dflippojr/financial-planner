@@ -305,6 +305,9 @@ def apply_proposal(principal, proposal_id):
     stale = None
     try:
         with transaction.atomic():
+            # Memberships before the proposal, the order unsharing and leaving use:
+            # their chat purge deletes this proposal while they hold the memberships.
+            lock_actor_household(person)
             proposal = _locked_pending(person, proposal_id)
             before = TransactionCorrectionHistory.objects.aggregate(top=Max("pk"))["top"] or 0
             try:
