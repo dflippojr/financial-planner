@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta, timezone as dt_timezone
 from pathlib import Path
 
@@ -6,7 +7,10 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
+from .auth_services import normalize_username
 from .models import Alert, Person
+
+logger = logging.getLogger(__name__)
 
 
 STALE_AFTER = timedelta(hours=26)
@@ -28,11 +32,18 @@ STATUS_KEYS = (
 
 
 def operator_people():
-    names = [name.strip() for name in settings.OPERATOR_USERNAMES.split(",") if name.strip()]
+    # Stored usernames are normalized, so match the configured names the way sign-in does.
+    names = {normalize_username(name) for name in settings.OPERATOR_USERNAMES.split(",") if name.strip()}
     if names:
-        return list(
+        people = list(
             Person.objects.filter(user__username__in=names).select_related("user").order_by("pk")
         )
+        unmatched = names - {person.user.username for person in people}
+        if unmatched:
+            logger.warning(
+                "OPERATOR_USERNAMES names %d member(s) that do not exist.", len(unmatched)
+            )
+        return people
     earliest = Person.objects.select_related("user").order_by("created_at", "pk").first()
     return [earliest] if earliest is not None else []
 
