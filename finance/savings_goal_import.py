@@ -26,6 +26,7 @@ from .models import SavingsGoal
 from .savings_goal_services import save_savings_goal
 
 MAX_FILE_BYTES = 256 * 1024
+NUL_MESSAGE = "The file contains NUL bytes, so it is not a valid text file."
 MAX_ROWS = 300
 MAX_NAME_LENGTH = 150
 MAX_MINOR = 2**63 - 1
@@ -80,9 +81,17 @@ def _decode(content):
     if len(content) > MAX_FILE_BYTES:
         raise GoalFileError("The file is larger than the 256 KB limit for a wishlist.")
     try:
-        return content.decode("utf-8-sig")
+        text = content.decode("utf-8-sig")
     except UnicodeDecodeError as exc:
         raise GoalFileError("The file must be UTF-8 text.") from exc
+    _reject_nul(text)
+    return text
+
+
+def _reject_nul(text):
+    # PostgreSQL text and jsonb values cannot hold NUL.
+    if "\x00" in text:
+        raise GoalFileError(NUL_MESSAGE)
 
 
 def _json_cell(value):
@@ -91,7 +100,9 @@ def _json_cell(value):
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, (str, int, Decimal)):
-        return str(value).strip()
+        text = str(value)
+        _reject_nul(text)  # a JSON escape for NUL only decodes after the text check
+        return text.strip()
     raise GoalFileError("Each JSON value must be text, a number, true/false or null.")
 
 
@@ -106,6 +117,8 @@ def _json_records(text):
         raise GoalFileError('JSON must be a list of goal objects, or an object with a "goals" list.')
     records = []
     for item in data:
+        for key in item:
+            _reject_nul(key)
         record = {str(key).strip().casefold(): _json_cell(value) for key, value in item.items()}
         if len(record) != len(item):
             raise GoalFileError("An object repeats a column name.")

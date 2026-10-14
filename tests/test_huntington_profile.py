@@ -87,3 +87,21 @@ def test_huntington_import_stores_source_id_and_does_not_match_on_it():
         "100000000000000003",
     ]
     assert Transaction.objects.filter(account=account, status="active").count() == 3
+
+
+@pytest.mark.django_db
+def test_over_long_source_id_row_is_invalid_and_never_committed():
+    user, person = make_person("owner")
+    account = Account.objects.create(name="Synthetic Checking", account_type="checking", owner=person)
+    content = huntington_csv(
+        (
+            "09/15/2026,1,SYNTHETIC GROCER,WEEKLY FOOD,-42.15,," + "9" * 255,
+            "09/16/2026,2,SYNTHETIC CAFE,COFFEE,-3.00,," + "9" * 256,
+        )
+    )
+
+    result = commit(user, account, content)
+
+    assert result.invalid_count == 1
+    assert result.new_count == 1
+    assert list(Transaction.objects.values_list("description", flat=True)) == ["SYNTHETIC GROCER - WEEKLY FOOD"]
