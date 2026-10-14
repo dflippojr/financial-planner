@@ -13,6 +13,7 @@ from django.urls import reverse
 from finance.forms import TransactionCorrectionForm
 from finance.lifecycle_services import archive_account
 from finance.models import Account, Household, ImportBatch, Membership, Person, Transaction, TransactionCorrectionHistory
+from tests.lock_races import backend_pid, wait_until_blocked_by
 
 
 PASSWORD = "Synthetic-passphrase-42!"
@@ -375,16 +376,20 @@ def test_correction_cannot_be_saved_after_the_editor_is_evicted_from_the_househo
     financial_transaction = make_transaction(owner, account=account)
 
     editing_paused = threading.Event()
+    removal_started = threading.Event()
     removal_committed = threading.Event()
+    release_edit = threading.Event()
+    pids = {}
     observed = {}
     errors = []
     original_apply = TransactionCorrectionForm.apply
 
     def pause_before_saving(form, target, **kwargs):
+        pids["edit"] = backend_pid()
         editing_paused.set()
-        # If the edit holds the membership lock, the removal cannot finish
-        # while it waits here, so this wait simply times out.
-        removal_committed.wait(timeout=3)
+        # The test releases the edit only after PostgreSQL shows the removal
+        # blocked on this transaction's membership lock.
+        assert release_edit.wait(timeout=30)
         observed["removal_committed_before_save"] = removal_committed.is_set()
         return original_apply(form, target, **kwargs)
 
@@ -403,6 +408,8 @@ def test_correction_cannot_be_saved_after_the_editor_is_evicted_from_the_househo
 
     def evict():
         try:
+            pids["evict"] = backend_pid()
+            removal_started.set()
             call_command("evict_household_member", username="editor")
             removal_committed.set()
         except Exception as exc:  # noqa: BLE001 - reported to the main thread
@@ -415,9 +422,14 @@ def test_correction_cannot_be_saved_after_the_editor_is_evicted_from_the_househo
         editing.start()
         assert editing_paused.wait(timeout=10)
         evicting = threading.Thread(target=evict)
-        evicting.start()
-        editing.join(timeout=30)
-        evicting.join(timeout=30)
+        try:
+            evicting.start()
+            assert removal_started.wait(timeout=10)
+            wait_until_blocked_by(pids["evict"], pids["edit"], removal_committed, errors)
+        finally:
+            release_edit.set()
+            editing.join(timeout=30)
+            evicting.join(timeout=30)
 
     assert errors == []
     assert observed["removal_committed_before_save"] is False

@@ -465,7 +465,7 @@ def start_fake_harness(state=None):
             self._json(404, {"detail": "not found"})
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
     thread.start()
     host, port = server.server_address
     url = f"http://{host}:{port}"

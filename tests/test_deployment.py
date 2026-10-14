@@ -154,6 +154,7 @@ assert all(conn.connection is None for conn in connections.all())
         capture_output=True,
         text=True,
         check=False,
+        timeout=60,
     )
     assert result.returncode == 0, result.stderr
 

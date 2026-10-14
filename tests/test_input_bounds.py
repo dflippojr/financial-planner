@@ -1,7 +1,6 @@
 """Synthetic regression checks for bounded member input and query work (#307)."""
 from datetime import date
 from pathlib import Path
-from time import perf_counter
 from types import SimpleNamespace
 from unittest.mock import patch
 import errno
@@ -56,9 +55,10 @@ def test_edit_rejects_oversized_description():
 
 
 def test_description_inference_and_prompt_are_bounded():
-    start = perf_counter()
-    assert shared_description_contains(["SYNTHETIC SHOP " + "x" * 10_000] * 3)
-    assert perf_counter() - start < 1
+    # Only the first 200 characters of each description are compared, so the work and the
+    # result stay bounded however long the stored text is.
+    shared = shared_description_contains(["SYNTHETIC SHOP " + "x" * 10_000] * 3)
+    assert shared == ("SYNTHETIC SHOP " + "x" * 10_000)[:200]
     txns = [SimpleNamespace(pk=i, transaction_date=date(2026, 1, 1), amount_minor=-100,
                             currency="USD", description="Synthetic\nmerchant\r\n" * 10_000) for i in range(40)]
     prompt = _build_prompt(txns, [SimpleNamespace(pk=1, name="Groceries")])

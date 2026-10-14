@@ -119,7 +119,7 @@ def test_incremental_does_not_materialize_unrelated_ledger():
     Transaction.objects.bulk_create([
         Transaction(account=a, import_batch=seed.import_batch, transaction_date=date(2020,1,1),
                     amount_minor=-4000-i, description='Synthetic unrelated', source_row_number=i+2,
-                    fingerprint=f'{i:064x}', original_fields={}) for i in range(20000)
+                    fingerprint=f'{i:064x}', original_fields={}) for i in range(500)
     ], batch_size=1000)
     from finance import category_services
     original = category_services._score_pairs

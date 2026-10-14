@@ -23,7 +23,7 @@ from finance.lifecycle_services import (
     unshare_account,
 )
 from finance.models import Account, Household, ImportBatch, Membership, Person, Transaction
-from tests.lock_races import run_account_lock_race
+from tests.lock_races import backend_pid, run_account_lock_race, wait_until_blocked_by
 
 
 def make_person(username):
@@ -672,14 +672,19 @@ def test_share_mode_change_and_transaction_edit_do_not_deadlock():
     )
 
     editing_paused = threading.Event()
+    mode_change_started = threading.Event()
     mode_change_committed = threading.Event()
+    release_edit = threading.Event()
+    pids = {}
     observed = {}
     errors = []
     original_apply = TransactionCorrectionForm.apply
 
     def pause_before_saving(form, target, **kwargs):
+        pids["edit"] = backend_pid()
         editing_paused.set()
-        mode_change_committed.wait(timeout=3)
+        # Release the edit only after PostgreSQL shows the mode change blocked on its locks.
+        assert release_edit.wait(timeout=30)
         observed["mode_changed_before_save"] = mode_change_committed.is_set()
         return original_apply(form, target, **kwargs)
 
@@ -698,6 +703,8 @@ def test_share_mode_change_and_transaction_edit_do_not_deadlock():
 
     def change_mode():
         try:
+            pids["change"] = backend_pid()
+            mode_change_started.set()
             change_account_share_mode(
                 owner,
                 account.pk,
@@ -715,9 +722,14 @@ def test_share_mode_change_and_transaction_edit_do_not_deadlock():
         editing.start()
         assert editing_paused.wait(timeout=10)
         changing = threading.Thread(target=change_mode)
-        changing.start()
-        editing.join(timeout=30)
-        changing.join(timeout=30)
+        try:
+            changing.start()
+            assert mode_change_started.wait(timeout=10)
+            wait_until_blocked_by(pids["change"], pids["edit"], mode_change_committed, errors)
+        finally:
+            release_edit.set()
+            editing.join(timeout=30)
+            changing.join(timeout=30)
 
     assert errors == []
     assert not editing.is_alive()
