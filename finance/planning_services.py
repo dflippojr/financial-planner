@@ -87,21 +87,42 @@ def _household_member_ids(principal):
     )
 
 
-def _one_series_per_bill(rows, replaced):
-    """Collapse members' series for one merchant and cadence into a single bill.
+def _charge_ids_by_series(series_ids):
+    charges = {}
+    rows = RecurringSeriesMember.objects.filter(series_id__in=series_ids).values_list("series_id", "transaction_id")
+    for series_id, transaction_id in rows:
+        charges.setdefault(series_id, set()).add(transaction_id)
+    return charges
 
-    Two members may each confirm the same joint bill; it must project once.
+
+def _one_series_per_bill(rows, replaced):
+    """Collapse members' series for one joint bill into a single series.
+
+    Two members may each confirm the same household bill; it must project
+    once. Series are the same bill when they share a merchant, a cadence and
+    at least one charge, so two distinct bills from one merchant both stay.
     The series with the latest charge wins (it holds the current price), then
-    the lowest id. A planned item replacing any of them replaces the bill.
+    the lowest id. A planned item replacing a series replaces the bill, even
+    when that series is no longer active, because its charges still identify
+    the bill.
     """
-    replaced_bills = {(row.merchant_key, row.cadence) for row in rows if row.pk in replaced}
-    chosen = {}
-    for row in sorted(rows, key=lambda row: (row.last_on is None, -(row.last_on.toordinal() if row.last_on else 0), row.pk)):
-        chosen.setdefault((row.merchant_key, row.cadence), row)
-    return sorted(
-        (row for key, row in chosen.items() if key not in replaced_bills),
-        key=lambda row: (row.display_name, row.pk),
-    )
+    charges = _charge_ids_by_series([row.pk for row in rows] + list(replaced))
+    replaced_charges = set().union(*(charges.get(pk, set()) for pk in replaced)) if replaced else set()
+    chosen = []
+    ordered = sorted(rows, key=lambda row: (row.last_on is None, -(row.last_on.toordinal() if row.last_on else 0), row.pk))
+    for row in ordered:
+        row_charges = charges.get(row.pk, set())
+        if row.pk in replaced or row_charges & replaced_charges:
+            continue
+        duplicate = any(
+            other.person_id != row.person_id
+            and (other.merchant_key, other.cadence) == (row.merchant_key, row.cadence)
+            and row_charges & charges.get(other.pk, set())
+            for other in chosen
+        )
+        if not duplicate:
+            chosen.append(row)
+    return sorted(chosen, key=lambda row: (row.display_name, row.pk))
 
 
 def visible_projection_inputs(principal, *, account=None, scope="", accounts=None, include_household=True):
@@ -169,7 +190,11 @@ def visible_projection_inputs(principal, *, account=None, scope="", accounts=Non
         members__transaction__in=eligible,
     )
     if household_only:
-        series = confine_recurring_series_to_accounts(series, selection)
+        # Judge every charge against all household accounts, not just the
+        # selected one, so a bill that moved between accounts stays whole.
+        series = confine_recurring_series_to_accounts(
+            series, selected_accounts(principal, scope=Account.Scope.HOUSEHOLD)
+        )
     elif not include_household or accounts is not None:
         # Report filters select eligible charges; the allowed account set
         # independently protects every member behind a series's typical amount.
