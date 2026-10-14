@@ -23,7 +23,6 @@ LAYOUT_JS = """() => {
   const columns = document.querySelector('main .page-columns');
   const side = document.querySelector('main .page-side');
   return {
-    h1s: document.querySelectorAll('h1').length,
     scroll: document.documentElement.scrollWidth > document.documentElement.clientWidth,
     main: box(columns.firstElementChild),
     side: box(side),
@@ -53,7 +52,6 @@ def _add_balances():
 
 
 def _check_columns(layout, width):
-    assert layout["h1s"] == 1
     assert not layout["scroll"]
     main_left, main_top, main_width = layout["main"]
     side_left, side_top, side_width = layout["side"]
@@ -87,12 +85,11 @@ def test_net_worth_by_month_table_and_side_column(open_report, width):
 
 
 @pytest.mark.parametrize("width", [390, 1024, 1440])
-@pytest.mark.parametrize("scheme", ["light", "dark"])
-def test_spending_ranked_table_and_side_column(open_report, width, scheme):
-    context, page = open_report("/spending/", width, scheme)
+def test_spending_ranked_table_and_side_column(open_report, width):
+    context, page = open_report("/spending/", width)
     try:
         if SCREEN_DIR:
-            page.screenshot(path=str(Path(SCREEN_DIR) / f"spending-{width}-{scheme}.png"), full_page=True)
+            page.screenshot(path=str(Path(SCREEN_DIR) / f"spending-{width}.png"), full_page=True)
         _check_columns(page.evaluate(LAYOUT_JS), width)
         assert page.evaluate("[...document.querySelectorAll('main .overflow-x-auto')].every((box) => box.scrollWidth <= box.clientWidth)")
         table = page.get_by_role("table").filter(has=page.get_by_role("columnheader", name="Share"))

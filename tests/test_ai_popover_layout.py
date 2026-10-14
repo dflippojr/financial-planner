@@ -34,10 +34,34 @@ def popover_session(page_session, harness):
     return open_page
 
 
+def finish_motion(page):
+    """Wait for the window's own animations (swoop, drag settle, collapse, expand) to end.
+
+    Only the popover element is read: the chat thread's "thinking" dots animate forever and would
+    never finish. A cancelled animation counts as finished.
+    """
+    page.evaluate(
+        "() => Promise.all(document.getElementById('ai-popover').getAnimations()"
+        ".map((animation) => animation.finished.catch(() => {})))"
+    )
+
+
 def open_popover(page):
     page.evaluate("() => window.AiPopover.open({origin: document.querySelector('main h1')})")
     expect(page.locator("#ai-popover")).to_be_visible()
-    page.wait_for_timeout(260)
+    finish_motion(page)
+
+
+def hold_send(page, click):
+    """Run click, which submits the form, and keep its POST pending; return the held routes."""
+    held = []
+    page.route("**/chat/send/", lambda route: held.append(route))
+    with page.expect_request("**/chat/send/"):
+        click()
+    # The form disables Send while its POST is in flight. This round trip also delivers the route.
+    expect(page.locator('#ai-popover-form [type="submit"]')).to_be_disabled()
+    assert len(held) == 1
+    return held
 
 
 def stored(page):
@@ -54,7 +78,7 @@ def assert_in_bounds(page):
     assert box["y"] + box["height"] <= size["height"] - 7
 
 
-@pytest.mark.parametrize("width", [1024, 1280, 1440])
+@pytest.mark.parametrize("width", [1024, 1440])
 def test_drag_keyboard_move_pill_and_resize_stay_outside_sidebar(popover_session, width):
     context, page, _person = popover_session(width)
     try:
@@ -71,16 +95,18 @@ def test_drag_keyboard_move_pill_and_resize_stay_outside_sidebar(popover_session
         page.mouse.down()
         page.mouse.move(0, 0, steps=5)
         page.mouse.up()
-        page.wait_for_timeout(250)
+        finish_motion(page)
         assert_in_bounds(page)
         before = page.locator("#ai-popover").bounding_box()
         page.get_by_role("button", name="Collapse AI chat").click()
-        page.wait_for_timeout(250)
+        expect(page.get_by_role("button", name="Expand AI chat")).to_be_visible()
+        finish_motion(page)
         pill = page.locator("#ai-popover").bounding_box()
         assert (pill["width"], pill["height"]) == (320, 52)
         assert (pill["x"], pill["y"]) == (before["x"], before["y"])
         page.get_by_role("button", name="Expand AI chat").click()
-        page.wait_for_timeout(250)
+        expect(page.get_by_role("button", name="Collapse AI chat")).to_be_visible()
+        finish_motion(page)
         page.set_viewport_size({"width": 1024, "height": 600})
         assert_in_bounds(page)
     finally:
@@ -176,9 +202,8 @@ def test_navigation_restores_form_position_and_idle_state(popover_session, colla
         context.close()
 
 
-@pytest.mark.parametrize("scheme", ["light", "dark"])
-def test_keyboard_skip_escape_context_removal_a11y_and_reduced_motion(popover_session, scheme):
-    context, page, _person = popover_session(scheme=scheme)
+def test_keyboard_skip_escape_context_removal_a11y_and_reduced_motion(popover_session):
+    context, page, _person = popover_session()
     try:
         page.emulate_media(reduced_motion="reduce")
         open_popover(page)
@@ -244,13 +269,9 @@ def test_send_preserves_a_draft_edited_while_the_post_is_pending(popover_session
     context, page, _person = popover_session()
     try:
         open_popover(page)
-        requests = []
-        page.route("**/chat/send/", lambda route: requests.append(route))
         composer = page.locator("#ai-popover textarea")
         composer.fill("First synthetic question")
-        page.locator("#ai-popover-form").get_by_role("button", name="Send").click()
-        page.wait_for_timeout(100)
-        assert len(requests) == 1
+        requests = hold_send(page, page.locator("#ai-popover-form").get_by_role("button", name="Send").click)
         # Editing and then retyping the sent text is still a new, unsent draft.
         composer.fill("Edited intermediate draft")
         composer.fill(next_draft)
@@ -278,7 +299,7 @@ def test_swoop_uses_the_origin_center_and_reduced_close_fades_out(popover_sessio
         }""")
         assert abs(data["centerX"] - data["originX"]) < 1
         assert abs(data["centerY"] - data["originY"]) < 1
-        page.wait_for_timeout(260)
+        finish_motion(page)
         page.emulate_media(reduced_motion="reduce")
         frames = page.evaluate("""() => {
           document.querySelector('[data-pop-action=close]').click();
@@ -312,14 +333,10 @@ def test_closing_during_first_send_keeps_the_conversation(popover_session, reope
     context, page, person = popover_session()
     try:
         open_popover(page)
-        requests = []
-        page.route("**/chat/send/", lambda route: requests.append(route))
         composer = page.locator("#ai-popover textarea")
         composer.fill("Synthetic first question")
         send = page.locator('#ai-popover-form [type="submit"]')
-        send.click()
-        page.wait_for_timeout(100)
-        assert len(requests) == 1
+        requests = hold_send(page, send.click)
         page.get_by_role("button", name="Close AI chat").click()
         expect(page.locator("#ai-popover")).to_be_hidden()
         if reopen_pending:

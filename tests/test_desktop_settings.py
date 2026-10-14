@@ -1,8 +1,8 @@
 """Settings at desktop widths in a real browser (issue #339).
 
 Needs Playwright with Chromium and a compiled static/dist/app.css
-(scripts/build_css.sh); skipped otherwise. Set DESKTOP_SHOTS_DIR to also save a
-full-page screenshot of each settings page at 1024 wide.
+(scripts/build_css.sh); skipped otherwise. The settings pages' fit at every desktop width is
+checked with the other pages in test_desktop_layout.py::test_page_fits_desktop.
 """
 
 import os
@@ -24,15 +24,6 @@ pytestmark = [
     pytest.mark.django_db(transaction=True),
     pytest.mark.skipif(not CSS.exists(), reason="static/dist/app.css is not built"),
 ]
-
-SETTINGS_PAGES = (
-    "/settings/security/",
-    "/settings/categories/",
-    "/settings/alerts/",
-    "/settings/audit/",
-    "/settings/ai/",
-)
-SCREEN_DIR = os.environ.get("DESKTOP_SHOTS_DIR")
 
 
 @pytest.fixture(scope="module")
@@ -62,23 +53,6 @@ def desktop(live_server, client, browser):
 
     yield open_page
     context.close()
-
-
-@pytest.mark.parametrize("path", SETTINGS_PAGES)
-def test_settings_sections_all_show_at_1024_without_sideways_scroll(desktop, path):
-    page = desktop(path)
-    if SCREEN_DIR:
-        Path(SCREEN_DIR).mkdir(parents=True, exist_ok=True)
-        page.screenshot(path=str(Path(SCREEN_DIR) / f"settings-{path.strip('/').split('/')[-1]}-1024.png"), full_page=True)
-    sections = page.get_by_role("navigation", name="Settings sections")
-    links = sections.get_by_role("link")
-    assert links.count() == 10
-    for index in range(10):
-        assert links.nth(index).is_visible()
-    assert sections.locator('[aria-current="page"]').count() == 1
-    assert not page.get_by_role("tablist").is_visible()
-    width = page.evaluate("() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]")
-    assert width[0] <= width[1], f"{path} scrolls sideways: {width}"
 
 
 def test_category_rename_works_by_keyboard(desktop):

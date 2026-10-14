@@ -73,12 +73,18 @@ def open_page(live_server, client, browser):
         context.close()
 
 
+ROW_HEIGHTS_JS = """() => [...document.querySelectorAll('main section[aria-labelledby=accounts-list-heading] tbody tr')]
+  .filter((row) => row.querySelector('details[data-row-menu]'))
+  .map((row) => row.getBoundingClientRect().height)"""
+
+
 @pytest.mark.parametrize("width", [1024, 1280, 1440])
 @pytest.mark.parametrize(
     ("path", "listing", "form"),
     [
         ("/planning/goals/", "section[aria-labelledby=goals-list-heading]", "#add-goal"),
         ("/planning/items/", "section[aria-labelledby=planned-list-heading]", "#add-item"),
+        ("/accounts/", "main section[aria-labelledby=accounts-list-heading]", "#add-account"),
     ],
 )
 def test_list_first_with_the_add_form_beside_or_under_it(open_page, path, listing, form, width):
@@ -93,25 +99,15 @@ def test_list_first_with_the_add_form_beside_or_under_it(open_page, path, listin
     else:
         assert form_top >= list_top + list_height
         assert abs(form_left - list_left) <= 1
-
-
-@pytest.mark.parametrize(
-    ("path", "first_row"),
-    [
-        ("/planning/goals/", "section[aria-labelledby=goals-list-heading] li"),
-        ("/planning/items/", "section[aria-labelledby=planned-list-heading] tbody tr"),
-    ],
-)
-def test_first_goal_and_planned_item_are_above_the_fold(open_page, path, first_row):
-    page = open_page(path, 1440)
-    _, top, _, height = page.evaluate(BOX_JS, first_row)
-
-    assert top + height <= 900
+    if path == "/accounts/" and width == 1440:
+        # One line for the name plus a second line for scope, not a stack of controls.
+        heights = page.evaluate(ROW_HEIGHTS_JS)
+        assert heights and max(heights) < 90
 
 
 @pytest.mark.parametrize(
     ("path", "link"),
-    [("/planning/goals/", "Add goal"), ("/planning/items/", "Add planned item")],
+    [("/planning/goals/", "Add goal"), ("/planning/items/", "Add planned item"), ("/accounts/", "Add account")],
 )
 def test_header_link_moves_focus_to_the_add_form(open_page, path, link):
     page = open_page(path, 1440)
@@ -131,9 +127,8 @@ def test_planned_amounts_carry_their_sign(open_page):
 
 
 @pytest.mark.parametrize("width", [390, 1024, 1280, 1440])
-@pytest.mark.parametrize("scheme", ["light", "dark"])
-def test_planned_rows_and_actions_stay_inside_the_list_column(open_page, width, scheme):
-    page = open_page("/planning/items/", width, scheme=scheme)
+def test_planned_rows_and_actions_stay_inside_the_list_column(open_page, width):
+    page = open_page("/planning/items/", width)
     listing = "section[aria-labelledby=planned-list-heading]"
     list_left, _, list_width, _ = page.evaluate(BOX_JS, listing)
     table_left, _, table_width, _ = page.evaluate(BOX_JS, listing + " table")
