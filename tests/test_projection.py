@@ -704,3 +704,66 @@ def test_a_series_whose_charges_are_confirmed_transfers_stops_projecting():
     months = projected_months_for(owner, today=date(2026, 10, 1), horizon=3)
 
     assert all(month.spending_minor == 0 for month in months)
+
+
+@pytest.mark.django_db
+def test_future_months_appear_only_as_projected_when_range_ends_after_today():
+    today = date(2026, 10, 13)
+    owner = make_person("owner")
+    make_household(owner)
+    make_account(owner)
+    PlannedItem.objects.create(
+        owner=owner,
+        name="Synthetic pay",
+        kind=PlannedItem.Kind.INCOME,
+        amount_minor=100_000,
+        start_date=date(2026, 11, 1),
+        cadence=PlannedItem.Cadence.MONTHLY,
+    )
+
+    report = cash_flow_with_projection(
+        owner, date_from=date(2026, 1, 1), date_to=date(2026, 12, 31), grouping="month", today=today, horizon=3
+    )
+    rows = cash_flow_chart_data(report)["periods"]
+    labels = [row["label"] for row in rows]
+
+    assert len(labels) == len(set(labels)), labels
+    assert labels[9] == "October 2026 (partial)"
+    assert [row["projected"] for row in rows] == [False] * 10 + [True] * 3
+    assert not any(period.missing_import for period in report.periods if period.start > today)
+    assert report.periods[-1].end == date(2026, 10, 31)
+    assert report.summary.previous_to == date(2025, 12, 31)
+
+
+@pytest.mark.django_db
+def test_range_wholly_in_the_future_has_no_actual_periods():
+    today = date(2026, 10, 13)
+    owner = make_person("owner")
+    make_household(owner)
+    make_account(owner)
+
+    report = cash_flow_with_projection(
+        owner, date_from=date(2026, 11, 1), date_to=date(2026, 12, 31), grouping="month", today=today, horizon=3
+    )
+
+    assert report.periods == []
+    assert report.summary.net_minor == 0
+    assert report.summary.previous_from is None
+    assert [item.label for item in report.projected_periods][:2] == ["November 2026", "December 2026"]
+
+
+@pytest.mark.django_db
+def test_range_ending_today_is_unchanged_by_projection():
+    today = date(2026, 10, 13)
+    owner = make_person("owner")
+    make_household(owner)
+    make_account(owner)
+    kwargs = dict(date_from=date(2026, 8, 1), date_to=today, grouping="month", today=today)
+
+    plain = cash_flow_report(owner, **kwargs)
+    combined = cash_flow_with_projection(owner, horizon=3, **kwargs)
+
+    assert [(p.label, p.start, p.end, p.missing_import) for p in combined.periods] == [
+        (p.label, p.start, p.end, p.missing_import) for p in plain.periods
+    ]
+    assert combined.summary.previous_from == plain.summary.previous_from

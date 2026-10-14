@@ -502,7 +502,13 @@ def cash_flow_report(
     today=None,
     tag=None,
     accounts=None,
+    actuals_only=False,
 ):
+    """Income and spending per period.
+
+    With `actuals_only`, periods that start after `today` are left out: they have
+    no actuals to show and no import to expect, and a projection owns them.
+    """
     if period_count(date_from, date_to, grouping) > MAX_REPORT_PERIODS:
         raise ValueError("Too many periods for one report.")
     today = today or timezone.localdate()
@@ -513,6 +519,8 @@ def cash_flow_report(
     account_filter = accounts
     periods = []
     windows = list(iter_period_windows(date_from, date_to, grouping))
+    if actuals_only:
+        windows = [window for window in windows if window.start <= today]
     window_totals = income_and_spending_by_window(
         principal,
         [(window.start, window.end) for window in windows],
@@ -557,7 +565,11 @@ def cash_flow_report(
         spending_minor=current_spending,
         net_minor=current_income - current_spending,
     )
-    previous_from, previous_to = previous_equal_range(date_from, date_to)
+    # Compare against the span the periods cover, which `actuals_only` can shorten.
+    if windows:
+        previous_from, previous_to = previous_equal_range(windows[0].start, windows[-1].end)
+    else:
+        previous_from = previous_to = None
     previous = None
     if previous_from is not None:
         ((previous_income, previous_spending),) = income_and_spending_by_window(
