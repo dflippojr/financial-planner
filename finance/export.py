@@ -497,6 +497,16 @@ def _tag_rows(person):
     return rows
 
 
+def _visible_category_names(person):
+    # A former member keeps their own rows but must not see the household's
+    # current names, so names come only from categories still visible (#301).
+    return dict(Category.objects.visible_to(person).values_list("pk", "name"))
+
+
+def _visible_tag_names(person):
+    return dict(Tag.objects.visible_to(person).values_list("pk", "name"))
+
+
 def _excluded_transaction_ids(visible_txn_ids):
     pairs = TransferPair.objects.excluding_income_and_spending().filter(
         leg_a_id__in=visible_txn_ids,
@@ -520,10 +530,11 @@ def _visible_refund_originals(visible_txn_ids):
 def _transaction_rows(person, visible_txn_ids):
     excluded = _excluded_transaction_ids(visible_txn_ids)
     refunds = _visible_refund_originals(visible_txn_ids)
+    category_names = _visible_category_names(person)
     rows = []
     transactions = (
         Transaction.objects.visible_to(person)
-        .select_related("category", "import_batch")
+        .select_related("import_batch")
         .order_by("pk")
     )
     for txn in transactions:
@@ -543,7 +554,7 @@ def _transaction_rows(person, visible_txn_ids):
                 "source_row_number": txn.source_row_number,
                 "source_transaction_id": txn.source_transaction_id,
                 "category_id": txn.category_id,
-                "category_name": txn.category.name if txn.category_id else "",
+                "category_name": category_names.get(txn.category_id, ""),
                 "excluded_from_income_and_spending": txn.pk in excluded,
                 "refund_original_id": original_id,
                 "refund_original_part_id": original_part_id,
@@ -599,10 +610,10 @@ def _transfer_pair_rows(person):
 
 
 def _split_rows(person):
+    category_names = _visible_category_names(person)
     rows = []
     parts = (
         TransactionSplit.objects.filter(transaction__in=Transaction.objects.visible_to(person))
-        .select_related("category")
         .order_by("transaction_id", "position", "pk")
     )
     for part in parts:
@@ -612,7 +623,7 @@ def _split_rows(person):
                 "transaction_id": part.transaction_id,
                 "position": part.position,
                 "category_id": part.category_id,
-                "category_name": part.category.name,
+                "category_name": category_names.get(part.category_id, ""),
                 "amount_minor": part.amount_minor,
                 "amount_decimal": money_decimal(part.amount_minor),
             }
@@ -620,20 +631,17 @@ def _split_rows(person):
     return rows
 
 
-def _transaction_tag_rows(visible_txn_ids):
+def _transaction_tag_rows(person, visible_txn_ids):
+    tag_names = _visible_tag_names(person)
     rows = []
-    links = (
-        TransactionTag.objects.filter(transaction_id__in=visible_txn_ids)
-        .select_related("tag")
-        .order_by("pk")
-    )
+    links = TransactionTag.objects.filter(transaction_id__in=visible_txn_ids).order_by("pk")
     for link in links:
         rows.append(
             {
                 "id": link.pk,
                 "transaction_id": link.transaction_id,
                 "tag_id": link.tag_id,
-                "tag_name": link.tag.name,
+                "tag_name": tag_names.get(link.tag_id, ""),
             }
         )
     return rows
@@ -818,8 +826,9 @@ def _ai_conversation_message_rows(person):
 
 
 def _budget_rows(person):
+    category_names = _visible_category_names(person)
     rows = []
-    budgets = Budget.objects.visible_to(person).select_related("owner__user", "category").order_by("pk")
+    budgets = Budget.objects.visible_to(person).select_related("owner__user").order_by("pk")
     for budget in budgets:
         rows.append(
             {
@@ -828,7 +837,7 @@ def _budget_rows(person):
                 "owner_username": budget.owner.user.username,
                 "household_id": budget.household_id,
                 "category_id": budget.category_id,
-                "category_name": budget.category.name if budget.category_id is not None else "",
+                "category_name": category_names.get(budget.category_id, ""),
                 "rollover_enabled": budget.rollover_enabled,
                 "rollover_started_month": budget.rollover_started_month,
                 "status": budget.status,
@@ -891,7 +900,7 @@ def collect_export_tables(person) -> dict[str, list[dict]]:
         "import_batches": _import_batch_rows(person),
         "transfer_pairs": _transfer_pair_rows(person),
         "transaction_splits": _split_rows(person),
-        "transaction_tags": _transaction_tag_rows(visible_txn_ids),
+        "transaction_tags": _transaction_tag_rows(person, visible_txn_ids),
         "receipts": _receipt_rows(person),
         "recurring_series": _recurring_series_rows(person),
         "recurring_exclusions": _recurring_exclusion_rows(person),

@@ -468,3 +468,57 @@ def test_snapshot_rows_keep_only_visible_accounts():
         tables = collect_export_tables(owner)
     assert "balance_snapshots" in tables
     assert tables["balance_snapshots"][0]["id"] == 1
+
+
+@pytest.mark.django_db
+def test_export_after_leaving_hides_household_live_category_and_tag_names():
+    from finance.budget_services import save_budget
+    from finance.category_services import rename_category, split_transaction
+    from finance.lifecycle_services import leave_household
+    from finance.models import Budget
+    from finance.tag_services import add_tag, rename_tag, set_transaction_note_and_tags
+    from tests.test_monthly_review import (
+        make_account, make_household, make_person, make_transaction, signed_in,
+    )
+
+    owner = make_person("owner")
+    member = make_person("member")
+    household = make_household(owner, member)
+    groceries = household.categories.get(name="Groceries")
+    dining = household.categories.get(name="Dining")
+    mine = make_account(member, name="Member Private")
+    tagged = make_transaction(member, mine, amount_minor=-2_000, description="Synthetic corner shop")
+    split = make_transaction(
+        member, mine, amount_minor=-3_000, description="Synthetic split shop",
+        transaction_date=date(2026, 9, 16),
+    )
+    assign_category(member, tagged.pk, groceries.pk)
+    tag = add_tag(member, "Synthetic trip")
+    set_transaction_note_and_tags(member, tagged.pk, note="", tag_ids=[tag.pk])
+    split_transaction(member, split.pk, [(groceries.pk, -1_000), (dining.pk, -2_000)])
+    save_budget(member.user, {
+        "scope": Budget.Scope.PRIVATE, "category": groceries, "amount_minor": 10_000,
+        "effective_month": date(2026, 9, 1),
+    })
+    before = collect_export_tables(member)
+    assert before["transaction_tags"][0]["tag_name"] == "Synthetic trip"
+    assert before["budgets"][0]["category_name"] == "Groceries"
+
+    leave_household(member)
+    rename_category(owner, groceries.pk, "ZQ Surprise party for member")
+    rename_tag(owner, tag.pk, "ZQ Divorce lawyer")
+    body = signed_in(member).get(reverse("transaction-list")).content.decode()
+    assert "ZQ Surprise party" not in body and "ZQ Divorce lawyer" not in body
+
+    def names(tables, needles):
+        return {
+            table: sorted({str(v) for row in rows for v in row.values() if any(n in str(v) for n in needles)})
+            for table, rows in tables.items()
+        }
+
+    leaked = names(collect_export_tables(member), ("ZQ ", "Groceries", "Dining", "Synthetic trip"))
+    assert {t: v for t, v in leaked.items() if v} == {}
+
+    owner_tables = collect_export_tables(owner)
+    assert any(row["name"] == "ZQ Surprise party for member" for row in owner_tables["categories"])
+    assert any(row["name"] == "ZQ Divorce lawyer" for row in owner_tables["tags"])
