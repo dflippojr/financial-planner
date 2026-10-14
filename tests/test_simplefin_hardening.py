@@ -1,5 +1,6 @@
 """Malformed SimpleFIN payloads fail as SimpleFinError or skip a row, never anything else."""
 
+import logging
 from datetime import date
 
 import pytest
@@ -380,3 +381,56 @@ def test_a_database_error_on_one_connection_does_not_stop_the_daily_pass(monkeyp
     assert first.last_sync_result == UNEXPECTED_FAILURE
     assert Transaction.objects.filter(account=second_checking).count() == 1
     assert alert_passes == [1]
+
+
+def _make_unreadable(connection):
+    SimpleFinConnection.objects.filter(pk=connection.pk).update(encrypted_access_url=b"not-a-fernet-token")
+
+
+@pytest.mark.django_db
+def test_scheduled_sync_records_and_alerts_an_unreadable_connection(monkeypatch, caplog):
+    from finance.models import Alert, AuditEvent
+    from finance.simplefin_services import UNREADABLE_CONNECTION
+    from tests.test_simplefin import ACCESS_URL
+
+    caplog.set_level(logging.DEBUG)
+    owner, _checking, connection = _linked_owner_and_checking(monkeypatch)
+    make_household(owner)
+    assert sync_all_connections() == 1
+    connection.refresh_from_db()
+    before = connection.last_sync_at
+    _make_unreadable(connection)
+
+    assert sync_all_connections() == 1
+    connection.refresh_from_db()
+    assert connection.last_sync_at != before
+    assert connection.last_sync_result == UNREADABLE_CONNECTION
+    assert not connection.disabled
+    assert sync_all_connections() == 1
+
+    alerts = Alert.objects.filter(recipient=owner, kind=Alert.Kind.SYNC)
+    assert alerts.count() == 1
+    stored = [repr(row) for row in alerts.values()] + [repr(row) for row in AuditEvent.objects.values()]
+    for text in [*stored, caplog.text]:
+        assert ACCESS_URL not in text
+        assert "synthetic-access-secret" not in text
+
+
+@pytest.mark.django_db
+def test_rate_limited_sync_of_an_unreadable_connection_records_nothing(monkeypatch):
+    from finance.models import Alert
+    from finance.simplefin_errors import SimpleFinRateLimited
+
+    owner, _checking, connection = _linked_owner_and_checking(monkeypatch)
+    make_household(owner)
+    sync_connection(owner, connection.pk)
+    connection.refresh_from_db()
+    before = (connection.last_sync_at, connection.last_sync_result)
+    _make_unreadable(connection)
+
+    with pytest.raises(SimpleFinRateLimited):
+        sync_connection(owner, connection.pk)
+
+    connection.refresh_from_db()
+    assert (connection.last_sync_at, connection.last_sync_result) == before
+    assert not Alert.objects.filter(recipient=owner, kind=Alert.Kind.SYNC).exists()
