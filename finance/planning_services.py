@@ -136,6 +136,16 @@ def _one_series_per_bill(rows, replaced, member_ids, household):
             else:
                 first_owner[charge_id] = pk
     replaced_bills = {find(pk) for pk in replaced if pk in parent}
+    # Recency is judged over every charge, not just the selected account's, so
+    # a single-account view still picks the series holding the current price.
+    latest = {
+        series_id: last.toordinal()
+        for series_id, last in RecurringSeriesMember.objects.filter(
+            series_id__in=row_ids, transaction__status=Transaction.Status.ACTIVE
+        )
+        .values_list("series_id")
+        .annotate(last=Max("transaction__transaction_date"))
+    }
     bills = {}
     for row in rows:
         bills.setdefault(find(row.pk), []).append(row)
@@ -143,9 +153,7 @@ def _one_series_per_bill(rows, replaced, member_ids, household):
     for root, members in bills.items():
         if root in replaced_bills or any(row.pk in replaced for row in members):
             continue
-        chosen.append(
-            min(members, key=lambda row: (row.last_on is None, -(row.last_on.toordinal() if row.last_on else 0), row.pk))
-        )
+        chosen.append(min(members, key=lambda row: (-latest.get(row.pk, 0), row.pk)))
     return sorted(chosen, key=lambda row: (row.display_name, row.pk))
 
 

@@ -998,3 +998,20 @@ def test_a_replacement_reaches_the_whole_bill_through_cancelled_bridges():
         names = [i.name for i in visible_projection_inputs(person.user, scope="household")]
         assert "Synthetic Electric" not in names
         assert "Synthetic Electric plan" in names
+
+
+@pytest.mark.django_db
+def test_single_account_household_view_picks_the_series_with_the_current_price():
+    owner, member, household = household_fixture()
+    account_a = Account.objects.get(name="Synthetic Joint")
+    account_b = make_account(owner, name="Synthetic Joint Two", scope=Account.Scope.HOUSEHOLD, household=household)
+    stale = make_confirmed_series(owner, "Synthetic Electric", account_a, months=(7,), amount_minor=300_000)
+    current = make_confirmed_series(member, "Synthetic Electric", account_b, months=(9,), amount_minor=350_000)
+    RecurringSeriesMember.objects.create(series=current, transaction=stale.members.get().transaction)
+
+    for person in (owner, member):
+        items = [
+            i for i in visible_projection_inputs(person.user, account=account_a, scope="household")
+            if i.source == "series"
+        ]
+        assert [i.amount_minor for i in items] == [350_000]
