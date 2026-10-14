@@ -297,6 +297,9 @@ transactions.csv / transactions.json
   original is split and the chosen part is on a visible transaction. note is the
   member-entered free-text note. import_source is the source of the row's
   import batch; "manual" marks a transaction a member entered by hand.
+  category_name here, and in transaction_splits, transaction_tags (tag_name)
+  and budgets, is blank when the category or tag belongs to a household the
+  member no longer belongs to.
 
 transaction_tags.csv / transaction_tags.json
   Tag links for visible transactions.
