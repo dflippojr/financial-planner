@@ -1289,15 +1289,24 @@ def shared_series_for_review(principal, own_series):
         if series.status == RecurringSeries.Status.CONFIRMED and series.is_active
     ]
     rows = []
-    for cancelled in (False, True):
-        bucket = [series for series in candidates if (series.cancelled_at is not None) == cancelled]
-        for bill in _bill_components(bucket):
-            if any(series.pk in own_ids for series in bill):
+    # Group over active and cancelled copies together, so a cancelled copy
+    # still links the active copies it shares charges with.
+    for bill in _bill_components(candidates):
+        for cancelled in (False, True):
+            copies = [series for series in bill if (series.cancelled_at is not None) == cancelled]
+            if not copies or any(series.pk in own_ids for series in copies):
                 continue
-            first = bill[0]
-            first.shared_by_other = True
-            rows.append(first)
+            # The copy with the latest charge holds the current price, then the lowest id.
+            chosen = min(copies, key=lambda series: (_latest_charge_ordinal(series), series.pk))
+            chosen.shared_by_other = True
+            rows.append(chosen)
+    rows.sort(key=lambda series: (series.display_name, series.pk))
     return rows
+
+
+def _latest_charge_ordinal(series):
+    dates = [member.transaction.transaction_date.toordinal() for member in series.members.all()]
+    return -max(dates, default=0)
 
 
 def _bill_copies(person, series):

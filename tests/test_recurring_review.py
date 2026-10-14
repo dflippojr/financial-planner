@@ -760,3 +760,35 @@ def test_recurring_page_counts_a_chained_bill_once(_refresh, _view):
     other.force_login(fourth.user)
     shown = other.get(reverse("recurring-review")).context["confirmed"]
     assert len(shown) == 1
+
+
+@pytest.mark.django_db
+@patch("finance.views.timezone.localdate", return_value=TODAY)
+@patch("finance.recurring_services.timezone.localdate", return_value=TODAY)
+def test_shared_bill_row_is_the_copy_with_the_latest_charge_and_cancelled_copies_bridge(_refresh, _view):
+    owner, member, _outsider, older = _shared_bill()
+    shared = older.members.first().transaction.account
+    newest = make_transaction(
+        owner, shared, transaction_date=date(2026, 9, 30), amount_minor=-7000, description="Synthetic Internet"
+    )
+    newer = make_series(member, name="Synthetic Internet", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-7000)
+    add_member(newer, newest)
+    add_member(newer, older.members.order_by("transaction__transaction_date").first().transaction)
+    fourth = make_person("fourth")
+    Membership.objects.create(person=fourth, household=Household.objects.get(name="Synthetic Household"))
+    client = Client()
+    client.force_login(fourth.user)
+    shown = client.get(reverse("recurring-review")).context["confirmed"]
+    assert [row.pk for row in shown] == [newer.pk]
+
+    # A cancelled copy bridging two active ones, disjoint from each other, is still one bill.
+    older.members.exclude(transaction__transaction_date=date(2026, 9, 12)).delete()
+    newer.members.exclude(transaction=newest).delete()
+    bridge = make_series(
+        owner, name="Synthetic Internet", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-6000,
+        cancelled_at=timezone.now(), fingerprint="d" * 64,
+    )
+    add_member(bridge, newest)
+    add_member(bridge, older.members.first().transaction)
+    shown = client.get(reverse("recurring-review")).context["confirmed"]
+    assert len(shown) == 1
