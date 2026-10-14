@@ -498,7 +498,7 @@ def test_an_account_without_a_balance_snapshot_gets_no_balance_or_alert():
 
 @pytest.mark.django_db
 def test_an_archived_charge_does_not_move_a_series_to_another_account():
-    from finance.bills_calendar import _last_charge_account_ids
+    from finance.bills_calendar import _last_charges
 
     owner = make_person("owner")
     make_household(owner)
@@ -513,7 +513,7 @@ def test_an_archived_charge_does_not_move_a_series_to_another_account():
     RecurringSeriesMember.objects.create(series=series, transaction=newer)
     Account.objects.filter(pk=other.pk).update(status=Account.Status.ARCHIVED, archived_at=timezone.now())
 
-    assert _last_charge_account_ids([series.pk]) == {series.pk: checking.pk}
+    assert {k: account_id for k, (account_id, _txn) in _last_charges([series.pk]).items()} == {series.pk: checking.pk}
 
 
 @pytest.mark.django_db

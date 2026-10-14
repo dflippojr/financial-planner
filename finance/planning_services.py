@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.db.models import Exists, Max, OuterRef
+from django.db.models import Exists, Max, OuterRef, Q
 
 from .access import DENIED as _DENIED
 from .access import require_person as _person
@@ -75,16 +75,14 @@ def confine_recurring_series_to_accounts(series_qs, accounts):
     return series_qs.exclude(Exists(hidden))
 
 
-def _household_member_ids(principal):
+def _household_members(principal):
+    """The viewer's current household and its current members' ids."""
     person = _person(principal, check_authenticated=False)
     household = current_household(person)
     if household is None:
-        return [person.pk]
-    return list(
-        Membership.objects.filter(household=household, ended_at__isnull=True, person__isnull=False).values_list(
-            "person_id", flat=True
-        )
-    )
+        return None, [person.pk]
+    ids = Membership.objects.filter(household=household, ended_at__isnull=True, person__isnull=False)
+    return household, list(ids.values_list("person_id", flat=True))
 
 
 def _charge_ids_by_series(series_ids):
@@ -95,7 +93,7 @@ def _charge_ids_by_series(series_ids):
     return charges
 
 
-def _one_series_per_bill(rows, replaced, member_ids):
+def _one_series_per_bill(rows, replaced, member_ids, household):
     """Collapse members' series for one joint bill into a single series.
 
     Two members may each confirm the same household bill; it must project
@@ -106,16 +104,23 @@ def _one_series_per_bill(rows, replaced, member_ids):
     price), then the lowest id. A planned item replacing a series replaces the
     whole bill, even when that series is no longer active, because its charges
     still identify the bill. A confirmed series that is cancelled or inactive
-    still links the histories it shares charges with.
+    still links the histories it shares charges with, as long as every charge
+    sits in a household account, so private history never shapes the plan.
     """
-    bridges = list(
-        RecurringSeries.objects.filter(person_id__in=member_ids, status=RecurringSeries.Status.CONFIRMED)
-        .exclude(pk__in=[row.pk for row in rows])
-        .values_list("pk", flat=True)
+    row_ids = [row.pk for row in rows]
+    linkers = (
+        RecurringSeries.objects.filter(
+            Q(pk__in=replaced)
+            | Q(person_id__in=member_ids, status=RecurringSeries.Status.CONFIRMED)
+        )
+        .exclude(pk__in=row_ids)
     )
-    charges = _charge_ids_by_series([row.pk for row in rows] + list(replaced) + bridges)
-    replaced_charges = set().union(*(charges.get(pk, set()) for pk in replaced)) if replaced else set()
-    parent = {pk: pk for pk in [row.pk for row in rows] + bridges}
+    linkers = confine_recurring_series_to_accounts(
+        linkers, Account.objects.filter(scope=Account.Scope.HOUSEHOLD, household=household)
+    )
+    linker_ids = list(linkers.values_list("pk", flat=True))
+    charges = _charge_ids_by_series(row_ids + linker_ids)
+    parent = {pk: pk for pk in row_ids + linker_ids}
 
     def find(pk):
         while parent[pk] != pk:
@@ -130,12 +135,13 @@ def _one_series_per_bill(rows, replaced, member_ids):
                 parent[find(pk)] = find(first_owner[charge_id])
             else:
                 first_owner[charge_id] = pk
+    replaced_bills = {find(pk) for pk in replaced if pk in parent}
     bills = {}
     for row in rows:
         bills.setdefault(find(row.pk), []).append(row)
     chosen = []
-    for members in bills.values():
-        if any(row.pk in replaced or charges.get(row.pk, set()) & replaced_charges for row in members):
+    for root, members in bills.items():
+        if root in replaced_bills or any(row.pk in replaced for row in members):
             continue
         chosen.append(
             min(members, key=lambda row: (row.last_on is None, -(row.last_on.toordinal() if row.last_on else 0), row.pk))
@@ -201,7 +207,7 @@ def visible_projection_inputs(principal, *, account=None, scope="", accounts=Non
         # Series are stored per person, so a household selection reads every
         # member's series whose charges all sit in the selected household
         # accounts. Every member then projects the same bills.
-        member_ids = _household_member_ids(principal)
+        household, member_ids = _household_members(principal)
         series = RecurringSeries.objects.filter(person_id__in=member_ids)
     else:
         series = RecurringSeries.objects.visible_to(principal)
@@ -232,7 +238,7 @@ def visible_projection_inputs(principal, *, account=None, scope="", accounts=Non
         series.annotate(last_on=Max("members__transaction__transaction_date")).order_by("display_name", "pk")
     )
     if shared_series:
-        series_rows = _one_series_per_bill(series_rows, replaced, member_ids)
+        series_rows = _one_series_per_bill(series_rows, replaced, member_ids, household)
     else:
         series_rows = [row for row in series_rows if row.pk not in replaced]
     for series in series_rows:

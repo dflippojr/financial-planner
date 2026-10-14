@@ -952,3 +952,49 @@ def test_a_cancelled_series_still_links_the_histories_it_bridges():
     for person in (owner, member):
         items = [i for i in visible_projection_inputs(person.user, scope="household") if i.source == "series"]
         assert len(items) == 1
+
+
+def link_charges(series, *sources):
+    """Attach the first and last charge of each source series to `series`."""
+    for source in sources:
+        ordered = source.members.order_by("transaction__transaction_date")
+        for member in (ordered.first(), ordered.last()):
+            RecurringSeriesMember.objects.get_or_create(series=series, transaction=member.transaction)
+
+
+@pytest.mark.django_db
+def test_a_series_touching_a_private_account_never_bridges_household_bills():
+    owner, member, household = household_fixture()
+    shared = Account.objects.get(name="Synthetic Joint")
+    private_account = make_account(owner, name=SECRET_ACCOUNT)
+    first = make_confirmed_series(owner, "Synthetic Insurance", shared, months=(1, 2, 3), amount_minor=40_000)
+    second = make_confirmed_series(member, "Synthetic Insurance", shared, months=(7, 8, 9), amount_minor=90_000)
+    mixed = make_confirmed_series(owner, "Synthetic Mixed", private_account, months=(5,))
+    link_charges(mixed, first, second)
+    before = sorted(i.amount_minor for i in visible_projection_inputs(member.user, scope="household") if i.source == "series")
+
+    assert before == [40_000, 90_000]
+    assert before == sorted(
+        i.amount_minor for i in visible_projection_inputs(owner.user, scope="household") if i.source == "series"
+    )
+
+
+@pytest.mark.django_db
+def test_a_replacement_reaches_the_whole_bill_through_cancelled_bridges():
+    owner, member, household = household_fixture()
+    shared = Account.objects.get(name="Synthetic Joint")
+    replaced = make_confirmed_series(owner, "Synthetic Electric", shared, months=(1, 2, 3))
+    active = make_confirmed_series(member, "Synthetic Electric", shared, months=(7, 8, 9))
+    bridge = make_confirmed_series(member, "Synthetic Electric", shared, months=(5,), amount_minor=305_000)
+    link_charges(bridge, replaced, active)
+    RecurringSeries.objects.filter(pk__in=(replaced.pk, bridge.pk)).update(cancelled_at=timezone.now())
+    PlannedItem.objects.create(
+        owner=owner, household=household, scope=PlannedItem.Scope.HOUSEHOLD, name="Synthetic Electric plan",
+        kind=PlannedItem.Kind.EXPENSE, amount_minor=250_000, start_date=date(2026, 11, 1),
+        cadence=PlannedItem.Cadence.MONTHLY, replaces_series=replaced,
+    )
+
+    for person in (owner, member):
+        names = [i.name for i in visible_projection_inputs(person.user, scope="household")]
+        assert "Synthetic Electric" not in names
+        assert "Synthetic Electric plan" in names

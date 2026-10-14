@@ -110,10 +110,6 @@ def _last_charges(series_ids):
     return {series_id: (account_id, txn_id) for series_id, (_key, account_id, txn_id) in best.items()}
 
 
-def _last_charge_account_ids(series_ids):
-    return {series_id: account_id for series_id, (account_id, _txn_id) in _last_charges(series_ids).items()}
-
-
 def calendar_inputs(principal, *, scope=""):
     from .models import RecurringSeries
 
