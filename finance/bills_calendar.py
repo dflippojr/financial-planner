@@ -84,7 +84,8 @@ def save_calendar_settings(principal, *, account_ids, threshold_minor):
     return prefs
 
 
-def _last_charge_account_ids(series_ids):
+def _last_charges(series_ids):
+    """Each series's latest active charge as (account id, transaction id)."""
     if not series_ids:
         return {}
     from .models import RecurringSeriesMember
@@ -105,17 +106,30 @@ def _last_charge_account_ids(series_ids):
         key = (row["transaction__transaction_date"], row["transaction_id"])
         current = best.get(row["series_id"])
         if current is None or key > current[0]:
-            best[row["series_id"]] = (key, row["transaction__account_id"])
-    return {series_id: account_id for series_id, (_key, account_id) in best.items()}
+            best[row["series_id"]] = (key, row["transaction__account_id"], row["transaction_id"])
+    return {series_id: (account_id, txn_id) for series_id, (_key, account_id, txn_id) in best.items()}
+
+
+def _last_charge_account_ids(series_ids):
+    return {series_id: account_id for series_id, (account_id, _txn_id) in _last_charges(series_ids).items()}
 
 
 def calendar_inputs(principal, *, scope=""):
+    from .models import RecurringSeries
+
     rows = []
     sources = visible_projection_inputs(principal, scope=scope)
     series_ids = [item.source_id for item in sources if item.source == SOURCE_SERIES]
-    last_accounts = _last_charge_account_ids(series_ids)
+    last_charges = _last_charges(series_ids)
+    # A household bill another member confirmed is not on the viewer's own
+    # Recurring page, so it links to its latest charge instead.
+    own_series = set(RecurringSeries.objects.visible_to(principal).filter(pk__in=series_ids).values_list("pk", flat=True))
     for item in sources:
-        account_id = last_accounts.get(item.source_id) if item.source == SOURCE_SERIES else None
+        account_id = charge_id = None
+        if item.source == SOURCE_SERIES:
+            account_id, charge_id = last_charges.get(item.source_id, (None, None))
+            if item.source_id in own_series:
+                charge_id = None
         rows.append(
             SimpleNamespace(
                 name=item.name,
@@ -128,6 +142,7 @@ def calendar_inputs(principal, *, scope=""):
                 source=item.source,
                 source_id=item.source_id,
                 account_id=account_id,
+                charge_transaction_id=charge_id,
             )
         )
     return rows
@@ -142,6 +157,9 @@ def _signed_amount(item):
 def _item_url(item):
     if item.source == SOURCE_PLANNED:
         return reverse("planned-item-edit", args=[item.source_id])
+    charge_id = getattr(item, "charge_transaction_id", None)
+    if charge_id is not None:
+        return reverse("transaction-edit", args=[charge_id])
     return f"{reverse('recurring-review')}#series-{item.source_id}"
 
 

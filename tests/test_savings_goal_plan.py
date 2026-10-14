@@ -901,3 +901,33 @@ def test_a_combined_view_of_only_household_accounts_keeps_the_viewers_own_series
     items = visible_projection_inputs(member.user, accounts=accounts)
 
     assert [i for i in items if i.source == "series"] == []
+
+
+@pytest.mark.django_db
+def test_household_projection_counts_one_bill_when_members_series_use_different_merchant_keys():
+    owner, member, household = household_fixture()
+    shared = Account.objects.get(name="Synthetic Joint")
+    owner_series = make_confirmed_series(owner, "Synthetic Electric", shared)
+    renamed = make_confirmed_series(member, "Synthetic Power Co", shared, same_charges_as=owner_series)
+    RecurringSeries.objects.filter(pk=renamed.pk).update(cadence=RecurringSeries.Cadence.QUARTERLY)
+
+    for person in (owner, member):
+        items = [i for i in visible_projection_inputs(person.user, scope="household") if i.source == "series"]
+        assert len(items) == 1
+
+
+@pytest.mark.django_db
+def test_calendar_links_another_members_household_bill_to_its_latest_charge():
+    from finance.bills_calendar import _item_url
+
+    owner, member, household = household_fixture()
+    shared = Account.objects.get(name="Synthetic Joint")
+    series = make_confirmed_series(owner, "Synthetic Electric", shared)
+    latest = series.members.order_by("transaction__transaction_date").last().transaction
+
+    def bill_url(person):
+        (row,) = [r for r in calendar_inputs(person.user, scope="household") if r.name == "Synthetic Electric"]
+        return _item_url(row)
+
+    assert bill_url(owner) == f"{reverse('recurring-review')}#series-{series.pk}"
+    assert bill_url(member) == reverse("transaction-edit", args=[latest.pk])

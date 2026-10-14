@@ -99,12 +99,13 @@ def _one_series_per_bill(rows, replaced):
     """Collapse members' series for one joint bill into a single series.
 
     Two members may each confirm the same household bill; it must project
-    once. Series belong to one bill when they share a merchant and cadence and
-    are linked by shared charges, directly or through a third series, so two
-    distinct bills from one merchant both stay. The series with the latest
-    charge wins (it holds the current price), then the lowest id. A planned
-    item replacing a series replaces the whole bill, even when that series is
-    no longer active, because its charges still identify the bill.
+    once. Series belong to one bill when shared charges link them, directly or
+    through a third series (a charge is one bill whatever name or cadence each
+    member's series gave it), so two distinct bills from one merchant both
+    stay. The series with the latest charge wins (it holds the current
+    price), then the lowest id. A planned item replacing a series replaces the
+    whole bill, even when that series is no longer active, because its charges
+    still identify the bill.
     """
     charges = _charge_ids_by_series([row.pk for row in rows] + list(replaced))
     replaced_charges = set().union(*(charges.get(pk, set()) for pk in replaced)) if replaced else set()
@@ -119,11 +120,10 @@ def _one_series_per_bill(rows, replaced):
     first_owner = {}
     for row in rows:
         for charge_id in charges.get(row.pk, ()):
-            key = (row.merchant_key, row.cadence, charge_id)
-            if key in first_owner:
-                parent[find(row.pk)] = find(first_owner[key])
+            if charge_id in first_owner:
+                parent[find(row.pk)] = find(first_owner[charge_id])
             else:
-                first_owner[key] = row.pk
+                first_owner[charge_id] = row.pk
     bills = {}
     for row in rows:
         bills.setdefault(find(row.pk), []).append(row)
