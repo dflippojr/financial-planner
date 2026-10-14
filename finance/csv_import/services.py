@@ -26,7 +26,7 @@ class ImportCommitResult:
     new_count: int
     duplicate_count: int
     invalid_count: int
-    batch: ImportBatch | None
+    batch: ImportBatch
 
 
 def _active_account(principal, account_id):
@@ -125,19 +125,20 @@ def commit_csv_import(
     preview = classify_overlap(account, preview_csv(document, mapping))
     new_rows = [row for row in preview.rows if row.overlap_status == "new"]
     source_file_sha256 = hashlib.sha256(content).hexdigest()
-    batch = None
+    # The batch is always written, even with no new rows: it records that the
+    # member imported this date range, which Import due and Missing import read.
+    batch = ImportBatch.objects.create(
+        account=account,
+        imported_by=person,
+        source=source,
+        source_file_sha256=source_file_sha256,
+        date_range_start=date_range_start,
+        date_range_end=date_range_end,
+        saved_csv_mapping=saved_csv_mapping,
+    )
+    if saved_csv_mapping is not None:
+        lock_saved_mapping(saved_csv_mapping)
     if new_rows:
-        batch = ImportBatch.objects.create(
-            account=account,
-            imported_by=person,
-            source=source,
-            source_file_sha256=source_file_sha256,
-            date_range_start=date_range_start,
-            date_range_end=date_range_end,
-            saved_csv_mapping=saved_csv_mapping,
-        )
-        if saved_csv_mapping is not None:
-            lock_saved_mapping(saved_csv_mapping)
         kind = _kind_for(source)
         source_rows = {row.number: row for row in document.rows}
         Transaction.objects.bulk_create(
@@ -159,13 +160,13 @@ def commit_csv_import(
             ]
         )
     counts = {"new_count": preview.new_count, "duplicate_count": preview.duplicate_count,
-              "invalid_count": preview.invalid_count, "format": source}
-    if batch is None:
-        record(person, AuditEvent.Action.IMPORT_NO_NEW_ROWS, AuditEvent.TargetType.ACCOUNT, account.pk,
+              "invalid_count": preview.invalid_count, "format": source, "batch_id": batch.pk}
+    if new_rows:
+        record(person, AuditEvent.Action.IMPORT_COMMITTED, AuditEvent.TargetType.IMPORT_BATCH, batch.pk,
                audience={"account": account}, metadata=counts, verified=True)
     else:
-        record(person, AuditEvent.Action.IMPORT_COMMITTED, AuditEvent.TargetType.IMPORT_BATCH, batch.pk,
-               audience={"account": account}, metadata={**counts, "batch_id": batch.pk}, verified=True)
+        record(person, AuditEvent.Action.IMPORT_NO_NEW_ROWS, AuditEvent.TargetType.ACCOUNT, account.pk,
+               audience={"account": account}, metadata=counts, verified=True)
     return ImportCommitResult(preview.new_count, preview.duplicate_count, preview.invalid_count, batch)
 
 
@@ -184,6 +185,8 @@ def categorize_imported_batch(principal, batch):
         return []
     person = _person_for(principal)
     created = list(Transaction.objects.filter(import_batch=batch, status=Transaction.Status.ACTIVE))
+    if not created:
+        return []
     refresh_transfer_pairs(person, transaction_ids=[row.pk for row in created])
     applied = apply_enabled_rules_to_transactions(person, created)
     from finance.category_suggestion_services import queue_category_suggestions_for

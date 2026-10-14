@@ -267,7 +267,9 @@ def test_import_reimport_and_undo(import_client, name, account_type):
     response = upload(client, account, content)
     assert response.context["preview"].duplicate_count == 2
     assert commit(client, account, response).status_code == 302
-    assert ImportBatch.objects.count() == 1
+    assert ImportBatch.objects.count() == 2
+    reimport = ImportBatch.objects.exclude(pk=batch.pk).get()
+    assert not reimport.transactions.exists()
     assert Transaction.objects.count() == 2
     assert not list(staging.glob("*.csvstage"))
     # A changed FITID still matches by fingerprint; only the extra date is new.
@@ -276,7 +278,7 @@ def test_import_reimport_and_undo(import_client, name, account_type):
     assert response.context["preview"].duplicate_count == 1
     assert response.context["preview"].new_count == 1
     assert commit(client, account, response).status_code == 302
-    second = ImportBatch.objects.exclude(pk=batch.pk).get()
+    second = ImportBatch.objects.exclude(pk__in=[batch.pk, reimport.pk]).get()
     assert client.post(reverse("csv-import-undo", args=[account.pk, second.pk])).status_code == 302
     assert Transaction.objects.filter(status="active").count() == 2
     assert Transaction.objects.get(import_batch=second).status == "archived"
