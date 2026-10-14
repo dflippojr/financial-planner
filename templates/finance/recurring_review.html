@@ -177,7 +177,7 @@
         <li class="flex items-center justify-between gap-3 border-t border-base-300 py-2 first:mt-2">
           <span class="flex min-w-0 flex-col">
             <span>{{ item.series.display_name }}</span>
-            <span class="text-sm opacity-80">{{ item.expected_on }} · {{ item.series.get_cadence_display|lower }}</span>
+            <span class="text-sm opacity-80">{% if item.due %}Due, expected {% endif %}{{ item.expected_on }} · {{ item.series.get_cadence_display|lower }}</span>
           </span>
           <span class="whitespace-nowrap font-semibold">{% include "finance/_amount.html" with value=item.amount_display tone="" %}</span>
         </li>

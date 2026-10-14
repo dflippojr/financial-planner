@@ -538,6 +538,7 @@ Owner decisions:
 - **Cancelling.** A member can mark a series cancelled. It leaves totals and the projection, and its history stays. If a new matching charge arrives, it shows as "resumed?" for the member to confirm.
 - **Step changes** are covered by #124: a confirmed series follows step changes and gradual drift.
 - **Daily pass (#426).** The daily alert pass refreshes every active member's series (skipping detection when their charges are unchanged) and raises price-change and missed-charge alerts, so they and their email notices arrive without a Recurring page visit. A failure for one member is logged by member id and error type only, and the pass moves on.
+- **Late charges (#447).** Owner decision 2026-10-14: a charge that is past its expected date but still inside its cadence tolerance (3 days for weekly, biweekly and monthly, 4 quarterly, 5 annual) is "due", not missed. Recurring review lists it under Upcoming as "Due, expected <date>", and the bills calendar counts it today, so the expected balance dips now and a threshold shortfall is flagged. It stays that way until it posts (the series then steps to the next date) or the tolerance passes and it becomes "missed". A late charge that posted today but is not yet linked to its series is counted twice, which errs low.
 
 ## Weekly digest (2026-10-12, #419)
 
