@@ -23,6 +23,7 @@ from .models import (
 )
 from .months import add_months, month_end
 from .planning_services import visible_projection_inputs
+from .recurring_review import is_overdue
 from .projection import (
     KIND_INCOME,
     SOURCE_PLANNED,
@@ -109,7 +110,13 @@ def _last_charge_account_ids(series_ids):
     return {series_id: account_id for series_id, (_key, account_id) in best.items()}
 
 
-def calendar_inputs(principal, *, scope=""):
+def calendar_inputs(principal, *, scope="", today=None):
+    """Projection sources for the calendar.
+
+    A series charge a few days late (see `is_overdue`) carries `due_on=today`, so
+    the forecast counts it today instead of dropping it until it posts or is missed.
+    """
+    today = today or timezone.localdate()
     rows = []
     sources = visible_projection_inputs(principal, scope=scope)
     series_ids = [item.source_id for item in sources if item.source == SOURCE_SERIES]
@@ -128,6 +135,9 @@ def calendar_inputs(principal, *, scope=""):
                 source=item.source,
                 source_id=item.source_id,
                 account_id=account_id,
+                due_on=today
+                if item.source == SOURCE_SERIES and is_overdue(item.start, item.cadence, today)
+                else None,
             )
         )
     return rows
@@ -148,7 +158,9 @@ def _item_url(item):
 def _expected_on_day(sources, on_date):
     hits = []
     for item in sources:
-        if occurrence_dates(item.start, item.end, item.cadence, on_date, on_date):
+        if on_date == getattr(item, "due_on", None) or occurrence_dates(
+            item.start, item.end, item.cadence, on_date, on_date
+        ):
             delta = _signed_amount(item)
             hits.append(
                 SimpleNamespace(
@@ -337,7 +349,7 @@ def build_month(
     today = today or timezone.localdate()
     month_start = date(year, month, 1)
     last = month_end(month_start)
-    sources = calendar_inputs(principal, scope=scope)
+    sources = calendar_inputs(principal, scope=scope, today=today)
     selected = list(deposit_accounts(principal, scope=scope))
     wanted = set(account_ids or [])
     selected = [account for account in selected if account.pk in wanted]
@@ -441,7 +453,7 @@ def first_below_in_next_days(principal, *, today=None, days=7):
     selected = list(deposit_accounts(principal).filter(pk__in=selected_ids))
     if not selected or accounts_without_snapshot(selected, as_of=today):
         return None
-    sources = calendar_inputs(principal)
+    sources = calendar_inputs(principal, today=today)
     start_balance = starting_balance_minor(selected, as_of=today)
     through = today + timedelta(days=days - 1)
     balances = expected_balances_by_day(

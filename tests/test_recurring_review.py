@@ -520,3 +520,28 @@ def test_cancelled_series_is_not_upcoming():
     assert missed_charge(series, owner, today=TODAY) is None
     assert price_change(series) is None
 
+
+
+@pytest.mark.django_db
+def test_overdue_charge_is_due_until_it_posts_or_is_missed():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    series = make_series(owner, name="Synthetic Rent", cadence=RecurringSeries.Cadence.MONTHLY)
+    add_member(series, make_transaction(owner, account, transaction_date=date(2026, 9, 12), description="Synthetic Rent"))
+
+    due = upcoming_charge(series, today=date(2026, 10, 13))
+    assert due.due is True and due.expected_on == date(2026, 10, 12)
+    assert missed_charge(series, owner, today=date(2026, 10, 13)) is None
+    # On its expected date it is simply upcoming, not due.
+    assert upcoming_charge(series, today=date(2026, 10, 12)).due is False
+    # The last tolerated day is still due; the day after, it is missed.
+    assert upcoming_charge(series, today=date(2026, 10, 15)).due is True
+    assert missed_charge(series, owner, today=date(2026, 10, 15)) is None
+    assert upcoming_charge(series, today=date(2026, 10, 16)) is None
+    assert missed_charge(series, owner, today=date(2026, 10, 16)).expected_on == date(2026, 10, 12)
+
+    # Once it posts, the next expected charge is a month on and nothing is due.
+    add_member(series, make_transaction(owner, account, transaction_date=date(2026, 10, 13), description="Synthetic Rent"))
+    assert upcoming_charge(series, today=date(2026, 10, 13)) is None
+    assert upcoming_charge(series, today=date(2026, 10, 20)).due is False  # Nov 13 is inside the horizon
