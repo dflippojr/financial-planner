@@ -156,6 +156,7 @@ from .recurring_services import (
     merge_recurring_series,
     refresh_recurring_series,
     remove_recurring_member,
+    shared_series_for_review,
     undo_cancel_recurring_series,
 )
 from .recurring_review import build_recurring_review, price_change_percent_for
@@ -1493,11 +1494,14 @@ def recurring_review(request):
     if request.method == "POST":
         return _handle_recurring_post(request)
     _service_or_404(lambda: refresh_recurring_series(request.user, only_if_changed=True))
-    visible = (
+    own = list(
         RecurringSeries.objects.visible_to(request.user)
         .prefetch_related("members__transaction__account")
         .order_by("display_name", "pk")
     )
+    # Household bills another member confirmed can be cancelled or resumed
+    # here too; they stay out of suggestions, merge and charge editing.
+    visible = sorted([*own, *shared_series_for_review(request.user, own)], key=lambda series: (series.display_name, series.pk))
     confirmed = [
         series
         for series in visible
@@ -1519,6 +1523,7 @@ def recurring_review(request):
         if series.is_active
         and series.status != RecurringSeries.Status.DISMISSED
         and series.cancelled_at is None
+        and not getattr(series, "shared_by_other", False)
     ]
     merge_series_id, merge_targets = _recurring_merge_selection(request.GET.get("merge_series"), grouping_series)
     add_series_id = None
@@ -1537,7 +1542,7 @@ def recurring_review(request):
             add_series_id = None
     today = timezone.localdate()
     upcoming, price_change_rows, missed, cancelled = build_recurring_review(
-        request.user, list(visible), today=today
+        request.user, visible, today=today
     )
     return render(
         request,

@@ -545,3 +545,111 @@ def test_overdue_charge_is_due_until_it_posts_or_is_missed():
     add_member(series, make_transaction(owner, account, transaction_date=date(2026, 10, 13), description="Synthetic Rent"))
     assert upcoming_charge(series, today=date(2026, 10, 13)) is None
     assert upcoming_charge(series, today=date(2026, 10, 20)).due is False  # Nov 13 is inside the horizon
+
+
+def _shared_bill():
+    owner = make_person("owner")
+    member = make_person("member")
+    outsider = make_person("outsider")
+    household = make_household(owner, member)
+    make_household(outsider, name="Other Household")
+    shared = make_account(owner, name="Synthetic Joint", scope=Account.Scope.HOUSEHOLD, household=household)
+    series = make_series(
+        owner, name="Synthetic Internet", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-6000
+    )
+    for month in (7, 8, 9):
+        add_member(
+            series,
+            make_transaction(
+                owner,
+                shared,
+                transaction_date=date(2026, month, 12),
+                amount_minor=-6000,
+                description="Synthetic Internet",
+            ),
+        )
+    return owner, member, outsider, series
+
+
+@pytest.mark.django_db
+def test_a_household_member_can_cancel_and_resume_a_series_another_member_confirmed():
+    owner, member, _outsider, series = _shared_bill()
+
+    cancel_recurring_series(member, series.pk)
+    series.refresh_from_db()
+    assert series.cancelled_at is not None
+    undo_cancel_recurring_series(member, series.pk)
+    series.refresh_from_db()
+    assert series.cancelled_at is None
+    assert projected_months_for(owner, today=date(2026, 10, 1), horizon=3)[0].spending_minor == 6000
+    cancel_recurring_series(member, series.pk)
+    assert projected_months_for(owner, today=date(2026, 10, 1), horizon=3)[0].spending_minor == 0
+
+
+@pytest.mark.django_db
+def test_cancelling_a_series_needs_household_charges_and_household_membership():
+    from django.core.exceptions import PermissionDenied
+
+    _owner, member, outsider, series = _shared_bill()
+    with pytest.raises(PermissionDenied):
+        cancel_recurring_series(outsider, series.pk)
+
+    owner_series = RecurringSeries.objects.create(
+        person=series.person,
+        merchant_key="mixed",
+        display_name="Synthetic Mixed",
+        cadence=RecurringSeries.Cadence.MONTHLY,
+        typical_amount_minor=-6000,
+        status=RecurringSeries.Status.CONFIRMED,
+        confidence=RecurringSeries.Confidence.HIGH,
+        reasons=["synthetic"],
+        fingerprint="c" * 64,
+    )
+    add_member(owner_series, series.members.first().transaction)
+    add_member(
+        owner_series,
+        make_transaction(series.person, make_account(series.person, name="Owner Private"), description="Private"),
+    )
+    with pytest.raises(PermissionDenied):
+        cancel_recurring_series(member, owner_series.pk)
+    owner_series.refresh_from_db()
+    assert owner_series.cancelled_at is None
+
+
+@pytest.mark.django_db
+def test_keep_cancelled_stays_with_the_series_owner():
+    from django.core.exceptions import PermissionDenied
+
+    owner, member, _outsider, series = _shared_bill()
+    cancel_recurring_series(member, series.pk)
+    with pytest.raises(PermissionDenied):
+        keep_cancelled_recurring_series(member, series.pk)
+    keep_cancelled_recurring_series(owner, series.pk)
+
+
+@pytest.mark.django_db
+@patch("finance.views.timezone.localdate", return_value=TODAY)
+@patch("finance.recurring_services.timezone.localdate", return_value=TODAY)
+def test_recurring_page_lists_a_shared_bill_with_cancel_only_and_counts_a_joint_bill_once(_refresh, _view):
+    owner, member, _outsider, series = _shared_bill()
+    client = Client()
+    client.force_login(member.user)
+    page = client.get(reverse("recurring-review"))
+    html = page.content.decode()
+    assert [row.pk for row in page.context["confirmed"]] == [series.pk]
+    assert "Mark cancelled" in html
+    assert f"series-{series.pk}-add" not in html
+    assert f"series-{series.pk}-charges" not in html
+    assert page.context["monthly_minor"] > 0
+
+    # Once the member confirms the same bill themselves, only their copy shows.
+    own = make_series(member, name="Synthetic Internet", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-6000)
+    for row in series.members.all():
+        add_member(own, row.transaction)
+    both = client.get(reverse("recurring-review"))
+    assert [row.pk for row in both.context["confirmed"]] == [own.pk]
+
+    cancel = client.post(reverse("recurring-review"), {"series_id": series.pk, "action": "cancel"})
+    assert cancel.status_code == 302
+    series.refresh_from_db()
+    assert series.cancelled_at is not None

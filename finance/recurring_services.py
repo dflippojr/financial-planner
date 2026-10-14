@@ -1239,10 +1239,38 @@ def create_manual_series(principal, name, cadence, transaction_ids):
     return _recompute_series_from_members(series)
 
 
-def _lock_confirmed_series(principal, series_id):
+def shared_series_for_review(principal, own_series):
+    """Household bills another member confirmed, for the Recurring page.
+
+    A bill both members confirmed shows once, as the viewer's own series, so
+    totals do not count it twice. Each row is marked `shared_by_other`: the
+    viewer may cancel or resume it, but grouping edits stay with its owner.
+    """
+    counted = set()
+    for series in own_series:
+        if series.status == RecurringSeries.Status.CONFIRMED and series.is_active and series.cancelled_at is None:
+            counted |= {member.transaction_id for member in series.members.all()}
+    rows = []
+    shared = RecurringSeries.objects.shared_with(principal).filter(is_active=True).prefetch_related(
+        "members__transaction__account"
+    )
+    for series in shared.order_by("display_name", "pk"):
+        if series.cancelled_at is None and counted.intersection(member.transaction_id for member in series.members.all()):
+            continue
+        series.shared_by_other = True
+        rows.append(series)
+    return rows
+
+
+def _lock_confirmed_series(principal, series_id, *, own_only=False):
+    # Cancel, resume and price acknowledgement are household actions, so a
+    # series another member confirmed from household charges qualifies too.
+    # `own_only` keeps actions that write per-person state with the owner.
     person = _person_for(principal)
     lock_actor_household(person)
-    _visible_series(person, series_id)
+    candidates = RecurringSeries.objects.visible_to(person) if own_only else RecurringSeries.objects.actionable_by(person)
+    if not candidates.filter(pk=series_id).exists():
+        raise PermissionDenied(_DENIED)
     series = RecurringSeries.objects.select_for_update(of=("self",)).filter(pk=series_id).first()
     if series is None or series.status != RecurringSeries.Status.CONFIRMED or not series.is_active:
         raise PermissionDenied(_DENIED)
@@ -1278,7 +1306,7 @@ def confirm_resume_recurring_series(principal, series_id):
 
 @transaction.atomic
 def keep_cancelled_recurring_series(principal, series_id):
-    person, series = _lock_confirmed_series(principal, series_id)
+    person, series = _lock_confirmed_series(principal, series_id, own_only=True)
     if series.cancelled_at is None:
         raise PermissionDenied(_DENIED)
     cutoff = timezone.localdate(series.cancelled_at)

@@ -1141,6 +1141,41 @@ class RecurringSeries(models.Model):
             ).exclude(transaction_id__in=visible_transactions)
             return self.filter(person=person).exclude(models.Exists(hidden_members))
 
+        def shared_with(self, principal):
+            """Confirmed series another current household member owns, when every charge sits in a household account.
+
+            Every member may edit shared accounts, so a bill built only from
+            household charges is the household's to cancel or resume. A series
+            with any private charge stays with its owner.
+            """
+            person = _person_for(principal)
+            if person is None:
+                return self.none()
+            household_ids = Membership.objects.filter(person=person, ended_at__isnull=True).values("household_id")
+            member_ids = Membership.objects.filter(
+                household_id__in=household_ids, ended_at__isnull=True, person__isnull=False
+            ).values("person_id")
+            household_accounts = Account.objects.filter(
+                scope=Account.Scope.HOUSEHOLD, household_id__in=household_ids
+            ).values("pk")
+            visible_transactions = Transaction.objects.visible_to(person).values("pk")
+            outside = RecurringSeriesMember.objects.filter(series_id=models.OuterRef("pk")).exclude(
+                transaction__account_id__in=household_accounts, transaction_id__in=visible_transactions
+            )
+            has_members = RecurringSeriesMember.objects.filter(series_id=models.OuterRef("pk"))
+            return (
+                self.filter(person_id__in=member_ids, status=RecurringSeries.Status.CONFIRMED)
+                .exclude(person=person)
+                .filter(models.Exists(has_members))
+                .exclude(models.Exists(outside))
+            )
+
+        def actionable_by(self, principal):
+            """Series the viewer may cancel or resume: their own, plus the household's shared ones."""
+            return self.filter(
+                Q(pk__in=self.visible_to(principal).values("pk")) | Q(pk__in=self.shared_with(principal).values("pk"))
+            )
+
     objects = QuerySet.as_manager()
 
     class Meta:
