@@ -477,9 +477,6 @@ def test_export_after_leaving_hides_household_live_category_and_tag_names():
     from finance.lifecycle_services import leave_household
     from finance.models import Budget
     from finance.tag_services import add_tag, rename_tag, set_transaction_note_and_tags
-    from tests.test_monthly_review import (
-        make_account, make_household, make_person, make_transaction, signed_in,
-    )
 
     owner = make_person("owner")
     member = make_person("member")
@@ -507,7 +504,9 @@ def test_export_after_leaving_hides_household_live_category_and_tag_names():
     leave_household(member)
     rename_category(owner, groceries.pk, "ZQ Surprise party for member")
     rename_tag(owner, tag.pk, "ZQ Divorce lawyer")
-    body = signed_in(member).get(reverse("transaction-list")).content.decode()
+    client = Client()
+    client.force_login(member.user)
+    body = client.get(reverse("transaction-list")).content.decode()
     assert "ZQ Surprise party" not in body and "ZQ Divorce lawyer" not in body
 
     def names(tables, needles):
