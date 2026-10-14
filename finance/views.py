@@ -264,7 +264,10 @@ def _scenario_choice_querysets(principal, inputs):
     planned_ids = [item.source_id for item in inputs if item.source == SOURCE_PLANNED]
     series_ids = [item.source_id for item in inputs if item.source == SOURCE_SERIES]
     planned = PlannedItem.objects.visible_to(principal).filter(pk__in=planned_ids).order_by("name", "pk")
-    series = RecurringSeries.objects.visible_to(principal).filter(pk__in=series_ids).order_by("display_name", "pk")
+    # The ids come from the authorized projection inputs, which may include a
+    # household bill another member confirmed, so they are not limited to the
+    # viewer's own series here.
+    series = RecurringSeries.objects.filter(pk__in=series_ids).order_by("display_name", "pk")
     return planned, series
 
 
