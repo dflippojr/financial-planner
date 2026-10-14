@@ -9,7 +9,7 @@ from .ofx_sgml import LEAF_TAGS
 
 OFX_HEADERS = ("Date", "Amount", "Name", "Memo", "FITID", "Type")
 _SGML_NAMED = {"lt": "<", "gt": ">", "amp": "&", "quot": '"', "apos": "'"}
-_SGML_ENTITY = re.compile(r"&(?:(lt|gt|amp|quot|apos)|#(\d{1,7})|#[xX]([0-9A-Fa-f]{1,6}));")
+_SGML_ENTITY = re.compile(r"&(?:(lt|gt|amp|quot|apos)|#0*(\d{1,7})|#[xX]0*([0-9A-Fa-f]{1,6}));")
 MALFORMED = "This is not a valid OFX / QFX statement file."
 UNSUPPORTED_CORRECTIONS = (
     "OFX transaction corrections are not supported. "

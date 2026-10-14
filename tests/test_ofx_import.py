@@ -101,8 +101,8 @@ def test_sgml_raw_ampersand_in_name_is_kept(raw):
 
 
 def test_sgml_defined_entities_still_decode():
-    document = read_ofx(sgml_statement("A &amp; B &lt;C&gt; &#65;&#x42;"))
-    assert preview_csv(document, OFX_MAPPING).rows[0].description == "A & B <C> AB"
+    document = read_ofx(sgml_statement("A &amp; B &lt;C&gt; &#65;&#x42; AT&#00000038;T&#x0000026;T"))
+    assert preview_csv(document, OFX_MAPPING).rows[0].description == "A & B <C> AB AT&T&T"
 
 
 def test_sgml_explicit_scalar_end_tags_and_empty_memo():
