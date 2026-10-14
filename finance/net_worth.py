@@ -93,7 +93,19 @@ def _account_month_row(account, snapshot, window):
     )
 
 
+def counts_on(account, as_of):
+    """Whether an account belongs in net worth as of a date.
+
+    An archived account keeps its place in periods that end before the day it
+    was archived, so history stays as it was, and drops out from then on.
+    """
+    if account.archived_at is None:
+        return True
+    return as_of < timezone.localdate(account.archived_at)
+
+
 def _month_period(window, accounts, indexed, today):
+    accounts = [account for account in accounts if counts_on(account, window.end)]
     assets = 0
     liabilities = 0
     rows = []
@@ -199,12 +211,14 @@ def net_worth_report(principal, *, date_from, date_to, scope="", today=None, acc
     if period_count(date_from, date_to, GROUPING_MONTH) > MAX_REPORT_PERIODS:
         raise ValueError("Too many periods for one report.")
     today = today or timezone.localdate()
-    accounts = selected_accounts(principal, scope=scope, accounts=accounts)
-    indexed = _indexed_snapshots(principal, accounts, date_to)
-    periods = [
-        _month_period(window, accounts, indexed, today)
-        for window in iter_period_windows(date_from, date_to, GROUPING_MONTH)
+    windows = list(iter_period_windows(date_from, date_to, GROUPING_MONTH))
+    accounts = [
+        account
+        for account in selected_accounts(principal, scope=scope, accounts=accounts)
+        if any(counts_on(account, window.end) for window in windows)
     ]
+    indexed = _indexed_snapshots(principal, accounts, date_to)
+    periods = [_month_period(window, accounts, indexed, today) for window in windows]
     return SimpleNamespace(
         accounts=accounts,
         periods=periods,
