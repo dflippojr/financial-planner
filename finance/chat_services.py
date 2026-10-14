@@ -35,7 +35,7 @@ from .ai_types import (
 from .chat_proposals import proposal_tools
 from .lifecycle_services import _DENIED, _person_for
 from .input_limits import MAX_CHAT_PROMPT_CHARS, MAX_PAGE_CONTEXT_CHARS, MAX_CHAT_MESSAGES
-from .models import AiConversation, AiConversationMessage, Person
+from .models import Account, AiConversation, AiConversationMessage, Person
 from .category_services import current_household
 from .policy_services import household_ai_allowed, may_use_ai
 
@@ -130,6 +130,36 @@ def delete_conversations_for_account(account_id):
         AiConversation.objects.filter(pk__in=doomed).delete()
 
 
+def delete_conversations_without_access(account_ids):
+    """Delete conversations that used one of these accounts when their member can no longer see it.
+
+    Chat history is derived from what the member can see, so unsharing an account or
+    leaving a household purges it the same way deleting the account does.
+    """
+    affected = set(account_ids)
+    if not affected:
+        return
+    visible_by_member = {}
+    doomed = []
+    for row in AiConversation.objects.select_related("member").iterator():
+        used = affected.intersection(row.used_account_ids or [])
+        if not used:
+            continue
+        if row.member_id not in visible_by_member:
+            visible_by_member[row.member_id] = set(
+                Account.objects.visible_to(row.member).filter(pk__in=affected).values_list("pk", flat=True)
+            )
+        if used - visible_by_member[row.member_id]:
+            doomed.append(row.pk)
+    if doomed:
+        AiConversation.objects.filter(pk__in=doomed).delete()
+
+
+def _uses_only_visible_accounts(conversation, person):
+    used = set(conversation.used_account_ids or [])
+    if not used:
+        return True
+    return Account.objects.visible_to(person).filter(pk__in=used).count() == len(used)
 
 
 def sanitize_page_context(raw, person=None):
@@ -347,8 +377,10 @@ def answer_turn(turn, *, sleep=None, monotonic=None):
     saved_session = (conversation.harness_session_id or "").strip()
     household = current_household(person)
     consent_held = household is None or household_ai_allowed(household)
+    # Earlier turns built from an account the member can no longer see are never resent.
+    history_held = consent_held and _uses_only_visible_accounts(conversation, person)
     follow_up = (
-        consent_held
+        history_held
         and bool(saved_session)
         and (conversation.harness_connection or "") == marker
         and (conversation.backend or "") == backend
@@ -379,7 +411,7 @@ def answer_turn(turn, *, sleep=None, monotonic=None):
         follow_up=follow_up,
         on_tool=on_tool,
         allow_tool=allow_tool,
-        history=_api_history(conversation, question) if consent_held and connection.kind in API_KINDS else (),
+        history=_api_history(conversation, question) if history_held and connection.kind in API_KINDS else (),
         tool_budget=tool_budget,
     )
     with transaction.atomic():
