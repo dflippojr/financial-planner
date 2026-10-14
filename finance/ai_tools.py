@@ -274,6 +274,7 @@ def cash_flow_totals(person, args):
             person, date_from=date_from, date_to=date_to,
             grouping=grouping,
             account=account, scope=scope, accounts=accounts,
+            actuals_only=True,  # the Home page this links to leaves future periods to the projection
         )
     query = _range_query(date_from, date_to, account=account, scope=scope)
     if all_dates:

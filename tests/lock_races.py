@@ -41,8 +41,11 @@ def _wait_for_membership_lock(first_pid, competing_pid, competing_done, errors):
     )
 
 
-def run_account_lock_race(first_action, competing_action, *, start_competitor_first=False):
+def run_account_lock_race(first_action, competing_action, *, start_competitor_first=False, pause_after=None):
     """Hold the first account lock until PostgreSQL proves actual contention.
+
+    pause_after is the (module, function name) after which the first worker
+    pauses; it defaults to the visible-account lock in lifecycle_services.
 
     Both modes gate the competing service call until the first worker holds
     its locks. Starting the competitor first holds it at that gate while the
@@ -60,10 +63,11 @@ def run_account_lock_race(first_action, competing_action, *, start_competitor_fi
     errors = []
     pids = {}
     started = []
-    original_lock = lifecycle_services._visible_account_for_update
+    pause_module, pause_name = pause_after or (lifecycle_services, "_visible_account_for_update")
+    original_lock = getattr(pause_module, pause_name)
 
-    def lock_then_pause(principal, account_id):
-        locked = original_lock(principal, account_id)
+    def lock_then_pause(*args, **kwargs):
+        locked = original_lock(*args, **kwargs)
         if threading.current_thread() is first:
             first_lock_held.set()
             if not release_first.wait(timeout=JOIN_SECONDS):
@@ -103,7 +107,7 @@ def run_account_lock_race(first_action, competing_action, *, start_competitor_fi
         worker.start()
         started.append(worker)
 
-    with patch.object(lifecycle_services, "_visible_account_for_update", lock_then_pause):
+    with patch.object(pause_module, pause_name, lock_then_pause):
         try:
             if start_competitor_first:
                 start(competing)

@@ -263,9 +263,14 @@ def _batches_by_account(principal, accounts):
 
 
 def _period_missing_accounts(window, accounts, batches_by_account):
-    """Names of the selected accounts with no import covering any of the window, by name."""
+    """Names of the selected accounts with no import covering any of the window, by name.
+
+    Investment accounts are balance-only (no importer), so they never carry the flag.
+    """
     missing = []
     for account in accounts:
+        if account.account_type == Account.Type.INVESTMENT:
+            continue
         covered = any(
             batch.date_range_start <= window.end and batch.date_range_end >= window.start
             for batch in batches_by_account.get(account.pk, ())
@@ -502,17 +507,27 @@ def cash_flow_report(
     today=None,
     tag=None,
     accounts=None,
+    actuals_only=False,
 ):
+    """Income and spending per period.
+
+    With `actuals_only`, periods that start after `today` are left out: they have
+    no actuals to show and no import to expect, and a projection owns them.
+    """
     if period_count(date_from, date_to, grouping) > MAX_REPORT_PERIODS:
         raise ValueError("Too many periods for one report.")
     today = today or timezone.localdate()
     accounts = selected_accounts(
         principal, account=account, scope=scope, cash_flow_only=True, accounts=accounts
     )
-    batches_by_account = _batches_by_account(principal, accounts)
+    # An archived account's batches are archived with it, so it can never show coverage.
+    coverage_accounts = [item for item in accounts if item.status == Account.Status.ACTIVE]
+    batches_by_account = _batches_by_account(principal, coverage_accounts)
     account_filter = accounts
     periods = []
     windows = list(iter_period_windows(date_from, date_to, grouping))
+    if actuals_only:
+        windows = [window for window in windows if window.start <= today]
     window_totals = income_and_spending_by_window(
         principal,
         [(window.start, window.end) for window in windows],
@@ -525,7 +540,7 @@ def cash_flow_report(
             spending_minor=spending_minor,
             net_minor=income_minor - spending_minor,
         )
-        missing_accounts = _period_missing_accounts(window, accounts, batches_by_account) if accounts else []
+        missing_accounts = _period_missing_accounts(window, coverage_accounts, batches_by_account)
         periods.append(
             SimpleNamespace(
                 start=window.start,
@@ -557,7 +572,11 @@ def cash_flow_report(
         spending_minor=current_spending,
         net_minor=current_income - current_spending,
     )
-    previous_from, previous_to = previous_equal_range(date_from, date_to)
+    # Compare against the span the periods cover, which `actuals_only` can shorten.
+    if windows:
+        previous_from, previous_to = previous_equal_range(windows[0].start, windows[-1].end)
+    else:
+        previous_from = previous_to = None
     previous = None
     if previous_from is not None:
         ((previous_income, previous_spending),) = income_and_spending_by_window(

@@ -64,6 +64,9 @@ still uses account, date, amount and description. Original fields contain only
 Date, Amount, Name, Memo, FITID and Type. Account identifiers, balances, security
 lists and investment statements are ignored. No bank downloading is offered.
 A statement with no bank or card transactions is rejected.
+A file with more than one account statement (for example a bank's "download all
+accounts" export) is rejected with a message to download one account at a time,
+because one import targets one app account and account fields are not retained.
 Files with nonempty CORRECTFITID or CORRECTACTION correction records are also
 rejected: provider replacements/deletions need ID matching, which this importer
 does not perform. Use the app's correction or import undo controls instead.

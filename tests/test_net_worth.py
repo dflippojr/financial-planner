@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -344,3 +344,99 @@ def test_an_amount_owed_shows_as_negative_whatever_its_source(source, amount_min
         content = client.get(url).content.decode()
         assert "\N{MINUS SIGN}$500.00" in content, url
         assert "+$500.00" not in content, url
+
+
+def _archive_on(owner, account, archived_on):
+    from finance.lifecycle_services import archive_account
+
+    archive_account(owner.user, account.pk)
+    archived_at = timezone.make_aware(datetime(archived_on.year, archived_on.month, archived_on.day, 12))
+    Account.objects.filter(pk=account.pk).update(archived_at=archived_at)
+
+
+def _books_with_old_savings(owner):
+    checking = make_account(owner, name="Synthetic Checking")
+    old_savings = make_account(owner, name="Synthetic Old Savings", account_type=Account.Type.SAVINGS)
+    add_snapshot(checking, date(2025, 12, 31), 200_000, BalanceSnapshot.Source.MANUAL)
+    add_snapshot(old_savings, date(2025, 12, 31), 500_000, BalanceSnapshot.Source.MANUAL)
+    return checking, old_savings
+
+
+@pytest.mark.django_db
+def test_archived_account_counts_only_in_periods_ending_before_its_archive_day():
+    owner = make_person("owner")
+    make_household(owner)
+    _checking, old_savings = _books_with_old_savings(owner)
+    _archive_on(owner, old_savings, date(2026, 9, 15))
+
+    report = net_worth_report(
+        owner.user, date_from=date(2026, 8, 1), date_to=date(2026, 10, 31), today=date(2026, 10, 31)
+    )
+    august, september, october = report.periods
+
+    assert august.net_minor == 700_000
+    assert "Synthetic Old Savings" in [row.account_name for row in august.accounts]
+    assert september.net_minor == 200_000
+    assert october.net_minor == 200_000
+    assert [row.account_name for row in october.accounts] == ["Synthetic Checking"]
+    assert october.omitted_untracked == 0
+    assert report.summary.month_change.minor == 0
+    assert report.summary.range_change.minor == -500_000
+    assert old_savings.pk in [account.pk for account in report.accounts]
+
+
+@pytest.mark.django_db
+def test_a_period_cut_off_before_the_archive_day_still_counts_the_account():
+    owner = make_person("owner")
+    make_household(owner)
+    _checking, old_savings = _books_with_old_savings(owner)
+    _archive_on(owner, old_savings, date(2026, 9, 15))
+
+    as_of_14th = net_worth_report(
+        owner.user, date_from=date(2026, 9, 1), date_to=date(2026, 9, 14), today=date(2026, 9, 14)
+    )
+    as_of_15th = net_worth_report(
+        owner.user, date_from=date(2026, 9, 1), date_to=date(2026, 9, 15), today=date(2026, 9, 15)
+    )
+
+    assert as_of_14th.periods[-1].net_minor == 700_000
+    assert as_of_15th.periods[-1].net_minor == 200_000
+
+
+@pytest.mark.django_db
+def test_account_archived_before_the_range_is_left_out_entirely():
+    owner = make_person("owner")
+    make_household(owner)
+    _checking, old_savings = _books_with_old_savings(owner)
+    _archive_on(owner, old_savings, date(2026, 3, 31))
+
+    report = net_worth_report(
+        owner.user, date_from=date(2026, 9, 1), date_to=date(2026, 9, 30), today=date(2026, 10, 13)
+    )
+
+    assert report.periods[-1].net_minor == 200_000
+    assert [account.name for account in report.accounts] == ["Synthetic Checking"]
+    assert report.periods[-1].omitted_untracked == 0
+    chart = net_worth_chart_data(report)
+    assert [row["account_name"] for row in chart["periods"][-1]["accounts"]] == ["Synthetic Checking"]
+
+
+@pytest.mark.django_db
+def test_year_end_points_and_monthly_review_drop_an_archived_account():
+    from finance.category_services import ensure_household_categories
+    from finance.monthly_review import compute_monthly_review_facts
+    from finance.year_end import year_end_report
+
+    owner = make_person("owner")
+    ensure_household_categories(make_household(owner))
+    _checking, old_savings = _books_with_old_savings(owner)
+    _archive_on(owner, old_savings, date(2026, 9, 15))
+
+    points = year_end_report(owner.user, year=2026, today=date(2027, 1, 5)).net_worth
+    assert points.start.net_minor == 700_000
+    assert points.end.net_minor == 200_000
+
+    facts = compute_monthly_review_facts(owner.user, date(2026, 9, 1), today=date(2026, 10, 3))
+    assert facts["net_worth_prior_minor"] == 700_000
+    assert facts["net_worth_minor"] == 200_000
+    assert facts["net_worth_change_minor"] == -500_000

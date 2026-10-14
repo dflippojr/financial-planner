@@ -546,3 +546,27 @@ def test_committing_an_import_applies_enabled_category_rules(staging_settings):
     imported = Transaction.objects.get(account=account)
     assert imported.category_id == groceries.pk
     assert imported.category_source == Transaction.CategorySource.RULE
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "content",
+    [
+        b"When,Memo,Amount\n09/27/2026,SYNTHETIC\x00GROCER,-12.34\n",
+        b"When,Me\x00mo,Amount\n09/27/2026,SYNTHETIC GROCER,-12.34\n",
+    ],
+    ids=["cell", "header"],
+)
+def test_upload_with_a_nul_byte_shows_a_form_error_and_keeps_no_staged_file(staging_settings, content):
+    user, person = make_person("owner")
+    account = Account.objects.create(name="Synthetic Checking", account_type="checking", owner=person)
+    client = Client()
+    client.force_login(user)
+
+    response = upload(client, account, content)
+
+    assert response.status_code == 200
+    assert "NUL bytes" in response.context["upload_form"].errors["csv_file"][0]
+    assert not [path for path in staging_settings.iterdir() if path.name != ".stage-lock"]
+    assert not Transaction.objects.exists()
+

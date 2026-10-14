@@ -340,6 +340,7 @@ def cash_flow_with_projection(
         scope=scope,
         today=today,
         tag=tag,
+        actuals_only=True,
     )
     inputs = visible_projection_inputs(principal, account=account, scope=scope)
     report.projected_periods = project_cash_flow(inputs, today=today, horizon=horizon)

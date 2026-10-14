@@ -661,3 +661,27 @@ def test_reject_does_not_overwrite_a_concurrent_accept(harness, monkeypatch):
 
     suggestion.refresh_from_db()
     assert suggestion.status == CategorySuggestion.Status.ACCEPTED
+
+
+@pytest.mark.django_db
+def test_former_member_does_not_see_live_household_category_name_on_pending_suggestion(harness):
+    from finance.category_services import rename_category
+    from finance.category_suggestion_services import _store_suggestion, pending_suggestions_for
+    from finance.lifecycle_services import leave_household
+
+    _state, url = harness
+    _u, owner, household = make_member("owner")
+    member_user, member, _ = make_member("member", household=household)
+    connect_harness(member, base_url=url, token=TOKEN)
+    mine = make_account(member, name="Member Private")
+    txn = make_transaction(member, mine, amount_minor=-2_500, description="Synthetic corner shop")
+    _store_suggestion(member, txn, groceries(household).pk, provider="agent_harness", backend="claude")
+    assert txn.pk in pending_suggestions_for(member, [txn])
+
+    leave_household(member)
+    rename_category(owner, groceries(household).pk, "ZQ Surprise party for member")
+    client = Client()
+    client.force_login(member_user)
+    body = client.get(reverse("transaction-list")).content.decode()
+    assert "ZQ Surprise party" not in body
+    assert pending_suggestions_for(member, [txn]) == {}

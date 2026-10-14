@@ -585,7 +585,7 @@ def _sync_one_link(person, connection, link, remote, synced_at, payload) -> int:
 @member_operation
 @notify_after_alert_run
 def sync_connection(principal, connection_id, *, ignore_rate_limit=False) -> dict:
-    """Sync one connection. A fetch or import failure is recorded, then raised.
+    """Sync one connection. A setup, fetch or import failure is recorded, then raised.
 
     The fetch runs before the transaction and household lock, so a slow
     provider never holds up other members' writes. The results are then
@@ -593,7 +593,15 @@ def sync_connection(principal, connection_id, *, ignore_rate_limit=False) -> dic
     A failure record commits on its own, and the error is raised after it.
     """
     person = _person_for(principal)
-    plan = _plan_sync(person, connection_id, ignore_rate_limit=ignore_rate_limit)
+    try:
+        plan = _plan_sync(person, connection_id, ignore_rate_limit=ignore_rate_limit)
+    except SimpleFinRateLimited:
+        raise
+    except SimpleFinError as exc:
+        # A setup failure, such as an access URL the current key cannot
+        # decrypt, is recorded like a fetch failure so the owner is alerted.
+        _record_failure(person, connection_id, timezone.now(), str(exc), failure="provider_error")
+        raise
     try:
         payload = fetch_accounts(plan.access_url, start_date=plan.start_epoch, end_date=int(plan.now.timestamp()) + 1)
     except SimpleFinError as exc:

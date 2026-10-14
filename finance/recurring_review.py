@@ -85,6 +85,15 @@ def missing_import_on(principal, accounts, on_date):
     return any(account.pk not in covered for account in accounts)
 
 
+def is_overdue(expected, cadence, today):
+    """Past its expected date but still inside the cadence tolerance, so not yet missed.
+
+    Review calls such a charge "due" and the bills calendar counts it today.
+    """
+    late_days = (today - expected).days
+    return 0 < late_days <= cadence_tolerance_days(cadence)
+
+
 def _within_cadence_tolerance(actual, expected, cadence):
     return abs((actual - expected).days) <= cadence_tolerance_days(cadence)
 
@@ -115,6 +124,7 @@ class UpcomingCharge:
     expected_on: object
     amount_minor: int
     amount_display: str
+    due: bool = False
 
 
 @dataclass(frozen=True)
@@ -144,13 +154,15 @@ def upcoming_charge(series, *, today):
     if expected is None:
         return None
     horizon = today + timedelta(days=UPCOMING_DAYS)
-    if expected < today or expected > horizon:
+    due = is_overdue(expected, series.cadence, today)
+    if (expected < today and not due) or expected > horizon:
         return None
     return UpcomingCharge(
         series=series,
         expected_on=expected,
         amount_minor=series.typical_amount_minor,
         amount_display=series.amount_display,
+        due=due,
     )
 
 

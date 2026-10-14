@@ -538,3 +538,93 @@ def test_a_far_future_month_does_not_forecast_day_by_day_from_today(monkeypatch)
     assert seen["through"] <= TODAY + timedelta(days=bills.MAX_FORECAST_DAYS)
     assert calendar.beyond_forecast is True
     assert all(day.balance_display is None for day in calendar.days if not getattr(day, "blank", False))
+
+
+def _late_rent_setup(*, extra_rent_on=None):
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner)
+    add_snapshot(checking, date(2026, 10, 12), 100_000)
+    series = make_series(owner, name="Synthetic Rent", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-90_000)
+    for month in (7, 8, 9):
+        RecurringSeriesMember.objects.create(
+            series=series,
+            transaction=make_transaction(
+                owner, checking, transaction_date=date(2026, month, 12), amount_minor=-90_000,
+                description="Synthetic Rent",
+            ),
+        )
+    if extra_rent_on:
+        RecurringSeriesMember.objects.create(
+            series=series,
+            transaction=make_transaction(
+                owner, checking, transaction_date=extra_rent_on, amount_minor=-90_000,
+                description="Synthetic Rent",
+            ),
+        )
+    return owner, checking, series
+
+
+def _week_low(calendar, today):
+    return min(row.balance_minor for row in calendar.days if row.balance_minor is not None and (row.date - today).days < 7)
+
+
+@pytest.mark.django_db
+def test_charge_a_day_late_stays_in_the_forecast_and_flags_the_shortfall():
+    today = date(2026, 10, 13)
+    owner, checking, series = _late_rent_setup()
+
+    calendar = build_month(
+        owner, year=2026, month=10, today=today, account_ids=[checking.pk], threshold_minor=50_000
+    )
+
+    assert _week_low(calendar, today) == 10_000
+    assert calendar.first_below.date == today
+    assert [row.item.name for row in calendar.upcoming if row.date == today] == ["Synthetic Rent"]
+    # The same dip drives the daily expected-balance alert.
+    save_calendar_settings(owner, account_ids=[checking.pk], threshold_minor=50_000)
+    assert first_below_in_next_days(owner, today=today) == today
+    # Next month's charge is still the regular occurrence, not a second late one.
+    november = build_month(owner, year=2026, month=11, today=today, account_ids=[checking.pk])
+    assert [row.date for row in november.days if any(i.name == "Synthetic Rent" for i in row.items)] == [
+        date(2026, 11, 12)
+    ]
+
+
+@pytest.mark.django_db
+def test_late_charge_that_posts_today_is_not_counted_twice():
+    today = date(2026, 10, 13)
+    owner, checking, series = _late_rent_setup(extra_rent_on=today)
+
+    calendar = build_month(
+        owner, year=2026, month=10, today=today, account_ids=[checking.pk], threshold_minor=50_000
+    )
+
+    # 1,000.00 snapshot minus the 900.00 that posted on the 13th, counted once.
+    assert calendar.start_balance_minor == 10_000
+    assert _week_low(calendar, today) == 10_000
+    assert calendar.upcoming == []
+
+
+@pytest.mark.django_db
+def test_charge_past_its_tolerance_is_missed_not_forecast():
+    today = date(2026, 10, 16)  # expected the 12th; a monthly series tolerates 3 days
+    owner, checking, series = _late_rent_setup()
+
+    calendar = build_month(
+        owner, year=2026, month=10, today=today, account_ids=[checking.pk], threshold_minor=50_000
+    )
+
+    assert _week_low(calendar, today) == 100_000
+    assert calendar.first_below is None
+    assert calendar.upcoming == []
+
+
+@pytest.mark.django_db
+def test_charge_on_the_last_tolerated_day_is_still_forecast():
+    today = date(2026, 10, 15)
+    owner, checking, series = _late_rent_setup()
+
+    calendar = build_month(owner, year=2026, month=10, today=today, account_ids=[checking.pk])
+
+    assert _week_low(calendar, today) == 10_000

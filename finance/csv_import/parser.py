@@ -7,11 +7,13 @@ from decimal import Decimal, InvalidOperation
 
 from finance.date_bounds import activity_date_error
 from finance.input_limits import MAX_COLUMNS
+from finance.models import Transaction
 
 
 MAX_FILE_BYTES = 5 * 1024 * 1024
 MAX_DATA_ROWS = 10_000
 MAX_BIGINT = 2**63 - 1
+SOURCE_ID_MAX_LENGTH = Transaction._meta.get_field("source_transaction_id").max_length
 
 DATE_FORMATS = {
     "mdy_slash_4": ("MM/DD/YYYY", "%m/%d/%Y"),
@@ -130,6 +132,8 @@ def _decode(content: bytes) -> str:
         text = content.decode("utf-8-sig")
     except UnicodeDecodeError as exc:
         raise CsvInputError("The CSV file must use UTF-8 encoding.") from exc
+    if "\x00" in text:
+        raise CsvInputError("The CSV file contains NUL bytes, so it is not a valid text export.")
     if not text.strip():
         raise CsvInputError("The CSV file is empty.")
     return text
@@ -347,17 +351,25 @@ def _source_transaction_id(row, indexes, mapping):
     return _cell(row, indexes, mapping.source_id_column).strip()
 
 
+def _source_id_error(source_transaction_id):
+    if len(source_transaction_id) > SOURCE_ID_MAX_LENGTH:
+        return f"Transaction ID exceeds the {SOURCE_ID_MAX_LENGTH} character limit."
+    return None
+
+
 def _preview_row(row, indexes, mapping):
     parsed_date, date_error = _parse_date(row, indexes, mapping)
     description = _description(row, indexes, mapping)
     amount_minor, amount_error = _parse_amount(row, indexes, mapping)
     currency, currency_error = _parse_currency(row, indexes, mapping)
+    source_transaction_id = _source_transaction_id(row, indexes, mapping)
     errors = (
         row.structural_error,
         date_error,
         None if description.strip() else "Description is required.",
         amount_error,
         currency_error,
+        _source_id_error(source_transaction_id),
     )
     return PreviewRow(
         row.number,
@@ -366,7 +378,7 @@ def _preview_row(row, indexes, mapping):
         amount_minor,
         currency,
         tuple(error for error in errors if error),
-        _source_transaction_id(row, indexes, mapping),
+        source_transaction_id,
     )
 
 

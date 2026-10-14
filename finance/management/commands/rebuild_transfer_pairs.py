@@ -4,6 +4,7 @@ from finance.audit_commands import AuditedCommand
 from django.core.management.base import CommandError
 
 from finance.category_services import refresh_transfer_pairs
+from finance.auth_services import normalize_username
 from finance.models import Person
 
 
@@ -20,7 +21,7 @@ class Command(AuditedCommand):
             raise CommandError("Choose --username or --all.")
         people = Person.objects.order_by("pk")
         if options["username"]:
-            people = people.filter(user__username=options["username"])
+            people = people.filter(user__username=normalize_username(options["username"]))
             if not people.exists():
                 raise CommandError("Member not found.")
         for person in people.iterator():
