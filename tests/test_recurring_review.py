@@ -653,3 +653,59 @@ def test_recurring_page_lists_a_shared_bill_with_cancel_only_and_counts_a_joint_
     assert cancel.status_code == 302
     series.refresh_from_db()
     assert series.cancelled_at is not None
+
+
+@pytest.mark.django_db
+def test_cancelling_one_copy_of_a_joint_bill_cancels_every_copy_the_member_can_act_on():
+    owner, member, _outsider, series = _shared_bill()
+    own = make_series(member, name="Synthetic Internet", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-6000)
+    for row in series.members.all():
+        add_member(own, row.transaction)
+
+    cancel_recurring_series(member, own.pk)
+
+    series.refresh_from_db()
+    own.refresh_from_db()
+    assert own.cancelled_at is not None
+    assert series.cancelled_at is not None
+    assert projected_months_for(owner, today=date(2026, 10, 1), horizon=3)[0].spending_minor == 0
+
+
+@pytest.mark.django_db
+@patch("finance.views.timezone.localdate", return_value=TODAY)
+@patch("finance.recurring_services.timezone.localdate", return_value=TODAY)
+def test_recurring_page_shows_a_joint_bill_once_when_two_other_members_confirmed_it(_refresh, _view):
+    owner, member, _outsider, series = _shared_bill()
+    third = make_person("third")
+    Membership.objects.create(person=third, household=Household.objects.get(name="Synthetic Household"))
+    other = make_series(member, name="Synthetic Internet", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-6000)
+    for row in series.members.all():
+        add_member(other, row.transaction)
+
+    client = Client()
+    client.force_login(third.user)
+    page = client.get(reverse("recurring-review"))
+    assert len(page.context["confirmed"]) == 1
+    assert page.context["monthly_minor"] == confirmed_totals([series])[0]
+
+
+@pytest.mark.django_db
+def test_a_shared_cancelled_series_does_not_offer_keep_cancelled():
+    _owner, member, _outsider, series = _shared_bill()
+    later = make_transaction(
+        series.person,
+        series.members.first().transaction.account,
+        transaction_date=timezone.localdate() - timedelta(days=1),
+        amount_minor=-6000,
+        description="Synthetic Internet",
+    )
+    add_member(series, later)
+    series.cancelled_at = timezone.now() - timedelta(days=30)
+    series.save(update_fields=["cancelled_at"])
+    client = Client()
+    client.force_login(member.user)
+    html = client.get(reverse("recurring-review")).content.decode()
+    assert "Undo cancel" in html
+    assert "Keep cancelled" not in html
+    client.force_login(series.person.user)
+    assert "Keep cancelled" in client.get(reverse("recurring-review")).content.decode()

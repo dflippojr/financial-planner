@@ -1239,24 +1239,32 @@ def create_manual_series(principal, name, cadence, transaction_ids):
     return _recompute_series_from_members(series)
 
 
+def _active_charge_ids(series):
+    return {member.transaction_id for member in series.members.all()}
+
+
 def shared_series_for_review(principal, own_series):
     """Household bills another member confirmed, for the Recurring page.
 
-    A bill both members confirmed shows once, as the viewer's own series, so
-    totals do not count it twice. Each row is marked `shared_by_other`: the
-    viewer may cancel or resume it, but grouping edits stay with its owner.
+    A bill several members confirmed shows once, so totals do not count it
+    twice: the viewer's own copy wins, then the first shared copy. Active and
+    cancelled copies dedupe separately. Each row is marked `shared_by_other`:
+    the viewer may cancel or resume it, but grouping edits stay with its owner.
     """
-    counted = set()
+    shown = {True: set(), False: set()}
     for series in own_series:
-        if series.status == RecurringSeries.Status.CONFIRMED and series.is_active and series.cancelled_at is None:
-            counted |= {member.transaction_id for member in series.members.all()}
+        if series.status == RecurringSeries.Status.CONFIRMED and series.is_active:
+            shown[series.cancelled_at is None] |= _active_charge_ids(series)
     rows = []
     shared = RecurringSeries.objects.shared_with(principal).filter(is_active=True).prefetch_related(
         "members__transaction__account"
     )
     for series in shared.order_by("display_name", "pk"):
-        if series.cancelled_at is None and counted.intersection(member.transaction_id for member in series.members.all()):
+        charges = _active_charge_ids(series)
+        bucket = shown[series.cancelled_at is None]
+        if bucket & charges:
             continue
+        bucket |= charges
         series.shared_by_other = True
         rows.append(series)
     return rows
@@ -1282,9 +1290,28 @@ def cancel_recurring_series(principal, series_id):
     person, series = _lock_confirmed_series(principal, series_id)
     if series.cancelled_at is not None:
         return series
-    series.cancelled_at = timezone.now()
-    series.save(update_fields=("cancelled_at", "updated_at"))
-    _record_series(person, AuditEvent.Action.RECURRING_CANCELED, series)
+    # Members may each have confirmed their own copy of one household bill;
+    # cancelling the bill cancels every copy the viewer may act on, or the
+    # other copy would keep projecting it.
+    charge_ids = list(series.members.values_list("transaction_id", flat=True))
+    copy_ids = set(
+        RecurringSeries.objects.actionable_by(person)
+        .filter(
+            status=RecurringSeries.Status.CONFIRMED,
+            is_active=True,
+            cancelled_at__isnull=True,
+            members__transaction_id__in=charge_ids,
+        )
+        .values_list("pk", flat=True)
+    )
+    copy_ids.add(series.pk)
+    now = timezone.now()
+    for copy in RecurringSeries.objects.select_for_update(of=("self",)).filter(pk__in=copy_ids).order_by("pk"):
+        copy.cancelled_at = now
+        copy.save(update_fields=("cancelled_at", "updated_at"))
+        _record_series(person, AuditEvent.Action.RECURRING_CANCELED, copy)
+        if copy.pk == series.pk:
+            series = copy
     return series
 
 

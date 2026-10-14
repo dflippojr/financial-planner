@@ -1519,11 +1519,10 @@ def recurring_review(request):
     annual_display = _money_display(annual_minor, currency)
     grouping_series = [
         series
-        for series in visible
+        for series in own
         if series.is_active
         and series.status != RecurringSeries.Status.DISMISSED
         and series.cancelled_at is None
-        and not getattr(series, "shared_by_other", False)
     ]
     merge_series_id, merge_targets = _recurring_merge_selection(request.GET.get("merge_series"), grouping_series)
     add_series_id = None
