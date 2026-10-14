@@ -1015,3 +1015,99 @@ def test_single_account_household_view_picks_the_series_with_the_current_price()
             if i.source == "series"
         ]
         assert [i.amount_minor for i in items] == [350_000]
+
+
+def add_charge(series, account, on, amount_minor, *, number):
+    batch = ImportBatch.objects.create(
+        account=account, imported_by=series.person, source=ImportBatch.Source.HUNTINGTON,
+        source_file_sha256=sha256(f"extra-{series.pk}-{number}".encode()).hexdigest(),
+        date_range_start=date(2026, 1, 1), date_range_end=date(2026, 12, 28),
+    )
+    row = Transaction.objects.create(
+        account=account, import_batch=batch, transaction_date=on, amount_minor=-amount_minor,
+        description=series.display_name, kind=Transaction.Kind.CASH_FLOW, source_row_number=number,
+        fingerprint=sha256(f"extra-txn-{series.pk}-{number}".encode()).hexdigest(),
+        original_fields={"Synthetic Amount": str(-amount_minor)},
+    )
+    RecurringSeriesMember.objects.create(series=series, transaction=row)
+    return row
+
+
+def household_series_inputs(person, **kwargs):
+    return [i for i in visible_projection_inputs(person.user, scope="household", **kwargs) if i.source == "series"]
+
+
+@pytest.mark.django_db
+def test_single_account_view_reaches_the_current_series_through_a_cancelled_bridge():
+    owner, member, household = household_fixture()
+    account_a = Account.objects.get(name="Synthetic Joint")
+    account_b = make_account(owner, name="Synthetic Joint Two", scope=Account.Scope.HOUSEHOLD, household=household)
+    old = make_confirmed_series(owner, "Synthetic Electric", account_a, months=(5, 6), amount_minor=40_000)
+    current = make_confirmed_series(member, "Synthetic Electric", account_b, months=(8, 9), amount_minor=90_000)
+    bridge = make_confirmed_series(member, "Synthetic Electric", account_a, months=(7,), amount_minor=65_000)
+    link_charges(bridge, old, current)
+    RecurringSeries.objects.filter(pk=bridge.pk).update(cancelled_at=timezone.now())
+
+    for person in (owner, member):
+        everything = [i.amount_minor for i in household_series_inputs(person)]
+        assert everything == [90_000]
+        for account in (account_a, account_b):
+            assert [i.amount_minor for i in household_series_inputs(person, account=account)] == everything
+
+
+@pytest.mark.django_db
+def test_single_account_view_takes_the_schedule_from_the_whole_bill():
+    owner, member, household = household_fixture()
+    account_a = Account.objects.get(name="Synthetic Joint")
+    account_b = make_account(owner, name="Synthetic Joint Two", scope=Account.Scope.HOUSEHOLD, household=household)
+    series = make_confirmed_series(owner, "Synthetic Electric", account_a, months=(7,), amount_minor=90_000)
+    add_charge(series, account_b, date(2026, 9, 29), 90_000, number=20)
+
+    for person in (owner, member):
+        whole = [(i.amount_minor, i.start) for i in household_series_inputs(person)]
+        assert [(i.amount_minor, i.start) for i in household_series_inputs(person, account=account_a)] == whole
+        assert [(i.amount_minor, i.start) for i in household_series_inputs(person, account=account_b)] == whole
+        assert whole[0][1].month == 10 and whole[0][1].day == 29
+
+
+@pytest.mark.django_db
+def test_single_account_view_hides_a_bill_with_no_charge_on_that_account():
+    owner, member, household = household_fixture()
+    account_a = Account.objects.get(name="Synthetic Joint")
+    account_b = make_account(owner, name="Synthetic Joint Two", scope=Account.Scope.HOUSEHOLD, household=household)
+    make_confirmed_series(owner, "Synthetic Electric", account_a, months=(8, 9))
+    make_confirmed_series(owner, "Synthetic Water", account_b, months=(8, 9))
+
+    for person in (owner, member):
+        assert [i.name for i in household_series_inputs(person, account=account_a)] == ["Synthetic Electric"]
+        assert [i.name for i in household_series_inputs(person, account=account_b)] == ["Synthetic Water"]
+        assert [i.name for i in household_series_inputs(person)] == ["Synthetic Electric", "Synthetic Water"]
+
+
+@pytest.mark.django_db
+def test_private_charges_never_shape_a_single_account_household_bill():
+    owner, member, household = household_fixture()
+    account_a = Account.objects.get(name="Synthetic Joint")
+    private_account = make_account(owner, name=SECRET_ACCOUNT)
+    series = make_confirmed_series(owner, "Synthetic Electric", account_a, months=(8, 9), amount_minor=90_000)
+    add_charge(series, private_account, date(2026, 9, 29), 90_000, number=20)
+    alone = make_confirmed_series(owner, "Synthetic Gym", private_account, months=(9,))
+
+    for person in (owner, member):
+        assert alone.pk not in [i.source_id for i in household_series_inputs(person, account=account_a)]
+        assert [i.name for i in household_series_inputs(person, account=account_a)] == []
+
+
+@pytest.mark.django_db
+def test_a_charge_the_projection_ignores_never_ranks_a_household_series():
+    owner, member, household = household_fixture()
+    account_a = Account.objects.get(name="Synthetic Joint")
+    old = make_confirmed_series(owner, "Synthetic Insurance", account_a, months=(7,), amount_minor=40_000)
+    current = make_confirmed_series(member, "Synthetic Insurance", account_a, months=(9,), amount_minor=90_000)
+    link_charges(current, old)
+    ignored = add_charge(old, account_a, date(2026, 10, 1), 40_000, number=30)
+    Transaction.objects.filter(pk=ignored.pk).update(kind=Transaction.Kind.INVESTMENT_ACTIVITY)
+
+    for person in (owner, member):
+        assert [i.amount_minor for i in household_series_inputs(person)] == [90_000]
+        assert [i.amount_minor for i in household_series_inputs(person, account=account_a)] == [90_000]
