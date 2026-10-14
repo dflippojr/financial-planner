@@ -57,7 +57,7 @@ def other_service(settings):
         do_GET = do_POST = do_DELETE = _answer
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
     host, port = server.server_address
     url = f"http://{host}:{port}"
     settings.AGENT_HARNESS_ALLOWED_ORIGINS = [url]

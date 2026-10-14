@@ -1,6 +1,6 @@
 import logging
 import threading
-import time
+from datetime import timedelta
 from io import StringIO
 from unittest.mock import patch
 
@@ -543,10 +543,10 @@ def test_session_expiry_is_fixed_at_sign_in_and_later_writes_do_not_extend_it():
     session_key = client.session.session_key
     at_sign_in = Session.objects.get(session_key=session_key).expire_date
 
-    time.sleep(0.05)
-    session = client.session
-    session["written_later"] = "value"
-    session.save()
+    with patch("django.utils.timezone.now", return_value=timezone.now() + timedelta(hours=1)):
+        session = client.session
+        session["written_later"] = "value"
+        session.save()
     after_write = Session.objects.get(session_key=session_key).expire_date
 
     assert after_write == at_sign_in

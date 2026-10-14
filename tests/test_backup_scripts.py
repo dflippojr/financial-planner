@@ -229,6 +229,7 @@ def _run_backup(fake_bin, backup_root, extra_env=None):
         capture_output=True,
         text=True,
         env=env,
+        timeout=60,
     )
 
 
@@ -263,6 +264,7 @@ def _run_restore(fake_bin, dump_path, extra_env=None):
         capture_output=True,
         text=True,
         env=env,
+        timeout=60,
     )
 
 
@@ -286,6 +288,7 @@ def _run_verify(fake_bin, dump_path):
         capture_output=True,
         text=True,
         env=env,
+        timeout=60,
     )
 
 

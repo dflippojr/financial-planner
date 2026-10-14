@@ -13,6 +13,25 @@ WAIT_SECONDS = 10
 JOIN_SECONDS = 30
 
 
+def backend_pid():
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT pg_backend_pid()")
+        return cursor.fetchone()[0]
+
+
+def wait_until_blocked_by(blocked_pid, blocking_pid, blocked_done, errors):
+    """Wait until PostgreSQL reports blocked_pid waiting on blocking_pid's lock."""
+    deadline = monotonic() + WAIT_SECONDS
+    with connection.cursor() as cursor:
+        while monotonic() < deadline:
+            assert not blocked_done.is_set(), f"Blocked operation finished without blocking: {errors}"
+            cursor.execute("SELECT pg_blocking_pids(%s)", [blocked_pid])
+            if blocking_pid in cursor.fetchone()[0]:
+                return
+            blocked_done.wait(0.02)
+    raise AssertionError(f"Operation never blocked on the first transaction's lock; errors={errors!r}")
+
+
 def _wait_for_membership_lock(first_pid, competing_pid, competing_done, errors):
     """Observe a real blocked query, not merely a thread about to execute it."""
     deadline = monotonic() + WAIT_SECONDS

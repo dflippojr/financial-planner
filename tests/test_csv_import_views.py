@@ -1,6 +1,7 @@
 from finance.csv_import.staging import _path as _stage_file_path
 import logging
 import time
+from datetime import timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -10,6 +11,7 @@ from django.contrib.sessions.models import Session
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, override_settings
 from django.urls import reverse
+from django.utils import timezone
 
 from finance.csv_import.parser import MAX_FILE_BYTES
 from finance.csv_import.staging import SESSION_KEY
@@ -353,8 +355,8 @@ def test_uploading_a_csv_does_not_extend_the_session(staging_settings):
     session_key = client.session.session_key
     at_sign_in = Session.objects.get(session_key=session_key).expire_date
 
-    time.sleep(0.05)
-    response = upload(client, account)
+    with patch("django.utils.timezone.now", return_value=timezone.now() + timedelta(hours=1)):
+        response = upload(client, account)
 
     assert response.status_code == 200
     assert Session.objects.get(session_key=session_key).expire_date == at_sign_in

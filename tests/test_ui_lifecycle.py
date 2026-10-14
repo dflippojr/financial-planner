@@ -21,25 +21,30 @@ from tests.ui_diagnostics import diagnostic_summary
 
 def test_idle_browser_preconnection_does_not_block_shutdown():
     accepted = threading.Event()
+    idle_limits = []
 
     class ObservedServer(ui_instance.ThreadedServer):
         def get_request(self):
             result = super().get_request()
+            # The launcher's own bound on an idle connection is what lets shutdown finish.
+            idle_limits.append(result[0].gettimeout())
             accepted.set()
             return result
 
     server = ui_instance.make_server("127.0.0.1", 0, lambda _env, _start: [], server_class=ObservedServer)
-    serving = threading.Thread(target=server.serve_forever)
+    serving = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05})
     serving.start()
     connection = socket.create_connection(("127.0.0.1", server.server_port), timeout=5)
     try:
         assert accepted.wait(timeout=5)
-        started = time.monotonic()
-        server.shutdown()
-        server.server_close()
+        assert idle_limits and idle_limits[0] is not None
+        closing = threading.Thread(target=lambda: (server.shutdown(), server.server_close()))
+        closing.start()
+        # Closing joins the idle request thread, so it may take up to the launcher's idle limit.
+        closing.join(timeout=idle_limits[0] + 5)
+        assert not closing.is_alive()
         serving.join(timeout=1)
         assert not serving.is_alive()
-        assert time.monotonic() - started < 7
     finally:
         connection.close()
         server.shutdown()

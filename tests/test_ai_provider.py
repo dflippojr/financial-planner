@@ -900,7 +900,7 @@ def test_redirects_are_not_followed_so_the_token_stays_put():
 
     redirector = HTTPServer(("127.0.0.1", 0), Redirector)
     for server in (elsewhere, redirector):
-        threading.Thread(target=server.serve_forever, daemon=True).start()
+        threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
     try:
         with pytest.raises(HarnessHttpError) as caught:
             json_request(f"http://127.0.0.1:{redirector.server_port}/api/v1", token=TOKEN)
