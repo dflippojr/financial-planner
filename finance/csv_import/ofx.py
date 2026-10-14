@@ -2,13 +2,14 @@
 
 import codecs
 import re
-from html import unescape
 from xml.etree import ElementTree as ET
 
 from .parser import MAX_DATA_ROWS, MAX_FILE_BYTES, CsvDocument, CsvInputError, CsvRow
 from .ofx_sgml import LEAF_TAGS
 
 OFX_HEADERS = ("Date", "Amount", "Name", "Memo", "FITID", "Type")
+_SGML_NAMED = {"lt": "<", "gt": ">", "amp": "&", "quot": '"', "apos": "'"}
+_SGML_ENTITY = re.compile(r"&(?:(lt|gt|amp|quot|apos)|#0*(\d{1,7})|#[xX]0*([0-9A-Fa-f]{1,6}));")
 MALFORMED = "This is not a valid OFX / QFX statement file."
 UNSUPPORTED_CORRECTIONS = (
     "OFX transaction corrections are not supported. "
@@ -84,6 +85,21 @@ def looks_like_ofx(content):
     ))
 
 
+def _sgml_entity(match):
+    name, decimal, hexadecimal = match.groups()
+    if name:
+        return _SGML_NAMED[name]
+    code = int(decimal or hexadecimal, 10 if decimal else 16)
+    if code == 0 or 0xD800 <= code <= 0xDFFF or code > 0x10FFFF:
+        return match.group(0)
+    return chr(code)
+
+
+def _sgml_text(token):
+    """Decode only the OFX entities; a raw `&` in a payee name stays literal."""
+    return _SGML_ENTITY.sub(_sgml_entity, token)
+
+
 def _sgml_tree(text):
     """OFX 1.x permits omitted scalar end tags, but requires aggregate end tags."""
     root = ET.Element("DOCUMENT")
@@ -93,7 +109,7 @@ def _sgml_tree(text):
             if token.strip():
                 if len(stack) == 1:
                     raise CsvInputError(MALFORMED)
-                stack[-1].text = (stack[-1].text or "") + unescape(token.strip())
+                stack[-1].text = (stack[-1].text or "") + _sgml_text(token.strip())
             continue
         _sgml_tag(stack, token)
     if len(stack) != 1 or len(root) != 1 or root[0].tag != "OFX":
@@ -168,14 +184,21 @@ def _currency_error(statement_currencies, transaction):
 
 def read_ofx(content: bytes, *, max_rows=MAX_DATA_ROWS) -> CsvDocument:
     root = _tree(_decode(content))
+    statements = [item for tag in ("STMTRS", "CCSTMTRS") for item in root.iter(tag)]
+    if len(statements) > 1:
+        # One import targets one app account; rows from another statement would
+        # land in the wrong ledger, and the account fields are never retained.
+        raise CsvInputError(
+            f"This file contains {len(statements)} account statements. "
+            "Download one account at a time."
+        )
     rows = []
-    for statement_tag in ("STMTRS", "CCSTMTRS"):
-        for statement in root.iter(statement_tag):
-            currencies = [_value(statement, "CURDEF")] + _currencies(statement)
-            for transaction in statement.findall("BANKTRANLIST/STMTTRN"):
-                if len(rows) >= max_rows:
-                    raise CsvInputError(f"The statement file exceeds the {max_rows:,} row limit.")
-                rows.append(_row(currencies, transaction, len(rows) + 2))
+    for statement in statements:
+        currencies = [_value(statement, "CURDEF")] + _currencies(statement)
+        for transaction in statement.findall("BANKTRANLIST/STMTTRN"):
+            if len(rows) >= max_rows:
+                raise CsvInputError(f"The statement file exceeds the {max_rows:,} row limit.")
+            rows.append(_row(currencies, transaction, len(rows) + 2))
     if not rows:
         raise CsvInputError("This file has no bank or card transactions")
     return CsvDocument(OFX_HEADERS, tuple(rows))

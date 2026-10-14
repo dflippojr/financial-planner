@@ -6,7 +6,8 @@ from django.urls import reverse
 from django.utils import timezone
 
 from finance.alert_services import run_daily_alert_pass
-from finance.backup_health import backup_alert_title, backup_is_unhealthy, evaluate_backup_alerts
+from finance.auth_services import seed_first_household
+from finance.backup_health import backup_alert_title, backup_is_unhealthy, evaluate_backup_alerts, operator_people
 from finance.models import Alert, Household, Membership
 from tests.test_alerts import make_person, signed_in
 
@@ -309,3 +310,29 @@ def test_settings_restore_check_line_for_never_checked_and_off(tmp_path, fields,
         page = signed_in(operator).get(reverse("settings-data"))
 
     assert shown in page.content
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("configured", ["Dan", " DAN ", "nobody, Dan"])
+def test_operator_usernames_match_the_name_the_member_signed_up_with(tmp_path, configured):
+    user, _codes = seed_first_household("Dan", "Dan Example", "Synthetic Household", "Synthetic-passphrase-42!")
+    assert user.username == "dan"
+    missing = tmp_path / "no-status"
+
+    with override_settings(BACKUP_STATUS_PATH=str(missing), OPERATOR_USERNAMES=configured):
+        assert [person.user.username for person in operator_people()] == ["dan"]
+        created = evaluate_backup_alerts(today=datetime(2026, 10, 4).date())
+
+    assert [(row.title, row.recipient.user.username) for row in created] == [("No backup status found", "dan")]
+
+
+@pytest.mark.django_db
+def test_unmatched_operator_usernames_are_logged_without_naming_them(caplog):
+    make_person("operator")
+
+    with override_settings(OPERATOR_USERNAMES="operator, Ghost"):
+        with caplog.at_level("WARNING", logger="finance.backup_health"):
+            assert [person.user.username for person in operator_people()] == ["operator"]
+
+    assert "1 member(s)" in caplog.text
+    assert "ghost" not in caplog.text.lower()

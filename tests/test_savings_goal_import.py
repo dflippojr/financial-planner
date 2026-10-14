@@ -584,3 +584,36 @@ def test_reversing_a_chain_does_not_trip_on_stale_links_of_unchanged_goals():
     by_name = {goal.name: goal for goal in SavingsGoal.objects.all()}
     assert by_name["X"].depends_on_id == by_name["D"].pk
     assert by_name["D"].depends_on_id == by_name["E"].pk and by_name["E"].depends_on_id is None
+
+
+NUL_GOAL_FILES = {
+    "csv-name": b"name,target_amount,priority\nLap\x00top,100.00,1\n",
+    "csv-header": b"na\x00me,target_amount,priority\nLaptop,100.00,1\n",
+    "json-raw-name": b'[{"name": "Lap\x00top", "target_amount": "100.00", "priority": 1}]',
+    "json-escaped-name": rb'[{"name": "Lap\u0000top", "target_amount": "100.00", "priority": 1}]',
+    "json-escaped-key": rb'[{"name": "Laptop", "target_amount": "100.00", "priority": 1, "x\u0000": "a"}]',
+}
+
+
+@pytest.mark.parametrize("content", NUL_GOAL_FILES.values(), ids=NUL_GOAL_FILES.keys())
+def test_nul_bytes_are_rejected_in_every_wishlist_format(content):
+    with pytest.raises(GoalFileError, match="NUL bytes"):
+        parse_goal_file(content)
+
+
+@pytest.mark.django_db
+def test_goal_upload_with_a_nul_byte_shows_a_form_error_and_stages_nothing(tmp_path, settings):
+    settings.CSV_IMPORT_STAGING_DIR = tmp_path
+    owner = make_person("owner")
+    client = Client()
+    client.force_login(owner.user)
+
+    response = client.post(
+        reverse("savings-goal-import"),
+        {"goals_file": SimpleUploadedFile("goals.json", NUL_GOAL_FILES["json-escaped-name"])},
+    )
+
+    assert response.status_code == 200
+    assert "NUL bytes" in response.context["upload_form"].errors["goals_file"][0]
+    assert not [path for path in tmp_path.iterdir() if path.name != ".stage-lock"]
+    assert not SavingsGoal.objects.exists()

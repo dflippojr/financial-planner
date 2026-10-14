@@ -448,3 +448,10 @@ def test_inference_outcome_requires_result_and_start_does_not(harness):
     _inference_event(person, connection, "local", "structured", phase="started")
     row, = operational_rows(person, "ai_inference")
     assert row.outcome == "started"
+
+
+def test_maintenance_commands_normalize_the_username_they_are_given(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPERATOR_AUDIT_DIR", str(tmp_path))
+    _user, person, _ = make_member("target")
+    call_command("rebuild_transfer_pairs", username=" TARGET ", stdout=StringIO())
+    event, = operational_rows(person, "transfer_rebuild")

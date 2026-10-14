@@ -4,9 +4,10 @@ An account is due when it is active, takes CSV imports, has no SimpleFIN link
 in transactions mode, and its newest active non-manual batch covers through a
 date more than IMPORT_DUE_DAYS before today. Accounts never imported are not due.
 A balances-only link still syncs SimpleFIN batches through today without any
-transactions, and a batch does not record its link's mode, so a SimpleFIN batch
-counts as coverage only when it holds a transaction. That holds after the link is
-removed too.
+transactions, and a batch does not record its link's mode, so a sync batch (one
+with a SimpleFIN account id) counts as coverage only when it holds a transaction.
+That holds after the link is removed too. An uploaded file batch, including an
+empty one from an all-duplicate or header-only import (#437), always counts.
 """
 
 from datetime import timedelta
@@ -32,7 +33,9 @@ def due_import_accounts(accounts, *, today=None):
         ImportBatch.objects.filter(account_id=OuterRef("pk"), status=ImportBatch.Status.ACTIVE)
         .exclude(source=ImportBatch.Source.MANUAL)
         .alias(_has_transactions=Exists(Transaction.objects.filter(import_batch_id=OuterRef("pk"))))
-        .exclude(source=ImportBatch.Source.SIMPLEFIN, _has_transactions=False)
+        # Balance-only sync batches carry the remote account id; a CSV file marked
+        # SimpleFIN does not, so an empty file import still counts as coverage.
+        .exclude(source=ImportBatch.Source.SIMPLEFIN, _has_transactions=False, simplefin_account_id__gt="")
         .order_by("-date_range_end")
         .values("date_range_end")[:1]
     )

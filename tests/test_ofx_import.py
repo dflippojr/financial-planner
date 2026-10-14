@@ -74,6 +74,38 @@ def test_bad_files(content, message):
         read_ofx(content)
 
 
+def _statement(wrapper, statement, account, fitid):
+    return (
+        f"<{wrapper}><{statement}><CURDEF>USD\n"
+        f"<BANKACCTFROM><BANKID>999999999<ACCTID>{account}<ACCTTYPE>CHECKING</BANKACCTFROM>\n"
+        "<BANKTRANLIST><DTSTART>20260901<DTEND>20260930\n"
+        f"<STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20260927<TRNAMT>-12.34<FITID>{fitid}<NAME>SYNTHETIC</STMTTRN>\n"
+        f"</BANKTRANLIST></{statement}></{wrapper}>\n"
+    ).encode()
+
+
+def _multi_statement_file(first, second):
+    return (b"OFXHEADER:100\nDATA:OFXSGML\nVERSION:102\n<OFX>" + first + second + b"</OFX>\n")
+
+
+MULTI_STATEMENT_FILES = {
+    "bank+bank": _multi_statement_file(
+        _statement("STMTTRNRS", "STMTRS", "SYNTHETIC-CHECKING", "chk-1"),
+        _statement("STMTTRNRS", "STMTRS", "SYNTHETIC-SAVINGS", "sav-1"),
+    ),
+    "bank+card": _multi_statement_file(
+        _statement("STMTTRNRS", "STMTRS", "SYNTHETIC-CHECKING", "chk-1"),
+        _statement("CCSTMTTRNRS", "CCSTMTRS", "SYNTHETIC-CARD", "card-1"),
+    ),
+}
+
+
+@pytest.mark.parametrize("content", MULTI_STATEMENT_FILES.values(), ids=MULTI_STATEMENT_FILES.keys())
+def test_multi_statement_files_are_rejected(content):
+    with pytest.raises(CsvInputError, match="2 account statements. Download one account at a time"):
+        read_ofx(content)
+
+
 def test_row_limit_and_legacy_encoding():
     with pytest.raises(CsvInputError, match="5 MB limit"):
         read_ofx(b"x" * (MAX_FILE_BYTES + 1))
@@ -81,6 +113,28 @@ def test_row_limit_and_legacy_encoding():
         read_ofx(fixture(), max_rows=1)
     document = read_ofx(fixture().replace(b"Weekly &amp; fresh", b"Synthetic caf\xe9"))
     assert document.rows[0].cells[3] == "Synthetic café"
+
+
+def sgml_statement(name):
+    return (
+        "OFXHEADER:100\nDATA:OFXSGML\nVERSION:102\n"
+        "<OFX><BANKMSGSRSV1><STMTTRNRS><STMTRS><CURDEF>USD\n"
+        "<BANKTRANLIST><DTSTART>20260901<DTEND>20260930\n"
+        f"<STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20260927<TRNAMT>-12.34<FITID>s-1<NAME>{name}</STMTTRN>\n"
+        "</BANKTRANLIST></STMTRS></STMTTRNRS></BANKMSGSRSV1></OFX>\n"
+    ).encode()
+
+
+@pytest.mark.parametrize("raw", [
+    "FEDEX OFFICE PRINT&COPY", "PB&LTD SUPPLY", "B&GT GRILL", "A&REG B", "R&D &#xZZ; &#0; &#55296;",
+])
+def test_sgml_raw_ampersand_in_name_is_kept(raw):
+    assert preview_csv(read_ofx(sgml_statement(raw)), OFX_MAPPING).rows[0].description == raw
+
+
+def test_sgml_defined_entities_still_decode():
+    document = read_ofx(sgml_statement("A &amp; B &lt;C&gt; &#65;&#x42; AT&#00000038;T&#x0000026;T"))
+    assert preview_csv(document, OFX_MAPPING).rows[0].description == "A & B <C> AB AT&T&T"
 
 
 def test_sgml_explicit_scalar_end_tags_and_empty_memo():
@@ -267,7 +321,9 @@ def test_import_reimport_and_undo(import_client, name, account_type):
     response = upload(client, account, content)
     assert response.context["preview"].duplicate_count == 2
     assert commit(client, account, response).status_code == 302
-    assert ImportBatch.objects.count() == 1
+    assert ImportBatch.objects.count() == 2
+    reimport = ImportBatch.objects.exclude(pk=batch.pk).get()
+    assert not reimport.transactions.exists()
     assert Transaction.objects.count() == 2
     assert not list(staging.glob("*.csvstage"))
     # A changed FITID still matches by fingerprint; only the extra date is new.
@@ -276,7 +332,7 @@ def test_import_reimport_and_undo(import_client, name, account_type):
     assert response.context["preview"].duplicate_count == 1
     assert response.context["preview"].new_count == 1
     assert commit(client, account, response).status_code == 302
-    second = ImportBatch.objects.exclude(pk=batch.pk).get()
+    second = ImportBatch.objects.exclude(pk__in=[batch.pk, reimport.pk]).get()
     assert client.post(reverse("csv-import-undo", args=[account.pk, second.pk])).status_code == 302
     assert Transaction.objects.filter(status="active").count() == 2
     assert Transaction.objects.get(import_batch=second).status == "archived"
@@ -287,6 +343,7 @@ def test_import_reimport_and_undo(import_client, name, account_type):
     (b"broken", "ofx", "not a valid"),
     (b"<OFX><INVSTMTRS/></OFX>", "ofx", "no bank or card transactions"),
     (fixture().replace(b"<CURDEF>USD", b"<CURDEF>EUR"), "ofx", "Currency must be USD"),
+    (MULTI_STATEMENT_FILES["bank+card"], "ofx", "Download one account at a time"),
     (b"Date,Amount,Name\n2026-09-27,-12.34,Example", "ofx", "not a valid"),
     (fixture(), "generic", "Choose the OFX / QFX profile"),
     (fixture(), "huntington", "Choose the OFX / QFX profile"),

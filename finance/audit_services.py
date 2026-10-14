@@ -38,7 +38,9 @@ def append_event(*, action, account=None, actor=None, actor_kind=AuditEvent.Acto
     Never pass submitted actor/source metadata. System callers must supply the
     effective member whose account access authorized the action. Account actions
     take `account`; household actions take `household`; personal actions are
-    visible to `actor` (or `effective_member` for system callers) only.
+    visible to `actor` (or `effective_member` for system callers) only, unless a
+    `verified=True` caller names the affected member as `private_owner` (the
+    audience), so the initiating actor is not mistaken for the audience.
     `affected_member` names the person acted upon when it differs from the
     initiator; it is never the operator. Workflow actions (#273) take `target_type`,
     `target_id` and exactly one audience: `account`, `private_owner` or `household`;
@@ -107,7 +109,10 @@ def append_event(*, action, account=None, actor=None, actor_kind=AuditEvent.Acto
         if account is not None or principal is None or not target_id:
             raise ValidationError("Unsupported audit target.")
         if audience == AUDIENCE_PERSONAL:
-            private_owner_id = principal.pk
+            # A verified trusted caller may file a personal event in the audience of
+            # the member it affects while the actor stays the initiator.
+            audience_person = private_owner if verified and private_owner is not None else principal
+            private_owner_id = audience_person.pk
         else:
             if household is None:
                 raise ValidationError("Unsupported audit target.")

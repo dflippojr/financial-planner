@@ -95,7 +95,12 @@ def pending_suggestions_for(person, transactions):
     ids = [txn.pk for txn in transactions]
     rows = (
         CategorySuggestion.objects.visible_to(person)
-        .filter(status=CategorySuggestion.Status.PENDING, transaction_id__in=ids)
+        .filter(
+            status=CategorySuggestion.Status.PENDING,
+            transaction_id__in=ids,
+            # A former member must not see the household's current category name (#301).
+            category__in=Category.objects.visible_to(person),
+        )
         .select_related("category")
     )
     by_id = {}
@@ -115,7 +120,10 @@ def proposed_rule_from_accepts(person):
         return None
     accepted = list(
         CategorySuggestion.objects.visible_to(person)
-        .filter(status=CategorySuggestion.Status.ACCEPTED)
+        .filter(
+            status=CategorySuggestion.Status.ACCEPTED,
+            category__in=Category.objects.visible_to(person),
+        )
         .select_related("category", "transaction")
         .order_by("-resolved_at", "-pk")[:40]
     )

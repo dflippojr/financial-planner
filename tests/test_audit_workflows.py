@@ -98,12 +98,13 @@ def test_import_commit_no_new_rows_and_undo_identify_each_member():
     assert committed.metadata == {"new_count": 1, "duplicate_count": 0, "invalid_count": 0,
                                   "format": "huntington", "batch_id": result.batch.pk}
     assert committed.account_id == shared.pk and committed.source == "ui"
-    # An exact reimport creates no batch and exactly one distinct no-new-rows event.
+    # An exact reimport records an empty coverage batch and exactly one distinct no-new-rows event.
     again = import_csv(member, shared)
-    assert again.batch is None
+    assert again.new_count == 0 and not again.batch.transactions.exists()
     skipped = only(A.IMPORT_NO_NEW_ROWS)
     assert (skipped.actor_id, skipped.target_type, skipped.target_id) == (member.pk, T.ACCOUNT, shared.pk)
     assert skipped.metadata["duplicate_count"] == 1 and skipped.metadata["new_count"] == 0
+    assert skipped.metadata["batch_id"] == again.batch.pk
     undo_import_batch(member, shared.pk, result.batch.pk)
     undone = only(A.IMPORT_UNDONE)
     assert undone.actor_id == member.pk != committed.actor_id
