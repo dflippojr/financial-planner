@@ -1096,3 +1096,18 @@ def test_private_charges_never_shape_a_single_account_household_bill():
     for person in (owner, member):
         assert alone.pk not in [i.source_id for i in household_series_inputs(person, account=account_a)]
         assert [i.name for i in household_series_inputs(person, account=account_a)] == []
+
+
+@pytest.mark.django_db
+def test_a_charge_the_projection_ignores_never_ranks_a_household_series():
+    owner, member, household = household_fixture()
+    account_a = Account.objects.get(name="Synthetic Joint")
+    old = make_confirmed_series(owner, "Synthetic Insurance", account_a, months=(7,), amount_minor=40_000)
+    current = make_confirmed_series(member, "Synthetic Insurance", account_a, months=(9,), amount_minor=90_000)
+    link_charges(current, old)
+    ignored = add_charge(old, account_a, date(2026, 10, 1), 40_000, number=30)
+    Transaction.objects.filter(pk=ignored.pk).update(kind=Transaction.Kind.INVESTMENT_ACTIVITY)
+
+    for person in (owner, member):
+        assert [i.amount_minor for i in household_series_inputs(person)] == [90_000]
+        assert [i.amount_minor for i in household_series_inputs(person, account=account_a)] == [90_000]

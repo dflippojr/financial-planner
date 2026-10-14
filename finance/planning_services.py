@@ -140,16 +140,10 @@ def _one_series_per_bill(rows, replaced, member_ids, household, *, selected=None
             else:
                 first_owner[charge_id] = pk
     replaced_bills = {find(pk) for pk in replaced if pk in parent}
-    # Recency is judged over every charge, not just the selected account's, so
-    # a single-account view still picks the series holding the current price.
-    latest = {
-        series_id: last.toordinal()
-        for series_id, last in RecurringSeriesMember.objects.filter(
-            series_id__in=row_ids, transaction__status=Transaction.Status.ACTIVE
-        )
-        .values_list("series_id")
-        .annotate(last=Max("transaction__transaction_date"))
-    }
+    # Recency is judged by each row's last eligible charge on any household
+    # account, so a single-account view still picks the series holding the
+    # current price and a transfer or archived charge never ranks a series.
+    latest = {row.pk: row.last_on.toordinal() for row in rows if row.last_on is not None}
     bills = {}
     for row in rows:
         bills.setdefault(find(row.pk), []).append(row)
