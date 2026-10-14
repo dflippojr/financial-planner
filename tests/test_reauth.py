@@ -1,5 +1,6 @@
 import json
 import time
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import timedelta
 from types import SimpleNamespace
@@ -96,7 +97,12 @@ def test_sign_in_stamps_recent_auth_and_sign_out_clears_it():
 
 
 @pytest.mark.django_db
-def test_google_only_member_is_not_asked_for_a_password():
+@pytest.mark.parametrize(
+    ("google_enabled", "offers_google"),
+    [(False, False), (True, True)],
+    ids=["google-disabled", "google-enabled"],
+)
+def test_google_only_member_is_not_asked_for_a_password(google_enabled, offers_google):
     user, _person, _household = make_member("google-only")
     user.set_unusable_password()
     user.save(update_fields=("password",))
@@ -104,24 +110,11 @@ def test_google_only_member_is_not_asked_for_a_password():
     client = Client()
     client.force_login(user)
 
-    page = client.get(reverse("reauth"), {"next": reverse("invite"), "action": "invite"})
+    with _google_settings() if google_enabled else nullcontext():
+        page = client.get(reverse("reauth"), {"next": reverse("invite"), "action": "invite"})
+
     assert b'name="password"' not in page.content
-    assert b"Confirm with Google" not in page.content
-
-
-@pytest.mark.django_db
-@_google_settings()
-def test_google_only_member_sees_google_confirmation_when_enabled():
-    user, _person, _household = make_member("google-only-enabled")
-    user.set_unusable_password()
-    user.save(update_fields=("password",))
-    SocialAccount.objects.create(user=user, provider="google", uid=GOOGLE_SUB, extra_data={"sub": GOOGLE_SUB})
-    client = Client()
-    client.force_login(user)
-
-    page = client.get(reverse("reauth"), {"next": reverse("invite"), "action": "invite"})
-    assert b'name="password"' not in page.content
-    assert b"Confirm with Google" in page.content
+    assert (b"Confirm with Google" in page.content) is offers_google
 
 
 @pytest.mark.django_db
@@ -189,41 +182,25 @@ def test_google_connect_callback_rechecks_recent_auth():
 
 @pytest.mark.django_db
 @_google_settings()
-def test_another_members_google_login_never_confirms_this_session():
-    victim, _person, _household = make_member("victim")
-    attacker, _attacker_person, _attacker_household = make_member("attacker")
-    SocialAccount.objects.create(user=attacker, provider="google", uid=GOOGLE_SUB, extra_data={"sub": GOOGLE_SUB})
-    client = Client()
-    client.force_login(victim)
-    _expire_recent_auth(client)
-
-    start = client.post(reverse("google_login"), {"process": "redirect"})
-    _finish_google(client, start)
-
-    # Whatever happened, the victim's session must not be freshly confirmed.
-    session = client.session
-    if str(session.get("_auth_user_id")) == str(victim.pk):
-        fresh = session.get(RECENT_AUTH_SESSION_KEY)
-        assert not (fresh and fresh > (timezone.now() - timedelta(minutes=10)).timestamp())
-    refused = client.post(reverse("invite"))
-    assert refused.status_code == 302
-    assert Invitation.objects.count() == 0
-
-
-@pytest.mark.django_db
-@_google_settings()
-def test_own_google_login_from_a_stale_session_does_not_confirm_it():
+@pytest.mark.parametrize("google_identity_is_own", [False, True], ids=["another-member", "own-identity"])
+def test_a_google_login_from_a_stale_session_never_confirms_it(google_identity_is_own):
+    # A silent Google sign-in through the ordinary login flow must not stand in for the
+    # confirmation step, which checks how recently Google authenticated, and a Google
+    # identity that belongs to another member must never confirm this session either.
     member, _person, _household = make_member("member")
-    SocialAccount.objects.create(user=member, provider="google", uid=GOOGLE_SUB, extra_data={"sub": GOOGLE_SUB})
+    google_owner = member if google_identity_is_own else make_member("attacker")[0]
+    SocialAccount.objects.create(user=google_owner, provider="google", uid=GOOGLE_SUB, extra_data={"sub": GOOGLE_SUB})
     client = Client()
     client.force_login(member)
     _expire_recent_auth(client)
 
-    # A silent Google sign-in through the ordinary login flow must not stand in
-    # for the confirmation step, which checks how recently Google authenticated.
     start = client.post(reverse("google_login"), {"process": "redirect"})
     _finish_google(client, start)
 
+    session = client.session
+    if str(session.get("_auth_user_id")) == str(member.pk):
+        confirmed_at = session.get(RECENT_AUTH_SESSION_KEY)
+        assert not (confirmed_at and confirmed_at > (timezone.now() - timedelta(minutes=10)).timestamp())
     refused = client.post(reverse("invite"))
     assert refused.status_code == 302
     assert Invitation.objects.count() == 0

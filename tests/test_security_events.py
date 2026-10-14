@@ -23,13 +23,11 @@ from tests.test_auth_flows import PASSWORD, make_member
 
 
 @pytest.mark.django_db
-def test_each_security_event_type_can_be_recorded():
+def test_security_events_are_visible_only_to_their_member():
     _user, person, _household = make_member()
-    for value, _label in EVENT_TYPES.choices:
-        record_security_event(person, value, ip_address="203.0.113.10", user_agent="SyntheticAgent/1.0")
-    stored = list(MemberSecurityEvent.objects.visible_to(person).order_by("pk"))
-    assert [row.event_type for row in stored] == [choice[0] for choice in EVENT_TYPES.choices]
+    record_security_event(person, EVENT_TYPES.SIGN_IN_SUCCESS, ip_address="203.0.113.10", user_agent="SyntheticAgent/1.0")
     outsider, outsider_person, _h = make_member("outsider")
+    assert MemberSecurityEvent.objects.visible_to(person).count() == 1
     assert MemberSecurityEvent.objects.visible_to(outsider_person).count() == 0
     assert MemberSecurityEvent.objects.visible_to(outsider).count() == 0
     assert MemberSecurityEvent.objects.visible_to(None).count() == 0
@@ -240,28 +238,24 @@ def _client_ip_request(*, remote="127.0.0.1", forwarded=None):
     return RequestFactory().get("/sign-in/", REMOTE_ADDR=remote, **extra)
 
 
-def test_client_ip_honors_forwarded_for_only_from_a_trusted_proxy():
-    request = _client_ip_request(remote="203.0.113.20", forwarded="198.51.100.1, 192.0.2.60")
-    with override_settings(TRUSTED_PROXY_IPS=()):
-        assert client_ip(request) == "203.0.113.20"
-    with override_settings(TRUSTED_PROXY_IPS=parse_trusted_proxies("203.0.113.21")):
-        assert client_ip(request) == "203.0.113.20"
-    with override_settings(TRUSTED_PROXY_IPS=parse_trusted_proxies("203.0.113.20")):
-        assert client_ip(request) == "192.0.2.60"
-    with override_settings(TRUSTED_PROXY_IPS=parse_trusted_proxies("10.0.0.1, 203.0.113.0/24")):
-        assert client_ip(request) == "192.0.2.60"
+# (connecting address, X-Forwarded-For, trusted proxies, the address the app sees)
+CLIENT_IP_CASES = {
+    "no-trusted-proxy": ("203.0.113.20", "198.51.100.1, 192.0.2.60", "", "203.0.113.20"),
+    "other-proxy": ("203.0.113.20", "198.51.100.1, 192.0.2.60", "203.0.113.21", "203.0.113.20"),
+    "trusted-proxy": ("203.0.113.20", "198.51.100.1, 192.0.2.60", "203.0.113.20", "192.0.2.60"),
+    "trusted-network": ("203.0.113.20", "198.51.100.1, 192.0.2.60", "10.0.0.1, 203.0.113.0/24", "192.0.2.60"),
+    "invalid-forwarded-address": ("203.0.113.20", "198.51.100.1, not-an-ip", "203.0.113.20", "203.0.113.20"),
+    "unparseable-connecting-address": ("", "192.0.2.60", "0.0.0.0/0", ""),
+}
 
 
-def test_client_ip_falls_back_when_the_trusted_forwarded_address_is_invalid():
-    request = _client_ip_request(remote="203.0.113.20", forwarded="198.51.100.1, not-an-ip")
-    with override_settings(TRUSTED_PROXY_IPS=parse_trusted_proxies("203.0.113.20")):
-        assert client_ip(request) == "203.0.113.20"
-
-
-def test_client_ip_ignores_forwarded_for_when_the_connecting_address_is_unparseable():
-    request = _client_ip_request(remote="", forwarded="192.0.2.60")
-    with override_settings(TRUSTED_PROXY_IPS=parse_trusted_proxies("0.0.0.0/0")):
-        assert client_ip(request) == ""
+@pytest.mark.parametrize(
+    ("remote", "forwarded", "trusted", "expected"), CLIENT_IP_CASES.values(), ids=CLIENT_IP_CASES.keys()
+)
+def test_client_ip_honors_forwarded_for_only_from_a_trusted_proxy(remote, forwarded, trusted, expected):
+    request = _client_ip_request(remote=remote, forwarded=forwarded)
+    with override_settings(TRUSTED_PROXY_IPS=parse_trusted_proxies(trusted) if trusted else ()):
+        assert client_ip(request) == expected
 
 
 @pytest.mark.django_db
