@@ -195,6 +195,7 @@ def test_password_member_can_connect_google_and_sign_in_with_either_method():
     assert connected.status_code == 302
     assert SocialAccount.objects.filter(user=user, uid=GOOGLE_SUB).exists()
     assert SocialToken.objects.count() == 0
+    assert sign_in_method_count(user) == 2
 
     client.post(reverse("logout"))
     signed_in = _finish_google(client, client.post(reverse("google-sign-in")))
@@ -210,6 +211,7 @@ def test_password_member_can_connect_google_and_sign_in_with_either_method():
     assert removed.status_code == 200
     user.refresh_from_db()
     assert not user.has_usable_password()
+    assert sign_in_method_count(user) == 1
     disconnect = client.post(reverse("account-settings"), {"action": "disconnect-google"})
     assert b"Keep at least one sign-in method" in disconnect.content
     assert SocialAccount.objects.filter(user=user).exists()
