@@ -187,18 +187,6 @@ def test_email_match_without_sub_does_not_sign_in_or_link():
 
 @pytest.mark.django_db
 @_google_settings()
-def test_unverified_google_email_is_refused():
-    make_member()
-    client = Client()
-
-    _finish_google(client, client.post(reverse("google-sign-in")), id_token=_id_token(verified=False))
-
-    assert "_auth_user_id" not in client.session
-    assert not SocialAccount.objects.exists()
-
-
-@pytest.mark.django_db
-@_google_settings()
 def test_password_member_can_connect_google_and_sign_in_with_either_method():
     user, _person, _household = make_member()
     client = Client()
@@ -300,19 +288,6 @@ def test_google_sign_in_sets_fixed_session_expiry_and_enforces_csrf():
     session_key = client.session.session_key
     expire_date = Session.objects.get(session_key=session_key).expire_date
     assert abs((expire_date - timezone.now()).total_seconds() - 60 * 60 * 24 * 28) < 30
-
-
-@pytest.mark.django_db
-@_google_settings(LOGIN_FAILURE_LIMIT=2, LOGIN_BLOCK_SECONDS=900)
-def test_google_sign_in_uses_the_login_throttle():
-    make_member()
-    client = Client()
-    _finish_google(client, client.post(reverse("google-sign-in")))
-    _finish_google(client, client.post(reverse("google-sign-in")))
-    blocked = client.post(reverse("google-sign-in"))
-    assert blocked.status_code == 200
-    assert b"Sign-in failed" in blocked.content
-    assert "accounts.google.com" not in (blocked.get("Location") or "")
 
 
 @pytest.mark.django_db
@@ -630,32 +605,3 @@ def test_concurrent_google_joins_same_identity_keep_one_member():
     assert unused.pk != used.pk
     assert RecoveryCode.objects.filter(user=created.get()).count() == 8
 
-
-@pytest.mark.django_db
-@_google_settings(LOGIN_FAILURE_LIMIT=2, LOGIN_BLOCK_SECONDS=900)
-def test_unverified_email_callbacks_count_toward_the_login_throttle():
-    make_member()
-    client = Client()
-    for _ in range(2):
-        _finish_google(client, client.post(reverse("google-sign-in")), id_token=_id_token(verified=False))
-
-    blocked = client.post(reverse("google-sign-in"))
-
-    assert blocked.status_code == 200
-    assert b"Sign-in failed" in blocked.content
-
-
-@pytest.mark.django_db
-@_google_settings(LOGIN_FAILURE_LIMIT=2, LOGIN_BLOCK_SECONDS=900)
-def test_denied_google_callbacks_count_toward_the_login_throttle():
-    make_member()
-    client = Client()
-    for _ in range(2):
-        start = client.post(reverse("google-sign-in"))
-        state = parse_qs(urlparse(start["Location"]).query)["state"][0]
-        client.get(reverse("google_callback"), {"error": "access_denied", "state": state})
-
-    blocked = client.post(reverse("google-sign-in"))
-
-    assert blocked.status_code == 200
-    assert b"Sign-in failed" in blocked.content

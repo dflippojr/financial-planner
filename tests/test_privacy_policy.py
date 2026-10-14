@@ -1,6 +1,8 @@
 import io
 import json
 import zipfile
+from dataclasses import dataclass
+from typing import Callable
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -14,7 +16,6 @@ from finance.lifecycle_services import leave_household
 from finance.models import Household, Membership, Person, PrivacyPolicyAcceptance, PrivacyPolicyVersion
 from finance.policy_services import (
     accept_policy,
-    accept_shown_version,
     current_policy,
     household_ai_allowed,
     in_acceptance,
@@ -67,83 +68,81 @@ def test_publish_policy_collision_returns_the_winner(monkeypatch):
     assert PrivacyPolicyVersion.objects.count() == 1
 
 
-@pytest.mark.django_db
-def test_non_material_publish_leaves_acceptance_and_ai_guards_true():
-    _user, person, household = make_member("owner")
-    first = publish_policy(material=True, body="Synthetic policy v1")
-    accept_policy(person, first)
-
-    second = publish_policy(material=False, body="Synthetic policy v2 typo fix")
-
-    assert second.version == 2
-    assert not second.is_material
-    assert in_acceptance(person)
-    assert may_use_ai(person)
-    assert household_ai_allowed(household)
-
-
-@pytest.mark.django_db
-def test_material_publish_takes_members_out_of_acceptance_until_they_accept():
-    _user, person, household = make_member("owner")
-    first = publish_policy(material=True, body="Synthetic policy v1")
-    accept_policy(person, first)
-    publish_policy(material=True, body="Synthetic policy v2 material")
-
-    assert not in_acceptance(person)
-    assert not may_use_ai(person)
-    assert not household_ai_allowed(household)
-
-    accept_policy(person, current_policy())
-
-    assert in_acceptance(person)
-    assert may_use_ai(person)
-    assert household_ai_allowed(household)
-
-
-@pytest.mark.django_db
-def test_member_without_acceptance_cannot_use_ai():
-    _user, person, household = make_member("owner")
-    publish_policy(material=True, body="Synthetic policy v1")
-
-    assert not may_use_ai(person)
-    assert not household_ai_allowed(household)
-
-
-@pytest.mark.django_db
-def test_household_shared_ai_refused_until_every_current_member_accepts():
-    _owner_user, owner, household = make_member("owner")
-    _member_user, member, _ = make_member("member", household=household)
-    first = publish_policy(material=True, body="Synthetic policy v1")
-    accept_policy(owner, first)
-
-    assert may_use_ai(owner)
-    assert not may_use_ai(member)
-    assert not household_ai_allowed(household)
-
-    accept_policy(member, first)
-
-    assert household_ai_allowed(household)
+# Each step is ("publish", is_material), ("accept", member, version number or "current"),
+# ("join", member), ("leave", member) or ("expect", household_ai_allowed, {member: accepted}).
+# A member who is accepted is in acceptance and may use AI; one who is not is neither.
+POLICY_RULE_CASES = {
+    "non-material publish keeps acceptance": [
+        ("publish", True),
+        ("accept", "owner", 1),
+        ("publish", False),
+        ("expect", True, {"owner": True}),
+    ],
+    "material publish needs a new acceptance": [
+        ("publish", True),
+        ("accept", "owner", 1),
+        ("publish", True),
+        ("expect", False, {"owner": False}),
+        ("accept", "owner", "current"),
+        ("expect", True, {"owner": True}),
+    ],
+    "member without acceptance": [
+        ("publish", True),
+        ("expect", False, {"owner": False}),
+    ],
+    "household needs every member": [
+        ("join", "member"),
+        ("publish", True),
+        ("accept", "owner", 1),
+        ("expect", False, {"owner": True, "member": False}),
+        ("accept", "member", 1),
+        ("expect", True, {"owner": True, "member": True}),
+    ],
+    "join and leave": [
+        ("publish", True),
+        ("accept", "owner", 1),
+        ("expect", True, {"owner": True}),
+        ("join", "joiner"),
+        ("expect", False, {"owner": True, "joiner": False}),
+        ("accept", "joiner", 1),
+        ("expect", True, {"owner": True, "joiner": True}),
+        ("leave", "joiner"),
+        ("expect", True, {"owner": True}),
+        ("join", "newcomer"),
+        ("expect", False, {"owner": True, "newcomer": False}),
+    ],
+    "accepting a later non-material version": [
+        ("publish", True),
+        ("publish", False),
+        ("accept", "owner", 2),
+        ("expect", True, {"owner": True}),
+    ],
+}
 
 
 @pytest.mark.django_db
-def test_join_and_leave_update_household_ai_allowed():
-    _owner_user, owner, household = make_member("owner")
-    first = publish_policy(material=True, body="Synthetic policy v1")
-    accept_policy(owner, first)
-    assert household_ai_allowed(household)
-
-    _joiner_user, joiner, _ = make_member("joiner", household=household)
-    assert not household_ai_allowed(household)
-
-    accept_policy(joiner, first)
-    assert household_ai_allowed(household)
-
-    leave_household(joiner)
-    assert Membership.objects.filter(person=joiner, ended_at__isnull=True).count() == 0
-    assert household_ai_allowed(household)
-
-    _new_user, _new_member, _ = make_member("newcomer", household=household)
-    assert not household_ai_allowed(household)
+@pytest.mark.parametrize("steps", POLICY_RULE_CASES.values(), ids=POLICY_RULE_CASES.keys())
+def test_policy_history_decides_acceptance_and_ai_use(steps):
+    _user, owner, household = make_member("owner")
+    people = {"owner": owner}
+    versions = []
+    for kind, *args in steps:
+        if kind == "publish":
+            versions.append(publish_policy(material=args[0], body=f"Synthetic policy v{len(versions) + 1}"))
+        elif kind == "accept":
+            member, which = args
+            accept_policy(people[member], current_policy() if which == "current" else versions[which - 1])
+        elif kind == "join":
+            people[args[0]] = make_member(args[0], household=household)[1]
+        elif kind == "leave":
+            leave_household(people[args[0]])
+            assert not Membership.objects.filter(person=people[args[0]], ended_at__isnull=True).exists()
+        else:
+            household_allowed, accepted = args
+            for member, expected in accepted.items():
+                assert in_acceptance(people[member]) is expected, member
+                assert may_use_ai(people[member]) is expected, member
+            assert household_ai_allowed(household) is household_allowed
 
 
 @pytest.mark.django_db
@@ -160,17 +159,6 @@ def test_publish_command_reads_override_file(tmp_path):
     assert versions[0].is_material
     assert not versions[1].is_material
     assert versions[1].body == "Synthetic operator policy"
-
-
-@pytest.mark.django_db
-def test_accepting_a_later_non_material_version_counts_as_in_acceptance():
-    _user, person, _household = make_member("owner")
-    publish_policy(material=True, body="Synthetic v1")
-    later = publish_policy(material=False, body="Synthetic v2")
-    accept_policy(person, later)
-
-    assert in_acceptance(person)
-    assert may_use_ai(person)
 
 
 @pytest.mark.django_db
@@ -198,85 +186,80 @@ def _setup_form(**overrides):
     return data
 
 
-@pytest.mark.django_db
-def test_policy_page_is_public_and_shows_version_and_date():
-    response = Client().get(reverse("privacy-policy"))
+def _policy_date(policy):
+    return timezone.localtime(policy.published_at).date().isoformat().encode()
 
-    policy = PrivacyPolicyVersion.objects.get()
+
+POLICY_LINK_CASES = {
+    "policy-page": ("privacy-policy", False, lambda policy: [
+        b"Privacy and data policy",
+        f"Version {policy.version}".encode(),
+        _policy_date(policy),
+    ]),
+    "sign-in": ("login", True, lambda policy: [reverse("privacy-policy").encode()]),
+    "join": ("join", True, lambda policy: [b"Privacy and data policy"]),
+    "setup": ("setup", False, lambda policy: [b"Privacy and data policy"]),
+}
+
+
+@pytest.mark.django_db
+@override_settings(SETUP_CODE=SYNTHETIC_SETUP_CODE)
+@pytest.mark.parametrize("case", POLICY_LINK_CASES.values(), ids=POLICY_LINK_CASES.keys())
+def test_pages_present_or_link_to_the_policy(case):
+    url_name, needs_member, expected = case
+    if needs_member:
+        make_member("owner")
+
+    response = Client().get(reverse(url_name))
+
     assert response.status_code == 200
-    assert b"Privacy and data policy" in response.content
-    assert f"Version {policy.version}".encode() in response.content
-    assert timezone.localtime(policy.published_at).date().isoformat().encode() in response.content
+    for fragment in expected(current_policy()):
+        assert fragment in response.content
 
 
-@pytest.mark.django_db
-def test_sign_in_and_join_pages_link_to_the_policy():
-    make_member("owner")
-    login_page = Client().get(reverse("login"))
-    join_page = Client().get(reverse("join"))
-
-    assert reverse("privacy-policy").encode() in login_page.content
-    assert b"Privacy and data policy" in join_page.content
-
-
-@pytest.mark.django_db
-@override_settings(SETUP_CODE=SYNTHETIC_SETUP_CODE)
-def test_setup_presents_the_policy_on_get():
-    shown = Client().get(reverse("setup"))
-    assert b"Privacy and data policy" in shown.content
-
-
-@pytest.mark.django_db
-@override_settings(SETUP_CODE=SYNTHETIC_SETUP_CODE)
-def test_setup_without_accepting_still_finishes():
+def _onboard_by_setup(accept):
     client = Client()
-    client.post(reverse("setup"), _setup_form())
-    user = get_user_model().objects.get()
-    assert PrivacyPolicyAcceptance.objects.count() == 0
+    version = {"accept_privacy_policy": "on", "privacy_policy_version": str(current_policy().version)} if accept else {}
+    client.post(reverse("setup"), _setup_form(**version))
+    person = get_user_model().objects.get().person
     assert client.get(reverse("home")).status_code == 200
-    assert not may_use_ai(user.person)
+    return person
 
 
-@pytest.mark.django_db
-@override_settings(SETUP_CODE=SYNTHETIC_SETUP_CODE)
-def test_setup_with_acceptance_records_a_row():
-    client = Client()
-    client.post(
-        reverse("setup"),
-        _setup_form(
-            accept_privacy_policy="on",
-            privacy_policy_version=str(current_policy().version),
-        ),
-    )
-    user = get_user_model().objects.get()
-    row = PrivacyPolicyAcceptance.objects.get(person=user.person)
-    assert row.policy_version == current_policy()
-    assert may_use_ai(user.person)
-
-
-@pytest.mark.django_db
-def test_join_records_optional_acceptance():
-    inviter, person, household = make_member("owner")
+def _onboard_by_join(accept):
+    inviter, inviter_person, household = make_member("owner")
     client = Client()
     client.force_login(inviter)
     stamp_recent_auth(client)
-    code = create_invitation(person)
-    joined = Client().post(
-        reverse("join"),
-        {
-            "invitation_code": code,
-            "username": "new-member",
-            "display_name": "New Example",
-            "password1": PASSWORD,
-            "password2": PASSWORD,
-            "accept_privacy_policy": "on",
-            "privacy_policy_version": str(current_policy().version),
-        },
-    )
-    new_user = get_user_model().objects.get(username="new-member")
+    form = {
+        "invitation_code": create_invitation(inviter_person),
+        "username": "new-member",
+        "display_name": "New Example",
+        "password1": PASSWORD,
+        "password2": PASSWORD,
+    }
+    if accept:
+        form.update(accept_privacy_policy="on", privacy_policy_version=str(current_policy().version))
+    joined = Client().post(reverse("join"), form)
+    person = get_user_model().objects.get(username="new-member").person
     assert joined.status_code == 200
-    assert PrivacyPolicyAcceptance.objects.filter(person=new_user.person).exists()
-    assert Membership.objects.filter(person=new_user.person, household=household, ended_at__isnull=True).exists()
+    assert Membership.objects.filter(person=person, household=household, ended_at__isnull=True).exists()
+    return person
+
+
+@pytest.mark.django_db
+@override_settings(SETUP_CODE=SYNTHETIC_SETUP_CODE)
+@pytest.mark.parametrize("accept", [True, False], ids=["accepting", "not-accepting"])
+@pytest.mark.parametrize("onboard", [_onboard_by_setup, _onboard_by_join], ids=["setup", "join"])
+def test_setup_and_join_finish_with_or_without_accepting_the_policy(onboard, accept):
+    person = onboard(accept)
+
+    rows = PrivacyPolicyAcceptance.objects.filter(person=person)
+    if accept:
+        assert rows.get().policy_version == current_policy()
+    else:
+        assert not rows.exists()
+    assert may_use_ai(person) is accept
 
 
 @pytest.mark.django_db
@@ -333,34 +316,6 @@ def test_acceptance_rows_are_exported():
 
 
 @pytest.mark.django_db
-def test_stale_versioned_page_does_not_accept_current_policy():
-    user, person, _household = make_member("owner")
-    first = publish_policy(material=True, body="Synthetic policy v1")
-    accept_policy(person, first)
-    current = publish_policy(material=True, body="Synthetic policy v2")
-    client = Client()
-    client.force_login(user)
-
-    shown = client.get(reverse("privacy-policy-version", args=(first.version,)))
-    assert shown.status_code == 200
-    assert b"Accept this version" not in shown.content
-    assert b"Read the current version" in shown.content
-
-    posted = client.post(
-        reverse("privacy-policy-respond"),
-        {
-            "action": "accept",
-            "version": str(first.version),
-            "next": reverse("account-settings"),
-        },
-    )
-
-    assert not PrivacyPolicyAcceptance.objects.filter(person=person, policy_version=current).exists()
-    assert posted.status_code == 302
-    assert posted.url == reverse("privacy-policy")
-
-
-@pytest.mark.django_db
 def test_accept_from_current_policy_page_records_the_shown_version():
     user, person, _household = make_member("owner")
     current = publish_policy(material=True, body="Synthetic policy v1")
@@ -391,70 +346,96 @@ def _hidden_version(content, name="privacy_policy_version"):
     return content[start : content.index(b'"', start)].decode()
 
 
-@pytest.mark.django_db
-def test_accept_shown_version_ignores_a_stale_render():
-    _user, person, _household = make_member("owner")
-    shown = publish_policy(material=True, body="Synthetic policy v1")
-    later = publish_policy(material=True, body="Synthetic policy v2")
+@dataclass
+class StaleSubmission:
+    """What a form submitted with an out-of-date policy version left behind."""
 
-    assert not accept_shown_version(person, shown.version)
-    assert not PrivacyPolicyAcceptance.objects.filter(person=person).exists()
-    assert accept_shown_version(person, later.version)
-    assert PrivacyPolicyAcceptance.objects.filter(person=person, policy_version=later).exists()
+    response: object
+    person: Person
+    completed: Callable
 
 
-@pytest.mark.django_db
-def test_settings_stale_shown_version_is_not_accepted():
+def _publish_next_policy():
+    return publish_policy(material=True, body="Synthetic policy v2")
+
+
+def _stale_respond(action, *, json_reply=False):
+    def submit():
+        user, person, _household = make_member("owner")
+        client = Client()
+        client.force_login(user)
+        shown = _hidden_version(client.get(reverse("privacy-policy")).content, "version")
+        _publish_next_policy()
+        extra = {"HTTP_ACCEPT": "application/json"} if json_reply else {}
+
+        response = client.post(
+            reverse("privacy-policy-respond"),
+            {"action": action, "version": shown, "next": reverse("account-settings")},
+            **extra,
+        )
+
+        def completed():
+            if json_reply:
+                assert response.status_code == 409
+                assert response.json()["policy_url"] == reverse("privacy-policy")
+                return
+            assert response.status_code == 302
+            assert response.url == reverse("privacy-policy")
+            # The old version's own page offers no way to accept it any more.
+            stale_page = client.get(reverse("privacy-policy-version", args=(int(shown),)))
+            assert b"Accept this version" not in stale_page.content
+            assert b"Read the current version" in stale_page.content
+
+        return StaleSubmission(response, person, completed)
+
+    return submit
+
+
+def _stale_settings_ai():
     user, person, _household = make_member("owner")
-    publish_policy(material=True, body="Synthetic policy v1")
     client = Client()
     client.force_login(user)
     stamp_recent_auth(client)
     shown = _hidden_version(client.get(reverse("settings-ai")).content, "version")
-    later = publish_policy(material=True, body="Synthetic policy v2")
+    later = _publish_next_policy()
 
-    posted = client.post(
-        reverse("settings-ai"),
-        {"action": "accept-privacy-policy", "version": shown},
-    )
+    response = client.post(reverse("settings-ai"), {"action": "accept-privacy-policy", "version": shown})
 
-    assert posted.status_code == 200
-    assert not PrivacyPolicyAcceptance.objects.filter(person=person).exists()
-    assert f"Current version {later.version}".encode() in posted.content
-    assert f'name="version" value="{later.version}"'.encode() in posted.content
+    def completed():
+        assert response.status_code == 200
+        assert f"Current version {later.version}".encode() in response.content
+        assert f'name="version" value="{later.version}"'.encode() in response.content
+
+    return StaleSubmission(response, person, completed)
 
 
-@pytest.mark.django_db
-@override_settings(SETUP_CODE=SYNTHETIC_SETUP_CODE)
-def test_setup_stale_shown_version_finishes_without_acceptance():
+def _stale_setup():
     client = Client()
     shown = _hidden_version(client.get(reverse("setup")).content)
-    publish_policy(material=True, body="Synthetic policy v2")
+    _publish_next_policy()
 
-    created = client.post(
-        reverse("setup"),
-        _setup_form(accept_privacy_policy="on", privacy_policy_version=shown),
-    )
+    response = client.post(reverse("setup"), _setup_form(accept_privacy_policy="on", privacy_policy_version=shown))
 
     user = get_user_model().objects.get()
-    assert created.status_code == 200
-    assert PrivacyPolicyAcceptance.objects.filter(person=user.person).count() == 0
-    assert client.get(reverse("home")).status_code == 200
-    assert not in_acceptance(user.person)
+
+    def completed():
+        assert response.status_code == 200
+        assert client.get(reverse("home")).status_code == 200
+
+    return StaleSubmission(response, user.person, completed)
 
 
-@pytest.mark.django_db
-def test_join_stale_shown_version_finishes_without_acceptance():
-    inviter, person, household = make_member("owner")
+def _stale_join():
+    inviter, inviter_person, household = make_member("owner")
     client = Client()
     client.force_login(inviter)
     stamp_recent_auth(client)
-    code = create_invitation(person)
+    code = create_invitation(inviter_person)
     join_client = Client()
     shown = _hidden_version(join_client.get(reverse("join")).content)
-    publish_policy(material=True, body="Synthetic policy v2")
+    _publish_next_policy()
 
-    joined = join_client.post(
+    response = join_client.post(
         reverse("join"),
         {
             "invitation_code": code,
@@ -468,20 +449,22 @@ def test_join_stale_shown_version_finishes_without_acceptance():
     )
 
     new_user = get_user_model().objects.get(username="new-member")
-    assert joined.status_code == 200
-    assert PrivacyPolicyAcceptance.objects.filter(person=new_user.person).count() == 0
-    assert Membership.objects.filter(person=new_user.person, household=household, ended_at__isnull=True).exists()
+
+    def completed():
+        assert response.status_code == 200
+        assert Membership.objects.filter(person=new_user.person, household=household, ended_at__isnull=True).exists()
+
+    return StaleSubmission(response, new_user.person, completed)
 
 
-@pytest.mark.django_db
-def test_google_join_stale_shown_version_finishes_without_acceptance():
+def _stale_google_join():
     from tests.test_google_auth import _finish_google, _google_settings
 
-    inviter, person, _household = make_member("owner")
-    code = create_invitation(person)
+    _inviter, inviter_person, _household = make_member("owner")
+    code = create_invitation(inviter_person)
     client = Client()
     shown = _hidden_version(client.get(reverse("join")).content)
-    publish_policy(material=True, body="Synthetic policy v2")
+    _publish_next_policy()
 
     with _google_settings():
         start = client.post(
@@ -495,21 +478,22 @@ def test_google_join_stale_shown_version_finishes_without_acceptance():
                 "privacy_policy_version": shown,
             },
         )
-        joined = _finish_google(client, start)
+        response = _finish_google(client, start)
 
     new_user = get_user_model().objects.get(username="joined-google")
-    assert joined.status_code == 200
-    assert PrivacyPolicyAcceptance.objects.filter(person=new_user.person).count() == 0
+
+    def completed():
+        assert response.status_code == 200
+
+    return StaleSubmission(response, new_user.person, completed)
 
 
-@pytest.mark.django_db
-@override_settings(SETUP_CODE=SYNTHETIC_SETUP_CODE)
-def test_google_setup_stale_shown_version_finishes_without_acceptance():
+def _stale_google_setup():
     from tests.test_google_auth import _finish_google, _google_settings
 
     client = Client()
     shown = _hidden_version(client.get(reverse("setup")).content)
-    publish_policy(material=True, body="Synthetic policy v2")
+    _publish_next_policy()
 
     with _google_settings(SETUP_CODE=SYNTHETIC_SETUP_CODE):
         start = client.post(
@@ -524,31 +508,45 @@ def test_google_setup_stale_shown_version_finishes_without_acceptance():
                 "privacy_policy_version": shown,
             },
         )
-        created = _finish_google(client, start)
+        response = _finish_google(client, start)
 
     user = get_user_model().objects.get(username="first-google")
-    assert created.status_code == 200
-    assert PrivacyPolicyAcceptance.objects.filter(person=user.person).count() == 0
-    assert client.session.get("_auth_user_id")
 
+    def completed():
+        assert response.status_code == 200
+        assert client.session.get("_auth_user_id")
+
+    return StaleSubmission(response, user.person, completed)
+
+
+STALE_ENTRIES = {
+    "respond-accept": _stale_respond("accept"),
+    "respond-decline": _stale_respond("decline"),
+    "respond-json-accept": _stale_respond("accept", json_reply=True),
+    "respond-json-decline": _stale_respond("decline", json_reply=True),
+    "respond-json-dismiss": _stale_respond("dismiss", json_reply=True),
+    "settings-ai": _stale_settings_ai,
+    "setup": _stale_setup,
+    "join": _stale_join,
+    "google-join": _stale_google_join,
+    "google-setup": _stale_google_setup,
+}
 
 
 @pytest.mark.django_db
-def test_deny_on_a_stale_prompt_does_not_decline_the_new_version():
-    user, person, _household = make_member("owner")
-    shown = publish_policy(material=True, body="Synthetic policy v1")
-    later = publish_policy(material=True, body="Synthetic policy v2")
-    client = Client()
-    client.force_login(user)
+@override_settings(SETUP_CODE=SYNTHETIC_SETUP_CODE)
+@pytest.mark.parametrize("entry", STALE_ENTRIES.values(), ids=STALE_ENTRIES.keys())
+def test_stale_shown_version_is_never_recorded(entry):
+    submission = entry()
 
-    posted = client.post(
-        reverse("privacy-policy-respond"),
-        {"action": "decline", "version": str(shown.version), "next": reverse("home")},
-    )
-
-    assert posted.status_code == 302
+    person = submission.person
     person.refresh_from_db()
-    assert person.privacy_policy_declined_version_id != later.pk
+    assert not PrivacyPolicyAcceptance.objects.filter(person=person).exists()
+    assert person.privacy_policy_declined_version_id is None
+    assert person.privacy_policy_dismissed_version_id is None
+    assert not in_acceptance(person)
+    submission.completed()
+
 
 
 @pytest.mark.django_db
@@ -711,24 +709,6 @@ def test_household_status_query_count_does_not_grow_with_members(django_assert_n
     with django_assert_num_queries(2):
         status = household_consent_status(household)
     assert status["total"] == 9 and status["pending"] == 4
-
-
-@pytest.mark.django_db
-@pytest.mark.parametrize("action", ["accept", "decline", "dismiss"])
-def test_json_rejects_stale_policy_and_does_not_store_a_response(action):
-    user, person, _ = make_member("owner")
-    old = current_policy()
-    publish_policy(material=True, body="Synthetic new material policy")
-    client = Client()
-    client.force_login(user)
-    reply = client.post(reverse("privacy-policy-respond"),
-        {"action": action, "version": old.version}, HTTP_ACCEPT="application/json")
-    assert reply.status_code == 409
-    assert reply.json()["policy_url"] == reverse("privacy-policy")
-    assert not PrivacyPolicyAcceptance.objects.filter(person=person).exists()
-    person.refresh_from_db()
-    assert person.privacy_policy_declined_version_id is None
-    assert person.privacy_policy_dismissed_version_id is None
 
 
 @pytest.mark.django_db

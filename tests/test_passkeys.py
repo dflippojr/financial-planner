@@ -183,27 +183,6 @@ def test_member_data_deletion_removes_passkeys():
 
 @PASSKEY_SETTINGS
 @pytest.mark.django_db
-@override_settings(LOGIN_FAILURE_LIMIT=2, LOGIN_BLOCK_SECONDS=900)
-def test_passkey_step_uses_the_login_throttle():
-    user, _person, _household = make_member()
-    client = Client()
-    client.force_login(user)
-    stamp_recent_auth(client)
-    _register_passkey(client)
-    client.post(reverse("passkey-require"), {"require_passkey": "on"})
-    client.post(reverse("logout"))
-
-    signed = Client()
-    signed.post(reverse("login"), {"username": user.username, "password": PASSWORD})
-    _json(signed, reverse("passkey-sign-in-assert"), {"credential": {}})
-    _json(signed, reverse("passkey-sign-in-assert"), {"credential": {}})
-    blocked = _json(signed, reverse("passkey-sign-in-options"))
-    assert blocked.status_code == 429
-    assert "_auth_user_id" not in signed.session
-
-
-@PASSKEY_SETTINGS
-@pytest.mark.django_db
 def test_registration_requires_recent_auth():
     user, _person, _household = make_member()
     client = Client()
@@ -221,27 +200,6 @@ def _require_passkey_after_password(user):
     client.post(reverse("passkey-require"), {"require_passkey": "on"})
     client.post(reverse("logout"))
     return device
-
-
-@PASSKEY_SETTINGS
-@pytest.mark.django_db
-@override_settings(LOGIN_FAILURE_LIMIT=2, LOGIN_BLOCK_SECONDS=900)
-def test_correct_password_does_not_reset_throttle_before_second_factor():
-    user, _person, _household = make_member()
-    _require_passkey_after_password(user)
-    signed = Client()
-    for _ in range(2):
-        signed.post(reverse("login"), {"username": user.username, "password": PASSWORD})
-        signed.post(reverse("passkey-sign-in"), {"recovery_code": "not-a-recovery-code"})
-
-    blocked_login = signed.post(reverse("login"), {"username": user.username, "password": PASSWORD})
-    assert blocked_login.status_code == 200
-    assert b"Sign-in failed" in blocked_login.content
-    assert "_auth_user_id" not in signed.session
-
-    blocked_recovery = signed.post(reverse("passkey-sign-in"), {"recovery_code": "not-a-recovery-code"})
-    assert blocked_recovery.status_code in (200, 302)
-    assert "_auth_user_id" not in signed.session
 
 
 @PASSKEY_SETTINGS

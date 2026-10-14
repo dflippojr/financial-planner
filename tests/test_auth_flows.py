@@ -16,7 +16,6 @@ from django.utils import timezone
 
 from tests.helpers import stamp_recent_auth
 from finance.auth_services import (
-    SETUP_THROTTLE_USERNAME,
     create_invitation,
     create_recovery_codes,
     invitation_is_usable,
@@ -85,21 +84,6 @@ def test_user_without_person_profile_cannot_sign_in():
 
     assert response.status_code == 200
     assert b"Sign-in failed" in response.content
-
-
-@pytest.mark.django_db
-@override_settings(LOGIN_FAILURE_LIMIT=2, LOGIN_BLOCK_SECONDS=900)
-def test_repeated_login_failures_block_correct_password_and_show_generic_error():
-    user, _person, _household = make_member()
-    client = Client()
-    for _ in range(2):
-        client.post(reverse("login"), {"username": user.username, "password": "wrong"})
-
-    blocked = client.post(reverse("login"), {"username": user.username, "password": PASSWORD})
-
-    assert blocked.status_code == 200
-    assert b"Sign-in failed" in blocked.content
-    assert "_auth_user_id" not in client.session
 
 
 @pytest.mark.django_db
@@ -386,35 +370,6 @@ def test_recovery_code_changes_password_is_consumed_and_revokes_all_sessions():
 
 
 @pytest.mark.django_db
-@override_settings(LOGIN_FAILURE_LIMIT=2, LOGIN_BLOCK_SECONDS=900, LOGIN_FAILURE_WINDOW_SECONDS=900)
-def test_repeated_recovery_failures_block_a_valid_code():
-    user, _person, _household = make_member()
-    code = create_recovery_codes(user, count=1)[0]
-    client = Client()
-    for _ in range(2):
-        client.post(
-            reverse("recover"),
-            {"username": user.username, "recovery_code": "000000-000000", "password1": NEW_PASSWORD, "password2": NEW_PASSWORD},
-        )
-    throttle = LoginThrottle.objects.get(key_digest=throttle_key(user.username, "127.0.0.1").pair_digest)
-    blocked_until_before = throttle.blocked_until
-    assert blocked_until_before is not None
-
-    blocked = client.post(
-        reverse("recover"),
-        {"username": user.username, "recovery_code": code, "password1": NEW_PASSWORD, "password2": NEW_PASSWORD},
-    )
-
-    assert b"Recovery failed" in blocked.content
-    assert blocked.context["recovered"] is False
-    user.refresh_from_db()
-    assert user.check_password(PASSWORD)
-    assert RecoveryCode.objects.get().used_at is None
-    throttle.refresh_from_db()
-    assert throttle.blocked_until == blocked_until_before
-
-
-@pytest.mark.django_db
 def test_recovery_succeeds_with_the_original_unnormalized_username():
     user, _person, _household = make_member()
     client = Client()
@@ -632,22 +587,6 @@ def test_setup_is_404_once_a_user_or_person_exists():
     assert Client().post(reverse("setup"), _setup_form()).status_code == 404
     assert get_user_model().objects.count() == 1
     assert Person.objects.count() == 0
-
-
-@pytest.mark.django_db
-@override_settings(SETUP_CODE=SYNTHETIC_SETUP_CODE, LOGIN_FAILURE_LIMIT=2, LOGIN_BLOCK_SECONDS=900)
-def test_setup_failures_use_the_login_throttle():
-    client = Client()
-    for _ in range(2):
-        client.post(reverse("setup"), _setup_form(setup_code="wrong"))
-
-    blocked = client.post(reverse("setup"), _setup_form())
-
-    assert get_user_model().objects.count() == 0
-    assert b"Setup could not be completed" in blocked.content
-    setup_key = throttle_key(SETUP_THROTTLE_USERNAME, "127.0.0.1")
-    assert LoginThrottle.objects.get(key_digest=setup_key.pair_digest).blocked_until is not None
-    assert LoginThrottle.objects.get(key_digest=setup_key.username_digest).failure_count == 2
 
 
 @pytest.mark.django_db

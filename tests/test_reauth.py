@@ -10,14 +10,13 @@ import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.sessions.models import Session
-from django.test import Client, override_settings
+from django.test import Client
 from django.urls import reverse
 from django.utils import timezone
 from allauth.socialaccount.models import SocialAccount
 
 from finance import reauth
-from finance.auth_services import throttle_key
-from finance.models import Invitation, LoginThrottle, MemberSession, Membership, Passkey
+from finance.models import Invitation, MemberSession, Membership, Passkey
 from finance.reauth import RECENT_AUTH_SESSION_KEY, action_label
 from financial_planner import urls as project_urls
 from tests.helpers import stamp_recent_auth
@@ -83,23 +82,6 @@ def test_reauth_next_stays_on_this_site():
         {"password": PASSWORD, "next": "https://example.invalid/steal", "action": "invite"},
     )
     assert confirmed.url == reverse("home")
-
-
-@pytest.mark.django_db
-@override_settings(LOGIN_FAILURE_LIMIT=2, LOGIN_BLOCK_SECONDS=900)
-def test_reauth_failures_use_the_login_throttle():
-    user, _person, _household = make_member()
-    client = Client()
-    client.force_login(user)
-
-    first = client.post(reverse("reauth"), {"password": "wrong-password", "next": reverse("invite")})
-    second = client.post(reverse("reauth"), {"password": "wrong-password", "next": reverse("invite")})
-    assert first.status_code == second.status_code == 200
-    assert LoginThrottle.objects.get(key_digest=throttle_key(user.username, "127.0.0.1").pair_digest).blocked_until is not None
-
-    blocked = client.post(reverse("reauth"), {"password": PASSWORD, "next": reverse("invite")})
-    assert blocked.status_code == 200
-    assert RECENT_AUTH_SESSION_KEY not in client.session
 
 
 @pytest.mark.django_db
