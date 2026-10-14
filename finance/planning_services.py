@@ -9,7 +9,16 @@ from .access import require_person as _person
 from .cash_flow import cash_flow_report, selected_accounts
 from .category_services import current_household, exclusion_exists_for
 from .audit_services import changed_names, owned_audience, record, snapshot
-from .models import Account, AuditEvent, PlannedItem, RecurringSeries, RecurringSeriesMember, SavingsGoal, Transaction
+from .models import (
+    Account,
+    AuditEvent,
+    Membership,
+    PlannedItem,
+    RecurringSeries,
+    RecurringSeriesMember,
+    SavingsGoal,
+    Transaction,
+)
 from .projection import (
     DEFAULT_HORIZON,
     KIND_EXPENSE,
@@ -66,6 +75,35 @@ def confine_recurring_series_to_accounts(series_qs, accounts):
     return series_qs.exclude(Exists(hidden))
 
 
+def _household_member_ids(principal):
+    person = _person(principal, check_authenticated=False)
+    household = current_household(person)
+    if household is None:
+        return [person.pk]
+    return list(
+        Membership.objects.filter(household=household, ended_at__isnull=True, person__isnull=False).values_list(
+            "person_id", flat=True
+        )
+    )
+
+
+def _one_series_per_bill(rows, replaced):
+    """Collapse members' series for one merchant and cadence into a single bill.
+
+    Two members may each confirm the same joint bill; it must project once.
+    The series with the latest charge wins (it holds the current price), then
+    the lowest id. A planned item replacing any of them replaces the bill.
+    """
+    replaced_bills = {(row.merchant_key, row.cadence) for row in rows if row.pk in replaced}
+    chosen = {}
+    for row in sorted(rows, key=lambda row: (row.last_on is None, -(row.last_on.toordinal() if row.last_on else 0), row.pk)):
+        chosen.setdefault((row.merchant_key, row.cadence), row)
+    return sorted(
+        (row for key, row in chosen.items() if key not in replaced_bills),
+        key=lambda row: (row.display_name, row.pk),
+    )
+
+
 def visible_projection_inputs(principal, *, account=None, scope="", accounts=None, include_household=True):
     """Planned items and confirmed series behind the projection.
 
@@ -117,13 +155,22 @@ def visible_projection_inputs(principal, *, account=None, scope="", accounts=Non
     )
     if selection is not None:
         eligible = eligible.filter(account__in=selection)
-    series = RecurringSeries.objects.visible_to(principal).filter(
+    if household_only:
+        # Series are stored per person, so a household selection reads every
+        # member's series whose charges all sit in the selected household
+        # accounts. Every member then projects the same bills.
+        series = RecurringSeries.objects.filter(person_id__in=_household_member_ids(principal))
+    else:
+        series = RecurringSeries.objects.visible_to(principal)
+    series = series.filter(
         status=RecurringSeries.Status.CONFIRMED,
         is_active=True,
         cancelled_at__isnull=True,
         members__transaction__in=eligible,
     )
-    if not include_household or accounts is not None:
+    if household_only:
+        series = confine_recurring_series_to_accounts(series, selection)
+    elif not include_household or accounts is not None:
         # Report filters select eligible charges; the allowed account set
         # independently protects every member behind a series's typical amount.
         # Earlier charges on another authorized account must not erase a series
@@ -134,11 +181,13 @@ def visible_projection_inputs(principal, *, account=None, scope="", accounts=Non
             accounts=accounts,
         )
         series = confine_recurring_series_to_accounts(series, allowed)
-    series_rows = (
-        series.exclude(pk__in=replaced)
-        .annotate(last_on=Max("members__transaction__transaction_date"))
-        .order_by("display_name", "pk")
+    series_rows = list(
+        series.annotate(last_on=Max("members__transaction__transaction_date")).order_by("display_name", "pk")
     )
+    if household_only:
+        series_rows = _one_series_per_bill(series_rows, replaced)
+    else:
+        series_rows = [row for row in series_rows if row.pk not in replaced]
     for series in series_rows:
         if series.last_on is None:
             continue

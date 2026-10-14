@@ -6,6 +6,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.test import Client
+from django.utils import timezone
 from django.urls import reverse
 
 from finance.models import (
@@ -17,10 +18,13 @@ from finance.models import (
     Membership,
     Person,
     PlannedItem,
+    RecurringSeries,
+    RecurringSeriesMember,
     SavingsGoal,
     Transaction,
 )
-from finance.planning_services import projected_months_for
+from finance.bills_calendar import calendar_inputs
+from finance.planning_services import projected_months_for, visible_projection_inputs
 from finance.savings_goal_plan import (
     ALREADY_FUNDED,
     BEYOND_HORIZON,
@@ -401,6 +405,127 @@ def test_household_plan_is_identical_for_every_member_whatever_private_data_exis
 
     assert after_owner == after_member == before_owner
     assert [name for name, *_ in after_member[0]] == ["Shared sofa"]
+
+
+def confirm_series(person, name, account, *, months=(7, 8, 9), amount_minor=300_000, fingerprint_tag=""):
+    series = RecurringSeries.objects.create(
+        person=person,
+        merchant_key=name.casefold(),
+        display_name=name,
+        cadence=RecurringSeries.Cadence.MONTHLY,
+        typical_amount_minor=-amount_minor,
+        status=RecurringSeries.Status.CONFIRMED,
+        confidence=RecurringSeries.Confidence.HIGH,
+        reasons=["synthetic"],
+        fingerprint=f"{person.pk}-{name}-{fingerprint_tag}".encode().hex().ljust(64, "b")[:64],
+    )
+    batch = ImportBatch.objects.create(
+        account=account,
+        imported_by=person,
+        source=ImportBatch.Source.HUNTINGTON,
+        source_file_sha256=f"{series.pk:064x}",
+        date_range_start=date(2026, 1, 1),
+        date_range_end=date(2026, 12, 28),
+    )
+    for index, month in enumerate(months):
+        row = Transaction.objects.create(
+            account=account,
+            import_batch=batch,
+            transaction_date=date(2026, month, 20),
+            amount_minor=-amount_minor,
+            description=name,
+            kind=Transaction.Kind.CASH_FLOW,
+            source_row_number=index + 2,
+            fingerprint=f"{series.pk}-{month}-{name}".encode().hex().ljust(64, "c")[:64],
+            original_fields={"Synthetic Amount": str(-amount_minor)},
+        )
+        RecurringSeriesMember.objects.create(series=series, transaction=row)
+    return series
+
+
+def household_series_names(principal):
+    return sorted(
+        item.name
+        for item in visible_projection_inputs(principal, scope="household")
+        if item.source == "series"
+    )
+
+
+@pytest.mark.django_db
+def test_household_plan_is_identical_when_only_one_member_confirmed_a_household_bill():
+    owner, member, household = household_fixture()
+    shared = Account.objects.get(name="Synthetic Joint")
+    before = summary(build_funding_plan(owner.user, today=TODAY, scope="household"))
+    confirm_series(owner, "Synthetic Electric", shared)
+
+    owner_plan = build_funding_plan(owner.user, today=TODAY, scope="household")
+    member_plan = build_funding_plan(member.user, today=TODAY, scope="household")
+
+    assert summary(owner_plan) == summary(member_plan)
+    assert summary(member_plan) != before, "the household bill should reduce the surplus for everyone"
+
+
+@pytest.mark.django_db
+def test_household_projection_counts_a_bill_both_members_confirmed_once():
+    owner, member, household = household_fixture()
+    # A fixed buffer keeps the second member's charges out of the default buffer.
+    household.savings_buffer_minor = 0
+    household.save(update_fields=("savings_buffer_minor",))
+    shared = Account.objects.get(name="Synthetic Joint")
+    confirm_series(owner, "Synthetic Electric", shared)
+    owner_only = summary(build_funding_plan(member.user, today=TODAY, scope="household"))
+
+    confirm_series(member, "Synthetic Electric", shared)
+
+    assert household_series_names(owner.user) == household_series_names(member.user) == ["Synthetic Electric"]
+    assert summary(build_funding_plan(owner.user, today=TODAY, scope="household")) == owner_only
+
+
+@pytest.mark.django_db
+def test_dismissed_or_cancelled_series_stay_out_of_the_household_projection_for_everyone():
+    owner, member, household = household_fixture()
+    shared = Account.objects.get(name="Synthetic Joint")
+    cancelled = confirm_series(owner, "Synthetic Cancelled", shared)
+    RecurringSeries.objects.filter(pk=cancelled.pk).update(cancelled_at=timezone.now())
+    dismissed = confirm_series(member, "Synthetic Dismissed", shared)
+    RecurringSeries.objects.filter(pk=dismissed.pk).update(status=RecurringSeries.Status.DISMISSED)
+
+    assert household_series_names(owner.user) == household_series_names(member.user) == []
+
+
+@pytest.mark.django_db
+def test_private_account_series_never_reach_a_household_projection():
+    owner, member, household = household_fixture()
+    shared = Account.objects.get(name="Synthetic Joint")
+    private_account = make_account(owner, name=SECRET_ACCOUNT)
+    confirm_series(owner, "Synthetic Private Bill", private_account)
+    mixed = confirm_series(owner, "Synthetic Mixed Bill", shared, months=(7, 8))
+    private_row = Transaction.objects.filter(account=private_account).first()
+    RecurringSeriesMember.objects.create(series=mixed, transaction=private_row)
+    before = summary(build_funding_plan(member.user, today=TODAY, scope="household"))
+
+    assert household_series_names(owner.user) == household_series_names(member.user) == []
+    assert summary(build_funding_plan(owner.user, today=TODAY, scope="household")) == before
+    assert not any(
+        item.source == "series"
+        for item in visible_projection_inputs(member.user, scope="household")
+    )
+
+
+@pytest.mark.django_db
+def test_household_bills_calendar_and_projection_match_for_every_member():
+    owner, member, household = household_fixture()
+    shared = Account.objects.get(name="Synthetic Joint")
+    confirm_series(owner, "Synthetic Electric", shared)
+
+    def view(person):
+        return (
+            [(row.name, row.amount_minor, row.start) for row in calendar_inputs(person.user, scope="household")],
+            [(m.start, m.income_minor, m.spending_minor) for m in projected_months_for(person.user, today=TODAY, scope="household")],
+        )
+
+    assert view(owner) == view(member)
+    assert any(name == "Synthetic Electric" for name, *_ in view(member)[0])
 
 
 SECRET_ACCOUNT = "Owner Secret Vault"
