@@ -3,6 +3,7 @@ from django.core.exceptions import PermissionDenied
 from django.core.management.base import CommandError
 
 from finance.lifecycle_services import end_current_membership
+from finance.auth_services import normalize_username
 from finance.models import Person
 
 
@@ -19,7 +20,7 @@ class Command(AuditedCommand):
     def handle(self, *args, **options):
         username = options["username"]
         try:
-            person = Person.objects.select_related("user").get(user__username=username)
+            person = Person.objects.select_related("user").get(user__username=normalize_username(username))
         except Person.DoesNotExist as exc:
             raise CommandError("Unknown username.") from exc
         try:

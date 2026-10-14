@@ -3,6 +3,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.management.base import CommandError
 
 from finance.lifecycle_services import LENT_CHOICES, delete_member_data, lent_household_accounts
+from finance.auth_services import normalize_username
 from finance.models import Person
 
 
@@ -29,7 +30,7 @@ class Command(AuditedCommand):
         if typed != username:
             raise CommandError("Confirmation did not match.")
         try:
-            person = Person.objects.select_related("user").get(user__username=username)
+            person = Person.objects.select_related("user").get(user__username=normalize_username(username))
         except Person.DoesNotExist as exc:
             raise CommandError("Unknown username.") from exc
         lent_choices = self._lent_choices(options["lent"])
