@@ -74,6 +74,38 @@ def test_bad_files(content, message):
         read_ofx(content)
 
 
+def _statement(wrapper, statement, account, fitid):
+    return (
+        f"<{wrapper}><{statement}><CURDEF>USD\n"
+        f"<BANKACCTFROM><BANKID>999999999<ACCTID>{account}<ACCTTYPE>CHECKING</BANKACCTFROM>\n"
+        "<BANKTRANLIST><DTSTART>20260901<DTEND>20260930\n"
+        f"<STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20260927<TRNAMT>-12.34<FITID>{fitid}<NAME>SYNTHETIC</STMTTRN>\n"
+        f"</BANKTRANLIST></{statement}></{wrapper}>\n"
+    ).encode()
+
+
+def _multi_statement_file(first, second):
+    return (b"OFXHEADER:100\nDATA:OFXSGML\nVERSION:102\n<OFX>" + first + second + b"</OFX>\n")
+
+
+MULTI_STATEMENT_FILES = {
+    "bank+bank": _multi_statement_file(
+        _statement("STMTTRNRS", "STMTRS", "SYNTHETIC-CHECKING", "chk-1"),
+        _statement("STMTTRNRS", "STMTRS", "SYNTHETIC-SAVINGS", "sav-1"),
+    ),
+    "bank+card": _multi_statement_file(
+        _statement("STMTTRNRS", "STMTRS", "SYNTHETIC-CHECKING", "chk-1"),
+        _statement("CCSTMTTRNRS", "CCSTMTRS", "SYNTHETIC-CARD", "card-1"),
+    ),
+}
+
+
+@pytest.mark.parametrize("content", MULTI_STATEMENT_FILES.values(), ids=MULTI_STATEMENT_FILES.keys())
+def test_multi_statement_files_are_rejected(content):
+    with pytest.raises(CsvInputError, match="2 account statements. Download one account at a time"):
+        read_ofx(content)
+
+
 def test_row_limit_and_legacy_encoding():
     with pytest.raises(CsvInputError, match="5 MB limit"):
         read_ofx(b"x" * (MAX_FILE_BYTES + 1))
@@ -311,6 +343,7 @@ def test_import_reimport_and_undo(import_client, name, account_type):
     (b"broken", "ofx", "not a valid"),
     (b"<OFX><INVSTMTRS/></OFX>", "ofx", "no bank or card transactions"),
     (fixture().replace(b"<CURDEF>USD", b"<CURDEF>EUR"), "ofx", "Currency must be USD"),
+    (MULTI_STATEMENT_FILES["bank+card"], "ofx", "Download one account at a time"),
     (b"Date,Amount,Name\n2026-09-27,-12.34,Example", "ofx", "not a valid"),
     (fixture(), "generic", "Choose the OFX / QFX profile"),
     (fixture(), "huntington", "Choose the OFX / QFX profile"),

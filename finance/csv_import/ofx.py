@@ -184,14 +184,21 @@ def _currency_error(statement_currencies, transaction):
 
 def read_ofx(content: bytes, *, max_rows=MAX_DATA_ROWS) -> CsvDocument:
     root = _tree(_decode(content))
+    statements = [item for tag in ("STMTRS", "CCSTMTRS") for item in root.iter(tag)]
+    if len(statements) > 1:
+        # One import targets one app account; rows from another statement would
+        # land in the wrong ledger, and the account fields are never retained.
+        raise CsvInputError(
+            f"This file contains {len(statements)} account statements. "
+            "Download one account at a time."
+        )
     rows = []
-    for statement_tag in ("STMTRS", "CCSTMTRS"):
-        for statement in root.iter(statement_tag):
-            currencies = [_value(statement, "CURDEF")] + _currencies(statement)
-            for transaction in statement.findall("BANKTRANLIST/STMTTRN"):
-                if len(rows) >= max_rows:
-                    raise CsvInputError(f"The statement file exceeds the {max_rows:,} row limit.")
-                rows.append(_row(currencies, transaction, len(rows) + 2))
+    for statement in statements:
+        currencies = [_value(statement, "CURDEF")] + _currencies(statement)
+        for transaction in statement.findall("BANKTRANLIST/STMTTRN"):
+            if len(rows) >= max_rows:
+                raise CsvInputError(f"The statement file exceeds the {max_rows:,} row limit.")
+            rows.append(_row(currencies, transaction, len(rows) + 2))
     if not rows:
         raise CsvInputError("This file has no bank or card transactions")
     return CsvDocument(OFX_HEADERS, tuple(rows))
