@@ -302,6 +302,9 @@ def unshare_account(principal, account_id):
     from finance.category_services import revalidate_pairs_touching_account
 
     revalidate_pairs_touching_account(person, account_id)
+    from finance.chat_services import delete_conversations_without_access
+
+    delete_conversations_without_access((account.pk,))
 
 
 @transaction.atomic
@@ -391,6 +394,9 @@ def end_current_membership(person, *, audit_actor=None):
     # Plan links through another member's harness only last while both share a household.
     AiPlanLink.objects.filter(person=person).exclude(connection__owner=person).delete()
     AiPlanLink.objects.filter(connection__owner=person).exclude(person=person).delete()
+    from finance.chat_services import delete_conversations_without_access
+
+    delete_conversations_without_access(account.pk for account in household_accounts)
     if audit_actor is not None:
         append_event(action=AuditEvent.Action.MEMBER_LEFT, actor=audit_actor, affected_member=person,
                      household=own_membership.household, target_id=person.pk)
