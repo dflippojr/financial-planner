@@ -1096,7 +1096,7 @@ def test_popover_fetch_errors_do_not_redirect_or_select_another_conversation(har
 
 
 @pytest.mark.django_db
-def test_popover_consent_backend_and_csrf_gates(harness):
+def test_popover_consent_and_backend_gates(harness):
     _state, url = harness
     user, person, _ = make_member("popover-gated")
     client = Client()
@@ -1106,9 +1106,6 @@ def test_popover_consent_backend_and_csrf_gates(harness):
     connect_harness(person, base_url=url, token=TOKEN)
     assert 'id="ai-popover"' in client.get(reverse("home")).content.decode()
     assert client.get(reverse("chat-popover")).json()["conversationId"] is None
-    strict = Client(enforce_csrf_checks=True)
-    strict.force_login(user)
-    assert strict.post(reverse("chat-send"), {"prompt": "Synthetic"}, HTTP_ACCEPT="application/json").status_code == 403
     publish_policy(material=True, body="Synthetic renewed policy")
     assert 'id="ai-popover"' not in client.get(reverse("home")).content.decode()
     assert client.get(reverse("chat-popover")).status_code == 403

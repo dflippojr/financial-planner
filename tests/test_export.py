@@ -403,7 +403,7 @@ def test_export_view_streams_zip_without_storing_cache_or_logging_content(caplog
 
 
 @pytest.mark.django_db
-def test_export_requires_auth_post_and_csrf():
+def test_export_requires_auth_and_post():
     owner = make_person("owner")
     make_household(owner)
     anonymous = Client().post(reverse("account-export"))
@@ -411,17 +411,10 @@ def test_export_requires_auth_post_and_csrf():
     logged.force_login(owner.user)
     stamp_recent_auth(logged)
     get_denied = logged.get(reverse("account-export"))
-    csrf_client = Client(enforce_csrf_checks=True)
-    csrf_client.force_login(owner.user)
-    stamp_recent_auth(csrf_client)
-    csrf_client.get(reverse("settings-data"))
-    token = csrf_client.cookies["csrftoken"].value
-    denied = csrf_client.post(reverse("account-export"))
-    allowed = csrf_client.post(reverse("account-export"), {"csrfmiddlewaretoken": token})
+    allowed = logged.post(reverse("account-export"))
 
     assert anonymous.status_code == 302
     assert get_denied.status_code == 405
-    assert denied.status_code == 403
     assert allowed.status_code == 200
 
 

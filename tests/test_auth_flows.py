@@ -1,5 +1,6 @@
 import logging
 import threading
+import uuid
 from datetime import timedelta
 from io import StringIO
 from unittest.mock import patch
@@ -14,6 +15,7 @@ from django.test import Client, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
+from financial_planner import urls as project_urls
 from tests.helpers import stamp_recent_auth
 from finance.auth_services import (
     create_invitation,
@@ -424,12 +426,26 @@ def test_first_user_command_rejects_a_username_that_is_invalid_once_normalized()
     assert get_user_model().objects.count() == 0
 
 
-@pytest.mark.django_db
-def test_login_form_enforces_csrf():
-    client = Client(enforce_csrf_checks=True)
-    response = client.post(reverse("login"), {"username": "nobody", "password": "invalid"})
+def _named_route_urls():
+    sample = {"IntConverter": 1, "UUIDConverter": uuid.UUID(int=1)}
+    for pattern in project_urls.urlpatterns:
+        if pattern.name:
+            kwargs = {name: sample.get(type(c).__name__, "sample") for name, c in pattern.pattern.converters.items()}
+            yield pattern.name, reverse(pattern.name, kwargs=kwargs)
 
-    assert response.status_code == 403
+
+@pytest.mark.django_db
+def test_a_post_without_a_csrf_token_is_refused_on_every_named_route():
+    # Every named route, not only the state-changing ones, so a new view cannot opt out by accident.
+    user, _person, _household = make_member()
+    client = Client(enforce_csrf_checks=True)
+    client.force_login(user)
+    routes = dict(_named_route_urls())
+
+    accepted = [name for name, url in routes.items() if client.post(url).status_code != 403]
+
+    assert len(routes) > 100
+    assert accepted == []
 
 
 @pytest.mark.django_db

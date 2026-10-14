@@ -712,13 +712,8 @@ def test_household_status_query_count_does_not_grow_with_members(django_assert_n
 
 
 @pytest.mark.django_db
-def test_policy_json_requires_csrf_and_rejects_unknown_actions():
+def test_policy_json_rejects_unknown_actions():
     user, _person, _ = make_member("owner")
-    protected = Client(enforce_csrf_checks=True)
-    protected.force_login(user)
-    assert protected.post(reverse("privacy-policy-respond"),
-        {"action": "accept", "version": current_policy().version},
-        HTTP_ACCEPT="application/json").status_code == 403
     ordinary = Client()
     ordinary.force_login(user)
     assert ordinary.post(reverse("privacy-policy-respond"),

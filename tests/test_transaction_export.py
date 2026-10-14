@@ -151,7 +151,7 @@ def test_invalid_filters_have_no_rows_or_events(filters):
     assert not MemberSecurityEvent.objects.filter(event_type="member_data_export").exists()
 
 
-def test_auth_csrf_reauth_resubmission_and_empty_header():
+def test_auth_reauth_resubmission_and_empty_header():
     owner = make_person("owner")
     account = make_account(owner)
     make_transaction(owner, account)
@@ -173,9 +173,6 @@ def test_auth_csrf_reauth_resubmission_and_empty_header():
     _, rows, payload = download(client, {"q": "No synthetic match"})
     assert rows == []
     assert next(csv.reader(io.StringIO(payload))) == list(CSV_COLUMNS)
-    csrf_client = Client(enforce_csrf_checks=True)
-    csrf_client.force_login(owner.user)
-    assert csrf_client.post(reverse("transaction-export")).status_code == 403
     page = client.get(reverse("transaction-list"), filters).content.decode()
     assert 'action="/transactions/export/"' in page
     assert 'id="transaction-export-help"' in page
