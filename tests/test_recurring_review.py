@@ -709,3 +709,54 @@ def test_a_shared_cancelled_series_does_not_offer_keep_cancelled():
     assert "Keep cancelled" not in html
     client.force_login(series.person.user)
     assert "Keep cancelled" in client.get(reverse("recurring-review")).content.decode()
+
+
+def _chain_of_copies():
+    owner, member, _outsider, first = _shared_bill()
+    third = make_person("third")
+    Membership.objects.create(person=third, household=Household.objects.get(name="Synthetic Household"))
+    shared = first.members.first().transaction.account
+    extra = [
+        make_transaction(owner, shared, transaction_date=date(2026, 6, 12), amount_minor=-6000, description="Synthetic Internet"),
+        make_transaction(owner, shared, transaction_date=date(2026, 5, 12), amount_minor=-6000, description="Synthetic Internet"),
+    ]
+    first_txns = [row.transaction for row in first.members.all()]
+    # first covers t0..t2, middle covers t2 and the June charge, last covers June and May: first and last are disjoint.
+    middle = make_series(member, name="Synthetic Internet", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-6000)
+    last = make_series(third, name="Synthetic Internet", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-6000)
+    add_member(middle, first_txns[-1])
+    add_member(middle, extra[0])
+    add_member(last, extra[0])
+    add_member(last, extra[1])
+    return owner, member, third, [first, middle, last]
+
+
+@pytest.mark.django_db
+def test_cancel_and_resume_cover_every_copy_of_a_chained_bill():
+    _owner, member, _third, copies = _chain_of_copies()
+
+    cancel_recurring_series(member, copies[1].pk)
+    assert all(RecurringSeries.objects.get(pk=copy.pk).cancelled_at is not None for copy in copies)
+
+    undo_cancel_recurring_series(member, copies[1].pk)
+    assert all(RecurringSeries.objects.get(pk=copy.pk).cancelled_at is None for copy in copies)
+
+
+@pytest.mark.django_db
+@patch("finance.views.timezone.localdate", return_value=TODAY)
+@patch("finance.recurring_services.timezone.localdate", return_value=TODAY)
+def test_recurring_page_counts_a_chained_bill_once(_refresh, _view):
+    _owner, member, _third, copies = _chain_of_copies()
+    # The member's own copy bridges the two shared ones, so only it shows.
+    client = Client()
+    client.force_login(member.user)
+    page = client.get(reverse("recurring-review"))
+    assert [row.pk for row in page.context["confirmed"]] == [copies[1].pk]
+
+    # A viewer with no copy of their own sees a bridged pair once, not twice.
+    fourth = make_person("fourth")
+    Membership.objects.create(person=fourth, household=Household.objects.get(name="Synthetic Household"))
+    other = Client()
+    other.force_login(fourth.user)
+    shown = other.get(reverse("recurring-review")).context["confirmed"]
+    assert len(shown) == 1
