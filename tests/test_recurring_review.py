@@ -792,3 +792,29 @@ def test_shared_bill_row_is_the_copy_with_the_latest_charge_and_cancelled_copies
     add_member(bridge, older.members.first().transaction)
     shown = client.get(reverse("recurring-review")).context["confirmed"]
     assert len(shown) == 1
+
+
+@pytest.mark.django_db
+def test_a_series_with_a_private_charge_does_not_link_household_bills_when_cancelling():
+    owner, member, _outsider, household_bill = _shared_bill()
+    private = make_account(member, name="Member Private")
+    mixed = make_series(member, name="Synthetic Mixed", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-6000)
+    add_member(mixed, household_bill.members.first().transaction)
+    add_member(mixed, make_transaction(member, private, description="Private", amount_minor=-6000))
+
+    cancel_recurring_series(member, mixed.pk)
+
+    household_bill.refresh_from_db()
+    assert RecurringSeries.objects.get(pk=mixed.pk).cancelled_at is not None
+    assert household_bill.cancelled_at is None
+
+
+@pytest.mark.django_db
+def test_a_shared_bill_whose_household_account_is_archived_is_not_offered():
+    owner, member, _outsider, series = _shared_bill()
+    assert RecurringSeries.objects.shared_with(member).filter(pk=series.pk).exists()
+    account = series.members.first().transaction.account
+    account.status = Account.Status.ARCHIVED
+    account.archived_at = timezone.now()
+    account.save(update_fields=["status", "archived_at"])
+    assert not RecurringSeries.objects.shared_with(member).filter(pk=series.pk).exists()

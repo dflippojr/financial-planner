@@ -1162,7 +1162,13 @@ class RecurringSeries(models.Model):
             outside = RecurringSeriesMember.objects.filter(series_id=models.OuterRef("pk")).exclude(
                 transaction__account_id__in=household_accounts, transaction_id__in=visible_transactions
             )
-            has_members = RecurringSeriesMember.objects.filter(series_id=models.OuterRef("pk"))
+            # A stale `is_active` flag on another member's row is not trusted:
+            # the bill must still have a charge on an active account.
+            has_members = RecurringSeriesMember.objects.filter(
+                series_id=models.OuterRef("pk"),
+                transaction__status=Transaction.Status.ACTIVE,
+                transaction__account__status=Account.Status.ACTIVE,
+            )
             return (
                 self.filter(person_id__in=member_ids, status=RecurringSeries.Status.CONFIRMED)
                 .exclude(person=person)

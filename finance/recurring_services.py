@@ -16,7 +16,7 @@ from .access import require_person as _person_for
 from .category_services import exclusion_exists_for
 from .audit_services import personal_audience, record
 from .lifecycle_services import lock_actor_household
-from .models import AuditEvent, Person, RecurringExclusion, RecurringSeries, RecurringSeriesMember, Transaction
+from .models import Account, AuditEvent, Person, RecurringExclusion, RecurringSeries, RecurringSeriesMember, Transaction
 from .months import add_months_clamped
 
 MANUAL_REASON = "grouping edited manually"
@@ -1286,7 +1286,7 @@ def shared_series_for_review(principal, own_series):
     candidates = [
         series
         for series in [*own_series, *shared]
-        if series.status == RecurringSeries.Status.CONFIRMED and series.is_active
+        if series.status == RecurringSeries.Status.CONFIRMED and series.is_active and _household_only(series)
     ]
     rows = []
     # Group over active and cancelled copies together, so a cancelled copy
@@ -1309,14 +1309,27 @@ def _latest_charge_ordinal(series):
     return -max(dates, default=0)
 
 
+def _household_only(series):
+    """True when every charge sits in a household account; a private history never links bills."""
+    return all(member.transaction.account.scope == Account.Scope.HOUSEHOLD for member in series.members.all())
+
+
 def _bill_copies(person, series):
-    """The series the person may act on that belong to the same bill as `series`, itself included."""
-    candidates = list(
-        RecurringSeries.objects.actionable_by(person)
+    """The series the person may act on that belong to the same bill as `series`, itself included.
+
+    Like the projection, only series built wholly from household charges
+    link into one bill; a series with a private charge acts alone.
+    """
+    candidates = [
+        copy
+        for copy in RecurringSeries.objects.actionable_by(person)
         .filter(status=RecurringSeries.Status.CONFIRMED, is_active=True)
-        .prefetch_related("members")
+        .prefetch_related("members__transaction__account")
         .order_by("pk")
-    )
+        if copy.pk == series.pk or _household_only(copy)
+    ]
+    if not _household_only(next(copy for copy in candidates if copy.pk == series.pk)):
+        return [series]
     for bill in _bill_components(candidates):
         if any(copy.pk == series.pk for copy in bill):
             return bill
