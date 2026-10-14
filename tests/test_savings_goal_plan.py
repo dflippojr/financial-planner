@@ -931,3 +931,24 @@ def test_calendar_links_another_members_household_bill_to_its_latest_charge():
 
     assert bill_url(owner) == f"{reverse('recurring-review')}#series-{series.pk}"
     assert bill_url(member) == reverse("transaction-edit", args=[latest.pk])
+
+
+@pytest.mark.django_db
+def test_a_cancelled_series_still_links_the_histories_it_bridges():
+    owner, member, household = household_fixture()
+    shared = Account.objects.get(name="Synthetic Joint")
+    early = make_confirmed_series(owner, "Synthetic Electric", shared, months=(1, 2, 3, 4))
+    late = make_confirmed_series(member, "Synthetic Electric", shared, months=(7, 8, 9), amount_minor=310_000)
+    bridge = make_confirmed_series(member, "Synthetic Electric", shared, months=(5,), amount_minor=305_000)
+    RecurringSeriesMember.objects.filter(series=bridge).delete()
+    RecurringSeriesMember.objects.create(
+        series=bridge, transaction=early.members.order_by("transaction__transaction_date").last().transaction
+    )
+    RecurringSeriesMember.objects.create(
+        series=bridge, transaction=late.members.order_by("transaction__transaction_date").first().transaction
+    )
+    RecurringSeries.objects.filter(pk=bridge.pk).update(cancelled_at=timezone.now())
+
+    for person in (owner, member):
+        items = [i for i in visible_projection_inputs(person.user, scope="household") if i.source == "series"]
+        assert len(items) == 1

@@ -95,7 +95,7 @@ def _charge_ids_by_series(series_ids):
     return charges
 
 
-def _one_series_per_bill(rows, replaced):
+def _one_series_per_bill(rows, replaced, member_ids):
     """Collapse members' series for one joint bill into a single series.
 
     Two members may each confirm the same household bill; it must project
@@ -105,11 +105,17 @@ def _one_series_per_bill(rows, replaced):
     stay. The series with the latest charge wins (it holds the current
     price), then the lowest id. A planned item replacing a series replaces the
     whole bill, even when that series is no longer active, because its charges
-    still identify the bill.
+    still identify the bill. A confirmed series that is cancelled or inactive
+    still links the histories it shares charges with.
     """
-    charges = _charge_ids_by_series([row.pk for row in rows] + list(replaced))
+    bridges = list(
+        RecurringSeries.objects.filter(person_id__in=member_ids, status=RecurringSeries.Status.CONFIRMED)
+        .exclude(pk__in=[row.pk for row in rows])
+        .values_list("pk", flat=True)
+    )
+    charges = _charge_ids_by_series([row.pk for row in rows] + list(replaced) + bridges)
     replaced_charges = set().union(*(charges.get(pk, set()) for pk in replaced)) if replaced else set()
-    parent = {row.pk: row.pk for row in rows}
+    parent = {pk: pk for pk in [row.pk for row in rows] + bridges}
 
     def find(pk):
         while parent[pk] != pk:
@@ -118,12 +124,12 @@ def _one_series_per_bill(rows, replaced):
         return pk
 
     first_owner = {}
-    for row in rows:
-        for charge_id in charges.get(row.pk, ()):
+    for pk in parent:
+        for charge_id in charges.get(pk, ()):
             if charge_id in first_owner:
-                parent[find(row.pk)] = find(first_owner[charge_id])
+                parent[find(pk)] = find(first_owner[charge_id])
             else:
-                first_owner[charge_id] = row.pk
+                first_owner[charge_id] = pk
     bills = {}
     for row in rows:
         bills.setdefault(find(row.pk), []).append(row)
@@ -195,7 +201,8 @@ def visible_projection_inputs(principal, *, account=None, scope="", accounts=Non
         # Series are stored per person, so a household selection reads every
         # member's series whose charges all sit in the selected household
         # accounts. Every member then projects the same bills.
-        series = RecurringSeries.objects.filter(person_id__in=_household_member_ids(principal))
+        member_ids = _household_member_ids(principal)
+        series = RecurringSeries.objects.filter(person_id__in=member_ids)
     else:
         series = RecurringSeries.objects.visible_to(principal)
     series = series.filter(
@@ -225,7 +232,7 @@ def visible_projection_inputs(principal, *, account=None, scope="", accounts=Non
         series.annotate(last_on=Max("members__transaction__transaction_date")).order_by("display_name", "pk")
     )
     if shared_series:
-        series_rows = _one_series_per_bill(series_rows, replaced)
+        series_rows = _one_series_per_bill(series_rows, replaced, member_ids)
     else:
         series_rows = [row for row in series_rows if row.pk not in replaced]
     for series in series_rows:
