@@ -10,6 +10,7 @@ from .models import (
     AiPlanLink,
     AuditEvent,
     Account,
+    AccountLink,
     Alert,
     ImportBatch,
     Invitation,
@@ -97,6 +98,33 @@ def _make_account_private(account, *, audit_actor=None):
         append_event(account=account, action=AuditEvent.Action.ACCOUNT_UNSHARED, actor=audit_actor, changed_fields=("scope", "share_mode"))
     account.save(update_fields=("scope", "household", "share_mode", "updated_at"))
     clear_invalid_loan_pairings(account)
+
+
+def _release_simplefin_links_without_access(account_ids):
+    """Delete SimpleFIN links whose connection owner can no longer see the account.
+
+    Imported transactions stay and the account is free to link again. Call after
+    the scope or membership change is saved, so visibility reflects the new state.
+    One audit event per affected connection goes to the link owner's own log.
+    """
+    if not account_ids:
+        return
+    links = list(
+        AccountLink.objects.select_for_update()
+        .select_related("connection__owner")
+        .filter(account_id__in=account_ids)
+        .order_by("pk")
+    )
+    released = {}
+    for link in links:
+        owner = link.connection.owner
+        if Account.objects.visible_to(owner).filter(pk=link.account_id).exists():
+            continue
+        released.setdefault(link.connection_id, (owner, []))[1].append(link.pk)
+    for connection_id, (owner, link_ids) in released.items():
+        AccountLink.objects.filter(pk__in=link_ids).delete()
+        append_event(action=AuditEvent.Action.SIMPLEFIN_LINKS_CHANGED, actor=owner, effective_member=owner,
+                     affected_member=owner, target_id=connection_id, changed_fields=("account_links",))
 
 
 def _actor_may_manage_sharing(person, account):
@@ -267,6 +295,7 @@ def unshare_account(principal, account_id):
         raise PermissionDenied(_DENIED)
 
     _make_account_private(account, audit_actor=person)
+    _release_simplefin_links_without_access((account.pk,))
     from finance.category_services import revalidate_pairs_touching_account
 
     revalidate_pairs_touching_account(person, account_id)
@@ -349,6 +378,7 @@ def end_current_membership(person, *, audit_actor=None):
             append_event(account=account, action=action, actor=audit_actor, affected_member=person, changed_fields=fields)
     own_membership.ended_at = transitioned_at
     own_membership.save(update_fields=("ended_at",))
+    _release_simplefin_links_without_access([account.pk for account in household_accounts])
     # A departing member's outstanding codes end with their membership.
     Invitation.objects.filter(
         invited_by=person,
