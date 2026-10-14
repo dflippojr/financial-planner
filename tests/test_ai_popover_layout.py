@@ -53,7 +53,7 @@ def open_popover(page):
 
 
 def hold_send(page, click):
-    """Run click, which submits the form, and keep its POST pending; return the held routes."""
+    """Run click, which submits the form, and keep its POST pending; return the held route."""
     held = []
     page.route("**/chat/send/", lambda route: held.append(route))
     with page.expect_request("**/chat/send/"):
@@ -61,7 +61,7 @@ def hold_send(page, click):
     # The form disables Send while its POST is in flight. This round trip also delivers the route.
     expect(page.locator('#ai-popover-form [type="submit"]')).to_be_disabled()
     assert len(held) == 1
-    return held
+    return held[0]
 
 
 def stored(page):
@@ -271,11 +271,11 @@ def test_send_preserves_a_draft_edited_while_the_post_is_pending(popover_session
         open_popover(page)
         composer = page.locator("#ai-popover textarea")
         composer.fill("First synthetic question")
-        requests = hold_send(page, page.locator("#ai-popover-form").get_by_role("button", name="Send").click)
+        held = hold_send(page, page.locator("#ai-popover-form").get_by_role("button", name="Send").click)
         # Editing and then retyping the sent text is still a new, unsent draft.
         composer.fill("Edited intermediate draft")
         composer.fill(next_draft)
-        requests[0].continue_()
+        held.continue_()
         expect(page.locator("#ai-popover [data-chat-turn-url]")).to_have_count(1)
         expect(page.locator("#ai-popover-form").get_by_role("button", name="Send")).to_be_enabled()
         expect(composer).to_have_value(next_draft)
@@ -336,12 +336,12 @@ def test_closing_during_first_send_keeps_the_conversation(popover_session, reope
         composer = page.locator("#ai-popover textarea")
         composer.fill("Synthetic first question")
         send = page.locator('#ai-popover-form [type="submit"]')
-        requests = hold_send(page, send.click)
+        held = hold_send(page, send.click)
         page.get_by_role("button", name="Close AI chat").click()
         expect(page.locator("#ai-popover")).to_be_hidden()
         if reopen_pending:
             open_popover(page)
-        requests[0].continue_()
+        held.continue_()
         expect(send).to_be_enabled()
         expect(composer).to_have_value("")
         conversation_id = stored(page)["conversationId"]
