@@ -24,6 +24,7 @@ def add_batch(account, *, ends, source=ImportBatch.Source.APPLE_CARD, status=Imp
         account=account,
         imported_by=account.owner,
         source=source,
+        simplefin_account_id="synthetic-remote" if source == ImportBatch.Source.SIMPLEFIN else "",
         source_file_sha256=f"{account.pk:x}{ends:%Y%m%d}{source}".encode().hex().ljust(64, "0")[:64],
         date_range_start=ends - timedelta(days=30),
         date_range_end=ends,

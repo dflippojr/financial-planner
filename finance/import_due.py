@@ -32,7 +32,9 @@ def due_import_accounts(accounts, *, today=None):
         ImportBatch.objects.filter(account_id=OuterRef("pk"), status=ImportBatch.Status.ACTIVE)
         .exclude(source=ImportBatch.Source.MANUAL)
         .alias(_has_transactions=Exists(Transaction.objects.filter(import_batch_id=OuterRef("pk"))))
-        .exclude(source=ImportBatch.Source.SIMPLEFIN, _has_transactions=False)
+        # Balance-only sync batches carry the remote account id; a CSV file marked
+        # SimpleFIN does not, so an empty file import still counts as coverage.
+        .exclude(source=ImportBatch.Source.SIMPLEFIN, _has_transactions=False, simplefin_account_id__gt="")
         .order_by("-date_range_end")
         .values("date_range_end")[:1]
     )

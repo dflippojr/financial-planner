@@ -73,3 +73,21 @@ def test_undoing_an_empty_batch_removes_its_coverage_and_keeps_earlier_rows():
     assert due_ids(account, today) == [account.pk]
     assert Transaction.objects.filter(status=Transaction.Status.ACTIVE).count() == 1
     assert ImportBatch.objects.get(pk=empty.pk).status == ImportBatch.Status.ARCHIVED
+
+
+def test_empty_csv_marked_simplefin_still_counts_as_coverage():
+    user, person = make_person("sf-owner")
+    account = Account.objects.create(name="Synthetic Card", account_type="credit_card", owner=person)
+    today = timezone.localdate()
+    old = today - timedelta(days=60)
+    header = HEADER.encode()
+    commit_csv_import(
+        user, account.pk, content=header, document=read_csv(header), mapping=APPLE_CARD_MAPPING,
+        source="simplefin", date_range_start=old, date_range_end=old,
+    )
+    assert due_ids(account, today) == [account.pk]
+    commit_csv_import(
+        user, account.pk, content=header, document=read_csv(header), mapping=APPLE_CARD_MAPPING,
+        source="simplefin", date_range_start=old, date_range_end=today,
+    )
+    assert due_ids(account, today) == []
