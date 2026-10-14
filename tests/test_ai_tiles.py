@@ -17,6 +17,7 @@ from finance.ai_tools import cash_flow_totals, default_tools, list_budgets, list
 from finance.category_services import ensure_household_categories
 from finance.chat_proposals import proposal_tools
 from finance.chat_services import _harness_context, sanitize_page_context
+from finance.planning_services import cash_flow_with_projection
 from finance.models import Account, BalanceSnapshot, Budget, Category, Membership, Person, PlannedItem, RecurringSeries, RecurringSeriesMember
 from finance.policy_services import accept_policy, current_policy, decline_policy, publish_policy
 from tests.chat_helpers import ask
@@ -221,6 +222,23 @@ def test_all_dates_and_category_scope_tools_match_the_page(member):
     assert payload["spending_minor"] == 100
     assert payload["date_from"] is None
     assert not search_transactions(person, {"category_id": 2**63 - 1}).ok
+
+
+def test_cash_flow_tool_leaves_future_periods_to_the_projection_like_home(member):
+    _user, person, household = member
+    account = checking(person, household, "Private", private=True)
+    today = date(2026, 10, 13)
+    # Only the full 36-month previous range (2022-2024) reaches back to here.
+    add_txn(account, person, date(2023, 1, 15), 700, "Synthetic old pay")
+    args = {"date_from": "2025-01-01", "date_to": "2027-12-31", "grouping": "month"}
+    with patch("django.utils.timezone.localdate", return_value=today):
+        payload = json.loads(cash_flow_totals(person, args).text)
+    expected = cash_flow_with_projection(
+        person.user, date_from=date(2025, 1, 1), date_to=date(2027, 12, 31), grouping="month", today=today,
+    )
+    assert [row["label"] for row in payload["periods"]] == [item.label for item in expected.periods]
+    assert payload["periods"][-1]["label"] == "October 2026 (partial)"
+    assert payload["previous_net_minor"] == expected.summary.previous_net_minor == 0
 
 
 def test_planned_tool_includes_disabled_items_without_other_private_data(member):
