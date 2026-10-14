@@ -155,6 +155,24 @@ def delete_conversations_without_access(account_ids):
         AiConversation.objects.filter(pk__in=doomed).delete()
 
 
+def keep_conversation_if_visible(conversation_id):
+    """Before a reply is stored, purge its conversation if the member lost sight of an account it used.
+
+    Locks the used accounts first, as unsharing and leaving do, so a reply racing
+    one of them either commits before its purge scan or sees its committed result.
+    """
+    conversation = AiConversation.objects.select_related("member").filter(pk=conversation_id).first()
+    if conversation is None:
+        return False
+    used = sorted(set(conversation.used_account_ids or []))
+    if used:
+        list(Account.objects.select_for_update().filter(pk__in=used).order_by("pk").values_list("pk", flat=True))
+    if _uses_only_visible_accounts(conversation, conversation.member):
+        return True
+    conversation.delete()
+    return False
+
+
 def _uses_only_visible_accounts(conversation, person):
     used = set(conversation.used_account_ids or [])
     if not used:

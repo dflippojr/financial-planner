@@ -24,7 +24,7 @@ from django.utils import timezone
 
 from .ai_jobs import _lock_qs
 from .ai_types import PROVIDER_ERROR, UNAVAILABLE
-from .chat_services import answer_turn, failed_reply, failure_text
+from .chat_services import answer_turn, failed_reply, failure_text, keep_conversation_if_visible
 from .models import AiConversation, AiConversationMessage
 from .audit_operations import operation, outcome
 
@@ -142,6 +142,8 @@ def _finish(pk, token, reply):
     # as stale keeps its failure rather than flipping back to an answer.
     row = AiConversationMessage.objects.filter(pk=pk, status=PENDING, claim_token=token).first()
     if row is None:
+        return False
+    if not keep_conversation_if_visible(row.conversation_id):
         return False
     changed = AiConversationMessage.objects.filter(pk=pk, status=PENDING, claim_token=token).update(**reply)
     if changed:

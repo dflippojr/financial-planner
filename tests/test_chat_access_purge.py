@@ -13,6 +13,8 @@ from tests.test_chat import TOKEN, add_txn, checking, harness, make_member  # no
 from tests.test_monthly_review import signed_in
 
 from finance.ai_services import connect_api_key, connect_harness, set_api_defaults
+from finance.chat_runner import process_pending_turns
+from finance.chat_services import send_message
 from finance.export import collect_export_tables
 from finance.lifecycle_services import leave_household, unshare_account
 from finance.models import Account, AiConversation, AiConversationMessage
@@ -51,7 +53,7 @@ def _ask_with_tool(state, person, account, text):
 
 
 @pytest.mark.django_db
-def test_chat_history_keeps_now_private_account_data_after_unshare(harness):
+def test_unshare_purges_chat_history_built_from_the_now_private_account(harness):
     _state, url = harness
     _a, owner, household = make_member("owner")
     _b, member, _ = make_member("member", household=household, policy=current_policy())
@@ -121,10 +123,39 @@ def test_harness_session_is_not_resumed_once_a_used_account_is_out_of_sight(harn
 
     _make_private_behind_the_purge(shared)
     creates_before = len(state.session_creates)
-    ask(member, "Follow up", conversation_id=conversation.pk)
+    send_message(member, "Follow up", conversation_id=conversation.pk)
+    process_pending_turns(sleep=lambda _s: None)
 
     assert ("POST", f"/api/v1/sessions/{old_session}/messages") not in state.requests
     assert len(state.session_creates) == creates_before + 1
+    assert not AiConversation.objects.filter(pk=conversation.pk).exists()
+
+
+@pytest.mark.django_db
+def test_reply_is_dropped_when_unshare_lands_before_the_turn_records_its_account(harness, monkeypatch):
+    import finance.chat_runner as chat_runner
+
+    state, url = harness
+    _a, owner, household = make_member("owner")
+    _b, member, _ = make_member("member", household=household, policy=current_policy())
+    connect_harness(member, base_url=url, token=TOKEN)
+    shared = checking(owner, household, "Synthetic shared checking")
+    add_txn(shared, owner, date(2026, 1, 4), -800, "Synthetic shared coffee")
+    real_answer_turn = chat_runner.answer_turn
+
+    def answer_then_unshare(turn, **kwargs):
+        reply = real_answer_turn(turn, **kwargs)
+        _make_private_behind_the_purge(shared)
+        return reply
+
+    monkeypatch.setattr(chat_runner, "answer_turn", answer_then_unshare)
+    state.need_tool = True
+    state.pending_tool_calls = [[{"call_id": "c1", "name": "list_transactions", "args": {"account_id": shared.pk}}]]
+    conversation = send_message(member, "Show the shared rows")
+    process_pending_turns(sleep=lambda _s: None)
+
+    assert not AiConversation.objects.filter(pk=conversation.pk).exists()
+    assert not AiConversationMessage.objects.filter(conversation_id=conversation.pk).exists()
 
 
 def _api_member(household):
@@ -145,11 +176,13 @@ def test_api_history_is_not_resent_once_a_used_account_is_out_of_sight(provider)
     AiConversation.objects.filter(pk=conversation.pk).update(used_account_ids=[shared.pk])
 
     _make_private_behind_the_purge(shared)
-    ask(member, "Second question", conversation_id=conversation.pk)
+    send_message(member, "Second question", conversation_id=conversation.pk)
+    process_pending_turns(sleep=lambda _s: None)
 
     messages = provider.requests[-1]["body"]["messages"]
     assert marker not in str(messages)
     assert [m["content"] for m in messages] == ["Second question"]
+    assert not AiConversation.objects.filter(pk=conversation.pk).exists()
 
 
 @pytest.mark.django_db
