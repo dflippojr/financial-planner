@@ -4,9 +4,10 @@ An account is due when it is active, takes CSV imports, has no SimpleFIN link
 in transactions mode, and its newest active non-manual batch covers through a
 date more than IMPORT_DUE_DAYS before today. Accounts never imported are not due.
 A balances-only link still syncs SimpleFIN batches through today without any
-transactions, and a batch does not record its link's mode, so a SimpleFIN batch
-counts as coverage only when it holds a transaction. That holds after the link is
-removed too.
+transactions, and a batch does not record its link's mode, so a sync batch (one
+with a SimpleFIN account id) counts as coverage only when it holds a transaction.
+That holds after the link is removed too. An uploaded file batch, including an
+empty one from an all-duplicate or header-only import (#437), always counts.
 """
 
 from datetime import timedelta
