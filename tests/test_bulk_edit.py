@@ -330,6 +330,13 @@ def test_selection_cap_applies_to_matching_filters_and_explicit_ids(monkeypatch)
         follow=True,
     )
     assert OVER_CAP.encode() in refused.content
+    # Apply never expands "select matching" itself; with no previewed ids there is nothing to write.
+    empty = client.post(
+        reverse("transaction-bulk-apply"),
+        {**fields, "select_matching": "on", "filter_query": "q=coffee"},
+        follow=True,
+    )
+    assert b"No eligible transactions to update." in empty.content
     assert not Transaction.objects.filter(category__isnull=False).exists()
 
 

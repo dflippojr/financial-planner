@@ -524,6 +524,9 @@ def test_link_refund_page_requires_a_part_of_the_split_purchase():
     client.force_login(owner.user)
     url = reverse("transaction-link-refund", args=(refund.pk,))
 
+    # The page checks the part before the service does; the service refuses on its own too.
+    with pytest.raises(ValidationError, match=SPLIT_PART_REQUIRED):
+        link_refund(owner, refund.pk, purchase.pk)
     missing = client.post(url, {"original": str(purchase.pk)})
     assert missing.status_code == 200
     assert SPLIT_PART_REQUIRED.encode() in missing.content
