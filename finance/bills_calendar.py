@@ -25,11 +25,13 @@ from .months import add_months, month_end
 from .planning_services import visible_projection_inputs
 from .recurring_review import is_overdue
 from .projection import (
+    CADENCE_ONE_TIME,
     KIND_INCOME,
     SOURCE_PLANNED,
     SOURCE_SERIES,
     occurrence_dates,
 )
+from .recurring_services import CADENCE_DAYS
 
 ALERT_TITLE = "Expected balance below threshold in the next 7 days"
 DEPOSIT_TYPES = (Account.Type.CHECKING, Account.Type.SAVINGS)
@@ -39,6 +41,8 @@ DEPOSIT_TYPES = (Account.Type.CHECKING, Account.Type.SAVINGS)
 MAX_FORECAST_DAYS = 731
 # The "Due in the next 7 days" list and the expected-balance alert look this far ahead.
 UPCOMING_DAYS = 7
+# How far back to look for an item's previous occurrence: past a year, so an annual one is found.
+PREVIOUS_OCCURRENCE_DAYS = 400
 
 
 def deposit_accounts(principal, *, scope=""):
@@ -261,8 +265,9 @@ def accounts_without_snapshot(accounts, *, as_of):
 def starting_balance_minor(accounts, *, as_of):
     """Each account's latest snapshot plus the transactions posted after it, through `as_of`.
 
-    The forecast skips any of `as_of`'s expected items that have already posted
-    (see `_posted_on`), so a payment made today is counted once.
+    The forecast skips expected items that have already posted (see
+    `_posted_on`), so a payment made today, or a paycheck a few days early, is
+    counted once.
     """
     snapshots = _latest_snapshots(accounts, as_of=as_of)
     total = 0
@@ -277,13 +282,92 @@ def starting_balance_minor(accounts, *, as_of):
     return total
 
 
-def _posted_on(sources, on_date, selected_ids):
-    """Expected items for `on_date` already counted in the starting balance.
+def _income_tolerance(cadence):
+    # A one-time item has no cadence to slip against, so only a same-day deposit matches it.
+    if cadence == CADENCE_ONE_TIME:
+        return 0
+    return CADENCE_DAYS[cadence][1]
 
-    The forecast for today only ever errs low, so a shortfall is never hidden:
-    - recurring series link to their transactions, so a posted charge is skipped exactly;
-    - planned income is skipped when a deposit of the same amount posted today (a wrong
-      match leaves the forecast low);
+
+def _previous_occurrence(item, on_date):
+    earlier = occurrence_dates(
+        item.start,
+        item.end,
+        item.cadence,
+        max(item.start, on_date - timedelta(days=PREVIOUS_OCCURRENCE_DAYS)),
+        on_date - timedelta(days=1),
+        getattr(item, "anchor_day", None),
+    )
+    return earlier[-1] if earlier else None
+
+
+def _early_income(sources, on_date, selected_ids):
+    """Planned income from `on_date` on whose deposit already posted, as (source, id, date) keys.
+
+    An occurrence within its cadence tolerance after `on_date` (today) is
+    skipped when a deposit of the same amount posted on a selected account
+    between (occurrence - tolerance) and today, after the previous occurrence,
+    and that deposit has not already been matched (#508). A wrong match would
+    run the forecast high, so the match is exact and never reaches back a period.
+    """
+    planned = [
+        item
+        for item in sources
+        if item.source == SOURCE_PLANNED and item.kind == KIND_INCOME and item.amount_minor > 0
+    ]
+    if not planned or not selected_ids:
+        return set()
+    occurrences = []
+    for item in planned:
+        tolerance = _income_tolerance(item.cadence)
+        for occurrence in occurrence_dates(
+            item.start,
+            item.end,
+            item.cadence,
+            on_date,
+            on_date + timedelta(days=tolerance),
+            getattr(item, "anchor_day", None),
+        ):
+            occurrences.append((occurrence, item.name.lower(), item.source_id, item, tolerance))
+    if not occurrences:
+        return set()
+    occurrences.sort(key=lambda row: row[:3])
+    widest = max(row[4] for row in occurrences)
+    deposits = list(
+        Transaction.objects.filter(
+            account_id__in=selected_ids,
+            status=Transaction.Status.ACTIVE,
+            amount_minor__gt=0,
+            transaction_date__gte=on_date - timedelta(days=widest),
+            transaction_date__lte=on_date,
+        )
+        .order_by("transaction_date", "pk")
+        .values_list("pk", "transaction_date", "amount_minor")
+    )
+    used = set()
+    posted = set()
+    for occurrence, _name, _source_id, item, tolerance in occurrences:
+        earliest = occurrence - timedelta(days=tolerance)
+        previous = _previous_occurrence(item, occurrence)
+        for pk, posted_on, amount in deposits:
+            if pk in used or amount != item.amount_minor or posted_on < earliest:
+                continue
+            if previous is not None and posted_on <= previous:
+                continue
+            used.add(pk)
+            posted.add((SOURCE_PLANNED, item.source_id, occurrence))
+            break
+    return posted
+
+
+def _posted_on(sources, on_date, selected_ids):
+    """Expected items already counted in the starting balance, as (source, id, date) keys.
+
+    The forecast only ever errs low, so a shortfall is never hidden:
+    - recurring series link to their transactions, so a charge posted today is skipped exactly;
+    - planned income is skipped on its expected day when a deposit of the same amount already
+      posted, today or up to its cadence tolerance early (see `_early_income`; a wrong match
+      would run the forecast high, so matches are exact);
     - planned expenses are always applied (a bill already paid today runs the forecast
       low until tomorrow).
     """
@@ -297,21 +381,18 @@ def _posted_on(sources, on_date, selected_ids):
     charged_series = set(
         RecurringSeriesMember.objects.filter(transaction__in=todays).values_list("series_id", flat=True)
     )
-    deposits = [amount for amount in todays.values_list("amount_minor", flat=True) if amount > 0]
-    posted = set()
-    for item in _expected_on_day(sources, on_date):
-        if item.source == SOURCE_SERIES and item.source_id in charged_series:
-            posted.add((item.source, item.source_id))
-        elif item.source == SOURCE_PLANNED and item.amount_minor > 0 and item.amount_minor in deposits:
-            deposits.remove(item.amount_minor)
-            posted.add((item.source, item.source_id))
-    return posted
+    posted = {
+        (item.source, item.source_id, on_date)
+        for item in _expected_on_day(sources, on_date)
+        if item.source == SOURCE_SERIES and item.source_id in charged_series
+    }
+    return posted | _early_income(sources, on_date, selected_ids)
 
 
 def _balance_delta_on_day(sources, on_date, selected_ids, skip=frozenset()):
     total = 0
     for item in _expected_on_day(sources, on_date):
-        if (item.source, item.source_id) in skip:
+        if (item.source, item.source_id, on_date) in skip:
             continue
         if item.source == SOURCE_SERIES and item.account_id not in selected_ids:
             continue
@@ -339,16 +420,16 @@ def month_weeks(year, month):
 def expected_balances_by_day(sources, *, start_balance, selected_ids, from_date, through_date):
     """Inclusive running expected balances from from_date through through_date.
 
-    `start_balance` already includes what posted on from_date, so that day's
-    expected items that have posted are skipped.
+    `start_balance` already includes what posted through from_date, so expected
+    items that have posted are skipped: that day's series charges, and planned
+    income that posted on or a few days before its expected day.
     """
     running = start_balance
     balances = {}
     day = from_date
-    posted_first_day = _posted_on(sources, from_date, selected_ids)
+    posted = _posted_on(sources, from_date, selected_ids)
     while day <= through_date:
-        skip = posted_first_day if day == from_date else frozenset()
-        running += _balance_delta_on_day(sources, day, selected_ids, skip)
+        running += _balance_delta_on_day(sources, day, selected_ids, posted)
         balances[day] = running
         day += timedelta(days=1)
     return balances
