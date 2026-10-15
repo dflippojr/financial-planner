@@ -60,6 +60,17 @@ def _lose_membership(owner, feature, shared):
     Membership.objects.filter(person=owner).delete()
 
 
+def _delete_the_review(owner, feature, shared):
+    MonthlyReview.objects.filter(person=owner).delete()
+
+
+def _make_the_job_stale(owner, feature, shared):
+    """The review was regenerated after this job read it; only the newest generation is phrased."""
+    job = AiJob.objects.get(member=owner, feature=feature)
+    job.input_refs = {**job.input_refs, "generated_at": "2001-01-01T00:00:00+00:00"}
+    job.save(update_fields=["input_refs"])
+
+
 # answer: what the harness replies; failure: a harness session failure; written: the paragraph kept;
 # skipped: the job must not reach the harness at all; regenerated: the review is replaced mid-call.
 SCENARIOS = {
@@ -68,6 +79,8 @@ SCENARIOS = {
     "invented": {"answer": "Invented spending of 99.99 USD.", "written": ""},
     "provider_failure": {"failure": "provider_error", "written": None},
     "switch_off": {"before": _switch_off, "skipped": True},
+    "review_deleted": {"before": _delete_the_review, "skipped": True, "no_review": True},
+    "stale_job": {"before": _make_the_job_stale, "skipped": True, "requeued": True},
     "membership_lost": {"before": _lose_membership, "skipped": True},
     "account_made_private": {"setup": _share_a_partner_account, "before": _make_the_account_private,
                              "skipped": True, "hidden": PARTNER_ITEM},
@@ -105,6 +118,9 @@ def test_phrasing_job_contract(review_harness, monkeypatch, feature, scenario): 
 
     process_due_jobs()
 
+    if case.get("no_review"):
+        assert not state.session_prompts and not MonthlyReview.objects.filter(person=owner).exists()
+        return
     review = MonthlyReview.objects.get(person=owner, month=month)
     written = case.get("written") or ""
     assert tuple(getattr(review, field) for field in spec["fields"]) == ((written, "local") if written else ("", ""))
@@ -113,7 +129,7 @@ def test_phrasing_job_contract(review_harness, monkeypatch, feature, scenario): 
     prompts = "\n".join(state.session_prompts)
     assert bool(prompts) == (not case.get("skipped"))
     assert not any(item in prompts for item in case.get("hidden", ()))
-    if case.get("regenerated"):
+    if case.get("regenerated") or case.get("requeued"):
         follow_up = AiJob.objects.get(member=owner, feature=feature, status=AiJob.Status.QUEUED)
         assert follow_up.pk != job.pk
         assert follow_up.input_refs["generated_at"] == review.generated_at.isoformat()

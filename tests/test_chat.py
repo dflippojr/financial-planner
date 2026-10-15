@@ -877,6 +877,19 @@ def test_follow_up_opens_a_new_session_after_the_member_s_setup_changes(harness,
 
 
 @pytest.mark.django_db
+def test_list_transactions_without_an_account_returns_only_the_viewers_visible_rows():
+    _user, person, household = make_member("owner", policy=current_policy())
+    _other_user, other, _ = make_member("housemate", household=household, policy=current_policy())
+    add_txn(checking(person, household, "Owner Private", private=True), person, date(2026, 1, 4), -800, "OWN-SYN-ROW")
+    add_txn(checking(other, household, "Housemate Private", private=True), other, date(2026, 1, 5), -900, "THEIR-SYN-ROW")
+
+    result = run_tool(person, default_tools(), "list_transactions", {})
+
+    assert result.ok and "OWN-SYN-ROW" in result.text
+    assert "THEIR-SYN-ROW" not in result.text
+
+
+@pytest.mark.django_db
 def test_recurring_tool_lists_only_confirmed_current_series():
     _user, person, household = make_member("owner")
     account = checking(person, household, "Owner Private", private=True)
