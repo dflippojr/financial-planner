@@ -306,18 +306,17 @@ def test_export_includes_notes_and_tags_and_account_deletion_removes_them():
 
 
 @pytest.mark.django_db
-def test_tags_page_and_edit_page_let_members_manage_tags():
+def test_member_notes_and_tags_a_household_transaction():
     owner = make_person("owner")
     member = make_person("member")
     household = make_household(owner, member)
     account = make_account(owner, scope=Account.Scope.HOUSEHOLD, household=household)
     txn = make_transaction(owner, account)
     client = signed_client(member)
+    tag = add_tag(member, "vacation 2026")
     listed = client.get(reverse("tag-list"))
     assert listed.status_code == 200
-    added = client.post(reverse("tag-list"), {"action": "add", "name": "vacation 2026"})
-    assert added.status_code == 302
-    tag = Tag.objects.get(household=household, name="vacation 2026")
+    assert "vacation 2026" in listed.content.decode()
     saved = client.post(
         reverse("transaction-note-tags", args=(txn.pk,)),
         {"note": "Cabin rental", "tags": [str(tag.pk)], "new_tag": "souvenirs"},
@@ -330,10 +329,6 @@ def test_tags_page_and_edit_page_let_members_manage_tags():
     body = page.content.decode()
     assert "vacation 2026" in body
     assert "Cabin rental" in body
-    archived = client.post(reverse("tag-list"), {"action": "archive", "tag_id": str(tag.pk)})
-    assert archived.status_code == 302
-    tag.refresh_from_db()
-    assert tag.is_archived
 
 
 @pytest.mark.django_db

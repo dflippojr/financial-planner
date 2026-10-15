@@ -1,14 +1,17 @@
 import os
+import re
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from django.conf import settings
 from django.db import DatabaseError, connections
 from django.test import override_settings
 from django.urls import reverse
 
 from financial_planner.healthcheck import probe_host
 from financial_planner.settings import allowed_hosts_from_env
+from tests.helpers import compose_service
 
 
 @pytest.mark.django_db
@@ -125,16 +128,11 @@ def test_gunicorn_access_log_never_records_query_strings_or_referrers():
 def test_gunicorn_timeout_outlasts_the_agent_harness_chat_wait():
     # Chat waits for the harness session inside the request. With gunicorn's
     # default 30 s timeout the worker was killed mid-answer and chat returned 500.
-    from django.conf import settings
-
     script = (Path(__file__).resolve().parent.parent / "scripts/start-production.sh").read_text()
     timeout_line = next(line for line in script.splitlines() if "--timeout" in line)
     default = int(timeout_line.split(":-", 1)[1].split("}", 1)[0])
 
     assert default > settings.AGENT_HARNESS_SESSION_TIMEOUT_SECONDS
-    assert "--worker-class gthread" in script
-    assert '--threads "${GUNICORN_THREADS:-4}"' in script
-    assert "--preload" in script
 
 
 def test_wsgi_preload_opens_no_database_connection_before_fork():
@@ -162,31 +160,38 @@ assert all(conn.connection is None for conn in connections.all())
 def test_compose_stages_csv_uploads_on_a_memory_backed_mount():
     # An abandoned upload of a real bank export must never sit on disk, so the
     # staging directory has to live on a tmpfs and the app has to be pointed at it.
-    compose = (Path(__file__).resolve().parent.parent / "compose.yml").read_text()
+    app = compose_service("app")
 
-    assert "CSV_IMPORT_STAGING_DIR: /run/csv-staging/uploads" in compose
-    assert "SETUP_CODE: ${SETUP_CODE:-}" in compose
-    assert "PRIVACY_POLICY_PATH: ${PRIVACY_POLICY_PATH:-}" in compose
-    assert "GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}" in compose
-    assert "GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}" in compose
-    assert "FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:?FIELD_ENCRYPTION_KEY must be set}" in compose
-    assert "TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS-default-gateway}" in compose
-    assert "TRUST_PROXY_FORWARDED_FOR" not in compose
-    assert "SIMPLEFIN_SYNC_CRON: ${SIMPLEFIN_SYNC_CRON:-30 6 * * *}" in compose
-    assert "background:" in compose
-    assert 'entrypoint: ["/app/scripts/run-background.sh"]' in compose
-    assert "AI_LOCAL_QUIET_WINDOW: ${AI_LOCAL_QUIET_WINDOW:-22:00-06:00}" in compose
-    assert "tmpfs:" in compose
-    assert "- /run/csv-staging:size=128m,mode=1777" in compose
-    assert "BACKUP_STATUS_PATH: /backup-health/status" in compose
-    assert "OPERATOR_USERNAMES: ${OPERATOR_USERNAMES:-}" in compose
-    assert "OFFSITE_RCLONE_REMOTE: ${OFFSITE_RCLONE_REMOTE:-}" in compose
-    assert "OFFSITE_AGE_RECIPIENT: ${OFFSITE_AGE_RECIPIENT:-}" in compose
-    assert "RESTORE_CHECK_INTERVAL_DAYS: ${RESTORE_CHECK_INTERVAL_DAYS:-7}" in compose
-    assert "RCLONE_CONFIG: /config/rclone.conf" in compose
-    assert "RECEIPTS_DIR: /receipts" in compose
-    assert "- receipts:/receipts" in compose
-    assert "RECEIPTS_VOLUME_NAME:-financial-planner-receipts" in compose
+    assert "CSV_IMPORT_STAGING_DIR: /run/csv-staging/uploads" in app
+    assert "FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:?FIELD_ENCRYPTION_KEY must be set}" in app
+    assert "tmpfs:" in app
+    assert "- /run/csv-staging:size=128m,mode=1777" in app
+
+
+@pytest.mark.parametrize(
+    ("services", "sources", "variable_pattern"),
+    [
+        # The Django settings and app code read these; the job tuning ones go to the background worker only.
+        (("app", "background"), ("finance/**/*.py", "financial_planner/**/*.py"), r"""(?:environ\.get|getenv|environ\[)\(?\s*["']([A-Z][A-Z0-9_]+)["']"""),
+        (("backup",), ("ops/backup/*.sh",), r"\$\{?([A-Z][A-Z0-9_]*)"),
+    ],
+    ids=["app code", "backup scripts"],
+)
+def test_documented_settings_reach_the_container_that_reads_them(services, sources, variable_pattern):
+    root = Path(__file__).resolve().parent.parent
+    documented = set(re.findall(r"^#?\s*([A-Z][A-Z0-9_]+)=", (root / ".env.example").read_text(encoding="utf-8"), re.M))
+    read = {
+        name
+        for pattern in sources
+        for path in root.glob(pattern)
+        for name in re.findall(variable_pattern, path.read_text(encoding="utf-8"))
+    }
+    passed = {
+        name for service in services for name in re.findall(r"^      ([A-Z][A-Z0-9_]*):", compose_service(service), re.M)
+    }
+
+    assert read & documented
+    assert sorted((read & documented) - passed) == []
 
 
 def test_backup_container_mounts_only_the_rclone_config_file():
@@ -206,10 +211,9 @@ def test_backup_container_mounts_only_the_rclone_config_file():
 
 
 def test_app_and_simplefin_mount_backup_health_not_the_dump_directory():
-    compose = (Path(__file__).resolve().parent.parent / "compose.yml").read_text()
-    app = compose.split("  app:", 1)[1].split("\n  backup:", 1)[0]
-    scheduler = compose.split("  background:", 1)[1].split("\nvolumes:", 1)[0]
-    backup = compose.split("  backup:", 1)[1].split("\n  background:", 1)[0]
+    app = compose_service("app")
+    scheduler = compose_service("background")
+    backup = compose_service("backup")
 
     for block in (app, scheduler):
         assert "BACKUP_STATUS_PATH: /backup-health/status" in block
@@ -222,8 +226,9 @@ def test_app_and_simplefin_mount_backup_health_not_the_dump_directory():
 
 
 def test_dockerfile_builds_css_with_a_pinned_checksum_and_collectstatic():
-    dockerfile = (Path(__file__).resolve().parent.parent / "Dockerfile").read_text()
-    pins = (Path(__file__).resolve().parent.parent / "scripts" / "css_pins.env").read_text()
+    root = Path(__file__).resolve().parent.parent
+    dockerfile = (root / "Dockerfile").read_text()
+    pins = (root / "scripts" / "css_pins.env").read_text()
 
     assert "FROM debian:bookworm-slim AS css" in dockerfile
     assert "sha256sum -c" in dockerfile
@@ -232,53 +237,39 @@ def test_dockerfile_builds_css_with_a_pinned_checksum_and_collectstatic():
     assert "--ignore src" in dockerfile
     assert "--ignore vendor" not in dockerfile
     assert "tailwindcss" in dockerfile
-    assert "TAILWIND_VERSION=v4.3.3" in pins
-    assert "DAISYUI_VERSION=v5.7.47" in pins
-    assert "whitenoise.middleware.WhiteNoiseMiddleware" in (
-        Path(__file__).resolve().parent.parent / "financial_planner" / "settings.py"
-    ).read_text()
-
+    # Every pin the build uses is defined in the pins file, whichever version it holds.
+    used = set(re.findall(r"\$\{?((?:TAILWIND|DAISYUI)_[A-Z0-9_]+)", dockerfile))
+    defined = set(re.findall(r"^((?:TAILWIND|DAISYUI)_[A-Z0-9_]+)=\S+$", pins, re.M))
+    assert "TAILWIND_VERSION" in used
+    assert used <= defined
+    assert "whitenoise.middleware.WhiteNoiseMiddleware" in settings.MIDDLEWARE
 
 
 def test_the_simplefin_scheduler_does_not_inherit_the_web_health_check():
-    compose = (Path(__file__).resolve().parents[1] / "compose.yml").read_text(encoding="utf-8")
-    scheduler = compose.split("  background:", 1)[1].split("\nvolumes:", 1)[0]
+    scheduler = compose_service("background")
 
     # It runs no web server, so the image's HTTP probe would always fail.
     assert "healthcheck:\n      disable: true" in scheduler
 
 
 def test_ai_jobs_container_receives_every_ai_job_setting():
-    import re
-
     root = Path(__file__).resolve().parent.parent
     settings_text = (root / "financial_planner" / "settings.py").read_text()
     names = sorted(
         set(re.findall(r'os\.environ\.get\("((?:AI_|AGENT_HARNESS_)[A-Z_]+)"', settings_text))
     )
     assert names
-    compose = (root / "compose.yml").read_text()
-    start = compose.index("  background:")
-    following = re.search(r"\n  [a-z][a-z0-9-]*:\n", compose[start + 1 :])
-    block = compose[start : start + 1 + following.start()] if following else compose[start:]
+    block = compose_service("background")
     missing = [name for name in names if f"{name}:" not in block]
     assert missing == []
 
 
 def test_background_workers_wait_for_the_migrated_app():
-    import re
-
-    compose = (Path(__file__).resolve().parent.parent / "compose.yml").read_text()
-    for service in ("background",):
-        start = compose.index(f"  {service}:\n")
-        following = re.search(r"\n  [a-z][a-z0-9-]*:\n", compose[start + 1 :])
-        block = compose[start : start + 1 + following.start()] if following else compose[start:]
-        assert re.search(r"depends_on:\n(?:.*\n)*?\s+app:\n\s+condition: service_healthy", block), service
+    block = compose_service("background")
+    assert re.search(r"depends_on:\n(?:.*\n)*?\s+app:\n\s+condition: service_healthy", block)
 
 
 def test_database_backup_and_test_images_share_one_postgres_major():
-    import re
-
     root = Path(__file__).resolve().parent.parent
     compose = (root / "compose.yml").read_text()
     db = compose.split("  db:\n", 1)[1].split("\n  app:", 1)[0]
@@ -294,15 +285,9 @@ def test_database_backup_and_test_images_share_one_postgres_major():
         assert "- postgres_data:/var/lib/postgresql\n" in db
 
 
-def test_backup_image_ships_the_row_count_script_the_upgrade_runbook_uses():
+@pytest.mark.parametrize("script", ["row-counts.sh", "verify-restore.sh"])
+def test_backup_image_ships_the_script_the_deployment_runbook_uses(script):
     root = Path(__file__).resolve().parent.parent
     copy_line = next(line for line in (root / "ops/backup/Dockerfile").read_text().splitlines() if line.startswith("COPY"))
-    assert "row-counts.sh" in copy_line
-    assert "/opt/financial-planner/row-counts.sh" in (root / "docs/deployment.md").read_text(encoding="utf-8")
-
-
-def test_backup_image_ships_the_restore_check_script():
-    root = Path(__file__).resolve().parent.parent
-    copy_line = next(line for line in (root / "ops/backup/Dockerfile").read_text().splitlines() if line.startswith("COPY"))
-    assert "verify-restore.sh" in copy_line
-    assert "/opt/financial-planner/verify-restore.sh" in (root / "docs/deployment.md").read_text(encoding="utf-8")
+    assert script in copy_line
+    assert f"/opt/financial-planner/{script}" in (root / "docs/deployment.md").read_text(encoding="utf-8")

@@ -3,8 +3,12 @@ from pathlib import Path
 import shutil
 import subprocess
 import tarfile
+from datetime import datetime, timezone as dt_timezone
 
 import pytest
+
+from finance.backup_health import evaluate_backup_alerts
+from tests.test_alerts import make_person
 
 
 BACKUP_SCRIPT = Path(__file__).parents[1] / "ops" / "backup" / "backup.sh"
@@ -322,7 +326,7 @@ def test_backup_is_verified_and_retains_latest_nightly_and_weekly_files(tmp_path
     nightly.mkdir(parents=True)
     weekly.mkdir()
     _fake_date(fake_bin)
-    _fake_pg(fake_bin)
+    state = _fake_pg(fake_bin)
 
     for index in range(1, 16):
         (nightly / f"financial_planner_202609{index:02d}T060000Z.dump").write_text("old")
@@ -345,6 +349,11 @@ def test_backup_is_verified_and_retains_latest_nightly_and_weekly_files(tmp_path
     assert status["table_count"] == "4"
     assert status["last_error"] == ""
     assert status.get("offsite_configured", "0") == "0"
+    assert _scratch_restores(state) == 1
+    assert not (state / "scratch").exists()
+    assert status["restore_check_at"] == "2026-09-27T06:00:00Z"
+    assert status["restore_check_error"] == ""
+    assert status["restore_check_interval_days"] == "7"
     assert (backup_root / "health" / "status").is_file()
     assert not (backup_root / "status").exists()
 
@@ -497,9 +506,6 @@ def test_backup_status_is_readable_by_the_app_user(tmp_path):
     result = _run_backup(fake_bin, backup_root)
 
     assert result.returncode == 0, result.stderr
-    script = BACKUP_SCRIPT.read_text(encoding="utf-8")
-    assert 'chmod 644 "$status_file"' in script
-    assert 'chmod 755 "$health_dir"' in script
     dump = backup_root / "nightly" / "financial_planner_20260927T060000Z.dump"
     assert _posix_mode(backup_root / "health") == "755"
     assert _posix_mode(backup_root / "health" / "status") == "644"
@@ -565,36 +571,6 @@ def test_offsite_missing_remote_directory_is_not_a_prune_failure(tmp_path):
 
 
 @pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
-def test_backup_archives_receipts_next_to_the_dump(tmp_path):
-    fake_bin = tmp_path / "bin"
-    backup_root = tmp_path / "backups"
-    fake_bin.mkdir()
-    (backup_root / "nightly").mkdir(parents=True)
-    (backup_root / "weekly").mkdir()
-    live = backup_root / "receipts-live"
-    live.mkdir(parents=True)
-    (live / "synthetic-receipt.bin").write_bytes(b"synthetic-receipt-bytes")
-    _fake_date(fake_bin)
-    _fake_pg(fake_bin)
-
-    result = _run_backup(fake_bin, backup_root)
-
-    assert result.returncode == 0, result.stderr
-    archive = backup_root / "nightly" / "financial_planner_20260927T060000Z.receipts.tar.gz"
-    weekly = backup_root / "weekly" / "financial_planner_20260927T060000Z.receipts.tar.gz"
-    assert archive.is_file()
-    assert weekly.is_file()
-    listing = subprocess.run(
-        [POSIX_BASH, "-c", f'tar -tzf "{_unix_path(archive)}"'],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert listing.returncode == 0, listing.stderr
-    assert "synthetic-receipt.bin" in listing.stdout
-
-
-@pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
 def test_restore_replaces_receipts_from_the_sibling_archive(tmp_path):
     fake_bin = tmp_path / "bin"
     backup_root = tmp_path / "backups"
@@ -651,6 +627,7 @@ def test_backup_signs_a_manifest_of_the_dump_and_receipts(tmp_path):
     names = [line.split()[1].lstrip("*") for line in manifest.read_text().splitlines()]
     assert names == [dump.name, "financial_planner_20260927T060000Z.receipts.tar.gz"]
     assert manifest.with_name(manifest.name + ".sig").read_text().startswith("-----BEGIN SSH SIGNATURE-----")
+    assert (backup_root / "weekly" / "financial_planner_20260927T060000Z.receipts.tar.gz").is_file()
     assert (backup_root / "weekly" / manifest.name).is_file()
     assert (backup_root / "weekly" / (manifest.name + ".sig")).is_file()
     assert _public_key(backup_root).is_file()
@@ -958,23 +935,9 @@ def _scratch_restores(state):
     return log.read_text().split().count("financial_planner_restore_check") if log.exists() else 0
 
 
+@pytest.mark.django_db
 @pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
-def test_backup_runs_the_first_restore_check_and_records_the_pass(tmp_path):
-    fake_bin, backup_root, state = _backup_setup(tmp_path)
-
-    result = _run_backup(fake_bin, backup_root)
-
-    assert result.returncode == 0, result.stderr
-    assert _scratch_restores(state) == 1
-    assert not (state / "scratch").exists()
-    status = _read_status(backup_root)
-    assert status["restore_check_at"] == "2026-09-27T06:00:00Z"
-    assert status["restore_check_error"] == ""
-    assert status["restore_check_interval_days"] == "7"
-
-
-@pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")
-def test_failed_restore_check_keeps_the_dump_published_and_records_the_error(tmp_path):
+def test_failed_restore_check_keeps_the_dump_published_and_records_the_error(tmp_path, settings):
     fake_bin, backup_root, state = _backup_setup(tmp_path, dump_text="truncated synthetic dump")
     _write_status_file(backup_root, restore_check_at="2026-09-01T06:00:00Z", restore_check_interval_days="7")
 
@@ -991,6 +954,15 @@ def test_failed_restore_check_keeps_the_dump_published_and_records_the_error(tmp
     assert status["restore_check_error"] == "Restore check failed"
     assert status["restore_check_at"] == "2026-09-01T06:00:00Z"
     assert SECRET_ROW_VALUE not in (backup_root / "health" / "status").read_text()
+
+    # The app reads what the script wrote: the failed check alerts the operator.
+    make_person("operator")
+    settings.BACKUP_STATUS_PATH = str(backup_root / "health" / "status")
+    settings.OPERATOR_USERNAMES = "operator"
+    created = evaluate_backup_alerts(
+        now=datetime(2026, 9, 27, 12, tzinfo=dt_timezone.utc), today=datetime(2026, 9, 27).date()
+    )
+    assert [row.title for row in created] == ["The weekly restore check failed"]
 
 
 @pytest.mark.skipif(NEEDS_BASH, reason="backup script test requires a POSIX shell")

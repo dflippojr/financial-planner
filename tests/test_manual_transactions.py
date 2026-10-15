@@ -141,7 +141,8 @@ def test_member_adds_to_private_and_household_accounts_and_reports_include_them(
         reverse("transaction-add"), add_payload(private, category=groceries.pk, note="Synthetic receipt lost")
     )
     assert response.status_code == 302
-    response = client.post(
+    member_client = signed_in(member)
+    response = member_client.post(
         reverse("transaction-add"),
         add_payload(shared, direction="in", amount="50.00", description="SYNTHETIC CASH GIFT"),
     )
@@ -159,6 +160,7 @@ def test_member_adds_to_private_and_household_accounts_and_reports_include_them(
     assert spent.import_batch.imported_by == owner
     assert spent.import_batch.date_range_start == spent.import_batch.date_range_end == ENTRY_DATE
     assert received.amount_minor == 5000
+    assert received.import_batch.imported_by == member
 
     listing = client.get(reverse("transaction-list"))
     assert "SYNTHETIC GROCER" in listing.content.decode()
@@ -173,24 +175,9 @@ def test_member_adds_to_private_and_household_accounts_and_reports_include_them(
     assert progress_snapshot(budget, date(2026, 9, 1), owner).spent_minor == 1234
 
     # The household member sees the shared entry, but not the private one.
-    member_list = signed_in(member).get(reverse("transaction-list")).content.decode()
+    member_list = member_client.get(reverse("transaction-list")).content.decode()
     assert "SYNTHETIC CASH GIFT" in member_list
     assert "SYNTHETIC GROCER" not in member_list
-
-
-@pytest.mark.django_db
-def test_household_member_may_add_to_a_shared_account():
-    owner = make_person("owner")
-    member = make_person("member")
-    household = make_household(owner, member)
-    shared = make_account(owner, name="Synthetic Joint", household=household)
-
-    entry = add_manual_transaction(
-        member, shared.pk, transaction_date=ENTRY_DATE, amount_minor=-500, description="SYNTHETIC CHECK 101"
-    )
-
-    assert entry.account_id == shared.pk
-    assert entry.import_batch.imported_by == member
 
 
 @pytest.mark.django_db
