@@ -1068,3 +1068,25 @@ def test_a_former_members_series_does_not_hold_a_payment_from_the_remaining_bill
     Membership.objects.filter(person=departed).update(ended_at=timezone.now())
     (bill,) = resolve_household_bills([series], eligible)
     assert bill.last_on == date(2026, 10, 12)
+
+
+@pytest.mark.django_db
+def test_a_series_spanning_another_household_does_not_hold_a_payment_from_this_bill():
+    from finance.bill_grouping import eligible_bill_charges
+    from finance.recurring_services import resolve_household_bills
+
+    owner, member, outsider, series = _shared_bill()
+    shared = series.members.first().transaction.account
+    october = make_transaction(
+        owner, shared, transaction_date=date(2026, 10, 12), amount_minor=-6000, description="Synthetic Internet"
+    )
+    elsewhere = make_account(
+        outsider, name="Synthetic Elsewhere", scope=Account.Scope.HOUSEHOLD, household=Household.objects.get(name="Other Household")
+    )
+    spanning = make_series(member, name="Synthetic Spanning", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-6000)
+    add_member(spanning, october)
+    add_member(spanning, make_transaction(outsider, elsewhere, description="Synthetic Elsewhere", amount_minor=-6000))
+
+    (bill,) = resolve_household_bills([series], eligible_bill_charges(member))
+
+    assert bill.last_on == date(2026, 10, 12)

@@ -1325,12 +1325,13 @@ def resolve_household_bills(copies, eligible):
 def _held_by_a_household_bill():
     """Memberships of current household members' confirmed active series built wholly from household charges.
 
-    A series with a private charge never reaches a household bill, and a former
-    member's series no longer counts, so what they hold is still free to
-    continue one.
+    A series with a private charge, or a charge from another household, never
+    reaches a household bill, and a former member's series no longer counts, so
+    what they hold is still free to continue one.
     """
     private_member = RecurringSeriesMember.objects.filter(series_id=OuterRef("series_id")).exclude(
-        transaction__account__scope=Account.Scope.HOUSEHOLD
+        transaction__account__scope=Account.Scope.HOUSEHOLD,
+        transaction__account__household_id=OuterRef("transaction__account__household_id"),
     )
     current_member = Membership.objects.filter(
         person_id=OuterRef("series__person_id"),
