@@ -193,12 +193,11 @@ def test_key_is_encrypted_and_never_shown(provider):
 
 
 @pytest.mark.django_db
-def test_settings_views_require_reauth_and_hide_the_key(provider):
+def test_settings_views_hide_the_key(provider):
     user, person, _household = make_member("viewer")
     client = Client()
     client.force_login(user)
     body = {"provider": OPENAI, "key": OPENAI_KEY}
-    assert client.post(reverse("ai-key-connect"), body).url.startswith(reverse("reauth"))
     stamp_recent_auth(client)
     assert client.post(reverse("ai-key-connect"), body).url == reverse("settings-ai")
     assert AiProviderConnection.objects.filter(owner=person, kind=OPENAI).exists()

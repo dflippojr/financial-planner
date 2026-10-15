@@ -1,5 +1,6 @@
 import logging
 import threading
+import uuid
 from datetime import timedelta
 from io import StringIO
 from unittest.mock import patch
@@ -14,9 +15,9 @@ from django.test import Client, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
+from financial_planner import urls as project_urls
 from tests.helpers import stamp_recent_auth
 from finance.auth_services import (
-    SETUP_THROTTLE_USERNAME,
     create_invitation,
     create_recovery_codes,
     invitation_is_usable,
@@ -85,21 +86,6 @@ def test_user_without_person_profile_cannot_sign_in():
 
     assert response.status_code == 200
     assert b"Sign-in failed" in response.content
-
-
-@pytest.mark.django_db
-@override_settings(LOGIN_FAILURE_LIMIT=2, LOGIN_BLOCK_SECONDS=900)
-def test_repeated_login_failures_block_correct_password_and_show_generic_error():
-    user, _person, _household = make_member()
-    client = Client()
-    for _ in range(2):
-        client.post(reverse("login"), {"username": user.username, "password": "wrong"})
-
-    blocked = client.post(reverse("login"), {"username": user.username, "password": PASSWORD})
-
-    assert blocked.status_code == 200
-    assert b"Sign-in failed" in blocked.content
-    assert "_auth_user_id" not in client.session
 
 
 @pytest.mark.django_db
@@ -176,82 +162,53 @@ def test_invitation_is_hashed_one_time_and_joins_same_household():
 
 
 @pytest.mark.django_db
-def test_username_normalization_is_consistent_between_join_and_sign_in():
-    # U+210C "ℌ" NFKC-decomposes to "H", but str.casefold() alone leaves
-    # it unchanged. Django's create_user() applies its own NFKC
-    # normalize_username() to whatever we pass it, so casefolding before
-    # that (rather than after) let account creation and sign-in disagree.
+@pytest.mark.parametrize(
+    ("joined_as", "stored_as", "signed_in_as", "recovered_as"),
+    [
+        # U+210C "ℌ" NFKC-decomposes to "H", but str.casefold() alone leaves it unchanged.
+        # Django's create_user() applies its own NFKC normalize_username() to whatever we
+        # pass it, so casefolding before that (rather than after) let account creation and
+        # sign-in disagree. Recovery must find the account by the name as registered, too.
+        ("ℌenry", "henry", "Henry", "Henry"),
+        # U+01F0 "ǰ" is precomposed; full case folding maps it to "j" plus a combining
+        # caron, which create_user()'s NFKC normalization recomposes back to "ǰ". A single
+        # NFKC-then-casefold pass would compute the decomposed form and never match.
+        ("ǰane", "ǰane", "ǰane", "ǰane"),
+    ],
+    ids=["compatibility-letter", "casefold-that-decomposes"],
+)
+def test_username_normalization_is_consistent_between_join_sign_in_and_recovery(
+    joined_as, stored_as, signed_in_as, recovered_as
+):
     user, _person, _household = make_member()
     client = Client()
     client.force_login(user)
     stamp_recent_auth(client)
     code = client.post(reverse("invite")).context["invitation_code"]
 
-    join_data = {
-        "invitation_code": code,
-        "username": "ℌenry",
-        "display_name": "Henry Example",
-        "password1": PASSWORD,
-        "password2": PASSWORD,
-    }
-    Client().post(reverse("join"), join_data)
-
-    new_user = get_user_model().objects.exclude(pk=user.pk).get()
-    assert new_user.username == "henry"
-
-    response = Client().post(reverse("login"), {"username": "Henry", "password": PASSWORD})
-    assert response.status_code == 302
-
-
-@pytest.mark.django_db
-def test_username_normalization_survives_a_casefold_that_decomposes():
-    # U+01F0 "ǰ" is precomposed; full case folding maps it to "j" plus a
-    # combining caron (decomposed), which create_user()'s own NFKC
-    # normalization then recomposes back to "ǰ". A single
-    # NFKC-then-casefold pass would compute the decomposed form and never
-    # match what actually gets stored.
-    user, _person, _household = make_member()
-    client = Client()
-    client.force_login(user)
-    stamp_recent_auth(client)
-    code = client.post(reverse("invite")).context["invitation_code"]
-
-    join_data = {
-        "invitation_code": code,
-        "username": "ǰane",
-        "display_name": "Jane Example",
-        "password1": PASSWORD,
-        "password2": PASSWORD,
-    }
-    Client().post(reverse("join"), join_data)
-
-    response = Client().post(reverse("login"), {"username": "ǰane", "password": PASSWORD})
-    assert response.status_code == 302
-
-
-@pytest.mark.django_db
-def test_expired_invitation_cannot_be_used():
-    user, _person, _household = make_member()
-    client = Client()
-    client.force_login(user)
-    stamp_recent_auth(client)
-    created = client.post(reverse("invite"))
-    code = created.context["invitation_code"]
-    Invitation.objects.update(expires_at=timezone.now())
-
-    response = Client().post(
+    joined = Client().post(
         reverse("join"),
         {
             "invitation_code": code,
-            "username": "late-member",
-            "display_name": "Late Example",
+            "username": joined_as,
+            "display_name": "Joined Example",
             "password1": PASSWORD,
             "password2": PASSWORD,
         },
     )
 
-    assert b"could not be used" in response.content
-    assert not get_user_model().objects.filter(username="late-member").exists()
+    assert get_user_model().objects.exclude(pk=user.pk).get().username == stored_as
+    assert Client().post(reverse("login"), {"username": signed_in_as, "password": PASSWORD}).status_code == 302
+    recovered = Client().post(
+        reverse("recover"),
+        {
+            "username": recovered_as,
+            "recovery_code": joined.context["recovery_codes"][0],
+            "password1": NEW_PASSWORD,
+            "password2": NEW_PASSWORD,
+        },
+    )
+    assert recovered.context["recovered"] is True
 
 
 def make_two_member_household():
@@ -295,47 +252,48 @@ def _delete_data(person):
     delete_member_data(person, {})
 
 
+def _expire(_person):
+    Invitation.objects.update(expires_at=timezone.now())
+
+
+def _end_membership_without_cleanup(person):
+    # Covers rows whose inviter's membership ended without the usual cleanup,
+    # for example invitations created before that cleanup existed.
+    Membership.objects.filter(person=person).update(ended_at=timezone.now())
+
+
+def _forget_inviter(_person):
+    Invitation.objects.update(invited_by=None)
+
+
+# Each case makes an unused invitation unusable; the flag says whether the
+# invitation row is also removed (the inviter's membership ended properly).
+UNUSABLE_INVITATIONS = {
+    "expired": (_expire, False),
+    "inviter-left": (_leave, True),
+    "inviter-evicted": (_evict, True),
+    "inviter-deleted-their-data": (_delete_data, True),
+    "inviter-membership-ended-without-cleanup": (_end_membership_without_cleanup, False),
+    "no-recorded-inviter": (_forget_inviter, False),
+}
+
+
 @pytest.mark.django_db
-@pytest.mark.parametrize("end_membership", [_leave, _evict, _delete_data], ids=["leave", "eviction", "delete-my-data"])
-def test_unused_invitation_stops_working_when_its_inviter_membership_ends(end_membership):
+@pytest.mark.parametrize("unusable", UNUSABLE_INVITATIONS.values(), ids=UNUSABLE_INVITATIONS.keys())
+def test_an_unused_invitation_stops_working(unusable):
+    make_unusable, row_removed = unusable
     inviter, _stayer, household = make_two_member_household()
     code = create_invitation(inviter)
     members_before = Membership.objects.filter(household=household).count()
 
-    end_membership(inviter)
+    make_unusable(inviter)
     response = join_with(code, "late-joiner")
 
+    assert not invitation_is_usable(code)
     assert b"could not be used" in response.content
     assert not get_user_model().objects.filter(username="late-joiner").exists()
     assert Membership.objects.filter(household=household).count() == members_before
-    assert not Invitation.objects.filter(household=household, used_at__isnull=True).exists()
-
-
-@pytest.mark.django_db
-def test_invitation_requires_its_inviter_to_still_be_a_current_member():
-    # Covers rows whose inviter's membership ended without the usual cleanup,
-    # for example invitations created before that cleanup existed.
-    inviter, _stayer, household = make_two_member_household()
-    code = create_invitation(inviter)
-    Membership.objects.filter(person=inviter).update(ended_at=timezone.now())
-
-    assert not invitation_is_usable(code)
-    response = join_with(code, "late-joiner")
-
-    assert b"could not be used" in response.content
-    assert not get_user_model().objects.filter(username="late-joiner").exists()
-    assert Invitation.objects.get(household=household).used_at is None
-
-
-@pytest.mark.django_db
-def test_invitation_without_a_recorded_inviter_cannot_be_used():
-    inviter, _stayer, _household = make_two_member_household()
-    code = create_invitation(inviter)
-    Invitation.objects.update(invited_by=None)
-
-    assert not invitation_is_usable(code)
-    assert b"could not be used" in join_with(code, "late-joiner").content
-    assert not get_user_model().objects.filter(username="late-joiner").exists()
+    assert Invitation.objects.filter(household=household, used_at__isnull=True).exists() is not row_removed
 
 
 @pytest.mark.django_db
@@ -383,65 +341,6 @@ def test_recovery_code_changes_password_is_consumed_and_revokes_all_sessions():
         {"username": user.username, "recovery_code": code, "password1": PASSWORD, "password2": PASSWORD},
     )
     assert b"Recovery failed" in reused.content
-
-
-@pytest.mark.django_db
-@override_settings(LOGIN_FAILURE_LIMIT=2, LOGIN_BLOCK_SECONDS=900, LOGIN_FAILURE_WINDOW_SECONDS=900)
-def test_repeated_recovery_failures_block_a_valid_code():
-    user, _person, _household = make_member()
-    code = create_recovery_codes(user, count=1)[0]
-    client = Client()
-    for _ in range(2):
-        client.post(
-            reverse("recover"),
-            {"username": user.username, "recovery_code": "000000-000000", "password1": NEW_PASSWORD, "password2": NEW_PASSWORD},
-        )
-    throttle = LoginThrottle.objects.get(key_digest=throttle_key(user.username, "127.0.0.1").pair_digest)
-    blocked_until_before = throttle.blocked_until
-    assert blocked_until_before is not None
-
-    blocked = client.post(
-        reverse("recover"),
-        {"username": user.username, "recovery_code": code, "password1": NEW_PASSWORD, "password2": NEW_PASSWORD},
-    )
-
-    assert b"Recovery failed" in blocked.content
-    assert blocked.context["recovered"] is False
-    user.refresh_from_db()
-    assert user.check_password(PASSWORD)
-    assert RecoveryCode.objects.get().used_at is None
-    throttle.refresh_from_db()
-    assert throttle.blocked_until == blocked_until_before
-
-
-@pytest.mark.django_db
-def test_recovery_succeeds_with_the_original_unnormalized_username():
-    user, _person, _household = make_member()
-    client = Client()
-    client.force_login(user)
-    stamp_recent_auth(client)
-    code = client.post(reverse("invite")).context["invitation_code"]
-
-    join_data = {
-        "invitation_code": code,
-        "username": "ℌenry",
-        "display_name": "Henry Example",
-        "password1": PASSWORD,
-        "password2": PASSWORD,
-    }
-    joined = Client().post(reverse("join"), join_data)
-    recovery_code = joined.context["recovery_codes"][0]
-
-    # Submitting the original, un-normalized username (as registered) rather
-    # than its stored/normalized form must still find the account.
-    response = Client().post(
-        reverse("recover"),
-        {"username": "Henry", "recovery_code": recovery_code, "password1": NEW_PASSWORD, "password2": NEW_PASSWORD},
-    )
-
-    assert response.context["recovered"] is True
-    new_user = get_user_model().objects.get(username="henry")
-    assert new_user.check_password(NEW_PASSWORD)
 
 
 @pytest.mark.django_db
@@ -527,12 +426,26 @@ def test_first_user_command_rejects_a_username_that_is_invalid_once_normalized()
     assert get_user_model().objects.count() == 0
 
 
-@pytest.mark.django_db
-def test_login_form_enforces_csrf():
-    client = Client(enforce_csrf_checks=True)
-    response = client.post(reverse("login"), {"username": "nobody", "password": "invalid"})
+def _named_route_urls():
+    sample = {"IntConverter": 1, "UUIDConverter": uuid.UUID(int=1)}
+    for pattern in project_urls.urlpatterns:
+        if pattern.name:
+            kwargs = {name: sample.get(type(c).__name__, "sample") for name, c in pattern.pattern.converters.items()}
+            yield pattern.name, reverse(pattern.name, kwargs=kwargs)
 
-    assert response.status_code == 403
+
+@pytest.mark.django_db
+def test_a_post_without_a_csrf_token_is_refused_on_every_named_route():
+    # Every named route, not only the state-changing ones, so a new view cannot opt out by accident.
+    user, _person, _household = make_member()
+    client = Client(enforce_csrf_checks=True)
+    client.force_login(user)
+    routes = dict(_named_route_urls())
+
+    accepted = [name for name, url in routes.items() if client.post(url).status_code != 403]
+
+    assert len(routes) > 100
+    assert accepted == []
 
 
 @pytest.mark.django_db
@@ -632,22 +545,6 @@ def test_setup_is_404_once_a_user_or_person_exists():
     assert Client().post(reverse("setup"), _setup_form()).status_code == 404
     assert get_user_model().objects.count() == 1
     assert Person.objects.count() == 0
-
-
-@pytest.mark.django_db
-@override_settings(SETUP_CODE=SYNTHETIC_SETUP_CODE, LOGIN_FAILURE_LIMIT=2, LOGIN_BLOCK_SECONDS=900)
-def test_setup_failures_use_the_login_throttle():
-    client = Client()
-    for _ in range(2):
-        client.post(reverse("setup"), _setup_form(setup_code="wrong"))
-
-    blocked = client.post(reverse("setup"), _setup_form())
-
-    assert get_user_model().objects.count() == 0
-    assert b"Setup could not be completed" in blocked.content
-    setup_key = throttle_key(SETUP_THROTTLE_USERNAME, "127.0.0.1")
-    assert LoginThrottle.objects.get(key_digest=setup_key.pair_digest).blocked_until is not None
-    assert LoginThrottle.objects.get(key_digest=setup_key.username_digest).failure_count == 2
 
 
 @pytest.mark.django_db

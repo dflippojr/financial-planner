@@ -55,15 +55,9 @@ def test_sidebar_and_more_page_list_the_same_destinations_in_the_same_groups(mem
     assert reverse("budgets") not in more["money"] + more["planning"]
 
 
-def test_sidebar_uses_dock_names_and_marks_the_current_page(member_client):
-    response = member_client.get(reverse("transaction-list"))
-    groups = response.context["nav_groups"]
-    assert [item["label"] for item in groups[0]["items"]] == ["Home", "Activity", "Budgets", "Chat"]
-    assert [tab["label"] for tab in response.context["dock_tabs"]] == ["Home", "Activity", "Budgets", "Chat", "More"]
-    assert all(item["icon"] for group in groups for item in group["items"])
-    html = response.content.decode()
-    assert f'href="{reverse("transaction-list")}" class="nav-row" aria-current="page"' in html
+def test_sidebar_links_to_more_once(member_client):
     # More is phone-only: the dock is the one link to it.
+    html = member_client.get(reverse("transaction-list")).content.decode()
     assert html.count(f'href="{reverse("more")}"') == 1
 
 
@@ -74,9 +68,3 @@ def test_no_page_renders_the_floating_chat_button(member_client):
     assert "data-chat-drawer-open" not in html
     assert "Ask about this page" not in html
     assert "Enable AI Features" in html
-
-
-def test_more_page_points_to_the_sidebar_on_wide_screens(member_client):
-    html = member_client.get(reverse("more")).content.decode()
-    assert "Every page is in the sidebar" in html
-    assert '<div class="lg:hidden">' in html

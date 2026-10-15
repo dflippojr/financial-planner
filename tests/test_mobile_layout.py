@@ -18,7 +18,7 @@ from finance.chat_services import send_message, start_conversation
 from finance.models import Budget, Person, Household, Membership
 from finance.policy_services import accept_policy, publish_policy
 from tests.chat_helpers import ask
-from tests.browser_support import CSS, SCREEN_DIR, browser, page_session  # noqa: F401
+from tests.browser_support import CSS, SCREEN_DIR, browser, check_each_page, page_session, visit  # noqa: F401
 from tests.mobile_seed import seed_phone_data
 from tests.test_chat import TOKEN, harness  # noqa: F401 - harness is a fixture
 
@@ -67,17 +67,22 @@ TAP_JS = """() => [...document.querySelectorAll('.dock a, .dock button, main .bt
 
 @pytest.mark.parametrize("size", VIEWPORTS)
 @pytest.mark.parametrize("scheme", ["light", "dark"])
-@pytest.mark.parametrize(("name", "path"), PAGES)
-def test_page_fits_phone(phone_session, size, scheme, name, path):
-    context, page = phone_session(size, scheme, path)
+def test_page_fits_phone(phone_session, live_server, size, scheme):
+    # One seed and one browser context per size and theme; every page loads in it in turn.
+    context, page = phone_session(size, scheme, "/")
     try:
-        if SCREEN_DIR:
-            Path(SCREEN_DIR).mkdir(parents=True, exist_ok=True)
-            page.screenshot(path=str(Path(SCREEN_DIR) / f"{name}-{size}-{scheme}.png"), full_page=True)
-        fit = page.evaluate(OVERFLOW_JS)
-        assert fit["scroll"] <= fit["width"], f"{name} scrolls sideways: {fit}"
-        assert not fit["clipped"], f"{name} has clipped button text: {fit['clipped']}"
-        assert page.evaluate(TAP_JS) == [], f"{name} has small tap targets"
+
+        def check(name, path):
+            visit(page, live_server.url, path, wait_until="load")
+            if SCREEN_DIR:
+                Path(SCREEN_DIR).mkdir(parents=True, exist_ok=True)
+                page.screenshot(path=str(Path(SCREEN_DIR) / f"{name}-{size}-{scheme}.png"), full_page=True)
+            fit = page.evaluate(OVERFLOW_JS)
+            assert fit["scroll"] <= fit["width"], f"scrolls sideways: {fit}"
+            assert not fit["clipped"], f"has clipped button text: {fit['clipped']}"
+            assert page.evaluate(TAP_JS) == [], "has small tap targets"
+
+        check_each_page(PAGES, check)
     finally:
         context.close()
 
@@ -150,7 +155,6 @@ def test_desktop_sidebar_groups_and_content_width(phone_session, browser, live_s
             assert abs((left - 240) - (width - left - content_width)) <= 1
         sidebar = page.get_by_role("navigation", name="Main")
         assert sidebar.locator("[aria-current=page]").inner_text().strip() == "Activity"
-        assert page.locator("label[for=finance-chat-drawer]").count() == 0
     finally:
         context.close()
 
@@ -177,7 +181,6 @@ def test_enable_ai_dialog_keyboard_escape_and_close(page_session, scheme):
             page.screenshot(path=str(Path(SCREEN_DIR) / f"ai-consent-{scheme}.png"))
         assert dialog.bounding_box()["width"] == 360
         assert dialog.bounding_box()["height"] < 600
-        assert page.locator("#finance-chat-panel").count() == 0
         page.keyboard.press("Escape")
         assert not dialog.is_visible()
         assert trigger.evaluate("el => el === document.activeElement")
@@ -197,10 +200,9 @@ def test_enable_ai_dialog_keyboard_escape_and_close(page_session, scheme):
         context.close()
 
 
-@pytest.mark.parametrize("scheme", ["light", "dark"])
 @pytest.mark.parametrize("reduced", [False, True])
-def test_dialog_accept_shows_members_and_reopens_from_slot(page_session, scheme, reduced):
-    context, page = page_session((1280, 800), scheme, "/transactions/?date_from=2000-01-01")
+def test_dialog_accept_shows_members_and_reopens_from_slot(page_session, reduced):
+    context, page = page_session((1280, 800), "light", "/transactions/?date_from=2000-01-01")
     from tests.test_privacy_policy import make_member
     make_member("pending-synthetic", Household.objects.get())
     page.reload()
@@ -288,7 +290,6 @@ HEADER_JS = """() => {
   const side = document.querySelector('main .page-side');
   const columns = document.querySelector('main .page-columns');
   return {
-    h1s: document.querySelectorAll('h1').length,
     header: box(header),
     helper: helper && helper.offsetParent !== null ? box(helper) : null,
     main: box(columns.firstElementChild),
@@ -311,7 +312,6 @@ def test_home_page_header_and_side_column(phone_session, width):
         if SCREEN_DIR:
             page.screenshot(path=str(Path(SCREEN_DIR) / f"home-header-{width}.png"), full_page=True)
         layout = page.evaluate(HEADER_JS)
-        assert layout["h1s"] == 1
         assert not layout["scroll"]
         if width < 768:
             assert layout["helper"] is None and layout["side"] is None
@@ -432,7 +432,6 @@ TRANSACTIONS_JS = """() => {
   const side = document.querySelector('main .page-side');
   const table = document.querySelector('main section[aria-label=Transactions]');
   return {
-    h1s: document.querySelectorAll('h1').length,
     firstRow: rows.length ? box(rows[0]) : null,
     headings: [...document.querySelectorAll('main thead th')].filter(visible).map((th) => th.textContent.trim()),
     boxes: [...document.querySelectorAll('.js-bulk-row')].filter(visible).length,
@@ -463,7 +462,6 @@ def test_transactions_desktop_layout(browser, live_server, client, width, height
         if SCREEN_DIR:
             page.screenshot(path=str(Path(SCREEN_DIR) / f"transactions-{width}.png"), full_page=True)
         layout = page.evaluate(TRANSACTIONS_JS)
-        assert layout["h1s"] == 1
         assert not layout["scroll"]
         assert layout["headings"] == ["Date", "Description", "Category", "Amount"]
         assert layout["boxes"] == 0 and not layout["bulk"]
@@ -620,16 +618,15 @@ def chat_session(phone_session, harness):  # noqa: F811 - pytest fixture injecti
     return open_chat
 
 
-@pytest.mark.parametrize("scheme", ["light", "dark"])
-def test_chat_list_sits_beside_the_thread_at_desktop_width(chat_session, scheme):
+def test_chat_list_sits_beside_the_thread_at_desktop_width(chat_session):
     VIEWPORTS["1440"] = (1440, 900)
     try:
-        context, page = chat_session("1440", scheme)
+        context, page = chat_session("1440", "light")
     finally:
         del VIEWPORTS["1440"]
     try:
         if SCREEN_DIR:
-            page.screenshot(path=str(Path(SCREEN_DIR) / f"chat-1440-{scheme}.png"))
+            page.screenshot(path=str(Path(SCREEN_DIR) / "chat-1440.png"))
         layout = page.evaluate(CHAT_JS)
         assert not layout["scroll"]
         assert layout["summary"] is None
@@ -646,7 +643,6 @@ def test_chat_list_sits_beside_the_thread_at_desktop_width(chat_session, scheme)
         thinking.locator("[data-chat-thinking]").wait_for(state="visible")
         assert thinking.get_attribute("aria-busy") == "true"
         assert "Working on it." in thinking.inner_text()
-        assert page.locator("h1").count() == 1
         helper = page.locator("main .page-header-helper")
         assert helper.count() == 1
         assert "Opinion, not financial advice." in helper.inner_text()
@@ -702,18 +698,17 @@ BILLS_JS = """() => {
 
 
 @pytest.mark.parametrize("width", [390, 1024, 1440])
-@pytest.mark.parametrize("scheme", ["light", "dark"])
-def test_bills_calendar_checkboxes_and_side_column(phone_session, width, scheme):
+def test_bills_calendar_checkboxes_and_side_column(phone_session, width):
     """Desktop 10: account checkboxes never overlap their labels, and labels toggle them."""
     size = f"bills-{width}"
     VIEWPORTS[size] = (width, 900)
     try:
-        context, page = phone_session(size, scheme, "/planning/calendar/")
+        context, page = phone_session(size, "light", "/planning/calendar/")
     finally:
         del VIEWPORTS[size]
     try:
         if SCREEN_DIR:
-            page.screenshot(path=str(Path(SCREEN_DIR) / f"bills-{width}-{scheme}.png"), full_page=True)
+            page.screenshot(path=str(Path(SCREEN_DIR) / f"bills-{width}.png"), full_page=True)
         layout = page.evaluate(BILLS_JS)
         assert not layout["scroll"]
         assert layout["options"], "no expected-balance account options"

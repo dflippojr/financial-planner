@@ -17,6 +17,32 @@ CSS = Path(settings.BASE_DIR) / "static" / "dist" / "app.css"
 SCREEN_DIR = os.environ.get("MOBILE_SHOTS_DIR")
 
 
+def check_each_page(pages, check):
+    """Run check(name, path) for every (name, path) and fail once, naming every page that failed.
+
+    A page that breaks one assertion must not hide the pages after it, so each failure is collected
+    and the test asserts at the end.
+    """
+    failures = []
+    for name, path in pages:
+        try:
+            check(name, path)
+        except (AssertionError, sync_api.Error) as error:
+            failures.append(f"- {name} ({path}): {str(error).strip()}")
+    summary = "\n".join([f"{len(failures)} of {len(pages)} pages failed:", *failures])
+    assert not failures, summary
+
+
+def visit(page, base_url, path, wait_until="networkidle"):
+    """Load path in an open page and wait for it to settle.
+
+    The page loops pass wait_until="load": the pages issue no requests after load, so networkidle
+    would only add its fixed 500 ms quiet period to each of the 27 pages.
+    """
+    response = page.goto(base_url + path, wait_until=wait_until)
+    assert response is not None and response.ok, f"{path} answered {response and response.status}"
+
+
 @pytest.fixture(scope="module")
 def browser():
     with sync_api.sync_playwright() as playwright:
