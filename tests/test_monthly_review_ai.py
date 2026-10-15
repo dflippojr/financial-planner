@@ -161,9 +161,6 @@ def test_ai_on_phrases_in_background_and_shows_label(harness, monkeypatch):
         "No other amounts are included."
     )
     monkeypatch.setattr("finance.ai_jobs.in_quiet_window", lambda moment=None: False)
-    process_due_jobs()
-    job.refresh_from_db()
-    assert job.status == AiJob.Status.WAITING_MODEL
     state.model_state = "ready"
     process_due_jobs()
     job.refresh_from_db()

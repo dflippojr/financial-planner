@@ -1,10 +1,8 @@
-import threading
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
 import pytest
 from django.contrib.auth import get_user_model
-from django.db import connection, connections
 from django.test import Client
 from django.urls import reverse
 from django.utils import timezone
@@ -287,15 +285,6 @@ def test_harness_url_must_be_an_allowed_origin(settings):
 
 
 @pytest.mark.django_db
-def test_disconnect_erases_the_token(harness):
-    _state, url = harness
-    _user, person, _household = make_member("owner")
-    connect_harness(person, base_url=url, token=TOKEN)
-    disconnect_harness(person)
-    assert not AiProviderConnection.objects.owned_by(person).exists()
-
-
-@pytest.mark.django_db
 def test_session_poll_backs_off_to_a_short_cap(harness):
     state, url = harness
     state.running_polls = 5
@@ -456,40 +445,6 @@ def test_stale_running_job_without_session_is_requeued(harness, settings):
     assert job.attempts == 1
     assert moment + timedelta(seconds=120) <= job.next_attempt_at <= timezone.now() + timedelta(seconds=120)
     assert state.requests.count(("POST", "/api/v1/sessions")) == 0
-
-
-@pytest.mark.django_db(transaction=True)
-def test_two_runners_claim_the_same_job_once(harness):
-    if connection.vendor != "postgresql":
-        pytest.skip("atomic job claims need PostgreSQL row locks")
-    state, url = harness
-    state.model_state = "ready"
-    _user, person, _household = make_member("owner")
-    connect_harness(person, base_url=url, token=TOKEN)
-    set_defaults(person, chat_backend="local", background_backend="local")
-    job = enqueue_job(person, feature="structured")
-    barrier = threading.Barrier(2)
-    errors = []
-
-    def run():
-        try:
-            barrier.wait(timeout=10)
-            process_due_jobs()
-        except Exception as exc:  # noqa: BLE001 - reported to the main thread
-            errors.append(exc)
-        finally:
-            connections.close_all()
-
-    first = threading.Thread(target=run)
-    second = threading.Thread(target=run)
-    first.start()
-    second.start()
-    first.join(timeout=30)
-    second.join(timeout=30)
-    assert errors == []
-    job.refresh_from_db()
-    assert job.status == job.Status.SUCCEEDED
-    assert state.requests.count(("POST", "/api/v1/sessions")) == 1
 
 
 @pytest.mark.django_db

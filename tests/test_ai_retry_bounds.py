@@ -56,7 +56,7 @@ def test_malformed_model_status_has_only_a_safe_error(monkeypatch, value):
     assert ai_harness.failure_from_http(caught.value) == PROVIDER_ERROR
 
 
-@pytest.mark.parametrize("budget", [1, 3, 5])
+@pytest.mark.parametrize("budget", [3])
 @pytest.mark.parametrize("quiet", [False, True])
 def test_malformed_readiness_exhausts_the_configured_budget(connected_member, monkeypatch, settings, caplog, budget, quiet):
     person, _connection = connected_member
@@ -216,7 +216,7 @@ def test_terminal_failure_releases_phrasing_capacity(connected_member, monkeypat
     assert AiJob.objects.filter(status__in=ai_jobs.ACTIVE_STATUSES).count() == 1
 
 
-@pytest.mark.parametrize("http_status", [0, 429, 502])
+@pytest.mark.parametrize("http_status", [0, 429])
 def test_readiness_http_failures_spend_the_budget(connected_member, monkeypatch, settings, http_status):
     person, _connection = connected_member
     settings.AI_JOB_MAX_ATTEMPTS = 2

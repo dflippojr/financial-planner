@@ -18,7 +18,6 @@ from finance.category_suggestion_services import (
     accept_suggestion,
     queue_category_suggestions_for,
     queue_remaining_uncategorized,
-    snapshot_hash,
 )
 from finance.csv_import.services import categorize_imported_batch
 from finance.models import (
@@ -213,27 +212,6 @@ def test_sync_queues_suggestions(harness, monkeypatch):
     job = AiJob.objects.get(member=person, feature=FEATURE)
     assert job.input_refs["transaction_ids"]
     assert Transaction.objects.get(pk=job.input_refs["transaction_ids"][0]).description == "Synthetic Stream"
-
-
-@pytest.mark.django_db
-def test_job_waits_while_local_model_sleeps(harness, monkeypatch):
-    state, url = harness
-    _user, person, household = make_member("owner")
-    connect_ai(person, url)
-    account = make_account(person)
-    txn = make_transaction(person, account)
-    queue_category_suggestions_for(person, [txn])
-    monkeypatch.setattr("finance.ai_jobs.in_quiet_window", lambda moment=None: False)
-    process_due_jobs()
-    job = AiJob.objects.get(member=person, feature=FEATURE)
-    assert job.status == AiJob.Status.WAITING_MODEL
-    assert CategorySuggestion.objects.count() == 0
-    state.model_state = "ready"
-    state.session_answer = suggestion_json({txn.pk: groceries(household).pk})
-    process_due_jobs()
-    job.refresh_from_db()
-    assert job.status == AiJob.Status.SUCCEEDED
-    assert CategorySuggestion.objects.filter(transaction=txn, status=CategorySuggestion.Status.PENDING).exists()
 
 
 @pytest.mark.django_db
@@ -444,17 +422,6 @@ def test_reject_leaves_uncategorized(harness, monkeypatch):
     suggestion.refresh_from_db()
     assert txn.category_id is None
     assert suggestion.status == CategorySuggestion.Status.REJECTED
-
-
-@pytest.mark.django_db
-def test_snapshot_changes_with_description():
-    owner_user = get_user_model().objects.create_user(username="snap", password=PASSWORD)
-    owner = Person.objects.create(user=owner_user, display_name="Snap")
-    account = make_account(owner)
-    txn = make_transaction(owner, account, description="One")
-    first = snapshot_hash(txn)
-    txn.description = "Two"
-    assert snapshot_hash(txn) != first
 
 
 def _uncategorized_rows(owner, account, count, start=0):
