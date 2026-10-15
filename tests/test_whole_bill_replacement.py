@@ -8,9 +8,9 @@ from datetime import date
 import pytest
 
 from finance.bills_calendar import calendar_inputs
-from finance.models import Account, PlannedItem
+from finance.models import Account, Membership, PlannedItem
 from finance.planning_services import projected_months_for, visible_projection_inputs
-from tests.test_savings_goal_plan import TODAY, household_fixture, make_account, make_confirmed_series
+from tests.test_savings_goal_plan import TODAY, household_fixture, make_account, make_confirmed_series, make_person
 
 
 def _replace(owner, series, *, household=None, name="Synthetic Electric plan"):
@@ -74,12 +74,24 @@ def test_the_combined_projection_counts_the_plan_not_the_members_copy():
 
 @pytest.mark.django_db
 def test_a_replaced_bill_linked_through_a_third_members_copy_is_replaced_whole():
-    owner, member, household, owner_series, member_series = _joint_bill()
-    # The member's copy shares only its September charge with the owner's copy.
-    member_series.members.exclude(transaction__transaction_date=date(2026, 9, 20)).delete()
+    owner, member, household = household_fixture()
+    shared = Account.objects.get(name="Synthetic Joint")
+    third = make_person("third")
+    Membership.objects.create(person=third, household=household)
+    owner_series = make_confirmed_series(owner, "Synthetic Electric", shared, months=(5, 6))
+    member_series = make_confirmed_series(member, "Synthetic Electric", shared, months=(8, 9))
+    # Only the third member's copy shares charges with both: June with the owner's, August with the member's.
+    bridge = make_confirmed_series(third, "Synthetic Electric", shared, months=())
+    for series, month in ((owner_series, 6), (member_series, 8)):
+        stored = series.members.get(transaction__transaction_date=date(2026, month, 20))
+        bridge.members.create(transaction=stored.transaction)
     _replace(owner, owner_series, household=household)
 
     assert _views(member)[0] == ["Synthetic Electric plan"]
+    member_series.refresh_from_db()
+    assert not set(owner_series.members.values_list("transaction", flat=True)) & set(
+        member_series.members.values_list("transaction", flat=True)
+    )
 
 
 @pytest.mark.django_db

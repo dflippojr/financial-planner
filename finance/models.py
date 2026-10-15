@@ -1,6 +1,7 @@
 import uuid
 from .input_limits import BUDGET_MONTH_FLOOR, MAX_DESCRIPTION_CHARS
-from decimal import ROUND_HALF_EVEN, Decimal
+from decimal import Decimal
+from fractions import Fraction
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, ValidationError
@@ -1096,7 +1097,8 @@ class RefundLink(models.Model):
 
 def monthly_from_annual_minor(annual_minor):
     """A monthly amount from an annual one, in minor units: annual / 12 rounded half-even (#507)."""
-    return int((Decimal(annual_minor) / 12).quantize(Decimal(1), rounding=ROUND_HALF_EVEN))
+    # round() on a Fraction is exact and rounds half to even.
+    return round(Fraction(annual_minor, 12))
 
 
 class RecurringSeries(models.Model):

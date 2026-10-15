@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.db.models import Exists, Max, OuterRef, Q
+from django.db.models import Exists, OuterRef, Q
 
 from .access import DENIED as _DENIED
 from .access import require_person as _person
@@ -152,7 +152,6 @@ def _one_series_per_bill(rows, replaced, member_ids, household, eligible, *, sel
         if current is None or current.pk not in by_pk:
             continue
         row = by_pk[current.pk]
-        row.last_on = bill.last_on
         row.last_charge = bill.charges[-1]
         row.charge_dates = [txn.transaction_date for txn in bill.charges[-ANCHOR_CHARGES:]]
         chosen.append(row)
@@ -276,7 +275,8 @@ def visible_projection_inputs(principal, *, account=None, scope="", accounts=Non
         )
         series = confine_recurring_series_to_accounts(series, allowed)
     series_rows = list(
-        series.annotate(last_on=Max("members__transaction__transaction_date")).order_by("display_name", "pk")
+        # The member join repeats a series once per eligible charge.
+        series.distinct().order_by("display_name", "pk")
     )
     if shared_series:
         series_rows = _one_series_per_bill(

@@ -79,6 +79,17 @@ def test_detection_chains_across_a_clamped_month(dates):
     assert series.transaction_ids == tuple(range(1, len(dates) + 1))
 
 
+def test_detection_keeps_a_chain_whose_anchor_differs_from_the_first_found():
+    # Jan 31 reaches Feb 28 first, but its anchor (31) would expect Mar 31 and
+    # miss Mar 27; the chain from Feb 1 anchors on the 28th and reaches it.
+    (series,) = detect_recurring_series(
+        _rows((date(2030, 1, 31), date(2030, 2, 1), date(2030, 2, 28), date(2030, 3, 27)))
+    )
+
+    assert series.transaction_ids == (2, 3, 4)
+    assert series.status == RecurringSeries.Status.SUGGESTED
+
+
 @pytest.mark.django_db
 def test_a_confirmed_bill_on_the_31st_continues_with_a_charge_on_the_1st():
     owner = make_person("owner")

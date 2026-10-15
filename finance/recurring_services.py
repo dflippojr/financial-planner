@@ -270,42 +270,44 @@ def _collapse_same_day(transactions):
 
 
 def _longest_chain(ordered, dates, cadence):
-    """Longest cadence chain. `ordered` is sorted by (date, pk); `dates` is its dates."""
+    """Longest cadence chain. `ordered` is sorted by (date, pk); `dates` is its dates.
+
+    A month-end bill's next date depends on its anchor day, which comes from
+    the chain's latest charges, so each charge keeps its best chain for every
+    anchor day a chain can reach it with (at most five: none or 28 to 31).
+    """
     tolerance = CADENCE_DAYS[cadence][1]
     days = [value.toordinal() for value in dates]
-    length = [1] * len(ordered)
-    previous = [-1] * len(ordered)
+    # states[index][anchor] = (length, previous index, previous anchor, latest dates newest first)
+    states = [{_anchor_day((value,), cadence): (1, -1, None, (value,))} for value in dates]
     for start, source in enumerate(dates):
-        # Every earlier charge has its best chain already, so this charge's
-        # anchor day comes from that chain's latest charges.
-        recent = [source]
-        index = previous[start]
-        while index >= 0 and len(recent) < ANCHOR_CHARGES:
-            recent.append(dates[index])
-            index = previous[index]
-        # A step can only land within the cadence tolerance, so look at that
-        # window of the sorted dates instead of every later charge.
-        expected_date = add_cadence(source, cadence, _anchor_day(recent, cadence))
-        if expected_date is None:
-            continue
-        expected = expected_date.toordinal()
-        low = bisect_left(days, expected - tolerance, start + 1)
-        high = bisect_right(days, expected + tolerance, low)
-        candidate = length[start] + 1
-        for end in range(low, high):
-            if candidate > length[end]:
-                length[end] = candidate
-                previous[end] = start
-    if not length:
-        return []
-    end_index = max(range(len(length)), key=lambda index: (length[index], -index))
-    if length[end_index] < 2:
+        for anchor, (length, _previous, _previous_anchor, recent) in list(states[start].items()):
+            # A step can only land within the cadence tolerance, so look at that
+            # window of the sorted dates instead of every later charge.
+            expected_date = add_cadence(source, cadence, anchor)
+            if expected_date is None:
+                continue
+            expected = expected_date.toordinal()
+            low = bisect_left(days, expected - tolerance, start + 1)
+            high = bisect_right(days, expected + tolerance, low)
+            for end in range(low, high):
+                extended = (dates[end], *recent[: ANCHOR_CHARGES - 1])
+                key = _anchor_day(extended, cadence)
+                current = states[end].get(key)
+                if current is None or length + 1 > current[0]:
+                    states[end][key] = (length + 1, start, anchor, extended)
+    best = None
+    for index, by_anchor in enumerate(states):
+        for anchor, state in by_anchor.items():
+            if best is None or state[0] > best[0]:
+                best = (state[0], index, anchor)
+    if best is None or best[0] < 2:
         return []
     chain = []
-    index = end_index
+    _length, index, anchor = best
     while index >= 0:
         chain.append(ordered[index])
-        index = previous[index]
+        _length, index, anchor, _recent = states[index][anchor]
     chain.reverse()
     return chain
 
