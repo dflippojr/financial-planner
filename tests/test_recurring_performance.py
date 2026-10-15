@@ -106,8 +106,9 @@ def _golden_digest():
 
 
 def test_detected_series_match_the_ones_found_before_the_search_was_rewritten():
-    # Recorded from the previous O(n^3) search over these same synthetic merchants.
-    assert _golden_digest() == "e99cbe20bd0bacad076e4cdca0f39b6ae48ac0c31583069ec1353aa03ee7c193"
+    # Recorded from the previous O(n^3) search over these same synthetic merchants,
+    # then re-recorded when month-end bills began keeping their anchor day (#505).
+    assert _golden_digest() == "7940aeaee9c7a0717d14183d9c50d00f6d554e595e453a0d8480532ca09a1732"
 
 
 @pytest.fixture

@@ -25,7 +25,7 @@ from .bill_grouping import (
 )
 from .lifecycle_services import lock_actor_household
 from .models import Account, AuditEvent, Membership, Person, RecurringExclusion, RecurringSeries, RecurringSeriesMember, Transaction
-from .months import add_months_clamped
+from .months import add_months, month_end
 
 MANUAL_REASON = "grouping edited manually"
 MANUAL_CREATED_REASON = "created manually by the member, not detected"
@@ -39,7 +39,7 @@ MAX_AMOUNT_VARIANCE = Decimal("0.25")
 # the page) rather than holding a request for minutes.
 MAX_CHARGES_PER_MERCHANT = 600
 # Bump when detection rules change so every household detects again.
-DETECTION_VERSION = "1"
+DETECTION_VERSION = "2"
 CADENCE_DAYS = {
     RecurringSeries.Cadence.WEEKLY: (7, 3),
     RecurringSeries.Cadence.BIWEEKLY: (14, 3),
@@ -62,24 +62,94 @@ def merchant_key(description):
     return " ".join(tokens)[: RecurringSeries._meta.get_field("merchant_key").max_length].rstrip()
 
 
-_CADENCE_STEPS = {
-    RecurringSeries.Cadence.WEEKLY: lambda value: value + timedelta(days=7),
-    RecurringSeries.Cadence.BIWEEKLY: lambda value: value + timedelta(days=14),
-    RecurringSeries.Cadence.MONTHLY: lambda value: add_months_clamped(value, 1),
-    RecurringSeries.Cadence.QUARTERLY: lambda value: add_months_clamped(value, 3),
-    RecurringSeries.Cadence.ANNUAL: lambda value: add_months_clamped(value, 12),
+_WEEK_STEPS = {
+    RecurringSeries.Cadence.WEEKLY: 7,
+    RecurringSeries.Cadence.BIWEEKLY: 14,
 }
+_MONTH_STEPS = {
+    RecurringSeries.Cadence.MONTHLY: 1,
+    RecurringSeries.Cadence.QUARTERLY: 3,
+    RecurringSeries.Cadence.ANNUAL: 12,
+}
+# A bill due at the end of the month keeps its day after a month too short
+# for it: one on the 31st expects Mar 31 after a charge on Feb 28, and a charge
+# that slipped to Apr 1 stands for Mar 31 (#505). The anchor day comes from
+# this many latest charges, and only month-end days count toward it, so a bill
+# due mid-month still steps from its last charge.
+ANCHOR_CHARGES = 3
+MONTH_END_DAY = 28
+
+
+def _on_day(value: date, day: int) -> date:
+    return value.replace(day=min(day, month_end(value).day))
+
+
+def _anchor_day(recent, cadence):
+    """The month-end day a calendar cadence keeps, from its latest charges' dates, or None."""
+    if cadence not in _MONTH_STEPS:
+        return None
+    tolerance = CADENCE_DAYS[cadence][1]
+    late = [value.day for value in recent if value.day >= MONTH_END_DAY]
+    slipped = [value for value in recent if value.day <= tolerance]
+    # A bill due on the 1st that once posted early on the 30th stays a 1st bill.
+    if not late or len(late) < len(slipped):
+        return None
+    return max(late)
 
 
 @lru_cache(maxsize=65536)
-def add_cadence(value: date, cadence: str) -> date | None:
-    """The next expected date, or None when it would fall past the calendar's end."""
-    if cadence not in _CADENCE_STEPS:
+def _anchored(value: date, cadence: str, anchor_day: int | None) -> tuple:
+    """The date `value` stands for and the day of month to keep from it.
+
+    A month-end charge keeps the anchor day. One that slipped a few days into
+    the next month stands for the anchored date in the month before. Any other
+    charge keeps its own day.
+    """
+    if anchor_day is not None:
+        if value.day >= MONTH_END_DAY:
+            return value, anchor_day
+        if value.day <= CADENCE_DAYS[cadence][1] and (value.year, value.month) != (1, 1):
+            before = _on_day(add_months(value, -1), anchor_day)
+            if (value - before).days <= CADENCE_DAYS[cadence][1]:
+                return before, anchor_day
+    return value, value.day
+
+
+@lru_cache(maxsize=65536)
+def add_cadence(value: date, cadence: str, anchor_day: int | None = None) -> date | None:
+    """The next expected date, or None when it would fall past the calendar's end.
+
+    `anchor_day` is the month-end day a monthly, quarterly or annual bill keeps
+    (see `_anchor_day`); without it the step keeps `value`'s own day.
+    """
+    days = _WEEK_STEPS.get(cadence)
+    months = _MONTH_STEPS.get(cadence)
+    if days is None and months is None:
         raise ValueError("Unknown cadence")
     try:
-        return _CADENCE_STEPS[cadence](value)
+        if days is not None:
+            return value + timedelta(days=days)
+        nominal, day = _anchored(value, cadence, anchor_day)
+        return _on_day(add_months(nominal, months), day)
     except (OverflowError, ValueError):
         return None
+
+
+def next_charge_date(dates, cadence):
+    """The date after the last of `dates` (oldest first), or None when there is none."""
+    dates = list(dates)
+    if not dates:
+        return None
+    return add_cadence(dates[-1], cadence, _anchor_day(dates[-ANCHOR_CHARGES:], cadence))
+
+
+def projection_anchor_day(dates, cadence):
+    """The day of month projected charges after `dates` keep, or None to keep the start's own day."""
+    dates = list(dates)
+    anchor_day = _anchor_day(dates[-ANCHOR_CHARGES:], cadence) if dates else None
+    if anchor_day is None:
+        return None
+    return _anchored(dates[-1], cadence, anchor_day)[1]
 
 
 def _median_minor(values):
@@ -196,9 +266,16 @@ def _longest_chain(ordered, dates, cadence):
     length = [1] * len(ordered)
     previous = [-1] * len(ordered)
     for start, source in enumerate(dates):
+        # Every earlier charge has its best chain already, so this charge's
+        # anchor day comes from that chain's latest charges.
+        recent = [source]
+        index = previous[start]
+        while index >= 0 and len(recent) < ANCHOR_CHARGES:
+            recent.append(dates[index])
+            index = previous[index]
         # A step can only land within the cadence tolerance, so look at that
         # window of the sorted dates instead of every later charge.
-        expected_date = add_cadence(source, cadence)
+        expected_date = add_cadence(source, cadence, _anchor_day(recent, cadence))
         if expected_date is None:
             continue
         expected = expected_date.toordinal()
@@ -227,10 +304,11 @@ def _confidence_and_reasons(chain, cadence):
     minors = [item.amount_minor for item in chain]
     exact = len({abs(value) for value in minors}) == 1
     step = _largest_consecutive_step(chain)
+    dates = [item.transaction_date for item in chain]
     date_slop = []
-    for left, right in zip(chain, chain[1:]):
-        expected = add_cadence(left.transaction_date, cadence)
-        date_slop.append(abs((right.transaction_date - expected).days))
+    for index in range(1, len(dates)):
+        expected = next_charge_date(dates[:index], cadence)
+        date_slop.append(abs((dates[index] - expected).days))
     max_slop = max(date_slop) if date_slop else 0
     count = len(chain)
     if exact:
@@ -605,9 +683,10 @@ def irregular_history_notes(ordered, cadence):
     """Plain-language flags for history that detection itself would not accept."""
     tolerance = CADENCE_DAYS[cadence][1]
     notes = []
+    dates = [item.transaction_date for item in ordered]
     if any(
-        abs((right.transaction_date - add_cadence(left.transaction_date, cadence)).days) > tolerance
-        for left, right in zip(ordered, ordered[1:])
+        abs((dates[index] - next_charge_date(dates[:index], cadence)).days) > tolerance
+        for index in range(1, len(dates))
     ):
         notes.append(f"irregular history: some dates are more than {tolerance} days from a {cadence} interval")
     if not _chain_passes_rolling_band(ordered):
@@ -1393,7 +1472,7 @@ def _continue_from_household_charges(bills, eligible):
                 continue
             if not _in_confirmed_amount_band(anchor.typical_amount_minor, txn.amount_minor):
                 continue
-            expected = add_cadence(last, anchor.cadence)
+            expected = next_charge_date([charge.transaction_date for charge in bill.charges], anchor.cadence)
             if expected is None:
                 break
             gap = (txn.transaction_date - expected).days

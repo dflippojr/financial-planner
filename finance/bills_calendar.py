@@ -145,6 +145,7 @@ def calendar_inputs(principal, *, scope="", today=None):
                 start=item.start,
                 end=item.end,
                 cadence=item.cadence,
+                anchor_day=getattr(item, "anchor_day", None),
                 source=item.source,
                 source_id=item.source_id,
                 account_id=account_id,
@@ -176,7 +177,7 @@ def _expected_on_day(sources, on_date):
     hits = []
     for item in sources:
         if on_date == getattr(item, "due_on", None) or occurrence_dates(
-            item.start, item.end, item.cadence, on_date, on_date
+            item.start, item.end, item.cadence, on_date, on_date, getattr(item, "anchor_day", None)
         ):
             delta = _signed_amount(item)
             hits.append(

@@ -19,14 +19,18 @@ from .models import (
     RecurringSeriesMember,
     SavingsGoal,
 )
-from .recurring_services import resolve_household_bills
+from .recurring_services import (
+    ANCHOR_CHARGES,
+    next_charge_date,
+    projection_anchor_day,
+    resolve_household_bills,
+)
 from .projection import (
     DEFAULT_HORIZON,
     KIND_EXPENSE,
     SOURCE_PLANNED,
     SOURCE_SERIES,
     project_cash_flow,
-    step_occurrence,
 )
 from .scenario import apply_scenario, compare_projected_months
 from .savings_goal_services import goal_progress
@@ -46,16 +50,23 @@ def _planned_input(item):
     )
 
 
-def _series_input(series, last_on, last_charge=None):
-    """A series' projection input; `last_charge` is the bill's latest charge when it is newer than the stored ones."""
+def _series_input(series, charge_dates, last_charge=None):
+    """A series' projection input from its charges' dates, oldest first.
+
+    `last_charge` is the bill's latest charge when it is newer than the stored ones.
+    """
+    start = next_charge_date(charge_dates, series.cadence)
+    if start is None:
+        return None
     return SimpleNamespace(
         name=series.display_name,
         kind=KIND_EXPENSE,
         amount_minor=abs(series.typical_amount_minor),
         currency=series.currency,
-        start=step_occurrence(last_on, series.cadence),
+        start=start,
         end=None,
         cadence=series.cadence,
+        anchor_day=projection_anchor_day(charge_dates, series.cadence),
         source=SOURCE_SERIES,
         source_id=series.pk,
         last_account_id=last_charge.account_id if last_charge else None,
@@ -143,6 +154,7 @@ def _one_series_per_bill(rows, replaced, member_ids, household, eligible, *, sel
         row = by_pk[current.pk]
         row.last_on = bill.last_on
         row.last_charge = bill.charges[-1]
+        row.charge_dates = [txn.transaction_date for txn in bill.charges[-ANCHOR_CHARGES:]]
         chosen.append(row)
     return sorted(chosen, key=lambda row: (row.display_name, row.pk))
 
@@ -242,16 +254,29 @@ def visible_projection_inputs(principal, *, account=None, scope="", accounts=Non
         )
     else:
         series_rows = [row for row in series_rows if row.pk not in replaced]
+        recent = _recent_charge_dates([row.pk for row in series_rows], eligible)
+        for row in series_rows:
+            row.charge_dates = recent.get(row.pk, [])
     for series in series_rows:
-        if series.last_on is None:
-            continue
-        try:
-            inputs.append(_series_input(series, series.last_on, getattr(series, "last_charge", None)))
-        except (OverflowError, ValueError):
-            # The next charge would fall past the calendar's end, so it
-            # cannot appear in any projection window.
-            continue
+        item = _series_input(series, series.charge_dates, getattr(series, "last_charge", None))
+        # None when there is no charge, or when the next one would fall past
+        # the calendar's end, so it cannot appear in any projection window.
+        if item is not None:
+            inputs.append(item)
     return inputs
+
+
+def _recent_charge_dates(series_ids, eligible):
+    """Each series' latest eligible charge dates, oldest first, enough to keep its anchor day."""
+    dates = {}
+    rows = (
+        RecurringSeriesMember.objects.filter(series_id__in=series_ids, transaction__in=eligible)
+        .order_by("series_id", "transaction__transaction_date", "transaction_id")
+        .values_list("series_id", "transaction__transaction_date")
+    )
+    for series_id, transaction_date in rows:
+        dates.setdefault(series_id, []).append(transaction_date)
+    return {series_id: values[-ANCHOR_CHARGES:] for series_id, values in dates.items()}
 
 
 def projected_months_for(
