@@ -19,6 +19,7 @@ from tests.fake_provider import (
 from tests.helpers import stamp_recent_auth
 from tests.test_chat import TOKEN, add_txn, checking, harness, make_member  # noqa: F401 - harness is a fixture
 
+from finance.ai_api import default_model
 from finance.ai_jobs import enqueue_job, process_due_jobs
 from finance.ai_services import (
     AiError,
@@ -94,7 +95,7 @@ def test_chat_runs_tools_and_logs_tokens(provider, kind):
     if kind == ANTHROPIC:
         assert first["path"] == "/v1/messages"
         assert first["headers"]["x-api-key"] == ANTHROPIC_KEY
-        assert first["body"]["model"] == "claude-sonnet-5-5"
+        assert first["body"]["model"] == default_model(ANTHROPIC, use_chat=True)
         assert first["body"]["tools"][0]["input_schema"]
         result = second["body"]["messages"][-1]["content"][0]
         assert result["type"] == "tool_result" and result["tool_use_id"] == "toolu_1"
@@ -102,7 +103,7 @@ def test_chat_runs_tools_and_logs_tokens(provider, kind):
         assert first["path"] == "/v1/responses"
         assert first["headers"]["authorization"] == f"Bearer {OPENAI_KEY}"
         assert first["body"]["store"] is False
-        assert first["body"]["model"] == "gpt-6.1-sol"
+        assert first["body"]["model"] == default_model(OPENAI, use_chat=True)
         assert first["body"]["tools"][0]["type"] == "function"
         output = second["body"]["input"][-1]
         assert output["type"] == "function_call_output" and output["call_id"] == "call_1"
@@ -228,7 +229,7 @@ def test_bad_keys_and_models_are_refused(provider):
     with pytest.raises(AiError):
         connect_api_key(person, kind="other", key=OPENAI_KEY)
     connect_api_key(person, kind=OPENAI, key=OPENAI_KEY, chat_model="not-a-model")
-    assert AiProviderConnection.objects.get(owner=person).chat_model == "gpt-6.1-sol"
+    assert AiProviderConnection.objects.get(owner=person).chat_model == default_model(OPENAI, use_chat=True)
 
 
 @pytest.mark.django_db
@@ -267,7 +268,7 @@ def test_background_job_uses_the_api_connection(provider):
     assert process_due_jobs() == 1
     job.refresh_from_db()
     assert job.status == AiJob.Status.SUCCEEDED
-    assert provider.requests[0]["body"]["model"] == "gpt-6-luna"
+    assert provider.requests[0]["body"]["model"] == default_model(OPENAI, use_chat=False)
     assert AiUsageEvent.objects.get(member=person).provider == OPENAI
 
 

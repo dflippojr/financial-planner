@@ -485,8 +485,6 @@ def test_partly_filled_queued_job_tops_up_only_to_batch_size(harness):
 
 @pytest.mark.django_db
 def test_top_up_skips_a_job_the_runner_already_claimed(harness):
-    from finance.category_suggestion_services import _top_up_queued_job
-
     _state, url = harness
     _user, person, _household = make_member("owner")
     connect_ai(person, url)
@@ -498,12 +496,14 @@ def test_top_up_skips_a_job_the_runner_already_claimed(harness):
     claimed.status = AiJob.Status.RUNNING
     claimed.save(update_fields=("status", "updated_at"))
 
-    rest, topped = _top_up_queued_job(claimed.pk, [999001, 999002])
+    later = _uncategorized_rows(person, account, 2, start=3)
+    queue_remaining_uncategorized(person)
 
-    assert topped is None
-    assert rest == [999001, 999002]
     claimed.refresh_from_db()
     assert claimed.input_refs["transaction_ids"] == id_lists[0]
+    jobs, id_lists = _job_id_lists(person)
+    assert [job.pk for job in jobs][0] == claimed.pk
+    assert id_lists[1:] == [[row.pk for row in later]]
 
 
 @pytest.mark.django_db
@@ -577,8 +577,6 @@ def test_resumed_answer_is_dropped_for_a_transaction_changed_since_the_prompt(ha
 
 @pytest.mark.django_db
 def test_top_up_skips_a_retry_that_will_resume_its_session(harness):
-    from finance.category_suggestion_services import _top_up_queued_job
-
     _state, url = harness
     _user, person, _household = make_member("owner")
     connect_ai(person, url)
@@ -591,13 +589,14 @@ def test_top_up_skips_a_retry_that_will_resume_its_session(harness):
     retry.input_refs = {**retry.input_refs, "snapshots": {"1": "synthetic"}}
     retry.save(update_fields=("harness_session_id", "input_refs", "updated_at"))
 
-    rest, topped = _top_up_queued_job(retry.pk, [999001])
+    later = _uncategorized_rows(person, account, 1, start=3)
+    queue_remaining_uncategorized(person)
 
-    assert topped is None
-    assert rest == [999001]
     retry.refresh_from_db()
     assert retry.input_refs["transaction_ids"] == id_lists[0]
     assert retry.input_refs["snapshots"] == {"1": "synthetic"}
+    jobs, id_lists = _job_id_lists(person)
+    assert id_lists[1:] == [[row.pk for row in later]]
 
 
 @pytest.mark.django_db

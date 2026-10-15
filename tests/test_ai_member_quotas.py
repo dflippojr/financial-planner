@@ -332,19 +332,3 @@ def test_member_phrasing_queue_is_bounded(review_harness, settings):
         store_monthly_review(owner, month)
     phrasing = AiJob.objects.filter(member=owner, feature__in=("monthly_review", "unusual_spending"), status__in=ACTIVE)
     assert phrasing.count() == 2
-
-
-@pytest.mark.django_db
-def test_a_month_before_the_earliest_transaction_falls_back_to_the_default(review_harness):
-    owner = _review_member(review_harness)
-    closed = latest_closed_month()
-    client = Client()
-    client.force_login(owner.user)
-
-    page = client.get(reverse("monthly-review") + "?month=2001-01")
-    assert page.context["month"] == closed
-    assert page.context["previous_url"] is None
-
-    response = client.post(reverse("monthly-review-regenerate"), {"month": "2001-01"})
-    assert response["Location"].endswith(f"month={closed.isoformat()[:7]}")
-    assert not MonthlyReview.objects.filter(person=owner, month__lt=closed).exists()

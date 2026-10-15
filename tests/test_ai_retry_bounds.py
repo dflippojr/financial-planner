@@ -14,6 +14,7 @@ from finance.ai_types import PROVIDER_ERROR, ModelStatus, ProviderResult
 from finance.encryption import encrypt_secret
 from finance.models import AiJob, AiProviderConnection, MonthlyReview
 from tests.test_ai_provider import make_member
+from tests.test_chat import TOKEN, harness  # noqa: F401 - harness is a fixture
 
 
 @pytest.fixture(autouse=True)
@@ -44,12 +45,11 @@ def saved_job(person, connection, *, moment, status=AiJob.Status.QUEUED, age=0):
 
 
 @pytest.mark.parametrize("value", ["later-private-provider-text", {"private": "text"}, [1], float("inf")])
-def test_malformed_model_status_has_only_a_safe_error(monkeypatch, value):
-    monkeypatch.setattr(ai_harness, "json_request", Mock(return_value=[
-        {"name": "synthetic-model", "state": "ready", "waking_seconds": value},
-    ]))
+def test_malformed_model_status_has_only_a_safe_error(harness, value):
+    state, url = harness
+    state.waking_seconds = value
     with pytest.raises(HarnessHttpError) as caught:
-        ai_harness.model_status("http://127.0.0.1:12345", "synthetic-token")
+        ai_harness.model_status(url, TOKEN)
     assert caught.value.payload == {}
     assert caught.value.__suppress_context__
     assert str(caught.value) == "The AI provider could not be reached."

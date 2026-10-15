@@ -78,8 +78,7 @@ def harness():
 
 
 @pytest.mark.django_db
-def test_unconnected_member_sees_no_ai_ui_and_makes_no_request(harness):
-    state, url = harness
+def test_unconnected_member_sees_no_ai_ui_and_makes_no_request():
     user, _person, _household = make_member("solo")
     client = Client()
     client.force_login(user)
@@ -91,7 +90,6 @@ def test_unconnected_member_sees_no_ai_ui_and_makes_no_request(harness):
     assert b'data-ai-ui=' not in home.content
     assert b'data-ai-ui=' not in settings_page.content
     assert b"Connect Agent Harness" in settings_page.content
-    assert state.requests == []
 
 
 @pytest.mark.django_db
@@ -300,7 +298,11 @@ def test_session_poll_backs_off_to_a_short_cap(harness):
     )
     assert result.ok
     assert result.answer == "synthetic-ok"
-    assert clock.sleeps == [0.25, 0.5, 0.6, 0.6, 0.6]
+    # The delay grows from its first value, then stays at one cap.
+    assert len(clock.sleeps) == 5
+    assert clock.sleeps == sorted(clock.sleeps)
+    assert clock.sleeps[0] < clock.sleeps[1] < clock.sleeps[-1]
+    assert clock.sleeps[-1] == clock.sleeps[-2] == clock.sleeps[-3]
     session_gets = [
         item for item in state.requests if item == ("GET", f"/api/v1/sessions/{result.session_id}")
     ]

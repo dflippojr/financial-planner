@@ -495,3 +495,21 @@ def test_goal_progress_uses_snapshot_on_or_before_closed_month_end():
     assert facts["savings_goals"][0]["name"] == "Synthetic emergency"
     assert facts["savings_goals"][0]["current_display"] == "2,000.00 USD"
     assert facts["savings_goals"][0]["percent"] == 20
+
+
+@pytest.mark.django_db
+def test_a_month_before_the_earliest_transaction_falls_back_to_the_default():
+    owner = make_person("owner")
+    make_household(owner)
+    closed = latest_closed_month()
+    make_transaction(owner, make_account(owner), transaction_date=closed)
+    store_monthly_review(owner, closed)
+    client = signed_in(owner)
+
+    page = client.get(reverse("monthly-review") + "?month=2001-01")
+    assert page.context["month"] == closed
+    assert page.context["previous_url"] is None
+
+    response = client.post(reverse("monthly-review-regenerate"), {"month": "2001-01"})
+    assert response["Location"].endswith(f"month={closed.isoformat()[:7]}")
+    assert not MonthlyReview.objects.filter(person=owner, month__lt=closed).exists()
