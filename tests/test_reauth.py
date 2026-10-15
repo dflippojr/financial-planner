@@ -434,7 +434,11 @@ def test_stale_session_is_sent_to_reauth_without_side_effects(stale_world, case)
     assert query["action"] == [case.action]
     assert query["next"] == [reverse(case.form_url_name) if case.form_url_name else url]
     assert _database_state() == before
-    assert world.client.get(refused.url).status_code == 200
+    page = world.client.get(refused.url)
+    assert page.status_code == 200
+    assert case.action in reauth.ACTION_LABELS
+    assert page.context["action_label"] == reauth.ACTION_LABELS[case.action]
+    assert reauth.ACTION_LABELS[case.action].encode() in page.content
 
 
 def _decorated_url_names():
