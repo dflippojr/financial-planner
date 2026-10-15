@@ -13,10 +13,7 @@ from finance.bulk_edit_services import (
     ACTION_CATEGORY,
     ACTION_REMOVE_TAGS,
     CHANGED_SINCE,
-    SKIP_INVESTMENT,
-    SKIP_NOTE_TOO_LONG,
-    SKIP_SPLIT,
-    SKIP_TRANSFER,
+    OVER_CAP,
     UNDO_UNAVAILABLE,
     apply_bulk_edit,
     preview_bulk_edit,
@@ -150,42 +147,27 @@ def test_list_has_row_checkboxes_and_select_matching():
     assert "Preview bulk edit" in body
 
 
-@pytest.mark.django_db
-def test_preview_counts_match_applied_category_changes():
-    owner = make_person("owner")
-    household = make_household(owner)
-    account = make_account(owner)
-    first = make_transaction(owner, account, description="Synthetic one", fingerprint="1" * 64)
-    second = make_transaction(owner, account, description="Synthetic two", fingerprint="2" * 64)
-    category = groceries(household)
-    ids = [first.pk, second.pk]
-    preview = preview_bulk_edit(
-        owner,
-        matching=matching_qs(owner),
-        transaction_ids=ids,
-        select_matching=False,
-        action=ACTION_CATEGORY,
-        category_id=category.pk,
+def post_bulk(client, view, ids=(), *, follow=False, **fields):
+    data = {key: value for key, value in fields.items() if value is not None}
+    data["transaction_id"] = [str(pk) for pk in ids]
+    return client.post(reverse(view), data, follow=follow)
+
+
+def apply_previewed(client, preview, **fields):
+    """Post what the preview page's apply form carries: the selection and its eligible ids."""
+    return client.post(
+        reverse("transaction-bulk-apply"),
+        {
+            **fields,
+            "transaction_id": [str(pk) for pk in preview.context["transaction_ids"]],
+            "eligible_id": [str(pk) for pk in preview.context["eligible_ids"]],
+        },
+        follow=True,
     )
-    applied, _undo = apply_bulk_edit(
-        owner,
-        matching=matching_qs(owner),
-        transaction_ids=ids,
-        action=ACTION_CATEGORY,
-        category_id=category.pk,
-    )
-    first.refresh_from_db()
-    second.refresh_from_db()
-    assert preview.eligible_ids == applied.eligible_ids
-    assert set(preview.eligible_ids) == {first.pk, second.pk}
-    assert first.category_id == category.pk
-    assert first.category_source == Transaction.CategorySource.MANUAL
-    assert second.category_source == Transaction.CategorySource.MANUAL
-    assert TransactionCorrectionHistory.objects.filter(field_name="category").count() == 2
 
 
 @pytest.mark.django_db
-def test_skip_reasons_for_category_and_investment():
+def test_category_preview_skips_what_apply_leaves_alone():
     owner = make_person("owner")
     household = make_household(owner)
     checking = make_account(owner, name="Synthetic Checking")
@@ -213,38 +195,54 @@ def test_skip_reasons_for_category_and_investment():
         fingerprint="g" * 64,
         kind=Transaction.Kind.INVESTMENT_ACTIVITY,
     )
-    ids = [cash.pk, split.pk, out_leg.pk, card_out.pk, investment.pk]
-    preview = preview_bulk_edit(
-        owner,
-        matching=matching_qs(owner),
-        transaction_ids=ids,
-        select_matching=False,
-        action=ACTION_CATEGORY,
-        category_id=groceries(household).pk,
-    )
-    assert preview.skip_counts[SKIP_SPLIT] == 1
-    assert preview.skip_counts[SKIP_TRANSFER] == 2
-    assert preview.skip_counts[SKIP_INVESTMENT] == 1
-    assert preview.eligible_ids == [cash.pk]
-    apply_bulk_edit(
-        owner,
-        matching=matching_qs(owner),
-        transaction_ids=ids,
-        action=ACTION_CATEGORY,
-        category_id=groceries(household).pk,
-    )
-    cash.refresh_from_db()
-    split.refresh_from_db()
-    out_leg.refresh_from_db()
-    investment.refresh_from_db()
+    purchase = make_transaction(owner, checking, amount_minor=-4000, description="Synthetic store", fingerprint="p" * 64)
+    refund = make_transaction(owner, checking, amount_minor=1500, description="Synthetic refund", fingerprint="r" * 64)
+    assign_category(owner, purchase.pk, dining(household).pk)
+    link_refund(owner, refund.pk, purchase.pk)
+    ids = [cash.pk, split.pk, out_leg.pk, card_out.pk, investment.pk, purchase.pk, refund.pk]
+    client = Client()
+    client.force_login(owner.user)
+    fields = {"action": ACTION_CATEGORY, "category": str(groceries(household).pk)}
+
+    preview = post_bulk(client, "transaction-bulk-preview", ids, **fields)
+
+    body = preview.content.decode()
+    assert "7 selected. 2 will be updated." in body
+    assert "1 skipped: Split parents" in body
+    assert "2 skipped: Transfers and card payments" in body
+    assert "1 skipped: Investment activity" in body
+    assert "1 skipped: Linked refunds" in body
+    assert sorted(preview.context["eligible_ids"]) == sorted([cash.pk, purchase.pk])
+
+    applied = apply_previewed(client, preview, **fields)
+
+    assert b"Updated 2 transactions" in applied.content
+    for txn in (cash, split, out_leg, investment, purchase, refund):
+        txn.refresh_from_db()
     assert cash.category_id == groceries(household).pk
+    assert cash.category_source == Transaction.CategorySource.MANUAL
+    assert purchase.category_id == groceries(household).pk
+    assert refund.category_id == groceries(household).pk
+    assert refund.category_source == Transaction.CategorySource.INHERITED
     assert split.category_source == Transaction.CategorySource.SPLIT
     assert out_leg.category_id is None
     assert investment.category_id is None
+    assert TransactionCorrectionHistory.objects.filter(field_name="category", transaction=cash).count() == 1
+
+    # Leaving the category blank sends the row back to Uncategorized.
+    cleared = client.post(
+        reverse("transaction-bulk-apply"),
+        {"action": ACTION_CATEGORY, "category": "", "transaction_id": [str(cash.pk)]},
+        follow=True,
+    )
+    assert b"Updated 1 transaction." in cleared.content
+    cash.refresh_from_db()
+    assert cash.category_id is None
+    assert cash.category_source == Transaction.CategorySource.MANUAL
 
 
 @pytest.mark.django_db
-def test_investment_is_skipped_for_tags_and_notes():
+def test_tag_and_note_edits_skip_investment_rows_and_notes_that_would_overflow():
     owner = make_person("owner")
     make_household(owner)
     account = make_account(owner)
@@ -256,28 +254,83 @@ def test_investment_is_skipped_for_tags_and_notes():
         fingerprint="i" * 64,
         kind=Transaction.Kind.INVESTMENT_ACTIVITY,
     )
-    tag = add_tag(owner, "Synthetic tag")
-    preview = preview_bulk_edit(
-        owner,
-        matching=matching_qs(owner),
-        transaction_ids=[cash.pk, investment.pk],
-        select_matching=False,
-        action=ACTION_ADD_TAGS,
-        tag_ids=[tag.pk],
-    )
-    assert preview.skip_counts[SKIP_INVESTMENT] == 1
-    assert preview.eligible_ids == [cash.pk]
-    apply_bulk_edit(
-        owner,
-        matching=matching_qs(owner),
-        transaction_ids=[cash.pk, investment.pk],
-        action=ACTION_APPEND_NOTE,
-        note_line="Synthetic note line",
-    )
-    cash.refresh_from_db()
-    investment.refresh_from_db()
+    nearly_full = make_transaction(owner, account, description="Synthetic long note", fingerprint="j" * 64)
+    nearly_full.note = "x" * 1995
+    nearly_full.save(update_fields=("note", "updated_at"))
+    keep = add_tag(owner, "Keep")
+    drop = add_tag(owner, "Drop")
+    ids = [cash.pk, investment.pk, nearly_full.pk]
+    client = Client()
+    client.force_login(owner.user)
+
+    def edit(**fields):
+        preview = post_bulk(client, "transaction-bulk-preview", ids, **fields)
+        apply_previewed(client, preview, **fields)
+        return preview.content.decode()
+
+    body = edit(action=ACTION_ADD_TAGS, tags=[str(keep.pk), str(drop.pk)])
+    assert "3 selected. 2 will be updated." in body
+    assert "1 skipped: Investment activity" in body
+    assert set(cash.tags.values_list("name", flat=True)) == {"Keep", "Drop"}
+    assert set(nearly_full.tags.values_list("name", flat=True)) == {"Keep", "Drop"}
+    assert not investment.tags.exists()
+
+    body = edit(action=ACTION_REMOVE_TAGS, tags=[str(drop.pk)])
+    assert "2 will be updated." in body
+    assert set(cash.tags.values_list("name", flat=True)) == {"Keep"}
+    assert set(nearly_full.tags.values_list("name", flat=True)) == {"Keep"}
+
+    body = edit(action=ACTION_APPEND_NOTE, note_line="Synthetic note line")
+    assert "3 selected. 1 will be updated." in body
+    assert "1 skipped: Investment activity" in body
+    assert "1 skipped: Note would exceed 2,000 characters" in body
+    for txn in (cash, investment, nearly_full):
+        txn.refresh_from_db()
     assert cash.note == "Synthetic note line"
     assert investment.note == ""
+    assert nearly_full.note == "x" * 1995
+
+
+@pytest.mark.django_db
+def test_selection_cap_applies_to_matching_filters_and_explicit_ids(monkeypatch):
+    owner = make_person("owner")
+    household = make_household(owner)
+    account = make_account(owner)
+    coffee = [
+        make_transaction(owner, account, description=f"Synthetic coffee {name}", fingerprint=name * 64)
+        for name in "abc"
+    ]
+    other = make_transaction(owner, account, description="Synthetic hardware", fingerprint="d" * 64)
+    monkeypatch.setattr("finance.bulk_edit_services.BULK_EDIT_CAP", 2)
+    monkeypatch.setattr("finance.bulk_edit_views.BULK_EDIT_CAP", 2)
+    client = Client()
+    client.force_login(owner.user)
+    fields = {"action": ACTION_CATEGORY, "category": str(groceries(household).pk)}
+
+    over = client.post(
+        reverse("transaction-bulk-preview"),
+        {**fields, "select_matching": "on", "filter_query": "q=coffee"},
+    )
+    assert b"Narrow the filters to select all 3 matching rows (cap 2)" in over.content
+    assert b"Apply bulk edit" not in over.content
+
+    under = client.post(
+        reverse("transaction-bulk-preview"),
+        {**fields, "select_matching": "on", "filter_query": "q=hardware"},
+    )
+    assert b"1 selected. 1 will be updated." in under.content
+    assert under.context["transaction_ids"] == [other.pk]
+
+    explicit = post_bulk(client, "transaction-bulk-preview", [txn.pk for txn in coffee], **fields)
+    assert b"Narrow the filters to select all" in explicit.content
+
+    refused = client.post(
+        reverse("transaction-bulk-apply"),
+        {**fields, "filter_query": "q=coffee", "transaction_id": [str(txn.pk) for txn in coffee]},
+        follow=True,
+    )
+    assert OVER_CAP.encode() in refused.content
+    assert not Transaction.objects.filter(category__isnull=False).exists()
 
 
 @pytest.mark.django_db
@@ -414,124 +467,6 @@ def test_rules_and_ai_do_not_override_bulk_set_category():
     accept_suggestion(owner, suggestion.pk)
     txn.refresh_from_db()
     assert txn.category_id == dining(household).pk
-    assert txn.category_source == Transaction.CategorySource.MANUAL
-
-
-@pytest.mark.django_db
-def test_add_and_remove_tags_and_note_too_long_skip():
-    owner = make_person("owner")
-    make_household(owner)
-    account = make_account(owner)
-    txn = make_transaction(owner, account)
-    keep = add_tag(owner, "Keep")
-    drop = add_tag(owner, "Drop")
-    apply_bulk_edit(
-        owner,
-        matching=matching_qs(owner),
-        transaction_ids=[txn.pk],
-        action=ACTION_ADD_TAGS,
-        tag_ids=[keep.pk, drop.pk],
-    )
-    txn.refresh_from_db()
-    assert set(txn.tags.values_list("name", flat=True)) == {"Keep", "Drop"}
-    apply_bulk_edit(
-        owner,
-        matching=matching_qs(owner),
-        transaction_ids=[txn.pk],
-        action=ACTION_REMOVE_TAGS,
-        tag_ids=[drop.pk],
-    )
-    txn.refresh_from_db()
-    assert set(txn.tags.values_list("name", flat=True)) == {"Keep"}
-    txn.note = "x" * 1995
-    txn.save(update_fields=("note", "updated_at"))
-    preview = preview_bulk_edit(
-        owner,
-        matching=matching_qs(owner),
-        transaction_ids=[txn.pk],
-        select_matching=False,
-        action=ACTION_APPEND_NOTE,
-        note_line="too-long-line",
-    )
-    assert preview.skip_counts[SKIP_NOTE_TOO_LONG] == 1
-    assert preview.eligible_ids == []
-
-
-@pytest.mark.django_db
-def test_select_matching_respects_cap(monkeypatch):
-    owner = make_person("owner")
-    household = make_household(owner)
-    account = make_account(owner)
-    make_transaction(owner, account, description="Synthetic a", fingerprint="m" * 64)
-    make_transaction(owner, account, description="Synthetic b", fingerprint="n" * 64)
-    make_transaction(owner, account, description="Synthetic c", fingerprint="o" * 64)
-    monkeypatch.setattr("finance.bulk_edit_services.BULK_EDIT_CAP", 2)
-    preview = preview_bulk_edit(
-        owner,
-        matching=matching_qs(owner),
-        transaction_ids=[],
-        select_matching=True,
-        action=ACTION_CATEGORY,
-        category_id=groceries(household).pk,
-    )
-    assert preview.over_cap is True
-    assert preview.eligible_ids == []
-    with pytest.raises(ValidationError):
-        apply_bulk_edit(
-            owner,
-            matching=matching_qs(owner),
-            transaction_ids=[],
-            action=ACTION_CATEGORY,
-            category_id=groceries(household).pk,
-        )
-
-
-@pytest.mark.django_db
-def test_explicit_ids_respect_cap(monkeypatch):
-    owner = make_person("owner")
-    household = make_household(owner)
-    account = make_account(owner)
-    first = make_transaction(owner, account, description="Synthetic a", fingerprint="u" * 64)
-    second = make_transaction(owner, account, description="Synthetic b", fingerprint="v" * 64)
-    third = make_transaction(owner, account, description="Synthetic c", fingerprint="w" * 64)
-    monkeypatch.setattr("finance.bulk_edit_services.BULK_EDIT_CAP", 2)
-    ids = [first.pk, second.pk, third.pk]
-    preview = preview_bulk_edit(
-        owner,
-        matching=matching_qs(owner),
-        transaction_ids=ids,
-        select_matching=False,
-        action=ACTION_CATEGORY,
-        category_id=groceries(household).pk,
-    )
-    assert preview.over_cap is True
-    assert preview.eligible_ids == []
-    with pytest.raises(ValidationError):
-        apply_bulk_edit(
-            owner,
-            matching=matching_qs(owner),
-            transaction_ids=ids,
-            action=ACTION_CATEGORY,
-            category_id=groceries(household).pk,
-        )
-
-
-@pytest.mark.django_db
-def test_uncategorized_and_select_matching_under_cap():
-    owner = make_person("owner")
-    household = make_household(owner)
-    account = make_account(owner)
-    txn = make_transaction(owner, account)
-    assign_category(owner, txn.pk, groceries(household).pk)
-    apply_bulk_edit(
-        owner,
-        matching=matching_qs(owner),
-        transaction_ids=[txn.pk],
-        action=ACTION_CATEGORY,
-        category_id=None,
-    )
-    txn.refresh_from_db()
-    assert txn.category_id is None
     assert txn.category_source == Transaction.CategorySource.MANUAL
 
 
