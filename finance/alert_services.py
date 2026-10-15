@@ -1,6 +1,7 @@
 import logging
 from calendar import month_name
 from datetime import timedelta
+from functools import partial
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
@@ -24,12 +25,17 @@ from .models import (
     AlertSettings,
     Budget,
     Person,
+    RecurringSeries,
+    RecurringSeriesMember,
     SimpleFinConnection,
     Transaction,
 )
 from .months import month_start
+from .pass_isolation import run_step
 
 logger = logging.getLogger(__name__)
+
+SERIES_ALERT_KINDS = (Alert.Kind.RECURRING_PRICE, Alert.Kind.RECURRING_MISSED)
 
 _KIND_ENABLED_FIELD = {
     Alert.Kind.SYNC: "sync_enabled",
@@ -106,12 +112,27 @@ def alerts_for(principal):
         _key=Concat(Value("budget:"), Cast("pk", output_field=CharField())),
         _prefix=Concat(Value("budget:"), Cast("pk", output_field=CharField()), Value(":")),
     ).filter(Q(_alert_key=F("_key")) | Q(_alert_key__startswith=F("_prefix")))
+    # A series alert quotes its charges, so it stays visible only while every
+    # account holding one of them does (an unshare or a member leaving hides it).
+    hidden_charges = RecurringSeriesMember.objects.filter(series_id=OuterRef("pk")).exclude(
+        transaction__account_id__in=visible_accounts
+    )
+    series_with_hidden_charges = (
+        RecurringSeries.objects.annotate(
+            _alert_key=Cast(OuterRef("dedupe_key"), output_field=CharField()),
+            _prefix=Concat(Value("recurring:"), Cast("pk", output_field=CharField()), Value(":")),
+        )
+        .filter(_alert_key__startswith=F("_prefix"))
+        .filter(Exists(hidden_charges))
+    )
     return (
         Alert.objects.filter(recipient=person)
         .exclude(kind=Alert.Kind.LARGE_TRANSACTION, account_id__isnull=True)
         .filter(Q(account_id__isnull=True) | Q(account_id__in=visible_accounts))
         .alias(_budget_visible=Exists(visible_budgets))
         .filter(~Q(kind=Alert.Kind.BUDGET) | Q(_budget_visible=True))
+        .alias(_series_hidden=Exists(series_with_hidden_charges))
+        .filter(~Q(kind__in=SERIES_ALERT_KINDS) | Q(_series_hidden=False))
         .order_by("-created_at", "-pk")
     )
 
@@ -499,35 +520,58 @@ def refresh_all_recurring_series(*, today=None):
             )
 
 
+class DailyAlertPassIncomplete(Exception):
+    """One or more steps of the daily alert pass failed; every other step still ran."""
+
+    def __init__(self, steps):
+        self.steps = tuple(steps)
+        super().__init__(f"Daily alert pass steps failed: {', '.join(self.steps)}")
+
+
 @notify_after_alert_run
 @journal_run("daily_alerts")
 def run_daily_alert_pass(*, today=None, now=None):
-    created = evaluate_sync_alerts()
-    # Before the monthly review and expected-balance steps, which read series.
-    refresh_all_recurring_series(today=today)
-    created.extend(evaluate_active_budget_alerts(today=today))
-    created.extend(evaluate_recent_large_transactions())
-    from .backup_health import evaluate_backup_alerts
-    from .monthly_review import generate_due_monthly_reviews
+    """Run every daily alert and retention step, each isolated from the others.
 
-    generate_due_monthly_reviews(today=today)
-    created.extend(evaluate_backup_alerts(today=today, now=now))
-    from .bills_calendar import evaluate_expected_balance_alerts
-
-    created.extend(evaluate_expected_balance_alerts(today=today))
-    from .import_due import evaluate_import_due_alerts
-
-    created.extend(evaluate_import_due_alerts(today=today))
-    purge_old_read_alerts(now=now)
+    A failing step is logged by name and error type only, and the pass moves
+    on. If any step failed, raises DailyAlertPassIncomplete at the end so the
+    daily_alerts journal records a failure. A database-unavailable error stops
+    the pass at once.
+    """
     from .auth_services import purge_expired_login_throttles
+    from .backup_health import evaluate_backup_alerts
+    from .bills_calendar import evaluate_expected_balance_alerts
+    from .import_due import evaluate_import_due_alerts
+    from .monthly_review import generate_due_monthly_reviews
     from .passkey_services import purge_stale_pending_sign_ins
-    from .security_services import purge_expired_sessions, purge_old_security_events, purge_stale_member_sessions
     from .receipt_services import sweep_orphan_receipt_files
+    from .security_services import purge_expired_sessions, purge_old_security_events, purge_stale_member_sessions
 
-    purge_old_security_events(now=now)
-    purge_expired_login_throttles(now=now)
-    purge_expired_sessions(now=now)
-    purge_stale_member_sessions(now=now)
-    purge_stale_pending_sign_ins(now=now)
-    sweep_orphan_receipt_files(now=now)
+    # (name, function, whether it returns new alerts).
+    steps = (
+        ("sync_alerts", evaluate_sync_alerts, True),
+        # Before the monthly review and expected-balance steps, which read series.
+        ("recurring_refresh", partial(refresh_all_recurring_series, today=today), False),
+        ("budget_alerts", partial(evaluate_active_budget_alerts, today=today), True),
+        ("large_transaction_alerts", evaluate_recent_large_transactions, True),
+        ("monthly_reviews", partial(generate_due_monthly_reviews, today=today), False),
+        ("backup_alerts", partial(evaluate_backup_alerts, today=today, now=now), True),
+        ("expected_balance_alerts", partial(evaluate_expected_balance_alerts, today=today), True),
+        ("import_due_alerts", partial(evaluate_import_due_alerts, today=today), True),
+        ("purge_read_alerts", partial(purge_old_read_alerts, now=now), False),
+        ("purge_security_events", partial(purge_old_security_events, now=now), False),
+        ("purge_login_throttles", partial(purge_expired_login_throttles, now=now), False),
+        ("purge_expired_sessions", partial(purge_expired_sessions, now=now), False),
+        ("purge_stale_member_sessions", partial(purge_stale_member_sessions, now=now), False),
+        ("purge_pending_sign_ins", partial(purge_stale_pending_sign_ins, now=now), False),
+        ("receipt_sweep", partial(sweep_orphan_receipt_files, now=now), False),
+    )
+    created = []
+    failed = []
+    for name, function, returns_alerts in steps:
+        result = run_step(name, function, failed=failed, logger=logger)
+        if returns_alerts and result is not None:
+            created.extend(result)
+    if failed:
+        raise DailyAlertPassIncomplete(failed)
     return created

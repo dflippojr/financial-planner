@@ -1,5 +1,6 @@
 """Computed monthly review facts for a closed month, stored per member."""
 
+import logging
 from calendar import month_name
 from datetime import date
 from hashlib import sha256
@@ -10,6 +11,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from .audit_operations import execution, operation, outcome
+from .pass_isolation import for_each_member
 
 from .alert_services import raise_alert, settings_for
 from .budget_services import month_budget_cards
@@ -37,6 +39,8 @@ from .months import add_months, month_end, month_start
 from .net_worth import net_worth_report
 from .recurring_review import build_recurring_review
 from .savings_goal_services import SOURCE_NONE, goal_progress
+
+logger = logging.getLogger(__name__)
 
 
 def latest_closed_month(today=None):
@@ -522,13 +526,12 @@ def review_for_viewer(principal, month, *, today=None, force=False):
 def generate_due_monthly_reviews(*, today=None):
     today = today or timezone.localdate()
     month = latest_closed_month(today)
-    created = []
-    for person in Person.objects.order_by("pk"):
+
+    def store(person):
         if execution.get() is None:
             with operation():
-                review, wrote = store_monthly_review(person, month, force=False, today=today)
-        else:
-            review, wrote = store_monthly_review(person, month, force=False, today=today)
-        if wrote:
-            created.append(review)
-    return created
+                return store_monthly_review(person, month, force=False, today=today)
+        return store_monthly_review(person, month, force=False, today=today)
+
+    results = for_each_member(Person.objects.order_by("pk"), store, label="Monthly review", logger=logger)
+    return [review for review, wrote in results if wrote]
