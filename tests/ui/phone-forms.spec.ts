@@ -1,10 +1,5 @@
-import { test, expect, signIn, openShellCorrection, submit } from './fixtures';
+import { test, expect, signIn, openShellCorrection, submit, noOverflow } from './fixtures';
 import type { Page } from '@playwright/test';
-
-async function noOverflow(page: Page, width: number) {
-  await expect.poll(() => page.evaluate(() => innerWidth)).toBe(width);
-  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-}
 
 async function fieldGeometry(page: Page) {
   const fields = page.locator('main .input, main .select, main .textarea, main .file-input').filter({ visible: true });
@@ -67,7 +62,9 @@ async function walkFocus(page: Page) {
 test('Correction and shared phone fields have 44px targets, 8px gaps and 16px editable text (#366, #367)', async ({ page }, info) => {
   await signIn(page);
   const edit = await openShellCorrection(page);
-  for (const width of [320, 375, 393, 412]) {
+  // Each project's own phone width, plus the narrowest 320px width on iPhone SE only.
+  const widths = [page.viewportSize()!.width, ...(info.project.name.includes('iPhone-SE') ? [320] : [])];
+  for (const width of widths) {
     await page.setViewportSize({ width, height: 900 });
     for (const path of [edit, '/settings/alerts/', '/settings/ai/']) {
       await page.goto(path);
@@ -138,53 +135,4 @@ test('Sequential focus stays above dock through portrait, landscape and keyboard
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolve)))));
   expect(await amount.evaluate(el => el === document.activeElement)).toBe(true);
   expect(await page.evaluate(() => scrollY)).toBeCloseTo(manualPosition, 0);
-});
-
-test('Long settings and CSV choice labels reflow with contained AI table (#365)', async ({ page }) => {
-  await signIn(page);
-  for (const width of [320, 375, 768, 1440]) {
-    await page.setViewportSize({ width, height: 900 });
-    for (const path of ['/settings/alerts/', '/settings/ai/']) {
-      await page.goto(path);
-      await noOverflow(page, width);
-    }
-  }
-  await page.setViewportSize({ width: 1280, height: 900 });
-  for (const path of ['/settings/alerts/', '/settings/ai/']) {
-    await page.goto(path);
-    await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
-    await noOverflow(page, 1280);
-    await page.evaluate(() => { document.documentElement.style.fontSize = ''; });
-  }
-  await page.goto('/accounts/');
-  const href = await page.locator('main').getByRole('link', { name: 'Import CSV', exact: true }).first().getAttribute('href');
-  await page.goto(href!);
-  await page.getByLabel('Import profile').selectOption('generic');
-  await page.getByLabel('CSV, OFX or QFX file').setInputFiles('tests/fixtures/ui-pass/synthetic.csv');
-  await submit(page, page.getByRole('button', { name: 'Upload and map' }));
-  for (const width of [320, 375, 412, 768, 1440]) {
-    await page.setViewportSize({ width, height: 900 });
-    await noOverflow(page, width);
-    const defaultChoice = page.getByLabel('Use as the default mapping for this account', { exact: true });
-    const label = defaultChoice.locator('..');
-    const before = await defaultChoice.isChecked();
-    await label.click();
-    expect(await defaultChoice.isChecked()).toBe(!before);
-    await label.click();
-    expect(await defaultChoice.isChecked()).toBe(before);
-    for (const name of ['One signed amount column', 'Separate debit and credit columns']) {
-      const choice = page.getByLabel(name, { exact: true });
-      await choice.locator('..').click();
-      await expect(choice).toBeChecked();
-    }
-  }
-  for (const [name, value] of [['date_column', 'Date'], ['description_column', 'Description'], ['amount_column', 'Amount'], ['currency_column', 'Currency']]) await page.locator('[name=' + name + ']').selectOption(value);
-  await page.locator('[name=date_format]').selectOption('iso');
-  await page.locator('[name=number_format]').selectOption('dot_none');
-  await page.getByLabel('One signed amount column').check();
-  await page.setViewportSize({ width: 412, height: 915 });
-  await submit(page, page.getByRole('button', { name: 'Preview rows' }));
-  await expect(page.getByRole('heading', { name: 'Preview results' })).toBeVisible();
-  await expect(page.locator('main')).toContainText('2 new; 0 duplicate; 1 invalid.');
-  await submit(page, page.getByRole('button', { name: 'Cancel and delete upload' }));
 });

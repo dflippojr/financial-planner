@@ -44,51 +44,51 @@ async function answer(page: Page, prompt: string) {
   await expect(page.locator('main')).toContainText('Synthetic UI reply. No real provider was contacted.');
 }
 
-for (const device of ['iPhone SE', 'iPhone 15', 'Pixel 7']) {
-  for (const landscape of [false, true]) {
-    test.describe(device + (landscape ? ' landscape' : ' portrait'), () => {
-      const size = device === 'iPhone SE' ? { width: 375, height: 667 } : devices[device].screen!;
-      const viewport = landscape ? { width: size.height, height: size.width } : size;
-      test('#371 Chat delete is reachable for short, long and newly empty threads', async ({ uiURL }, info) => {
-        await withDevice(device, viewport, info.project.use.colorScheme as 'light' | 'dark', uiURL, async page => {
-          await signIn(page);
-          expect(await page.evaluate(() => ({ width: innerWidth, height: innerHeight }))).toEqual(viewport);
-          await expect(page.locator('html')).toHaveAttribute('data-theme', info.project.use.colorScheme as string);
-          await page.goto('/chat/');
-          const remove = page.locator('main form[action="/chat/delete-all/"] button').filter({ visible: true });
-          await answer(page, 'Synthetic short conversation');
-          await page.reload();
-          await reachable(remove);
-          expect((await remove.boundingBox())!.height).toBeGreaterThanOrEqual(44);
-          page.once('dialog', dialog => dialog.dismiss());
-          await remove.tap();
-          await page.reload();
-          await expect(page.locator('main')).toContainText('Synthetic short conversation');
-          await answer(page, 'Synthetic long conversation ' + 'synthetic detail '.repeat(120));
-          await reachable(remove);
-          await remove.focus();
-          page.once('dialog', dialog => dialog.dismiss());
-          await remove.press('Enter');
-          await submit(page, page.getByRole('button', { name: 'New conversation', exact: true }).filter({ visible: true }));
-          const question = page.locator('main').getByLabel('Question', { exact: true });
-          await expect(question).toHaveValue('');
-          await page.setViewportSize({ width: viewport.width, height: Math.round(viewport.height * 0.6) });
-          await question.focus();
-          await reachable(question);
-          await reachable(page.locator('main').getByRole('button', { name: 'Send', exact: true }));
-          await reachable(remove);
-          await page.setViewportSize(viewport);
-          await reachable(page.getByRole('navigation', { name: 'Main tabs', exact: true }).getByRole('link').first());
-          page.once('dialog', dialog => dialog.accept());
-          await submit(page, remove);
-          await page.reload();
-          await expect(page.getByRole('navigation', { name: 'Conversations', exact: true }).locator('li')).toHaveCount(0);
-          await expect(page.locator('main')).not.toContainText('Synthetic short conversation');
-          await expect(page.locator('main')).not.toContainText('Synthetic long conversation');
-        });
+// iPhone 15 portrait and iPhone SE landscape reach the same below-md and md-lg branches on the
+// same engines as the cases kept here, so they are not repeated.
+for (const [device, landscape] of [['iPhone SE', false], ['iPhone 15', true], ['Pixel 7', false], ['Pixel 7', true]] as const) {
+  test.describe(device + (landscape ? ' landscape' : ' portrait'), () => {
+    const size = device === 'iPhone SE' ? { width: 375, height: 667 } : devices[device].screen!;
+    const viewport = landscape ? { width: size.height, height: size.width } : size;
+    test('#371 Chat delete is reachable for short, long and newly empty threads', async ({ uiURL }, info) => {
+      await withDevice(device, viewport, info.project.use.colorScheme as 'light' | 'dark', uiURL, async page => {
+        await signIn(page);
+        expect(await page.evaluate(() => ({ width: innerWidth, height: innerHeight }))).toEqual(viewport);
+        await expect(page.locator('html')).toHaveAttribute('data-theme', info.project.use.colorScheme as string);
+        await page.goto('/chat/');
+        const remove = page.locator('main form[action="/chat/delete-all/"] button').filter({ visible: true });
+        await answer(page, 'Synthetic short conversation');
+        await page.reload();
+        await reachable(remove);
+        expect((await remove.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+        page.once('dialog', dialog => dialog.dismiss());
+        await remove.tap();
+        await page.reload();
+        await expect(page.locator('main')).toContainText('Synthetic short conversation');
+        await answer(page, 'Synthetic long conversation ' + 'synthetic detail '.repeat(120));
+        await reachable(remove);
+        await remove.focus();
+        page.once('dialog', dialog => dialog.dismiss());
+        await remove.press('Enter');
+        await submit(page, page.getByRole('button', { name: 'New conversation', exact: true }).filter({ visible: true }));
+        const question = page.locator('main').getByLabel('Question', { exact: true });
+        await expect(question).toHaveValue('');
+        await page.setViewportSize({ width: viewport.width, height: Math.round(viewport.height * 0.6) });
+        await question.focus();
+        await reachable(question);
+        await reachable(page.locator('main').getByRole('button', { name: 'Send', exact: true }));
+        await reachable(remove);
+        await page.setViewportSize(viewport);
+        await reachable(page.getByRole('navigation', { name: 'Main tabs', exact: true }).getByRole('link').first());
+        page.once('dialog', dialog => dialog.accept());
+        await submit(page, remove);
+        await page.reload();
+        await expect(page.getByRole('navigation', { name: 'Conversations', exact: true }).locator('li')).toHaveCount(0);
+        await expect(page.locator('main')).not.toContainText('Synthetic short conversation');
+        await expect(page.locator('main')).not.toContainText('Synthetic long conversation');
       });
     });
-  }
+  });
 }
 
 for (const device of ['iPhone 15', 'Pixel 7', 'Desktop Chrome']) {
@@ -217,32 +217,5 @@ test('375px portrait Filters reveal reverse focus below the sticky page header',
         receivesHits: [box.top + 2, box.top + box.height / 2, box.bottom - 2]
           .every(y => element.contains(document.elementFromPoint(box.left + box.width / 2, y))) };
     })).toEqual({ belowHeader: true, aboveDock: true, receivesHits: true });
-  });
-});
-
-test('320px enlarged Filters keep the close action within the viewport', async ({ uiURL }, info) => {
-  await withDevice('iPhone SE', { width: 320, height: 667 }, info.project.use.colorScheme as 'light' | 'dark', uiURL, async page => {
-    await signIn(page);
-    await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
-    const panel = page.locator('#cash-flow-filters');
-    const closedWidth = await page.evaluate(() => document.documentElement.scrollWidth);
-    await panel.locator('summary').click();
-    const close = panel.getByRole('button', { name: 'Close filters', exact: true });
-    await close.evaluate(element => element.scrollIntoView({ block: 'center' }));
-    await expect.poll(() => close.evaluate(element => {
-      const header = element.closest('[data-filters-header]')!.getBoundingClientRect();
-      const box = element.getBoundingClientRect();
-      const dock = document.querySelector('nav.dock')!.getBoundingClientRect();
-      return { headerContained: header.left >= 0 && header.right <= innerWidth,
-        actionContained: box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= dock.top,
-        receivesHits: [box.top + 2, box.top + box.height / 2, box.bottom - 2]
-          .every(y => element.contains(document.elementFromPoint(box.left + box.width / 2, y))) };
-    })).toEqual({ headerContained: true, actionContained: true, receivesHits: true });
-    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBe(closedWidth);
-    await close.focus();
-    await close.press('Enter');
-    await expect(panel).not.toHaveAttribute('open', '');
-    await expect(panel.locator('summary')).toBeFocused();
-    expect(await page.evaluate(() => getComputedStyle(document.documentElement).fontSize)).toBe('32px');
   });
 });

@@ -64,6 +64,10 @@ export async function signIn(page: Page, user = 'synthetic_alex', password = 'Sy
   await submit(page, page.getByRole('button', { name: 'Sign in', exact: true }));
   await expect(page.getByRole('heading', { name: 'Cash flow', exact: true })).toBeVisible();
 }
+export async function noOverflow(page: Page, width: number) {
+  await expect.poll(() => page.evaluate(() => innerWidth)).toBe(width);
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+}
 export async function openShellCorrection(page: Page) {
   await page.goto('/transactions/');
   await page.getByRole('link', { name: /^(Correct )?Shell Oil 5741$/ }).filter({ visible: true }).click();

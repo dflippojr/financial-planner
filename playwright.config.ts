@@ -2,6 +2,7 @@ import { defineConfig, devices } from '@playwright/test';
 
 // Recovery/invitation codes must never appear in failure DOM snapshots.
 process.env.PLAYWRIGHT_NO_COPY_PROMPT = '1';
+const csvLabelProjects = new Set(['iPhone SE light', 'Pixel 7 light']);
 export default defineConfig({
   // CI otherwise embeds the entire PR patch, including the privacy tests'
   // deliberately code-shaped synthetic sentinels. Evidence needs the commit,
@@ -16,12 +17,13 @@ export default defineConfig({
     ...(['iPhone SE', 'iPhone 15', 'Pixel 7'] as const).flatMap(device =>
       (['light', 'dark'] as const).map(colorScheme => ({
         name: 'forms-' + device.replaceAll(' ', '-') + '-' + colorScheme,
-        testMatch: /phone-forms\.spec\.ts/,
+        // The CSV label reflow test runs on one WebKit and one Chromium forms project only.
+        testMatch: csvLabelProjects.has(device + ' ' + colorScheme) ? /phone-forms(-csv)?\.spec\.ts/ : /phone-forms\.spec\.ts/,
         use: { ...devices[device], viewport: device === 'iPhone SE' ? { width: 375, height: 667 } : device === 'iPhone 15' ? { width: 393, height: 852 } : { width: 412, height: 915 }, colorScheme },
       }))),
-    { name: 'desktop-light', testIgnore: /phone-forms\.spec\.ts/, use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 }, colorScheme: 'light' } },
-    { name: 'desktop-dark', testIgnore: /phone-forms\.spec\.ts/, use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 }, colorScheme: 'dark' } },
-    { name: 'phone-light', testIgnore: /desktop-|phone-forms\.spec\.ts/, use: { ...devices['iPhone SE'], browserName: 'webkit', colorScheme: 'light' } },
-    { name: 'phone-dark', testIgnore: /desktop-|phone-forms\.spec\.ts/, use: { ...devices['iPhone SE'], browserName: 'webkit', colorScheme: 'dark' } },
+    { name: 'desktop-light', testIgnore: /phone-forms|dialog\.spec\.ts/, use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 }, colorScheme: 'light' } },
+    { name: 'desktop-dark', testIgnore: /phone-forms|dialog\.spec\.ts/, use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 }, colorScheme: 'dark' } },
+    { name: 'phone-light', testIgnore: /desktop-|phone-forms/, use: { ...devices['iPhone SE'], browserName: 'webkit', colorScheme: 'light' } },
+    { name: 'phone-dark', testIgnore: /desktop-|phone-forms/, use: { ...devices['iPhone SE'], browserName: 'webkit', colorScheme: 'dark' } },
   ],
 });

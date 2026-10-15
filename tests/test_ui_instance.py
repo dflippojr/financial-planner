@@ -1,4 +1,4 @@
-"""Disposable-instance guards and a real sign-in/category-persistence smoke check."""
+"""Disposable-instance launcher and teardown guards. Browser journeys live in tests/ui/*.spec.ts."""
 from contextlib import contextmanager
 import json
 import io
@@ -13,7 +13,7 @@ import uuid
 
 import pytest
 
-from scripts.ui_instance import PASSWORD, ROOT, isolated_environment, refuse_database_environment, run_css_builder, teardown
+from scripts.ui_instance import ROOT, isolated_environment, refuse_database_environment, run_css_builder, teardown
 from tests.ui_diagnostics import diagnostic_summary
 
 
@@ -155,65 +155,6 @@ def test_smoke_cleanup_preserves_recovery_handle_when_shutdown_times_out(tmp_pat
     assert calls[0][-2:] == ["--teardown", str(directory)]
     assert handles[0].exists() and directory.exists()
     assert str(handles[0]) in str(error.value)
-
-
-@pytest.fixture
-def ui_instance(tmp_path):
-    with ui_process(tmp_path) as instance:
-        yield instance
-
-
-@pytest.fixture
-def browser():
-    from playwright.sync_api import sync_playwright
-    # This CI smoke test must fail rather than silently skip a missing browser.
-    with sync_playwright() as playwright:
-        instance = playwright.chromium.launch()
-        yield instance
-        instance.close()
-
-
-def test_sign_in_and_category_persist(browser, ui_instance):
-    from playwright.sync_api import expect
-    context = browser.new_context(viewport={"width": 390, "height": 844}, has_touch=True)
-    page = context.new_page()
-    base = ui_instance["url"]
-    try:
-        page.goto(base + "/sign-in/")
-        expect(page.get_by_label("Username", exact=True)).to_have_attribute("autocomplete", "username")
-        expect(page.get_by_label("Password", exact=True)).to_have_attribute("autocomplete", "current-password")
-        assert page.request.get(base + "/favicon.ico").status == 200
-        assert page.request.post(base + "/__ui_teardown__/").status == 403
-        page.get_by_label("Username", exact=True).fill(ui_instance["username"])
-        page.get_by_label("Password", exact=True).fill(PASSWORD)
-        page.get_by_role("button", name="Sign in", exact=True).click()
-        expect(page.get_by_role("heading", name="Cash flow", exact=True)).to_be_visible()
-        page.get_by_role("navigation", name="Main tabs").get_by_role("link", name="Activity", exact=True).click()
-        row = page.locator("tr").filter(has_text="Shell Oil 5741")
-        row.get_by_role("link", name="Correct Shell Oil 5741", exact=True).click()
-        edit_url = page.url
-        form = page.locator('form[action$="/category/"]')
-        form.get_by_label("Category", exact=True).select_option(label="Transportation")
-        form.get_by_role("button", name="Save category", exact=True).click()
-        page.goto(edit_url)
-        expect(page.locator('form[action$="/category/"] option:checked')).to_have_text("Transportation")
-        expect(page.locator("ol li").filter(has_text="Category:")).to_contain_text("Transportation")
-        page.goto(base + "/transactions/")
-        expect(page.locator("tr").filter(has_text="Shell Oil 5741")).to_contain_text("Transportation")
-        page.goto(base + "/chat/")
-        page.get_by_label("Question", exact=True).filter(visible=True).fill("How much is my synthetic spending?")
-        page.get_by_role("button", name="Send", exact=True).filter(visible=True).click()
-        reply = page.get_by_text("Synthetic UI reply. No real provider was contacted.", exact=True).filter(visible=True)
-        expect(reply).to_be_visible(timeout=15000)
-        page.reload()
-        expect(reply).to_be_visible()
-        page.get_by_label("Question", exact=True).filter(visible=True).fill("A synthetic follow-up question")
-        page.get_by_role("button", name="Send", exact=True).filter(visible=True).click()
-        expect(reply).to_have_count(2, timeout=15000)
-        page.reload()
-        expect(reply).to_have_count(2)
-    finally:
-        context.close()
 
 
 @pytest.mark.parametrize("taskkill_failure", [None, "timeout", "launch-error"])

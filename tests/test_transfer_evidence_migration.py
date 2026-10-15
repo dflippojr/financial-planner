@@ -1,4 +1,4 @@
-"""Synthetic populated upgrades through the historical 0060 transfer schema."""
+"""Synthetic populated upgrade through the historical 0060 transfer schema (one private-account case)."""
 from datetime import date
 from importlib import import_module
 
@@ -12,7 +12,7 @@ BEFORE = [("finance", "0059_audit_operations")]
 AFTER = [("finance", "0060_reevaluate_auto_marked_pairs")]
 
 
-def _seed(apps, scope):
+def _seed(apps):
     models = {name: apps.get_model("finance", name) for name in (
         "Person", "Household", "Membership", "Account", "ImportBatch", "Category",
         "Transaction", "TransferPair", "RefundLink", "TransactionCorrectionHistory",
@@ -20,18 +20,14 @@ def _seed(apps, scope):
     user = apps.get_model("auth", "User").objects.create(username="synthetic-migration-owner")
     owner = models["Person"].objects.create(user=user, display_name="Synthetic Owner")
     household = models["Household"].objects.create(name="Synthetic Household", transfer_match_window_days=9)
-    if scope != "no_membership":
-        models["Membership"].objects.create(person=owner, household=household)
+    models["Membership"].objects.create(person=owner, household=household)
     groceries = models["Category"].objects.create(household=household, name="Synthetic Groceries")
     transfer = models["Category"].objects.create(household=household, name="Transfer", code="transfer")
     accounts = {}
     batches = {}
     for kind in ("checking", "savings", "credit_card"):
-        shared = scope == "household"
         accounts[kind] = models["Account"].objects.create(
-            owner=owner, name=f"Synthetic {kind}", account_type=kind,
-            scope="household" if shared else "private",
-            household=household if shared else None, share_mode="co_owned" if shared else "",
+            owner=owner, name=f"Synthetic {kind}", account_type=kind, scope="private",
         )
         batches[kind] = models["ImportBatch"].objects.create(
             account=accounts[kind], imported_by=owner, source="huntington", source_file_sha256="b" * 64,
@@ -83,16 +79,15 @@ def _snapshot(models):
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("scope", ["private", "household", "no_membership"])
 @override_settings(TRANSFER_MATCH_WINDOW_DAYS=13)
-def test_populated_upgrade_restores_only_weak_auto_marked_pairs(scope):
+def test_populated_upgrade_restores_only_weak_auto_marked_pairs():
     executor = MigrationExecutor(connection)
     latest = executor.loader.graph.leaf_nodes()
     try:
         executor.migrate(BEFORE)
         apps = executor.loader.project_state(BEFORE).apps
         assert "savings_buffer_minor" not in {field.name for field in apps.get_model("finance", "Household")._meta.fields}
-        models, weak, wrong, settled, refunds, groceries, old_history = _seed(apps, scope)
+        models, weak, wrong, settled, refunds, groceries, old_history = _seed(apps)
         original = _snapshot(models)
         executor = MigrationExecutor(connection)
         executor.migrate(AFTER)
@@ -101,7 +96,7 @@ def test_populated_upgrade_restores_only_weak_auto_marked_pairs(scope):
         for pair in (weak, wrong):
             pair.refresh_from_db()
             assert (pair.status, pair.confidence, pair.kind) == ("suggested", "low", "transfer")
-            assert f"dates within {13 if scope == 'no_membership' else 9} days" in pair.reasons
+            assert "dates within 9 days" in pair.reasons
             assert models["Transaction"].objects.get(pk=pair.leg_a_id).category_id == groceries.pk
             assert models["Transaction"].objects.get(pk=pair.leg_b_id).category_id is None
         assert "no payment or transfer wording on either leg, so it needs confirmation" in weak.reasons

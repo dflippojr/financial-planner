@@ -5,7 +5,18 @@ const main = (page: Page) => page.locator('main');
 test.beforeEach(async ({ page }) => { await signIn(page); });
 
 test('Home range and URL-only scenario retain state without changing actuals', async ({ page }) => {
-  const actuals = await page.getByRole('region', { name: 'Key numbers' }).innerText();
+  const numbers = page.getByRole('region', { name: 'Key numbers' });
+  const actuals = await numbers.innerText();
+  await page.locator('#cash-flow-filters summary').click();
+  // Reversed dates validate, and Reset range clears them, without changing actuals.
+  await page.locator('#cash-flow-filters [name=date_from]').fill('2026-10-05');
+  await page.locator('#cash-flow-filters [name=date_to]').fill('2026-10-04');
+  await submit(page, page.locator('#cash-flow-filters').getByRole('button', { name: 'Update', exact: true }));
+  await expect(page.locator('#cash-flow-filters')).toContainText('End date must be on or after start date.');
+  await submit(page, page.locator('#cash-flow-filters').getByRole('link', { name: 'Reset range', exact: true }));
+  await page.reload();
+  await expect(page).not.toHaveURL(/date_(from|to)=/);
+  await expect(numbers).toHaveText(actuals, { useInnerText: true });
   await page.locator('#cash-flow-filters summary').click();
   const rangeToday = new Date();
   const rangeEnd = [rangeToday.getFullYear(), String(rangeToday.getMonth() + 1).padStart(2, '0'), String(rangeToday.getDate()).padStart(2, '0')].join('-');
@@ -24,6 +35,11 @@ test('Home range and URL-only scenario retain state without changing actuals', a
   await page.locator('summary').filter({ hasText: 'What-if scenario' }).click();
   const form = page.locator('form').filter({ has: page.locator('[name=scenario_action]') });
   await form.locator('[name=change_type]').selectOption('oneoff');
+  // An incomplete scenario validates and leaves the URL and actuals alone.
+  await submit(page, form.getByRole('button', { name: 'Add to scenario' }));
+  await expect(form).toContainText('This field is required.');
+  await expect(numbers).toHaveText(actuals, { useInnerText: true });
+  await expect(page).not.toHaveURL(/sc=/);
   await form.locator('[name=name]').fill('Synthetic scenario expense');
   await form.locator('[name=kind]').selectOption('expense');
   await form.locator('[name=amount]').fill('10.00');
@@ -34,7 +50,7 @@ test('Home range and URL-only scenario retain state without changing actuals', a
   await expect(page).toHaveURL(/sc=/);
   await page.reload();
   await expect(main(page)).toContainText('Synthetic scenario expense');
-  await expect(page.getByRole('region', { name: 'Key numbers' })).toHaveText(actuals, { useInnerText: true });
+  await expect(numbers).toHaveText(actuals, { useInnerText: true });
   await page.getByRole('link', { name: 'Remove', exact: true }).click();
   await expect(main(page)).not.toContainText('Synthetic scenario expense');
 });
@@ -245,6 +261,17 @@ test('Fake-provider chat history persists and a new conversation has a blank com
   await page.reload();
   await expect(reply).toBeVisible();
   await expect(main(page)).toContainText('How much is my synthetic spending?');
+  await question.fill('A synthetic follow-up question');
+  await submit(page, page.getByRole('button', { name: 'Send', exact: true }).filter({ visible: true }));
+  await expect(reply).toHaveCount(2, { timeout: 20_000 });
+  await page.reload();
+  await expect(reply).toHaveCount(2);
+  // Dismissing the Delete all confirmation keeps the history.
+  page.once('dialog', dialog => dialog.dismiss());
+  await page.locator('main form[action="/chat/delete-all/"] button').filter({ visible: true }).click();
+  await page.reload();
+  await expect(main(page)).toContainText('How much is my synthetic spending?');
+  await expect(reply).toHaveCount(2);
   await submit(page, page.getByRole('button', { name: 'New conversation', exact: true }).filter({ visible: true }));
   await expect(question).toHaveValue('');
   const conversations = page.getByRole('navigation', { name: 'Conversations', exact: true });
@@ -259,7 +286,7 @@ test('Fake-provider chat history persists and a new conversation has a blank com
   await submit(page, page.locator('main form[action="/chat/delete-all/"] button').filter({ visible: true }));
   await page.reload();
   await expect(conversations.locator('li')).toHaveCount(0);
-
+  await expect(main(page)).not.toContainText('How much is my synthetic spending?');
 });
 
 test('Generic CSV preview shows exact signs and invalid row, cancel deletes stage', async ({ page }) => {
@@ -284,12 +311,8 @@ test('Generic CSV preview shows exact signs and invalid row, cancel deletes stag
   await expect(main(page)).not.toContainText('Synthetic preview income');
 });
 
-test('Settings tabs are reachable and sign-out revokes the current session', async ({ page }) => {
-  for (const path of ['security', 'categories', 'tags', 'alerts', 'data', 'ai', 'audit', 'household']) {
-    const response = await page.goto('/settings/' + path + '/');
-    expect(response!.status()).toBe(200);
-    await expect(main(page).getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
-  }
+// Settings page reachability is asserted for every tab by breakpoints.spec.ts.
+test('Theme switch persists and sign-out revokes the current session', async ({ page }) => {
   await page.goto('/more/');
   const theme = page.getByRole('button', { name: /^(Dark theme|Switch to (dark|light) theme)$/ }).filter({ visible: true });
   const original = await page.locator('html').getAttribute('data-theme');
