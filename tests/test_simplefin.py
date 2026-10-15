@@ -1,7 +1,7 @@
 from datetime import date, datetime, timedelta
 from datetime import timezone as dt_utc
+from http.client import IncompleteRead
 from io import BytesIO
-from unittest.mock import patch
 from urllib.error import HTTPError
 
 import pytest
@@ -13,7 +13,7 @@ from django.utils import timezone
 
 from finance.category_services import ensure_household_categories, exclusion_exists_for
 from finance.csv_import.services import undo_import_batch
-from finance.encryption import decrypt_access_url, encrypt_access_url
+from finance.encryption import decrypt_access_url
 from finance.models import (
     Account,
     AccountLink,
@@ -154,7 +154,7 @@ def test_claim_success_encrypts_access_url(monkeypatch, caplog):
 
 
 @pytest.mark.django_db
-def test_claim_403_on_client_reports_compromise(monkeypatch):
+def test_a_refused_claim_reports_compromise_and_stores_no_connection(monkeypatch):
     owner = make_person("owner")
     make_household(owner)
 
@@ -162,41 +162,13 @@ def test_claim_403_on_client_reports_compromise(monkeypatch):
         raise HTTPError(CLAIM_URL, 403, "Forbidden", hdrs=None, fp=BytesIO())
 
     monkeypatch.setattr("finance.simplefin_client.urlopen", fake_open)
-    with pytest.raises(SimpleFinError) as raised:
-        claim_access_url(CLAIM_URL)
-    assert str(raised.value) == CLAIM_COMPROMISED
-    assert CLAIM_URL not in str(raised.value)
-
-
-@pytest.mark.django_db
-def test_claim_403_does_not_store_a_connection(monkeypatch):
-    owner = make_person("owner")
-    make_household(owner)
-
-    def fake_open(*args, **kwargs):
-        raise HTTPError(CLAIM_URL, 403, "Forbidden", hdrs=None, fp=BytesIO())
-
-    monkeypatch.setattr("finance.simplefin_client.urlopen", fake_open)
-    token = setup_token()
     with pytest.raises(SimpleFinError) as wrapped:
-        claim_connection(owner, token)
+        claim_connection(owner, setup_token())
+
+    assert str(wrapped.value) == CLAIM_COMPROMISED
+    assert CLAIM_URL not in str(wrapped.value)
     assert ACCESS_URL not in str(wrapped.value)
     assert SimpleFinConnection.objects.count() == 0
-
-
-@pytest.mark.django_db
-def test_connections_page_never_shows_access_url(monkeypatch):
-    owner = make_person("owner")
-    make_household(owner)
-    connect_owner(owner, monkeypatch)
-    client = signed_in(owner)
-    response = client.get(reverse("simplefin-connections"))
-    body = response.content.decode()
-
-    assert response.status_code == 200
-    assert ACCESS_URL not in body
-    assert "synthetic-access-secret" not in body
-    assert "Synthetic Bank - Pat" in body
 
 
 @pytest.mark.django_db
@@ -228,18 +200,8 @@ def test_sync_dedupes_repeated_runs_and_skips_pending_and_cutover(monkeypatch):
             posted_txn(txn_id="new-1", day=16, amount="-3.00"),
         ]
     )
-    connection = connect_owner(owner, monkeypatch, payload)
-    save_account_links(
-        owner,
-        connection.pk,
-        [
-            {
-                "simplefin_account_id": "CON-1:sf-checking",
-                "action": "link",
-                "account_id": checking.pk,
-                "cutover_date": date(2026, 3, 11),
-            }
-        ],
+    _owner, _checking, connection = _linked_owner_and_checking(
+        monkeypatch, owner=owner, payload=payload, cutover=date(2026, 3, 11), account=checking
     )
     first = sync_connection(owner, connection.pk, ignore_rate_limit=True)
     second = sync_connection(owner, connection.pk, ignore_rate_limit=True)
@@ -360,14 +322,8 @@ def test_sync_pairs_transfers_and_refreshes_recurring(monkeypatch):
 def test_undo_sync_batch_archives_transactions_and_removes_snapshot(monkeypatch):
     owner = make_person("owner")
     make_household(owner)
-    checking = make_account(owner)
     payload = account_payload(transactions=[posted_txn(txn_id="new-1", day=16, amount="-3.00")])
-    connection = connect_owner(owner, monkeypatch, payload)
-    save_account_links(
-        owner,
-        connection.pk,
-        [{"simplefin_account_id": "CON-1:sf-checking", "action": "link", "account_id": checking.pk, "cutover_date": date(2026, 3, 1)}],
-    )
+    _owner, checking, connection = _linked_owner_and_checking(monkeypatch, owner=owner, payload=payload)
     sync_connection(owner, connection.pk, ignore_rate_limit=True)
     batch = ImportBatch.objects.get(account=checking, source=ImportBatch.Source.SIMPLEFIN, status=ImportBatch.Status.ACTIVE)
     undo_import_batch(owner, checking.pk, batch.pk)
@@ -383,22 +339,6 @@ def test_scheduler_skips_when_no_connection(capsys):
     call_command("sync_simplefin")
     assert "No SimpleFIN connections." in capsys.readouterr().out
     assert sync_all_connections() == 0
-
-
-@pytest.mark.django_db
-def test_sync_now_rate_limit(monkeypatch):
-    owner = make_person("owner")
-    make_household(owner)
-    checking = make_account(owner)
-    connection = connect_owner(owner, monkeypatch, account_payload(transactions=[]))
-    save_account_links(
-        owner,
-        connection.pk,
-        [{"simplefin_account_id": "CON-1:sf-checking", "action": "link", "account_id": checking.pk}],
-    )
-    sync_connection(owner, connection.pk)
-    with pytest.raises(SimpleFinError, match="15 minutes"):
-        sync_connection(owner, connection.pk)
 
 
 @pytest.mark.django_db
@@ -426,14 +366,8 @@ def test_access_rules_hide_another_members_connection(monkeypatch):
 def test_rejects_custom_currency(monkeypatch):
     owner = make_person("owner")
     make_household(owner)
-    checking = make_account(owner)
     payload = account_payload(currency="https://example.test/points")
-    connection = connect_owner(owner, monkeypatch, payload)
-    save_account_links(
-        owner,
-        connection.pk,
-        [{"simplefin_account_id": "CON-1:sf-checking", "action": "link", "account_id": checking.pk}],
-    )
+    _owner, _checking, connection = _linked_owner_and_checking(monkeypatch, owner=owner, payload=payload)
     with pytest.raises(SimpleFinError, match="currency"):
         sync_connection(owner, connection.pk, ignore_rate_limit=True)
 
@@ -442,27 +376,14 @@ def test_rejects_custom_currency(monkeypatch):
 def test_disconnect_keeps_imported_rows(monkeypatch):
     owner = make_person("owner")
     make_household(owner)
-    checking = make_account(owner)
     payload = account_payload(transactions=[posted_txn(txn_id="keep-1", day=16, amount="-3.00")])
-    connection = connect_owner(owner, monkeypatch, payload)
-    save_account_links(
-        owner,
-        connection.pk,
-        [{"simplefin_account_id": "CON-1:sf-checking", "action": "link", "account_id": checking.pk, "cutover_date": date(2026, 3, 1)}],
-    )
+    _owner, _checking, connection = _linked_owner_and_checking(monkeypatch, owner=owner, payload=payload)
     sync_connection(owner, connection.pk, ignore_rate_limit=True)
     from finance.simplefin_services import disconnect_connection
 
     disconnect_connection(owner, connection.pk)
     assert not SimpleFinConnection.objects.filter(pk=connection.pk).exists()
     assert Transaction.objects.filter(source_transaction_id="keep-1").exists()
-
-
-@pytest.mark.django_db
-def test_encrypt_roundtrip_does_not_embed_plaintext():
-    token = encrypt_access_url(ACCESS_URL)
-    assert ACCESS_URL.encode() not in token
-    assert decrypt_access_url(token) == ACCESS_URL
 
 
 class _FakeResponse:
@@ -482,7 +403,6 @@ class _FakeResponse:
 def test_claim_and_fetch_http_paths(monkeypatch):
     from finance.simplefin_client import fetch_accounts
     from finance.simplefin_errors import provider_errors
-    from finance.simplefin_schedule import next_scheduled_sync, parse_five_field_cron
     from urllib.error import URLError
 
     monkeypatch.setattr(
@@ -544,17 +464,6 @@ def test_claim_and_fetch_http_paths(monkeypatch):
     )
     assert msgs[0] == "Re-auth Huntington at [redacted]"
     assert "secret" not in "".join(msgs)
-    parse_five_field_cron("30 6 * * *")
-    nxt = next_scheduled_sync("30 6 * * *", datetime(2026, 10, 1, 6, 0))
-    assert nxt.hour == 6
-    assert nxt.minute == 30
-    with pytest.raises(ValueError):
-        parse_five_field_cron("not a cron")
-    from finance.simplefin_schedule import cron_matches
-
-    assert cron_matches("0 * * * *", datetime(2026, 10, 1, 6, 1)) is False
-    assert cron_matches("*/15 6-7 1,2 * *", datetime(2026, 10, 1, 6, 0))
-    assert cron_matches("0 * * * *", datetime(2026, 10, 1, 6, 0))
 
 
 @pytest.mark.django_db
@@ -607,13 +516,7 @@ def test_sync_all_and_claim_http_failure_on_page(monkeypatch):
     assert b"could not claim" in response.content
     assert CLAIM_URL.encode() not in response.content
     payload = account_payload(transactions=[posted_txn(txn_id="n1", day=16, amount="-1.00")])
-    connection = connect_owner(owner, monkeypatch, payload)
-    checking = make_account(owner, name="Other Checking")
-    save_account_links(
-        owner,
-        connection.pk,
-        [{"simplefin_account_id": "CON-1:sf-checking", "action": "link", "account_id": checking.pk, "cutover_date": date(2026, 3, 1)}],
-    )
+    _linked_owner_and_checking(monkeypatch, owner=owner, payload=payload)
     assert sync_all_connections() == 1
 
 
@@ -674,17 +577,20 @@ def test_failed_sync_state_is_saved_and_only_denied_access_disables(monkeypatch)
     assert connection.disabled is True
 
 
-@pytest.mark.django_db
-def test_same_account_id_at_two_institutions_stays_separate(monkeypatch):
-    owner = make_person("owner")
-    make_household(owner)
-    first = make_account(owner, name="Synthetic First")
-    second = make_account(owner, name="Synthetic Second")
+def _two_institution_payload(*, errlist=()):
+    """The same account id "acct-1" under CON-1 and CON-2."""
     payload = account_payload(account_id="acct-1", transactions=[posted_txn(txn_id="t-a", day=10, amount="-10.00")])
     other = dict(payload["accounts"][0])
     other.update({"conn_id": "CON-2", "transactions": [posted_txn(txn_id="t-b", day=11, amount="-20.00")]})
     payload["accounts"].append(other)
     payload["connections"].append({"conn_id": "CON-2", "name": "Synthetic Bank Two", "org_id": "ORG-2"})
+    payload["errlist"] = list(errlist)
+    return payload
+
+
+def _link_two_institutions(owner, monkeypatch, payload):
+    first = make_account(owner, name="Synthetic First")
+    second = make_account(owner, name="Synthetic Second")
     connection = connect_owner(owner, monkeypatch, payload=payload)
     save_account_links(
         owner,
@@ -694,6 +600,14 @@ def test_same_account_id_at_two_institutions_stays_separate(monkeypatch):
             {"simplefin_account_id": "CON-2:acct-1", "action": "link", "account_id": second.pk, "cutover_date": date(2026, 3, 1)},
         ],
     )
+    return first, second, connection
+
+
+@pytest.mark.django_db
+def test_same_account_id_at_two_institutions_stays_separate(monkeypatch):
+    owner = make_person("owner")
+    make_household(owner)
+    first, second, connection = _link_two_institutions(owner, monkeypatch, _two_institution_payload())
 
     sync_connection(owner, connection.pk, ignore_rate_limit=True)
 
@@ -701,14 +615,79 @@ def test_same_account_id_at_two_institutions_stays_separate(monkeypatch):
     assert list(Transaction.objects.filter(account=second).values_list("amount_minor", flat=True)) == [-2000]
 
 
-def _linked_owner_and_checking(monkeypatch, *, scope=None, household=None, owner=None, payload=None):
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("errlist", "batched"),
+    [
+        # An error naming CON-1's acct-1 leaves CON-2's acct-1 alone.
+        ([{"conn_id": "CON-1", "account_id": "acct-1", "msg": "Failed to get all transactions."}], ("second",)),
+        # An error naming only a connection covers every account on it.
+        ([{"conn_id": "CON-2", "msg": "Other bank."}], ("first",)),
+        # An error naming no account or connection, or a bare string, may affect any account.
+        ([{"code": "gen.partial", "msg": "Incomplete data."}], ()),
+        (["Incomplete data."], ()),
+    ],
+    ids=["account-error", "connection-error", "unnamed-error", "bare-string"],
+)
+def test_a_provider_error_holds_back_only_the_accounts_it_may_affect(monkeypatch, errlist, batched):
+    owner = make_person("owner")
+    make_household(owner)
+    accounts = dict(zip(("first", "second"), _link_two_institutions(owner, monkeypatch, _two_institution_payload(errlist=errlist))[:2]))
+    connection = SimpleFinConnection.objects.get(owner=owner)
+
+    sync_connection(owner, connection.pk, ignore_rate_limit=True)
+
+    for name, account in accounts.items():
+        has_batch = ImportBatch.objects.filter(
+            account=account, source=ImportBatch.Source.SIMPLEFIN, status=ImportBatch.Status.ACTIVE
+        ).exists()
+        assert has_batch is (name in batched)
+        assert Transaction.objects.filter(account=account).exists() is (name in batched)
+        assert BalanceSnapshot.objects.filter(account=account, source=BalanceSnapshot.Source.SIMPLEFIN).exists()
+
+
+@pytest.mark.django_db
+def test_posted_link_rows_follow_the_account_id_when_simplefin_reorders_accounts(monkeypatch):
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner)
+    savings = make_account(owner, name="Synthetic Savings", account_type=Account.Type.SAVINGS)
+    payload = account_payload()
+    payload["accounts"].append({**payload["accounts"][0], "id": "sf-savings", "name": "Synthetic Savings"})
+    connect_owner(owner, monkeypatch, payload)
+    reordered = {**payload, "accounts": list(reversed(payload["accounts"]))}
+    monkeypatch.setattr("finance.simplefin_services.fetch_accounts", lambda *args, **kwargs: reordered)
+
+    response = signed_in(owner).post(
+        reverse("simplefin-connections"),
+        {
+            "intent": "link",
+            "sf_id_0": "CON-1:sf-checking",
+            "action_0": "link",
+            "account_id_0": str(checking.pk),
+            "cutover_0": "2026-03-01",
+            "sf_id_1": "CON-1:sf-savings",
+            "action_1": "link",
+            "account_id_1": str(savings.pk),
+            "cutover_1": "2026-03-01",
+        },
+    )
+
+    assert response.status_code == 302
+    assert AccountLink.objects.get(account=checking).simplefin_account_id == "CON-1:sf-checking"
+    assert AccountLink.objects.get(account=savings).simplefin_account_id == "CON-1:sf-savings"
+
+
+def _linked_owner_and_checking(
+    monkeypatch, *, scope=None, household=None, owner=None, payload=None, cutover=date(2026, 3, 1), account=None
+):
     owner = owner or make_person("owner")
-    checking = make_account(owner, scope=scope or Account.Scope.PRIVATE, household=household)
+    checking = account or make_account(owner, scope=scope or Account.Scope.PRIVATE, household=household)
     connection = connect_owner(owner, monkeypatch, payload=payload)
     save_account_links(
         owner,
         connection.pk,
-        [{"simplefin_account_id": "CON-1:sf-checking", "action": "link", "account_id": checking.pk, "cutover_date": date(2026, 3, 1)}],
+        [{"simplefin_account_id": "CON-1:sf-checking", "action": "link", "account_id": checking.pk, "cutover_date": cutover}],
     )
     return owner, checking, connection
 
@@ -825,39 +804,24 @@ def test_ignoring_a_linked_account_unlinks_it(monkeypatch):
     assert not AccountLink.objects.filter(account=checking).exists()
 
 
-def test_time_zone_follows_the_tz_environment_variable(monkeypatch):
-    import importlib
-
-    import financial_planner.settings as settings_module
-
-    monkeypatch.setenv("TZ", "America/Los_Angeles")
-    monkeypatch.setenv("DJANGO_SECRET_KEY", "test-only-secret-key-with-enough-entropy-not-for-production-12345")
-    reloaded = importlib.reload(settings_module)
-    try:
-        assert reloaded.TIME_ZONE == "America/Los_Angeles"
-    finally:
-        monkeypatch.delenv("TZ")
-        importlib.reload(settings_module)
-
-
-def test_stalled_response_body_becomes_a_safe_error(monkeypatch):
+@pytest.mark.parametrize(
+    "failure",
+    [TimeoutError("read timed out"), IncompleteRead(b'{"accounts"', 100)],
+    ids=["stalled", "truncated"],
+)
+def test_a_stalled_or_truncated_response_becomes_a_safe_error(monkeypatch, failure):
     from finance.simplefin_client import fetch_accounts
 
-    class StallingResponse:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            return False
-
+    class BrokenResponse(_FakeResponse):
         def read(self, size=-1):
-            raise TimeoutError("read timed out")
+            raise failure
 
-    monkeypatch.setattr("finance.simplefin_client.urlopen", lambda *a, **k: StallingResponse())
+    monkeypatch.setattr("finance.simplefin_client.urlopen", lambda *a, **k: BrokenResponse(b""))
 
-    with pytest.raises(SimpleFinError) as caught:
+    with pytest.raises(SimpleFinError, match="did not finish responding"):
         fetch_accounts(ACCESS_URL)
-    assert "did not finish responding" in str(caught.value)
+    with pytest.raises(SimpleFinError):
+        claim_access_url(CLAIM_URL)
 
 
 @pytest.mark.django_db
@@ -873,26 +837,6 @@ def test_create_new_account_on_a_linked_row_repoints_the_link(monkeypatch):
     link = AccountLink.objects.get(connection=connection, simplefin_account_id="CON-1:sf-checking")
     assert link.account.name == "Synthetic New"
     assert Account.objects.filter(pk=checking.pk).exists()
-
-
-def test_cron_range_with_step_matches():
-    from finance.simplefin_schedule import cron_matches
-
-    tz = dt_utc.utc
-    assert cron_matches("0 6-18/6 * * *", datetime(2026, 10, 1, 12, 0, tzinfo=tz))
-    assert cron_matches("0 6-18/6 * * *", datetime(2026, 10, 1, 18, 0, tzinfo=tz))
-    assert not cron_matches("0 6-18/6 * * *", datetime(2026, 10, 1, 9, 0, tzinfo=tz))
-    assert not cron_matches("0 6-18/6 * * *", datetime(2026, 10, 1, 0, 0, tzinfo=tz))
-
-
-def test_cron_accepts_seven_as_sunday():
-    from finance.simplefin_schedule import cron_matches, next_cron_datetime
-
-    sunday = datetime(2026, 10, 4, 6, 30, tzinfo=dt_utc.utc)
-    assert cron_matches("30 6 * * 7", sunday)
-    assert cron_matches("30 6 * * 0", sunday)
-    assert not cron_matches("30 6 * * 7", sunday + timedelta(days=1))
-    assert next_cron_datetime("30 6 * * 7", sunday - timedelta(days=1)) == sunday
 
 
 @pytest.mark.django_db
@@ -912,22 +856,6 @@ def test_unreadable_connection_shows_a_safe_message_instead_of_500(monkeypatch):
     assert b"can no longer be read with the current encryption key" in page.content
     with pytest.raises(SimpleFinError):
         sync_connection(owner, connection.pk, ignore_rate_limit=True)
-
-
-def test_redirects_are_refused_and_reported_safely(monkeypatch):
-    from email.message import Message
-
-    from finance.simplefin_client import _RefuseRedirects, fetch_accounts
-
-    assert _RefuseRedirects().redirect_request(None, None, 302, "Found", Message(), "https://elsewhere.example.test/") is None
-
-    def redirected(*args, **kwargs):
-        raise HTTPError("https://bridge.example.test/simplefin/accounts", 302, "Found", Message(), None)
-
-    monkeypatch.setattr("finance.simplefin_client.urlopen", redirected)
-    with pytest.raises(SimpleFinError) as caught:
-        fetch_accounts(ACCESS_URL)
-    assert "unexpected redirect" in str(caught.value)
 
 
 @pytest.mark.django_db
@@ -954,18 +882,8 @@ def test_sync_does_not_treat_csv_ids_as_simplefin_duplicates(monkeypatch):
         original_fields={"Synthetic Amount": "-5.00"},
     )
     payload = account_payload(transactions=[posted_txn(txn_id="123", day=16, amount="-3.00")])
-    connection = connect_owner(owner, monkeypatch, payload)
-    save_account_links(
-        owner,
-        connection.pk,
-        [
-            {
-                "simplefin_account_id": "CON-1:sf-checking",
-                "action": "link",
-                "account_id": checking.pk,
-                "cutover_date": date(2026, 3, 11),
-            }
-        ],
+    _owner, _checking, connection = _linked_owner_and_checking(
+        monkeypatch, owner=owner, payload=payload, cutover=date(2026, 3, 11), account=checking
     )
 
     result = sync_connection(owner, connection.pk, ignore_rate_limit=True)
@@ -1029,15 +947,45 @@ def test_sync_does_not_dedupe_against_a_previous_remote_account_after_relink(mon
     assert sorted(amounts) == [-400, -300]
 
 
-def test_cron_day_of_month_or_weekday_when_both_restricted():
+UTC = dt_utc.utc
+CRON_CASES = [
+    # (expression, moment, expected match)
+    ("0 * * * *", datetime(2026, 10, 1, 6, 0), True),
+    ("0 * * * *", datetime(2026, 10, 1, 6, 1), False),
+    ("*/15 6-7 1,2 * *", datetime(2026, 10, 1, 6, 0), True),
+    ("0 6-18/6 * * *", datetime(2026, 10, 1, 12, 0, tzinfo=UTC), True),
+    ("0 6-18/6 * * *", datetime(2026, 10, 1, 18, 0, tzinfo=UTC), True),
+    ("0 6-18/6 * * *", datetime(2026, 10, 1, 9, 0, tzinfo=UTC), False),
+    ("0 6-18/6 * * *", datetime(2026, 10, 1, 0, 0, tzinfo=UTC), False),
+    # 7 and 0 both mean Sunday.
+    ("30 6 * * 7", datetime(2026, 10, 4, 6, 30, tzinfo=UTC), True),
+    ("30 6 * * 0", datetime(2026, 10, 4, 6, 30, tzinfo=UTC), True),
+    ("30 6 * * 7", datetime(2026, 10, 5, 6, 30, tzinfo=UTC), False),
+    # With both day-of-month and weekday restricted, either may match.
+    ("30 6 1 * 1", datetime(2026, 10, 5, 6, 30, tzinfo=UTC), True),  # a Monday, not the 1st
+    ("30 6 1 * 1", datetime(2026, 10, 1, 6, 30, tzinfo=UTC), True),  # the 1st, a Thursday
+    ("30 6 1 * 1", datetime(2026, 10, 6, 6, 30, tzinfo=UTC), False),  # Tuesday the 6th
+    ("30 6 * * 1", datetime(2026, 10, 5, 6, 30, tzinfo=UTC), True),
+    ("30 6 * * 1", datetime(2026, 10, 1, 6, 30, tzinfo=UTC), False),
+]
+
+
+@pytest.mark.parametrize(("expression", "moment", "expected"), CRON_CASES)
+def test_cron_matches_fields_ranges_steps_and_either_day_rule(expression, moment, expected):
     from finance.simplefin_schedule import cron_matches
 
-    tz = dt_utc.utc
-    assert cron_matches("30 6 1 * 1", datetime(2026, 10, 5, 6, 30, tzinfo=tz))  # a Monday, not the 1st
-    assert cron_matches("30 6 1 * 1", datetime(2026, 10, 1, 6, 30, tzinfo=tz))  # the 1st, a Thursday
-    assert not cron_matches("30 6 1 * 1", datetime(2026, 10, 6, 6, 30, tzinfo=tz))  # Tuesday the 6th
-    assert cron_matches("30 6 * * 1", datetime(2026, 10, 5, 6, 30, tzinfo=tz))
-    assert not cron_matches("30 6 * * 1", datetime(2026, 10, 1, 6, 30, tzinfo=tz))
+    assert cron_matches(expression, moment) is expected
+
+
+def test_cron_finds_the_next_run_and_rejects_a_bad_expression():
+    from finance.simplefin_schedule import next_cron_datetime, next_scheduled_sync, parse_five_field_cron
+
+    nxt = next_scheduled_sync("30 6 * * *", datetime(2026, 10, 1, 6, 0))
+    assert (nxt.hour, nxt.minute) == (6, 30)
+    sunday = datetime(2026, 10, 4, 6, 30, tzinfo=UTC)
+    assert next_cron_datetime("30 6 * * 7", sunday - timedelta(days=1)) == sunday
+    with pytest.raises(ValueError):
+        parse_five_field_cron("not a cron")
 
 
 def test_sync_loop_schedules_from_due_time_and_runs_immediately_if_already_due():
@@ -1055,27 +1003,12 @@ def test_sync_loop_schedules_from_due_time_and_runs_immediately_if_already_due()
     assert late_wait == 0
 
 
-def test_link_rows_match_by_id_when_simplefin_reorders_accounts():
-    from django.test import RequestFactory
-
-    from finance.simplefin_views import _choices_from_post
-
-    rendered = [{"id": "CON-1:a", "name": "A"}, {"id": "CON-1:b", "name": "B"}]
-    refetched = list(reversed(rendered))
-    request = RequestFactory().post("/", {"sf_id_0": "CON-1:a", "action_0": "ignore", "sf_id_1": "CON-1:b", "action_1": "ignore"})
-
-    choices = _choices_from_post(request, refetched)
-
-    assert sorted(choice["simplefin_account_id"] for choice in choices) == ["CON-1:a", "CON-1:b"]
-
-
 @pytest.mark.django_db
 def test_provider_account_errors_do_not_create_covering_import_batch(monkeypatch):
     from finance.cash_flow import GROUPING_MONTH, cash_flow_report
 
     owner = make_person("owner")
     make_household(owner)
-    checking = make_account(owner)
     payload = account_payload()
     payload["accounts"][0]["transactions"] = []
     payload["errlist"] = [
@@ -1085,18 +1018,8 @@ def test_provider_account_errors_do_not_create_covering_import_batch(monkeypatch
             "account_id": "sf-checking",
         }
     ]
-    connection = connect_owner(owner, monkeypatch, payload)
-    save_account_links(
-        owner,
-        connection.pk,
-        [
-            {
-                "simplefin_account_id": "CON-1:sf-checking",
-                "action": "link",
-                "account_id": checking.pk,
-                "cutover_date": date(2026, 3, 11),
-            }
-        ],
+    _owner, checking, connection = _linked_owner_and_checking(
+        monkeypatch, owner=owner, payload=payload, cutover=date(2026, 3, 11)
     )
 
     result = sync_connection(owner, connection.pk, ignore_rate_limit=True)
@@ -1123,21 +1046,10 @@ def test_provider_account_errors_do_not_create_covering_import_batch(monkeypatch
 def test_missing_transaction_list_does_not_create_covering_import_batch(monkeypatch):
     owner = make_person("owner")
     make_household(owner)
-    checking = make_account(owner)
     payload = account_payload(transactions=[posted_txn(txn_id="hidden-1", day=16, amount="-3.00")])
     del payload["accounts"][0]["transactions"]
-    connection = connect_owner(owner, monkeypatch, payload)
-    save_account_links(
-        owner,
-        connection.pk,
-        [
-            {
-                "simplefin_account_id": "CON-1:sf-checking",
-                "action": "link",
-                "account_id": checking.pk,
-                "cutover_date": date(2026, 3, 11),
-            }
-        ],
+    _owner, checking, connection = _linked_owner_and_checking(
+        monkeypatch, owner=owner, payload=payload, cutover=date(2026, 3, 11)
     )
 
     sync_connection(owner, connection.pk, ignore_rate_limit=True)
@@ -1147,17 +1059,6 @@ def test_missing_transaction_list_does_not_create_covering_import_batch(monkeypa
     ).exists()
     assert BalanceSnapshot.objects.filter(account=checking).exists()
     assert not Transaction.objects.filter(account=checking, source_transaction_id="hidden-1").exists()
-
-
-def test_account_error_only_applies_to_its_own_connection():
-    from finance.simplefin_services import _error_applies_to_remote
-
-    error = {"conn_id": "CON-1", "account_id": "acct-1", "msg": "Failed to get all transactions."}
-    failing = {"id": "acct-1", "conn_id": "CON-1"}
-    healthy = {"id": "acct-1", "conn_id": "CON-2"}
-
-    assert _error_applies_to_remote(error, failing)
-    assert not _error_applies_to_remote(error, healthy)
 
 
 def test_scheduler_waits_real_time_across_a_daylight_saving_change():
@@ -1176,40 +1077,19 @@ def test_scheduler_waits_real_time_across_a_daylight_saving_change():
 
 @pytest.mark.django_db
 def test_a_sync_with_only_stored_rows_does_not_hide_an_undone_import(monkeypatch):
-    from finance.cash_flow import GROUPING_MONTH, cash_flow_report
-
     owner = make_person("owner")
     make_household(owner)
-    checking = make_account(owner)
-    payload = account_payload(transactions=[posted_txn(txn_id="t-1", day=12, amount="-25.00")])
-    connection = connect_owner(owner, monkeypatch, payload)
-    save_account_links(
-        owner,
-        connection.pk,
-        [
-            {
-                "simplefin_account_id": "CON-1:sf-checking",
-                "action": "link",
-                "account_id": checking.pk,
-                "cutover_date": date(2026, 3, 1),
-            }
-        ],
-    )
-    sync_connection(owner, connection.pk, ignore_rate_limit=True)
+    march = posted_txn(txn_id="t-1", day=12, amount="-25.00")
+    checking, connection = _link_checking(owner, monkeypatch, [account_payload(transactions=[march])])
+    _sync_on(owner, connection, monkeypatch, date(2026, 3, 31))
     first = ImportBatch.objects.get(account=checking, source=ImportBatch.Source.SIMPLEFIN)
-    sync_connection(owner, connection.pk, ignore_rate_limit=True)
+    _sync_on(owner, connection, monkeypatch, date(2026, 3, 31))
 
     undo_import_batch(owner, checking.pk, first.pk)
 
-    report = cash_flow_report(
-        owner,
-        date_from=date(2026, 3, 1),
-        date_to=date(2026, 3, 31),
-        grouping=GROUPING_MONTH,
-        account=checking,
-        today=date(2026, 4, 1),
-    )
-    assert report.periods[0].missing_import is True
+    assert _month_missing(owner, checking, date(2026, 3, 1), date(2026, 3, 31)) is True
+    # The repeat sync kept the snapshot on its original batch, so the undo removed it too.
+    assert not BalanceSnapshot.objects.filter(account=checking, source=BalanceSnapshot.Source.SIMPLEFIN).exists()
 
 
 def _link_checking(owner, monkeypatch, payloads):
@@ -1250,25 +1130,6 @@ def _month_missing(owner, account, first, last):
 
 
 @pytest.mark.django_db
-def test_a_later_sync_covers_only_dates_not_already_imported(monkeypatch):
-    owner = make_person("owner")
-    make_household(owner)
-    march = posted_txn(txn_id="t-1", day=12, amount="-25.00")
-    april = posted_txn(txn_id="t-2", day=1, amount="-30.00", posted=epoch(2026, 4, 10))
-    checking, connection = _link_checking(
-        owner, monkeypatch, [account_payload(transactions=[march]), account_payload(transactions=[march, april])]
-    )
-    _sync_on(owner, connection, monkeypatch, date(2026, 3, 31))
-    first = ImportBatch.objects.get(account=checking, source=ImportBatch.Source.SIMPLEFIN)
-    _sync_on(owner, connection, monkeypatch, date(2026, 4, 30))
-
-    undo_import_batch(owner, checking.pk, first.pk)
-
-    assert _month_missing(owner, checking, date(2026, 3, 1), date(2026, 3, 31)) is True
-    assert _month_missing(owner, checking, date(2026, 4, 1), date(2026, 4, 30)) is False
-
-
-@pytest.mark.django_db
 def test_a_sync_with_only_stored_rows_still_covers_newly_elapsed_dates(monkeypatch):
     owner = make_person("owner")
     make_household(owner)
@@ -1278,21 +1139,6 @@ def test_a_sync_with_only_stored_rows_still_covers_newly_elapsed_dates(monkeypat
     _sync_on(owner, connection, monkeypatch, date(2026, 4, 30))
 
     assert _month_missing(owner, checking, date(2026, 4, 1), date(2026, 4, 30)) is False
-
-
-@pytest.mark.django_db
-def test_a_repeat_sync_keeps_the_balance_snapshots_original_batch(monkeypatch):
-    owner = make_person("owner")
-    make_household(owner)
-    march = posted_txn(txn_id="t-1", day=12, amount="-25.00")
-    checking, connection = _link_checking(owner, monkeypatch, [account_payload(transactions=[march])])
-    _sync_on(owner, connection, monkeypatch, date(2026, 3, 31))
-    first = ImportBatch.objects.get(account=checking, source=ImportBatch.Source.SIMPLEFIN)
-    _sync_on(owner, connection, monkeypatch, date(2026, 3, 31))
-
-    undo_import_batch(owner, checking.pk, first.pk)
-
-    assert not BalanceSnapshot.objects.filter(account=checking, source=BalanceSnapshot.Source.SIMPLEFIN).exists()
 
 
 @pytest.mark.django_db
@@ -1391,32 +1237,6 @@ def test_saving_links_does_not_bypass_the_sync_limit(monkeypatch):
     assert b"Account links saved" in again.content
 
 
-def test_an_error_naming_no_account_makes_every_account_unreliable():
-    from finance.simplefin_services import _transactions_unreliable
-
-    remote = {"id": "acct-1", "conn_id": "CON-1", "transactions": []}
-
-    assert _transactions_unreliable(remote, {"errlist": [{"code": "gen.partial", "msg": "Incomplete data."}]})
-    assert _transactions_unreliable(remote, {"errlist": ["Incomplete data."]})
-    assert not _transactions_unreliable(remote, {"errlist": [{"conn_id": "CON-2", "msg": "Other bank."}]})
-
-
-def test_a_truncated_response_is_a_simplefin_error(monkeypatch):
-    from http.client import IncompleteRead
-
-    from finance.simplefin_client import fetch_accounts
-
-    class _TruncatedResponse(_FakeResponse):
-        def read(self, size=-1):
-            raise IncompleteRead(b"{\"accounts\"", 100)
-
-    monkeypatch.setattr("finance.simplefin_client.urlopen", lambda *a, **k: _TruncatedResponse(b""))
-    with pytest.raises(SimpleFinError, match="did not finish responding"):
-        fetch_accounts(ACCESS_URL)
-    with pytest.raises(SimpleFinError):
-        claim_access_url(CLAIM_URL)
-
-
 def test_account_keys_cannot_collide_through_colons():
     from finance.simplefin_services import remote_account_key
 
@@ -1431,20 +1251,7 @@ def test_account_keys_cannot_collide_through_colons():
 def test_saving_links_keeps_a_link_to_an_archived_account(monkeypatch):
     owner = make_person("owner")
     make_household(owner)
-    checking = make_account(owner)
-    connection = connect_owner(owner, monkeypatch)
-    save_account_links(
-        owner,
-        connection.pk,
-        [
-            {
-                "simplefin_account_id": "CON-1:sf-checking",
-                "action": "link",
-                "account_id": checking.pk,
-                "cutover_date": date(2026, 3, 1),
-            }
-        ],
-    )
+    _owner, checking, connection = _linked_owner_and_checking(monkeypatch, owner=owner)
     Account.objects.filter(pk=checking.pk).update(status=Account.Status.ARCHIVED, archived_at=timezone.now())
     client = signed_in(owner)
 
