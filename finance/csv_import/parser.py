@@ -1,7 +1,7 @@
 import csv
 import io
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
@@ -82,16 +82,10 @@ class PreviewRow:
         return not self.errors
 
     def classified(self, overlap_status):
-        return PreviewRow(
-            self.row_number,
-            self.transaction_date,
-            self.description,
-            self.amount_minor,
-            self.currency,
-            self.errors,
-            self.source_transaction_id,
-            overlap_status,
-        )
+        return replace(self, overlap_status=overlap_status)
+
+    def with_error(self, error):
+        return replace(self, errors=(*self.errors, error))
 
     @property
     def amount_display(self):
@@ -190,6 +184,10 @@ def _collect_rows(records, column_count, max_rows):
     rows = []
     try:
         for number, cells in enumerate(records, start=2):
+            # An empty line, or one made only of delimiters, is not a record.
+            # It still advances the number, so later rows keep their line.
+            if all(not cell.strip() for cell in cells):
+                continue
             if len(rows) >= max_rows:
                 raise CsvInputError(f"The CSV file exceeds the {max_rows:,} row limit.")
             structural_error = None

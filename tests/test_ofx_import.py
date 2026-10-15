@@ -49,6 +49,21 @@ def test_invalid_row_fields(old, new, error):
     assert any(error in message for message in preview.rows[0].errors)
 
 
+@pytest.mark.parametrize("amount,expected", [
+    (b"-12,34", -1234), (b"12,3", 1230), (b"+5,00", 500), (b"-12.34", -1234), (b"12", 1200),
+])
+def test_comma_radix_amounts_read_like_dot_amounts(amount, expected):
+    preview = preview_csv(read_ofx(fixture().replace(b"-12.34", amount)), OFX_MAPPING)
+    assert preview.rows[0].errors == ()
+    assert preview.rows[0].amount_minor == expected
+
+
+@pytest.mark.parametrize("amount", [b"1.234,56", b"1,234.56", b"1,234,56", b"1,234", b",50", b"12,"])
+def test_grouped_or_ambiguous_amounts_stay_invalid(amount):
+    preview = preview_csv(read_ofx(fixture().replace(b"-12.34", amount)), OFX_MAPPING)
+    assert any("Amount is not valid" in message for message in preview.rows[0].errors)
+
+
 @pytest.mark.parametrize("content,message", [
     (b"", "not a valid"),
     (b"Date,Amount,Name\n2026-09-27,-12.34,Example", "not a valid"),
@@ -396,3 +411,15 @@ def test_encoded_xml_chosen_as_csv_has_a_profile_error(import_client):
     response = upload(client, account, content.encode("utf-16"), profile="generic")
     assert "Choose the OFX / QFX profile" in str(response.context["upload_form"].errors)
     assert not list(staging.glob("*.csvstage"))
+
+
+@pytest.mark.django_db
+def test_comma_radix_statement_reimports_as_duplicates(import_client):
+    client, account, _staging = import_client
+    comma = fixture().replace(b"<TRNAMT>-12.34", b"<TRNAMT>-12,34")
+    assert commit(client, account, upload(client, account, comma)).status_code == 302
+    assert Transaction.objects.order_by("source_row_number").first().amount_minor == -1234
+
+    for content in (comma, fixture()):
+        response = upload(client, account, content)
+        assert (response.context["preview"].new_count, response.context["preview"].duplicate_count) == (0, 2)

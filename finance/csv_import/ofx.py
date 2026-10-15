@@ -204,6 +204,13 @@ def read_ofx(content: bytes, *, max_rows=MAX_DATA_ROWS) -> CsvDocument:
     return CsvDocument(OFX_HEADERS, tuple(rows))
 
 
+def _amount(value):
+    """OFX allows a comma radix point; grouped amounts stay for the parser to refuse."""
+    if re.fullmatch(r"[+-]?\d+,\d+", value):
+        return value.replace(",", ".")
+    return value
+
+
 def _row(statement_currencies, transaction, number):
     if _value(transaction, "CORRECTFITID") or _value(transaction, "CORRECTACTION"):
         # Corrections require matching provider IDs, which this importer does
@@ -212,7 +219,7 @@ def _row(statement_currencies, transaction, number):
     posted = _value(transaction, "DTPOSTED")
     date = f"{posted[:4]}-{posted[4:6]}-{posted[6:8]}" if re.match(r"^\d{8}", posted) else ""
     name = _value(transaction, "NAME") or _value(transaction, "PAYEE/NAME") or _value(transaction, "PAYEE2/NAME")
-    cells = (date, _value(transaction, "TRNAMT"), name,
+    cells = (date, _amount(_value(transaction, "TRNAMT")), name,
              *(_value(transaction, tag) for tag in ("MEMO", "FITID", "TRNTYPE")))
     error = _currency_error(statement_currencies, transaction)
     if len(cells[4]) > 255:

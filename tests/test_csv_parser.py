@@ -132,6 +132,31 @@ def test_ragged_rows_are_invalid_without_crashing():
     assert "different number of columns" in result.rows[0].errors[0]
 
 
+@pytest.mark.parametrize("content", [
+    b"When,Memo,Amount\n09/16/2026,SYNTHETIC A,-1.00\n\n09/17/2026,SYNTHETIC B,-2.00\n",
+    b"When,Memo,Amount\n09/16/2026,SYNTHETIC A,-1.00\n09/17/2026,SYNTHETIC B,-2.00\n\n",
+    b"When,Memo,Amount\r\n09/16/2026,SYNTHETIC A,-1.00\r\n09/17/2026,SYNTHETIC B,-2.00\r\n\r\n",
+    b"When,Memo,Amount\n09/16/2026,SYNTHETIC A,-1.00\n,,\n09/17/2026,SYNTHETIC B,-2.00\n",
+    b"When,Memo,Amount\n09/16/2026,SYNTHETIC A,-1.00\n , ,\n09/17/2026,SYNTHETIC B,-2.00\n",
+])
+def test_empty_and_delimiter_only_records_are_skipped(content):
+    result = preview_csv(read_csv(content), mapping())
+    assert (result.valid_count, result.invalid_count) == (2, 0)
+    assert result.rows[0].row_number == 2
+
+
+def test_rows_after_a_skipped_record_keep_their_file_line():
+    content = b"When,Memo,Amount\n\n09/16/2026,SYNTHETIC A,-1.00\n,,\n09/17/2026,SYNTHETIC B\n"
+    result = preview_csv(read_csv(content), mapping())
+    assert [row.row_number for row in result.rows] == [3, 5]
+    assert result.rows[0].is_valid
+    assert "different number of columns" in result.rows[1].errors[0]
+
+
+def test_skipped_records_do_not_count_toward_the_row_cap():
+    assert len(read_csv(b"When,Memo,Amount\n\n,,\n1,2,3\n\n", max_rows=1).rows) == 1
+
+
 def test_row_and_file_caps_are_enforced():
     with pytest.raises(CsvInputError, match="row limit"):
         read_csv(b"When,Memo,Amount\n1,2,3\n1,2,3\n", max_rows=1)

@@ -588,3 +588,69 @@ def test_upload_with_a_nul_byte_shows_a_form_error_and_keeps_no_staged_file(stag
     assert not [path for path in staging_settings.iterdir() if path.name != ".stage-lock"]
     assert not Transaction.objects.exists()
 
+
+
+PAYCHECK_CSV = (
+    b"When,Memo,Amount,Currency\n"
+    b"09/26/2026,SYNTHETIC PAYCHECK,1000.00,USD\n"
+    b"09/27/2026,SYNTHETIC GROCER,-40.00,USD\n"
+)
+
+
+def _saved_mapping_for(user, account):
+    from finance.csv_import.parser import Mapping
+    from finance.csv_import.saved_mappings import save_csv_mapping
+
+    return save_csv_mapping(
+        user,
+        name="Synthetic bank",
+        headers=("When", "Memo", "Amount", "Currency"),
+        mapping=Mapping(
+            date_column="When", description_column="Memo", date_format="mdy_slash_4",
+            number_format="dot_comma", amount_mode="signed", amount_column="Amount",
+            currency_column="Currency",
+        ),
+        account=account,
+        set_as_account_default=False,
+    )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("path", ["generic", "saved"])
+def test_mapped_csv_offers_only_csv_providers_and_refuses_crafted_sources(staging_settings, path):
+    from finance.category_services import income_and_spending_totals
+
+    user, person = make_person("owner")
+    household = Household.objects.create(name="Synthetic Household")
+    Membership.objects.create(person=person, household=household)
+    account = Account.objects.create(name="Synthetic Checking", account_type="checking", owner=person)
+    client = Client()
+    client.force_login(user)
+    preview_url = reverse("csv-import-preview", args=(account.pk,))
+    upload_data = {"action": "upload", "csv_file": SimpleUploadedFile("synthetic.csv", PAYCHECK_CSV, "text/csv")}
+    if path == "saved":
+        upload_data["import_profile"] = f"saved:{_saved_mapping_for(user, account).pk}"
+    form = client.post(preview_url, upload_data).context["mapping_form"]
+    token = form["token"].value()
+
+    offered = [value for value, _label in form.fields["source"].choices]
+    assert offered == ["huntington", "capital_one", "apple_card"]
+
+    def commit_with(source):
+        if path == "saved":
+            return client.post(preview_url, {
+                "action": "commit", "token": token, "source": source,
+                "date_range_start": "2026-09-01", "date_range_end": "2026-09-30",
+            })
+        return client.post(preview_url, commit_data(token, source=source))
+
+    for source in ("vanguard", "simplefin", "ofx"):
+        refused = commit_with(source)
+        assert refused.status_code == 200
+        assert refused.context["mapping_form"].errors["source"]
+        assert not ImportBatch.objects.exists()
+
+    assert commit_with("huntington").status_code == 302
+    assert set(Transaction.objects.values_list("kind", flat=True)) == {Transaction.Kind.CASH_FLOW}
+    totals = income_and_spending_totals(user)
+    assert (totals.income_minor, totals.spending_minor) == (100000, 4000)

@@ -75,19 +75,21 @@ def test_undoing_an_empty_batch_removes_its_coverage_and_keeps_earlier_rows():
     assert ImportBatch.objects.get(pk=empty.pk).status == ImportBatch.Status.ARCHIVED
 
 
-def test_empty_csv_marked_simplefin_still_counts_as_coverage():
-    user, person = make_person("sf-owner")
+def test_historical_empty_csv_batch_marked_simplefin_still_counts_as_coverage():
+    # File imports now refuse a simplefin source (#499), but batches stored
+    # before that keep an empty simplefin_account_id and still count.
+    _user, person = make_person("sf-owner")
     account = Account.objects.create(name="Synthetic Card", account_type="credit_card", owner=person)
     today = timezone.localdate()
     old = today - timedelta(days=60)
-    header = HEADER.encode()
-    commit_csv_import(
-        user, account.pk, content=header, document=read_csv(header), mapping=APPLE_CARD_MAPPING,
-        source="simplefin", date_range_start=old, date_range_end=old,
-    )
+
+    def historical_batch(end):
+        ImportBatch.objects.create(
+            account=account, imported_by=person, source=ImportBatch.Source.SIMPLEFIN,
+            source_file_sha256="e" * 64, date_range_start=old, date_range_end=end,
+        )
+
+    historical_batch(old)
     assert due_ids(account, today) == [account.pk]
-    commit_csv_import(
-        user, account.pk, content=header, document=read_csv(header), mapping=APPLE_CARD_MAPPING,
-        source="simplefin", date_range_start=old, date_range_end=today,
-    )
+    historical_batch(today)
     assert due_ids(account, today) == []
