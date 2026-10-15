@@ -103,9 +103,10 @@ def _one_series_per_bill(rows, replaced, member_ids, household, eligible, *, sel
     account, so private history never shapes the plan.
 
     `eligible` is the queryset of charges that count. `selected` narrows a
-    single-account view: a bill stays only when one of its charges, on any
-    series that belongs to it, sits in that queryset of transactions. The
-    amount and schedule still come from the whole bill.
+    single-account view: a bill stays only when one of its current charges, on
+    any series that belongs to it or still to be caught up, sits in that
+    queryset of transactions. The amount and schedule still come from the
+    whole bill.
     """
     row_ids = {row.pk for row in rows}
     linkers = (
@@ -119,19 +120,19 @@ def _one_series_per_bill(rows, replaced, member_ids, household, eligible, *, sel
         linkers, Account.objects.filter(scope=Account.Scope.HOUSEHOLD, household=household)
     )
     bills = resolve_household_bills([*rows, *linkers], eligible)
-    touched_ids = None
+    touched = None
     if selected is not None:
-        touched_ids = set(
-            RecurringSeriesMember.objects.filter(
-                series_id__in=[series.pk for bill in bills for series in bill.copies], transaction__in=selected
-            ).values_list("series_id", flat=True)
+        # The bill's current charges count, so a payment that moved to the
+        # selected account keeps the bill in that view.
+        touched = set(
+            selected.filter(pk__in={txn.pk for bill in bills for txn in bill.charges}).values_list("pk", flat=True)
         )
     by_pk = {row.pk: row for row in rows}
     chosen = []
     for bill in bills:
         if any(series.pk in replaced for series in bill.copies):
             continue
-        if touched_ids is not None and not any(series.pk in touched_ids for series in bill.copies):
+        if touched is not None and not any(txn.pk in touched for txn in bill.charges):
             continue
         current = bill.current
         if current is None or current.pk not in by_pk:

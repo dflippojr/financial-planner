@@ -1322,6 +1322,22 @@ def resolve_household_bills(copies, eligible):
     return bills
 
 
+def _held_by_a_household_bill():
+    """Memberships of confirmed active series built wholly from household charges.
+
+    A series with a private charge never reaches a household bill, so what it
+    holds is still free to continue one.
+    """
+    private_member = RecurringSeriesMember.objects.filter(series_id=OuterRef("series_id")).exclude(
+        transaction__account__scope=Account.Scope.HOUSEHOLD
+    )
+    return RecurringSeriesMember.objects.filter(
+        transaction_id=OuterRef("pk"),
+        series__status=RecurringSeries.Status.CONFIRMED,
+        series__is_active=True,
+    ).exclude(Exists(private_member))
+
+
 def _continue_from_household_charges(bills, eligible):
     """Add household charges the stored copies have not caught up to.
 
@@ -1341,15 +1357,7 @@ def _continue_from_household_charges(bills, eligible):
             transaction_date__gt=min(bill.last_on for bill in anchored),
         )
         .exclude(Exists(RecurringExclusion.objects.filter(transaction_id=OuterRef("pk"), person_id__in=owners)))
-        .exclude(
-            Exists(
-                RecurringSeriesMember.objects.filter(
-                    transaction_id=OuterRef("pk"),
-                    series__status=RecurringSeries.Status.CONFIRMED,
-                    series__is_active=True,
-                )
-            )
-        )
+        .exclude(Exists(_held_by_a_household_bill()))
         .select_related("account")
         .order_by("transaction_date", "pk")
     )
@@ -1442,13 +1450,13 @@ def confirmed_totals_once_per_bill(confirmed, review):
     return confirmed_totals(counted)
 
 
-def _bill_copies(person, series):
-    """The series the person may act on that belong to the same bill as `series`, itself included.
+def _bill_candidates(person, series):
+    """The confirmed series the person may act on that could link into `series`'s bill, itself included.
 
     Like the projection, only series built wholly from household charges
     link into one bill; a series with a private charge acts alone.
     """
-    candidates = [
+    return [
         copy
         for copy in RecurringSeries.objects.actionable_by(person, linkers=True)
         .filter(status=RecurringSeries.Status.CONFIRMED)
@@ -1456,6 +1464,11 @@ def _bill_copies(person, series):
         .order_by("pk")
         if copy.pk == series.pk or _household_only(copy)
     ]
+
+
+def _bill_copies(person, series):
+    """The series the person may act on that belong to the same bill as `series`, itself included."""
+    candidates = _bill_candidates(person, series)
     if not _household_only(next(copy for copy in candidates if copy.pk == series.pk)):
         return [series]
     by_pk = {copy.pk: copy for copy in candidates}
@@ -1463,6 +1476,17 @@ def _bill_copies(person, series):
         if series.pk in bill:
             return [by_pk[pk] for pk in bill]
     return [series]
+
+
+def _current_bill_charges(person, series):
+    """The bill's current household charges, oldest first, or None when `series` stands alone."""
+    candidates = _bill_candidates(person, series)
+    if not _household_only(next(copy for copy in candidates if copy.pk == series.pk)):
+        return None
+    for bill in resolve_household_bills(candidates, eligible_bill_charges(person)):
+        if any(copy.pk == series.pk for copy in bill.copies):
+            return bill.charges
+    return None
 
 
 def _set_bill_cancelled(person, series, *, cancelled_at, action):
@@ -1550,15 +1574,24 @@ def keep_cancelled_recurring_series(principal, series_id):
 @transaction.atomic
 def dismiss_price_change(principal, series_id):
     person, series = _lock_confirmed_series(principal, series_id)
-    latest = (
-        RecurringSeriesMember.objects.filter(series=series)
-        .select_related("transaction")
-        .order_by("-transaction__transaction_date", "-transaction_id")
-        .first()
-    )
-    if latest is None:
-        raise PermissionDenied(_DENIED)
-    series.acknowledged_amount_minor = latest.transaction.amount_minor
+    amount_minor = None
+    if series.person_id != person.pk:
+        # A household bill another member confirmed shows its price state from
+        # the bill's current household charges, so acknowledge that charge.
+        charges = _current_bill_charges(person, series)
+        if charges:
+            amount_minor = charges[-1].amount_minor
+    if amount_minor is None:
+        latest = (
+            RecurringSeriesMember.objects.filter(series=series)
+            .select_related("transaction")
+            .order_by("-transaction__transaction_date", "-transaction_id")
+            .first()
+        )
+        if latest is None:
+            raise PermissionDenied(_DENIED)
+        amount_minor = latest.transaction.amount_minor
+    series.acknowledged_amount_minor = amount_minor
     series.save(update_fields=("acknowledged_amount_minor", "updated_at"))
     _record_series(person, AuditEvent.Action.RECURRING_PRICE_ACKNOWLEDGED, series)
     return series

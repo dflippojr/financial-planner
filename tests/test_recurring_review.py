@@ -923,3 +923,57 @@ def test_a_household_charge_that_does_not_fit_the_bill_leaves_it_missed(descript
     page = _page(member, today=date(2026, 10, 30))
 
     assert [item.expected_on for item in page.context["missed_charges"]] == [date(2026, 10, 12)]
+
+
+@pytest.mark.django_db
+def test_only_a_household_bill_holds_a_payment_back_from_continuing_another_bill():
+    from finance.bill_grouping import eligible_bill_charges
+    from finance.recurring_services import resolve_household_bills
+
+    _owner, member, _outsider, series = _shared_bill()
+    shared = series.members.first().transaction.account
+    october = make_transaction(
+        member, shared, transaction_date=date(2026, 10, 12), amount_minor=-6000, description="Synthetic Internet"
+    )
+    mixed = make_series(member, name="Synthetic Mixed", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-6000)
+    add_member(mixed, october)
+    add_member(mixed, make_transaction(member, make_account(member, name="Member Private"), description="Private", amount_minor=-6000))
+
+    def last_on():
+        (bill,) = resolve_household_bills([series], eligible_bill_charges(member))
+        return bill.last_on
+
+    # A series with a private charge never reaches a household bill, so it holds nothing back.
+    assert last_on() == date(2026, 10, 12)
+
+    # Another household bill that holds the payment does.
+    mixed.members.filter(transaction__description="Private").delete()
+    assert last_on() == date(2026, 9, 12)
+
+
+@pytest.mark.django_db
+def test_a_single_account_plan_keeps_a_bill_whose_latest_payment_moved_to_that_account():
+    from finance.planning_services import visible_projection_inputs
+
+    owner, member, _outsider, series = _shared_bill()
+    new_account = make_account(owner, name="Synthetic New Joint", scope=Account.Scope.HOUSEHOLD, household=_household())
+    make_transaction(owner, new_account, transaction_date=date(2026, 10, 12), amount_minor=-6000, description="Synthetic Internet")
+
+    inputs = visible_projection_inputs(member, account=new_account, scope=Account.Scope.HOUSEHOLD)
+
+    assert [(item.source_id, item.start) for item in inputs if item.source == "series"] == [(series.pk, date(2026, 11, 12))]
+
+
+@pytest.mark.django_db
+def test_acknowledging_a_shared_rows_price_change_records_the_current_charge():
+    _owner, member, _outsider, series = _shared_bill()
+    shared = series.members.first().transaction.account
+    make_transaction(member, shared, transaction_date=date(2026, 10, 12), amount_minor=-7000, description="Synthetic Internet")
+    today = date(2026, 10, 13)
+    assert [item.series.pk for item in _page(member, today=today).context["price_changes"]] == [series.pk]
+
+    dismiss_price_change(member, series.pk)
+
+    series.refresh_from_db()
+    assert series.acknowledged_amount_minor == -7000
+    assert _page(member, today=today).context["price_changes"] == []
