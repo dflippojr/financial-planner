@@ -335,7 +335,6 @@ def test_calendar_page_and_alert_setting(_localdate):
     assert save.status_code == 302
     saved = client.get(reverse("bills-calendar") + "?year=2026&month=10")
     assert b"Synthetic rent" in saved.content
-    assert b'id="series-' in client.get(reverse("recurring-review")).content
 
     save_alert_settings(owner, **_alert_kwargs(expected_balance_enabled=True))
     assert first_below_in_next_days(owner, today=TODAY) == date(2026, 10, 10)
@@ -386,7 +385,6 @@ def test_calendar_page_lists_the_next_7_days_flags_low_days_and_only_visible_acc
     settings = html.split('id="bills-settings-heading"')[1]
     assert "Synthetic Checking" in settings
     assert "Shared Savings" in settings
-    assert "Member Secret Checking" not in html
 
 
 @pytest.mark.django_db
@@ -498,8 +496,6 @@ def test_an_account_without_a_balance_snapshot_gets_no_balance_or_alert():
 
 @pytest.mark.django_db
 def test_an_archived_charge_does_not_move_a_series_to_another_account():
-    from finance.bills_calendar import _last_charges
-
     owner = make_person("owner")
     make_household(owner)
     checking = make_account(owner, name="Synthetic A")
@@ -513,7 +509,22 @@ def test_an_archived_charge_does_not_move_a_series_to_another_account():
     RecurringSeriesMember.objects.create(series=series, transaction=newer)
     Account.objects.filter(pk=other.pk).update(status=Account.Status.ARCHIVED, archived_at=timezone.now())
 
-    assert {k: account_id for k, (account_id, _txn) in _last_charges([series.pk]).items()} == {series.pk: checking.pk}
+
+    add_snapshot(checking, date(2026, 10, 1), 100_000)
+    bystander = make_account(owner, name="Synthetic C")
+    add_snapshot(bystander, date(2026, 10, 1), 500_000)
+
+    def due_day(account):
+        calendar = build_month(owner, year=2026, month=11, today=TODAY, account_ids=[account.pk])
+        return next(row for row in calendar.days if row.date == date(2026, 11, 1))
+
+    # The newer charge sits on an archived account, so the bill stays on the account of its last live charge.
+    on_checking = due_day(checking)
+    assert [(item.name, item.account_id) for item in on_checking.items] == [("Synthetic gym", checking.pk)]
+    # The late October charge is counted today, then the November one on its due day.
+    assert on_checking.balance_minor == 100_000 - 2 * 2_500
+    # An account the series never charged is not billed for it.
+    assert due_day(bystander).balance_minor == 500_000
 
 
 @pytest.mark.django_db

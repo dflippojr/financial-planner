@@ -26,24 +26,38 @@ def _random_merchant(count, seed):
     return [_row(index + 1, day, rng.randint(300, 25000)) for index, day in enumerate(days)]
 
 
-def test_five_hundred_random_charges_for_one_merchant_finish_quickly():
-    rows = _random_merchant(500, seed=1)
+def _count_cadence_steps(rows, monkeypatch):
+    """Detect and return how many cadence steps the search took, which does not depend on machine speed."""
+    steps = 0
+    real = recurring_services.add_cadence
+
+    def counting(*args, **kwargs):
+        nonlocal steps
+        steps += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(recurring_services, "add_cadence", counting)
     started = perf_counter()
     detect_recurring_series(rows)
-    # About 1.5 s locally and about 13 s under CI coverage tracing; the cubic search needed minutes.
+    # Only a safety net for a hang; the step counts below are the real bound.
     assert perf_counter() - started < 60
+    return steps
 
 
-def test_frequent_varied_purchases_finish_quickly():
+def test_many_random_charges_for_one_merchant_stay_within_the_step_budget(monkeypatch):
+    # 546,586 steps today; the earlier cubic search took minutes on 500 charges.
+    assert _count_cadence_steps(_random_merchant(250, seed=1), monkeypatch) < 1_000_000
+
+
+def test_frequent_varied_purchases_stay_within_the_step_budget(monkeypatch):
     rng = random.Random(2)
     day = date(2023, 1, 1)
     rows = []
     for pk in range(1, 161):
         day += timedelta(days=rng.randint(3, 9))
         rows.append(_row(pk, day, rng.randint(4000, 18000), "Synthetic Grocer"))
-    started = perf_counter()
-    detect_recurring_series(rows)
-    assert perf_counter() - started < 5
+    # 95,286 steps today.
+    assert _count_cadence_steps(rows, monkeypatch) < 200_000
 
 
 def _golden_digest():

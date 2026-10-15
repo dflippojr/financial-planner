@@ -69,7 +69,8 @@ def test_private_missed_alert_reaches_only_the_owner():
 
 def test_imported_higher_charge_raises_price_alert_and_no_missed_alert():
     owner = make_person("owner")
-    make_household(owner)
+    member = make_person("member")
+    make_household(owner, member)
     account = make_account(owner)
     series = confirmed_monthly(owner, account, description="Synthetic Price Bill")
     today = date(2026, 7, 28)
@@ -82,6 +83,7 @@ def test_imported_higher_charge_raises_price_alert_and_no_missed_alert():
 
     run_daily_alert_pass(today=today)
 
+    # The account is private, so the price alert never reaches the other member.
     assert recurring_alerts(Alert.Kind.RECURRING_PRICE) == [(owner.pk, f"recurring:{series.pk}:-2400")]
     assert recurring_alerts(Alert.Kind.RECURRING_MISSED) == []
     assert series.members.count() == 7
@@ -103,6 +105,7 @@ def test_price_alert_respects_each_recipients_threshold():
     run_daily_alert_pass(today=date(2026, 7, 20))
 
     assert recurring_alerts(Alert.Kind.RECURRING_PRICE) == [(owner.pk, f"recurring:{series.pk}:-2400")]
+    assert "20.00 USD to 24.00 USD" in Alert.objects.get(kind=Alert.Kind.RECURRING_PRICE).title
 
 
 def test_second_pass_adds_no_duplicates_and_empty_members_are_fine():

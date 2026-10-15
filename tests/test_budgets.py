@@ -1,5 +1,4 @@
 from datetime import date
-from decimal import Decimal
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -194,8 +193,8 @@ def test_edit_prefill_uses_amount_in_effect_for_viewed_month():
     page = client.get(reverse("budget-edit", args=[budget.pk]) + "?month=2026-01")
     assert page.status_code == 200
     prefill = page.context["form"].initial.get("amount")
-    assert prefill not in (Decimal("100"), Decimal("100.00"), Decimal("100.0"))
-    posted_amount = "" if prefill in (None, Decimal("0"), Decimal("0.00")) else str(prefill)
+    assert prefill is None
+    posted_amount = ""
     client.post(
         reverse("budget-edit", args=[budget.pk]) + "?month=2026-01",
         {
@@ -243,23 +242,6 @@ def test_turning_rollover_on_starts_carry_that_month():
 
 
 @pytest.mark.django_db
-def test_rollover_resets_from_earlier_period_do_not_affect_later_period():
-    owner = make_person("owner")
-    household = make_household(owner)
-    groceries = household.categories.get(name="Groceries")
-    budget = add_budget(owner, category=groceries, amount_minor=10_000, month=date(2026, 1, 1), rollover=True)
-    reset_budget_rollover(owner.user, budget, month=date(2026, 6, 1))
-    assert BudgetRolloverReset.objects.filter(budget=budget, month=date(2026, 6, 1)).exists()
-    set_budget_rollover(owner.user, budget, False, month=date(2026, 6, 1))
-    set_budget_rollover(owner.user, budget, True, month=date(2026, 3, 1))
-    budget.refresh_from_db()
-    cards = {card.budget.pk: card for card in month_budget_cards(owner.user, date(2026, 7, 1))}
-    # March through June leftover at 100.00 each; the June reset belongs to the prior period.
-    assert cards[budget.pk].carry_minor == 40_000
-    assert BudgetRolloverReset.objects.filter(budget=budget, month=date(2026, 6, 1)).exists()
-
-
-@pytest.mark.django_db
 def test_household_budget_excludes_private_spending():
     owner = make_person("owner")
     member = make_person("member")
@@ -296,7 +278,7 @@ def test_household_budget_excludes_private_spending():
     page = signed_in(member).get(reverse("budgets") + "?month=2026-01")
     body = page.content.decode()
     assert "90.00" not in body
-    assert "Over by" not in body or "9,000" not in body.replace(",", "")
+    assert "Over by" not in body
 
 
 @pytest.mark.django_db
@@ -388,9 +370,10 @@ def test_budgets_page_and_dashboard_card():
     assert page.status_code == 200
     assert "Groceries" in body
     assert "Over by" in body
-    assert "12.00" in body or "120.00" in body
+    assert "Over by 20.00 USD" in body
+    assert "120.00 USD of 100.00 USD" in body
     home = client.get(reverse("home"))
-    assert "Open budgets" in home.content.decode() or "Budgets" in home.content.decode()
+    assert "Open budgets" in home.content.decode()
     assert reverse("budgets") in home.content.decode()
 
 
@@ -436,16 +419,49 @@ def test_add_edit_archive_and_reset_confirmation():
     assert budget.status == Budget.Status.ARCHIVED
 
 
-@pytest.mark.django_db
-def test_resetting_the_same_month_again_counts_in_the_new_rollover_period():
-    owner = make_person("owner")
-    household = make_household(owner)
-    groceries = household.categories.get(name="Groceries")
+def _freeze_clock(monkeypatch):
+    from django.utils import timezone as django_timezone
+
+    frozen = django_timezone.now()
+    monkeypatch.setattr("finance.budget_services.timezone.now", lambda: frozen)
+    monkeypatch.setattr("django.utils.timezone.now", lambda: frozen)
+
+
+def _budget_with_a_june_reset_and_a_new_rollover_period(owner, groceries):
     budget = add_budget(owner, category=groceries, amount_minor=10_000, month=date(2026, 1, 1), rollover=True)
     reset_budget_rollover(owner.user, budget, month=date(2026, 6, 1))
     set_budget_rollover(owner.user, budget, False, month=date(2026, 6, 1))
     set_budget_rollover(owner.user, budget, True, month=date(2026, 3, 1))
     budget.refresh_from_db()
+    return budget
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("same_clock_tick", [False, True], ids=["normal-time", "frozen-time"])
+def test_a_reset_from_an_earlier_rollover_period_does_not_carry_into_the_new_period(same_clock_tick, monkeypatch):
+    owner = make_person("owner")
+    household = make_household(owner)
+    groceries = household.categories.get(name="Groceries")
+    if same_clock_tick:
+        _freeze_clock(monkeypatch)
+    budget = _budget_with_a_june_reset_and_a_new_rollover_period(owner, groceries)
+
+    cards = {card.budget.pk: card for card in month_budget_cards(owner.user, date(2026, 7, 1))}
+
+    # March through June leftover at 100.00 each; the June reset belongs to the prior period.
+    assert cards[budget.pk].carry_minor == 40_000
+    assert BudgetRolloverReset.objects.filter(budget=budget, month=date(2026, 6, 1)).exists()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("same_clock_tick", [False, True], ids=["normal-time", "frozen-time"])
+def test_resetting_the_same_month_again_counts_in_the_new_rollover_period(same_clock_tick, monkeypatch):
+    owner = make_person("owner")
+    household = make_household(owner)
+    groceries = household.categories.get(name="Groceries")
+    if same_clock_tick:
+        _freeze_clock(monkeypatch)
+    budget = _budget_with_a_june_reset_and_a_new_rollover_period(owner, groceries)
 
     reset_budget_rollover(owner.user, budget, month=date(2026, 6, 1))
 
@@ -453,47 +469,3 @@ def test_resetting_the_same_month_again_counts_in_the_new_rollover_period():
     # The June reset is part of the current period again: only June's leftover carries.
     assert cards[budget.pk].carry_minor == 10_000
     assert BudgetRolloverReset.objects.filter(budget=budget, month=date(2026, 6, 1)).count() == 1
-
-
-@pytest.mark.django_db
-def test_reset_and_re_enabling_in_the_same_clock_tick_starts_a_clean_period(monkeypatch):
-    from django.utils import timezone as django_timezone
-
-    owner = make_person("owner")
-    household = make_household(owner)
-    groceries = household.categories.get(name="Groceries")
-    budget = add_budget(owner, category=groceries, amount_minor=10_000, month=date(2026, 1, 1), rollover=True)
-    frozen = django_timezone.now()
-    monkeypatch.setattr("finance.budget_services.timezone.now", lambda: frozen)
-    monkeypatch.setattr("django.utils.timezone.now", lambda: frozen)
-    reset_budget_rollover(owner.user, budget, month=date(2026, 6, 1))
-    set_budget_rollover(owner.user, budget, False, month=date(2026, 6, 1))
-    set_budget_rollover(owner.user, budget, True, month=date(2026, 3, 1))
-    budget.refresh_from_db()
-
-    cards = {card.budget.pk: card for card in month_budget_cards(owner.user, date(2026, 7, 1))}
-
-    assert cards[budget.pk].carry_minor == 40_000
-
-
-@pytest.mark.django_db
-def test_reset_made_in_the_same_tick_after_re_enabling_counts_in_the_new_period(monkeypatch):
-    from django.utils import timezone as django_timezone
-
-    owner = make_person("owner")
-    household = make_household(owner)
-    groceries = household.categories.get(name="Groceries")
-    budget = add_budget(owner, category=groceries, amount_minor=10_000, month=date(2026, 1, 1), rollover=True)
-    frozen = django_timezone.now()
-    monkeypatch.setattr("finance.budget_services.timezone.now", lambda: frozen)
-    monkeypatch.setattr("django.utils.timezone.now", lambda: frozen)
-    reset_budget_rollover(owner.user, budget, month=date(2026, 6, 1))
-    set_budget_rollover(owner.user, budget, False, month=date(2026, 6, 1))
-    set_budget_rollover(owner.user, budget, True, month=date(2026, 3, 1))
-    budget.refresh_from_db()
-    reset_budget_rollover(owner.user, budget, month=date(2026, 6, 1))
-
-    cards = {card.budget.pk: card for card in month_budget_cards(owner.user, date(2026, 7, 1))}
-
-    # The new June reset counts: only June's leftover carries into July.
-    assert cards[budget.pk].carry_minor == 10_000

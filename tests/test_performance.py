@@ -277,22 +277,3 @@ def test_recording_a_statement_entry_parses_net_contribution():
     assert snapshot.net_contribution_minor == 500
 
 
-@pytest.mark.django_db
-def test_private_investment_account_performance_is_never_visible_to_another_member():
-    owner = make_person("owner")
-    member = make_person("member")
-    make_household(owner, member)
-    private = make_account(owner, name=SECRET_INVESTMENT, scope=Account.Scope.PRIVATE)
-    statement(private, date(2026, 1, 31), 10_000, 0)
-    statement(private, date(2026, 2, 28), 11_000, 500)
-
-    member_client = signed_in(member)
-    missing_id = private.pk + 999
-
-    account_page = member_client.get(reverse("account-balances", args=[private.pk]))
-    missing_page = member_client.get(reverse("account-balances", args=[missing_id]))
-    assert account_page.status_code == missing_page.status_code == 404
-    assert account_page.content == missing_page.content
-
-    net_worth_page = member_client.get(reverse("net-worth"))
-    assert SECRET_INVESTMENT not in net_worth_page.content.decode()

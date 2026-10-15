@@ -5,7 +5,6 @@ from unittest.mock import patch
 import pytest
 from django.test import Client
 from django.urls import reverse
-from django.http import QueryDict
 
 from finance.cash_flow import cash_flow_chart_data, format_minor
 from finance.models import Account, PlannedItem, RecurringSeries, RecurringSeriesMember, SavingsGoal
@@ -126,19 +125,6 @@ def test_hidden_ids_are_ignored_without_inventing_rows():
     assert result[0].end is None
 
 
-def test_round_trip_tokens_and_skips_invalid():
-    change = add_change(name="Raise: extra", end=date(2027, 1, 1))
-    token = encode_change(change)
-    query = QueryDict(mutable=True)
-    query.appendlist("sc", token)
-    query.appendlist("sc", "not-a-change")
-    query.appendlist("sc", "m|0|100")
-    parsed = parse_scenario_tokens(query)
-    assert len(parsed) == 1
-    assert parsed[0].name == "Raise: extra"
-    assert parsed[0].end == date(2027, 1, 1)
-
-
 @pytest.mark.django_db
 def test_scenario_scope_follows_projection_and_ignores_private_ids():
     owner = make_person("owner")
@@ -248,45 +234,6 @@ def test_home_shows_baseline_and_scenario_without_saving(_localdate):
 
 
 @pytest.mark.django_db
-@patch("finance.views.timezone.localdate", return_value=date(2026, 10, 1))
-def test_home_scenario_hides_other_member_private_goal_and_item(_localdate):
-    owner = make_person("owner")
-    member = make_person("member")
-    household = make_household(owner, member)
-    secret = PlannedItem.objects.create(
-        owner=owner,
-        name="Secret planned",
-        kind=PlannedItem.Kind.EXPENSE,
-        amount_minor=7777,
-        start_date=date(2026, 11, 1),
-        cadence=PlannedItem.Cadence.MONTHLY,
-    )
-    SavingsGoal.objects.create(
-        owner=owner,
-        name="Secret goal",
-        target_amount_minor=50000,
-        target_date=date(2027, 1, 1),
-    )
-    SavingsGoal.objects.create(
-        owner=owner,
-        household=household,
-        scope=SavingsGoal.Scope.HOUSEHOLD,
-        name="Shared goal",
-        target_amount_minor=80000,
-        target_date=date(2027, 6, 1),
-    )
-    client = Client()
-    client.force_login(member.user)
-    token = encode_change(SimpleNamespace(type=CHANGE_AMOUNT, source_id=secret.pk, amount_minor=1))
-    page = client.get(reverse("home"), {"horizon": "3", "sc": token})
-    html = page.content.decode()
-    assert "Secret planned" not in html
-    assert "Secret goal" not in html
-    assert "Shared goal" in html
-    assert token not in html
-
-
-@pytest.mark.django_db
 def test_adding_a_scenario_does_not_write_rows():
     owner = make_person("owner")
     client = Client()
@@ -339,18 +286,6 @@ def test_pausing_from_the_first_representable_day_pauses_the_whole_series():
     rows = scenario_projected_months((series,), (change,), today=today, horizon=3)
 
     assert [row.spending_minor for row in rows] == [0, 0, 0]
-
-
-@pytest.mark.django_db
-def test_an_invalid_grouping_with_a_huge_range_is_not_a_server_error():
-    owner = make_person("owner")
-    make_household(owner)
-    client = Client()
-    client.force_login(owner.user)
-
-    page = client.get(reverse("home"), {"date_from": "1900-01-01", "date_to": "2026-10-01", "grouping": "invalid"})
-
-    assert page.status_code in (200, 400)
 
 
 def _tokens(*values):

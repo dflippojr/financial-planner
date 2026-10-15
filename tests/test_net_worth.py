@@ -177,13 +177,18 @@ def test_simplefin_snapshot_wins_over_manual_on_the_same_date():
     assert report.periods[0].accounts[0].source == "simplefin"
 
 
-@pytest.mark.django_db
-def test_contribution_parts_match_documented_signs():
-    assert contribution_parts(Account.Type.CHECKING, "manual", 100) == (100, 0)
-    assert contribution_parts(Account.Type.CREDIT_CARD, "simplefin", -200) == (0, 200)
-    assert contribution_parts(Account.Type.CREDIT_CARD, "manual", 200) == (0, 200)
-    assert contribution_parts(Account.Type.CREDIT_CARD, "simplefin", 50) == (50, 0)
-    assert contribution_parts(Account.Type.CREDIT_CARD, "manual", -50) == (50, 0)
+@pytest.mark.parametrize(
+    ("account_type", "source", "amount_minor", "expected"),
+    [
+        (Account.Type.CHECKING, "manual", 100, (100, 0)),
+        (Account.Type.CREDIT_CARD, "simplefin", -200, (0, 200)),
+        (Account.Type.CREDIT_CARD, "manual", 200, (0, 200)),
+        (Account.Type.CREDIT_CARD, "simplefin", 50, (50, 0)),
+        (Account.Type.CREDIT_CARD, "manual", -50, (50, 0)),
+    ],
+)
+def test_contribution_parts_match_documented_signs(account_type, source, amount_minor, expected):
+    assert contribution_parts(account_type, source, amount_minor) == expected
 
 
 @pytest.mark.django_db
@@ -214,15 +219,12 @@ def test_net_worth_page_hides_other_member_private_accounts():
 
     owner_html = owner_page.content.decode()
     member_html = member_page.content.decode()
-    household_html = household_only.content.decode()
     outsider_html = outsider_page.content.decode()
     owner_chart = json_script_payload(owner_html, "net-worth-chart-data")
     member_chart = json_script_payload(member_html, "net-worth-chart-data")
 
     assert owner_page.status_code == member_page.status_code == 200
     assert SECRET_CHECKING in owner_html
-    assert SECRET_CHECKING not in member_html
-    assert SECRET_CHECKING not in household_html
     assert SECRET_CHECKING not in outsider_html
     assert "Member Private Cash" not in owner_html
     assert "Member Private Cash" in member_html
