@@ -977,3 +977,56 @@ def test_acknowledging_a_shared_rows_price_change_records_the_current_charge():
     series.refresh_from_db()
     assert series.acknowledged_amount_minor == -7000
     assert _page(member, today=today).context["price_changes"] == []
+
+
+@pytest.mark.django_db
+def test_a_removal_by_another_bills_owner_does_not_hide_a_payment_from_this_bill():
+    from finance.bill_grouping import eligible_bill_charges
+    from finance.recurring_services import resolve_household_bills
+
+    _owner, member, _outsider, series = _shared_bill()
+    shared = series.members.first().transaction.account
+    october = make_transaction(
+        member, shared, transaction_date=date(2026, 10, 12), amount_minor=-6000, description="Synthetic Internet"
+    )
+    phone = make_series(member, name="Synthetic Phone", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-3000)
+    for month in (8, 9):
+        add_member(
+            phone,
+            make_transaction(member, shared, transaction_date=date(2026, month, 3), amount_minor=-3000, description="Synthetic Phone"),
+        )
+    eligible = eligible_bill_charges(member)
+
+    # The member removed the payment from their own grouping, but they do not own the Internet bill.
+    RecurringExclusion.objects.create(person=member, transaction=october)
+    bills = {bill.copies[0].pk: bill for bill in resolve_household_bills([series, phone], eligible)}
+    assert bills[series.pk].last_on == date(2026, 10, 12)
+
+    # Their removal does count against a bill they own a copy of.
+    own = make_series(member, name="Synthetic Internet", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-6000)
+    add_member(own, series.members.first().transaction)
+    (bill,) = resolve_household_bills([series, own], eligible)
+    assert bill.last_on == date(2026, 9, 12)
+
+
+@pytest.mark.django_db
+def test_a_payment_fitting_two_bills_goes_to_the_one_still_projecting_whatever_the_input_order():
+    from finance.bill_grouping import eligible_bill_charges
+    from finance.recurring_services import resolve_household_bills
+
+    owner, member, _outsider, cancelled = _shared_bill()
+    cancelled.cancelled_at = timezone.now()
+    cancelled.save(update_fields=["cancelled_at"])
+    shared = cancelled.members.first().transaction.account
+    active = make_series(member, name="Synthetic Internet", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-6000)
+    for month in (8, 9):
+        add_member(
+            active,
+            make_transaction(member, shared, transaction_date=date(2026, month, 14), amount_minor=-6000, description="Synthetic Internet"),
+        )
+    make_transaction(member, shared, transaction_date=date(2026, 10, 14), amount_minor=-6000, description="Synthetic Internet")
+    eligible = eligible_bill_charges(member)
+
+    for copies in ([cancelled, active], [active, cancelled]):
+        last = {bill.copies[0].pk: bill.last_on for bill in resolve_household_bills(copies, eligible)}
+        assert last == {cancelled.pk: date(2026, 9, 12), active.pk: date(2026, 10, 14)}

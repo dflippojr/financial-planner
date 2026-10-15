@@ -1349,28 +1349,36 @@ def _continue_from_household_charges(bills, eligible):
     anchored = [bill for bill in bills if bill.charges and bill.anchor is not None]
     if not anchored:
         return
-    owners = {series.person_id for bill in anchored for series in bill.copies}
     later = (
         eligible.filter(
             amount_minor__lt=0,
             account__scope=Account.Scope.HOUSEHOLD,
             transaction_date__gt=min(bill.last_on for bill in anchored),
         )
-        .exclude(Exists(RecurringExclusion.objects.filter(transaction_id=OuterRef("pk"), person_id__in=owners)))
         .exclude(Exists(_held_by_a_household_bill()))
         .select_related("account")
         .order_by("transaction_date", "pk")
     )
+    later = list(later)
+    # Each bill honors only its own owners' removals, not other bills' owners'.
+    removed = defaultdict(set)
+    for transaction_id, person_id in RecurringExclusion.objects.filter(
+        transaction_id__in=[txn.pk for txn in later]
+    ).values_list("transaction_id", "person_id"):
+        removed[transaction_id].add(person_id)
     by_merchant = defaultdict(list)
     for txn in later:
         by_merchant[merchant_key(txn.description)].append(txn)
     taken = set()
-    for bill in anchored:
+    # A payment fitting two bills goes to the same one whatever order the
+    # caller listed them in: a bill still projecting first, then the lowest id.
+    for bill in sorted(anchored, key=lambda bill: (bill.current is None, min(series.pk for series in bill.copies))):
         anchor = bill.anchor
+        owners = {series.person_id for series in bill.copies}
         tolerance = timedelta(days=CADENCE_DAYS[anchor.cadence][1])
         last = bill.last_on
         for txn in by_merchant.get(anchor.merchant_key, ()):
-            if txn.pk in taken or txn.transaction_date <= last:
+            if txn.pk in taken or txn.transaction_date <= last or removed[txn.pk] & owners:
                 continue
             if not _in_confirmed_amount_band(anchor.typical_amount_minor, txn.amount_minor):
                 continue
