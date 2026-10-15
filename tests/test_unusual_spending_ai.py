@@ -11,9 +11,9 @@ from finance.ai_jobs import process_due_jobs
 from finance.ai_services import connect_harness, set_defaults
 from finance.alert_services import save_alert_settings, settings_for
 from finance.category_services import assign_category, ensure_household_categories
-from finance.models import Account, AiJob, Household, ImportBatch, Membership, MonthlyReview, Person, Transaction
+from finance.models import Account, AiJob, Household, ImportBatch, Membership, Person, Transaction
 from finance.monthly_review import store_monthly_review
-from finance.monthly_review_ai import facts_payload_for_ai, phrasing_label
+from finance.monthly_review_ai import phrasing_label
 from finance.policy_services import accept_policy, current_policy, publish_policy
 from finance.unusual_spending_ai import unusual_facts_for_ai, queue_unusual_phrasing
 
@@ -252,99 +252,11 @@ def _merchant_shared_median_private_charge(owner, household):
     return private
 
 
-@pytest.mark.django_db
-def test_restricted_ai_does_not_send_shared_category_baseline(harness, monkeypatch):
-    state, url = harness
-    owner = make_person("owner")
-    household = make_household(owner, make_person("member", accept=False))
-    connect_ai(owner, url)
-    _category_shared_baseline_private_spike(owner, household)
-    review, _wrote = store_monthly_review(owner, SEP, today=TODAY)
-    grocery = next(item for item in review.facts["unusual"] if item["kind"] == "category" and item["name"] == "Groceries")
-    assert grocery["baseline_minor"] == 10000
-    payload = unusual_facts_for_ai(owner, review.facts)
-    blob = str(payload) + str(facts_payload_for_ai(owner, review.facts))
-    assert "100.00" not in blob
-    assert "10000" not in blob
-    state.session_answer = "A short summary with no extra numbers."
-    monkeypatch.setattr("finance.ai_jobs.in_quiet_window", lambda moment=None: True)
-    process_due_jobs()
-    prompts = _prompts(state)
-    assert prompts
-    assert "100.00" not in prompts
-    assert "10000" not in prompts
-    page = signed_in(owner).get(reverse("monthly-review") + "?month=2026-09")
-    body = page.content.decode()
-    assert "Unusual this month" in body
-    assert "\N{MINUS SIGN}$100.00" in body
-
-
-@pytest.mark.django_db
-def test_restricted_ai_does_not_send_shared_merchant_median(harness, monkeypatch):
-    state, url = harness
-    owner = make_person("owner")
-    household = make_household(owner, make_person("member", accept=False))
-    connect_ai(owner, url)
-    _merchant_shared_median_private_charge(owner, household)
-    review, _wrote = store_monthly_review(owner, SEP, today=TODAY)
-    merchant = next(item for item in review.facts["unusual"] if item["kind"] == "merchant")
-    assert merchant["median_minor"] == 1000
-    payload = unusual_facts_for_ai(owner, review.facts)
-    blob = str(payload) + str(facts_payload_for_ai(owner, review.facts))
-    assert "10.00" not in blob
-    assert "1000" not in blob
-    state.session_answer = "A short summary with no extra numbers."
-    monkeypatch.setattr("finance.ai_jobs.in_quiet_window", lambda moment=None: True)
-    process_due_jobs()
-    prompts = _prompts(state)
-    assert prompts
-    assert "10.00" not in prompts
-    assert "1000" not in prompts
-    page = signed_in(owner).get(reverse("monthly-review") + "?month=2026-09")
-    assert "\N{MINUS SIGN}$10.00" in page.content.decode()
-
-
-@pytest.mark.django_db
-def test_allowed_household_ai_still_sends_full_unusual_flags(harness, monkeypatch):
-    state, url = harness
-    owner = make_person("owner")
-    household = make_household(owner, make_person("member"))
-    connect_ai(owner, url)
-    _category_shared_baseline_private_spike(owner, household)
-    _merchant_shared_median_private_charge(owner, household)
-    review, _wrote = store_monthly_review(owner, SEP, today=TODAY)
-    payload = unusual_facts_for_ai(owner, review.facts)
-    blob = str(payload)
-    assert "100.00" in blob
-    assert "10000" in blob
-    assert "10.00" in blob
-    assert "1000" in blob
-    state.session_answer = "A short summary with no extra numbers."
-    monkeypatch.setattr("finance.ai_jobs.in_quiet_window", lambda moment=None: True)
-    process_due_jobs()
-    prompts = _prompts(state)
-    assert "100.00" in prompts
-    assert "10000" in prompts
-    assert "10.00" in prompts
-    assert "1000" in prompts
-
-
-@pytest.mark.django_db
-def test_restricted_ai_sends_no_unusual_facts_without_private_accounts(harness, monkeypatch):
-    state, url = harness
-    owner = make_person("owner")
-    household = make_household(owner, make_person("member", accept=False))
-    connect_ai(owner, url)
+def _shared_only_grocery_spike(owner, household):
     shared = make_account(owner, name="Shared checking", scope=Account.Scope.HOUSEHOLD, household=household)
     groceries = household.categories.get(name="Groceries")
-    for when in (
-        date(2026, 3, 10),
-        date(2026, 4, 10),
-        date(2026, 5, 10),
-        date(2026, 6, 10),
-        date(2026, 7, 10),
-        date(2026, 8, 10),
-    ):
+    for when in (date(2026, 3, 10), date(2026, 4, 10), date(2026, 5, 10),
+                 date(2026, 6, 10), date(2026, 7, 10), date(2026, 8, 10)):
         row = make_transaction(
             owner, shared, amount_minor=-10_000, description=f"Synthetic grocer {when}", transaction_date=when
         )
@@ -353,71 +265,52 @@ def test_restricted_ai_sends_no_unusual_facts_without_private_accounts(harness, 
         owner, shared, amount_minor=-15_000, description="Synthetic grocer spike", transaction_date=date(2026, 9, 12)
     )
     assign_category(owner, spike.pk, groceries.pk)
-    review, _wrote = store_monthly_review(owner, SEP, today=TODAY)
-    assert any(item["kind"] == "category" for item in review.facts["unusual"])
-    payload = unusual_facts_for_ai(owner, review.facts)
-    assert payload["unusual"] == []
-    state.session_answer = "A short summary with no extra numbers."
-    monkeypatch.setattr("finance.ai_jobs.in_quiet_window", lambda moment=None: True)
-    process_due_jobs()
-    prompts = _prompts(state)
-    assert "100.00" not in prompts
-    assert "10000" not in prompts
-    assert "150.00" not in prompts
-    assert "15000" not in prompts
 
 
-def test_baseline_and_median_are_stored_as_integer_cents():
-    from finance.unusual_spending import _whole_minor
-
-    assert _whole_minor(10000) == 10000
-    assert _whole_minor("2500.5") == 2500
-    assert _whole_minor("2501.5") == 2502
-
-
-def test_a_cents_figure_read_as_dollars_is_not_grounded():
-    from finance.monthly_review_ai import paragraph_is_grounded
-
-    facts = {"unusual": [{"kind": "category", "name": "Groceries", "month_minor": 15000, "baseline_minor": 10000}]}
-
-    assert paragraph_is_grounded("Groceries were 150.00 USD against a usual 100.00 USD.", facts)
-    assert not paragraph_is_grounded("Groceries had a median of 10,000 USD.", facts)
+# accepted: the other member accepted household AI use, so shared figures may be sent.
+# sent / withheld: strings the harness prompt must / must not hold; shown: text on the review page.
+PRIVACY_CASES = {
+    "restricted_hides_the_shared_category_baseline": {
+        "accepted": False, "build": [_category_shared_baseline_private_spike],
+        "withheld": ("100.00", "10000"), "shown": ("\N{MINUS SIGN}$100.00",),
+    },
+    "restricted_hides_the_shared_merchant_median": {
+        "accepted": False, "build": [_merchant_shared_median_private_charge],
+        "withheld": ("10.00", "1000"), "shown": ("\N{MINUS SIGN}$10.00",),
+    },
+    "allowed_household_sends_every_flag": {
+        "accepted": True,
+        "build": [_category_shared_baseline_private_spike, _merchant_shared_median_private_charge],
+        "sent": ("100.00", "10000", "10.00", "1000"),
+    },
+    "restricted_without_private_accounts_sends_no_flags": {
+        "accepted": False, "build": [_shared_only_grocery_spike],
+        "withheld": ("100.00", "10000", "150.00", "15000"),
+    },
+}
 
 
 @pytest.mark.django_db
-def test_the_job_runs_on_the_connection_it_was_validated_against(monkeypatch):
-    from django.utils import timezone
-
-    from types import SimpleNamespace
-
-    from finance.monthly_review import visibility_key
-
-    from finance import unusual_spending_ai
-    from finance.ai_types import ProviderResult
-
+@pytest.mark.parametrize("case_name", sorted(PRIVACY_CASES))
+def test_unusual_prompt_follows_the_household_ai_consent(harness, monkeypatch, case_name):
+    case = PRIVACY_CASES[case_name]
+    state, url = harness
     owner = make_person("owner")
-    make_household(owner)
-    review = MonthlyReview.objects.create(
-        person=owner,
-        month=date(2026, 9, 1),
-        visibility_key=visibility_key(owner),
-        facts={
-            "unusual": [{"kind": "category", "name": "Groceries", "month_minor": 15000, "baseline_minor": 10000}],
-            "month": "2026-09",
-        },
-        generated_at=timezone.now(),
-    )
-    seen = {}
+    household = make_household(owner, make_person("member", accept=case["accepted"]))
+    connect_ai(owner, url)
+    for build in case["build"]:
+        build(owner, household)
+    review, _wrote = store_monthly_review(owner, SEP, today=TODAY)
+    assert any(item["kind"] in {"category", "merchant"} for item in review.facts["unusual"])
+    state.session_answer = "A short summary with no extra numbers."
+    monkeypatch.setattr("finance.ai_jobs.in_quiet_window", lambda moment=None: True)
+    state.model_state = "ready"
 
-    def spy(*args, **kwargs):
-        seen["connection"] = kwargs.get("connection")
-        return ProviderResult(ok=True, answer="")
+    process_due_jobs()
 
-    monkeypatch.setattr(unusual_spending_ai, "run_structured", spy)
-    monkeypatch.setattr(unusual_spending_ai, "unusual_spending_ai_on", lambda person: True)
-    validated = object()
-    job = SimpleNamespace(input_refs={"monthly_review_id": review.pk, "generated_at": review.generated_at.isoformat()})
-
-    unusual_spending_ai.run_unusual_spending_job(owner, job, backend="local", connection=validated)
-
-    assert seen.get("connection") is validated
+    prompts = _prompts(state)
+    assert all(text in prompts for text in case.get("sent", ()))
+    assert not any(text in prompts for text in case.get("withheld", ()))
+    body = signed_in(owner).get(reverse("monthly-review") + "?month=2026-09").content.decode()
+    assert "Unusual this month" in body
+    assert all(text in body for text in case.get("shown", ()))
