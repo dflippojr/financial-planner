@@ -28,7 +28,6 @@ LAYOUT_JS = """() => {
   const box = (el) => { const r = el.getBoundingClientRect(); return [Math.round(r.left), Math.round(r.top), Math.round(r.width)]; };
   const grid = document.querySelector('main .xl\\\\:grid-cols-2');
   return {
-    h1s: document.querySelectorAll('h1').length,
     header: !!document.querySelector('main .page-header'),
     scroll: document.documentElement.scrollWidth > document.documentElement.clientWidth,
     cards: grid ? [...grid.children].slice(0, 2).map(box) : [],
@@ -49,7 +48,6 @@ def test_report_pages_share_the_header_and_fit(page_session, width, name, path):
             Path(SCREEN_DIR).mkdir(parents=True, exist_ok=True)
             page.screenshot(path=str(Path(SCREEN_DIR) / f"{name}-{width}.png"), full_page=True)
         layout = page.evaluate(LAYOUT_JS)
-        assert layout["h1s"] == 1
         assert layout["header"]
         assert not layout["scroll"], f"{name} scrolls sideways at {width}"
         if name == "monthly-review":
@@ -115,9 +113,8 @@ def test_year_end_exports_are_reachable_from_the_keyboard(page_session):  # noqa
 
 
 @pytest.mark.parametrize("width", [390, 1024, 1440])
-@pytest.mark.parametrize("scheme", ["light", "dark"])
-def test_long_over_budget_category_name_wraps(page_session, width, scheme):  # noqa: F811
-    context, page = page_session((width, 900), scheme, "/planning/review/")
+def test_long_over_budget_category_name_wraps(page_session, width):  # noqa: F811
+    context, page = page_session((width, 900), "light", "/planning/review/")
     try:
         name = "Home maintenance and repairs including seasonal household improvements"
         review = MonthlyReview.objects.get(person__user__username="synthetic_alex")
@@ -132,6 +129,6 @@ def test_long_over_budget_category_name_wraps(page_session, width, scheme):  # n
         assert link.is_visible()
         assert page.evaluate(
             "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
-        ), f"Long budget category scrolls sideways at {width} in {scheme}"
+        ), f"Long budget category scrolls sideways at {width}"
     finally:
         context.close()

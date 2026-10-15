@@ -44,9 +44,27 @@ def center(locator):
     return box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
 
 
-@pytest.mark.parametrize("width", [1024, 1280, 1440])
-def test_pointer_tracks_border_clamps_and_freezes_on_bead(bead_session, width):
-    context, page = bead_session(width=width, clock=True)
+def wait_for_center_x(page, bead, expected):
+    """Wait for the bead's 80 ms transform transition to land within 2 px of expected."""
+    page.wait_for_function(
+        "([el, x]) => { const r = el.getBoundingClientRect(); return Math.abs(r.left + r.width / 2 - x) <= 2; }",
+        arg=[bead.element_handle(), expected],
+        timeout=5000,
+    )
+
+
+def bead_x(tile):
+    return tile.evaluate("el => el.style.getPropertyValue('--ai-bead-x')")
+
+
+def settle_frames(page):
+    """Let two real frames run so style and the bead's script have had their turn (no fake clock)."""
+    page.evaluate("() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+
+
+def test_pointer_tracks_border_clamps_and_freezes_on_bead(bead_session):
+    # The clamp is relative to the tile, so one desktop width is enough.
+    context, page = bead_session(clock=True)
     try:
         bead = page.get_by_role("button", name="Ask AI about Key numbers")
         tile = bead.locator("xpath=ancestor::section[1]")
@@ -56,17 +74,19 @@ def test_pointer_tracks_border_clamps_and_freezes_on_bead(bead_session, width):
             x = box["x"] + offset
             page.mouse.move(x, box["y"] + 65)
             page.clock.run_for(16)
-            page.wait_for_timeout(180)
             expected = max(box["x"] + 36, min(x, box["x"] + box["width"] - 36))
-            assert abs(center(bead)[0] - expected) <= 2
+            wait_for_center_x(page, bead, expected)
             assert abs(center(bead)[1] - box["y"]) <= 2
         x, y = center(bead)
         page.mouse.move(x, y)
-        page.wait_for_timeout(160)
-        page.mouse.move(x + 6, y + 3)
-        page.wait_for_timeout(160)
-        assert abs(center(bead)[0] - x) <= 2
-        assert bead.bounding_box()["width"] == 40
+        expect(bead).to_have_css("width", "40px")
+        frozen = bead_x(tile)
+        # The bead sits at the right clamp, so only a move left would shift it if it tracked.
+        page.mouse.move(x - 6, y + 3)
+        # The frame the move scheduled runs here, and must leave the bead where it was.
+        page.clock.run_for(16)
+        assert bead_x(tile) == frozen
+        wait_for_center_x(page, bead, x)
         # Assert the delay at its boundary without host scheduling or IPC jitter.
         page.mouse.move(1, 1)
         page.clock.run_for(299)
@@ -137,8 +157,7 @@ def test_touch_on_hover_capable_device_stays_reachable_then_resumes_mouse(bead_s
         assert bead.bounding_box()["width"] == 30
         page.mouse.move(box["x"] + 100, box["y"] + 70)
         page.clock.run_for(16)
-        page.wait_for_timeout(180)
-        assert abs(center(bead)[0] - (box["x"] + 100)) <= 2
+        wait_for_center_x(page, bead, box["x"] + 100)
         page.mouse.move(1, 1)
         page.clock.run_for(300)
         expect(bead).to_have_css("opacity", "0")
@@ -160,13 +179,13 @@ def test_fixed_home_for_touch_and_reduced_motion(bead_session, touch, reduced):
         bead = page.get_by_role("button", name="Ask AI about Key numbers")
         tile = bead.locator("xpath=ancestor::section[1]").bounding_box()
         page.mouse.move(tile["x"] + 80, tile["y"] + 70)
-        page.wait_for_timeout(180)
-        assert abs(center(bead)[0] - (tile["x"] + tile["width"] - 24)) <= 2
+        # Opacity fades in over 120 ms, longer than the 80 ms transform a tracking bead would run.
         expect(bead).to_have_css("opacity", "1")
+        assert abs(center(bead)[0] - (tile["x"] + tile["width"] - 24)) <= 2
         if reduced:
             page.mouse.move(*center(bead))
-            page.wait_for_timeout(160)
-            assert bead.bounding_box()["width"] == 30
+            settle_frames(page)
+            expect(bead).to_have_css("width", "30px")
         else:
             bead.tap()
             expect(page.locator("#ai-popover")).to_be_visible()
@@ -174,9 +193,9 @@ def test_fixed_home_for_touch_and_reduced_motion(bead_session, touch, reduced):
         context.close()
 
 
-@pytest.mark.parametrize("width", [390, 1023])
-def test_narrow_load_restores_openers_when_resized_to_desktop(bead_session, width):
-    context, page = bead_session(width=width)
+def test_narrow_load_restores_openers_when_resized_to_desktop(bead_session):
+    # 1023 is the widest width without openers; the 390 reload is covered by the sticky-track test.
+    context, page = bead_session(width=1023)
     try:
         bead = page.get_by_role("button", name="Ask AI about Key numbers")
         assert bead.count() == 0
@@ -206,9 +225,8 @@ def test_tall_transactions_sticky_track_and_mobile_absence(bead_session):
         box = tile.bounding_box()
         page.evaluate("y => window.scrollTo(0, y)", box["y"] + 150)
         page.mouse.move(box["x"] + 100, 100)
-        page.wait_for_timeout(180)
+        wait_for_center_x(page, bead, box["x"] + 100)
         assert 7 <= bead.bounding_box()["y"] <= 10
-        assert abs(center(bead)[0] - (box["x"] + 100)) <= 2
         page.set_viewport_size({"width": 390, "height": 844})
         expect(bead).to_be_hidden()
         page.reload()

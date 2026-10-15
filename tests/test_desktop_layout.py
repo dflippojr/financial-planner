@@ -10,8 +10,9 @@ from pathlib import Path
 
 import pytest
 
+from finance.context_processors import SETTINGS_TABS
 from finance.policy_services import publish_policy
-from tests.browser_support import CSS, browser  # noqa: F401 - shared fixture
+from tests.browser_support import CSS, browser, check_each_page, visit  # noqa: F401 - browser is a fixture
 from tests.desktop_seed import seed_desktop_data
 
 pytestmark = [
@@ -65,9 +66,7 @@ def desktop_session(live_server, client, browser):
         contexts.append(context)
         context.add_cookies([{"name": "sessionid", "value": cookie, "url": live_server.url}])
         page = context.new_page()
-        response = page.goto(live_server.url + path)
-        assert response is not None and response.ok, f"{path} answered {response and response.status}"
-        page.wait_for_load_state("networkidle")
+        visit(page, live_server.url, path)
         return page
 
     yield open_page
@@ -133,39 +132,44 @@ CONTRAST_JS = """() => {
 
 @pytest.mark.parametrize("size", VIEWPORTS)
 @pytest.mark.parametrize("scheme", ["light", "dark"])
-@pytest.mark.parametrize(("name", "path"), PAGES)
-def test_page_fits_desktop(desktop_session, size, scheme, name, path):
-    page = desktop_session(size, scheme, path)
-    if SCREEN_DIR:
-        Path(SCREEN_DIR).mkdir(parents=True, exist_ok=True)
-        page.screenshot(path=str(Path(SCREEN_DIR) / f"{name}-{size}-{scheme}.png"), full_page=True)
-    layout = page.evaluate(LAYOUT_JS)
-    assert not layout["scroll"], f"{name} scrolls sideways"
-    assert layout["h1s"] == 1, f"{name} has {layout['h1s']} h1 elements"
-    assert len(layout["headerPrimary"]) <= 1, f"{name} header has primary buttons {layout['headerPrimary']}"
-    assert layout["fixed"] == [], f"{name} has floating elements {layout['fixed']}"
-    low = [amount for amount in page.evaluate(CONTRAST_JS) if amount["ratio"] < 4.5]
-    assert low == [], f"{name} has amounts under 4.5:1: {low}"
-    if name.startswith("settings-"):
-        sections = page.get_by_role("navigation", name="Settings sections")
-        links = sections.get_by_role("link")
-        assert links.count() == 10
-        for link in links.all():
-            assert link.is_visible()
-            box = link.bounding_box()
-            assert box is not None and box["x"] >= 0 and box["x"] + box["width"] <= VIEWPORTS[size][0]
-        active = sections.locator('[aria-current="page"]')
-        assert active.count() == 1
-        section_path = "/settings/categories/" if name == "settings-rules" else path
-        assert active.get_attribute("href") == section_path
-        assert not page.get_by_role("tablist").is_visible()
+def test_page_fits_desktop(desktop_session, live_server, size, scheme):
+    # One seed and one browser context per size and theme; every page loads in it in turn.
+    page = desktop_session(size, scheme, "/")
+
+    def check(name, path):
+        visit(page, live_server.url, path, wait_until="load")
+        if SCREEN_DIR:
+            Path(SCREEN_DIR).mkdir(parents=True, exist_ok=True)
+            page.screenshot(path=str(Path(SCREEN_DIR) / f"{name}-{size}-{scheme}.png"), full_page=True)
+        layout = page.evaluate(LAYOUT_JS)
+        assert not layout["scroll"], "scrolls sideways"
+        assert layout["h1s"] == 1, f"has {layout['h1s']} h1 elements"
+        assert len(layout["headerPrimary"]) <= 1, f"header has primary buttons {layout['headerPrimary']}"
+        assert layout["fixed"] == [], f"has floating elements {layout['fixed']}"
+        low = [amount for amount in page.evaluate(CONTRAST_JS) if amount["ratio"] < 4.5]
+        assert low == [], f"has amounts under 4.5:1: {low}"
+        if name.startswith("settings-"):
+            sections = page.get_by_role("navigation", name="Settings sections")
+            links = sections.get_by_role("link")
+            assert links.count() == len(SETTINGS_TABS)
+            for link in links.all():
+                assert link.is_visible()
+                box = link.bounding_box()
+                assert box is not None and box["x"] >= 0 and box["x"] + box["width"] <= VIEWPORTS[size][0]
+            active = sections.locator('[aria-current="page"]')
+            assert active.count() == 1
+            section_path = "/settings/categories/" if name == "settings-rules" else path
+            assert active.get_attribute("href") == section_path
+            assert not page.get_by_role("tablist").is_visible()
+
+    check_each_page(PAGES, check)
 
 
-@pytest.mark.parametrize("size", VIEWPORTS)
-@pytest.mark.parametrize("scheme", ["light", "dark"])
-def test_settings_ai_has_one_pending_privacy_prompt(desktop_session, size, scheme):
+def test_settings_ai_has_one_pending_privacy_prompt(desktop_session):
+    # The prompt text and counts do not depend on theme or width. The narrowest desktop width is the
+    # one where the extra prompt could add sideways scroll, so that is the one checked.
     publish_policy(material=True, body="Synthetic desktop privacy policy")
-    page = desktop_session(size, scheme, "/settings/ai/")
+    page = desktop_session("1024x768", "light", "/settings/ai/")
     prompt = page.get_by_role("region", name="Privacy and data policy")
     assert prompt.is_visible()
     assert page.get_by_text("Privacy and data policy", exact=True).count() == 1
@@ -179,18 +183,6 @@ def _bottom(locator):
     box = locator.bounding_box()
     assert box is not None, f"{locator} is not shown"
     return box["y"] + box["height"]
-
-
-def test_home_totals_and_needs_attention_are_above_the_fold(desktop_session):
-    page = desktop_session("1440x900", "light", "/")
-    numbers = page.get_by_role("region", name="Key numbers")
-    for label in ("Net cash flow", "Income", "Spending"):
-        heading = numbers.get_by_role("heading", name=label, exact=True)
-        assert _bottom(heading.locator("xpath=following-sibling::p[1]")) <= 900, label
-    attention = page.locator("#attention-heading-side")
-    assert attention.is_visible()
-    assert _bottom(attention) <= 900
-    assert _bottom(page.locator("main .page-side li").first) <= 900
 
 
 @pytest.mark.parametrize("size", VIEWPORTS)

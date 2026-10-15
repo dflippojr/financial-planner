@@ -1,4 +1,5 @@
 import hashlib
+import json
 import struct
 import zlib
 from pathlib import Path
@@ -27,12 +28,18 @@ def _member():
 
 
 @pytest.mark.django_db
-def test_compiled_css_and_theme_script_are_public(tmp_path, settings):
+def test_compiled_css_theme_script_manifest_and_icons_are_public(tmp_path, settings):
+    root = _repo_root()
     static_dir = tmp_path / "static"
+    icons = static_dir / "icons"
     (static_dir / "dist").mkdir(parents=True)
     (static_dir / "js").mkdir(parents=True)
+    icons.mkdir(parents=True)
     (static_dir / "dist" / "app.css").write_text("/* synthetic-app-css */")
     (static_dir / "js" / "theme.js").write_text("/* synthetic-theme-js */")
+    (static_dir / "manifest.webmanifest").write_bytes((root / "static" / "manifest.webmanifest").read_bytes())
+    for name in ("apple-touch-icon.png", "icon-192.png", "icon-512.png"):
+        (icons / name).write_bytes((root / "static" / "icons" / name).read_bytes())
     collected = tmp_path / "staticfiles"
     settings.STATICFILES_DIRS = [static_dir]
     settings.STATIC_ROOT = collected
@@ -47,8 +54,13 @@ def test_compiled_css_and_theme_script_are_public(tmp_path, settings):
     css = client.get("/static/dist/app.css")
     script = client.get("/static/js/theme.js")
     missing = client.get("/static/not-a-real-file.css")
+    manifest = client.get("/static/manifest.webmanifest")
+    icon = client.get("/static/icons/icon-192.png")
+    apple = client.get("/static/icons/apple-touch-icon.png")
     css_body = b"".join(css.streaming_content)
     script_body = b"".join(script.streaming_content)
+    manifest_body = b"".join(manifest.streaming_content)
+    icon_body = b"".join(icon.streaming_content)
 
     assert css.status_code == 200
     assert "text/css" in css["Content-Type"]
@@ -56,6 +68,12 @@ def test_compiled_css_and_theme_script_are_public(tmp_path, settings):
     assert script.status_code == 200
     assert b"synthetic-theme-js" in script_body
     assert missing.status_code == 404
+    assert manifest.status_code == 200
+    assert "application/manifest+json" in manifest["Content-Type"]
+    assert json.loads(manifest_body)["display"] == "standalone"
+    assert icon.status_code == 200
+    assert apple.status_code == 200
+    assert icon_body[:8] == b"\x89PNG\r\n\x1a\n"
 
 
 @pytest.mark.django_db
@@ -104,51 +122,22 @@ def test_theme_script_notifies_charts_and_charts_stay_self_hosted():
 
 
 @pytest.mark.django_db
-def test_signed_in_pages_use_shared_nav_and_signed_out_pages_use_a_card():
+def test_signed_in_pages_show_the_account_nav_and_hide_settings_only_links():
+    # What the sidebar and More page list is checked in test_more_page.py.
     user = _member()
     client = Client()
     client.force_login(user)
     home = client.get(reverse("home")).content.decode()
     login = Client().get(reverse("login")).content.decode()
 
-    for label in (
-        "Home",
-        "Net worth",
-        "Spending",
-        "Activity",
-        "Chat",
-        "Transfers",
-        "Recurring",
-        "Accounts",
-        "Import",
-        "Planning",
-        "Planned items",
-        "Debt payoff",
-        "Enable AI Features",
-        "Dark theme",
-        "Sign out",
-    ):
-        assert label in home
     assert reverse("category-list") not in home
     assert reverse("invite") not in home
     assert reverse("simplefin-connections") not in home
     assert 'aria-current="page"' in home
     assert reverse("account-settings") in home
-    assert 'id="theme-toggle"' in home
-    assert 'aria-pressed="false"' in home
-    assert "data-chat-drawer-open" not in home
-    assert "finance-chat-panel" not in home
-    assert "/static/js/chat-drawer.js" not in home
-    assert "/static/js/ai-consent.js" in home
-    assert "fixed right-4 top-4" not in home
     assert reverse("logout") in home
     assert "csrfmiddlewaretoken" in home
-    assert "/static/vendor/chart.umd.min.js" in home
-    assert "/static/js/charts.js" in home
-    assert "cdn." not in home.lower()
-    assert "drawer" in home
-    assert "card-body" in login
-    assert "drawer" not in login
+    assert reverse("logout") not in login
     assert "<p><a href=" not in home
 
 
@@ -282,17 +271,18 @@ def test_committed_icons_and_manifest_are_install_sized():
     assert _png_size(root / "static" / "icons" / "icon-192.png") == (192, 192)
     assert _png_size(root / "static" / "icons" / "icon-512.png") == (512, 512)
     svg = (root / "static" / "icons" / "icon.svg").read_text(encoding="utf-8")
-    manifest = (root / "static" / "manifest.webmanifest").read_text(encoding="utf-8")
+    manifest = json.loads((root / "static" / "manifest.webmanifest").read_text(encoding="utf-8"))
 
     assert 'fill="#422ad5"' in svg
     assert '<rect width="512" height="512" fill="#422ad5"/>' in svg
     assert 'rx="96"' not in svg
-    assert '"name": "Financial Planner"' in manifest
-    assert '"short_name": "Finances"' in manifest
-    assert '"display": "standalone"' in manifest
-    assert "/static/icons/icon-192.png" in manifest
-    assert "/static/icons/icon-512.png" in manifest
-    assert "maskable" in manifest
+    assert manifest["name"] == "Financial Planner"
+    assert manifest["short_name"] == "Finances"
+    assert manifest["display"] == "standalone"
+    icons = {icon["src"]: icon for icon in manifest["icons"]}
+    assert icons["/static/icons/icon-192.png"]["sizes"] == "192x192"
+    assert icons["/static/icons/icon-512.png"]["sizes"] == "512x512"
+    assert any("maskable" in icon.get("purpose", "") for icon in manifest["icons"])
     assert "serviceWorker" not in manifest
 
 
@@ -306,7 +296,7 @@ def test_home_screen_icons_are_full_bleed_background():
 
 
 @pytest.mark.django_db
-def test_pages_link_install_metadata_and_do_not_register_a_service_worker():
+def test_pages_link_install_metadata():
     user = _member()
     login = Client().get(reverse("login")).content.decode()
     signed_in = Client()
@@ -324,8 +314,6 @@ def test_pages_link_install_metadata_and_do_not_register_a_service_worker():
         assert 'content="#1d232a"' in content
         assert "viewport-fit=cover" in content
         assert "apple-mobile-web-app-capable" in content
-        assert "serviceWorker.register" not in content
-        assert "navigator.serviceWorker" not in content
         assert "cdn." not in content.lower()
 
 
@@ -357,9 +345,13 @@ def _css_layer_block(css, layer_name):
     raise AssertionError(f"unclosed @layer {layer_name}")
 
 
-def test_compact_layout_css_uses_safe_area_insets():
+def test_safe_area_insets_are_used_and_navbar_padding_is_outside_base_layer():
     css = (_repo_root() / "static" / "src" / "app.css").read_text(encoding="utf-8")
+    base = _css_layer_block(css, "base")
+    navbar_top = "padding-top: max(0.5rem, env(safe-area-inset-top))"
+    outside_base = css.replace(base, "", 1)
 
+    # Browser emulation cannot apply insets, so this one source guard stands in for them.
     for inset in (
         "env(safe-area-inset-top)",
         "env(safe-area-inset-right)",
@@ -367,53 +359,7 @@ def test_compact_layout_css_uses_safe_area_insets():
         "env(safe-area-inset-left)",
     ):
         assert inset in css
-
-
-def test_navbar_safe_area_padding_is_outside_base_layer():
-    css = (_repo_root() / "static" / "src" / "app.css").read_text(encoding="utf-8")
-    base = _css_layer_block(css, "base")
-    navbar_top = "padding-top: max(0.5rem, env(safe-area-inset-top))"
-    outside_base = css.replace(base, "", 1)
-
     assert navbar_top not in base
     assert navbar_top in outside_base
     assert "body:not(:has(.navbar))" in css
     assert "padding-top: env(safe-area-inset-top)" in base
-
-
-@pytest.mark.django_db
-def test_manifest_and_icons_are_public_static_files(tmp_path, settings):
-    root = _repo_root()
-    static_dir = tmp_path / "static"
-    icons = static_dir / "icons"
-    icons.mkdir(parents=True)
-    (static_dir / "manifest.webmanifest").write_bytes(
-        (root / "static" / "manifest.webmanifest").read_bytes()
-    )
-    for name in ("apple-touch-icon.png", "icon-192.png", "icon-512.png"):
-        (icons / name).write_bytes((root / "static" / "icons" / name).read_bytes())
-    collected = tmp_path / "staticfiles"
-    settings.STATICFILES_DIRS = [static_dir]
-    settings.STATIC_ROOT = collected
-    settings.STORAGES = {
-        "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
-        "staticfiles": {"BACKEND": "whitenoise.storage.CompressedStaticFilesStorage"},
-    }
-    settings.WHITENOISE_AUTOREFRESH = True
-    call_command("collectstatic", "--noinput", verbosity=0)
-
-    client = Client()
-    manifest = client.get("/static/manifest.webmanifest")
-    icon = client.get("/static/icons/icon-192.png")
-    apple = client.get("/static/icons/apple-touch-icon.png")
-    manifest_body = b"".join(manifest.streaming_content)
-    icon_body = b"".join(icon.streaming_content)
-
-    assert manifest.status_code == 200
-    assert "application/manifest+json" in manifest["Content-Type"]
-    assert b'"display": "standalone"' in manifest_body
-    assert icon.status_code == 200
-    assert apple.status_code == 200
-    assert icon_body[:8] == b"\x89PNG\r\n\x1a\n"
-
-

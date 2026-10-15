@@ -1,6 +1,8 @@
 """Accounts page at desktop widths in a real browser (issue #332, Desktop 6).
 
-Needs Playwright with Chromium and a compiled static/dist/app.css; skipped otherwise.
+Needs Playwright with Chromium and a compiled static/dist/app.css; skipped otherwise. The list, add
+form and header link are checked with the Goals and Planned items pages in
+test_goals_import_alerts_layout.py.
 """
 
 import os
@@ -21,19 +23,6 @@ pytestmark = [
     pytest.mark.django_db(transaction=True),
     pytest.mark.skipif(not CSS.exists(), reason="static/dist/app.css is not built"),
 ]
-
-LAYOUT_JS = """() => {
-  const box = (el) => { const r = el.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; };
-  const rows = [...document.querySelectorAll('main section[aria-labelledby=accounts-list-heading] tbody tr')]
-    .filter((row) => row.querySelector('details[data-row-menu]'));
-  return {
-    scroll: document.documentElement.scrollWidth > document.documentElement.clientWidth,
-    list: box(document.querySelector('main section[aria-labelledby=accounts-list-heading]')),
-    form: box(document.getElementById('add-account')),
-    rowHeights: rows.map((row) => row.getBoundingClientRect().height),
-  };
-}"""
-
 
 @pytest.fixture(scope="module")
 def browser():
@@ -65,33 +54,6 @@ def accounts_page(live_server, client, browser):
     yield open_page
     for context in contexts:
         context.close()
-
-
-@pytest.mark.parametrize("width", [1024, 1280, 1440])
-def test_accounts_list_first_with_the_add_form_beside_or_under_it(accounts_page, width):
-    page = accounts_page(width)
-    layout = page.evaluate(LAYOUT_JS)
-
-    assert not layout["scroll"]
-    list_left, list_top, list_width, list_height = layout["list"]
-    form_left, form_top, _, _ = layout["form"]
-    if width >= 1280:
-        assert form_left >= list_left + list_width
-        assert abs(form_top - list_top) <= 1
-    else:
-        assert form_top >= list_top + list_height
-        assert abs(form_left - list_left) <= 1
-    if width == 1440:
-        # One line for the name plus a second line for scope, not a stack of controls.
-        assert layout["rowHeights"] and max(layout["rowHeights"]) < 90
-
-
-def test_header_link_moves_focus_to_the_add_form(accounts_page):
-    page = accounts_page(1440)
-    page.get_by_role("link", name="Add account").focus()
-    page.keyboard.press("Enter")
-
-    assert page.evaluate("document.activeElement.id") == "id_name"
 
 
 def test_row_menu_reaches_rename_and_archive(accounts_page):
