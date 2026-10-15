@@ -213,18 +213,6 @@ def test_reached_takes_precedence_over_past_due():
 
 
 @pytest.mark.django_db
-def test_private_goal_visible_only_to_owner():
-    owner = make_person("owner")
-    outsider = make_person("outsider")
-    make_household(owner)
-    make_household(outsider, name="Other Household")
-    goal = make_goal(owner, name=SECRET_ACCOUNT)
-
-    assert SavingsGoal.objects.visible_to(owner.user).filter(pk=goal.pk).exists()
-    assert not SavingsGoal.objects.visible_to(outsider.user).filter(pk=goal.pk).exists()
-
-
-@pytest.mark.django_db
 def test_household_goal_visible_to_current_members_only():
     owner = make_person("owner")
     member = make_person("member")

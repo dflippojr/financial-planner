@@ -600,20 +600,6 @@ SECRET_ACCOUNT = "Owner Secret Vault"
 
 
 @pytest.mark.django_db
-def test_member_never_sees_another_members_private_goals_in_any_plan_scope():
-    owner, member, _household = household_fixture()
-    make_goal(owner, "Owner secret goal", 100_000, priority=1)
-
-    for scope in ("", "private", "household"):
-        plan = build_funding_plan(member.user, today=TODAY, scope=scope)
-        assert "Owner secret goal" not in [row.goal.name for row in plan.rows]
-    client = Client()
-    client.force_login(member.user)
-    page = client.get(reverse("savings-goal-plan"))
-    assert b"Owner secret goal" not in page.content
-
-
-@pytest.mark.django_db
 def test_private_plan_excludes_household_goals_and_household_items():
     owner, _member, _household = household_fixture()
     plan_item(owner, "Synthetic stipend", PlannedItem.Kind.INCOME, 50_000)

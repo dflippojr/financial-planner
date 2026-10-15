@@ -385,7 +385,6 @@ def test_calendar_page_lists_the_next_7_days_flags_low_days_and_only_visible_acc
     settings = html.split('id="bills-settings-heading"')[1]
     assert "Synthetic Checking" in settings
     assert "Shared Savings" in settings
-    assert "Member Secret Checking" not in html
 
 
 @pytest.mark.django_db

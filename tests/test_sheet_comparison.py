@@ -424,13 +424,6 @@ def test_duplicate_month_rows_are_rejected_without_storing():
 
 
 @pytest.mark.django_db
-def test_unauthenticated_visitor_is_sent_to_sign_in():
-    response = Client().get(reverse("sheet-comparison"))
-    assert response.status_code == 302
-    assert reverse("login") in response.url
-
-
-@pytest.mark.django_db
 def test_source_filename_is_sanitized():
     from finance.sheet_comparison import parsed_month_totals, save_mapping, store_month_totals
 

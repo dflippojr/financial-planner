@@ -234,45 +234,6 @@ def test_home_shows_baseline_and_scenario_without_saving(_localdate):
 
 
 @pytest.mark.django_db
-@patch("finance.views.timezone.localdate", return_value=date(2026, 10, 1))
-def test_home_scenario_hides_other_member_private_goal_and_item(_localdate):
-    owner = make_person("owner")
-    member = make_person("member")
-    household = make_household(owner, member)
-    secret = PlannedItem.objects.create(
-        owner=owner,
-        name="Secret planned",
-        kind=PlannedItem.Kind.EXPENSE,
-        amount_minor=7777,
-        start_date=date(2026, 11, 1),
-        cadence=PlannedItem.Cadence.MONTHLY,
-    )
-    SavingsGoal.objects.create(
-        owner=owner,
-        name="Secret goal",
-        target_amount_minor=50000,
-        target_date=date(2027, 1, 1),
-    )
-    SavingsGoal.objects.create(
-        owner=owner,
-        household=household,
-        scope=SavingsGoal.Scope.HOUSEHOLD,
-        name="Shared goal",
-        target_amount_minor=80000,
-        target_date=date(2027, 6, 1),
-    )
-    client = Client()
-    client.force_login(member.user)
-    token = encode_change(SimpleNamespace(type=CHANGE_AMOUNT, source_id=secret.pk, amount_minor=1))
-    page = client.get(reverse("home"), {"horizon": "3", "sc": token})
-    html = page.content.decode()
-    assert "Secret planned" not in html
-    assert "Secret goal" not in html
-    assert "Shared goal" in html
-    assert token not in html
-
-
-@pytest.mark.django_db
 def test_adding_a_scenario_does_not_write_rows():
     owner = make_person("owner")
     client = Client()

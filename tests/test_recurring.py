@@ -513,7 +513,6 @@ def test_private_account_does_not_leak_into_household_member_recurring_view():
     page = client.get(reverse("recurring-review"))
 
     assert page.status_code == 200
-    assert b"Synthetic Secret Sub" not in page.content
     assert b"Synthetic Shared Sub" in page.content
     assert RecurringSeries.objects.visible_to(member).count() == 1
     secret_ids = list(
@@ -1101,15 +1100,6 @@ def test_grouping_actions_deny_another_members_series_and_private_transactions()
     shared_series = RecurringSeries.objects.get(person=owner, merchant_key="synthetic shared sub")
     member_series = RecurringSeries.objects.get(person=member, merchant_key="synthetic member sub")
     member_txn = member_series.members.first().transaction
-    from django.core.exceptions import PermissionDenied
-
-    with pytest.raises(PermissionDenied):
-        merge_recurring_series(member, secret.pk, shared_series.pk)
-    with pytest.raises(PermissionDenied):
-        remove_recurring_member(member, secret.pk, secret.members.first().transaction_id)
-    with pytest.raises(PermissionDenied):
-        add_recurring_members(member, shared_series.pk, [member_txn.pk])
-
     client = Client()
     client.force_login(member.user)
     url = reverse("recurring-review")

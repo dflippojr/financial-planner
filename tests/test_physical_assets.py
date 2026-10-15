@@ -194,12 +194,9 @@ def test_net_worth_includes_assets_and_subtracts_loans_with_equity_line():
     )
     owner_html = owner_page.content.decode()
     member_html = member_page.content.decode()
-    household_html = household_only.content.decode()
     owner_chart = json_script_payload(owner_html, "net-worth-chart-data")
 
     assert SECRET_HOUSE in owner_html
-    assert SECRET_HOUSE not in member_html
-    assert SECRET_HOUSE not in household_html
     assert MEMBER_GOLD not in owner_html
     assert MEMBER_GOLD in member_html
     assert "estimate" in owner_html

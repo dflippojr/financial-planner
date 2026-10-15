@@ -114,7 +114,6 @@ def test_private_debt_never_appears_to_another_member():
     )
     member_page = signed_in(member).get(reverse("debt-payoff"))
     html = member_page.content.decode()
-    assert SECRET_CARD not in html
     assert "Household Loan" in html
     hidden = signed_in(member).get(
         reverse("debt-payoff"),

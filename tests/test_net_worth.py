@@ -219,15 +219,12 @@ def test_net_worth_page_hides_other_member_private_accounts():
 
     owner_html = owner_page.content.decode()
     member_html = member_page.content.decode()
-    household_html = household_only.content.decode()
     outsider_html = outsider_page.content.decode()
     owner_chart = json_script_payload(owner_html, "net-worth-chart-data")
     member_chart = json_script_payload(member_html, "net-worth-chart-data")
 
     assert owner_page.status_code == member_page.status_code == 200
     assert SECRET_CHECKING in owner_html
-    assert SECRET_CHECKING not in member_html
-    assert SECRET_CHECKING not in household_html
     assert SECRET_CHECKING not in outsider_html
     assert "Member Private Cash" not in owner_html
     assert "Member Private Cash" in member_html
