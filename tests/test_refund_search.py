@@ -2,7 +2,7 @@ from datetime import date, timedelta
 import pytest
 from django.test import Client
 from django.urls import reverse
-from finance.models import RefundLink, Transaction
+from finance.models import Account, RefundLink, Transaction, TransferPair
 from finance.category_services import split_transaction
 from tests.test_categorization import make_person, make_household, make_account, make_transaction
 
@@ -101,3 +101,50 @@ def test_excluded_transfer_has_no_refund_search():
     assert with_transfer_state(owner, refund).is_excluded_transfer
     response = client.get(reverse('transaction-edit', args=(refund.pk,)))
     assert b'Search purchases' not in response.content
+
+
+@pytest.mark.parametrize('paired_type', [Account.Type.SAVINGS, Account.Type.CREDIT_CARD])
+def test_excluded_leg_is_never_a_refund_original(paired_type):
+    from django.core.exceptions import ValidationError
+    from finance.category_services import (
+        REFUND_LINK_RULE, income_and_spending_totals, link_refund, refresh_transfer_pairs,
+    )
+    owner, _, account, refund, client = setup_refund()
+    paired = make_account(owner, name='Synthetic Paired', account_type=paired_type)
+    out_leg = make_transaction(owner, account, amount_minor=-50000, description='Synthetic paired transfer out')
+    make_transaction(owner, paired, amount_minor=50000, description='Synthetic paired transfer in')
+    groceries = make_transaction(owner, account, amount_minor=-10000, description='Synthetic paired groceries')
+    refresh_transfer_pairs(owner)
+    assert TransferPair.objects.excluding_income_and_spending().filter(leg_a__in=[out_leg]).exists() or (
+        TransferPair.objects.excluding_income_and_spending().filter(leg_b__in=[out_leg]).exists()
+    )
+    before = income_and_spending_totals(owner)
+    url = reverse('transaction-edit', args=(refund.pk,))
+    results = client.get(url, {'refund_search': 'Synthetic paired'}).context['refund_results']
+    assert [p.pk for p in results] == [groceries.pk]
+    assert client.get(url, {'original': out_leg.pk}).context['selected_original'] is None
+    rejected = client.post(reverse('transaction-link-refund', args=(refund.pk,)), {'original': out_leg.pk})
+    assert rejected.status_code == 200
+    assert REFUND_LINK_RULE in rejected.content.decode()
+    with pytest.raises(ValidationError) as raised:
+        link_refund(owner, refund.pk, out_leg.pk)
+    assert raised.value.messages == [REFUND_LINK_RULE]
+    assert not RefundLink.objects.filter(refund=refund).exists()
+    assert income_and_spending_totals(owner) == before
+
+
+def test_pair_hidden_from_viewer_does_not_block_refund_original():
+    from finance.category_services import link_refund, refresh_transfer_pairs
+    from finance.models import Membership
+    owner, household, account, _, _ = setup_refund()
+    member = make_person('refund-member')
+    Membership.objects.create(person=member, household=household)
+    shared = make_account(owner, name='Synthetic Joint', scope=Account.Scope.HOUSEHOLD, household=household)
+    private = make_account(owner, name='Synthetic Owner Savings', account_type=Account.Type.SAVINGS)
+    out_leg = make_transaction(owner, shared, amount_minor=-50000, description='Synthetic joint transfer out')
+    make_transaction(owner, private, amount_minor=50000, description='Synthetic private transfer in')
+    refresh_transfer_pairs(owner)
+    assert TransferPair.objects.excluding_income_and_spending().exists()
+    refund = make_transaction(member, shared, amount_minor=4000, description='Synthetic joint reversal')
+    link_refund(member, refund.pk, out_leg.pk)
+    assert RefundLink.objects.get(refund=refund).original_id == out_leg.pk
