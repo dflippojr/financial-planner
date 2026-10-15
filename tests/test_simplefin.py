@@ -632,8 +632,8 @@ def test_same_account_id_at_two_institutions_stays_separate(monkeypatch):
 def test_a_provider_error_holds_back_only_the_accounts_it_may_affect(monkeypatch, errlist, batched):
     owner = make_person("owner")
     make_household(owner)
-    accounts = dict(zip(("first", "second"), _link_two_institutions(owner, monkeypatch, _two_institution_payload(errlist=errlist))[:2]))
-    connection = SimpleFinConnection.objects.get(owner=owner)
+    first, second, connection = _link_two_institutions(owner, monkeypatch, _two_institution_payload(errlist=errlist))
+    accounts = {"first": first, "second": second}
 
     sync_connection(owner, connection.pk, ignore_rate_limit=True)
 
