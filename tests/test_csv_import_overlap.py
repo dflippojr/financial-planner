@@ -1,6 +1,8 @@
 from datetime import date
+from importlib import import_module
 
 import pytest
+from django.apps import apps as django_apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
 
@@ -140,3 +142,53 @@ def test_household_member_sees_shared_overlap_and_cannot_touch_private():
 
     assert overlap.new_count == 0
     assert Transaction.objects.filter(account=shared, status="active").count() == 1
+
+
+FORMULA_CSV = (
+    b"When,Memo,Amount,Currency\n"
+    b"09/27/2026,=SYNTHETIC FORMULA,-1.00,USD\n"
+    b"09/28/2026,-SYNTHETIC ACH,-2.00,USD\n"
+)
+
+
+@pytest.mark.django_db
+def test_formula_like_descriptions_are_stored_raw():
+    user, person = make_person("owner")
+    account = Account.objects.create(name="Synthetic Checking", account_type="checking", owner=person)
+
+    commit(user, account, FORMULA_CSV)
+
+    assert sorted(Transaction.objects.values_list("description", flat=True)) == [
+        "-SYNTHETIC ACH", "=SYNTHETIC FORMULA",
+    ]
+
+
+@pytest.mark.django_db
+def test_file_imported_before_raw_descriptions_reimports_as_duplicates():
+    user, person = make_person("owner")
+    account = Account.objects.create(name="Synthetic Checking", account_type="checking", owner=person)
+    commit(user, account, FORMULA_CSV)
+    # Recreate what imports stored before #503: an apostrophe on formula-like
+    # text, hashed in that form. The upgrade then strips the apostrophe.
+    for row in Transaction.objects.all():
+        row.description = "'" + row.description
+        row.save(update_fields=["description"])
+    simplefin_batch = ImportBatch.objects.create(
+        account=account, imported_by=person, source=ImportBatch.Source.SIMPLEFIN,
+        source_file_sha256="c" * 64, date_range_start=date(2026, 9, 1), date_range_end=date(2026, 9, 30),
+    )
+    simplefin_row = Transaction.objects.create(
+        account=account, import_batch=simplefin_batch, transaction_date=date(2026, 9, 29),
+        amount_minor=-300, currency="USD", description="'=SYNTHETIC FEED TEXT", fingerprint="d" * 64,
+        source_row_number=1, original_fields={},
+    )
+    import_module("finance.migrations.0071_raw_import_descriptions").strip_import_formula_escape(django_apps, None)
+
+    reimport = commit(user, account, FORMULA_CSV)
+
+    assert (reimport.new_count, reimport.duplicate_count) == (0, 2)
+    assert sorted(
+        Transaction.objects.exclude(pk=simplefin_row.pk).values_list("description", flat=True)
+    ) == ["-SYNTHETIC ACH", "=SYNTHETIC FORMULA"]
+    simplefin_row.refresh_from_db()
+    assert simplefin_row.description == "'=SYNTHETIC FEED TEXT"

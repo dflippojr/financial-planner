@@ -13,6 +13,18 @@ def transaction_fingerprint(account_id: int, transaction_date: date, amount_mino
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def file_import_fingerprint_description(description: str) -> str:
+    """The description a file import hashes, kept as it was before #503.
+
+    File imports used to store formula-like text with a leading apostrophe and
+    hashed that stored form. Descriptions are now stored raw, but the digest
+    still covers the old form so reimporting an earlier file finds its rows.
+    """
+    if description.lstrip().startswith(("=", "+", "-", "@")):
+        return "'" + description
+    return description
+
+
 def manual_entry_fingerprint(
     account_id: int, transaction_date: date, amount_minor: int, description: str, batch_id: int
 ) -> str:
