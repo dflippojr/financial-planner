@@ -1,5 +1,8 @@
 import logging
+import threading
+import urllib.error
 from datetime import date
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -306,9 +309,44 @@ def test_http_transport_without_token_or_link(settings):
     assert "Authorization" not in headers and "Click" not in headers and "Tags" not in headers
 
 
-def test_http_transport_refuses_redirects():
-    handler = alert_ntfy._NoRedirect()
-    assert handler.redirect_request(None, None, 302, "Found", {}, "https://elsewhere.invalid/") is None
+def test_http_transport_refuses_redirects(settings):
+    received = []
+
+    class Elsewhere(BaseHTTPRequestHandler):
+        def log_message(self, format, *args):
+            return
+
+        def do_POST(self):
+            received.append(self.headers.get("Authorization"))
+            self.send_response(200)
+            self.end_headers()
+
+    elsewhere = HTTPServer(("127.0.0.1", 0), Elsewhere)
+    target = f"http://127.0.0.1:{elsewhere.server_port}/steal"
+
+    class Redirector(BaseHTTPRequestHandler):
+        def log_message(self, format, *args):
+            return
+
+        def do_POST(self):
+            self.send_response(302)
+            self.send_header("Location", target)
+            self.end_headers()
+
+    redirector = HTTPServer(("127.0.0.1", 0), Redirector)
+    for server in (elsewhere, redirector):
+        threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+    settings.NTFY_URL = f"http://127.0.0.1:{redirector.server_port}"
+    settings.NTFY_TOKEN = TOKEN
+    try:
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            HttpTransport().send(TOPIC, "Title", "Body", "", "")
+        assert caught.value.code == 302
+        assert received == []
+    finally:
+        for server in (elsewhere, redirector):
+            server.shutdown()
+            server.server_close()
 
 
 def signed_in(person):
