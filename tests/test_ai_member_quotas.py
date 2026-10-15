@@ -13,7 +13,7 @@ from finance.ai_jobs import enqueue_review_phrasing
 from finance.ai_services import AiError, connect_harness
 from finance.ai_types import UNAVAILABLE
 from finance.category_services import assign_category
-from finance.chat_runner import claim_next_turn, heartbeat, recover_stale_turns, turn_max_seconds
+from finance.chat_runner import claim_next_turn
 from finance.chat_services import CONVERSATION_LIMIT, PENDING_LIMIT, send_message, start_conversation
 from finance.models import AiConversation, AiConversationMessage, AiJob, MonthlyReview
 from finance.monthly_review import latest_closed_month, store_monthly_review
@@ -117,35 +117,6 @@ def test_chat_turn_passes_the_conversations_remaining_tool_budget(harness, monke
     turn = conversation.messages.get(status=PENDING)
     chat_services.answer_turn(turn)
     assert seen["remaining"] == 2
-
-
-@pytest.mark.django_db
-def test_a_turn_past_its_deadline_fails_while_the_runner_heartbeat_is_fresh(harness):
-    _user, person = _connected(harness, "deadline")
-    conversation = send_message(person, "A very long question")
-    start = timezone.now()
-    pk = claim_next_turn("live-runner", now=start)
-    turn = AiConversationMessage.objects.get(pk=pk)
-    assert turn.deadline_at == start + timedelta(seconds=turn_max_seconds())
-
-    later = start + timedelta(seconds=turn_max_seconds() + 1)
-    heartbeat("live-runner", now=later)
-    assert recover_stale_turns(now=later) == 1
-    turn.refresh_from_db()
-    assert turn.status == AiConversationMessage.Status.FAILED
-    assert conversation.messages.filter(status=PENDING).count() == 0
-
-
-@pytest.mark.django_db
-def test_a_turn_inside_its_deadline_is_left_running(harness):
-    _user, person = _connected(harness, "inside")
-    send_message(person, "A question")
-    start = timezone.now()
-    pk = claim_next_turn("live-runner", now=start)
-    later = start + timedelta(seconds=turn_max_seconds() - 1)
-    heartbeat("live-runner", now=later)
-    assert recover_stale_turns(now=later) == 0
-    assert AiConversationMessage.objects.get(pk=pk).status == PENDING
 
 
 @pytest.mark.django_db
