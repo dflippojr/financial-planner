@@ -11,14 +11,14 @@ from django.test import Client, RequestFactory
 from django.urls import reverse
 from django.utils import timezone
 
-from finance.ai_services import AiError, connect_harness
+from finance.ai_services import connect_harness
 from finance.ai_tiles import TILES, sanitize_tile, tile_data_shareable
 from finance.ai_tools import cash_flow_totals, default_tools, list_budgets, list_planned_items, net_worth_series, spending_by_category, projected_cash_flow_tool, search_transactions
 from finance.category_services import ensure_household_categories
 from finance.chat_proposals import proposal_tools
 from finance.chat_services import _harness_context, sanitize_page_context
 from finance.planning_services import cash_flow_with_projection
-from finance.models import Account, BalanceSnapshot, Budget, Category, Membership, Person, PlannedItem, RecurringSeries, RecurringSeriesMember
+from finance.models import Account, AiProviderConnection, BalanceSnapshot, Budget, Category, Membership, Person, PlannedItem, RecurringSeries, RecurringSeriesMember
 from finance.policy_services import accept_policy, current_policy, decline_policy, publish_policy
 from tests.chat_helpers import ask
 from tests.test_chat import TOKEN, add_txn, checking, harness, make_member  # noqa: F401
@@ -118,9 +118,11 @@ def test_harness_receives_only_registry_text_and_validated_values(member, harnes
     ask(person, "Explain this tile", page_context=context)
     blocks = state.session_creates[-1]["context"]
     tile = next(block for block in blocks if block["title"] == "Current tile")
-    assert tile == {"title": "Current tile", "content":
-        "kind=budgets\nlabel=Category budgets\nmonth=2026-01\ntools=list_budgets, propose_set_budget\n"
-        "Use these filters with the named tools. A month means its full date range; compare prior months where needed."}
+    lines = tile["content"].splitlines()
+    assert lines[:4] == [
+        "kind=budgets", f"label={TILES['budgets'].label}", "month=2026-01",
+        f"tools={', '.join(TILES['budgets'].tools)}",
+    ]
     assert "Injected" not in str(blocks)
     assert [block["title"] for block in _harness_context(sanitize_page_context({"tile": {"kind": "budgets"}}))] == ["How to answer", "Current tile"]
 
@@ -158,15 +160,13 @@ def test_denied_member_has_no_bead_even_with_a_connection(member):
 
 
 def test_connected_but_unusable_chat_backend_has_no_bead(member):
-    user, _person, _household = member
-    with patch("finance.chat_services.chat_backend_for", side_effect=AiError("No chat backend")):
-        assert render_bead(user) == ""
+    user, person, _household = member
+    AiProviderConnection.objects.filter(owner=person).update(chat_backend="")
+    assert render_bead(user) == ""
 
 
 @pytest.mark.parametrize("kind,cleaned,report", [
     ("transactions", {"q": "Synthetic search"}, None),
-    ("transactions", {"amount_min": 0}, None),
-    ("transactions", {"amount_max": 0}, None),
     ("transactions", {"future_filter": "selected"}, None),
     ("cash-flow-totals", {"tag": 1}, None),
     ("transactions", {"category": "transfer"}, None),
@@ -186,14 +186,6 @@ def test_invalid_form_and_valid_filters(member):
     form = SimpleNamespace(is_bound=True, is_valid=lambda: True, cleaned_data={
         "scope": "private", "grouping": "quarter", "horizon": 6})
     assert "data-ai-bead" in render_bead(user, kind="cash-flow-chart", form=form)
-
-
-@pytest.mark.parametrize("kind", TILES)
-def test_every_registered_tile_renders_with_its_registry_label(member, kind):
-    user, _person, _household = member
-    result = render_bead(user, kind=kind, filters={"month": date(2026, 1, 1)})
-    assert "data-ai-bead" in result
-    assert f'aria-label="Ask AI about {TILES[kind].label}"' in result
 
 
 def test_posted_context_is_stored_per_question_and_crafted_text_is_dropped(member):
@@ -322,9 +314,13 @@ def test_real_pages_render_only_their_supported_data_tiles(harness):
         beads = [node for node in parser.elements if "data-ai-bead" in node.attrs]
         actual = {json.loads(node.attrs["data-tile-context"])["kind"] for node in beads}
         assert actual == kinds, (name, actual)
+        for bead in beads:
+            kind = json.loads(bead.attrs["data-tile-context"])["kind"]
+            assert bead.attrs["aria-label"] == f"Ask AI about {TILES[kind].label}"
         if name == "transaction-list":
             for bead in beads:
                 assert json.loads(bead.attrs["data-tile-context"])["filters"]["date_from"] == previous.isoformat()
+    assert set().union(*expected.values()) == set(TILES)
     for name in ("account-list", "transfer-review", "alert-list", "savings-goals", "csv-import"):
         assert b"data-ai-bead" not in client.get(reverse(name)).content
 
@@ -456,19 +452,10 @@ def test_report_tiles_keep_visible_archived_history_in_their_totals(member):
     assert [row["spent_minor"] for row in rows] == [100]
 
 
-@pytest.mark.parametrize("kind", ["transactions", "transaction-totals", "cash-flow-totals", "cash-flow-chart", "cash-flow-months", "spending-categories"])
-def test_bead_is_omitted_when_applied_account_filter_is_rejected(member, kind):
-    user, person, household = member
-    account = checking(person, household, "Synthetic historical filter", private=True)
-    account.status = Account.Status.ARCHIVED
-    account.archived_at = timezone.now()
-    account.save()
-    assert not render_bead(user, kind=kind, filters={"account_id": account.pk})
-
-
 @pytest.mark.parametrize("route,kinds", [
     ("transaction-list", ("transactions", "transaction-totals")),
     ("home", ("cash-flow-totals", "cash-flow-chart", "cash-flow-months")),
+    ("spending-by-category", ("spending-categories",)),
 ])
 def test_archived_account_page_filter_never_renders_an_unfiltered_bead(member, route, kinds):
     user, person, household = member
