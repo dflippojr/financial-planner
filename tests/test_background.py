@@ -56,6 +56,45 @@ def test_invalid_schedule_fails_before_starting_lanes(settings, monkeypatch):
     lane.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    ("expression", "message"),
+    [
+        ("30 6 * * MON-FRI", "numbers only"),
+        ("0 2 * * sun", "numbers only"),
+        ("30 6 * JAN *", "numbers only"),
+        ("@daily x x x x", "numbers only"),
+        ("60 6 * * *", "minute outside 0-59"),
+        ("30 24 * * *", "hour outside 0-23"),
+        ("30 6 0 * *", "day of month outside 1-31"),
+        ("30 6 * 13 *", "month outside 1-12"),
+        ("30 6 * * 8", "day of week outside 0-7"),
+        ("*/0 6 * * *", "minute step below 1"),
+        ("30 6-4 * * *", "hour range that runs backwards"),
+        ("30 6,,7 * * *", "invalid hour field"),
+        ("30 6 31 2 *", "does not match a time"),
+        ("30 6 * *", "five-field"),
+    ],
+)
+def test_unusable_schedule_fails_with_a_clear_message_before_starting_lanes(expression, message, settings, monkeypatch):
+    settings.SIMPLEFIN_SYNC_CRON = expression
+    lane = Mock()
+    monkeypatch.setattr(background, "ChatLane", lane)
+    with pytest.raises(ValueError, match=message):
+        background.main()
+    lane.assert_not_called()
+
+
+@pytest.mark.parametrize("expression", ["30 6 * * *", "30 6 * * 1-5", "*/15 * * * *", "0 6-18/6 1,15 * 0,7", "5/20 3 * * *"])
+def test_valid_schedule_starts_the_lanes(expression, settings, monkeypatch):
+    settings.SIMPLEFIN_SYNC_CRON = expression
+    started = Mock()
+    monkeypatch.setattr(background, "ChatLane", Mock())
+    monkeypatch.setattr(background.threading.Thread, "start", started)
+    monkeypatch.setattr(background, "supervise", Mock())
+    background.main()
+    assert started.call_count == 3
+
+
 def test_dead_lane_exits_process_even_with_chat_pool_alive(monkeypatch):
     sleep = Mock()
     exit_process = Mock()
