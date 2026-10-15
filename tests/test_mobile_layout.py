@@ -1,8 +1,9 @@
 """Phone-width layout checks in a real browser (issue #221).
 
 Needs Playwright with Chromium and a compiled static/dist/app.css
-(scripts/build_css.sh); skipped otherwise. Set MOBILE_SHOTS_DIR to also save a
-full-page screenshot of every page, in light and dark, at both phone sizes.
+(scripts/build_css.sh); skipped otherwise. Set MOBILE_SHOTS_DIR to also save
+screenshots from these checks. Sideways overflow, clipped button text and 44px tap
+targets on every primary page are owned by tests/ui/breakpoints.spec.ts.
 """
 
 from pathlib import Path
@@ -18,7 +19,7 @@ from finance.chat_services import send_message, start_conversation
 from finance.models import Budget, Person, Household, Membership
 from finance.policy_services import accept_policy, publish_policy
 from tests.chat_helpers import ask
-from tests.browser_support import CSS, SCREEN_DIR, browser, check_each_page, page_session, visit  # noqa: F401
+from tests.browser_support import CSS, SCREEN_DIR, browser, page_session  # noqa: F401
 from tests.mobile_seed import seed_phone_data
 from tests.test_chat import TOKEN, harness  # noqa: F401 - harness is a fixture
 
@@ -28,19 +29,6 @@ pytestmark = [
 ]
 
 VIEWPORTS = {"390x844": (390, 844), "360x740": (360, 740)}
-PAGES = (
-    ("home", "/"),
-    ("transactions", "/transactions/"),
-    ("budgets", "/planning/budgets/"),
-    ("chat", "/chat/"),
-    ("more", "/more/"),
-    ("accounts", "/accounts/"),
-    ("alerts", "/alerts/"),
-    ("recurring", "/recurring/"),
-    ("imports", "/imports/"),
-    ("settings", "/settings/security/"),
-    ("bills", "/planning/calendar/"),
-)
 
 
 @pytest.fixture
@@ -63,28 +51,6 @@ TAP_JS = """() => [...document.querySelectorAll('.dock a, .dock button, main .bt
   .filter((el) => el.offsetParent !== null || getComputedStyle(el).position === 'fixed')
   .map((el) => { const r = el.getBoundingClientRect(); return [(el.textContent || el.getAttribute('aria-label')).trim(), r.width, r.height]; })
   .filter(([, w, h]) => w > 0 && (w < 44 || h < 44))"""
-
-
-@pytest.mark.parametrize("size", VIEWPORTS)
-@pytest.mark.parametrize("scheme", ["light", "dark"])
-def test_page_fits_phone(phone_session, live_server, size, scheme):
-    # One seed and one browser context per size and theme; every page loads in it in turn.
-    context, page = phone_session(size, scheme, "/")
-    try:
-
-        def check(name, path):
-            visit(page, live_server.url, path, wait_until="load")
-            if SCREEN_DIR:
-                Path(SCREEN_DIR).mkdir(parents=True, exist_ok=True)
-                page.screenshot(path=str(Path(SCREEN_DIR) / f"{name}-{size}-{scheme}.png"), full_page=True)
-            fit = page.evaluate(OVERFLOW_JS)
-            assert fit["scroll"] <= fit["width"], f"scrolls sideways: {fit}"
-            assert not fit["clipped"], f"has clipped button text: {fit['clipped']}"
-            assert page.evaluate(TAP_JS) == [], "has small tap targets"
-
-        check_each_page(PAGES, check)
-    finally:
-        context.close()
 
 
 @pytest.mark.parametrize("size", VIEWPORTS)

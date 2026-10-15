@@ -3,6 +3,7 @@
 Every main page at 1440x900, 1280x800 and 1024x768, in light and dark, on synthetic seed data.
 Needs Playwright with Chromium and a compiled static/dist/app.css (scripts/build_css.sh); skipped
 otherwise. Set DESKTOP_SHOTS_DIR to also save a full-page screenshot of every page.
+Sideways overflow on every page at these widths is owned by tests/ui/breakpoints.spec.ts.
 """
 
 import os
@@ -142,7 +143,6 @@ def test_page_fits_desktop(desktop_session, live_server, size, scheme):
             Path(SCREEN_DIR).mkdir(parents=True, exist_ok=True)
             page.screenshot(path=str(Path(SCREEN_DIR) / f"{name}-{size}-{scheme}.png"), full_page=True)
         layout = page.evaluate(LAYOUT_JS)
-        assert not layout["scroll"], "scrolls sideways"
         assert layout["h1s"] == 1, f"has {layout['h1s']} h1 elements"
         assert len(layout["headerPrimary"]) <= 1, f"header has primary buttons {layout['headerPrimary']}"
         assert layout["fixed"] == [], f"has floating elements {layout['fixed']}"

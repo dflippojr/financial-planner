@@ -3,6 +3,9 @@ import { test, expect, submit } from './fixtures';
 test('Invalid sign-in is rejected and authenticated deep link retains its destination', async ({ page }) => {
   await page.goto('/transactions/');
   await expect(page).toHaveURL(/\/sign-in\//);
+  await expect(page.getByLabel('Username', { exact: true })).toHaveAttribute('autocomplete', 'username');
+  await expect(page.getByLabel('Password', { exact: true })).toHaveAttribute('autocomplete', 'current-password');
+  expect((await page.request.get('/favicon.ico')).status()).toBe(200);
   await page.getByLabel('Username', { exact: true }).fill('synthetic_alex');
   await page.getByLabel('Password', { exact: true }).fill('Synthetic-invalid-password!');
   await submit(page, page.getByRole('button', { name: 'Sign in', exact: true }));
