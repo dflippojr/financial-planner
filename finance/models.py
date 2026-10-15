@@ -1132,7 +1132,6 @@ class RecurringSeries(models.Model):
     fingerprint = models.CharField(max_length=64, validators=(sha256_validator,))
     is_active = models.BooleanField(default=True)
     cancelled_at = models.DateTimeField(null=True, blank=True)
-    acknowledged_amount_minor = models.BigIntegerField(null=True, blank=True)
     confirmed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -1276,6 +1275,27 @@ class RecurringSeriesMember(models.Model):
 
     def __str__(self):
         return f"Series {self.series_id} txn {self.transaction_id}"
+
+
+class RecurringPriceAcknowledgement(models.Model):
+    """The latest charge amount one member dismissed as a series' price-change flag.
+
+    Kept per member, so dismissing a household bill's flag leaves every other
+    member's flag and alerts in place (#523).
+    """
+
+    person = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="recurring_price_acknowledgements")
+    series = models.ForeignKey(RecurringSeries, on_delete=models.CASCADE, related_name="price_acknowledgements")
+    amount_minor = models.BigIntegerField()
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("person", "series"), name="recurring_price_ack_person_series"),
+        ]
+
+    def __str__(self):
+        return f"Price acknowledgement person {self.person_id} series {self.series_id}"
 
 
 class RecurringExclusion(models.Model):

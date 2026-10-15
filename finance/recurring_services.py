@@ -31,6 +31,7 @@ from .models import (
     Membership,
     Person,
     RecurringExclusion,
+    RecurringPriceAcknowledgement,
     RecurringSeries,
     RecurringSeriesMember,
     Transaction,
@@ -1728,7 +1729,11 @@ def dismiss_price_change(principal, series_id):
         if latest is None:
             raise PermissionDenied(_DENIED)
         amount_minor = latest.transaction.amount_minor
-    series.acknowledged_amount_minor = amount_minor
-    series.save(update_fields=("acknowledged_amount_minor", "updated_at"))
+    # The dismissal is this member's alone, and covers every copy of the bill
+    # they may act on, so the flag stays down whichever copy shows the bill (#523).
+    for copy in _bill_copies(person, series):
+        RecurringPriceAcknowledgement.objects.update_or_create(
+            person=person, series=copy, defaults={"amount_minor": amount_minor}
+        )
     _record_series(person, AuditEvent.Action.RECURRING_PRICE_ACKNOWLEDGED, series)
     return series

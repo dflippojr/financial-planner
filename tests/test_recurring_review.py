@@ -26,6 +26,8 @@ from finance.planning_services import projected_months_for
 from finance.recurring_review import (
     is_resumed,
     missed_charge,
+    acknowledged_amounts,
+    build_recurring_review,
     price_change,
     raise_recurring_review_alerts,
     upcoming_charge,
@@ -242,14 +244,16 @@ def test_acknowledged_amount_suppresses_until_the_amount_changes():
 
     dismiss_price_change(owner, flagged.pk)
     flagged.refresh_from_db()
-    assert price_change(flagged) is None
+    acknowledged = acknowledged_amounts(owner, [flagged])
+    assert acknowledged == {flagged.pk: -1200}
+    assert price_change(flagged, acknowledged_minor=acknowledged[flagged.pk]) is None
     raise_recurring_review_alerts(owner, [flagged], today=TODAY)
     assert not Alert.objects.filter(kind=Alert.Kind.RECURRING_PRICE).exists()
     extra = make_transaction(
         owner, account, transaction_date=date(2026, 10, 10), amount_minor=-1400, description="Synthetic Rise later"
     )
     add_member(flagged, extra)
-    again = price_change(flagged)
+    again = price_change(flagged, acknowledged_minor=acknowledged[flagged.pk])
     assert again is not None
     assert again.new_minor == -1400
 
@@ -974,8 +978,7 @@ def test_acknowledging_a_shared_rows_price_change_records_the_current_charge():
 
     dismiss_price_change(member, series.pk)
 
-    series.refresh_from_db()
-    assert series.acknowledged_amount_minor == -7000
+    assert acknowledged_amounts(member, [series]) == {series.pk: -7000}
     assert _page(member, today=today).context["price_changes"] == []
 
 
@@ -1107,3 +1110,123 @@ def test_a_charge_at_the_end_of_the_calendar_does_not_crash_a_bill_that_ends_the
     (bill,) = resolve_household_bills([series], eligible_bill_charges(member))
 
     assert bill.last_on in (date(9999, 11, 30), date(9999, 12, 31))
+
+
+def _two_copies_of_a_risen_bill(*, risen_minor=-9000):
+    owner, member, _outsider, series = _shared_bill()
+    copy = make_series(member, name="Synthetic Internet", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-6000)
+    shared = series.members.first().transaction.account
+    for item in series.members.all():
+        add_member(copy, item.transaction)
+    if risen_minor is not None:
+        risen = make_transaction(
+            owner, shared, transaction_date=date(2026, 10, 12), amount_minor=risen_minor, description="Synthetic Internet"
+        )
+        add_member(series, risen)
+        add_member(copy, risen)
+    return owner, member, series, copy
+
+
+def _review_alerts(kind):
+    return sorted(Alert.objects.filter(kind=kind).values_list("recipient_id", "dedupe_key"))
+
+
+def _run_both_passes(owner, member, today):
+    from finance.recurring_services import _raise_review_alerts
+
+    _raise_review_alerts(owner, today=today)
+    _raise_review_alerts(member, today=today)
+
+
+@pytest.mark.django_db
+def test_each_member_gets_one_price_alert_per_shared_bill_whoever_confirmed_it():
+    owner, member, series, _copy = _two_copies_of_a_risen_bill()
+    risen = series.members.order_by("-transaction__transaction_date").first().transaction_id
+
+    _run_both_passes(owner, member, date(2026, 10, 13))
+    _run_both_passes(owner, member, date(2026, 10, 14))
+
+    key = f"recurring:bill:{risen}:-9000"
+    assert _review_alerts(Alert.Kind.RECURRING_PRICE) == sorted([(owner.pk, key), (member.pk, key)])
+    assert {alert.title for alert in Alert.objects.filter(kind=Alert.Kind.RECURRING_PRICE)} == {
+        "Synthetic Internet changed from 60.00 USD to 90.00 USD"
+    }
+
+
+@pytest.mark.django_db
+def test_a_later_charge_at_the_same_new_price_does_not_alert_again():
+    owner, member, series, copy = _two_copies_of_a_risen_bill()
+    _run_both_passes(owner, member, date(2026, 10, 13))
+    shared = series.members.first().transaction.account
+    later = make_transaction(
+        owner, shared, transaction_date=date(2026, 11, 12), amount_minor=-9000, description="Synthetic Internet"
+    )
+    add_member(series, later)
+    add_member(copy, later)
+
+    _run_both_passes(owner, member, date(2026, 11, 13))
+
+    assert Alert.objects.filter(kind=Alert.Kind.RECURRING_PRICE).count() == 2
+
+
+@pytest.mark.django_db
+def test_each_member_gets_one_missed_alert_per_shared_bill():
+    owner, member, series, _copy = _two_copies_of_a_risen_bill(risen_minor=None)
+    latest = series.members.order_by("-transaction__transaction_date").first().transaction_id
+
+    _run_both_passes(owner, member, date(2026, 10, 20))
+
+    key = f"recurring:bill:{latest}:missed:2026-10-12"
+    assert _review_alerts(Alert.Kind.RECURRING_MISSED) == sorted([(owner.pk, key), (member.pk, key)])
+
+
+@pytest.mark.django_db
+def test_two_bills_from_one_merchant_still_alert_separately():
+    owner, member, series, _copy = _two_copies_of_a_risen_bill()
+    second_account = make_account(
+        owner, name="Synthetic Second Joint", scope=Account.Scope.HOUSEHOLD, household=_household()
+    )
+    second = make_series(
+        owner, name="Synthetic Internet", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-2000, fingerprint="c" * 64
+    )
+    for month, amount in ((7, -2000), (8, -2000), (9, -2000), (10, -3000)):
+        add_member(second, make_transaction(
+            owner, second_account, transaction_date=date(2026, month, 20), amount_minor=amount,
+            description="Synthetic Internet",
+        ))
+
+    _run_both_passes(owner, member, date(2026, 10, 21))
+
+    for person in (owner, member):
+        assert Alert.objects.filter(kind=Alert.Kind.RECURRING_PRICE, recipient=person).count() == 2
+
+
+@pytest.mark.django_db
+def test_dismissing_a_bills_price_change_silences_only_that_member():
+    owner, member, series, copy = _two_copies_of_a_risen_bill()
+    today = date(2026, 10, 13)
+
+    dismiss_price_change(member, series.pk)
+    _run_both_passes(owner, member, today)
+
+    assert acknowledged_amounts(member, [series, copy]) == {series.pk: -9000, copy.pk: -9000}
+    assert acknowledged_amounts(owner, [series, copy]) == {}
+    assert [recipient for recipient, _key in _review_alerts(Alert.Kind.RECURRING_PRICE)] == [owner.pk]
+    assert _page(member, today=today).context["price_changes"] == []
+    _upcoming, owner_changes, _missed, _cancelled = build_recurring_review(owner, [series], today=today)
+    assert [item.series.pk for item in owner_changes] == [series.pk]
+
+
+@pytest.mark.django_db
+def test_a_bill_alerted_before_grouping_is_not_alerted_again():
+    owner, member, series, copy = _two_copies_of_a_risen_bill()
+    Alert.objects.create(
+        recipient=owner, kind=Alert.Kind.RECURRING_PRICE, title="Synthetic earlier", link="/recurring/",
+        dedupe_key=f"recurring:{copy.pk}:-9000",
+    )
+
+    _run_both_passes(owner, member, date(2026, 10, 13))
+
+    keys = dict(_review_alerts(Alert.Kind.RECURRING_PRICE))
+    assert Alert.objects.filter(recipient=owner, kind=Alert.Kind.RECURRING_PRICE).count() == 1
+    assert keys[member.pk].startswith("recurring:bill:")

@@ -9,7 +9,15 @@ from django.urls import reverse
 from django.utils import timezone
 
 from .cash_flow import format_minor
-from .models import Account, Alert, AlertSettings, ImportBatch, RecurringSeries, _person_for
+from .models import (
+    Account,
+    Alert,
+    AlertSettings,
+    ImportBatch,
+    RecurringPriceAcknowledgement,
+    RecurringSeries,
+    _person_for,
+)
 from .recurring_services import CADENCE_DAYS, next_charge_date
 
 # A member's AlertSettings.recurring_price_percent; this is its default.
@@ -164,12 +172,30 @@ def upcoming_charge(series, *, today):
     )
 
 
-def price_drift(series):
+def acknowledged_amounts(principal, series_list):
+    """The amounts this member dismissed as price-change flags, as {series id: amount_minor}.
+
+    Each member dismisses on their own, so another member's dismissal never
+    hides this member's flag (#523).
+    """
+    person = _person_for(principal)
+    ids = [series.pk for series in series_list]
+    if person is None or not ids:
+        return {}
+    return dict(
+        RecurringPriceAcknowledgement.objects.filter(person=person, series_id__in=ids).values_list(
+            "series_id", "amount_minor"
+        )
+    )
+
+
+def price_drift(series, acknowledged_minor=None):
     """The latest charge measured against the median of the charges before it.
 
     Returns a PriceChange whatever the size of the drift, or None when there is
     no baseline (fewer than two prior charges or a zero median) or the member
-    already dismissed this amount. Callers apply a threshold with exceeds_percent.
+    already dismissed this amount (`acknowledged_minor`). Callers apply a
+    threshold with exceeds_percent.
     """
     if not _counts_in_review(series):
         return None
@@ -178,7 +204,7 @@ def price_drift(series):
     if len(prior) < MIN_PRIOR_CHARGES:
         return None
     latest = rows[-1]
-    if series.acknowledged_amount_minor == latest.amount_minor:
+    if acknowledged_minor is not None and acknowledged_minor == latest.amount_minor:
         return None
     median = _median_abs(item.amount_minor for item in prior)
     if median == 0:
@@ -202,8 +228,8 @@ def exceeds_percent(change, percent):
     return abs(change.ratio) * 100 > percent
 
 
-def price_change(series, percent=DEFAULT_PRICE_CHANGE_PERCENT):
-    change = price_drift(series)
+def price_change(series, percent=DEFAULT_PRICE_CHANGE_PERCENT, acknowledged_minor=None):
+    change = price_drift(series, acknowledged_minor)
     if change is None or not exceeds_percent(change, percent):
         return None
     return change
@@ -255,8 +281,13 @@ def upcoming_charges(series_list, *, today):
     return rows
 
 
-def price_changes(series_list, percent=DEFAULT_PRICE_CHANGE_PERCENT):
-    rows = [item for series in series_list if (item := price_change(series, percent))]
+def price_changes(series_list, percent=DEFAULT_PRICE_CHANGE_PERCENT, acknowledged=None):
+    """Flagged rows; `acknowledged` is the viewer's {series id: dismissed amount}."""
+    acknowledged = acknowledged or {}
+    rows = [
+        item for series in series_list
+        if (item := price_change(series, percent, acknowledged.get(series.pk)))
+    ]
     rows.sort(key=lambda item: (item.charge_date, item.series.display_name, item.series.pk), reverse=True)
     return rows
 
@@ -280,6 +311,90 @@ def _alert_audience(series):
     return [series.person], private
 
 
+@dataclass(frozen=True)
+class _AlertSource:
+    """What review alerts judge: a series on its own, or one household bill through its current copy.
+
+    `copies` are every copy of the bill (just `series` when it stands alone).
+    Price alerts are keyed `{price_prefix}:{amount}` and missed alerts
+    `{missed_prefix}:missed:{date}`.
+    """
+
+    series: RecurringSeries
+    copies: tuple
+    price_prefix: str
+    missed_prefix: str
+
+
+def _price_run_start(charges):
+    """The first charge of the latest run at the latest amount.
+
+    Keying a bill's price alert on it raises a rise once, not again with every
+    later charge at the same new price.
+    """
+    start = charges[-1]
+    for txn in reversed(charges):
+        if txn.amount_minor != start.amount_minor:
+            break
+        start = txn
+    return start
+
+
+def _alert_sources(principal, series_list):
+    """One source per household bill holding a series in `series_list`, and one per other series.
+
+    Members may each confirm their own copy of one household bill. Grouped
+    with `bill_grouping`, the bill raises one alert per recipient, keyed on its
+    shared charges instead of a copy, so every member's daily pass raises the
+    same alert (#523).
+    """
+    from .recurring_services import household_review
+
+    own_ids = {series.pk for series in series_list}
+    bills = [
+        bill for bill in household_review(principal, series_list).bills
+        if any(series.pk in own_ids for series in bill.copies)
+    ]
+    in_bills = {series.pk for bill in bills for series in bill.copies}
+    sources = [
+        _AlertSource(series, (series,), f"recurring:{series.pk}", f"recurring:{series.pk}")
+        for series in series_list
+        if series.pk not in in_bills
+    ]
+    for bill in bills:
+        current = bill.current
+        if current is None or not bill.charges:
+            continue
+        current.bill_charges = bill.charges
+        sources.append(_AlertSource(
+            current,
+            tuple(bill.copies),
+            f"recurring:bill:{_price_run_start(bill.charges).pk}",
+            f"recurring:bill:{bill.charges[-1].pk}",
+        ))
+    return sources
+
+
+def _price_acknowledgements(sources):
+    """Every member's dismissed amount per copy, as {series id: {person id: amount_minor}}."""
+    acknowledged = {}
+    rows = RecurringPriceAcknowledgement.objects.filter(
+        series_id__in=[series.pk for source in sources for series in source.copies]
+    ).values_list("series_id", "person_id", "amount_minor")
+    for series_id, person_id, amount_minor in rows:
+        acknowledged.setdefault(series_id, {})[person_id] = amount_minor
+    return acknowledged
+
+
+def _without_earlier_alert(recipients, source, legacy_suffix):
+    """Recipients not already alerted under a copy's per-series key from before bills were grouped."""
+    keys = [f"recurring:{series.pk}:{legacy_suffix}" for series in source.copies]
+    already = set(
+        Alert.objects.filter(recipient__in=recipients, dedupe_key__in=keys).values_list("recipient_id", flat=True)
+    )
+    return [person for person in recipients if person.pk not in already]
+
+
 def raise_recurring_review_alerts(principal, series_list, *, today):
     from .alert_services import raise_alert, settings_for
 
@@ -292,14 +407,26 @@ def raise_recurring_review_alerts(principal, series_list, *, today):
             percents[person.pk] = settings_for(person).recurring_price_percent
         return percents[person.pk]
 
-    drifts = [item for series in series_list if (item := price_drift(series))]
-    for change in drifts:
-        audience, account = _alert_audience(change.series)
-        recipients = [person for person in audience if exceeds_percent(change, recipient_percent(person))]
+    sources = _alert_sources(principal, series_list)
+    acknowledged = _price_acknowledgements(sources)
+    for source in sources:
+        change = price_drift(source.series)
+        if change is None:
+            continue
+        audience, account = _alert_audience(source.series)
+        # Each recipient's own threshold and dismissal decide whether they hear of it.
+        recipients = [
+            person for person in audience
+            if exceeds_percent(change, recipient_percent(person))
+            and not any(
+                acknowledged.get(series.pk, {}).get(person.pk) == change.new_minor for series in source.copies
+            )
+        ]
+        recipients = _without_earlier_alert(recipients, source, change.new_minor)
         if not recipients:
             continue
         title = (
-            f"{change.series.display_name} changed from {change.previous_display} to {change.new_display}"
+            f"{source.series.display_name} changed from {change.previous_display} to {change.new_display}"
         )
         created.extend(
             raise_alert(
@@ -307,23 +434,30 @@ def raise_recurring_review_alerts(principal, series_list, *, today):
                 Alert.Kind.RECURRING_PRICE,
                 title,
                 link,
-                f"recurring:{change.series.pk}:{change.new_minor}",
+                f"{source.price_prefix}:{change.new_minor}",
                 account=account,
-                source_accounts=series_accounts(change.series),
+                source_accounts=series_accounts(source.series),
             )
         )
-    for missed in missed_charges(series_list, principal, today=today):
-        recipients, account = _alert_audience(missed.series)
-        title = f"{missed.series.display_name} was expected on {missed.expected_on.isoformat()} and was not seen"
+    for source in sources:
+        missed = missed_charge(source.series, principal, today=today)
+        if missed is None:
+            continue
+        recipients, account = _alert_audience(source.series)
+        expected = missed.expected_on.isoformat()
+        recipients = _without_earlier_alert(recipients, source, f"missed:{expected}")
+        if not recipients:
+            continue
+        title = f"{source.series.display_name} was expected on {expected} and was not seen"
         created.extend(
             raise_alert(
                 recipients,
                 Alert.Kind.RECURRING_MISSED,
                 title,
                 link,
-                f"recurring:{missed.series.pk}:missed:{missed.expected_on.isoformat()}",
+                f"{source.missed_prefix}:missed:{expected}",
                 account=account,
-                source_accounts=series_accounts(missed.series),
+                source_accounts=series_accounts(source.series),
             )
         )
     return created
@@ -331,7 +465,9 @@ def raise_recurring_review_alerts(principal, series_list, *, today):
 
 def build_recurring_review(principal, series_list, *, today):
     upcoming = upcoming_charges(series_list, today=today)
-    changes = price_changes(series_list, price_change_percent_for(principal))
+    changes = price_changes(
+        series_list, price_change_percent_for(principal), acknowledged_amounts(principal, series_list)
+    )
     missed = missed_charges(series_list, principal, today=today)
     cancelled = [
         SimpleNamespace(series=series, resumed=is_resumed(series), resumed_transactions=resumed_transactions(series))
