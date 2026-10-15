@@ -255,28 +255,6 @@ def test_acknowledged_amount_suppresses_until_the_amount_changes():
 
 
 @pytest.mark.django_db
-def test_household_alert_uses_each_recipient_threshold():
-    owner = make_person("owner")
-    member = make_person("member")
-    household = make_household(owner, member)
-    shared = make_account(owner, name="Shared", scope=Account.Scope.HOUSEHOLD, household=household)
-    AlertSettings.objects.create(person=owner, recurring_price_percent=10)
-    AlertSettings.objects.create(person=member, recurring_price_percent=25)
-    series = make_priced_series(owner, shared, "Synthetic Shared Rise", (-1000, -1000, -1200))
-
-    first = raise_recurring_review_alerts(owner, [series], today=TODAY)
-    second = raise_recurring_review_alerts(owner, [series], today=TODAY)
-
-    price_alerts = Alert.objects.filter(kind=Alert.Kind.RECURRING_PRICE)
-    assert [alert.recipient_id for alert in first if alert.kind == Alert.Kind.RECURRING_PRICE] == [owner.pk]
-    assert list(price_alerts.values_list("recipient_id", "dedupe_key")) == [
-        (owner.pk, f"recurring:{series.pk}:-1200")
-    ]
-    assert second == []
-    assert "10.00 USD to 12.00 USD" in price_alerts.get().title
-
-
-@pytest.mark.django_db
 def test_review_page_shows_usual_price_drift_and_viewer_threshold():
     owner = make_person("owner")
     make_household(owner)

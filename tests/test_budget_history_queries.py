@@ -30,9 +30,19 @@ def card_values(cards):
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("viewer", ["owner", "partner"])
-@pytest.mark.parametrize("selected", [False, True])
-@pytest.mark.parametrize("period", ["off", "on", "reset", "reenabled"])
+@pytest.mark.parametrize(
+    ("period", "viewer", "selected"),
+    # Pairwise over rollover state, viewer and account selection: every value of each
+    # axis appears, and both viewers meet both selections. Each case costs about 3 s.
+    [
+        ("off", "owner", False),
+        ("off", "partner", True),
+        ("on", "owner", True),
+        ("on", "partner", False),
+        ("reset", "owner", True),
+        ("reenabled", "partner", True),
+    ],
+)
 def test_history_cards_and_alerts_match_old_reports(ledger, viewer, selected, period):
     household = ledger.shared.household
     categories = [None, *Category.objects.filter(

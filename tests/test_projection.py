@@ -419,13 +419,18 @@ def test_home_chart_payload_matches_projected_table(_localdate):
     )
     html = page.content.decode()
     payload = json_script_payload(html, "cash-flow-chart-data")
-    report = page.context["report"]
 
-    assert payload == cash_flow_chart_data(report)
     projected = [row for row in payload["periods"] if row["projected"]]
-    assert [row["label"] for row in projected] == [item.label for item in report.projected_periods]
-    assert [row["spending_minor"] for row in projected] == [item.spending_minor for item in report.projected_periods]
-    assert payload["summary"]["spending_minor"] == report.summary.spending_minor
+    assert [row["label"] for row in projected] == [
+        "November 2026",
+        "December 2026",
+        "January 2027",
+        "February 2027",
+        "March 2027",
+        "April 2027",
+    ]
+    assert [row["spending_minor"] for row in projected] == [10000] * 6
+    assert payload["summary"]["spending_minor"] == 0
     assert "Projected" in html
     assert "Projection horizon" in html
     assert "Synthetic rent" in html

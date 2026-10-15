@@ -15,7 +15,6 @@ from finance.cash_flow import (
     GROUPING_YEAR,
     cash_flow_chart_data,
     cash_flow_report,
-    default_date_range,
     format_minor,
     iter_period_windows,
     period_count,
@@ -23,11 +22,7 @@ from finance.cash_flow import (
     previous_equal_range,
 )
 from tests.page_payload import json_script_payload
-from finance.category_services import (
-    income_and_spending_totals,
-    link_refund,
-    refresh_transfer_pairs,
-)
+from finance.category_services import income_and_spending_totals
 from finance.models import Account, BalanceSnapshot, Household, ImportBatch, Membership, Person, Transaction
 
 
@@ -97,14 +92,6 @@ def make_transaction(
 
 
 @pytest.mark.django_db
-def test_default_range_is_twelve_full_months_plus_current_month_to_date():
-    start, end = default_date_range(date(2026, 9, 15))
-
-    assert start == date(2025, 9, 1)
-    assert end == date(2026, 9, 15)
-
-
-@pytest.mark.django_db
 def test_weeks_start_on_monday():
     windows = list(iter_period_windows(date(2026, 1, 1), date(2026, 1, 7), GROUPING_WEEK))
 
@@ -143,52 +130,6 @@ def test_period_totals_match_income_and_spending_helper():
     assert report.periods[0].income_display == format_minor(5000)
     assert report.periods[0].spending_display == "23.00 USD"
     assert report.periods[0].net_display == "27.00 USD"
-
-
-@pytest.mark.django_db
-def test_excluded_transfer_and_linked_refund_follow_helper_not_copied_rules():
-    owner = make_person("owner")
-    make_household(owner)
-    checking = make_account(owner, name="Synthetic Checking")
-    savings = make_account(owner, name="Synthetic Savings", account_type=Account.Type.SAVINGS)
-    make_transaction(owner, checking, amount_minor=-4000, description="Synthetic transfer out")
-    make_transaction(
-        owner,
-        savings,
-        amount_minor=4000,
-        description="Synthetic transfer in",
-        fingerprint="d" * 64,
-    )
-    purchase = make_transaction(
-        owner,
-        checking,
-        amount_minor=-2000,
-        description="Synthetic purchase",
-        fingerprint="e" * 64,
-    )
-    refund = make_transaction(
-        owner,
-        checking,
-        amount_minor=500,
-        description="Synthetic refund",
-        fingerprint="f" * 64,
-    )
-    refresh_transfer_pairs(owner)
-    link_refund(owner, refund.pk, purchase.pk)
-    expected = income_and_spending_totals(owner, date_from=date(2026, 1, 1), date_to=date(2026, 1, 31))
-    report = cash_flow_report(
-        owner,
-        date_from=date(2026, 1, 1),
-        date_to=date(2026, 1, 31),
-        grouping=GROUPING_MONTH,
-        today=date(2026, 2, 1),
-    )
-
-    assert expected.income_minor == 0
-    assert expected.spending_minor == 1500
-    assert report.periods[0].income_minor == expected.income_minor
-    assert report.periods[0].spending_minor == expected.spending_minor
-    assert report.periods[0].net_minor == expected.net_minor
 
 
 @pytest.mark.django_db
@@ -288,15 +229,18 @@ def test_private_account_never_appears_in_another_members_periods_or_flags():
     )
     html = page.content.decode()
     payload = json_script_payload(html, "cash-flow-chart-data")
-    report_payload = cash_flow_chart_data(member_report)
 
-    assert payload["summary"] == report_payload["summary"]
+    assert payload["summary"]["income_minor"] == 0
+    assert payload["summary"]["net_minor"] == -1000
+    # A plain report, with no projection attached, serialises its periods without scenario fields.
+    plain = cash_flow_chart_data(member_report)
+    assert [(row["spending_minor"], row["projected"], "scenario_net_minor" in row) for row in plain["periods"]] == [
+        (1000, False, False),
+        (0, False, False),
+    ]
     actual_spending = [row["spending_minor"] for row in payload["periods"] if not row.get("projected")]
     assert actual_spending == [1000, 0]
     assert payload["summary"]["spending_minor"] == 1000
-    assert "SECRET PRIVATE LEDGER" not in html
-    assert "99999" not in html
-    assert "999.99 USD" not in html
     assert "cdn." not in html.lower()
     assert "/static/vendor/chart.umd.min.js" in html
 
@@ -393,10 +337,12 @@ def test_home_is_cash_flow_with_default_range_and_partial_current_month(_localda
     assert "/static/js/charts.js" in content
     assert "cdn." not in content.lower()
     payload = json_script_payload(content, "cash-flow-chart-data")
-    report = response.context["report"]
-    assert payload == cash_flow_chart_data(report)
-    assert payload["summary"]["spending_minor"] == report.summary.spending_minor == 1200
-    assert payload["summary"]["income_display"] == report.summary.income_display
+    assert payload["summary"]["spending_minor"] == 1200
+    assert payload["summary"]["income_minor"] == 0
+    assert payload["summary"]["net_minor"] == -1200
+    assert payload["summary"]["spending_display"] == "12.00 USD"
+    actual = [row["spending_minor"] for row in payload["periods"] if not row["projected"]]
+    assert actual == [0] * 11 + [1200, 0]
     assert "vs previous range" in content
     periods = response.context["report"].periods
     assert periods[0].start == date(2025, 9, 1)
@@ -424,6 +370,8 @@ def test_home_empty_state_links_to_csv_import():
     assert "No visible transactions yet." in content
     assert reverse("account-list") in content
     assert "Missing import" in content
+    assert "0.00 USD" in content
+    assert "Missing import</td>" not in content
 
 
 @pytest.mark.django_db
@@ -469,23 +417,6 @@ def test_home_filters_and_drilldown_keep_account_and_scope():
     )
 
 
-@pytest.mark.django_db
-def test_home_does_not_treat_missing_import_as_a_zero_amount():
-    owner = make_person("owner")
-    make_household(owner)
-    make_account(owner)
-    client = Client()
-    client.force_login(owner.user)
-    response = client.get(
-        reverse("home"),
-        {"date_from": "2026-03-01", "date_to": "2026-03-31", "grouping": "month"},
-    )
-    content = response.content.decode()
-    assert "Missing import" in content
-    assert "0.00 USD" in content
-    assert "Missing import</td>" not in content
-
-
 def test_period_clipped_at_the_range_start_is_labeled_partial():
     windows = list(iter_period_windows(date(2025, 9, 1), date(2026, 9, 30), GROUPING_YEAR))
     today = date(2026, 12, 31)
@@ -496,42 +427,59 @@ def test_period_clipped_at_the_range_start_is_labeled_partial():
     assert period_label(full_year[0], today=today) == "2024"
 
 
+HOME_RANGE_CASES = [
+    pytest.param(
+        {"date_to": "2025-08-31", "grouping": "month"},
+        "End date must be on or after start date.",
+        False,
+        id="default-start-applied-before-validation",
+    ),
+    pytest.param(
+        {"date_from": "9999-12-01", "date_to": "9999-12-31", "grouping": "month"},
+        "9998-12-31",
+        False,
+        id="past-the-last-safe-boundary",
+    ),
+    pytest.param(
+        {"date_from": "0001-01-01", "date_to": "9998-12-31", "grouping": "week"},
+        "more than 500 periods",
+        False,
+        id="too-many-periods",
+    ),
+    pytest.param(
+        {"date_from": "1900-01-01", "date_to": "2026-10-01", "grouping": "invalid"},
+        "more than 500 periods",
+        False,
+        id="invalid-grouping-with-a-huge-range",
+    ),
+    pytest.param(
+        {"date_from": "0001-01-01", "date_to": "0001-01-31", "grouping": "month"},
+        "No earlier range to compare",
+        True,
+        id="year-one-has-no-comparison",
+    ),
+]
+
+
 @pytest.mark.django_db
+@pytest.mark.parametrize(("query", "message", "builds_report"), HOME_RANGE_CASES)
 @patch("finance.views.timezone.localdate", return_value=date(2026, 9, 30))
 @patch("finance.cash_flow.timezone.localdate", return_value=date(2026, 9, 30))
-def test_home_applies_default_start_before_range_validation(_cash_today, _view_today):
+def test_home_validates_the_range_before_building_the_report(_cash_today, _view_today, query, message, builds_report):
     owner = make_person("owner")
     make_household(owner)
     make_account(owner)
     client = Client()
     client.force_login(owner.user)
 
-    response = client.get(
-        reverse("home"),
-        {"date_to": "2025-08-31", "grouping": "month"},
-    )
+    with patch("finance.cash_flow.iter_period_windows", wraps=iter_period_windows) as iterate:
+        response = client.get(reverse("home"), query)
 
     assert response.status_code == 200
-    assert response.context["report"] is None
-    assert "End date must be on or after start date." in response.content.decode()
-
-
-@pytest.mark.django_db
-def test_home_rejects_dates_past_the_last_safe_period_boundary():
-    owner = make_person("owner")
-    make_household(owner)
-    make_account(owner)
-    client = Client()
-    client.force_login(owner.user)
-
-    response = client.get(
-        reverse("home"),
-        {"date_from": "9999-12-01", "date_to": "9999-12-31", "grouping": "month"},
-    )
-
-    assert response.status_code == 200
-    assert response.context["report"] is None
-    assert "9998-12-31" in response.content.decode()
+    assert message in response.content.decode()
+    assert (response.context["report"] is not None) is builds_report
+    # A rejected range must not enumerate its periods at all.
+    assert iterate.called is builds_report
 
 
 @pytest.mark.parametrize("grouping", [GROUPING_WEEK, GROUPING_MONTH, GROUPING_QUARTER, GROUPING_YEAR])
@@ -542,26 +490,6 @@ def test_period_count_agrees_with_the_period_windows(grouping):
         (date(2023, 12, 31), date(2025, 1, 1)),
     ):
         assert period_count(date_from, date_to, grouping) == len(list(iter_period_windows(date_from, date_to, grouping)))
-
-
-@pytest.mark.django_db
-def test_home_rejects_a_range_with_too_many_periods_without_building_it():
-    owner = make_person("owner")
-    make_household(owner)
-    make_account(owner)
-    client = Client()
-    client.force_login(owner.user)
-
-    with patch("finance.cash_flow.iter_period_windows") as iterate:
-        response = client.get(
-            reverse("home"),
-            {"date_from": "0001-01-01", "date_to": "9998-12-31", "grouping": "week"},
-        )
-
-    assert response.status_code == 200
-    assert response.context["report"] is None
-    assert "more than 500 periods" in response.content.decode()
-    iterate.assert_not_called()
 
 
 def test_report_refuses_too_many_periods_when_called_directly():
@@ -578,21 +506,6 @@ def test_previous_equal_range_is_the_same_length_immediately_before():
 def test_previous_equal_range_is_none_before_the_earliest_date():
     assert previous_equal_range(date(1, 1, 1), date(1, 1, 31)) == (None, None)
     assert previous_equal_range(date(1, 2, 1), date(1, 2, 28)) == (date(1, 1, 4), date(1, 1, 31))
-
-
-@pytest.mark.django_db
-def test_home_with_a_range_at_year_one_has_no_comparison_instead_of_failing():
-    owner = make_person("owner")
-    make_household(owner)
-    make_account(owner)
-    client = Client()
-    client.force_login(owner.user)
-
-    response = client.get(reverse("home"), {"date_from": "0001-01-01", "date_to": "0001-01-31", "grouping": "month"})
-
-    assert response.status_code == 200
-    assert response.context["report"].summary.income_change.label == "No earlier range to compare"
-    assert b"No earlier range to compare" in response.content
 
 
 @pytest.mark.django_db

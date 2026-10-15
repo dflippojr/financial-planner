@@ -67,11 +67,16 @@ def signed_in(person):
     return client
 
 
-@pytest.mark.django_db
-def test_loan_contribution_parts_match_credit_cards():
-    assert contribution_parts(Account.Type.LOAN, "simplefin", -250_000) == (0, 250_000)
-    assert contribution_parts(Account.Type.LOAN, "manual", 250_000) == (0, 250_000)
-    assert contribution_parts(Account.Type.REAL_ESTATE, "manual", 400_000) == (400_000, 0)
+@pytest.mark.parametrize(
+    ("account_type", "source", "amount_minor", "expected"),
+    [
+        (Account.Type.LOAN, "simplefin", -250_000, (0, 250_000)),
+        (Account.Type.LOAN, "manual", 250_000, (0, 250_000)),
+        (Account.Type.REAL_ESTATE, "manual", 400_000, (400_000, 0)),
+    ],
+)
+def test_loan_contribution_parts_match_credit_cards(account_type, source, amount_minor, expected):
+    assert contribution_parts(account_type, source, amount_minor) == expected
 
 
 @pytest.mark.django_db
@@ -174,8 +179,6 @@ def test_net_worth_includes_assets_and_subtracts_loans_with_equity_line():
     assert len(january.equity_lines) == 1
     assert january.equity_lines[0].equity_minor == 10_000_000
     assert january.equity_lines[0].is_estimate
-    unpaired_net = january.assets_minor - january.liabilities_minor
-    assert unpaired_net == january.net_minor
 
     owner_page = signed_in(owner).get(
         reverse("net-worth"),

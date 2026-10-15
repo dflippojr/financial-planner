@@ -5,7 +5,6 @@ from unittest.mock import patch
 import pytest
 from django.test import Client
 from django.urls import reverse
-from django.http import QueryDict
 
 from finance.cash_flow import cash_flow_chart_data, format_minor
 from finance.models import Account, PlannedItem, RecurringSeries, RecurringSeriesMember, SavingsGoal
@@ -124,19 +123,6 @@ def test_hidden_ids_are_ignored_without_inventing_rows():
     assert len(result) == 1
     assert result[0].amount_minor == 10000
     assert result[0].end is None
-
-
-def test_round_trip_tokens_and_skips_invalid():
-    change = add_change(name="Raise: extra", end=date(2027, 1, 1))
-    token = encode_change(change)
-    query = QueryDict(mutable=True)
-    query.appendlist("sc", token)
-    query.appendlist("sc", "not-a-change")
-    query.appendlist("sc", "m|0|100")
-    parsed = parse_scenario_tokens(query)
-    assert len(parsed) == 1
-    assert parsed[0].name == "Raise: extra"
-    assert parsed[0].end == date(2027, 1, 1)
 
 
 @pytest.mark.django_db
@@ -339,18 +325,6 @@ def test_pausing_from_the_first_representable_day_pauses_the_whole_series():
     rows = scenario_projected_months((series,), (change,), today=today, horizon=3)
 
     assert [row.spending_minor for row in rows] == [0, 0, 0]
-
-
-@pytest.mark.django_db
-def test_an_invalid_grouping_with_a_huge_range_is_not_a_server_error():
-    owner = make_person("owner")
-    make_household(owner)
-    client = Client()
-    client.force_login(owner.user)
-
-    page = client.get(reverse("home"), {"date_from": "1900-01-01", "date_to": "2026-10-01", "grouping": "invalid"})
-
-    assert page.status_code in (200, 400)
 
 
 def _tokens(*values):

@@ -227,7 +227,7 @@ def test_stored_sheet_totals_are_private_to_the_uploader():
     assert "+$1,000.00" in owner_page.content.decode()
     assert "synthetic-sheet.csv" not in member_page.content.decode()
     assert "$1,000.00" not in member_page.content.decode()
-    assert "0 of 0 recent months" in member_page.content.decode() or "No stored sheet totals" in member_page.content.decode()
+    assert "No stored sheet totals" in member_page.content.decode()
 
 
 @pytest.mark.django_db
@@ -339,7 +339,7 @@ def test_member_cannot_save_a_note_on_another_members_month():
         reverse("sheet-comparison"),
         {"action": "note", "month": "2026-01-01", "note": "should not stick"},
     )
-    assert response.status_code in (302, 400)
+    assert response.status_code == 302
     assert SheetMonthTotal.objects.visible_to(owner).get(month=date(2026, 1, 1)).note == ""
 
 
@@ -432,7 +432,7 @@ def test_unauthenticated_visitor_is_sent_to_sign_in():
 
 @pytest.mark.django_db
 def test_source_filename_is_sanitized():
-    from finance.sheet_comparison import _source_name, parsed_month_totals, save_mapping, store_month_totals
+    from finance.sheet_comparison import parsed_month_totals, save_mapping, store_month_totals
 
     owner = make_person("owner")
     make_household(owner)
@@ -447,8 +447,8 @@ def test_source_filename_is_sanitized():
     )
     store_month_totals(owner, parsed_month_totals(rows, mapping), r"..\..\secret-export.csv")
     assert SheetMonthTotal.objects.visible_to(owner).first().source == "secret-export.csv"
-    assert _source_name("synthetic-sheet.csv") == "synthetic-sheet.csv"
-    assert _source_name("bad/name?.csv") == "uploaded.csv"
+    store_month_totals(owner, parsed_month_totals(rows, mapping), "bad/name?.csv")
+    assert SheetMonthTotal.objects.visible_to(owner).first().source == "uploaded.csv"
 
 
 def test_oversized_and_empty_csv_are_rejected():

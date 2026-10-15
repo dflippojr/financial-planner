@@ -162,10 +162,7 @@ def test_monthly_amount_needed_rounds_up_to_the_cent():
     goal.manual_amount_minor = 1
     goal.save()
     progress = goal_progress(owner.user, goal, today=date(2026, 10, 2))
-    remaining = 100_000 - 1
-    expected = -(-remaining // 3)
-    assert progress.monthly_needed_minor == expected
-    assert expected == 33_333  # 99999 / 3 = 33333.0 exactly; bump remainder to force a round-up
+    assert progress.monthly_needed_minor == 33_333  # 99999 / 3 = 33333.0 exactly
     goal.manual_amount_minor = 0
     goal.manual_amount_date = date(2026, 10, 1)
     goal.save()

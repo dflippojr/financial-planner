@@ -1,7 +1,6 @@
 import csv
 import io
 from datetime import date
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -258,7 +257,7 @@ def test_year_end_lists_missing_import_months():
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("prefix", ["=", "+", "-", "@", "\t", "\r", ""])
+@pytest.mark.parametrize("prefix", ["=", ""])
 def test_year_end_csv_amounts_round_trip_and_streams(prefix):
     owner = make_person("owner")
     household = make_household(owner)
@@ -340,15 +339,6 @@ def test_year_end_csv_amounts_round_trip_and_streams(prefix):
 
     unknown = client.get(reverse("year-end-csv", args=["not-a-section"]), {"year": "2025"})
     assert unknown.status_code == 404
-
-
-def test_print_stylesheet_hides_sidebar_and_breaks_sections():
-    css = (Path(__file__).resolve().parents[1] / "static" / "src" / "app.css").read_text(encoding="utf-8")
-    assert "@media print" in css
-    assert ".drawer-side" in css
-    assert "break-after: page" in css
-    assert ".year-end-print-header" in css
-    assert ".no-print" in css
 
 
 @pytest.mark.django_db

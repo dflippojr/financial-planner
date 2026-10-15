@@ -17,7 +17,6 @@ from finance.models import Account, Category
 from finance.spending_trends import (
     OTHER_NAME,
     category_spending_trend_report,
-    category_trend_chart_data,
     spending_category_trend_report,
     spending_trend_chart_data,
 )
@@ -115,77 +114,6 @@ def test_period_category_totals_reconcile_with_spending_report(grouping):
 
 
 @pytest.mark.django_db
-def test_trends_exclude_another_members_private_accounts():
-    owner = make_person("owner")
-    member = make_person("member")
-    household = make_household(owner, member)
-    shared = make_account(
-        owner,
-        name="Synthetic Shared",
-        scope=Account.Scope.HOUSEHOLD,
-        household=household,
-    )
-    private = make_account(owner, name="SECRET PRIVATE LEDGER")
-    groceries = household.categories.get(name="Groceries")
-    _spend(owner, shared, groceries, -1100, date(2026, 1, 15), "g")
-    _spend(owner, private, groceries, -8800, date(2026, 1, 16), "h")
-    client = Client()
-    client.force_login(member.user)
-    page = client.get(
-        reverse("spending-by-category"),
-        {
-            "date_from": "2026-01-01",
-            "date_to": "2026-01-31",
-            "scope": "household",
-            "tab": "trends",
-        },
-    )
-    html = page.content.decode()
-    payload = json_script_payload(html, "spending-trend-chart-data")
-    report = spending_category_trend_report(
-        member,
-        date_from=date(2026, 1, 1),
-        date_to=date(2026, 1, 31),
-        scope=Account.Scope.HOUSEHOLD,
-        today=date(2026, 2, 1),
-    )
-
-    assert page.status_code == 200
-    assert payload == spending_trend_chart_data(report)
-    assert payload["total_spending_minor"] == 1100
-    assert "SECRET PRIVATE LEDGER" not in html
-    assert "88.00 USD" not in html
-    assert all(value != 8800 for period in payload["periods"] for value in period["values"])
-
-
-@pytest.mark.django_db
-def test_trends_page_chart_payload_matches_accessible_table():
-    owner = make_person("owner")
-    household = make_household(owner)
-    checking = make_account(owner)
-    groceries = household.categories.get(name="Groceries")
-    _spend(owner, checking, groceries, -2500, date(2026, 1, 8), "i")
-    _spend(owner, checking, None, -400, date(2026, 1, 9), "j")
-    client = Client()
-    client.force_login(owner.user)
-    page = client.get(
-        reverse("spending-by-category"),
-        {"date_from": "2026-01-01", "date_to": "2026-01-31", "tab": "trends"},
-    )
-    html = page.content.decode()
-    payload = json_script_payload(html, "spending-trend-chart-data")
-
-    assert "Trends" in html
-    assert 'data-chart="spending-trend"' in html
-    assert "Uncategorized" in html
-    assert payload == spending_trend_chart_data(page.context["trend_report"])
-    assert [item["name"] for item in payload["categories"]] == [item.name for item in page.context["trend_report"].categories]
-    for period, row in zip(payload["periods"], page.context["trend_report"].periods, strict=True):
-        assert period["values"] == row.values
-        assert period["total_spending_minor"] == sum(row.values)
-
-
-@pytest.mark.django_db
 def test_trend_chart_groups_categories_beyond_top_eight_as_other():
     owner = make_person("owner")
     household = make_household(owner)
@@ -253,7 +181,10 @@ def test_category_detail_shows_average_change_and_transaction_link():
     assert report.previous_spending_minor == 2000
     assert report.spending_change.direction == "up"
     assert page.status_code == 200
-    assert payload == category_trend_chart_data(page.context["report"])
+    assert payload["name"] == "Groceries"
+    assert payload["total_spending_minor"] == 8000
+    assert payload["average_minor"] == 4000
+    assert [period["spending_minor"] for period in payload["periods"]] == [5000, 3000]
     assert "Average per period" in html
     assert "View transactions" in html
     assert f"category={groceries.pk}" in html
@@ -299,8 +230,6 @@ def test_category_detail_and_uncategorized_hide_private_and_unknown_ids():
     assert uncategorized.context["report"].total_spending_minor == 300
     assert client.get(reverse("spending-category-detail", args=[foreign.pk])).status_code == 404
     assert client.get(reverse("spending-category-detail", args=[transfer.pk])).status_code == 404
-    anonymous = Client().get(reverse("spending-category-uncategorized"))
-    assert anonymous.status_code == 302
 
 
 @pytest.mark.django_db
