@@ -640,6 +640,7 @@ def test_mapped_csv_offers_only_csv_providers_and_refuses_crafted_sources(stagin
         if path == "saved":
             return client.post(preview_url, {
                 "action": "commit", "token": token, "source": source,
+                "mapping_version": form["mapping_version"].value(),
                 "date_range_start": "2026-09-01", "date_range_end": "2026-09-30",
             })
         return client.post(preview_url, commit_data(token, source=source))

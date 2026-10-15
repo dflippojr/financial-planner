@@ -46,11 +46,18 @@ from .saved_mappings import (
     active_saved_mappings,
     headers_match,
     mapping_from_saved,
+    mapping_version,
     parse_saved_profile,
     save_csv_mapping,
     saved_profile_key,
 )
-from .services import categorize_imported_batch, classify_overlap, commit_csv_import, undo_import_batch
+from .services import (
+    MAPPING_CHANGED,
+    categorize_imported_batch,
+    classify_overlap,
+    commit_csv_import,
+    undo_import_batch,
+)
 from .staging import StageUnavailable, create_stage, delete_stage, find_live_stage, load_stage, set_stage_profile, stage_profile
 
 
@@ -273,10 +280,16 @@ def _fixed_profile_preview(context, document, account, post_data, profile):
     return preview, mapping_form
 
 
+def _with_mapping_version(data, saved):
+    stamped = data.copy()
+    stamped["mapping_version"] = mapping_version(saved)
+    return stamped
+
+
 def _saved_mapping_preview(context, document, account, post_data, saved):
     mapping = mapping_from_saved(saved)
     preview = classify_overlap(account, preview_csv(document, mapping))
-    filled = _prefill_date_range(post_data, preview)
+    filled = _with_mapping_version(_prefill_date_range(post_data, preview), saved)
     mapping_form = SavedMappingImportForm(filled)
     mapping_form.is_valid()
     context.update(
@@ -367,7 +380,9 @@ def _prepare_staged_preview(request, account, document, profile, context):
         return preview, mapping_form, spec.mapping, False, None
     profile, saved = _resolve_saved_stage(request, token, account, document, profile, context)
     if saved is not None:
-        mapping_form = SavedMappingImportForm(request.POST)
+        # The re-rendered form carries the version this request parses with;
+        # the commit compares the submitted one against it.
+        mapping_form = SavedMappingImportForm(_with_mapping_version(request.POST, saved))
         context.update(
             {
                 "mapping_form": mapping_form,
@@ -544,6 +559,13 @@ def csv_preview(request, account_id):
         context["commit_available"] = True
         return _render_preview(request, account, context)
     if action != "commit":
+        return _render_preview(request, account, context)
+    if saved_mapping is not None and request.POST.get("mapping_version") != mapping_version(saved_mapping):
+        # Another member edited the mapping after this preview was shown. Show
+        # the preview it parses to now instead of importing unseen rows.
+        mapping_form.add_error(None, MAPPING_CHANGED)
+        context["preview"] = preview
+        context["commit_available"] = True
         return _render_preview(request, account, context)
     return _commit_staged_import(
         request,

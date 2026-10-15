@@ -10,7 +10,7 @@ from finance.audit_services import record
 from finance.input_limits import MAX_DESCRIPTION_CHARS
 from finance.csv_import.fingerprint import transaction_fingerprint
 from finance.csv_import.parser import Preview, preview_csv
-from finance.csv_import.profiles import OFX_MAPPING
+from finance.csv_import.profiles import CSV_FILE_SOURCES, OFX_MAPPING
 from finance.lifecycle_services import (
     _DENIED,
     _lock_visible_account_with_pair_counterparts,
@@ -21,13 +21,6 @@ from finance.lifecycle_services import (
 from finance.csv_import.saved_mappings import headers_match, lock_saved_mapping, mapping_from_saved
 from finance.models import Account, AccountLink, AuditEvent, ImportBatch, SavedCsvMapping, Transaction
 
-# Vanguard has no CSV importer and SimpleFIN rows come only from a sync, so a
-# file import accepts the CSV providers, plus OFX from the OFX profile.
-CSV_FILE_SOURCES = (
-    ImportBatch.Source.HUNTINGTON,
-    ImportBatch.Source.CAPITAL_ONE,
-    ImportBatch.Source.APPLE_CARD,
-)
 MAPPING_CHANGED = "This mapping changed; preview the file again."
 
 

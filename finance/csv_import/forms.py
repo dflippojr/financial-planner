@@ -4,17 +4,10 @@ from django import forms
 from finance.models import ImportBatch
 
 from .parser import DATE_FORMATS, NUMBER_FORMATS, Mapping
-from .profiles import GENERIC, PROFILE_CHOICES, normalize_profile
+from .profiles import CSV_FILE_SOURCES, GENERIC, PROFILE_CHOICES, normalize_profile
 from .saved_mappings import parse_saved_profile, saved_profile_key
 
-# A mapped CSV can only come from a CSV provider. Vanguard has no CSV importer,
-# SimpleFIN rows come from a sync, OFX has its own profile, and hand-entered
-# rows are batches but never a file import.
-CSV_SOURCE_CHOICES = [
-    (value, label)
-    for value, label in ImportBatch.Source.choices
-    if value in (ImportBatch.Source.HUNTINGTON, ImportBatch.Source.CAPITAL_ONE, ImportBatch.Source.APPLE_CARD)
-]
+CSV_SOURCE_CHOICES = [(value, label) for value, label in ImportBatch.Source.choices if value in CSV_FILE_SOURCES]
 
 
 class CsvUploadForm(forms.Form):
@@ -156,6 +149,8 @@ class CsvMappingForm(forms.Form):
 
 class SavedMappingImportForm(forms.Form):
     token = forms.CharField(widget=forms.HiddenInput)
+    # The version of the saved mapping the displayed preview was parsed with.
+    mapping_version = forms.CharField(widget=forms.HiddenInput, required=False)
     source = forms.ChoiceField(choices=CSV_SOURCE_CHOICES, required=False)
     date_range_start = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
     date_range_end = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))

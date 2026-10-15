@@ -1,4 +1,15 @@
+from finance.models import ImportBatch
+
 from .parser import CsvInputError, Mapping
+
+# A mapped CSV can only come from a CSV provider. Vanguard has no CSV importer,
+# SimpleFIN rows come from a sync, OFX has its own profile, and hand-entered
+# rows are batches but never a file import.
+CSV_FILE_SOURCES = (
+    ImportBatch.Source.HUNTINGTON,
+    ImportBatch.Source.CAPITAL_ONE,
+    ImportBatch.Source.APPLE_CARD,
+)
 
 OFX = "ofx"
 GENERIC = "generic"

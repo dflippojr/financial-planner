@@ -531,7 +531,7 @@ Owner decisions:
 Owner decisions:
 - **Scope.** Saved mappings are household-wide: any current member can use and edit them, like categories.
 - **Locked after the first import.** Once a mapping has imported a batch, none of its parsing fields can change: date, amount, sign, and description columns and formats. They all feed the reimport fingerprint (account, date, amount, description). Only the name and account default stay editable. A member makes a new mapping instead.
-- **Edited during an import (#500).** The commit re-reads the saved mapping under the household lock. If its parsing fields or headers no longer match the ones the preview parsed with, the commit is refused with "This mapping changed; preview the file again." and writes no batch.
+- **Edited during an import (#500).** The preview form carries a digest of the saved mapping's parsing fields and headers, and the commit re-reads the mapping under the household lock. If either no longer matches what the displayed preview parsed with, the commit is refused with "This mapping changed; preview the file again." and writes no batch; the page shows the preview the mapping now gives, which the member can import from.
 
 ## Recurring review (2026-10-03, #102)
 

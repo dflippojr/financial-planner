@@ -1,5 +1,9 @@
 """Household saved CSV column mappings for providers without a built-in profile."""
 
+import hashlib
+import json
+from dataclasses import asdict
+
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.utils import timezone
@@ -74,6 +78,12 @@ def mapping_from_saved(saved):
         source_id_column=saved.source_id_column,
         excluded_original_columns=tuple(saved.excluded_original_columns),
     )
+
+
+def mapping_version(saved):
+    """A digest of the parsing fields and headers, so a commit can tell the preview is stale."""
+    fields = {**asdict(mapping_from_saved(saved)), "headers": list(saved.headers)}
+    return hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
 
 
 def headers_match(saved, headers):
