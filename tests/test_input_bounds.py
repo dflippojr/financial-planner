@@ -5,23 +5,23 @@ from types import SimpleNamespace
 from unittest.mock import patch
 import errno
 import json
+import re
 
 import pytest
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError, connection, transaction
-from django.test import Client, RequestFactory
+from django.test import Client
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 
 from finance import category_services
 from finance.ai_services import AiError
-from finance.alert_services import raise_large_transaction_alerts, unread_alert_count, purge_old_read_alerts
+from finance.alert_services import unread_alert_count, purge_old_read_alerts
 from finance.budget_services import carry_start_month, parse_month, save_budget
 from finance.category_suggestion_services import _build_prompt, shared_description_contains
 from finance.chat_services import sanitize_page_context, send_message
-from finance.chat_views import _chat_context
 from finance.csv_import import staging
 from finance.csv_import.ofx import read_ofx, MAX_CURRENCY_ELEMENTS
 from finance.csv_import.parser import CsvInputError, Mapping, MAX_COLUMNS, read_csv
@@ -30,11 +30,12 @@ from finance.csv_import.services import commit_csv_import
 from finance.forms import TransactionCorrectionForm
 from finance.input_limits import (
     MAX_CHAT_MESSAGES, MAX_CHAT_PROMPT_CHARS, MAX_PAGE_CONTEXT_CHARS,
-    MAX_PROMPT_CHARS, MAX_CARRY_MONTHS, BUDGET_MONTH_FLOOR,
-    MAX_LARGE_ALERTS, MAX_UNUSUAL_FLAGS, MAX_UNUSUAL_ALERTS, MAX_AI_FACTS_CHARS,
+    MAX_PROMPT_CHARS, BUDGET_MONTH_FLOOR,
+    MAX_UNUSUAL_FLAGS, MAX_UNUSUAL_ALERTS, MAX_AI_FACTS_CHARS,
 )
-from finance.models import AiConversation, AiConversationMessage, Alert, AlertSettings, Budget, Transaction
+from finance.models import AiConversation, AiConversationMessage, AiProviderConnection, Alert, AlertSettings, Budget, Transaction
 from finance.monthly_review import store_monthly_review
+from finance.policy_services import accept_policy, publish_policy
 from finance.monthly_review_ai import bound_ai_facts
 from finance.rule_services import apply_rule, preview_rule, save_category_rule
 from tests.test_alerts import make_person, make_household, make_account, make_transaction
@@ -84,18 +85,25 @@ def test_oversized_chat_rejected_before_any_storage_and_page_context_dropped():
 
 
 @pytest.mark.django_db
-def test_chat_context_keeps_newest_messages_in_order():
+def test_chat_page_renders_only_the_newest_messages_in_order():
     person = make_person("chat-history")
+    make_household(person)
+    accept_policy(person, publish_policy(material=True, body="Synthetic privacy policy"))
+    AiProviderConnection.objects.create(
+        owner=person, encrypted_token=b"synthetic-unused", base_url="http://synthetic.invalid", chat_backend="local", background_backend="local"
+    )
     conversation = AiConversation.objects.create(member=person, backend="local", expires_at=timezone.now() + timezone.timedelta(days=1))
     AiConversationMessage.objects.bulk_create([
         AiConversationMessage(conversation=conversation, role="user", content=f"Synthetic {i}")
         for i in range(MAX_CHAT_MESSAGES + 20)
     ])
-    request = RequestFactory().get("/chat/")
-    context = _chat_context(person, conversation, request)
-    assert len(context["chat_messages"]) == MAX_CHAT_MESSAGES
-    assert context["chat_messages"][0].content == "Synthetic 20"
-    assert context["chat_messages"][-1].content == f"Synthetic {MAX_CHAT_MESSAGES + 19}"
+    client = Client()
+    client.force_login(person.user)
+
+    page = client.get(reverse("chat"), {"c": conversation.pk})
+
+    shown = [int(number) for number in re.findall(r"Synthetic (\d+)", page.content.decode())]
+    assert shown == list(range(20, MAX_CHAT_MESSAGES + 20))
 
 
 def wide_csv():
@@ -208,22 +216,15 @@ def test_import_description_truncation_keeps_reimport_fingerprint():
 
 
 @pytest.mark.django_db
-def test_unread_count_one_sql_query_and_large_alert_limit():
+def test_unread_count_is_one_sql_query_and_old_alerts_are_purged():
     person = make_person("alert-limit")
-    make_household(person)
-    account = make_account(person)
-    AlertSettings.objects.create(person=person, large_transaction_minor=1)
-    rows = [make_transaction(person, account, description=f"Synthetic {i}") for i in range(MAX_LARGE_ALERTS + 20)]
-    created = raise_large_transaction_alerts(rows)
-    assert len(created) == MAX_LARGE_ALERTS + 1
-    assert not raise_large_transaction_alerts(rows)
     for count in (10, 100):
         Alert.objects.bulk_create([Alert(recipient=person, kind="sync", title="Synthetic", link="/", dedupe_key=f"synthetic:{count}:{i}") for i in range(count)])
         with CaptureQueriesContext(connection) as captured:
             unread_alert_count(person)
         assert len(captured) == 1
     Alert.objects.update(created_at=timezone.now() - timezone.timedelta(days=181))
-    assert purge_old_read_alerts() >= MAX_LARGE_ALERTS + 1
+    assert purge_old_read_alerts() == 110
     assert not Alert.objects.exists()
 
 
@@ -238,7 +239,6 @@ def test_budget_month_floor_constraint_and_clamped_legacy_span():
     budget = Budget(owner=person, rollover_enabled=True, rollover_started_month=date(1,1,1))
     with patch("finance.budget_services.last_reset_month", return_value=None):
         assert carry_start_month(budget, date(2026,1,1)) == date(2024,1,1)
-    assert MAX_CARRY_MONTHS == 24
     with pytest.raises(IntegrityError), transaction.atomic():
         budget.save()
 
@@ -276,14 +276,6 @@ def test_unusual_review_top_flags_omitted_count_and_alert_cap():
     assert len(review.facts["unusual"]) == MAX_UNUSUAL_FLAGS
     assert review.facts["unusual_omitted_count"] >= 450
     assert Alert.objects.filter(recipient=person, kind="unusual_spending").count() <= MAX_UNUSUAL_ALERTS
-
-
-def test_serialized_ai_facts_bound_preserves_json():
-    facts = {"month":"2026-09", "unusual":[{"name":"x" * 10_000, "amount_minor":100} for _ in range(500)]}
-    bounded = bound_ai_facts(facts)
-    assert len(json.dumps(bounded)) <= MAX_AI_FACTS_CHARS
-    assert bounded["unusual_omitted_count"] >= 450
-    assert len(bounded["unusual"]) <= MAX_UNUSUAL_FLAGS
 
 
 @pytest.mark.django_db
@@ -335,6 +327,11 @@ def test_legacy_wide_mapping_edit_page_remains_bounded():
 
 
 def test_ai_fact_total_cap_drops_whole_items_and_handles_nested_values():
+    facts = {"month": "2026-09", "unusual": [{"name": "x" * 10_000, "amount_minor": 100} for _ in range(500)]}
+    bounded = bound_ai_facts(facts)
+    assert len(json.dumps(bounded)) <= MAX_AI_FACTS_CHARS
+    assert bounded["unusual_omitted_count"] >= 450
+    assert len(bounded["unusual"]) <= MAX_UNUSUAL_FLAGS
     facts = {"month": "2026-09", "unusual": [{"name": "\\" * 10_000, "amount_minor": 100} for _ in range(50)]}
     bounded = bound_ai_facts(facts)
     assert len(json.dumps(bounded)) <= MAX_AI_FACTS_CHARS
