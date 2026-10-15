@@ -260,6 +260,13 @@ def test_stage_is_bound_to_user_and_account(staging_settings):
     response = owner_client.post(reverse("csv-import-preview", args=(second.pk,)), mapping_data(token))
     assert response.status_code == 404
 
+    # Nor can the same user's other session commit it.
+    other_session = Client()
+    other_session.force_login(owner_user)
+    response = other_session.post(reverse("csv-import-preview", args=(owner_account.pk,)), commit_data(token))
+    assert response.status_code == 404
+    assert not Transaction.objects.exists()
+
 
 @pytest.mark.django_db
 def test_cancel_and_expiry_delete_staged_content(staging_settings):

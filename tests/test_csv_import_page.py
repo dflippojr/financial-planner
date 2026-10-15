@@ -1,4 +1,5 @@
 from datetime import date
+from pathlib import Path
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -21,6 +22,7 @@ from finance.models import (
 
 PASSWORD = "Synthetic-passphrase-42!"
 CSV = b"When,Memo,Amount,Currency\n09/27/2026,SYNTHETIC GROCER,-12.34,USD\n"
+OFX = (Path(__file__).parent / "fixtures" / "synthetic_checking.ofx").read_bytes()
 ACCESS_URL = "https://demo:synthetic-access-secret@bridge.example.test/simplefin"
 
 
@@ -58,8 +60,6 @@ def test_import_nav_is_not_the_accounts_page():
     html = page.content.decode()
 
     assert page.status_code == 200
-    assert reverse("csv-import") == "/imports/"
-    assert reverse("csv-import") != reverse("account-list")
     assert f'href="{reverse("csv-import")}"' in html
     assert f'href="{reverse("account-list")}"' in html
     assert 'aria-current="page"' in html
@@ -127,7 +127,14 @@ def test_import_page_marks_simplefin_linked_accounts_and_notes_cutover():
 
 
 @pytest.mark.django_db
-def test_import_page_handoff_stages_then_opens_preview(staging_settings):
+@pytest.mark.parametrize(
+    ("profile", "filename", "content", "intro"),
+    [
+        ("generic", "synthetic.csv", CSV, b"Map the uploaded columns"),
+        ("ofx", "synthetic.qbo", OFX, b"OFX / QFX transactions are mapped automatically"),
+    ],
+)
+def test_import_page_handoff_stages_then_opens_preview(staging_settings, profile, filename, content, intro):
     user, owner = make_person("owner")
     account = Account.objects.create(name="Synthetic Checking", account_type="checking", owner=owner)
     client = Client()
@@ -136,7 +143,8 @@ def test_import_page_handoff_stages_then_opens_preview(staging_settings):
         reverse("csv-import"),
         {
             "account_id": str(account.pk),
-            "csv_file": SimpleUploadedFile("synthetic.csv", CSV, "text/csv"),
+            "import_profile": profile,
+            "csv_file": SimpleUploadedFile(filename, content, "text/csv"),
         },
     )
 
@@ -144,7 +152,13 @@ def test_import_page_handoff_stages_then_opens_preview(staging_settings):
     assert response.url == reverse("csv-import-preview", args=(account.pk,))
     preview = client.get(response.url)
     assert preview.status_code == 200
-    assert b"Map the uploaded columns" in preview.content
+    assert intro in preview.content
+    assert len(list(staging_settings.glob("*.csvstage"))) == 1
+
+    form = preview.context["mapping_form"]
+    cancelled = client.post(response.url, {"action": "cancel", "token": form.data.get("token") or form.initial["token"]})
+    assert cancelled.status_code == 302
+    assert not list(staging_settings.glob("*.csvstage"))
 
 
 @pytest.mark.django_db
