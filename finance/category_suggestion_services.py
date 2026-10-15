@@ -15,7 +15,7 @@ from django.utils import timezone
 from .input_limits import MAX_DESCRIPTION_CHARS, MAX_PROMPT_CHARS, MAX_PROMPT_LINE_CHARS
 from .ai_jobs import enqueue_jobs
 from .ai_services import member_has_ai, resolve_ai, run_structured
-from .ai_tools import visible_accounts
+from .ai_tools import ai_nameable_categories, visible_accounts
 from .ai_types import ProviderResult
 from .lifecycle_services import lock_actor_household
 from .category_services import (
@@ -340,7 +340,10 @@ def _current_suggestion_txn_ids(person):
 
 
 def _suggestable_categories(person):
-    return assignable_categories(person).exclude(code=Category.Code.UNCATEGORIZED)
+    # Until household consent is complete only built-in names reach the prompt (#521).
+    return assignable_categories(person).exclude(code=Category.Code.UNCATEGORIZED).filter(
+        pk__in=ai_nameable_categories(person).values("pk")
+    )
 
 
 def _prompt_text(value, limit):

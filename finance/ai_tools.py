@@ -22,13 +22,17 @@ from .cash_flow import (
     selected_accounts,
     spending_by_category_report,
 )
-from .category_services import current_household
+from .category_services import STARTER_CUSTOM_NAMES, current_household
 from .models import Account, Category, PlannedItem, RecurringSeries, RecurringSeriesMember, Transaction
 from .net_worth import net_worth_report
 from .planning_services import confine_recurring_series_to_accounts, projected_months_for
 from .policy_services import household_ai_allowed, may_use_ai
 
 MAX_TOOL_ROWS = 50
+# Names the app itself gives categories. Any other category name is the
+# household's own label, shared household data under the AI consent rule (#521).
+BUILT_IN_CATEGORY_NAMES = ("Uncategorized", "Transfer", *STARTER_CUSTOM_NAMES)
+WITHHELD_CATEGORY_NAME = "Household category (name withheld)"
 INSTRUCTION_CONTEXT = (
     "Answer only from tool results for this member. Every figure must come from a tool. "
     "Link numbers to the page URLs the tools return. Label suggestions as opinion, never "
@@ -180,21 +184,47 @@ def run_tool(person, tools, name, args):
         return ToolResult(text="That tool could not run.", ok=False)
 
 
+def household_consent_complete(person):
+    """Whether household-shared data may reach an AI backend for this member now."""
+    household = current_household(person)
+    return household is None or household_ai_allowed(household)
+
+
 def visible_accounts(person, *, include_archived=False):
     query = Account.objects.visible_to(person)
     if not include_archived:
         query = query.filter(status=Account.Status.ACTIVE)
-    household = current_household(person)
-    if household is not None and not household_ai_allowed(household):
+    if not household_consent_complete(person):
         query = query.filter(scope=Account.Scope.PRIVATE, owner=person)
     return query
 
 
 def _ai_scope(person, *, include_archived=True):
     """Report tiles retain visible archived history and enforce household consent."""
-    household = current_household(person)
-    include_household = household is None or household_ai_allowed(household)
-    return visible_accounts(person, include_archived=include_archived), include_household
+    return visible_accounts(person, include_archived=include_archived), household_consent_complete(person)
+
+
+def ai_nameable_categories(person):
+    """Visible categories whose names may reach an AI backend.
+
+    Household category names are household-shared data (owner decision
+    2026-10-15, #521): until every current member has accepted the AI policy,
+    only categories still carrying a built-in name qualify, even on the
+    member's own private rows.
+    """
+    categories = Category.objects.visible_to(person)
+    if household_consent_complete(person):
+        return categories
+    return categories.filter(name__in=BUILT_IN_CATEGORY_NAMES)
+
+
+def withheld_category_ids(person):
+    """Visible category ids whose names an AI backend may not see now; empty once consent is complete."""
+    if household_consent_complete(person):
+        return frozenset()
+    return frozenset(
+        Category.objects.visible_to(person).exclude(name__in=BUILT_IN_CATEGORY_NAMES).values_list("pk", flat=True)
+    )
 
 
 def list_accounts(person, args):
@@ -338,9 +368,12 @@ def spending_by_category(person, args):
         accounts=accounts,
     )
     wanted = (args.get("category") or "").strip()
+    withheld = withheld_category_ids(person)
     rows = []
     figures = []
     for row in report.rows:
+        if str(row.key).isdigit() and int(row.key) in withheld:
+            row = SimpleNamespace(**{**vars(row), "name": WITHHELD_CATEGORY_NAME})
         if wanted and wanted.lower() not in {row.name.lower(), str(row.key).lower()}:
             continue
         query = _range_query(date_from, date_to, account=account, scope=scope)
@@ -387,15 +420,18 @@ def search_transactions(person, args):
     query = visible_transaction_queryset(person).filter(account_id__in=accounts.values("pk"))
     needle = (args.get("q") or "").strip()
     category = (args.get("category") or "").strip()
+    # A withheld category answers exactly like a missing one, so the tool is
+    # no oracle for the household's own category names (#521).
+    nameable = ai_nameable_categories(person)
     if args.get("category_id") is not None:
-        match = Category.objects.visible_to(person).filter(pk=args["category_id"]).first()
+        match = nameable.filter(pk=args["category_id"]).first()
         if match is None:
             return ToolResult(text="That category is not visible.", ok=False)
         category = str(match.pk)
     elif category.lower() == "uncategorized":
         category = "uncategorized"
     elif category:
-        match = Category.objects.visible_to(person).filter(name__iexact=category).first()
+        match = nameable.filter(name__iexact=category).first()
         if match is None:
             return ToolResult(text="That category is not visible.", ok=False)
         category = str(match.pk)
@@ -513,12 +549,14 @@ def list_budgets(person, args):
     if scope:
         cards = [card for card in cards if card.budget.scope == scope]
     url = f"{reverse('budgets')}?{urlencode({'month': month.isoformat()[:7]})}"
+    withheld = withheld_category_ids(person)
     rows = []
     figures = []
     for card in cards[:MAX_TOOL_ROWS]:
+        name = WITHHELD_CATEGORY_NAME if card.budget.category_id in withheld else card.name
         rows.append(
             {
-                "name": card.name,
+                "name": name,
                 "amount_minor": card.amount_minor,
                 "spent_minor": card.spent_minor,
                 "remaining_minor": card.remaining_minor,
@@ -527,7 +565,7 @@ def list_budgets(person, args):
                 "url": card.drilldown_url,
             }
         )
-        figures.append(_figure(f"{card.name} spent", card.spent_minor, card.drilldown_url))
+        figures.append(_figure(f"{name} spent", card.spent_minor, card.drilldown_url))
     return ToolResult(
         text=json.dumps({"month": month.isoformat()[:7], "page_url": url, "rows": rows}),
         figures=tuple(figures),
