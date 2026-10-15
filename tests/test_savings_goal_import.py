@@ -1,4 +1,3 @@
-from finance.csv_import.staging import _path as _stage_file_path
 import csv
 from datetime import date
 
