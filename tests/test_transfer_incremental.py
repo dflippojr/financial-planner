@@ -4,6 +4,7 @@ import random
 
 import pytest
 from django.db import connection, transaction
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from finance.category_services import (
@@ -104,10 +105,11 @@ def test_incremental_revisits_old_neighbors_without_a_stored_pair():
 
 @pytest.mark.django_db
 def test_duplicate_batch_and_empty_ids_do_not_score_or_query():
-    with patch('finance.category_services._score_pairs') as score:
+    with CaptureQueriesContext(connection) as queries:
         assert categorize_imported_batch(None, None) == []
         assert refresh_transfer_pairs(None, transaction_ids=[]) == []
-    score.assert_not_called()
+    # The atomic wrappers open savepoints; nothing may read or write a table.
+    assert [q['sql'] for q in queries if 'SAVEPOINT' not in q['sql']] == []
 
 
 @pytest.mark.django_db

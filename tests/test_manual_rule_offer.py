@@ -8,7 +8,7 @@ from django.urls import reverse
 
 from finance.category_services import assign_category, split_transaction
 from finance.models import Account, Category, CategoryRule, CategorySuggestion, Membership, Transaction
-from finance.rule_services import manual_rule_offer, preview_unsaved_rule, unsaved_rule
+from finance.rule_services import preview_unsaved_rule, unsaved_rule
 from tests.test_category_rules import dining, groceries, make_account, make_household, make_person, make_transaction
 
 
@@ -27,6 +27,10 @@ def _setup(others=2):
     client = Client()
     client.force_login(owner.user)
     return owner, household, account, edited, rest, client
+
+
+def _offer(client, txn):
+    return client.get(reverse("transaction-edit", args=(txn.pk,))).context["rule_offer"]
 
 
 def _categorize(client, txn, category):
@@ -59,9 +63,7 @@ def test_count_matches_unsaved_rule_preview_and_skips_manual_rows():
     hand_set = make_transaction(owner, account, amount_minor=-777, description=COFFEE.lower())
     assign_category(owner, hand_set.pk, groceries(household).pk)
     assign_category(owner, edited.pk, dining(household).pk)
-    edited.refresh_from_db()
-    edited._excluded = False
-    offer = manual_rule_offer(owner, edited)
+    offer = _offer(client, edited)
     rule = unsaved_rule(
         owner, owner_kind="personal", description_contains=offer["description_contains"],
         category_id=dining(household).pk,
@@ -188,16 +190,14 @@ def test_count_follows_existing_rule_precedence_like_the_preview():
         owner_person=other, description_contains="shared 0", category=groceries(household)
     )
     assign_category(owner, edited.pk, dining(household).pk)
-    edited.refresh_from_db()
-    edited._excluded = False
     rule = unsaved_rule(owner, owner_kind="personal", description_contains=COFFEE, category_id=dining(household).pk)
     expected = {txn.pk for txn in preview_unsaved_rule(owner, rule) if txn.category_id != rule.category_id}
     assert expected == {shared_rows[1].pk}
-    assert manual_rule_offer(owner, edited) is None
+    assert _offer(client, edited) is None
     make_transaction(owner, shared, amount_minor=-700, description=f"{COFFEE} SHARED 9")
     expected = {txn.pk for txn in preview_unsaved_rule(owner, rule) if txn.category_id != rule.category_id}
     assert len(expected) == 2
-    assert manual_rule_offer(owner, edited)["count"] == 2
+    assert _offer(client, edited)["count"] == 2
 
 
 @pytest.mark.django_db
@@ -209,13 +209,13 @@ def test_matching_folds_case_like_the_rule_preview():
     for index in range(2):
         make_transaction(owner, account, amount_minor=-500 - index, description=f"Synthetic Straße Cafe {index}")
     assign_category(owner, edited.pk, dining(household).pk)
-    edited.refresh_from_db()
-    edited._excluded = False
+    client = Client()
+    client.force_login(owner.user)
     rule = unsaved_rule(
         owner, owner_kind="personal", description_contains="SYNTHETIC STRASSE CAFE", category_id=dining(household).pk
     )
     assert len(preview_unsaved_rule(owner, rule)) == 2
-    assert manual_rule_offer(owner, edited)["count"] == 2
+    assert _offer(client, edited)["count"] == 2
 
 
 @pytest.mark.django_db
@@ -230,11 +230,11 @@ def test_household_rules_never_block_a_new_personal_rule():
     ]
     CategoryRule.objects.create(owner_household=household, description_contains="coffee", category=groceries(household))
     assign_category(owner, edited.pk, dining(household).pk)
-    edited.refresh_from_db()
-    edited._excluded = False
+    client = Client()
+    client.force_login(owner.user)
     personal = unsaved_rule(owner, owner_kind="personal", description_contains=COFFEE, category_id=dining(household).pk)
     assert {txn.pk for txn in preview_unsaved_rule(owner, personal)} == {txn.pk for txn in others}
-    assert manual_rule_offer(owner, edited)["count"] == 2
+    assert _offer(client, edited)["count"] == 2
     # The reverse holds for a household rule: any matching personal rule runs first.
     CategoryRule.objects.create(
         owner_person=owner, description_contains="coffee 0", category=groceries(household), priority=9
