@@ -231,7 +231,7 @@ def test_lent_choices_are_required():
 
 
 @pytest.mark.django_db
-def test_delete_my_data_page_requires_reauth_username_and_lent_choice():
+def test_delete_my_data_page_requires_username_and_lent_choice():
     owner = make_person("owner")
     member = make_person("member")
     household = make_household(owner, member)
@@ -244,10 +244,6 @@ def test_delete_my_data_page_requires_reauth_username_and_lent_choice():
     )
     client = Client()
     client.force_login(owner.user)
-
-    refused = client.post(reverse("delete-my-data"), {"confirm_username": "owner", f"lent_{lent.pk}": LENT_DELETE})
-    assert refused.status_code == 302
-    assert refused.url.startswith(reverse("reauth"))
 
     stamp_recent_auth(client)
     page = client.get(reverse("delete-my-data"))

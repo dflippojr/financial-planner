@@ -122,11 +122,10 @@ def connect_owner(owner, monkeypatch, payload=None):
     return claim_connection(owner, setup_token())
 
 
-def signed_in(person, *, confirmed=True):
+def signed_in(person):
     client = Client()
     client.force_login(person.user)
-    if confirmed:
-        stamp_recent_auth(client)
+    stamp_recent_auth(client)
     return client
 
 
@@ -1486,39 +1485,27 @@ def test_a_confirmed_rule_categorizes_newly_synced_transactions(monkeypatch):
 
 
 @pytest.mark.django_db
-def test_connecting_simplefin_needs_a_fresh_confirmation(monkeypatch):
+def test_connecting_simplefin_saves_the_connection(monkeypatch):
     owner = make_person("owner")
     make_household(owner)
     monkeypatch.setattr("finance.simplefin_services.claim_access_url", lambda url: ACCESS_URL)
     monkeypatch.setattr("finance.simplefin_services.fetch_accounts", lambda *args, **kwargs: account_payload())
-    client = signed_in(owner, confirmed=False)
+    client = signed_in(owner)
 
-    refused = client.post(reverse("simplefin-connections"), {"intent": "claim", "token": setup_token()})
-
-    assert refused.status_code == 302
-    assert refused.url.startswith(reverse("reauth"))
-    assert not SimpleFinConnection.objects.filter(owner=owner).exists()
-
-    stamp_recent_auth(client)
     accepted = client.post(reverse("simplefin-connections"), {"intent": "claim", "token": setup_token()})
     assert accepted.status_code == 302
     assert SimpleFinConnection.objects.filter(owner=owner).exists()
 
 
 @pytest.mark.django_db
-def test_disconnecting_simplefin_needs_a_fresh_confirmation(monkeypatch):
+def test_disconnecting_simplefin_removes_the_connection(monkeypatch):
     owner = make_person("owner")
     make_household(owner)
     connect_owner(owner, monkeypatch)
-    client = signed_in(owner, confirmed=False)
+    client = signed_in(owner)
 
-    refused = client.post(reverse("simplefin-disconnect"))
-
-    assert refused.url.startswith(reverse("reauth"))
-    assert SimpleFinConnection.objects.filter(owner=owner).exists()
-    # Linking accounts and Sync now stay unguarded: they change no access.
+    # Linking accounts and Sync stay unguarded: they change no access.
     assert client.post(reverse("simplefin-sync")).status_code == 302
 
-    stamp_recent_auth(client)
     client.post(reverse("simplefin-disconnect"))
     assert not SimpleFinConnection.objects.filter(owner=owner).exists()

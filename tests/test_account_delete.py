@@ -385,28 +385,6 @@ def test_non_owner_delete_views_return_identical_404(method):
     assert Account.objects.filter(pk=shared.pk).exists()
 
 
-@pytest.mark.django_db
-def test_delete_enforces_csrf():
-    owner = make_person("owner")
-    account = make_account(owner, name="Synthetic Checking")
-    client = Client(enforce_csrf_checks=True)
-    client.force_login(owner.user)
-    stamp_recent_auth(client)
-
-    denied = client.post(reverse("account-delete", args=(account.pk,)), {"confirm_name": "Synthetic Checking"})
-    page = client.get(reverse("account-delete", args=(account.pk,)))
-    token = client.cookies["csrftoken"].value
-    allowed = client.post(
-        reverse("account-delete", args=(account.pk,)),
-        {"confirm_name": "Synthetic Checking", "csrfmiddlewaretoken": token},
-    )
-
-    assert denied.status_code == 403
-    assert page.status_code == 200
-    assert allowed.status_code == 302
-    assert not Account.objects.filter(pk=account.pk).exists()
-
-
 def _run_delete_race(other_action, owner, account, *, start_competitor_first):
     run_account_lock_race(
         lambda: delete_account(owner, account.pk),

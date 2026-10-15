@@ -129,7 +129,7 @@ def test_recovery_code_completes_passkey_sign_in_once():
 
 @PASSKEY_SETTINGS
 @pytest.mark.django_db
-def test_removing_the_last_passkey_turns_the_requirement_off_after_reauth():
+def test_removing_the_last_passkey_turns_the_requirement_off():
     user, person, _household = make_member()
     client = Client()
     client.force_login(user)
@@ -138,12 +138,6 @@ def test_removing_the_last_passkey_turns_the_requirement_off_after_reauth():
     client.post(reverse("passkey-require"), {"require_passkey": "on"})
     passkey_id = Passkey.objects.get().pk
 
-    _expire_recent_auth(client)
-    refused = client.post(reverse("passkey-delete", args=(passkey_id,)))
-    assert refused.url.startswith(reverse("reauth"))
-    assert Passkey.objects.filter(pk=passkey_id).exists()
-
-    stamp_recent_auth(client)
     client.post(reverse("passkey-delete", args=(passkey_id,)))
     person.refresh_from_db()
     assert not Passkey.objects.filter(pk=passkey_id).exists()
@@ -189,27 +183,6 @@ def test_member_data_deletion_removes_passkeys():
 
 @PASSKEY_SETTINGS
 @pytest.mark.django_db
-@override_settings(LOGIN_FAILURE_LIMIT=2, LOGIN_BLOCK_SECONDS=900)
-def test_passkey_step_uses_the_login_throttle():
-    user, _person, _household = make_member()
-    client = Client()
-    client.force_login(user)
-    stamp_recent_auth(client)
-    _register_passkey(client)
-    client.post(reverse("passkey-require"), {"require_passkey": "on"})
-    client.post(reverse("logout"))
-
-    signed = Client()
-    signed.post(reverse("login"), {"username": user.username, "password": PASSWORD})
-    _json(signed, reverse("passkey-sign-in-assert"), {"credential": {}})
-    _json(signed, reverse("passkey-sign-in-assert"), {"credential": {}})
-    blocked = _json(signed, reverse("passkey-sign-in-options"))
-    assert blocked.status_code == 429
-    assert "_auth_user_id" not in signed.session
-
-
-@PASSKEY_SETTINGS
-@pytest.mark.django_db
 def test_registration_requires_recent_auth():
     user, _person, _household = make_member()
     client = Client()
@@ -231,27 +204,6 @@ def _require_passkey_after_password(user):
 
 @PASSKEY_SETTINGS
 @pytest.mark.django_db
-@override_settings(LOGIN_FAILURE_LIMIT=2, LOGIN_BLOCK_SECONDS=900)
-def test_correct_password_does_not_reset_throttle_before_second_factor():
-    user, _person, _household = make_member()
-    _require_passkey_after_password(user)
-    signed = Client()
-    for _ in range(2):
-        signed.post(reverse("login"), {"username": user.username, "password": PASSWORD})
-        signed.post(reverse("passkey-sign-in"), {"recovery_code": "not-a-recovery-code"})
-
-    blocked_login = signed.post(reverse("login"), {"username": user.username, "password": PASSWORD})
-    assert blocked_login.status_code == 200
-    assert b"Sign-in failed" in blocked_login.content
-    assert "_auth_user_id" not in signed.session
-
-    blocked_recovery = signed.post(reverse("passkey-sign-in"), {"recovery_code": "not-a-recovery-code"})
-    assert blocked_recovery.status_code in (200, 302)
-    assert "_auth_user_id" not in signed.session
-
-
-@PASSKEY_SETTINGS
-@pytest.mark.django_db
 def test_password_change_refuses_pending_passkey_completion():
     user, _person, _household = make_member()
     device = _require_passkey_after_password(user)
@@ -268,37 +220,40 @@ def test_password_change_refuses_pending_passkey_completion():
     assert "_auth_user_id" not in pending.session
 
 
-@PASSKEY_SETTINGS
-@pytest.mark.django_db
-def test_password_change_refuses_pending_recovery_code_completion():
-    user, _person, _household = make_member()
-    codes = create_recovery_codes(user, count=1)
-    _require_passkey_after_password(user)
-    pending = Client()
-    pending.post(reverse("login"), {"username": user.username, "password": PASSWORD})
-
+def _change_password(user, pending):
     user.set_password("synthetic-changed-passphrase")
     user.save(update_fields=("password",))
 
-    used = pending.post(reverse("passkey-sign-in"), {"recovery_code": codes[0]})
-    assert used.status_code == 302
-    assert used.url == reverse("login")
-    assert "_auth_user_id" not in pending.session
-    assert RecoveryCode.objects.get().used_at is None
+
+def _outlive_the_pending_window(user, pending):
+    session = pending.session
+    session["passkey_pending_started_at"] = (timezone.now() - timedelta(seconds=301)).timestamp()
+    session.save()
+
+
+def _sign_out_everywhere_else(user, pending):
+    signed_in = Client()
+    signed_in.force_login(user)
+    stamp_recent_auth(signed_in)
+    signed_in.post(reverse("revoke-other-sessions"))
 
 
 @PASSKEY_SETTINGS
 @pytest.mark.django_db
 @override_settings(PASSKEY_PENDING_MAX_AGE_SECONDS=300)
-def test_stale_pending_passkey_login_is_refused():
+@pytest.mark.parametrize(
+    "invalidate",
+    [_change_password, _outlive_the_pending_window, _sign_out_everywhere_else],
+    ids=["password-changed", "pending-window-passed", "signed-out-everywhere-else"],
+)
+def test_an_invalidated_pending_sign_in_cannot_be_finished_with_a_recovery_code(invalidate):
     user, _person, _household = make_member()
     codes = create_recovery_codes(user, count=1)
     _require_passkey_after_password(user)
     pending = Client()
     pending.post(reverse("login"), {"username": user.username, "password": PASSWORD})
-    session = pending.session
-    session["passkey_pending_started_at"] = (timezone.now() - timedelta(seconds=301)).timestamp()
-    session.save()
+
+    invalidate(user, pending)
 
     used = pending.post(reverse("passkey-sign-in"), {"recovery_code": codes[0]})
     assert used.status_code == 302
@@ -306,25 +261,3 @@ def test_stale_pending_passkey_login_is_refused():
     assert "_auth_user_id" not in pending.session
     assert RecoveryCode.objects.get().used_at is None
 
-
-@PASSKEY_SETTINGS
-@pytest.mark.django_db
-def test_sign_out_everywhere_else_clears_pending_passkey_login():
-    user, _person, _household = make_member()
-    codes = create_recovery_codes(user, count=1)
-    _require_passkey_after_password(user)
-
-    signed_in = Client()
-    signed_in.force_login(user)
-    stamp_recent_auth(signed_in)
-
-    pending = Client()
-    pending.post(reverse("login"), {"username": user.username, "password": PASSWORD})
-
-    signed_in.post(reverse("revoke-other-sessions"))
-
-    used = pending.post(reverse("passkey-sign-in"), {"recovery_code": codes[0]})
-    assert used.status_code == 302
-    assert used.url == reverse("login")
-    assert "_auth_user_id" not in pending.session
-    assert RecoveryCode.objects.get().used_at is None

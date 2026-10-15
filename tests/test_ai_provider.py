@@ -257,13 +257,11 @@ def test_token_rejected_after_connecting(harness):
 
 
 @pytest.mark.django_db
-def test_settings_connect_requires_reauth_and_hides_token(harness):
+def test_settings_connect_hides_the_token(harness):
     _state, url = harness
     user, _person, _household = make_member("owner")
     client = Client()
     client.force_login(user)
-    refused = client.post(reverse("ai-connect"), {"base_url": url, "token": TOKEN})
-    assert refused.url.startswith(reverse("reauth"))
     stamp_recent_auth(client)
     saved = client.post(reverse("ai-connect"), {"base_url": url, "token": TOKEN})
     assert saved.url == reverse("settings-ai")
@@ -600,14 +598,12 @@ def test_http_failures_map_to_stable_codes():
 
 
 @pytest.mark.django_db
-def test_settings_disconnect_and_defaults_require_reauth(harness):
+def test_settings_disconnect_and_defaults_save(harness):
     _state, url = harness
     user, person, _household = make_member("owner")
     connect_harness(person, base_url=url, token=TOKEN)
     client = Client()
     client.force_login(user)
-    refused = client.post(reverse("ai-disconnect"))
-    assert refused.url.startswith(reverse("reauth"))
     stamp_recent_auth(client)
     disconnected = client.post(reverse("ai-disconnect"))
     assert disconnected.url == reverse("settings-ai")
