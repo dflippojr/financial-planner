@@ -1,3 +1,4 @@
+import hashlib
 from datetime import date, datetime, timedelta
 from datetime import timezone as dt_utc
 from http.client import IncompleteRead
@@ -23,6 +24,7 @@ from finance.models import (
     Membership,
     Person,
     RecurringSeries,
+    SimpleFinClaim,
     SimpleFinConnection,
     Transaction,
     TransferPair,
@@ -518,6 +520,74 @@ def test_sync_all_and_claim_http_failure_on_page(monkeypatch):
     payload = account_payload(transactions=[posted_txn(txn_id="n1", day=16, amount="-1.00")])
     _linked_owner_and_checking(monkeypatch, owner=owner, payload=payload)
     assert sync_all_connections() == 1
+
+
+@pytest.mark.django_db
+def test_a_double_submitted_connect_is_not_reported_as_a_compromised_token(monkeypatch):
+    owner = make_person("owner")
+    make_household(owner)
+    monkeypatch.setattr("finance.simplefin_services.fetch_accounts", lambda *args, **kwargs: account_payload())
+    first_client = signed_in(owner)
+    second_client = signed_in(owner)
+    form = {"intent": "claim", "token": setup_token()}
+    claimed = []
+    nested = {}
+
+    def single_use_provider(request, **kwargs):
+        if claimed:
+            raise HTTPError(CLAIM_URL, 403, "Forbidden", hdrs=None, fp=BytesIO())
+        claimed.append(request.full_url)
+        # The second click arrives while SimpleFIN is still answering the first.
+        nested["second"] = second_client.post(reverse("simplefin-connections"), form)
+        return _FakeResponse(ACCESS_URL.encode())
+
+    monkeypatch.setattr("finance.simplefin_client.urlopen", single_use_provider)
+    first = first_client.post(reverse("simplefin-connections"), form)
+    second = nested["second"]
+
+    assert first.status_code == 302
+    assert second.status_code == 302
+    assert second.url == reverse("simplefin-connections")
+    assert claimed == [CLAIM_URL]
+    assert SimpleFinConnection.objects.filter(owner=owner).count() == 1
+    assert not SimpleFinClaim.objects.exists()
+    page = second_client.get(second.url)
+    assert b"treat it as compromised" not in page.content
+    assert b"already being claimed" in page.content
+    assert page.context["connection"] is not None
+
+
+@pytest.mark.django_db
+def test_a_claim_left_by_a_stopped_request_does_not_block_a_retry(monkeypatch):
+    owner = make_person("owner")
+    make_household(owner)
+    stale = SimpleFinClaim.objects.create(
+        owner=owner,
+        claim_url_sha256=hashlib.sha256(CLAIM_URL.encode()).hexdigest(),
+        started_at=timezone.now() - timedelta(hours=1),
+    )
+
+    connection = connect_owner(owner, monkeypatch)
+
+    assert connection.owner == owner
+    assert not SimpleFinClaim.objects.filter(pk=stale.pk).exists()
+
+
+@pytest.mark.django_db
+def test_a_refused_claim_ends_its_in_flight_record(monkeypatch):
+    owner = make_person("owner")
+    make_household(owner)
+
+    def denied(*args, **kwargs):
+        raise HTTPError(CLAIM_URL, 403, "Forbidden", hdrs=None, fp=BytesIO())
+
+    monkeypatch.setattr("finance.simplefin_client.urlopen", denied)
+    client = signed_in(owner)
+    response = client.post(reverse("simplefin-connections"), {"intent": "claim", "token": setup_token()})
+
+    assert CLAIM_COMPROMISED.encode() in response.content
+    assert not SimpleFinConnection.objects.exists()
+    assert not SimpleFinClaim.objects.exists()
 
 
 def test_fetch_sends_access_url_credentials_as_basic_auth(monkeypatch):
