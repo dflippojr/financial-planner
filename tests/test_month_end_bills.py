@@ -90,6 +90,17 @@ def test_detection_keeps_a_chain_whose_anchor_differs_from_the_first_found():
     assert series.status == RecurringSeries.Status.SUGGESTED
 
 
+def test_detection_keeps_a_chain_whose_anchor_splits_one_charge_later():
+    # Mar 30 is reached from Feb 27 and from Mar 2 with the same anchor, but
+    # only the chain through Mar 2 lets May 1 stand for Apr 30.
+    (series,) = detect_recurring_series(
+        _rows((date(2030, 2, 27), date(2030, 3, 2), date(2030, 3, 30), date(2030, 5, 1), date(2030, 6, 3)))
+    )
+
+    assert series.cadence == MONTHLY
+    assert series.transaction_ids == (2, 3, 4, 5)
+
+
 @pytest.mark.django_db
 def test_a_confirmed_bill_on_the_31st_continues_with_a_charge_on_the_1st():
     owner = make_person("owner")

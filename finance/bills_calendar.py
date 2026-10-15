@@ -307,8 +307,8 @@ def _early_income(sources, on_date, selected_ids):
     An occurrence within its cadence tolerance after `on_date` (today) is
     skipped when a deposit of the same amount posted on a selected account
     between (occurrence - tolerance) and today, after the previous occurrence,
-    and that deposit has not already been matched (#508). A wrong match would
-    run the forecast high, so the match is exact and never reaches back a period.
+    and that deposit has not already been matched (#508). A wrong match drops
+    income that is still to come and leaves the forecast low, never high.
     """
     planned = [
         item
@@ -367,7 +367,7 @@ def _posted_on(sources, on_date, selected_ids):
     - recurring series link to their transactions, so a charge posted today is skipped exactly;
     - planned income is skipped on its expected day when a deposit of the same amount already
       posted, today or up to its cadence tolerance early (see `_early_income`; a wrong match
-      would run the forecast high, so matches are exact);
+      leaves the forecast low);
     - planned expenses are always applied (a bill already paid today runs the forecast
       low until tomorrow).
     """

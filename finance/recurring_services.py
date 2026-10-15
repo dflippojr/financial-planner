@@ -269,22 +269,36 @@ def _collapse_same_day(transactions):
     return sorted(by_key.values(), key=lambda row: (row.transaction_date, row.pk))
 
 
+def _day_class(value, cadence):
+    """All `_anchor_day` reads of a date: its month-end day, an early-month slip, or neither."""
+    if value.day >= MONTH_END_DAY:
+        return value.day
+    return -1 if value.day <= CADENCE_DAYS[cadence][1] else 0
+
+
+def _ranked_states(by_key):
+    """A charge's chain states, longest first, then the earliest previous charge, as a single best chain would rank them."""
+    return sorted(by_key.items(), key=lambda item: (-item[1][0], item[1][1]))
+
+
 def _longest_chain(ordered, dates, cadence):
     """Longest cadence chain. `ordered` is sorted by (date, pk); `dates` is its dates.
 
     A month-end bill's next date depends on its anchor day, which comes from
     the chain's latest charges, so each charge keeps its best chain for every
-    anchor day a chain can reach it with (at most five: none or 28 to 31).
+    state a chain can reach it in: the anchor it steps with, and the class of
+    the charge before it (`_day_class`), which with the next charge decides
+    the next anchor. A bill due mid-month has one state per charge.
     """
     tolerance = CADENCE_DAYS[cadence][1]
     days = [value.toordinal() for value in dates]
-    # states[index][anchor] = (length, previous index, previous anchor, latest dates newest first)
-    states = [{_anchor_day((value,), cadence): (1, -1, None, (value,))} for value in dates]
+    # states[index][(anchor, previous class)] = (length, previous index, previous key, latest dates newest first)
+    states = [{(_anchor_day((value,), cadence), None): (1, -1, None, (value,))} for value in dates]
     for start, source in enumerate(dates):
-        for anchor, (length, _previous, _previous_anchor, recent) in list(states[start].items()):
+        for key, (length, _previous, _previous_key, recent) in _ranked_states(states[start]):
             # A step can only land within the cadence tolerance, so look at that
             # window of the sorted dates instead of every later charge.
-            expected_date = add_cadence(source, cadence, anchor)
+            expected_date = add_cadence(source, cadence, key[0])
             if expected_date is None:
                 continue
             expected = expected_date.toordinal()
@@ -292,22 +306,22 @@ def _longest_chain(ordered, dates, cadence):
             high = bisect_right(days, expected + tolerance, low)
             for end in range(low, high):
                 extended = (dates[end], *recent[: ANCHOR_CHARGES - 1])
-                key = _anchor_day(extended, cadence)
-                current = states[end].get(key)
+                next_key = (_anchor_day(extended, cadence), _day_class(source, cadence))
+                current = states[end].get(next_key)
                 if current is None or length + 1 > current[0]:
-                    states[end][key] = (length + 1, start, anchor, extended)
+                    states[end][next_key] = (length + 1, start, key, extended)
     best = None
-    for index, by_anchor in enumerate(states):
-        for anchor, state in by_anchor.items():
-            if best is None or state[0] > best[0]:
-                best = (state[0], index, anchor)
+    for index, by_key in enumerate(states):
+        key, state = _ranked_states(by_key)[0]
+        if best is None or state[0] > best[0]:
+            best = (state[0], index, key)
     if best is None or best[0] < 2:
         return []
     chain = []
-    _length, index, anchor = best
+    _length, index, key = best
     while index >= 0:
         chain.append(ordered[index])
-        _length, index, anchor, _recent = states[index][anchor]
+        _length, index, key, _recent = states[index][key]
     chain.reverse()
     return chain
 
