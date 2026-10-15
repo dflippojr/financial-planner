@@ -167,22 +167,24 @@ def test_commit_locks_parsing_fields_but_name_and_default_stay_editable(staging_
     assert ImportBatch.objects.get().saved_csv_mapping_id == mapping.pk
     assert Transaction.objects.count() == 1
 
-    edit = client.post(
-        reverse("csv-mapping-edit", args=(mapping.pk,)),
-        {
-            "name": "Renamed store",
-            "date_column": "Memo",
-            "description_column": "When",
-            "date_format": "iso",
-            "number_format": "dot_none",
-            "amount_mode": "signed",
-            "amount_column": "Memo",
-            "invert_sign": "on",
-            "default_accounts": [str(account.pk)],
-        },
-        follow=True,
-    )
-    assert edit.status_code == 200
+    # Saving the same edit twice is harmless: the second save changes nothing.
+    for _ in range(2):
+        edit = client.post(
+            reverse("csv-mapping-edit", args=(mapping.pk,)),
+            {
+                "name": "Renamed store",
+                "date_column": "Memo",
+                "description_column": "When",
+                "date_format": "iso",
+                "number_format": "dot_none",
+                "amount_mode": "signed",
+                "amount_column": "Memo",
+                "invert_sign": "on",
+                "default_accounts": [str(account.pk)],
+            },
+            follow=True,
+        )
+        assert edit.status_code == 200
     mapping.refresh_from_db()
     assert mapping.name == "Renamed store"
     account.refresh_from_db()
