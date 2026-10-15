@@ -5,9 +5,22 @@ financial values. Database-unavailable errors still propagate, so the
 background process exits and Docker restarts it.
 """
 
-from django.db import InterfaceError, OperationalError, transaction
+from django.db import InterfaceError, OperationalError, connection, transaction
 
-DATABASE_UNAVAILABLE = (OperationalError, InterfaceError)
+
+def database_unavailable(exc):
+    """True for a lost connection; False for a deadlock or lock timeout on a live one.
+
+    PostgreSQL reports both kinds as OperationalError, so probe the connection.
+    """
+    if isinstance(exc, InterfaceError):
+        return True
+    if not isinstance(exc, OperationalError):
+        return False
+    try:
+        return not connection.is_usable()
+    except Exception:  # No connection to probe.
+        return True
 
 
 class MemberFailures(Exception):
@@ -30,9 +43,9 @@ def for_each_member(people, work, *, label, logger):
         try:
             with transaction.atomic():
                 results.append(work(person))
-        except DATABASE_UNAVAILABLE:
-            raise
         except Exception as exc:  # The pass must reach every member.
+            if database_unavailable(exc):
+                raise
             failures += 1
             logger.error("%s for member %s failed (%s).", label, person.pk, type(exc).__name__)
     if failures:
@@ -44,9 +57,9 @@ def run_step(name, function, *, failed, logger):
     """Run one step of a pass; on failure log it, add its name to failed and return None."""
     try:
         return function()
-    except DATABASE_UNAVAILABLE:
-        raise
     except Exception as exc:  # Later steps must still run.
+        if database_unavailable(exc):
+            raise
         logger.error("Daily alert pass step %s failed (%s).", name, type(exc).__name__)
         failed.append(name)
         return None

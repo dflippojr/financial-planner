@@ -3,24 +3,15 @@
 from django.db import migrations, models
 
 
-def backfill_series_alert_sources(apps, schema_editor):
-    """Record each existing recurring alert's accounts from its series' current charges (#520)."""
+def drop_unsourced_series_alerts(apps, schema_editor):
+    """Delete recurring alerts raised before sources were recorded (#520).
+
+    Their accounts cannot be recovered: a refresh may already have dropped a
+    charge that became private, from any member's series. The next daily
+    pass raises the ones that still apply again, with their sources.
+    """
     Alert = apps.get_model("finance", "Alert")
-    RecurringSeriesMember = apps.get_model("finance", "RecurringSeriesMember")
-    Through = Alert.source_accounts.through
-    rows = []
-    alerts = Alert.objects.filter(kind__in=("recurring_price", "recurring_missed")).values_list("pk", "dedupe_key")
-    for alert_id, dedupe_key in alerts.iterator():
-        parts = dedupe_key.split(":")
-        if len(parts) < 3 or parts[0] != "recurring" or not parts[1].isdigit():
-            continue
-        account_ids = (
-            RecurringSeriesMember.objects.filter(series_id=int(parts[1]))
-            .values_list("transaction__account_id", flat=True)
-            .distinct()
-        )
-        rows.extend(Through(alert_id=alert_id, account_id=account_id) for account_id in account_ids)
-    Through.objects.bulk_create(rows, ignore_conflicts=True)
+    Alert.objects.filter(kind__in=("recurring_price", "recurring_missed")).delete()
 
 
 class Migration(migrations.Migration):
@@ -35,5 +26,5 @@ class Migration(migrations.Migration):
             name='source_accounts',
             field=models.ManyToManyField(blank=True, related_name='sourced_alerts', to='finance.account'),
         ),
-        migrations.RunPython(backfill_series_alert_sources, migrations.RunPython.noop),
+        migrations.RunPython(drop_unsourced_series_alerts, migrations.RunPython.noop),
     ]

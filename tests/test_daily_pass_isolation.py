@@ -84,11 +84,24 @@ def test_database_unavailable_stops_the_pass(error, monkeypatch, tmp_path):
     monkeypatch.setenv("OPERATOR_AUDIT_DIR", str(tmp_path))
     with ExitStack() as stack:
         mocks = patched_steps(stack, "budget_alerts", error)
+        stack.enter_context(patch("finance.pass_isolation.connection.is_usable", return_value=False))
         with pytest.raises(type(error)):
             run_daily_alert_pass(today=date(2026, 9, 3))
 
     assert mocks["backup_alerts"].call_count == 0
     assert daily_alert_outcomes(tmp_path) == ["started", "failed"]
+
+
+def test_a_deadlock_on_a_live_connection_does_not_stop_the_pass(monkeypatch, tmp_path):
+    # PostgreSQL reports deadlocks and lock timeouts as OperationalError too.
+    monkeypatch.setenv("OPERATOR_AUDIT_DIR", str(tmp_path))
+    with ExitStack() as stack:
+        mocks = patched_steps(stack, "budget_alerts", OperationalError("synthetic deadlock"))
+        with pytest.raises(DailyAlertPassIncomplete) as raised:
+            run_daily_alert_pass(today=date(2026, 9, 3))
+
+    assert raised.value.steps == ("budget_alerts",)
+    assert mocks["receipt_sweep"].call_count == 1
 
 
 def test_sync_command_reports_failed_steps_without_raising(monkeypatch, tmp_path):
@@ -158,8 +171,9 @@ def test_database_unavailable_in_a_member_loop_still_propagates():
     make_household(first)
 
     with (
-        patch("finance.monthly_review.store_monthly_review", side_effect=InterfaceError("synthetic")),
-        pytest.raises(InterfaceError),
+        patch("finance.monthly_review.store_monthly_review", side_effect=OperationalError("synthetic")),
+        patch("finance.pass_isolation.connection.is_usable", return_value=False),
+        pytest.raises(OperationalError),
     ):
         generate_due_monthly_reviews(today=date(2026, 9, 3))
 

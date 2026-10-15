@@ -163,19 +163,20 @@ def test_deleting_an_account_removes_the_alerts_that_quote_it():
     assert not Alert.objects.filter(kind=Alert.Kind.RECURRING_PRICE).exists()
 
 
-def test_migration_backfills_sources_for_existing_series_alerts():
+def test_migration_drops_series_alerts_raised_without_sources_and_the_pass_raises_them_again():
     from importlib import import_module
 
     from django.apps import apps
 
-    backfill = import_module("finance.migrations.0070_alert_source_accounts").backfill_series_alert_sources
+    migrate = import_module("finance.migrations.0070_alert_source_accounts").drop_unsourced_series_alerts
     owner, member, joint, lent, series = household_with_split_series()
     raise_recurring_review_alerts(owner, [series], today=TODAY)
     Alert.source_accounts.through.objects.all().delete()  # As before the migration.
 
-    backfill(apps, None)
+    migrate(apps, None)
 
-    for alert in Alert.objects.all():
-        assert {account.pk for account in alert.source_accounts.all()} == {joint.pk, lent.pk}
+    assert not Alert.objects.exists()
+    raise_recurring_review_alerts(owner, [series], today=TODAY)
+    assert visible_titles(member) == [TITLE]
     unshare_account(owner, lent.pk)
     assert visible_titles(member) == []

@@ -10,7 +10,7 @@ from django.db import transaction
 from django.urls import reverse
 from django.utils import timezone
 
-from .audit_operations import execution, operation, outcome
+from .audit_operations import outcome, scheduled_operation
 from .pass_isolation import for_each_member
 
 from .alert_services import raise_alert, settings_for
@@ -527,10 +527,8 @@ def generate_due_monthly_reviews(*, today=None):
     today = today or timezone.localdate()
     month = latest_closed_month(today)
 
+    @scheduled_operation
     def store(person):
-        if execution.get() is None:
-            with operation():
-                return store_monthly_review(person, month, force=False, today=today)
         return store_monthly_review(person, month, force=False, today=today)
 
     results = for_each_member(Person.objects.order_by("pk"), store, label="Monthly review", logger=logger)
