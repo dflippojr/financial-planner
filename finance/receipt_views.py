@@ -10,6 +10,7 @@ from .forms import ReceiptUploadForm
 from .models import Receipt
 from .receipt_services import (
     attach_receipt,
+    receipt_download_name,
     remove_receipt,
     stored_receipt_path,
     visible_receipt_or_none,
@@ -57,7 +58,7 @@ def receipt_download(request, transaction_id, receipt_id):
         path.open("rb"),
         content_type=receipt.content_type,
         as_attachment=receipt.content_type == Receipt.ContentType.PDF,
-        filename=receipt.original_name,
+        filename=receipt_download_name(receipt),
     )
     response["X-Content-Type-Options"] = "nosniff"
     # Uploaded bytes are never allowed to run script or load anything in this origin.

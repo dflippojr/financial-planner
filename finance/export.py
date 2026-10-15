@@ -307,8 +307,9 @@ transaction_tags.csv / transaction_tags.json
 
 receipts.csv / receipts.json
   Receipts attached to visible transactions. Binary files are under
-  receipts/<id>/ using the original filename. Another member's private
-  receipts are omitted.
+  receipts/<id>/ using the original filename, with its extension corrected
+  to match the file's content type. Another member's private receipts are
+  omitted.
   id, transaction_id, original_name, content_type, size_bytes, created_at,
   export_path
 
@@ -658,7 +659,9 @@ def _safe_zip_name(name):
 
 
 def _receipt_export_path(receipt):
-    return f"receipts/{receipt.pk}/{_safe_zip_name(receipt.original_name)}"
+    from .receipt_services import receipt_download_name
+
+    return f"receipts/{receipt.pk}/{_safe_zip_name(receipt_download_name(receipt))}"
 
 
 def _receipt_rows(person):

@@ -245,6 +245,30 @@ def _safe_original_name(name: str) -> str:
     return cleaned[:255]
 
 
+# The first extension is the one a mismatched name is given.
+_EXTENSIONS = {
+    Receipt.ContentType.JPEG: (".jpg", ".jpeg"),
+    Receipt.ContentType.PNG: (".png",),
+    Receipt.ContentType.WEBP: (".webp",),
+    Receipt.ContentType.HEIC: (".heic", ".heif"),
+    Receipt.ContentType.PDF: (".pdf",),
+}
+
+
+def receipt_download_name(receipt) -> str:
+    """The original name, with the extension corrected to match the sniffed content.
+
+    A saved file opens by its extension, so PDF bytes uploaded as invoice.html
+    must not be saved as .html. original_name itself stays as uploaded for display.
+    """
+    name = receipt.original_name
+    extensions = _EXTENSIONS.get(receipt.content_type)
+    if extensions is None or name.lower().endswith(extensions):
+        return name
+    stem = os.path.splitext(name)[0] or "receipt"
+    return stem + extensions[0]
+
+
 def _unique_stored_name() -> str:
     for _ in range(8):
         candidate = secrets.token_hex(16)

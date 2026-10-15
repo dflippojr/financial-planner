@@ -17,7 +17,12 @@ from finance.csv_import.services import undo_import_batch
 from finance.export import write_export_zip
 from finance.lifecycle_services import delete_account, delete_member_data
 from finance.models import Account, Household, ImportBatch, Membership, Person, Receipt, Transaction, TransactionSplit
-from finance.receipt_services import attach_receipt, remove_receipt, sniff_receipt_content_type
+from finance.receipt_services import (
+    attach_receipt,
+    receipt_download_name,
+    remove_receipt,
+    sniff_receipt_content_type,
+)
 from tests.helpers import compose_service
 
 
@@ -119,6 +124,50 @@ def test_upload_view_download_and_delete(tmp_path, settings):
     assert deleted.status_code == 302
     assert not Receipt.objects.filter(pk=receipt.pk).exists()
     assert stored.is_file()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("uploaded_name", "payload", "content_type", "saved_name"),
+    [
+        ("invoice.html", PDF + b"<html></html>", "application/pdf", "invoice.pdf"),
+        ("photo.svg", JPEG, "image/jpeg", "photo.jpg"),
+        ("lunch.jpg", JPEG, "image/jpeg", "lunch.jpg"),
+    ],
+)
+def test_download_and_export_names_take_the_extension_of_the_content(
+    tmp_path, settings, uploaded_name, payload, content_type, saved_name
+):
+    settings.RECEIPTS_DIR = str(tmp_path)
+    owner = make_person("owner")
+    txn = make_transaction(owner)
+    receipt = attach_receipt(owner, txn.pk, upload_bytes(uploaded_name, payload))
+    client = Client()
+    client.force_login(owner.user)
+
+    download = client.get(reverse("transaction-receipt-download", args=(txn.pk, receipt.pk)))
+
+    assert download["Content-Type"] == content_type
+    assert f'filename="{saved_name}"' in download["Content-Disposition"]
+    archive = zipfile.ZipFile(BytesIO(write_export_zip(owner)))
+    assert f"receipts/{receipt.pk}/{saved_name}" in archive.namelist()
+    receipt.refresh_from_db()
+    assert receipt.original_name == uploaded_name
+
+
+@pytest.mark.parametrize(
+    ("original_name", "content_type", "saved_name"),
+    [
+        ("scan.JPEG", Receipt.ContentType.JPEG, "scan.JPEG"),
+        ("phone.heif", Receipt.ContentType.HEIC, "phone.heif"),
+        ("phone.jpg", Receipt.ContentType.HEIC, "phone.heic"),
+        ("screenshot", Receipt.ContentType.PNG, "screenshot.png"),
+        ("archive.tar.html", Receipt.ContentType.WEBP, "archive.tar.webp"),
+    ],
+)
+def test_download_name_keeps_the_stem_and_any_matching_extension(original_name, content_type, saved_name):
+    receipt = Receipt(original_name=original_name, content_type=content_type)
+    assert receipt_download_name(receipt) == saved_name
 
 
 @pytest.mark.django_db
@@ -252,10 +301,12 @@ def test_export_includes_visible_receipts_only(tmp_path, settings):
     payload = write_export_zip(owner)
     archive = zipfile.ZipFile(BytesIO(payload))
     names = set(archive.namelist())
-    assert f"receipts/{visible.pk}/shared.jpg" in names
-    assert f"receipts/{secret.pk}/secret.jpg" not in names
+    # PNG bytes uploaded as shared.jpg are saved as .png; the listed name stays as uploaded.
+    assert f"receipts/{visible.pk}/shared.png" in names
+    assert not any(name.startswith(f"receipts/{secret.pk}/") for name in names)
     assert b"secret.jpg" not in archive.read("receipts.csv")
     assert b"shared.jpg" in archive.read("receipts.csv")
+    assert f"receipts/{visible.pk}/shared.png".encode() in archive.read("receipts.csv")
 
 
 @pytest.mark.django_db
