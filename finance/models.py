@@ -1141,7 +1141,7 @@ class RecurringSeries(models.Model):
             ).exclude(transaction_id__in=visible_transactions)
             return self.filter(person=person).exclude(models.Exists(hidden_members))
 
-        def shared_with(self, principal):
+        def shared_with(self, principal, *, linkers=False):
             """Confirmed series another current household member owns, when every charge sits in a household account.
 
             Every member may edit shared accounts, so a bill built only from
@@ -1169,6 +1169,10 @@ class RecurringSeries(models.Model):
                 transaction__status=Transaction.Status.ACTIVE,
                 transaction__account__status=Account.Status.ACTIVE,
             )
+            if linkers:
+                # Inactive and archived-account copies still link a bill's
+                # histories, as in the projection; they are never offered.
+                has_members = RecurringSeriesMember.objects.filter(series_id=models.OuterRef("pk"))
             return (
                 self.filter(person_id__in=member_ids, status=RecurringSeries.Status.CONFIRMED)
                 .exclude(person=person)
@@ -1176,10 +1180,15 @@ class RecurringSeries(models.Model):
                 .exclude(models.Exists(outside))
             )
 
-        def actionable_by(self, principal):
-            """Series the viewer may cancel or resume: their own, plus the household's shared ones."""
+        def actionable_by(self, principal, *, linkers=False):
+            """Series the viewer may cancel or resume: their own, plus the household's shared ones.
+
+            With `linkers`, shared series with no live charge are included too,
+            for finding which copies make up one bill.
+            """
             return self.filter(
-                Q(pk__in=self.visible_to(principal).values("pk")) | Q(pk__in=self.shared_with(principal).values("pk"))
+                Q(pk__in=self.visible_to(principal).values("pk"))
+                | Q(pk__in=self.shared_with(principal, linkers=linkers).values("pk"))
             )
 
     objects = QuerySet.as_manager()

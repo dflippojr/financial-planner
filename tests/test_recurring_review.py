@@ -818,3 +818,38 @@ def test_a_shared_bill_whose_household_account_is_archived_is_not_offered():
     account.archived_at = timezone.now()
     account.save(update_fields=["status", "archived_at"])
     assert not RecurringSeries.objects.shared_with(member).filter(pk=series.pk).exists()
+
+
+@pytest.mark.django_db
+def test_a_bridging_copy_on_an_archived_account_still_links_the_bill_for_cancel():
+    owner, member, _outsider, first = _shared_bill()
+    third = make_person("third")
+    Membership.objects.create(person=third, household=Household.objects.get(name="Synthetic Household"))
+    old_account = make_account(
+        owner, name="Synthetic Old Joint", scope=Account.Scope.HOUSEHOLD,
+        household=Household.objects.get(name="Synthetic Household"),
+    )
+    old_one = make_transaction(owner, old_account, transaction_date=date(2025, 5, 12), amount_minor=-6000, description="Synthetic Internet")
+    old_two = make_transaction(owner, old_account, transaction_date=date(2025, 6, 12), amount_minor=-6000, description="Synthetic Internet")
+    live = make_transaction(
+        owner, first.members.first().transaction.account, transaction_date=date(2026, 6, 12),
+        amount_minor=-6000, description="Synthetic Internet",
+    )
+    add_member(first, old_one)
+    third_copy = make_series(third, name="Synthetic Internet", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-6000)
+    add_member(third_copy, old_two)
+    add_member(third_copy, live)
+    # The viewer's copy shares one charge with each other copy only through an archived-account history.
+    bridge = make_series(owner, name="Synthetic Bridge", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-6000, fingerprint="e" * 64)
+    add_member(bridge, old_one)
+    add_member(bridge, old_two)
+    old_account.status = Account.Status.ARCHIVED
+    old_account.archived_at = timezone.now()
+    old_account.save(update_fields=["status", "archived_at"])
+    bridge.is_active = False
+    bridge.save(update_fields=["is_active"])
+
+    cancel_recurring_series(member, first.pk)
+
+    assert RecurringSeries.objects.get(pk=third_copy.pk).cancelled_at is not None
+    assert RecurringSeries.objects.get(pk=bridge.pk).cancelled_at is None

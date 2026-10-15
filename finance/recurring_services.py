@@ -1277,8 +1277,7 @@ def shared_series_for_review(principal, own_series):
     the viewer may cancel or resume it, but grouping edits stay with its owner.
     """
     shared = list(
-        RecurringSeries.objects.shared_with(principal)
-        .filter(is_active=True)
+        RecurringSeries.objects.shared_with(principal, linkers=True)
         .prefetch_related("members__transaction__account")
         .order_by("display_name", "pk")
     )
@@ -1286,14 +1285,18 @@ def shared_series_for_review(principal, own_series):
     candidates = [
         series
         for series in [*own_series, *shared]
-        if series.status == RecurringSeries.Status.CONFIRMED and series.is_active and _household_only(series)
+        if series.status == RecurringSeries.Status.CONFIRMED and _household_only(series)
     ]
     rows = []
     # Group over active and cancelled copies together, so a cancelled copy
     # still links the active copies it shares charges with.
     for bill in _bill_components(candidates):
         for cancelled in (False, True):
-            copies = [series for series in bill if (series.cancelled_at is not None) == cancelled]
+            copies = [
+                series
+                for series in bill
+                if (series.cancelled_at is not None) == cancelled and series.is_active and _has_live_charge(series)
+            ]
             if not copies or any(series.pk in own_ids for series in copies):
                 continue
             # The copy with the latest charge holds the current price, then the lowest id.
@@ -1302,6 +1305,13 @@ def shared_series_for_review(principal, own_series):
             rows.append(chosen)
     rows.sort(key=lambda series: (series.display_name, series.pk))
     return rows
+
+
+def _has_live_charge(series):
+    return any(
+        member.transaction.status == Transaction.Status.ACTIVE and member.transaction.account.status == Account.Status.ACTIVE
+        for member in series.members.all()
+    )
 
 
 def _latest_charge_ordinal(series):
@@ -1322,8 +1332,8 @@ def _bill_copies(person, series):
     """
     candidates = [
         copy
-        for copy in RecurringSeries.objects.actionable_by(person)
-        .filter(status=RecurringSeries.Status.CONFIRMED, is_active=True)
+        for copy in RecurringSeries.objects.actionable_by(person, linkers=True)
+        .filter(status=RecurringSeries.Status.CONFIRMED)
         .prefetch_related("members__transaction__account")
         .order_by("pk")
         if copy.pk == series.pk or _household_only(copy)
@@ -1343,7 +1353,11 @@ def _set_bill_cancelled(person, series, *, cancelled_at, action):
     changing only one copy would leave another still projecting it, or still
     cancelled after a resume.
     """
-    wanted = {copy.pk for copy in _bill_copies(person, series) if (copy.cancelled_at is None) == (cancelled_at is not None)}
+    wanted = {
+        copy.pk
+        for copy in _bill_copies(person, series)
+        if copy.is_active and (copy.cancelled_at is None) == (cancelled_at is not None)
+    }
     wanted.add(series.pk)
     result = series
     for copy in RecurringSeries.objects.select_for_update(of=("self",)).filter(pk__in=wanted).order_by("pk"):
