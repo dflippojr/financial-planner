@@ -41,14 +41,9 @@ def test_output_never_contains_values_and_shows_headers():
     assert_no_secrets(report)
     assert "Posting Date" in report
     assert "Description" in report
+    assert "Debit and Credit" in report
     assert "delimiter: ','" in report
     assert "CRLF" in report
-
-
-def test_separate_debit_and_credit_columns_are_detected():
-    report = describe(BANK_STYLE)
-
-    assert "Debit and Credit" in report
 
 
 def test_signed_amount_layout_reports_negative_values_and_no_pair():
@@ -157,18 +152,6 @@ def test_command_line_reports_an_unreadable_file_without_a_traceback(tmp_path, c
 
     assert exit_code == 1
     assert "cannot read the file" in capsys.readouterr().err
-
-
-def test_command_line_prints_the_report(tmp_path, capsys):
-    path = tmp_path / "export.csv"
-    path.write_bytes(BANK_STYLE)
-
-    exit_code = csv_shape.main([str(path), "--label", "checking", "--show-headers"])
-
-    output = capsys.readouterr().out
-    assert exit_code == 0
-    assert "Shape of checking" in output
-    assert_no_secrets(output)
 
 
 BROKERAGE = (
@@ -390,13 +373,6 @@ def test_header_labels_are_masked_by_default():
     assert_no_secrets(report)
 
 
-def test_show_headers_prints_plain_labels_as_written():
-    report = csv_shape.describe_csv(BANK_STYLE, show_headers=True)
-
-    assert "Posting Date" in report
-    assert "Debit and Credit" in report
-
-
 @pytest.mark.parametrize(
     "first_line",
     [
@@ -452,13 +428,16 @@ def test_command_line_show_headers_flag(tmp_path, capsys):
     path = tmp_path / "export.csv"
     path.write_bytes(BANK_STYLE)
 
-    default_exit = csv_shape.main([str(path)])
+    default_exit = csv_shape.main([str(path), "--label", "checking"])
     default_output = capsys.readouterr().out
-    shown_exit = csv_shape.main([str(path), "--show-headers"])
+    shown_exit = csv_shape.main([str(path), "--label", "checking", "--show-headers"])
     shown_output = capsys.readouterr().out
 
     assert default_exit == 0
     assert shown_exit == 0
+    assert "Shape of checking" in shown_output
+    assert_no_secrets(default_output)
+    assert_no_secrets(shown_output)
     assert "Posting Date" not in default_output
     assert "Posting Date" in shown_output
 

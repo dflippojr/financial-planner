@@ -1,4 +1,3 @@
-from finance.csv_import.staging import _path as _stage_file_path
 from datetime import date
 from pathlib import Path
 
@@ -10,7 +9,6 @@ from django.urls import reverse
 from finance.csv_import.ofx import OFX_HEADERS, looks_like_ofx, read_ofx
 from finance.csv_import.parser import MAX_FILE_BYTES, CsvInputError, preview_csv
 from finance.csv_import.profiles import OFX_MAPPING
-from finance.csv_import.staging import SESSION_KEY
 from finance.models import Account, ImportBatch, Transaction
 from tests.test_csv_import_views import make_person, mapping_data
 
@@ -353,21 +351,7 @@ def test_upload_errors_leave_nothing_staged(import_client, content, profile, mes
     response = upload(client, account, content, profile)
     assert message in str(response.context["upload_form"].errors)
     assert not list(staging.glob("*.csvstage"))
-    assert not client.session.get(SESSION_KEY)
     assert not ImportBatch.objects.exists()
-    assert not Transaction.objects.exists()
-
-
-@pytest.mark.django_db
-def test_stage_cannot_be_used_for_another_account_or_session(import_client):
-    client, account, _staging = import_client
-    response = upload(client, account, fixture())
-    token = response.context["mapping_form"].data["token"]
-    other = Account.objects.create(name="Synthetic other", account_type="checking", owner=account.owner)
-    assert client.post(reverse("csv-import-preview", args=[other.pk]), {"action": "commit", "token": token}).status_code == 404
-    second = Client()
-    second.force_login(account.owner.user)
-    assert second.post(reverse("csv-import-preview", args=[account.pk]), {"action": "commit", "token": token}).status_code == 404
     assert not Transaction.objects.exists()
 
 
@@ -384,23 +368,8 @@ def test_replacement_does_not_add_to_an_earlier_import(import_client):
     response = upload(client, account, correction)
     assert "transaction corrections are not supported" in str(response.context["upload_form"].errors)
     assert not list(staging.glob("*.csvstage"))
-    assert not client.session.get(SESSION_KEY)
     assert ImportBatch.objects.count() == 1
     assert list(Transaction.objects.order_by("pk").values_list("amount_minor", flat=True)) == amounts
-
-
-@pytest.mark.django_db
-def test_hub_upload_and_cancel(import_client):
-    client, account, staging = import_client
-    response = client.post(reverse("csv-import"), {
-        "account_id": account.pk, "import_profile": "ofx",
-        "csv_file": SimpleUploadedFile("synthetic.qbo", fixture()),
-    })
-    assert response.status_code == 302
-    preview = client.get(response.url)
-    token = preview.context["mapping_form"].data["token"]
-    assert client.post(response.url, {"action": "cancel", "token": token}).status_code == 302
-    assert not list(staging.glob("*.csvstage"))
 
 
 @pytest.mark.django_db

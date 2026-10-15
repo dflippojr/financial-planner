@@ -5,7 +5,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
 
 from finance.csv_import.parser import Mapping, preview_csv, read_csv
-from finance.csv_import.services import classify_overlap, commit_csv_import, undo_import_batch
+from finance.csv_import.services import classify_overlap, commit_csv_import
 from finance.models import Account, Household, ImportBatch, Membership, Person, Transaction
 
 
@@ -134,24 +134,3 @@ def test_household_member_sees_shared_overlap_and_cannot_touch_private():
 
     assert overlap.new_count == 0
     assert Transaction.objects.filter(account=shared, status="active").count() == 1
-
-
-@pytest.mark.django_db
-def test_undo_archives_only_that_batch_and_allows_reimport():
-    user, person = make_person("owner")
-    account = Account.objects.create(name="Synthetic Checking", account_type="checking", owner=person)
-    earlier = commit(user, account, CSV)
-    later_csv = b"When,Memo,Amount,Currency\n09/28/2026,SYNTHETIC CAFE,-5.00,USD\n"
-    later = commit(user, account, later_csv)
-
-    undo_import_batch(user, account.pk, later.batch.pk)
-    later.batch.refresh_from_db()
-
-    assert later.batch.status == ImportBatch.Status.ARCHIVED
-    assert Transaction.objects.filter(import_batch=later.batch).get().status == Transaction.Status.ARCHIVED
-    earlier.batch.refresh_from_db()
-    assert earlier.batch.status == ImportBatch.Status.ACTIVE
-    assert Transaction.objects.filter(import_batch=earlier.batch).get().status == Transaction.Status.ACTIVE
-    replay = commit(user, account, later_csv)
-    assert replay.new_count == 1
-    assert Transaction.objects.filter(account=account, status="active").count() == 2

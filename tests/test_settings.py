@@ -137,3 +137,18 @@ def test_settings_section_list_marks_only_the_active_section():
     assert section_list.count('class="nav-row"') == 10
     assert section_list.count('aria-current="page"') == 1
     assert f'href="{reverse("settings-audit")}" class="nav-row" aria-current="page">Audit trail<' in section_list
+
+
+def test_time_zone_follows_the_tz_environment_variable(monkeypatch):
+    import importlib
+
+    import financial_planner.settings as settings_module
+
+    monkeypatch.setenv("TZ", "America/Los_Angeles")
+    monkeypatch.setenv("DJANGO_SECRET_KEY", "test-only-secret-key-with-enough-entropy-not-for-production-12345")
+    reloaded = importlib.reload(settings_module)
+    try:
+        assert reloaded.TIME_ZONE == "America/Los_Angeles"
+    finally:
+        monkeypatch.delenv("TZ")
+        importlib.reload(settings_module)

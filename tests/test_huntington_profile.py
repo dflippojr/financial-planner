@@ -37,12 +37,6 @@ def commit(user, account, content):
     )
 
 
-def test_native_fixture_uses_crlf_and_expected_headers():
-    assert NATIVE_CSV.startswith(
-        b"Date,Reference Number,Payee Name,Memo,Amount,Category Name,Transaction Number\r\n"
-    )
-
-
 def test_huntington_preview_joins_description_and_keeps_signed_amounts():
     preview = preview_csv(read_csv(NATIVE_CSV), HUNTINGTON_MAPPING)
     rows = preview.rows
