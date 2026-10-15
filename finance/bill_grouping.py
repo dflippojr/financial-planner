@@ -69,13 +69,6 @@ def group_bills(charges_by_series):
     return list(bills.values())
 
 
-def is_current_candidate(series):
-    """A copy that still projects the bill: confirmed, active and not cancelled."""
-    return (
-        series.status == RecurringSeries.Status.CONFIRMED and series.is_active and series.cancelled_at is None
-    )
-
-
 def choose_copy(copies, latest_ordinal):
     """The copy holding the current price: latest eligible charge, then lowest id.
 

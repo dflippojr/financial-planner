@@ -1090,3 +1090,20 @@ def test_a_series_spanning_another_household_does_not_hold_a_payment_from_this_b
     (bill,) = resolve_household_bills([series], eligible_bill_charges(member))
 
     assert bill.last_on == date(2026, 10, 12)
+
+
+@pytest.mark.django_db
+def test_a_charge_at_the_end_of_the_calendar_does_not_crash_a_bill_that_ends_there():
+    from finance.bill_grouping import eligible_bill_charges
+    from finance.recurring_services import resolve_household_bills
+
+    owner, member, _outsider, series = _shared_bill()
+    shared = series.members.first().transaction.account
+    series.members.all().delete()
+    for day in (date(9999, 9, 30), date(9999, 10, 31), date(9999, 11, 30)):
+        add_member(series, make_transaction(owner, shared, transaction_date=day, amount_minor=-6000, description="Synthetic Internet"))
+    make_transaction(owner, shared, transaction_date=date(9999, 12, 31), amount_minor=-6000, description="Synthetic Internet")
+
+    (bill,) = resolve_household_bills([series], eligible_bill_charges(member))
+
+    assert bill.last_on in (date(9999, 11, 30), date(9999, 12, 31))

@@ -1386,7 +1386,7 @@ def _continue_from_household_charges(bills, eligible):
     for bill in sorted(anchored, key=lambda bill: (bill.current is None, min(series.pk for series in bill.copies))):
         anchor = bill.anchor
         owners = {series.person_id for series in bill.copies}
-        tolerance = timedelta(days=CADENCE_DAYS[anchor.cadence][1])
+        tolerance = CADENCE_DAYS[anchor.cadence][1]
         last = bill.last_on
         for txn in by_merchant.get(anchor.merchant_key, ()):
             if txn.pk in taken or txn.transaction_date <= last or removed[txn.pk] & owners:
@@ -1394,9 +1394,12 @@ def _continue_from_household_charges(bills, eligible):
             if not _in_confirmed_amount_band(anchor.typical_amount_minor, txn.amount_minor):
                 continue
             expected = add_cadence(last, anchor.cadence)
-            if expected is None or txn.transaction_date > expected + tolerance:
+            if expected is None:
                 break
-            if txn.transaction_date < expected - tolerance:
+            gap = (txn.transaction_date - expected).days
+            if gap > tolerance:
+                break
+            if gap < -tolerance:
                 continue
             bill.charges.append(txn)
             taken.add(txn.pk)
