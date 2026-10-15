@@ -24,7 +24,7 @@ from .bill_grouping import (
     stored_charge_ids,
 )
 from .lifecycle_services import lock_actor_household
-from .models import Account, AuditEvent, Person, RecurringExclusion, RecurringSeries, RecurringSeriesMember, Transaction
+from .models import Account, AuditEvent, Membership, Person, RecurringExclusion, RecurringSeries, RecurringSeriesMember, Transaction
 from .months import add_months_clamped
 
 MANUAL_REASON = "grouping edited manually"
@@ -1323,19 +1323,29 @@ def resolve_household_bills(copies, eligible):
 
 
 def _held_by_a_household_bill():
-    """Memberships of confirmed active series built wholly from household charges.
+    """Memberships of current household members' confirmed active series built wholly from household charges.
 
-    A series with a private charge never reaches a household bill, so what it
-    holds is still free to continue one.
+    A series with a private charge never reaches a household bill, and a former
+    member's series no longer counts, so what they hold is still free to
+    continue one.
     """
     private_member = RecurringSeriesMember.objects.filter(series_id=OuterRef("series_id")).exclude(
         transaction__account__scope=Account.Scope.HOUSEHOLD
     )
-    return RecurringSeriesMember.objects.filter(
-        transaction_id=OuterRef("pk"),
-        series__status=RecurringSeries.Status.CONFIRMED,
-        series__is_active=True,
-    ).exclude(Exists(private_member))
+    current_member = Membership.objects.filter(
+        person_id=OuterRef("series__person_id"),
+        household_id=OuterRef("transaction__account__household_id"),
+        ended_at__isnull=True,
+    )
+    return (
+        RecurringSeriesMember.objects.filter(
+            transaction_id=OuterRef("pk"),
+            series__status=RecurringSeries.Status.CONFIRMED,
+            series__is_active=True,
+        )
+        .filter(Exists(current_member))
+        .exclude(Exists(private_member))
+    )
 
 
 def _continue_from_household_charges(bills, eligible):

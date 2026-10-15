@@ -1030,3 +1030,41 @@ def test_a_payment_fitting_two_bills_goes_to_the_one_still_projecting_whatever_t
     for copies in ([cancelled, active], [active, cancelled]):
         last = {bill.copies[0].pk: bill.last_on for bill in resolve_household_bills(copies, eligible)}
         assert last == {cancelled.pk: date(2026, 9, 12), active.pk: date(2026, 10, 14)}
+
+
+@pytest.mark.django_db
+def test_the_calendar_follows_a_payment_that_moved_to_another_household_account():
+    from finance.bills_calendar import calendar_inputs
+
+    owner, member, _outsider, series = _shared_bill()
+    new_account = make_account(owner, name="Synthetic New Joint", scope=Account.Scope.HOUSEHOLD, household=_household())
+    payment = make_transaction(
+        owner, new_account, transaction_date=date(2026, 10, 12), amount_minor=-6000, description="Synthetic Internet"
+    )
+
+    (item,) = [row for row in calendar_inputs(member, scope=Account.Scope.HOUSEHOLD, today=date(2026, 10, 13)) if row.source_id == series.pk]
+
+    assert (item.start, item.account_id, item.charge_transaction_id) == (date(2026, 11, 12), new_account.pk, payment.pk)
+
+
+@pytest.mark.django_db
+def test_a_former_members_series_does_not_hold_a_payment_from_the_remaining_bill():
+    from finance.bill_grouping import eligible_bill_charges
+    from finance.recurring_services import resolve_household_bills
+
+    owner, member, _outsider, series = _shared_bill()
+    departed = _add_member("departed")
+    shared = series.members.first().transaction.account
+    october = make_transaction(
+        owner, shared, transaction_date=date(2026, 10, 12), amount_minor=-6000, description="Synthetic Internet"
+    )
+    held = make_series(departed, name="Synthetic Internet Old", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-6000)
+    add_member(held, october)
+    eligible = eligible_bill_charges(member)
+
+    (bill,) = resolve_household_bills([series], eligible)
+    assert bill.last_on == date(2026, 9, 12)
+
+    Membership.objects.filter(person=departed).update(ended_at=timezone.now())
+    (bill,) = resolve_household_bills([series], eligible)
+    assert bill.last_on == date(2026, 10, 12)

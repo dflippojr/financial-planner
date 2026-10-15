@@ -46,7 +46,8 @@ def _planned_input(item):
     )
 
 
-def _series_input(series, last_on):
+def _series_input(series, last_on, last_charge=None):
+    """A series' projection input; `last_charge` is the bill's latest charge when it is newer than the stored ones."""
     return SimpleNamespace(
         name=series.display_name,
         kind=KIND_EXPENSE,
@@ -57,6 +58,8 @@ def _series_input(series, last_on):
         cadence=series.cadence,
         source=SOURCE_SERIES,
         source_id=series.pk,
+        last_account_id=last_charge.account_id if last_charge else None,
+        last_transaction_id=last_charge.pk if last_charge else None,
     )
 
 
@@ -139,6 +142,7 @@ def _one_series_per_bill(rows, replaced, member_ids, household, eligible, *, sel
             continue
         row = by_pk[current.pk]
         row.last_on = bill.last_on
+        row.last_charge = bill.charges[-1]
         chosen.append(row)
     return sorted(chosen, key=lambda row: (row.display_name, row.pk))
 
@@ -242,7 +246,7 @@ def visible_projection_inputs(principal, *, account=None, scope="", accounts=Non
         if series.last_on is None:
             continue
         try:
-            inputs.append(_series_input(series, series.last_on))
+            inputs.append(_series_input(series, series.last_on, getattr(series, "last_charge", None)))
         except (OverflowError, ValueError):
             # The next charge would fall past the calendar's end, so it
             # cannot appear in any projection window.
