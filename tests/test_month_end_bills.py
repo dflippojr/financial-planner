@@ -46,6 +46,8 @@ def _rows(dates, description="Synthetic Rent"):
         # A charge that slipped into the next month stands for the month it was due in.
         ((date(2030, 1, 31), date(2030, 2, 28), date(2030, 4, 1)), date(2030, 4, 30)),
         ((date(2030, 1, 30), date(2030, 3, 1)), date(2030, 3, 30)),
+        # A charge a day early, before the 28th, keeps the anchor too.
+        ((date(2029, 12, 31), date(2030, 1, 31), date(2030, 2, 27)), date(2030, 3, 31)),
         # A bill on the 28th still expects the 28th.
         ((date(2030, 1, 28), date(2030, 2, 28)), date(2030, 3, 28)),
         # A bill due mid-month steps from its last charge, even as it drifts earlier.
@@ -70,6 +72,7 @@ def test_next_charge_date_keeps_the_anchor_day(dates, expected):
         (date(2029, 12, 30), date(2030, 1, 30), date(2030, 3, 1), date(2030, 3, 30)),
         (*RENT_DATES, date(2030, 4, 1), date(2030, 4, 30), date(2030, 5, 31), date(2030, 7, 1)),
         (date(2030, 2, 14), date(2030, 3, 13), date(2030, 4, 11), date(2030, 5, 10), date(2030, 6, 12)),
+        (date(2029, 12, 31), date(2030, 1, 31), date(2030, 2, 27), date(2030, 3, 31)),
     ],
 )
 def test_detection_chains_across_a_clamped_month(dates):

@@ -3,6 +3,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, timedelta
 from functools import lru_cache
+from typing import NamedTuple
 from decimal import Decimal
 from hashlib import sha256
 import re
@@ -111,17 +112,19 @@ def _anchor_day(recent, cadence):
 def _anchored(value: date, cadence: str, anchor_day: int | None) -> tuple:
     """The date `value` stands for and the day of month to keep from it.
 
-    A month-end charge keeps the anchor day. One that slipped a few days into
-    the next month stands for the anchored date in the month before. Any other
-    charge keeps its own day.
+    A charge within the cadence tolerance of the anchored date in its own
+    month, early or late, or of the one in the month before (a charge that
+    slipped past the month end) stands for that date and keeps the anchor.
+    Any other charge keeps its own day.
     """
     if anchor_day is not None:
-        if value.day >= MONTH_END_DAY:
-            return value, anchor_day
-        if value.day <= CADENCE_DAYS[cadence][1] and (value.year, value.month) != (1, 1):
-            before = _on_day(add_months(value, -1), anchor_day)
-            if (value - before).days <= CADENCE_DAYS[cadence][1]:
-                return before, anchor_day
+        tolerance = CADENCE_DAYS[cadence][1]
+        candidates = [_on_day(value, anchor_day)]
+        if (value.year, value.month) != (1, 1):
+            candidates.append(_on_day(add_months(value, -1), anchor_day))
+        nearest = min(candidates, key=lambda candidate: abs((value - candidate).days))
+        if abs((value - nearest).days) <= tolerance:
+            return nearest, anchor_day
     return value, value.day
 
 
@@ -276,9 +279,16 @@ def _day_class(value, cadence):
     return -1 if value.day <= CADENCE_DAYS[cadence][1] else 0
 
 
+class _ChainState(NamedTuple):
+    length: int
+    previous: int
+    previous_key: tuple | None
+    recent: tuple  # the chain's latest dates, newest first
+
+
 def _ranked_states(by_key):
     """A charge's chain states, longest first, then the earliest previous charge, as a single best chain would rank them."""
-    return sorted(by_key.items(), key=lambda item: (-item[1][0], item[1][1]))
+    return sorted(by_key.items(), key=lambda item: (-item[1].length, item[1].previous))
 
 
 def _longest_chain(ordered, dates, cadence):
@@ -292,10 +302,10 @@ def _longest_chain(ordered, dates, cadence):
     """
     tolerance = CADENCE_DAYS[cadence][1]
     days = [value.toordinal() for value in dates]
-    # states[index][(anchor, previous class)] = (length, previous index, previous key, latest dates newest first)
-    states = [{(_anchor_day((value,), cadence), None): (1, -1, None, (value,))} for value in dates]
+    # states[index][(anchor, previous charge's class)] is that charge's best chain in that state.
+    states = [{(_anchor_day((value,), cadence), None): _ChainState(1, -1, None, (value,))} for value in dates]
     for start, source in enumerate(dates):
-        for key, (length, _previous, _previous_key, recent) in _ranked_states(states[start]):
+        for key, state in _ranked_states(states[start]):
             # A step can only land within the cadence tolerance, so look at that
             # window of the sorted dates instead of every later charge.
             expected_date = add_cadence(source, cadence, key[0])
@@ -305,23 +315,24 @@ def _longest_chain(ordered, dates, cadence):
             low = bisect_left(days, expected - tolerance, start + 1)
             high = bisect_right(days, expected + tolerance, low)
             for end in range(low, high):
-                extended = (dates[end], *recent[: ANCHOR_CHARGES - 1])
+                extended = (dates[end], *state.recent[: ANCHOR_CHARGES - 1])
                 next_key = (_anchor_day(extended, cadence), _day_class(source, cadence))
                 current = states[end].get(next_key)
-                if current is None or length + 1 > current[0]:
-                    states[end][next_key] = (length + 1, start, key, extended)
+                if current is None or state.length + 1 > current.length:
+                    states[end][next_key] = _ChainState(state.length + 1, start, key, extended)
     best = None
     for index, by_key in enumerate(states):
         key, state = _ranked_states(by_key)[0]
-        if best is None or state[0] > best[0]:
-            best = (state[0], index, key)
+        if best is None or state.length > best[0]:
+            best = (state.length, index, key)
     if best is None or best[0] < 2:
         return []
     chain = []
     _length, index, key = best
     while index >= 0:
         chain.append(ordered[index])
-        _length, index, key, _recent = states[index][key]
+        state = states[index][key]
+        index, key = state.previous, state.previous_key
     chain.reverse()
     return chain
 
