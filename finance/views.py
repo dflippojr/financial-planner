@@ -148,7 +148,7 @@ from .recurring_services import (
     cancel_recurring_series,
     confirm_resume_recurring_series,
     confirm_recurring_series,
-    confirmed_totals,
+    confirmed_totals_once_per_bill,
     dismiss_price_change,
     dismiss_recurring_series,
     keep_cancelled_recurring_series,
@@ -156,7 +156,7 @@ from .recurring_services import (
     merge_recurring_series,
     refresh_recurring_series,
     remove_recurring_member,
-    shared_series_for_review,
+    household_review,
     undo_cancel_recurring_series,
 )
 from .recurring_review import build_recurring_review, price_change_percent_for
@@ -1501,7 +1501,8 @@ def recurring_review(request):
     )
     # Household bills another member confirmed can be cancelled or resumed
     # here too; they stay out of suggestions, merge and charge editing.
-    visible = sorted([*own, *shared_series_for_review(request.user, own)], key=lambda series: (series.display_name, series.pk))
+    review = household_review(request.user, own)
+    visible = sorted([*own, *review.shared_rows], key=lambda series: (series.display_name, series.pk))
     confirmed = [
         series
         for series in visible
@@ -1512,7 +1513,7 @@ def recurring_review(request):
         for series in visible
         if series.status in (RecurringSeries.Status.POSSIBLE, RecurringSeries.Status.SUGGESTED)
     ]
-    monthly_minor, annual_minor = confirmed_totals(confirmed)
+    monthly_minor, annual_minor = confirmed_totals_once_per_bill(confirmed, review)
     confirmed.sort(key=lambda series: (-series.monthly_minor, series.display_name, series.pk))
     currency = confirmed[0].currency if confirmed else "USD"
     monthly_display = _money_display(monthly_minor, currency)

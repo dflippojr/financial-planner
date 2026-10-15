@@ -131,6 +131,9 @@ def calendar_inputs(principal, *, scope="", today=None):
         account_id = charge_id = None
         if item.source == SOURCE_SERIES:
             account_id, charge_id = last_charges.get(item.source_id, (None, None))
+            if item.last_transaction_id is not None:
+                # The bill's latest charge, newer than the series' stored ones.
+                account_id, charge_id = item.last_account_id, item.last_transaction_id
             if item.source_id in own_series:
                 charge_id = None
         rows.append(
