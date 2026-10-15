@@ -1,4 +1,3 @@
-from finance.csv_import.staging import _path as _stage_file_path
 import logging
 import time
 from datetime import timedelta
@@ -14,7 +13,6 @@ from django.urls import reverse
 from django.utils import timezone
 
 from finance.csv_import.parser import MAX_FILE_BYTES
-from finance.csv_import.staging import SESSION_KEY
 from finance.lifecycle_services import archive_account
 from finance.models import Account, Household, ImportBatch, Membership, Person, Transaction
 
@@ -33,6 +31,10 @@ def upload(client, account, content=CSV):
         reverse("csv-import-preview", args=(account.pk,)),
         {"action": "upload", "csv_file": SimpleUploadedFile("synthetic.csv", content, "text/csv")},
     )
+
+
+def stage_files(staging_dir):
+    return list(Path(staging_dir).glob("*.csvstage"))
 
 
 def mapping_data(token, **changes):
@@ -159,7 +161,7 @@ def test_upload_stages_privately_then_previews_without_database_writes(staging_s
 
     staged = upload(client, account)
     token = staged.context["mapping_form"].initial["token"]
-    stage_path = _stage_file_path(token)
+    (stage_path,) = stage_files(staging_settings)
     assert stage_path.read_bytes() == CSV
 
     response = client.post(reverse("csv-import-preview", args=(account.pk,)), mapping_data(token))
@@ -266,20 +268,20 @@ def test_cancel_and_expiry_delete_staged_content(staging_settings):
     client = Client()
     client.force_login(user)
     token = upload(client, account).context["mapping_form"].initial["token"]
-    path = _stage_file_path(token)
+    assert len(stage_files(staging_settings)) == 1
 
     cancelled = client.post(
         reverse("csv-import-preview", args=(account.pk,)), {"action": "cancel", "token": token}
     )
     assert cancelled.status_code == 302
-    assert not path.exists()
+    assert not stage_files(staging_settings)
 
     token = upload(client, account).context["mapping_form"].initial["token"]
-    path = _stage_file_path(token)
+    assert len(stage_files(staging_settings)) == 1
     with patch("finance.csv_import.staging.time.time", return_value=time.time() + 4000):
         expired = client.post(reverse("csv-import-preview", args=(account.pk,)), mapping_data(token))
     assert expired.status_code == 404
-    assert not path.exists()
+    assert not stage_files(staging_settings)
 
 
 @pytest.mark.django_db
@@ -292,12 +294,12 @@ def test_bad_uploads_and_size_cap_are_safe_and_not_staged(staging_settings):
     malformed = upload(client, account, b"When,Memo\n\"unterminated")
     assert malformed.status_code == 200
     assert b"malformed quoting" in malformed.content
-    assert not list(Path(staging_settings).glob("*.csvstage"))
+    assert not stage_files(staging_settings)
 
     oversized = upload(client, account, b"x" * (MAX_FILE_BYTES + 1))
     assert oversized.status_code == 200
     assert b"exceeds the 5 MB limit" in oversized.content
-    assert not list(Path(staging_settings).glob("*.csvstage"))
+    assert not stage_files(staging_settings)
 
 
 def _spooled_temp_files():
@@ -325,7 +327,7 @@ def test_a_normal_sized_upload_is_never_spooled_to_a_temp_file_on_disk(staging_s
     assert len(content) > 2_621_440
     assert spool.call_count == 0
     assert response.status_code == 200
-    assert len(list(Path(staging_settings).glob("*.csvstage"))) == 1
+    assert len(stage_files(staging_settings)) == 1
 
 
 @pytest.mark.django_db
@@ -341,7 +343,7 @@ def test_a_very_large_upload_is_refused_without_touching_disk(staging_settings):
     assert spool.call_count == 0
     assert response.status_code == 200
     assert b"exceeds the 5 MB limit" in response.content
-    assert not list(Path(staging_settings).glob("*.csvstage"))
+    assert not stage_files(staging_settings)
 
 
 @pytest.mark.django_db
@@ -386,7 +388,7 @@ def test_get_after_upload_restores_mapping_and_cancel_from_live_stage(staging_se
 
     cancelled = client.post(preview_url, {"action": "cancel", "token": token})
     assert cancelled.status_code == 302
-    assert not (_stage_file_path(token)).exists()
+    assert not stage_files(staging_settings)
     blank = client.get(preview_url)
     assert blank.context.get("mapping_form") is None
     assert b"Cancel and delete upload" not in blank.content
@@ -404,15 +406,13 @@ def test_reupload_replaces_prior_stage_for_the_same_account(staging_settings):
     second_csv = b"When,Memo,Amount,Currency\n09/28/2026,SYNTHETIC CAFE,-5.00,USD\n"
     second_token = upload(client, account, second_csv).context["mapping_form"].initial["token"]
 
-    files = {path.name for path in Path(staging_settings).glob("*.csvstage")}
-    stages = client.session[SESSION_KEY]
+    # The first upload's file is gone; the other account's stage is untouched.
     assert first_token != second_token
-    assert files == {_stage_file_path(second_token).name, _stage_file_path(other_token).name}
-    assert set(stages) == {second_token, other_token}
-    assert stages[second_token]["account_id"] == account.pk
-    assert stages[other_token]["account_id"] == other.pk
-    assert not (_stage_file_path(first_token)).exists()
-    assert (_stage_file_path(second_token)).read_bytes() == second_csv
+    assert sorted(path.read_bytes() for path in stage_files(staging_settings)) == sorted([CSV, second_csv])
+    restored = client.get(reverse("csv-import-preview", args=(account.pk,)))
+    other_restored = client.get(reverse("csv-import-preview", args=(other.pk,)))
+    assert restored.context["mapping_form"].initial["token"] == second_token
+    assert other_restored.context["mapping_form"].initial["token"] == other_token
 
 
 @pytest.mark.django_db
@@ -421,8 +421,8 @@ def test_get_does_not_restore_an_expired_stage(staging_settings):
     account = Account.objects.create(name="Synthetic Checking", account_type="checking", owner=person)
     client = Client()
     client.force_login(user)
-    token = upload(client, account).context["mapping_form"].initial["token"]
-    path = _stage_file_path(token)
+    upload(client, account)
+    assert len(stage_files(staging_settings)) == 1
 
     with patch("finance.csv_import.staging.time.time", return_value=time.time() + 4000):
         expired = client.get(reverse("csv-import-preview", args=(account.pk,)))
@@ -430,7 +430,7 @@ def test_get_does_not_restore_an_expired_stage(staging_settings):
     assert expired.status_code == 200
     assert expired.context.get("mapping_form") is None
     assert b"Cancel and delete upload" not in expired.content
-    assert not path.exists()
+    assert not stage_files(staging_settings)
 
 
 def commit_data(token, **changes):
@@ -472,13 +472,13 @@ def test_commit_imports_new_rows_discards_stage_and_skips_duplicates(staging_set
     client.force_login(user)
     preview_url = reverse("csv-import-preview", args=(account.pk,))
     token = upload(client, account).context["mapping_form"].initial["token"]
-    path = _stage_file_path(token)
+    assert len(stage_files(staging_settings)) == 1
 
     imported = client.post(preview_url, commit_data(token), follow=True)
     assert imported.status_code == 200
     assert b"1</strong> new" in imported.content
     assert Transaction.objects.filter(account=account, status="active").count() == 1
-    assert not path.exists()
+    assert not stage_files(staging_settings)
 
     token = upload(client, account).context["mapping_form"].initial["token"]
     skipped = client.post(preview_url, commit_data(token), follow=True)
@@ -510,7 +510,16 @@ def test_undo_archives_one_batch_and_foreign_accounts_are_404(staging_settings):
     assert b"undone" in undone.content
     later.refresh_from_db()
     assert later.status == ImportBatch.Status.ARCHIVED
+    assert Transaction.objects.get(import_batch=later).status == Transaction.Status.ARCHIVED
     assert ImportBatch.objects.get(pk=earlier_id).status == ImportBatch.Status.ACTIVE
+    assert Transaction.objects.get(import_batch_id=earlier_id).status == Transaction.Status.ACTIVE
+
+    # The undone rows are new again on a re-upload, and importing them restores the total.
+    token = upload(client, account, later_csv).context["mapping_form"].initial["token"]
+    replay = client.post(preview_url, mapping_data(token))
+    assert (replay.context["preview"].new_count, replay.context["preview"].duplicate_count) == (1, 0)
+    client.post(preview_url, commit_data(token, date_range_start="2026-09-28", date_range_end="2026-09-28"))
+    assert Transaction.objects.filter(account=account, status="active").count() == 2
 
     viewer = Client()
     viewer.force_login(viewer_user)
