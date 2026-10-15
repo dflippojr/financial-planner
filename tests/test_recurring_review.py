@@ -853,3 +853,31 @@ def test_a_bridging_copy_on_an_archived_account_still_links_the_bill_for_cancel(
 
     assert RecurringSeries.objects.get(pk=third_copy.pk).cancelled_at is not None
     assert RecurringSeries.objects.get(pk=bridge.pk).cancelled_at is None
+
+
+@pytest.mark.django_db
+@patch("finance.views.timezone.localdate", return_value=TODAY)
+@patch("finance.recurring_services.timezone.localdate", return_value=TODAY)
+def test_shared_bill_row_ignores_archived_account_charges_when_choosing_the_current_copy(_refresh, _view):
+    owner, member, _outsider, stale = _shared_bill()
+    household = Household.objects.get(name="Synthetic Household")
+    old_account = make_account(owner, name="Synthetic Old Joint", scope=Account.Scope.HOUSEHOLD, household=household)
+    late = make_transaction(owner, old_account, transaction_date=date(2026, 9, 29), amount_minor=-9000, description="Synthetic Internet")
+    add_member(stale, late)
+    old_account.status = Account.Status.ARCHIVED
+    old_account.archived_at = timezone.now()
+    old_account.save(update_fields=["status", "archived_at"])
+    third = make_person("third")
+    Membership.objects.create(person=third, household=household)
+    current = make_series(third, name="Synthetic Internet", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-6000)
+    add_member(current, stale.members.order_by("-transaction__transaction_date").exclude(transaction=late).first().transaction)
+    live = make_transaction(
+        owner, stale.members.first().transaction.account, transaction_date=date(2026, 10, 1),
+        amount_minor=-6000, description="Synthetic Internet",
+    )
+    add_member(current, live)
+
+    client = Client()
+    client.force_login(member.user)
+    shown = client.get(reverse("recurring-review")).context["confirmed"]
+    assert [row.pk for row in shown] == [current.pk]

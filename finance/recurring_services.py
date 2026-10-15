@@ -1239,7 +1239,7 @@ def create_manual_series(principal, name, cadence, transaction_ids):
     return _recompute_series_from_members(series)
 
 
-def _active_charge_ids(series):
+def _charge_ids(series):
     return {member.transaction_id for member in series.members.all()}
 
 
@@ -1259,7 +1259,7 @@ def _bill_components(series_list):
 
     first_with_charge = {}
     for index, series in enumerate(series_list):
-        for charge_id in _active_charge_ids(series):
+        for charge_id in _charge_ids(series):
             other = first_with_charge.setdefault(charge_id, index)
             parent[find(index)] = find(other)
     groups = {}
@@ -1315,7 +1315,13 @@ def _has_live_charge(series):
 
 
 def _latest_charge_ordinal(series):
-    dates = [member.transaction.transaction_date.toordinal() for member in series.members.all()]
+    # Only live charges count: an archived account's last charge is not the current price.
+    dates = [
+        member.transaction.transaction_date.toordinal()
+        for member in series.members.all()
+        if member.transaction.status == Transaction.Status.ACTIVE
+        and member.transaction.account.status == Account.Status.ACTIVE
+    ]
     return -max(dates, default=0)
 
 
