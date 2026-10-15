@@ -9,12 +9,20 @@ import re
 
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
+from django.db.models import Exists, OuterRef
 from django.utils import timezone
 
 from .access import DENIED as _DENIED
 from .access import require_person as _person_for
 from .category_services import exclusion_exists_for
 from .audit_services import personal_audience, record
+from .bill_grouping import (
+    charges_in,
+    choose_copy,
+    eligible_bill_charges,
+    group_bills,
+    stored_charge_ids,
+)
 from .lifecycle_services import lock_actor_household
 from .models import Account, AuditEvent, Person, RecurringExclusion, RecurringSeries, RecurringSeriesMember, Transaction
 from .months import add_months_clamped
@@ -1243,38 +1251,149 @@ def _charge_ids(series):
     return {member.transaction_id for member in series.members.all()}
 
 
-def _bill_components(series_list):
-    """Group series into bills: copies linked by shared charges, directly or through another copy.
+def _household_only(series):
+    """True when every charge sits in a household account; a private history never links bills."""
+    return all(member.transaction.account.scope == Account.Scope.HOUSEHOLD for member in series.members.all())
 
-    Mirrors the projection's one-series-per-bill rule so the page and the
-    cancel action agree with what the plan counts. Returns lists of series.
+
+@dataclass
+class HouseholdBill:
+    """One household bill: the copies linked by shared charges, and what the household's charges say now.
+
+    `charges` are the bill's eligible charges, oldest first: every copy's
+    stored ones plus later household charges that continue the schedule, so the
+    state does not wait for each member's series to refresh.
     """
-    parent = list(range(len(series_list)))
 
-    def find(index):
-        while parent[index] != index:
-            parent[index] = parent[parent[index]]
-            index = parent[index]
-        return index
+    copies: list
+    latest: dict
+    charges: list
 
-    first_with_charge = {}
-    for index, series in enumerate(series_list):
-        for charge_id in _charge_ids(series):
-            other = first_with_charge.setdefault(charge_id, index)
-            parent[find(index)] = find(other)
-    groups = {}
-    for index, series in enumerate(series_list):
-        groups.setdefault(find(index), []).append(series)
-    return list(groups.values())
+    @property
+    def last_on(self):
+        return self.charges[-1].transaction_date if self.charges else None
+
+    def copies_in_state(self, *, cancelled):
+        """Active copies with an eligible charge, cancelled or not."""
+        return [
+            series
+            for series in self.copies
+            if series.is_active and (series.cancelled_at is not None) == cancelled and series.pk in self.latest
+        ]
+
+    def copy_in_state(self, *, cancelled):
+        copies = self.copies_in_state(cancelled=cancelled)
+        return choose_copy(copies, self.latest) if copies else None
+
+    @property
+    def current(self):
+        """The copy the projection uses: the latest eligible charge holds the current price."""
+        return self.copy_in_state(cancelled=False)
+
+    @property
+    def anchor(self):
+        """The copy whose cadence and amount continue the history, cancelled or not."""
+        return self.current or self.copy_in_state(cancelled=True)
 
 
-def shared_series_for_review(principal, own_series):
-    """Household bills another member confirmed, for the Recurring page.
+def resolve_household_bills(copies, eligible):
+    """Group confirmed household series into bills, judged by the charges in `eligible`.
 
-    A bill several members confirmed shows once, so totals do not count it
-    twice: the viewer's own copy wins, then the first shared copy. Active and
-    cancelled copies dedupe separately. Each row is marked `shared_by_other`:
-    the viewer may cancel or resume it, but grouping edits stay with its owner.
+    `eligible` is a queryset of the charges that count (see
+    `eligible_bill_charges`). The page, cancel and the projection all group
+    with `group_bills` and rank with `choose_copy`; this adds each bill's
+    current history on top. Nothing is written.
+    """
+    by_pk = {series.pk: series for series in copies}
+    stored = stored_charge_ids(by_pk)
+    rows = {txn.pk: txn for txn in charges_in(eligible, by_pk).select_related("account")}
+    bills = []
+    for group in group_bills(stored):
+        members = [by_pk[pk] for pk in group]
+        latest, charges = {}, {}
+        for series in members:
+            live = [rows[pk] for pk in stored[series.pk] if pk in rows]
+            if live:
+                latest[series.pk] = max(txn.transaction_date for txn in live).toordinal()
+            charges.update((txn.pk, txn) for txn in live)
+        ordered = sorted(charges.values(), key=lambda txn: (txn.transaction_date, txn.pk))
+        bills.append(HouseholdBill(copies=members, latest=latest, charges=ordered))
+    _continue_from_household_charges(bills, eligible)
+    return bills
+
+
+def _continue_from_household_charges(bills, eligible):
+    """Add household charges the stored copies have not caught up to.
+
+    A charge continues a bill when it has the copy's merchant, sits in the
+    amount band and lands inside the cadence tolerance of the next expected
+    date. A charge another confirmed series holds, or one a copy's owner
+    removed from their series, never continues a bill.
+    """
+    anchored = [bill for bill in bills if bill.charges and bill.anchor is not None]
+    if not anchored:
+        return
+    owners = {series.person_id for bill in anchored for series in bill.copies}
+    later = (
+        eligible.filter(
+            amount_minor__lt=0,
+            account__scope=Account.Scope.HOUSEHOLD,
+            transaction_date__gt=min(bill.last_on for bill in anchored),
+        )
+        .exclude(Exists(RecurringExclusion.objects.filter(transaction_id=OuterRef("pk"), person_id__in=owners)))
+        .exclude(
+            Exists(
+                RecurringSeriesMember.objects.filter(
+                    transaction_id=OuterRef("pk"),
+                    series__status=RecurringSeries.Status.CONFIRMED,
+                    series__is_active=True,
+                )
+            )
+        )
+        .select_related("account")
+        .order_by("transaction_date", "pk")
+    )
+    by_merchant = defaultdict(list)
+    for txn in later:
+        by_merchant[merchant_key(txn.description)].append(txn)
+    taken = set()
+    for bill in anchored:
+        anchor = bill.anchor
+        tolerance = timedelta(days=CADENCE_DAYS[anchor.cadence][1])
+        last = bill.last_on
+        for txn in by_merchant.get(anchor.merchant_key, ()):
+            if txn.pk in taken or txn.transaction_date <= last:
+                continue
+            if not _in_confirmed_amount_band(anchor.typical_amount_minor, txn.amount_minor):
+                continue
+            expected = add_cadence(last, anchor.cadence)
+            if expected is None or txn.transaction_date > expected + tolerance:
+                break
+            if txn.transaction_date < expected - tolerance:
+                continue
+            bill.charges.append(txn)
+            taken.add(txn.pk)
+            last = txn.transaction_date
+
+
+@dataclass
+class HouseholdReview:
+    """What the Recurring page adds from the household: other members' rows and the bills behind the totals."""
+
+    shared_rows: list
+    bills: list
+
+
+def household_review(principal, own_series):
+    """Household bills for the Recurring page, grouped like the plan and the cancel action.
+
+    A household bill another member confirmed shows once. The viewer's own
+    copies stay as their own rows, and the bill counts once in the totals (see
+    `confirmed_totals_once_per_bill`). Active and cancelled copies dedupe
+    separately. Each shared row is marked `shared_by_other`: the viewer may
+    cancel or resume it, but grouping edits stay with its owner. Its dates and
+    price state come from the bill's current household charges, not its stored
+    members.
     """
     shared = list(
         RecurringSeries.objects.shared_with(principal, linkers=True)
@@ -1282,52 +1401,45 @@ def shared_series_for_review(principal, own_series):
         .order_by("display_name", "pk")
     )
     own_ids = {series.pk for series in own_series}
-    candidates = [
+    copies = [
         series
         for series in [*own_series, *shared]
         if series.status == RecurringSeries.Status.CONFIRMED and _household_only(series)
     ]
-    rows = []
     # Group over active and cancelled copies together, so a cancelled copy
     # still links the active copies it shares charges with.
-    for bill in _bill_components(candidates):
+    bills = resolve_household_bills(copies, eligible_bill_charges(principal))
+    rows = []
+    for bill in bills:
         for cancelled in (False, True):
-            copies = [
-                series
-                for series in bill
-                if (series.cancelled_at is not None) == cancelled and series.is_active and _has_live_charge(series)
-            ]
-            if not copies or any(series.pk in own_ids for series in copies):
+            in_state = bill.copies_in_state(cancelled=cancelled)
+            if not in_state or any(series.pk in own_ids for series in in_state):
                 continue
-            # The copy with the latest charge holds the current price, then the lowest id.
-            chosen = min(copies, key=lambda series: (_latest_charge_ordinal(series), series.pk))
+            chosen = choose_copy(in_state, bill.latest)
             chosen.shared_by_other = True
+            chosen.bill_charges = bill.charges
             rows.append(chosen)
     rows.sort(key=lambda series: (series.display_name, series.pk))
-    return rows
+    return HouseholdReview(shared_rows=rows, bills=bills)
 
 
-def _has_live_charge(series):
-    return any(
-        member.transaction.status == Transaction.Status.ACTIVE and member.transaction.account.status == Account.Status.ACTIVE
-        for member in series.members.all()
-    )
+def confirmed_totals_once_per_bill(confirmed, review):
+    """Monthly and annual totals with each household bill counted once, at the price the plan uses.
 
-
-def _latest_charge_ordinal(series):
-    # Only live charges count: an archived account's last charge is not the current price.
-    dates = [
-        member.transaction.transaction_date.toordinal()
-        for member in series.members.all()
-        if member.transaction.status == Transaction.Status.ACTIVE
-        and member.transaction.account.status == Account.Status.ACTIVE
-    ]
-    return -max(dates, default=0)
-
-
-def _household_only(series):
-    """True when every charge sits in a household account; a private history never links bills."""
-    return all(member.transaction.account.scope == Account.Scope.HOUSEHOLD for member in series.members.all())
+    A member may confirm several copies of one bill, and each shows as its own
+    row; the bill still costs one amount, so only the copy holding the current
+    price counts. A series with a private charge never links, so it counts alone.
+    """
+    bill_of = {series.pk: bill for bill in review.bills for series in bill.copies}
+    counted, seen = [], set()
+    for series in confirmed:
+        bill = bill_of.get(series.pk)
+        if bill is None:
+            counted.append(series)
+        elif id(bill) not in seen:
+            seen.add(id(bill))
+            counted.append(bill.current or series)
+    return confirmed_totals(counted)
 
 
 def _bill_copies(person, series):
@@ -1346,9 +1458,10 @@ def _bill_copies(person, series):
     ]
     if not _household_only(next(copy for copy in candidates if copy.pk == series.pk)):
         return [series]
-    for bill in _bill_components(candidates):
-        if any(copy.pk == series.pk for copy in bill):
-            return bill
+    by_pk = {copy.pk: copy for copy in candidates}
+    for bill in group_bills({copy.pk: _charge_ids(copy) for copy in candidates}):
+        if series.pk in bill:
+            return [by_pk[pk] for pk in bill]
     return [series]
 
 

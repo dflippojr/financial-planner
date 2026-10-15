@@ -779,3 +779,147 @@ def test_shared_bill_row_ignores_archived_account_charges_when_choosing_the_curr
     client.force_login(member.user)
     shown = client.get(reverse("recurring-review")).context["confirmed"]
     assert [row.pk for row in shown] == [current.pk]
+
+
+def _household():
+    return Household.objects.get(name="Synthetic Household")
+
+
+def _add_member(name):
+    person = make_person(name)
+    Membership.objects.create(person=person, household=_household())
+    return person
+
+
+def _page(person, today=TODAY):
+    client = Client()
+    client.force_login(person.user)
+    with patch("finance.views.timezone.localdate", return_value=today), patch(
+        "finance.recurring_services.timezone.localdate", return_value=today
+    ):
+        return client.get(reverse("recurring-review"))
+
+
+def _series_inputs(person):
+    from finance.planning_services import visible_projection_inputs
+
+    return [
+        item
+        for item in visible_projection_inputs(person, scope=Account.Scope.HOUSEHOLD)
+        if item.source == "series"
+    ]
+
+
+@pytest.mark.django_db
+def test_page_and_plan_pick_the_same_copy_when_a_later_transfer_sits_on_the_older_copy():
+    from finance.models import TransferPair
+
+    owner, _member, _outsider, older = _shared_bill()
+    shared = older.members.first().transaction.account
+    other = make_account(owner, name="Synthetic Other Joint", scope=Account.Scope.HOUSEHOLD, household=_household())
+    newest = make_transaction(
+        owner, shared, transaction_date=date(2026, 9, 30), amount_minor=-7000, description="Synthetic Internet"
+    )
+    newer = make_series(
+        _add_member("third"), name="Synthetic Internet", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-7000
+    )
+    add_member(newer, newest)
+    add_member(newer, older.members.get(transaction__transaction_date=date(2026, 8, 12)).transaction)
+    # A confirmed transfer after both is not a charge: it must not make the $60 copy look current.
+    leg = make_transaction(
+        owner, shared, transaction_date=date(2026, 10, 1), amount_minor=-6000, description="Synthetic Internet"
+    )
+    add_member(older, leg)
+    pair_leg = make_transaction(owner, other, transaction_date=date(2026, 10, 1), amount_minor=6000, description="Synthetic Move")
+    TransferPair.objects.create(
+        leg_a=leg,
+        leg_b=pair_leg,
+        status=TransferPair.Status.CONFIRMED,
+        kind=TransferPair.Kind.TRANSFER,
+        confidence=TransferPair.Confidence.HIGH,
+        reasons=["synthetic"],
+    )
+
+    viewer = _add_member("fourth")
+    shown = _page(viewer).context["confirmed"]
+    planned = _series_inputs(viewer)
+
+    assert [row.pk for row in shown] == [newer.pk]
+    assert [(item.source_id, item.amount_minor) for item in planned] == [(newer.pk, 7000)]
+
+
+@pytest.mark.django_db
+def test_shared_row_ignores_archived_account_history_for_upcoming_and_price_change():
+    owner, member, _outsider, series = _shared_bill()
+    old_account = make_account(owner, name="Synthetic Old Joint", scope=Account.Scope.HOUSEHOLD, household=_household())
+    add_member(
+        series,
+        make_transaction(owner, old_account, transaction_date=date(2026, 9, 29), amount_minor=-9000, description="Synthetic Internet"),
+    )
+    old_account.status = Account.Status.ARCHIVED
+    old_account.archived_at = timezone.now()
+    old_account.save(update_fields=["status", "archived_at"])
+
+    page = _page(member)
+
+    assert [item.expected_on for item in page.context["upcoming"]] == [date(2026, 10, 12)]
+    assert page.context["price_changes"] == []
+
+
+@pytest.mark.django_db
+def test_totals_count_a_bill_once_when_the_viewer_owns_disjoint_copies_another_member_links():
+    owner, member, _outsider, linking = _shared_bill()
+    shared = linking.members.first().transaction.account
+    by_month = {row.transaction.transaction_date.month: row.transaction for row in linking.members.all()}
+    earlier = make_transaction(
+        owner, shared, transaction_date=date(2026, 5, 12), amount_minor=-6000, description="Synthetic Internet"
+    )
+    first = make_series(member, name="Synthetic Internet A", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-6000)
+    last = make_series(member, name="Synthetic Internet C", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-6000)
+    add_member(first, earlier)
+    add_member(first, by_month[7])
+    add_member(last, by_month[8])
+    add_member(last, by_month[9])
+
+    page = _page(member)
+
+    # Both owned copies stay as editable rows; the bill still costs one amount.
+    assert {row.pk for row in page.context["confirmed"]} == {first.pk, last.pk}
+    assert page.context["monthly_minor"] == confirmed_totals([linking])[0]
+    assert page.context["annual_minor"] == confirmed_totals([linking])[1]
+
+
+@pytest.mark.django_db
+def test_shared_row_follows_the_households_current_charges_without_writing_to_the_owner():
+    owner, member, _outsider, series = _shared_bill()
+    shared = series.members.first().transaction.account
+    # The member imports October's payment; nobody has confirmed a series holding it.
+    make_transaction(member, shared, transaction_date=date(2026, 10, 12), amount_minor=-6000, description="Synthetic Internet")
+    before = (series.members.count(), RecurringSeries.objects.get(pk=series.pk).updated_at)
+
+    page = _page(member, today=date(2026, 10, 20))
+
+    assert page.context["missed_charges"] == []
+    assert [item.expected_on for item in page.context["upcoming"]] == [date(2026, 11, 12)]
+    assert [item.start for item in _series_inputs(member)] == [date(2026, 11, 12)]
+    assert (series.members.count(), RecurringSeries.objects.get(pk=series.pk).updated_at) == before
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("description", "amount_minor", "posted"),
+    [
+        ("Synthetic Water", -6000, date(2026, 10, 12)),
+        ("Synthetic Internet", -20000, date(2026, 10, 12)),
+        ("Synthetic Internet", -6000, date(2026, 10, 25)),
+    ],
+    ids=["other-merchant", "outside-amount-band", "outside-cadence-tolerance"],
+)
+def test_a_household_charge_that_does_not_fit_the_bill_leaves_it_missed(description, amount_minor, posted):
+    _owner, member, _outsider, series = _shared_bill()
+    shared = series.members.first().transaction.account
+    make_transaction(member, shared, transaction_date=posted, amount_minor=amount_minor, description=description)
+
+    page = _page(member, today=date(2026, 10, 30))
+
+    assert [item.expected_on for item in page.context["missed_charges"]] == [date(2026, 10, 12)]

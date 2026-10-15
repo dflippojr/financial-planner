@@ -7,8 +7,9 @@ from django.db.models import Exists, Max, OuterRef, Q
 from .access import DENIED as _DENIED
 from .access import require_person as _person
 from .cash_flow import cash_flow_report, selected_accounts
-from .category_services import current_household, exclusion_exists_for
+from .category_services import current_household
 from .audit_services import changed_names, owned_audience, record, snapshot
+from .bill_grouping import eligible_bill_charges
 from .models import (
     Account,
     AuditEvent,
@@ -17,8 +18,8 @@ from .models import (
     RecurringSeries,
     RecurringSeriesMember,
     SavingsGoal,
-    Transaction,
 )
+from .recurring_services import resolve_household_bills
 from .projection import (
     DEFAULT_HORIZON,
     KIND_EXPENSE,
@@ -85,33 +86,28 @@ def _household_members(principal):
     return household, list(ids.values_list("person_id", flat=True))
 
 
-def _charge_ids_by_series(series_ids):
-    charges = {}
-    rows = RecurringSeriesMember.objects.filter(series_id__in=series_ids).values_list("series_id", "transaction_id")
-    for series_id, transaction_id in rows:
-        charges.setdefault(series_id, set()).add(transaction_id)
-    return charges
-
-
-def _one_series_per_bill(rows, replaced, member_ids, household, *, selected=None):
+def _one_series_per_bill(rows, replaced, member_ids, household, eligible, *, selected=None):
     """Collapse members' series for one joint bill into a single series.
 
     Two members may each confirm the same household bill; it must project
-    once. Series belong to one bill when shared charges link them, directly or
-    through a third series (a charge is one bill whatever name or cadence each
-    member's series gave it), so two distinct bills from one merchant both
-    stay. The series with the latest charge wins (it holds the current
-    price), then the lowest id. A planned item replacing a series replaces the
-    whole bill, even when that series is no longer active, because its charges
-    still identify the bill. A confirmed series that is cancelled or inactive
-    still links the histories it shares charges with, as long as every charge
-    sits in a household account, so private history never shapes the plan.
+    once. Grouping and the choice of copy are the page's and cancel's own
+    (`bill_grouping`): series belong to one bill when shared charges link them,
+    directly or through a third series, so two distinct bills from one
+    merchant both stay. The copy with the latest eligible charge wins (it
+    holds the current price), then the lowest id, and the bill's last date
+    comes from the household's current charges, not the stored series. A
+    planned item replacing a series replaces the whole bill, even when that
+    series is no longer active, because its charges still identify the bill.
+    A confirmed series that is cancelled or inactive still links the histories
+    it shares charges with, as long as every charge sits in a household
+    account, so private history never shapes the plan.
 
-    `selected` narrows a single-account view: a bill stays only when one of
-    its charges, on any series that belongs to it, sits in that queryset of
-    transactions. The amount and schedule still come from the whole bill.
+    `eligible` is the queryset of charges that count. `selected` narrows a
+    single-account view: a bill stays only when one of its charges, on any
+    series that belongs to it, sits in that queryset of transactions. The
+    amount and schedule still come from the whole bill.
     """
-    row_ids = [row.pk for row in rows]
+    row_ids = {row.pk for row in rows}
     linkers = (
         RecurringSeries.objects.filter(
             Q(pk__in=replaced)
@@ -122,46 +118,27 @@ def _one_series_per_bill(rows, replaced, member_ids, household, *, selected=None
     linkers = confine_recurring_series_to_accounts(
         linkers, Account.objects.filter(scope=Account.Scope.HOUSEHOLD, household=household)
     )
-    linker_ids = list(linkers.values_list("pk", flat=True))
-    charges = _charge_ids_by_series(row_ids + linker_ids)
-    parent = {pk: pk for pk in row_ids + linker_ids}
-
-    def find(pk):
-        while parent[pk] != pk:
-            parent[pk] = parent[parent[pk]]
-            pk = parent[pk]
-        return pk
-
-    first_owner = {}
-    for pk in parent:
-        for charge_id in charges.get(pk, ()):
-            if charge_id in first_owner:
-                parent[find(pk)] = find(first_owner[charge_id])
-            else:
-                first_owner[charge_id] = pk
-    replaced_bills = {find(pk) for pk in replaced if pk in parent}
-    # Recency is judged by each row's last eligible charge on any household
-    # account, so a single-account view still picks the series holding the
-    # current price and a transfer or archived charge never ranks a series.
-    latest = {row.pk: row.last_on.toordinal() for row in rows if row.last_on is not None}
-    bills = {}
-    for row in rows:
-        bills.setdefault(find(row.pk), []).append(row)
-    touched_bills = None
+    bills = resolve_household_bills([*rows, *linkers], eligible)
+    touched_ids = None
     if selected is not None:
-        touched_bills = {
-            find(series_id)
-            for series_id in RecurringSeriesMember.objects.filter(
-                series_id__in=list(parent), transaction__in=selected
+        touched_ids = set(
+            RecurringSeriesMember.objects.filter(
+                series_id__in=[series.pk for bill in bills for series in bill.copies], transaction__in=selected
             ).values_list("series_id", flat=True)
-        }
+        )
+    by_pk = {row.pk: row for row in rows}
     chosen = []
-    for root, members in bills.items():
-        if root in replaced_bills or any(row.pk in replaced for row in members):
+    for bill in bills:
+        if any(series.pk in replaced for series in bill.copies):
             continue
-        if touched_bills is not None and root not in touched_bills:
+        if touched_ids is not None and not any(series.pk in touched_ids for series in bill.copies):
             continue
-        chosen.append(min(members, key=lambda row: (-latest.get(row.pk, 0), row.pk)))
+        current = bill.current
+        if current is None or current.pk not in by_pk:
+            continue
+        row = by_pk[current.pk]
+        row.last_on = bill.last_on
+        chosen.append(row)
     return sorted(chosen, key=lambda row: (row.display_name, row.pk))
 
 
@@ -202,18 +179,7 @@ def visible_projection_inputs(principal, *, account=None, scope="", accounts=Non
         household_only = bool(selection) and all(
             item.scope == Account.Scope.HOUSEHOLD for item in selection
         )
-    eligible = (
-        Transaction.objects.visible_to(principal)
-        .filter(
-            status=Transaction.Status.ACTIVE,
-            kind=Transaction.Kind.CASH_FLOW,
-            account__status=Account.Status.ACTIVE,
-            account__archived_at__isnull=True,
-        )
-        .annotate(_excluded=exclusion_exists_for(principal, household_only=household_only))
-        .filter(_excluded=False)
-        .values("pk")
-    )
+    eligible = eligible_bill_charges(principal, household_only=household_only)
     # Only an explicit household scope shares series between members; a combined
     # view that happens to hold only household accounts stays the viewer's own.
     shared_series = household_only and scope == Account.Scope.HOUSEHOLD
@@ -267,7 +233,7 @@ def visible_projection_inputs(principal, *, account=None, scope="", accounts=Non
     )
     if shared_series:
         series_rows = _one_series_per_bill(
-            series_rows, replaced, member_ids, household, selected=selected_charges if narrowed else None
+            series_rows, replaced, member_ids, household, eligible, selected=selected_charges if narrowed else None
         )
     else:
         series_rows = [row for row in series_rows if row.pk not in replaced]

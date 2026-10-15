@@ -22,6 +22,11 @@ UPCOMING_DAYS = 30
 
 
 def _ordered_transactions(series):
+    # A household bill's row reads the bill's current household charges, so it
+    # does not wait for the owning member's series to refresh.
+    bill_charges = getattr(series, "bill_charges", None)
+    if bill_charges is not None:
+        return bill_charges
     members = getattr(series, "_prefetched_objects_cache", {}).get("members")
     if members is None:
         members = series.members.select_related("transaction", "transaction__account").all()
