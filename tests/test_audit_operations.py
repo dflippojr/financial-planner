@@ -380,27 +380,34 @@ def _connected_member_with_queued_job(state, url):
     return person, enqueue_job(person, feature="structured")
 
 
-@pytest.mark.parametrize("scenario", [
-    "newer-attempt-succeeds",
-    "newer-attempt-retries",
-    "newer-attempt-fails-for-good",
-    "finished-elsewhere-succeeds",
-    "finished-elsewhere-fails",
-])
-def test_late_worker_cannot_duplicate_final_outcomes_or_change_newer_attempt(harness, settings, scenario):
+@pytest.mark.parametrize(
+    ("takeover", "harness_fails", "max_attempts"),
+    [
+        pytest.param("newer-attempt", False, None, id="newer-attempt-succeeds"),
+        pytest.param("newer-attempt", True, None, id="newer-attempt-retries"),
+        pytest.param("newer-attempt", True, 1, id="newer-attempt-fails-for-good"),
+        pytest.param("finished-elsewhere", False, None, id="finished-elsewhere-succeeds"),
+        pytest.param("finished-elsewhere", True, None, id="finished-elsewhere-fails"),
+    ],
+)
+def test_late_worker_cannot_duplicate_final_outcomes_or_change_newer_attempt(
+    harness, settings, takeover, harness_fails, max_attempts
+):
     from finance.ai_jobs import process_due_jobs
     import finance.ai_jobs as ai_jobs
 
     state, url = harness
     person, job = _connected_member_with_queued_job(state, url)
-    fails = scenario.endswith(("retries", "for-good", "fails"))
-    if fails:
+    if harness_fails:
         state.session_failure = "provider_unavailable"
-    if scenario.endswith("for-good"):
-        settings.AI_JOB_MAX_ATTEMPTS = 1
-    superseded = {"audit_run_id": uuid.uuid4()} if scenario.startswith("newer") else {
-        "status": AiJob.Status.SUCCEEDED, "finished_at": timezone.now(),
-    }
+    if max_attempts is not None:
+        settings.AI_JOB_MAX_ATTEMPTS = max_attempts
+    newer_run = uuid.uuid4()
+    superseded = (
+        {"audit_run_id": newer_run}
+        if takeover == "newer-attempt"
+        else {"status": AiJob.Status.SUCCEEDED, "finished_at": timezone.now()}
+    )
     real_run = ai_jobs.run_structured
 
     def run_while_another_worker_takes_over(*args, **kwargs):
@@ -411,8 +418,8 @@ def test_late_worker_cannot_duplicate_final_outcomes_or_change_newer_attempt(har
         process_due_jobs()
 
     row = AiJob.objects.get(pk=job.pk)
-    if "audit_run_id" in superseded:
-        assert row.status == AiJob.Status.RUNNING and row.audit_run_id == superseded["audit_run_id"]
+    if takeover == "newer-attempt":
+        assert row.status == AiJob.Status.RUNNING and row.audit_run_id == newer_run
     else:
         assert row.status == AiJob.Status.SUCCEEDED
     assert not operational_rows(person, "ai_job")
