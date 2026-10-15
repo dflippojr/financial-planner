@@ -24,7 +24,17 @@ from .bill_grouping import (
     stored_charge_ids,
 )
 from .lifecycle_services import lock_actor_household
-from .models import Account, AuditEvent, Membership, Person, RecurringExclusion, RecurringSeries, RecurringSeriesMember, Transaction
+from .models import (
+    Account,
+    AuditEvent,
+    Membership,
+    Person,
+    RecurringExclusion,
+    RecurringSeries,
+    RecurringSeriesMember,
+    Transaction,
+    monthly_from_annual_minor,
+)
 from .months import add_months, month_end
 
 MANUAL_REASON = "grouping edited manually"
@@ -1081,16 +1091,15 @@ def dismiss_recurring_series(principal, series_id):
 
 
 def confirmed_totals(series_queryset):
-    monthly = 0
+    """Monthly and annual totals; the monthly one is the annual total / 12, so the two always agree."""
     annual = 0
     for series in series_queryset:
         if series.status != RecurringSeries.Status.CONFIRMED or not series.is_active:
             continue
         if series.cancelled_at is not None:
             continue
-        monthly += series.monthly_minor
         annual += series.annual_minor
-    return monthly, annual
+    return monthly_from_annual_minor(annual), annual
 
 
 def _is_grouping_series(series):
