@@ -4,7 +4,6 @@ import json
 import logging
 import zipfile
 from datetime import date
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -22,8 +21,6 @@ from finance.category_services import (
 from finance.export import (
     CSV_FIELDS,
     ENTITY_FILES,
-    _balance_snapshot_model,
-    _snapshot_rows,
     collect_export_tables,
     minor_from_decimal_string,
     money_decimal,
@@ -31,6 +28,7 @@ from finance.export import (
 )
 from finance.models import (
     Account,
+    BalanceSnapshot,
     Household,
     ImportBatch,
     Membership,
@@ -120,7 +118,10 @@ def _csv_rows(archive, name):
     return list(csv.DictReader(io.StringIO(text)))
 
 
-@pytest.mark.parametrize("prefix", ["=", "+", "-", "@", "\t", "\r", ""])
+# The full seven-prefix sweep runs through the real export in
+# test_zip_exports_stored_description_note_account_category_and_tag; this table only
+# has to prove every entity goes through the shared escaping helper.
+@pytest.mark.parametrize("prefix", ["=", ""])
 @pytest.mark.parametrize("entity", CSV_FIELDS)
 def test_every_zip_csv_escapes_text_and_preserves_json_and_money(prefix, entity):
     text = prefix + 'Synthetic, "雪"\ntext'
@@ -240,6 +241,13 @@ def test_export_never_includes_another_members_private_data():
     shared = make_account(owner, name="Shared Ledger", scope=Account.Scope.HOUSEHOLD, household=household)
     secret_txn = make_transaction(member, member_private, amount_minor=-7777, description="Secret synthetic purchase")
     secret_hash = secret_txn.import_batch.source_file_sha256
+    visible_snapshot = BalanceSnapshot.objects.create(
+        account=shared, snapshot_date=date(2026, 2, 1), amount_minor=250, source=BalanceSnapshot.Source.MANUAL
+    )
+    hidden_snapshot = BalanceSnapshot.objects.create(
+        account=member_private, snapshot_date=date(2026, 2, 1), amount_minor=987654,
+        source=BalanceSnapshot.Source.MANUAL,
+    )
     visible_out = make_transaction(owner, shared, amount_minor=-1500, description="Synthetic shared out")
     hidden_in = make_transaction(member, member_private, amount_minor=1500, description="Synthetic private in")
     first, second = (visible_out, hidden_in) if visible_out.pk < hidden_in.pk else (hidden_in, visible_out)
@@ -286,6 +294,12 @@ def test_export_never_includes_another_members_private_data():
     assert pair_ids == set()
     assert "secret merchant" not in series_keys
     assert original.pk not in refund_originals
+    snapshots = _json_rows(archive, "balance_snapshots")
+    assert [(row["id"], row["account_id"], row["amount_minor"], row["amount_decimal"]) for row in snapshots] == [
+        (visible_snapshot.pk, shared.pk, 250, "2.50")
+    ]
+    assert hidden_snapshot.pk not in {row["id"] for row in snapshots}
+    assert "9876.54" not in text
     assert "Member Secret Ledger" not in text
     assert secret_hash not in text
     refund_row = next(row for row in _json_rows(archive, "transactions") if row["id"] == refund.pk)
@@ -416,51 +430,6 @@ def test_export_requires_auth_and_post():
     assert anonymous.status_code == 302
     assert get_denied.status_code == 405
     assert allowed.status_code == 200
-
-
-def test_money_decimal_helpers():
-    assert money_decimal(-1234) == "-12.34"
-    assert money_decimal(50) == "0.50"
-    assert minor_from_decimal_string("-12.34") == -1234
-    # SimpleFIN (#67) adds BalanceSnapshot, so the export now includes snapshots.
-    from finance.models import BalanceSnapshot
-
-    assert _balance_snapshot_model() is BalanceSnapshot
-
-
-@pytest.mark.django_db
-def test_snapshot_rows_keep_only_visible_accounts():
-    owner = make_person("owner")
-    other = make_person("other")
-    make_household(owner, other)
-    visible = make_account(owner, name="Visible Snap")
-    hidden = make_account(other, name="Hidden Snap")
-    snaps = [
-        SimpleNamespace(pk=1, account_id=visible.pk, snapshot_date=date(2026, 2, 1), amount_minor=250, currency="USD"),
-        SimpleNamespace(pk=2, account_id=hidden.pk, snapshot_date=date(2026, 2, 1), amount_minor=999, currency="USD"),
-    ]
-
-    class Query(list):
-        def order_by(self, *_args):
-            return self
-
-    class Model:
-        class objects:
-            @staticmethod
-            def filter(account_id__in):
-                allowed = {row["pk"] for row in account_id__in}
-                return Query(item for item in snaps if item.account_id in allowed)
-
-    rows = _snapshot_rows(owner, Model)
-    assert len(rows) == 1
-    assert rows[0]["amount_minor"] == 250
-    assert rows[0]["amount_decimal"] == "2.50"
-    assert rows[0]["account_id"] == visible.pk
-
-    with patch("finance.export._balance_snapshot_model", return_value=Model):
-        tables = collect_export_tables(owner)
-    assert "balance_snapshots" in tables
-    assert tables["balance_snapshots"][0]["id"] == 1
 
 
 @pytest.mark.django_db

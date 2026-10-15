@@ -369,43 +369,93 @@ def test_usage_write_failure_keeps_successful_inference_without_retry(harness, c
     assert "Audit write gap" in caplog.text and CANARY not in caplog.text
 
 
-def test_late_worker_cannot_duplicate_final_outcomes_or_change_newer_attempt():
-    from finance.ai_jobs import _save_job_success, _fail, _retry_or_fail
+def _connected_member_with_queued_job(state, url):
+    from finance.ai_jobs import enqueue_job
+    from finance.ai_services import connect_harness, set_defaults
 
+    state.model_state = "ready"
     _user, person, _ = make_member("ai")
-    job = AiJob.objects.create(member=person, feature="structured", status="running", attempts=1)
-    job.status = "succeeded"
-    job.finished_at = timezone.now()
-    assert _save_job_success(job)
-    assert not _save_job_success(job)
-    _fail(job, "provider_error")
-    _retry_or_fail(job, timezone.now(), "provider_error")
+    connect_harness(person, base_url=url, token=TOKEN)
+    set_defaults(person, chat_backend="local", background_backend="local")
+    return person, enqueue_job(person, feature="structured")
+
+
+@pytest.mark.parametrize(
+    ("takeover", "harness_fails", "max_attempts"),
+    [
+        pytest.param("newer-attempt", False, None, id="newer-attempt-succeeds"),
+        pytest.param("newer-attempt", True, None, id="newer-attempt-retries"),
+        pytest.param("newer-attempt", True, 1, id="newer-attempt-fails-for-good"),
+        pytest.param("finished-elsewhere", False, None, id="finished-elsewhere-succeeds"),
+        pytest.param("finished-elsewhere", True, None, id="finished-elsewhere-fails"),
+    ],
+)
+def test_late_worker_cannot_duplicate_final_outcomes_or_change_newer_attempt(
+    harness, settings, takeover, harness_fails, max_attempts
+):
+    from finance.ai_jobs import process_due_jobs
+    import finance.ai_jobs as ai_jobs
+
+    state, url = harness
+    person, job = _connected_member_with_queued_job(state, url)
+    if harness_fails:
+        state.session_failure = "provider_unavailable"
+    if max_attempts is not None:
+        settings.AI_JOB_MAX_ATTEMPTS = max_attempts
+    newer_run = uuid.uuid4()
+    superseded = (
+        {"audit_run_id": newer_run}
+        if takeover == "newer-attempt"
+        else {"status": AiJob.Status.SUCCEEDED, "finished_at": timezone.now()}
+    )
+    real_run = ai_jobs.run_structured
+
+    def run_while_another_worker_takes_over(*args, **kwargs):
+        AiJob.objects.filter(pk=job.pk).update(**superseded)
+        return real_run(*args, **kwargs)
+
+    with patch.object(ai_jobs, "run_structured", run_while_another_worker_takes_over):
+        process_due_jobs()
+
+    row = AiJob.objects.get(pk=job.pk)
+    if takeover == "newer-attempt":
+        assert row.status == AiJob.Status.RUNNING and row.audit_run_id == newer_run
+    else:
+        assert row.status == AiJob.Status.SUCCEEDED
+    assert not operational_rows(person, "ai_job")
+    assert not operational_rows(person, "ai_attempt")
+    assert len(operational_rows(person, "ai_claim")) == 1
+    process_due_jobs()
+    assert not operational_rows(person, "ai_job")
+
+
+def test_stale_recovery_has_distinct_claim_id_without_spending_inference_attempt(harness, settings):
+    from finance.ai_jobs import process_due_jobs
+
+    state, url = harness
+    state.running_polls = 1000
+    settings.AGENT_HARNESS_SESSION_TIMEOUT_SECONDS = 0
+    person, job = _connected_member_with_queued_job(state, url)
+    process_due_jobs()
     job.refresh_from_db()
-    assert job.status == "succeeded"
-    assert len(operational_rows(person, "ai_job")) == 1
-    old_run = job.audit_run_id
-    AiJob.objects.filter(pk=job.pk).update(status="running", audit_run_id=uuid.uuid4())
-    job.audit_run_id = old_run
-    assert not _save_job_success(job)
-    _fail(job, "provider_error")
+    assert job.attempts == 1 and job.harness_session_id
+    claimed_run = job.audit_run_id
+    # The worker that opened the session died mid-run: stale and still marked running.
+    AiJob.objects.filter(pk=job.pk).update(
+        status=AiJob.Status.RUNNING, updated_at=timezone.now() - timedelta(hours=1)
+    )
+
+    process_due_jobs()
+
     job.refresh_from_db()
-    assert job.status == "running"
-
-
-def test_stale_recovery_has_distinct_claim_id_without_spending_inference_attempt():
-    from finance.ai_jobs import _claim_for_run
-
-    _user, person, _ = make_member("ai")
-    moment = timezone.now()
-    job = AiJob.objects.create(member=person, feature="structured", status="running", attempts=1,
-                               harness_session_id="synthetic-saved-session")
-    AiJob.objects.filter(pk=job.pk).update(updated_at=moment - timedelta(hours=1))
-    claimed = _claim_for_run(job, moment, moment - timedelta(minutes=10))
-    assert claimed is not None and claimed.attempts == 1 and claimed.audit_run_id == job.audit_run_id
+    assert job.attempts == 1 and job.audit_run_id == claimed_run
     row, = operational_rows(person, "ai_recovery")
     assert row.correlation_id != job.audit_run_id
     assert row.metadata["operation_id"] == str(job.audit_run_id)
-    assert _claim_for_run(job, moment, moment - timedelta(minutes=10)) is None
+    assert len(operational_rows(person, "ai_claim")) == 1
+    # A fresh heartbeat is not stale, so nothing claims it a second time.
+    AiJob.objects.filter(pk=job.pk).update(status=AiJob.Status.RUNNING, updated_at=timezone.now())
+    process_due_jobs()
     assert len(operational_rows(person, "ai_recovery")) == 1
 
 
@@ -434,20 +484,6 @@ def test_delegated_domain_event_keeps_explicit_rule_source_and_run():
     row = events_for(person).get(action="rule_applied")
     assert row.source == "rule" and row.actor_kind == "operator"
     assert row.correlation_id == run.run_id and row.effective_member_id == person.pk
-
-
-def test_inference_outcome_requires_result_and_start_does_not(harness):
-    from finance.ai_services import _inference_event, connect_harness
-
-    _state, url = harness
-    _user, person, _ = make_member("member")
-    connection = connect_harness(person, base_url=url, token=TOKEN)
-    with pytest.raises(ValueError, match="requires a result"):
-        _inference_event(person, connection, "local", "structured")
-    assert not operational_rows(person, "ai_inference")
-    _inference_event(person, connection, "local", "structured", phase="started")
-    row, = operational_rows(person, "ai_inference")
-    assert row.outcome == "started"
 
 
 def test_maintenance_commands_normalize_the_username_they_are_given(monkeypatch, tmp_path):

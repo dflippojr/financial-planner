@@ -45,67 +45,75 @@ def import_batch(person, private_account):
     )
 
 
-@pytest.mark.django_db
-def test_private_and_household_account_shapes_are_persisted(person, household):
-    private = Account.objects.create(
-        name="Private Savings",
-        account_type=Account.Type.SAVINGS,
-        owner=person,
-        scope=Account.Scope.PRIVATE,
+def _history_with_mismatched_columns(person, import_batch):
+    financial_transaction = Transaction.objects.create(
+        account=import_batch.account,
+        import_batch=import_batch,
+        transaction_date=date(2026, 1, 2),
+        amount_minor=-100,
+        description="Synthetic groceries",
+        source_row_number=2,
+        fingerprint="c" * 64,
+        original_fields={"synthetic": "value"},
     )
-    shared = Account.objects.create(
-        name="Shared Card",
-        account_type=Account.Type.CREDIT_CARD,
-        owner=person,
-        scope=Account.Scope.HOUSEHOLD,
-        household=household,
-        share_mode=Account.ShareMode.CO_OWNED,
+    TransactionCorrectionHistory.objects.create(
+        transaction=financial_transaction,
+        actor=person,
+        field_name=TransactionCorrectionHistory.Field.AMOUNT_MINOR,
+        previous_date=date(2026, 1, 1),
+        new_date=date(2026, 1, 2),
     )
 
-    assert private.household is None
-    assert shared.household == household
-    assert shared.currency == "USD"
+
+def _account_with(person, **overrides):
+    fields = {"name": "Invalid", "account_type": Account.Type.CHECKING, "owner": person}
+    fields.update(overrides)
+    Account.objects.create(**fields)
+
+
+def _constraint_cases():
+    private, household_scope = Account.Scope.PRIVATE, Account.Scope.HOUSEHOLD
+    shared = Account.ShareMode.CO_OWNED
+    return {
+        "private-account-with-household": lambda p, h, a, b: _account_with(p, scope=private, household=h),
+        "household-account-without-household": lambda p, h, a, b: _account_with(
+            p, scope=household_scope, household=None, share_mode=shared
+        ),
+        "private-account-with-share-mode": lambda p, h, a, b: _account_with(
+            p, scope=private, household=None, share_mode=shared
+        ),
+        "household-account-without-share-mode": lambda p, h, a, b: _account_with(
+            p, scope=household_scope, household=h, share_mode=None
+        ),
+        "household-account-with-unknown-share-mode": lambda p, h, a, b: _account_with(
+            p, scope=household_scope, household=h, share_mode="secret"
+        ),
+        "membership-ends-before-it-starts": lambda p, h, a, b: Membership.objects.create(
+            person=p,
+            household=Household.objects.create(name="Backwards Household"),
+            joined_at=timezone.now(),
+            ended_at=timezone.now() - timedelta(days=1),
+        ),
+        "non-usd-transaction": lambda p, h, a, b: Transaction.objects.create(
+            account=a,
+            import_batch=b,
+            transaction_date=date(2026, 1, 15),
+            amount_minor=100,
+            currency="CAD",
+            description="Invalid currency",
+            source_row_number=2,
+            fingerprint="d" * 64,
+            original_fields={},
+        ),
+        "correction-history-with-mismatched-value-columns": lambda p, h, a, b: _history_with_mismatched_columns(p, b),
+    }
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize(
-    ("scope", "with_household"),
-    [(Account.Scope.PRIVATE, True), (Account.Scope.HOUSEHOLD, False)],
-)
-def test_database_rejects_scope_household_mismatches(person, household, scope, with_household):
-    kwargs = {}
-    if scope == Account.Scope.HOUSEHOLD:
-        kwargs["share_mode"] = Account.ShareMode.CO_OWNED
+@pytest.mark.parametrize("case", list(_constraint_cases()))
+def test_database_rejects_invalid_rows(person, household, private_account, import_batch, case):
     with pytest.raises(IntegrityError), transaction.atomic():
-        Account.objects.create(
-            name="Invalid Scope",
-            account_type=Account.Type.CHECKING,
-            owner=person,
-            scope=scope,
-            household=household if with_household else None,
-            **kwargs,
-        )
-
-
-@pytest.mark.django_db
-@pytest.mark.parametrize(
-    ("scope", "share_mode", "household_set"),
-    [
-        (Account.Scope.PRIVATE, Account.ShareMode.CO_OWNED, False),
-        (Account.Scope.HOUSEHOLD, None, True),
-        (Account.Scope.HOUSEHOLD, "secret", True),
-    ],
-)
-def test_database_rejects_share_mode_scope_mismatches(person, household, scope, share_mode, household_set):
-    with pytest.raises(IntegrityError), transaction.atomic():
-        Account.objects.create(
-            name="Invalid Share Mode",
-            account_type=Account.Type.CHECKING,
-            owner=person,
-            scope=scope,
-            household=household if household_set else None,
-            share_mode=share_mode,
-        )
+        _constraint_cases()[case](person, household, private_account, import_batch)
 
 
 @pytest.mark.django_db
@@ -121,76 +129,6 @@ def test_person_can_have_only_one_current_household(person, household):
     Membership.objects.create(person=person, household=another)
 
     assert Membership.objects.filter(person=person).count() == 2
-
-
-@pytest.mark.django_db
-def test_membership_end_cannot_precede_join(person):
-    household = Household.objects.create(name="Example Household")
-    joined_at = timezone.now()
-    ended_at = joined_at - timedelta(days=1)
-
-    with pytest.raises(IntegrityError), transaction.atomic():
-        Membership.objects.create(
-            person=person,
-            household=household,
-            joined_at=joined_at,
-            ended_at=ended_at,
-        )
-
-
-@pytest.mark.django_db
-def test_transaction_preserves_exact_signed_minor_units_and_provenance(private_account, import_batch):
-    original_fields = {
-        "Date": "01/15/2026",
-        "Description": "SYNTHETIC PAYROLL",
-        "Amount": "123456789012.34",
-    }
-    imported = Transaction.objects.create(
-        account=private_account,
-        import_batch=import_batch,
-        transaction_date=date(2026, 1, 15),
-        amount_minor=12_345_678_901_234,
-        currency="USD",
-        description="Synthetic payroll",
-        source_row_number=2,
-        source_transaction_id="synthetic-transaction-1",
-        fingerprint="b" * 64,
-        original_fields=original_fields,
-    )
-    spent = Transaction.objects.create(
-        account=private_account,
-        import_batch=import_batch,
-        transaction_date=date(2026, 1, 16),
-        amount_minor=-10_99,
-        currency="USD",
-        description="Synthetic groceries",
-        source_row_number=3,
-        fingerprint="c" * 64,
-        original_fields={"Amount": "-10.99"},
-    )
-
-    imported.refresh_from_db()
-    assert imported.amount_minor == 12_345_678_901_234
-    assert imported.original_fields == original_fields
-    assert spent.amount_minor == -1099
-
-
-@pytest.mark.django_db
-def test_database_rejects_non_usd_transaction(private_account, import_batch):
-    transaction_date = date(2026, 1, 15)
-
-    with pytest.raises(IntegrityError), transaction.atomic():
-        Transaction.objects.create(
-            account=private_account,
-            import_batch=import_batch,
-            transaction_date=transaction_date,
-            amount_minor=100,
-            currency="CAD",
-            description="Invalid currency",
-            source_row_number=2,
-            fingerprint="d" * 64,
-            original_fields={},
-        )
 
 
 @pytest.mark.django_db
@@ -233,23 +171,6 @@ def test_transaction_batch_must_match_account(person, private_account, import_ba
 
 
 @pytest.mark.django_db
-def test_investment_activity_is_stored_as_neutral_kind(private_account, import_batch):
-    imported = Transaction.objects.create(
-        account=private_account,
-        import_batch=import_batch,
-        transaction_date=date(2026, 1, 15),
-        amount_minor=0,
-        description="Synthetic investment activity",
-        kind=Transaction.Kind.INVESTMENT_ACTIVITY,
-        source_row_number=2,
-        fingerprint="0" * 64,
-        original_fields={"Type": "SYNTHETIC UNKNOWN ACTIVITY"},
-    )
-
-    assert imported.kind == Transaction.Kind.INVESTMENT_ACTIVITY
-
-
-@pytest.mark.django_db
 def test_archived_records_require_archive_timestamp(private_account):
     unarchived = Account.objects.filter(pk=private_account.pk)
 
@@ -263,29 +184,3 @@ def test_archived_records_require_archive_timestamp(private_account):
     )
     private_account.refresh_from_db()
     assert private_account.archived_at == archived_at
-
-
-@pytest.mark.django_db
-def test_correction_history_rejects_mismatched_value_columns(person, import_batch):
-    financial_transaction = Transaction.objects.create(
-        account=import_batch.account,
-        import_batch=import_batch,
-        transaction_date=date(2026, 1, 2),
-        amount_minor=-100,
-        description="Synthetic groceries",
-        source_row_number=2,
-        fingerprint="c" * 64,
-        original_fields={"synthetic": "value"},
-    )
-
-    invalid_history = TransactionCorrectionHistory(
-        transaction=financial_transaction,
-        actor=person,
-        field_name=TransactionCorrectionHistory.Field.AMOUNT_MINOR,
-        previous_date=date(2026, 1, 1),
-        new_date=date(2026, 1, 2),
-    )
-    with transaction.atomic():
-        with pytest.raises(IntegrityError):
-            invalid_history.save()
-

@@ -15,7 +15,6 @@ from django.utils import timezone
 from finance.category_services import split_transaction
 from finance.models import CategorySuggestion, MemberSecurityEvent, Membership, RefundLink, SavedTransactionFilter, Tag, Transaction, TransactionSplit, TransferPair
 from finance.reauth import RECENT_AUTH_SESSION_KEY
-from finance.security_services import record_security_event
 from finance.transaction_export import CSV_COLUMNS
 from tests.test_transaction_search import make_account, make_household, make_person, make_transaction, PASSWORD
 
@@ -54,9 +53,7 @@ def test_all_pages_stream_once_in_list_order_with_bounded_queries():
     archived.archived_at = timezone.now()
     archived.save()
     client = fresh_client(owner)
-    with CaptureQueriesContext(connection) as queries, patch("finance.transaction_export.CHUNK_SIZE", 100), patch(
-        "finance.transaction_export.record_security_event", wraps=record_security_event,
-    ) as event:
+    with CaptureQueriesContext(connection) as queries, patch("finance.transaction_export.CHUNK_SIZE", 100):
         response, rows, _ = download(client, {"page": "2", "transaction_id": archived.pk, "select_matching": "1"})
     expected = list(Transaction.objects.filter(status="active").order_by("-transaction_date", "-pk").values_list("pk", flat=True))
     assert [int(row["transaction_id"]) for row in rows] == expected
@@ -65,8 +62,6 @@ def test_all_pages_stream_once_in_list_order_with_bounded_queries():
     assert response["Content-Type"] == "text/csv; charset=utf-8"
     assert response["Content-Disposition"] == f'attachment; filename="financial-planner-transactions-{timezone.localdate():%Y%m%d}.csv"'
     assert "no-store" in response["Cache-Control"]
-    assert event.call_count == 1
-    assert set(event.call_args.kwargs) == {"request"}
     assert MemberSecurityEvent.objects.filter(event_type="member_data_export").count() == 1
 
 

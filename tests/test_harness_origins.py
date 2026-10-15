@@ -16,13 +16,7 @@ from tests.test_ai_provider import TOKEN, make_member
 from finance import ai_http
 from finance.ai_harness import NotAHarness, list_backends, model_status
 from finance.ai_http import HarnessHttpError, json_request
-from finance.ai_services import (
-    HARNESS_UNAVAILABLE,
-    TOKEN_REJECTED,
-    AiError,
-    connect_harness,
-    connection_for,
-)
+from finance.ai_services import HARNESS_UNAVAILABLE, connect_harness, connection_for
 from finance.ai_urls import HARNESS_DISABLED, ORIGIN_NOT_ALLOWED, HarnessUrlError, parse_harness_url
 
 
@@ -172,17 +166,6 @@ def test_a_refused_port_gets_the_same_message(settings):
     settings.AGENT_HARNESS_ALLOWED_ORIGINS = ["http://127.0.0.1:1"]
     user, _person, _household = make_member("owner")
     assert _connect_messages(user, "http://127.0.0.1:1") == [HARNESS_UNAVAILABLE]
-
-
-@pytest.mark.django_db
-def test_a_proven_harness_still_names_a_rejected_token(harness):
-    state, url = harness
-    state.token = "ha-a-different-synthetic-token"
-    _user, person, _household = make_member("owner")
-    with pytest.raises(AiError) as caught:
-        connect_harness(person, base_url=url, token=TOKEN)
-    assert str(caught.value) == TOKEN_REJECTED
-    assert ("GET", "/api/v1/backends") in state.requests
 
 
 def test_an_oversized_response_is_refused(other_service):

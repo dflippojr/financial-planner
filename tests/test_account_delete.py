@@ -2,7 +2,6 @@ from datetime import date
 
 import pytest
 from django.contrib.auth import get_user_model
-from django.core.exceptions import PermissionDenied
 from django.db import connection
 from django.db.models import Q
 from django.test import Client
@@ -153,57 +152,6 @@ def assert_no_rows_reference(account_id):
 
 
 @pytest.mark.django_db
-def test_owner_deletes_private_and_household_accounts():
-    owner = make_person("owner")
-    member = make_person("member")
-    household = make_household(owner, member)
-    private = make_account(owner, name="Synthetic Private")
-    shared = make_account(owner, name="Synthetic Shared", scope=Account.Scope.HOUSEHOLD, household=household)
-    private_tx = make_transaction(owner, private, description="Synthetic private grocery")
-    shared_tx = make_transaction(owner, shared, description="Synthetic shared grocery")
-    TransactionCorrectionHistory.objects.create(
-        transaction=private_tx,
-        actor=owner,
-        field_name=TransactionCorrectionHistory.Field.DESCRIPTION,
-        previous_description="old",
-        new_description="Synthetic private grocery",
-    )
-    TransactionCorrectionHistory.objects.create(
-        transaction=shared_tx,
-        actor=owner,
-        field_name=TransactionCorrectionHistory.Field.DESCRIPTION,
-        previous_description="old",
-        new_description="Synthetic shared grocery",
-    )
-    private_id, shared_id = private.pk, shared.pk
-
-    delete_account(owner, private_id)
-    delete_account(owner, shared_id)
-
-    assert_no_rows_reference(private_id)
-    assert_no_rows_reference(shared_id)
-
-
-@pytest.mark.django_db
-def test_non_owner_and_outsider_cannot_delete_account():
-    owner = make_person("owner")
-    member = make_person("member")
-    outsider = make_person("outsider")
-    household = make_household(owner, member)
-    make_household(outsider, name="Other Household")
-    shared = make_account(owner, name="Synthetic Shared", scope=Account.Scope.HOUSEHOLD, household=household)
-    make_transaction(owner, shared)
-
-    with pytest.raises(PermissionDenied):
-        delete_account(member, shared.pk)
-    with pytest.raises(PermissionDenied):
-        delete_account(outsider, shared.pk)
-
-    assert related_counts(shared.pk)["Account"] == 1
-    assert related_counts(shared.pk)["Transaction"] == 1
-
-
-@pytest.mark.django_db
 def test_delete_repairs_transfer_partner_refunds_and_recurring_series():
     owner = make_person("owner")
     member = make_person("member")
@@ -322,24 +270,34 @@ def test_wrong_typed_name_deletes_nothing():
 
 
 @pytest.mark.django_db
-def test_owner_delete_button_and_success_message():
+@pytest.mark.parametrize("kind", ["private", "shared"])
+def test_owner_delete_button_and_success_message(kind):
     owner = make_person("owner")
     member = make_person("member")
     household = make_household(owner, member)
-    private = make_account(owner, name="Synthetic Private")
-    shared = make_account(owner, name="Synthetic Shared", scope=Account.Scope.HOUSEHOLD, household=household)
-    make_transaction(owner, private, description="Synthetic secret grocery")
-    make_transaction(owner, shared)
+    accounts = {
+        "private": make_account(owner, name="Synthetic Private"),
+        "shared": make_account(owner, name="Synthetic Shared", scope=Account.Scope.HOUSEHOLD, household=household),
+    }
+    target = accounts[kind]
+    bystander = accounts["shared" if kind == "private" else "private"]
+    target_tx = make_transaction(owner, target, description="Synthetic secret grocery")
+    make_transaction(owner, bystander, description="Synthetic bystander row")
+    TransactionCorrectionHistory.objects.create(
+        transaction=target_tx,
+        actor=owner,
+        field_name=TransactionCorrectionHistory.Field.DESCRIPTION,
+        previous_description="old",
+        new_description="Synthetic secret grocery",
+    )
 
     owner_page = signed_in(owner).get(reverse("account-list")).content.decode()
     member_page = signed_in(member).get(reverse("account-list")).content.decode()
-    confirm = signed_in(owner).get(reverse("account-delete", args=(shared.pk,)))
+    confirm = signed_in(owner).get(reverse("account-delete", args=(target.pk,)))
     confirm_page = confirm.content.decode()
 
-    assert reverse("account-delete", args=(private.pk,)) in owner_page
-    assert reverse("account-delete", args=(shared.pk,)) in owner_page
-    assert reverse("account-delete", args=(shared.pk,)) not in member_page
-    assert reverse("account-delete", args=(private.pk,)) not in member_page
+    assert reverse("account-delete", args=(target.pk,)) in owner_page
+    assert reverse("account-delete", args=(target.pk,)) not in member_page
     assert confirm.status_code == 200
     assert "1 transaction" in confirm_page
     assert "1 import" in confirm_page
@@ -348,10 +306,13 @@ def test_owner_delete_button_and_success_message():
     assert "csrfmiddlewaretoken" in confirm_page
     assert "Synthetic secret grocery" not in confirm_page
 
-    deleted = recent(owner).post(reverse("account-delete", args=(shared.pk,)), {"confirm_name": "Synthetic Shared"}, follow=True)
+    deleted = recent(owner).post(
+        reverse("account-delete", args=(target.pk,)), {"confirm_name": target.name}, follow=True
+    )
     assert deleted.redirect_chain[0][0] == reverse("account-list")
-    assert "Deleted Synthetic Shared." in deleted.content.decode()
-    assert_no_rows_reference(shared.pk)
+    assert f"Deleted {target.name}." in deleted.content.decode()
+    assert_no_rows_reference(target.pk)
+    assert related_counts(bystander.pk)["Transaction"] == 1
     assert "Synthetic secret grocery" not in deleted.content.decode()
 
 

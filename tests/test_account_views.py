@@ -7,7 +7,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from tests.helpers import stamp_recent_auth
-from finance.lifecycle_services import archive_account, share_account
+from finance.lifecycle_services import archive_account
 from finance.models import Account, Household, ImportBatch, Membership, Person, Transaction
 
 
@@ -260,49 +260,77 @@ def test_rename_rejects_empty_and_too_long_names():
     assert account.name == "Keep Name"
 
 
-@pytest.mark.parametrize(
-    ("action", "url_name"),
-    (
-        ("rename", "account-rename"),
-        ("share", "account-share"),
-        ("share-mode", "account-share-mode"),
-        ("unshare", "account-unshare"),
-        ("archive", "account-archive"),
-        ("delete", "account-delete"),
-    ),
-)
+ACTION_URLS = {
+    "rename": "account-rename",
+    "share": "account-share",
+    "share-mode": "account-share-mode",
+    "unshare": "account-unshare",
+    "archive": "account-archive",
+    "delete": "account-delete",
+}
+DENIED_CASES = [
+    pytest.param(action, actor, target, id=f"{actor}-{action}-{target}")
+    for action in ACTION_URLS
+    for actor, target in (("member", "private"), ("outsider", "private"), ("outsider", "shared"))
+] + [
+    pytest.param("unshare", "borrower", "lent", id="lent-borrower-unshare"),
+    pytest.param("archive", "borrower", "lent", id="lent-borrower-archive"),
+    pytest.param("share-mode", "borrower", "lent", id="lent-borrower-share-mode"),
+    pytest.param("unshare", "former", "shared", id="former-member-unshare"),
+    pytest.param("share", "member", "shared", id="co-member-share"),
+    pytest.param("delete", "member", "shared", id="co-member-delete"),
+]
+
+
+@pytest.mark.parametrize(("action", "actor_key", "target_key"), DENIED_CASES)
 @pytest.mark.django_db
-def test_unauthorized_account_actions_return_identical_404(action, url_name):
+def test_unauthorized_account_actions_return_identical_404(action, actor_key, target_key):
     owner = make_person("owner")
     member = make_person("member")
+    former = make_person("former")
     outsider = make_person("outsider")
-    household = make_household(owner, member)
+    household = make_household(owner, member, former)
+    Membership.objects.filter(person=former).update(ended_at=timezone.now())
     private = make_account(owner, name="Owner Private")
     shared = make_account(owner, name="Shared", scope=Account.Scope.HOUSEHOLD, household=household)
-    payloads = {
+    lent = make_account(
+        owner,
+        name="Lent",
+        scope=Account.Scope.HOUSEHOLD,
+        household=household,
+        share_mode=Account.ShareMode.LENT,
+    )
+    actor = {"member": member, "borrower": member, "former": former, "outsider": outsider}[actor_key]
+    target = {"private": private, "shared": shared, "lent": lent}[target_key]
+    payload = {
         "rename": {"name": "Hacked"},
-        "delete": {"confirm_name": "Shared"},
+        "delete": {"confirm_name": target.name},
         "share": {"share_mode": Account.ShareMode.CO_OWNED},
-        "share-mode": {"share_mode": Account.ShareMode.LENT},
-    }
-    payload = payloads.get(action, {})
+        "share-mode": (
+            {"share_mode": Account.ShareMode.CO_OWNED, "confirm_give_up_ownership": "on"}
+            if target is lent
+            else {"share_mode": Account.ShareMode.LENT}
+        ),
+    }.get(action, {})
     caller = recent if action in {"share", "share-mode", "unshare", "delete"} else signed_in
+    url_name = ACTION_URLS[action]
 
-    member_private = caller(member).post(reverse(url_name, args=(private.pk,)), payload)
-    outsider_private = caller(outsider).post(reverse(url_name, args=(private.pk,)), payload)
-    outsider_shared = caller(outsider).post(reverse(url_name, args=(shared.pk,)), payload)
-    missing = caller(owner).post(reverse(url_name, args=(missing_id(private),)), payload)
+    denied = caller(actor).post(reverse(url_name, args=(target.pk,)), payload)
+    missing = caller(owner).post(reverse(url_name, args=(missing_id(target),)), payload)
 
-    assert_same_404(member_private, missing)
-    assert_same_404(outsider_private, missing)
-    assert_same_404(outsider_shared, missing)
-    private.refresh_from_db()
-    shared.refresh_from_db()
-    assert private.name == "Owner Private"
-    assert private.scope == Account.Scope.PRIVATE
-    assert private.status == Account.Status.ACTIVE
-    assert shared.scope == Account.Scope.HOUSEHOLD
-    assert shared.status == Account.Status.ACTIVE
+    assert_same_404(denied, missing)
+    for account, name, scope, mode in (
+        (private, "Owner Private", Account.Scope.PRIVATE, ""),
+        (shared, "Shared", Account.Scope.HOUSEHOLD, Account.ShareMode.CO_OWNED),
+        (lent, "Lent", Account.Scope.HOUSEHOLD, Account.ShareMode.LENT),
+    ):
+        account.refresh_from_db()
+        assert (account.name, account.scope, account.share_mode, account.status) == (
+            name,
+            scope,
+            mode,
+            Account.Status.ACTIVE,
+        )
 
 
 @pytest.mark.django_db
@@ -389,31 +417,6 @@ def test_import_nav_points_to_import_page_when_an_account_exists():
 
 
 @pytest.mark.django_db
-def test_share_is_owner_only_even_for_household_member():
-    owner = make_person("owner")
-    member = make_person("member")
-    make_household(owner, member)
-    private = make_account(owner)
-    share_account(owner.user, private.pk, Account.ShareMode.CO_OWNED)
-    unshare = recent(owner).post(reverse("account-unshare", args=(private.pk,)))
-    private.refresh_from_db()
-    member_share = recent(member).post(
-        reverse("account-share", args=(private.pk,)),
-        {"share_mode": Account.ShareMode.CO_OWNED},
-    )
-    missing = recent(owner).post(
-        reverse("account-share", args=(missing_id(private),)),
-        {"share_mode": Account.ShareMode.CO_OWNED},
-    )
-
-    assert unshare.status_code == 302
-    assert private.scope == Account.Scope.PRIVATE
-    assert_same_404(member_share, missing)
-    private.refresh_from_db()
-    assert private.scope == Account.Scope.PRIVATE
-
-
-@pytest.mark.django_db
 def test_rename_is_refused_when_the_account_is_unshared_mid_request(monkeypatch):
     import finance.lifecycle_services as lifecycle
 
@@ -472,16 +475,7 @@ def test_lent_share_controls_and_mode_switch_on_accounts_page():
     assert "Make co-owned" not in member_page
     assert "Make lent" not in member_page
 
-    denied_unshare = recent(member).post(reverse("account-unshare", args=(lent.pk,)))
-    denied_archive = signed_in(member).post(reverse("account-archive", args=(lent.pk,)))
-    denied_mode = recent(member).post(
-        reverse("account-share-mode", args=(lent.pk,)),
-        {"share_mode": Account.ShareMode.CO_OWNED, "confirm_give_up_ownership": "on"},
-    )
     missing = recent(owner).post(reverse("account-unshare", args=(missing_id(lent),)))
-    assert_same_404(denied_unshare, missing)
-    assert_same_404(denied_archive, missing)
-    assert_same_404(denied_mode, missing)
 
     unconfirmed = recent(owner).post(
         reverse("account-share-mode", args=(lent.pk,)),

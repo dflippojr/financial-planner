@@ -21,7 +21,6 @@ from finance.ai_services import (
     connect_harness,
     connection_for,
 )
-from finance.ai_urls import HarnessUrlError, parse_harness_url
 from finance.log_redaction import redact
 
 
@@ -48,17 +47,12 @@ def _connect_message(client, base_url, token=TOKEN):
     return [str(message) for message in response.context["messages"]]
 
 
-@pytest.mark.parametrize("suffix", ["/api/v1", "/api/v1/"])
-def test_parse_drops_trailing_api_path(settings, suffix):
-    settings.AGENT_HARNESS_ALLOWED_ORIGINS = ["https://tower.example.ts.net"]
-    assert parse_harness_url(f"https://tower.example.ts.net{suffix}") == "https://tower.example.ts.net"
-
-
 @pytest.mark.django_db
-def test_url_ending_in_api_path_connects_like_the_bare_url(harness):
+@pytest.mark.parametrize("suffix", ["/api/v1", "/api/v1/"])
+def test_url_ending_in_api_path_connects_like_the_bare_url(harness, suffix):
     state, url = harness
     _user, person, _household = make_member("owner")
-    connect_harness(person, base_url=f"{url}/api/v1/", token=TOKEN)
+    connect_harness(person, base_url=f"{url}{suffix}", token=TOKEN)
     assert connection_for(person).base_url == url
     assert ("GET", "/api/v1") in state.requests
     assert not any(path.startswith("/api/v1/api/v1") for _method, path in state.requests)
@@ -72,6 +66,7 @@ def test_rejected_token_names_the_harness_settings(harness):
     messages = _connect_message(_signed_in_client(user), url)
     assert messages == [TOKEN_REJECTED]
     assert "Settings → Apps" in TOKEN_REJECTED
+    assert ("GET", "/api/v1/backends") in state.requests
 
 
 @pytest.mark.django_db
@@ -84,13 +79,6 @@ def test_page_path_is_refused_before_any_request(harness):
 
 
 @pytest.mark.django_db
-def test_unreachable_harness_gets_the_generic_message(settings):
-    settings.AGENT_HARNESS_ALLOWED_ORIGINS = ["http://127.0.0.1:1"]
-    user, _person, _household = make_member("owner")
-    messages = _connect_message(_signed_in_client(user), "http://127.0.0.1:1")
-    assert messages == [HARNESS_UNAVAILABLE]
-
-
 @pytest.mark.parametrize(
     "raw",
     [
@@ -104,22 +92,13 @@ def test_unreachable_harness_gets_the_generic_message(settings):
         "https://tést.ts.net",
     ],
 )
-def test_malformed_urls_are_refused_with_a_message(settings, raw):
-    settings.AGENT_HARNESS_ALLOWED_ORIGINS = ["http://localhost:8100", "https://tower.example.ts.net"]
-    with pytest.raises(HarnessUrlError):
-        parse_harness_url(raw)
-
-
-@pytest.mark.django_db
-@pytest.mark.parametrize(
-    "raw",
-    ["http://[::1", "http://localhost:abc", "http://localhost/ space", "http://localhost/café"],
-)
 def test_malformed_url_post_is_a_message_not_a_500(settings, raw):
-    settings.AGENT_HARNESS_ALLOWED_ORIGINS = ["http://localhost:8100"]
+    settings.AGENT_HARNESS_ALLOWED_ORIGINS = ["http://localhost:8100", "https://tower.example.ts.net"]
     user, person, _household = make_member("owner")
     messages = _connect_message(_signed_in_client(user), raw)
+    # Refused as a URL problem before any request: not the "unreachable" or "token" messages.
     assert len(messages) == 1
+    assert messages[0] not in (HARNESS_UNAVAILABLE, TOKEN_REJECTED)
     assert connection_for(person) is None
 
 

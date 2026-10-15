@@ -1,9 +1,11 @@
 import json
-from datetime import timedelta, timezone as dt_timezone
+from datetime import date, timedelta, timezone as dt_timezone
 from io import StringIO
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.management import call_command
 from django.core.management.base import CommandError
@@ -13,12 +15,20 @@ from django.urls import reverse
 from django.utils import timezone
 
 from finance.audit_services import append_event, events_for, purge_old_events, GAP_WARNING
+from finance.auth_services import create_invitation
+from finance.csv_import.services import undo_import_batch
 from finance.lifecycle_services import (
     archive_account, change_account_share_mode, delete_account, delete_member_data,
-    leave_household, share_account, unshare_account,
+    leave_household, rename_account, share_account, unshare_account,
 )
-from finance.models import Account, AuditEvent, Membership
-from tests.test_auth_flows import make_member
+from finance.manual_entry_services import add_manual_transaction, delete_manual_transaction
+from finance.models import Account, AuditEvent, Household, Membership, Person
+from finance.policy_services import accept_policy, current_policy
+from finance.snapshot_services import record_manual_snapshot
+from finance.simplefin_services import disconnect_connection
+from tests.test_auth_flows import PASSWORD, make_member
+from tests.test_manual_transactions import ENTRY_DATE, import_csv
+from tests.test_simplefin import account_payload, connect_owner
 
 pytestmark = pytest.mark.django_db
 
@@ -106,16 +116,6 @@ def test_co_owned_exit_and_deleted_shared_actor_revoke_former_member():
     assert events_for(other).count() == 3
 
 
-def test_deleted_shared_event_is_anonymized_while_household_remains():
-    _user, person, household, _other_user, other = shared_members()
-    shared = account_for(person, household)
-    delete_account(person, shared.pk)
-    delete_member_data(person)
-    event = events_for(other).get()
-    assert event.action == "account_deleted"
-    assert event.actor_id is None
-
-
 def test_deleted_shared_target_keeps_only_deletion_for_current_household():
     _user, person, household, _other_user, other = shared_members()
     account = account_for(person, household)
@@ -132,18 +132,6 @@ def test_deleted_shared_target_keeps_only_deletion_for_current_household():
     assert events_for(other).count() == 0
     delete_member_data(person)
     assert AuditEvent.objects.count() == 0  # no audience after last household removed
-
-
-def test_member_deletion_removes_private_and_anonymizes_shared_references():
-    _user, person, household, _other_user, other = shared_members()
-    append(account_for(person), person)
-    append(account_for(person, household), person, effective_member=person)
-    delete_member_data(person)
-    event = AuditEvent.objects.get()
-    assert event.actor_id is None
-    assert event.effective_member_id is None
-    assert event.checksum == event.calculated_checksum()
-    assert events_for(other).count() == 1
 
 
 def test_private_deletion_metadata_is_not_visible_to_household_and_goes_with_member():
@@ -173,30 +161,133 @@ def test_atomic_rollback_no_op_and_hidden_target_failures():
     archive_account(person, account.pk)
     archive_account(person, account.pk)
     assert AuditEvent.objects.count() == 3
-    _other_user, outsider, _h = make_member("outsider")
-    for pk in (account.pk, 987654):
-        with pytest.raises(PermissionDenied, match="^Operation is not permitted.$"):
-            delete_account(outsider, pk)
-    assert AuditEvent.objects.count() == 3
 
 
-@pytest.mark.parametrize("canary", [
-    "password-SYNTHETIC", "recovery-code-SYNTHETIC", "token-SYNTHETIC",
-    "https://user:secret@example.invalid", "Private merchant description", "123.45",
-    "Private note", "synthetic@example.invalid", "date,amount,raw CSV", "<OFX>raw</OFX>",
-    "receipt-private.png", "Private AI text",
+def _denial_setup(monkeypatch):
+    _user, owner, household = make_member("owner")
+    _outsider_user, outsider, _outsider_household = make_member("outsider")
+    shared = account_for(owner, household)
+    imported = import_csv(owner, shared)
+    imported_row = imported.batch.transactions.get()
+    manual_row = add_manual_transaction(
+        owner, shared.pk, transaction_date=ENTRY_DATE, amount_minor=-1234, description="Synthetic manual row"
+    )
+    connection = connect_owner(owner, monkeypatch, account_payload())
+    loner = Person.objects.create(
+        user=get_user_model().objects.create_user("loner", password=PASSWORD), display_name="Loner"
+    )
+    return SimpleNamespace(
+        owner=owner, outsider=outsider, shared=shared, batch=imported.batch, imported_row=imported_row,
+        manual_row=manual_row, connection=connection, loner=loner,
+    )
+
+
+@pytest.mark.parametrize(("operation", "attempt"), [
+    pytest.param("rename", lambda w: rename_account(w.outsider, w.shared.pk, "Hijack"), id="rename"),
+    pytest.param("delete", lambda w: delete_account(w.outsider, w.shared.pk), id="delete"),
+    pytest.param("delete-missing", lambda w: delete_account(w.outsider, w.shared.pk + 1000), id="delete-missing"),
+    pytest.param("undo-import", lambda w: undo_import_batch(w.outsider, w.shared.pk, w.batch.pk), id="undo-import"),
+    pytest.param("manual-add", lambda w: add_manual_transaction(
+        w.outsider, w.shared.pk, transaction_date=ENTRY_DATE, amount_minor=-1, description="x"), id="manual-add"),
+    pytest.param("manual-delete", lambda w: delete_manual_transaction(w.outsider, w.manual_row.pk),
+                 id="manual-delete"),
+    pytest.param("manual-delete-imported-row", lambda w: delete_manual_transaction(w.owner, w.imported_row.pk),
+                 id="manual-delete-imported-row"),
+    pytest.param("snapshot", lambda w: record_manual_snapshot(
+        w.outsider, w.shared.pk, snapshot_date=date(2026, 9, 1), amount_minor=1), id="snapshot"),
+    pytest.param("simplefin-disconnect", lambda w: disconnect_connection(w.outsider, w.connection.pk),
+                 id="simplefin-disconnect"),
+    pytest.param("leave-without-membership", lambda w: leave_household(w.loner), id="leave-without-membership"),
 ])
-def test_sensitive_metadata_is_rejected_without_echo(canary, caplog):
+def test_denied_service_calls_append_nothing(operation, attempt, monkeypatch):
+    world = _denial_setup(monkeypatch)
+    before = AuditEvent.objects.count()
+    with pytest.raises(PermissionDenied):
+        attempt(world)
+    assert AuditEvent.objects.count() == before
+
+
+def _seed_account_events(person, household):
+    append(account_for(person), person)
+    append(account_for(person, household), person, effective_member=person)
+    return ["account_archived"]
+
+
+def _seed_household_events(person, household):
+    create_invitation(person)
+    return ["invitation_created"]
+
+
+def _seed_personal_events(person, household):
+    append(account_for(person), person)
+    accept_policy(person, current_policy())
+    return []
+
+
+def _seed_deletion_events(person, household):
+    delete_account(person, account_for(person, household).pk)
+    return ["account_deleted"]
+
+
+@pytest.mark.parametrize("seed", [
+    pytest.param(_seed_account_events, id="account"),
+    pytest.param(_seed_household_events, id="household"),
+    pytest.param(_seed_personal_events, id="personal"),
+    pytest.param(_seed_deletion_events, id="deletion"),
+])
+def test_member_deletion_anonymizes_shared_events_and_removes_personal_ones_by_audience(seed):
+    _user, person, household, _other_user, other = shared_members()
+    survivors = seed(person, household)
+    person_id = person.pk
+
+    delete_member_data(person)
+
+    assert not AuditEvent.objects.filter(private_owner_id=person_id).exists()
+    assert sorted(events_for(other).values_list("action", flat=True)) == survivors
+    assert AuditEvent.objects.count() == len(survivors)
+    for event in AuditEvent.objects.all():
+        assert event.actor_id is None
+        assert event.effective_member_id is None
+        assert event.affected_member_id is None
+        assert event.checksum == event.calculated_checksum()
+    assert Household.objects.filter(pk=household.pk).exists()
+
+
+def _metadata_case(metadata, canary=None):
+    fields = {"action": "record_created", "target_type": "transaction", "target_id": 1, "metadata": metadata}
+    return pytest.param(fields, canary, id=f"metadata-{next(iter(metadata))}-{metadata[next(iter(metadata))]!r}")
+
+
+@pytest.mark.parametrize(("fields", "canary"), [
+    pytest.param({"changed_fields": (canary,)}, canary, id=f"changed-field-{index}")
+    for index, canary in enumerate([
+        "password-SYNTHETIC", "recovery-code-SYNTHETIC", "token-SYNTHETIC",
+        "https://user:secret@example.invalid", "Private merchant description", "123.45",
+        "Private note", "synthetic@example.invalid", "date,amount,raw CSV", "<OFX>raw</OFX>",
+        "receipt-private.png", "Private AI text",
+    ])
+] + [
+    _metadata_case({"file_name": "receipt-private.png"}, "receipt-private.png"),
+    _metadata_case({"format": "Private bank"}, "Private bank"),
+    _metadata_case({"row_count": "12"}),
+    _metadata_case({"row_count": True}),
+    _metadata_case({"operation_id": "not-a-uuid"}, "not-a-uuid"),
+    _metadata_case({"row_count": -1}),
+])
+def test_sensitive_metadata_is_rejected_without_echo(fields, canary, caplog):
     _user, person, _household = make_member()
     account = account_for(person)
     with pytest.raises(ValidationError) as error:
         with transaction.atomic():
-            append_event(account=account, actor=person, action="account_archived", changed_fields=(canary,))
-    assert canary not in str(error.value)
-    assert canary not in caplog.text
+            append_event(account=account, actor=person, **{"action": "account_archived", **fields})
+    assert "private" not in str(error.value).lower()
+    if canary:
+        assert canary not in str(error.value)
+        assert canary not in caplog.text
     assert AuditEvent.objects.count() == 0
-    with pytest.raises(TypeError):
-        append_event(account=account, actor=person, action="account_archived", payload={"secret": canary})
+    if "changed_fields" in fields:
+        with pytest.raises(TypeError):
+            append_event(account=account, actor=person, action="account_archived", payload={"secret": canary})
 
 
 def test_append_only_validation_and_typed_metadata():
