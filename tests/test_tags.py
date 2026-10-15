@@ -168,7 +168,7 @@ def test_tag_filter_totals_reconcile_across_list_spending_and_cash_flow():
     transfer_out = make_transaction(owner, checking, amount_minor=-2000, description="Synthetic transfer out", fingerprint="e" * 64)
     transfer_in = make_transaction(owner, savings, amount_minor=2000, description="Synthetic transfer in", fingerprint="f" * 64)
     refresh_transfer_pairs(owner)
-    untagged = make_transaction(owner, checking, amount_minor=-9999, description="Synthetic untagged", fingerprint="g" * 64)
+    make_transaction(owner, checking, amount_minor=-9999, description="Synthetic untagged", fingerprint="g" * 64)
     for txn in (purchase, refund, transfer_out, transfer_in):
         set_transaction_note_and_tags(owner, txn.pk, note="trip", tag_ids=[tag.pk])
     expected = income_and_spending_totals(
@@ -194,7 +194,6 @@ def test_tag_filter_totals_reconcile_across_list_spending_and_cash_flow():
     assert "Synthetic trip card" in listed
     assert "Synthetic untagged" not in listed
     assert "tag=" in cash.context["report"].periods[0].drilldown_url
-    assert untagged.pk
 
 
 @pytest.mark.django_db

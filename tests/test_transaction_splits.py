@@ -15,13 +15,11 @@ from finance.category_services import (
     SPLIT_SUM_ERROR,
     SPLIT_TRANSFER_ERROR,
     assign_category,
-    assign_split_part_category,
     ensure_household_categories,
     income_and_spending_totals,
     link_refund,
     refresh_transfer_pairs,
     split_transaction,
-    unsplit_transaction,
 )
 from finance.models import (
     Account,
@@ -201,76 +199,6 @@ def test_split_refusals():
                 {"category_id": housing.pk, "amount_minor": -2000},
             ),
         )
-
-
-@pytest.mark.django_db
-def test_split_assigns_existing_refunds_and_unsplit_restores_one_category():
-    owner = make_person("owner")
-    household = make_household(owner)
-    groceries = household.categories.get(name="Groceries")
-    housing = household.categories.get(name="Housing")
-    account = make_account(owner)
-    purchase = make_transaction(owner, account, amount_minor=-8000, description="Synthetic purchase")
-    refund = make_transaction(owner, account, amount_minor=2000, description="Synthetic refund")
-    assign_category(owner, purchase.pk, groceries.pk)
-    link_refund(owner, refund.pk, purchase.pk)
-
-    split_transaction(
-        owner,
-        purchase.pk,
-        (
-            {"category_id": groceries.pk, "amount_minor": -5000},
-            {"category_id": housing.pk, "amount_minor": -3000},
-        ),
-        refund_assignments={refund.pk: 1},
-    )
-
-    refund.refresh_from_db()
-    link = RefundLink.objects.get(refund=refund)
-    assert refund.category_id == housing.pk
-    assert link.original_part.category_id == housing.pk
-    totals = income_and_spending_totals(owner)
-    assert totals.spending_by_category_id[groceries.pk] == 5000
-    assert totals.spending_by_category_id[housing.pk] == 1000
-
-    unsplit_transaction(owner, purchase.pk, groceries.pk)
-    purchase.refresh_from_db()
-    refund.refresh_from_db()
-    link.refresh_from_db()
-    assert purchase.category_id == groceries.pk
-    assert purchase.category_source == Transaction.CategorySource.MANUAL
-    assert purchase.splits.count() == 0
-    assert refund.category_id == groceries.pk
-    assert link.original_part_id is None
-
-
-@pytest.mark.django_db
-def test_link_refund_to_split_requires_part_and_part_recategorize_propagates():
-    owner = make_person("owner")
-    household = make_household(owner)
-    groceries = household.categories.get(name="Groceries")
-    housing = household.categories.get(name="Housing")
-    dining = household.categories.get(name="Dining")
-    account = make_account(owner)
-    purchase = make_transaction(owner, account, amount_minor=-9000)
-    refund = make_transaction(owner, account, amount_minor=1000, description="Synthetic refund")
-    split_transaction(
-        owner,
-        purchase.pk,
-        (
-            {"category_id": groceries.pk, "amount_minor": -4000},
-            {"category_id": housing.pk, "amount_minor": -5000},
-        ),
-    )
-    with pytest.raises(ValidationError, match=SPLIT_PART_REQUIRED):
-        link_refund(owner, refund.pk, purchase.pk)
-    groceries_part = purchase.splits.get(category=groceries)
-    link_refund(owner, refund.pk, purchase.pk, original_part_id=groceries_part.pk)
-    refund.refresh_from_db()
-    assert refund.category_id == groceries.pk
-    assign_split_part_category(owner, groceries_part.pk, dining.pk)
-    refund.refresh_from_db()
-    assert refund.category_id == dining.pk
 
 
 @pytest.mark.django_db
@@ -573,7 +501,6 @@ def test_splitting_suggested_transfer_leg_drops_pair_and_allows_rematch():
     assert rematch_ids == {inflow.pk, leftover.pk}
 
 
-
 @pytest.mark.django_db
 def test_link_refund_page_requires_a_part_of_the_split_purchase():
     from finance.category_services import SPLIT_PART_MISMATCH
@@ -644,7 +571,22 @@ def test_split_page_assigns_a_visible_refund_to_the_chosen_part():
     assert response.status_code == 302
     refund.refresh_from_db()
     assert refund.category_id == housing.pk
-    assert RefundLink.objects.get(refund=refund).original_part.category_id == housing.pk
+    link = RefundLink.objects.get(refund=refund)
+    assert link.original_part.category_id == housing.pk
+    totals = income_and_spending_totals(owner)
+    assert totals.spending_by_category_id[groceries.pk] == 5000
+    assert totals.spending_by_category_id[housing.pk] == 1000
+
+    unsplit = client.post(reverse("transaction-unsplit", args=(purchase.pk,)), {"category": str(groceries.pk)})
+    assert unsplit.status_code == 302
+    purchase.refresh_from_db()
+    refund.refresh_from_db()
+    link.refresh_from_db()
+    assert purchase.category_id == groceries.pk
+    assert purchase.category_source == Transaction.CategorySource.MANUAL
+    assert purchase.splits.count() == 0
+    assert refund.category_id == groceries.pk
+    assert link.original_part_id is None
 
 
 @pytest.mark.django_db

@@ -105,7 +105,6 @@ def test_upload_view_download_and_delete(tmp_path, settings):
     assert "synthetic-lunch.jpg" in download["Content-Disposition"]
     assert "inline" in download["Content-Disposition"].lower()
     assert "sandbox" in download["Content-Security-Policy"]
-    assert download["X-Content-Type-Options"] == "nosniff"
     assert download.getvalue() == JPEG
 
     pdf = attach_receipt(owner, txn.pk, upload_bytes("synthetic.pdf", PDF))

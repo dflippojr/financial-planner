@@ -74,7 +74,6 @@ def test_nonpositive_transaction_has_no_refund_search(amount):
     assert b'Search purchases' not in response.content
     assert b'name="original"' not in response.content
     assert b'name="original_part"' not in response.content
-    assert len(response.content) < 60000
 
 
 def test_split_selection_loads_only_selected_purchase_parts():

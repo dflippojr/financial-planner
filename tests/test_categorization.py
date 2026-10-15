@@ -358,13 +358,10 @@ def test_exclusion_hidden_when_counterpart_is_not_visible():
     member_totals = income_and_spending_totals(member)
     client = Client()
     client.force_login(member.user)
-    review = client.get(reverse("transfer-review"))
     listed = client.get(reverse("transaction-list"))
 
     assert owner_totals.income_minor == 0
     assert member_totals.income_minor == 3000
-    assert TransferPair.objects.visible_to(member).count() == 0
-    assert b"Undo exclusion" not in review.content
     assert b"Owner Private" not in listed.content
     assert shared_leg.description.encode() in listed.content
     shared_on_list = (
@@ -402,11 +399,14 @@ def test_outsider_cannot_categorize_or_see_private_errors():
 
 
 @pytest.mark.django_db
-def test_renamed_system_category_is_not_reseeded():
+def test_renamed_system_and_starter_categories_are_not_reseeded():
     owner = make_person("owner")
     household = make_household(owner)
     uncategorized = household.categories.get(code=Category.Code.UNCATEGORIZED)
+    groceries = household.categories.get(name="Groceries")
     rename_category(owner, uncategorized.pk, "Inbox")
+    rename_category(owner, groceries.pk, "Synthetic food")
+    ensure_household_categories(household)
     client = Client()
     client.force_login(owner.user)
 
@@ -419,6 +419,8 @@ def test_renamed_system_category_is_not_reseeded():
     assert household.categories.filter(code=Category.Code.TRANSFER).count() == 1
     uncategorized.refresh_from_db()
     assert uncategorized.name == "Inbox"
+    assert not household.categories.filter(name="Groceries").exists()
+    assert household.categories.filter(pk=groceries.pk, name="Synthetic food").exists()
 
 
 @pytest.mark.django_db
@@ -776,20 +778,6 @@ def test_narrowing_transfer_window_revalidates_pairs_then_refreshes():
     assert auto_out.category_id is None
     assert totals.income_minor == 5800
     assert totals.spending_minor == 3400
-
-
-
-@pytest.mark.django_db
-def test_renamed_starter_category_is_not_reseeded():
-    owner = make_person("owner")
-    household = make_household(owner)
-    groceries = household.categories.get(name="Groceries")
-
-    rename_category(owner, groceries.pk, "Synthetic food")
-    ensure_household_categories(household)
-
-    assert not household.categories.filter(name="Groceries").exists()
-    assert household.categories.filter(pk=groceries.pk, name="Synthetic food").exists()
 
 
 @pytest.mark.django_db

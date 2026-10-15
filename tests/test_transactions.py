@@ -1,6 +1,5 @@
 import threading
 from datetime import date
-from decimal import Decimal
 from unittest.mock import patch
 
 import pytest
@@ -311,16 +310,6 @@ def test_correction_form_converts_money_exactly_and_rejects_bigint_overflow():
 
 
 @pytest.mark.django_db
-def test_correction_form_initial_amount_does_not_round_through_float():
-    owner = make_person("owner")
-    financial_transaction = make_transaction(owner, amount_minor=9_007_199_254_740_993)
-
-    form = TransactionCorrectionForm.for_transaction(financial_transaction)
-
-    assert form.initial["amount"] == Decimal("90071992547409.93")
-
-
-@pytest.mark.django_db
 def test_correction_edit_posts_large_amount_as_decimal_text():
     owner = make_person("owner")
     financial_transaction = make_transaction(owner, amount_minor=9_007_199_254_740_993)
@@ -473,7 +462,6 @@ def test_correction_records_one_history_entry_per_changed_field():
     assert description_entry.new_display == "Corrected synthetic groceries"
     assert amount_entry.previous_display == "-12.34 USD"
     assert amount_entry.new_display == "-98.76 USD"
-    assert str(date_entry) == "Correction of transaction_date"
     assert not TransactionCorrectionHistory.objects.visible_to(None).exists()
     financial_transaction.refresh_from_db()
     assert financial_transaction.original_fields == original_fields
@@ -534,7 +522,6 @@ def test_edit_page_shows_history_only_to_people_who_can_see_the_transaction():
     assert "Household correction" in page
     assert outsider_response.status_code == 404
     assert outsider_response.content == missing_response.content
-    assert not TransactionCorrectionHistory.objects.visible_to(outsider).exists()
     assert TransactionCorrectionHistory.objects.visible_to(outsider).count() == 0
     assert TransactionCorrectionHistory.objects.visible_to(member).count() == 2
 

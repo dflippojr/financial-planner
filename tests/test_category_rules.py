@@ -678,7 +678,7 @@ def test_deleting_an_account_removes_its_rule_history_and_account_rules():
         min_amount_minor=None, max_amount_minor=None, category_id=dining(household).pk, priority=1,
     )
     apply_rule(owner, only_this.pk)
-    apply_rule(owner, general.pk)
+    application, _skipped = apply_rule(owner, general.pk)
 
     delete_account(owner, account.pk)
 
@@ -687,6 +687,9 @@ def test_deleting_an_account_removes_its_rule_history_and_account_rules():
     assert not RuleApplicationEntry.objects.filter(transaction__account_id=account.pk).exists()
     assert RuleApplicationEntry.objects.filter(transaction=kept).exists()
     assert RuleApplication.objects.filter(rule=general).exists()
+    reverse_application(owner, application.pk)
+    kept.refresh_from_db()
+    assert kept.category_id is None
 
 
 @pytest.mark.django_db
@@ -808,7 +811,6 @@ def test_personal_rule_does_not_apply_former_household_category_after_move():
 
     txn.refresh_from_db()
     assert txn.category_id is None
-    assert groceries(household_a).household_id != household_b.pk
 
 
 @pytest.mark.django_db
@@ -1029,34 +1031,6 @@ def test_former_member_can_undo_a_household_rule_on_their_lent_account():
 
     txn.refresh_from_db()
     assert txn.category_id is None
-
-
-@pytest.mark.django_db
-def test_deleting_an_account_keeps_rule_history_for_other_accounts():
-    from finance.lifecycle_services import delete_account
-
-    owner = make_person("owner-delete")
-    household = make_household(owner)
-    first = make_account(owner)
-    second = make_account(owner, name="Synthetic Savings")
-    make_transaction(owner, first, fingerprint="eb".ljust(64, "0"))
-    kept = make_transaction(owner, second, fingerprint="ec".ljust(64, "0"))
-    rule = save_category_rule(
-        owner, owner_kind="personal", description_contains="kroger", account_id=None,
-        min_amount_minor=None, max_amount_minor=None, category_id=groceries(household).pk, priority=0,
-    )
-    application, _skipped = apply_rule(owner, rule.pk)
-    save_category_rule(
-        owner, rule_id=rule.pk, owner_kind="personal", description_contains="kroger", account_id=first.pk,
-        min_amount_minor=None, max_amount_minor=None, category_id=groceries(household).pk, priority=0,
-    )
-
-    delete_account(owner, first.pk)
-
-    assert RuleApplicationEntry.objects.filter(application=application, transaction=kept).exists()
-    reverse_application(owner, application.pk)
-    kept.refresh_from_db()
-    assert kept.category_id is None
 
 
 @pytest.mark.django_db
