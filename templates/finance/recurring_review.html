@@ -49,7 +49,7 @@
             <td class="whitespace-nowrap text-right max-md:hidden">{% include "finance/_amount.html" with value=series.annual_display tone="out" %}</td>
             <td class="text-right">{% with label="Actions for "|add:series.display_name %}{% include "finance/_row_menu.html" with items="finance/_recurring_menu_items.html" %}{% endwith %}</td>
           </tr>
-          {% include "finance/_recurring_charges_row.html" with colspan=6 %}
+          {% if not series.shared_by_other %}{% include "finance/_recurring_charges_row.html" with colspan=6 %}{% endif %}
         {% endfor %}
         </tbody>
       </table>

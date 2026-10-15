@@ -8,6 +8,7 @@
     <button type="submit">Confirm resume</button>
   </form>
 </li>
+{% if not item.series.shared_by_other %}
 <li>
   <form method="post">
     {% csrf_token %}
@@ -16,6 +17,7 @@
     <button type="submit">Keep cancelled</button>
   </form>
 </li>
+{% endif %}
 {% endif %}
 <li>
   <form method="post">

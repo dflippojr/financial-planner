@@ -1141,6 +1141,56 @@ class RecurringSeries(models.Model):
             ).exclude(transaction_id__in=visible_transactions)
             return self.filter(person=person).exclude(models.Exists(hidden_members))
 
+        def shared_with(self, principal, *, linkers=False):
+            """Confirmed series another current household member owns, when every charge sits in a household account.
+
+            Every member may edit shared accounts, so a bill built only from
+            household charges is the household's to cancel or resume. A series
+            with any private charge stays with its owner.
+            """
+            person = _person_for(principal)
+            if person is None:
+                return self.none()
+            household_ids = Membership.objects.filter(person=person, ended_at__isnull=True).values("household_id")
+            member_ids = Membership.objects.filter(
+                household_id__in=household_ids, ended_at__isnull=True, person__isnull=False
+            ).values("person_id")
+            household_accounts = Account.objects.filter(
+                scope=Account.Scope.HOUSEHOLD, household_id__in=household_ids
+            ).values("pk")
+            visible_transactions = Transaction.objects.visible_to(person).values("pk")
+            outside = RecurringSeriesMember.objects.filter(series_id=models.OuterRef("pk")).exclude(
+                transaction__account_id__in=household_accounts, transaction_id__in=visible_transactions
+            )
+            # A stale `is_active` flag on another member's row is not trusted:
+            # the bill must still have a charge on an active account.
+            has_members = RecurringSeriesMember.objects.filter(
+                series_id=models.OuterRef("pk"),
+                transaction__status=Transaction.Status.ACTIVE,
+                transaction__account__status=Account.Status.ACTIVE,
+            )
+            if linkers:
+                # Inactive and archived-account copies still link a bill's
+                # histories, as in the projection; they are never offered.
+                has_members = RecurringSeriesMember.objects.filter(series_id=models.OuterRef("pk"))
+            return (
+                self.filter(person_id__in=member_ids, status=RecurringSeries.Status.CONFIRMED)
+                .exclude(person=person)
+                .filter(models.Exists(has_members))
+                .exclude(models.Exists(outside))
+            )
+
+        def actionable_by(self, principal, *, linkers=False):
+            """Series the viewer may cancel or resume: their own, plus the household's shared ones.
+
+            With `linkers`, shared series with no live charge are included too,
+            for finding which copies make up one bill.
+            """
+            return self.filter(
+                Q(pk__in=self.visible_to(principal).values("pk"))
+                | Q(pk__in=self.shared_with(principal, linkers=linkers).values("pk"))
+            )
+
     objects = QuerySet.as_manager()
 
     class Meta:

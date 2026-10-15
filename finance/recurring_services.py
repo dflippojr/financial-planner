@@ -16,7 +16,7 @@ from .access import require_person as _person_for
 from .category_services import exclusion_exists_for
 from .audit_services import personal_audience, record
 from .lifecycle_services import lock_actor_household
-from .models import AuditEvent, Person, RecurringExclusion, RecurringSeries, RecurringSeriesMember, Transaction
+from .models import Account, AuditEvent, Person, RecurringExclusion, RecurringSeries, RecurringSeriesMember, Transaction
 from .months import add_months_clamped
 
 MANUAL_REASON = "grouping edited manually"
@@ -1239,10 +1239,151 @@ def create_manual_series(principal, name, cadence, transaction_ids):
     return _recompute_series_from_members(series)
 
 
-def _lock_confirmed_series(principal, series_id):
+def _charge_ids(series):
+    return {member.transaction_id for member in series.members.all()}
+
+
+def _bill_components(series_list):
+    """Group series into bills: copies linked by shared charges, directly or through another copy.
+
+    Mirrors the projection's one-series-per-bill rule so the page and the
+    cancel action agree with what the plan counts. Returns lists of series.
+    """
+    parent = list(range(len(series_list)))
+
+    def find(index):
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    first_with_charge = {}
+    for index, series in enumerate(series_list):
+        for charge_id in _charge_ids(series):
+            other = first_with_charge.setdefault(charge_id, index)
+            parent[find(index)] = find(other)
+    groups = {}
+    for index, series in enumerate(series_list):
+        groups.setdefault(find(index), []).append(series)
+    return list(groups.values())
+
+
+def shared_series_for_review(principal, own_series):
+    """Household bills another member confirmed, for the Recurring page.
+
+    A bill several members confirmed shows once, so totals do not count it
+    twice: the viewer's own copy wins, then the first shared copy. Active and
+    cancelled copies dedupe separately. Each row is marked `shared_by_other`:
+    the viewer may cancel or resume it, but grouping edits stay with its owner.
+    """
+    shared = list(
+        RecurringSeries.objects.shared_with(principal, linkers=True)
+        .prefetch_related("members__transaction__account")
+        .order_by("display_name", "pk")
+    )
+    own_ids = {series.pk for series in own_series}
+    candidates = [
+        series
+        for series in [*own_series, *shared]
+        if series.status == RecurringSeries.Status.CONFIRMED and _household_only(series)
+    ]
+    rows = []
+    # Group over active and cancelled copies together, so a cancelled copy
+    # still links the active copies it shares charges with.
+    for bill in _bill_components(candidates):
+        for cancelled in (False, True):
+            copies = [
+                series
+                for series in bill
+                if (series.cancelled_at is not None) == cancelled and series.is_active and _has_live_charge(series)
+            ]
+            if not copies or any(series.pk in own_ids for series in copies):
+                continue
+            # The copy with the latest charge holds the current price, then the lowest id.
+            chosen = min(copies, key=lambda series: (_latest_charge_ordinal(series), series.pk))
+            chosen.shared_by_other = True
+            rows.append(chosen)
+    rows.sort(key=lambda series: (series.display_name, series.pk))
+    return rows
+
+
+def _has_live_charge(series):
+    return any(
+        member.transaction.status == Transaction.Status.ACTIVE and member.transaction.account.status == Account.Status.ACTIVE
+        for member in series.members.all()
+    )
+
+
+def _latest_charge_ordinal(series):
+    # Only live charges count: an archived account's last charge is not the current price.
+    dates = [
+        member.transaction.transaction_date.toordinal()
+        for member in series.members.all()
+        if member.transaction.status == Transaction.Status.ACTIVE
+        and member.transaction.account.status == Account.Status.ACTIVE
+    ]
+    return -max(dates, default=0)
+
+
+def _household_only(series):
+    """True when every charge sits in a household account; a private history never links bills."""
+    return all(member.transaction.account.scope == Account.Scope.HOUSEHOLD for member in series.members.all())
+
+
+def _bill_copies(person, series):
+    """The series the person may act on that belong to the same bill as `series`, itself included.
+
+    Like the projection, only series built wholly from household charges
+    link into one bill; a series with a private charge acts alone.
+    """
+    candidates = [
+        copy
+        for copy in RecurringSeries.objects.actionable_by(person, linkers=True)
+        .filter(status=RecurringSeries.Status.CONFIRMED)
+        .prefetch_related("members__transaction__account")
+        .order_by("pk")
+        if copy.pk == series.pk or _household_only(copy)
+    ]
+    if not _household_only(next(copy for copy in candidates if copy.pk == series.pk)):
+        return [series]
+    for bill in _bill_components(candidates):
+        if any(copy.pk == series.pk for copy in bill):
+            return bill
+    return [series]
+
+
+def _set_bill_cancelled(person, series, *, cancelled_at, action):
+    """Cancel or resume every copy of the bill whose state differs, returning the row for `series`.
+
+    Members may each have confirmed their own copy of one household bill, so
+    changing only one copy would leave another still projecting it, or still
+    cancelled after a resume.
+    """
+    wanted = {
+        copy.pk
+        for copy in _bill_copies(person, series)
+        if copy.is_active and (copy.cancelled_at is None) == (cancelled_at is not None)
+    }
+    wanted.add(series.pk)
+    result = series
+    for copy in RecurringSeries.objects.select_for_update(of=("self",)).filter(pk__in=wanted).order_by("pk"):
+        copy.cancelled_at = cancelled_at
+        copy.save(update_fields=("cancelled_at", "updated_at"))
+        _record_series(person, action, copy)
+        if copy.pk == series.pk:
+            result = copy
+    return result
+
+
+def _lock_confirmed_series(principal, series_id, *, own_only=False):
+    # Cancel, resume and price acknowledgement are household actions, so a
+    # series another member confirmed from household charges qualifies too.
+    # `own_only` keeps actions that write per-person state with the owner.
     person = _person_for(principal)
     lock_actor_household(person)
-    _visible_series(person, series_id)
+    candidates = RecurringSeries.objects.visible_to(person) if own_only else RecurringSeries.objects.actionable_by(person)
+    if not candidates.filter(pk=series_id).exists():
+        raise PermissionDenied(_DENIED)
     series = RecurringSeries.objects.select_for_update(of=("self",)).filter(pk=series_id).first()
     if series is None or series.status != RecurringSeries.Status.CONFIRMED or not series.is_active:
         raise PermissionDenied(_DENIED)
@@ -1254,10 +1395,7 @@ def cancel_recurring_series(principal, series_id):
     person, series = _lock_confirmed_series(principal, series_id)
     if series.cancelled_at is not None:
         return series
-    series.cancelled_at = timezone.now()
-    series.save(update_fields=("cancelled_at", "updated_at"))
-    _record_series(person, AuditEvent.Action.RECURRING_CANCELED, series)
-    return series
+    return _set_bill_cancelled(person, series, cancelled_at=timezone.now(), action=AuditEvent.Action.RECURRING_CANCELED)
 
 
 @transaction.atomic
@@ -1265,10 +1403,7 @@ def undo_cancel_recurring_series(principal, series_id):
     person, series = _lock_confirmed_series(principal, series_id)
     if series.cancelled_at is None:
         return series
-    series.cancelled_at = None
-    series.save(update_fields=("cancelled_at", "updated_at"))
-    _record_series(person, AuditEvent.Action.RECURRING_RESUMED, series)
-    return series
+    return _set_bill_cancelled(person, series, cancelled_at=None, action=AuditEvent.Action.RECURRING_RESUMED)
 
 
 @transaction.atomic
@@ -1278,7 +1413,7 @@ def confirm_resume_recurring_series(principal, series_id):
 
 @transaction.atomic
 def keep_cancelled_recurring_series(principal, series_id):
-    person, series = _lock_confirmed_series(principal, series_id)
+    person, series = _lock_confirmed_series(principal, series_id, own_only=True)
     if series.cancelled_at is None:
         raise PermissionDenied(_DENIED)
     cutoff = timezone.localdate(series.cancelled_at)
