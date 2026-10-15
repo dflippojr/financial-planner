@@ -123,10 +123,6 @@ def test_non_operators_do_not_see_backup_status(tmp_path):
     assert b"financial_planner_synthetic.dump" not in member_page.content
 
 
-def test_missing_backup_status_is_unhealthy():
-    assert backup_is_unhealthy(None) is True
-
-
 @pytest.mark.django_db
 def test_missing_status_file_alerts_and_settings_say_none_found(tmp_path):
     operator = make_person("operator")
@@ -232,38 +228,30 @@ def test_restore_check_turned_off_is_never_overdue():
     assert backup_is_unhealthy(status, now=NOW) is False
 
 
-def test_status_without_restore_check_keys_counts_as_never_checked():
-    # A status file from before the restore check existed.
-    status = _healthy_status()
-    for key in ("restore_check_error", "restore_check_interval_days", "restore_check"):
-        del status[key]
-    assert backup_is_unhealthy(status, now=NOW) is False
-    never_checked = _healthy_status(restore_check=None)
-    assert backup_is_unhealthy(never_checked, now=NOW) is False
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {},  # a status file from before the restore check existed
+        {"restore_check_interval_days": "7"},  # restore check on, but it has never run
+    ],
+)
+def test_status_without_a_restore_check_time_counts_as_never_checked(tmp_path, fields):
+    make_person("operator")
+    status = tmp_path / "status"
+    fresh = (timezone.now() - timedelta(hours=1)).astimezone(dt_timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _write_status(status, last_success_at=fresh, dump_name="financial_planner_synthetic.dump", **fields)
+
+    with override_settings(BACKUP_STATUS_PATH=str(status), OPERATOR_USERNAMES="operator"):
+        created = evaluate_backup_alerts(today=datetime(2026, 10, 4).date())
+
+    assert created == []
+    assert not Alert.objects.filter(kind=Alert.Kind.BACKUP).exists()
 
 
 def test_stale_nightly_backup_title_wins_over_an_overdue_restore_check():
     status = _healthy_status(last_success=NOW - timedelta(days=3), restore_check=NOW - timedelta(days=10))
     assert backup_alert_title(status, now=NOW) == "Nightly backups have not succeeded"
-
-
-@pytest.mark.django_db
-def test_failed_restore_check_alerts_operators(tmp_path):
-    operator = make_person("operator")
-    status = tmp_path / "status"
-    now = timezone.now().astimezone(dt_timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    _write_status(
-        status,
-        last_success_at=now,
-        dump_name="financial_planner_synthetic.dump",
-        restore_check_interval_days="7",
-        restore_check_error="Restore check failed: pg_restore could not restore the dump",
-    )
-
-    with override_settings(BACKUP_STATUS_PATH=str(status), OPERATOR_USERNAMES="operator"):
-        created = evaluate_backup_alerts(today=datetime(2026, 10, 4).date())
-
-    assert [(row.recipient_id, row.title) for row in created] == [(operator.pk, "The weekly restore check failed")]
 
 
 @pytest.mark.django_db

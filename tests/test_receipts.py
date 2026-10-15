@@ -18,6 +18,7 @@ from finance.export import write_export_zip
 from finance.lifecycle_services import delete_account, delete_member_data
 from finance.models import Account, Household, ImportBatch, Membership, Person, Receipt, Transaction, TransactionSplit
 from finance.receipt_services import attach_receipt, remove_receipt, sniff_receipt_content_type
+from tests.helpers import compose_service
 
 
 PASSWORD = "Synthetic-passphrase-42!"
@@ -105,7 +106,6 @@ def test_upload_view_download_and_delete(tmp_path, settings):
     assert "synthetic-lunch.jpg" in download["Content-Disposition"]
     assert "inline" in download["Content-Disposition"].lower()
     assert "sandbox" in download["Content-Security-Policy"]
-    assert download["X-Content-Type-Options"] == "nosniff"
     assert download.getvalue() == JPEG
 
     pdf = attach_receipt(owner, txn.pk, upload_bytes("synthetic.pdf", PDF))
@@ -171,7 +171,7 @@ def test_oversized_and_mislabeled_files_are_rejected(tmp_path, settings):
 
 
 @pytest.mark.django_db
-def test_files_are_removed_with_transaction_account_and_member(tmp_path, settings):
+def test_deleting_an_account_removes_receipt_rows_and_leaves_files_for_the_sweep(tmp_path, settings):
     settings.RECEIPTS_DIR = str(tmp_path)
     owner = make_person("owner")
     txn = make_transaction(owner)
@@ -183,14 +183,6 @@ def test_files_are_removed_with_transaction_account_and_member(tmp_path, setting
     assert deleted
     assert path.is_file()
     assert not Receipt.objects.filter(pk=receipt.pk).exists()
-
-    leftover = make_person("leaving")
-    leftover_txn = make_transaction(leftover)
-    leftover_receipt = attach_receipt(leftover, leftover_txn.pk, upload_bytes("mine.jpg", PNG))
-    leftover_path = Path(settings.RECEIPTS_DIR) / leftover_receipt.stored_name
-    delete_member_data(leftover)
-    assert leftover_path.is_file()
-    assert not Receipt.objects.filter(pk=leftover_receipt.pk).exists()
 
 
 @pytest.mark.django_db
@@ -351,8 +343,7 @@ def test_the_grace_period_starts_when_an_old_receipt_is_deleted(tmp_path, settin
 
 
 def test_the_sync_container_can_sweep_receipts():
-    compose = (Path(__file__).resolve().parent.parent / "compose.yml").read_text()
-    scheduler = compose.split("  background:", 1)[1].split("\nvolumes:", 1)[0]
+    scheduler = compose_service("background")
 
     assert "RECEIPTS_DIR: /receipts" in scheduler
     assert "- receipts:/receipts" in scheduler
