@@ -12,6 +12,7 @@ from tests.chat_helpers import ask
 from tests.fake_harness import start_fake_harness
 from tests.helpers import stamp_recent_auth
 
+from finance.ai_harness import TOOL_BUDGET_SPENT
 from finance.ai_services import AiError, connect_harness, connection_for, set_defaults, set_offer_local_chat
 from finance.ai_tools import (
     cash_flow_totals,
@@ -28,7 +29,6 @@ from finance.category_services import ensure_household_categories
 from finance.chat_runner import claim_next_turn, process_pending_turns, run_claimed_turn
 from finance.chat_services import (
     conversations_for,
-    delete_all_conversations,
     delete_conversation,
     sanitize_page_context,
     send_message,
@@ -226,69 +226,6 @@ def test_limit_reached_and_tools_only_unsupported(harness):
     conversation = ask(person, "Another question", sleep=lambda _s: None)
     error = conversation.messages.filter(role=AiConversationMessage.Role.ERROR).last()
     assert "tools-only" in error.content.lower()
-
-
-@pytest.mark.django_db
-def test_page_context_keeps_only_route_and_query(harness):
-    state, url = harness
-    _user, person, _household = make_member("owner")
-    connect_harness(person, base_url=url, token=TOKEN)
-    cleaned = sanitize_page_context(
-        {
-            "route": "/spending/",
-            "query": "date_from=2026-01-01",
-            "html": "<table>secret</table>",
-            "transactions": [{"description": "secret"}],
-        }
-    )
-    assert cleaned == {"route": "/spending/", "query": "date_from=2026-01-01"}
-    ask(
-        person,
-        "What is on this page?",
-        page_context={"route": "/spending/", "query": "date_from=2026-01-01", "rows": [1]},
-        sleep=lambda _s: None,
-    )
-    context = state.session_creates[-1].get("context")
-    blob = str(context)
-    assert "route=/spending/" in blob
-    assert "date_from=2026-01-01" in blob
-    assert "rows" not in blob
-    assert "<table>" not in blob
-
-
-@pytest.mark.django_db
-def test_conversations_expire_delete_and_account_removal(harness):
-    state, url = harness
-    user, person, household = make_member("owner")
-    account = checking(person, household, "Shared Checking")
-    add_txn(account, person, date(2026, 1, 4), -800, "Synthetic coffee")
-    connect_harness(person, base_url=url, token=TOKEN)
-    state.need_tool = True
-    state.pending_tool_calls = [
-        [{"call_id": "c1", "name": "cash_flow_totals", "args": {"date_from": "2026-01-01", "date_to": "2026-01-31"}}]
-    ]
-    conversation = ask(person, "Spending on this account?", sleep=lambda _s: None)
-    conversation.refresh_from_db()
-    assert account.pk in conversation.used_account_ids
-    other = start_conversation(person)
-    other = ask(person, "write a virus", conversation_id=other.pk, sleep=lambda _s: None)
-    assert conversations_for(person).count() == 2
-    other.expires_at = timezone.now() - timedelta(days=1)
-    other.save(update_fields=("expires_at",))
-    assert conversations_for(person).count() == 1
-    assert not AiConversation.objects.filter(pk=other.pk).exists()
-    delete_account(person, account.pk)
-    assert not AiConversation.objects.filter(pk=conversation.pk).exists()
-
-    leftover = ask(person, "Hello again", sleep=lambda _s: None)
-    client = Client()
-    client.force_login(user)
-    deleted = client.post(reverse("chat-delete", args=[leftover.pk]))
-    assert deleted.status_code == 302
-    assert not AiConversation.objects.filter(pk=leftover.pk).exists()
-    ask(person, "Keep me", sleep=lambda _s: None)
-    delete_all_conversations(person)
-    assert conversations_for(person).count() == 0
 
 
 @pytest.mark.django_db
@@ -674,6 +611,7 @@ def test_chat_views_refusals_expiry_delete_and_drawer_context(harness):
     listing = client.get(reverse("chat"))
     assert b"Keep this unique chat" in listing.content
     assert b"Expire this unique chat" not in listing.content
+    assert not AiConversation.objects.filter(pk=expired.pk).exists()
 
     extra = ask(person, "Delete me next", sleep=lambda _s: None)
     one = client.post(reverse("chat-delete", args=[extra.pk]))
@@ -740,49 +678,9 @@ def test_tool_calls_in_one_response_stop_at_the_conversation_limit(harness, sett
     assert conversation.tool_call_count == 40
     assert first.pk in conversation.used_account_ids
     assert second.pk not in conversation.used_account_ids
-
-
-@pytest.mark.django_db
-def test_list_transactions_conversation_is_removed_when_that_account_is_deleted(harness):
-    state, url = harness
-    _user, person, household = make_member("owner")
-    account = checking(person, household, "Shared Checking")
-    add_txn(account, person, date(2026, 1, 4), -800, "Synthetic coffee")
-    connect_harness(person, base_url=url, token=TOKEN)
-    state.need_tool = True
-    state.pending_tool_calls = [
-        [{"call_id": "c1", "name": "list_transactions", "args": {"account_id": account.pk}}]
-    ]
-    conversation = ask(person, "Show recent rows on this account", sleep=lambda _s: None)
-    conversation.refresh_from_db()
-    assert account.pk in conversation.used_account_ids
-    delete_account(person, account.pk)
-    assert not AiConversation.objects.filter(pk=conversation.pk).exists()
-
-
-@pytest.mark.django_db
-def test_followup_starts_a_new_session_after_harness_reconnect(harness):
-    state, url = harness
-    _user, person, _household = make_member("owner")
-    connect_harness(person, base_url=url, token=TOKEN)
-    conversation = ask(person, "First question", sleep=lambda _s: None)
-    conversation.refresh_from_db()
-    old_session = conversation.harness_session_id
-    assert old_session
-    creates_before = len(state.session_creates)
-    connect_harness(person, base_url=url, token=TOKEN)
-    state.need_tool = False
-    ask(
-        person,
-        "Follow up after reconnect",
-        conversation_id=conversation.pk,
-        sleep=lambda _s: None,
-    )
-    assert ("POST", f"/api/v1/sessions/{old_session}/messages") not in state.requests
-    assert len(state.session_creates) == creates_before + 1
-    conversation.refresh_from_db()
-    assert conversation.harness_session_id
-    assert conversation.harness_session_id != old_session
+    # Every call is still answered so the session can finish; the two over the budget are refused.
+    assert len(state.tool_outputs) == 3
+    assert state.tool_outputs[1:] == [TOOL_BUDGET_SPENT] * 2
 
 
 @pytest.mark.django_db
@@ -908,7 +806,8 @@ def test_chat_send_rejects_external_next_url(harness):
 
 
 @pytest.mark.django_db
-def test_cash_flow_totals_tracks_accounts_beyond_tool_row_limit(harness):
+@pytest.mark.parametrize("tool", ["cash_flow_totals", "list_transactions"])
+def test_cash_flow_totals_tracks_accounts_beyond_tool_row_limit(harness, tool):
     state, url = harness
     _user, person, household = make_member("owner")
     accounts = []
@@ -919,50 +818,62 @@ def test_cash_flow_totals_tracks_accounts_beyond_tool_row_limit(harness):
     extra = accounts[-1]
     connect_harness(person, base_url=url, token=TOKEN)
     state.need_tool = True
-    state.pending_tool_calls = [
-        [{"call_id": "c1", "name": "cash_flow_totals", "args": {"date_from": "2026-01-01", "date_to": "2026-01-31"}}]
-    ]
+    args = (
+        {"date_from": "2026-01-01", "date_to": "2026-01-31"} if tool == "cash_flow_totals"
+        else {"account_id": extra.pk}
+    )
+    state.pending_tool_calls = [[{"call_id": "c1", "name": tool, "args": args}]]
     conversation = ask(person, "Spending across every account?", sleep=lambda _s: None)
     conversation.refresh_from_db()
     assert extra.pk in conversation.used_account_ids
-    assert len(conversation.used_account_ids) >= 51
+    if tool == "cash_flow_totals":
+        assert len(conversation.used_account_ids) >= 51
     delete_account(person, extra.pk)
     assert not AiConversation.objects.filter(pk=conversation.pk).exists()
 
 
+def _reconnect(person, household):
+    connect_harness(person, base_url=connection_for(person).base_url, token=TOKEN)
+
+
+def _switch_to_local_chat(person, household):
+    set_offer_local_chat(person, True)
+    set_defaults(person, chat_backend="local", background_backend="local")
+
+
+def _household_consent_lapses(person, household):
+    late_user = get_user_model().objects.create_user(username="late", password=PASSWORD)
+    late = Person.objects.create(user=late_user, display_name="Late Example")
+    Membership.objects.create(person=late, household=household)
+
+
 @pytest.mark.django_db
-def test_followup_starts_a_new_session_after_chat_backend_switch(harness, settings):
+@pytest.mark.parametrize("change", [_reconnect, _switch_to_local_chat, _household_consent_lapses])
+def test_follow_up_opens_a_new_session_after_the_member_s_setup_changes(harness, change):
     from finance.models import AiUsageEvent
 
     state, url = harness
-    _user, person, _household = make_member("owner")
+    _user, person, household = make_member("owner")
     connect_harness(person, base_url=url, token=TOKEN)
-    conversation = ask(person, "First question on Claude", sleep=lambda _s: None)
+    conversation = ask(person, "First question", sleep=lambda _s: None)
     conversation.refresh_from_db()
     old_session = conversation.harness_session_id
-    assert conversation.backend == "claude"
-    assert old_session
+    assert old_session and conversation.backend == "claude"
     creates_before = len(state.session_creates)
-    set_offer_local_chat(person, True)
-    set_defaults(person, chat_backend="local", background_backend="local")
+    change(person, household)
     state.need_tool = False
-    ask(
-        person,
-        "Follow up after switching to local",
-        conversation_id=conversation.pk,
-        sleep=lambda _s: None,
-    )
+
+    ask(person, "Follow up", conversation_id=conversation.pk, sleep=lambda _s: None)
+
     assert ("POST", f"/api/v1/sessions/{old_session}/messages") not in state.requests
     assert len(state.session_creates) == creates_before + 1
-    assert state.session_creates[-1].get("backend") == "local"
     conversation.refresh_from_db()
-    assert conversation.backend == "local"
-    assert conversation.harness_session_id
-    assert conversation.harness_session_id != old_session
-    latest = AiUsageEvent.objects.filter(member=person, feature="chat").order_by("-pk").first()
-    assert latest is not None
-    assert latest.backend == "local"
-
+    assert conversation.harness_session_id and conversation.harness_session_id != old_session
+    if change is _switch_to_local_chat:
+        assert state.session_creates[-1].get("backend") == "local"
+        assert conversation.backend == "local"
+        latest = AiUsageEvent.objects.filter(member=person, feature="chat").order_by("-pk").first()
+        assert latest is not None and latest.backend == "local"
 
 
 @pytest.mark.django_db
@@ -1008,25 +919,6 @@ def test_send_without_a_chat_backend_explains_what_to_do(harness):
     with pytest.raises(AiError, match="No chat backend is available yet"):
         ask(person, "What did I spend last month?")
     assert not AiConversation.objects.filter(member=person).exists()
-
-
-@pytest.mark.django_db
-def test_harness_follow_up_opens_a_new_session_after_household_consent_lapses(harness):
-    state, url = harness
-    _user, person, household = make_member("owner")
-    connect_harness(person, base_url=url, token=TOKEN)
-    conversation = ask(person, "First question", sleep=lambda _s: None)
-    conversation.refresh_from_db()
-    old_session = conversation.harness_session_id
-    assert old_session
-    late_user = get_user_model().objects.create_user(username="late", password=PASSWORD)
-    late = Person.objects.create(user=late_user, display_name="Late Example")
-    Membership.objects.create(person=late, household=household)
-    creates_before = len(state.session_creates)
-    state.need_tool = False
-    ask(person, "Follow up", conversation_id=conversation.pk, sleep=lambda _s: None)
-    assert ("POST", f"/api/v1/sessions/{old_session}/messages") not in state.requests
-    assert len(state.session_creates) == creates_before + 1
 
 
 @pytest.mark.django_db

@@ -75,50 +75,6 @@ def test_session_stops_tool_calls_once_the_deadline_passes(monkeypatch, settings
     assert not result.ok and result.failure_code == UNAVAILABLE and result.session_open
 
 
-def test_a_batch_larger_than_the_tool_budget_runs_only_the_budget(monkeypatch, settings):
-    settings.AGENT_HARNESS_ALLOWED_ORIGINS = ["http://harness.invalid"]
-    session = _FakeSession(10)
-    monkeypatch.setattr(ai_harness, "json_request", session.request)
-    ran = []
-
-    def runner(name, _args):
-        ran.append(name)
-        return "synthetic output", True
-
-    answered = ai_harness._answer_tool_calls(
-        "http://harness.invalid", "token", "synthetic-session", runner, tool_budget=lambda: 3,
-    )
-
-    assert len(ran) == 3
-    # Every call still gets an answer, so the session can finish instead of waiting.
-    assert answered == 10
-    refused = [body for _call, body in session.answers if not body["ok"]]
-    assert len(refused) == 7
-    assert all(body["output"] == ai_harness.TOOL_BUDGET_SPENT for body in refused)
-
-
-@pytest.mark.django_db
-def test_chat_turn_passes_the_conversations_remaining_tool_budget(harness, monkeypatch, settings):
-    settings.AI_CHAT_MAX_TOOL_CALLS = 10
-    _user, person = _connected(harness, "budget")
-    conversation = send_message(person, "How much did I spend?")
-    AiConversation.objects.filter(pk=conversation.pk).update(tool_call_count=8)
-    seen = {}
-
-    def fake_run(*_args, tool_budget=None, **_kwargs):
-        from finance.ai_types import ProviderResult
-
-        seen["remaining"] = tool_budget()
-        return ProviderResult(ok=True, answer="Synthetic answer.")
-
-    from finance import chat_services
-
-    monkeypatch.setattr(chat_services, "run_conversation", fake_run)
-    turn = conversation.messages.get(status=PENDING)
-    chat_services.answer_turn(turn)
-    assert seen["remaining"] == 2
-
-
 @pytest.mark.django_db
 def test_a_send_beyond_the_pending_cap_is_refused_without_a_row(harness, settings):
     settings.AI_CHAT_MAX_PENDING_PER_MEMBER = 2
