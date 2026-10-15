@@ -9,7 +9,7 @@ from .access import require_person as _person
 from .cash_flow import cash_flow_report, selected_accounts
 from .category_services import current_household
 from .audit_services import changed_names, owned_audience, record, snapshot
-from .bill_grouping import eligible_bill_charges
+from .bill_grouping import eligible_bill_charges, group_bills, stored_charge_ids
 from .models import (
     Account,
     AuditEvent,
@@ -159,6 +159,36 @@ def _one_series_per_bill(rows, replaced, member_ids, household, eligible, *, sel
     return sorted(chosen, key=lambda row: (row.display_name, row.pk))
 
 
+def _with_whole_bills(principal, rows, replaced):
+    """`replaced` widened to every series that shares a household bill with a replaced one (#522).
+
+    A planned item that replaces one member's copy of a joint bill replaces the
+    whole bill in the viewer's own view too, so the viewer's copy does not
+    count beside the plan. Bills are grouped as in household scope: series
+    built wholly from household charges, linked by shared stored charges,
+    directly or through another member's confirmed copy. Two distinct bills
+    from one merchant share no charge, so both stay.
+    """
+    if not replaced:
+        return replaced
+    household, member_ids = _household_members(principal)
+    if household is None:
+        return replaced
+    candidates = RecurringSeries.objects.filter(
+        Q(pk__in=replaced)
+        | Q(pk__in=[row.pk for row in rows])
+        | Q(person_id__in=member_ids, status=RecurringSeries.Status.CONFIRMED)
+    )
+    candidates = confine_recurring_series_to_accounts(
+        candidates, Account.objects.filter(scope=Account.Scope.HOUSEHOLD, household=household)
+    )
+    widened = set(replaced)
+    for bill in group_bills(stored_charge_ids(candidates.values_list("pk", flat=True))):
+        if replaced.intersection(bill):
+            widened.update(bill)
+    return widened
+
+
 def visible_projection_inputs(principal, *, account=None, scope="", accounts=None, include_household=True):
     """Planned items and confirmed series behind the projection.
 
@@ -253,6 +283,7 @@ def visible_projection_inputs(principal, *, account=None, scope="", accounts=Non
             series_rows, replaced, member_ids, household, eligible, selected=selected_charges if narrowed else None
         )
     else:
+        replaced = _with_whole_bills(principal, series_rows, replaced)
         series_rows = [row for row in series_rows if row.pk not in replaced]
         recent = _recent_charge_dates([row.pk for row in series_rows], eligible)
         for row in series_rows:
