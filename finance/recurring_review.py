@@ -316,6 +316,7 @@ def raise_recurring_review_alerts(principal, series_list, *, today):
                 link,
                 f"recurring:{change.series.pk}:{change.new_minor}",
                 account=account,
+                source_accounts=series_accounts(change.series),
             )
         )
     for missed in missed_charges(series_list, principal, today=today):
@@ -329,6 +330,7 @@ def raise_recurring_review_alerts(principal, series_list, *, today):
                 link,
                 f"recurring:{missed.series.pk}:missed:{missed.expected_on.isoformat()}",
                 account=account,
+                source_accounts=series_accounts(missed.series),
             )
         )
     return created

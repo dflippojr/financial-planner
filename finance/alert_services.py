@@ -25,17 +25,13 @@ from .models import (
     AlertSettings,
     Budget,
     Person,
-    RecurringSeries,
-    RecurringSeriesMember,
     SimpleFinConnection,
     Transaction,
 )
 from .months import month_start
-from .pass_isolation import run_step
+from .pass_isolation import for_each_member, run_step
 
 logger = logging.getLogger(__name__)
-
-SERIES_ALERT_KINDS = (Alert.Kind.RECURRING_PRICE, Alert.Kind.RECURRING_MISSED)
 
 _KIND_ENABLED_FIELD = {
     Alert.Kind.SYNC: "sync_enabled",
@@ -70,8 +66,12 @@ def _internal_link(link):
 
 @transaction.atomic
 @scheduled_operation
-def raise_alert(recipients, kind, title, link, dedupe_key, account=None):
-    """Create one inbox row per recipient unless that condition was already raised."""
+def raise_alert(recipients, kind, title, link, dedupe_key, account=None, source_accounts=()):
+    """Create one inbox row per recipient unless that condition was already raised.
+
+    source_accounts are every account the title quotes data from; a recipient
+    who later loses sight of any of them no longer sees the alert.
+    """
     if not _internal_link(link):
         raise ValidationError("Alert links must be internal URLs.")
     created = []
@@ -89,6 +89,8 @@ def raise_alert(recipients, kind, title, link, dedupe_key, account=None):
                 "account": account,
             },
         )
+        if source_accounts:
+            alert.source_accounts.add(*source_accounts)
         if was_created:
             created.append(alert)
             outcome(recipient, "alert_delivery", alert.pk, account=account)
@@ -112,18 +114,10 @@ def alerts_for(principal):
         _key=Concat(Value("budget:"), Cast("pk", output_field=CharField())),
         _prefix=Concat(Value("budget:"), Cast("pk", output_field=CharField()), Value(":")),
     ).filter(Q(_alert_key=F("_key")) | Q(_alert_key__startswith=F("_prefix")))
-    # A series alert quotes its charges, so it stays visible only while every
-    # account holding one of them does (an unshare or a member leaving hides it).
-    hidden_charges = RecurringSeriesMember.objects.filter(series_id=OuterRef("pk")).exclude(
-        transaction__account_id__in=visible_accounts
-    )
-    series_with_hidden_charges = (
-        RecurringSeries.objects.annotate(
-            _alert_key=Cast(OuterRef("dedupe_key"), output_field=CharField()),
-            _prefix=Concat(Value("recurring:"), Cast("pk", output_field=CharField()), Value(":")),
-        )
-        .filter(_alert_key__startswith=F("_prefix"))
-        .filter(Exists(hidden_charges))
+    # An alert quoting an account the viewer can no longer see (after an
+    # unshare or leaving the household) drops out of their view.
+    hidden_sources = Alert.source_accounts.through.objects.filter(alert_id=OuterRef("pk")).exclude(
+        account_id__in=visible_accounts
     )
     return (
         Alert.objects.filter(recipient=person)
@@ -131,8 +125,7 @@ def alerts_for(principal):
         .filter(Q(account_id__isnull=True) | Q(account_id__in=visible_accounts))
         .alias(_budget_visible=Exists(visible_budgets))
         .filter(~Q(kind=Alert.Kind.BUDGET) | Q(_budget_visible=True))
-        .alias(_series_hidden=Exists(series_with_hidden_charges))
-        .filter(~Q(kind__in=SERIES_ALERT_KINDS) | Q(_series_hidden=False))
+        .exclude(Exists(hidden_sources))
         .order_by("-created_at", "-pk")
     )
 
@@ -503,21 +496,16 @@ def refresh_all_recurring_series(*, today=None):
     """Bring every active member's series in line and raise their review alerts.
 
     Each member runs in its own transaction, so one failure (a lock timeout,
-    say) rolls back only that member and the pass moves on. Logs name the
-    member and error type only: a message could quote financial values.
+    say) rolls back only that member and the pass moves on.
     """
     from .recurring_services import refresh_recurring_series
 
-    for person in Person.objects.filter(user__is_active=True).order_by("pk"):
-        try:
-            with transaction.atomic():
-                refresh_recurring_series(person, only_if_changed=True, today=today)
-        except Exception as exc:  # The pass must reach every member and its later steps.
-            logger.error(
-                "Daily recurring refresh for member %s failed (%s).",
-                person.pk,
-                type(exc).__name__,
-            )
+    for_each_member(
+        Person.objects.filter(user__is_active=True).order_by("pk"),
+        lambda person: refresh_recurring_series(person, only_if_changed=True, today=today),
+        label="Daily recurring refresh",
+        logger=logger,
+    )
 
 
 class DailyAlertPassIncomplete(Exception):

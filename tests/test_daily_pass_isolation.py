@@ -14,6 +14,7 @@ from finance.alert_services import DailyAlertPassIncomplete, run_daily_alert_pas
 from finance.bills_calendar import evaluate_expected_balance_alerts
 from finance.models import AlertSettings
 from finance.monthly_review import generate_due_monthly_reviews
+from finance.pass_isolation import MemberFailures
 from ops.backup.audit_journal import query
 from tests.test_recurring import make_household, make_person
 
@@ -117,11 +118,11 @@ def test_one_members_monthly_review_failure_does_not_stop_the_others(caplog):
     with (
         patch("finance.monthly_review.store_monthly_review", side_effect=store),
         caplog.at_level(logging.ERROR, logger="finance.monthly_review"),
+        pytest.raises(MemberFailures),
     ):
-        created = generate_due_monthly_reviews(today=date(2026, 9, 3))
+        generate_due_monthly_reviews(today=date(2026, 9, 3))
 
     assert reached == [first.pk, second.pk]
-    assert len(created) == 1
     assert f"member {first.pk} failed (RuntimeError)" in caplog.text
     assert SECRET not in caplog.text
 
@@ -138,16 +139,16 @@ def test_one_members_expected_balance_failure_does_not_stop_the_others(caplog):
         reached.append(person.pk)
         if person.pk == first.pk:
             raise RuntimeError(SECRET)
-        return ["synthetic alert"]
+        return []
 
     with (
         patch("finance.bills_calendar.evaluate_expected_balance_alert", side_effect=evaluate),
         caplog.at_level(logging.ERROR, logger="finance.bills_calendar"),
+        pytest.raises(MemberFailures),
     ):
-        created = evaluate_expected_balance_alerts(today=date(2026, 9, 3))
+        evaluate_expected_balance_alerts(today=date(2026, 9, 3))
 
     assert sorted(reached) == sorted([first.pk, second.pk])
-    assert created == ["synthetic alert"]
     assert f"member {first.pk} failed (RuntimeError)" in caplog.text
     assert SECRET not in caplog.text
 
@@ -161,3 +162,27 @@ def test_database_unavailable_in_a_member_loop_still_propagates():
         pytest.raises(InterfaceError),
     ):
         generate_due_monthly_reviews(today=date(2026, 9, 3))
+
+
+def test_a_members_failure_marks_the_daily_pass_failed(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPERATOR_AUDIT_DIR", str(tmp_path))
+    first = make_person("first")
+    second = make_person("second")
+    make_household(first, second)
+    reviewed = []
+
+    def store(person, _month, **_kwargs):
+        if person.pk == first.pk:
+            raise RuntimeError(SECRET)
+        reviewed.append(person.pk)
+        return object(), False
+
+    with (
+        patch("finance.monthly_review.store_monthly_review", side_effect=store),
+        pytest.raises(DailyAlertPassIncomplete) as raised,
+    ):
+        run_daily_alert_pass(today=date(2026, 9, 3))
+
+    assert raised.value.steps == ("monthly_reviews",)
+    assert reviewed == [second.pk]
+    assert daily_alert_outcomes(tmp_path) == ["started", "failed"]

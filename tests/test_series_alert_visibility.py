@@ -6,9 +6,9 @@ import pytest
 from django.urls import reverse
 
 from finance.alert_services import alerts_for, unread_alert_count
-from finance.lifecycle_services import leave_household, unshare_account
+from finance.lifecycle_services import delete_account, leave_household, unshare_account
 from finance.models import Account, Alert, RecurringSeries
-from finance.recurring_review import raise_recurring_review_alerts
+from finance.recurring_review import raise_recurring_review_alerts, series_accounts
 from finance.recurring_services import confirm_recurring_series, refresh_recurring_series
 from tests.test_alerts import signed_in
 from tests.test_recurring import add_monthly_charges, make_account, make_household, make_person, make_transaction
@@ -123,3 +123,59 @@ def test_another_series_alert_is_unaffected_by_an_unrelated_unshare():
     unshare_account(owner, lent.pk)
 
     assert visible_titles(member) == ["Synthetic Gym changed from 20.00 USD to 24.00 USD"]
+
+
+def test_alert_stays_hidden_after_the_series_drops_the_now_private_charge():
+    # The series belongs to the member; its latest charge sits on the owner's lent account.
+    owner = make_person("owner")
+    member = make_person("member")
+    household = make_household(owner, member)
+    joint = make_account(member, name="Synthetic Joint", scope=Account.Scope.HOUSEHOLD, household=household)
+    lent = make_account(
+        owner,
+        name="Synthetic Lent",
+        scope=Account.Scope.HOUSEHOLD,
+        household=household,
+        share_mode=Account.ShareMode.LENT,
+    )
+    series = confirmed_series(member, joint, "Synthetic Streaming", -1000, lent, -1234)
+    assert {account.pk for account in series_accounts(series)} == {joint.pk, lent.pk}
+    raise_recurring_review_alerts(member, [series], today=TODAY)
+    assert visible_titles(member) == [TITLE]
+
+    unshare_account(owner, lent.pk)
+    # The member's next refresh drops the charge they can no longer see.
+    refresh_recurring_series(member, today=TODAY)
+    series = RecurringSeries.objects.get(pk=series.pk)
+    assert {account.pk for account in series_accounts(series)} == {joint.pk}
+
+    # A missed-charge alert for the joint-only series may follow; nothing quotes 12.34.
+    assert not any("12.34" in title for title in visible_titles(member))
+    assert TITLE in visible_titles(owner)
+
+
+def test_deleting_an_account_removes_the_alerts_that_quote_it():
+    owner, member, _joint, lent, series = household_with_split_series()
+    raise_recurring_review_alerts(owner, [series], today=TODAY)
+
+    delete_account(owner, lent.pk)
+
+    assert not Alert.objects.filter(kind=Alert.Kind.RECURRING_PRICE).exists()
+
+
+def test_migration_backfills_sources_for_existing_series_alerts():
+    from importlib import import_module
+
+    from django.apps import apps
+
+    backfill = import_module("finance.migrations.0070_alert_source_accounts").backfill_series_alert_sources
+    owner, member, joint, lent, series = household_with_split_series()
+    raise_recurring_review_alerts(owner, [series], today=TODAY)
+    Alert.source_accounts.through.objects.all().delete()  # As before the migration.
+
+    backfill(apps, None)
+
+    for alert in Alert.objects.all():
+        assert {account.pk for account in alert.source_accounts.all()} == {joint.pk, lent.pk}
+    unshare_account(owner, lent.pk)
+    assert visible_titles(member) == []
