@@ -163,6 +163,9 @@ def test_download_and_export_names_take_the_extension_of_the_content(
         ("phone.jpg", Receipt.ContentType.HEIC, "phone.heic"),
         ("screenshot", Receipt.ContentType.PNG, "screenshot.png"),
         ("archive.tar.html", Receipt.ContentType.WEBP, "archive.tar.webp"),
+        ("s" * 255, Receipt.ContentType.PNG, "s" * 251 + ".png"),
+        ("s" * 250 + ".html", Receipt.ContentType.JPEG, "s" * 250 + ".jpg"),
+        ("s" * 252 + ".gif", Receipt.ContentType.WEBP, "s" * 250 + ".webp"),
     ],
 )
 def test_download_name_keeps_the_stem_and_any_matching_extension(original_name, content_type, saved_name):
