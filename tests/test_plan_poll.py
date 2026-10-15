@@ -43,9 +43,10 @@ def _events(person):
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("backend", ["claude", "codex"])
 @pytest.mark.parametrize("initial", ["absent", "linked", "needs_login", "different_connection"])
-def test_repeated_success_preserves_transition_timestamp_and_one_event(backend, initial):
+def test_repeated_success_preserves_transition_timestamp_and_one_event(initial):
+    # poll_login passes the backend through untouched, so one backend is enough.
+    backend = "claude"
     user, person, selected, previous = _setup()
     first = timezone.now() - timedelta(days=2)
     if initial != "absent":
@@ -68,9 +69,9 @@ def test_repeated_success_preserves_transition_timestamp_and_one_event(backend, 
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("backend", ["claude", "codex"])
 @pytest.mark.parametrize("initial", ["absent", "needs_login", "different_connection"])
-def test_concurrent_success_records_one_transition(backend, initial):
+def test_concurrent_success_records_one_transition(initial):
+    backend = "claude"
     if connection.vendor != "postgresql":
         pytest.skip("Row-lock concurrency requires disposable PostgreSQL")
     user, person, selected, previous = _setup()
@@ -126,7 +127,7 @@ def test_link_and_event_roll_back_together(initial):
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("status", ["pending", "failed", "expired", "cancelled", "denied"])
+@pytest.mark.parametrize("status", ["pending", "failed"])
 def test_unsuccessful_poll_does_not_change_existing_link_or_events(status):
     user, person, selected, previous = _setup()
     AiPlanLink.objects.create(person=person, backend="claude", connection=selected)

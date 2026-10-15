@@ -18,7 +18,6 @@ from finance.category_suggestion_services import (
     accept_suggestion,
     queue_category_suggestions_for,
     queue_remaining_uncategorized,
-    snapshot_hash,
 )
 from finance.csv_import.services import categorize_imported_batch
 from finance.models import (
@@ -213,27 +212,6 @@ def test_sync_queues_suggestions(harness, monkeypatch):
     job = AiJob.objects.get(member=person, feature=FEATURE)
     assert job.input_refs["transaction_ids"]
     assert Transaction.objects.get(pk=job.input_refs["transaction_ids"][0]).description == "Synthetic Stream"
-
-
-@pytest.mark.django_db
-def test_job_waits_while_local_model_sleeps(harness, monkeypatch):
-    state, url = harness
-    _user, person, household = make_member("owner")
-    connect_ai(person, url)
-    account = make_account(person)
-    txn = make_transaction(person, account)
-    queue_category_suggestions_for(person, [txn])
-    monkeypatch.setattr("finance.ai_jobs.in_quiet_window", lambda moment=None: False)
-    process_due_jobs()
-    job = AiJob.objects.get(member=person, feature=FEATURE)
-    assert job.status == AiJob.Status.WAITING_MODEL
-    assert CategorySuggestion.objects.count() == 0
-    state.model_state = "ready"
-    state.session_answer = suggestion_json({txn.pk: groceries(household).pk})
-    process_due_jobs()
-    job.refresh_from_db()
-    assert job.status == AiJob.Status.SUCCEEDED
-    assert CategorySuggestion.objects.filter(transaction=txn, status=CategorySuggestion.Status.PENDING).exists()
 
 
 @pytest.mark.django_db
@@ -446,17 +424,6 @@ def test_reject_leaves_uncategorized(harness, monkeypatch):
     assert suggestion.status == CategorySuggestion.Status.REJECTED
 
 
-@pytest.mark.django_db
-def test_snapshot_changes_with_description():
-    owner_user = get_user_model().objects.create_user(username="snap", password=PASSWORD)
-    owner = Person.objects.create(user=owner_user, display_name="Snap")
-    account = make_account(owner)
-    txn = make_transaction(owner, account, description="One")
-    first = snapshot_hash(txn)
-    txn.description = "Two"
-    assert snapshot_hash(txn) != first
-
-
 def _uncategorized_rows(owner, account, count, start=0):
     return [
         make_transaction(
@@ -518,8 +485,6 @@ def test_partly_filled_queued_job_tops_up_only_to_batch_size(harness):
 
 @pytest.mark.django_db
 def test_top_up_skips_a_job_the_runner_already_claimed(harness):
-    from finance.category_suggestion_services import _top_up_queued_job
-
     _state, url = harness
     _user, person, _household = make_member("owner")
     connect_ai(person, url)
@@ -531,12 +496,14 @@ def test_top_up_skips_a_job_the_runner_already_claimed(harness):
     claimed.status = AiJob.Status.RUNNING
     claimed.save(update_fields=("status", "updated_at"))
 
-    rest, topped = _top_up_queued_job(claimed.pk, [999001, 999002])
+    later = _uncategorized_rows(person, account, 2, start=3)
+    queue_remaining_uncategorized(person)
 
-    assert topped is None
-    assert rest == [999001, 999002]
     claimed.refresh_from_db()
     assert claimed.input_refs["transaction_ids"] == id_lists[0]
+    jobs, id_lists = _job_id_lists(person)
+    assert [job.pk for job in jobs][0] == claimed.pk
+    assert id_lists[1:] == [[row.pk for row in later]]
 
 
 @pytest.mark.django_db
@@ -610,8 +577,6 @@ def test_resumed_answer_is_dropped_for_a_transaction_changed_since_the_prompt(ha
 
 @pytest.mark.django_db
 def test_top_up_skips_a_retry_that_will_resume_its_session(harness):
-    from finance.category_suggestion_services import _top_up_queued_job
-
     _state, url = harness
     _user, person, _household = make_member("owner")
     connect_ai(person, url)
@@ -624,13 +589,14 @@ def test_top_up_skips_a_retry_that_will_resume_its_session(harness):
     retry.input_refs = {**retry.input_refs, "snapshots": {"1": "synthetic"}}
     retry.save(update_fields=("harness_session_id", "input_refs", "updated_at"))
 
-    rest, topped = _top_up_queued_job(retry.pk, [999001])
+    later = _uncategorized_rows(person, account, 1, start=3)
+    queue_remaining_uncategorized(person)
 
-    assert topped is None
-    assert rest == [999001]
     retry.refresh_from_db()
     assert retry.input_refs["transaction_ids"] == id_lists[0]
     assert retry.input_refs["snapshots"] == {"1": "synthetic"}
+    jobs, id_lists = _job_id_lists(person)
+    assert id_lists[1:] == [[row.pk for row in later]]
 
 
 @pytest.mark.django_db

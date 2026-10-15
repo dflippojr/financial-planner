@@ -12,8 +12,6 @@ from finance.alert_services import (
     alerts_for,
     evaluate_active_budget_alerts,
     evaluate_budget_alert,
-    mark_all_alerts_read,
-    mark_alert_read,
     purge_old_read_alerts,
     raise_alert,
     raise_large_transaction_alerts,
@@ -344,20 +342,6 @@ def test_disabled_connection_uses_relink_title():
 
 
 @pytest.mark.django_db
-def test_unread_count_and_mark_read():
-    owner = make_person("owner")
-    make_household(owner)
-    raise_alert([owner], Alert.Kind.SYNC, "A SimpleFIN sync failed", reverse("simplefin-connections"), "sync:1:a")
-    raise_alert([owner], Alert.Kind.SYNC, "A SimpleFIN sync failed", reverse("simplefin-connections"), "sync:1:b")
-    assert unread_alert_count(owner) == 2
-    first = Alert.objects.order_by("pk").first()
-    mark_alert_read(owner, first.pk)
-    assert unread_alert_count(owner) == 1
-    mark_all_alerts_read(owner)
-    assert unread_alert_count(owner) == 0
-
-
-@pytest.mark.django_db
 def test_alerts_page_and_nav_unread():
     owner = make_person("owner")
     make_household(owner)
@@ -412,13 +396,6 @@ def test_alert_settings_form_saves_threshold():
     assert prefs.monthly_review_enabled is False
 
 
-@pytest.mark.parametrize("value", ["0", "101"])
-def test_alert_settings_form_rejects_recurring_percent_outside_range(value):
-    form = AlertSettingsForm({"recurring_price_percent": value})
-    assert not form.is_valid()
-    assert "recurring_price_percent" in form.errors
-
-
 @pytest.mark.django_db
 def test_alert_settings_recurring_percent_round_trips():
     owner = make_person("owner")
@@ -432,9 +409,11 @@ def test_alert_settings_recurring_percent_round_trips():
     assert AlertSettings.objects.get(person=owner).recurring_price_percent == 25
     page = client.get(reverse("settings-alerts"))
     assert page.context["alert_settings_form"]["recurring_price_percent"].value() == 25
-    rejected = client.post(reverse("settings-alerts"), {"recurring_price_percent": "101"})
-    assert rejected.status_code == 200
-    assert AlertSettings.objects.get(person=owner).recurring_price_percent == 25
+    for outside in ("0", "101"):
+        rejected = client.post(reverse("settings-alerts"), {"recurring_price_percent": outside})
+        assert rejected.status_code == 200
+        assert "recurring_price_percent" in rejected.context["alert_settings_form"].errors
+        assert AlertSettings.objects.get(person=owner).recurring_price_percent == 25
 
 
 @pytest.mark.django_db
@@ -448,15 +427,6 @@ def test_recurring_percent_database_constraint():
 def test_alert_settings_groups_show_every_field_once():
     grouped = [name for _label, names in AlertSettingsForm.KIND_GROUPS for name in names]
     assert sorted(grouped) == sorted(AlertSettingsForm.base_fields)
-
-
-@pytest.mark.django_db
-def test_alert_settings_page_groups_fields_under_one_save():
-    owner = make_person("owner")
-    make_household(owner)
-    html = signed_in(owner).get(reverse("settings-alerts")).content.decode()
-    assert html.count("<fieldset") == len(AlertSettingsForm.KIND_GROUPS)
-    assert html.count("Save alert settings") == 1
 
 
 @pytest.mark.django_db

@@ -18,6 +18,7 @@ from finance.chat_runner import (
     recover_stale_turns,
     run_claimed_turn,
     stale_seconds,
+    turn_max_seconds,
     unclaimed_max_age_seconds,
 )
 from finance.chat_services import answer_turn, send_message
@@ -136,44 +137,6 @@ def test_background_tool_calls_see_only_the_asking_members_records(harness):
     assert private_beta.pk not in conversation.used_account_ids
     reply = conversation.messages.filter(role=AiConversationMessage.Role.ASSISTANT).last()
     assert reply.status == AiConversationMessage.Status.DONE
-
-
-@pytest.mark.django_db
-def test_a_runner_killed_mid_turn_leaves_no_turn_pending_after_the_cutoff(harness):
-    state, client, person, _household = _connected_client(harness)
-    conversation = send_message(person, "Will this finish?")
-    turn = _pending_turn(conversation)
-    claimed_at = timezone.now()
-    assert claim_next_turn("dead-runner", now=claimed_at) == turn.pk
-    # The runner dies here: no more heartbeats and no reply.
-
-    assert recover_stale_turns(now=claimed_at + timedelta(seconds=stale_seconds() - 1)) == 0
-    assert recover_stale_turns(now=claimed_at + timedelta(seconds=stale_seconds() + 1)) == 1
-
-    turn.refresh_from_db()
-    assert turn.status == AiConversationMessage.Status.FAILED
-    assert turn.role == AiConversationMessage.Role.ERROR
-    assert turn.content == "The AI backend is unavailable."
-    assert not AiConversationMessage.objects.filter(status=PENDING).exists()
-    # A runner that comes back late cannot overwrite the failure.
-    assert run_claimed_turn(turn.pk, "dead-runner", **NO_SLEEP) is False
-    assert state.session_creates == []
-    payload = json.loads(client.get(reverse("chat-turn", args=[turn.pk])).content)
-    assert payload["status"] == "failed"
-    assert payload["role"] == "error"
-
-
-@pytest.mark.django_db
-def test_live_runner_heartbeats_keep_a_long_turn_from_going_stale(harness):
-    _state, _client, person, _household = _connected_client(harness)
-    turn = _pending_turn(send_message(person, "A long answer"))
-    start = timezone.now()
-    claim_next_turn("live-runner", now=start)
-    later = start + timedelta(seconds=stale_seconds() * 5)
-    assert heartbeat("live-runner", now=later - timedelta(seconds=1)) == 1
-    assert recover_stale_turns(now=later) == 0
-    turn.refresh_from_db()
-    assert turn.status == PENDING
 
 
 @pytest.mark.django_db
@@ -313,16 +276,6 @@ def test_chat_lane_keeps_going_after_a_failed_turn_or_poll(harness, monkeypatch,
     assert stop.waits == [1.0, 1.0]
 
 
-def test_chat_lane_defaults_to_its_own_worker_pool(settings):
-    settings.AI_CHAT_WORKERS = 3
-    lane = ChatLane()
-    try:
-        assert lane.workers == 3
-        assert lane._pool_threads is True
-    finally:
-        lane.executor.shutdown(wait=False)
-
-
 @pytest.mark.django_db
 def test_turn_status_returns_figures_with_local_links_only_and_notices(harness):
     _state, client, person, _household = _connected_client(harness)
@@ -350,23 +303,76 @@ def test_turn_status_returns_figures_with_local_links_only_and_notices(harness):
     assert payload["notices"] == ["Synthetic usage notice"]
 
 
+FAILED = AiConversationMessage.Status.FAILED
+# Offsets from the claim, as functions of (stale, turn deadline, unclaimed) seconds: the last heartbeat
+# (None: the runner died without one), the clock for recovery, how many turns recover, and each turn's status.
+STALE_TURN_CASES = {
+    "killed_runner_inside_the_heartbeat_window": {
+        "heartbeat": None, "now": lambda stale, deadline, unclaimed: stale - 1,
+        "recovered": 0, "first": PENDING,
+    },
+    "killed_runner_past_the_heartbeat_window": {
+        "heartbeat": None, "now": lambda stale, deadline, unclaimed: stale + 1,
+        "recovered": 1, "first": FAILED,
+    },
+    "live_runner_heartbeats_through_a_long_turn": {
+        "heartbeat": lambda stale, deadline, unclaimed: stale * 5 - 1,
+        "now": lambda stale, deadline, unclaimed: stale * 5,
+        "recovered": 0, "first": PENDING,
+    },
+    "turn_past_its_deadline_with_a_fresh_heartbeat": {
+        "heartbeat": lambda stale, deadline, unclaimed: deadline + 1,
+        "now": lambda stale, deadline, unclaimed: deadline + 1,
+        "recovered": 1, "first": FAILED,
+    },
+    "turn_inside_its_deadline_with_a_fresh_heartbeat": {
+        "heartbeat": lambda stale, deadline, unclaimed: deadline - 1,
+        "now": lambda stale, deadline, unclaimed: deadline - 1,
+        "recovered": 0, "first": PENDING,
+    },
+    "follow_up_waits_behind_a_live_turn": {
+        "follow_up": True, "turn_max": 24 * 60 * 60,
+        "heartbeat": lambda stale, deadline, unclaimed: unclaimed + 30,
+        "now": lambda stale, deadline, unclaimed: unclaimed + 30,
+        "recovered": 0, "first": PENDING, "second": PENDING,
+    },
+    "follow_up_ends_with_its_runner": {
+        "follow_up": True, "turn_max": 24 * 60 * 60,
+        "heartbeat": lambda stale, deadline, unclaimed: unclaimed + 30,
+        "now": lambda stale, deadline, unclaimed: unclaimed + 30 + stale + 1,
+        "recovered": 2, "first": FAILED, "second": FAILED,
+    },
+}
+
+
 @pytest.mark.django_db
-def test_a_follow_up_queued_behind_a_long_live_turn_is_not_failed(harness, settings):
-    # The running turn's own deadline is covered separately; keep it out of the way here.
-    settings.AI_CHAT_TURN_MAX_SECONDS = 24 * 60 * 60
-    _state, client, person, _household = _connected_client(harness)
+@pytest.mark.parametrize("name", sorted(STALE_TURN_CASES))
+def test_stale_turn_recovery_follows_heartbeat_deadline_and_queue_position(harness, settings, name):
+    case = STALE_TURN_CASES[name]
+    if "turn_max" in case:
+        settings.AI_CHAT_TURN_MAX_SECONDS = case["turn_max"]
+    state, _client, person, _household = _connected_client(harness)
     conversation = send_message(person, "A long first question")
-    send_message(person, "A quick follow-up", conversation_id=conversation.pk)
+    if case.get("follow_up"):
+        send_message(person, "A quick follow-up", conversation_id=conversation.pk)
     start = timezone.now()
-    first = claim_next_turn("live-runner", now=start)
-    waiting = conversation.messages.filter(status=PENDING).exclude(pk=first).get()
-    later = start + timedelta(seconds=unclaimed_max_age_seconds() + 30)
-    heartbeat("live-runner", now=later)
+    first = claim_next_turn("runner", now=start)
+    seconds = (stale_seconds(), turn_max_seconds(), unclaimed_max_age_seconds())
+    assert AiConversationMessage.objects.get(pk=first).deadline_at == start + timedelta(seconds=seconds[1])
+    if case["heartbeat"]:
+        assert heartbeat("runner", now=start + timedelta(seconds=case["heartbeat"](*seconds))) == 1
 
-    assert recover_stale_turns(now=later) == 0
-    waiting.refresh_from_db()
-    assert waiting.status == PENDING
+    assert recover_stale_turns(now=start + timedelta(seconds=case["now"](*seconds))) == case["recovered"]
 
-    # Once that runner is gone too, both turns end instead of waiting forever.
-    gone = later + timedelta(seconds=stale_seconds() + 1)
-    assert recover_stale_turns(now=gone) == 2
+    turn = AiConversationMessage.objects.get(pk=first)
+    assert turn.status == case["first"]
+    if case.get("follow_up"):
+        second = conversation.messages.filter(status__in=[PENDING, FAILED]).exclude(pk=first).get()
+        assert second.status == case["second"]
+    if case["first"] == FAILED:
+        assert turn.role == AiConversationMessage.Role.ERROR
+        assert turn.content == "The AI backend is unavailable."
+        assert not conversation.messages.filter(status=PENDING).exists()
+        # A runner that comes back late cannot overwrite the failure.
+        assert run_claimed_turn(turn.pk, "runner", **NO_SLEEP) is False
+        assert state.session_creates == []

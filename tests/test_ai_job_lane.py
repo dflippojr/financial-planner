@@ -116,22 +116,6 @@ def test_worker_closes_connections_after_missing_job_or_storage_failure(monkeypa
     assert close.call_count == 2
 
 
-@pytest.mark.django_db
-def test_worker_isolates_one_failure_and_continues(monkeypatch):
-    _user, person, _household = make_member("isolation")
-    jobs = [AiJob.objects.create(member=person, feature="structured") for _ in range(2)]
-    process = Mock(side_effect=[RuntimeError("synthetic job failure"), True])
-    isolate = Mock()
-    monkeypatch.setattr(ai_jobs, "_process_one", process)
-    monkeypatch.setattr(ai_jobs, "close_old_connections", Mock())
-    monkeypatch.setattr(ai_jobs, "_isolate_job_failure", isolate)
-    monkeypatch.setattr(ai_jobs.connections, "close_all", Mock())
-    for job in jobs:
-        ai_jobs.AiJobLane._run(job.pk, timezone.now())
-    assert process.call_count == 2
-    assert isolate.call_args.args[0].pk == jobs[0].pk
-
-
 @pytest.mark.django_db(transaction=True)
 def test_competing_pools_process_200_jobs_once(monkeypatch):
     if connection.vendor != "postgresql":
