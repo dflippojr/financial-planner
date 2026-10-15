@@ -60,7 +60,7 @@ def _lose_membership(owner, feature, shared):
     Membership.objects.filter(person=owner).delete()
 
 
-# answer: what the harness replies; written: the paragraph kept (None means the job must not write);
+# answer: what the harness replies; failure: a harness session failure; written: the paragraph kept;
 # skipped: the job must not reach the harness at all; regenerated: the review is replaced mid-call.
 SCENARIOS = {
     "grounded": {"answer": GROUNDED, "written": GROUNDED},
