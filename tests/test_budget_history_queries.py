@@ -32,8 +32,9 @@ def card_values(cards):
 @pytest.mark.django_db
 @pytest.mark.parametrize(
     ("period", "viewer", "selected"),
-    # Pairwise over rollover state, viewer and account selection: every value of each
-    # axis appears, and both viewers meet both selections. Each case costs about 3 s.
+    # A representative subset of rollover state x viewer x account selection: every value of
+    # each axis appears, and both viewers meet both selections, but not every pair of values
+    # (reset and reenabled run with one viewer and one selection). Each case costs about 3 s.
     [
         ("off", "owner", False),
         ("off", "partner", True),
