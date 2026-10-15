@@ -1,5 +1,7 @@
 """The shared process keeps long-running work on independent, supervised lanes."""
 
+import io
+import logging
 import threading
 import runpy
 from datetime import timedelta
@@ -10,6 +12,7 @@ import pytest
 from django.utils import timezone
 
 from finance import background
+from finance.log_redaction import RedactingFormatter
 
 
 def test_all_lanes_start_even_when_batch_job_blocks(monkeypatch):
@@ -26,9 +29,12 @@ def test_all_lanes_start_even_when_batch_job_blocks(monkeypatch):
     monkeypatch.setattr(background, "run_ai_jobs", run("jobs"))
     monkeypatch.setattr(background, "run_daily_pass", run("daily"))
     monkeypatch.setattr(background, "ChatLane", lambda: Mock(run_forever=run("chat")))
+    # main() replaces the process-wide hook; put pytest's back afterwards.
+    monkeypatch.setattr(threading, "excepthook", threading.excepthook)
 
     def inspect(threads):
         try:
+            assert threading.excepthook is background.log_uncaught_lane_error
             assert all(event.wait(2) for event in started.values())
             assert all(thread.is_alive() for thread in threads)
         finally:
@@ -90,6 +96,27 @@ def test_daily_pass_waits_runs_and_advances_schedule(monkeypatch):
     close.assert_called_once()
     assert schedule.call_args.args[1] == now
     assert [call.args[0] for call in stop.wait.call_args_list] == [10, 86400]
+
+
+def test_an_uncaught_lane_exception_is_logged_with_secrets_redacted(monkeypatch):
+    output = io.StringIO()
+    handler = logging.StreamHandler(output)
+    handler.setFormatter(RedactingFormatter("{levelname} {name}: {message}", style="{"))
+    monkeypatch.setattr(background.logger, "handlers", [handler])
+    monkeypatch.setattr(background.logger, "propagate", False)
+    monkeypatch.setattr(threading, "excepthook", background.log_uncaught_lane_error)
+
+    def crash():
+        raise RuntimeError("x-api-key: sk-ant-api03-SYNTHETIC0123456789")
+
+    thread = threading.Thread(target=crash, name="synthetic-lane")
+    thread.start()
+    thread.join(2)
+
+    logged = output.getvalue()
+    assert "Background lane synthetic-lane raised an uncaught exception" in logged
+    assert "RuntimeError" in logged
+    assert "SYNTHETIC0123456789" not in logged
 
 
 def test_entrypoint_bootstraps_django_once_then_starts_lanes(monkeypatch):

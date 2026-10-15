@@ -165,3 +165,17 @@ def test_redact_strips_tokens_and_url_credentials():
     assert "ha-abc123" not in text
     assert "pa55" not in text
     assert "sha-256" in text
+
+
+def test_redact_masks_openai_and_anthropic_keys():
+    anthropic_key = "sk-ant-api03-SYNTHETIC_key-0123456789"
+    openai_key = "sk-proj-SYNTHETIC_key-0123456789"
+
+    assert redact(f"x-api-key: {anthropic_key}") == "x-api-key: sk-[redacted]"
+    assert redact(f"key={openai_key}") == "key=sk-[redacted]"
+    assert redact(f"Authorization: Bearer {openai_key}") == "Authorization: Bearer [redacted]"
+
+
+def test_redact_leaves_ordinary_hyphenated_words():
+    text = "task-list risk-free desk-lamp sk-short"
+    assert redact(text) == text

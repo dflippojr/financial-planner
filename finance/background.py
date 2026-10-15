@@ -56,6 +56,22 @@ def run_daily_pass(stop_event):
         due = next_scheduled_sync(expression, due)
 
 
+def log_uncaught_lane_error(args):
+    """Log a lane's uncaught exception through the redacting log formatter.
+
+    Python's default thread hook prints the traceback straight to stderr, which
+    skips the redaction every logged record gets.
+    """
+    if issubclass(args.exc_type, SystemExit):
+        return
+    name = args.thread.name if args.thread is not None else "unknown"
+    logger.error(
+        "Background lane %s raised an uncaught exception",
+        name,
+        exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+    )
+
+
 def supervise(threads):
     while all(thread.is_alive() for thread in threads):
         time.sleep(1)
@@ -68,6 +84,7 @@ def supervise(threads):
 def main():
     # Invalid cron fails before any threads or chat executor are started.
     parse_five_field_cron(settings.SIMPLEFIN_SYNC_CRON)
+    threading.excepthook = log_uncaught_lane_error
     stop_event = threading.Event()
     lane = ChatLane()
     threads = [
