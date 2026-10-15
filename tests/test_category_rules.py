@@ -36,6 +36,7 @@ from finance.rule_services import (
 
 PASSWORD = "Synthetic-passphrase-42!"
 CSV = b"When,Memo,Amount,Currency\n09/27/2026,SYNTHETIC KROGER,-12.34,USD\n"
+CSV_AFTER_DISABLE = b"When,Memo,Amount,Currency\n09/28/2026,SYNTHETIC KROGER MARKET,-8.10,USD\n"
 
 
 def make_person(username):
@@ -223,6 +224,20 @@ def test_reverse_restores_except_later_hand_edits():
     assert second.category_source == Transaction.CategorySource.MANUAL
 
 
+def import_csv(owner, account, content):
+    result = commit_csv_import(
+        owner.user,
+        account.pk,
+        content=content,
+        document=read_csv(content),
+        mapping=mapping(),
+        source=ImportBatch.Source.HUNTINGTON,
+        date_range_start=date(2026, 9, 1),
+        date_range_end=date(2026, 9, 30),
+    )
+    categorize_imported_batch(owner.user, result.batch)
+
+
 @pytest.mark.django_db
 def test_rules_auto_apply_on_csv_import_and_disable_stops_them():
     owner = make_person("owner")
@@ -239,21 +254,16 @@ def test_rules_auto_apply_on_csv_import_and_disable_stops_them():
         priority=0,
     )
     apply_rule(owner, rule.pk)  # confirming the preview turns on automatic use
-    document = read_csv(CSV)
-    result = commit_csv_import(
-        owner.user,
-        account.pk,
-        content=CSV,
-        document=document,
-        mapping=mapping(),
-        source=ImportBatch.Source.HUNTINGTON,
-        date_range_start=date(2026, 9, 1),
-        date_range_end=date(2026, 9, 30),
-    )
-    categorize_imported_batch(owner.user, result.batch)
+    import_csv(owner, account, CSV)
     imported = Transaction.objects.get(account=account)
     assert imported.category_id == groceries(household).pk
     assert imported.category_source == Transaction.CategorySource.RULE
+
+    set_rule_enabled(owner, rule.pk, False)
+    import_csv(owner, account, CSV_AFTER_DISABLE)
+    later = Transaction.objects.exclude(pk=imported.pk).get(account=account)
+    assert later.category_id is None
+    assert later.category_source == Transaction.CategorySource.UNSET
 
 
 @pytest.mark.django_db
@@ -297,27 +307,6 @@ def test_rules_skip_refunds_and_honor_amount_bounds():
     assert refund.category_source == Transaction.CategorySource.INHERITED
     assert refund.category_id == groceries(household).pk
     assert too_small.category_id is None
-
-
-@pytest.mark.django_db
-def test_disabled_rule_does_not_auto_apply():
-    owner = make_person("owner")
-    household = make_household(owner)
-    account = make_account(owner)
-    rule = save_category_rule(
-        owner,
-        owner_kind="personal",
-        description_contains="kroger",
-        account_id=None,
-        min_amount_minor=None,
-        max_amount_minor=None,
-        category_id=groceries(household).pk,
-        priority=0,
-        enabled=False,
-    )
-    set_rule_enabled(owner, rule.pk, False)
-    apply_enabled_rules_to_transactions(owner, [make_transaction(owner, account)])
-    assert Transaction.objects.get(account=account).category_id is None
 
 
 @pytest.mark.django_db
