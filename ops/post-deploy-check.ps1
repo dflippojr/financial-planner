@@ -47,6 +47,7 @@ $RevisionLabel = 'org.opencontainers.image.revision'
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $Helper = Join-Path $RepoRoot 'scripts\prod_signals.py'
 $script:Failures = New-Object System.Collections.Generic.List[string]
+$script:HealthUnreachable = $false
 
 function Add-Failure([string]$Reason) {
     $script:Failures.Add($Reason)
@@ -142,6 +143,7 @@ function Test-Health {
         $response = $_.Exception.Response
         if ($null -eq $response) {
             Add-Failure "health: $HealthUrl unreachable ($($_.Exception.Status))"
+            $script:HealthUnreachable = $true
             return $null
         }
     }
@@ -166,7 +168,9 @@ function Test-Revision([string]$HealthRevision, $Snapshot) {
     }
     $expected = $ExpectedSha.Trim().ToLowerInvariant()
     $short = $expected.Substring(0, [Math]::Min(12, $expected.Length))
-    if (-not $HealthRevision) {
+    if ($script:HealthUnreachable) {
+        # Already reported; the image labels below still show what is deployed.
+    } elseif (-not $HealthRevision) {
         Add-Failure 'revision: /health/ sent no X-App-Revision header'
     } elseif ($HealthRevision -eq 'unknown') {
         Add-Failure 'revision: the app image has no GIT_SHA; rebuild with $env:GIT_SHA set'

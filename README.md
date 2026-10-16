@@ -403,6 +403,7 @@ check when the SonarCloud quality gate fails (including 80% coverage on new code
 | [Data model](docs/data-model.md) | Storage contract, import, transfer, recurring, and net-worth rules |
 | [Authentication](docs/authentication.md) | Onboarding, invitations, recovery, and session security |
 | [Deployment](docs/deployment.md) | Home server deployment, backup, and restore |
+| [Production signals](docs/production-signals.md) | Read-only production state and the post-deploy check |
 | [Audit trail](docs/audit-trail.md) | Audited actions, review, retention, and the operator journal |
 | [CSV and OFX shapes](docs/csv-shapes.md) | Supported provider export shapes |
 | [Backlog](docs/backlog.md) | Milestones and issue roadmap |
