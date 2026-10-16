@@ -142,19 +142,20 @@ def test_commit_locks_parsing_fields_but_name_and_default_stay_editable(staging_
     ).context["mapping_form"].initial["token"]
     client.post(preview_url, mapping_post(token, action="save_mapping", save_mapping_as="Locked store"))
     mapping = SavedCsvMapping.objects.get(name="Locked store")
-    token = client.post(
+    form = client.post(
         preview_url,
         {
             "action": "upload",
             "import_profile": f"saved:{mapping.pk}",
             "csv_file": SimpleUploadedFile("synthetic.csv", CSV, "text/csv"),
         },
-    ).context["mapping_form"]["token"].value()
+    ).context["mapping_form"]
     imported = client.post(
         preview_url,
         {
             "action": "commit",
-            "token": token,
+            "token": form["token"].value(),
+            "mapping_version": form["mapping_version"].value(),
             "source": "huntington",
             "date_range_start": "2026-09-01",
             "date_range_end": "2026-09-30",
@@ -204,19 +205,20 @@ def _owner_account(username="owner"):
 
 def _lock_mapping(user, account, mapping, client):
     preview_url = reverse("csv-import-preview", args=(account.pk,))
-    token = client.post(
+    form = client.post(
         preview_url,
         {
             "action": "upload",
             "import_profile": f"saved:{mapping.pk}",
             "csv_file": SimpleUploadedFile("synthetic.csv", CSV, "text/csv"),
         },
-    ).context["mapping_form"]["token"].value()
+    ).context["mapping_form"]
     client.post(
         preview_url,
         {
             "action": "commit",
-            "token": token,
+            "token": form["token"].value(),
+            "mapping_version": form["mapping_version"].value(),
             "source": "huntington",
             "date_range_start": "2026-09-01",
             "date_range_end": "2026-09-30",
@@ -634,3 +636,112 @@ def test_archiving_clears_defaults_and_an_archived_mapping_cannot_become_one(sta
         update_csv_mapping(user, mapping.pk, name=mapping.name, default_account_ids=[account.pk])
     account.refresh_from_db()
     assert account.default_saved_csv_mapping_id is None
+
+
+RACE_CSV = b"When,Memo,Payee,Amount\n09/27/2026,SYNTHETIC MEMO,SYNTHETIC PAYEE,-12.34\n"
+
+
+@pytest.mark.django_db
+def test_a_mapping_edited_between_preview_and_commit_refuses_the_commit(staging_settings):
+    from unittest.mock import patch
+
+    from finance.csv_import import views
+    from finance.csv_import.services import MAPPING_CHANGED
+
+    owner_user, owner = make_person("owner")
+    member_user, member = make_person("member")
+    household_for(owner, member)
+    account = Account.objects.create(name="Synthetic Checking", account_type="checking", owner=owner)
+    memo_mapping = Mapping(
+        date_column="When", description_column="Memo", date_format="mdy_slash_4",
+        number_format="dot_comma", amount_mode="signed", amount_column="Amount",
+    )
+    saved = save_csv_mapping(
+        owner_user, name="Synthetic race", headers=("When", "Memo", "Payee", "Amount"),
+        mapping=memo_mapping, account=account, set_as_account_default=False,
+    )
+    client = Client()
+    client.force_login(owner_user)
+    preview_url = reverse("csv-import-preview", args=(account.pk,))
+
+    def upload_and_commit():
+        form = client.post(preview_url, {
+            "action": "upload", "import_profile": f"saved:{saved.pk}",
+            "csv_file": SimpleUploadedFile("synthetic.csv", RACE_CSV, "text/csv"),
+        }).context["mapping_form"]
+        return client.post(preview_url, {
+            "action": "commit", "token": form["token"].value(), "source": "huntington",
+            "mapping_version": form["mapping_version"].value(),
+            "date_range_start": "2026-09-01", "date_range_end": "2026-09-30",
+        })
+
+    real_commit = views.commit_csv_import
+
+    def edit_then_commit(*args, **kwargs):
+        update_csv_mapping(
+            member_user, saved.pk, name=saved.name, mapping=replace(memo_mapping, description_column="Payee"),
+        )
+        return real_commit(*args, **kwargs)
+
+    with patch.object(views, "commit_csv_import", edit_then_commit):
+        refused = upload_and_commit()
+
+    assert refused.status_code == 200
+    assert MAPPING_CHANGED in refused.context["mapping_form"].non_field_errors()
+    assert not ImportBatch.objects.exists()
+    saved.refresh_from_db()
+    assert saved.locked_at is None
+    assert saved.description_column == "Payee"
+
+    assert upload_and_commit().status_code == 302
+    assert Transaction.objects.get().description == "SYNTHETIC PAYEE"
+    saved.refresh_from_db()
+    assert saved.locked_at is not None
+    reimport = client.post(preview_url, {
+        "action": "upload", "import_profile": f"saved:{saved.pk}",
+        "csv_file": SimpleUploadedFile("synthetic.csv", RACE_CSV, "text/csv"),
+    })
+    assert (reimport.context["preview"].new_count, reimport.context["preview"].duplicate_count) == (0, 1)
+
+
+@pytest.mark.django_db
+def test_a_mapping_edited_after_the_preview_was_shown_needs_a_fresh_preview(staging_settings):
+    from finance.csv_import.services import MAPPING_CHANGED
+
+    owner_user, owner = make_person("owner")
+    member_user, member = make_person("member")
+    household_for(owner, member)
+    account = Account.objects.create(name="Synthetic Checking", account_type="checking", owner=owner)
+    saved = save_csv_mapping(
+        owner_user, name="Synthetic shown", headers=("When", "Memo", "Amount", "Currency"),
+        mapping=HAND_MAPPING, account=account, set_as_account_default=False,
+    )
+    client = Client()
+    client.force_login(owner_user)
+    preview_url = reverse("csv-import-preview", args=(account.pk,))
+    shown = client.post(preview_url, {
+        "action": "upload", "import_profile": f"saved:{saved.pk}",
+        "csv_file": SimpleUploadedFile("synthetic.csv", CSV, "text/csv"),
+    })
+    assert shown.context["preview"].rows[0].amount_minor == -1234
+    form = shown.context["mapping_form"]
+    assert f'name="mapping_version" value="{form["mapping_version"].value()}"'.encode() in shown.content
+
+    update_csv_mapping(member_user, saved.pk, name=saved.name, mapping=replace(HAND_MAPPING, invert_sign=True))
+
+    def commit(version):
+        return client.post(preview_url, {
+            "action": "commit", "token": form["token"].value(), "mapping_version": version,
+            "source": "huntington", "date_range_start": "2026-09-01", "date_range_end": "2026-09-30",
+        })
+
+    refused = commit(form["mapping_version"].value())
+    assert refused.status_code == 200
+    assert MAPPING_CHANGED in refused.context["mapping_form"].non_field_errors()
+    assert refused.context["preview"].rows[0].amount_minor == 1234
+    assert not ImportBatch.objects.exists()
+
+    fresh_version = refused.context["mapping_form"]["mapping_version"].value()
+    assert fresh_version != form["mapping_version"].value()
+    assert commit(fresh_version).status_code == 302
+    assert Transaction.objects.get().amount_minor == 1234

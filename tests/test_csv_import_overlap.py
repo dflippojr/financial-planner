@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 from django.contrib.auth import get_user_model
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied, ValidationError
 
 from finance.csv_import.parser import Mapping, preview_csv, read_csv
 from finance.csv_import.services import classify_overlap, commit_csv_import
@@ -98,13 +98,19 @@ def test_invalid_rows_are_counted_and_never_imported():
 
 
 @pytest.mark.django_db
-def test_vanguard_rows_are_neutral_investment_activity():
+@pytest.mark.parametrize("source", [
+    ImportBatch.Source.VANGUARD, ImportBatch.Source.SIMPLEFIN, ImportBatch.Source.OFX,
+    ImportBatch.Source.MANUAL, "unknown",
+])
+def test_a_mapped_csv_refuses_sources_that_do_not_fit_its_parser(source):
     user, person = make_person("owner")
-    account = Account.objects.create(name="Synthetic Brokerage", account_type="investment", owner=person)
+    account = Account.objects.create(name="Synthetic Checking", account_type="checking", owner=person)
 
-    commit(user, account, CSV, source=ImportBatch.Source.VANGUARD)
+    with pytest.raises(ValidationError, match="supported import source"):
+        commit(user, account, CSV, source=source)
 
-    assert Transaction.objects.get().kind == Transaction.Kind.INVESTMENT_ACTIVITY
+    assert not ImportBatch.objects.exists()
+    assert not Transaction.objects.exists()
 
 
 @pytest.mark.django_db

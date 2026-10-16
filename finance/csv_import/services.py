@@ -10,6 +10,7 @@ from finance.audit_services import record
 from finance.input_limits import MAX_DESCRIPTION_CHARS
 from finance.csv_import.fingerprint import transaction_fingerprint
 from finance.csv_import.parser import Preview, preview_csv
+from finance.csv_import.profiles import CSV_FILE_SOURCES, OFX_MAPPING
 from finance.lifecycle_services import (
     _DENIED,
     _lock_visible_account_with_pair_counterparts,
@@ -17,8 +18,10 @@ from finance.lifecycle_services import (
     _visible_account_for_update,
     lock_actor_household,
 )
-from finance.csv_import.saved_mappings import lock_saved_mapping
-from finance.models import Account, AuditEvent, ImportBatch, SavedCsvMapping, Transaction
+from finance.csv_import.saved_mappings import headers_match, lock_saved_mapping, mapping_from_saved
+from finance.models import Account, AccountLink, AuditEvent, ImportBatch, SavedCsvMapping, Transaction
+
+MAPPING_CHANGED = "This mapping changed; preview the file again."
 
 
 @dataclass(frozen=True)
@@ -48,6 +51,15 @@ def _active_fingerprint_counts(account):
     return Counter(fingerprints)
 
 
+def simplefin_cutover(account):
+    """The cut-over date of the account's transactions-mode SimpleFIN link, or None."""
+    return (
+        AccountLink.objects.filter(account=account, mode=AccountLink.Mode.TRANSACTIONS)
+        .values_list("cutover_date", flat=True)
+        .first()
+    )
+
+
 def classify_overlap(account, preview: Preview) -> Preview:
     """Mark valid rows as new or duplicate using per-account fingerprint multiplicity.
 
@@ -55,10 +67,15 @@ def classify_overlap(account, preview: Preview) -> Preview:
     matching active rows, and only extras beyond the stored count are new on a
     reimport. Matching is limited to this account so a private ledger cannot
     hide overlap on a household account, and archived (undone) rows do not count.
+    Rows on or after a transactions-mode SimpleFIN cut-over are invalid: the sync
+    supplies that period, and its descriptions differ from the bank's CSV.
     """
     remaining = _active_fingerprint_counts(account)
+    cutover = simplefin_cutover(account)
     classified = []
     for row in preview.rows:
+        if row.is_valid and cutover is not None and row.transaction_date >= cutover:
+            row = row.with_error(f"Covered by SimpleFIN from {cutover.isoformat()}.")
         if not row.is_valid:
             classified.append(row.classified("invalid"))
             continue
@@ -80,10 +97,37 @@ def _original_fields(headers, source_row, mapping):
     }
 
 
-def _kind_for(source):
-    if source == ImportBatch.Source.VANGUARD:
-        return Transaction.Kind.INVESTMENT_ACTIVITY
-    return Transaction.Kind.CASH_FLOW
+def _require_file_source(source, mapping):
+    if mapping == OFX_MAPPING:
+        allowed = source == ImportBatch.Source.OFX
+    else:
+        allowed = source in CSV_FILE_SOURCES
+    if not allowed:
+        raise ValidationError("Choose a supported import source.")
+
+
+def _locked_saved_mapping(person, saved_csv_mapping, mapping, document):
+    """Re-read the saved mapping under the household lock and require the caller parsed with it.
+
+    A household member can edit an unused mapping between the view's read and
+    this commit. Parsing with the old fields but locking the new ones would make
+    every later reimport fingerprint differently, so the commit is refused.
+    """
+    locked = (
+        SavedCsvMapping.objects.visible_to(person)
+        .select_for_update()
+        .filter(
+            pk=saved_csv_mapping.pk,
+            status=SavedCsvMapping.Status.ACTIVE,
+            archived_at__isnull=True,
+        )
+        .first()
+    )
+    if locked is None:
+        raise PermissionDenied(_DENIED)
+    if mapping_from_saved(locked) != mapping or not headers_match(locked, document.headers):
+        raise ValidationError(MAPPING_CHANGED)
+    return locked
 
 
 @transaction.atomic
@@ -103,24 +147,13 @@ def commit_csv_import(
     lock_actor_household(person)
     account = _active_account(person, account_id)
     if saved_csv_mapping is not None:
-        saved_csv_mapping = (
-            SavedCsvMapping.objects.visible_to(person)
-            .filter(
-                pk=saved_csv_mapping.pk,
-                status=SavedCsvMapping.Status.ACTIVE,
-                archived_at__isnull=True,
-            )
-            .first()
-        )
-        if saved_csv_mapping is None:
-            raise PermissionDenied(_DENIED)
+        saved_csv_mapping = _locked_saved_mapping(person, saved_csv_mapping, mapping, document)
     # _active_account holds the account row lock, serializing concurrent imports
     # and ledger lifecycle changes without materializing the entire history.
 
     if date_range_end < date_range_start:
         raise ValidationError("The import date range must end on or after it starts.")
-    if source not in ImportBatch.Source.values or source == ImportBatch.Source.MANUAL:
-        raise ValidationError("Choose a supported import source.")
+    _require_file_source(source, mapping)
 
     preview = classify_overlap(account, preview_csv(document, mapping))
     new_rows = [row for row in preview.rows if row.overlap_status == "new"]
@@ -139,7 +172,6 @@ def commit_csv_import(
     if saved_csv_mapping is not None:
         lock_saved_mapping(saved_csv_mapping)
     if new_rows:
-        kind = _kind_for(source)
         source_rows = {row.number: row for row in document.rows}
         Transaction.objects.bulk_create(
             [
@@ -150,7 +182,7 @@ def commit_csv_import(
                     amount_minor=row.amount_minor,
                     currency=row.currency,
                     description=row.description[:MAX_DESCRIPTION_CHARS],
-                    kind=kind,
+                    kind=Transaction.Kind.CASH_FLOW,
                     source_row_number=row.row_number,
                     source_transaction_id=row.source_transaction_id,
                     fingerprint=_fingerprint_for(account, row),

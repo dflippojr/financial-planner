@@ -2,7 +2,7 @@
 {% block title %}Import · Financial Planner{% endblock %}
 {% block content %}
 {% if has_linked_accounts %}
-{% include "finance/_page_header.html" with title="Import" helper="Upload a CSV, OFX or QFX statement. You map and preview its rows before anything is saved, and any import can be undone." more="Per-account Import CSV on Accounts still works. Accounts marked Linked are connected through SimpleFIN. CSV history before the cut-over date stays; SimpleFIN supplies activity from that date forward. CSV rows on or after the cut-over can overlap linked data for that account." %}
+{% include "finance/_page_header.html" with title="Import" helper="Upload a CSV, OFX or QFX statement. You map and preview its rows before anything is saved, and any import can be undone." more="Per-account Import CSV on Accounts still works. Accounts marked Linked are connected through SimpleFIN. CSV history before the cut-over date stays; SimpleFIN supplies activity from that date forward. File rows dated on or after the cut-over are refused, so nothing is counted twice." %}
 {% else %}
 {% include "finance/_page_header.html" with title="Import" helper="Upload a CSV, OFX or QFX statement. You map and preview its rows before anything is saved, and any import can be undone." more="Per-account Import CSV on Accounts still works." %}
 {% endif %}
@@ -31,7 +31,7 @@
       <ul class="mb-3 text-sm opacity-80">
         {% for account in accounts %}
           {% if account.simplefin_cutover %}
-          <li>{{ account.name }}: CSV rows dated before {{ account.simplefin_cutover|date:"Y-m-d" }} stay as CSV history. Rows on or after that cut-over are in the SimpleFIN period.</li>
+          <li>{{ account.name }}: CSV rows dated before {{ account.simplefin_cutover|date:"Y-m-d" }} stay as CSV history. Rows on or after that cut-over come from SimpleFIN and are refused in a file import.</li>
           {% endif %}
         {% endfor %}
       </ul>
