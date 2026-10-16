@@ -46,7 +46,8 @@ jobs:
             echo "docker=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          files=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[].filename')
+          # Both names of a rename, so moving a packaging file away still builds.
+          files=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[] | .filename, (.previous_filename // empty)')
           # The packaging paths docker-smoke.yml used to filter on.
           if grep -qE '^(Dockerfile|compose\.yml|requirements\.txt|(scripts|ops|static|templates)/.*|\.github/workflows/(docker-smoke|ci)\.yml)$' <<< "$files"; then
             echo "docker=true" >> "$GITHUB_OUTPUT"

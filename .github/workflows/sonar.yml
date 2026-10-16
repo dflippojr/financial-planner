@@ -38,7 +38,8 @@ jobs:
   sonar:
     runs-on: ubuntu-latest
     # Secrets are not passed to pull requests from forks; skip rather than fail.
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    # Every other event runs, including manual runs of ci.yml or this file.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@v7
         with:
