@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import json
 import subprocess
 from datetime import datetime, timezone
@@ -110,6 +111,13 @@ def test_tracebacks_command_reads_a_file(tmp_path, capsys):
 
     assert signals.main(["tracebacks", "--file", str(path)]) == 0
     assert json.loads(capsys.readouterr().out)["tracebacks"] == 3
+
+
+def test_tracebacks_command_reads_standard_input(monkeypatch, capsys):
+    monkeypatch.setattr(signals.sys, "stdin", io.StringIO(SYNTHETIC_LOG))
+
+    assert signals.main(["tracebacks", "--file", "-"]) == 0
+    assert json.loads(capsys.readouterr().out)["types"]["ValueError"] == 1
 
 
 def test_tracebacks_command_reads_docker_logs_with_both_streams(capsys):
