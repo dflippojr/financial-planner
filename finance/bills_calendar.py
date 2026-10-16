@@ -1,5 +1,6 @@
 """Month calendar of expected charges and a running expected deposit balance."""
 
+import logging
 from datetime import date, timedelta
 from types import SimpleNamespace
 
@@ -22,6 +23,7 @@ from .models import (
     Transaction,
 )
 from .months import add_months, month_end
+from .pass_isolation import for_each_member
 from .planning_services import visible_projection_inputs
 from .recurring_review import is_overdue
 from .projection import (
@@ -32,6 +34,8 @@ from .projection import (
     occurrence_dates,
 )
 from .recurring_services import CADENCE_DAYS
+
+logger = logging.getLogger(__name__)
 
 ALERT_TITLE = "Expected balance below threshold in the next 7 days"
 DEPOSIT_TYPES = (Account.Type.CHECKING, Account.Type.SAVINGS)
@@ -588,7 +592,14 @@ def evaluate_expected_balance_alert(principal, *, today=None):
 
 def evaluate_expected_balance_alerts(*, today=None):
     today = today or timezone.localdate()
-    created = []
-    for prefs in AlertSettings.objects.filter(expected_balance_enabled=True).select_related("person"):
-        created.extend(evaluate_expected_balance_alert(prefs.person, today=today))
-    return created
+    people = [
+        prefs.person
+        for prefs in AlertSettings.objects.filter(expected_balance_enabled=True).select_related("person")
+    ]
+    results = for_each_member(
+        people,
+        lambda person: evaluate_expected_balance_alert(person, today=today),
+        label="Expected balance alert",
+        logger=logger,
+    )
+    return [alert for alerts in results for alert in alerts]

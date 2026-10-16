@@ -2308,6 +2308,9 @@ class Alert(models.Model):
         blank=True,
         related_name="alerts",
     )
+    # Every account whose data the title quotes. The recipient sees the alert
+    # only while they can see all of them.
+    source_accounts = models.ManyToManyField(Account, blank=True, related_name="sourced_alerts")
     created_at = models.DateTimeField(auto_now_add=True)
     read_at = models.DateTimeField(null=True, blank=True)
     email_notice_sent_at = models.DateTimeField(null=True, blank=True)

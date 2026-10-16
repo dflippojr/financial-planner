@@ -8,7 +8,7 @@ import pytest
 from django.core import mail
 from django.utils import timezone
 
-from finance.alert_services import run_daily_alert_pass, settings_for
+from finance.alert_services import DailyAlertPassIncomplete, run_daily_alert_pass, settings_for
 from finance.models import Account, Alert, Person, RecurringSeries
 from finance.recurring_review import missed_charge
 from finance.recurring_services import confirm_recurring_series, refresh_recurring_series
@@ -154,9 +154,12 @@ def test_one_members_failure_does_not_stop_others_or_later_steps(caplog):
         patch("finance.recurring_services.refresh_recurring_series", side_effect=refresh),
         patch("finance.receipt_services.sweep_orphan_receipt_files") as sweep,
         caplog.at_level(logging.ERROR, logger="finance.alert_services"),
+        pytest.raises(DailyAlertPassIncomplete) as raised,
     ):
         run_daily_alert_pass()
 
+    # The pass finishes every step, then reports the failed one (#513).
+    assert raised.value.steps == ("recurring_refresh",)
     assert RecurringSeries.objects.filter(person=other).exists()
     sweep.assert_called_once()
     assert f"member {failing.pk} failed (RuntimeError)" in caplog.text

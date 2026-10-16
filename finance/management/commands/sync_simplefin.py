@@ -5,7 +5,7 @@ from finance.audit_operations import journal_run
 
 from finance.audit_services import purge_old_events
 from finance.alert_email import notify_after_alert_run
-from finance.alert_services import run_daily_alert_pass
+from finance.alert_services import DailyAlertPassIncomplete, run_daily_alert_pass
 from finance.models import SimpleFinConnection
 from finance.simplefin_services import sync_all_connections
 
@@ -25,7 +25,13 @@ class Command(AuditedCommand):
         except Exception as exc:  # The alert pass below must still run.
             logger.error("SimpleFIN sync stage failed (%s); running the alert pass anyway.", type(exc).__name__)
             self.stderr.write("SimpleFIN sync stage failed; alerts are still processed.")
-        run_daily_alert_pass()
+        try:
+            run_daily_alert_pass()
+        except DailyAlertPassIncomplete as exc:
+            # Every other step ran and the journal records the failure; keep
+            # the background lanes up rather than restarting them daily.
+            self.stderr.write(f"Some alert pass steps failed: {', '.join(exc.steps)}.")
+            return
         self.stdout.write("Processed alerts.")
 
     def _sync(self):

@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-schedule=${BACKUP_CRON:-0 2 * * *}
+schedule=${BACKUP_CRON:-30 3 * * *}
 field_count=$(printf '%s\n' "$schedule" | awk 'NF { lines += 1; fields = NF } END { if (lines == 1) print fields; else print 0 }')
 if [ "$field_count" -ne 5 ]; then
   echo "BACKUP_CRON must be one five-field cron schedule" >&2

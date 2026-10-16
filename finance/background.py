@@ -17,7 +17,7 @@ from django.utils import timezone
 from .audit_operations import operation
 from .ai_jobs import AiJobLane
 from .chat_runner import ChatLane
-from .simplefin_schedule import next_scheduled_sync, parse_five_field_cron, seconds_until
+from .simplefin_schedule import next_scheduled_sync, seconds_until
 
 logger = logging.getLogger(__name__)
 
@@ -82,8 +82,9 @@ def supervise(threads):
 
 
 def main():
-    # Invalid cron fails before any threads or chat executor are started.
-    parse_five_field_cron(settings.SIMPLEFIN_SYNC_CRON)
+    # Invalid cron, or one that never matches, fails before any threads or
+    # chat executor are started.
+    next_scheduled_sync(settings.SIMPLEFIN_SYNC_CRON)
     threading.excepthook = log_uncaught_lane_error
     stop_event = threading.Event()
     lane = ChatLane()

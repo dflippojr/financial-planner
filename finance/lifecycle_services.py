@@ -1,6 +1,6 @@
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.db.models import ProtectedError
+from django.db.models import ProtectedError, Q
 from django.utils import timezone
 
 from .access import DENIED as _DENIED
@@ -555,7 +555,7 @@ def _repair_then_delete_account_rows(person, account):
         delete_receipts_for_transactions(tx_ids)
         Transaction.objects.filter(pk__in=tx_ids).delete()
     ImportBatch.objects.filter(account_id=account.pk).delete()
-    Alert.objects.filter(account_id=account.pk).delete()
+    Alert.objects.filter(Q(account_id=account.pk) | Q(pk__in=account.sourced_alerts.values("pk"))).delete()
     account.delete()
 
 

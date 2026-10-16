@@ -1037,6 +1037,11 @@ CRON_CASES = [
     ("30 6 1 * 1", datetime(2026, 10, 6, 6, 30, tzinfo=UTC), False),  # Tuesday the 6th
     ("30 6 * * 1", datetime(2026, 10, 5, 6, 30, tzinfo=UTC), True),
     ("30 6 * * 1", datetime(2026, 10, 1, 6, 30, tzinfo=UTC), False),
+    # A start with a step runs to the field's maximum.
+    ("5/20 * * * *", datetime(2026, 10, 1, 6, 45, tzinfo=UTC), True),
+    ("5/20 * * * *", datetime(2026, 10, 1, 6, 0, tzinfo=UTC), False),
+    ("30 6 * * 1-5", datetime(2026, 10, 2, 6, 30, tzinfo=UTC), True),  # a Friday
+    ("30 6 * * 1-5", datetime(2026, 10, 3, 6, 30, tzinfo=UTC), False),  # a Saturday
 ]
 
 

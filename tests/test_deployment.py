@@ -291,3 +291,16 @@ def test_backup_image_ships_the_script_the_deployment_runbook_uses(script):
     copy_line = next(line for line in (root / "ops/backup/Dockerfile").read_text().splitlines() if line.startswith("COPY"))
     assert script in copy_line
     assert f"/opt/financial-planner/{script}" in (root / "docs/deployment.md").read_text(encoding="utf-8")
+
+
+def test_backup_schedule_defaults_agree_and_avoid_daylight_saving_hours():
+    # BusyBox crond skips 02:00-02:59 on spring-forward Sunday and repeats
+    # 01:00-01:59 on fall-back Sunday (#512).
+    root = Path(__file__).resolve().parent.parent
+    defaults = {
+        re.search(r"BACKUP_CRON:-([^}]+)\}", (root / "compose.yml").read_text()).group(1),
+        re.search(r"BACKUP_CRON:-([^}]+)\}", (root / "ops/backup/run-backups.sh").read_text()).group(1),
+        re.search(r"^BACKUP_CRON=(.+)$", (root / ".env.example").read_text(), re.MULTILINE).group(1).strip(),
+    }
+
+    assert defaults == {"30 3 * * *"}

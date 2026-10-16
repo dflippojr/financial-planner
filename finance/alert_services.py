@@ -1,6 +1,7 @@
 import logging
 from calendar import month_name
 from datetime import timedelta
+from functools import partial
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
@@ -28,6 +29,7 @@ from .models import (
     Transaction,
 )
 from .months import month_start
+from .pass_isolation import for_each_member, run_step
 
 logger = logging.getLogger(__name__)
 
@@ -64,8 +66,12 @@ def _internal_link(link):
 
 @transaction.atomic
 @scheduled_operation
-def raise_alert(recipients, kind, title, link, dedupe_key, account=None):
-    """Create one inbox row per recipient unless that condition was already raised."""
+def raise_alert(recipients, kind, title, link, dedupe_key, account=None, source_accounts=()):
+    """Create one inbox row per recipient unless that condition was already raised.
+
+    source_accounts are every account the title quotes data from; a recipient
+    who later loses sight of any of them no longer sees the alert.
+    """
     if not _internal_link(link):
         raise ValidationError("Alert links must be internal URLs.")
     created = []
@@ -84,6 +90,10 @@ def raise_alert(recipients, kind, title, link, dedupe_key, account=None):
             },
         )
         if was_created:
+            # Sources are the visibility snapshot of the first raise; a later
+            # repeat must not widen it with accounts the original never quoted.
+            if source_accounts:
+                alert.source_accounts.add(*source_accounts)
             created.append(alert)
             outcome(recipient, "alert_delivery", alert.pk, account=account)
     return created
@@ -106,12 +116,18 @@ def alerts_for(principal):
         _key=Concat(Value("budget:"), Cast("pk", output_field=CharField())),
         _prefix=Concat(Value("budget:"), Cast("pk", output_field=CharField()), Value(":")),
     ).filter(Q(_alert_key=F("_key")) | Q(_alert_key__startswith=F("_prefix")))
+    # An alert quoting an account the viewer can no longer see (after an
+    # unshare or leaving the household) drops out of their view.
+    hidden_sources = Alert.source_accounts.through.objects.filter(alert_id=OuterRef("pk")).exclude(
+        account_id__in=visible_accounts
+    )
     return (
         Alert.objects.filter(recipient=person)
         .exclude(kind=Alert.Kind.LARGE_TRANSACTION, account_id__isnull=True)
         .filter(Q(account_id__isnull=True) | Q(account_id__in=visible_accounts))
         .alias(_budget_visible=Exists(visible_budgets))
         .filter(~Q(kind=Alert.Kind.BUDGET) | Q(_budget_visible=True))
+        .exclude(Exists(hidden_sources))
         .order_by("-created_at", "-pk")
     )
 
@@ -482,52 +498,70 @@ def refresh_all_recurring_series(*, today=None):
     """Bring every active member's series in line and raise their review alerts.
 
     Each member runs in its own transaction, so one failure (a lock timeout,
-    say) rolls back only that member and the pass moves on. Logs name the
-    member and error type only: a message could quote financial values.
+    say) rolls back only that member and the pass moves on.
     """
     from .recurring_services import refresh_recurring_series
 
-    for person in Person.objects.filter(user__is_active=True).order_by("pk"):
-        try:
-            with transaction.atomic():
-                refresh_recurring_series(person, only_if_changed=True, today=today)
-        except Exception as exc:  # The pass must reach every member and its later steps.
-            logger.error(
-                "Daily recurring refresh for member %s failed (%s).",
-                person.pk,
-                type(exc).__name__,
-            )
+    for_each_member(
+        Person.objects.filter(user__is_active=True).order_by("pk"),
+        lambda person: refresh_recurring_series(person, only_if_changed=True, today=today),
+        label="Daily recurring refresh",
+        logger=logger,
+    )
+
+
+class DailyAlertPassIncomplete(Exception):
+    """One or more steps of the daily alert pass failed; every other step still ran."""
+
+    def __init__(self, steps):
+        self.steps = tuple(steps)
+        super().__init__(f"Daily alert pass steps failed: {', '.join(self.steps)}")
 
 
 @notify_after_alert_run
 @journal_run("daily_alerts")
 def run_daily_alert_pass(*, today=None, now=None):
-    created = evaluate_sync_alerts()
-    # Before the monthly review and expected-balance steps, which read series.
-    refresh_all_recurring_series(today=today)
-    created.extend(evaluate_active_budget_alerts(today=today))
-    created.extend(evaluate_recent_large_transactions())
-    from .backup_health import evaluate_backup_alerts
-    from .monthly_review import generate_due_monthly_reviews
+    """Run every daily alert and retention step, each isolated from the others.
 
-    generate_due_monthly_reviews(today=today)
-    created.extend(evaluate_backup_alerts(today=today, now=now))
-    from .bills_calendar import evaluate_expected_balance_alerts
-
-    created.extend(evaluate_expected_balance_alerts(today=today))
-    from .import_due import evaluate_import_due_alerts
-
-    created.extend(evaluate_import_due_alerts(today=today))
-    purge_old_read_alerts(now=now)
+    A failing step is logged by name and error type only, and the pass moves
+    on. If any step failed, raises DailyAlertPassIncomplete at the end so the
+    daily_alerts journal records a failure. A database-unavailable error stops
+    the pass at once.
+    """
     from .auth_services import purge_expired_login_throttles
+    from .backup_health import evaluate_backup_alerts
+    from .bills_calendar import evaluate_expected_balance_alerts
+    from .import_due import evaluate_import_due_alerts
+    from .monthly_review import generate_due_monthly_reviews
     from .passkey_services import purge_stale_pending_sign_ins
-    from .security_services import purge_expired_sessions, purge_old_security_events, purge_stale_member_sessions
     from .receipt_services import sweep_orphan_receipt_files
+    from .security_services import purge_expired_sessions, purge_old_security_events, purge_stale_member_sessions
 
-    purge_old_security_events(now=now)
-    purge_expired_login_throttles(now=now)
-    purge_expired_sessions(now=now)
-    purge_stale_member_sessions(now=now)
-    purge_stale_pending_sign_ins(now=now)
-    sweep_orphan_receipt_files(now=now)
+    # (name, function, whether it returns new alerts).
+    steps = (
+        ("sync_alerts", evaluate_sync_alerts, True),
+        # Before the monthly review and expected-balance steps, which read series.
+        ("recurring_refresh", partial(refresh_all_recurring_series, today=today), False),
+        ("budget_alerts", partial(evaluate_active_budget_alerts, today=today), True),
+        ("large_transaction_alerts", evaluate_recent_large_transactions, True),
+        ("monthly_reviews", partial(generate_due_monthly_reviews, today=today), False),
+        ("backup_alerts", partial(evaluate_backup_alerts, today=today, now=now), True),
+        ("expected_balance_alerts", partial(evaluate_expected_balance_alerts, today=today), True),
+        ("import_due_alerts", partial(evaluate_import_due_alerts, today=today), True),
+        ("purge_read_alerts", partial(purge_old_read_alerts, now=now), False),
+        ("purge_security_events", partial(purge_old_security_events, now=now), False),
+        ("purge_login_throttles", partial(purge_expired_login_throttles, now=now), False),
+        ("purge_expired_sessions", partial(purge_expired_sessions, now=now), False),
+        ("purge_stale_member_sessions", partial(purge_stale_member_sessions, now=now), False),
+        ("purge_pending_sign_ins", partial(purge_stale_pending_sign_ins, now=now), False),
+        ("receipt_sweep", partial(sweep_orphan_receipt_files, now=now), False),
+    )
+    created = []
+    failed = []
+    for name, function, returns_alerts in steps:
+        result = run_step(name, function, failed=failed, logger=logger)
+        if returns_alerts and result is not None:
+            created.extend(result)
+    if failed:
+        raise DailyAlertPassIncomplete(failed)
     return created
