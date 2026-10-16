@@ -1281,12 +1281,14 @@ class RecurringPriceAcknowledgement(models.Model):
     """The latest charge amount one member dismissed as a series' price-change flag.
 
     Kept per member, so dismissing a household bill's flag leaves every other
-    member's flag and alerts in place (#523).
+    member's flag and alerts in place (#523). `transaction` is the charge that
+    was flagged, when known; dismissals from before it was recorded have none.
     """
 
     person = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="recurring_price_acknowledgements")
     series = models.ForeignKey(RecurringSeries, on_delete=models.CASCADE, related_name="price_acknowledgements")
     amount_minor = models.BigIntegerField()
+    transaction = models.ForeignKey(Transaction, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:

@@ -1402,3 +1402,60 @@ def test_an_older_charge_at_the_new_price_joining_the_bill_does_not_alert_again(
     _run_both_passes(owner, member, today)
 
     assert _review_alerts(Alert.Kind.RECURRING_PRICE) == before
+
+
+@pytest.mark.django_db
+def test_dismissing_a_mixed_series_private_charge_leaves_a_household_bills_flag():
+    owner, member, _outsider, bill = _shared_bill()
+    shared = bill.members.first().transaction.account
+    household_rise = make_transaction(
+        owner, shared, transaction_date=date(2026, 10, 12), amount_minor=-9000, description="Synthetic Internet"
+    )
+    add_member(bill, household_rise)
+    private = make_account(member, name="Synthetic Own Card")
+    mixed = make_series(member, name="Synthetic Internet", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-6000)
+    for item in bill.members.order_by("transaction__transaction_date")[:2]:
+        add_member(mixed, item.transaction)
+    add_member(mixed, household_rise)
+    add_member(mixed, make_transaction(
+        member, private, transaction_date=date(2026, 10, 13), amount_minor=-9000, description="Synthetic Internet"
+    ))
+    today = date(2026, 10, 14)
+    dismiss_price_change(member, mixed.pk)
+
+    assert acknowledged_amounts(member, [bill]) == {}
+    assert [item.series.pk for item in build_recurring_review(member, [bill], today=today)[1]] == [bill.pk]
+
+
+@pytest.mark.django_db
+def test_an_archived_private_charge_still_keeps_a_series_out_of_household_dismissals():
+    from django.db.models import Prefetch
+
+    owner, member, _outsider, bill = _shared_bill()
+    shared = bill.members.first().transaction.account
+    add_member(bill, make_transaction(
+        owner, shared, transaction_date=date(2026, 10, 12), amount_minor=-9000, description="Synthetic Internet"
+    ))
+    dismiss_price_change(member, bill.pk)
+    private = make_account(member, name="Synthetic Own Card")
+    undone = make_transaction(
+        member, private, transaction_date=date(2026, 9, 20), amount_minor=-6000, description="Synthetic Internet"
+    )
+    mixed = make_series(member, name="Synthetic Internet", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-6000)
+    for item in bill.members.order_by("transaction__transaction_date")[:3]:
+        add_member(mixed, item.transaction)
+    add_member(mixed, undone)
+    add_member(mixed, make_transaction(
+        owner, shared, transaction_date=date(2026, 10, 13), amount_minor=-9000, description="Synthetic Internet"
+    ))
+    Transaction.objects.filter(pk=undone.pk).update(status=Transaction.Status.ARCHIVED, archived_at=timezone.now())
+    # As the weekly digest loads it: only the still-active charges.
+    shown = RecurringSeries.objects.prefetch_related(
+        Prefetch(
+            "members",
+            queryset=RecurringSeriesMember.objects.filter(transaction__status=Transaction.Status.ACTIVE)
+            .select_related("transaction__account"),
+        )
+    ).get(pk=mixed.pk)
+
+    assert acknowledged_amounts(member, [shown]) == {}

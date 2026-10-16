@@ -5,6 +5,7 @@ from datetime import timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from types import SimpleNamespace
 
+from django.db.models import Exists, OuterRef, Q
 from django.urls import reverse
 from django.utils import timezone
 
@@ -176,39 +177,53 @@ def upcoming_charge(series, *, today):
 def _dismissals(groups, *, person_ids=None):
     """Members' dismissed price-change amounts per group, as [{person id: set of amount_minor}].
 
-    Each group is (the pks of a bill's copies, the pk of the flagged charge or
-    None). A member's dismissal counts when it is on one of the copies, or on
-    any series holding the flagged charge itself, so it survives a copy
-    leaving the bill when its account turns private. A series with a private
-    charge never joins a bill, so a dismissal never spreads through it to a
-    different charge (#523). `person_ids` limits the members read.
+    Each group is (the pks of a bill's copies, the pks of the flagged run: the
+    latest charges at the latest amount). A member's dismissal counts when it
+    is on one of the copies, or, on any series, when the charge it dismissed
+    is in the flagged run, so it survives a copy leaving the bill when its
+    account turns private. A series with a private charge never joins a bill,
+    so a dismissal never spreads through it to a different charge (#523).
+    `person_ids` limits the members read.
     """
-    charge_ids = {charge for _copies, charge in groups if charge is not None}
-    holders = {}
-    for txn_id, series_id in RecurringSeriesMember.objects.filter(transaction_id__in=charge_ids).values_list(
-        "transaction_id", "series_id"
-    ):
-        holders.setdefault(txn_id, set()).add(series_id)
-    series_ids = set().union(set(), *(copies for copies, _charge in groups), *holders.values())
-    rows = RecurringPriceAcknowledgement.objects.filter(series_id__in=series_ids)
+    series_ids = set().union(set(), *(copies for copies, _run in groups))
+    charge_ids = set().union(set(), *(run for _copies, run in groups))
+    rows = RecurringPriceAcknowledgement.objects.filter(
+        Q(series_id__in=series_ids) | Q(transaction_id__in=charge_ids)
+    )
     if person_ids is not None:
         rows = rows.filter(person_id__in=person_ids)
-    acknowledged = {}
-    for series_id, person_id, amount_minor in rows.values_list("series_id", "person_id", "amount_minor"):
-        acknowledged.setdefault(series_id, {}).setdefault(person_id, set()).add(amount_minor)
+    by_series, by_charge = {}, {}
+    for series_id, txn_id, person_id, amount_minor in rows.values_list(
+        "series_id", "transaction_id", "person_id", "amount_minor"
+    ):
+        by_series.setdefault(series_id, set()).add((person_id, amount_minor))
+        if txn_id is not None:
+            by_charge.setdefault(txn_id, set()).add((person_id, amount_minor))
     result = []
-    for copies, charge in groups:
+    for copies, run in groups:
         found = {}
-        for series_id in set(copies) | holders.get(charge, set()):
-            for person_id, amounts in acknowledged.get(series_id, {}).items():
-                found.setdefault(person_id, set()).update(amounts)
+        for pairs in [*(by_series.get(pk, ()) for pk in copies), *(by_charge.get(pk, ()) for pk in run)]:
+            for person_id, amount_minor in pairs:
+                found.setdefault(person_id, set()).add(amount_minor)
         result.append(found)
     return result
 
 
-def _flagged_charge_id(series):
+def _flagged_run_ids(series):
     rows = _ordered_transactions(series)
-    return rows[-1].pk if rows else None
+    return tuple(txn.pk for txn in _latest_price_run(rows)) if rows else ()
+
+
+def _household_only_ids(queryset):
+    """The pks in `queryset` whose stored charges all sit in household accounts.
+
+    Read from every stored membership, not a caller's prefetch, which may
+    hold only some of a series' charges.
+    """
+    outside = RecurringSeriesMember.objects.filter(series_id=OuterRef("pk")).exclude(
+        transaction__account__scope=Account.Scope.HOUSEHOLD
+    )
+    return set(queryset.exclude(Exists(outside)).values_list("pk", flat=True))
 
 
 def acknowledged_amounts(principal, series_list):
@@ -220,7 +235,6 @@ def acknowledged_amounts(principal, series_list):
     the page, the digest and the alerts agree (#523).
     """
     from .bill_grouping import group_bills, stored_charge_ids
-    from .recurring_services import _household_only
 
     person = _person_for(principal)
     if person is None or not series_list:
@@ -231,17 +245,13 @@ def acknowledged_amounts(principal, series_list):
     # outside `series_list` (a digest week's quiet series) may still link a
     # dismissed copy to a shown one.
     own = RecurringSeries.objects.visible_to(person).filter(status=RecurringSeries.Status.CONFIRMED)
-    household = {
-        series.pk
-        for series in [*series_list, *own.prefetch_related("members__transaction__account")]
-        if series.status == RecurringSeries.Status.CONFIRMED and _household_only(series)
-    }
+    household = _household_only_ids(own)
     household |= set(RecurringSeries.objects.shared_with(principal, linkers=True).values_list("pk", flat=True))
     copies_of = {}
     for bill in group_bills(stored_charge_ids(household)):
         copies_of.update((pk, tuple(bill)) for pk in bill)
     found = _dismissals(
-        [(copies_of.get(series.pk, (series.pk,)), _flagged_charge_id(series)) for series in series_list],
+        [(copies_of.get(series.pk, (series.pk,)), _flagged_run_ids(series)) for series in series_list],
         person_ids=[person.pk],
     )
     return {
@@ -488,7 +498,7 @@ def raise_recurring_review_alerts(principal, series_list, *, today):
     sources = _alert_sources(principal, series_list)
     changes = [(source, change) for source in sources if (change := price_drift(source.series))]
     dismissals = _dismissals(
-        [(tuple(series.pk for series in source.copies), _flagged_charge_id(source.series)) for source, _ in changes]
+        [(tuple(series.pk for series in source.copies), _flagged_run_ids(source.series)) for source, _ in changes]
     )
     for (source, change), dismissed in zip(changes, dismissals):
         audience, account = _alert_audience(source.series)

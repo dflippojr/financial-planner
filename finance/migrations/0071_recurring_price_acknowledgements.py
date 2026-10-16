@@ -45,6 +45,7 @@ class Migration(migrations.Migration):
                 ('updated_at', models.DateTimeField(auto_now=True)),
                 ('person', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='recurring_price_acknowledgements', to='finance.person')),
                 ('series', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='price_acknowledgements', to='finance.recurringseries')),
+                ('transaction', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='+', to='finance.transaction')),
             ],
             options={
                 'constraints': [models.UniqueConstraint(fields=('person', 'series'), name='recurring_price_ack_person_series')],
