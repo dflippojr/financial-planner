@@ -34,7 +34,6 @@ from .strategies import (
     HUNTINGTON,
     MAX_MINOR,
     Row,
-    amounts,
     overlapping_files,
     payee_memo,
     rows,
@@ -213,8 +212,13 @@ def transfer_cases(draw):
         day = draw(st.dates(date(2026, 1, 1), date(2026, 8, 31)))
         # Within the default five-day matching window.
         transfers.append(Transfer(source, target, size, day, draw(st.integers(0, 3))))
-    # Ordinary activity never shares an amount with a transfer, so the intended pairs are the only matches.
-    background = draw(rows(min_size=0, max_size=6, amount_strategy=amounts.filter(lambda a: abs(a) not in sizes)))
+    # Ordinary activity never shares an absolute amount with a transfer or with
+    # other ordinary activity, so the intended pairs are the only possible matches.
+    background = draw(rows(min_size=0, max_size=6))
+    distinct = draw(st.lists(st.integers(1, MAX_MINOR).filter(lambda size: size not in sizes),
+                             min_size=len(background), max_size=len(background), unique=True))
+    background = [replace(row, amount_minor=size if row.amount_minor > 0 else -size)
+                  for row, size in zip(background, distinct)]
     placed = [(draw(st.sampled_from(tuple(ACCOUNT_SHAPES))), row) for row in background]
     return tuple(transfers), tuple(placed)
 
@@ -287,12 +291,13 @@ def test_a_refund_reduces_spending_only_when_its_original_was_counted(case):
             except (PermissionDenied, ValidationError):
                 pass
 
-        # A refund of a counted purchase reduces spending. One aimed at the
-        # excluded transfer leg must be refused, so it stays income.
-        reduced = sum(size for size, original in refunds if original < len(purchases))
-        unlinked = sum(size for size, original in refunds if original == len(purchases))
+        # A refund of a counted purchase reduces spending, below zero when
+        # refunds exceed purchases (a net refund). One aimed at the excluded
+        # transfer leg must be refused, so it stays income.
+        income = sum(size for size, original in refunds if original == len(purchases))
+        spending = sum(purchases) - sum(size for size, original in refunds if original < len(purchases))
         household = selected_accounts(owner, scope=Account.Scope.HOUSEHOLD, cash_flow_only=True)
-        assert ledger.totals(owner, household) == ledger.expected_totals([unlinked, reduced - sum(purchases)])
+        assert ledger.totals(owner, household) == ledger.Totals(income, spending, income - spending)
 
 
 # 5. Exact money.
