@@ -31,4 +31,17 @@ bash scripts/test_postgres.sh -n 4 --dist worksteal -m "not browser" --cov=. --c
 
 echo "== Browser layout tests"
 "$python_bin" -m pytest tests -q -p no:cacheprovider -m browser -n 4 -rs \
-  --ignore=tests/test_ui_instance.py
+  --ignore=tests/test_ui_instance.py --junitxml=test-results/ci-local-browser.xml
+
+# As in playwright.yml: the tests skip themselves when Chromium or the CSS is
+# missing, which would pass while checking nothing.
+"$python_bin" - <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+
+root = ET.parse("test-results/ci-local-browser.xml").getroot()
+suite = root if root.tag == "testsuite" else root.find("testsuite")
+tests, skipped = int(suite.get("tests")), int(suite.get("skipped"))
+print(f"{tests} browser tests, {skipped} skipped")
+sys.exit(1 if tests == 0 or skipped else 0)
+PY
