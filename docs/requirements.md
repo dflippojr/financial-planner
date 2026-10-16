@@ -580,6 +580,7 @@ Owner decisions:
   - A short paragraph of three to five plain sentences sits above the facts, labeled AI-generated with the backend named.
   - Every number must match a computed fact. A paragraph stating any other number is discarded, and the facts show alone.
   - It is on by default for members who have connected an AI backend and are in acceptance of the privacy policy. Each member can turn it off.
+- **Snapshot until Regenerate (2026-10-15, #509).** A stored review is not rebuilt when transactions change, so no model call runs on its own. The page shows "Generated <date>", and when a visible active row dated in the reviewed month was added after that, a "New transactions since this review" hint with a Regenerate button.
 
 ## Deleting a member's data (2026-10-03, #104)
 

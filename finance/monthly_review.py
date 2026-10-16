@@ -519,6 +519,24 @@ def store_monthly_review(principal, month, *, force=False, today=None, raise_inb
     return review, True
 
 
+def has_newer_transactions(principal, review):
+    """Whether a visible row for the review's month was added after it was generated (#509).
+
+    The review stays a snapshot until Regenerate; this only tells the member
+    that cash flow may now disagree with it.
+    """
+    return (
+        Transaction.objects.visible_to(principal)
+        .filter(
+            status=Transaction.Status.ACTIVE,
+            transaction_date__gte=review.month,
+            transaction_date__lte=month_end(review.month),
+            created_at__gt=review.generated_at,
+        )
+        .exists()
+    )
+
+
 def review_for_viewer(principal, month, *, today=None, force=False):
     return store_monthly_review(principal, month, force=force, today=today, raise_inbox=True)[0]
 

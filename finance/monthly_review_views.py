@@ -5,7 +5,13 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_GET, require_POST
 
 from .access import request_person as _person
-from .monthly_review import earliest_review_month, latest_closed_month, parse_review_month, review_for_viewer
+from .monthly_review import (
+    earliest_review_month,
+    has_newer_transactions,
+    latest_closed_month,
+    parse_review_month,
+    review_for_viewer,
+)
 from .monthly_review_ai import visible_phrasing
 from .months import add_months
 from .unusual_spending_ai import visible_unusual_phrasing
@@ -43,6 +49,7 @@ def monthly_review(request):
             "previous_url": _list_url(previous_month) if previous_month >= earliest else None,
             "next_url": _list_url(next_month) if next_month <= closed else None,
             "regenerate_url": reverse("monthly-review-regenerate"),
+            "has_newer_transactions": has_newer_transactions(person, review),
         },
     )
 
