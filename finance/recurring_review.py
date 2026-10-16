@@ -16,6 +16,7 @@ from .models import (
     ImportBatch,
     RecurringPriceAcknowledgement,
     RecurringSeries,
+    RecurringSeriesMember,
     _person_for,
 )
 from .recurring_services import CADENCE_DAYS, next_charge_date
@@ -172,36 +173,78 @@ def upcoming_charge(series, *, today):
     )
 
 
+def _dismissals(groups, *, person_ids=None):
+    """Members' dismissed price-change amounts per group, as [{person id: set of amount_minor}].
+
+    Each group is (the pks of a bill's copies, the pk of the flagged charge or
+    None). A member's dismissal counts when it is on one of the copies, or on
+    any series holding the flagged charge itself, so it survives a copy
+    leaving the bill when its account turns private. A series with a private
+    charge never joins a bill, so a dismissal never spreads through it to a
+    different charge (#523). `person_ids` limits the members read.
+    """
+    charge_ids = {charge for _copies, charge in groups if charge is not None}
+    holders = {}
+    for txn_id, series_id in RecurringSeriesMember.objects.filter(transaction_id__in=charge_ids).values_list(
+        "transaction_id", "series_id"
+    ):
+        holders.setdefault(txn_id, set()).add(series_id)
+    series_ids = set().union(set(), *(copies for copies, _charge in groups), *holders.values())
+    rows = RecurringPriceAcknowledgement.objects.filter(series_id__in=series_ids)
+    if person_ids is not None:
+        rows = rows.filter(person_id__in=person_ids)
+    acknowledged = {}
+    for series_id, person_id, amount_minor in rows.values_list("series_id", "person_id", "amount_minor"):
+        acknowledged.setdefault(series_id, {}).setdefault(person_id, set()).add(amount_minor)
+    result = []
+    for copies, charge in groups:
+        found = {}
+        for series_id in set(copies) | holders.get(charge, set()):
+            for person_id, amounts in acknowledged.get(series_id, {}).items():
+                found.setdefault(person_id, set()).update(amounts)
+        result.append(found)
+    return result
+
+
+def _flagged_charge_id(series):
+    rows = _ordered_transactions(series)
+    return rows[-1].pk if rows else None
+
+
 def acknowledged_amounts(principal, series_list):
     """The amounts this member dismissed as price-change flags, as {series id: frozenset of amount_minor}.
 
     Each member dismisses on their own, so another member's dismissal never
-    hides this member's flag. A dismissal on any copy of a bill counts for
-    every copy linked to it by a shared charge, as in the daily alerts, so it
-    holds whichever copy the member's page shows (#523).
+    hides this member's flag. Copies group into bills as in the daily alerts
+    (`household_bills`), and `_dismissals` decides which dismissals count, so
+    the page, the digest and the alerts agree (#523).
     """
     from .bill_grouping import group_bills, stored_charge_ids
+    from .recurring_services import _household_only
 
     person = _person_for(principal)
-    ids = {series.pk for series in series_list}
-    if person is None or not ids:
+    if person is None or not series_list:
         return {}
-    dismissed = {}
-    for series_id, amount_minor in RecurringPriceAcknowledgement.objects.filter(person=person).values_list(
-        "series_id", "amount_minor"
-    ):
-        dismissed.setdefault(series_id, set()).add(amount_minor)
-    if not dismissed:
+    if not RecurringPriceAcknowledgement.objects.filter(person=person).exists():
         return {}
-    # Other members' copies may link a dismissed copy to a displayed one, as
-    # in the daily alerts, so they join the grouping too.
-    linkers = set(RecurringSeries.objects.shared_with(principal, linkers=True).values_list("pk", flat=True))
-    result = {}
-    for bill in group_bills(stored_charge_ids(ids | set(dismissed) | linkers)):
-        amounts = frozenset().union(*(dismissed.get(pk, ()) for pk in bill))
-        if amounts:
-            result.update((pk, amounts) for pk in bill if pk in ids)
-    return result
+    household = {
+        series.pk
+        for series in series_list
+        if series.status == RecurringSeries.Status.CONFIRMED and _household_only(series)
+    }
+    household |= set(RecurringSeries.objects.shared_with(principal, linkers=True).values_list("pk", flat=True))
+    copies_of = {}
+    for bill in group_bills(stored_charge_ids(household)):
+        copies_of.update((pk, tuple(bill)) for pk in bill)
+    found = _dismissals(
+        [(copies_of.get(series.pk, (series.pk,)), _flagged_charge_id(series)) for series in series_list],
+        person_ids=[person.pk],
+    )
+    return {
+        series.pk: frozenset(dismissed[person.pk])
+        for series, dismissed in zip(series_list, found)
+        if dismissed.get(person.pk)
+    }
 
 
 def price_drift(series, acknowledged=()):
@@ -392,17 +435,6 @@ def _alert_sources(principal, series_list):
     return sources
 
 
-def _price_acknowledgements(sources):
-    """Every member's dismissed amount per copy, as {series id: {person id: amount_minor}}."""
-    acknowledged = {}
-    rows = RecurringPriceAcknowledgement.objects.filter(
-        series_id__in=[series.pk for source in sources for series in source.copies]
-    ).values_list("series_id", "person_id", "amount_minor")
-    for series_id, person_id, amount_minor in rows:
-        acknowledged.setdefault(series_id, {})[person_id] = amount_minor
-    return acknowledged
-
-
 def _earlier_prefixes(source, *, price):
     """Key prefixes the same alert had under the other grouping.
 
@@ -442,19 +474,17 @@ def raise_recurring_review_alerts(principal, series_list, *, today):
         return percents[person.pk]
 
     sources = _alert_sources(principal, series_list)
-    acknowledged = _price_acknowledgements(sources)
-    for source in sources:
-        change = price_drift(source.series)
-        if change is None:
-            continue
+    changes = [(source, change) for source in sources if (change := price_drift(source.series))]
+    dismissals = _dismissals(
+        [(tuple(series.pk for series in source.copies), _flagged_charge_id(source.series)) for source, _ in changes]
+    )
+    for (source, change), dismissed in zip(changes, dismissals):
         audience, account = _alert_audience(source.series)
         # Each recipient's own threshold and dismissal decide whether they hear of it.
         recipients = [
             person for person in audience
             if exceeds_percent(change, recipient_percent(person))
-            and not any(
-                acknowledged.get(series.pk, {}).get(person.pk) == change.new_minor for series in source.copies
-            )
+            and change.new_minor not in dismissed.get(person.pk, ())
         ]
         recipients = _without_earlier_alert(recipients, source, change.new_minor, price=True)
         if not recipients:
