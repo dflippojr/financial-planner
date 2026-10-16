@@ -11,6 +11,7 @@
 # (npm run test:ui), the disposable UI smoke and the Docker smoke build. CI
 # runs those. Requires Docker, requirements-test.txt, pytest-cov, Chromium
 # (python -m playwright install chromium) and built CSS (scripts/build_css.sh).
+# On Windows some tests skip, so coverage here runs about a point below CI's.
 #
 # Usage: scripts/ci-local.sh
 set -euo pipefail
@@ -26,7 +27,7 @@ DJANGO_SETTINGS_MODULE=financial_planner.test_settings \
   "$python_bin" manage.py makemigrations --check --dry-run
 
 echo "== Suite on PostgreSQL 18 with the coverage floor"
-scripts/test_postgres.sh -n 4 --dist worksteal -m "not browser" --cov=. --cov-report=term
+bash scripts/test_postgres.sh -n 4 --dist worksteal -m "not browser" --cov=. --cov-report=term
 
 echo "== Browser layout tests"
 "$python_bin" -m pytest tests -q -p no:cacheprovider -m browser -n 4 -rs \
