@@ -372,9 +372,13 @@ def spending_by_category(person, args):
     rows = []
     figures = []
     for row in report.rows:
+        selectors = {row.name.lower(), str(row.key).lower()}
         if str(row.key).isdigit() and int(row.key) in withheld:
+            # Neither the name nor the id selects a withheld row, so asking
+            # for one answers like asking for a missing category (#521).
             row = SimpleNamespace(**{**vars(row), "name": WITHHELD_CATEGORY_NAME})
-        if wanted and wanted.lower() not in {row.name.lower(), str(row.key).lower()}:
+            selectors = {WITHHELD_CATEGORY_NAME.lower()}
+        if wanted and wanted.lower() not in selectors:
             continue
         query = _range_query(date_from, date_to, account=account, scope=scope)
         if row.key == "uncategorized":

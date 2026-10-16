@@ -166,3 +166,17 @@ def test_restricted_review_facts_withhold_household_category_names_on_unusual_fl
 
     assert [flag["name"] for flag in payload["unusual"]] == [WITHHELD_CATEGORY_NAME, "Groceries"]
     assert CUSTOM not in json.dumps(payload)
+
+
+def test_spending_by_category_answers_a_withheld_category_id_like_a_missing_one():
+    alpha, beta, _household, custom, _private = _household_without_consent()
+
+    def rows(category):
+        return json.loads(spending_by_category(alpha, {**RANGE, "category": category}).text)["rows"]
+
+    assert rows(str(custom.pk)) == rows("999999") == []
+    assert rows(CUSTOM) == []
+
+    accept_policy(beta, current_policy())
+
+    assert [row["name"] for row in rows(str(custom.pk))] == [CUSTOM]

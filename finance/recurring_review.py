@@ -348,11 +348,11 @@ def _alert_sources(principal, series_list):
     shared charges instead of a copy, so every member's daily pass raises the
     same alert (#523).
     """
-    from .recurring_services import household_review
+    from .recurring_services import household_bills
 
     own_ids = {series.pk for series in series_list}
     bills = [
-        bill for bill in household_review(principal, series_list).bills
+        bill for bill in household_bills(principal, series_list)
         if any(series.pk in own_ids for series in bill.copies)
     ]
     in_bills = {series.pk for bill in bills for series in bill.copies}

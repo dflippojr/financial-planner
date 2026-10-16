@@ -1530,6 +1530,26 @@ class HouseholdReview:
     bills: list
 
 
+def household_bills(principal, own_series):
+    """Every household bill the viewer can see, grouped over their own and other members' confirmed copies.
+
+    The Recurring page and the daily review alerts both start from these.
+    Active and cancelled copies group together, so a cancelled copy still
+    links the active copies it shares charges with.
+    """
+    shared = list(
+        RecurringSeries.objects.shared_with(principal, linkers=True)
+        .prefetch_related("members__transaction__account")
+        .order_by("display_name", "pk")
+    )
+    copies = [
+        series
+        for series in [*own_series, *shared]
+        if series.status == RecurringSeries.Status.CONFIRMED and _household_only(series)
+    ]
+    return resolve_household_bills(copies, eligible_bill_charges(principal))
+
+
 def household_review(principal, own_series):
     """Household bills for the Recurring page, grouped like the plan and the cancel action.
 
@@ -1541,20 +1561,8 @@ def household_review(principal, own_series):
     price state come from the bill's current household charges, not its stored
     members.
     """
-    shared = list(
-        RecurringSeries.objects.shared_with(principal, linkers=True)
-        .prefetch_related("members__transaction__account")
-        .order_by("display_name", "pk")
-    )
     own_ids = {series.pk for series in own_series}
-    copies = [
-        series
-        for series in [*own_series, *shared]
-        if series.status == RecurringSeries.Status.CONFIRMED and _household_only(series)
-    ]
-    # Group over active and cancelled copies together, so a cancelled copy
-    # still links the active copies it shares charges with.
-    bills = resolve_household_bills(copies, eligible_bill_charges(principal))
+    bills = household_bills(principal, own_series)
     rows = []
     for bill in bills:
         for cancelled in (False, True):
