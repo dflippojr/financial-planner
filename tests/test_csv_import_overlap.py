@@ -164,7 +164,7 @@ def test_formula_like_descriptions_are_stored_raw():
 
 
 def strip_import_formula_escape():
-    module = import_module("finance.migrations.0071_raw_import_descriptions")
+    module = import_module("finance.migrations.0072_raw_import_descriptions")
     module.strip_import_formula_escape(django_apps, None)
 
 

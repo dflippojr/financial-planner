@@ -53,7 +53,7 @@ def strip_import_formula_escape(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("finance", "0070_alert_source_accounts"),
+        ("finance", "0071_recurring_price_acknowledgements"),
     ]
 
     operations = [
