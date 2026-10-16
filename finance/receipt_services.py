@@ -18,6 +18,7 @@ from .models import Account, AuditEvent, Person, Receipt, Transaction, _person_f
 
 _REJECTED = "That file could not be attached."
 _TOO_MANY = "A transaction can have at most 5 receipts."
+_MAX_NAME_CHARS = 255
 _JPEG = b"\xff\xd8\xff"
 _PNG = b"\x89PNG\r\n\x1a\n"
 _PDF = b"%PDF"
@@ -242,7 +243,33 @@ def _safe_original_name(name: str) -> str:
     cleaned = cleaned.replace("\x00", "")
     if not cleaned or cleaned in {".", ".."}:
         return "receipt"
-    return cleaned[:255]
+    return cleaned[:_MAX_NAME_CHARS]
+
+
+# The first extension is the one a mismatched name is given.
+_EXTENSIONS = {
+    Receipt.ContentType.JPEG: (".jpg", ".jpeg"),
+    Receipt.ContentType.PNG: (".png",),
+    Receipt.ContentType.WEBP: (".webp",),
+    Receipt.ContentType.HEIC: (".heic", ".heif"),
+    Receipt.ContentType.PDF: (".pdf",),
+}
+
+
+def receipt_download_name(receipt) -> str:
+    """The original name, with the extension corrected to match the sniffed content.
+
+    A saved file opens by its extension, so PDF bytes uploaded as invoice.html
+    must not be saved as .html. original_name itself stays as uploaded for display.
+    """
+    name = receipt.original_name
+    extensions = _EXTENSIONS.get(receipt.content_type)
+    if extensions is None or name.lower().endswith(extensions):
+        return name
+    extension = extensions[0]
+    # Stay within the 255-character file name limit of common filesystems.
+    stem = (os.path.splitext(name)[0] or "receipt")[: _MAX_NAME_CHARS - len(extension)]
+    return stem + extension
 
 
 def _unique_stored_name() -> str:

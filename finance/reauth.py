@@ -37,6 +37,7 @@ ACTION_LABELS = {
     "ai-offer-plan": "Offer plan linking to the household",
     "ai-defaults": "Change AI backend defaults",
     "ai-offer-local": "Offer the household local model",
+    "ai-offer-local-chat": "Offer local-model chat to the household",
     "ai-shared-local": "Use the household local model",
     "revoke-session": "Sign out a session",
     "revoke-other-sessions": "Sign out other sessions",

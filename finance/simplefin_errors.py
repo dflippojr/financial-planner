@@ -66,3 +66,7 @@ class SimpleFinError(Exception):
 
 class SimpleFinRateLimited(SimpleFinError):
     """A manual sync was refused because the last one was too recent."""
+
+
+class SimpleFinAlreadyClaimed(SimpleFinError):
+    """The member is already connected, or another request is claiming this token."""

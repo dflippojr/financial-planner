@@ -1313,6 +1313,25 @@ class SimpleFinConnection(models.Model):
         return f"SimpleFIN connection {self.pk}"
 
 
+class SimpleFinClaim(models.Model):
+    """A setup token claim in flight, so a double-submitted Connect never sends it twice.
+
+    Holds only a hash of the claim URL, and only while the claim runs.
+    """
+
+    owner = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="+")
+    claim_url_sha256 = models.CharField(max_length=64)
+    started_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("owner", "claim_url_sha256"), name="simplefin_claim_owner_token"),
+        ]
+
+    def __str__(self):
+        return f"SimpleFIN claim {self.pk}"
+
+
 class AccountLink(models.Model):
     class Mode(models.TextChoices):
         TRANSACTIONS = "transactions", "Transactions"

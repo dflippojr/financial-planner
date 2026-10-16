@@ -15,7 +15,7 @@ from .forms import SimpleFinSetupForm
 from .models import Account, AccountLink, SimpleFinConnection
 from .reauth import requires_recent_auth
 from .security_services import EVENT_TYPES, record_security_event
-from .simplefin_errors import SimpleFinError, SimpleFinRateLimited
+from .simplefin_errors import SimpleFinAlreadyClaimed, SimpleFinError, SimpleFinRateLimited
 from .simplefin_schedule import next_scheduled_sync
 from .simplefin_services import (
     claim_connection,
@@ -87,6 +87,13 @@ def _handle_claim(request, connection, form):
         return None
     try:
         claim_connection(request.user, form.cleaned_data["token"])
+    except SimpleFinAlreadyClaimed as exc:
+        # Usually a double-clicked Connect: the other request claimed the token.
+        if SimpleFinConnection.objects.filter(owner=_person(request)).exists():
+            messages.success(request, "SimpleFIN is connected. Link the accounts below.")
+        else:
+            messages.info(request, str(exc))
+        return redirect("simplefin-connections")
     except SimpleFinError as exc:
         form.add_error("token", str(exc))
         return None

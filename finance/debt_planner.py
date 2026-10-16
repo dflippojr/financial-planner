@@ -381,9 +381,12 @@ class _LabelCheck:
                 self.pays_off.add(debt.account_id)
 
 
-def simulate_payoff(debts, extra_minor=0, strategy=STRATEGY_MINIMUMS, custom_order=None, start=None):
-    """Amortize included debts. Extra is applied after each debt's minimum."""
-    start = start or date.today().replace(day=1)
+def simulate_payoff(debts, extra_minor=0, strategy=STRATEGY_MINIMUMS, custom_order=None, *, start):
+    """Amortize included debts from ``start``, the first day of the first month.
+
+    Extra is applied after each debt's minimum. ``start`` is required so the
+    caller decides the month from the app's local date, never system time.
+    """
     extra_minor = extra_minor or 0
     if strategy == STRATEGY_MINIMUMS:
         extra_minor = 0
@@ -491,7 +494,7 @@ def simulate_payoff(debts, extra_minor=0, strategy=STRATEGY_MINIMUMS, custom_ord
     )
 
 
-def compare_to_minimums(debts, extra_minor, strategy, custom_order=None, start=None):
+def compare_to_minimums(debts, extra_minor, strategy, custom_order=None, *, start):
     chosen = simulate_payoff(
         debts,
         extra_minor=extra_minor,

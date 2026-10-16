@@ -10,7 +10,7 @@ from urllib.parse import quote, urlsplit
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Max
 from django.utils import timezone
 
@@ -28,11 +28,18 @@ from finance.models import (
     BalanceSnapshot,
     ImportBatch,
     Membership,
+    SimpleFinClaim,
     SimpleFinConnection,
     Transaction,
 )
-from finance.simplefin_client import claim_access_url, fetch_accounts
-from finance.simplefin_errors import SimpleFinError, SimpleFinRateLimited, clean_text, provider_errors
+from finance.simplefin_client import CLAIM_DEADLINE_SECONDS, claim_access_url, fetch_accounts
+from finance.simplefin_errors import (
+    SimpleFinAlreadyClaimed,
+    SimpleFinError,
+    SimpleFinRateLimited,
+    clean_text,
+    provider_errors,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +56,13 @@ UNSTORABLE_AMOUNT = "SimpleFIN sent an amount that could not be stored."
 INVALID_TOKEN = "That setup token is not a valid SimpleFIN token."
 UNSTORABLE_ID = "SimpleFIN sent a transaction id that could not be stored."
 ALREADY_CONNECTED = "Disconnect the existing SimpleFIN connection before adding another."
+CLAIM_IN_PROGRESS = (
+    "That setup token is already being claimed. Your connection appears here once SimpleFIN answers. "
+    "If it does not, create a new setup token."
+)
+# A claim left by a process that stopped mid-request no longer blocks a retry
+# once every claim that started with it has passed its deadline.
+STALE_CLAIM_SECONDS = 2 * CLAIM_DEADLINE_SECONDS
 RATE_LIMITED = "Wait 15 minutes between Sync now requests."
 LINKS_CHANGED = "Account links changed while SimpleFIN was syncing. Sync again."
 UNEXPECTED_FAILURE = "The sync could not be completed. It will be retried on the next scheduled run."
@@ -208,21 +222,42 @@ def claim_connection(principal, setup_token: str) -> SimpleFinConnection:
     """Claim a setup token and store the encrypted Access URL.
 
     The outbound claim runs before any transaction or row lock, so a slow
-    provider never holds up other household members' writes.
+    provider never holds up other household members' writes. A setup token
+    works once, so a second request with the same token (a double-clicked
+    Connect) is refused before it reaches SimpleFIN. Otherwise SimpleFIN would
+    answer 403 and the member would be told to treat the token as compromised.
     """
     person = _person_for(principal)
     if SimpleFinConnection.objects.filter(owner=person).exists():
-        raise SimpleFinError(ALREADY_CONNECTED)
+        raise SimpleFinAlreadyClaimed(ALREADY_CONNECTED)
     claim_url = decode_setup_token(setup_token)
-    access_url = claim_access_url(claim_url)
-    return _store_claimed_connection(person, access_url)
+    claim = _start_claim(person, claim_url)
+    try:
+        # The other request stores its connection before it ends its claim.
+        if SimpleFinConnection.objects.filter(owner=person).exists():
+            raise SimpleFinAlreadyClaimed(ALREADY_CONNECTED)
+        access_url = claim_access_url(claim_url)
+        return _store_claimed_connection(person, access_url)
+    finally:
+        SimpleFinClaim.objects.filter(pk=claim.pk).delete()
+
+
+def _start_claim(person, claim_url: str) -> SimpleFinClaim:
+    digest = hashlib.sha256(claim_url.encode("utf-8")).hexdigest()
+    stale_before = timezone.now() - timedelta(seconds=STALE_CLAIM_SECONDS)
+    SimpleFinClaim.objects.filter(owner=person, started_at__lt=stale_before).delete()
+    try:
+        with transaction.atomic():
+            return SimpleFinClaim.objects.create(owner=person, claim_url_sha256=digest)
+    except IntegrityError:
+        raise SimpleFinAlreadyClaimed(CLAIM_IN_PROGRESS) from None
 
 
 @transaction.atomic
 def _store_claimed_connection(person, access_url: str) -> SimpleFinConnection:
     lock_actor_household(person)
     if SimpleFinConnection.objects.filter(owner=person).exists():
-        raise SimpleFinError(ALREADY_CONNECTED)
+        raise SimpleFinAlreadyClaimed(ALREADY_CONNECTED)
     connection = SimpleFinConnection.objects.create(
         owner=person,
         encrypted_access_url=encrypt_access_url(access_url),
