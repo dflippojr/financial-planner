@@ -91,6 +91,8 @@ def test_valid_schedule_starts_the_lanes(expression, settings, monkeypatch):
     monkeypatch.setattr(background, "ChatLane", Mock())
     monkeypatch.setattr(background.threading.Thread, "start", started)
     monkeypatch.setattr(background, "supervise", Mock())
+    # main() replaces the process-wide hook; put pytest's back afterwards.
+    monkeypatch.setattr(threading, "excepthook", threading.excepthook)
     background.main()
     assert started.call_count == 3
 
