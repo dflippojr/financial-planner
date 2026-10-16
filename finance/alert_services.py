@@ -89,9 +89,11 @@ def raise_alert(recipients, kind, title, link, dedupe_key, account=None, source_
                 "account": account,
             },
         )
-        if source_accounts:
-            alert.source_accounts.add(*source_accounts)
         if was_created:
+            # Sources are the visibility snapshot of the first raise; a later
+            # repeat must not widen it with accounts the original never quoted.
+            if source_accounts:
+                alert.source_accounts.add(*source_accounts)
             created.append(alert)
             outcome(recipient, "alert_delivery", alert.pk, account=account)
     return created

@@ -5,7 +5,7 @@ from datetime import date
 import pytest
 from django.urls import reverse
 
-from finance.alert_services import alerts_for, unread_alert_count
+from finance.alert_services import alerts_for, raise_alert, unread_alert_count
 from finance.lifecycle_services import delete_account, leave_household, unshare_account
 from finance.models import Account, Alert, RecurringSeries
 from finance.recurring_review import raise_recurring_review_alerts, series_accounts
@@ -180,3 +180,18 @@ def test_migration_drops_series_alerts_raised_without_sources_and_the_pass_raise
     assert visible_titles(member) == [TITLE]
     unshare_account(owner, lent.pk)
     assert visible_titles(member) == []
+
+
+def test_a_repeat_raise_keeps_the_sources_of_the_original_alert():
+    owner, member, joint, lent, _series = household_with_split_series()
+    args = ([owner, member], Alert.Kind.RECURRING_PRICE, TITLE, "/recurring/", "recurring-price:synthetic")
+    raise_alert(*args, source_accounts=[joint])
+
+    # A later charge on the lent account repeats the same condition.
+    assert raise_alert(*args, source_accounts=[joint, lent]) == []
+
+    assert set(Alert.source_accounts.through.objects.values_list("account_id", flat=True)) == {joint.pk}
+    unshare_account(owner, lent.pk)
+    assert visible_titles(member) == [TITLE]
+    delete_account(owner, lent.pk)
+    assert visible_titles(owner) == [TITLE]
