@@ -23,10 +23,7 @@ name: SonarCloud
 # runs. sonar.qualitygate.wait then fails the check when the SonarCloud
 # quality gate fails, including coverage on new code (Sonar way: 80%).
 on:
-  push:
-    branches: [main]
-  pull_request:
-    types: [opened, synchronize, reopened]
+  workflow_call:
   workflow_dispatch:
 
 permissions:
@@ -34,8 +31,8 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: sonar-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: sonar-${{ github.ref == 'refs/heads/main' && github.run_id || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   sonar:
@@ -62,6 +59,7 @@ jobs:
       # 4 xdist workers, as in postgres.yml; pytest-cov merges their coverage.
       # Serially this step took 12 to 19 minutes depending on the runner.
       # Browser tests run in playwright.yml (no Chromium here).
+      # Fails below the fail_under floor in .coveragerc.
       - name: Run tests with coverage
         timeout-minutes: 20
         run: >

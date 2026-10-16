@@ -384,6 +384,11 @@ See [review runner setup](docs/review-runner.md). The workflow is a thin caller 
 the shared reviewer in `dflippojr/agent-harness` (`.github/workflows/review.yml@review-v1`), which holds the review
 logic and posts an `Automated Code Review` check that passes on a clean review and fails on findings.
 
+`.github/workflows/ci.yml` runs on every pull request and every push to `main`. It calls the guards,
+PostgreSQL, SonarCloud, Playwright and Docker smoke workflows and ends in one check, `gate`, which fails when
+any of them failed or was cancelled and treats a path-skipped job as passing. Runs on `main` are never
+cancelled. The suite's coverage floor is `fail_under` in `.coveragerc`.
+
 `.github/workflows/sonar.yml` runs the test suite with coverage and reports it to SonarCloud on every
 push to `main`, on pull requests from branches of this repository, and on demand (`gh workflow run sonar.yml`).
 It uses the `SONARCLOUD_TOKEN` repository secret, is skipped for pull requests from forks, and fails the
