@@ -50,6 +50,25 @@ def strip_import_formula_escape(apps, schema_editor):
     Transaction.objects.bulk_update(changed, ["description"])
 
 
+def strip_rule_formula_escape(apps, schema_editor):
+    """Drop the import apostrophe from rules copied from escaped descriptions (#503).
+
+    "Create rule" prefilled a rule's text from the stored description, so a
+    rule may read "'-SYNTHETIC ACH". Rules match by case-folded containment,
+    and every description containing "'-X" also contains "-X", so the stripped
+    rule still matches every row it matched before and now matches the raw
+    descriptions too. The rule stays confirmed: the member chose this match.
+    """
+    CategoryRule = apps.get_model("finance", "CategoryRule")
+    changed = []
+    for rule in CategoryRule.objects.filter(description_contains__startswith="'").only("pk", "description_contains"):
+        raw = rule.description_contains[1:]
+        if raw.strip() and raw.lstrip().startswith(FORMULA_STARTS):
+            rule.description_contains = raw
+            changed.append(rule)
+    CategoryRule.objects.bulk_update(changed, ["description_contains"], batch_size=BATCH_SIZE)
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -58,4 +77,5 @@ class Migration(migrations.Migration):
 
     operations = [
         migrations.RunPython(strip_import_formula_escape, migrations.RunPython.noop),
+        migrations.RunPython(strip_rule_formula_escape, migrations.RunPython.noop),
     ]

@@ -166,6 +166,41 @@ def test_formula_like_descriptions_are_stored_raw():
 def strip_import_formula_escape():
     module = import_module("finance.migrations.0072_raw_import_descriptions")
     module.strip_import_formula_escape(django_apps, None)
+    module.strip_rule_formula_escape(django_apps, None)
+
+
+@pytest.mark.django_db
+def test_upgrade_keeps_rules_made_from_escaped_descriptions_matching():
+    from django.utils import timezone
+
+    from finance.models import CategoryRule
+    from finance.rule_services import _rule_fields_match
+
+    user, person = make_person("owner")
+    household = Household.objects.create(name="Synthetic Household")
+    Membership.objects.create(household=household, person=person)
+    category = household.categories.create(name="Synthetic Fees")
+    account = Account.objects.create(name="Synthetic Checking", account_type="checking", owner=person)
+    commit(user, account, FORMULA_CSV)
+    confirmed = timezone.now()
+
+    def rule(text):
+        return CategoryRule.objects.create(
+            owner_person=person, description_contains=text, category=category, confirmed_at=confirmed
+        )
+
+    escaped, quoted, lone = rule("'-SYNTHETIC ACH"), rule("'SYNTHETIC QUOTED"), rule("'")
+    for row in Transaction.objects.all():
+        row.description = "'" + row.description
+        row.save(update_fields=["description"])
+    strip_import_formula_escape()
+
+    for item in (escaped, quoted, lone):
+        item.refresh_from_db()
+    assert [item.description_contains for item in (escaped, quoted, lone)] == ["-SYNTHETIC ACH", "'SYNTHETIC QUOTED", "'"]
+    assert escaped.confirmed_at == confirmed
+    txn = Transaction.objects.get(description="-SYNTHETIC ACH")
+    assert _rule_fields_match(escaped, txn.description, txn.account_id, txn.amount_minor)
 
 
 @pytest.mark.django_db
