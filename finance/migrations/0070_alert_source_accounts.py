@@ -17,7 +17,7 @@ def drop_unsourced_series_alerts(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('finance', '0068_import_due_alerts'),
+        ('finance', '0069_simplefin_claim'),
     ]
 
     operations = [
