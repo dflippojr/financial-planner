@@ -1250,3 +1250,51 @@ def test_a_dismissal_on_another_members_copy_holds_for_a_copy_confirmed_later():
 
     assert changes == []
     assert [item.series.pk for item in build_recurring_review(owner, [series], today=today)[1]] == [series.pk]
+
+
+@pytest.mark.django_db
+def test_a_bill_alerted_while_shared_is_not_alerted_again_once_its_account_is_private():
+    from finance.lifecycle_services import unshare_account
+    from finance.recurring_services import _raise_review_alerts
+
+    owner, _member, _outsider, series = _shared_bill()
+    shared = series.members.first().transaction.account
+    add_member(series, make_transaction(
+        owner, shared, transaction_date=date(2026, 10, 12), amount_minor=-9000, description="Synthetic Internet"
+    ))
+    today = date(2026, 11, 25)
+    _raise_review_alerts(owner, today=today)
+    before = sorted(Alert.objects.filter(recipient=owner).values_list("kind", "dedupe_key"))
+    assert {kind for kind, _key in before} == {Alert.Kind.RECURRING_PRICE, Alert.Kind.RECURRING_MISSED}
+    assert all(key.startswith("recurring:bill:") for _kind, key in before)
+
+    unshare_account(owner, shared.pk)
+    _raise_review_alerts(owner, today=today)
+
+    assert sorted(Alert.objects.filter(recipient=owner).values_list("kind", "dedupe_key")) == before
+
+
+@pytest.mark.django_db
+def test_a_dismissal_holds_on_a_copy_linked_to_it_only_through_another_members_copy():
+    owner, member, _outsider, dismissed = _shared_bill()
+    shared = dismissed.members.first().transaction.account
+
+    def charge(day, amount_minor):
+        return make_transaction(
+            owner, shared, transaction_date=day, amount_minor=amount_minor, description="Synthetic Internet"
+        )
+
+    add_member(dismissed, charge(date(2026, 10, 12), -9000))
+    today = date(2026, 10, 13)
+    dismiss_price_change(member, dismissed.pk)
+    own = make_series(member, name="Synthetic Internet", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-6000)
+    for month in (4, 5, 6):
+        add_member(own, charge(date(2026, month, 12), -6000))
+    add_member(own, charge(date(2026, 10, 13), -9000))
+    assert [item.series.pk for item in build_recurring_review(member, [own], today=today)[1]] == [own.pk]
+
+    linker = make_series(owner, name="Synthetic Internet Link", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-6000)
+    add_member(linker, own.members.order_by("transaction__transaction_date").last().transaction)
+    add_member(linker, dismissed.members.order_by("transaction__transaction_date").last().transaction)
+
+    assert build_recurring_review(member, [own], today=today)[1] == []

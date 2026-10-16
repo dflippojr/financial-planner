@@ -193,8 +193,11 @@ def acknowledged_amounts(principal, series_list):
         dismissed.setdefault(series_id, set()).add(amount_minor)
     if not dismissed:
         return {}
+    # Other members' copies may link a dismissed copy to a displayed one, as
+    # in the daily alerts, so they join the grouping too.
+    linkers = set(RecurringSeries.objects.shared_with(principal, linkers=True).values_list("pk", flat=True))
     result = {}
-    for bill in group_bills(stored_charge_ids(ids | set(dismissed))):
+    for bill in group_bills(stored_charge_ids(ids | set(dismissed) | linkers)):
         amounts = frozenset().union(*(dismissed.get(pk, ()) for pk in bill))
         if amounts:
             result.update((pk, amounts) for pk in bill if pk in ids)
@@ -336,6 +339,7 @@ class _AlertSource:
     copies: tuple
     price_prefix: str
     missed_prefix: str
+    is_bill: bool = False
 
 
 def _price_run_start(charges):
@@ -383,6 +387,7 @@ def _alert_sources(principal, series_list):
             tuple(bill.copies),
             f"recurring:bill:{_price_run_start(bill.charges).pk}",
             f"recurring:bill:{bill.charges[-1].pk}",
+            is_bill=True,
         ))
     return sources
 
@@ -398,9 +403,26 @@ def _price_acknowledgements(sources):
     return acknowledged
 
 
-def _without_earlier_alert(recipients, source, legacy_suffix):
-    """Recipients not already alerted under a copy's per-series key from before bills were grouped."""
-    keys = [f"recurring:{series.pk}:{legacy_suffix}" for series in source.copies]
+def _earlier_prefixes(source, *, price):
+    """Key prefixes the same alert had under the other grouping.
+
+    A bill's copy may have been alerted under its per-series key, before bills
+    were grouped or while its account was private. A series standing alone may
+    have been alerted under its bill's key while its account was shared.
+    """
+    if source.is_bill:
+        return [f"recurring:{series.pk}" for series in source.copies]
+    charges = _ordered_transactions(source.series)
+    if not charges:
+        return []
+    return [f"recurring:bill:{(_price_run_start(charges) if price else charges[-1]).pk}"]
+
+
+def _without_earlier_alert(recipients, source, suffix, *, price):
+    """Recipients not already alerted about this under the other grouping's key."""
+    keys = [f"{prefix}:{suffix}" for prefix in _earlier_prefixes(source, price=price)]
+    if not recipients or not keys:
+        return recipients
     already = set(
         Alert.objects.filter(recipient__in=recipients, dedupe_key__in=keys).values_list("recipient_id", flat=True)
     )
@@ -434,7 +456,7 @@ def raise_recurring_review_alerts(principal, series_list, *, today):
                 acknowledged.get(series.pk, {}).get(person.pk) == change.new_minor for series in source.copies
             )
         ]
-        recipients = _without_earlier_alert(recipients, source, change.new_minor)
+        recipients = _without_earlier_alert(recipients, source, change.new_minor, price=True)
         if not recipients:
             continue
         title = (
@@ -457,7 +479,7 @@ def raise_recurring_review_alerts(principal, series_list, *, today):
             continue
         recipients, account = _alert_audience(source.series)
         expected = missed.expected_on.isoformat()
-        recipients = _without_earlier_alert(recipients, source, f"missed:{expected}")
+        recipients = _without_earlier_alert(recipients, source, f"missed:{expected}", price=False)
         if not recipients:
             continue
         title = f"{source.series.display_name} was expected on {expected} and was not seen"
