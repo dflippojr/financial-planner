@@ -13,7 +13,7 @@
 # (python -m playwright install chromium) and built CSS (scripts/build_css.sh).
 # On Windows some tests skip, so coverage here runs about a point below CI's.
 #
-# Usage: scripts/ci-local.sh
+# Usage: bash scripts/ci-local.sh
 set -euo pipefail
 
 python_bin="${PYTHON:-python}"

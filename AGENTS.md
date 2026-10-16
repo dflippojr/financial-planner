@@ -28,7 +28,7 @@ Work is dispatched with Orca. Each worker gets one GitHub issue in its own git w
 
 ## How to prove a change works
 
-- Before pushing, run scripts/ci-local.sh. It runs what the gate runs locally: the statement-file guard, the migration check, the suite on a throwaway PostgreSQL 18 with the coverage floor in .coveragerc, and the browser layout tests. It needs Docker. Its header lists the jobs only CI runs. While working, run focused tests with python -m pytest tests/test_x.py, or scripts/test_postgres.sh with the same arguments to use PostgreSQL.
+- Before pushing, run bash scripts/ci-local.sh. It runs what the gate runs locally: the statement-file guard, the migration check, the suite on a throwaway PostgreSQL 18 with the coverage floor in .coveragerc, and the browser layout tests. It needs Docker. Its header lists the jobs only CI runs. While working, run focused tests with python -m pytest tests/test_x.py, or bash scripts/test_postgres.sh with the same arguments to use PostgreSQL.
 - For a UI change, use the verify skill in .claude/skills/verify/SKILL.md (launch, doctor, drive, evidence and cleanup on a disposable instance per docs/ui-testing.md).
 - For a bug fix, write the test first and show it fails on main, then make it pass. Do not add tests that merely copy implementation logic.
 - Give the PR body a ## Proof table, as the shared PR template asks (dflippojr/.github#13): each acceptance criterion, how it was verified (command, test name, verify skill) and the evidence (output excerpt, artifact link, red before and green after). Under ### Not verified, say what you did not check and why. Under ### Gate changes, list any test deleted or skipped and any check or threshold loosened, with the reason.
