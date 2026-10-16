@@ -10,8 +10,7 @@ from django.utils import timezone
 
 from .cash_flow import format_minor
 from .models import Account, Alert, AlertSettings, ImportBatch, RecurringSeries, _person_for
-from .projection import step_occurrence
-from .recurring_services import CADENCE_DAYS
+from .recurring_services import CADENCE_DAYS, next_charge_date
 
 # A member's AlertSettings.recurring_price_percent; this is its default.
 DEFAULT_PRICE_CHANGE_PERCENT = 10
@@ -43,15 +42,9 @@ def last_charge_date(series):
 
 
 def next_expected_date(series):
-    last_on = last_charge_date(series)
-    if last_on is None:
-        return None
-    try:
-        return step_occurrence(last_on, series.cadence)
-    except (OverflowError, ValueError):
-        # The last charge is so far in the future that the next one would
-        # fall past the end of the calendar.
-        return None
+    # None when there is no charge, or when the last one is so far in the
+    # future that the next would fall past the end of the calendar.
+    return next_charge_date([row.transaction_date for row in _ordered_transactions(series)], series.cadence)
 
 
 def cadence_tolerance_days(cadence):

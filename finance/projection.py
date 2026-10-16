@@ -4,7 +4,7 @@ from datetime import timedelta
 from types import SimpleNamespace
 
 from .cash_flow import GROUPING_MONTH, format_minor, period_label
-from .months import add_months, add_months_clamped, month_end
+from .months import add_months, month_end
 
 HORIZONS = (3, 6, 12, 24)
 DEFAULT_HORIZON = 12
@@ -30,17 +30,12 @@ def first_projection_month(today):
     return add_months(today, 1)
 
 
-def step_occurrence(value, cadence):
-    days = _WEEK_DAYS.get(cadence)
-    if days is not None:
-        return value + timedelta(days=days)
-    months = _CALENDAR_MONTHS.get(cadence)
-    if months is not None:
-        return add_months_clamped(value, months)
-    raise ValueError(f"Unknown cadence {cadence}.")
+def _shift(start, months, anchor_day):
+    target = add_months(start, months)
+    return target.replace(day=min(anchor_day or start.day, month_end(target).day))
 
 
-def _first_on_or_after(start, cadence, window_start):
+def _first_on_or_after(start, cadence, window_start, anchor_day=None):
     if start >= window_start:
         return start
     days = _WEEK_DAYS.get(cadence)
@@ -53,14 +48,14 @@ def _first_on_or_after(start, cadence, window_start):
         raise ValueError(f"Unknown cadence {cadence}.")
     total_months = (window_start.year - start.year) * 12 + (window_start.month - start.month)
     n = max(total_months // months, 0)
-    candidate = add_months_clamped(start, n * months)
+    candidate = _shift(start, n * months, anchor_day)
     while candidate < window_start:
         n += 1
-        candidate = add_months_clamped(start, n * months)
+        candidate = _shift(start, n * months, anchor_day)
     return candidate
 
 
-def _advance_from_start(start, current, cadence):
+def _advance_from_start(start, current, cadence, anchor_day=None):
     days = _WEEK_DAYS.get(cadence)
     if days is not None:
         return current + timedelta(days=days)
@@ -68,10 +63,11 @@ def _advance_from_start(start, current, cadence):
     if months is None:
         raise ValueError(f"Unknown cadence {cadence}.")
     elapsed = (current.year - start.year) * 12 + (current.month - start.month)
-    return add_months_clamped(start, elapsed + months)
+    return _shift(start, elapsed + months, anchor_day)
 
 
-def occurrence_dates(start, end, cadence, window_start, window_end):
+def occurrence_dates(start, end, cadence, window_start, window_end, anchor_day=None):
+    """Dates from `start` inside the window; a calendar cadence keeps `anchor_day`, else `start`'s day."""
     dates = []
     if cadence == CADENCE_ONE_TIME:
         if window_start <= start <= window_end and (end is None or start <= end):
@@ -79,13 +75,13 @@ def occurrence_dates(start, end, cadence, window_start, window_end):
         return dates
     if start > window_end or (end is not None and end < window_start):
         return dates
-    current = _first_on_or_after(start, cadence, window_start)
+    current = _first_on_or_after(start, cadence, window_start, anchor_day)
     while current <= window_end:
         if end is not None and current > end:
             break
         if current >= window_start:
             dates.append(current)
-        current = _advance_from_start(start, current, cadence)
+        current = _advance_from_start(start, current, cadence, anchor_day)
     return dates
 
 
@@ -125,7 +121,8 @@ def project_cash_flow(items, *, today, horizon=DEFAULT_HORIZON):
     """Sum planned and series amounts into N calendar months after today.
 
     `items` is an iterable of SimpleNamespace rows with name, kind, amount_minor
-    (positive), currency, start, end, cadence, source, and source_id.
+    (positive), currency, start, end, cadence, source, and source_id, and an
+    optional anchor_day (see `occurrence_dates`).
     """
     if horizon not in HORIZONS:
         raise ValueError("Horizon must be 3, 6, 12, or 24 months.")
@@ -145,7 +142,9 @@ def project_cash_flow(items, *, today, horizon=DEFAULT_HORIZON):
         spending = 0
         contributions = []
         for item in items:
-            hits = occurrence_dates(item.start, item.end, item.cadence, start, end)
+            hits = occurrence_dates(
+                item.start, item.end, item.cadence, start, end, getattr(item, "anchor_day", None)
+            )
             if not hits:
                 continue
             contribution = _contribution(item, len(hits))
