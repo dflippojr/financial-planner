@@ -163,6 +163,11 @@ def test_formula_like_descriptions_are_stored_raw():
     ]
 
 
+def strip_import_formula_escape():
+    module = import_module("finance.migrations.0071_raw_import_descriptions")
+    module.strip_import_formula_escape(django_apps, None)
+
+
 @pytest.mark.django_db
 def test_file_imported_before_raw_descriptions_reimports_as_duplicates():
     user, person = make_person("owner")
@@ -173,43 +178,48 @@ def test_file_imported_before_raw_descriptions_reimports_as_duplicates():
     for row in Transaction.objects.all():
         row.description = "'" + row.description
         row.save(update_fields=["description"])
-    simplefin_batch = ImportBatch.objects.create(
-        account=account, imported_by=person, source=ImportBatch.Source.SIMPLEFIN,
-        source_file_sha256="c" * 64, date_range_start=date(2026, 9, 1), date_range_end=date(2026, 9, 30),
-    )
-    simplefin_row = Transaction.objects.create(
-        account=account, import_batch=simplefin_batch, transaction_date=date(2026, 9, 29),
-        amount_minor=-300, currency="USD", description="'=SYNTHETIC FEED TEXT", fingerprint="d" * 64,
-        source_row_number=1, original_fields={},
-    )
-    literal = Transaction.objects.create(
-        account=account, import_batch=Transaction.objects.first().import_batch, transaction_date=date(2026, 9, 29),
-        amount_minor=-400, currency="USD", description="'-SYNTHETIC QUOTED", fingerprint="e" * 64,
-        source_row_number=3, original_fields={"Memo": "'-SYNTHETIC QUOTED"},
-    )
-    joined = Transaction.objects.create(
-        account=account, import_batch=literal.import_batch, transaction_date=date(2026, 9, 29),
-        amount_minor=-500, currency="USD", description="'-SYNTHETIC PAYEE - Monthly memo", fingerprint="f" * 64,
-        source_row_number=4, original_fields={"Payee": " '-SYNTHETIC PAYEE", "Memo": "Monthly memo "},
-    )
-    edited = Transaction.objects.create(
-        account=account, import_batch=literal.import_batch, transaction_date=date(2026, 9, 29),
-        amount_minor=-600, currency="USD", description="'@SYNTHETIC EDITED", fingerprint="0" * 64,
-        source_row_number=5, original_fields={"Memo": "SYNTHETIC MERCHANT"},
-    )
-    import_module("finance.migrations.0071_raw_import_descriptions").strip_import_formula_escape(django_apps, None)
+    strip_import_formula_escape()
 
     reimport = commit(user, account, FORMULA_CSV)
 
     assert (reimport.new_count, reimport.duplicate_count) == (0, 2)
-    assert sorted(
-        Transaction.objects.exclude(pk__in=(simplefin_row.pk, literal.pk, joined.pk, edited.pk)).values_list("description", flat=True)
-    ) == ["-SYNTHETIC ACH", "=SYNTHETIC FORMULA"]
-    simplefin_row.refresh_from_db()
-    literal.refresh_from_db()
-    joined.refresh_from_db()
-    edited.refresh_from_db()
-    assert edited.description == "'@SYNTHETIC EDITED"
-    assert simplefin_row.description == "'=SYNTHETIC FEED TEXT"
-    assert literal.description == "'-SYNTHETIC QUOTED"
-    assert joined.description == "'-SYNTHETIC PAYEE - Monthly memo"
+    assert sorted(Transaction.objects.values_list("description", flat=True)) == [
+        "-SYNTHETIC ACH", "=SYNTHETIC FORMULA",
+    ]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("source", "description", "original_fields", "expected"),
+    [
+        # The import added the apostrophe to a single cell or a joined payee and memo.
+        ("huntington", "'=SYNTHETIC CELL", {"Memo": "=SYNTHETIC CELL"}, "=SYNTHETIC CELL"),
+        ("ofx", "'-SYNTHETIC PAYEE - Memo", {"Name": " -SYNTHETIC PAYEE", "Memo": "Memo "}, "-SYNTHETIC PAYEE - Memo"),
+        # SimpleFIN rows were always stored raw.
+        ("simplefin", "'=SYNTHETIC FEED", {"description": "=SYNTHETIC FEED"}, "'=SYNTHETIC FEED"),
+        # The source text itself began with the apostrophe.
+        ("huntington", "'-SYNTHETIC QUOTED", {"Memo": "'-SYNTHETIC QUOTED"}, "'-SYNTHETIC QUOTED"),
+        ("ofx", "'-SYNTHETIC PAYEE - Memo", {"Name": "'-SYNTHETIC PAYEE", "Memo": "Memo"}, "'-SYNTHETIC PAYEE - Memo"),
+        # A member edited the description.
+        ("huntington", "'@SYNTHETIC EDITED", {"Memo": "SYNTHETIC MERCHANT"}, "'@SYNTHETIC EDITED"),
+        # Another mapped column could have produced the stored text as is.
+        ("apple_card", "'-SYNTHETIC SHOP", {"Merchant": "'-SYNTHETIC SHOP", "Description": "-SYNTHETIC SHOP"}, "'-SYNTHETIC SHOP"),
+    ],
+)
+def test_upgrade_strips_only_apostrophes_the_import_added(source, description, original_fields, expected):
+    _user, person = make_person("owner")
+    account = Account.objects.create(name="Synthetic Checking", account_type="checking", owner=person)
+    batch = ImportBatch.objects.create(
+        account=account, imported_by=person, source=source, source_file_sha256="c" * 64,
+        date_range_start=date(2026, 9, 1), date_range_end=date(2026, 9, 30),
+    )
+    row = Transaction.objects.create(
+        account=account, import_batch=batch, transaction_date=date(2026, 9, 29), amount_minor=-300,
+        currency="USD", description=description, fingerprint="d" * 64, source_row_number=1,
+        original_fields=original_fields,
+    )
+
+    strip_import_formula_escape()
+
+    row.refresh_from_db()
+    assert row.description == expected

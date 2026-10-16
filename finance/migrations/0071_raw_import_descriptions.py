@@ -22,7 +22,8 @@ def strip_import_formula_escape(apps, schema_editor):
 
     Only file-import rows carry it: SimpleFIN and manual entries were always
     stored raw. Fingerprints keep the escaped form, which reimports still hash.
-    A row is changed only when its source cells produce the unescaped text.
+    A row is changed only when its source cells produce the unescaped text
+    and not the stored one.
     """
     Transaction = apps.get_model("finance", "Transaction")
     rows = (
@@ -33,9 +34,13 @@ def strip_import_formula_escape(apps, schema_editor):
     changed = []
     for row in rows.iterator(chunk_size=BATCH_SIZE):
         raw = row.description[1:]
-        # Strip only what the import added: the rest must be exactly what the
-        # source cells produce, so member edits and literal apostrophes stay.
-        if not raw.lstrip().startswith(FORMULA_STARTS) or raw not in _source_texts(row.original_fields):
+        if not raw.lstrip().startswith(FORMULA_STARTS):
+            continue
+        # Strip only what the import clearly added: the rest must be what the
+        # source cells produce, and the stored text must not be. Member edits,
+        # literal apostrophes and rows that could be either stay as they are.
+        texts = _source_texts(row.original_fields)
+        if raw not in texts or row.description in texts:
             continue
         row.description = raw
         changed.append(row)
