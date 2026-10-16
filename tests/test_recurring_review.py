@@ -1351,3 +1351,54 @@ def test_a_dismissal_holds_after_the_copy_confirmed_later_turns_private():
 
     assert build_recurring_review(owner, [own], today=today)[1] == []
     assert not Alert.objects.filter(recipient=owner, kind=Alert.Kind.RECURRING_PRICE).exists()
+
+
+@pytest.mark.django_db
+def test_a_dismissal_links_through_the_viewers_series_outside_the_rows_shown():
+    from finance.recurring_services import _raise_review_alerts
+
+    owner, member, _outsider, dismissed = _shared_bill()
+    shared = dismissed.members.first().transaction.account
+
+    def charge(day, amount_minor):
+        return make_transaction(
+            owner, shared, transaction_date=day, amount_minor=amount_minor, description="Synthetic Internet"
+        )
+
+    add_member(dismissed, charge(date(2026, 10, 12), -9000))
+    dismiss_price_change(member, dismissed.pk)
+    older = [charge(date(2026, month, 12), -6000) for month in (4, 5, 6)]
+    history = make_series(member, name="Synthetic Internet Old", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-6000)
+    for txn in [*older, dismissed.members.order_by("transaction__transaction_date").first().transaction]:
+        add_member(history, txn)
+    later = make_series(member, name="Synthetic Internet", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-6000)
+    for txn in [*older, charge(date(2026, 10, 13), -9000)]:
+        add_member(later, txn)
+
+    assert acknowledged_amounts(member, [later]) == {later.pk: {-9000}}
+    _raise_review_alerts(member, today=date(2026, 10, 14))
+    assert not Alert.objects.filter(recipient=member, kind=Alert.Kind.RECURRING_PRICE).exists()
+
+
+@pytest.mark.django_db
+def test_an_older_charge_at_the_new_price_joining_the_bill_does_not_alert_again():
+    owner, member, _outsider, bill = _shared_bill()
+    shared = bill.members.first().transaction.account
+
+    def charge(day):
+        return make_transaction(owner, shared, transaction_date=day, amount_minor=-9000, description="Synthetic Internet")
+
+    missing = charge(date(2026, 9, 20))
+    risen = charge(date(2026, 10, 12))
+    add_member(bill, risen)
+    today = date(2026, 10, 14)
+    _run_both_passes(owner, member, today)
+    before = _review_alerts(Alert.Kind.RECURRING_PRICE)
+    assert [key for _recipient, key in before] == [f"recurring:bill:{risen.pk}:-9000"] * 2
+
+    copy = make_series(member, name="Synthetic Internet", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-6000)
+    for txn in [*(item.transaction for item in bill.members.all()), missing]:
+        add_member(copy, txn)
+    _run_both_passes(owner, member, today)
+
+    assert _review_alerts(Alert.Kind.RECURRING_PRICE) == before

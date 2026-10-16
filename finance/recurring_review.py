@@ -227,9 +227,13 @@ def acknowledged_amounts(principal, series_list):
         return {}
     if not RecurringPriceAcknowledgement.objects.filter(person=person).exists():
         return {}
+    # Every copy the daily pass groups, not only the rows shown: a copy
+    # outside `series_list` (a digest week's quiet series) may still link a
+    # dismissed copy to a shown one.
+    own = RecurringSeries.objects.visible_to(person).filter(status=RecurringSeries.Status.CONFIRMED)
     household = {
         series.pk
-        for series in series_list
+        for series in [*series_list, *own.prefetch_related("members__transaction__account")]
         if series.status == RecurringSeries.Status.CONFIRMED and _household_only(series)
     }
     household |= set(RecurringSeries.objects.shared_with(principal, linkers=True).values_list("pk", flat=True))
@@ -385,18 +389,23 @@ class _AlertSource:
     is_bill: bool = False
 
 
+def _latest_price_run(charges):
+    """The latest run of charges at the latest amount, oldest first."""
+    run = []
+    for txn in reversed(charges):
+        if run and txn.amount_minor != run[0].amount_minor:
+            break
+        run.insert(0, txn)
+    return run
+
+
 def _price_run_start(charges):
     """The first charge of the latest run at the latest amount.
 
     Keying a bill's price alert on it raises a rise once, not again with every
     later charge at the same new price.
     """
-    start = charges[-1]
-    for txn in reversed(charges):
-        if txn.amount_minor != start.amount_minor:
-            break
-        start = txn
-    return start
+    return _latest_price_run(charges)[0]
 
 
 def _alert_sources(principal, series_list):
@@ -440,18 +449,21 @@ def _earlier_prefixes(source, *, price):
 
     A bill's copy may have been alerted under its per-series key, before bills
     were grouped or while its account was private. A series standing alone may
-    have been alerted under its bill's key while its account was shared.
+    have been alerted under its bill's key while its account was shared. A
+    price alert's bill key names the first charge of the run at the new price,
+    which moves earlier when a newly confirmed copy brings an older charge at
+    that price, so every charge of the run counts.
     """
-    if source.is_bill:
-        return [f"recurring:{series.pk}" for series in source.copies]
+    prefixes = [f"recurring:{series.pk}" for series in source.copies] if source.is_bill else []
     charges = _ordered_transactions(source.series)
-    if not charges:
-        return []
-    return [f"recurring:bill:{(_price_run_start(charges) if price else charges[-1]).pk}"]
+    if charges:
+        anchors = _latest_price_run(charges) if price else [charges[-1]]
+        prefixes.extend(f"recurring:bill:{txn.pk}" for txn in anchors)
+    return prefixes
 
 
 def _without_earlier_alert(recipients, source, suffix, *, price):
-    """Recipients not already alerted about this under the other grouping's key."""
+    """Recipients not already alerted about this under an earlier key (see `_earlier_prefixes`)."""
     keys = [f"{prefix}:{suffix}" for prefix in _earlier_prefixes(source, price=price)]
     if not recipients or not keys:
         return recipients
