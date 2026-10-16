@@ -187,15 +187,22 @@ def test_file_imported_before_raw_descriptions_reimports_as_duplicates():
         amount_minor=-400, currency="USD", description="'-SYNTHETIC QUOTED", fingerprint="e" * 64,
         source_row_number=3, original_fields={"Memo": "'-SYNTHETIC QUOTED"},
     )
+    joined = Transaction.objects.create(
+        account=account, import_batch=literal.import_batch, transaction_date=date(2026, 9, 29),
+        amount_minor=-500, currency="USD", description="'-SYNTHETIC PAYEE - Monthly memo", fingerprint="f" * 64,
+        source_row_number=4, original_fields={"Payee": " '-SYNTHETIC PAYEE", "Memo": "Monthly memo "},
+    )
     import_module("finance.migrations.0071_raw_import_descriptions").strip_import_formula_escape(django_apps, None)
 
     reimport = commit(user, account, FORMULA_CSV)
 
     assert (reimport.new_count, reimport.duplicate_count) == (0, 2)
     assert sorted(
-        Transaction.objects.exclude(pk__in=(simplefin_row.pk, literal.pk)).values_list("description", flat=True)
+        Transaction.objects.exclude(pk__in=(simplefin_row.pk, literal.pk, joined.pk)).values_list("description", flat=True)
     ) == ["-SYNTHETIC ACH", "=SYNTHETIC FORMULA"]
     simplefin_row.refresh_from_db()
     literal.refresh_from_db()
+    joined.refresh_from_db()
     assert simplefin_row.description == "'=SYNTHETIC FEED TEXT"
     assert literal.description == "'-SYNTHETIC QUOTED"
+    assert joined.description == "'-SYNTHETIC PAYEE - Monthly memo"
