@@ -173,28 +173,40 @@ def upcoming_charge(series, *, today):
 
 
 def acknowledged_amounts(principal, series_list):
-    """The amounts this member dismissed as price-change flags, as {series id: amount_minor}.
+    """The amounts this member dismissed as price-change flags, as {series id: frozenset of amount_minor}.
 
     Each member dismisses on their own, so another member's dismissal never
-    hides this member's flag (#523).
+    hides this member's flag. A dismissal on any copy of a bill counts for
+    every copy linked to it by a shared charge, as in the daily alerts, so it
+    holds whichever copy the member's page shows (#523).
     """
+    from .bill_grouping import group_bills, stored_charge_ids
+
     person = _person_for(principal)
-    ids = [series.pk for series in series_list]
+    ids = {series.pk for series in series_list}
     if person is None or not ids:
         return {}
-    return dict(
-        RecurringPriceAcknowledgement.objects.filter(person=person, series_id__in=ids).values_list(
-            "series_id", "amount_minor"
-        )
-    )
+    dismissed = {}
+    for series_id, amount_minor in RecurringPriceAcknowledgement.objects.filter(person=person).values_list(
+        "series_id", "amount_minor"
+    ):
+        dismissed.setdefault(series_id, set()).add(amount_minor)
+    if not dismissed:
+        return {}
+    result = {}
+    for bill in group_bills(stored_charge_ids(ids | set(dismissed))):
+        amounts = frozenset().union(*(dismissed.get(pk, ()) for pk in bill))
+        if amounts:
+            result.update((pk, amounts) for pk in bill if pk in ids)
+    return result
 
 
-def price_drift(series, acknowledged_minor=None):
+def price_drift(series, acknowledged=()):
     """The latest charge measured against the median of the charges before it.
 
     Returns a PriceChange whatever the size of the drift, or None when there is
     no baseline (fewer than two prior charges or a zero median) or the member
-    already dismissed this amount (`acknowledged_minor`). Callers apply a
+    already dismissed this amount (one of `acknowledged`). Callers apply a
     threshold with exceeds_percent.
     """
     if not _counts_in_review(series):
@@ -204,7 +216,7 @@ def price_drift(series, acknowledged_minor=None):
     if len(prior) < MIN_PRIOR_CHARGES:
         return None
     latest = rows[-1]
-    if acknowledged_minor is not None and acknowledged_minor == latest.amount_minor:
+    if latest.amount_minor in acknowledged:
         return None
     median = _median_abs(item.amount_minor for item in prior)
     if median == 0:
@@ -228,8 +240,8 @@ def exceeds_percent(change, percent):
     return abs(change.ratio) * 100 > percent
 
 
-def price_change(series, percent=DEFAULT_PRICE_CHANGE_PERCENT, acknowledged_minor=None):
-    change = price_drift(series, acknowledged_minor)
+def price_change(series, percent=DEFAULT_PRICE_CHANGE_PERCENT, acknowledged=()):
+    change = price_drift(series, acknowledged)
     if change is None or not exceeds_percent(change, percent):
         return None
     return change
@@ -282,11 +294,11 @@ def upcoming_charges(series_list, *, today):
 
 
 def price_changes(series_list, percent=DEFAULT_PRICE_CHANGE_PERCENT, acknowledged=None):
-    """Flagged rows; `acknowledged` is the viewer's {series id: dismissed amount}."""
+    """Flagged rows; `acknowledged` is the viewer's {series id: dismissed amounts} (`acknowledged_amounts`)."""
     acknowledged = acknowledged or {}
     rows = [
         item for series in series_list
-        if (item := price_change(series, percent, acknowledged.get(series.pk)))
+        if (item := price_change(series, percent, acknowledged.get(series.pk, ())))
     ]
     rows.sort(key=lambda item: (item.charge_date, item.series.display_name, item.series.pk), reverse=True)
     return rows

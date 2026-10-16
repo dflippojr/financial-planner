@@ -245,15 +245,15 @@ def test_acknowledged_amount_suppresses_until_the_amount_changes():
     dismiss_price_change(owner, flagged.pk)
     flagged.refresh_from_db()
     acknowledged = acknowledged_amounts(owner, [flagged])
-    assert acknowledged == {flagged.pk: -1200}
-    assert price_change(flagged, acknowledged_minor=acknowledged[flagged.pk]) is None
+    assert acknowledged == {flagged.pk: {-1200}}
+    assert price_change(flagged, acknowledged=acknowledged[flagged.pk]) is None
     raise_recurring_review_alerts(owner, [flagged], today=TODAY)
     assert not Alert.objects.filter(kind=Alert.Kind.RECURRING_PRICE).exists()
     extra = make_transaction(
         owner, account, transaction_date=date(2026, 10, 10), amount_minor=-1400, description="Synthetic Rise later"
     )
     add_member(flagged, extra)
-    again = price_change(flagged, acknowledged_minor=acknowledged[flagged.pk])
+    again = price_change(flagged, acknowledged=acknowledged[flagged.pk])
     assert again is not None
     assert again.new_minor == -1400
 
@@ -978,7 +978,7 @@ def test_acknowledging_a_shared_rows_price_change_records_the_current_charge():
 
     dismiss_price_change(member, series.pk)
 
-    assert acknowledged_amounts(member, [series]) == {series.pk: -7000}
+    assert acknowledged_amounts(member, [series]) == {series.pk: {-7000}}
     assert _page(member, today=today).context["price_changes"] == []
 
 
@@ -1209,7 +1209,7 @@ def test_dismissing_a_bills_price_change_silences_only_that_member():
     dismiss_price_change(member, series.pk)
     _run_both_passes(owner, member, today)
 
-    assert acknowledged_amounts(member, [series, copy]) == {series.pk: -9000, copy.pk: -9000}
+    assert acknowledged_amounts(member, [series, copy]) == {series.pk: {-9000}, copy.pk: {-9000}}
     assert acknowledged_amounts(owner, [series, copy]) == {}
     assert [recipient for recipient, _key in _review_alerts(Alert.Kind.RECURRING_PRICE)] == [owner.pk]
     assert _page(member, today=today).context["price_changes"] == []
@@ -1230,3 +1230,23 @@ def test_a_bill_alerted_before_grouping_is_not_alerted_again():
     keys = dict(_review_alerts(Alert.Kind.RECURRING_PRICE))
     assert Alert.objects.filter(recipient=owner, kind=Alert.Kind.RECURRING_PRICE).count() == 1
     assert keys[member.pk].startswith("recurring:bill:")
+
+
+@pytest.mark.django_db
+def test_a_dismissal_on_another_members_copy_holds_for_a_copy_confirmed_later():
+    owner, member, _outsider, series = _shared_bill()
+    shared = series.members.first().transaction.account
+    risen = make_transaction(
+        owner, shared, transaction_date=date(2026, 10, 12), amount_minor=-9000, description="Synthetic Internet"
+    )
+    add_member(series, risen)
+    today = date(2026, 10, 13)
+    dismiss_price_change(member, series.pk)
+    own = make_series(member, name="Synthetic Internet", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-6000)
+    for item in series.members.all():
+        add_member(own, item.transaction)
+
+    _upcoming, changes, _missed, _cancelled = build_recurring_review(member, [own], today=today)
+
+    assert changes == []
+    assert [item.series.pk for item in build_recurring_review(owner, [series], today=today)[1]] == [series.pk]
