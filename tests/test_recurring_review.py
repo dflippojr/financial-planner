@@ -594,15 +594,17 @@ def test_recurring_page_shows_a_joint_bill_once_when_two_other_members_confirmed
 @pytest.mark.django_db
 def test_a_shared_cancelled_series_does_not_offer_keep_cancelled():
     _owner, member, _outsider, series = _shared_bill()
+    # Fixed dates: the resumed charge must stay inside the monthly tolerance of
+    # the bill's 12th-of-the-month cadence, or the owner's refresh drops it.
     later = make_transaction(
         series.person,
         series.members.first().transaction.account,
-        transaction_date=timezone.localdate() - timedelta(days=1),
+        transaction_date=date(2026, 10, 12),
         amount_minor=-6000,
         description="Synthetic Internet",
     )
     add_member(series, later)
-    series.cancelled_at = timezone.now() - timedelta(days=30)
+    series.cancelled_at = datetime(2026, 9, 20, 12, tzinfo=dt_timezone.utc)
     series.save(update_fields=["cancelled_at"])
     client = Client()
     client.force_login(member.user)
