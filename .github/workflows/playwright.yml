@@ -7,18 +7,15 @@ name: Playwright layout
 # of it rather than a smoke subset. Uses no secrets and the in-memory SQLite
 # test settings; layout does not depend on the database engine.
 on:
-  push:
-    branches: [main]
-  pull_request:
-    types: [opened, synchronize, reopened]
+  workflow_call:
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: playwright-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: playwright-${{ github.ref == 'refs/heads/main' && github.run_id || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   browser:
