@@ -147,7 +147,7 @@ function Get-Snapshot {
     return $snapshot
 }
 
-function Test-Health {
+function Test-Health([string]$Label = 'health') {
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     $request = [Net.HttpWebRequest]::Create($HealthUrl)
     $request.Method = 'GET'
@@ -161,7 +161,7 @@ function Test-Health {
     } catch [Net.WebException] {
         $response = $_.Exception.Response
         if ($null -eq $response) {
-            Add-Failure "health: $HealthUrl unreachable ($($_.Exception.Status))"
+            Add-Failure "${Label}: $HealthUrl unreachable ($($_.Exception.Status))"
             $script:HealthUnreachable = $true
             return $null
         }
@@ -172,7 +172,7 @@ function Test-Health {
     } finally {
         $response.Close()
     }
-    if ($code -eq 200) { Write-Pass "health: 200" } else { Add-Failure "health: returned $code, expected 200" }
+    if ($code -eq 200) { Write-Pass "${Label}: 200" } else { Add-Failure "${Label}: returned $code, expected 200" }
     return $revision
 }
 
@@ -319,6 +319,10 @@ try {
     if ($StableSeconds -gt 0) {
         Write-Host "wait $StableSeconds s for restarts"
         Start-Sleep -Seconds $StableSeconds
+    }
+    if ($StableSeconds -gt 0) {
+        # The app can start answering 503 during the window without restarting.
+        [void](Test-Health 'health after wait')
     }
     $after = Get-Snapshot
     Test-Containers $before $after $deployStart
