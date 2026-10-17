@@ -5,28 +5,18 @@ name: Docker smoke test
 # start script fails here instead of during a deploy. Uses compose.yml with an
 # env file of dummy values: no secrets, no real paths, nothing is pushed.
 # Backup, SimpleFIN, and AI-job containers are not started.
+# ci.yml calls it on every push to main and on pull requests that change
+# packaging paths; its changes job holds the path list.
 on:
-  push:
-    branches: [main]
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths:
-      - Dockerfile
-      - compose.yml
-      - requirements.txt
-      - scripts/**
-      - ops/**
-      - static/**
-      - templates/**
-      - .github/workflows/docker-smoke.yml
+  workflow_call:
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: docker-smoke-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: docker-smoke-${{ github.ref == 'refs/heads/main' && github.run_id || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   smoke:
