@@ -1389,6 +1389,11 @@ def link_refund(principal, refund_id, original_id, original_part_id=None):
         refund.amount_minor <= 0
         or original.amount_minor >= 0
         or refund.kind != original.kind
+        # Excluded legs were never counted, so a refund cannot offset one.
+        # The check sees only pairs whose legs are both visible to this person.
+        or Transaction.objects.filter(pk__in=(refund.pk, original.pk))
+        .filter(exclusion_exists_for(person))
+        .exists()
     ):
         raise ValidationError(REFUND_LINK_RULE)
     inherited = original.category
