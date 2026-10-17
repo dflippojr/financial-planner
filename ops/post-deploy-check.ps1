@@ -235,9 +235,9 @@ function Test-Containers($Before, $After, [datetime]$DeployStart) {
                 Add-Failure "containers: $service restarted $($now.RestartCount) time(s) since the deploy"
                 $healthy = $false
             } elseif ($now.Created -and $now.Created -lt $deployUtc -and $now.Started -and $now.Started -ge $deployUtc -and
-                      ($now.Started - $now.Created).TotalSeconds -gt $FirstStartSeconds) {
+                      (($now.Started - $now.Created).TotalSeconds -gt $FirstStartSeconds -or $now.RestartCount -gt 0)) {
                 # A container the deploy kept (usually db) should not have started again since. Its
-                # first start comes seconds after its creation, so that one is not a restart.
+                # first start comes seconds after its creation with no restarts, so that one is not.
                 Add-Failure "containers: $service was kept by the deploy but started again since it began"
                 $healthy = $false
             }
