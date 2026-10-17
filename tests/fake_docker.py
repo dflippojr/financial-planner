@@ -13,7 +13,10 @@ from datetime import datetime, timezone
 
 
 def _docker_time(seconds):
-    return datetime.fromtimestamp(seconds, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f000Z")
+    # Docker drops trailing zeros, so its times often have seven or fewer
+    # fractional digits, which PowerShell 7's ConvertFrom-Json reads as dates.
+    text = datetime.fromtimestamp(seconds, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f").rstrip("0").rstrip(".")
+    return text + "Z"
 
 
 def _option_values(args, name):

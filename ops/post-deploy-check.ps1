@@ -101,7 +101,10 @@ function Read-EnvValue([string]$Path, [string]$Key) {
     return $value
 }
 
-function ConvertFrom-DockerTime([string]$Value) {
+function ConvertFrom-DockerTime($Value) {
+    # PowerShell 7's ConvertFrom-Json already turns a time with at most seven
+    # fractional digits into a DateTime.
+    if ($Value -is [datetime]) { return $Value.ToUniversalTime() }
     # Docker writes nanoseconds; .NET parses at most seven fractional digits.
     if ($Value -notmatch '^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(\.\d{1,7})?\d*(Z|[+-]\d\d:\d\d)$') { return $null }
     $text = $Matches[1] + $(if ($Matches[2]) { $Matches[2] } else { '' }) + $Matches[3]
