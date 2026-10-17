@@ -34,7 +34,10 @@ param(
     [int]$StableSeconds = 120,
     # Defaults to BACKUP_DIR\health\status.
     [string]$StatusPath,
-    [string]$Python = 'python'
+    [string]$Python = 'python',
+    # Only for a rollback to a release older than #537, whose images record
+    # no SHA; confirm the checked-out revision with `git rev-parse HEAD`.
+    [switch]$SkipRevision
 )
 
 $ErrorActionPreference = 'Stop'
@@ -44,6 +47,8 @@ $Services = @('db', 'app', 'backup', 'background')
 # Images built from this repository carry the revision label.
 $BuiltServices = @('app', 'backup', 'background')
 $RevisionLabel = 'org.opencontainers.image.revision'
+# Compose starts a container with no unmet dependencies within seconds of creating it.
+$FirstStartSeconds = 60
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $Helper = Join-Path $RepoRoot 'scripts\prod_signals.py'
 $script:Failures = New-Object System.Collections.Generic.List[string]
@@ -107,7 +112,9 @@ function ConvertFrom-DockerTime([string]$Value) {
 function Get-ServiceContainers([string]$Service) {
     $ids = Invoke-Native 'docker' @('ps', '-a', '-q', '--no-trunc',
         '--filter', "label=com.docker.compose.project=$ProjectName",
-        '--filter', "label=com.docker.compose.service=$Service")
+        '--filter', "label=com.docker.compose.service=$Service",
+        # Leave out `docker compose run` containers, which share the labels.
+        '--filter', 'label=com.docker.compose.oneoff=False')
     if ($ids.ExitCode -ne 0) { throw 'docker ps failed; is Docker Desktop running?' }
     $found = @()
     foreach ($id in $ids.Output) {
@@ -227,8 +234,10 @@ function Test-Containers($Before, $After, [datetime]$DeployStart) {
             } elseif ($now.Created -and $now.Created -ge $deployUtc -and $now.RestartCount -gt 0) {
                 Add-Failure "containers: $service restarted $($now.RestartCount) time(s) since the deploy"
                 $healthy = $false
-            } elseif ($now.Created -and $now.Created -lt $deployUtc -and $now.Started -and $now.Started -ge $deployUtc) {
-                # A container the deploy kept (usually db) should not have started again since.
+            } elseif ($now.Created -and $now.Created -lt $deployUtc -and $now.Started -and $now.Started -ge $deployUtc -and
+                      ($now.Started - $now.Created).TotalSeconds -gt $FirstStartSeconds) {
+                # A container the deploy kept (usually db) should not have started again since. Its
+                # first start comes seconds after its creation, so that one is not a restart.
                 Add-Failure "containers: $service was kept by the deploy but started again since it began"
                 $healthy = $false
             }
@@ -301,7 +310,11 @@ try {
     $deployStart = [datetime]$Since
 
     $revision = Test-Health
-    Test-Revision $revision $before
+    if ($SkipRevision) {
+        Write-Host 'skip revision: -SkipRevision given'
+    } else {
+        Test-Revision $revision $before
+    }
 
     if ($StableSeconds -gt 0) {
         Write-Host "wait $StableSeconds s for restarts"

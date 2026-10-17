@@ -289,9 +289,18 @@ Starting the new app applies all pending Django migrations before Gunicorn accep
 If any other check fails, roll back:
 
 1. Inspect bounded logs with `docker compose --env-file $Config logs --tail 100 app background db`; do not repeatedly restart or run migrations by hand.
-2. Return to the previous code: `git checkout --detach $PreviousSha`, set `$env:GIT_SHA = $PreviousSha`, and run the same `build` and `up -d` commands.
-3. If the failed release applied migrations the previous code cannot run against, restore the pre-upgrade dump into a fresh volume using the procedure above.
-4. Run the check again with `-ExpectedSha $PreviousSha` and a fresh `$DeployStart`, then open an issue with the failing lines, which carry no financial data.
+2. Keep a copy of the check, because the previous revision may predate it:
+
+   ```powershell
+   $Tools = Join-Path $env:TEMP 'financial-planner-post-deploy'
+   New-Item -ItemType Directory -Force "$Tools\ops", "$Tools\scripts" | Out-Null
+   Copy-Item ops\post-deploy-check.ps1 "$Tools\ops\"
+   Copy-Item scripts\prod_signals.py "$Tools\scripts\"
+   ```
+
+3. Return to the previous code: `git checkout --detach $PreviousSha`, set `$env:GIT_SHA = $PreviousSha`, and run the same `build` and `up -d` commands, recording a fresh `$DeployStart` first.
+4. If the failed release applied migrations the previous code cannot run against, restore the pre-upgrade dump into a fresh volume using the procedure above.
+5. Run the copied check: `& "$Tools\ops\post-deploy-check.ps1" -ConfigPath $Config -Since $DeployStart -ExpectedSha $PreviousSha`. A revision older than #537 builds images without the SHA label or header, so add `-SkipRevision` for it and confirm the revision with `git rev-parse HEAD` instead. Then open an issue with the failing lines from the first run, which carry no financial data.
 
 The `Docker smoke test` workflow (`.github/workflows/docker-smoke.yml`) runs on pull requests that change packaging files (`Dockerfile`, `compose.yml`, `requirements.txt`, `scripts/`, `ops/`, `static/`, `templates/`) and on pushes to `main`, including Dependabot's. It builds the image, starts `db` and `app` from `compose.yml` with dummy values and a throwaway database, waits for the app to report healthy, and requests the sign-in page, which redirects to first-run setup on an empty database. It does not start the backup or background containers and never touches the tower.
 

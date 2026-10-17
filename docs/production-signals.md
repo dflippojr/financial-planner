@@ -48,7 +48,7 @@ else about the build is exposed.
 ## Deployed SHA, container state and restarts
 
 ```powershell
-docker ps -aq --filter "label=com.docker.compose.project=$Project" |
+docker ps -aq --filter "label=com.docker.compose.project=$Project" --filter label=com.docker.compose.oneoff=False |
   ForEach-Object { (docker inspect $_) -join "`n" | ConvertFrom-Json } |
   ForEach-Object { [pscustomobject]@{
       Service      = $_.Config.Labels.'com.docker.compose.service'
@@ -59,7 +59,7 @@ docker ps -aq --filter "label=com.docker.compose.project=$Project" |
   Sort-Object Service | Format-Table -AutoSize
 ```
 
-Expect `db`, `app`, `backup` and `background`, each `running`. `RestartCount`
+Expect `db`, `app`, `backup` and `background`, each `running`. The `oneoff` filter leaves out containers that `docker compose run` left behind. `RestartCount`
 counts Docker's automatic restarts of that container since it was created, so
 compare it between two readings: a count that rises, or a state of
 `restarting`, is a crash loop (as in #514). A recreated container starts again
@@ -74,7 +74,7 @@ older SHA after a deploy was not recreated; the deployment runbook covers that.
 
 ```powershell
 foreach ($Service in 'db', 'app', 'backup', 'background') {
-  $Id = docker ps -aq --filter "label=com.docker.compose.project=$Project" --filter "label=com.docker.compose.service=$Service" | Select-Object -First 1
+  $Id = docker ps -aq --filter "label=com.docker.compose.project=$Project" --filter "label=com.docker.compose.service=$Service" --filter label=com.docker.compose.oneoff=False | Select-Object -First 1
   "$Service $(python scripts\prod_signals.py tracebacks --container $Id --since 24h)"
 }
 ```
@@ -145,5 +145,7 @@ one line per reason, when:
 It reads `DJANGO_CSRF_TRUSTED_ORIGINS` (for the health URL) and `BACKUP_DIR`
 from the env file and nothing else. Pass `-HealthUrl`, `-StatusPath`,
 `-ExpectedSha`, `-ProjectName` or `-StableSeconds` to override a default.
+`-SkipRevision` is only for a rollback to a release older than #537, whose
+images record no SHA.
 Without `-Since`, it dates the deploy from when the `app` and `background`
 containers were created.
