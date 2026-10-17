@@ -15,6 +15,14 @@ The first release imports CSV exports from Huntington Bank, Capital One, Apple C
 - Keep historical actuals distinct from future projections. Do not present generated financial recommendations as verified facts.
 - Do not invent a provider's CSV schema or Vanguard transaction meaning. If an export shape is unknown, record the gap and use only clearly marked synthetic fixtures until it is resolved.
 
+### Ledger property tests
+
+tests/properties (marker `property`) states these rules as Hypothesis properties over synthetic exports and SimpleFIN feeds: idempotent reimport, order independence, one count across a SimpleFIN cut-over, transfers netting to zero, refunds never reducing uncounted spending, and exact money through export and reimport. test_report_invariants.py ties views of the same money to each other and to the generated ledger: net worth, category shares and the donut, cash flow and the monthly review per month and scope, recurring monthly against annual totals, planned occurrences in the projection and bills calendar, and household totals that private activity never moves. CI runs them with the default `ci` profile (derandomized, bounded). After changing an importer, sync, pairing, refund, totals, report or projection path, also run the `deep` profile locally, which searches far more inputs:
+
+    HYPOTHESIS_PROFILE=deep python -m pytest tests/properties -m property
+
+A property that an open bug still breaks is `xfail(strict=True, reason="#N")` with the shrunk counterexample as an `@example`. When you fix that bug, remove the marker. When you add an importer or report path, add it to the strategies or properties.
+
 ## Build workflow
 
 Work is dispatched with Orca. Each worker gets one GitHub issue in its own git worktree and branch, and never edits main.
