@@ -320,6 +320,8 @@ class _Builder:
                 cadence="monthly", typical_amount_minor=typical, currency="USD", status=status, confidence="high",
                 reasons=["Synthetic monthly charge"], fingerprint=_digest("series", name),
                 confirmed_at=NOW if status == "confirmed" else None,
+                # The gym price rose; Blair dismissed the alert at the new amount (0071 moves this).
+                acknowledged_amount_minor=-5_000 if name == "gym" else None,
             )
             self.bulk("RecurringSeriesMember", [self.m["RecurringSeriesMember"](series=series, transaction=row)
                                                 for row in members])

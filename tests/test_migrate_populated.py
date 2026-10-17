@@ -24,6 +24,13 @@ START_POINTS = {
 DELETED_ALERT_KINDS = ("recurring_price", "recurring_missed")
 # 0060 appends the restorations it makes to the correction history.
 APPEND_ONLY = {"finance_transactioncorrectionhistory"}
+# Money columns a migration drops after copying their values elsewhere. Each
+# moved total must arrive whole; a money column dropped without an entry here
+# fails the test.
+MOVED_MONEY = {
+    # 0071 turns each series' acknowledged price into its owner's acknowledgement (#523).
+    "finance_recurringseries.acknowledged_amount_minor": "finance_recurringpriceacknowledgement.amount_minor",
+}
 
 
 def _scalar(sql, params=()):
@@ -44,8 +51,21 @@ def _counts():
     return {table: _scalar(f"SELECT COUNT(*) FROM {quote(table)}") for table in sorted(tables)}
 
 
-def _money_queries(apps):
-    """One SQL query per money column, grouped by account where the table has one."""
+def _money_columns(apps):
+    return {
+        f"{model._meta.db_table}.{field.column}"
+        for model in apps.get_app_config("finance").get_models()
+        for field in model._meta.concrete_fields if field.name.endswith("_minor")
+    }
+
+
+def _total(key):
+    table, column = (connection.ops.quote_name(part) for part in key.split("."))
+    return _rows(f"SELECT COUNT({column}), SUM({column}) FROM {table}")
+
+
+def _money_queries(apps, kept):
+    """One SQL query per money column in kept, grouped by account where the table has one."""
     quote = connection.ops.quote_name
     queries = {}
     for model in apps.get_app_config("finance").get_models():
@@ -53,7 +73,7 @@ def _money_queries(apps):
         columns = {field.name: field.column for field in model._meta.concrete_fields}
         group = columns.get("account")
         for name, column in columns.items():
-            if not name.endswith("_minor"):
+            if not name.endswith("_minor") or f"{model._meta.db_table}.{column}" not in kept:
                 continue
             if group:
                 sql = (f"SELECT {quote(group)}, COUNT({quote(column)}), SUM({quote(column)}) FROM {table} "
@@ -100,6 +120,7 @@ def test_populated_database_migrates_to_head(start):
     target = START_POINTS[start]
     executor = MigrationExecutor(connection)
     head = executor.loader.graph.leaf_nodes()
+    new_apps = executor.loader.project_state(head).apps
     try:
         executor.migrate(target)
         old_apps = executor.loader.project_state(target).apps
@@ -109,15 +130,18 @@ def test_populated_database_migrates_to_head(start):
         assert summary["transactions"] >= 2000
         assert summary["weak_auto_marked"] > 0
 
-        money_queries = _money_queries(old_apps)
+        dropped = _money_columns(old_apps) - _money_columns(new_apps)
+        assert dropped == set(MOVED_MONEY), "declare where each dropped money column went in MOVED_MONEY"
+        money_queries = _money_queries(old_apps, _money_columns(new_apps))
         counts, money = _counts(), _money(money_queries)
+        moved = {key: _total(key) for key in MOVED_MONEY}
+        assert all(count for ((count, _),) in moved.values()), "seed a value in every moved money column"
         deleted_alerts = old_apps.get_model("finance", "Alert").objects.filter(kind__in=DELETED_ALERT_KINDS).count()
         assert deleted_alerts > 0
 
         executor = MigrationExecutor(connection)
         executor.migrate(head)
         migrated = time.monotonic()
-        new_apps = executor.loader.project_state(head).apps
         print(f"start {target[0][1]}: {summary}; built in {built - began:.1f}s, migrated in {migrated - built:.1f}s")
 
         after = _counts()
@@ -128,6 +152,7 @@ def test_populated_database_migrates_to_head(start):
             else:
                 assert after[table] == count, table
         assert _money(money_queries) == money
+        assert {key: _total(target) for key, target in MOVED_MONEY.items()} == moved
 
         became = _became_not_null(old_apps, new_apps)
         assert became, "expected at least one column to become NOT NULL after the start"
