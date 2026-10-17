@@ -2,7 +2,7 @@
 
 ## Start here
 
-This public repository is a self hosted personal finance app; anything committed, and any issue or PR text, is visible to anyone. Read docs/requirements.md and docs/backlog.md before changing code. In a whole-issue run, read the live GitHub issue and every comment. In an agent-loop task-file run, follow that scoped task file as the complete instruction and do not expand into the parent issue. The current user request and recorded product decisions take priority over older issue or document text. Record new decisions in the requirements and issue before building on them.
+This public repository is a self hosted personal finance app; anything committed, and any issue or PR text, is visible to anyone. Read docs/requirements.md and docs/backlog.md before changing code. In a whole-issue run, read the live GitHub issue and every comment. In a run driven by a scoped task file, follow that task file as the complete instruction and do not expand into the parent issue. The current user request and recorded product decisions take priority over older issue or document text. Record new decisions in the requirements and issue before building on them.
 
 The first release imports CSV exports from Huntington Bank, Capital One, Apple Card, and Vanguard. Its lead view shows income, spending, and net cash flow over time. People have private accounts and explicitly shared household accounts; every household member may edit shared accounts and transactions. The app will run on the basement PC through the home network and Tailscale. Plaid is a later research item and must not become a paid dependency for the first release. See issue #1 for unresolved provider formats and account lifecycle rules; issue #2 chooses the stack.
 
@@ -23,18 +23,20 @@ tests/properties (marker `property`) states these rules as Hypothesis properties
 
 A property that an open bug still breaks is `xfail(strict=True, reason="#N")` with the shrunk counterexample as an `@example`. When you fix that bug, remove the marker. When you add an importer or report path, add it to the strategies or properties.
 
-## Build workflow with agent-loop
+## Build workflow
 
-The local launcher is D:/Projects/agent-loop, configured as project financial-planner in its ignored projects/financial-planner.env. Run its scripts from Git Bash in that directory. Logs and state go under its ignored logs/financial-planner directory; issue worktrees are siblings under D:/Projects.
+Work is dispatched with Orca. Each worker gets one GitHub issue in its own git worktree and branch, and never edits main.
 
-- Each worker owns one GitHub issue. Independent ready issues may run concurrently up to the agent-loop project cap. Check dependencies on main and avoid parallel changes to the same schema, access model, or import semantics without an explicit coordination plan.
-- Use exactly one readiness label: needs-refinement when a decision or acceptance criterion is missing; blocked when the issue is fully specified but a prerequisite is not merged on main; ready only when the specification is complete and every prerequisite has landed. List prerequisites by issue number in the issue body. Do not launch blocked issues. Recheck and relabel them after each prerequisite merges.
-- After refine-issue.sh, check dependencies and correct the label if needed: the current shared refiner chooses ready or needs-refinement and does not assign blocked itself.
-- For a ready issue, use audit-issue.sh when a pre-implementation review is warranted, then run-issue.sh --project financial-planner --issue N --tier standard (adjust the tier to the work). The launcher creates an isolated worktree and pushes an issue branch. Do not edit main from a worker session.
-- Check status with status.sh --project financial-planner. Once a branch is reviewable, open-pr.sh --project financial-planner --issue N creates or finds the PR. Use run-pr.sh for work on an existing PR branch when needed.
-- Link the PR to its issue with Closes #N. The owner approves every merge; agents must not merge, close issues early, or publish financial data.
-- Keep changes scoped to the issue. If a prerequisite is not on main, or a decision is missing, stop at a clean checkpoint and record the blocker instead of implementing a guess.
-- To prove a change works in the running app, use the verify skill in .claude/skills/verify/SKILL.md (launch, doctor, drive, evidence and cleanup on a disposable instance per docs/ui-testing.md).
-- For code changes, run focused checks while working and the existing full suite before pushing, as agent-loop requires. If no suite exists yet, report that accurately. Do not add tests that merely copy implementation logic.
+- One issue per worktree. Independent ready issues may run concurrently. Check dependencies on main and avoid parallel changes to the same schema, access model, or import semantics without an explicit coordination plan.
+- Use exactly one readiness label: needs-refinement when a decision or acceptance criterion is missing; blocked when the issue is fully specified but a prerequisite is not merged on main; ready only when the specification is complete and every prerequisite has landed. List prerequisites by issue number in the issue body. Do not start blocked issues. Recheck and relabel them after each prerequisite merges.
+- Keep changes scoped to the issue. If a prerequisite is not on main, or a decision is missing, stop at a clean checkpoint and record the blocker on the issue instead of implementing a guess.
+- Commit as you go and push the issue branch with an explicit refspec (git push origin HEAD:refs/heads/BRANCH). Open a PR whose body says Closes #N, assigned to the owner (--assignee dflippojr).
+- CI runs on every PR and every push to main through .github/workflows/ci.yml, which ends in one required check named gate. Watch it until it is green and fix failures at the root cause. The automated review (review.yml) runs once when the PR opens; after later pushes, dispatch a re-review with gh workflow run review.yml -f pr_number=N -f mode=full.
+- The owner approves and merges every PR. Agents must not merge, close issues early, or publish financial data.
 
-Do not assume agent-harness CI, deployment, or review infrastructure exists in this new repository. Add only what a financial-planner issue calls for.
+## How to prove a change works
+
+- Before pushing, run bash scripts/ci-local.sh. It runs what the gate runs locally: the statement-file guard, the migration check, the suite on a throwaway PostgreSQL 18 with the coverage floor in .coveragerc, and the browser layout tests. It needs Docker. Its header lists the jobs only CI runs. While working, run focused tests with python -m pytest tests/test_x.py, or bash scripts/test_postgres.sh with the same arguments to use PostgreSQL.
+- For a UI change, use the verify skill in .claude/skills/verify/SKILL.md (launch, doctor, drive, evidence and cleanup on a disposable instance per docs/ui-testing.md).
+- For a bug fix, write the test first and show it fails on main, then make it pass. Do not add tests that merely copy implementation logic.
+- Give the PR body a ## Proof table, as the shared PR template asks (dflippojr/.github#13): each acceptance criterion, how it was verified (command, test name, verify skill) and the evidence (output excerpt, artifact link, red before and green after). Under ### Not verified, say what you did not check and why. Under ### Gate changes, list any test deleted or skipped and any check or threshold loosened, with the reason.

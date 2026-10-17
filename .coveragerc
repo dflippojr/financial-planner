@@ -6,3 +6,9 @@ omit =
     **/migrations/*
     **/__pycache__/*
     manage.py
+
+[report]
+# The floor for the whole suite: the 91% measured in October 2026 minus one
+# point, so pruning tests cannot silently drop coverage. pytest-cov reads it,
+# so the coverage run in sonar.yml fails below it (issue #528).
+fail_under = 90
