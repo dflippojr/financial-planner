@@ -7,18 +7,15 @@ name: PostgreSQL 18
 # SonarCloud gate. Uses no secrets; scripts/test_postgres.sh is the local
 # equivalent.
 on:
-  push:
-    branches: [main]
-  pull_request:
-    types: [opened, synchronize, reopened]
+  workflow_call:
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: postgres-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: postgres-${{ github.ref == 'refs/heads/main' && github.run_id || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   postgres:
