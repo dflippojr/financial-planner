@@ -16,7 +16,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from .access import first_message as _first_message
-from .ai_tools import visible_accounts
+from .ai_tools import ai_nameable_categories, visible_accounts
 from .ai_types import ToolResult, ToolSpec
 from .audit_services import origin, record
 from .bulk_edit_services import _apply_tags
@@ -135,7 +135,13 @@ def _category_by_name(person, name):
     cleaned = str(name or "").strip()
     if not cleaned:
         return None
-    return assignable_categories(person).filter(name__iexact=cleaned).first()
+    # A household's own category name stays unknown to the model until
+    # household consent is complete, so it answers like a missing name (#521).
+    return (
+        assignable_categories(person)
+        .filter(name__iexact=cleaned, pk__in=ai_nameable_categories(person).values("pk"))
+        .first()
+    )
 
 
 def _editable_transactions(person, ids):

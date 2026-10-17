@@ -360,14 +360,27 @@ def end_current_membership(person, *, audit_actor=None):
         ),
         key=lambda membership: (membership.joined_at, membership.pk),
     )
-    household_accounts = list(
-        Account.objects.select_for_update()
-        .filter(
+    household_account_ids = list(
+        Account.objects.filter(
             scope=Account.Scope.HOUSEHOLD,
             household_id=own_membership.household_id,
-        )
+        ).values_list("pk", flat=True)
+    )
+    # Pairs from a household account to a private one may lose their only
+    # shared viewer, so lock those counterparts with the household's accounts.
+    seed_leg_ids = list(
+        Transaction.objects.filter(account_id__in=household_account_ids).values_list("pk", flat=True)
+    )
+    counterpart_ids = _pair_counterpart_account_ids(None, seed_leg_ids)
+    locked_accounts = list(
+        Account.objects.select_for_update()
+        .filter(pk__in=set(household_account_ids) | counterpart_ids)
         .order_by("pk")
     )
+    household_accounts = [
+        account for account in locked_accounts
+        if account.scope == Account.Scope.HOUSEHOLD and account.household_id == own_membership.household_id
+    ]
     _lock_ledgers(account.pk for account in household_accounts)
     transitioned_at = timezone.now()
     transitions = _apply_shared_account_exit(
@@ -384,6 +397,7 @@ def end_current_membership(person, *, audit_actor=None):
             append_event(account=account, action=action, actor=audit_actor, affected_member=person, changed_fields=fields)
     own_membership.ended_at = transitioned_at
     own_membership.save(update_fields=("ended_at",))
+    _revalidate_after_exit(person, transitions, seed_leg_ids)
     _release_simplefin_links_without_access([account.pk for account in household_accounts], initiator=audit_actor)
     # A departing member's outstanding codes end with their membership.
     Invitation.objects.filter(
@@ -400,6 +414,22 @@ def end_current_membership(person, *, audit_actor=None):
     if audit_actor is not None:
         append_event(action=AuditEvent.Action.MEMBER_LEFT, actor=audit_actor, affected_member=person,
                      household=own_membership.household, target_id=person.pk)
+
+
+def _revalidate_after_exit(person, transitions, seed_leg_ids):
+    """Apply the unshare cleanup to a membership exit, as `unshare_account` does.
+
+    Pairs touching the household's accounts are revalidated now that the
+    membership has ended, and loans keep only same-scope asset pairings.
+    """
+    from finance.category_services import _revalidate_pairs_for_leg_ids
+
+    _revalidate_pairs_for_leg_ids(person, seed_leg_ids)
+    made_private = [
+        account.pk for account, action, _fields in transitions if action == AuditEvent.Action.ACCOUNT_UNSHARED
+    ]
+    for account in Account.objects.filter(pk__in=made_private).select_related("secured_asset").order_by("pk"):
+        clear_invalid_loan_pairings(account)
 
 
 def _apply_shared_account_exit(person, household_accounts, remaining_memberships, transitioned_at):

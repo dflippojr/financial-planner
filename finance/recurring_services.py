@@ -31,6 +31,7 @@ from .models import (
     Membership,
     Person,
     RecurringExclusion,
+    RecurringPriceAcknowledgement,
     RecurringSeries,
     RecurringSeriesMember,
     Transaction,
@@ -1529,6 +1530,26 @@ class HouseholdReview:
     bills: list
 
 
+def household_bills(principal, own_series):
+    """Every household bill the viewer can see, grouped over their own and other members' confirmed copies.
+
+    The Recurring page and the daily review alerts both start from these.
+    Active and cancelled copies group together, so a cancelled copy still
+    links the active copies it shares charges with.
+    """
+    shared = list(
+        RecurringSeries.objects.shared_with(principal, linkers=True)
+        .prefetch_related("members__transaction__account")
+        .order_by("display_name", "pk")
+    )
+    copies = [
+        series
+        for series in [*own_series, *shared]
+        if series.status == RecurringSeries.Status.CONFIRMED and _household_only(series)
+    ]
+    return resolve_household_bills(copies, eligible_bill_charges(principal))
+
+
 def household_review(principal, own_series):
     """Household bills for the Recurring page, grouped like the plan and the cancel action.
 
@@ -1540,20 +1561,8 @@ def household_review(principal, own_series):
     price state come from the bill's current household charges, not its stored
     members.
     """
-    shared = list(
-        RecurringSeries.objects.shared_with(principal, linkers=True)
-        .prefetch_related("members__transaction__account")
-        .order_by("display_name", "pk")
-    )
     own_ids = {series.pk for series in own_series}
-    copies = [
-        series
-        for series in [*own_series, *shared]
-        if series.status == RecurringSeries.Status.CONFIRMED and _household_only(series)
-    ]
-    # Group over active and cancelled copies together, so a cancelled copy
-    # still links the active copies it shares charges with.
-    bills = resolve_household_bills(copies, eligible_bill_charges(principal))
+    bills = household_bills(principal, own_series)
     rows = []
     for bill in bills:
         for cancelled in (False, True):
@@ -1711,14 +1720,14 @@ def keep_cancelled_recurring_series(principal, series_id):
 @transaction.atomic
 def dismiss_price_change(principal, series_id):
     person, series = _lock_confirmed_series(principal, series_id)
-    amount_minor = None
+    flagged = None
     if series.person_id != person.pk:
         # A household bill another member confirmed shows its price state from
         # the bill's current household charges, so acknowledge that charge.
         charges = _current_bill_charges(person, series)
         if charges:
-            amount_minor = charges[-1].amount_minor
-    if amount_minor is None:
+            flagged = charges[-1]
+    if flagged is None:
         latest = (
             RecurringSeriesMember.objects.filter(series=series)
             .select_related("transaction")
@@ -1727,8 +1736,12 @@ def dismiss_price_change(principal, series_id):
         )
         if latest is None:
             raise PermissionDenied(_DENIED)
-        amount_minor = latest.transaction.amount_minor
-    series.acknowledged_amount_minor = amount_minor
-    series.save(update_fields=("acknowledged_amount_minor", "updated_at"))
+        flagged = latest.transaction
+    # The dismissal is this member's alone, and covers every copy of the bill
+    # they may act on, so the flag stays down whichever copy shows the bill (#523).
+    for copy in _bill_copies(person, series):
+        RecurringPriceAcknowledgement.objects.update_or_create(
+            person=person, series=copy, defaults={"amount_minor": flagged.amount_minor, "transaction": flagged}
+        )
     _record_series(person, AuditEvent.Action.RECURRING_PRICE_ACKNOWLEDGED, series)
     return series
