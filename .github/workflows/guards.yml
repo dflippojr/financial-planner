@@ -5,10 +5,7 @@ name: Repository guards
 # pinned dependency. Uses no secrets. The weekly run surfaces advisories that
 # appear on an unchanged pin; it only fails visibly and opens no issue.
 on:
-  push:
-    branches: [main]
-  pull_request:
-    types: [opened, synchronize, reopened]
+  workflow_call:
   schedule:
     - cron: "17 6 * * 1"
   workflow_dispatch:
@@ -17,8 +14,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: guards-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: guards-${{ github.ref == 'refs/heads/main' && github.run_id || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   statement-files:
