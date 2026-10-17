@@ -246,6 +246,41 @@ function Test-Containers($Before, $After, [datetime]$DeployStart) {
     }
 }
 
+function ConvertTo-UnixTime([datetime]$Utc) {
+    $seconds = ([DateTimeOffset]$Utc).ToUnixTimeMilliseconds() / 1000
+    return $seconds.ToString('0.000', [Globalization.CultureInfo]::InvariantCulture)
+}
+
+function Test-StartCounts($Snapshot, [datetime]$DeployStart, [datetime]$Until) {
+    # A restart between the deploy and the first snapshot leaves no trace in
+    # inspect when it was manual (RestartCount counts only Docker's own), so
+    # count each new container's start events since its creation instead.
+    $deployUtc = $DeployStart.ToUniversalTime()
+    $new = @($Services | ForEach-Object { $Snapshot[$_] } | Where-Object { $_.Created -and $_.Created -ge $deployUtc })
+    if ($new.Count -eq 0) { return }
+    $from = ($new | ForEach-Object { $_.Created } | Sort-Object | Select-Object -First 1).AddSeconds(-1)
+    $events = Invoke-Native 'docker' @('events', '--since', (ConvertTo-UnixTime $from), '--until', (ConvertTo-UnixTime $Until),
+        '--filter', 'type=container', '--filter', "label=com.docker.compose.project=$ProjectName",
+        '--filter', 'event=create', '--filter', 'event=start', '--format', '{{.Action}} {{.Actor.ID}}')
+    if ($events.ExitCode -ne 0) {
+        Add-Failure 'containers: cannot read docker events to count starts since the deploy'
+        return
+    }
+    $lines = @($events.Output | Where-Object { $_ })
+    foreach ($container in $new) {
+        # Docker keeps a bounded event history; seeing the create event proves
+        # every later event for this container is still there.
+        if (-not ($lines -contains "create $($container.Id)")) {
+            Add-Failure "containers: Docker's event history no longer reaches the $($container.Service) deploy; run the check right after up -d"
+            continue
+        }
+        $starts = @($lines | Where-Object { $_ -eq "start $($container.Id)" }).Count
+        if ($starts -gt 1) {
+            Add-Failure "containers: $($container.Service) started $starts times between the deploy and the check"
+        }
+    }
+}
+
 function Invoke-Helper([string[]]$Arguments) {
     $result = Invoke-Native $Python (@($Helper) + $Arguments)
     if ($result.ExitCode -ne 0 -or -not $result.Output) { return $null }
@@ -301,6 +336,7 @@ try {
         $StatusPath = Join-Path $backupDir 'health\status'
     }
 
+    $checkStart = (Get-Date).ToUniversalTime()
     $before = Get-Snapshot
     if (-not $Since) {
         $created = @('app', 'background' | ForEach-Object { $before[$_] } | ForEach-Object { $_.Created } | Where-Object { $_ })
@@ -319,13 +355,12 @@ try {
     if ($StableSeconds -gt 0) {
         Write-Host "wait $StableSeconds s for restarts"
         Start-Sleep -Seconds $StableSeconds
-    }
-    if ($StableSeconds -gt 0) {
         # The app can start answering 503 during the window without restarting.
         [void](Test-Health 'health after wait')
     }
     $after = Get-Snapshot
     Test-Containers $before $after $deployStart
+    Test-StartCounts $before $deployStart $checkStart
     Test-Tracebacks $after $deployStart
     Test-Backup
 } catch {

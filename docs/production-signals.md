@@ -133,7 +133,12 @@ one line per reason, when:
 - `/health/` does not return 200;
 - `X-App-Revision`, or any built image's revision label, is not `origin/main`;
 - any of the four containers is not running, or restarts during a 2 minute
-  window, or has restarted since the deploy;
+  window, or has restarted since the deploy (by `RestartCount`, its start
+  time, and for a new container its `start` events in `docker events`, which
+  also catch a manual restart);
+- Docker's bounded event history no longer reaches a new container's creation,
+  so the check cannot count its starts; run it right after `up -d`;
+- `/health/` stops returning 200 by the end of the window;
 - any container logged a traceback since the deploy started;
 - the backup status file is missing or in the `error` state (`stale` is only a
   warning; the nightly alert handles it).
