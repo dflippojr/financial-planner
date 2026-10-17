@@ -234,6 +234,37 @@ def test_backup_status_command_prints_json(tmp_path, capsys):
     assert json.loads(capsys.readouterr().out)["state"] == "error"
 
 
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {},
+        {"last_error": "synthetic"},
+        {"offsite_error": "synthetic"},
+        {"restore_check_error": "synthetic"},
+        {"last_success_at": "2026-10-15T09:00:00Z"},
+        {"last_success_at": ""},
+        {"offsite_configured": "1", "offsite_success_at": ""},
+        {"offsite_configured": "1", "offsite_success_at": "2026-10-16T07:40:00Z"},
+        {"restore_check_at": "2026-10-07T11:00:00Z"},
+        {"restore_check_at": "2026-10-07T11:00:00Z", "restore_check_interval_days": "0"},
+        {"restore_check_at": "", "restore_check_interval_days": ""},
+    ],
+)
+def test_flags_a_status_file_exactly_when_the_in_app_alert_does(tmp_path, overrides):
+    path = write(tmp_path, "status", status_text(**overrides))
+
+    flagged = signals.backup_state(path, now=NOW)["state"] != "ok"
+
+    assert flagged == backup_health.backup_is_unhealthy(backup_health.read_backup_status(path), now=NOW)
+
+
+def test_a_missing_file_is_flagged_by_both(tmp_path):
+    path = tmp_path / "status"
+
+    assert signals.backup_state(path, now=NOW)["state"] == "missing"
+    assert backup_health.backup_is_unhealthy(backup_health.read_backup_status(path), now=NOW)
+
+
 def test_reads_the_keys_the_app_reads():
     # Both parse the file ops/backup/backup.sh writes; a key added to one must reach the other.
     assert signals.STATUS_KEYS == backup_health.STATUS_KEYS

@@ -75,14 +75,25 @@ function Invoke-Native([string]$File, [string[]]$Arguments) {
     return [pscustomobject]@{ Output = @($output); ExitCode = $code }
 }
 
+function ConvertFrom-EnvValue([string]$Raw) {
+    # Compose env-file rules: a quoted value ends at its closing quote, and an
+    # unquoted one ends at a " #" comment.
+    $text = $Raw.Trim()
+    if ($text -match "^'([^']*)'") { return $Matches[1] }
+    if ($text -match '^"((?:[^"\\]|\\.)*)"') { return $Matches[1] -replace '\\(["\\])', '$1' }
+    return ($text -replace '\s+#.*$', '').Trim()
+}
+
 function Read-EnvValue([string]$Path, [string]$Key) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+    $value = $null
     foreach ($line in Get-Content -LiteralPath $Path) {
-        if ($line -match "^\s*$([regex]::Escape($Key))\s*=(.*)$") {
-            return $Matches[1].Trim().Trim('"').Trim("'")
+        # Compose lets a later line override an earlier one.
+        if ($line -match "^\s*(?:export\s+)?$([regex]::Escape($Key))\s*=(.*)$") {
+            $value = ConvertFrom-EnvValue $Matches[1]
         }
     }
-    return $null
+    return $value
 }
 
 function ConvertFrom-DockerTime([string]$Value) {
@@ -115,6 +126,7 @@ function Get-ServiceContainers([string]$Service) {
             Status       = $info.State.Status
             RestartCount = [int]$info.RestartCount
             StartedAt    = $info.State.StartedAt
+            Started      = ConvertFrom-DockerTime $info.State.StartedAt
             Created      = ConvertFrom-DockerTime $info.Created
             Revision     = $revision
         }
@@ -214,6 +226,10 @@ function Test-Containers($Before, $After, [datetime]$DeployStart) {
                 $healthy = $false
             } elseif ($now.Created -and $now.Created -ge $deployUtc -and $now.RestartCount -gt 0) {
                 Add-Failure "containers: $service restarted $($now.RestartCount) time(s) since the deploy"
+                $healthy = $false
+            } elseif ($now.Created -and $now.Created -lt $deployUtc -and $now.Started -and $now.Started -ge $deployUtc) {
+                # A container the deploy kept (usually db) should not have started again since.
+                Add-Failure "containers: $service was kept by the deploy but started again since it began"
                 $healthy = $false
             }
         }
