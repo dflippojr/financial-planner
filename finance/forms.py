@@ -840,8 +840,13 @@ class RefundSearchForm(forms.Form):
 
 
 def refund_candidates(principal, refund):
-    return Transaction.objects.visible_to(principal).filter(
-        status=Transaction.Status.ACTIVE, amount_minor__lt=0, kind=refund.kind
+    from .category_services import exclusion_exists_for
+
+    # A leg of an excluded transfer or card payment was never counted as spending.
+    return (
+        Transaction.objects.visible_to(principal)
+        .filter(status=Transaction.Status.ACTIVE, amount_minor__lt=0, kind=refund.kind)
+        .exclude(exclusion_exists_for(principal))
     )
 
 

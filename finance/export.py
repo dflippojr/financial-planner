@@ -28,6 +28,7 @@ from .models import (
     ImportBatch,
     PrivacyPolicyAcceptance,
     RecurringExclusion,
+    RecurringPriceAcknowledgement,
     RecurringSeries,
     RefundLink,
     Tag,
@@ -684,6 +685,10 @@ def _receipt_rows(person):
 def _recurring_series_rows(person):
     rows = []
     series_qs = RecurringSeries.objects.visible_to(person).prefetch_related("members").order_by("pk")
+    # A member exports their own dismissals; another member's never appear (#523).
+    acknowledged = dict(
+        RecurringPriceAcknowledgement.objects.filter(person=person).values_list("series_id", "amount_minor")
+    )
     for series in series_qs:
         member_ids = sorted(member.transaction_id for member in series.members.all())
         rows.append(
@@ -699,7 +704,7 @@ def _recurring_series_rows(person):
                 "confidence": series.confidence,
                 "is_active": series.is_active,
                 "cancelled_at": series.cancelled_at,
-                "acknowledged_amount_minor": series.acknowledged_amount_minor,
+                "acknowledged_amount_minor": acknowledged.get(series.pk),
                 "member_transaction_ids": member_ids,
                 "member_sources": {
                     str(member.transaction_id): member.source for member in series.members.all()
