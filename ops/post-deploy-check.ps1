@@ -336,8 +336,11 @@ try {
         $StatusPath = Join-Path $backupDir 'health\status'
     }
 
-    $checkStart = (Get-Date).ToUniversalTime()
     $before = Get-Snapshot
+    # Count start events up to the end of the first snapshot. A restart after
+    # it changes StartedAt between the snapshots; one before it, even while
+    # the snapshot runs, is seen only in the events.
+    $eventsUntil = (Get-Date).ToUniversalTime()
     if (-not $Since) {
         $created = @('app', 'background' | ForEach-Object { $before[$_] } | ForEach-Object { $_.Created } | Where-Object { $_ })
         if ($created.Count -eq 0) { throw 'no app or background container to date the deploy; pass -Since' }
@@ -360,7 +363,7 @@ try {
     }
     $after = Get-Snapshot
     Test-Containers $before $after $deployStart
-    Test-StartCounts $before $deployStart $checkStart
+    Test-StartCounts $before $deployStart $eventsUntil
     Test-Tracebacks $after $deployStart
     Test-Backup
 } catch {
