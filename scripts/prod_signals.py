@@ -5,7 +5,7 @@ Both subcommands print one JSON object of counts, types, states and timestamps.
 Log lines, error text, amounts and names never reach the output.
 
     python scripts/prod_signals.py tracebacks --container ID --since 24h
-    python scripts/prod_signals.py tracebacks --file synthetic.log
+    python scripts/prod_signals.py tracebacks --stdin < synthetic.log
     python scripts/prod_signals.py backup-status E:/financial-planner-backups/health/status
 
 It needs only the standard library, so it runs on the Windows host without the
@@ -26,6 +26,10 @@ GROUP_MARGIN = re.compile(r"^\s*\|\s?")
 EXCEPTION_TYPE = re.compile(r"([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)(?::|$)")
 MAX_TYPE_LENGTH = 120
 UNKNOWN = "unknown"
+CONTAINER_REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
+SINCE = re.compile(r"\d{1,6}[smh]|\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?(?:Z|[+-]\d\d:\d\d)")
+# ops/backup/backup.sh writes BACKUP_DIR/health/status; read nothing else.
+STATUS_FILE_NAME = "status"
 
 # The keys ops/backup/backup.sh writes; finance/backup_health.py reads the same file.
 STATUS_KEYS = (
@@ -83,8 +87,11 @@ def count_tracebacks(lines):
 
 def docker_log_lines(container, since):
     """Both output streams of one container since a time docker accepts (24h or RFC 3339)."""
+    # Only a plain id or name and a plain time reach docker, so neither can be read as an option.
+    if not CONTAINER_REF.fullmatch(container) or not SINCE.fullmatch(since):
+        raise ValueError("give a container id or name and a --since like 24h or 2026-10-16T12:00:00Z")
     result = subprocess.run(
-        ["docker", "logs", "--since", since, container],
+        ["docker", "logs", "--since", since, "--", container],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         timeout=DOCKER_LOGS_TIMEOUT_SECONDS,
@@ -146,8 +153,11 @@ def backup_state(path, *, now=None):
     allows, and "ok" otherwise.
     """
     now = now or datetime.now(timezone.utc)
+    status_path = Path(path).resolve()
+    if status_path.name != STATUS_FILE_NAME:
+        raise ValueError(f"give the backup health file, BACKUP_DIR/health/{STATUS_FILE_NAME}")
     try:
-        text = Path(path).read_text(encoding="utf-8")
+        text = status_path.read_text(encoding="utf-8")
     except OSError:
         return {"state": "missing"}
     data = parse_status_text(text)
@@ -175,7 +185,7 @@ def _parser():
     tracebacks = commands.add_parser("tracebacks", help="count Python tracebacks by exception type")
     source = tracebacks.add_mutually_exclusive_group(required=True)
     source.add_argument("--container", help="container name or id to read with docker logs")
-    source.add_argument("--file", help="a log file to read instead, or - for standard input")
+    source.add_argument("--stdin", action="store_true", help="read the log from standard input instead")
     tracebacks.add_argument("--since", default="24h", help="docker logs --since value (default 24h)")
     status = commands.add_parser("backup-status", help="summarize the backup health status file")
     status.add_argument("path")
@@ -186,9 +196,7 @@ def _parser():
 def _read_lines(args):
     if args.container:
         return docker_log_lines(args.container, args.since)
-    if args.file == "-":
-        return sys.stdin.read().splitlines()
-    return Path(args.file).read_text(encoding="utf-8", errors="replace").splitlines()
+    return sys.stdin.read().splitlines()
 
 
 def main(argv=None):
@@ -196,7 +204,7 @@ def main(argv=None):
     if args.command == "tracebacks":
         try:
             lines = _read_lines(args)
-        except RuntimeError as error:
+        except (RuntimeError, ValueError) as error:
             print(f"cannot read logs: {error}", file=sys.stderr)
             return 2
         except (OSError, subprocess.TimeoutExpired) as error:
@@ -205,7 +213,11 @@ def main(argv=None):
         result = count_tracebacks(lines)
     else:
         now = _parse_time(args.now) if args.now else None
-        result = backup_state(args.path, now=now)
+        try:
+            result = backup_state(args.path, now=now)
+        except ValueError as error:
+            print(str(error), file=sys.stderr)
+            return 2
     print(json.dumps(result, sort_keys=True))
     return 0
 

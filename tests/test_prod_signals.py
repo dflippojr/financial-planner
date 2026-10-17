@@ -42,8 +42,11 @@ GET /health/ 200
 """
 
 
-def write(tmp_path, name, text):
-    path = tmp_path / name
+def write(tmp_path, case, text):
+    """A status file in its own folder; the reader opens only files named status."""
+    folder = tmp_path / case
+    folder.mkdir()
+    path = folder / "status"
     path.write_text(text, encoding="utf-8")
     return path
 
@@ -106,17 +109,10 @@ def test_an_implausibly_long_type_is_reported_as_unknown():
     assert signals.count_tracebacks(lines)["types"] == {"unknown": 1}
 
 
-def test_tracebacks_command_reads_a_file(tmp_path, capsys):
-    path = write(tmp_path, "app.log", SYNTHETIC_LOG)
-
-    assert signals.main(["tracebacks", "--file", str(path)]) == 0
-    assert json.loads(capsys.readouterr().out)["tracebacks"] == 3
-
-
 def test_tracebacks_command_reads_standard_input(monkeypatch, capsys):
     monkeypatch.setattr(signals.sys, "stdin", io.StringIO(SYNTHETIC_LOG))
 
-    assert signals.main(["tracebacks", "--file", "-"]) == 0
+    assert signals.main(["tracebacks", "--stdin"]) == 0
     assert json.loads(capsys.readouterr().out)["types"]["ValueError"] == 1
 
 
@@ -125,7 +121,7 @@ def test_tracebacks_command_reads_docker_logs_with_both_streams(capsys):
     with patch.object(signals.subprocess, "run", return_value=completed) as run:
         assert signals.main(["tracebacks", "--container", "fp-app-1", "--since", "2026-10-16T12:00:00Z"]) == 0
 
-    assert run.call_args.args[0] == ["docker", "logs", "--since", "2026-10-16T12:00:00Z", "fp-app-1"]
+    assert run.call_args.args[0] == ["docker", "logs", "--since", "2026-10-16T12:00:00Z", "--", "fp-app-1"]
     assert run.call_args.kwargs["stderr"] == subprocess.STDOUT
     assert json.loads(capsys.readouterr().out)["tracebacks"] == 3
 
@@ -140,9 +136,24 @@ def test_a_docker_logs_failure_reports_no_docker_output(capsys):
     assert captured.err.strip() == "cannot read logs: docker logs exited 1"
 
 
-def test_an_unreadable_log_file_exits_2(tmp_path, capsys):
-    assert signals.main(["tracebacks", "--file", str(tmp_path / "absent.log")]) == 2
-    assert "FileNotFoundError" in capsys.readouterr().err
+def test_a_docker_logs_timeout_exits_2(capsys):
+    timeout = subprocess.TimeoutExpired(["docker"], 120)
+    with patch.object(signals.subprocess, "run", side_effect=timeout):
+        assert signals.main(["tracebacks", "--container", "fp-app-1"]) == 2
+
+    assert capsys.readouterr().err.strip() == "cannot read logs: TimeoutExpired"
+
+
+@pytest.mark.parametrize(
+    ("container", "since"),
+    [("--help", "24h"), ("fp app", "24h"), ("fp-app-1", "1d"), ("fp-app-1", "--follow"), ("fp-app-1", "2026-10-16")],
+)
+def test_only_a_plain_container_and_time_reach_docker(capsys, container, since):
+    with patch.object(signals.subprocess, "run") as run:
+        assert signals.main(["tracebacks", f"--container={container}", f"--since={since}"]) == 2
+
+    run.assert_not_called()
+    assert capsys.readouterr().err.startswith("cannot read logs: give a container id")
 
 
 def status_text(**overrides):
@@ -225,6 +236,14 @@ def test_naive_and_offset_timestamps_parse(tmp_path):
     assert signals.backup_state(naive, now=NOW)["state"] == "ok"
     assert signals.backup_state(offset, now=NOW)["state"] == "ok"
     assert signals.backup_state(garbage, now=NOW)["stale"] == ["last_success"]
+
+
+def test_backup_status_reads_only_a_file_named_status(tmp_path, capsys):
+    other = tmp_path / "production.env"
+    other.write_text("last_error=synthetic\n", encoding="utf-8")
+
+    assert signals.main(["backup-status", str(other)]) == 2
+    assert "BACKUP_DIR/health/status" in capsys.readouterr().err
 
 
 def test_backup_status_command_prints_json(tmp_path, capsys):
