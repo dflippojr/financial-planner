@@ -255,18 +255,21 @@ def test_matched_transfers_and_card_payments_add_nothing_to_household_cash_flow(
 
 
 @st.composite
-def refund_cases(draw, transfer_leg=True):
+def refund_cases(draw):
     transfer = draw(st.integers(1, MAX_MINOR))
     other = st.integers(1, MAX_MINOR).filter(lambda size: size != transfer)
     purchases = draw(st.lists(other, min_size=1, max_size=4))
     refunds = draw(st.lists(other, min_size=1, max_size=3))
     # Index len(purchases) picks the outgoing transfer leg, which totals already exclude.
-    last = len(purchases) if transfer_leg else len(purchases) - 1
-    originals = draw(st.lists(st.integers(0, last), min_size=len(refunds), max_size=len(refunds)))
+    originals = draw(st.lists(st.integers(0, len(purchases)), min_size=len(refunds), max_size=len(refunds)))
     return transfer, tuple(purchases), tuple(zip(refunds, originals))
 
 
-def _check_refunds(case):
+@given(refund_cases())
+# The shrunk counterexample from #506: a 0.01 refund linked to the excluded
+# 0.02 transfer leg erased 0.01 of counted spending.
+@example((2, (1,), ((1, 1),)))
+def test_a_refund_reduces_spending_only_when_its_original_was_counted(case):
     transfer, purchases, refunds = case
     day = date(2026, 8, 10)
     checking = [Row(day, -transfer, "SYN TRANSFER TO SAVINGS", "", "")]
@@ -294,23 +297,6 @@ def _check_refunds(case):
         spending = sum(purchases) - sum(size for size, original in refunds if original < len(purchases))
         household = selected_accounts(owner, scope=Account.Scope.HOUSEHOLD, cash_flow_only=True)
         assert ledger.totals(owner, household) == ledger.Totals(income, spending, income - spending)
-
-
-@given(refund_cases(transfer_leg=False))
-def test_a_refund_of_a_counted_purchase_reduces_spending_by_its_amount(case):
-    _check_refunds(case)
-
-
-# The failing explicit example ends this test before Hypothesis generates any
-# cases, so the property above carries the generated purchase refunds until
-# #506 is fixed. Then remove the marker and let this one search both kinds.
-@pytest.mark.xfail(strict=True, reason="#506")
-@given(refund_cases())
-# Hypothesis's shrunk counterexample: a 0.01 refund linked to the excluded
-# 0.02 transfer leg erases 0.01 of counted spending.
-@example((2, (1,), ((1, 1),)))
-def test_a_refund_reduces_spending_only_when_its_original_was_counted(case):
-    _check_refunds(case)
 
 
 # 5. Exact money.
