@@ -8,7 +8,7 @@ from django.urls import reverse
 
 from finance.cash_flow import cash_flow_report, spending_by_category_report
 from finance.export import collect_export_tables
-from finance.lifecycle_services import archive_account, delete_account, share_account
+from finance.lifecycle_services import archive_account, delete_account, leave_household, share_account
 from finance.models import Account, BalanceSnapshot, Household, ImportBatch, Membership, Person, Transaction, loan_asset_pairing_allowed
 from finance.net_worth import contribution_parts, net_worth_report
 from finance.pairing_services import PairingError, set_loan_secured_asset
@@ -391,3 +391,82 @@ def test_loan_pairing_form_only_lists_same_scope_assets():
     assert rejected.status_code == 302
     loan.refresh_from_db()
     assert loan.secured_asset_id == household_house.pk
+
+
+def _lend(account):
+    Account.objects.filter(pk=account.pk).update(share_mode=Account.ShareMode.LENT)
+    account.refresh_from_db()
+    return account
+
+
+@pytest.mark.django_db
+def test_lent_owner_leaving_clears_household_loan_paired_with_lent_asset():
+    owner = make_person("owner")
+    member = make_person("member")
+    household = make_household(owner, member)
+    house = _lend(make_account(
+        owner, name="Lent House", account_type=Account.Type.REAL_ESTATE,
+        scope=Account.Scope.HOUSEHOLD, household=household,
+    ))
+    loan = make_account(
+        member, name="Household Mortgage", account_type=Account.Type.LOAN,
+        scope=Account.Scope.HOUSEHOLD, household=household,
+    )
+    loan.secured_asset = house
+    loan.save()
+
+    leave_household(owner)
+    loan.refresh_from_db()
+    house.refresh_from_db()
+
+    assert house.scope == Account.Scope.PRIVATE
+    assert loan.secured_asset_id is None
+    member_loan = next(row for row in collect_export_tables(member)["accounts"] if row["name"] == "Household Mortgage")
+    assert member_loan["secured_asset_id"] is None
+    loan.save()
+
+
+@pytest.mark.django_db
+def test_lent_owner_leaving_clears_lent_loan_paired_with_household_asset():
+    owner = make_person("owner")
+    member = make_person("member")
+    household = make_household(owner, member)
+    house = make_account(
+        member, name="Household House", account_type=Account.Type.REAL_ESTATE,
+        scope=Account.Scope.HOUSEHOLD, household=household,
+    )
+    loan = _lend(make_account(
+        owner, name="Lent Mortgage", account_type=Account.Type.LOAN,
+        scope=Account.Scope.HOUSEHOLD, household=household,
+    ))
+    loan.secured_asset = house
+    loan.save()
+
+    leave_household(owner)
+    loan.refresh_from_db()
+
+    assert loan.scope == Account.Scope.PRIVATE
+    assert loan.secured_asset_id is None
+    loan.save()
+
+
+@pytest.mark.django_db
+def test_last_member_leaving_keeps_valid_loan_pairing():
+    owner = make_person("owner")
+    household = make_household(owner)
+    house = make_account(
+        owner, name="Household House", account_type=Account.Type.REAL_ESTATE,
+        scope=Account.Scope.HOUSEHOLD, household=household,
+    )
+    loan = make_account(
+        owner, name="Household Mortgage", account_type=Account.Type.LOAN,
+        scope=Account.Scope.HOUSEHOLD, household=household,
+    )
+    loan.secured_asset = house
+    loan.save()
+
+    leave_household(owner)
+    loan.refresh_from_db()
+
+    assert loan.scope == Account.Scope.PRIVATE
+    assert loan.secured_asset_id == house.pk
