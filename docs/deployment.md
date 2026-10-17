@@ -52,10 +52,13 @@ Prerequisites are Docker Desktop configured to use WSL2 and start when Windows s
 
    ```powershell
    $Config = 'D:\financial-planner-config\production.env'
+   $env:GIT_SHA = git rev-parse HEAD
    docker compose --env-file $Config config --quiet
    docker compose --env-file $Config up -d --build
    docker compose --env-file $Config ps
    ```
+
+   `GIT_SHA` records the checked-out commit in each image, and `/health/` reports it (see [production signals](production-signals.md)). Without it the images say `unknown` and the post-deploy check fails.
 
    The app entrypoint runs `python manage.py migrate --noinput` before Gunicorn starts. Both the application and PostgreSQL should report `healthy`; the backup, SimpleFIN sync, and AI job runners should report `Up`.
 
@@ -114,7 +117,7 @@ Google sign-in stays off until both `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET
 
 ## Health and operations
 
-`GET /health/` is intentionally unauthenticated so Docker and an operator can monitor readiness. It performs `SELECT 1` and returns only `ok` with HTTP 200 or `unavailable` with HTTP 503; it never returns financial records, database names, credentials, or error details.
+`GET /health/` is intentionally unauthenticated so Docker and an operator can monitor readiness. It performs `SELECT 1` and returns only `ok` with HTTP 200 or `unavailable` with HTTP 503; it never returns financial records, database names, credentials, or error details. Its `X-App-Revision` header is the short SHA the image was built from. [Production signals](production-signals.md) lists the read-only commands for every other signal: restarts, tracebacks, backup state and reconciliation.
 
 ```powershell
 Invoke-WebRequest https://BASEMENT-PC.MAGICDNS-NAME/health/
@@ -266,16 +269,38 @@ plus stale margin) and `AI_JOB_MAX_QUEUED_PER_MEMBER` (12) need no env change.
 Turns already claimed before the upgrade have no deadline and keep the existing
 heartbeat recovery.
 
-Review release notes and take a verified manual backup first. Then fetch the approved revision and run:
+Review release notes and take a verified manual backup first. Then, in the checkout on `main`, note the running revision, pull the approved one, and run:
 
 ```powershell
+$PreviousSha = git rev-parse HEAD
+git pull --ff-only origin main
+$env:GIT_SHA = git rev-parse HEAD
+$DeployStart = Get-Date
 docker compose --env-file $Config build --pull app backup background
 docker compose --env-file $Config up -d
 docker compose --env-file $Config ps
-Invoke-WebRequest https://BASEMENT-PC.MAGICDNS-NAME/health/
+.\ops\post-deploy-check.ps1 -ConfigPath $Config -Since $DeployStart
 ```
 
-Starting the new app applies all pending Django migrations before Gunicorn accepts traffic. `background` waits for the app to report healthy, so it never runs against a database that has not been migrated yet. After `up -d`, compare each running container's image with the newly built one (`docker inspect -f '{{.Image}}' <container>` against `docker image inspect -f '{{.Id}}' <image>`). If one still runs the old image, as `backup` has done, recreate it with `docker compose --env-file $Config up -d --force-recreate <service>`. If a migration or health check fails, inspect bounded logs with `docker compose --env-file $Config logs --tail 100 app db`; do not repeatedly restart or run migrations by hand. Restore the pre-upgrade dump into a fresh volume using the procedure above when database rollback is required.
+Starting the new app applies all pending Django migrations before Gunicorn accepts traffic. `background` waits for the app to report healthy, so it never runs against a database that has not been migrated yet.
+
+`ops/post-deploy-check.ps1` only reads. It takes about two minutes and exits non-zero with one line per problem: `/health/` not 200; the deployed SHA (the `X-App-Revision` header and every built image's label) not `origin/main`; a container not running or restarting; any traceback logged since `$DeployStart`; or the backup status file missing or in error. [Production signals](production-signals.md) explains each signal. A line saying a service "runs an image built from" an older SHA means it was not recreated, as `backup` has done: recreate it with `docker compose --env-file $Config up -d --force-recreate <service>` and run the check again with a fresh `$DeployStart`.
+
+If any other check fails, roll back:
+
+1. Inspect bounded logs with `docker compose --env-file $Config logs --tail 100 app background db`; do not repeatedly restart or run migrations by hand.
+2. Keep a copy of the check, because the previous revision may predate it:
+
+   ```powershell
+   $Tools = Join-Path $env:TEMP 'financial-planner-post-deploy'
+   New-Item -ItemType Directory -Force "$Tools\ops", "$Tools\scripts" | Out-Null
+   Copy-Item ops\post-deploy-check.ps1 "$Tools\ops\"
+   Copy-Item scripts\prod_signals.py "$Tools\scripts\"
+   ```
+
+3. Return to the previous code: `git checkout --detach $PreviousSha`, set `$env:GIT_SHA = $PreviousSha`, and run the same `build` and `up -d` commands, recording a fresh `$DeployStart` first.
+4. If the failed release applied migrations the previous code cannot run against, restore the pre-upgrade dump into a fresh volume using the procedure above.
+5. Run the copied check: `& "$Tools\ops\post-deploy-check.ps1" -ConfigPath $Config -Since $DeployStart -ExpectedSha $PreviousSha`. A revision older than #537 builds images without the SHA label or header, so add `-SkipRevision` for it and confirm the revision with `git rev-parse HEAD` instead. Then open an issue with the failing lines from the first run, which carry no financial data.
 
 The `Docker smoke test` workflow (`.github/workflows/docker-smoke.yml`) runs on pull requests that change packaging files (`Dockerfile`, `compose.yml`, `requirements.txt`, `scripts/`, `ops/`, `static/`, `templates/`) and on pushes to `main`, including Dependabot's. It builds the image, starts `db` and `app` from `compose.yml` with dummy values and a throwaway database, waits for the app to report healthy, and requests the sign-in page, which redirects to first-run setup on an empty database. It does not start the backup or background containers and never touches the tower.
 
@@ -304,6 +329,7 @@ From 18, the `postgres` image keeps its data in a versioned subdirectory, so `co
 3. Fetch the approved revision and build its images. Building does not change the running containers:
 
    ```powershell
+   $env:GIT_SHA = git rev-parse HEAD
    docker compose --env-file $Config build --pull app backup background
    ```
 
@@ -440,7 +466,7 @@ Dependabot opens version and security update PRs. There is no auto-merge; the ow
 On the PR branch:
 
 1. Run the SQLite suite (`python -m pytest tests -q`) and `bash scripts/test_postgres.sh` (the `PostgreSQL 18` workflow runs the same on the PR).
-2. After merge, rebuild and deploy with the upgrade steps above (backup first, then `docker compose --env-file $Config build --pull` and `up -d`, then the health check).
+2. After merge, rebuild and deploy with the upgrade steps above (backup first, then `docker compose --env-file $Config build --pull` with `GIT_SHA` set and `up -d`, then the post-deploy check).
 
 ## Synthetic restore exercise record
 
