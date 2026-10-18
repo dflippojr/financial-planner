@@ -13,7 +13,8 @@ on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened]
+    # labeled and unlabeled re-judge gate-change-approved, so a removed approval cannot leave gate green.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   workflow_dispatch:
 
 permissions:
