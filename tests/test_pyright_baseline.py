@@ -92,8 +92,16 @@ def test_pyright_crash_fails_instead_of_passing(monkeypatch):
         baseline.run_pyright()
 
 
+def test_run_that_analyzed_no_files_fails(monkeypatch):
+    payload = json.dumps({"summary": {"filesAnalyzed": 0}, "generalDiagnostics": []})
+    ran = subprocess.CompletedProcess([], 0, stdout=payload, stderr="")
+    monkeypatch.setattr(baseline.subprocess, "run", lambda *_args, **_kwargs: ran)
+    with pytest.raises(SystemExit, match="analyzed no files"):
+        baseline.run_pyright()
+
+
 def test_reads_pyright_json(monkeypatch):
-    payload = json.dumps({"generalDiagnostics": [error("finance/views.py", 3)]})
+    payload = json.dumps({"summary": {"filesAnalyzed": 1}, "generalDiagnostics": [error("finance/views.py", 3)]})
     ran = subprocess.CompletedProcess([], 1, stdout=payload, stderr="")
     monkeypatch.setattr(baseline.subprocess, "run", lambda *_args, **_kwargs: ran)
     assert baseline.run_pyright() == [error("finance/views.py", 3)]

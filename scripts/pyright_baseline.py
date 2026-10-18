@@ -25,14 +25,21 @@ BASELINE = ROOT / "pyright-baseline.json"
 
 def run_pyright():
     result = subprocess.run(
-        [sys.executable, "-m", "pyright", "--outputjson", "--pythonpath", sys.executable],
+        # The project file explicitly: pyright otherwise prefers a pyrightconfig.json
+        # found in any parent directory.
+        [sys.executable, "-m", "pyright", "--outputjson", "--pythonpath", sys.executable,
+         "--project", str(ROOT / "pyproject.toml")],
         cwd=ROOT, capture_output=True, text=True,
     )
     # 0: no errors, 1: errors were reported. Anything else means pyright itself failed.
     if result.returncode not in (0, 1):
         sys.stderr.write(result.stdout + result.stderr)
         raise SystemExit(f"pyright failed with exit code {result.returncode}")
-    return json.loads(result.stdout)["generalDiagnostics"]
+    report = json.loads(result.stdout)
+    # A run that checked nothing reports no errors, which would pass every check.
+    if not report["summary"]["filesAnalyzed"]:
+        raise SystemExit("pyright analyzed no files; check the include paths in pyproject.toml")
+    return report["generalDiagnostics"]
 
 
 def key(diagnostic):
