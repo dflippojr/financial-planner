@@ -28,21 +28,21 @@
 {% if reconciliation.mismatches %}
 <div class="overflow-x-auto mb-6">
   <table class="table">
-    <caption class="text-left text-sm">Mismatched periods, newest first</caption>
+    <caption class="text-left text-sm">Mismatched periods, newest first. Difference is the bank's balance change minus the stored transactions.</caption>
     <thead>
       <tr>
         <th scope="col">Account</th>
         <th scope="col">After</th>
         <th scope="col">Through</th>
-        <th scope="col" class="text-right">Bank change minus transactions</th>
+        <th scope="col" class="text-right">Difference</th>
       </tr>
     </thead>
     <tbody>
       {% for row in reconciliation.mismatches %}
       <tr>
         <td>{{ row.account }}</td>
-        <td>{{ row.start|date:"Y-m-d" }}</td>
-        <td>{{ row.end|date:"Y-m-d" }}</td>
+        <td class="whitespace-nowrap">{{ row.start|date:"Y-m-d" }}</td>
+        <td class="whitespace-nowrap">{{ row.end|date:"Y-m-d" }}</td>
         <td class="{{ row.difference_display|amount_tone_class }}">{{ row.difference_display|amount_text }}</td>
       </tr>
       {% endfor %}
