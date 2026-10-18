@@ -2376,6 +2376,9 @@ class AlertSettings(models.Model):
     ntfy_topic = models.CharField(max_length=64, blank=True, default="", validators=[NTFY_TOPIC_VALIDATOR])
     # Monday of the last weekly digest pushed over ntfy, so each week is sent once.
     ntfy_digest_week = models.DateField(null=True, blank=True)
+    # "account:start:end" of each balance reconciliation mismatch already alerted
+    # (operators only), so dedupe outlives the alert row's retention purge.
+    reconciliation_alerted_windows = models.JSONField(default=list, blank=True)
     person = models.OneToOneField(Person, on_delete=models.PROTECT, related_name="alert_settings")
     sync_enabled = models.BooleanField(default=True)
     recurring_price_enabled = models.BooleanField(default=True)

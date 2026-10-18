@@ -244,54 +244,66 @@ def visible_results(principal, results):
     return {account_id: windows for account_id, windows in results.items() if account_id in visible}
 
 
-def _mismatch_key(results):
-    keys = sorted(
-        f"{window.account_id}:{window.start.isoformat()}:{window.end.isoformat()}"
-        for windows in results.values()
-        for window in windows
-        if window.state == MISMATCH
-    )
-    return hashlib.sha256("\n".join(keys).encode("utf-8")).hexdigest()[:32]
+def mismatched_windows(results):
+    return [window for windows in results.values() for window in windows if window.state == MISMATCH]
 
 
-def reconciliation_alert_title(results):
-    mismatched = [account_id for account_id, windows in results.items() if any(w.state == MISMATCH for w in windows)]
-    count = state_counts(results)[MISMATCH]
+def _window_key(window):
+    return f"{window.account_id}:{window.start.isoformat()}:{window.end.isoformat()}"
+
+
+def reconciliation_alert_title(mismatches):
+    accounts = {window.account_id for window in mismatches}
     return (
-        f"Bank balances disagree with transactions in {count} period(s) "
-        f"on {len(mismatched)} account(s)"
+        f"Bank balances disagree with transactions in {len(mismatches)} period(s) "
+        f"on {len(accounts)} account(s)"
     )
 
 
 def evaluate_reconciliation_alerts(*, now=None):
     """Daily pass step: alert each operator about mismatches on accounts they can see.
 
-    The title holds counts only. An operator with no visible mismatch has their
-    reconciliation alerts cleared. The run time is recorded for Settings → Data.
+    An operator is alerted again only when a window they were not yet alerted
+    about mismatches. The windows already alerted are kept on their alert
+    settings, not inferred from the alert row, which retention purges. The title
+    holds counts only. An operator with no visible mismatch has their
+    reconciliation alerts and that state cleared. The run time is recorded for
+    Settings → Data.
     """
-    from .alert_services import raise_alert
     from .backup_health import operator_people
 
     now = now or timezone.now()
     results = reconcile(eligible_accounts())
     created = []
     for operator in operator_people():
-        mine = visible_results(operator, results)
-        if not state_counts(mine)[MISMATCH]:
-            Alert.objects.filter(recipient=operator, kind=Alert.Kind.RECONCILIATION).delete()
-            continue
-        mismatched = [account_id for account_id, windows in mine.items() if any(w.state == MISMATCH for w in windows)]
-        created.extend(
-            raise_alert(
-                [operator],
-                Alert.Kind.RECONCILIATION,
-                reconciliation_alert_title(mine),
-                reverse("settings-data"),
-                f"reconcile:{_mismatch_key(mine)}",
-                source_accounts=Account.objects.filter(pk__in=mismatched),
-            )
-        )
+        with transaction.atomic():
+            created.extend(_alert_operator(operator, mismatched_windows(visible_results(operator, results))))
     record_run(now)
+    return created
+
+
+def _alert_operator(operator, mismatches):
+    from .alert_services import raise_alert, settings_for
+
+    prefs = settings_for(operator)
+    current = sorted({_window_key(window) for window in mismatches})
+    if not current:
+        Alert.objects.filter(recipient=operator, kind=Alert.Kind.RECONCILIATION).delete()
+    created = []
+    if set(current) - set(prefs.reconciliation_alerted_windows):
+        digest = hashlib.sha256("\n".join(current).encode("utf-8")).hexdigest()[:32]
+        created = raise_alert(
+            [operator],
+            Alert.Kind.RECONCILIATION,
+            reconciliation_alert_title(mismatches),
+            reverse("settings-data"),
+            f"reconcile:{digest}",
+            source_accounts=Account.objects.filter(pk__in={window.account_id for window in mismatches}),
+        )
+    # Forget resolved windows, so one that mismatches again later alerts again.
+    if prefs.reconciliation_alerted_windows != current:
+        prefs.reconciliation_alerted_windows = current
+        prefs.save(update_fields=("reconciliation_alerted_windows",))
     return created
 
 
@@ -311,7 +323,7 @@ def settings_reconciliation_context(person):
     names = {account.pk: account.name for account in accounts}
     results = reconcile(accounts)
     mismatches = sorted(
-        (window for windows in results.values() for window in windows if window.state == MISMATCH),
+        mismatched_windows(results),
         key=lambda window: (window.end, window.account_id),
         reverse=True,
     )

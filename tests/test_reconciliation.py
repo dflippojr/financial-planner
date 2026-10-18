@@ -12,7 +12,7 @@ from django.test import override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from finance.alert_services import alerts_for, run_daily_alert_pass
+from finance.alert_services import alerts_for, purge_old_read_alerts, run_daily_alert_pass, settings_for
 from finance.models import Account, AccountLink, Alert, BalanceSnapshot, ImportBatch, ReconciliationRun, Transaction
 from finance.reconciliation import (
     INSUFFICIENT,
@@ -425,11 +425,36 @@ def test_alert_repeats_only_for_a_new_mismatch_and_clears_when_fixed():
     assert len(evaluate_reconciliation_alerts()) == 1
     assert Alert.objects.filter(recipient=operator, kind=Alert.Kind.RECONCILIATION).count() == 2
 
-    for broken in (account, later):
-        BalanceSnapshot.objects.filter(account=broken, snapshot_date=SEPT_30).update(amount_minor=4_000)
+    # One fixed: no alert for a shrinking set.
+    BalanceSnapshot.objects.filter(account=account, snapshot_date=SEPT_30).update(amount_minor=4_000)
+    assert evaluate_reconciliation_alerts() == []
+    BalanceSnapshot.objects.filter(account=later, snapshot_date=SEPT_30).update(amount_minor=4_000)
     assert evaluate_reconciliation_alerts() == []
     assert not Alert.objects.filter(kind=Alert.Kind.RECONCILIATION).exists()
+    assert settings_for(operator).reconciliation_alerted_windows == []
     assert ReconciliationRun.objects.count() == 1
+
+    # A window that mismatches again after it was resolved alerts again.
+    BalanceSnapshot.objects.filter(account=account, snapshot_date=SEPT_30).update(amount_minor=5_000)
+    assert len(evaluate_reconciliation_alerts()) == 1
+
+
+@override_settings(OPERATOR_USERNAMES="operator")
+def test_unresolved_mismatch_does_not_alert_again_after_retention_purges_its_alert():
+    operator = make_person("operator")
+    account = _mismatched(operator)
+    assert len(evaluate_reconciliation_alerts()) == 1
+    Alert.objects.filter(kind=Alert.Kind.RECONCILIATION).update(
+        created_at=timezone.now() - timedelta(days=200), read_at=timezone.now() - timedelta(days=199)
+    )
+
+    purge_old_read_alerts()
+
+    assert not Alert.objects.exists()
+    assert evaluate_reconciliation_alerts() == []
+    assert settings_for(operator).reconciliation_alerted_windows == [
+        f"{account.pk}:{SEPT_1.isoformat()}:{SEPT_30.isoformat()}"
+    ]
 
 
 @override_settings(OPERATOR_USERNAMES="operator")
