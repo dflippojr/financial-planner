@@ -30,6 +30,7 @@ from django.utils import timezone
 
 from .cash_flow import format_minor
 from .models import Account, AccountLink, Alert, BalanceSnapshot, ImportBatch, ReconciliationRun, Transaction
+from .net_worth import signed_balance_minor
 
 OK = "ok"
 OK_LATE = "ok-late"
@@ -77,17 +78,12 @@ def eligible_accounts(accounts=None):
     )
 
 
-def _balance_in_transaction_sign(account_type, source, amount_minor):
-    # A manual credit-card balance is typed as the positive amount owed. SimpleFIN
-    # card balances and every other account's balances already use transaction sign
-    # (docs/data-model.md, "Net worth from balances").
-    if account_type == Account.Type.CREDIT_CARD and source == BalanceSnapshot.Source.MANUAL:
-        return -amount_minor
-    return amount_minor
-
-
 def _balances(accounts):
-    """{account id: [(date, balance in transaction sign)]}, oldest first, SimpleFIN over manual."""
+    """{account id: [(date, balance in transaction sign)]}, oldest first, SimpleFIN over manual.
+
+    Transaction sign is net worth's signed balance: money owed is negative,
+    whether a card balance came from SimpleFIN or was typed as the amount owed.
+    """
     types = {account.pk: account.account_type for account in accounts}
     chosen = {}
     rows = BalanceSnapshot.objects.filter(account_id__in=types).values_list(
@@ -97,7 +93,7 @@ def _balances(accounts):
         key = (account_id, day)
         if key in chosen and chosen[key][0] == BalanceSnapshot.Source.SIMPLEFIN:
             continue
-        chosen[key] = (source, _balance_in_transaction_sign(types[account_id], source, amount))
+        chosen[key] = (source, signed_balance_minor(types[account_id], source, amount))
     balances = {account_id: [] for account_id in types}
     for (account_id, day), (_source, amount) in sorted(chosen.items()):
         balances[account_id].append((day, amount))
