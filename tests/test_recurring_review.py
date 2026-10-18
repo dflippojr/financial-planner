@@ -6,6 +6,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.test import Client
 from django.urls import reverse
+from django.db.models import Q
 from django.utils import timezone
 
 from finance.category_services import ensure_household_categories
@@ -1461,3 +1462,67 @@ def test_an_archived_private_charge_still_keeps_a_series_out_of_household_dismis
     ).get(pk=mixed.pk)
 
     assert acknowledged_amounts(member, [shown]) == {}
+
+
+@pytest.mark.django_db
+def test_a_dismissal_on_a_merged_away_copy_moves_to_the_surviving_series():
+    from finance.recurring_services import _raise_review_alerts, merge_recurring_series
+
+    owner, member, _outsider, series = _shared_bill()
+    shared = series.members.first().transaction.account
+    risen = make_transaction(
+        owner, shared, transaction_date=date(2026, 10, 12), amount_minor=-9000, description="Synthetic Internet"
+    )
+    add_member(series, risen)
+    today = date(2026, 10, 13)
+    dismiss_price_change(member, series.pk)
+    own = make_series(member, name="Synthetic Internet", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-6000)
+    for item in series.members.all():
+        add_member(own, item.transaction)
+    target = make_series(
+        owner, name="Synthetic Internet", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-6000,
+        fingerprint="d" * 64,
+    )
+    add_member(target, make_transaction(
+        owner, shared, transaction_date=date(2026, 6, 12), amount_minor=-6000, description="Synthetic Internet"
+    ))
+
+    merge_recurring_series(owner, series.pk, target.pk)
+    _raise_review_alerts(member, today=today)
+
+    assert acknowledged_amounts(member, [own]) == {own.pk: {-9000}}
+    assert build_recurring_review(member, [own], today=today)[1] == []
+    assert not Alert.objects.filter(kind=Alert.Kind.RECURRING_PRICE, recipient=member).exists()
+
+
+@pytest.mark.django_db
+def test_merging_keeps_each_members_latest_dismissal_when_both_series_had_one():
+    from finance.models import RecurringPriceAcknowledgement
+    from finance.recurring_services import merge_recurring_series
+
+    owner, member, _outsider, series = _shared_bill()
+    older, newer = series.members.order_by("transaction__transaction_date")[:2]
+    target = make_series(
+        owner, name="Synthetic Internet", cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-6000,
+        fingerprint="d" * 64,
+    )
+    add_member(target, older.transaction)
+    stale = timezone.now() - timedelta(days=30)
+    for person, series_row, txn in (
+        (member, target, older.transaction),
+        (member, series, newer.transaction),
+        (owner, series, older.transaction),
+        (owner, target, newer.transaction),
+    ):
+        RecurringPriceAcknowledgement.objects.create(
+            person=person, series=series_row, amount_minor=txn.amount_minor, transaction=txn
+        )
+    RecurringPriceAcknowledgement.objects.filter(
+        Q(person=member, series=target) | Q(person=owner, series=series)
+    ).update(updated_at=stale)
+
+    merge_recurring_series(owner, series.pk, target.pk)
+
+    assert sorted(RecurringPriceAcknowledgement.objects.values_list("person_id", "series_id", "transaction_id")) == sorted(
+        [(member.pk, target.pk, newer.transaction_id), (owner.pk, target.pk, newer.transaction_id)]
+    )

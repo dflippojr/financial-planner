@@ -84,9 +84,9 @@ def test_row_errors_do_not_echo_values_and_non_usd_is_rejected():
     assert "not-money" not in " ".join(row.errors)
 
 
-def test_formula_like_description_is_neutralized_for_display():
+def test_formula_like_description_is_kept_raw():
     document = read_csv(b"When,Memo,Amount\n09/27/2026,=2+2,1.00\n")
-    assert preview_csv(document, mapping()).rows[0].description == "'=2+2"
+    assert preview_csv(document, mapping()).rows[0].description == "=2+2"
 
 
 def test_utf8_bom_semicolon_quoted_newline_and_negative_zero():

@@ -22,6 +22,7 @@ from .bill_grouping import (
     choose_copy,
     eligible_bill_charges,
     group_bills,
+    household_only_ids,
     stored_charge_ids,
 )
 from .lifecycle_services import lock_actor_household
@@ -1179,6 +1180,27 @@ def list_addable_transactions(principal, series, query=""):
     return rows
 
 
+def _carry_price_acknowledgements(source, target):
+    """Move every member's price dismissal on `source` to `target`, which survives a merge.
+
+    Deleting the source would otherwise cascade away other members' dismissals
+    and the unchanged charge would flag and alert again. A member with a
+    dismissal on both keeps the later one.
+    """
+    kept = {
+        row.person_id: row
+        for row in RecurringPriceAcknowledgement.objects.select_for_update().filter(series=target)
+    }
+    for row in RecurringPriceAcknowledgement.objects.select_for_update().filter(series=source):
+        existing = kept.get(row.person_id)
+        if existing is not None:
+            if existing.updated_at >= row.updated_at:
+                continue
+            existing.delete()
+        # update() leaves updated_at alone, so the carried dismissal keeps its time.
+        RecurringPriceAcknowledgement.objects.filter(pk=row.pk).update(series=target)
+
+
 @transaction.atomic
 def merge_recurring_series(principal, source_id, target_id):
     person = _person_for(principal)
@@ -1210,6 +1232,7 @@ def merge_recurring_series(principal, source_id, target_id):
             target.confirmed_at = timezone.now()
             fields.append("confirmed_at")
         target.save(update_fields=fields)
+    _carry_price_acknowledgements(source, target)
     source_pk = source.pk
     source.delete()
     _record_series(person, AuditEvent.Action.RECURRING_MERGED, target, source_id=source_pk, surviving_id=target.pk)
@@ -1542,11 +1565,9 @@ def household_bills(principal, own_series):
         .prefetch_related("members__transaction__account")
         .order_by("display_name", "pk")
     )
-    copies = [
-        series
-        for series in [*own_series, *shared]
-        if series.status == RecurringSeries.Status.CONFIRMED and _household_only(series)
-    ]
+    candidates = [series for series in [*own_series, *shared] if series.status == RecurringSeries.Status.CONFIRMED]
+    household = household_only_ids(RecurringSeries.objects.filter(pk__in=[series.pk for series in candidates]))
+    copies = [series for series in candidates if series.pk in household]
     return resolve_household_bills(copies, eligible_bill_charges(principal))
 
 

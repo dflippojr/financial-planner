@@ -1,6 +1,8 @@
 from datetime import date
+from importlib import import_module
 
 import pytest
+from django.apps import apps as django_apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
 
@@ -140,3 +142,119 @@ def test_household_member_sees_shared_overlap_and_cannot_touch_private():
 
     assert overlap.new_count == 0
     assert Transaction.objects.filter(account=shared, status="active").count() == 1
+
+
+FORMULA_CSV = (
+    b"When,Memo,Amount,Currency\n"
+    b"09/27/2026,=SYNTHETIC FORMULA,-1.00,USD\n"
+    b"09/28/2026,-SYNTHETIC ACH,-2.00,USD\n"
+)
+
+
+@pytest.mark.django_db
+def test_formula_like_descriptions_are_stored_raw():
+    user, person = make_person("owner")
+    account = Account.objects.create(name="Synthetic Checking", account_type="checking", owner=person)
+
+    commit(user, account, FORMULA_CSV)
+
+    assert sorted(Transaction.objects.values_list("description", flat=True)) == [
+        "-SYNTHETIC ACH", "=SYNTHETIC FORMULA",
+    ]
+
+
+def strip_import_formula_escape():
+    module = import_module("finance.migrations.0072_raw_import_descriptions")
+    module.strip_import_formula_escape(django_apps, None)
+    module.strip_rule_formula_escape(django_apps, None)
+
+
+@pytest.mark.django_db
+def test_upgrade_keeps_rules_made_from_escaped_descriptions_matching():
+    from django.utils import timezone
+
+    from finance.models import CategoryRule
+    from finance.rule_services import _rule_fields_match
+
+    user, person = make_person("owner")
+    household = Household.objects.create(name="Synthetic Household")
+    Membership.objects.create(household=household, person=person)
+    category = household.categories.create(name="Synthetic Fees")
+    account = Account.objects.create(name="Synthetic Checking", account_type="checking", owner=person)
+    commit(user, account, FORMULA_CSV)
+    confirmed = timezone.now()
+
+    def rule(text):
+        return CategoryRule.objects.create(
+            owner_person=person, description_contains=text, category=category, confirmed_at=confirmed
+        )
+
+    escaped, quoted, lone = rule("'-SYNTHETIC ACH"), rule("'SYNTHETIC QUOTED"), rule("'")
+    for row in Transaction.objects.all():
+        row.description = "'" + row.description
+        row.save(update_fields=["description"])
+    strip_import_formula_escape()
+
+    for item in (escaped, quoted, lone):
+        item.refresh_from_db()
+    assert [item.description_contains for item in (escaped, quoted, lone)] == ["-SYNTHETIC ACH", "'SYNTHETIC QUOTED", "'"]
+    assert escaped.confirmed_at == confirmed
+    txn = Transaction.objects.get(description="-SYNTHETIC ACH")
+    assert _rule_fields_match(escaped, txn.description, txn.account_id, txn.amount_minor)
+
+
+@pytest.mark.django_db
+def test_file_imported_before_raw_descriptions_reimports_as_duplicates():
+    user, person = make_person("owner")
+    account = Account.objects.create(name="Synthetic Checking", account_type="checking", owner=person)
+    commit(user, account, FORMULA_CSV)
+    # Recreate what imports stored before #503: an apostrophe on formula-like
+    # text, hashed in that form. The upgrade then strips the apostrophe.
+    for row in Transaction.objects.all():
+        row.description = "'" + row.description
+        row.save(update_fields=["description"])
+    strip_import_formula_escape()
+
+    reimport = commit(user, account, FORMULA_CSV)
+
+    assert (reimport.new_count, reimport.duplicate_count) == (0, 2)
+    assert sorted(Transaction.objects.values_list("description", flat=True)) == [
+        "-SYNTHETIC ACH", "=SYNTHETIC FORMULA",
+    ]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("source", "description", "original_fields", "expected"),
+    [
+        # The import added the apostrophe to a single cell or a joined payee and memo.
+        ("huntington", "'=SYNTHETIC CELL", {"Memo": "=SYNTHETIC CELL"}, "=SYNTHETIC CELL"),
+        ("ofx", "'-SYNTHETIC PAYEE - Memo", {"Name": " -SYNTHETIC PAYEE", "Memo": "Memo "}, "-SYNTHETIC PAYEE - Memo"),
+        # SimpleFIN rows were always stored raw.
+        ("simplefin", "'=SYNTHETIC FEED", {"description": "=SYNTHETIC FEED"}, "'=SYNTHETIC FEED"),
+        # The source text itself began with the apostrophe.
+        ("huntington", "'-SYNTHETIC QUOTED", {"Memo": "'-SYNTHETIC QUOTED"}, "'-SYNTHETIC QUOTED"),
+        ("ofx", "'-SYNTHETIC PAYEE - Memo", {"Name": "'-SYNTHETIC PAYEE", "Memo": "Memo"}, "'-SYNTHETIC PAYEE - Memo"),
+        # A member edited the description.
+        ("huntington", "'@SYNTHETIC EDITED", {"Memo": "SYNTHETIC MERCHANT"}, "'@SYNTHETIC EDITED"),
+        # Another mapped column could have produced the stored text as is.
+        ("apple_card", "'-SYNTHETIC SHOP", {"Merchant": "'-SYNTHETIC SHOP", "Description": "-SYNTHETIC SHOP"}, "'-SYNTHETIC SHOP"),
+    ],
+)
+def test_upgrade_strips_only_apostrophes_the_import_added(source, description, original_fields, expected):
+    _user, person = make_person("owner")
+    account = Account.objects.create(name="Synthetic Checking", account_type="checking", owner=person)
+    batch = ImportBatch.objects.create(
+        account=account, imported_by=person, source=source, source_file_sha256="c" * 64,
+        date_range_start=date(2026, 9, 1), date_range_end=date(2026, 9, 30),
+    )
+    row = Transaction.objects.create(
+        account=account, import_batch=batch, transaction_date=date(2026, 9, 29), amount_minor=-300,
+        currency="USD", description=description, fingerprint="d" * 64, source_row_number=1,
+        original_fields=original_fields,
+    )
+
+    strip_import_formula_escape()
+
+    row.refresh_from_db()
+    assert row.description == expected

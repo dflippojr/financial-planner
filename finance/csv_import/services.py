@@ -8,7 +8,7 @@ from django.utils import timezone
 
 from finance.audit_services import record
 from finance.input_limits import MAX_DESCRIPTION_CHARS
-from finance.csv_import.fingerprint import transaction_fingerprint
+from finance.csv_import.fingerprint import file_import_fingerprint_description, transaction_fingerprint
 from finance.csv_import.parser import Preview, preview_csv
 from finance.csv_import.profiles import CSV_FILE_SOURCES, OFX_MAPPING
 from finance.lifecycle_services import (
@@ -40,7 +40,9 @@ def _active_account(principal, account_id):
 
 
 def _fingerprint_for(account, row):
-    return transaction_fingerprint(account.pk, row.transaction_date, row.amount_minor, row.description)
+    return transaction_fingerprint(
+        account.pk, row.transaction_date, row.amount_minor, file_import_fingerprint_description(row.description)
+    )
 
 
 def _active_fingerprint_counts(account):

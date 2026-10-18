@@ -1,5 +1,5 @@
 import re
-from datetime import timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
@@ -9,6 +9,7 @@ from django.test import Client
 from django.urls import reverse
 from django.utils import timezone
 
+from finance.debt_planner_services import build_debt_plan
 from finance.lifecycle_services import update_debt_terms
 from finance.models import Account, BalanceSnapshot, Household, Membership, Person
 from tests.page_payload import json_script_payload
@@ -217,3 +218,57 @@ def test_custom_ranks_are_kept_after_comparing():
     html = page.content.decode()
     for card, rank in ((first, "2"), (second, "1")):
         assert re.search(rf'<input[^>]*name="rank_{card.pk}"[^>]*value="{rank}"', html)
+
+
+def _plan_debt(owner, name, snapshot_date, *, payment_day=None):
+    account = make_account(
+        owner, name=name, account_type=Account.Type.LOAN if payment_day else Account.Type.CREDIT_CARD,
+    )
+    add_snapshot(account, snapshot_date, 100_000)
+    update_debt_terms(
+        owner.user, account.pk, apr_percent=Decimal("0.000"), minimum_payment_minor=50_000, payment_day=payment_day,
+    )
+    return account
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("snapshot_date", "payment_day", "payoff"),
+    [
+        # A payment day that passed before the snapshot is already in the balance.
+        (date(2026, 10, 10), 5, "2026-12"),
+        (date(2026, 10, 10), 10, "2026-12"),
+        # The snapshot predates this month's payment day.
+        (date(2026, 10, 10), 20, "2026-11"),
+        # Without a payment day, a snapshot from this month is taken to include it.
+        (date(2026, 10, 1), None, "2026-12"),
+        (date(2026, 9, 28), None, "2026-11"),
+    ],
+)
+def test_current_month_is_simulated_only_when_the_snapshot_predates_its_payment(snapshot_date, payment_day, payoff):
+    owner = make_person("owner")
+    debt = _plan_debt(owner, "Synthetic Debt", snapshot_date, payment_day=payment_day)
+
+    plan = build_debt_plan(
+        owner.user, include_ids=[debt.pk], extra_minor=0, strategy="minimums", custom_order=None,
+        today=date(2026, 10, 15),
+    )
+
+    assert plan.comparison.chosen.debts[0].payoff_label == payoff
+    assert plan.start == (date(2026, 10, 1) if payoff == "2026-11" else date(2026, 11, 1))
+
+
+@pytest.mark.django_db
+def test_a_debt_already_paid_this_month_waits_while_others_pay_this_month():
+    owner = make_person("owner")
+    paid = _plan_debt(owner, "Synthetic Paid Loan", date(2026, 10, 10), payment_day=5)
+    due = _plan_debt(owner, "Synthetic Due Card", date(2026, 9, 28))
+
+    plan = build_debt_plan(
+        owner.user, include_ids=[paid.pk, due.pk], extra_minor=0, strategy="minimums", custom_order=None,
+        today=date(2026, 10, 15),
+    )
+
+    assert plan.start == date(2026, 10, 1)
+    payoffs = {row.account_id: row.payoff_label for row in plan.comparison.chosen.debts}
+    assert payoffs == {paid.pk: "2026-12", due.pk: "2026-11"}
