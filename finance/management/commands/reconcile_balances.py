@@ -23,7 +23,10 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         since = None
         if options["since"]:
-            since = parse_date(options["since"])
+            try:
+                since = parse_date(options["since"])
+            except ValueError:  # Well formed but impossible, such as 2026-02-30.
+                since = None
             if since is None:
                 raise CommandError("--since must be a date in YYYY-MM-DD form.")
         accounts = eligible_accounts()

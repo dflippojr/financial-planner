@@ -22,7 +22,7 @@ account; amounts and account names never go to logs or the ``--json`` output.
 import hashlib
 from bisect import bisect_right
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import date, timedelta
 
 from django.db import transaction
 from django.db.models import Count, Exists, OuterRef, Q, Subquery, Sum
@@ -54,8 +54,8 @@ MAX_LISTED_MISMATCHES = 50
 @dataclass(frozen=True)
 class Window:
     account_id: int
-    start: object  # d1, exclusive
-    end: object  # d2, inclusive
+    start: date  # d1, exclusive
+    end: date  # d2, inclusive
     state: str
     # Balance change minus the transactions, in transaction sign. Set only for a mismatch.
     difference_minor: int | None = None

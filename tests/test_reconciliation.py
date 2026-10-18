@@ -402,9 +402,11 @@ def test_command_rejects_an_ineligible_account_and_a_bad_date():
 
     _text, wrong_account = run_command("--account", str(house.pk))
     _text, wrong_date = run_command("--since", "Sept 1")
+    _text, impossible_date = run_command("--since", "2026-02-30")
 
     assert "not reconciled" in str(wrong_account)
     assert "YYYY-MM-DD" in str(wrong_date)
+    assert "YYYY-MM-DD" in str(impossible_date)
 
 
 def test_command_does_not_write():
