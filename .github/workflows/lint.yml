@@ -1,0 +1,42 @@
+name: Lint
+
+# Static analysis on the production interpreter: ruff with the rules in
+# pyproject.toml, then pyright in basic mode, failing only on errors that are
+# not in pyright-baseline.json (#530). No formatter check: the code is not
+# ruff-formatted. scripts/lint.sh is the local equivalent. Uses no secrets.
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-${{ github.ref == 'refs/heads/main' && github.run_id || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      # pyright resolves imports from the installed packages, so it needs the
+      # runtime requirements as well as the checkers.
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-test.txt
+
+      - name: ruff
+        run: python -m ruff check . --output-format github
+
+      - name: pyright (new errors only)
+        run: python scripts/pyright_baseline.py

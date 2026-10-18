@@ -2,10 +2,11 @@
 # Run locally what the CI gate runs on every pull request, before pushing.
 #
 #   1. The statement-file guard (guards.yml).
-#   2. The migration completeness check (postgres.yml).
-#   3. The suite on a throwaway PostgreSQL 18 with coverage, failing below the
+#   2. ruff and pyright (lint.yml, scripts/lint.sh).
+#   3. The migration completeness check (postgres.yml).
+#   4. The suite on a throwaway PostgreSQL 18 with coverage, failing below the
 #      .coveragerc floor (postgres.yml plus the coverage run in sonar.yml).
-#   4. The browser layout tests in Chromium (playwright.yml).
+#   5. The browser layout tests in Chromium (playwright.yml).
 #
 # Not covered here: pip-audit, the SonarCloud scan, the Playwright UI journeys
 # (npm run test:ui), the disposable UI smoke and the Docker smoke build. CI
@@ -21,6 +22,8 @@ cd "$(dirname "$0")/.."
 
 echo "== Statement-file guard"
 "$python_bin" scripts/check_statement_files.py
+
+PYTHON="$python_bin" bash scripts/lint.sh
 
 echo "== Migrations are complete"
 DJANGO_SETTINGS_MODULE=financial_planner.test_settings \
