@@ -5,7 +5,7 @@ from datetime import timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from types import SimpleNamespace
 
-from django.db.models import Exists, OuterRef, Q
+from django.db.models import Q
 from django.urls import reverse
 from django.utils import timezone
 
@@ -17,7 +17,6 @@ from .models import (
     ImportBatch,
     RecurringPriceAcknowledgement,
     RecurringSeries,
-    RecurringSeriesMember,
     _person_for,
 )
 from .recurring_services import CADENCE_DAYS, next_charge_date
@@ -214,18 +213,6 @@ def _flagged_run_ids(series):
     return tuple(txn.pk for txn in _latest_price_run(rows)) if rows else ()
 
 
-def _household_only_ids(queryset):
-    """The pks in `queryset` whose stored charges all sit in household accounts.
-
-    Read from every stored membership, not a caller's prefetch, which may
-    hold only some of a series' charges.
-    """
-    outside = RecurringSeriesMember.objects.filter(series_id=OuterRef("pk")).exclude(
-        transaction__account__scope=Account.Scope.HOUSEHOLD
-    )
-    return set(queryset.exclude(Exists(outside)).values_list("pk", flat=True))
-
-
 def acknowledged_amounts(principal, series_list):
     """The amounts this member dismissed as price-change flags, as {series id: frozenset of amount_minor}.
 
@@ -234,7 +221,7 @@ def acknowledged_amounts(principal, series_list):
     (`household_bills`), and `_dismissals` decides which dismissals count, so
     the page, the digest and the alerts agree (#523).
     """
-    from .bill_grouping import group_bills, stored_charge_ids
+    from .bill_grouping import group_bills, household_only_ids, stored_charge_ids
 
     person = _person_for(principal)
     if person is None or not series_list:
@@ -245,7 +232,7 @@ def acknowledged_amounts(principal, series_list):
     # outside `series_list` (a digest week's quiet series) may still link a
     # dismissed copy to a shown one.
     own = RecurringSeries.objects.visible_to(person).filter(status=RecurringSeries.Status.CONFIRMED)
-    household = _household_only_ids(own)
+    household = household_only_ids(own)
     household |= set(RecurringSeries.objects.shared_with(principal, linkers=True).values_list("pk", flat=True))
     copies_of = {}
     for bill in group_bills(stored_charge_ids(household)):
