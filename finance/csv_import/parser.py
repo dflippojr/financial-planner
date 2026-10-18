@@ -236,14 +236,6 @@ def _parse_money(value, number_format):
     return minor_int
 
 
-def _safe_description(value):
-    # Keep previews and any future spreadsheet export from interpreting text
-    # as a formula. The original source remains untouched in the staged file.
-    if value.lstrip().startswith(("=", "+", "-", "@")):
-        return "'" + value
-    return value
-
-
 def _cell(row, indexes, column):
     index = indexes[column]
     return row.cells[index] if index < len(row.cells) else ""
@@ -333,14 +325,13 @@ def _join_payee_memo(payee, memo):
 
 
 def _description(row, indexes, mapping):
+    # Stored raw (#503); CSV exports escape formula-like text when written.
     if mapping.description_mode == "payee_memo":
-        raw = _join_payee_memo(
+        return _join_payee_memo(
             _cell(row, indexes, mapping.payee_column),
             _cell(row, indexes, mapping.memo_column),
         )
-    else:
-        raw = _cell(row, indexes, mapping.description_column)
-    return _safe_description(raw)
+    return _cell(row, indexes, mapping.description_column)
 
 
 def _source_transaction_id(row, indexes, mapping):

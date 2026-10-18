@@ -41,6 +41,9 @@ class DebtInput:
     balance_minor: int
     apr_percent: Decimal
     minimum_payment_minor: int
+    # The balance already reflects the first month's payment (#511), so that
+    # month neither charges interest nor takes a payment for this debt.
+    first_month_paid: bool = False
 
 
 def monthly_interest_minor(balance_minor, apr_percent):
@@ -399,9 +402,10 @@ def simulate_payoff(debts, extra_minor=0, strategy=STRATEGY_MINIMUMS, custom_ord
         if all(balance <= 0 for balance in balances.values()):
             break
         before = dict(balances)
+        settled = {debt.account_id for debt in debts if debt.first_month_paid} if offset == 0 else set()
         interest_by_id = {}
         for debt in debts:
-            if balances[debt.account_id] <= 0 or debt.account_id in frozen:
+            if balances[debt.account_id] <= 0 or debt.account_id in frozen or debt.account_id in settled:
                 interest_by_id[debt.account_id] = 0
                 continue
             interest = monthly_interest_minor(balances[debt.account_id], debt.apr_percent)
@@ -409,7 +413,9 @@ def simulate_payoff(debts, extra_minor=0, strategy=STRATEGY_MINIMUMS, custom_ord
             balances[debt.account_id] += interest
             total_interest += interest
         ordered = [
-            debt for debt in _strategy_order(debts, balances, strategy, custom_order) if debt.account_id not in frozen
+            debt
+            for debt in _strategy_order(debts, balances, strategy, custom_order)
+            if debt.account_id not in frozen and debt.account_id not in settled
         ]
         # Snowball, avalanche, and custom keep the monthly total constant: a
         # paid-off debt's minimum rolls into the next debt in order.

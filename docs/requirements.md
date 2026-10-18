@@ -52,7 +52,7 @@ Build a private, self hosted personal finance app that can eventually replace Ro
 
 ## Quality and data handling
 
-- CSV spreadsheet safety (#305): every export prefixes text starting with `=`, `+`, `-`, `@`, TAB or CR with an apostrophe. Signed numeric money columns retain their numeric values; member-export JSON preserves the original text. The ZIP README explains this escaping.
+- CSV spreadsheet safety (#305): every export prefixes text starting with `=`, `+`, `-`, `@`, TAB or CR with an apostrophe. Signed numeric money columns retain their numeric values; member-export JSON preserves the original text. The ZIP README explains this escaping. Imports store descriptions raw and escape only at CSV export (#503); a reimport still matches rows stored with the old import-time apostrophe, which the upgrade strips from file-imported rows. The upgrade also strips that apostrophe from category rules whose text begins with it before formula-like text, since "Create rule" copied rule text from the stored description; a rule matches by containment, so the stripped rule still matches every row it did before.
 - Show the source and import time for each transaction so errors can be traced and corrected.
 - Keep monetary values exact (for example, integer minor units or decimal types), with an explicit currency.
 - Support an undo path for an erroneous import.
@@ -216,6 +216,7 @@ These rules replace the whole-chain median band above. Prices drift with inflati
 - The default range and presets match the cash flow view: the last 12 full months plus the current month to date. Presets are this month, last month, last 3 months, last 12 months, and year to date.
 - A category whose refunds exceed its spending in the range shows a negative total, marked as a net refund, so totals reconcile exactly with the cash flow view.
 - Rows are sorted by spending, largest first, with a percent-of-total column. Uncategorized is always listed.
+- Shares in the table, tiles and donut are of the sum of positive category spending (#510), so none falls below 0% or above 100%. A net-refund row shows a dash for its share.
 - Category tiles and a donut chart of the same shares come first (issue #57); the totals table remains the accessible detail, with drilldown from tiles, slices, and rows. Per-category trends over time are issue #100.
 - Income is not part of this view.
 
@@ -579,6 +580,7 @@ Owner decisions:
   - A short paragraph of three to five plain sentences sits above the facts, labeled AI-generated with the backend named.
   - Every number must match a computed fact. A paragraph stating any other number is discarded, and the facts show alone.
   - It is on by default for members who have connected an AI backend and are in acceptance of the privacy policy. Each member can turn it off.
+- **Snapshot until Regenerate (2026-10-15, #509).** A stored review is not rebuilt when transactions change, so no model call runs on its own. The page shows "Generated <date>", and when a visible active row dated in the reviewed month was added after that, a "New transactions since this review" hint with a Regenerate button.
 
 ## Deleting a member's data (2026-10-03, #104)
 
@@ -605,6 +607,7 @@ Owner decisions:
   - backup health and an off-site copy (#155), passkeys (#156), a sign-in log and sessions (#157), and Dependabot (#158);
   - local-model chat (#159), AI for other members (#162 and #147), chat proposals (#160), and unusual spending insights (#161).
 - **Year-end report:** a print-friendly page plus CSV downloads. No generated PDF.
+- **Debt payoff current month (#511):** the planner starts from each debt's latest balance snapshot on or before today and simulates this month's payment and interest only when the snapshot predates this month's payment. With a payment day (loans), a snapshot on or after this month's payment date already includes it. Without one, a snapshot taken this month is assumed to include it. When every included debt has paid this month, the plan starts next month.
 - **Off-site backups:** each verified dump is encrypted with `age` and copied with rclone to a remote the operator configures. The age private key stays off the tower. Each dump and receipts archive has a SHA-256 manifest signed on the tower with a key that is never uploaded. Restore refuses a file that does not match a verified manifest unless the operator explicitly overrides, and always extracts receipts only as plain files and directories inside the receipts directory (#304).
 - **Second factor:** passkeys (WebAuthn), optional per member, after password sign-in. Recovery codes stay the fallback. Google sign-in is not challenged.
 - **AI for other members:**

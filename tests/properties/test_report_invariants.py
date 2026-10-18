@@ -272,7 +272,6 @@ def test_category_shares_are_percentages_of_spending_that_match_the_donut(case):
     _check_category_shares(case)
 
 
-@pytest.mark.xfail(strict=True, reason="#510")
 @given(category_cases(with_refunds=True))
 # Hypothesis's shrunk counterexample: a 0.03 August refund of a 0.02 July
 # purchase leaves its category at -0.03 and net spending at -0.02, so the
@@ -388,7 +387,6 @@ def _first_review(case):
 # Owner decision (b) on #509: the stored review stays as it was, but the page says
 # "Generated <date>" and "New transactions since this review" when newer rows
 # exist for the month. Either the totals agree or the page says why they don't.
-@pytest.mark.xfail(strict=True, reason="#509")
 @given(late_import_cases())
 # Hypothesis's shrunk counterexample: a June review stored with 0.02 of
 # spending, then a late 0.01 June charge: the page still says 0.02, cash flow 0.03.
