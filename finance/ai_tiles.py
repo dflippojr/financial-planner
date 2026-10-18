@@ -1,7 +1,6 @@
 """Server-owned tile identities and the small, typed context a bead may send."""
 
 from dataclasses import dataclass
-from datetime import date
 import re
 
 from .category_services import current_household
