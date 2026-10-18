@@ -537,7 +537,7 @@ def cash_flow_report(
         accounts=account_filter,
         tag=tag,
     )
-    for window, (income_minor, spending_minor) in zip(windows, window_totals):
+    for window, (income_minor, spending_minor) in zip(windows, window_totals, strict=True):
         totals = SimpleNamespace(
             income_minor=income_minor,
             spending_minor=spending_minor,

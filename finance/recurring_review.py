@@ -243,7 +243,7 @@ def acknowledged_amounts(principal, series_list):
     )
     return {
         series.pk: frozenset(dismissed[person.pk])
-        for series, dismissed in zip(series_list, found)
+        for series, dismissed in zip(series_list, found, strict=True)
         if dismissed.get(person.pk)
     }
 
@@ -487,7 +487,7 @@ def raise_recurring_review_alerts(principal, series_list, *, today):
     dismissals = _dismissals(
         [(tuple(series.pk for series in source.copies), _flagged_run_ids(source.series)) for source, _ in changes]
     )
-    for (source, change), dismissed in zip(changes, dismissals):
+    for (source, change), dismissed in zip(changes, dismissals, strict=True):
         audience, account = _alert_audience(source.series)
         # Each recipient's own threshold and dismissal decide whether they hear of it.
         recipients = [

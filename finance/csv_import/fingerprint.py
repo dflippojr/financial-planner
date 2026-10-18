@@ -34,4 +34,4 @@ def manual_entry_fingerprint(
     another manual entry) during overlap classification, in either direction.
     """
     base = transaction_fingerprint(account_id, transaction_date, amount_minor, description)
-    return hashlib.sha256(f"manual\n{batch_id}\n{base}".encode("utf-8")).hexdigest()
+    return hashlib.sha256(f"manual\n{batch_id}\n{base}".encode()).hexdigest()

@@ -147,7 +147,9 @@ def _tree(text):
             raise CsvInputError(MALFORMED)
         return _sgml_tree(text[start:])
     try:
-        root = ET.fromstring(text)
+        # DOCTYPE and ENTITY declarations are refused above, and expat on 3.13
+        # resists entity expansion, so defusedxml would add nothing here.
+        root = ET.fromstring(text)  # noqa: S314
     except ET.ParseError:
         raise CsvInputError(MALFORMED) from None
     namespace, _separator, name = root.tag.rpartition("}")

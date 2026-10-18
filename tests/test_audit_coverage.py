@@ -23,7 +23,13 @@ from finance.ai_services import (
 )
 from finance.audit_models import ACTION_SPECS
 from finance.audit_services import events_for
-from finance.auth_services import accept_invitation, create_invitation, recover_account, seed_first_household
+from finance.auth_services import (
+    InvalidOneTimeCode,
+    accept_invitation,
+    create_invitation,
+    recover_account,
+    seed_first_household,
+)
 from finance.bills_calendar import save_calendar_settings
 from finance.google_auth import disconnect_google_account, remove_member_password
 from finance.lifecycle_services import (
@@ -175,7 +181,7 @@ def test_recovery_password_reset_and_failed_recovery():
     from finance.auth_services import create_recovery_codes
 
     code = create_recovery_codes(user, 1)[0]
-    with pytest.raises(Exception):
+    with pytest.raises(InvalidOneTimeCode):
         recover_account("recoverer", "wrong-code", "New-Password-1!")
     assert not rows(person, "password_changed")
     recover_account("recoverer", code, "New-Password-1!")

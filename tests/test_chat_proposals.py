@@ -3,6 +3,7 @@
 from datetime import date, timedelta
 
 import pytest
+from django.core.exceptions import PermissionDenied
 from django.test import Client
 from django.urls import reverse
 from django.utils import timezone
@@ -285,7 +286,7 @@ def test_proposals_expire_with_their_conversation(harness):
     conversation = _propose(state, person, "propose_set_category", {"transaction_ids": [txn.pk], "category": "Dining"})
     proposal = AiProposal.objects.get()
     AiConversation.objects.filter(pk=conversation.pk).update(expires_at=timezone.now() - timedelta(days=1))
-    with pytest.raises(Exception):
+    with pytest.raises(PermissionDenied):
         apply_proposal(person, proposal.pk)
     txn.refresh_from_db()
     assert txn.category_id is None

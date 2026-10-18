@@ -1,5 +1,5 @@
 import json
-from datetime import date, timedelta, timezone as dt_timezone
+from datetime import date, timedelta, UTC
 from io import StringIO
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -480,5 +480,5 @@ def test_audit_page_shows_short_run_ids_and_keeps_the_full_value():
     html = client.get(reverse("settings-audit")).content.decode()
     run = str(event.correlation_id)
     assert f'title="{run}">{run[:8]}<span class="sr-only">{run[8:]}</span>' in html
-    stamp = event.occurred_at.astimezone(dt_timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    stamp = event.occurred_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S")
     assert f">{stamp}</time>" in html

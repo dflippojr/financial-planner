@@ -80,7 +80,7 @@ def test_text_escaping_json_and_exact_bigint_money(prefix):
         row.tags.add(tag)
         transactions.append(row)
     _, rows, payload = download(fresh_client(owner))
-    for row, original in zip(rows, reversed(transactions)):
+    for row, original in zip(rows, reversed(transactions), strict=True):
         escape = "'" if prefix else ""
         assert row["description"] == escape + original.description
         assert row["note"] == escape + original.note

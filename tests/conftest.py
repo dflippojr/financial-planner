@@ -91,7 +91,7 @@ class _BrowserTraces:
         try:
             context.tracing.stop(path=path)
             self.saved.append(path)
-        except Exception:  # noqa: BLE001 - a lost trace must never fail the test
+        except Exception:  # noqa: BLE001, S110 - a lost trace must never fail the test
             pass
 
     @pytest.hookimpl(tryfirst=True)

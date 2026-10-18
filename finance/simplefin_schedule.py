@@ -1,6 +1,6 @@
 import re
 from datetime import datetime, time, timedelta
-from datetime import timezone as dt_timezone
+from datetime import UTC
 from typing import NamedTuple
 
 from django.utils import timezone
@@ -67,7 +67,7 @@ def parse_five_field_cron(expression: str) -> CronSchedule:
     if len(fields) != 5:
         raise ValueError("SIMPLEFIN_SYNC_CRON must be one five-field cron schedule")
     minutes, hours, days, months, weekdays = (
-        _parse_field(text, *spec) for text, spec in zip(fields, _FIELDS)
+        _parse_field(text, *spec) for text, spec in zip(fields, _FIELDS, strict=True)
     )
     return CronSchedule(
         minutes=minutes,
@@ -124,7 +124,7 @@ def next_scheduled_sync(expression: str, now=None):
 def seconds_until(due, now) -> float:
     # Compare in UTC: subtracting two times in the same zone measures wall-clock
     # time, which is an hour off across a daylight-saving change.
-    return max(0.0, (due.astimezone(dt_timezone.utc) - now.astimezone(dt_timezone.utc)).total_seconds())
+    return max(0.0, (due.astimezone(UTC) - now.astimezone(UTC)).total_seconds())
 
 
 def schedule_after_sync(expression: str, last_due, now):

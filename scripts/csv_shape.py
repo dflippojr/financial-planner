@@ -473,8 +473,8 @@ def debit_credit_pairs(columns, names, from_file=None):
     pairs = []
     for position, first in enumerate(money):
         for second in money[position + 1:]:
-            either = sum(bool(a) or bool(b) for a, b in zip(columns[first], columns[second]))
-            exactly_one = sum(bool(a) != bool(b) for a, b in zip(columns[first], columns[second]))
+            either = sum(bool(a) or bool(b) for a, b in zip(columns[first], columns[second], strict=False))
+            exactly_one = sum(bool(a) != bool(b) for a, b in zip(columns[first], columns[second], strict=False))
             if either and exactly_one >= 0.9 * either and any(columns[first]) and any(columns[second]):
                 pairs.append(
                     f"{_shown_name(names[first], origin[first])} and {_shown_name(names[second], origin[second])}"
@@ -556,9 +556,9 @@ def describe_csv(raw, label="file", show=(), show_headers=False):
     out = _file_lines(label, text, encoding, delimiter, rows, lengths, header_index, data)
     out += [warning] if warning else []
     out += ["", "columns:"]
-    allowed = {cell.strip() for cell, name in zip(header, names) if name == cell.strip()}
+    allowed = {cell.strip() for cell, name in zip(header, names, strict=False) if name == cell.strip()}
     matched = set()
-    for index, (name, values) in enumerate(zip(names, columns)):
+    for index, (name, values) in enumerate(zip(names, columns, strict=False)):
         # A requested column matches its printed name, "col N", or the header text you typed.
         keys = {name.lower(), f"col {index + 1}"} | ({header[index].strip().lower()} if index < len(header) else set())
         hit = keys & wanted

@@ -174,7 +174,7 @@ class MemberSocialAccountAdapter(DefaultSocialAccountAdapter):
             )
         except (InvalidOneTimeCode, GoogleOnboardingConflict):
             record_login_failure(key)
-            raise ImmediateHttpResponse(self._failed_response(request, "join"))
+            raise ImmediateHttpResponse(self._failed_response(request, "join")) from None
         record_onboarding_acceptance(
             _user.person,
             pending.get("accept_privacy_policy", False),
@@ -198,7 +198,7 @@ class MemberSocialAccountAdapter(DefaultSocialAccountAdapter):
 
     def _complete_setup(self, request, sociallogin, pending, key):
         if first_member_exists():
-            raise ImmediateHttpResponse(self._failed_response(request, "setup"))
+            raise ImmediateHttpResponse(self._failed_response(request, "setup")) from None
         uid = google_uid(sociallogin.account.extra_data) or sociallogin.account.uid
         try:
             user, recovery_codes = complete_google_onboarding(
@@ -212,7 +212,7 @@ class MemberSocialAccountAdapter(DefaultSocialAccountAdapter):
                 lambda created: sociallogin.connect(request, created),
             )
         except (ValueError, GoogleOnboardingConflict):
-            raise ImmediateHttpResponse(self._failed_response(request, "setup"))
+            raise ImmediateHttpResponse(self._failed_response(request, "setup")) from None
         record_onboarding_acceptance(
             user.person,
             pending.get("accept_privacy_policy", False),
