@@ -39,6 +39,9 @@ permissions:
   contents: read
   pull-requests: write
   checks: write
+  # review-v3 reads the issues the PR closes, the spec it reviews against. A called workflow can't hold more than
+  # its caller grants.
+  issues: read
 
 jobs:
   review:
