@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('finance', '0071_recurring_price_acknowledgements'),
+        ('finance', '0072_raw_import_descriptions'),
     ]
 
     operations = [
