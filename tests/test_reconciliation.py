@@ -440,6 +440,23 @@ def test_alert_repeats_only_for_a_new_mismatch_and_clears_when_fixed():
 
 
 @override_settings(OPERATOR_USERNAMES="operator")
+def test_mismatch_that_returns_after_resolving_alerts_again_each_time():
+    operator = make_person("operator")
+    returning = _mismatched(operator, name="Synthetic Returning")
+    _mismatched(operator, name="Synthetic Staying")
+    assert len(evaluate_reconciliation_alerts()) == 1
+    Alert.objects.update(read_at=timezone.now())
+
+    for _ in range(2):
+        BalanceSnapshot.objects.filter(account=returning, snapshot_date=SEPT_30).update(amount_minor=4_000)
+        assert evaluate_reconciliation_alerts() == []
+        BalanceSnapshot.objects.filter(account=returning, snapshot_date=SEPT_30).update(amount_minor=5_000)
+        assert len(evaluate_reconciliation_alerts()) == 1
+
+    assert Alert.objects.filter(recipient=operator, read_at__isnull=True).count() == 2
+
+
+@override_settings(OPERATOR_USERNAMES="operator")
 def test_unresolved_mismatch_does_not_alert_again_after_retention_purges_its_alert():
     operator = make_person("operator")
     account = _mismatched(operator)

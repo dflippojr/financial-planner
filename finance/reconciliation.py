@@ -277,12 +277,12 @@ def evaluate_reconciliation_alerts(*, now=None):
     created = []
     for operator in operator_people():
         with transaction.atomic():
-            created.extend(_alert_operator(operator, mismatched_windows(visible_results(operator, results))))
+            created.extend(_alert_operator(operator, mismatched_windows(visible_results(operator, results)), now))
     record_run(now)
     return created
 
 
-def _alert_operator(operator, mismatches):
+def _alert_operator(operator, mismatches, now):
     from .alert_services import raise_alert, settings_for
 
     prefs = settings_for(operator)
@@ -291,13 +291,16 @@ def _alert_operator(operator, mismatches):
         Alert.objects.filter(recipient=operator, kind=Alert.Kind.RECONCILIATION).delete()
     created = []
     if set(current) - set(prefs.reconciliation_alerted_windows):
-        digest = hashlib.sha256("\n".join(current).encode("utf-8")).hexdigest()[:32]
+        # The saved windows decide whether to alert, so each alert gets its own
+        # key: a set seen before (a mismatch that resolved and came back) must
+        # not collide with an older, already read alert row.
+        digest = hashlib.sha256("\n".join(current).encode("utf-8")).hexdigest()[:16]
         created = raise_alert(
             [operator],
             Alert.Kind.RECONCILIATION,
             reconciliation_alert_title(mismatches),
             reverse("settings-data"),
-            f"reconcile:{digest}",
+            f"reconcile:{now.strftime('%Y%m%dT%H%M%S%f')}:{digest}",
             source_accounts=Account.objects.filter(pk__in={window.account_id for window in mismatches}),
         )
     # Forget resolved windows, so one that mismatches again later alerts again.
