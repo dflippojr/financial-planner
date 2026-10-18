@@ -43,7 +43,7 @@ def test_trusted_gate_guard_runs_from_the_default_branch_and_runs_no_pull_reques
     target = _code("gate-guard-target.yml")
     header = _header(target)
     assert re.search(r"^on:\n  pull_request_target:\n    types: \[opened, synchronize, reopened, edited, labeled, "
-                     r"unlabeled\]\n\n", header, re.M), header
+                     r"unlabeled, closed\]\n\n", header, re.M), header
     assert "pull_request:" not in target and "workflow_dispatch" not in target and "push:" not in target
     assert _permissions(header) == {"  contents: read", "  issues: read", "  pull-requests: read",
                                     "  checks: write"}
