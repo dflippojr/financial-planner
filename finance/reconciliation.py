@@ -13,8 +13,10 @@ Window states:
 - ``insufficient``: some day in the window has no active import batch, so the
   transactions cannot be complete.
 
-Reads only. Callers decide who may see which account; amounts and account
-names never go to logs or the ``--json`` output.
+``reconcile()`` and the ``reconcile_balances`` command only read. The daily
+pass step ``evaluate_reconciliation_alerts()`` writes operator alerts, their
+alerted-window state and the run time. Callers decide who may see which
+account; amounts and account names never go to logs or the ``--json`` output.
 """
 
 import hashlib
@@ -29,7 +31,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from .cash_flow import format_minor
-from .models import Account, AccountLink, Alert, BalanceSnapshot, ImportBatch, ReconciliationRun, Transaction
+from .models import Account, AccountLink, Alert, AlertSettings, BalanceSnapshot, ImportBatch, ReconciliationRun, Transaction
 from .net_worth import signed_balance_minor
 
 OK = "ok"
@@ -133,12 +135,28 @@ def _daily_totals(account_ids):
 
 
 def _coverage(account_ids):
-    """{account id: merged [(start, end)]} of active, non-manual import batches."""
+    """{account id: merged [(start, end)]} of import batches that vouch for every row in their range.
+
+    A manual entry covers one row, not a whole statement period. A SimpleFIN
+    sync batch (one with a remote account id) proves its days were synced only
+    while that remote account is linked in transactions mode or the batch holds
+    a row: a balances-only link also writes empty batches through today, and a
+    batch does not record its link's mode (as in import_due.py).
+    """
     ranges = {account_id: [] for account_id in account_ids}
+    transactions_link = AccountLink.objects.filter(
+        account_id=OuterRef("account_id"),
+        simplefin_account_id=OuterRef("simplefin_account_id"),
+        mode=AccountLink.Mode.TRANSACTIONS,
+    )
     rows = (
         ImportBatch.objects.filter(account_id__in=account_ids, status=ImportBatch.Status.ACTIVE)
-        # A manual entry covers one row, not a whole statement period.
         .exclude(source=ImportBatch.Source.MANUAL)
+        .alias(
+            _linked=Exists(transactions_link),
+            _has_rows=Exists(Transaction.objects.filter(import_batch_id=OuterRef("pk"))),
+        )
+        .exclude(source=ImportBatch.Source.SIMPLEFIN, simplefin_account_id__gt="", _linked=False, _has_rows=False)
         .order_by("account_id", "date_range_start")
         .values_list("account_id", "date_range_start", "date_range_end")
     )
@@ -285,7 +303,8 @@ def evaluate_reconciliation_alerts(*, now=None):
 def _alert_operator(operator, mismatches, now):
     from .alert_services import raise_alert, settings_for
 
-    prefs = settings_for(operator)
+    # Locked, so overlapping passes cannot both alert about the same windows.
+    prefs = AlertSettings.objects.select_for_update().get(pk=settings_for(operator).pk)
     current = sorted({_window_key(window) for window in mismatches})
     if not current:
         Alert.objects.filter(recipient=operator, kind=Alert.Kind.RECONCILIATION).delete()

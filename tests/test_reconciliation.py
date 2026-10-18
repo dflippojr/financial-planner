@@ -8,6 +8,8 @@ from io import StringIO
 import pytest
 from django.core.management import call_command
 from django.core.management.base import CommandError
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.test import override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -216,6 +218,40 @@ def test_credit_card_sign_error_is_a_mismatch():
     snapshot(card, SEPT_30, 37_500, source=BalanceSnapshot.Source.MANUAL)
 
     assert states(card) == [MISMATCH]
+
+
+def _empty_sync_batch(account, remote):
+    batch = add_batch(account, SEPT_1, SEPT_30, source=ImportBatch.Source.SIMPLEFIN)
+    ImportBatch.objects.filter(pk=batch.pk).update(simplefin_account_id=remote)
+    return batch
+
+
+def test_empty_balances_only_sync_batches_are_not_coverage():
+    owner = make_person("owner")
+    account = make_account(owner)
+    link = link_account(owner, account, cutover=SEPT_1)
+    AccountLink.objects.filter(pk=link.pk).update(mode=AccountLink.Mode.BALANCES_ONLY)
+    _empty_sync_batch(account, link.simplefin_account_id)
+    snapshot(account, SEPT_1, 10_000)
+    snapshot(account, SEPT_30, 9_000)
+
+    assert states(account) == [INSUFFICIENT]
+
+    AccountLink.objects.filter(pk=link.pk).update(mode=AccountLink.Mode.TRANSACTIONS)
+    assert states(account) == [MISMATCH]
+
+
+def test_empty_sync_batch_from_a_removed_link_is_not_coverage_but_one_with_rows_is():
+    owner = make_person("owner")
+    account = make_account(owner)
+    batch = _empty_sync_batch(account, "CON-1:sf-gone")
+    snapshot(account, SEPT_1, 10_000)
+    snapshot(account, SEPT_30, 9_000)
+
+    assert states(account) == [INSUFFICIENT]
+
+    add_rows(batch, (date(2026, 9, 9), -1_000))
+    assert states(account) == [OK]
 
 
 def test_simplefin_snapshot_wins_over_manual_on_the_same_day():
@@ -472,6 +508,19 @@ def test_unresolved_mismatch_does_not_alert_again_after_retention_purges_its_ale
     assert settings_for(operator).reconciliation_alerted_windows == [
         f"{account.pk}:{SEPT_1.isoformat()}:{SEPT_30.isoformat()}"
     ]
+
+
+@pytest.mark.skipif(not connection.features.has_select_for_update, reason="needs row locks (PostgreSQL)")
+@override_settings(OPERATOR_USERNAMES="operator")
+def test_alerted_window_state_is_read_under_a_row_lock():
+    _mismatched(make_person("operator"))
+
+    with CaptureQueriesContext(connection) as queries:
+        evaluate_reconciliation_alerts()
+
+    assert any(
+        "FOR UPDATE" in query["sql"] and "finance_alertsettings" in query["sql"] for query in queries.captured_queries
+    )
 
 
 @override_settings(OPERATOR_USERNAMES="operator")
