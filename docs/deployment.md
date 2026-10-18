@@ -536,6 +536,20 @@ rebuild intentionally reads the selected member's complete visible active ledger
 run it outside busy periods. Changing the household matching window also performs
 a full revalidation, since every historical candidate may change.
 
+## Reconciling balances
+
+Each scheduled SimpleFIN sync is followed by a balance reconciliation in the `background` container. It compares the balance change the bank reported between consecutive balance entries with the transactions stored for those days, and raises an in-app alert to operators (`OPERATOR_USERNAMES`) when a period does not match. Operators see the counts, the last scheduled run and the mismatched periods with their amounts on Settings → Data, for accounts they can see. A manual balance entry, such as a statement's ending balance, is reconciled the same way.
+
+After a CSV import, or to check by hand, run it in the app environment:
+
+```powershell
+docker compose --env-file $Config exec -T app python manage.py reconcile_balances
+docker compose --env-file $Config exec -T app python manage.py reconcile_balances --account 12 --since 2026-09-01
+docker compose --env-file $Config exec -T app python manage.py reconcile_balances --json
+```
+
+It is read-only: it raises no alert and does not update the last-run time. It prints account IDs, dates and window states, never amounts or account names, and exits 1 when any period is a `mismatch`. States are `ok`, `ok-late` (the next period undoes the difference exactly, which is pending or posting-date skew), `mismatch`, and `insufficient` (some day in the period has no active import, so the transactions cannot be complete). `--json` prints one object: `version`, `accounts`, `counts` per state, and `windows`, each with `account`, `start` (exclusive), `end` and `state`. Fix a mismatch in the app, for example by undoing a duplicated import; the command never changes data.
+
 ## Checking stored dates
 
 Transaction and balance dates must fall between 1900-01-01 and a year past

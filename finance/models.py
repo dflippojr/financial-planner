@@ -2317,6 +2317,7 @@ class Alert(models.Model):
         BACKUP = "backup", "Backup"
         EXPECTED_BALANCE = "expected_balance", "Expected balance"
         IMPORT_DUE = "import_due", "Import due"
+        RECONCILIATION = "reconciliation", "Balance reconciliation"
 
     recipient = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="alerts")
     kind = models.CharField(max_length=20, choices=Kind)
@@ -2354,6 +2355,7 @@ class Alert(models.Model):
                         "backup",
                         "expected_balance",
                         "import_due",
+                        "reconciliation",
                     )
                 ),
                 name="alert_kind_valid",
@@ -2418,6 +2420,15 @@ class AlertSettings(models.Model):
 
     def __str__(self):
         return f"Alert settings for {self.person_id}"
+
+
+class ReconciliationRun(models.Model):
+    """When the scheduled balance reconciliation last ran; never its results."""
+
+    ran_at = models.DateTimeField()
+
+    def __str__(self):
+        return f"Reconciliation run {self.pk}"
 
 
 class BillsCalendarSettings(models.Model):

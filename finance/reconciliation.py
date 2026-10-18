@@ -1,0 +1,335 @@
+"""Reconcile stored transactions against bank-reported balances (issue #535).
+
+The institution's balance is a number this code did not produce. For each pair
+of consecutive balance snapshots (d1, d2] on a cash account, the change in
+balance must equal the sum of active transactions dated in that window.
+
+Window states:
+
+- ``ok``: the change matches the transactions exactly.
+- ``ok-late``: it differs, but the difference is undone within the next
+  LATE_WINDOWS window(s), which is pending or posting-date skew.
+- ``mismatch``: it differs and the difference is not undone in time.
+- ``insufficient``: some day in the window has no active import batch, so the
+  transactions cannot be complete.
+
+Reads only. Callers decide who may see which account; amounts and account
+names never go to logs or the ``--json`` output.
+"""
+
+import hashlib
+from bisect import bisect_right
+from dataclasses import dataclass
+from datetime import timedelta
+
+from django.db import transaction
+from django.db.models import Count, Exists, OuterRef, Q, Subquery, Sum
+from django.db.models.functions import Coalesce
+from django.urls import reverse
+from django.utils import timezone
+
+from .cash_flow import format_minor
+from .models import Account, AccountLink, Alert, BalanceSnapshot, ImportBatch, ReconciliationRun, Transaction
+
+OK = "ok"
+OK_LATE = "ok-late"
+MISMATCH = "mismatch"
+INSUFFICIENT = "insufficient"
+STATES = (OK, OK_LATE, MISMATCH, INSUFFICIENT)
+
+# How many following windows may undo a difference before it counts as a mismatch.
+LATE_WINDOWS = 1
+
+# Only cash accounts: their balance is the sum of their transactions. Investment
+# values move with the market, and physical assets and loans hold no transactions.
+RECONCILED_TYPES = (Account.Type.CHECKING, Account.Type.SAVINGS, Account.Type.CREDIT_CARD)
+
+# Settings → Data lists at most this many mismatched windows, newest first.
+MAX_LISTED_MISMATCHES = 50
+
+
+@dataclass(frozen=True)
+class Window:
+    account_id: int
+    start: object  # d1, exclusive
+    end: object  # d2, inclusive
+    state: str
+    # Balance change minus the transactions, in transaction sign. Set only for a mismatch.
+    difference_minor: int | None = None
+
+
+def eligible_accounts(accounts=None):
+    """Active cash accounts with a transactions-mode link or at least two snapshots."""
+    accounts = Account.objects.all() if accounts is None else accounts
+    linked = AccountLink.objects.filter(account_id=OuterRef("pk"), mode=AccountLink.Mode.TRANSACTIONS)
+    snapshot_days = (
+        BalanceSnapshot.objects.filter(account_id=OuterRef("pk"))
+        .order_by()
+        .values("account_id")
+        .annotate(days=Count("snapshot_date", distinct=True))
+        .values("days")
+    )
+    return (
+        accounts.filter(status=Account.Status.ACTIVE, archived_at__isnull=True, account_type__in=RECONCILED_TYPES)
+        .alias(_linked=Exists(linked), _snapshot_days=Coalesce(Subquery(snapshot_days), 0))
+        .filter(Q(_linked=True) | Q(_snapshot_days__gte=2))
+        .order_by("pk")
+    )
+
+
+def _balance_in_transaction_sign(account_type, source, amount_minor):
+    # A manual credit-card balance is typed as the positive amount owed. SimpleFIN
+    # card balances and every other account's balances already use transaction sign
+    # (docs/data-model.md, "Net worth from balances").
+    if account_type == Account.Type.CREDIT_CARD and source == BalanceSnapshot.Source.MANUAL:
+        return -amount_minor
+    return amount_minor
+
+
+def _balances(accounts):
+    """{account id: [(date, balance in transaction sign)]}, oldest first, SimpleFIN over manual."""
+    types = {account.pk: account.account_type for account in accounts}
+    chosen = {}
+    rows = BalanceSnapshot.objects.filter(account_id__in=types).values_list(
+        "account_id", "snapshot_date", "source", "amount_minor"
+    )
+    for account_id, day, source, amount in rows:
+        key = (account_id, day)
+        if key in chosen and chosen[key][0] == BalanceSnapshot.Source.SIMPLEFIN:
+            continue
+        chosen[key] = (source, _balance_in_transaction_sign(types[account_id], source, amount))
+    balances = {account_id: [] for account_id in types}
+    for (account_id, day), (_source, amount) in sorted(chosen.items()):
+        balances[account_id].append((day, amount))
+    return balances
+
+
+class _RunningTotals:
+    """Cumulative transaction totals by date, so any window sums in O(log n)."""
+
+    def __init__(self):
+        self.days = []
+        self.cumulative = []
+
+    def add(self, day, total):
+        self.days.append(day)
+        self.cumulative.append((self.cumulative[-1] if self.cumulative else 0) + total)
+
+    def through(self, day):
+        index = bisect_right(self.days, day)
+        return self.cumulative[index - 1] if index else 0
+
+    def between(self, start, end):
+        return self.through(end) - self.through(start)
+
+
+def _daily_totals(account_ids):
+    totals = {account_id: _RunningTotals() for account_id in account_ids}
+    rows = (
+        Transaction.objects.filter(account_id__in=account_ids, status=Transaction.Status.ACTIVE)
+        .values_list("account_id", "transaction_date")
+        .annotate(total=Sum("amount_minor"))
+        .order_by("account_id", "transaction_date")
+    )
+    for account_id, day, total in rows:
+        totals[account_id].add(day, total)
+    return totals
+
+
+def _coverage(account_ids):
+    """{account id: merged [(start, end)]} of active, non-manual import batches."""
+    ranges = {account_id: [] for account_id in account_ids}
+    rows = (
+        ImportBatch.objects.filter(account_id__in=account_ids, status=ImportBatch.Status.ACTIVE)
+        # A manual entry covers one row, not a whole statement period.
+        .exclude(source=ImportBatch.Source.MANUAL)
+        .order_by("account_id", "date_range_start")
+        .values_list("account_id", "date_range_start", "date_range_end")
+    )
+    for account_id, start, end in rows:
+        merged = ranges[account_id]
+        if merged and start <= merged[-1][1] + timedelta(days=1):
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return ranges
+
+
+def _covered(ranges, first, last):
+    return any(start <= first and last <= end for start, end in ranges)
+
+
+def _classify(account_id, raw):
+    """raw is [(start, end, difference or None when insufficient)], oldest first."""
+    windows = []
+    index = 0
+    while index < len(raw):
+        start, end, difference = raw[index]
+        if difference is None:
+            windows.append(Window(account_id, start, end, INSUFFICIENT))
+            index += 1
+            continue
+        if difference == 0:
+            windows.append(Window(account_id, start, end, OK))
+            index += 1
+            continue
+        resolved_at = None
+        running = difference
+        for ahead in range(index + 1, min(index + 1 + LATE_WINDOWS, len(raw))):
+            if raw[ahead][2] is None:
+                break
+            running += raw[ahead][2]
+            if running == 0:
+                resolved_at = ahead
+                break
+        if resolved_at is None:
+            windows.append(Window(account_id, start, end, MISMATCH, difference))
+            index += 1
+            continue
+        for later_start, later_end, later_difference in raw[index:resolved_at + 1]:
+            state = OK if later_difference == 0 else OK_LATE
+            windows.append(Window(account_id, later_start, later_end, state))
+        index = resolved_at + 1
+    return windows
+
+
+def reconcile(accounts, *, since=None):
+    """{account id: [Window]} for the given eligible accounts, oldest window first.
+
+    since keeps windows that end on or after that date; earlier windows still
+    count when deciding whether a later difference was skew.
+    """
+    accounts = list(accounts)
+    account_ids = [account.pk for account in accounts]
+    balances = _balances(accounts)
+    totals = _daily_totals(account_ids)
+    coverage = _coverage(account_ids)
+    results = {}
+    for account_id in account_ids:
+        raw = []
+        points = balances[account_id]
+        for (start, opening), (end, closing) in zip(points, points[1:]):
+            if not _covered(coverage[account_id], start + timedelta(days=1), end):
+                raw.append((start, end, None))
+                continue
+            raw.append((start, end, (closing - opening) - totals[account_id].between(start, end)))
+        windows = _classify(account_id, raw)
+        if since is not None:
+            windows = [window for window in windows if window.end >= since]
+        results[account_id] = windows
+    return results
+
+
+def state_counts(results):
+    counts = dict.fromkeys(STATES, 0)
+    for windows in results.values():
+        for window in windows:
+            counts[window.state] += 1
+    return counts
+
+
+def machine_summary(results):
+    """Counts and window states only: no amounts and no account names."""
+    return {
+        "version": 1,
+        "accounts": len(results),
+        "counts": state_counts(results),
+        "windows": [
+            {"account": account_id, "start": window.start.isoformat(), "end": window.end.isoformat(),
+             "state": window.state}
+            for account_id, windows in results.items()
+            for window in windows
+        ],
+    }
+
+
+def visible_results(principal, results):
+    visible = set(Account.objects.visible_to(principal).filter(pk__in=list(results)).values_list("pk", flat=True))
+    return {account_id: windows for account_id, windows in results.items() if account_id in visible}
+
+
+def _mismatch_key(results):
+    keys = sorted(
+        f"{window.account_id}:{window.start.isoformat()}:{window.end.isoformat()}"
+        for windows in results.values()
+        for window in windows
+        if window.state == MISMATCH
+    )
+    return hashlib.sha256("\n".join(keys).encode("utf-8")).hexdigest()[:32]
+
+
+def reconciliation_alert_title(results):
+    mismatched = [account_id for account_id, windows in results.items() if any(w.state == MISMATCH for w in windows)]
+    count = state_counts(results)[MISMATCH]
+    return (
+        f"Bank balances disagree with transactions in {count} period(s) "
+        f"on {len(mismatched)} account(s)"
+    )
+
+
+def evaluate_reconciliation_alerts(*, now=None):
+    """Daily pass step: alert each operator about mismatches on accounts they can see.
+
+    The title holds counts only. An operator with no visible mismatch has their
+    reconciliation alerts cleared. The run time is recorded for Settings → Data.
+    """
+    from .alert_services import raise_alert
+    from .backup_health import operator_people
+
+    now = now or timezone.now()
+    results = reconcile(eligible_accounts())
+    created = []
+    for operator in operator_people():
+        mine = visible_results(operator, results)
+        if not state_counts(mine)[MISMATCH]:
+            Alert.objects.filter(recipient=operator, kind=Alert.Kind.RECONCILIATION).delete()
+            continue
+        mismatched = [account_id for account_id, windows in mine.items() if any(w.state == MISMATCH for w in windows)]
+        created.extend(
+            raise_alert(
+                [operator],
+                Alert.Kind.RECONCILIATION,
+                reconciliation_alert_title(mine),
+                reverse("settings-data"),
+                f"reconcile:{_mismatch_key(mine)}",
+                source_accounts=Account.objects.filter(pk__in=mismatched),
+            )
+        )
+    record_run(now)
+    return created
+
+
+@transaction.atomic
+def record_run(now):
+    ReconciliationRun.objects.all().delete()
+    ReconciliationRun.objects.create(ran_at=now)
+
+
+def settings_reconciliation_context(person):
+    """Operator-only Settings → Data section, limited to accounts that operator can see."""
+    from .backup_health import person_is_operator
+
+    if not person_is_operator(person):
+        return {"reconciliation": None}
+    accounts = eligible_accounts(Account.objects.visible_to(person))
+    names = {account.pk: account.name for account in accounts}
+    results = reconcile(accounts)
+    mismatches = sorted(
+        (window for windows in results.values() for window in windows if window.state == MISMATCH),
+        key=lambda window: (window.end, window.account_id),
+        reverse=True,
+    )
+    last_run = ReconciliationRun.objects.order_by("-ran_at").values_list("ran_at", flat=True).first()
+    return {
+        "reconciliation": {
+            "accounts": len(results),
+            "counts": state_counts(results),
+            "last_run": last_run,
+            "mismatches": [
+                {"account": names[window.account_id], "start": window.start, "end": window.end,
+                 "difference_display": format_minor(window.difference_minor)}
+                for window in mismatches[:MAX_LISTED_MISMATCHES]
+            ],
+            "more_mismatches": max(0, len(mismatches) - MAX_LISTED_MISMATCHES),
+        }
+    }
