@@ -34,6 +34,11 @@ if os.environ.get("FINANCIAL_PLANNER_TEST_DB") != "postgres":
         }
     }
 
+# Django's default hasher (PBKDF2, about half a second per hash) made password
+# hashing most of the suite's run time. Test passwords are synthetic, and the
+# production settings keep the default (tests/test_fast_password_hasher.py).
+PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
+
 # Never contact SMTP from the test suite, even if operator variables are set.
 EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
 EMAIL_HOST = ""
