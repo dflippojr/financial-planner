@@ -41,7 +41,7 @@ if mode=='seed':
 else:
     p=Person.objects.get(user__username='bench244_0' if mode!='edit' else 'bench244_1')
     if mode in ('refresh', 'incremental'):
-        for i in range(2):
+        for _ in range(2):
             before=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
             start=time.perf_counter()
             with CaptureQueriesContext(connection) as q:

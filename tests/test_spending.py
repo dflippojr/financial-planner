@@ -21,7 +21,7 @@ from finance.category_services import (
     link_refund,
     refresh_transfer_pairs,
 )
-from finance.models import Account, Category, Household, ImportBatch, Membership, Person, Transaction
+from finance.models import Account, Household, ImportBatch, Membership, Person, Transaction
 
 
 PASSWORD = "Synthetic-passphrase-42!"

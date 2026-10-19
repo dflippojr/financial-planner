@@ -41,7 +41,7 @@ def main(argv):
                 if hasattr(tarfile, "data_filter"):
                     archive.extractall(argv[3], members=members, filter="data")
                 else:
-                    archive.extractall(argv[3], members=members)
+                    archive.extractall(argv[3], members=members)  # noqa: S202 - safe_members vetted every member
     except UnsafeArchive:
         print("Receipts archive refused: it has an absolute path, a .. component or a link", file=sys.stderr)
         return 1

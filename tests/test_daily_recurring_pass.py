@@ -98,7 +98,7 @@ def test_price_alert_respects_each_recipients_threshold():
     prefs = settings_for(member)
     prefs.recurring_price_percent = 30
     prefs.save()
-    series = confirmed_monthly(owner, shared, description="Synthetic Shared Price")
+    confirmed_monthly(owner, shared, description="Synthetic Shared Price")
     make_transaction(
         owner, shared, transaction_date=date(2026, 7, 15), amount_minor=-2400, description="Synthetic Shared Price"
     )

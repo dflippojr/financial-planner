@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
-from datetime import date, datetime, timedelta, timezone as dt_timezone
+from datetime import date, datetime, timedelta, UTC
 from types import SimpleNamespace
 from decimal import Decimal, Inexact, InvalidOperation, localcontext
 from urllib.parse import quote, urlsplit
@@ -53,7 +53,7 @@ from .input_limits import MAX_DESCRIPTION_CHARS
 MAX_AMOUNT_ADJUSTED_EXPONENT = 18
 UNSUPPORTED_CURRENCY = "That SimpleFIN account uses a currency this app does not store."
 UNSTORABLE_AMOUNT = "SimpleFIN sent an amount that could not be stored."
-INVALID_TOKEN = "That setup token is not a valid SimpleFIN token."
+INVALID_TOKEN = "That setup token is not a valid SimpleFIN token."  # noqa: S105 - not a secret
 UNSTORABLE_ID = "SimpleFIN sent a transaction id that could not be stored."
 ALREADY_CONNECTED = "Disconnect the existing SimpleFIN connection before adding another."
 CLAIM_IN_PROGRESS = (
@@ -148,7 +148,7 @@ def posted_date(posted) -> date | None:
     if stamp is None:
         return None
     try:
-        day = timezone.localtime(datetime.fromtimestamp(stamp, tz=dt_timezone.utc)).date()
+        day = timezone.localtime(datetime.fromtimestamp(stamp, tz=UTC)).date()
     except (OverflowError, OSError, ValueError):
         return None
     return None if activity_date_error(day) else day

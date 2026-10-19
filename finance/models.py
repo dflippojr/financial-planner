@@ -2317,6 +2317,7 @@ class Alert(models.Model):
         BACKUP = "backup", "Backup"
         EXPECTED_BALANCE = "expected_balance", "Expected balance"
         IMPORT_DUE = "import_due", "Import due"
+        RECONCILIATION = "reconciliation", "Balance reconciliation"
 
     recipient = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="alerts")
     kind = models.CharField(max_length=20, choices=Kind)
@@ -2354,6 +2355,7 @@ class Alert(models.Model):
                         "backup",
                         "expected_balance",
                         "import_due",
+                        "reconciliation",
                     )
                 ),
                 name="alert_kind_valid",
@@ -2374,6 +2376,9 @@ class AlertSettings(models.Model):
     ntfy_topic = models.CharField(max_length=64, blank=True, default="", validators=[NTFY_TOPIC_VALIDATOR])
     # Monday of the last weekly digest pushed over ntfy, so each week is sent once.
     ntfy_digest_week = models.DateField(null=True, blank=True)
+    # "account:start:end" of each balance reconciliation mismatch already alerted
+    # (operators only), so dedupe outlives the alert row's retention purge.
+    reconciliation_alerted_windows = models.JSONField(default=list, blank=True)
     person = models.OneToOneField(Person, on_delete=models.PROTECT, related_name="alert_settings")
     sync_enabled = models.BooleanField(default=True)
     recurring_price_enabled = models.BooleanField(default=True)
@@ -2418,6 +2423,15 @@ class AlertSettings(models.Model):
 
     def __str__(self):
         return f"Alert settings for {self.person_id}"
+
+
+class ReconciliationRun(models.Model):
+    """When the scheduled balance reconciliation last ran; never its results."""
+
+    ran_at = models.DateTimeField()
+
+    def __str__(self):
+        return f"Reconciliation run {self.pk}"
 
 
 class BillsCalendarSettings(models.Model):

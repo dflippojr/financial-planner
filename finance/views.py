@@ -19,6 +19,7 @@ from django.views.decorators.http import require_GET, require_http_methods, requ
 from .access import first_message as _first_message
 from .access import service_or_404 as _service_or_404
 from .backup_health import settings_backup_context
+from .reconciliation import settings_reconciliation_context
 from .auth_services import (
     InvalidOneTimeCode,
     SETUP_THROTTLE_USERNAME,
@@ -234,14 +235,21 @@ from .rule_services import manual_rule_offer
 @never_cache
 @require_GET
 def health(request):
-    """Report process and database readiness without exposing application data."""
+    """Report process and database readiness without exposing application data.
+
+    The X-App-Revision header carries the image's short git SHA, so the
+    post-deploy check can confirm which commit is serving.
+    """
     try:
         with connections["default"].cursor() as cursor:
             cursor.execute("SELECT 1")
             cursor.fetchone()
     except DatabaseError:
-        return HttpResponse("unavailable\n", status=503, content_type="text/plain")
-    return HttpResponse("ok\n", content_type="text/plain")
+        response = HttpResponse("unavailable\n", status=503, content_type="text/plain")
+    else:
+        response = HttpResponse("ok\n", content_type="text/plain")
+    response["X-App-Revision"] = settings.GIT_REVISION
+    return response
 
 
 def _cash_flow_pairs(*, date_from, date_to, grouping, horizon, account, scope, tag, changes):
@@ -2163,7 +2171,8 @@ def settings_alerts(request):
 @never_cache
 def settings_data(request):
     person = get_object_or_404(Person, user=request.user)
-    return render(request, "finance/settings_data.html", settings_backup_context(person))
+    context = {**settings_backup_context(person), **settings_reconciliation_context(person)}
+    return render(request, "finance/settings_data.html", context)
 
 
 @never_cache

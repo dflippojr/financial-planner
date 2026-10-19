@@ -15,6 +15,14 @@ The first release imports CSV exports from Huntington Bank, Capital One, Apple C
 - Keep historical actuals distinct from future projections. Do not present generated financial recommendations as verified facts.
 - Do not invent a provider's CSV schema or Vanguard transaction meaning. If an export shape is unknown, record the gap and use only clearly marked synthetic fixtures until it is resolved.
 
+### Ledger property tests
+
+tests/properties (marker `property`) states these rules as Hypothesis properties over synthetic exports and SimpleFIN feeds: idempotent reimport, order independence, one count across a SimpleFIN cut-over, transfers netting to zero, refunds never reducing uncounted spending, and exact money through export and reimport. test_report_invariants.py ties views of the same money to each other and to the generated ledger: net worth, category shares and the donut, cash flow and the monthly review per month and scope, recurring monthly against annual totals, planned occurrences in the projection and bills calendar, and household totals that private activity never moves. CI runs them with the default `ci` profile (derandomized, bounded). After changing an importer, sync, pairing, refund, totals, report or projection path, also run the `deep` profile locally, which searches far more inputs:
+
+    HYPOTHESIS_PROFILE=deep python -m pytest tests/properties -m property
+
+A property that an open bug still breaks is `xfail(strict=True, reason="#N")` with the shrunk counterexample as an `@example`. When you fix that bug, remove the marker. When you add an importer or report path, add it to the strategies or properties.
+
 ## Build workflow
 
 Work is dispatched with Orca. Each worker gets one GitHub issue in its own git worktree and branch, and never edits main.
@@ -28,7 +36,8 @@ Work is dispatched with Orca. Each worker gets one GitHub issue in its own git w
 
 ## How to prove a change works
 
-- Before pushing, run bash scripts/ci-local.sh. It runs what the gate runs locally: the statement-file guard, the migration check, the suite on a throwaway PostgreSQL 18 with the coverage floor in .coveragerc, and the browser layout tests. It needs Docker. Its header lists the jobs only CI runs. While working, run focused tests with python -m pytest tests/test_x.py, or bash scripts/test_postgres.sh with the same arguments to use PostgreSQL.
+- Before pushing, run bash scripts/ci-local.sh. It runs what the gate runs locally: the statement-file guard, ruff and pyright, the migration-number and migration checks, the suite on a throwaway PostgreSQL 18 with the coverage floor in .coveragerc, and the browser layout tests. It needs Docker. Its header lists the jobs only CI runs. For static analysis alone, run bash scripts/lint.sh: ruff with the rules in pyproject.toml, then pyright in basic mode on finance/ and financial_planner/, which fails only on errors missing from pyright-baseline.json. Fix a new finding rather than suppressing it; a noqa or pyright: ignore names its reason. After fixing baselined errors, run python scripts/pyright_baseline.py --update; never update it to accept a new error. While working, run focused tests with python -m pytest tests/test_x.py, or bash scripts/test_postgres.sh with the same arguments to use PostgreSQL.
+- For a migration, check open PRs for the next free number first (python scripts/check_migration_numbers.py fails on a shared number or a second leaf, and CI runs it on the merge commit). Attach the output of the populated upgrade test to the PR: bash scripts/test_postgres.sh -m migration -rP seeds a synthetic database at 0040 and 0059 through the historical models and migrates it to head, checking row counts, money sums and new NOT NULL columns. If the migration deletes or adds rows on purpose, declare it in tests/test_migrate_populated.py, and extend tests/migration_fixtures/builder.py when a table it changes has no rows there.
 - For a UI change, use the verify skill in .claude/skills/verify/SKILL.md (launch, doctor, drive, evidence and cleanup on a disposable instance per docs/ui-testing.md).
 - For a bug fix, write the test first and show it fails on main, then make it pass. Do not add tests that merely copy implementation logic.
 - Give the PR body a ## Proof table, as the shared PR template asks (dflippojr/.github#13): each acceptance criterion, how it was verified (command, test name, verify skill) and the evidence (output excerpt, artifact link, red before and green after). Under ### Not verified, say what you did not check and why. Under ### Gate changes, list any test deleted or skipped and any check or threshold loosened, with the reason.

@@ -4,7 +4,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import timedelta
 from types import SimpleNamespace
-from typing import Callable
+from collections.abc import Callable
 from urllib.parse import parse_qs, urlparse
 
 import pytest

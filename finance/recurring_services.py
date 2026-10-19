@@ -3,6 +3,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, timedelta
 from functools import lru_cache
+from itertools import pairwise
 from typing import NamedTuple
 from decimal import Decimal
 from hashlib import sha256
@@ -213,7 +214,7 @@ def _step_ratio(left_minor, right_minor):
 def _largest_consecutive_step(chain):
     if len(chain) < 2:
         return Decimal("0")
-    return max(_step_ratio(left.amount_minor, right.amount_minor) for left, right in zip(chain, chain[1:]))
+    return max(_step_ratio(left.amount_minor, right.amount_minor) for left, right in pairwise(chain))
 
 
 def _current_level(accepted):
@@ -406,7 +407,7 @@ def _cluster_by_amount(transactions):
     sizes = []
     for item in sorted(transactions, key=lambda row: (abs(row.amount_minor), row.pk)):
         value = abs(item.amount_minor)
-        for cluster, size in zip(clusters, sizes):
+        for cluster, size in zip(clusters, sizes, strict=True):
             # Same test as amounts_within_tolerance on cluster + item. Items
             # arrive in ascending amount, so only the first and the new value
             # can sit furthest from the median.

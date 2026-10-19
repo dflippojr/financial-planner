@@ -60,6 +60,10 @@ jobs:
     name: Guards
     uses: ./.github/workflows/guards.yml
 
+  lint:
+    name: Lint
+    uses: ./.github/workflows/lint.yml
+
   postgres:
     name: PostgreSQL 18
     uses: ./.github/workflows/postgres.yml
@@ -100,7 +104,7 @@ jobs:
     # always(): report red when a needed job failed or was cancelled, instead
     # of being skipped and leaving a required check pending.
     if: always()
-    needs: [changes, guards, postgres, sonar, playwright, docker-smoke, gate-guard]
+    needs: [changes, guards, lint, postgres, sonar, playwright, docker-smoke, gate-guard]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

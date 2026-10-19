@@ -55,7 +55,7 @@ def test_incremental_matches_full_after_imports_edits_archives_and_settlements()
     hidden = make_account(other)
     make_transaction(other, hidden, amount_minor=1234)
     rows = []
-    for i in range(80):
+    for _ in range(80):
         rows.append(make_transaction(person, random.choice(accounts),
             amount_minor=random.choice([-1234, 1234, -2000, 2000, -9000, 9000]),
             transaction_date=date(2026, 1, 1) + timedelta(days=random.randrange(40))))

@@ -24,11 +24,11 @@ def describe(raw, label="file", show=(), show_headers=True):
 SECRETS = ("SYNTHETIC COFFEE HOUSE", "4111111111111111", "Jamie Q Example", "987654321", "jamie@example.invalid")
 
 BANK_STYLE = (
-    "Posting Date,Description,Debit,Credit,Balance\r\n"
-    "09/27/2026,SYNTHETIC COFFEE HOUSE 4111111111111111,12.50,,\"1,234.56\"\r\n"
-    "09/28/2026,PAYROLL Jamie Q Example,,2500.00,\"3,734.56\"\r\n"
-    "09/29/2026,ONLINE TRANSFER jamie@example.invalid,40.00,,\"3,694.56\"\r\n"
-).encode()
+    b"Posting Date,Description,Debit,Credit,Balance\r\n"
+    b"09/27/2026,SYNTHETIC COFFEE HOUSE 4111111111111111,12.50,,\"1,234.56\"\r\n"
+    b"09/28/2026,PAYROLL Jamie Q Example,,2500.00,\"3,734.56\"\r\n"
+    b"09/29/2026,ONLINE TRANSFER jamie@example.invalid,40.00,,\"3,694.56\"\r\n"
+)
 
 
 def assert_no_secrets(report):
@@ -48,10 +48,10 @@ def test_output_never_contains_values_and_shows_headers():
 
 def test_signed_amount_layout_reports_negative_values_and_no_pair():
     raw = (
-        "Date,Merchant,Amount\n"
-        "2026-09-27,SYNTHETIC COFFEE HOUSE,-12.50\n"
-        "2026-09-28,PAYROLL Jamie Q Example,2500.00\n"
-    ).encode()
+        b"Date,Merchant,Amount\n"
+        b"2026-09-27,SYNTHETIC COFFEE HOUSE,-12.50\n"
+        b"2026-09-28,PAYROLL Jamie Q Example,2500.00\n"
+    )
 
     report = describe(raw)
 
@@ -78,13 +78,13 @@ def test_day_month_order_is_inferred_from_field_maxima_only(dates, expected):
 
 def test_preamble_lines_are_masked_and_never_echoed():
     raw = (
-        "Account: 987654321 Jamie Q Example\n"
-        "Generated 2026-09-30\n"
-        "\n"
-        "Date,Description,Amount\n"
-        "2026-09-27,SYNTHETIC COFFEE HOUSE,-12.50\n"
-        "2026-09-28,SYNTHETIC COFFEE HOUSE,-3.25\n"
-    ).encode()
+        b"Account: 987654321 Jamie Q Example\n"
+        b"Generated 2026-09-30\n"
+        b"\n"
+        b"Date,Description,Amount\n"
+        b"2026-09-27,SYNTHETIC COFFEE HOUSE,-12.50\n"
+        b"2026-09-28,SYNTHETIC COFFEE HOUSE,-3.25\n"
+    )
 
     report = describe(raw)
 
@@ -94,9 +94,9 @@ def test_preamble_lines_are_masked_and_never_echoed():
 
 def test_headerless_file_masks_its_first_row():
     raw = (
-        "SYNTHETIC COFFEE HOUSE,2026-09-27,-12.50\n"
-        "PAYROLL Jamie Q Example,2026-09-28,2500.00\n"
-    ).encode()
+        b"SYNTHETIC COFFEE HOUSE,2026-09-27,-12.50\n"
+        b"PAYROLL Jamie Q Example,2026-09-28,2500.00\n"
+    )
 
     report = describe(raw)
 
@@ -107,10 +107,10 @@ def test_headerless_file_masks_its_first_row():
 
 def test_semicolon_delimited_quoted_headers_and_decimal_commas():
     raw = (
-        '"Date";"Memo";"Amount"\n'
-        '"27.09.2026";"SYNTHETIC COFFEE HOUSE";"-12,50"\n'
-        '"28.09.2026";"PAYROLL Jamie Q Example";"2500,00"\n'
-    ).encode()
+        b'"Date";"Memo";"Amount"\n'
+        b'"27.09.2026";"SYNTHETIC COFFEE HOUSE";"-12,50"\n'
+        b'"28.09.2026";"PAYROLL Jamie Q Example";"2500,00"\n'
+    )
 
     report = describe(raw)
 
@@ -120,7 +120,7 @@ def test_semicolon_delimited_quoted_headers_and_decimal_commas():
 
 
 def test_unreadable_or_odd_headers_are_masked_not_printed():
-    raw = ("Date,Acct 987654321,Amount\n2026-09-27,x,1.00\n2026-09-28,y,2.00\n").encode()
+    raw = (b"Date,Acct 987654321,Amount\n2026-09-27,x,1.00\n2026-09-28,y,2.00\n")
 
     report = describe(raw)
 
@@ -155,11 +155,11 @@ def test_command_line_reports_an_unreadable_file_without_a_traceback(tmp_path, c
 
 
 BROKERAGE = (
-    "Trade Date,Transaction Type,Description,Amount\n"
-    "09/27/2026,Dividend,SYNTHETIC FUND ADMIRAL 4111111111111111,12.00\n"
-    "09/28/2026,Buy,SYNTHETIC INDEX FUND,-40.00\n"
-    "09/29/2026,Dividend,SYNTHETIC MONEY MARKET,3.00\n"
-).encode()
+    b"Trade Date,Transaction Type,Description,Amount\n"
+    b"09/27/2026,Dividend,SYNTHETIC FUND ADMIRAL 4111111111111111,12.00\n"
+    b"09/28/2026,Buy,SYNTHETIC INDEX FUND,-40.00\n"
+    b"09/29/2026,Dividend,SYNTHETIC MONEY MARKET,3.00\n"
+)
 
 
 def test_values_are_hidden_unless_a_column_is_requested():
@@ -232,11 +232,11 @@ def test_a_preamble_line_is_never_mistaken_for_the_header():
     # real header. Taking the first such row as the header printed it verbatim
     # and exempted it from the leak guard.
     raw = (
-        "Jamie Q Example,Checking account,USD\n"
-        "Date,Description,Amount\n"
-        "2026-09-27,SYNTHETIC COFFEE HOUSE,-12.50\n"
-        "2026-09-28,SYNTHETIC BOOK STORE,-3.25\n"
-    ).encode()
+        b"Jamie Q Example,Checking account,USD\n"
+        b"Date,Description,Amount\n"
+        b"2026-09-27,SYNTHETIC COFFEE HOUSE,-12.50\n"
+        b"2026-09-28,SYNTHETIC BOOK STORE,-3.25\n"
+    )
 
     report = describe(raw)
 
@@ -274,11 +274,11 @@ def test_positive_amounts_are_not_counted_as_negative():
 
 def test_rows_from_another_section_are_described_masked():
     raw = (
-        "Date,Type,Amount\n"
-        "2026-09-27,Buy,-10.00\n"
-        "2026-09-28,Sell,20.00\n"
-        "Total holdings SYNTHETIC FUND 4111111111111111\n"
-    ).encode()
+        b"Date,Type,Amount\n"
+        b"2026-09-27,Buy,-10.00\n"
+        b"2026-09-28,Sell,20.00\n"
+        b"Total holdings SYNTHETIC FUND 4111111111111111\n"
+    )
 
     report = describe(raw)
 
@@ -627,10 +627,10 @@ def test_a_digit_in_one_header_label_does_not_reject_the_row():
     # LABEL rejects digits, so requiring every cell to be LABEL-like dropped
     # Date,Card 4,Amount as a header and classified every column as text.
     raw = (
-        "Date,Card 4,Amount\n"
-        "2026-09-27,x,-12.50\n"
-        "2026-09-28,y,3.25\n"
-    ).encode()
+        b"Date,Card 4,Amount\n"
+        b"2026-09-27,x,-12.50\n"
+        b"2026-09-28,y,3.25\n"
+    )
 
     report = describe(raw)
 
@@ -694,13 +694,13 @@ def test_a_same_width_preamble_date_does_not_steal_the_header():
     # block, not the row before the first date in the file. A same-width
     # export-date line used to make --show-headers print the account holder.
     raw = (
-        "Pat Q Sample,Checking account,USD\n"
-        "Exported,09/27/2026,Checking\n"
-        "Date,Description,Amount\n"
-        "2026-09-27,SYNTHETIC COFFEE HOUSE,-12.50\n"
-        "2026-09-28,SYNTHETIC BOOK STORE,-3.25\n"
-        "2026-09-29,SYNTHETIC GROCER,-8.00\n"
-    ).encode()
+        b"Pat Q Sample,Checking account,USD\n"
+        b"Exported,09/27/2026,Checking\n"
+        b"Date,Description,Amount\n"
+        b"2026-09-27,SYNTHETIC COFFEE HOUSE,-12.50\n"
+        b"2026-09-28,SYNTHETIC BOOK STORE,-3.25\n"
+        b"2026-09-29,SYNTHETIC GROCER,-8.00\n"
+    )
 
     report = csv_shape.describe_csv(raw, show_headers=True)
 
@@ -812,15 +812,15 @@ def test_a_shorter_transaction_table_is_preferred_over_a_longer_balance_history(
     # outscore the real transaction table below it, so --show-headers named
     # Day/When/Balance and never printed Date/Description/Amount.
     raw = (
-        "Day,When,Balance\n"
-        "2026-09-01,Open,100.00\n"
-        "2026-09-02,Close,110.00\n"
-        "2026-09-03,Open,110.00\n"
-        "2026-09-04,Close,120.00\n"
-        "Date,Description,Amount\n"
-        "2026-09-27,SYNTHETIC COFFEE,-12.50\n"
-        "2026-09-28,SYNTHETIC BOOK,-3.25\n"
-    ).encode()
+        b"Day,When,Balance\n"
+        b"2026-09-01,Open,100.00\n"
+        b"2026-09-02,Close,110.00\n"
+        b"2026-09-03,Open,110.00\n"
+        b"2026-09-04,Close,120.00\n"
+        b"Date,Description,Amount\n"
+        b"2026-09-27,SYNTHETIC COFFEE,-12.50\n"
+        b"2026-09-28,SYNTHETIC BOOK,-3.25\n"
+    )
 
     report = describe(raw)
 

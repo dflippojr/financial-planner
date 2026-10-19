@@ -103,7 +103,7 @@ def _reports_for_months(principal, months, scope, accounts=None, named=None):
         principal, [(month, month_end(month)) for month in months], accounts=selected
     )
     reports = {}
-    for month, (total, by_category) in zip(months, totals):
+    for month, (total, by_category) in zip(months, totals, strict=True):
         combined = _combine_category_spending(by_category, named)
         reports[month] = SimpleNamespace(
             total_spending_minor=total,

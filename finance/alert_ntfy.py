@@ -44,7 +44,7 @@ class HttpTransport:
             headers["Click"] = click_url
         if settings.NTFY_TOKEN:
             headers["Authorization"] = f"Bearer {settings.NTFY_TOKEN}"
-        request = urllib.request.Request(
+        request = urllib.request.Request(  # noqa: S310 - NTFY_URL is operator config
             f"{settings.NTFY_URL}/{topic}", data=body.encode("utf-8"), headers=headers, method="POST",
         )
         with self.opener.open(request, timeout=settings.NTFY_TIMEOUT_SECONDS) as response:
@@ -89,7 +89,7 @@ def _send(topic, title, body, click_url, tags):
     try:
         if get_transport().send(topic, title, body, click_url, tags):
             return True
-    except Exception:
+    except Exception:  # noqa: S110 - logged below without the exception
         # HTTP errors can quote the URL (with the topic) or request headers.
         # Never log the exception or its traceback.
         pass

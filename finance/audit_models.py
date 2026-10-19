@@ -3,7 +3,7 @@ import hashlib
 import json
 import uuid
 
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
 from django.db.models import Q
 from django.utils import timezone
@@ -377,4 +377,6 @@ _WORKFLOW_ACTIONS = (
 # Target type None: any workflow target type, checked by the caller's typed call sites.
 ACTION_SPECS.update({action: (None, AUDIENCE_FLEXIBLE, set(CHANGED_FIELDS)) for action in _WORKFLOW_ACTIONS})
 ACTION_AUDIENCE = {action: spec[1] for action, spec in ACTION_SPECS.items()}
-assert set(ACTION_SPECS) == set(AuditEvent.Action), "Every audit action needs a coverage-matrix entry."
+if set(ACTION_SPECS) != set(AuditEvent.Action):
+    # Not an assert: python -O would skip it.
+    raise ImproperlyConfigured("Every audit action needs a coverage-matrix entry.")

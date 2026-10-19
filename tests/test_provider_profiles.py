@@ -6,7 +6,7 @@ Synthetic fixtures only. Provider-specific behavior stays in each provider's own
 import logging
 from dataclasses import dataclass
 from datetime import date
-from typing import Callable
+from collections.abc import Callable
 
 import pytest
 from django.contrib.auth import get_user_model

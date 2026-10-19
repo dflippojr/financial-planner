@@ -53,15 +53,15 @@ from .models import AiJob, AuditEvent, AiProviderConnection, AiUsageEvent, Membe
 from .policy_services import may_use_ai
 from .category_services import current_household
 
-TOKEN_PREFIX = "ha-"
+TOKEN_PREFIX = "ha-"  # noqa: S105 - not a secret
 CONNECT_DENIED = "AI backends cannot be connected until the privacy and data policy is accepted."
 SHARED_LOCAL_UNAVAILABLE = "The household local model is not available."
 SHARED_LOCAL_NOT_OFFERED = "The household local model is not offered."
 SHARED_LOCAL_CHOOSE = "Choose Local model (shared) in Settings → AI."
 HOSTED_SHARED_DENIED = "Hosted AI backends on another member's connection cannot be used."
-TOKEN_FORMAT = "Paste an Agent Harness App token that starts with ha-."
+TOKEN_FORMAT = "Paste an Agent Harness App token that starts with ha-."  # noqa: S105 - not a secret
 TOKEN_REJECTED = (
-    "That token isn't valid for this Agent Harness. Create an App token in that "
+    "That token isn't valid for this Agent Harness. Create an App token in that "  # noqa: S105 - not a secret
     "harness's Settings → Apps, then connect again."
 )
 # One message for refused, unreachable and not-a-harness endpoints, so connect

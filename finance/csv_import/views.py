@@ -498,7 +498,7 @@ def csv_import_page(request):
     try:
         account_id = int(request.POST.get("account_id") or 0)
     except (TypeError, ValueError):
-        raise Http404
+        raise Http404 from None
     account = _visible_account(request, account_id)
     if not account.accepts_csv_import():
         messages.info(request, "This account has no transactions. Record a valuation or balance instead.")

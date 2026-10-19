@@ -21,7 +21,7 @@ from wsgiref.simple_server import WSGIServer, make_server
 
 ROOT = Path(__file__).resolve().parents[1]
 USERNAME = "synthetic_alex"
-PASSWORD = "Synthetic-passphrase-42!"
+PASSWORD = "Synthetic-passphrase-42!"  # noqa: S105 - synthetic login for a disposable instance
 PREFIX = "financial-planner-ui-"
 ENV_ALLOWLIST = {"PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "TEMP", "TMP", "TMPDIR",
                  "HOME", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "LANG", "LC_ALL"}
@@ -119,7 +119,7 @@ def run_css_builder(command):
                 initial_error.add_note(str(error))
                 logger.error("%s", error)
             except BaseException:
-                raise initial_error
+                raise initial_error  # noqa: B904 - re-raises the primary failure; the later one is attached as a note
 
 
 def finish_css_builder(process, tree):
@@ -363,7 +363,7 @@ def main():
         initial_error = startup_failures[0] if startup_failures else error
         if initial_error is not error:
             initial_error.add_note(secondary_failure_note("UI finalization also failed", error))
-            raise initial_error
+            raise initial_error  # noqa: B904 - re-raises the primary failure; the later one is attached as a note
         raise
     finally:
         # The primary failure is captured before watcher finalization. Even an
@@ -377,7 +377,7 @@ def main():
                 raise
             cleanup_error = css_cleanup_failure(initial_error)
             initial_error.add_note(secondary_failure_note("UI storage cleanup also failed", error, cleanup_error))
-            raise initial_error
+            raise initial_error  # noqa: B904 - re-raises the primary failure; the later one is attached as a note
 
 
 def finish_ui_storage(directory, initial_error):
