@@ -54,7 +54,7 @@ def settings_for(person):
 
 
 def kind_is_enabled(prefs, kind):
-    if kind == Alert.Kind.BACKUP:
+    if kind in (Alert.Kind.BACKUP, Alert.Kind.RECONCILIATION):
         return True
     field = _KIND_ENABLED_FIELD.get(kind)
     return bool(field and getattr(prefs, field))
@@ -535,6 +535,7 @@ def run_daily_alert_pass(*, today=None, now=None):
     from .monthly_review import generate_due_monthly_reviews
     from .passkey_services import purge_stale_pending_sign_ins
     from .receipt_services import sweep_orphan_receipt_files
+    from .reconciliation import evaluate_reconciliation_alerts
     from .security_services import purge_expired_sessions, purge_old_security_events, purge_stale_member_sessions
 
     # (name, function, whether it returns new alerts).
@@ -548,6 +549,7 @@ def run_daily_alert_pass(*, today=None, now=None):
         ("backup_alerts", partial(evaluate_backup_alerts, today=today, now=now), True),
         ("expected_balance_alerts", partial(evaluate_expected_balance_alerts, today=today), True),
         ("import_due_alerts", partial(evaluate_import_due_alerts, today=today), True),
+        ("reconciliation_alerts", partial(evaluate_reconciliation_alerts, now=now), True),
         ("purge_read_alerts", partial(purge_old_read_alerts, now=now), False),
         ("purge_security_events", partial(purge_old_security_events, now=now), False),
         ("purge_login_throttles", partial(purge_expired_login_throttles, now=now), False),

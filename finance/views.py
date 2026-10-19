@@ -19,6 +19,7 @@ from django.views.decorators.http import require_GET, require_http_methods, requ
 from .access import first_message as _first_message
 from .access import service_or_404 as _service_or_404
 from .backup_health import settings_backup_context
+from .reconciliation import settings_reconciliation_context
 from .auth_services import (
     InvalidOneTimeCode,
     SETUP_THROTTLE_USERNAME,
@@ -2163,7 +2164,8 @@ def settings_alerts(request):
 @never_cache
 def settings_data(request):
     person = get_object_or_404(Person, user=request.user)
-    return render(request, "finance/settings_data.html", settings_backup_context(person))
+    context = {**settings_backup_context(person), **settings_reconciliation_context(person)}
+    return render(request, "finance/settings_data.html", context)
 
 
 @never_cache
