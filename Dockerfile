@@ -51,6 +51,11 @@ RUN DJANGO_SECRET_KEY=build-collectstatic-only \
     python manage.py collectstatic --noinput --ignore src --ignore *.mjs --ignore SHA256SUMS \
     && chown -R app:app /app/staticfiles
 
+# Declared after the slow layers so a new commit does not rebuild them.
+ARG GIT_SHA=unknown
+LABEL org.opencontainers.image.revision=$GIT_SHA
+ENV GIT_SHA=$GIT_SHA
+
 USER app
 
 EXPOSE 8000

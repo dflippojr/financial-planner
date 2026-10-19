@@ -23,7 +23,11 @@ services:
       start_period: 10s
 
   app:
-    build: .
+    build:
+      context: .
+      # The commit to record in the image; docs/deployment.md sets it before each build.
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
     restart: unless-stopped
     # A 500-row import into the 72k synthetic ledger peaks above 512 MiB.
     mem_limit: 1g
@@ -126,7 +130,10 @@ services:
       start_period: 30s
 
   backup:
-    build: ops/backup
+    build:
+      context: ops/backup
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
     restart: unless-stopped
     environment:
       OPERATOR_AUDIT_DIR: /operator-audit
@@ -165,7 +172,11 @@ services:
     command: ["/opt/financial-planner/run-backups.sh"]
 
   background:
-    build: .
+    build:
+      context: .
+      # The commit to record in the image; docs/deployment.md sets it before each build.
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
     restart: unless-stopped
     # One Django process, with independent job, chat and daily-pass threads.
     # The expanded synthetic ledger reached 286 MiB in a daily pass.

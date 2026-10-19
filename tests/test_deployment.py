@@ -10,7 +10,7 @@ from django.test import override_settings
 from django.urls import reverse
 
 from financial_planner.healthcheck import probe_host
-from financial_planner.settings import allowed_hosts_from_env
+from financial_planner.settings import allowed_hosts_from_env, git_revision_from_env
 from tests.helpers import compose_service
 
 
@@ -31,6 +31,39 @@ def test_health_failure_reveals_no_database_details(client):
     assert response.status_code == 503
     assert response.content == b"unavailable\n"
     assert b"secret" not in response.content
+
+
+@pytest.mark.django_db
+@override_settings(GIT_REVISION="0123456789ab")
+def test_health_reports_the_short_revision_in_a_header_only(client):
+    response = client.get(reverse("health"))
+
+    assert response.headers["X-App-Revision"] == "0123456789ab"
+    assert response.content == b"ok\n"
+
+
+@pytest.mark.parametrize(
+    ("git_sha", "expected"),
+    [
+        ("0123456789abcdef0123456789abcdef01234567", "0123456789ab"),
+        (" ABCDEF1\n", "abcdef1"),
+        ("", "unknown"),
+        ("unknown", "unknown"),
+        ("abc123", "unknown"),
+        ("0123456789abcdef; rm -rf /", "unknown"),
+    ],
+)
+def test_git_revision_is_a_short_hex_sha_or_unknown(git_sha, expected):
+    assert git_revision_from_env(git_sha) == expected
+
+
+def test_every_built_image_records_the_git_sha():
+    for service in ("app", "background", "backup"):
+        assert "GIT_SHA: ${GIT_SHA:-unknown}" in compose_service(service)
+    for dockerfile in ("Dockerfile", "ops/backup/Dockerfile"):
+        text = (Path(settings.BASE_DIR) / dockerfile).read_text(encoding="utf-8")
+        assert "ARG GIT_SHA=unknown" in text
+        assert "LABEL org.opencontainers.image.revision=$GIT_SHA" in text
 
 
 @pytest.mark.django_db

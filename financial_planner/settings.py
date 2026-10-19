@@ -1,5 +1,6 @@
 import mimetypes
 import os
+import re
 import tempfile
 from pathlib import Path
 
@@ -26,6 +27,15 @@ def allowed_hosts_from_env(value):
     host or the container is reported unhealthy while serving real requests.
     """
     return [host.strip() for host in value.split(",") if host.strip()]
+
+
+def git_revision_from_env(value):
+    """The first 12 hex digits of the GIT_SHA build arg, or "unknown" if it is not a SHA.
+
+    /health/ reports this, so it must never echo an arbitrary build value.
+    """
+    sha = value.strip().lower()
+    return sha[:12] if re.fullmatch(r"[0-9a-f]{7,40}", sha) else "unknown"
 
 
 ALLOWED_HOSTS = allowed_hosts_from_env(
@@ -290,6 +300,9 @@ if os.environ.get("AI_CHAT_TURN_MAX_SECONDS"):
     AI_CHAT_TURN_MAX_SECONDS = int(os.environ["AI_CHAT_TURN_MAX_SECONDS"])
 AI_JOB_MAX_QUEUED_PER_MEMBER = int(os.environ.get("AI_JOB_MAX_QUEUED_PER_MEMBER", "12"))
 AI_SHARED_LOCAL_DAILY_CAP = int(os.environ.get("AI_SHARED_LOCAL_DAILY_CAP", "200"))
+
+# The commit the image was built from, set by the Dockerfile's GIT_SHA build arg.
+GIT_REVISION = git_revision_from_env(os.environ.get("GIT_SHA", ""))
 
 # Written by ops/backup/backup.sh and mounted read-only into the app.
 BACKUP_STATUS_PATH = os.environ.get("BACKUP_STATUS_PATH", "/backup-health/status").strip() or "/backup-health/status"

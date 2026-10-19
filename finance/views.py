@@ -235,14 +235,21 @@ from .rule_services import manual_rule_offer
 @never_cache
 @require_GET
 def health(request):
-    """Report process and database readiness without exposing application data."""
+    """Report process and database readiness without exposing application data.
+
+    The X-App-Revision header carries the image's short git SHA, so the
+    post-deploy check can confirm which commit is serving.
+    """
     try:
         with connections["default"].cursor() as cursor:
             cursor.execute("SELECT 1")
             cursor.fetchone()
     except DatabaseError:
-        return HttpResponse("unavailable\n", status=503, content_type="text/plain")
-    return HttpResponse("ok\n", content_type="text/plain")
+        response = HttpResponse("unavailable\n", status=503, content_type="text/plain")
+    else:
+        response = HttpResponse("ok\n", content_type="text/plain")
+    response["X-App-Revision"] = settings.GIT_REVISION
+    return response
 
 
 def _cash_flow_pairs(*, date_from, date_to, grouping, horizon, account, scope, tag, changes):
