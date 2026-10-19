@@ -49,6 +49,8 @@ $BuiltServices = @('app', 'backup', 'background')
 $RevisionLabel = 'org.opencontainers.image.revision'
 # Compose starts a container with no unmet dependencies within seconds of creating it.
 $FirstStartSeconds = 60
+# How far apart Compose creates the containers of one deploy.
+$CreationSkewSeconds = 5
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $Helper = Join-Path $RepoRoot 'scripts\prod_signals.py'
 $script:Failures = New-Object System.Collections.Generic.List[string]
@@ -189,6 +191,11 @@ function Test-Revision([string]$HealthRevision, $Snapshot) {
         $script:ExpectedSha = [string]$rev.Output[0]
     }
     $expected = $ExpectedSha.Trim().ToLowerInvariant()
+    # A prefix is enough to compare with, but an empty or odd one would match anything.
+    if ($expected -notmatch '^[0-9a-f]{7,40}$') {
+        Add-Failure 'revision: -ExpectedSha must be 7 to 40 hex digits'
+        return
+    }
     $short = $expected.Substring(0, [Math]::Min(12, $expected.Length))
     if ($script:HealthUnreachable) {
         # Already reported; the image labels below still show what is deployed.
@@ -204,7 +211,8 @@ function Test-Revision([string]$HealthRevision, $Snapshot) {
     foreach ($service in $BuiltServices) {
         foreach ($container in $Snapshot[$service]) {
             $label = if ($container.Revision) { $container.Revision.ToLowerInvariant() } else { 'none' }
-            if ($label -ne $expected) {
+            # The label is a full SHA; -ExpectedSha may be a prefix of it.
+            if (-not $label.StartsWith($expected)) {
                 $shown = $label.Substring(0, [Math]::Min(12, $label.Length))
                 Add-Failure "revision: $service runs an image built from $shown, expected $short; recreate it"
             }
@@ -347,7 +355,10 @@ try {
     if (-not $Since) {
         $created = @('app', 'background' | ForEach-Object { $before[$_] } | ForEach-Object { $_.Created } | Where-Object { $_ })
         if ($created.Count -eq 0) { throw 'no app or background container to date the deploy; pass -Since' }
-        $Since = ($created | Sort-Object | Select-Object -First 1).ToLocalTime()
+        # Compose creates app, background and backup together, in any order within
+        # a second or two. Start a little early so a backup created just before
+        # app counts as new, not as a kept container; a kept one is days older.
+        $Since = ($created | Sort-Object | Select-Object -First 1).AddSeconds(-$CreationSkewSeconds).ToLocalTime()
     }
     $deployStart = [datetime]$Since
 

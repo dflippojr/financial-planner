@@ -46,7 +46,7 @@ def _inspect(state, args, path):
         "Created": _docker_time(container["created"]),
         "RestartCount": 0,
         "State": {"Status": "running", "StartedAt": _docker_time(container["started"])},
-        "Config": {"Labels": {}},
+        "Config": {"Labels": container.get("labels", {})},
     }]))
     return 0
 

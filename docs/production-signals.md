@@ -29,7 +29,7 @@ $Config = 'D:\financial-planner-config\production.env'
 | Container state and `RestartCount` | all four `running`, count not rising | live |
 | Tracebacks per container, last 24 h | 0 | live, over a 24 h window |
 | Backup status | `state` is `ok` | the last backup run, nightly at 03:30 |
-| Balance reconciliation | no `mismatch` windows | the last SimpleFIN sync, daily at 06:30 (after #535) |
+| Balance reconciliation | `counts.mismatch` is 0 | the last SimpleFIN sync, daily at 06:30 |
 
 ## Health
 
@@ -110,18 +110,25 @@ whether the off-site copy is configured. It never prints the error text.
 These are the same limits that raise the in-app backup alert
 (`finance/backup_health.py`).
 
-## Balance reconciliation (after #535)
+## Balance reconciliation
 
 ```powershell
-docker compose --env-file $Config exec -T app python manage.py reconcile_balances --json
+$Recon = docker compose --env-file $Config exec -T app python manage.py reconcile_balances --json
+$Code = $LASTEXITCODE
+($Recon | ConvertFrom-Json) | Select-Object accounts, counts | ConvertTo-Json -Compress
+$Code
 ```
 
-This command lands with #535 and does not exist before it. It compares each
-account's transactions with the bank-reported balances, read-only, and its
-`--json` output carries only counts and window states (`ok`, `ok-late`,
-`mismatch`, `insufficient`), no amounts or names. It exits non-zero on any
-mismatch. The `background` container runs it after each SimpleFIN sync; its
-fields are documented with the command once it is merged.
+`reconcile_balances` compares each account's transactions with the
+bank-reported balances, read-only. The command's own `--json` output has three
+fields: `version` (1), `accounts` (how many accounts were reconciled) and
+`counts` (windows per state: `ok`, `ok-late`, `mismatch`, `insufficient`). It
+also has a `windows` list with every window's account ID and dates. The
+command above leaves that list out, so only `accounts` and `counts` reach your
+terminal or an issue; never paste the raw output. The exit code is 1 when
+`counts.mismatch` is above 0, and 0 otherwise. The `background` container runs
+the command after each SimpleFIN sync and raises the in-app alert; see
+[Reconciling balances](deployment.md#reconciling-balances) for the Settings → Data view.
 
 ## Post-deploy check
 
