@@ -2,8 +2,8 @@
 # in the Docker image.
 -r requirements.txt
 # Property tests of ledger invariants in tests/properties (#533).
-hypothesis==6.168.5
-playwright==1.63.0
+hypothesis==6.170.0
+playwright==1.64.0
 pytest-xdist==3.8.0
 # Used directly by the disposable HTTP lifecycle tests.
 requests==2.34.2
