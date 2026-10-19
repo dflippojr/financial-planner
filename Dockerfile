@@ -27,7 +27,7 @@ RUN set -eu; \
     mkdir -p static/dist; \
     /tmp/tailwindcss -i static/src/app.css -o static/dist/app.css --minify
 
-FROM python:3.13-slim
+FROM python:3.14-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
