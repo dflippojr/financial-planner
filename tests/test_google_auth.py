@@ -104,7 +104,8 @@ class _FakeTokenSession:
         return _TokenResponse(payload)
 
 
-def _finish_google(client, start_response, id_token=_id_token()):
+def _finish_google(client, start_response, id_token=None):
+    id_token = _id_token() if id_token is None else id_token
     assert start_response.status_code == 302
     location = start_response["Location"]
     assert "code_challenge=" in location

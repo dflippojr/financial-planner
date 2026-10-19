@@ -15,7 +15,6 @@ from finance import (
     net_worth_views,
     passkey_views as views_passkey,
     planning_views,
-    planning_views,
     monthly_review_views,
     sheet_comparison_views,
     rule_views,

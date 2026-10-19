@@ -12,7 +12,7 @@ import time
 from datetime import date, timedelta
 from pathlib import Path
 
-PASSWORD = "Synthetic-passphrase-42!"
+PASSWORD = "Synthetic-passphrase-42!"  # noqa: S105 - synthetic login for a throwaway database
 SEED_DATE = date(2026, 10, 8)
 SEED_ROWS = 72_502
 

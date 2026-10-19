@@ -211,14 +211,14 @@ def _split_credentials(access_url: str):
     host = parts.hostname or ""
     netloc = f"{host}:{parts.port}" if parts.port else host
     bare_url = urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
-    credentials = f"{unquote(parts.username)}:{unquote(parts.password or '')}".encode("utf-8")
+    credentials = f"{unquote(parts.username)}:{unquote(parts.password or '')}".encode()
     return bare_url, {"Authorization": "Basic " + base64.b64encode(credentials).decode("ascii")}
 
 
 def claim_access_url(claim_url: str) -> str:
     """POST the claim URL once. Returns the Access URL. Never includes it in errors."""
     _require_https(claim_url)
-    request = Request(claim_url, method="POST", data=b"")
+    request = Request(claim_url, method="POST", data=b"")  # noqa: S310 - _require_https above
     deadline = time.monotonic() + CLAIM_DEADLINE_SECONDS
     try:
         with urlopen(request, timeout=CLAIM_TIMEOUT_SECONDS, context=_SSL, deadline=deadline) as response:
@@ -249,7 +249,7 @@ def fetch_accounts(access_url: str, *, start_date=None, end_date=None, balances_
         params["balances-only"] = "1"
     bare_url, headers = _split_credentials(access_url)
     url = bare_url.rstrip("/") + "/accounts?" + urlencode(params)
-    request = Request(url, method="GET", headers=headers)
+    request = Request(url, method="GET", headers=headers)  # noqa: S310 - _require_https above
     deadline = time.monotonic() + FETCH_DEADLINE_SECONDS
     try:
         with urlopen(request, timeout=FETCH_TIMEOUT_SECONDS, context=_SSL, deadline=deadline) as response:

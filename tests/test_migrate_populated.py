@@ -48,7 +48,7 @@ def _rows(sql):
 def _counts():
     tables = set(connection.introspection.table_names()) - {"django_migrations"}
     quote = connection.ops.quote_name
-    return {table: _scalar(f"SELECT COUNT(*) FROM {quote(table)}") for table in sorted(tables)}
+    return {table: _scalar(f"SELECT COUNT(*) FROM {quote(table)}") for table in sorted(tables)}  # noqa: S608 - identifiers come from the schema and are quoted by quote_name; no values
 
 
 def _money_columns(apps):
@@ -61,7 +61,7 @@ def _money_columns(apps):
 
 def _total(key):
     table, column = (connection.ops.quote_name(part) for part in key.split("."))
-    return _rows(f"SELECT COUNT({column}), SUM({column}) FROM {table}")
+    return _rows(f"SELECT COUNT({column}), SUM({column}) FROM {table}")  # noqa: S608 - identifiers come from the schema and are quoted by quote_name; no values
 
 
 def _money_queries(apps, kept):
@@ -76,10 +76,10 @@ def _money_queries(apps, kept):
             if not name.endswith("_minor") or f"{model._meta.db_table}.{column}" not in kept:
                 continue
             if group:
-                sql = (f"SELECT {quote(group)}, COUNT({quote(column)}), SUM({quote(column)}) FROM {table} "
+                sql = (f"SELECT {quote(group)}, COUNT({quote(column)}), SUM({quote(column)}) FROM {table} "  # noqa: S608 - quoted schema identifiers only
                        f"GROUP BY {quote(group)} ORDER BY {quote(group)}")
             else:
-                sql = f"SELECT COUNT({quote(column)}), SUM({quote(column)}) FROM {table}"
+                sql = f"SELECT COUNT({quote(column)}), SUM({quote(column)}) FROM {table}"  # noqa: S608 - identifiers come from the schema and are quoted by quote_name; no values
             queries[f"{model._meta.db_table}.{column}"] = sql
     return queries
 
@@ -158,7 +158,8 @@ def test_populated_database_migrates_to_head(start):
         assert became, "expected at least one column to become NOT NULL after the start"
         for table, column in became:
             quote = connection.ops.quote_name
-            assert _scalar(f"SELECT COUNT(*) FROM {quote(table)} WHERE {quote(column)} IS NULL") == 0, (table, column)
+            null_count = _scalar(f"SELECT COUNT(*) FROM {quote(table)} WHERE {quote(column)} IS NULL")  # noqa: S608 - identifiers come from the schema and are quoted by quote_name; no values
+            assert null_count == 0, (table, column)
             assert _column_is_nullable(table, column) is not True, (table, column)
 
         # The data migrations on the way did their jobs on populated rows.

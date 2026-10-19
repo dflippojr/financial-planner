@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone as dt_timezone
+from datetime import datetime, timedelta, UTC
 
 import pytest
 from django.test import override_settings
@@ -38,7 +38,7 @@ def test_backup_alert_fires_once_per_day_and_clears_after_success(tmp_path, sett
     Membership.objects.create(person=operator, household=household)
     Membership.objects.create(person=roommate, household=household)
     status = tmp_path / "status"
-    stale = (timezone.now() - timedelta(hours=27)).astimezone(dt_timezone.utc).strftime(
+    stale = (timezone.now() - timedelta(hours=27)).astimezone(UTC).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
     _write_status(status, last_success_at=stale, dump_name="financial_planner_synthetic.dump")
@@ -57,7 +57,7 @@ def test_backup_alert_fires_once_per_day_and_clears_after_success(tmp_path, sett
 
         # Relative to the real clock: staleness is measured against now, so a
         # fixed date here turned stale the day after it was written (#223).
-        fresh = (timezone.now() - timedelta(hours=1)).astimezone(dt_timezone.utc).strftime(
+        fresh = (timezone.now() - timedelta(hours=1)).astimezone(UTC).strftime(
             "%Y-%m-%dT%H:%M:%SZ"
         )
         _write_status(
@@ -159,7 +159,7 @@ def test_offsite_error_alerts_and_is_shown_on_settings(tmp_path):
 
 
 def test_stale_offsite_copy_is_unhealthy_when_configured():
-    now = datetime(2026, 10, 4, 12, tzinfo=dt_timezone.utc)
+    now = datetime(2026, 10, 4, 12, tzinfo=UTC)
     stale_offsite = now - timedelta(hours=27)
     configured = {
         "last_error": "",
@@ -179,7 +179,7 @@ def test_stale_offsite_copy_is_unhealthy_when_configured():
     assert backup_is_unhealthy(local_only, now=now) is False
 
 
-NOW = datetime(2026, 10, 4, 12, tzinfo=dt_timezone.utc)
+NOW = datetime(2026, 10, 4, 12, tzinfo=UTC)
 
 
 def _healthy_status(**fields):
@@ -239,7 +239,7 @@ def test_restore_check_turned_off_is_never_overdue():
 def test_status_without_a_restore_check_time_counts_as_never_checked(tmp_path, fields):
     make_person("operator")
     status = tmp_path / "status"
-    fresh = (timezone.now() - timedelta(hours=1)).astimezone(dt_timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    fresh = (timezone.now() - timedelta(hours=1)).astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     _write_status(status, last_success_at=fresh, dump_name="financial_planner_synthetic.dump", **fields)
 
     with override_settings(BACKUP_STATUS_PATH=str(status), OPERATOR_USERNAMES="operator"):

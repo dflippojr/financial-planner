@@ -2,12 +2,13 @@
 # Run locally what the CI gate runs on every pull request, before pushing.
 #
 #   1. The statement-file guard (guards.yml).
-#   2. The migration-number collision check (guards.yml) and the migration
+#   2. ruff and pyright (lint.yml, scripts/lint.sh).
+#   3. The migration-number collision check (guards.yml) and the migration
 #      completeness check (postgres.yml).
-#   3. The suite on a throwaway PostgreSQL 18 with coverage, failing below the
+#   4. The suite on a throwaway PostgreSQL 18 with coverage, failing below the
 #      .coveragerc floor (postgres.yml plus the coverage run in sonar.yml). It
 #      includes the populated migration test postgres.yml runs as its own step.
-#   4. The browser layout tests in Chromium (playwright.yml).
+#   5. The browser layout tests in Chromium (playwright.yml).
 #
 # Not covered here: pip-audit, the SonarCloud scan, the Playwright UI journeys
 # (npm run test:ui), the disposable UI smoke and the Docker smoke build. CI
@@ -23,6 +24,8 @@ cd "$(dirname "$0")/.."
 
 echo "== Statement-file guard"
 "$python_bin" scripts/check_statement_files.py
+
+PYTHON="$python_bin" bash scripts/lint.sh
 
 echo "== Migration numbers do not collide"
 "$python_bin" scripts/check_migration_numbers.py

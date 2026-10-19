@@ -15,7 +15,7 @@ the importer, so a test can compare the two.
 import csv
 import io
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, UTC
 
 from hypothesis import strategies as st
 
@@ -181,7 +181,7 @@ def overlapping_files(draw, pool, *, min_files=2, max_files=4):
 
 def simplefin_epoch(day):
     """Noon UTC on the day, which is the same calendar day in the app's US time zone."""
-    return int(datetime.combine(day, time(12), tzinfo=timezone.utc).timestamp())
+    return int(datetime.combine(day, time(12), tzinfo=UTC).timestamp())
 
 
 def simplefin_payload(items):

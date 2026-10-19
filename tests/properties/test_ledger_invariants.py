@@ -218,7 +218,7 @@ def transfer_cases(draw):
     distinct = draw(st.lists(st.integers(1, MAX_MINOR).filter(lambda size: size not in sizes),
                              min_size=len(background), max_size=len(background), unique=True))
     background = [replace(row, amount_minor=size if row.amount_minor > 0 else -size)
-                  for row, size in zip(background, distinct)]
+                  for row, size in zip(background, distinct, strict=True)]
     placed = [(draw(st.sampled_from(tuple(ACCOUNT_SHAPES))), row) for row in background]
     return tuple(transfers), tuple(placed)
 
@@ -262,7 +262,7 @@ def refund_cases(draw):
     refunds = draw(st.lists(other, min_size=1, max_size=3))
     # Index len(purchases) picks the outgoing transfer leg, which totals already exclude.
     originals = draw(st.lists(st.integers(0, len(purchases)), min_size=len(refunds), max_size=len(refunds)))
-    return transfer, tuple(purchases), tuple(zip(refunds, originals))
+    return transfer, tuple(purchases), tuple(zip(refunds, originals, strict=True))
 
 
 @given(refund_cases())

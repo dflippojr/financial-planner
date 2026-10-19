@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta, timezone as dt_timezone
+from datetime import date, datetime, timedelta, UTC
 from hashlib import sha256
 from unittest.mock import patch
 
@@ -413,7 +413,7 @@ def test_cancelled_series_is_not_upcoming():
         owner,
         name="Synthetic Ended",
         cadence=RecurringSeries.Cadence.MONTHLY,
-        cancelled_at=datetime(2026, 9, 1, tzinfo=dt_timezone.utc),
+        cancelled_at=datetime(2026, 9, 1, tzinfo=UTC),
     )
     add_member(
         series,
@@ -605,7 +605,7 @@ def test_a_shared_cancelled_series_does_not_offer_keep_cancelled():
         description="Synthetic Internet",
     )
     add_member(series, later)
-    series.cancelled_at = datetime(2026, 9, 20, 12, tzinfo=dt_timezone.utc)
+    series.cancelled_at = datetime(2026, 9, 20, 12, tzinfo=UTC)
     series.save(update_fields=["cancelled_at"])
     client = Client()
     client.force_login(member.user)

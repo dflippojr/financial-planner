@@ -1,6 +1,6 @@
 import hashlib
 from datetime import date, datetime, timedelta
-from datetime import timezone as dt_utc
+from datetime import UTC
 from http.client import IncompleteRead
 from io import BytesIO
 from urllib.error import HTTPError
@@ -76,7 +76,7 @@ def setup_token():
 
 
 def epoch(year, month, day, hour=15):
-    return int(datetime(year, month, day, hour, tzinfo=dt_utc.utc).timestamp())
+    return int(datetime(year, month, day, hour, tzinfo=UTC).timestamp())
 
 
 def account_payload(*, account_id="sf-checking", transactions=None, extra=None, currency="USD"):
@@ -1017,7 +1017,6 @@ def test_sync_does_not_dedupe_against_a_previous_remote_account_after_relink(mon
     assert sorted(amounts) == [-400, -300]
 
 
-UTC = dt_utc.utc
 CRON_CASES = [
     # (expression, moment, expected match)
     ("0 * * * *", datetime(2026, 10, 1, 6, 0), True),

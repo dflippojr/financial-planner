@@ -28,7 +28,7 @@ def _send_notice(address, body):
         )
         if sent:
             return True
-    except Exception:
+    except Exception:  # noqa: S110 - logged below without the exception
         # SMTP exceptions can contain recipients, credentials and message content.
         # Never log the exception or its traceback.
         pass

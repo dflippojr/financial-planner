@@ -1,0 +1,2240 @@
+[
+ {
+  "file": "finance/account_views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Account]\"",
+  "count": 3
+ },
+ {
+  "file": "finance/account_views.py",
+  "rule": "reportOptionalMemberAccess",
+  "message": "\"pk\" is not a known attribute of \"None\"",
+  "count": 1
+ },
+ {
+  "file": "finance/ai_api.py",
+  "rule": "reportOptionalMemberAccess",
+  "message": "\"get\" is not a known attribute of \"None\"",
+  "count": 3
+ },
+ {
+  "file": "finance/ai_harness.py",
+  "rule": "reportOptionalMemberAccess",
+  "message": "\"get\" is not a known attribute of \"None\"",
+  "count": 4
+ },
+ {
+  "file": "finance/ai_jobs.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"owner_id\" for class \"AiProviderConnection\"",
+  "count": 2
+ },
+ {
+  "file": "finance/ai_plan.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"connection_id\" for class \"AiPlanLink\"",
+  "count": 2
+ },
+ {
+  "file": "finance/ai_plan.py",
+  "rule": "reportOptionalMemberAccess",
+  "message": "\"get\" is not a known attribute of \"None\"",
+  "count": 1
+ },
+ {
+  "file": "finance/ai_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"id\" for class \"Person\"",
+  "count": 1
+ },
+ {
+  "file": "finance/ai_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"owned_by\" for class \"BaseManager[AiProviderConnection]\"",
+  "count": 9
+ },
+ {
+  "file": "finance/ai_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"owner_id\" for class \"AiProviderConnection\"",
+  "count": 1
+ },
+ {
+  "file": "finance/ai_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[AiUsageEvent]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/ai_tiles.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Account]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/ai_tools.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"LiteralString | Unknown\" cannot be assigned to parameter \"value\" of type \"int\" in function \"__setitem__\"",
+  "count": 1
+ },
+ {
+  "file": "finance/ai_tools.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Account]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/ai_tools.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Category]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/ai_tools.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[PlannedItem]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/ai_tools.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[RecurringSeries]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/ai_tools.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Transaction]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/ai_tools.py",
+  "rule": "reportOptionalMemberAccess",
+  "message": "\"isoformat\" is not a known attribute of \"None\"",
+  "count": 2
+ },
+ {
+  "file": "finance/ai_tools.py",
+  "rule": "reportOptionalMemberAccess",
+  "message": "\"pk\" is not a known attribute of \"None\"",
+  "count": 2
+ },
+ {
+  "file": "finance/ai_views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[AiUsageEvent]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/alert_ntfy.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot assign to attribute \"ntfy_digest_week\" for class \"AlertSettings\"",
+  "count": 1
+ },
+ {
+  "file": "finance/alert_services.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"int | list[Unknown] | list[Alert]\" cannot be assigned to parameter \"iterable\" of type \"Iterable[Unknown]\" in function \"extend\"",
+  "count": 1
+ },
+ {
+  "file": "finance/alert_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"household_id\" for class \"Budget\"",
+  "count": 1
+ },
+ {
+  "file": "finance/alert_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"owner_id\" for class \"Budget\"",
+  "count": 1
+ },
+ {
+  "file": "finance/alert_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"person_id\" for class \"AlertSettings\"",
+  "count": 2
+ },
+ {
+  "file": "finance/alert_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"recipient_id\" for class \"Alert\"",
+  "count": 1
+ },
+ {
+  "file": "finance/alert_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Account]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/alert_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Budget]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/alert_services.py",
+  "rule": "reportOptionalSubscript",
+  "message": "Object of type \"None\" is not subscriptable",
+  "count": 2
+ },
+ {
+  "file": "finance/allauth_adapters.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"person\" for class \"AbstractUser\"",
+  "count": 2
+ },
+ {
+  "file": "finance/audit_models.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"str\" cannot be assigned to parameter \"key\" of type \"Action\" in function \"get\"",
+  "count": 1
+ },
+ {
+  "file": "finance/audit_models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"account_id\" for class \"AuditEvent*\"",
+  "count": 5
+ },
+ {
+  "file": "finance/audit_models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"actor_id\" for class \"AuditEvent*\"",
+  "count": 2
+ },
+ {
+  "file": "finance/audit_models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"declared_operator_id\" for class \"AuditEvent*\"",
+  "count": 1
+ },
+ {
+  "file": "finance/audit_models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"household_id\" for class \"AuditEvent*\"",
+  "count": 5
+ },
+ {
+  "file": "finance/audit_models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"private_owner_id\" for class \"AuditEvent*\"",
+  "count": 5
+ },
+ {
+  "file": "finance/audit_models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Account]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/audit_operations.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"Execution\" cannot be assigned to parameter \"value\" of type \"None\" in function \"set\"",
+  "count": 1
+ },
+ {
+  "file": "finance/audit_operations.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"str\" cannot be assigned to parameter \"outcome\" of type \"Outcome\" in function \"append_event\"",
+  "count": 1
+ },
+ {
+  "file": "finance/audit_operations.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"actor_kind\" for class \"None\"",
+  "count": 3
+ },
+ {
+  "file": "finance/audit_operations.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"run_id\" for class \"None\"",
+  "count": 3
+ },
+ {
+  "file": "finance/audit_services.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"Origin\" cannot be assigned to parameter \"value\" of type \"None\" in function \"set\"",
+  "count": 1
+ },
+ {
+  "file": "finance/audit_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Account]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/audit_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[AuditEvent]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/audit_services.py",
+  "rule": "reportOptionalMemberAccess",
+  "message": "\"pk\" is not a known attribute of \"None\"",
+  "count": 1
+ },
+ {
+  "file": "finance/backup_health.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"bool\" cannot be assigned to parameter \"value\" of type \"str\" in function \"__setitem__\"",
+  "count": 1
+ },
+ {
+  "file": "finance/backup_health.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"datetime | None\" cannot be assigned to parameter \"value\" of type \"str\" in function \"__setitem__\"",
+  "count": 3
+ },
+ {
+  "file": "finance/bill_grouping.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Transaction]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/bills_calendar.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"set[tuple[str, Unknown, Unknown] | Unknown]\" cannot be assigned to parameter \"skip\" of type \"frozenset[Unknown]\" in function \"_balance_delta_on_day\"",
+  "count": 1
+ },
+ {
+  "file": "finance/bills_calendar.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"account_id\" for class \"BalanceSnapshot\"",
+  "count": 2
+ },
+ {
+  "file": "finance/bills_calendar.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Account]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/bills_calendar.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[RecurringSeries]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/bills_calendar.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Transaction]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/budget_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Budget]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/budget_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Category]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/budget_views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Budget]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/bulk_edit_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"category_id\" for class \"Transaction\"",
+  "count": 1
+ },
+ {
+  "file": "finance/bulk_edit_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[BulkEditUndo]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/bulk_edit_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Tag]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/bulk_edit_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Transaction]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/bulk_edit_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot assign to attribute \"_excluded\" for class \"Transaction\"",
+  "count": 1
+ },
+ {
+  "file": "finance/bulk_edit_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot assign to attribute \"category_id\" for class \"Transaction\"",
+  "count": 1
+ },
+ {
+  "file": "finance/bulk_edit_services.py",
+  "rule": "reportOptionalIterable",
+  "message": "Object of type \"None\" cannot be used as iterable value",
+  "count": 2
+ },
+ {
+  "file": "finance/bulk_edit_views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"getlist\" for class \"dict[str, Any]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/bulk_edit_views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[BulkEditUndo]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/bulk_edit_views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Transaction]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/cash_flow.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"for_cash_flow\" for class \"BaseManager[Account]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/cash_flow.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Account]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/cash_flow.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Category]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/cash_flow.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[ImportBatch]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/cash_flow.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Transaction]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/category_services.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"dict[str, dict[Any, Any]]\" cannot be assigned to parameter \"value\" of type \"None\" in function \"set\"",
+  "count": 1
+ },
+ {
+  "file": "finance/category_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"categories\" for class \"Household\"",
+  "count": 2
+ },
+ {
+  "file": "finance/category_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"excluding_income_and_spending\" for class \"BaseManager[TransferPair]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/category_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"household_id\" for class \"Membership\"",
+  "count": 1
+ },
+ {
+  "file": "finance/category_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"leg_a_id\" for class \"TransferPair\"",
+  "count": 2
+ },
+ {
+  "file": "finance/category_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"leg_b_id\" for class \"TransferPair\"",
+  "count": 2
+ },
+ {
+  "file": "finance/category_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"person_id\" for class \"Membership\"",
+  "count": 2
+ },
+ {
+  "file": "finance/category_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"splits\" for class \"Transaction\"",
+  "count": 6
+ },
+ {
+  "file": "finance/category_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Account]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/category_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Category]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/category_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[RefundLink]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/category_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Transaction]\"",
+  "count": 19
+ },
+ {
+  "file": "finance/category_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[TransferPair]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/category_suggestion_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"category_id\" for class \"CategorySuggestion\"",
+  "count": 1
+ },
+ {
+  "file": "finance/category_suggestion_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"transaction_id\" for class \"CategorySuggestion\"",
+  "count": 1
+ },
+ {
+  "file": "finance/category_suggestion_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[CategoryRule]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/category_suggestion_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[CategorySuggestion]\"",
+  "count": 3
+ },
+ {
+  "file": "finance/category_suggestion_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Category]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/category_suggestion_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Transaction]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/category_suggestion_views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[CategorySuggestion]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/chat_proposals.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"account_id\" for class \"CategoryRule\"",
+  "count": 1
+ },
+ {
+  "file": "finance/chat_proposals.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"entries\" for class \"RuleApplication\"",
+  "count": 1
+ },
+ {
+  "file": "finance/chat_proposals.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[AiProposal]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/chat_proposals.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Category]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/chat_proposals.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Tag]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/chat_proposals.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Transaction]\"",
+  "count": 4
+ },
+ {
+  "file": "finance/chat_runner.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"conversation_id\" for class \"AiConversationMessage\"",
+  "count": 1
+ },
+ {
+  "file": "finance/chat_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"member_id\" for class \"AiConversation\"",
+  "count": 3
+ },
+ {
+  "file": "finance/chat_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"owned_by\" for class \"BaseManager[AiConversation]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/chat_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"owner_id\" for class \"AiProviderConnection\"",
+  "count": 1
+ },
+ {
+  "file": "finance/chat_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Account]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/chat_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[AiConversation]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/chat_views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"id\" for class \"Person\"",
+  "count": 1
+ },
+ {
+  "file": "finance/chat_views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"owner_id\" for class \"AiProviderConnection\"",
+  "count": 2
+ },
+ {
+  "file": "finance/chat_views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[AiConversationMessage]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/chat_views.py",
+  "rule": "reportOptionalMemberAccess",
+  "message": "\"id\" is not a known attribute of \"None\"",
+  "count": 1
+ },
+ {
+  "file": "finance/csv_import/mapping_views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Account]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/csv_import/mapping_views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[SavedCsvMapping]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/csv_import/saved_mappings.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Account]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/csv_import/saved_mappings.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[SavedCsvMapping]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/csv_import/services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Account]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/csv_import/services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[SavedCsvMapping]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/csv_import/staging.py",
+  "rule": "reportOptionalMemberAccess",
+  "message": "\"unlink\" is not a known attribute of \"None\"",
+  "count": 1
+ },
+ {
+  "file": "finance/csv_import/views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Account]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/csv_import/views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[ImportBatch]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/debt_planner_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Account]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/debt_planner_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[BalanceSnapshot]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/export.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"actor_id\" for class \"BudgetRolloverReset\"",
+  "count": 1
+ },
+ {
+  "file": "finance/export.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"budget_id\" for class \"BudgetAmount\"",
+  "count": 1
+ },
+ {
+  "file": "finance/export.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"budget_id\" for class \"BudgetRolloverReset\"",
+  "count": 1
+ },
+ {
+  "file": "finance/export.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"category_id\" for class \"TransactionSplit\"",
+  "count": 2
+ },
+ {
+  "file": "finance/export.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"conversation_id\" for class \"AiConversationMessage\"",
+  "count": 1
+ },
+ {
+  "file": "finance/export.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"excluding_income_and_spending\" for class \"BaseManager[TransferPair]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/export.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"original_id\" for class \"RefundLink\"",
+  "count": 1
+ },
+ {
+  "file": "finance/export.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"original_part_id\" for class \"RefundLink\"",
+  "count": 1
+ },
+ {
+  "file": "finance/export.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"owned_by\" for class \"BaseManager[AiConversation]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/export.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"owned_by\" for class \"BaseManager[AiProviderConnection]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/export.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"refund_id\" for class \"RefundLink\"",
+  "count": 1
+ },
+ {
+  "file": "finance/export.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"tag_id\" for class \"TransactionTag\"",
+  "count": 2
+ },
+ {
+  "file": "finance/export.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"transaction_id\" for class \"TransactionSplit\"",
+  "count": 1
+ },
+ {
+  "file": "finance/export.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"transaction_id\" for class \"TransactionTag\"",
+  "count": 1
+ },
+ {
+  "file": "finance/export.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Account]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/export.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[AiJob]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/export.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[AiUsageEvent]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/export.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Budget]\"",
+  "count": 3
+ },
+ {
+  "file": "finance/export.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Category]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/export.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[ImportBatch]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/export.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Receipt]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/export.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[RecurringSeries]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/export.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Tag]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/export.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Transaction]\"",
+  "count": 3
+ },
+ {
+  "file": "finance/export.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[TransferPair]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/export.py",
+  "rule": "reportOptionalMemberAccess",
+  "message": "\"user\" is not a known attribute of \"None\"",
+  "count": 1
+ },
+ {
+  "file": "finance/forms.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"Any | None\" cannot be assigned to parameter \"x\" of type \"ConvertibleToInt\" in function \"__new__\"",
+  "count": 2
+ },
+ {
+  "file": "finance/forms.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"list[tuple[str, str | None]]\" cannot be assigned to parameter \"choices\" of type \"_FieldChoices | (() -> _FieldChoices)\" in function \"__init__\"",
+  "count": 1
+ },
+ {
+  "file": "finance/forms.py",
+  "rule": "reportAssignmentType",
+  "message": "Type \"tuple[Literal['invitation_code'], Literal['username'], Literal['display_name'], Literal['password1'], Literal['password2'], Literal['privacy_policy_version'], Literal['accept_privacy_policy']]\" is not assignable to declared type \"list[str] | None\"",
+  "count": 1
+ },
+ {
+  "file": "finance/forms.py",
+  "rule": "reportAssignmentType",
+  "message": "Type \"tuple[Literal['setup_code'], Literal['username'], Literal['display_name'], Literal['household_name'], Literal['password1'], Literal['password2'], Literal['privacy_policy_version'], Literal['accept_privacy_policy']]\" is not assignable to declared type \"list[str] | None\"",
+  "count": 1
+ },
+ {
+  "file": "finance/forms.py",
+  "rule": "reportAssignmentType",
+  "message": "Type \"tuple[Literal['username'], Literal['recovery_code'], Literal['password1'], Literal['password2']]\" is not assignable to declared type \"list[str] | None\"",
+  "count": 1
+ },
+ {
+  "file": "finance/forms.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"existing_user\" for class \"PasswordPairForm*\"",
+  "count": 1
+ },
+ {
+  "file": "finance/forms.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"queryset\" for class \"Field\"",
+  "count": 2
+ },
+ {
+  "file": "finance/forms.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Account]\"",
+  "count": 7
+ },
+ {
+  "file": "finance/forms.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Category]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/forms.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[RecurringSeries]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/forms.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[RefundLink]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/forms.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[SavingsGoal]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/forms.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Tag]\"",
+  "count": 7
+ },
+ {
+  "file": "finance/forms.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Transaction]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/forms.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot assign to attribute \"queryset\" for class \"Field\"",
+  "count": 30
+ },
+ {
+  "file": "finance/forms.py",
+  "rule": "reportOptionalMemberAccess",
+  "message": "\"version\" is not a known attribute of \"None\"",
+  "count": 1
+ },
+ {
+  "file": "finance/google_auth.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"Unknown | None\" cannot be assigned to parameter \"x\" of type \"ConvertibleToInt\" in function \"__new__\"",
+  "count": 2
+ },
+ {
+  "file": "finance/import_due.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"household_id\" for class \"Account\"",
+  "count": 1
+ },
+ {
+  "file": "finance/import_due.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"last_covered\" for class \"Account\"",
+  "count": 2
+ },
+ {
+  "file": "finance/import_due.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"owner_id\" for class \"Account\"",
+  "count": 1
+ },
+ {
+  "file": "finance/lifecycle_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"account_id\" for class \"AccountLink\"",
+  "count": 1
+ },
+ {
+  "file": "finance/lifecycle_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"connection_id\" for class \"AccountLink\"",
+  "count": 1
+ },
+ {
+  "file": "finance/lifecycle_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"household_id\" for class \"Account\"",
+  "count": 1
+ },
+ {
+  "file": "finance/lifecycle_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"household_id\" for class \"Membership\"",
+  "count": 8
+ },
+ {
+  "file": "finance/lifecycle_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"series_id\" for class \"RecurringSeriesMember\"",
+  "count": 1
+ },
+ {
+  "file": "finance/lifecycle_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Account]\"",
+  "count": 6
+ },
+ {
+  "file": "finance/management/commands/publish_privacy_policy.py",
+  "rule": "reportOptionalMemberAccess",
+  "message": "\"is_material\" is not a known attribute of \"None\"",
+  "count": 1
+ },
+ {
+  "file": "finance/management/commands/publish_privacy_policy.py",
+  "rule": "reportOptionalMemberAccess",
+  "message": "\"version\" is not a known attribute of \"None\"",
+  "count": 1
+ },
+ {
+  "file": "finance/manual_entry_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Account]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/manual_entry_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Tag]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/manual_entry_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Transaction]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/manual_entry_views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"queryset\" for class \"Field\"",
+  "count": 1
+ },
+ {
+  "file": "finance/middleware.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "\"LoginRequiredMiddleware\" is unknown import symbol",
+  "count": 1
+ },
+ {
+  "file": "finance/models.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"str\" cannot be assigned to parameter \"key\" of type \"Cadence\" in function \"__getitem__\"",
+  "count": 1
+ },
+ {
+  "file": "finance/models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"account_id\" for class \"BalanceSnapshot*\"",
+  "count": 1
+ },
+ {
+  "file": "finance/models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"account_id\" for class \"ImportBatch\"",
+  "count": 1
+ },
+ {
+  "file": "finance/models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"account_id\" for class \"Transaction*\"",
+  "count": 2
+ },
+ {
+  "file": "finance/models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"budget_id\" for class \"BudgetAmount*\"",
+  "count": 1
+ },
+ {
+  "file": "finance/models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"budget_id\" for class \"BudgetRolloverReset*\"",
+  "count": 1
+ },
+ {
+  "file": "finance/models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"category_id\" for class \"Budget*\"",
+  "count": 1
+ },
+ {
+  "file": "finance/models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"category_id\" for class \"Transaction*\"",
+  "count": 1
+ },
+ {
+  "file": "finance/models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"get_source_display\" for class \"ImportBatch*\"",
+  "count": 1
+ },
+ {
+  "file": "finance/models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"import_batch_id\" for class \"Transaction*\"",
+  "count": 1
+ },
+ {
+  "file": "finance/models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"leg_a_id\" for class \"TransferPair*\"",
+  "count": 1
+ },
+ {
+  "file": "finance/models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"leg_b_id\" for class \"TransferPair*\"",
+  "count": 1
+ },
+ {
+  "file": "finance/models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"member_id\" for class \"SheetComparisonSettings*\"",
+  "count": 1
+ },
+ {
+  "file": "finance/models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"member_id\" for class \"SheetMonthTotal*\"",
+  "count": 1
+ },
+ {
+  "file": "finance/models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"original_id\" for class \"RefundLink*\"",
+  "count": 1
+ },
+ {
+  "file": "finance/models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"person_id\" for class \"AlertSettings*\"",
+  "count": 1
+ },
+ {
+  "file": "finance/models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"person_id\" for class \"BillsCalendarSettings*\"",
+  "count": 1
+ },
+ {
+  "file": "finance/models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"person_id\" for class \"MonthlyReview*\"",
+  "count": 1
+ },
+ {
+  "file": "finance/models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"person_id\" for class \"RecurringExclusion*\"",
+  "count": 1
+ },
+ {
+  "file": "finance/models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"person_id\" for class \"RecurringPriceAcknowledgement*\"",
+  "count": 1
+ },
+ {
+  "file": "finance/models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"refund_id\" for class \"RefundLink*\"",
+  "count": 1
+ },
+ {
+  "file": "finance/models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"secured_asset_id\" for class \"Account*\"",
+  "count": 1
+ },
+ {
+  "file": "finance/models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"series_id\" for class \"RecurringPriceAcknowledgement*\"",
+  "count": 1
+ },
+ {
+  "file": "finance/models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"series_id\" for class \"RecurringSeriesMember*\"",
+  "count": 1
+ },
+ {
+  "file": "finance/models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"splits\" for class \"Transaction*\"",
+  "count": 1
+ },
+ {
+  "file": "finance/models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"tag_id\" for class \"TransactionTag*\"",
+  "count": 1
+ },
+ {
+  "file": "finance/models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"transaction_id\" for class \"RecurringExclusion*\"",
+  "count": 1
+ },
+ {
+  "file": "finance/models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"transaction_id\" for class \"RecurringSeriesMember*\"",
+  "count": 1
+ },
+ {
+  "file": "finance/models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"transaction_id\" for class \"TransactionTag*\"",
+  "count": 1
+ },
+ {
+  "file": "finance/models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Account]\"",
+  "count": 3
+ },
+ {
+  "file": "finance/models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[CategoryRule]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/models.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Transaction]\"",
+  "count": 8
+ },
+ {
+  "file": "finance/models.py",
+  "rule": "reportOptionalMemberAccess",
+  "message": "\"name\" is not a known attribute of \"None\"",
+  "count": 1
+ },
+ {
+  "file": "finance/monthly_review.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"Any | int\" cannot be assigned to parameter \"value\" of type \"str\" in function \"__setitem__\"",
+  "count": 1
+ },
+ {
+  "file": "finance/monthly_review.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"dict[str, list[dict[str, Unknown]]]\" cannot be assigned to parameter \"m\" of type \"Iterable[tuple[str, str]]\" in function \"update\"",
+  "count": 1
+ },
+ {
+  "file": "finance/monthly_review.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"list[Unknown]\" cannot be assigned to parameter \"value\" of type \"str\" in function \"__setitem__\"",
+  "count": 2
+ },
+ {
+  "file": "finance/monthly_review.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"excluding_income_and_spending\" for class \"BaseManager[TransferPair]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/monthly_review.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"isoformat\" for class \"object\"",
+  "count": 2
+ },
+ {
+  "file": "finance/monthly_review.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Account]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/monthly_review.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Budget]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/monthly_review.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[RecurringSeries]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/monthly_review.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[SavingsGoal]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/monthly_review.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Transaction]\"",
+  "count": 3
+ },
+ {
+  "file": "finance/monthly_review.py",
+  "rule": "reportCallIssue",
+  "message": "No overloads for \"update\" match the provided arguments",
+  "count": 1
+ },
+ {
+  "file": "finance/monthly_review_ai.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"Literal['unusual_omitted_count']\" cannot be assigned to parameter \"key\" of type \"slice[SupportsIndex | None, SupportsIndex | None, SupportsIndex | None]\" in function \"__setitem__\"",
+  "count": 2
+ },
+ {
+  "file": "finance/monthly_review_ai.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"for_cash_flow\" for class \"BaseManager[Account]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/monthly_review_ai.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"get\" for class \"list[str | dict[Unknown, str | dict[Unknown, Unknown] | list[Unknown] | Unknown | None] | list[Unknown] | Unknown | None]\"",
+  "count": 4
+ },
+ {
+  "file": "finance/monthly_review_ai.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"get\" for class \"str\"",
+  "count": 4
+ },
+ {
+  "file": "finance/monthly_review_ai.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"values\" for class \"list[str | dict[Unknown, str | dict[Unknown, Unknown] | list[Unknown] | Unknown | None] | list[Unknown] | Unknown | None]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/monthly_review_ai.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"values\" for class \"str\"",
+  "count": 1
+ },
+ {
+  "file": "finance/monthly_review_ai.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[RecurringSeries]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/monthly_review_ai.py",
+  "rule": "reportCallIssue",
+  "message": "No overloads for \"__setitem__\" match the provided arguments",
+  "count": 2
+ },
+ {
+  "file": "finance/monthly_review_ai.py",
+  "rule": "reportIndexIssue",
+  "message": "\"__setitem__\" method not defined on type \"str\"",
+  "count": 2
+ },
+ {
+  "file": "finance/monthly_review_ai.py",
+  "rule": "reportOperatorIssue",
+  "message": "Operator \"+\" not supported for types \"str | dict[Unknown, Unknown] | list[str | dict[Unknown, Unknown] | list[Unknown] | Unknown | None] | Unknown | None\" and \"Literal[1]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/monthly_review_ai.py",
+  "rule": "reportOptionalMemberAccess",
+  "message": "\"get\" is not a known attribute of \"None\"",
+  "count": 4
+ },
+ {
+  "file": "finance/monthly_review_ai.py",
+  "rule": "reportOptionalMemberAccess",
+  "message": "\"values\" is not a known attribute of \"None\"",
+  "count": 1
+ },
+ {
+  "file": "finance/monthly_review_ai.py",
+  "rule": "reportOptionalSubscript",
+  "message": "Object of type \"None\" is not subscriptable",
+  "count": 2
+ },
+ {
+  "file": "finance/net_worth.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[BalanceSnapshot]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/net_worth_views.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"Any | Literal[''] | None\" cannot be assigned to parameter \"scope\" of type \"str\" in function \"net_worth_report\"",
+  "count": 1
+ },
+ {
+  "file": "finance/net_worth_views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[BalanceSnapshot]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/pairing_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Account]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/passkey_services.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"list[Any] | list[Literal['http://localhost', 'http://127.0.0.1', 'http://testserver']]\" cannot be assigned to parameter \"expected_origin\" of type \"str | List[str]\" in function \"verify_authentication_response\"",
+  "count": 1
+ },
+ {
+  "file": "finance/passkey_services.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"list[Any] | list[Literal['http://localhost', 'http://127.0.0.1', 'http://testserver']]\" cannot be assigned to parameter \"expected_origin\" of type \"str | List[str]\" in function \"verify_registration_response\"",
+  "count": 1
+ },
+ {
+  "file": "finance/passkey_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Passkey]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/passkey_services.py",
+  "rule": "reportOptionalMemberAccess",
+  "message": "\"require_passkey_after_password\" is not a known attribute of \"None\"",
+  "count": 2
+ },
+ {
+  "file": "finance/passkey_services.py",
+  "rule": "reportOptionalMemberAccess",
+  "message": "\"save\" is not a known attribute of \"None\"",
+  "count": 1
+ },
+ {
+  "file": "finance/passkey_views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "\"login_not_required\" is unknown import symbol",
+  "count": 1
+ },
+ {
+  "file": "finance/passkey_views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"person\" for class \"AbstractUser\"",
+  "count": 2
+ },
+ {
+  "file": "finance/planning_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"charge_dates\" for class \"RecurringSeries\"",
+  "count": 1
+ },
+ {
+  "file": "finance/planning_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"owner_id\" for class \"PlannedItem\"",
+  "count": 1
+ },
+ {
+  "file": "finance/planning_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[PlannedItem]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/planning_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[RecurringSeries]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/planning_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[SavingsGoal]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/planning_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot assign to attribute \"charge_dates\" for class \"RecurringSeries\"",
+  "count": 1
+ },
+ {
+  "file": "finance/planning_services.py",
+  "rule": "reportOptionalIterable",
+  "message": "Object of type \"None\" cannot be used as iterable value",
+  "count": 1
+ },
+ {
+  "file": "finance/planning_views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[PlannedItem]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/policy_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"policy_accepted\" for class \"Person\"",
+  "count": 1
+ },
+ {
+  "file": "finance/policy_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"privacy_policy_declined_version_id\" for class \"Person\"",
+  "count": 1
+ },
+ {
+  "file": "finance/policy_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot assign to attribute \"privacy_policy_declined_version\" for class \"Person\"",
+  "count": 1
+ },
+ {
+  "file": "finance/policy_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot assign to attribute \"privacy_policy_dismissed_version\" for class \"Person\"",
+  "count": 1
+ },
+ {
+  "file": "finance/policy_services.py",
+  "rule": "reportOptionalMemberAccess",
+  "message": "\"pk\" is not a known attribute of \"None\"",
+  "count": 1
+ },
+ {
+  "file": "finance/policy_services.py",
+  "rule": "reportOptionalMemberAccess",
+  "message": "\"version\" is not a known attribute of \"None\"",
+  "count": 5
+ },
+ {
+  "file": "finance/receipt_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"account_id\" for class \"Transaction\"",
+  "count": 2
+ },
+ {
+  "file": "finance/receipt_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Account]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/receipt_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Receipt]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/receipt_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Transaction]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/recurring_review.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"isoformat\" for class \"object\"",
+  "count": 1
+ },
+ {
+  "file": "finance/recurring_review.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"shared_with\" for class \"BaseManager[RecurringSeries]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/recurring_review.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[ImportBatch]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/recurring_review.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[RecurringSeries]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/recurring_services.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"Unknown | tuple[Unknown, ...] | None\" cannot be assigned to parameter \"key\" of type \"tuple[Unknown | None, None]\" in function \"__getitem__\"",
+  "count": 1
+ },
+ {
+  "file": "finance/recurring_services.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"int | None\" cannot be assigned to parameter \"months\" of type \"int\" in function \"add_months\"",
+  "count": 1
+ },
+ {
+  "file": "finance/recurring_services.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"str\" cannot be assigned to parameter \"key\" of type \"Cadence\" in function \"__getitem__\"",
+  "count": 1
+ },
+ {
+  "file": "finance/recurring_services.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"str\" cannot be assigned to parameter \"key\" of type \"Cadence\" in function \"get\"",
+  "count": 2
+ },
+ {
+  "file": "finance/recurring_services.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"tuple[Unknown | None, Unknown | Literal[-1, 0]]\" cannot be assigned to parameter \"key\" of type \"tuple[Unknown | None, None]\" in function \"__setitem__\"",
+  "count": 1
+ },
+ {
+  "file": "finance/recurring_services.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"tuple[Unknown | None, Unknown | Literal[-1, 0]]\" cannot be assigned to parameter \"key\" of type \"tuple[Unknown | None, None]\" in function \"get\"",
+  "count": 1
+ },
+ {
+  "file": "finance/recurring_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"actionable_by\" for class \"BaseManager[RecurringSeries]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/recurring_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"members\" for class \"RecurringSeries\"",
+  "count": 5
+ },
+ {
+  "file": "finance/recurring_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"person_id\" for class \"RecurringPriceAcknowledgement\"",
+  "count": 2
+ },
+ {
+  "file": "finance/recurring_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"person_id\" for class \"RecurringSeries\"",
+  "count": 3
+ },
+ {
+  "file": "finance/recurring_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"shared_with\" for class \"BaseManager[RecurringSeries]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/recurring_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[RecurringSeries]\"",
+  "count": 5
+ },
+ {
+  "file": "finance/recurring_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Transaction]\"",
+  "count": 3
+ },
+ {
+  "file": "finance/rule_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"_visible\" for class \"CategoryRule\"",
+  "count": 1
+ },
+ {
+  "file": "finance/rule_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"account_id\" for class \"Transaction\"",
+  "count": 3
+ },
+ {
+  "file": "finance/rule_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"category_id\" for class \"CategoryRule\"",
+  "count": 1
+ },
+ {
+  "file": "finance/rule_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"excluding_income_and_spending\" for class \"BaseManager[TransferPair]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/rule_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"owner_household_id\" for class \"CategoryRule\"",
+  "count": 2
+ },
+ {
+  "file": "finance/rule_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"owner_person_id\" for class \"CategoryRule\"",
+  "count": 8
+ },
+ {
+  "file": "finance/rule_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"rule_id\" for class \"RuleApplication\"",
+  "count": 2
+ },
+ {
+  "file": "finance/rule_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"target_field\" for class \"Field[Any, Any]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/rule_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Account]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/rule_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[CategoryRule]\"",
+  "count": 3
+ },
+ {
+  "file": "finance/rule_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Category]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/rule_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[RuleApplicationEntry]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/rule_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[RuleApplication]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/rule_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Transaction]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/rule_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot assign to attribute \"_cached_owner_account_ids\" for class \"CategoryRule\"",
+  "count": 2
+ },
+ {
+  "file": "finance/rule_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot assign to attribute \"your_row_count\" for class \"RuleApplication\"",
+  "count": 1
+ },
+ {
+  "file": "finance/rule_views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[CategoryRule]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/savings_goal_plan.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Account]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/savings_goal_plan.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[SavingsGoal]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/savings_goal_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Account]\"",
+  "count": 3
+ },
+ {
+  "file": "finance/savings_goal_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[SavingsGoal]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/savings_goal_views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[SavingsGoal]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/security_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"member_id\" for class \"MemberSession\"",
+  "count": 1
+ },
+ {
+  "file": "finance/security_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[MemberSecurityEvent]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/security_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[MemberSession]\"",
+  "count": 3
+ },
+ {
+  "file": "finance/sheet_comparison.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[SheetComparisonSettings]\"",
+  "count": 5
+ },
+ {
+  "file": "finance/sheet_comparison.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[SheetMonthTotal]\"",
+  "count": 6
+ },
+ {
+  "file": "finance/simplefin_client.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"float | None\" cannot be assigned to parameter \"arg1\" of type \"SupportsRichComparisonT@min\" in function \"min\"",
+  "count": 1
+ },
+ {
+  "file": "finance/simplefin_client.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"str | int\" cannot be assigned to parameter \"value\" of type \"str\" in function \"_public_address\"",
+  "count": 1
+ },
+ {
+  "file": "finance/simplefin_client.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"_context\" for class \"_GuardedHTTPSConnection*\"",
+  "count": 1
+ },
+ {
+  "file": "finance/simplefin_client.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"_context\" for class \"_GuardedHTTPSHandler*\"",
+  "count": 1
+ },
+ {
+  "file": "finance/simplefin_client.py",
+  "rule": "reportGeneralTypeIssues",
+  "message": "Invalid exception class or object",
+  "count": 1
+ },
+ {
+  "file": "finance/simplefin_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"account_id\" for class \"AccountLink\"",
+  "count": 1
+ },
+ {
+  "file": "finance/simplefin_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Account]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/simplefin_services.py",
+  "rule": "reportOptionalMemberAccess",
+  "message": "\"get\" is not a known attribute of \"None\"",
+  "count": 2
+ },
+ {
+  "file": "finance/simplefin_services.py",
+  "rule": "reportReturnType",
+  "message": "Type \"dict[str, Unknown] | None\" is not assignable to return type \"dict[Unknown, Unknown]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/simplefin_views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"account_id\" for class \"AccountLink\"",
+  "count": 1
+ },
+ {
+  "file": "finance/simplefin_views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Account]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/snapshot_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Account]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/spending_trends.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Category]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/tag_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Account]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/tag_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Tag]\"",
+  "count": 3
+ },
+ {
+  "file": "finance/tag_services.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Transaction]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/transaction_export.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Category]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/transaction_export.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Tag]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/transaction_filters.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Account]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/transaction_filters.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Category]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/transaction_filters.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[SavedTransactionFilter]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/transaction_filters.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Tag]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/transaction_filters.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Transaction]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/unusual_spending.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"excluding_income_and_spending\" for class \"BaseManager[TransferPair]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/unusual_spending.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Transaction]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/unusual_spending_ai.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"get\" for class \"list[str | dict[Unknown, str | dict[Unknown, Unknown] | list[Unknown] | Unknown | None] | list[Unknown] | Unknown | None]\"",
+  "count": 4
+ },
+ {
+  "file": "finance/unusual_spending_ai.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"get\" for class \"str\"",
+  "count": 4
+ },
+ {
+  "file": "finance/unusual_spending_ai.py",
+  "rule": "reportOptionalMemberAccess",
+  "message": "\"get\" is not a known attribute of \"None\"",
+  "count": 4
+ },
+ {
+  "file": "finance/views.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"Any | Literal[''] | None\" cannot be assigned to parameter \"scope\" of type \"str\" in function \"_preset_links\"",
+  "count": 2
+ },
+ {
+  "file": "finance/views.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"Any | Literal[''] | None\" cannot be assigned to parameter \"scope\" of type \"str\" in function \"_spending_query\"",
+  "count": 1
+ },
+ {
+  "file": "finance/views.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"Any | Literal[''] | None\" cannot be assigned to parameter \"scope\" of type \"str\" in function \"cash_flow_with_projection\"",
+  "count": 1
+ },
+ {
+  "file": "finance/views.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"Any | Literal[''] | None\" cannot be assigned to parameter \"scope\" of type \"str\" in function \"category_spending_trend_report\"",
+  "count": 1
+ },
+ {
+  "file": "finance/views.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"Any | Literal[''] | None\" cannot be assigned to parameter \"scope\" of type \"str\" in function \"spending_by_category_report\"",
+  "count": 1
+ },
+ {
+  "file": "finance/views.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"Any | Literal[''] | None\" cannot be assigned to parameter \"scope\" of type \"str\" in function \"spending_category_trend_report\"",
+  "count": 1
+ },
+ {
+  "file": "finance/views.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"Any | Literal[''] | None\" cannot be assigned to parameter \"scope\" of type \"str\" in function \"visible_projection_inputs\"",
+  "count": 1
+ },
+ {
+  "file": "finance/views.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"Any | Literal['month'] | None\" cannot be assigned to parameter \"grouping\" of type \"str\" in function \"_spending_query\"",
+  "count": 1
+ },
+ {
+  "file": "finance/views.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"Any | Literal['month'] | None\" cannot be assigned to parameter \"grouping\" of type \"str\" in function \"category_spending_trend_report\"",
+  "count": 1
+ },
+ {
+  "file": "finance/views.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"Any | Literal['month'] | None\" cannot be assigned to parameter \"grouping\" of type \"str\" in function \"spending_by_category_report\"",
+  "count": 1
+ },
+ {
+  "file": "finance/views.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"Any | Literal['month'] | None\" cannot be assigned to parameter \"grouping\" of type \"str\" in function \"spending_category_trend_report\"",
+  "count": 1
+ },
+ {
+  "file": "finance/views.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"Unknown | Literal['add'] | None\" cannot be assigned to parameter \"key\" of type \"str\" in function \"get\"",
+  "count": 1
+ },
+ {
+  "file": "finance/views.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"Unknown | Literal['window', 'add'] | None\" cannot be assigned to parameter \"key\" of type \"str\" in function \"get\"",
+  "count": 1
+ },
+ {
+  "file": "finance/views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "\"login_not_required\" is unknown import symbol",
+  "count": 1
+ },
+ {
+  "file": "finance/views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"leg_a_id\" for class \"TransferPair\"",
+  "count": 1
+ },
+ {
+  "file": "finance/views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"leg_b_id\" for class \"TransferPair\"",
+  "count": 1
+ },
+ {
+  "file": "finance/views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"person\" for class \"AbstractUser\"",
+  "count": 2
+ },
+ {
+  "file": "finance/views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"queryset\" for class \"Field\"",
+  "count": 1
+ },
+ {
+  "file": "finance/views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Account]\"",
+  "count": 3
+ },
+ {
+  "file": "finance/views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Category]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[PlannedItem]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Receipt]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[RecurringSeries]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[RefundLink]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[SavedTransactionFilter]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Tag]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[TransactionCorrectionHistory]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Transaction]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[TransferPair]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/views.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot assign to attribute \"existing_user\" for class \"PasswordPairForm\"",
+  "count": 3
+ },
+ {
+  "file": "finance/views.py",
+  "rule": "reportOptionalMemberAccess",
+  "message": "\"pk\" is not a known attribute of \"None\"",
+  "count": 2
+ },
+ {
+  "file": "finance/weekly_digest.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[RecurringSeries]\"",
+  "count": 2
+ },
+ {
+  "file": "finance/weekly_digest.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Transaction]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/year_end.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[RecurringSeries]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/year_end.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Tag]\"",
+  "count": 1
+ },
+ {
+  "file": "finance/year_end_views.py",
+  "rule": "reportArgumentType",
+  "message": "Argument of type \"Any | Literal[''] | None\" cannot be assigned to parameter \"scope\" of type \"str\" in function \"year_end_report\"",
+  "count": 1
+ },
+ {
+  "file": "financial_planner/urls.py",
+  "rule": "reportAttributeAccessIssue",
+  "message": "\"login_not_required\" is unknown import symbol",
+  "count": 1
+ }
+]

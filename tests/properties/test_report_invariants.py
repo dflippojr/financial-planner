@@ -227,10 +227,10 @@ def _check_category_shares(case):
         )
         pks = _rows_by_description([account])
         originals = [*case.purchases, *case.earlier]
-        for row, (_size, category) in zip(rows, originals):
+        for row, (_size, category) in zip(rows, originals, strict=True):
             if category is not None:
                 assign_category(viewer, pks[row.payee], categories[category].pk)
-        for row, (_size, original) in zip(refund_rows, case.refunds):
+        for row, (_size, original) in zip(refund_rows, case.refunds, strict=True):
             link_refund(viewer, pks[row.payee], pks[rows[original].payee])
 
         # Spending per category, from the generated rows: August purchases, less
@@ -474,7 +474,7 @@ def test_recurring_monthly_total_is_the_annual_total_over_twelve_on_every_view(c
         for shared, account in accounts.items():
             ledger.import_rows(viewer, account, HUNTINGTON, [row for where, row in charges if where == shared])
         pks = _rows_by_description(list(accounts.values()))
-        for case, (_shared, row) in zip(cases, charges):
+        for case, (_shared, row) in zip(cases, charges, strict=True):
             series = make_series(
                 viewer, name=row.payee, cadence=case.cadence, typical_minor=case.typical_minor,
                 cancelled_at=timezone.now() if case.cancelled else None,

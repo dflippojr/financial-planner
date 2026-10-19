@@ -94,7 +94,8 @@ def _original_fields(headers, source_row, mapping):
     excluded = set(mapping.excluded_original_columns)
     return {
         header: cell
-        for header, cell in zip(headers, source_row.cells)
+        # A ragged row keeps only the cells that have a header.
+        for header, cell in zip(headers, source_row.cells, strict=False)
         if header not in excluded
     }
 

@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta, timezone as dt_timezone
+from datetime import date, datetime, timedelta, UTC
 from hashlib import sha256
 from unittest.mock import patch
 
@@ -328,7 +328,7 @@ def test_recurring_facts_include_price_missed_cancel_and_new():
         confidence=RecurringSeries.Confidence.HIGH,
         reasons=["synthetic"],
         fingerprint=sha256(b"rise").hexdigest(),
-        confirmed_at=datetime(2026, 8, 1, tzinfo=dt_timezone.utc),
+        confirmed_at=datetime(2026, 8, 1, tzinfo=UTC),
     )
     for day, amount in ((date(2026, 7, 10), -1000), (date(2026, 8, 10), -1000), (date(2026, 9, 10), -1200)):
         RecurringSeriesMember.objects.create(
@@ -347,7 +347,7 @@ def test_recurring_facts_include_price_missed_cancel_and_new():
         confidence=RecurringSeries.Confidence.HIGH,
         reasons=["synthetic"],
         fingerprint=sha256(b"missed").hexdigest(),
-        confirmed_at=datetime(2026, 8, 1, tzinfo=dt_timezone.utc),
+        confirmed_at=datetime(2026, 8, 1, tzinfo=UTC),
     )
     RecurringSeriesMember.objects.create(
         series=missed,
@@ -370,7 +370,7 @@ def test_recurring_facts_include_price_missed_cancel_and_new():
         confidence=RecurringSeries.Confidence.HIGH,
         reasons=["synthetic"],
         fingerprint=sha256(b"cancel").hexdigest(),
-        confirmed_at=datetime(2026, 8, 1, tzinfo=dt_timezone.utc),
+        confirmed_at=datetime(2026, 8, 1, tzinfo=UTC),
     )
     RecurringSeriesMember.objects.create(
         series=cancelled,
@@ -380,7 +380,7 @@ def test_recurring_facts_include_price_missed_cancel_and_new():
     )
     cancel_recurring_series(owner, cancelled.pk)
     RecurringSeries.objects.filter(pk=cancelled.pk).update(
-        cancelled_at=datetime(2026, 9, 20, tzinfo=dt_timezone.utc)
+        cancelled_at=datetime(2026, 9, 20, tzinfo=UTC)
     )
     suggestion = RecurringSeries.objects.create(
         person=owner,
@@ -399,7 +399,7 @@ def test_recurring_facts_include_price_missed_cancel_and_new():
             owner, account, transaction_date=date(2026, 7, 2), amount_minor=-2000, description="Synthetic New"
         ),
     )
-    september = datetime(2026, 9, 12, 12, 0, tzinfo=dt_timezone.utc)
+    september = datetime(2026, 9, 12, 12, 0, tzinfo=UTC)
     with patch("django.utils.timezone.now", return_value=september):
         confirm_recurring_series(owner, suggestion.pk)
 

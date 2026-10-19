@@ -4,6 +4,7 @@ os.environ.setdefault("DJANGO_SECRET_KEY", "test-only-secret-key-with-enough-ent
 os.environ.setdefault("FIELD_ENCRYPTION_KEY", "dGVzdC1maWVsZC1lbmNyeXB0aW9uLWtleS0zMmJ5dGU=")
 
 from .settings import *  # noqa: F403  # NOSONAR python:S2208 -- Django test overlay of production settings
+from .settings import BASE_DIR
 
 SESSION_COOKIE_SECURE = False
 CSRF_COOKIE_SECURE = False

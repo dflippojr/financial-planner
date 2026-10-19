@@ -4,7 +4,7 @@ import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta, timezone as datetime_timezone
+from datetime import datetime, time, timedelta, UTC
 
 from django.conf import settings
 from django.contrib import messages
@@ -261,9 +261,9 @@ def events_for(principal, *, action="", actor="", source="", date_from=None, dat
         except (ValueError, TypeError):
             return rows.none()
     if date_from:
-        rows = rows.filter(occurred_at__gte=datetime.combine(date_from, time.min, datetime_timezone.utc))
+        rows = rows.filter(occurred_at__gte=datetime.combine(date_from, time.min, UTC))
     if date_to:
-        rows = rows.filter(occurred_at__lt=datetime.combine(date_to + timedelta(days=1), time.min, datetime_timezone.utc))
+        rows = rows.filter(occurred_at__lt=datetime.combine(date_to + timedelta(days=1), time.min, UTC))
     return rows.order_by("-occurred_at", "-id")
 
 

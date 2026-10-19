@@ -1,7 +1,7 @@
 """Synthetic delegated work, rollback, privacy and operator-journal contracts."""
 import json
 import uuid
-from datetime import date, datetime, timedelta, timezone as utc_timezone
+from datetime import date, datetime, timedelta, UTC
 from io import StringIO
 from unittest.mock import patch
 
@@ -196,7 +196,7 @@ def test_ai_retry_has_new_attempt_id(harness):
 
 
 def test_journal_rotation_read_only_query_and_tamper_detection(tmp_path):
-    now = datetime(2026, 10, 8, tzinfo=utc_timezone.utc)
+    now = datetime(2026, 10, 8, tzinfo=UTC)
     run = uuid.uuid4()
     append("restore", "started", run, directory=tmp_path, now=now - timedelta(days=91))
     old = tmp_path / "2026-07-09.jsonl"

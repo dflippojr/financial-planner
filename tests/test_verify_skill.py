@@ -93,7 +93,7 @@ def test_non_loopback_instance_fails(instance, monkeypatch):
     assert "does not match" in failures(doctor.run_checks(instance["url"], instance["directory"], {}))["loopback"]
     (instance["directory"] / "instance.json").write_text(json.dumps({"port": port}))
     # Stand in for a wildcard bind; binding one for real could raise a host firewall prompt.
-    monkeypatch.setattr(doctor, "listener_addresses", lambda _port: {"127.0.0.1", "0.0.0.0"})
+    monkeypatch.setattr(doctor, "listener_addresses", lambda _port: {"127.0.0.1", "0.0.0.0"})  # noqa: S104 - addresses under test, not a bind
     assert "also listens on 0.0.0.0" in failures(doctor.run_checks(instance["url"], instance["directory"], {}))["loopback"]
     monkeypatch.setattr(doctor, "listener_addresses", lambda _port: set())
     assert "no TCP listener" in failures(doctor.run_checks(instance["url"], instance["directory"], {}))["loopback"]
@@ -101,7 +101,7 @@ def test_non_loopback_instance_fails(instance, monkeypatch):
 
 def test_listener_table_addresses_decode():
     assert doctor.proc_address("0100007F:1F90") == ("127.0.0.1", 8080)
-    assert doctor.proc_address("00000000:0050") == ("0.0.0.0", 80)
+    assert doctor.proc_address("00000000:0050") == ("0.0.0.0", 80)  # noqa: S104 - an address under test, not a bind
     assert doctor.proc_address("00000000000000000000000001000000:1F90") == ("::1", 8080)
     assert doctor.proc_address("00000000000000000000000000000000:0050") == ("::", 80)
 

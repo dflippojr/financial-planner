@@ -1,0 +1,35 @@
+# Tool configuration only: the app is not packaged, and pytest reads pytest.ini.
+# Run both checkers with: bash scripts/lint.sh
+
+[tool.ruff]
+# The production image runs python:3.13-slim (Dockerfile).
+target-version = "py313"
+
+[tool.ruff.lint]
+# Pyflakes (undefined names, unused imports), syntax errors, bugbear,
+# pyupgrade and bandit. No formatter rules: the code is not ruff-formatted.
+select = ["F", "E9", "B", "UP", "S"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests: pytest asserts (S101), synthetic passwords and tokens (S105, S106),
+# seeded randomness for synthetic data (S311), and argv-list subprocess calls
+# to this repo's own scripts and tools on PATH (S603, S607).
+"tests/**" = ["S101", "S105", "S106", "S311", "S603", "S607"]
+# These import pytest fixtures from another test module and take them as
+# parameters, which pyflakes reads as a redefinition.
+"tests/test_{ai_bead,ai_popover,desktop,goals_import_alerts,mobile,recurring_transfers,report_pages}_layout.py" = ["F811"]
+"tests/test_{ai_retry_bounds,ai_tiles,chat_access_purge,review_phrasing_concurrency}.py" = ["F811"]
+# Developer tooling, never imported by the app: argv-list subprocess calls to
+# git, docker, python and the like found on PATH.
+"{scripts,.claude/skills}/**" = ["S603", "S607"]
+# Backup scripts run on the backup image's or the operator's own python3, not
+# the app image, so they keep working on interpreters older than 3.13.
+"ops/**" = ["UP017"]
+# Benchmark seed scripts: asserts check the seed and randomness only spreads
+# synthetic data.
+"docs/perf/**" = ["S101", "S311"]
+
+[tool.pyright]
+include = ["finance", "financial_planner"]
+typeCheckingMode = "basic"
+pythonVersion = "3.13"

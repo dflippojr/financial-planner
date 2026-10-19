@@ -35,7 +35,8 @@ def json_request(url, *, token, method="GET", body=None, timeout=30, headers=Non
         data = json.dumps(body).encode("utf-8")
         headers["Content-Type"] = "application/json"
     try:
-        request = urllib.request.Request(url, data=data, headers=headers, method=method)
+        # Callers pass operator-configured or allow-listed URLs (ai_api._base, ai_harness._url).
+        request = urllib.request.Request(url, data=data, headers=headers, method=method)  # noqa: S310
         with _OPENER.open(request, timeout=timeout) as response:
             raw = _read_capped(response)
             if not raw:

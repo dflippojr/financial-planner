@@ -241,13 +241,13 @@ def test_category_windows_match_per_window_reference(ledger, viewer):
         (w.start, w.end) for w in iter_period_windows(date(2025, 12, 1), date(2026, 1, 31), GROUPING_MONTH)
     ]
     got = spending_by_category_by_window(principal, windows)
-    for (start, end), (total, by_category) in zip(windows, got):
+    for (start, end), (total, by_category) in zip(windows, got, strict=True):
         _, spending, expected, _ = reference_totals(principal, date_from=start, date_to=end)
         assert (total, by_category) == (spending, expected)
     split_windows = [(date(2026, 1, 1), date(2026, 1, 12)), (date(2026, 1, 13), date(2026, 1, 31))]
     for (start, end), (total, by_category) in zip(
         split_windows, spending_by_category_by_window(principal, split_windows)
-    ):
+    , strict=True):
         _, spending, expected, _ = reference_totals(principal, date_from=start, date_to=end)
         assert (total, by_category) == (spending, expected)
 

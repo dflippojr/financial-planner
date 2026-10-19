@@ -727,7 +727,7 @@ def _apply_automatic_rule_groups(person, by_rule):
         for payload in by_rule.values()
     ])
     changed, history, entries = [], [], []
-    for application, payload in zip(applications, by_rule.values()):
+    for application, payload in zip(applications, by_rule.values(), strict=True):
         rule = payload["rule"]
         for txn in payload["rows"]:
             entries.append(RuleApplicationEntry(
@@ -746,7 +746,7 @@ def _apply_automatic_rule_groups(person, by_rule):
             txn.category_source = Transaction.CategorySource.RULE
             txn.updated_at = now
             changed.append(txn)
-    for application, payload in zip(applications, by_rule.values()):
+    for application, payload in zip(applications, by_rule.values(), strict=True):
         record(person, AuditEvent.Action.RULE_APPLIED, AuditEvent.TargetType.RULE, payload["rule"].pk,
                audience=_actor_audience(person, payload["rule"]), verified=True,
                metadata={"rule_application_id": application.pk, "row_count": len(payload["rows"])})

@@ -30,7 +30,7 @@ def main():
         },
     )
     try:
-        urllib.request.urlopen(request, timeout=3)
+        urllib.request.urlopen(request, timeout=3)  # noqa: S310 - fixed http://127.0.0.1 URL
     except Exception:  # noqa: BLE001 - any failure means unhealthy
         return 1
     return 0

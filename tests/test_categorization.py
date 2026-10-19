@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date
 from io import StringIO
 
 import pytest

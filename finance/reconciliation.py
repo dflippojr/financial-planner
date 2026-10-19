@@ -23,6 +23,7 @@ import hashlib
 from bisect import bisect_right
 from dataclasses import dataclass
 from datetime import date, timedelta
+from itertools import pairwise
 
 from django.db import transaction
 from django.db.models import Count, Exists, OuterRef, Q, Subquery, Sum
@@ -222,7 +223,7 @@ def reconcile(accounts, *, since=None):
     for account_id in account_ids:
         raw = []
         points = balances[account_id]
-        for (start, opening), (end, closing) in zip(points, points[1:]):
+        for (start, opening), (end, closing) in pairwise(points):
             if not _covered(coverage[account_id], start + timedelta(days=1), end):
                 raw.append((start, end, None))
                 continue
@@ -258,7 +259,7 @@ def machine_summary(results):
 
 
 def visible_results(principal, results):
-    visible = set(Account.objects.visible_to(principal).filter(pk__in=list(results)).values_list("pk", flat=True))
+    visible = set(Account.objects.visible_to(principal).filter(pk__in=list(results)).values_list("pk", flat=True))  # pyright: ignore[reportAttributeAccessIssue] - AccountQuerySet.as_manager() is untyped, as for every Account.objects.visible_to in the baseline
     return {account_id: windows for account_id, windows in results.items() if account_id in visible}
 
 
@@ -341,7 +342,7 @@ def settings_reconciliation_context(person):
 
     if not person_is_operator(person):
         return {"reconciliation": None}
-    accounts = eligible_accounts(Account.objects.visible_to(person))
+    accounts = eligible_accounts(Account.objects.visible_to(person))  # pyright: ignore[reportAttributeAccessIssue] - AccountQuerySet.as_manager() is untyped, as for every Account.objects.visible_to in the baseline
     names = {account.pk: account.name for account in accounts}
     results = reconcile(accounts)
     mismatches = sorted(
