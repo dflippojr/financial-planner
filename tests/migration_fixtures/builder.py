@@ -13,11 +13,11 @@ months of history to write: "small" (CI, a few thousand transactions) or
 import hashlib
 import os
 import random
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 SIZES = {"small": 18, "large": 120}
 START_MONTH = date(2023, 1, 1)
-NOW = datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 1, 15, 12, 0, tzinfo=UTC)
 
 MODELS = (
     "Person", "Household", "Membership", "Category", "Tag", "SavedCsvMapping", "Account", "ImportBatch",
