@@ -18,6 +18,26 @@ def disposable_operator_journal(tmp_path_factory):
             os.environ[key] = value
 
 
+@pytest.fixture(scope="session")
+def django_db_setup(django_db_setup, django_db_blocker):
+    # Keep PostgreSQL's planner statistics as created. Autovacuum vacuums the
+    # tables while rollbacks leave them empty and records reltuples = 0, after
+    # which the transfer-exclusion subquery plans as a self-join of every
+    # transaction and one test ran for ten minutes (#555). Without statistics
+    # the planner sizes each table from its pages, as it does for real data.
+    from django.db import connection
+
+    if connection.vendor != "postgresql":
+        return
+    with django_db_blocker.unblock(), connection.cursor() as cursor:
+        cursor.execute(
+            "DO $$ DECLARE t text; BEGIN "
+            "FOR t IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP "
+            "EXECUTE format('ALTER TABLE %I SET (autovacuum_enabled = false)', t); "
+            "END LOOP; END $$"
+        )
+
+
 @pytest.fixture(autouse=True)
 def restore_harness_origins():
     # Fake harnesses add their random-port origin to the allow-list (#409).
