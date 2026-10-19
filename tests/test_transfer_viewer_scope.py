@@ -122,9 +122,9 @@ def test_transfer_state_never_falls_back_to_pairs_the_viewer_cannot_see():
 
     unannotated = Transaction.objects.get(pk=shared_leg.pk)
     with pytest.raises(ImproperlyConfigured):
-        unannotated.is_excluded_transfer
+        _ = unannotated.is_excluded_transfer
     with pytest.raises(ImproperlyConfigured):
-        unannotated.category_display
+        _ = unannotated.category_display
 
     assert with_transfer_state(member, Transaction.objects.get(pk=shared_leg.pk)).is_excluded_transfer is False
     assert with_transfer_state(owner, Transaction.objects.get(pk=shared_leg.pk)).is_excluded_transfer is True

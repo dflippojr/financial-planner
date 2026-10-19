@@ -3,6 +3,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, timedelta
 from functools import lru_cache
+from itertools import pairwise
 from typing import NamedTuple
 from decimal import Decimal
 from hashlib import sha256
@@ -22,6 +23,7 @@ from .bill_grouping import (
     choose_copy,
     eligible_bill_charges,
     group_bills,
+    household_only_ids,
     stored_charge_ids,
 )
 from .lifecycle_services import lock_actor_household
@@ -31,6 +33,7 @@ from .models import (
     Membership,
     Person,
     RecurringExclusion,
+    RecurringPriceAcknowledgement,
     RecurringSeries,
     RecurringSeriesMember,
     Transaction,
@@ -211,7 +214,7 @@ def _step_ratio(left_minor, right_minor):
 def _largest_consecutive_step(chain):
     if len(chain) < 2:
         return Decimal("0")
-    return max(_step_ratio(left.amount_minor, right.amount_minor) for left, right in zip(chain, chain[1:]))
+    return max(_step_ratio(left.amount_minor, right.amount_minor) for left, right in pairwise(chain))
 
 
 def _current_level(accepted):
@@ -404,7 +407,7 @@ def _cluster_by_amount(transactions):
     sizes = []
     for item in sorted(transactions, key=lambda row: (abs(row.amount_minor), row.pk)):
         value = abs(item.amount_minor)
-        for cluster, size in zip(clusters, sizes):
+        for cluster, size in zip(clusters, sizes, strict=True):
             # Same test as amounts_within_tolerance on cluster + item. Items
             # arrive in ascending amount, so only the first and the new value
             # can sit furthest from the median.
@@ -1178,6 +1181,27 @@ def list_addable_transactions(principal, series, query=""):
     return rows
 
 
+def _carry_price_acknowledgements(source, target):
+    """Move every member's price dismissal on `source` to `target`, which survives a merge.
+
+    Deleting the source would otherwise cascade away other members' dismissals
+    and the unchanged charge would flag and alert again. A member with a
+    dismissal on both keeps the later one.
+    """
+    kept = {
+        row.person_id: row
+        for row in RecurringPriceAcknowledgement.objects.select_for_update().filter(series=target)
+    }
+    for row in RecurringPriceAcknowledgement.objects.select_for_update().filter(series=source):
+        existing = kept.get(row.person_id)
+        if existing is not None:
+            if existing.updated_at >= row.updated_at:
+                continue
+            existing.delete()
+        # update() leaves updated_at alone, so the carried dismissal keeps its time.
+        RecurringPriceAcknowledgement.objects.filter(pk=row.pk).update(series=target)
+
+
 @transaction.atomic
 def merge_recurring_series(principal, source_id, target_id):
     person = _person_for(principal)
@@ -1209,6 +1233,7 @@ def merge_recurring_series(principal, source_id, target_id):
             target.confirmed_at = timezone.now()
             fields.append("confirmed_at")
         target.save(update_fields=fields)
+    _carry_price_acknowledgements(source, target)
     source_pk = source.pk
     source.delete()
     _record_series(person, AuditEvent.Action.RECURRING_MERGED, target, source_id=source_pk, surviving_id=target.pk)
@@ -1529,6 +1554,24 @@ class HouseholdReview:
     bills: list
 
 
+def household_bills(principal, own_series):
+    """Every household bill the viewer can see, grouped over their own and other members' confirmed copies.
+
+    The Recurring page and the daily review alerts both start from these.
+    Active and cancelled copies group together, so a cancelled copy still
+    links the active copies it shares charges with.
+    """
+    shared = list(
+        RecurringSeries.objects.shared_with(principal, linkers=True)
+        .prefetch_related("members__transaction__account")
+        .order_by("display_name", "pk")
+    )
+    candidates = [series for series in [*own_series, *shared] if series.status == RecurringSeries.Status.CONFIRMED]
+    household = household_only_ids(RecurringSeries.objects.filter(pk__in=[series.pk for series in candidates]))
+    copies = [series for series in candidates if series.pk in household]
+    return resolve_household_bills(copies, eligible_bill_charges(principal))
+
+
 def household_review(principal, own_series):
     """Household bills for the Recurring page, grouped like the plan and the cancel action.
 
@@ -1540,20 +1583,8 @@ def household_review(principal, own_series):
     price state come from the bill's current household charges, not its stored
     members.
     """
-    shared = list(
-        RecurringSeries.objects.shared_with(principal, linkers=True)
-        .prefetch_related("members__transaction__account")
-        .order_by("display_name", "pk")
-    )
     own_ids = {series.pk for series in own_series}
-    copies = [
-        series
-        for series in [*own_series, *shared]
-        if series.status == RecurringSeries.Status.CONFIRMED and _household_only(series)
-    ]
-    # Group over active and cancelled copies together, so a cancelled copy
-    # still links the active copies it shares charges with.
-    bills = resolve_household_bills(copies, eligible_bill_charges(principal))
+    bills = household_bills(principal, own_series)
     rows = []
     for bill in bills:
         for cancelled in (False, True):
@@ -1711,14 +1742,14 @@ def keep_cancelled_recurring_series(principal, series_id):
 @transaction.atomic
 def dismiss_price_change(principal, series_id):
     person, series = _lock_confirmed_series(principal, series_id)
-    amount_minor = None
+    flagged = None
     if series.person_id != person.pk:
         # A household bill another member confirmed shows its price state from
         # the bill's current household charges, so acknowledge that charge.
         charges = _current_bill_charges(person, series)
         if charges:
-            amount_minor = charges[-1].amount_minor
-    if amount_minor is None:
+            flagged = charges[-1]
+    if flagged is None:
         latest = (
             RecurringSeriesMember.objects.filter(series=series)
             .select_related("transaction")
@@ -1727,8 +1758,12 @@ def dismiss_price_change(principal, series_id):
         )
         if latest is None:
             raise PermissionDenied(_DENIED)
-        amount_minor = latest.transaction.amount_minor
-    series.acknowledged_amount_minor = amount_minor
-    series.save(update_fields=("acknowledged_amount_minor", "updated_at"))
+        flagged = latest.transaction
+    # The dismissal is this member's alone, and covers every copy of the bill
+    # they may act on, so the flag stays down whichever copy shows the bill (#523).
+    for copy in _bill_copies(person, series):
+        RecurringPriceAcknowledgement.objects.update_or_create(
+            person=person, series=copy, defaults={"amount_minor": flagged.amount_minor, "transaction": flagged}
+        )
     _record_series(person, AuditEvent.Action.RECURRING_PRICE_ACKNOWLEDGED, series)
     return series

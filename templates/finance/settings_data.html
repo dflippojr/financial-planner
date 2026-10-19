@@ -1,4 +1,5 @@
 {% extends "finance/settings_base.html" %}
+{% load ui %}
 {% block title %}Data · Financial Planner{% endblock %}
 {% block settings_content %}
 <h2 class="mb-4 text-xl font-semibold">Data</h2>
@@ -12,6 +13,45 @@
 {% if backup_status.offsite_error %}<p class="mb-2 text-sm">{{ backup_status.offsite_error }}</p>{% endif %}
 <p class="mb-2 text-sm">Last restore check: {% if backup_status.restore_check_off %}Off{% elif backup_status.restore_check %}{{ backup_status.restore_check|date:"Y-m-d H:i" }}{% else %}Never{% endif %}</p>
 {% if backup_status.restore_check_error and not backup_status.restore_check_off %}<p class="mb-2 text-sm">{{ backup_status.restore_check_error }}</p>{% endif %}
+{% endif %}
+{% endif %}
+{% if reconciliation %}
+<h3 class="mb-2 font-semibold">Balance reconciliation</h3>
+<p class="mb-2 text-sm">Compares each balance change the bank reported with the transactions stored for the same days, on accounts you can see.</p>
+<p class="mb-2 text-sm">Last scheduled check: {% if reconciliation.last_run %}{{ reconciliation.last_run|date:"Y-m-d H:i" }}{% else %}Never{% endif %}</p>
+<ul class="mb-4 text-sm" aria-label="Reconciliation periods by state">
+  <li>Match: {{ reconciliation.counts.ok }}</li>
+  <li>Match after a late posting: {{ reconciliation.counts|lookup:"ok-late" }}</li>
+  <li>Mismatch: {{ reconciliation.counts.mismatch }}</li>
+  <li>Not enough imports to check: {{ reconciliation.counts.insufficient }}</li>
+</ul>
+{% if reconciliation.mismatches %}
+<div class="overflow-x-auto mb-6">
+  <table class="table">
+    <caption class="text-left text-sm">Mismatched periods, newest first. Difference is the bank's balance change minus the stored transactions.</caption>
+    <thead>
+      <tr>
+        <th scope="col">Account</th>
+        <th scope="col">After</th>
+        <th scope="col">Through</th>
+        <th scope="col" class="text-right">Difference</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in reconciliation.mismatches %}
+      <tr>
+        <td>{{ row.account }}</td>
+        <td class="whitespace-nowrap">{{ row.start|date:"Y-m-d" }}</td>
+        <td class="whitespace-nowrap">{{ row.end|date:"Y-m-d" }}</td>
+        <td class="{{ row.difference_display|amount_tone_class }}">{{ row.difference_display|amount_text }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if reconciliation.more_mismatches %}<p class="mb-6 text-sm">{{ reconciliation.more_mismatches }} older mismatched period(s) not shown.</p>{% endif %}
+{% else %}
+<p class="mb-6 text-sm">No mismatched periods.</p>
 {% endif %}
 {% endif %}
 <form method="post" action="{% url 'account-export' %}" class="mb-4">

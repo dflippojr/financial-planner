@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timedelta, timezone as dt_timezone
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
 from django.conf import settings
@@ -67,7 +67,7 @@ def _parse_iso(value):
         except ValueError:
             return None
     if timezone.is_naive(parsed):
-        parsed = parsed.replace(tzinfo=dt_timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
     return parsed
 
 

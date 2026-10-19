@@ -52,7 +52,7 @@ def answers(*addresses):
         ("172.17.0.1",),
         ("100.101.102.103",),
         ("169.254.169.254",),
-        ("0.0.0.0",),
+        ("0.0.0.0",),  # noqa: S104 - an address under test, not a bind
         ("::1",),
         ("fe80::1%eth0",),
         ("fd7a:115c:a1e0::1",),
@@ -192,7 +192,7 @@ def test_hostile_json_is_unreadable_not_a_crash(monkeypatch, shape):
 def _self_signed_context():
     key = ec.generate_private_key(ec.SECP256R1())
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
-    now = dt.datetime.now(dt.timezone.utc)
+    now = dt.datetime.now(dt.UTC)
     cert = (
         x509.CertificateBuilder()
         .subject_name(name)

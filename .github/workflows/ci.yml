@@ -1,0 +1,103 @@
+name: CI
+
+# The one workflow that runs on every pull request and every push to main. It
+# calls each test workflow as a reusable workflow and ends in the gate job,
+# whose check name (gate) is the single check a ruleset can require. The test
+# workflows keep workflow_dispatch for standalone runs, and guards.yml keeps
+# its weekly schedule, but none of them triggers on push or pull_request any
+# more: that would run every job twice.
+#
+# Path-filtered work is an if: on a job, never workflow-level paths:, so the
+# gate always runs and reports. A path-skipped job counts as passing.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+# Pull request runs cancel the superseded run. Main runs are never cancelled:
+# each gets its own group, because even with cancel-in-progress off, a newer
+# run in the same group cancels a pending one, and batch merges queue several.
+concurrency:
+  group: ci-${{ github.ref == 'refs/heads/main' && github.run_id || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  changes:
+    name: Changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      docker: ${{ steps.filter.outputs.docker }}
+    steps:
+      - name: Decide which path-filtered jobs run
+        id: filter
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          # Pushes to main and manual runs build everything.
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            echo "docker=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Both names of a rename, so moving a packaging file away still builds.
+          files=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[] | .filename, (.previous_filename // empty)')
+          # The packaging paths docker-smoke.yml used to filter on.
+          if grep -qE '^(Dockerfile|compose\.yml|requirements\.txt|(scripts|ops|static|templates)/.*|\.github/workflows/(docker-smoke|ci)\.yml)$' <<< "$files"; then
+            echo "docker=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "docker=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  guards:
+    name: Guards
+    uses: ./.github/workflows/guards.yml
+
+  lint:
+    name: Lint
+    uses: ./.github/workflows/lint.yml
+
+  postgres:
+    name: PostgreSQL 18
+    uses: ./.github/workflows/postgres.yml
+
+  sonar:
+    name: SonarCloud
+    uses: ./.github/workflows/sonar.yml
+    secrets: inherit
+
+  playwright:
+    name: Playwright
+    uses: ./.github/workflows/playwright.yml
+
+  docker-smoke:
+    name: Docker smoke
+    needs: changes
+    if: needs.changes.outputs.docker == 'true'
+    uses: ./.github/workflows/docker-smoke.yml
+
+  gate:
+    name: gate
+    # always(): report red when a needed job failed or was cancelled, instead
+    # of being skipped and leaving a required check pending.
+    if: always()
+    needs: [changes, guards, lint, postgres, sonar, playwright, docker-smoke]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every needed job to pass or be skipped
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$NEEDS"
+          bad=$(jq -r '[to_entries[] | select(.value.result != "success" and .value.result != "skipped") | .key] | join(", ")' <<< "$NEEDS")
+          if [ -n "$bad" ]; then
+            echo "::error::Failed or cancelled: $bad"
+            exit 1
+          fi

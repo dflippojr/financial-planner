@@ -15,7 +15,7 @@ from finance.audit_services import events_for, origin
 from finance.bulk_edit_services import ACTION_CATEGORY, apply_bulk_edit, undo_bulk_edit
 from finance.budget_services import reset_budget_rollover, save_budget, set_budget_archived, set_budget_rollover
 from finance.category_services import (
-    ensure_household_categories, add_category, assign_category, confirm_transfer_pair, rename_category, split_transaction,
+    ensure_household_categories, add_category, assign_category, rename_category, split_transaction,
 )
 from finance.csv_import.saved_mappings import (
     delete_or_archive_csv_mapping, save_csv_mapping, set_account_default_mapping, update_csv_mapping,
@@ -24,8 +24,8 @@ from finance.csv_import.services import commit_csv_import, undo_import_batch
 from finance.lifecycle_services import leave_household
 from finance.manual_entry_services import add_manual_transaction, delete_manual_transaction
 from finance.models import (
-    Account, AuditEvent, Budget, Household, ImportBatch, Membership, PlannedItem, RecurringSeries,
-    SavingsGoal, Transaction, TransactionCorrectionHistory,
+    Account, AuditEvent, Budget, Household, ImportBatch, Membership, RecurringSeries,
+    Transaction, TransactionCorrectionHistory,
 )
 from finance.planning_services import save_planned_item, set_planned_item_enabled
 from finance.receipt_services import attach_receipt, remove_receipt

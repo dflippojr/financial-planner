@@ -211,7 +211,7 @@ def build_funding_plan(principal, *, today, scope=SCOPE_ALL, horizon=DEFAULT_HOR
                 held_display=format_minor(fill.held_minor),
                 available_display=format_minor(fill.available_minor),
             )
-            for month, fill in zip(months, filled)
+            for month, fill in zip(months, filled, strict=True)
         ],
         buffer_minor=buffer_minor,
         buffer_display=format_minor(buffer_minor),

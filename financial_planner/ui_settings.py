@@ -8,6 +8,7 @@ if not instance.is_absolute() or not instance.name.startswith("financial-planner
     raise RuntimeError("A disposable UI directory is required.")
 
 from .settings import *  # noqa: F403 -- isolated development overlay
+from .settings import LOGGING
 
 DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": instance / "db.sqlite3"}}
 STORAGES = {

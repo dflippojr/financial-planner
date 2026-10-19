@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 
@@ -315,3 +316,17 @@ def test_the_label_check_falls_back_to_each_debts_direction_at_its_step_limit(mo
 
     labels = {row.account_id: row.payoff_label for row in plan.debts}
     assert labels == {1: BEYOND_LIMIT, 2: NEVER_PAYS_OFF, 3: NEVER_PAYS_OFF}
+
+
+def test_a_debt_whose_first_payment_is_already_in_its_balance_sits_out_the_first_month():
+    # The loan's October payment and interest are already in its balance; the
+    # card still owes October, and the snowball's extra goes only to the card.
+    loan = replace(_debt(1, 100_000, "12.000", 50_000, "Synthetic loan"), first_month_paid=True)
+    card = _debt(2, 20_000, "0", 5_000, "Synthetic card")
+    plan = simulate_payoff([loan, card], extra_minor=1_000, strategy=STRATEGY_SNOWBALL, start=date(2026, 10, 1))
+    october = plan.months[0]
+    assert october.label == "2026-10"
+    assert (october.interest_by_id[1], october.paid_by_id.get(1, 0)) == (0, 0)
+    assert (october.interest_by_id[2], october.paid_by_id[2]) == (0, 6_000)
+    november = plan.months[1]
+    assert (november.interest_by_id[1], november.paid_by_id[1]) == (1_000, 50_000)

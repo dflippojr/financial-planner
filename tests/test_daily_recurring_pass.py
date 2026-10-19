@@ -9,7 +9,7 @@ from django.core import mail
 from django.utils import timezone
 
 from finance.alert_services import DailyAlertPassIncomplete, run_daily_alert_pass, settings_for
-from finance.models import Account, Alert, Person, RecurringSeries
+from finance.models import Account, Alert, Person, RecurringSeries, Transaction
 from finance.recurring_review import missed_charge
 from finance.recurring_services import confirm_recurring_series, refresh_recurring_series
 from finance.weekly_digest import build_weekly_digest
@@ -47,7 +47,8 @@ def test_daily_pass_alone_raises_one_missed_alert_for_the_household():
 
     run_daily_alert_pass(today=date(2026, 9, 3))
 
-    key = f"recurring:{series.pk}:missed:2026-07-15"
+    latest = series.members.order_by("-transaction__transaction_date").first().transaction_id
+    key = f"recurring:bill:{latest}:missed:2026-07-15"
     assert sorted(recurring_alerts(Alert.Kind.RECURRING_MISSED)) == sorted(
         [(owner.pk, key), (member.pk, key)]
     )
@@ -97,14 +98,15 @@ def test_price_alert_respects_each_recipients_threshold():
     prefs = settings_for(member)
     prefs.recurring_price_percent = 30
     prefs.save()
-    series = confirmed_monthly(owner, shared, description="Synthetic Shared Price")
+    confirmed_monthly(owner, shared, description="Synthetic Shared Price")
     make_transaction(
         owner, shared, transaction_date=date(2026, 7, 15), amount_minor=-2400, description="Synthetic Shared Price"
     )
 
     run_daily_alert_pass(today=date(2026, 7, 20))
 
-    assert recurring_alerts(Alert.Kind.RECURRING_PRICE) == [(owner.pk, f"recurring:{series.pk}:-2400")]
+    risen = Transaction.objects.get(account=shared, amount_minor=-2400).pk
+    assert recurring_alerts(Alert.Kind.RECURRING_PRICE) == [(owner.pk, f"recurring:bill:{risen}:-2400")]
     assert "20.00 USD to 24.00 USD" in Alert.objects.get(kind=Alert.Kind.RECURRING_PRICE).title
 
 

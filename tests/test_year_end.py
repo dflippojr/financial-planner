@@ -24,7 +24,7 @@ from finance.models import (
     Transaction,
 )
 from finance.net_worth import net_worth_report
-from finance.tag_services import add_tag, set_transaction_note_and_tags
+from finance.tag_services import set_transaction_note_and_tags
 from finance.year_end import CSV_SECTIONS, csv_fieldnames, iter_csv_bytes, last_full_year, year_end_report
 
 

@@ -356,7 +356,7 @@ def spending_category_detail_url(
     return f"{path}?{urlencode(query)}"
 
 
-def _spending_row(item, *, total_spending, date_from, date_to, account, scope, grouping=GROUPING_MONTH, tag=None):
+def _spending_row(item, *, share_total, date_from, date_to, account, scope, grouping=GROUPING_MONTH, tag=None):
     spending_minor = item["spending_minor"]
     query = _filter_query(
         date_from,
@@ -371,7 +371,7 @@ def _spending_row(item, *, total_spending, date_from, date_to, account, scope, g
         name=item["name"],
         spending_minor=spending_minor,
         spending_display=format_minor(spending_minor),
-        percent_display=format_percent(spending_minor, total_spending),
+        percent_display="—" if spending_minor < 0 else format_percent(spending_minor, share_total),
         is_net_refund=spending_minor < 0,
         color_index=category_color_index(item["color_key"]),
         parent_name="",
@@ -411,10 +411,13 @@ def spending_by_category_report(
     )
     named = {item.pk: item for item in Category.objects.visible_to(principal)}
     combined = _combine_category_spending(totals.spending_by_category_id, named)
+    # Shares are of positive spending, as in the donut (#510): net-refund rows
+    # show a dash, so no share falls below 0% or above 100%.
+    share_total = sum(max(item["spending_minor"], 0) for item in combined.values())
     rows = [
         _spending_row(
             item,
-            total_spending=totals.spending_minor,
+            share_total=share_total,
             date_from=date_from,
             date_to=date_to,
             account=account,
@@ -534,7 +537,7 @@ def cash_flow_report(
         accounts=account_filter,
         tag=tag,
     )
-    for window, (income_minor, spending_minor) in zip(windows, window_totals):
+    for window, (income_minor, spending_minor) in zip(windows, window_totals, strict=True):
         totals = SimpleNamespace(
             income_minor=income_minor,
             spending_minor=spending_minor,
@@ -684,18 +687,17 @@ def _donut_rows(rows):
     """Rows a donut can draw: only categories with positive spending.
 
     A net-refund category has a negative total, which a pie cannot show, so it
-    stays in the tiles and table and is left out of the chart. Shares are of
-    the charted (positive) total, not of net spending.
+    stays in the tiles and table and is left out of the chart. Shares are the
+    table's, which are of the charted (positive) total, not of net spending.
     """
     positive = [row for row in rows if row.spending_minor > 0]
-    charted_total = sum(row.spending_minor for row in positive)
     return [
         {
             "name": row.name,
             "color_index": row.color_index,
             "spending_minor": row.spending_minor,
             "spending_display": row.spending_display,
-            "share_display": format_percent(row.spending_minor, charted_total),
+            "share_display": row.percent_display,
             "drilldown_url": row.drilldown_url,
         }
         for row in positive

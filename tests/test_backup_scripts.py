@@ -3,7 +3,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tarfile
-from datetime import datetime, timezone as dt_timezone
+from datetime import datetime, UTC
 
 import pytest
 
@@ -960,7 +960,7 @@ def test_failed_restore_check_keeps_the_dump_published_and_records_the_error(tmp
     settings.BACKUP_STATUS_PATH = str(backup_root / "health" / "status")
     settings.OPERATOR_USERNAMES = "operator"
     created = evaluate_backup_alerts(
-        now=datetime(2026, 9, 27, 12, tzinfo=dt_timezone.utc), today=datetime(2026, 9, 27).date()
+        now=datetime(2026, 9, 27, 12, tzinfo=UTC), today=datetime(2026, 9, 27).date()
     )
     assert [row.title for row in created] == ["The weekly restore check failed"]
 

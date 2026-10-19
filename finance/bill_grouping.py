@@ -11,7 +11,7 @@ keeps its own presentation, and detection stays in `recurring_services`.
 from django.db.models import Exists, OuterRef
 
 from .category_services import exclusion_exists_for
-from .models import Account, RecurringSeries, RecurringSeriesMember, Transaction
+from .models import Account, RecurringSeriesMember, Transaction
 
 
 def eligible_bill_charges(principal, *, household_only=True):
@@ -33,6 +33,20 @@ def eligible_bill_charges(principal, *, household_only=True):
         .annotate(_excluded=exclusion_exists_for(principal, household_only=household_only))
         .filter(_excluded=False)
     )
+
+
+def household_only_ids(queryset):
+    """The pks in `queryset` whose stored charges all sit in household accounts.
+
+    Only such a series joins a household bill: a private history never links
+    bills. Read from every stored membership, not a caller's prefetch, which
+    may hold only some of a series' charges, so the page, the alerts and the
+    dismissals agree on which copies are household bills.
+    """
+    outside = RecurringSeriesMember.objects.filter(series_id=OuterRef("pk")).exclude(
+        transaction__account__scope=Account.Scope.HOUSEHOLD
+    )
+    return set(queryset.exclude(Exists(outside)).values_list("pk", flat=True))
 
 
 def stored_charge_ids(series_ids):

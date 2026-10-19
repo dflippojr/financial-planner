@@ -98,7 +98,7 @@ def test_phrasing_job_contract(review_harness, monkeypatch, feature, scenario): 
     shared = case["setup"](owner) if "setup" in case else None
     # Only this feature's job runs; the other feature keeps a summary the job must not touch.
     AiJob.objects.filter(member=owner).exclude(feature=feature).delete()
-    MonthlyReview.objects.filter(person=owner, month=month).update(**dict(zip(spec["other"], OTHER_SUMMARY)))
+    MonthlyReview.objects.filter(person=owner, month=month).update(**dict(zip(spec["other"], OTHER_SUMMARY, strict=False)))
     state.model_state = "ready"
     state.session_answer = case.get("answer")
     state.session_failure = case.get("failure")

@@ -7,18 +7,15 @@ name: PostgreSQL 18
 # SonarCloud gate. Uses no secrets; scripts/test_postgres.sh is the local
 # equivalent.
 on:
-  push:
-    branches: [main]
-  pull_request:
-    types: [opened, synchronize, reopened]
+  workflow_call:
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: postgres-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: postgres-${{ github.ref == 'refs/heads/main' && github.run_id || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   postgres:
@@ -37,7 +34,7 @@ jobs:
 
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.13"
           cache: pip
           cache-dependency-path: requirements*.txt
 
@@ -71,11 +68,23 @@ jobs:
           python manage.py makemigrations --check --dry-run
           python manage.py migrate --noinput
 
+      # Seeds a synthetic database at old migration states (0040 and #391's
+      # 0059) through the historical models and migrates it to head, checking
+      # row counts, money sums and new NOT NULL columns (issue #532). Its own
+      # step so the output, with build and migrate timings, is easy to attach
+      # to a migration PR. The small fixture size keeps it near 1.5 minutes.
+      - name: Migrate a populated synthetic database to head
+        timeout-minutes: 5
+        env:
+          FINANCIAL_PLANNER_TEST_DB: postgres
+          MIGRATION_FIXTURE_SIZE: small
+        run: python -m pytest tests -q -p no:cacheprovider -m migration -rP
+
       # One pytest-django test database per xdist worker (test_..._gw0 and
       # so on), matching the runner's 4 vCPUs. Work stealing keeps a few slow
       # tests at the end from leaving three workers idle. Browser tests run
-      # in playwright.yml on SQLite.
+      # in playwright.yml on SQLite; the populated migration test ran above.
       - name: Run tests on PostgreSQL 18
         env:
           FINANCIAL_PLANNER_TEST_DB: postgres
-        run: python -m pytest tests -q -p no:cacheprovider -n 4 --dist worksteal -m "not browser" --durations=15
+        run: python -m pytest tests -q -p no:cacheprovider -n 4 --dist worksteal -m "not browser and not migration" --durations=15

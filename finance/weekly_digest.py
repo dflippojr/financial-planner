@@ -16,7 +16,7 @@ from django.utils import timezone
 from .cash_flow import format_minor
 from .category_services import exclusion_exists_for
 from .models import AlertSettings, RecurringSeries, RecurringSeriesMember, Transaction, _person_for
-from .recurring_review import DEFAULT_PRICE_CHANGE_PERCENT, price_changes
+from .recurring_review import DEFAULT_PRICE_CHANGE_PERCENT, acknowledged_amounts, price_changes
 
 WEEK_CURRENT = "current"
 WEEK_LAST = "last"
@@ -102,7 +102,7 @@ def _new_series(principal, start, end):
 
 def _price_changes(principal, start, end, percent):
     # Only series with a charge in the window can have their latest charge there.
-    candidates = (
+    candidates = list(
         RecurringSeries.objects.visible_to(principal)
         .filter(
             status=RecurringSeries.Status.CONFIRMED,
@@ -121,7 +121,7 @@ def _price_changes(principal, start, end, percent):
             on=change.charge_date,
             url=_series_url(change.series),
         )
-        for change in price_changes(list(candidates), percent)
+        for change in price_changes(candidates, percent, acknowledged_amounts(principal, candidates))
         if start <= change.charge_date <= end
     ]
 

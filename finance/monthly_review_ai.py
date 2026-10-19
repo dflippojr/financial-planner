@@ -209,11 +209,25 @@ def _own_private_facts(person, facts):
         item for item in facts.get("large_transactions") or [] if _own_private_transaction(person, item)
     ]
     flags = _private_unusual_flags(person, facts)
-    filtered["unusual"] = list(flags)
+    filtered["unusual"] = _withhold_category_names(person, flags)
     filtered["unusual_omitted_count"] = getattr(flags, "omitted_count", 0)
     for key in RECURRING_LIST_KEYS:
         filtered[key] = [item for item in facts.get(key) or [] if _own_private_series(person, item)]
     return filtered
+
+
+def _withhold_category_names(person, flags):
+    """Flags on own private rows still name household categories, so mask the household's own names (#521)."""
+    from .ai_tools import WITHHELD_CATEGORY_NAME, withheld_category_ids
+    from .unusual_spending import KIND_CATEGORY
+
+    withheld = withheld_category_ids(person)
+    return [
+        {**flag, "name": WITHHELD_CATEGORY_NAME}
+        if flag.get("kind") == KIND_CATEGORY and str(flag.get("key")).isdigit() and int(flag["key"]) in withheld
+        else flag
+        for flag in flags
+    ]
 
 
 def _own_private_accounts(person):

@@ -155,12 +155,12 @@ def test_cycle_through_a_saved_goal_the_file_does_not_touch_is_rejected():
     owner = make_person("owner")
     commit_goal_import(owner.user, csv_file("A,10,1,,,,", "B,10,2,A,,,"))
     # A depends on B in the file, B (not in the file) already depends on A.
-    partial = "name,target_amount,priority,depends_on\nA,10,1,B\n".encode()
+    partial = b"name,target_amount,priority,depends_on\nA,10,1,B\n"
 
     # Column set differs from the first import, so B stays untouched.
     preview = preview_goal_import(owner.user, partial + b"")
     assert preview.rows[0].errors == ["depends_on must be the name of another goal in this file with the same scope."]
-    both = "name,target_amount,priority,depends_on\nA,10,1,B\nB,10,2,A\n".encode()
+    both = b"name,target_amount,priority,depends_on\nA,10,1,B\nB,10,2,A\n"
     assert all(row.errors for row in preview_goal_import(owner.user, both).rows)
 
 

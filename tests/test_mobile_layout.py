@@ -16,7 +16,7 @@ from django.utils import timezone
 from finance.ai_services import connect_harness
 from finance.budget_services import save_budget
 from finance.chat_services import send_message, start_conversation
-from finance.models import Budget, Person, Household, Membership
+from finance.models import Budget, Person, Household
 from finance.policy_services import accept_policy, publish_policy
 from tests.chat_helpers import ask
 from tests.browser_support import CSS, SCREEN_DIR, browser, page_session  # noqa: F401

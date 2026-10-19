@@ -302,7 +302,7 @@ If any other check fails, roll back:
 4. If the failed release applied migrations the previous code cannot run against, restore the pre-upgrade dump into a fresh volume using the procedure above.
 5. Run the copied check: `& "$Tools\ops\post-deploy-check.ps1" -ConfigPath $Config -Since $DeployStart -ExpectedSha $PreviousSha`. A revision older than #537 builds images without the SHA label or header, so add `-SkipRevision` for it and confirm the revision with `git rev-parse HEAD` instead. Then open an issue with the failing lines from the first run, which carry no financial data.
 
-The `Docker smoke test` workflow (`.github/workflows/docker-smoke.yml`) runs on pull requests that change packaging files (`Dockerfile`, `compose.yml`, `requirements.txt`, `scripts/`, `ops/`, `static/`, `templates/`) and on pushes to `main`, including Dependabot's. It builds the image, starts `db` and `app` from `compose.yml` with dummy values and a throwaway database, waits for the app to report healthy, and requests the sign-in page, which redirects to first-run setup on an empty database. It does not start the backup or background containers and never touches the tower.
+The `Docker smoke test` workflow (`.github/workflows/docker-smoke.yml`, called from `ci.yml`) runs on pull requests that change packaging files (`Dockerfile`, `compose.yml`, `requirements.txt`, `scripts/`, `ops/`, `static/`, `templates/`) and on pushes to `main`, including Dependabot's. It builds the image, starts `db` and `app` from `compose.yml` with dummy values and a throwaway database, waits for the app to report healthy, and requests the sign-in page, which redirects to first-run setup on an empty database. It does not start the backup or background containers and never touches the tower.
 
 A PostgreSQL major-version change cannot use these steps. Follow [PostgreSQL 16 to 18 upgrade](#postgresql-16-to-18-upgrade) instead.
 
@@ -561,6 +561,20 @@ and applies the same scoring and revalidation rules as normal refreshes. A full
 rebuild intentionally reads the selected member's complete visible active ledger;
 run it outside busy periods. Changing the household matching window also performs
 a full revalidation, since every historical candidate may change.
+
+## Reconciling balances
+
+Each scheduled SimpleFIN sync is followed by a balance reconciliation in the `background` container. It compares the balance change the bank reported between consecutive balance entries with the transactions stored for those days, and raises an in-app alert to operators (`OPERATOR_USERNAMES`) when a period does not match. Operators see the counts, the last scheduled run and the mismatched periods with their amounts on Settings → Data, for accounts they can see. A manual balance entry, such as a statement's ending balance, is reconciled the same way.
+
+After a CSV import, or to check by hand, run it in the app environment:
+
+```powershell
+docker compose --env-file $Config exec -T app python manage.py reconcile_balances
+docker compose --env-file $Config exec -T app python manage.py reconcile_balances --account 12 --since 2026-09-01
+docker compose --env-file $Config exec -T app python manage.py reconcile_balances --json
+```
+
+It is read-only: it raises no alert and does not update the last-run time. It prints account IDs, dates and window states, never amounts or account names, and exits 1 when any period is a `mismatch`. States are `ok`, `ok-late` (the next period undoes the difference exactly, which is pending or posting-date skew), `mismatch`, and `insufficient` (some day in the period has no active import, so the transactions cannot be complete). `--json` prints one object: `version`, `accounts`, `counts` per state, and `windows`, each with `account`, `start` (exclusive), `end` and `state`. Fix a mismatch in the app, for example by undoing a duplicated import; the command never changes data.
 
 ## Checking stored dates
 

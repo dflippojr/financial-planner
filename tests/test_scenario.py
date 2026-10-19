@@ -6,7 +6,7 @@ import pytest
 from django.test import Client
 from django.urls import reverse
 
-from finance.cash_flow import cash_flow_chart_data, format_minor
+from finance.cash_flow import format_minor
 from finance.models import Account, PlannedItem, RecurringSeries, RecurringSeriesMember, SavingsGoal
 from finance.planning_services import visible_projection_inputs
 from finance.projection import KIND_EXPENSE, KIND_INCOME, SOURCE_SERIES, project_cash_flow
@@ -23,7 +23,7 @@ from finance.scenario import (
     scenario_projected_months,
 )
 from tests.page_payload import json_script_payload
-from tests.test_projection import PASSWORD, make_account, make_household, make_person, make_transaction, planned_row
+from tests.test_projection import make_account, make_household, make_person, make_transaction, planned_row
 
 
 def add_change(**overrides):

@@ -1,3 +1,4 @@
+from dataclasses import replace
 from types import SimpleNamespace
 
 from django.utils import timezone
@@ -5,6 +6,7 @@ from django.utils import timezone
 from .cash_flow import format_minor
 from .debt_planner import NEEDS_DETAILS, DebtInput, compare_to_minimums
 from .models import Account, BalanceSnapshot
+from .months import add_months, month_end
 from .net_worth import contribution_parts, last_on_or_before
 
 
@@ -24,11 +26,12 @@ def _owed_minor(account, snapshot):
     return liabilities
 
 
-def _load_owed(principal, accounts, today):
+def _load_snapshots(principal, accounts, today):
+    """Each account's latest snapshot on or before today, or None."""
     grouped = {account.pk: [] for account in accounts}
-    owed = {}
+    latest = {}
     if not accounts:
-        return owed
+        return latest
     rows = BalanceSnapshot.objects.visible_to(principal).filter(
         account_id__in=grouped,
         snapshot_date__lte=today,
@@ -37,11 +40,12 @@ def _load_owed(principal, accounts, today):
         grouped[row.account_id].append(row)
     for account in accounts:
         ordered, dates = _ordered_snapshots(grouped[account.pk])
-        owed[account.pk] = _owed_minor(account, last_on_or_before(ordered, dates, today))
-    return owed
+        latest[account.pk] = last_on_or_before(ordered, dates, today)
+    return latest
 
 
-def _catalog_row(account, owed_minor):
+def _catalog_row(account, snapshot):
+    owed_minor = _owed_minor(account, snapshot)
     missing = []
     if account.apr_percent is None:
         missing.append("APR")
@@ -60,6 +64,7 @@ def _catalog_row(account, owed_minor):
         minimum_payment_minor=account.minimum_payment_minor,
         owed_minor=owed_minor,
         owed_display=format_minor(owed_minor) if owed_minor is not None else "",
+        snapshot_date=snapshot.snapshot_date if snapshot is not None else None,
         ready=ready,
         status="" if ready else NEEDS_DETAILS,
         missing=tuple(missing),
@@ -77,11 +82,23 @@ def list_visible_debts(principal, today=None):
         )
         .order_by("name", "pk")
     )
-    owed = _load_owed(principal, accounts, today)
-    return [_catalog_row(account, owed[account.pk]) for account in accounts]
+    snapshots = _load_snapshots(principal, accounts, today)
+    return [_catalog_row(account, snapshots[account.pk]) for account in accounts]
 
 
-def _inputs_for(rows, include_ids):
+def _payment_in_snapshot(row, today):
+    """Whether the balance already reflects this month's payment (#511).
+
+    With a known payment day, a snapshot on or after this month's payment date
+    reflects it. Without one, any snapshot taken this month is assumed to.
+    """
+    if row.payment_day:
+        due = today.replace(day=min(row.payment_day, month_end(today).day))
+        return row.snapshot_date >= due
+    return row.snapshot_date >= today.replace(day=1)
+
+
+def _inputs_for(rows, include_ids, today):
     selected = set(include_ids)
     included = []
     for row in rows:
@@ -96,9 +113,18 @@ def _inputs_for(rows, include_ids):
                 balance_minor=row.owed_minor,
                 apr_percent=row.apr_percent,
                 minimum_payment_minor=row.minimum_payment_minor,
+                first_month_paid=_payment_in_snapshot(row, today),
             )
         )
     return included
+
+
+def _first_month(inputs, today):
+    """This month, unless every included debt has already paid it."""
+    start = today.replace(day=1)
+    if inputs and all(debt.first_month_paid for debt in inputs):
+        return add_months(start, 1), [replace(debt, first_month_paid=False) for debt in inputs]
+    return start, inputs
 
 
 def planner_chart_data(plan):
@@ -129,8 +155,7 @@ def _decorate_comparison(comparison):
 def build_debt_plan(principal, *, include_ids, extra_minor, strategy, custom_order, today=None):
     today = today or timezone.localdate()
     catalog = list_visible_debts(principal, today=today)
-    inputs = _inputs_for(catalog, include_ids)
-    start = today.replace(day=1)
+    start, inputs = _first_month(_inputs_for(catalog, include_ids, today), today)
     comparison = None
     if inputs:
         comparison = compare_to_minimums(

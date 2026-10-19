@@ -1,8 +1,10 @@
-from datetime import date, timedelta
+from datetime import date
+from io import StringIO
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.management import call_command
 from django.test import Client
 from django.urls import reverse
 
@@ -22,7 +24,7 @@ from finance.category_services import (
     unsplit_transaction,
     with_transfer_state,
 )
-from finance.lifecycle_services import archive_account, share_account, unshare_account
+from finance.lifecycle_services import archive_account, leave_household, share_account, unshare_account
 from finance.csv_import.services import undo_import_batch
 from finance.models import (
     Account,
@@ -988,6 +990,106 @@ def test_unsharing_shared_account_unmarks_pair_with_other_members_private_leg():
         new_description="included",
         actor=owner,
     ).exists()
+
+
+def _leave_or_evict(person, exit_kind):
+    if exit_kind == "leave":
+        leave_household(person)
+    else:
+        call_command("evict_household_member", username=person.user.username, stdout=StringIO())
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("exit_kind", ["leave", "evict"])
+def test_lent_owner_leaving_unmarks_pair_with_other_members_private_leg(exit_kind):
+    owner = make_person("owner")
+    member = make_person("member")
+    household = make_household(owner, member)
+    lent = make_account(
+        owner, name="Synthetic Lent Checking", scope=Account.Scope.HOUSEHOLD, household=household,
+        share_mode=Account.ShareMode.LENT,
+    )
+    private = make_account(member, name="Synthetic Member Savings", account_type=Account.Type.SAVINGS)
+    groceries = Category.objects.get(household=household, name="Groceries")
+    make_transaction(owner, lent, amount_minor=-2900, description="Synthetic shared transfer out")
+    private_leg = make_transaction(member, private, amount_minor=2900, description="Synthetic private transfer in")
+    assign_category(member, private_leg.pk, groceries.pk)
+    refresh_transfer_pairs(member)
+    pair = TransferPair.objects.get()
+    assert pair.status == TransferPair.Status.AUTO_MARKED
+
+    _leave_or_evict(owner, exit_kind)
+    pair.refresh_from_db()
+    private_leg.refresh_from_db()
+
+    assert pair.status == TransferPair.Status.UNDONE
+    assert private_leg.category_id == groceries.pk
+    assert income_and_spending_totals(member).income_minor == 2900
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("status", [TransferPair.Status.CONFIRMED, TransferPair.Status.SUGGESTED])
+def test_leaving_undoes_pair_between_own_private_and_household_account(status):
+    owner = make_person("owner")
+    member = make_person("member")
+    household = make_household(owner, member)
+    shared = make_account(owner, name="Synthetic Shared Checking", scope=Account.Scope.HOUSEHOLD, household=household)
+    private = make_account(owner, name="Synthetic Owner Savings", account_type=Account.Type.SAVINGS)
+    make_transaction(owner, shared, amount_minor=-3100, description="Synthetic shared transfer out")
+    make_transaction(owner, private, amount_minor=3100, description="Synthetic private transfer in")
+    refresh_transfer_pairs(owner)
+    pair = TransferPair.objects.get()
+    TransferPair.objects.filter(pk=pair.pk).update(status=status)
+
+    leave_household(owner)
+    pair.refresh_from_db()
+    shared.refresh_from_db()
+
+    assert shared.scope == Account.Scope.HOUSEHOLD
+    assert shared.owner_id == member.pk
+    assert pair.status == TransferPair.Status.UNDONE
+    assert income_and_spending_totals(member).spending_minor == 3100
+
+
+@pytest.mark.django_db
+def test_leaving_keeps_pairs_whose_legs_still_share_a_viewer():
+    owner = make_person("owner")
+    member = make_person("member")
+    household = make_household(owner, member)
+    shared = make_account(owner, name="Synthetic Shared Checking", scope=Account.Scope.HOUSEHOLD, household=household)
+    shared_savings = make_account(
+        owner, name="Synthetic Shared Savings", account_type=Account.Type.SAVINGS,
+        scope=Account.Scope.HOUSEHOLD, household=household,
+    )
+    member_savings = make_account(member, name="Synthetic Member Savings", account_type=Account.Type.SAVINGS)
+    make_transaction(owner, shared, amount_minor=-3300, description="Synthetic shared transfer out")
+    make_transaction(owner, shared_savings, amount_minor=3300, description="Synthetic shared transfer in")
+    make_transaction(owner, shared, amount_minor=-3500, description="Synthetic member transfer out")
+    make_transaction(member, member_savings, amount_minor=3500, description="Synthetic member transfer in")
+    refresh_transfer_pairs(member)
+    assert TransferPair.objects.filter(status=TransferPair.Status.AUTO_MARKED).count() == 2
+
+    leave_household(owner)
+
+    assert TransferPair.objects.filter(status=TransferPair.Status.AUTO_MARKED).count() == 2
+
+
+@pytest.mark.django_db
+def test_last_member_leaving_keeps_pair_with_own_private_account():
+    owner = make_person("owner")
+    household = make_household(owner)
+    shared = make_account(owner, name="Synthetic Shared Checking", scope=Account.Scope.HOUSEHOLD, household=household)
+    private = make_account(owner, name="Synthetic Owner Savings", account_type=Account.Type.SAVINGS)
+    make_transaction(owner, shared, amount_minor=-3700, description="Synthetic shared transfer out")
+    make_transaction(owner, private, amount_minor=3700, description="Synthetic private transfer in")
+    refresh_transfer_pairs(owner)
+    pair = TransferPair.objects.get()
+    assert pair.status == TransferPair.Status.AUTO_MARKED
+
+    leave_household(owner)
+    pair.refresh_from_db()
+
+    assert pair.status == TransferPair.Status.AUTO_MARKED
 
 
 @pytest.mark.django_db

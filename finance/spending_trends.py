@@ -85,7 +85,7 @@ def spending_category_trend_report(
         accounts=overall.accounts,
         tag=tag,
     )
-    for window, (total_spending_minor, by_category_id) in zip(windows, window_spending):
+    for window, (total_spending_minor, by_category_id) in zip(windows, window_spending, strict=True):
         combined = _combine_category_spending(by_category_id, named)
         amounts = {item["filter_value"]: item["spending_minor"] for item in combined.values()}
         values = [amounts.get(item.key, 0) for item in categories]

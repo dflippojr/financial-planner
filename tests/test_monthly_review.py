@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone as dt_timezone
+from datetime import date, datetime, timedelta, UTC
 from hashlib import sha256
 from unittest.mock import patch
 
@@ -7,6 +7,7 @@ from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.test import Client
 from django.urls import reverse
+from django.utils import timezone as django_timezone
 
 from finance.alert_services import run_daily_alert_pass
 from finance.budget_services import save_budget
@@ -327,7 +328,7 @@ def test_recurring_facts_include_price_missed_cancel_and_new():
         confidence=RecurringSeries.Confidence.HIGH,
         reasons=["synthetic"],
         fingerprint=sha256(b"rise").hexdigest(),
-        confirmed_at=datetime(2026, 8, 1, tzinfo=dt_timezone.utc),
+        confirmed_at=datetime(2026, 8, 1, tzinfo=UTC),
     )
     for day, amount in ((date(2026, 7, 10), -1000), (date(2026, 8, 10), -1000), (date(2026, 9, 10), -1200)):
         RecurringSeriesMember.objects.create(
@@ -346,7 +347,7 @@ def test_recurring_facts_include_price_missed_cancel_and_new():
         confidence=RecurringSeries.Confidence.HIGH,
         reasons=["synthetic"],
         fingerprint=sha256(b"missed").hexdigest(),
-        confirmed_at=datetime(2026, 8, 1, tzinfo=dt_timezone.utc),
+        confirmed_at=datetime(2026, 8, 1, tzinfo=UTC),
     )
     RecurringSeriesMember.objects.create(
         series=missed,
@@ -369,7 +370,7 @@ def test_recurring_facts_include_price_missed_cancel_and_new():
         confidence=RecurringSeries.Confidence.HIGH,
         reasons=["synthetic"],
         fingerprint=sha256(b"cancel").hexdigest(),
-        confirmed_at=datetime(2026, 8, 1, tzinfo=dt_timezone.utc),
+        confirmed_at=datetime(2026, 8, 1, tzinfo=UTC),
     )
     RecurringSeriesMember.objects.create(
         series=cancelled,
@@ -379,7 +380,7 @@ def test_recurring_facts_include_price_missed_cancel_and_new():
     )
     cancel_recurring_series(owner, cancelled.pk)
     RecurringSeries.objects.filter(pk=cancelled.pk).update(
-        cancelled_at=datetime(2026, 9, 20, tzinfo=dt_timezone.utc)
+        cancelled_at=datetime(2026, 9, 20, tzinfo=UTC)
     )
     suggestion = RecurringSeries.objects.create(
         person=owner,
@@ -398,7 +399,7 @@ def test_recurring_facts_include_price_missed_cancel_and_new():
             owner, account, transaction_date=date(2026, 7, 2), amount_minor=-2000, description="Synthetic New"
         ),
     )
-    september = datetime(2026, 9, 12, 12, 0, tzinfo=dt_timezone.utc)
+    september = datetime(2026, 9, 12, 12, 0, tzinfo=UTC)
     with patch("django.utils.timezone.now", return_value=september):
         confirm_recurring_series(owner, suggestion.pk)
 
@@ -513,3 +514,42 @@ def test_a_month_before_the_earliest_transaction_falls_back_to_the_default():
     response = client.post(reverse("monthly-review-regenerate"), {"month": "2001-01"})
     assert response["Location"].endswith(f"month={closed.isoformat()[:7]}")
     assert not MonthlyReview.objects.filter(person=owner, month__lt=closed).exists()
+
+
+@pytest.mark.django_db
+def test_page_shows_generated_date_and_hints_at_newer_rows_until_regenerated():
+    owner = make_person("owner")
+    member = make_person("member")
+    make_household(owner, member)
+    checking = make_account(owner)
+    make_transaction(owner, checking, transaction_date=date(2026, 9, 12), amount_minor=-2_000, description="First spend")
+    review, _wrote = store_monthly_review(owner, SEP, today=TODAY)
+    # Leave clear gaps between the rows, the review and later rows.
+    generated = django_timezone.now() - timedelta(hours=1)
+    Transaction.objects.update(created_at=generated - timedelta(hours=1))
+    MonthlyReview.objects.filter(pk=review.pk).update(generated_at=generated)
+    client = signed_in(owner)
+    hint = "New transactions since this review."
+
+    page = client.get(reverse("monthly-review") + "?month=2026-09").content.decode()
+    assert f"Generated {django_timezone.localtime(generated).date().isoformat()}." in page
+    assert hint not in page
+
+    # Another member's private row for the month is not news to this member.
+    private = make_account(member, name="Member Private Checking")
+    make_transaction(member, private, transaction_date=date(2026, 9, 20), amount_minor=-5_000, description="Private")
+    # Neither is a row outside the reviewed month.
+    make_transaction(owner, checking, transaction_date=date(2026, 10, 2), amount_minor=-1_000, description="October")
+    assert hint not in client.get(reverse("monthly-review") + "?month=2026-09").content.decode()
+
+    make_transaction(owner, checking, transaction_date=date(2026, 9, 13), amount_minor=-7_000, description="Late import")
+    page = client.get(reverse("monthly-review") + "?month=2026-09").content.decode()
+    assert hint in page
+    review.refresh_from_db()
+    assert review.facts["spending_minor"] == 2_000
+
+    client.post(reverse("monthly-review-regenerate"), {"month": "2026-09"})
+    page = client.get(reverse("monthly-review") + "?month=2026-09").content.decode()
+    assert hint not in page
+    review.refresh_from_db()
+    assert review.facts["spending_minor"] == 9_000
