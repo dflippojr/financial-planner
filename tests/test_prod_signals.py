@@ -2,7 +2,7 @@ import importlib.util
 import io
 import json
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,7 +15,7 @@ spec = importlib.util.spec_from_file_location("prod_signals", SCRIPT)
 signals = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(signals)
 
-NOW = datetime(2026, 10, 16, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 16, 12, 0, tzinfo=UTC)
 
 # Synthetic container output: Gunicorn and Django lines around tracebacks whose
 # messages stand in for the private detail that must never be reported.

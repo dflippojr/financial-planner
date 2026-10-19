@@ -3,7 +3,7 @@ import os
 import shutil
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 import pytest
@@ -29,7 +29,7 @@ def _fake_docker_bin(tmp_path):
 
 
 def _run_check(tmp_path, *, restart_on_inspect=None):
-    now = datetime.now(timezone.utc).timestamp()
+    now = datetime.now(UTC).timestamp()
     deployed = now - 30
     containers = {"db-id": {"id": "db-id", "service": "db", "created": now - 86400, "started": now - 86400}}
     events = []

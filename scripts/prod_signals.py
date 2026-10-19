@@ -114,7 +114,7 @@ def _parse_time(value):
     except ValueError:
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        parsed = parsed.replace(tzinfo=timezone.utc)  # noqa: UP017 - runs on the host's own python, which may predate 3.11
     return parsed
 
 
@@ -152,7 +152,7 @@ def backup_state(path, *, now=None):
     recorded an error, "stale" when a success is older than the in-app alert
     allows, and "ok" otherwise.
     """
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(timezone.utc)  # noqa: UP017 - runs on the host's own python, which may predate 3.11
     status_path = Path(path).resolve()
     if status_path.name != STATUS_FILE_NAME:
         raise ValueError(f"give the backup health file, BACKUP_DIR/health/{STATUS_FILE_NAME}")

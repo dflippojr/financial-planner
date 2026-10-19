@@ -9,13 +9,13 @@ restart after the check began but before its first snapshot saw the container.
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 
 def _docker_time(seconds):
     # Docker drops trailing zeros, so its times often have seven or fewer
     # fractional digits, which PowerShell 7's ConvertFrom-Json reads as dates.
-    text = datetime.fromtimestamp(seconds, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f").rstrip("0").rstrip(".")
+    text = datetime.fromtimestamp(seconds, UTC).strftime("%Y-%m-%dT%H:%M:%S.%f").rstrip("0").rstrip(".")
     return text + "Z"
 
 
@@ -36,7 +36,7 @@ def _inspect(state, args, path):
     if container is None:
         return 1
     if container.pop("restart_on_inspect", False):
-        now = datetime.now(timezone.utc).timestamp()
+        now = datetime.now(UTC).timestamp()
         container["started"] = now
         state["events"].append({"time": now, "action": "start", "id": container["id"]})
         with open(path, "w", encoding="utf-8") as handle:
