@@ -682,3 +682,9 @@ A bead requires current policy acceptance and a usable chat backend. Household t
 Failed connection or model-readiness work before claim spends the configured `AI_JOB_MAX_ATTEMPTS` budget (default 5), as does starting a new inference. Malformed model-status fields fail with a sanitized provider error; readiness transport errors also back off toward the budget instead of indefinitely occupying the waiting-model queue. A valid sleeping model still waits for the quiet window without spending an attempt.
 
 Saved-session polls reuse the session without spending another inference attempt, including exception recovery. Both normal open-session results and exceptions enforce `AI_JOB_RESUME_MAX_AGE_SECONDS` (default 24 hours from job creation), clear the saved session on expiry, and record a safe failure code and finish time. Terminal jobs release their active phrasing queue slot. Conditional writes preserve another worker's newer state.
+
+## Statement balances and the spreadsheet check (2026-10-19, #536)
+
+The owner enters each month's statement ending balance as a `manual` balance entry for every account without SimpleFIN, so those accounts come under balance reconciliation (#535). SimpleFIN is not configured yet, so this covers every account for now.
+
+`compare_ledger` checks the cash-flow view against the owner's spreadsheet each month. The owner exports the sheet to a CSV outside the repository; the command reads it and stores nothing. It compares income and spending separately, exactly to the cent (tolerance was left to the recommended default), and prints month labels and `match`, `differs`, `excepted` or `open` only, never amounts. A month the owner names as a known timing difference is `excepted` when it differs. A month that has not ended is `open`. The command can be removed once the owner retires the sheet. Importing the sheet as data stays out of scope.
