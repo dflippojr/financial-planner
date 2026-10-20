@@ -576,6 +576,56 @@ docker compose --env-file $Config exec -T app python manage.py reconcile_balance
 
 It is read-only: it raises no alert and does not update the last-run time. It prints account IDs, dates and window states, never amounts or account names, and exits 1 when any period is a `mismatch`. States are `ok`, `ok-late` (the next period undoes the difference exactly, which is pending or posting-date skew), `mismatch`, and `insufficient` (some day in the period has no active import, so the transactions cannot be complete). `--json` prints one object: `version`, `accounts`, `counts` per state, and `windows`, each with `account`, `start` (exclusive), `end` and `state`. Fix a mismatch in the app, for example by undoing a duplicated import; the command never changes data.
 
+## Monthly reconciliation
+
+Once a month, after the new statements are imported, bring every account under the two independent checks:
+
+1. **Enter each statement's ending balance.** On Accounts, open the row menu of every account that has no SimpleFIN link and choose **Record balance**. Use the statement's closing date as the date and its ending balance as the amount; for a credit card or loan, enter the amount owed. Each one is stored as a `manual` balance entry. This takes about two minutes and gives [reconciliation](#reconciling-balances) a second balance entry to compare the month's transactions against.
+2. **Run `reconcile_balances`** as shown above. Fix each `mismatch` in the app, usually a missing or duplicated import, and run it again.
+3. **Compare the cash-flow view with your spreadsheet** while you still keep one, as below.
+
+### Comparing with your spreadsheet
+
+Export the sheet's month totals to a CSV and keep it outside this repository. `compare_ledger` reads it, compares each ended month's income and spending in your cash-flow accounts with it exactly to the cent, and stores nothing. Pipe the file in so it never lands in the container:
+
+```powershell
+Get-Content -Raw C:\Users\you\Documents\month-totals.csv | docker compose --env-file $Config exec -T app python manage.py compare_ledger --sheet - --username you
+```
+
+Output is a month label and a state per month plus counts, never an amount, a description or an account name, so it is safe to paste:
+
+```text
+2026-02 differs
+2026-04 excepted
+6 month(s) compared: 3 match, 1 differs, 1 excepted, 1 open.
+```
+
+`match` means income and spending are both identical to the cent. `differs` means either is not; open the month in the app's Transactions view to find the transactions. `open` is a month that has not ended, which is not judged. Add `--json` for `version`, `counts` and a `months` list. The command exits 1 when any month differs.
+
+**Known timing differences.** If your sheet books a transaction in a different month than the bank posted it, name the month with `--known-timing 2026-04` (repeatable). It then reports `excepted` instead of `differs` when it differs, and still reports `match` if it happens to match. Keep your list of excepted months and the reason for each in your own notes, not in the repository.
+
+**Column mapping.** The sheet needs one row per month with a month, an income and a spending column. By default the command uses the mapping saved on the Sheet comparison page, or else the headers `Month`, `Income` and `Spending`. Override any of them with `--month-column`, `--income-column`, `--spending-column` and `--spending-sign signed|unsigned`. A synthetic example that works with the defaults:
+
+```csv
+Month,Income,Spending
+2026-01,1000.00,400.00
+2026-02,1100.00,500.00
+```
+
+The same months with a signed spending column and other headers:
+
+```csv
+When,In,Out
+2026-01,1000.00,-400.00
+2026-02,1100.00,-500.00
+```
+
+```powershell
+... compare_ledger --sheet - --username you --month-column When --income-column In --spending-column Out --spending-sign signed
+```
+
+Months may be written `2026-01`, `01/2026`, `Jan 2026` or `January 2026`; money may carry `$`, commas or parentheses for a negative. Use `--account <id>` to compare one account, such as your checking account, instead of all of them. Remove the command once you retire the sheet.
+
 ## Checking stored dates
 
 Transaction and balance dates must fall between 1900-01-01 and a year past
