@@ -7,9 +7,9 @@ name: Gate guard (default branch)
 # base and head as git objects and reads their diff. It uses no secrets, only the GITHUB_TOKEN below.
 #
 # The owner's gate-change-approved label counts only when the owner applied it after the head commit was pushed (dated
-# from GitHub's push activity), so a push after an approval needs a new one. The verdict lands as the gate-guard check
-# on the head commit; the ruleset for main requires it next to gate. Both uses: and guard-ref name the same full SHA
-# as ci.yml's gate-guard job. See README.md in dflippojr/.github, "Gate guard on the default branch".
+# from GitHub's push activity), so a push after an approval needs a new one. The verdict is the job's own check,
+# gate-guard-target / gate-guard, on the head commit; the ruleset for main requires it next to gate. Both uses: and
+# guard-ref name the same full SHA as ci.yml's gate-guard job. See README.md in dflippojr/.github, "Gate guard on the default branch".
 on:
   pull_request_target:
     # edited re-judges a pull request moved to another base, where the same head can bring new hits;
@@ -23,12 +23,13 @@ permissions:
   issues: read
   pull-requests: read
 
-# The check run lands on the head commit, which several pull requests can share, so each run judges every open pull
+# The verdict is a check on the head commit, which several pull requests can share, so each run judges every open pull
 # request with that head and runs alone for it: the newest decision for a commit is the one that lands.
 concurrency:
   group: gate-guard-target-${{ github.event.pull_request.head.sha }}
   cancel-in-progress: true
 
+# The job id names the required check: gate-guard-target / gate-guard.
 jobs:
   gate-guard-target:
     uses: dflippojr/.github/.github/workflows/gate-guard-target.yml@fffb84b7fff0a8d68cad4a7da34ed4200e10dc0b
