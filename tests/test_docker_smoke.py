@@ -6,25 +6,27 @@ reached. Each stub state is "<status> <restart count>", as docker inspect
 prints it.
 """
 
+import os
 from pathlib import Path
-import shutil
 import subprocess
 
 import pytest
 
-SMOKE_SCRIPT = Path(__file__).parents[1] / "scripts" / "docker-smoke.sh"
+from tests.test_backup_scripts import POSIX_BASH, _unix_path
 
-pytestmark = pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+SMOKE_SCRIPT = Path(__file__).parents[1] / "scripts" / "docker-smoke.sh"
 
 
 def _run(tmp_path, body, **env):
-    script = f'source "{SMOKE_SCRIPT.as_posix()}"\nwork_dir="{tmp_path.as_posix()}"\n{body}\n'
+    script = f'source "{_unix_path(SMOKE_SCRIPT)}"\nwork_dir="{_unix_path(tmp_path)}"\n{body}\n'
+    # The expected-failure branch would otherwise write to the CI job summary.
+    base = {key: value for key, value in os.environ.items() if key != "GITHUB_STEP_SUMMARY"}
     return subprocess.run(
-        ["bash", "-c", script],
+        [POSIX_BASH or "bash", "-c", script],
         capture_output=True,
         text=True,
         timeout=60,
-        env={"PATH": "/usr/bin:/bin", **env},
+        env={**base, **env},
         check=False,
     )
 
@@ -64,7 +66,7 @@ CRON_MESSAGE = "ValueError: SIMPLEFIN_SYNC_CRON supports numbers only (for examp
 def _invalid_cron(tmp_path, state, *, up_output="", logs=CRON_MESSAGE):
     calls = tmp_path / "compose-calls"
     body = (
-        f'compose() {{ echo "SIMPLEFIN_SYNC_CRON=${{SIMPLEFIN_SYNC_CRON:-}} $*" >> "{calls.as_posix()}"; '
+        f'compose() {{ echo "SIMPLEFIN_SYNC_CRON=${{SIMPLEFIN_SYNC_CRON:-}} $*" >> "{_unix_path(calls)}"; '
         f'case $1 in up) printf "%s\\n" "{up_output}" ;; logs) printf "%s\\n" "{logs}" ;; esac; }}\n'
         f'container_state() {{ echo "{state}"; }}\n'
         "expect_invalid_cron_refused '30 6 * * MON-FRI' && echo checked"
