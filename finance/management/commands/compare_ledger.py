@@ -25,9 +25,13 @@ MONTH_LABEL = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
 
 def _month_label(value):
-    if not MONTH_LABEL.fullmatch(value):
-        raise CommandError("--known-timing must be a month in YYYY-MM form.")
-    return parse_sheet_month(value)
+    try:
+        if not MONTH_LABEL.fullmatch(value):
+            raise ValueError
+        return parse_sheet_month(value)
+    except ValueError:
+        # A well-shaped label can still be no calendar month, such as year 0000.
+        raise CommandError("--known-timing must be a month in YYYY-MM form.") from None
 
 
 class Command(BaseCommand):

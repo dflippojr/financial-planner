@@ -194,6 +194,14 @@ def test_bad_input_is_refused_without_echoing_cells(ledger, tmp_path, args, text
 
 
 @pytest.mark.django_db
+def test_year_zero_known_timing_returns_validation_error(ledger, tmp_path):
+    owner, _ = ledger
+    with pytest.raises(CommandError, match='YYYY-MM'):
+        call_command('compare_ledger', '--sheet', write_sheet(tmp_path),
+                     '--username', owner.user.username, '--known-timing', '0000-01')
+
+
+@pytest.mark.django_db
 def test_missing_file_and_unknown_member(ledger, tmp_path):
     owner, _account = ledger
     _out, error = run("--sheet", str(tmp_path / "absent.csv"), "--username", owner.user.username)
