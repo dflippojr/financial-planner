@@ -59,9 +59,10 @@ def test_trusted_gate_guard_runs_from_the_default_branch_and_runs_no_pull_reques
         assert unsafe not in jobs["judge"], unsafe
 
 
-def test_gate_guard_pin_includes_the_closed_pull_request_exclusion():
+def test_gate_guard_pin_is_not_the_revision_before_the_closed_pull_request_exclusion():
     # The closed trigger only helps once the guard leaves the closed pull request out of the head's verdict
-    # (dflippojr/.github#28, merged as 882623c). e2c7fae is the last main commit before that fix, so both pins
+    # (dflippojr/.github#28, merged as 882623c). e2c7fae is the last main commit before that fix. This rejects only
+    # that known bad pin; it cannot show a newer pin has the fix, so check that with gh api when you move it. Both pins
     # must have moved past it, in ci.yml and in the trusted caller alike.
     before_the_fix = "e2c7fae8508be0359f3abaf136caade46ee7479c"
     for name in ("ci.yml", "gate-guard-target.yml"):
