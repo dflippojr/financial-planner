@@ -14,11 +14,15 @@ failure, and the marker has to go.
 
 import os
 from pathlib import Path
+import re
 
 import pytest
 
 CASES_DIR = Path(os.environ.get("SMOKE_INVALID_CRON_DIR", "/smoke/invalid-cron"))
 CASES = sorted(path for path in CASES_DIR.iterdir() if path.is_dir()) if CASES_DIR.is_dir() else []
+# The error itself must name the variable, as in "ValueError: SIMPLEFIN_SYNC_CRON
+# has a minute outside 0-59": a traceback whose source lines quote it does not.
+VALIDATION_ERROR = re.compile(r"\b\w*(?:Error|Exception): [^\n]*\bSIMPLEFIN_SYNC_CRON\b")
 
 
 def _read(case, name):
@@ -32,7 +36,7 @@ def test_the_smoke_recorded_its_cases():
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case.name)
 def test_a_message_names_the_variable(case):
-    assert "SIMPLEFIN_SYNC_CRON" in _read(case, "log"), _read(case, "schedule")
+    assert VALIDATION_ERROR.search(_read(case, "log")), _read(case, "schedule")
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case.name)

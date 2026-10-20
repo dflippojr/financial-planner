@@ -165,6 +165,33 @@ def test_a_restart_loop_without_a_message_naming_the_variable_fails(tmp_path):
     assert "test_a_message_names_the_variable" in result.stdout
 
 
+# An unrelated crash whose traceback quotes the variable in source, not in the error.
+UNRELATED_TRACEBACK = (
+    "background-1  | Traceback (most recent call last):\n"
+    'background-1  |   File "/app/scripts/run_background.py", line 40, in main\n'
+    "background-1  |     next_scheduled_sync(settings.SIMPLEFIN_SYNC_CRON)\n"
+    "background-1  | TypeError: 'NoneType' object is not subscriptable\n"
+)
+
+
+def test_a_traceback_that_only_quotes_the_variable_in_source_fails(tmp_path):
+    result = _verdict(tmp_path, ("crash-loop", UNRELATED_TRACEBACK))
+
+    assert result.returncode == 1
+    assert "test_a_message_names_the_variable" in result.stdout
+
+
+def test_the_validation_error_in_a_compose_log_line_names_the_variable(tmp_path):
+    log = UNRELATED_TRACEBACK.replace(
+        "TypeError: 'NoneType' object is not subscriptable",
+        "ValueError: SIMPLEFIN_SYNC_CRON has a minute outside 0-59",
+    )
+    result = _verdict(tmp_path, ("crash-loop", log))
+
+    assert result.returncode == 0, result.stdout
+    assert "3 passed, 1 xfailed" in result.stdout
+
+
 def test_background_that_keeps_running_on_an_invalid_schedule_fails(tmp_path):
     result = _verdict(tmp_path, ("started", CRON_MESSAGE))
 
