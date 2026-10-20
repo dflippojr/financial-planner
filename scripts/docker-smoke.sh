@@ -83,7 +83,11 @@ compose build app backup background
 endgroup
 
 group "Start all four services and wait for app to report healthy"
-compose up -d --wait --wait-timeout 240 $services
+# background disables its healthcheck, which makes `up --wait` fail on it
+# ("has no healthcheck configured"), so only db and app are waited on. The
+# soak below is what proves backup and background stay up.
+compose up -d --wait --wait-timeout 240 db app
+compose up -d backup background
 compose ps
 endgroup
 
