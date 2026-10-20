@@ -22,8 +22,6 @@ permissions:
   contents: read
   issues: read
   pull-requests: read
-  # Only to post the gate-guard check run on the head commit.
-  checks: write
 
 # The check run lands on the head commit, which several pull requests can share, so each run judges every open pull
 # request with that head and runs alone for it: the newest decision for a commit is the one that lands.
@@ -32,7 +30,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  judge:
-    uses: dflippojr/.github/.github/workflows/gate-guard-target.yml@59cd62a0e02bb0c60720bea38373cef87992b3cd
+  gate-guard-target:
+    uses: dflippojr/.github/.github/workflows/gate-guard-target.yml@fffb84b7fff0a8d68cad4a7da34ed4200e10dc0b
     with:
-      guard-ref: 59cd62a0e02bb0c60720bea38373cef87992b3cd
+      guard-ref: fffb84b7fff0a8d68cad4a7da34ed4200e10dc0b
