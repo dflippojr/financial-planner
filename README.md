@@ -389,6 +389,13 @@ PostgreSQL, SonarCloud, Playwright and Docker smoke workflows and ends in one ch
 any of them failed or was cancelled and treats a path-skipped job as passing. Runs on `main` are never
 cancelled. The suite's coverage floor is `fail_under` in `.coveragerc`.
 
+`.github/workflows/gate-guard-target.yml` posts the `gate-guard` check from `main` under `pull_request_target`,
+so a pull request cannot rewrite the check that judges it. It calls the shared guard in `dflippojr/.github`,
+pinned by full SHA, which reads the pull request's diff without checking out or running its code. It fails a pull
+request that deletes or skips tests, adds retries, or edits workflow, coverage, Sonar or lint config, unless the
+owner applied `gate-change-approved` after the newest push. The ruleset for `main` requires `gate` and
+`gate-guard`.
+
 `.github/workflows/sonar.yml` runs the test suite with coverage and reports it to SonarCloud on every
 push to `main`, on pull requests from branches of this repository, and on demand (`gh workflow run sonar.yml`).
 It uses the `SONARCLOUD_TOKEN` repository secret, is skipped for pull requests from forks, and fails the

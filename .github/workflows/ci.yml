@@ -13,7 +13,8 @@ on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened]
+    # labeled and unlabeled re-judge gate-change-approved, so a removed approval cannot leave gate green.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   workflow_dispatch:
 
 permissions:
@@ -82,12 +83,28 @@ jobs:
     if: needs.changes.outputs.docker == 'true'
     uses: ./.github/workflows/docker-smoke.yml
 
+  # Pinned to the full SHA of dflippojr/.github main, the same SHA as guard-ref, per the owner's decision on #529.
+  # Only pull requests are judged; on push to main the job prints a notice and passes.
+  # This job is an early signal inside gate, not the judge: it runs from the PR's head, so a PR can replace it, and it
+  # accepts a label applied before the newest push. The ruleset trusts the gate-guard check that gate-guard-target.yml
+  # posts from main under pull_request_target.
+  gate-guard:
+    name: Gate guard
+    uses: dflippojr/.github/.github/workflows/gate-guard.yml@59cd62a0e02bb0c60720bea38373cef87992b3cd
+    with:
+      guard-ref: 59cd62a0e02bb0c60720bea38373cef87992b3cd
+      require-owner-label-actor: true
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+
   gate:
     name: gate
     # always(): report red when a needed job failed or was cancelled, instead
     # of being skipped and leaving a required check pending.
     if: always()
-    needs: [changes, guards, lint, postgres, sonar, playwright, docker-smoke]
+    needs: [changes, guards, lint, postgres, sonar, playwright, docker-smoke, gate-guard]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

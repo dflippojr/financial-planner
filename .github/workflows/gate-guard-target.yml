@@ -1,0 +1,38 @@
+name: Gate guard (default branch)
+
+# The trusted gate guard, from dflippojr/.github templates/gate-guard-target-caller.yml. ci.yml's gate-guard job runs
+# on pull_request, so it comes from the pull request's head, and a pull request can replace it with a green no-op.
+# pull_request_target runs this file as it is on the default branch, so a pull request that edits it, or ci.yml,
+# cannot change its own verdict. The called workflow checks out nothing from the pull request: it fetches the merge
+# base and head as git objects and reads their diff. It uses no secrets, only the GITHUB_TOKEN below.
+#
+# The owner's gate-change-approved label counts only when the owner applied it after the head commit was pushed (dated
+# from GitHub's push activity), so a push after an approval needs a new one. The verdict lands as the gate-guard check
+# on the head commit; the ruleset for main requires it next to gate. Both uses: and guard-ref name the same full SHA
+# as ci.yml's gate-guard job. See README.md in dflippojr/.github, "Gate guard on the default branch".
+on:
+  pull_request_target:
+    # edited re-judges a pull request moved to another base, where the same head can bring new hits;
+    # labeled/unlabeled re-judge it when an owner label changes.
+    # closed re-judges the pull requests still open with the head, so one
+    # that closes stops deciding their shared check.
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled, closed]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+  # Only to post the gate-guard check run on the head commit.
+  checks: write
+
+# The check run lands on the head commit, which several pull requests can share, so each run judges every open pull
+# request with that head and runs alone for it: the newest decision for a commit is the one that lands.
+concurrency:
+  group: gate-guard-target-${{ github.event.pull_request.head.sha }}
+  cancel-in-progress: true
+
+jobs:
+  judge:
+    uses: dflippojr/.github/.github/workflows/gate-guard-target.yml@59cd62a0e02bb0c60720bea38373cef87992b3cd
+    with:
+      guard-ref: 59cd62a0e02bb0c60720bea38373cef87992b3cd
