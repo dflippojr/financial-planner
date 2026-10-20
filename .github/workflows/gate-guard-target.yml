@@ -33,6 +33,6 @@ concurrency:
 
 jobs:
   judge:
-    uses: dflippojr/.github/.github/workflows/gate-guard-target.yml@e2c7fae8508be0359f3abaf136caade46ee7479c
+    uses: dflippojr/.github/.github/workflows/gate-guard-target.yml@59cd62a0e02bb0c60720bea38373cef87992b3cd
     with:
-      guard-ref: e2c7fae8508be0359f3abaf136caade46ee7479c
+      guard-ref: 59cd62a0e02bb0c60720bea38373cef87992b3cd

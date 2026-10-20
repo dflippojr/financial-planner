@@ -59,6 +59,17 @@ def test_trusted_gate_guard_runs_from_the_default_branch_and_runs_no_pull_reques
         assert unsafe not in jobs["judge"], unsafe
 
 
+def test_gate_guard_pin_includes_the_closed_pull_request_exclusion():
+    # The closed trigger only helps once the guard leaves the closed pull request out of the head's verdict
+    # (dflippojr/.github#28, merged as 882623c). e2c7fae is the last main commit before that fix, so both pins
+    # must have moved past it, in ci.yml and in the trusted caller alike.
+    before_the_fix = "e2c7fae8508be0359f3abaf136caade46ee7479c"
+    for name in ("ci.yml", "gate-guard-target.yml"):
+        pins = re.findall(r"(?:@|guard-ref: )([0-9a-f]{40})", _code(name))
+        assert pins, name
+        assert before_the_fix not in pins, name
+
+
 def test_ci_keeps_building_on_pull_request():
     # Only the guard moves to the default branch; the build and tests keep running the pull request's own code.
     header = _header(_code("ci.yml"))

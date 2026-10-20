@@ -90,9 +90,9 @@ jobs:
   # posts from main under pull_request_target.
   gate-guard:
     name: Gate guard
-    uses: dflippojr/.github/.github/workflows/gate-guard.yml@e2c7fae8508be0359f3abaf136caade46ee7479c
+    uses: dflippojr/.github/.github/workflows/gate-guard.yml@59cd62a0e02bb0c60720bea38373cef87992b3cd
     with:
-      guard-ref: e2c7fae8508be0359f3abaf136caade46ee7479c
+      guard-ref: 59cd62a0e02bb0c60720bea38373cef87992b3cd
       require-owner-label-actor: true
     permissions:
       contents: read
