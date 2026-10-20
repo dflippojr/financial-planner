@@ -45,18 +45,19 @@ def test_trusted_gate_guard_runs_from_the_default_branch_and_runs_no_pull_reques
     assert re.search(r"^on:\n  pull_request_target:\n    types: \[opened, synchronize, reopened, edited, labeled, "
                      r"unlabeled, closed\]\n\n", header, re.M), header
     assert "pull_request:" not in target and "workflow_dispatch" not in target and "push:" not in target
-    assert _permissions(header) == {"  contents: read", "  issues: read", "  pull-requests: read",
-                                    "  checks: write"}
+    assert _permissions(header) == {"  contents: read", "  issues: read", "  pull-requests: read"}
     assert "group: gate-guard-target-${{ github.event.pull_request.head.sha }}\n" in header
     assert "cancel-in-progress: true\n" in header
     jobs = _jobs(target)
-    assert set(jobs) == {"judge"}
+    # The job id names the required check, gate-guard-target / gate-guard (dflippojr/.github#36).
+    assert set(jobs) == {"gate-guard-target"}
+    job = jobs["gate-guard-target"]
     sha = _guard_sha()
-    assert f"    uses: dflippojr/.github/.github/workflows/gate-guard-target.yml@{sha}\n" in jobs["judge"]
-    assert f"      guard-ref: {sha}\n" in jobs["judge"]
+    assert f"    uses: dflippojr/.github/.github/workflows/gate-guard-target.yml@{sha}\n" in job
+    assert f"      guard-ref: {sha}\n" in job
     for unsafe in ("steps:", "run:", "actions/checkout", "secrets", "self-hosted", "runs-on",
                    "github.event.pull_request.title", "github.head_ref"):
-        assert unsafe not in jobs["judge"], unsafe
+        assert unsafe not in job, unsafe
 
 
 def test_gate_guard_pin_is_not_the_revision_before_the_closed_pull_request_exclusion():
