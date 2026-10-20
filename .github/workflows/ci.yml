@@ -7,8 +7,10 @@ name: CI
 # its weekly schedule, but none of them triggers on push or pull_request any
 # more: that would run every job twice.
 #
-# Path-filtered work is an if: on a job, never workflow-level paths:, so the
-# gate always runs and reports. A path-skipped job counts as passing.
+# Every job runs on every pull request and every push to main, so a change
+# under finance/ gets the production-image smoke test too. Any path-filtered
+# work would be an if: on a job, never workflow-level paths:, so the gate always
+# runs and reports; a skipped job counts as passing.
 on:
   push:
     branches: [main]
@@ -28,33 +30,6 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  changes:
-    name: Changed paths
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      docker: ${{ steps.filter.outputs.docker }}
-    steps:
-      - name: Decide which path-filtered jobs run
-        id: filter
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR: ${{ github.event.pull_request.number }}
-        run: |
-          # Pushes to main and manual runs build everything.
-          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
-            echo "docker=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          # Both names of a rename, so moving a packaging file away still builds.
-          files=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[] | .filename, (.previous_filename // empty)')
-          # The packaging paths docker-smoke.yml used to filter on.
-          if grep -qE '^(Dockerfile|compose\.yml|requirements\.txt|(scripts|ops|static|templates)/.*|\.github/workflows/(docker-smoke|ci)\.yml)$' <<< "$files"; then
-            echo "docker=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "docker=false" >> "$GITHUB_OUTPUT"
-          fi
-
   guards:
     name: Guards
     uses: ./.github/workflows/guards.yml
@@ -78,8 +53,6 @@ jobs:
 
   docker-smoke:
     name: Docker smoke
-    needs: changes
-    if: needs.changes.outputs.docker == 'true'
     uses: ./.github/workflows/docker-smoke.yml
 
   gate:
@@ -87,7 +60,7 @@ jobs:
     # always(): report red when a needed job failed or was cancelled, instead
     # of being skipped and leaving a required check pending.
     if: always()
-    needs: [changes, guards, lint, postgres, sonar, playwright, docker-smoke]
+    needs: [guards, lint, postgres, sonar, playwright, docker-smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
