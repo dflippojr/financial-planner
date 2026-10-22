@@ -1400,6 +1400,12 @@ class BalanceSnapshot(models.Model):
         blank=True,
         related_name="balance_snapshots",
     )
+    # A balance converted from another currency keeps what the provider sent
+    # and the ECB rate used (#441); all three are empty for a USD balance.
+    original_amount = models.DecimalField(max_digits=24, decimal_places=6, null=True, blank=True)
+    original_currency = models.CharField(max_length=3, blank=True, default="")
+    fx_rate = models.DecimalField(max_digits=20, decimal_places=10, null=True, blank=True)
+    fx_rate_date = models.DateField(null=True, blank=True)
 
     class QuerySet(models.QuerySet):
         def visible_to(self, principal):
@@ -1415,6 +1421,16 @@ class BalanceSnapshot(models.Model):
                 name="balance_snapshot_unique_account_date_source",
             ),
             models.CheckConstraint(condition=Q(currency="USD"), name="balance_snapshot_currency_usd"),
+            models.CheckConstraint(
+                condition=(
+                    Q(original_amount__isnull=True, original_currency="", fx_rate__isnull=True, fx_rate_date__isnull=True)
+                    | (
+                        Q(original_amount__isnull=False, fx_rate__isnull=False, fx_rate_date__isnull=False)
+                        & ~Q(original_currency="")
+                    )
+                ),
+                name="balance_snapshot_original_complete",
+            ),
             models.CheckConstraint(
                 condition=Q(source__in=("simplefin", "manual")),
                 name="balance_snapshot_source_valid",

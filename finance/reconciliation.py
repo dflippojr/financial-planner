@@ -63,7 +63,9 @@ class Window:
 
 
 def eligible_accounts(accounts=None):
-    """Active cash accounts with a transactions-mode link or at least two snapshots."""
+    """Active cash accounts with a transactions-mode link or at least two snapshots.
+
+    An account whose balances were converted from another currency is left out."""
     accounts = Account.objects.all() if accounts is None else accounts
     linked = AccountLink.objects.filter(account_id=OuterRef("pk"), mode=AccountLink.Mode.TRANSACTIONS)
     snapshot_days = (
@@ -73,9 +75,17 @@ def eligible_accounts(accounts=None):
         .annotate(days=Count("snapshot_date", distinct=True))
         .values("days")
     )
+    # A converted balance and each converted row use the ECB rate of their own
+    # date, so their sums differ by exchange-rate movement, not by a missing row (#441).
+    converted = BalanceSnapshot.objects.filter(account_id=OuterRef("pk")).exclude(original_currency="")
     return (
         accounts.filter(status=Account.Status.ACTIVE, archived_at__isnull=True, account_type__in=RECONCILED_TYPES)
-        .alias(_linked=Exists(linked), _snapshot_days=Coalesce(Subquery(snapshot_days), 0))
+        .alias(
+            _linked=Exists(linked),
+            _snapshot_days=Coalesce(Subquery(snapshot_days), 0),
+            _converted=Exists(converted),
+        )
+        .filter(_converted=False)
         .filter(Q(_linked=True) | Q(_snapshot_days__gte=2))
         .order_by("pk")
     )
