@@ -138,7 +138,7 @@ after a deploy. The deployment runbook runs it; see
 one line per reason, when:
 
 - `/health/` does not return 200;
-- `X-App-Revision`, or any built image's revision label, is not `origin/main`;
+- `X-App-Revision`, or the revision label of any image built from this repository (including the one `config-check` last ran, which is `background`'s), is not `origin/main`;
 - any of the four containers is not running, or restarts during a 2 minute
   window, or has restarted since the deploy (by `RestartCount`, its start
   time, and for a new container its `start` events in `docker events`, which

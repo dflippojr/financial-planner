@@ -11,7 +11,7 @@ from django.urls import reverse
 
 from financial_planner.healthcheck import probe_host
 from financial_planner.settings import allowed_hosts_from_env, git_revision_from_env
-from tests.helpers import compose_service
+from tests.helpers import COMPOSE_PATH, compose_service
 
 
 @pytest.mark.django_db
@@ -332,9 +332,36 @@ def test_background_waits_for_a_one_shot_config_check_that_app_and_backup_do_not
     assert 'restart: "no"' in check
     assert 'entrypoint: ["python", "/app/scripts/check_background_config.py"]' in check
     # The same image and environment as background, so it judges what background would read.
-    assert "GIT_SHA: ${GIT_SHA:-unknown}" in check
     assert "environment: &background-environment\n" in background
     assert "environment: *background-environment\n" in check
+
+
+SERVICE_KEY = re.compile(r"^  ([a-z][a-z0-9-]*):\n", re.M)
+
+
+def test_every_documented_build_updates_the_image_config_check_runs():
+    # A separately built config-check keeps its first image when an upgrade
+    # builds only `app backup background`, so it would validate a new release's
+    # settings with old code (#560). It must run background's image instead.
+    compose = COMPOSE_PATH.read_text(encoding="utf-8")
+    services = SERVICE_KEY.findall(compose[: compose.index("\nvolumes:\n")])
+    built = {name for name in services if "\n    build:\n" in compose_service(name)}
+    check = compose_service("config-check")
+    image = re.search(r"\n    image: (.+)\n", compose_service("background")).group(1)
+
+    assert built == {"app", "backup", "background"}
+    assert f"\n    image: {image}\n" in check
+    # Never pulled: an image of that name on a registry is not this release.
+    assert "\n    pull_policy: never\n" in check
+    docs = (COMPOSE_PATH.parent / "docs" / "deployment.md").read_text(encoding="utf-8")
+    builds = re.findall(r"docker compose [^\n`]*? build (?:--pull )?([a-z][a-z -]*[a-z])\n", docs)
+    assert len(builds) >= 2, builds
+    for names in builds:
+        assert set(names.split()) == built, names
+    # The smoke builds the same services, so it starts config-check the way an upgrade does.
+    smoke = (COMPOSE_PATH.parent / "scripts" / "docker-smoke.sh").read_text(encoding="utf-8")
+    assert set(re.search(r'^built_services="(.+)"$', smoke, re.M).group(1).split()) == built
+    assert "compose build $built_services\n" in smoke
 
 
 def test_database_backup_and_test_images_share_one_postgres_major():

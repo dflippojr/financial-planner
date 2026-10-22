@@ -177,6 +177,9 @@ services:
       # The commit to record in the image; docs/deployment.md sets it before each build.
       args:
         GIT_SHA: ${GIT_SHA:-unknown}
+    # Compose's default name for this image, made explicit because config-check
+    # runs it too: building background rebuilds the check with it.
+    image: ${COMPOSE_PROJECT_NAME}-background
     restart: unless-stopped
     # One Django process, with independent job, chat and daily-pass threads.
     # The expanded synthetic ledger reached 286 MiB in a daily pass.
@@ -275,10 +278,11 @@ services:
   # depends on it, so an invalid SIMPLEFIN_SYNC_CRON leaves app and its /health/
   # page up to name the problem; `docker compose logs config-check` shows it.
   config-check:
-    build:
-      context: .
-      args:
-        GIT_SHA: ${GIT_SHA:-unknown}
+    # background's image, never built or pulled on its own, so the documented
+    # `build app backup background` also updates the check: a separate build
+    # would keep validating with the release it was first built from.
+    image: ${COMPOSE_PROJECT_NAME}-background
+    pull_policy: never
     restart: "no"
     mem_limit: 256m
     environment: *background-environment

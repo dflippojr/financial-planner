@@ -10,12 +10,16 @@ recorded outcomes in tests/test_docker_smoke.py. Each case directory holds:
 - up-exit: the exit code of `docker compose up -d`;
 - log: the output of that `up` and every service's logs;
 - config-check-log: `docker compose logs config-check`;
-- app-health: app's health status once `up --wait` returned;
-- health: the body of GET /health/.
+- app-health: the health of the app container that `up` left, once healthy
+  or after 240 seconds, or its status when it is not running (exited, absent);
+- health: the body of GET /health/;
+- backup-state: backup's "<status> <restart count>" afterwards.
 
 The stack must refuse an invalid schedule in the one-shot config-check service,
 so `up` fails naming it and background is never started into a restart loop,
-while app stays healthy and its health page names the variable.
+while backup keeps running and app stays healthy with its health page naming
+the variable. The smoke starts nothing after that `up`, so it cannot repair
+what the `up` left.
 """
 
 import os
@@ -59,6 +63,11 @@ def test_background_is_refused_without_a_restart_loop(case):
 def test_up_fails_naming_config_check(case):
     assert _read(case, "up-exit").strip() != "0", _read(case, "schedule")
     assert 'service "config-check" didn\'t complete successfully' in _read(case, "log"), _read(case, "schedule")
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: case.name)
+def test_backup_keeps_running_without_restarts(case):
+    assert _read(case, "backup-state").strip() == "running 0", _read(case, "schedule")
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case.name)

@@ -4,6 +4,7 @@ It answers `ps`, `inspect` and `events` from a JSON state file named by
 FAKE_DOCKER_STATE, and never reaches a real Docker daemon. A container with
 "restart_on_inspect" starts again the first time it is inspected, which is a
 restart after the check began but before its first snapshot saw the container.
+A container is running unless it names another "status", such as "exited".
 """
 
 import json
@@ -45,7 +46,7 @@ def _inspect(state, args, path):
         "Name": "/" + container["service"],
         "Created": _docker_time(container["created"]),
         "RestartCount": 0,
-        "State": {"Status": "running", "StartedAt": _docker_time(container["started"])},
+        "State": {"Status": container.get("status", "running"), "StartedAt": _docker_time(container["started"])},
         "Config": {"Labels": container.get("labels", {})},
     }]))
     return 0

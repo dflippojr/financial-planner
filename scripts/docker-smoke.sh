@@ -12,10 +12,14 @@
 #      ops/backup/verify-restore.sh restores into a scratch database;
 #   5. `docker compose up -d` with a SIMPLEFIN_SYNC_CRON the schedule parser
 #      rejects must fail in the one-shot config-check service with a message
-#      naming the variable, never start background (so no restart loop), and
-#      leave app healthy with /health/ naming the variable (#560). The verdict
-#      is the pytest file tests/docker_smoke_invalid_cron.py, run with the app
-#      image's pytest.
+#      naming the variable, never start background (so no restart loop), leave
+#      backup running with no restarts, and leave app healthy with /health/
+#      naming the variable, all from that one `up` (#560). The verdict is the
+#      pytest file tests/docker_smoke_invalid_cron.py, run with the app image's
+#      pytest.
+#
+# It builds only the services docs/deployment.md builds, so config-check must
+# come from background's image, as it does on an upgrade.
 #
 # Called by .github/workflows/docker-smoke.yml. Dummy values only: no secrets,
 # no real paths, nothing is pushed. A local run is possible, but it is a
@@ -33,6 +37,9 @@ poll_seconds="${SOAK_POLL_SECONDS:-5}"
 # How long background is watched for a restart after an invalid schedule.
 refuse_seconds="${REFUSE_SECONDS:-30}"
 services="db app backup background"
+# What every documented build in docs/deployment.md names; config-check has no
+# build of its own and runs background's image.
+built_services="app backup background"
 repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 # Compose lets the shell environment override --env-file, so an exported
@@ -130,12 +137,33 @@ container_health() {
   docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$id"
 }
 
+# Wait up to $2 seconds for the container that already exists for service $1
+# to report healthy. It never starts or creates one, so it sees what the last
+# `up` left. Prints healthy, the health it last saw on a running container, or
+# the status of a container that is not running (absent, created, exited...).
+await_existing_healthy() {
+  local deadline=$((SECONDS + $2)) state health=none
+  while :; do
+    state=$(container_state "$1")
+    case $state in
+      running\ *) health=$(container_health "$1") ;;
+      *) echo "${state% *}"; return ;;
+    esac
+    if [ "$health" = healthy ] || [ "$SECONDS" -ge "$deadline" ]; then
+      echo "$health"
+      return
+    fi
+    sleep "$poll_seconds"
+  done
+}
+
 # Start the stack the way an operator does, with SIMPLEFIN_SYNC_CRON set to
 # $1, and watch background for refuse_seconds. Prints one word: crash-loop
 # (Docker restarted it), started (it is still running), or refused (never
 # restarted and not running). Records the rest of the case in directory $2:
 # up's exit code and output with every service's logs, config-check's logs,
-# app's health once it has had time to start, and the /health/ body.
+# app's health once it has had time to start, the /health/ body, and backup's
+# state. After that one `up`, nothing here starts or creates a container.
 invalid_cron_outcome() {
   local schedule=$1 case_dir=$2 deadline state up_exit=0 cron_env=$work_dir/invalid-cron.env
   # The operator's edit: the smoke env file with only the schedule changed.
@@ -154,11 +182,12 @@ invalid_cron_outcome() {
     [ "$SECONDS" -lt "$deadline" ] || break
     sleep "$poll_seconds"
   done
-  # app does not depend on config-check, so it must come up healthy anyway.
-  compose up -d --wait --wait-timeout 240 app >> "$case_dir/log" 2>&1 || true
-  container_health app > "$case_dir/app-health"
+  # app does not depend on config-check, so the operator's one `up` must have
+  # left it running and healthy; another `up` here could repair it first.
+  await_existing_healthy app 240 > "$case_dir/app-health"
   curl -s -H 'Host: smoke.example.test' -H 'X-Forwarded-Proto: https' \
     "http://127.0.0.1:$app_port/health/" > "$case_dir/health" || true
+  container_state backup > "$case_dir/backup-state"
   compose logs --no-color config-check > "$case_dir/config-check-log" 2>&1 || true
   compose logs --no-color >> "$case_dir/log" 2>&1 || true
   case $state in
@@ -189,10 +218,20 @@ expect_invalid_cron_refused() {
     printf '%s\n' "$schedule" > "$case_dir/schedule"
     outcome=$(invalid_cron_outcome "$schedule" "$case_dir")
     echo "$outcome" > "$case_dir/outcome"
-    echo "SIMPLEFIN_SYNC_CRON='$schedule' -> up exit $(cat "$case_dir/up-exit"), background $outcome ($(container_state background)), app $(cat "$case_dir/app-health")"
+    echo "SIMPLEFIN_SYNC_CRON='$schedule' -> up exit $(cat "$case_dir/up-exit"), background $outcome ($(container_state background)), app $(cat "$case_dir/app-health"), backup $(cat "$case_dir/backup-state")"
     grep -h 'SIMPLEFIN_SYNC_CRON' "$case_dir/config-check-log" "$case_dir/health" || true
   done
   judge_invalid_cron 2>&1 || fail "the invalid SIMPLEFIN_SYNC_CRON check failed (pytest output above)"
+}
+
+# Fail unless the config-check container ran the image background runs, by
+# name and revision, so building background is enough to update the check.
+expect_shared_check_image() {
+  local check background
+  check=$(docker inspect --format '{{.Config.Image}} {{index .Config.Labels "org.opencontainers.image.revision"}}' "$(compose ps --all -q config-check)")
+  background=$(docker inspect --format '{{.Config.Image}} {{index .Config.Labels "org.opencontainers.image.revision"}}' "$(compose ps --all -q background)")
+  echo "config-check: $check; background: $background"
+  [ "$check" = "$background" ] || fail "config-check ran '$check', not background's image '$background'"
 }
 
 if [ "${BASH_SOURCE[0]}" != "$0" ]; then
@@ -249,7 +288,7 @@ cleanup() {
 trap cleanup EXIT
 
 group "Build the production images"
-compose build app backup background config-check
+compose build $built_services
 endgroup
 
 group "Start all four services and wait for app to report healthy"
@@ -260,6 +299,9 @@ compose up -d --wait --wait-timeout 240 db app
 compose up -d backup background
 compose ps
 endgroup
+
+echo "== config-check ran background's image"
+expect_shared_check_image
 
 echo "== GET /sign-in/"
 # The Host and X-Forwarded-Proto headers stand in for Tailscale Serve. An empty

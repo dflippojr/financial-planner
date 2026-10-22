@@ -58,7 +58,7 @@ def _health_url(revision):
 
 
 def _run_check(tmp_path, *, restart_on_inspect=None, expected_sha=None, image_sha=None, backup_created_early=0,
-               health_revision=None, full_result=False):
+               health_revision=None, config_check_sha=None, full_result=False):
     now = datetime.now(UTC).timestamp()
     deployed = now - 30
     containers = {"db-id": {"id": "db-id", "service": "db", "created": now - 86400, "started": now - 86400}}
@@ -73,6 +73,11 @@ def _run_check(tmp_path, *, restart_on_inspect=None, expected_sha=None, image_sh
             {"time": created, "action": "create", "id": cid},
             {"time": created, "action": "start", "id": cid},
         ]
+    if config_check_sha:
+        # The one-shot check ran once during the deploy and exited.
+        containers["config-check-id"] = {"id": "config-check-id", "service": "config-check", "created": deployed,
+                                         "started": deployed, "status": "exited",
+                                         "labels": {"org.opencontainers.image.revision": config_check_sha}}
     if restart_on_inspect:
         containers[f"{restart_on_inspect}-id"]["restart_on_inspect"] = True
     state = tmp_path / "docker-state.json"
@@ -182,6 +187,24 @@ def test_wrong_expected_sha_fails_both_checks_at_any_length(tmp_path, length):
 
     assert f"FAIL revision: /health/ serves {SERVED_REVISION}, expected {expected[:12]}" in output
     assert f"FAIL revision: app runs an image built from {SERVED_REVISION}, expected {expected[:12]}" in output
+
+
+def test_config_check_that_ran_an_older_image_fails(tmp_path):
+    # An upgrade that rebuilt background but left config-check on its old image
+    # would validate the new release's settings with the old code (#560).
+    output = _run_check(tmp_path, expected_sha=FULL_SHA, image_sha=FULL_SHA, health_revision=SERVED_REVISION,
+                        config_check_sha=WRONG_SHA)
+
+    assert f"FAIL revision: config-check runs an image built from {WRONG_SHA[:12]}, expected {FULL_SHA[:12]}" in output
+    assert "FAIL revision: background" not in output
+
+
+def test_config_check_on_the_deployed_image_passes_although_it_exited(tmp_path):
+    output = _run_check(tmp_path, expected_sha=FULL_SHA, image_sha=FULL_SHA, health_revision=SERVED_REVISION,
+                        config_check_sha=FULL_SHA)
+
+    assert "FAIL revision" not in output
+    assert "containers: config-check" not in output
 
 
 def test_served_revision_shorter_than_seven_digits_is_not_a_match(tmp_path):
