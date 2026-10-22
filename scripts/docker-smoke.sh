@@ -190,7 +190,7 @@ expect_invalid_cron_refused() {
     outcome=$(invalid_cron_outcome "$schedule" "$case_dir")
     echo "$outcome" > "$case_dir/outcome"
     echo "SIMPLEFIN_SYNC_CRON='$schedule' -> up exit $(cat "$case_dir/up-exit"), background $outcome ($(container_state background)), app $(cat "$case_dir/app-health")"
-    grep 'SIMPLEFIN_SYNC_CRON' "$case_dir/config-check-log" "$case_dir/health" || true
+    grep -h 'SIMPLEFIN_SYNC_CRON' "$case_dir/config-check-log" "$case_dir/health" || true
   done
   judge_invalid_cron 2>&1 || fail "the invalid SIMPLEFIN_SYNC_CRON check failed (pytest output above)"
 }
