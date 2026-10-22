@@ -50,6 +50,21 @@ def two_account_payload(*, cad_currency="CAD"):
     }
 
 
+@pytest.fixture(autouse=True)
+def no_outbound_requests(monkeypatch):
+    """Fail any test here that reaches a real host, even if the sync swallows the error."""
+    attempts = []
+
+    def refuse(request, *args, **kwargs):
+        url = getattr(request, "full_url", request)
+        attempts.append(url)
+        raise AssertionError(f"UNMOCKED OUTBOUND REQUEST: {url}")
+
+    monkeypatch.setattr("finance.simplefin_client.urlopen", refuse)
+    yield
+    assert attempts == [], f"UNMOCKED OUTBOUND REQUEST: {attempts}"
+
+
 def link_both(monkeypatch, payload):
     owner = make_person("owner")
     make_household(owner)
@@ -72,6 +87,7 @@ def link_both(monkeypatch, payload):
 
 @pytest.mark.django_db
 def test_a_cad_account_does_not_block_the_usd_account_on_its_connection(monkeypatch):
+    patch_rates(monkeypatch, RATES)
     owner, checking, _savings, connection = link_both(monkeypatch, two_account_payload())
 
     sync_connection(owner, connection.pk, ignore_rate_limit=True)
@@ -150,6 +166,42 @@ def test_without_a_rate_only_the_cad_account_is_skipped_with_a_message(monkeypat
     assert "Skipped Synthetic Canadian Savings (CAD)" in connection.last_sync_result
     assert "retried on the next sync" in connection.last_sync_result
     assert not connection.disabled
+
+
+@pytest.mark.django_db
+def test_every_skipped_account_is_accounted_for_when_the_result_is_long(monkeypatch):
+    patch_rates(monkeypatch, RateUnavailable("The exchange-rate service could not be reached."))
+    payload = two_account_payload()
+    cad = payload["accounts"].pop()
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner)
+    connection = connect_owner(owner, monkeypatch, payload)
+    links = [{"simplefin_account_id": "CON-1:sf-checking", "action": "link", "account_id": checking.pk,
+              "cutover_date": date(2026, 3, 1)}]
+    for number in range(1, 6):
+        payload["accounts"].append({**cad, "id": f"sf-cad-{number}", "transactions": [
+            posted_txn(txn_id=f"cad-{number}", day=16, amount="-10.00")]})
+        account = make_account(owner, name=f"Synthetic CAD {number}", account_type=Account.Type.SAVINGS)
+        links.append({"simplefin_account_id": f"CON-1:sf-cad-{number}", "action": "link",
+                      "account_id": account.pk, "cutover_date": date(2026, 3, 1)})
+    save_account_links(owner, connection.pk, links)
+
+    result = sync_connection(owner, connection.pk, ignore_rate_limit=True)
+
+    assert len(result["unconverted"]) == 5
+    connection.refresh_from_db()
+    saved = connection.last_sync_result
+    assert len(saved) <= 500
+    shown = [number for number in range(1, 6) if f"Skipped Synthetic CAD {number} (CAD):" in saved]
+    assert shown == list(range(1, len(shown) + 1))
+    if len(shown) < 5:
+        assert f"and {5 - len(shown)} more skipped account(s), 5 in all" in saved
+    # A message is either whole or absent: none is cut part-way.
+    assert saved.count("It will be retried on the next sync.") == len(shown)
+    # The page that ran the sync lists every account in full.
+    for number in range(1, 6):
+        assert f"Skipped Synthetic CAD {number} (CAD):" in result["result"]
 
 
 @pytest.mark.django_db
