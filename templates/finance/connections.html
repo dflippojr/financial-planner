@@ -75,6 +75,7 @@
               <th scope="col">Name</th>
               <th scope="col">Institution</th>
               <th scope="col">Type</th>
+              <th scope="col">Currency</th>
               <th scope="col">Action</th>
             </tr>
           </thead>
@@ -84,6 +85,12 @@
               <td>{{ row.name }}</td>
               <td>{{ row.institution }}</td>
               <td>{{ row.type }}</td>
+              <td>
+                {{ row.currency|upper|default:"Not provided by SimpleFIN" }}
+                {% if row.currency and row.currency|upper != "USD" %}
+                <p class="text-xs opacity-70">Converted to USD at the ECB rate for each transaction's date. The original amount is kept.</p>
+                {% endif %}
+              </td>
               <td>
                 <input type="hidden" name="sf_id_{{ forloop.counter0 }}" value="{{ row.id }}">
                 <label class="sr-only" for="action-{{ forloop.counter0 }}">Action for {{ row.name }}</label>

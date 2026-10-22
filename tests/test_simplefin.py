@@ -365,13 +365,19 @@ def test_access_rules_hide_another_members_connection(monkeypatch):
 
 
 @pytest.mark.django_db
-def test_rejects_custom_currency(monkeypatch):
+def test_a_custom_currency_is_skipped_with_a_message_not_synced(monkeypatch):
     owner = make_person("owner")
     make_household(owner)
-    payload = account_payload(currency="https://example.test/points")
-    _owner, _checking, connection = _linked_owner_and_checking(monkeypatch, owner=owner, payload=payload)
-    with pytest.raises(SimpleFinError, match="currency"):
-        sync_connection(owner, connection.pk, ignore_rate_limit=True)
+    payload = account_payload(
+        currency="https://example.test/points", transactions=[posted_txn(txn_id="pts-1", day=16, amount="-3.00")]
+    )
+    _owner, checking, connection = _linked_owner_and_checking(monkeypatch, owner=owner, payload=payload)
+
+    result = sync_connection(owner, connection.pk, ignore_rate_limit=True)
+
+    assert "usable currency" in result["result"]
+    assert not Transaction.objects.filter(account=checking).exists()
+    assert not BalanceSnapshot.objects.filter(account=checking).exists()
 
 
 @pytest.mark.django_db

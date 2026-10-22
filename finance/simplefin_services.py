@@ -32,6 +32,7 @@ from finance.models import (
     SimpleFinConnection,
     Transaction,
 )
+from finance.fx_rates import APP_CURRENCY, RateBook, RateUnavailable, currency_code, to_usd_minor
 from finance.simplefin_client import CLAIM_DEADLINE_SECONDS, claim_access_url, fetch_accounts
 from finance.simplefin_errors import (
     SimpleFinAlreadyClaimed,
@@ -51,7 +52,7 @@ from .input_limits import MAX_DESCRIPTION_CHARS
 # Minor units of a signed 64-bit column have at most 19 digits, so an amount
 # with a larger exponent is rejected before any arithmetic.
 MAX_AMOUNT_ADJUSTED_EXPONENT = 18
-UNSUPPORTED_CURRENCY = "That SimpleFIN account uses a currency this app does not store."
+NO_CURRENCY = "SimpleFIN did not report a usable currency for it."
 UNSTORABLE_AMOUNT = "SimpleFIN sent an amount that could not be stored."
 INVALID_TOKEN = "That setup token is not a valid SimpleFIN token."  # noqa: S105 - not a secret
 UNSTORABLE_ID = "SimpleFIN sent a transaction id that could not be stored."
@@ -101,22 +102,22 @@ def _mode_for_account_type(account_type: str) -> str:
     return AccountLink.Mode.TRANSACTIONS
 
 
-def _iso4217_usd(value: str) -> str:
-    code = (value or "").strip().upper()
-    if "://" in (value or "") or len(code) != 3 or not code.isalpha():
-        raise SimpleFinError(UNSUPPORTED_CURRENCY)
-    if code != "USD":
-        raise SimpleFinError(UNSUPPORTED_CURRENCY)
-    return code
+class AccountSkipped(Exception):
+    """One linked account cannot sync now; the rest of its connection still does."""
 
 
-def decimal_to_minor(value: str) -> int:
+def _finite_amount(value: str) -> Decimal:
     try:
         amount = Decimal(str(value).strip())
     except (InvalidOperation, AttributeError, ValueError) as exc:
         raise SimpleFinError(UNSTORABLE_AMOUNT) from exc
     if not amount.is_finite() or amount.adjusted() > MAX_AMOUNT_ADJUSTED_EXPONENT:
         raise SimpleFinError(UNSTORABLE_AMOUNT)
+    return amount
+
+
+def decimal_to_minor(value: str) -> int:
+    amount = _finite_amount(value)
     with localcontext() as context:
         context.traps[Inexact] = True
         try:
@@ -415,15 +416,64 @@ def _accounts_by_simplefin_id(payload: dict) -> dict[str, dict]:
     return dict(_remote_accounts(payload))
 
 
-def _upsert_snapshot(account, *, snapshot_date, amount_minor, currency, batch):
+class _Conversion:
+    """One non-USD account's amounts in USD, at the ECB rate for each date (#441)."""
+
+    def __init__(self, currency: str, rates: RateBook):
+        self.currency = currency
+        self._rates = rates
+
+    def convert(self, value, day: date) -> SimpleNamespace:
+        amount = _finite_amount(value)
+        try:
+            rate = self._rates.rate_on(self.currency, day)
+        except RateUnavailable as exc:
+            raise AccountSkipped(str(exc)) from None
+        minor = to_usd_minor(amount, rate.value)
+        if abs(minor) > MAX_BIGINT:
+            raise SimpleFinError(UNSTORABLE_AMOUNT)
+        return SimpleNamespace(minor=minor, amount=amount, currency=self.currency, rate=rate)
+
+
+def _remote_currency(remote: dict) -> str | None:
+    """USD, another ISO 4217-shaped code, or None when the provider sent nothing usable."""
+    return currency_code(remote.get("currency"))
+
+
+def _conversion_for(remote: dict, rates: RateBook) -> _Conversion | None:
+    """None for a USD account; a converter for any other; AccountSkipped when the currency is unusable."""
+    currency = _remote_currency(remote)
+    if currency is None:
+        raise AccountSkipped(NO_CURRENCY)
+    return None if currency == APP_CURRENCY else _Conversion(currency, rates)
+
+
+def _balance_in_usd(remote: dict, balance_date: date, conversion: _Conversion | None) -> dict:
+    """The snapshot fields for the account's reported balance."""
+    value = remote.get("balance")
+    if conversion is None:
+        return {"amount_minor": decimal_to_minor(str(value)), "currency": APP_CURRENCY}
+    converted = conversion.convert(str(value), balance_date)
+    return {
+        "amount_minor": converted.minor,
+        "currency": APP_CURRENCY,
+        "original_amount": converted.amount,
+        "original_currency": converted.currency,
+        "fx_rate": converted.rate.value,
+        "fx_rate_date": converted.rate.rate_date,
+    }
+
+
+def _upsert_snapshot(account, *, snapshot_date, fields, batch):
     # A snapshot stays tied to the sync that first recorded its date, so
     # undoing a later batch never deletes an earlier day's balance.
+    fields = {"original_amount": None, "original_currency": "", "fx_rate": None, "fx_rate_date": None, **fields}
     BalanceSnapshot.objects.update_or_create(
         account=account,
         snapshot_date=snapshot_date,
         source=BalanceSnapshot.Source.SIMPLEFIN,
-        defaults={"amount_minor": amount_minor, "currency": currency},
-        create_defaults={"amount_minor": amount_minor, "currency": currency, "import_batch": batch},
+        defaults=fields,
+        create_defaults={**fields, "import_batch": batch},
     )
 
 
@@ -437,11 +487,21 @@ def _posted_source_id(item) -> str:
     return source_id
 
 
-def _new_transaction(account, link, item, source_id, *, row_number):
+def _new_transaction(account, link, item, source_id, *, row_number, conversion=None):
     txn_date = posted_date(item.get("posted"))
     if txn_date is None or txn_date < link.cutover_date:
         return None
-    amount_minor = decimal_to_minor(str(item.get("amount")))
+    if conversion is None:
+        amount_minor = decimal_to_minor(str(item.get("amount")))
+        fx = None
+    else:
+        converted = conversion.convert(str(item.get("amount")), txn_date)
+        amount_minor = converted.minor
+        fx = {
+            "currency": converted.currency,
+            "rate": str(converted.rate.value),
+            "rate_date": converted.rate.rate_date.isoformat(),
+        }
     description = clean_text(item.get("description") or "")[:MAX_DESCRIPTION_CHARS] or "SimpleFIN transaction"
     pending = item.get("pending")
     original = {
@@ -451,6 +511,9 @@ def _new_transaction(account, link, item, source_id, *, row_number):
         "description": description,
         "pending": pending if isinstance(pending, bool) else None,
     }
+    if fx is not None:
+        # "amount" above stays what the provider sent, in the original currency.
+        original["fx"] = fx
     return Transaction(
         account=account,
         transaction_date=txn_date,
@@ -465,7 +528,7 @@ def _new_transaction(account, link, item, source_id, *, row_number):
     )
 
 
-def _import_transactions(account, link, remote, batches) -> int:
+def _import_transactions(account, link, remote, batches, conversion=None) -> int:
     """Import new posted rows, each into the batch whose range covers its date."""
     existing_ids = set(
         Transaction.objects.filter(
@@ -483,7 +546,7 @@ def _import_transactions(account, link, remote, batches) -> int:
         source_id = _posted_source_id(item)
         if not source_id or source_id in existing_ids:
             continue
-        txn = _new_transaction(account, link, item, source_id, row_number=1)
+        txn = _new_transaction(account, link, item, source_id, row_number=1, conversion=conversion)
         if txn is None:
             continue
         batch = _batch_covering(batches, txn.transaction_date)
@@ -580,19 +643,16 @@ def _transactions_unreliable(remote: dict, payload: dict) -> bool:
     return False
 
 
-def _sync_one_link(person, connection, link, remote, synced_at, payload) -> int:
+def _sync_one_link(person, connection, link, remote, synced_at, payload, rates) -> int:
     account = link.account
-    currency = _iso4217_usd(str(remote.get("currency") or ""))
-    if account.currency != currency:
-        raise SimpleFinError("That SimpleFIN account uses a currency this app does not store.")
+    conversion = _conversion_for(remote, rates)
     balance_date = posted_date(remote.get("balance-date")) or timezone.localdate()
     if link.mode == AccountLink.Mode.TRANSACTIONS and _transactions_unreliable(remote, payload):
         if remote.get("balance") not in (None, ""):
             _upsert_snapshot(
                 account,
                 snapshot_date=balance_date,
-                amount_minor=decimal_to_minor(str(remote.get("balance"))),
-                currency=currency,
+                fields=_balance_in_usd(remote, balance_date, conversion),
                 batch=None,
             )
         return 0
@@ -605,13 +665,12 @@ def _sync_one_link(person, connection, link, remote, synced_at, payload) -> int:
     batches = new_batches + list(_active_link_batches(account, link).exclude(pk__in=new_ids))
     imported = 0
     if link.mode == AccountLink.Mode.TRANSACTIONS:
-        imported = _import_transactions(account, link, remote, batches)
+        imported = _import_transactions(account, link, remote, batches, conversion)
     batch = _batch_covering(batches, balance_date) if batches else None
     _upsert_snapshot(
         account,
         snapshot_date=balance_date,
-        amount_minor=decimal_to_minor(str(remote.get("balance"))),
-        currency=currency,
+        fields=_balance_in_usd(remote, balance_date, conversion),
         batch=batch,
     )
     return imported
@@ -645,7 +704,9 @@ def sync_connection(principal, connection_id, *, ignore_rate_limit=False) -> dic
         # retried on the next run.
         _record_failure(person, connection_id, plan.now, str(exc), failure=failure, disabled=exc.access_denied)
         raise
-    result, failure = _apply_sync(person, connection_id, plan, payload, ignore_rate_limit=ignore_rate_limit)
+    # Like the fetch, rate lookups run before the transaction and household lock.
+    rates = _load_rates(plan.links, payload)
+    result, failure = _apply_sync(person, connection_id, plan, payload, rates, ignore_rate_limit=ignore_rate_limit)
     if failure is not None:
         raise failure
     return result
@@ -668,12 +729,42 @@ def _plan_sync(person, connection_id, *, ignore_rate_limit):
         raise PermissionDenied(_DENIED)
     if _rate_limited(connection, ignore_rate_limit=ignore_rate_limit):
         raise SimpleFinRateLimited(RATE_LIMITED)
-    cutovers = list(AccountLink.objects.filter(connection=connection).values_list("cutover_date", flat=True))
+    links = list(AccountLink.objects.filter(connection=connection))
     return SimpleNamespace(
         now=timezone.now(),
         access_url=_readable_access_url(connection),
-        start_epoch=_start_epoch(cutovers),
+        start_epoch=_start_epoch([link.cutover_date for link in links]),
+        links=links,
     )
+
+
+def _days_to_convert(link, remote) -> list[date]:
+    """The dates whose amounts a sync of this link may convert: its balance and new posted rows."""
+    days = [posted_date(remote.get("balance-date")) or timezone.localdate()]
+    transactions = remote.get("transactions")
+    if link.mode == AccountLink.Mode.TRANSACTIONS and isinstance(transactions, list):
+        for item in transactions:
+            if isinstance(item, dict) and not _is_pending(item):
+                day = posted_date(item.get("posted"))
+                if day is not None and day >= link.cutover_date:
+                    days.append(day)
+    return days
+
+
+def _load_rates(links, payload) -> RateBook:
+    """One ECB request per foreign currency, spanning every date its linked accounts need."""
+    remote_accounts = _accounts_by_simplefin_id(payload)
+    spans: dict[str, list[date]] = {}
+    for link in links:
+        remote = remote_accounts.get(link.simplefin_account_id)
+        currency = _remote_currency(remote) if remote is not None else None
+        if currency is None or currency == APP_CURRENCY:
+            continue
+        spans.setdefault(currency, []).extend(_days_to_convert(link, remote))
+    rates = RateBook()
+    for currency, days in spans.items():
+        rates.load(currency, min(days), max(days))
+    return rates
 
 
 @transaction.atomic
@@ -720,11 +811,18 @@ def _locked_connection(person, connection_id, plan, *, ignore_rate_limit):
     return connection, links
 
 
-def _import_links(person, connection, links, syncable_ids, payload, now):
-    """Apply each linked account. Returns (imported, skipped)."""
+def _skip_message(link, remote, reason) -> str:
+    code = _remote_currency(remote)
+    label = f"{link.account.name} ({code})" if code and code != APP_CURRENCY else link.account.name
+    return f"Skipped {label}: {reason} It will be retried on the next sync."
+
+
+def _import_links(person, connection, links, syncable_ids, payload, now, rates):
+    """Apply each linked account. Returns (imported, skipped, unconverted messages)."""
     remote_accounts = _accounts_by_simplefin_id(payload)
     imported = 0
     skipped = 0
+    unconverted = []
     for link in links:
         if link.account_id not in syncable_ids:
             # Archived, or no longer visible to the connection owner
@@ -734,12 +832,28 @@ def _import_links(person, connection, links, syncable_ids, payload, now):
         remote = remote_accounts.get(link.simplefin_account_id)
         if remote is None:
             continue
-        imported += _sync_one_link(person, connection, link, remote, now, payload)
-    return imported, skipped
+        try:
+            # A savepoint per account: one that cannot convert leaves no half-written rows.
+            with transaction.atomic():
+                imported += _sync_one_link(person, connection, link, remote, now, payload, rates)
+        except AccountSkipped as exc:
+            unconverted.append(_skip_message(link, remote, str(exc)))
+    return imported, skipped, unconverted
+
+
+def _fit_summary(head, unconverted, tail, limit) -> str:
+    """Join the result, dropping whole skip messages from the end so it fits, and count the dropped ones."""
+    for shown in range(len(unconverted), -1, -1):
+        hidden = len(unconverted) - shown
+        more = [f"... and {hidden} more skipped account(s), {len(unconverted)} in all."] if hidden else []
+        summary = " ".join([head, *unconverted[:shown], *more, *tail])
+        if len(summary) <= limit:
+            return summary
+    return summary[:limit]
 
 
 @transaction.atomic
-def _apply_sync(person, connection_id, plan, payload, *, ignore_rate_limit):
+def _apply_sync(person, connection_id, plan, payload, rates, *, ignore_rate_limit):
     connection, links = _locked_connection(person, connection_id, plan, ignore_rate_limit=ignore_rate_limit)
     now = plan.now
     errors = provider_errors(payload)
@@ -752,18 +866,21 @@ def _apply_sync(person, connection_id, plan, payload, *, ignore_rate_limit):
         # A savepoint: a failure part-way undoes this run's imports while the
         # failure record below still commits.
         with transaction.atomic():
-            imported, skipped = _import_links(person, connection, links, syncable_ids, payload, now)
+            imported, skipped, unconverted = _import_links(
+                person, connection, links, syncable_ids, payload, now, rates
+            )
     except SimpleFinError as exc:
         _save_failure(person, connection, now, str(exc), failure="import_failed")
         return None, exc
     synced = _refresh_after_sync(person, syncable_ids, now)
-    summary = f"Synced {imported} new transaction(s)."
+    head = f"Synced {imported} new transaction(s)."
     if skipped:
-        summary = f"{summary} Skipped {skipped} linked account(s) that are archived or no longer available to you."
-    if errors:
-        summary = f"{summary} {errors[0]}"
+        head = f"{head} Skipped {skipped} linked account(s) that are archived or no longer available to you."
+    tail = errors[:1]
     connection.last_sync_at = now
-    connection.last_sync_result = summary[:500]
+    connection.last_sync_result = _fit_summary(
+        head, unconverted, tail, SimpleFinConnection._meta.get_field("last_sync_result").max_length
+    )
     connection.disabled = False
     connection.save(update_fields=("last_sync_at", "last_sync_result", "disabled"))
     from finance.alert_services import schedule_after_new_transactions
@@ -773,7 +890,13 @@ def _apply_sync(person, connection_id, plan, payload, *, ignore_rate_limit):
     if errors:
         details["failure"] = "provider_error"
     outcome(person, "simplefin_sync", connection.pk, phase="failed" if errors else "succeeded", metadata=details)
-    return {"imported": imported, "errors": errors, "result": connection.last_sync_result}, None
+    return {
+        "imported": imported,
+        "errors": errors,
+        "unconverted": unconverted,
+        # The page that ran the sync shows every skipped account in full.
+        "result": " ".join([head, *unconverted, *tail]),
+    }, None
 
 
 def _refresh_after_sync(person, syncable_ids, now):
