@@ -181,6 +181,14 @@ function Test-Health([string]$Label = 'health') {
     return $revision
 }
 
+function Test-RevisionPrefix([string]$Expected, [string]$Served) {
+    # /health/ serves 12 digits and -ExpectedSha may be 7 to 40, so the shorter
+    # one must be a prefix of the longer. A served value under 7 digits matches nothing.
+    $served = $Served.ToLowerInvariant()
+    if ($served.Length -lt 7) { return $false }
+    return $Expected.StartsWith($served) -or $served.StartsWith($Expected)
+}
+
 function Test-Revision([string]$HealthRevision, $Snapshot) {
     if (-not $ExpectedSha) {
         $rev = Invoke-Native 'git' @('-C', $RepoRoot, 'rev-parse', '--verify', 'origin/main')
@@ -203,7 +211,7 @@ function Test-Revision([string]$HealthRevision, $Snapshot) {
         Add-Failure 'revision: /health/ sent no X-App-Revision header'
     } elseif ($HealthRevision -eq 'unknown') {
         Add-Failure 'revision: the app image has no GIT_SHA; rebuild with $env:GIT_SHA set'
-    } elseif (-not $expected.StartsWith($HealthRevision.ToLowerInvariant())) {
+    } elseif (-not (Test-RevisionPrefix $expected $HealthRevision)) {
         Add-Failure "revision: /health/ serves $HealthRevision, expected $short"
     } else {
         Write-Pass "revision: /health/ serves $HealthRevision"
