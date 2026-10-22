@@ -34,4 +34,4 @@ jobs:
   gate-guard-target:
     uses: dflippojr/.github/.github/workflows/gate-guard-target.yml@27bdb76481888567a6c524ebbb19bf4a6c7e7e20
     with:
-      guard-ref: fffb84b7fff0a8d68cad4a7da34ed4200e10dc0b
+      guard-ref: 27bdb76481888567a6c524ebbb19bf4a6c7e7e20
