@@ -11,6 +11,7 @@ the smoke runs inside the app image, on recorded outcomes.
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 
@@ -22,14 +23,12 @@ INVALID_CRON_VERDICT = Path(__file__).parent / "docker_smoke_invalid_cron.py"
 
 def _run(tmp_path, body, **env):
     script = f'source "{_unix_path(SMOKE_SCRIPT)}"\nwork_dir="{_unix_path(tmp_path)}"\n{body}\n'
-    # The expected-failure branch would otherwise write to the CI job summary.
-    base = {key: value for key, value in os.environ.items() if key != "GITHUB_STEP_SUMMARY"}
     return subprocess.run(
         [POSIX_BASH or "bash", "-c", script],
         capture_output=True,
         text=True,
         timeout=60,
-        env={**base, **env},
+        env={**os.environ, **env},
         check=False,
     )
 
@@ -64,7 +63,9 @@ def test_soak_fails_when_a_service_restarts_in_the_last_interval(tmp_path):
 
 
 CRON_MESSAGE = "ValueError: SIMPLEFIN_SYNC_CRON supports numbers only (for example 1-5 for Monday to Friday)"
-VERDICT_OUTPUT = "2 passed, 1 xfailed"
+UP_FAILURE = "service \"config-check\" didn't complete successfully: exit 1"
+HEALTH = "ok\nbackground not started: SIMPLEFIN_SYNC_CRON supports numbers only (docker compose logs config-check)\n"
+VERDICT_OUTPUT = "11 passed"
 
 
 def _invalid_cron(tmp_path, state, *, logs=CRON_MESSAGE, verdict_code=0, verdict_output=VERDICT_OUTPUT):
@@ -73,33 +74,50 @@ def _invalid_cron(tmp_path, state, *, logs=CRON_MESSAGE, verdict_code=0, verdict
     env_file.write_text("POSTGRES_VOLUME_NAME=fp-smoke-postgres-data\nSIMPLEFIN_SYNC_CRON='30 6 * * 1-5'\n", encoding="utf-8")
     body = (
         f'env_file="{_unix_path(env_file)}"\n'
+        f"up_failure={shlex.quote(UP_FAILURE)}\n"
+        f"health={shlex.quote(HEALTH)}\n"
+        "app_port=8000\n"
         f'compose() {{ echo "$(tr "\\n" " " < "$env_file")$*" >> "{_unix_path(calls)}"; '
-        f'case $1 in logs) printf "%s\\n" "{logs}" ;; run) echo "{verdict_output}"; return {verdict_code} ;; esac; }}\n'
+        'case $1 in up) if [ "$*" = "up -d" ]; then echo "$up_failure"; return 1; fi ;; '
+        f'logs) printf "%s\\n" "{logs}" ;; run) echo "{verdict_output}"; return {verdict_code} ;; esac; }}\n'
         f'container_state() {{ echo "{state}"; }}\n'
+        "container_health() { echo healthy; }\n"
+        f'curl() {{ echo "$*" >> "{_unix_path(calls)}"; printf "%s" "$health"; }}\n'
         "expect_invalid_cron_refused '30 6 * * MON-FRI' '60 6 * * *' && echo checked"
     )
     result = _run(tmp_path, body, REFUSE_SECONDS="1", SOAK_POLL_SECONDS="1")
     return result, calls.read_text(encoding="utf-8")
 
 
-def test_invalid_cron_starts_the_normal_services_with_only_the_schedule_changed(tmp_path):
-    _, calls = _invalid_cron(tmp_path, "restarting 3")
+def test_invalid_cron_starts_the_whole_stack_with_only_the_schedule_changed(tmp_path):
+    _, calls = _invalid_cron(tmp_path, "created 0")
 
     ups = [line for line in calls.splitlines() if " up " in line]
+    env = "POSTGRES_VOLUME_NAME=fp-smoke-postgres-data SIMPLEFIN_SYNC_CRON="
+    # The operator's `up -d`, then a wait for app, which does not depend on config-check.
     assert ups == [
-        "POSTGRES_VOLUME_NAME=fp-smoke-postgres-data SIMPLEFIN_SYNC_CRON='30 6 * * MON-FRI' up -d db app backup background",
-        "POSTGRES_VOLUME_NAME=fp-smoke-postgres-data SIMPLEFIN_SYNC_CRON='60 6 * * *' up -d db app backup background",
+        f"{env}'30 6 * * MON-FRI' up -d",
+        f"{env}'30 6 * * MON-FRI' up -d --wait --wait-timeout 240 app",
+        f"{env}'60 6 * * *' up -d",
+        f"{env}'60 6 * * *' up -d --wait --wait-timeout 240 app",
     ]
 
 
-def test_invalid_cron_hands_each_outcome_to_the_pytest_verdict(tmp_path):
-    result, calls = _invalid_cron(tmp_path, "restarting 3")
+def test_invalid_cron_hands_each_case_to_the_pytest_verdict(tmp_path):
+    result, calls = _invalid_cron(tmp_path, "created 0")
 
     assert result.returncode == 0, result.stderr
     cases = tmp_path / "invalid-cron"
+    case = cases / "2"
     assert (cases / "1" / "schedule").read_text(encoding="utf-8") == "30 6 * * MON-FRI\n"
-    assert (cases / "2" / "outcome").read_text(encoding="utf-8") == "crash-loop\n"
-    assert CRON_MESSAGE in (cases / "2" / "log").read_text(encoding="utf-8")
+    assert (case / "outcome").read_text(encoding="utf-8") == "refused\n"
+    assert (case / "up-exit").read_text(encoding="utf-8") == "1\n"
+    assert UP_FAILURE in (case / "log").read_text(encoding="utf-8")
+    assert CRON_MESSAGE in (case / "config-check-log").read_text(encoding="utf-8")
+    assert (case / "app-health").read_text(encoding="utf-8") == "healthy\n"
+    assert (case / "health").read_text(encoding="utf-8") == HEALTH
+    assert "-H Host: smoke.example.test -H X-Forwarded-Proto: https http://127.0.0.1:8000/health/" in calls
+    assert " logs --no-color config-check" in calls
     verdict = [line for line in calls.splitlines() if " run " in line]
     assert len(verdict) == 1
     assert f"{_unix_path(INVALID_CRON_VERDICT)}:/smoke/invalid_cron.py:ro" in verdict[0]
@@ -107,29 +125,46 @@ def test_invalid_cron_hands_each_outcome_to_the_pytest_verdict(tmp_path):
     assert verdict[0].endswith("app -B -m pytest -p no:django -p no:cacheprovider --noconftest -c /dev/null --rootdir /smoke -rxX /smoke/invalid_cron.py")
 
 
-def test_the_expected_failure_is_a_warning_and_a_summary_line(tmp_path):
-    result, _ = _invalid_cron(tmp_path, "restarting 3")
+def test_a_restart_loop_is_recorded_as_one(tmp_path):
+    _invalid_cron(tmp_path, "restarting 3")
+
+    assert (tmp_path / "invalid-cron" / "1" / "outcome").read_text(encoding="utf-8") == "crash-loop\n"
+
+
+def test_a_refusal_passes_with_no_expected_failure_warning(tmp_path):
+    result, _ = _invalid_cron(tmp_path, "created 0")
 
     assert "checked" in result.stdout
-    assert "::warning::Expected failure (#560)" in result.stdout
+    assert "::warning::" not in result.stdout
+    assert "#560" not in result.stdout
 
 
 def test_a_failing_verdict_fails_the_smoke(tmp_path):
-    result, _ = _invalid_cron(tmp_path, "exited 0", verdict_code=1, verdict_output="FAILED [XPASS(strict)] #560")
+    result, _ = _invalid_cron(tmp_path, "restarting 3", verdict_code=1, verdict_output="FAILED test_background_is_refused_without_a_restart_loop")
 
     assert result.returncode == 1
     assert "checked" not in result.stdout
     assert "invalid SIMPLEFIN_SYNC_CRON check failed" in result.stderr
 
 
+# What the smoke records when config-check refuses the schedule (#560).
+REFUSED = {
+    "outcome": "refused\n",
+    "up-exit": "1\n",
+    "log": f"Container fp-smoke-config-check-1 Error\n{UP_FAILURE}\n",
+    "config-check-log": f"config-check-1  | {CRON_MESSAGE}\n",
+    "app-health": "healthy\n",
+    "health": HEALTH,
+}
+
+
 def _verdict(tmp_path, *cases):
-    """Run the #560 pytest verdict on recorded (outcome, log) cases."""
-    for number, (outcome, log) in enumerate(cases, start=1):
+    """Run the #560 pytest verdict on recorded cases, each REFUSED with some files changed."""
+    for number, changes in enumerate(cases, start=1):
         case = tmp_path / "invalid-cron" / str(number)
         case.mkdir(parents=True)
-        (case / "schedule").write_text("30 6 * * MON-FRI\n", encoding="utf-8")
-        (case / "outcome").write_text(f"{outcome}\n", encoding="utf-8")
-        (case / "log").write_text(log, encoding="utf-8")
+        for name, text in {"schedule": "30 6 * * MON-FRI\n", **REFUSED, **changes}.items():
+            (case / name).write_text(text, encoding="utf-8")
     return subprocess.run(
         [sys.executable, "-B", "-m", "pytest", "-p", "no:django", "-p", "no:cacheprovider", "-p", "no:xdist",
          "--noconftest", "-c", os.devnull, "--rootdir", str(tmp_path), "-rxX", str(INVALID_CRON_VERDICT)],
@@ -141,25 +176,23 @@ def _verdict(tmp_path, *cases):
     )
 
 
-def test_a_restart_loop_with_a_message_is_the_strict_expected_failure_for_560(tmp_path):
-    result = _verdict(tmp_path, ("crash-loop", CRON_MESSAGE), ("crash-loop", CRON_MESSAGE))
+def test_a_refusal_by_config_check_with_a_healthy_app_passes(tmp_path):
+    result = _verdict(tmp_path, {}, {})
 
     assert result.returncode == 0, result.stdout
-    assert "2 xfailed" in result.stdout
-    assert "XFAIL" in result.stdout
-    assert "#560" in result.stdout
+    assert "11 passed" in result.stdout
+    assert "xfail" not in result.stdout.lower()
 
 
-def test_a_refusal_without_a_restart_loop_is_a_strict_xpass_so_the_marker_must_go(tmp_path):
-    result = _verdict(tmp_path, ("refused", CRON_MESSAGE), ("crash-loop", CRON_MESSAGE))
+def test_a_restart_loop_fails(tmp_path):
+    result = _verdict(tmp_path, {"outcome": "crash-loop\n"}, {})
 
     assert result.returncode == 1
-    assert "XPASS(strict)" in result.stdout
-    assert "#560" in result.stdout
+    assert "test_background_is_refused_without_a_restart_loop" in result.stdout
 
 
-def test_a_restart_loop_without_a_message_naming_the_variable_fails(tmp_path):
-    result = _verdict(tmp_path, ("crash-loop", "Traceback (most recent call last)"))
+def test_a_config_check_log_without_a_message_naming_the_variable_fails(tmp_path):
+    result = _verdict(tmp_path, {"config-check-log": "config-check-1  | Traceback (most recent call last)\n"})
 
     assert result.returncode == 1
     assert "test_a_message_names_the_variable" in result.stdout
@@ -167,15 +200,15 @@ def test_a_restart_loop_without_a_message_naming_the_variable_fails(tmp_path):
 
 # An unrelated crash whose traceback quotes the variable in source, not in the error.
 UNRELATED_TRACEBACK = (
-    "background-1  | Traceback (most recent call last):\n"
-    'background-1  |   File "/app/scripts/run_background.py", line 40, in main\n'
-    "background-1  |     next_scheduled_sync(settings.SIMPLEFIN_SYNC_CRON)\n"
-    "background-1  | TypeError: 'NoneType' object is not subscriptable\n"
+    "config-check-1  | Traceback (most recent call last):\n"
+    'config-check-1  |   File "/app/scripts/check_background_config.py", line 40, in main\n'
+    "config-check-1  |     next_scheduled_sync(settings.SIMPLEFIN_SYNC_CRON)\n"
+    "config-check-1  | TypeError: 'NoneType' object is not subscriptable\n"
 )
 
 
 def test_a_traceback_that_only_quotes_the_variable_in_source_fails(tmp_path):
-    result = _verdict(tmp_path, ("crash-loop", UNRELATED_TRACEBACK))
+    result = _verdict(tmp_path, {"config-check-log": UNRELATED_TRACEBACK})
 
     assert result.returncode == 1
     assert "test_a_message_names_the_variable" in result.stdout
@@ -186,17 +219,45 @@ def test_the_validation_error_in_a_compose_log_line_names_the_variable(tmp_path)
         "TypeError: 'NoneType' object is not subscriptable",
         "ValueError: SIMPLEFIN_SYNC_CRON has a minute outside 0-59",
     )
-    result = _verdict(tmp_path, ("crash-loop", log))
+    result = _verdict(tmp_path, {"config-check-log": log})
 
     assert result.returncode == 0, result.stdout
-    assert "3 passed, 1 xfailed" in result.stdout
+    assert "6 passed" in result.stdout
 
 
 def test_background_that_keeps_running_on_an_invalid_schedule_fails(tmp_path):
-    result = _verdict(tmp_path, ("started", CRON_MESSAGE))
+    result = _verdict(tmp_path, {"outcome": "started\n"})
 
     assert result.returncode == 1
     assert "test_background_does_not_keep_running" in result.stdout
+
+
+def test_an_up_that_reports_success_fails(tmp_path):
+    result = _verdict(tmp_path, {"up-exit": "0\n"})
+
+    assert result.returncode == 1
+    assert "test_up_fails_naming_config_check" in result.stdout
+
+
+def test_an_up_failure_that_does_not_name_config_check_fails(tmp_path):
+    result = _verdict(tmp_path, {"log": "dependency failed to start: container fp-smoke-db-1 is unhealthy\n"})
+
+    assert result.returncode == 1
+    assert "test_up_fails_naming_config_check" in result.stdout
+
+
+def test_an_unhealthy_app_fails(tmp_path):
+    result = _verdict(tmp_path, {"app-health": "unhealthy\n"})
+
+    assert result.returncode == 1
+    assert "test_app_stays_healthy_and_its_health_page_names_the_variable" in result.stdout
+
+
+def test_a_health_page_that_hides_the_refusal_fails(tmp_path):
+    result = _verdict(tmp_path, {"health": "ok\n"})
+
+    assert result.returncode == 1
+    assert "test_app_stays_healthy_and_its_health_page_names_the_variable" in result.stdout
 
 
 def test_the_verdict_fails_when_the_smoke_recorded_no_case(tmp_path):

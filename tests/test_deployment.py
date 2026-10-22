@@ -42,6 +42,26 @@ def test_health_reports_the_short_revision_in_a_header_only(client):
     assert response.content == b"ok\n"
 
 
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("expression", "message"),
+    [("30 6 * * MON-FRI", "numbers only"), ("60 6 * * *", "minute outside 0-59")],
+)
+def test_health_stays_ok_and_names_a_schedule_background_refuses(client, settings, expression, message):
+    # app does not wait for config-check (#560), so its health page is where
+    # the refusal shows without reading container logs.
+    settings.SIMPLEFIN_SYNC_CRON = expression
+
+    response = client.get(reverse("health"))
+
+    assert response.status_code == 200
+    first, second = response.content.decode().splitlines()
+    assert first == "ok"
+    assert second.startswith("background not started: SIMPLEFIN_SYNC_CRON ")
+    assert message in second
+    assert second.endswith("(docker compose logs config-check)")
+
+
 @pytest.mark.parametrize(
     ("git_sha", "expected"),
     [
@@ -300,6 +320,21 @@ def test_ai_jobs_container_receives_every_ai_job_setting():
 def test_background_workers_wait_for_the_migrated_app():
     block = compose_service("background")
     assert re.search(r"depends_on:\n(?:.*\n)*?\s+app:\n\s+condition: service_healthy", block)
+
+
+def test_background_waits_for_a_one_shot_config_check_that_app_and_backup_do_not():
+    background = compose_service("background")
+    check = compose_service("config-check")
+
+    assert re.search(r"depends_on:\n(?:.*\n)*?\s+config-check:\n\s+condition: service_completed_successfully", background)
+    for service in ("db", "app", "backup"):
+        assert "config-check" not in compose_service(service)
+    assert 'restart: "no"' in check
+    assert 'entrypoint: ["python", "/app/scripts/check_background_config.py"]' in check
+    # The same image and environment as background, so it judges what background would read.
+    assert "GIT_SHA: ${GIT_SHA:-unknown}" in check
+    assert "environment: &background-environment\n" in background
+    assert "environment: *background-environment\n" in check
 
 
 def test_database_backup_and_test_images_share_one_postgres_major():
