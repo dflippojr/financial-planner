@@ -63,9 +63,9 @@ jobs:
   # from gate-guard-target.yml, which runs from main under pull_request_target.
   gate-guard:
     name: Gate guard
-    uses: dflippojr/.github/.github/workflows/gate-guard.yml@fffb84b7fff0a8d68cad4a7da34ed4200e10dc0b
+    uses: dflippojr/.github/.github/workflows/gate-guard.yml@27bdb76481888567a6c524ebbb19bf4a6c7e7e20
     with:
-      guard-ref: fffb84b7fff0a8d68cad4a7da34ed4200e10dc0b
+      guard-ref: 27bdb76481888567a6c524ebbb19bf4a6c7e7e20
       require-owner-label-actor: true
     permissions:
       contents: read
