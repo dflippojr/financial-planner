@@ -46,7 +46,7 @@ Set-StrictMode -Version Latest
 
 $Services = @('db', 'app', 'backup', 'background')
 # config-check runs background's image once per `up` and exits, so only its
-# image revision is checked; the container checks expect it to be stopped.
+# image revision is checked, not whether it is running.
 $OneShotServices = @('config-check')
 # Images built from this repository carry the revision label.
 $BuiltServices = @('app', 'backup', 'background', 'config-check')
