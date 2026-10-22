@@ -841,6 +841,17 @@ def _import_links(person, connection, links, syncable_ids, payload, now, rates):
     return imported, skipped, unconverted
 
 
+def _fit_summary(head, unconverted, tail, limit) -> str:
+    """Join the result, dropping whole skip messages from the end so it fits, and count the dropped ones."""
+    for shown in range(len(unconverted), -1, -1):
+        hidden = len(unconverted) - shown
+        more = [f"... and {hidden} more skipped account(s), {len(unconverted)} in all."] if hidden else []
+        summary = " ".join([head, *unconverted[:shown], *more, *tail])
+        if len(summary) <= limit:
+            return summary
+    return summary[:limit]
+
+
 @transaction.atomic
 def _apply_sync(person, connection_id, plan, payload, rates, *, ignore_rate_limit):
     connection, links = _locked_connection(person, connection_id, plan, ignore_rate_limit=ignore_rate_limit)
@@ -862,15 +873,14 @@ def _apply_sync(person, connection_id, plan, payload, rates, *, ignore_rate_limi
         _save_failure(person, connection, now, str(exc), failure="import_failed")
         return None, exc
     synced = _refresh_after_sync(person, syncable_ids, now)
-    summary = f"Synced {imported} new transaction(s)."
+    head = f"Synced {imported} new transaction(s)."
     if skipped:
-        summary = f"{summary} Skipped {skipped} linked account(s) that are archived or no longer available to you."
-    for message in unconverted:
-        summary = f"{summary} {message}"
-    if errors:
-        summary = f"{summary} {errors[0]}"
+        head = f"{head} Skipped {skipped} linked account(s) that are archived or no longer available to you."
+    tail = errors[:1]
     connection.last_sync_at = now
-    connection.last_sync_result = summary[:500]
+    connection.last_sync_result = _fit_summary(
+        head, unconverted, tail, SimpleFinConnection._meta.get_field("last_sync_result").max_length
+    )
     connection.disabled = False
     connection.save(update_fields=("last_sync_at", "last_sync_result", "disabled"))
     from finance.alert_services import schedule_after_new_transactions
@@ -884,7 +894,8 @@ def _apply_sync(person, connection_id, plan, payload, rates, *, ignore_rate_limi
         "imported": imported,
         "errors": errors,
         "unconverted": unconverted,
-        "result": connection.last_sync_result,
+        # The page that ran the sync shows every skipped account in full.
+        "result": " ".join([head, *unconverted, *tail]),
     }, None
 
 
