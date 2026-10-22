@@ -25,7 +25,8 @@ param(
     [string]$ProjectName = 'financial-planner',
     # Defaults to the first DJANGO_CSRF_TRUSTED_ORIGINS entry plus /health/.
     [string]$HealthUrl,
-    # Defaults to `git rev-parse origin/main`; run `git fetch origin` first.
+    # Defaults to `git rev-parse origin/main` when omitted; run `git fetch origin`
+    # first. An empty value, such as an unset variable, is rejected.
     [string]$ExpectedSha,
     # When the deploy started. Defaults to when the app and background
     # containers were created, which `up -d` does for a new image.
@@ -55,6 +56,8 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 $Helper = Join-Path $RepoRoot 'scripts\prod_signals.py'
 $script:Failures = New-Object System.Collections.Generic.List[string]
 $script:HealthUnreachable = $false
+# Only an omitted -ExpectedSha defaults to origin/main; an empty one is rejected below.
+$ExpectedShaGiven = $PSBoundParameters.ContainsKey('ExpectedSha')
 
 function Add-Failure([string]$Reason) {
     $script:Failures.Add($Reason)
@@ -181,8 +184,16 @@ function Test-Health([string]$Label = 'health') {
     return $revision
 }
 
+function Test-RevisionPrefix([string]$Expected, [string]$Served) {
+    # /health/ serves 12 digits and -ExpectedSha may be 7 to 40, so the shorter
+    # one must be a prefix of the longer. A served value under 7 digits matches nothing.
+    $served = $Served.ToLowerInvariant()
+    if ($served.Length -lt 7) { return $false }
+    return $Expected.StartsWith($served) -or $served.StartsWith($Expected)
+}
+
 function Test-Revision([string]$HealthRevision, $Snapshot) {
-    if (-not $ExpectedSha) {
+    if (-not $ExpectedShaGiven) {
         $rev = Invoke-Native 'git' @('-C', $RepoRoot, 'rev-parse', '--verify', 'origin/main')
         if ($rev.ExitCode -ne 0 -or -not $rev.Output) {
             Add-Failure 'revision: cannot read origin/main; run git fetch origin or pass -ExpectedSha'
@@ -203,7 +214,7 @@ function Test-Revision([string]$HealthRevision, $Snapshot) {
         Add-Failure 'revision: /health/ sent no X-App-Revision header'
     } elseif ($HealthRevision -eq 'unknown') {
         Add-Failure 'revision: the app image has no GIT_SHA; rebuild with $env:GIT_SHA set'
-    } elseif (-not $expected.StartsWith($HealthRevision.ToLowerInvariant())) {
+    } elseif (-not (Test-RevisionPrefix $expected $HealthRevision)) {
         Add-Failure "revision: /health/ serves $HealthRevision, expected $short"
     } else {
         Write-Pass "revision: /health/ serves $HealthRevision"
@@ -333,6 +344,13 @@ function Test-Backup {
     } else {
         Write-Pass "backup: status ok, last success $($status.last_success_at)"
     }
+}
+
+# Fail closed before any Docker or HTTP check: checking origin/main instead
+# could pass a deploy of a revision nobody asked for.
+if ($ExpectedShaGiven -and -not $ExpectedSha.Trim()) {
+    Add-Failure 'revision: -ExpectedSha is empty; pass the deployed SHA, or omit it to check origin/main'
+    exit 1
 }
 
 try {
