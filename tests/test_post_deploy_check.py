@@ -58,7 +58,7 @@ def _health_url(revision):
 
 
 def _run_check(tmp_path, *, restart_on_inspect=None, expected_sha=None, image_sha=None, backup_created_early=0,
-               health_revision=None):
+               health_revision=None, full_result=False):
     now = datetime.now(UTC).timestamp()
     deployed = now - 30
     containers = {"db-id": {"id": "db-id", "service": "db", "created": now - 86400, "started": now - 86400}}
@@ -90,7 +90,7 @@ def _run_check(tmp_path, *, restart_on_inspect=None, expected_sha=None, image_sh
                 "-StatusPath", str(tmp_path / "missing-status"),
                 "-Python", "fp-no-such-python",
                 "-StableSeconds", "0",
-                *(["-ExpectedSha", expected_sha] if expected_sha else ["-SkipRevision"]),
+                *(["-ExpectedSha", expected_sha] if expected_sha is not None else ["-SkipRevision"]),
             ],
             capture_output=True,
             text=True,
@@ -98,7 +98,7 @@ def _run_check(tmp_path, *, restart_on_inspect=None, expected_sha=None, image_sh
             timeout=120,
             check=False,
         )
-    return result.stdout
+    return result if full_result else result.stdout
 
 
 def test_clean_deploy_counts_one_start_per_new_container(tmp_path):
@@ -138,6 +138,19 @@ def test_expected_sha_that_is_not_hex_is_rejected(tmp_path):
     output = _run_check(tmp_path, expected_sha="main", image_sha=FULL_SHA)
 
     assert "FAIL revision: -ExpectedSha must be 7 to 40 hex digits" in output
+
+
+@pytest.mark.parametrize("expected_sha", ["", "   "])
+def test_empty_expected_sha_is_rejected_before_any_check(tmp_path, expected_sha):
+    # An unset variable passed as -ExpectedSha must not fall back to origin/main,
+    # which could pass a deploy of some other revision.
+    result = _run_check(tmp_path, expected_sha=expected_sha, image_sha=FULL_SHA, health_revision=SERVED_REVISION,
+                        full_result=True)
+
+    assert result.returncode == 1
+    assert "FAIL revision: -ExpectedSha is empty" in result.stdout
+    assert "ok   " not in result.stdout
+    assert "health" not in result.stdout
 
 
 def test_backup_created_just_before_app_is_counted_as_new(tmp_path):
