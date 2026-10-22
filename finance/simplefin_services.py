@@ -741,8 +741,9 @@ def _plan_sync(person, connection_id, *, ignore_rate_limit):
 def _days_to_convert(link, remote) -> list[date]:
     """The dates whose amounts a sync of this link may convert: its balance and new posted rows."""
     days = [posted_date(remote.get("balance-date")) or timezone.localdate()]
-    if link.mode == AccountLink.Mode.TRANSACTIONS:
-        for item in remote.get("transactions") or []:
+    transactions = remote.get("transactions")
+    if link.mode == AccountLink.Mode.TRANSACTIONS and isinstance(transactions, list):
+        for item in transactions:
             if isinstance(item, dict) and not _is_pending(item):
                 day = posted_date(item.get("posted"))
                 if day is not None and day >= link.cutover_date:
