@@ -3,6 +3,7 @@ from datetime import datetime, time, timedelta
 from datetime import UTC
 from typing import NamedTuple
 
+from django.conf import settings
 from django.utils import timezone
 
 # (name, minimum, maximum) for each of the five fields. Weekday allows 7 for Sunday.
@@ -119,6 +120,15 @@ def next_scheduled_sync(expression: str, now=None):
     if timezone.is_naive(when):
         when = timezone.make_aware(when, timezone.get_current_timezone())
     return next_cron_datetime(expression, timezone.localtime(when))
+
+
+def validate_sync_schedule():
+    """Raise the ValueError, naming SIMPLEFIN_SYNC_CRON, that stops background starting.
+
+    background, compose's one-shot config-check and the health page all call
+    this, so they agree on which schedules are refused.
+    """
+    next_scheduled_sync(settings.SIMPLEFIN_SYNC_CRON)
 
 
 def seconds_until(due, now) -> float:

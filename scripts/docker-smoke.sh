@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Docker smoke test: build the production images, start all four compose
-# services (db, app, backup, background) on dummy values and a throwaway
-# database, and fail if any of them is not what a deploy needs.
+# Docker smoke test: build the production images, start all four long-running
+# compose services (db, app, backup, background, which waits for the one-shot
+# config-check) on dummy values and a throwaway database, and fail if any of
+# them is not what a deploy needs.
 #
 #   1. app reports healthy and /sign-in/ answers 200;
 #   2. backup and background stay running with RestartCount 0 for SOAK_SECONDS
@@ -9,13 +10,12 @@
 #   3. no container logs a Python traceback in that window;
 #   4. the documented manual backup command produces a dump that
 #      ops/backup/verify-restore.sh restores into a scratch database;
-#   5. `docker compose up` with a SIMPLEFIN_SYNC_CRON the schedule parser
-#      rejects must refuse to start background with a message naming the
-#      variable, not leave it in a restart loop. The verdict is the pytest file
-#      tests/docker_smoke_invalid_cron.py, run with the app image's pytest.
-#      Today restart: unless-stopped restarts the refusing container, so the
-#      refusal is xfail(strict=True, reason="#560") there: the smoke passes
-#      while background loops and fails once it stops.
+#   5. `docker compose up -d` with a SIMPLEFIN_SYNC_CRON the schedule parser
+#      rejects must fail in the one-shot config-check service with a message
+#      naming the variable, never start background (so no restart loop), and
+#      leave app healthy with /health/ naming the variable (#560). The verdict
+#      is the pytest file tests/docker_smoke_invalid_cron.py, run with the app
+#      image's pytest.
 #
 # Called by .github/workflows/docker-smoke.yml. Dummy values only: no secrets,
 # no real paths, nothing is pushed. A local run is possible, but it is a
@@ -119,18 +119,32 @@ PYTHON
     fail "compose resolves storage outside the throwaway $COMPOSE_PROJECT_NAME project (listed above)"
 }
 
+# app's health status: healthy, unhealthy, starting, none or absent.
+container_health() {
+  local id
+  id=$(compose ps --all -q "$1")
+  if [ -z "$id" ]; then
+    echo absent
+    return
+  fi
+  docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$id"
+}
+
 # Start the stack the way an operator does, with SIMPLEFIN_SYNC_CRON set to
 # $1, and watch background for refuse_seconds. Prints one word: crash-loop
 # (Docker restarted it), started (it is still running), or refused (never
-# restarted and not running). The compose output and every service's logs go
-# to $2, for the message check.
+# restarted and not running). Records the rest of the case in directory $2:
+# up's exit code and output with every service's logs, config-check's logs,
+# app's health once it has had time to start, and the /health/ body.
 invalid_cron_outcome() {
-  local schedule=$1 out=$2 deadline state cron_env=$work_dir/invalid-cron.env
+  local schedule=$1 case_dir=$2 deadline state up_exit=0 cron_env=$work_dir/invalid-cron.env
   # The operator's edit: the smoke env file with only the schedule changed.
   # Every compose call in here, container_state's included, uses it.
   { grep -v '^SIMPLEFIN_SYNC_CRON=' "$env_file"; printf "SIMPLEFIN_SYNC_CRON='%s'\n" "$schedule"; } > "$cron_env"
   local env_file=$cron_env
-  compose up -d $services > "$out" 2>&1 || true
+  # config-check refuses the schedule, so up fails; the smoke carries on.
+  compose up -d > "$case_dir/log" 2>&1 || up_exit=$?
+  echo "$up_exit" > "$case_dir/up-exit"
   deadline=$((SECONDS + refuse_seconds))
   while :; do
     state=$(container_state background)
@@ -140,7 +154,13 @@ invalid_cron_outcome() {
     [ "$SECONDS" -lt "$deadline" ] || break
     sleep "$poll_seconds"
   done
-  compose logs --no-color >> "$out" 2>&1 || true
+  # app does not depend on config-check, so it must come up healthy anyway.
+  compose up -d --wait --wait-timeout 240 app >> "$case_dir/log" 2>&1 || true
+  container_health app > "$case_dir/app-health"
+  curl -s -H 'Host: smoke.example.test' -H 'X-Forwarded-Proto: https' \
+    "http://127.0.0.1:$app_port/health/" > "$case_dir/health" || true
+  compose logs --no-color config-check > "$case_dir/config-check-log" 2>&1 || true
+  compose logs --no-color >> "$case_dir/log" 2>&1 || true
   case $state in
     restarting\ *|*\ [1-9]*) echo crash-loop ;;
     running\ 0) echo started ;;
@@ -159,28 +179,20 @@ judge_invalid_cron() {
 }
 
 # Try each schedule in $@, record its case for the pytest verdict, and fail
-# unless the verdict passes. Its strict xfail for #560 is also reported as a
-# warning and a job summary line.
+# unless the verdict passes.
 expect_invalid_cron_refused() {
-  local schedule case_dir outcome number=0 verdict=$work_dir/invalid-cron.out
+  local schedule case_dir outcome number=0
   for schedule in "$@"; do
     number=$((number + 1))
     case_dir=$work_dir/invalid-cron/$number
     mkdir -p "$case_dir"
     printf '%s\n' "$schedule" > "$case_dir/schedule"
-    outcome=$(invalid_cron_outcome "$schedule" "$case_dir/log")
+    outcome=$(invalid_cron_outcome "$schedule" "$case_dir")
     echo "$outcome" > "$case_dir/outcome"
-    echo "SIMPLEFIN_SYNC_CRON='$schedule' -> background $outcome ($(container_state background))"
-    grep 'SIMPLEFIN_SYNC_CRON' "$case_dir/log" | tail -n 2 || true
+    echo "SIMPLEFIN_SYNC_CRON='$schedule' -> up exit $(cat "$case_dir/up-exit"), background $outcome ($(container_state background)), app $(cat "$case_dir/app-health")"
+    grep 'SIMPLEFIN_SYNC_CRON' "$case_dir/config-check-log" "$case_dir/health" || true
   done
-  judge_invalid_cron 2>&1 | tee "$verdict" || fail "the invalid SIMPLEFIN_SYNC_CRON check failed (pytest output above)"
-  if grep -q 'xfailed' "$verdict"; then
-    local note="Expected failure (#560): an invalid SIMPLEFIN_SYNC_CRON is rejected with a message, but restart: unless-stopped restarts background in a loop"
-    echo "::warning::$note"
-    if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-      echo "- $note" >> "$GITHUB_STEP_SUMMARY"
-    fi
-  fi
+  judge_invalid_cron 2>&1 || fail "the invalid SIMPLEFIN_SYNC_CRON check failed (pytest output above)"
 }
 
 if [ "${BASH_SOURCE[0]}" != "$0" ]; then
@@ -237,7 +249,7 @@ cleanup() {
 trap cleanup EXIT
 
 group "Build the production images"
-compose build app backup background
+compose build app backup background config-check
 endgroup
 
 group "Start all four services and wait for app to report healthy"
@@ -281,8 +293,8 @@ grep -q '^Restore check passed' "$work_dir/restore.out" || fail "verify-restore.
 endgroup
 
 group "compose up refuses an invalid SIMPLEFIN_SYNC_CRON"
-# The normal services and their restart policy, not a one-off container: what
-# matters is what Docker does with the refusal, not only the exit code.
+# The operator's `up -d` with the normal services and restart policy, not a
+# one-off container: what matters is what Docker does with the refusal.
 expect_invalid_cron_refused '30 6 * * MON-FRI' '60 6 * * *'
 endgroup
 

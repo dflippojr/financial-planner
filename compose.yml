@@ -181,7 +181,8 @@ services:
     # One Django process, with independent job, chat and daily-pass threads.
     # The expanded synthetic ledger reached 286 MiB in a daily pass.
     mem_limit: 512m
-    environment:
+    # config-check reuses this environment, so it judges what background reads.
+    environment: &background-environment
       OPERATOR_AUDIT_DIR: /operator-audit
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?DJANGO_SECRET_KEY must be set}
       DJANGO_DEBUG: "false"
@@ -244,6 +245,10 @@ services:
       # can query tables a new release has not created yet.
       app:
         condition: service_healthy
+      # A setting background would refuse fails `up` here, once, instead of
+      # starting background into a restart loop (#560).
+      config-check:
+        condition: service_completed_successfully
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -263,6 +268,21 @@ services:
           create_host_path: true
     entrypoint: ["/app/scripts/run-background.sh"]
     # No HTTP server; the process exits if any lane stops so Docker restarts it.
+    healthcheck:
+      disable: true
+
+  # One-shot: runs background's startup validation and exits. Only background
+  # depends on it, so an invalid SIMPLEFIN_SYNC_CRON leaves app and its /health/
+  # page up to name the problem; `docker compose logs config-check` shows it.
+  config-check:
+    build:
+      context: .
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
+    restart: "no"
+    mem_limit: 256m
+    environment: *background-environment
+    entrypoint: ["python", "/app/scripts/check_background_config.py"]
     healthcheck:
       disable: true
 
