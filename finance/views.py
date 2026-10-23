@@ -123,6 +123,7 @@ from .models import (
     Receipt,
     RecurringSeries,
     RefundLink,
+    RefundLinkDrop,
     SavedTransactionFilter,
     Tag,
     Transaction,
@@ -210,6 +211,7 @@ from .transaction_filters import (
     visible_transaction_queryset,
 )
 from .category_services import (
+    REFUND_LINK_STANDS,
     add_category,
     assign_category,
     confirm_transfer_pair,
@@ -992,6 +994,10 @@ def _render_transaction_edit(
         # Check only this transaction's link existence; never expose that purchase.
         and not RefundLink.objects.filter(refund=financial_transaction).exists()
     )
+    # A link dropped for this member alone still stands for another (#570, option c).
+    refund_link_stands = refund_link is None and RefundLinkDrop.objects.filter(
+        link__refund=financial_transaction, person__user=request.user
+    ).exists()
     refund_search_form = None
     refund_results = []
     selected_original = None
@@ -1037,6 +1043,7 @@ def _render_transaction_edit(
             "refund_form": refund_form,
             "refund_link": refund_link,
             "can_link_refund": can_link_refund,
+            "refund_link_stands": REFUND_LINK_STANDS if refund_link_stands else "",
             "refund_search_form": refund_search_form,
             "refund_results": refund_results,
             "selected_original": selected_original,

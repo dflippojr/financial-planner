@@ -66,6 +66,7 @@ def _prime_pair_cache(rows):
 REFUND_LINK_RULE = (
     "A refund must be a positive amount linked to a negative original purchase of the same kind."
 )
+REFUND_LINK_STANDS = "Another member's link for this refund still stands, so it can't be relinked here."
 SPLIT_TRANSFER_ERROR = "Unpair the transfer before splitting."
 SPLIT_REFUND_ERROR = "Unlink the refund before splitting."
 SPLIT_SUM_ERROR = "Parts must add up exactly to the transaction amount."
@@ -1545,7 +1546,12 @@ def link_refund(principal, refund_id, original_id, original_part_id=None):
     by_id = {item.pk: item for item in locked}
     refund = by_id[refund_id]
     original = by_id[original_id]
-    if RefundLink.objects.filter(refund=refund).exists():
+    existing = RefundLink.objects.filter(refund=refund).first()
+    if existing is not None:
+        # Owner decision 2026-10-23, option (c): a link dropped for this member
+        # alone still stands for another, so they cannot relink beside it.
+        if RefundLinkDrop.objects.filter(link=existing, person=person).exists():
+            raise ValidationError(REFUND_LINK_STANDS)
         raise PermissionDenied(_DENIED)
     if (
         refund.amount_minor <= 0
