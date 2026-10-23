@@ -434,3 +434,110 @@ def test_rate_limited_sync_of_an_unreadable_connection_records_nothing(monkeypat
     connection.refresh_from_db()
     assert (connection.last_sync_at, connection.last_sync_result) == before
     assert not Alert.objects.filter(recipient=owner, kind=Alert.Kind.SYNC).exists()
+
+
+UNUSABLE_KEYS = pytest.mark.parametrize("bad_key", ["", "not-a-fernet-key"], ids=["empty", "malformed"])
+
+
+def _no_secret_in(texts, *secrets):
+    for text in texts:
+        for secret in secrets:
+            if secret:
+                assert secret not in text
+
+
+@pytest.mark.parametrize("bad_key", ["", "not-a-fernet-key", "x" * 44], ids=["empty", "malformed", "wrong-length"])
+def test_an_unusable_key_is_improperly_configured_without_quoting_it(settings, bad_key):
+    from django.core.exceptions import ImproperlyConfigured
+
+    from finance.encryption import encrypt_secret
+
+    settings.FIELD_ENCRYPTION_KEY = bad_key
+    with pytest.raises(ImproperlyConfigured) as raised:
+        encrypt_secret("synthetic-secret")
+    _no_secret_in([str(raised.value), repr(raised.value)], bad_key)
+
+
+@UNUSABLE_KEYS
+@pytest.mark.django_db
+def test_connect_with_an_unusable_key_never_spends_the_setup_token(monkeypatch, settings, caplog, bad_key):
+    import html
+
+    from django.urls import reverse
+
+    from finance.models import AuditEvent, SimpleFinClaim
+    from tests.test_simplefin import ACCESS_URL, CLAIM_URL, setup_token, signed_in
+
+    caplog.set_level(logging.DEBUG)
+    good_key = settings.FIELD_ENCRYPTION_KEY
+    owner = make_person("owner")
+    make_household(owner)
+    claimed = []
+
+    def fake_claim(url):
+        claimed.append(url)
+        return ACCESS_URL
+
+    monkeypatch.setattr("finance.simplefin_services.claim_access_url", fake_claim)
+    use_payload(monkeypatch, account_payload())
+    client = signed_in(owner)
+    client.raise_request_exception = False
+    settings.FIELD_ENCRYPTION_KEY = bad_key
+
+    response = client.post(reverse("simplefin-connections"), {"intent": "claim", "token": setup_token()})
+
+    assert claimed == [], "the setup token was spent before the key was checked"
+    assert response.status_code == 200
+    page = html.unescape(response.content.decode())
+    assert "encryption key is not configured" in page
+    assert "setup token was not used" in page
+    assert not SimpleFinConnection.objects.filter(owner=owner).exists()
+    assert not SimpleFinClaim.objects.exists()
+    _no_secret_in([page, caplog.text, *(repr(row) for row in AuditEvent.objects.values())], bad_key, ACCESS_URL)
+
+    settings.FIELD_ENCRYPTION_KEY = good_key
+    fixed = client.post(reverse("simplefin-connections"), {"intent": "claim", "token": setup_token()})
+
+    assert fixed.status_code == 302
+    assert claimed == [CLAIM_URL]
+    assert SimpleFinConnection.objects.filter(owner=owner).exists()
+
+
+@UNUSABLE_KEYS
+@pytest.mark.django_db
+def test_sync_with_an_unusable_key_asks_the_member_to_reconnect(monkeypatch, settings, caplog, bad_key):
+    import html
+
+    from django.urls import reverse
+
+    from finance.models import Alert
+    from finance.simplefin_services import UNREADABLE_CONNECTION
+    from tests.test_simplefin import ACCESS_URL, signed_in
+
+    caplog.set_level(logging.DEBUG)
+    owner, _checking, connection = _linked_owner_and_checking(monkeypatch)
+    make_household(owner)
+    fetched = []
+    monkeypatch.setattr("finance.simplefin_services.fetch_accounts", lambda *args, **kwargs: fetched.append(args))
+    settings.FIELD_ENCRYPTION_KEY = bad_key
+
+    with pytest.raises(SimpleFinError) as raised:
+        sync_connection(owner, connection.pk)
+
+    assert str(raised.value) == UNREADABLE_CONNECTION
+    connection.refresh_from_db()
+    assert connection.last_sync_result == UNREADABLE_CONNECTION
+
+    SimpleFinConnection.objects.filter(pk=connection.pk).update(last_sync_result="")
+    assert sync_all_connections() == 1
+    connection.refresh_from_db()
+    assert connection.last_sync_result == UNREADABLE_CONNECTION
+    assert not connection.disabled
+
+    response = signed_in(owner).get(reverse("simplefin-connections"))
+    assert response.status_code == 200
+    page = html.unescape(response.content.decode())
+    assert UNREADABLE_CONNECTION in page
+    assert fetched == []
+    alerts = [repr(row) for row in Alert.objects.filter(recipient=owner).values()]
+    _no_secret_in([page, caplog.text, str(raised.value), *alerts], bad_key, ACCESS_URL, "synthetic-access-secret")
