@@ -36,7 +36,6 @@ from .strategies import (
     MAX_MINOR,
     Row,
     overlapping_files,
-    payee_memo,
     posted_day,
     posting_lags,
     rows,
