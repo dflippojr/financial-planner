@@ -111,9 +111,9 @@ def _former_member_refund():
     return alice, bob, household, purchase, refund, groceries, dining
 
 
-def _assert_untouched(alice, refund, groceries, history, spending):
+def _assert_untouched(alice, refund, groceries, history, spending, message="Bob rewrote Alice's private refund after she left"):
     refund.refresh_from_db()
-    assert refund.category_id == groceries.pk, "Bob rewrote Alice's private refund after she left"
+    assert refund.category_id == groceries.pk, message
     assert refund.category_source == Transaction.CategorySource.INHERITED
     assert _category_history(refund) == history
     assert income_and_spending_totals(alice).spending_minor == spending
@@ -249,15 +249,16 @@ def test_member_never_writes_another_members_private_refund_but_its_owner_still_
     history = _category_history(refund)
     spending = income_and_spending_totals(alice).spending_minor
 
+    unseen = "Bob wrote Alice's private refund, which he cannot see"
     assign_category(bob, purchase.pk, dining.pk)
-    _assert_untouched(alice, refund, groceries, history, spending)
+    _assert_untouched(alice, refund, groceries, history, spending, unseen)
 
     split_transaction(
         bob,
         purchase.pk,
         [{"category_id": housing.pk, "amount_minor": -6000}, {"category_id": dining.pk, "amount_minor": -3000}],
     )
-    _assert_untouched(alice, refund, groceries, history, spending)
+    _assert_untouched(alice, refund, groceries, history, spending, unseen)
     link = RefundLink.objects.get(refund=refund)
     assert link.original_part.category_id == housing.pk
 
