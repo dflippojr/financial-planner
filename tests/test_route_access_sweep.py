@@ -126,13 +126,19 @@ class ObjectRoute:
 class PageRoute:
     """A route without an object id that reads financial data.
 
-    query lists the GET parameters the view reads for scoping; each gets the
-    owner's private object id (PROBE names which object, an account by
-    default). form lists POST fields that carry ids, for views that take a
-    form; None when the view takes no POST worth probing.
+    query lists the GET parameters the view reads for scoping. Each is probed
+    on its own, on top of a valid baseline (the BASELINE parameters named in
+    baseline), so an unrelated validation error cannot leave the report
+    empty: an id parameter gets the owner's object id (PROBE names which
+    object, an account by default) and scope gets each scope. owner_canary
+    marks a page whose baseline shows the owner a canary, which proves the
+    probe would see a leak. form lists POST fields that carry ids, for views
+    that take a form; None when the view takes no POST worth probing.
     """
 
     query: tuple[str, ...] = ()
+    baseline: tuple[str, ...] = ()
+    owner_canary: bool = False
     form: tuple[str, ...] | None = None
     extra: dict = field(default_factory=dict)
     kwargs: tuple[dict, ...] = ({},)
@@ -259,6 +265,8 @@ PROBE = {
     "c": "conversation",
     "conversation_id": "conversation",
     "include": "card",
+    "category": "category",
+    "tag": "tag",
     "merge_series": "series",
     "add_series": "series",
     "suggestion_id": "suggestion",
@@ -267,32 +275,33 @@ PROBE = {
 }
 
 FILTERS = ("account", "tag", "scope")
+WINDOW = ("date_from", "date_to")
 
 PAGE_ROUTES = {
     "settings-audit": PageRoute(query=("actor",)),
-    "chat": PageRoute(query=("c",)),
+    "chat": PageRoute(query=("c",), owner_canary=True),
     "more": PageRoute(),
     "chat-popover": PageRoute(query=("c",)),
     "chat-send": PageRoute(form=("conversation_id",), extra={"prompt": "SYN question"}),
-    "home": PageRoute(query=FILTERS),
-    "spending-by-category": PageRoute(query=FILTERS),
-    "spending-category-uncategorized": PageRoute(query=FILTERS),
-    "net-worth": PageRoute(query=("scope",)),
-    "account-settings": PageRoute(),
+    "home": PageRoute(query=FILTERS, baseline=WINDOW, owner_canary=True),
+    "spending-by-category": PageRoute(query=FILTERS, baseline=WINDOW, owner_canary=True),
+    "spending-category-uncategorized": PageRoute(query=FILTERS, baseline=WINDOW, owner_canary=True),
+    "net-worth": PageRoute(query=("scope",), baseline=WINDOW, owner_canary=True),
+    "account-settings": PageRoute(owner_canary=True),
     "simplefin-connections": PageRoute(),
     "invite": PageRoute(),
     "category-list": PageRoute(),
-    "category-rule-list": PageRoute(query=("category",)),
+    "category-rule-list": PageRoute(query=("category",), owner_canary=True),
     "tag-list": PageRoute(),
     "csv-mapping-list": PageRoute(),
     "settings-alerts": PageRoute(),
     "settings-data": PageRoute(),
     "account-export": PageRoute(form=()),
     "settings-ai": PageRoute(),
-    "alert-list": PageRoute(),
-    "account-list": PageRoute(),
-    "csv-import": PageRoute(form=("account_id",)),
-    "transaction-list": PageRoute(query=(*FILTERS, "category")),
+    "alert-list": PageRoute(owner_canary=True),
+    "account-list": PageRoute(owner_canary=True),
+    "csv-import": PageRoute(form=("account_id",), owner_canary=True),
+    "transaction-list": PageRoute(query=(*FILTERS, "category"), baseline=WINDOW, owner_canary=True),
     "transaction-export": PageRoute(form=("account",)),
     "transaction-saved-filter-create": PageRoute(form=("account",), extra={"name": "SYN filter"}),
     "transaction-bulk-preview": PageRoute(
@@ -306,22 +315,27 @@ PAGE_ROUTES = {
     "transaction-add": PageRoute(
         form=("account",),
         extra={"transaction_date": "2026-01-01", "direction": "out", "amount": "1.00", "description": "SYN"},
+        owner_canary=True,
     ),
     "transfer-review": PageRoute(),
-    "recurring-review": PageRoute(query=("merge_series", "add_series")),
+    "recurring-review": PageRoute(query=("merge_series", "add_series"), owner_canary=True),
     "recurring-create": PageRoute(
-        form=("transaction_id",), extra={"step": "preview", "name": "SYN", "cadence": "monthly"}
+        form=("transaction_id",),
+        extra={"step": "preview", "name": "SYN", "cadence": "monthly"},
+        owner_canary=True,
     ),
-    "planned-items": PageRoute(query=("scope",)),
-    "bills-calendar": PageRoute(query=("scope",), form=("accounts",)),
-    "debt-payoff": PageRoute(query=("include",)),
-    "monthly-review": PageRoute(),
-    "sheet-comparison": PageRoute(query=FILTERS),
-    "year-end": PageRoute(query=("scope",)),
-    "year-end-csv": PageRoute(query=("scope",), kwargs=tuple({"section": section} for section in CSV_SECTIONS)),
-    "budgets": PageRoute(),
-    "savings-goals": PageRoute(),
-    "savings-goal-plan": PageRoute(query=("scope",)),
+    "planned-items": PageRoute(query=("scope",), owner_canary=True),
+    "bills-calendar": PageRoute(query=("scope",), form=("accounts",), owner_canary=True),
+    "debt-payoff": PageRoute(query=("include",), owner_canary=True),
+    "monthly-review": PageRoute(baseline=("month",), owner_canary=True),
+    "sheet-comparison": PageRoute(query=FILTERS, owner_canary=True),
+    "year-end": PageRoute(query=("scope",), baseline=("year",), owner_canary=True),
+    "year-end-csv": PageRoute(
+        query=("scope",), baseline=("year",), kwargs=tuple({"section": section} for section in CSV_SECTIONS)
+    ),
+    "budgets": PageRoute(baseline=("month",)),
+    "savings-goals": PageRoute(owner_canary=True),
+    "savings-goal-plan": PageRoute(query=("scope",), owner_canary=True),
     "savings-goal-import": PageRoute(),
 }
 
@@ -677,8 +691,11 @@ def world(db, settings, tmp_path):
         share_mode=Account.ShareMode.CO_OWNED,
     )
     shared = _side_rows(owner, household, shared_account, shared_card, HOUSEHOLD_CANARY, SHARED_MINOR, when, 200)
+    tag = Tag.objects.create(household=household, name="SYN trip")
     for side in (private, shared):
         (tmp_path / side.receipt.stored_name).write_bytes(PNG)
+        TransactionTag.objects.create(transaction=side.txn, tag=tag)
+        side.tag = tag
     _personal_rows(private)
     private.series = base.series
     private.planned = base.planned
@@ -714,7 +731,7 @@ def world(db, settings, tmp_path):
         created_by=owner,
     )
     return SimpleNamespace(
-        owner=owner, member=base.member, outsider=outsider, sides={"private": private, "shared": shared}
+        owner=owner, member=base.member, outsider=outsider, when=when, sides={"private": private, "shared": shared}
     )
 
 
@@ -816,6 +833,39 @@ def _probe_value(world, param):
     return str(getattr(world.sides["private"], PROBE.get(param, "account")).pk)
 
 
+def _baseline(world, route):
+    month_start = world.when.replace(day=1)
+    values = {
+        "date_from": month_start.isoformat(),
+        "date_to": world.when.replace(day=28).isoformat(),
+        "year": str(world.when.year),
+        "month": month_start.strftime("%Y-%m"),
+    }
+    return {param: values[param] for param in route.baseline}
+
+
+def _probes(world, route):
+    """The baseline alone, then each scoping parameter on its own on top of it."""
+    baseline = _baseline(world, route)
+    yield baseline
+    for param in route.query:
+        values = ("private", "household") if param == "scope" else (_probe_value(world, param),)
+        for value in values:
+            yield {**baseline, param: value}
+
+
+def _hidden_ids(requester):
+    """Accounts the requester cannot see, and the transactions and batches on them."""
+    hidden = set(
+        Account.objects.exclude(pk__in=Account.objects.visible_to(requester).values("pk")).values_list("pk", flat=True)
+    )
+    return {
+        "account_id": hidden,
+        "transaction_id": set(Transaction.objects.filter(account_id__in=hidden).values_list("pk", flat=True)),
+        "import_batch_id": set(ImportBatch.objects.filter(account_id__in=hidden).values_list("pk", flat=True)),
+    }
+
+
 def _page_cases():
     return [
         pytest.param(name, kwargs, who, id=f"{name}-{'-'.join(kwargs.values()) or 'page'}-{who}")
@@ -832,21 +882,42 @@ def test_pages_do_not_leak_through_ids_in_the_query(world, name, kwargs, who):
     requester = getattr(world, who)
     client = _client(requester)
     url = reverse(name, kwargs=kwargs)
-    query = {param: _probe_value(world, param) for param in route.query}
-    response = client.get(url, query)
-    if route.form is None or response.status_code != 405:
+    for query in _probes(world, route):
+        response = client.get(url, query)
+        if route.form is not None and response.status_code == 405:
+            break
         assert response.status_code in PAGE_ANSWERS, f"GET {url} {query} answered {response.status_code}"
         assert not _leaks(response, forbidden), f"GET {url} {query} leaked {_leaks(response, forbidden)}"
     if route.form is None:
         return
     data = {**route.extra, **{param: _probe_value(world, param) for param in route.form}}
+    hidden = _hidden_ids(requester)
     before = _ledger(requester)
     response = client.post(url, data)
     assert response.status_code in PAGE_POST_ANSWERS, f"POST {url} {data} answered {response.status_code}"
     assert not _leaks(response, forbidden), f"POST {url} {data} leaked {_leaks(response, forbidden)}"
     after = _ledger(requester)
-    # The requester may add rows of their own; nothing that existed may change.
     for model, rows in before.items():
         kept = {row["id"]: row for row in after[model]}
         changed = [row["id"] for row in rows if kept.get(row["id"]) != row]
         assert not changed, f"POST {url} changed {model} rows {changed}"
+        # The requester may add rows of their own, never one on an account they cannot see.
+        existing = {row["id"] for row in rows}
+        added = [row for row in after[model] if row["id"] not in existing]
+        trespass = [
+            row["id"] for row in added if any(row.get(column) in ids for column, ids in hidden.items())
+        ]
+        assert not trespass, f"POST {url} added {model} rows {trespass} on objects hidden from the {who}"
+
+
+def _owner_canary_cases():
+    return [name for name, route in PAGE_ROUTES.items() if route.owner_canary]
+
+
+@pytest.mark.parametrize("name", _owner_canary_cases())
+def test_owner_sees_the_canary_on_the_baseline_page(world, name):
+    route = PAGE_ROUTES[name]
+    query = _baseline(world, route)
+    response = _client(world.owner).get(reverse(name, kwargs=route.kwargs[0]), query)
+    assert response.status_code == 200, f"{name} {query} answered {response.status_code}"
+    assert CANARY in _text(response), f"the owner does not see the canary on {name} {query}"
