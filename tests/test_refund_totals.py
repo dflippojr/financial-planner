@@ -6,13 +6,17 @@ card-payment leg. The link is deleted with correction history on the refund,
 so the refund counts as ordinary income and spending never goes negative.
 """
 
+import threading
 from datetime import date
+from unittest.mock import patch
 
 import pytest
 from django.core.exceptions import ValidationError
+from django.db import connection, connections
 from django.test import Client
 from django.urls import reverse
 
+from finance import category_services, lifecycle_services
 from finance.category_services import (
     confirm_transfer_pair,
     downgrade_unevidenced_auto_marked_pairs,
@@ -22,7 +26,7 @@ from finance.category_services import (
     undo_transfer_pair,
 )
 from finance.csv_import.services import undo_import_batch
-from finance.lifecycle_services import archive_account, delete_account
+from finance.lifecycle_services import archive_account, delete_account, leave_household
 from finance.manual_entry_services import add_manual_transaction, delete_manual_transaction
 from finance.models import (
     Account,
@@ -33,6 +37,7 @@ from finance.models import (
     TransactionCorrectionHistory,
     TransferPair,
 )
+from tests.lock_races import backend_pid, wait_until_blocked_by
 from tests.test_categorization import make_account, make_household, make_person, make_transaction
 
 pytestmark = pytest.mark.django_db
@@ -450,3 +455,114 @@ def test_a_members_dropped_link_history_stays_hidden_after_the_link_is_deleted()
         ("linked", "unlinked"),
         ("linked", "unlinked"),
     ]
+
+
+# Archiving writes history on the refunds of its originals, which may sit in
+# other accounts, so it locks those accounts up front, in pk order, as account
+# delete does. Without that, two former household members whose private
+# accounts still hold refunds linked across them could each lock their own rows
+# and then wait on the other's refund.
+
+
+def _cross_linked_accounts_of_former_members():
+    alice = make_person("alice")
+    bob = make_person("bob")
+    household = make_household(alice, bob)
+    lent = {"scope": Account.Scope.HOUSEHOLD, "household": household, "share_mode": Account.ShareMode.LENT}
+    alice_card = make_account(alice, name="Synthetic Alice Card", **lent)
+    bob_card = make_account(bob, name="Synthetic Bob Card", **lent)
+    alice_purchase = make_transaction(alice, alice_card, amount_minor=-5000, description="Synthetic purchase")
+    alice_refund = make_transaction(alice, alice_card, amount_minor=1500, description="Synthetic return credit")
+    bob_purchase = make_transaction(bob, bob_card, amount_minor=-4000, description="Synthetic purchase")
+    bob_refund = make_transaction(bob, bob_card, amount_minor=2000, description="Synthetic return credit")
+    link_refund(alice, alice_refund.pk, bob_purchase.pk)
+    link_refund(bob, bob_refund.pk, alice_purchase.pk)
+    leave_household(alice)
+    assert not Account.objects.visible_to(bob).filter(pk=alice_card.pk).exists()
+    assert not Account.objects.visible_to(alice).filter(pk=bob_card.pk).exists()
+    return alice, bob, alice_card, bob_card, alice_purchase
+
+
+def _spy_on_account_locks(monkeypatch):
+    locked = []
+    lock_in_pk_order = lifecycle_services._lock_accounts_in_pk_order
+
+    def spy(account_ids):
+        account_ids = list(account_ids)
+        locked.extend(account_ids)
+        return lock_in_pk_order(account_ids)
+
+    monkeypatch.setattr(lifecycle_services, "_lock_accounts_in_pk_order", spy)
+    return locked
+
+
+def test_archiving_an_account_locks_the_accounts_of_its_originals_refunds(monkeypatch):
+    alice, _bob, alice_card, bob_card, _purchase = _cross_linked_accounts_of_former_members()
+    locked = _spy_on_account_locks(monkeypatch)
+
+    archive_account(alice, alice_card.pk)
+
+    assert bob_card.pk in locked
+
+
+def test_undoing_an_import_locks_the_accounts_of_its_originals_refunds(monkeypatch):
+    alice, _bob, alice_card, bob_card, purchase = _cross_linked_accounts_of_former_members()
+    locked = _spy_on_account_locks(monkeypatch)
+
+    undo_import_batch(alice, alice_card.pk, purchase.import_batch_id)
+
+    assert bob_card.pk in locked
+    assert not RefundLink.objects.filter(original=purchase).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_former_members_archiving_cross_linked_accounts_concurrently_do_not_deadlock():
+    if connection.vendor != "postgresql":
+        pytest.skip("row-lock ordering can only be exercised on PostgreSQL")
+
+    alice, bob, alice_card, bob_card, _purchase = _cross_linked_accounts_of_former_members()
+    alice_paused = threading.Event()
+    release_alice = threading.Event()
+    bob_started = threading.Event()
+    bob_done = threading.Event()
+    pids = {}
+    errors = []
+    drop_links = category_services.drop_refund_links_to_originals
+
+    def pause_alice_before_dropping(original_ids, actor):
+        # Alice holds her account's rows here, about to write history on Bob's refund.
+        if actor.pk == alice.pk:
+            alice_paused.set()
+            assert release_alice.wait(timeout=30)
+        return drop_links(original_ids, actor)
+
+    def archive(person, account, role, started=None, done=None):
+        try:
+            pids[role] = backend_pid()
+            if started is not None:
+                started.set()
+            archive_account(person, account.pk)
+        except Exception as exc:  # noqa: BLE001 - reported to the main thread
+            errors.append(exc)
+        finally:
+            if done is not None:
+                done.set()
+            connections.close_all()
+
+    with patch.object(category_services, "drop_refund_links_to_originals", pause_alice_before_dropping):
+        alice_archiving = threading.Thread(target=archive, args=(alice, alice_card, "alice"))
+        alice_archiving.start()
+        bob_archiving = threading.Thread(target=archive, args=(bob, bob_card, "bob", bob_started, bob_done))
+        try:
+            assert alice_paused.wait(timeout=10)
+            bob_archiving.start()
+            assert bob_started.wait(timeout=10)
+            wait_until_blocked_by(pids["bob"], pids["alice"], bob_done, errors)
+        finally:
+            release_alice.set()
+            alice_archiving.join(timeout=30)
+            bob_archiving.join(timeout=30)
+
+    assert errors == []
+    assert not RefundLink.objects.exists()
+    assert set(Account.objects.values_list("status", flat=True)) == {Account.Status.ARCHIVED}
