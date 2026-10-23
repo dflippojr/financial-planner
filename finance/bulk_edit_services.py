@@ -242,7 +242,7 @@ def _lock_rows(person, transactions, *, with_refunds=False):
     the same lock first, so none can be linked between the lookup and the locks.
     """
     lock_actor_household(person)
-    extra = linked_refunds_for_originals(transactions) if with_refunds else []
+    extra = linked_refunds_for_originals(person, transactions) if with_refunds else []
     required_ids = sorted({item.pk for item in transactions})
     all_items = list(transactions) + [item for item in extra if item.pk not in set(required_ids)]
     account_ids = sorted({item.account_id for item in all_items})
