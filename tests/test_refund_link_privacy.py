@@ -10,10 +10,12 @@ import pytest
 from finance.bulk_edit_services import ACTION_CATEGORY, apply_bulk_edit, undo_bulk_edit
 from finance.category_services import (
     assign_category,
+    assign_split_part_category,
     income_and_spending_totals,
     link_refund,
     split_transaction,
     undo_transfer_pair,
+    unsplit_transaction,
 )
 from finance.lifecycle_services import leave_household, unshare_account
 from finance.models import (
@@ -90,6 +92,45 @@ def test_private_split_does_not_reach_the_shared_refund():
     seen = Transaction.objects.visible_to(bob).get(pk=refund.pk)
     assert seen.category_id == groceries.pk, "private split copied onto shared refund"
     assert _category_history(refund) == history
+
+
+def _split_private_original(alice, purchase, refund, secret, housing, assigned_part):
+    split_transaction(
+        alice,
+        purchase.pk,
+        [{"category_id": secret.pk, "amount_minor": -3000}, {"category_id": housing.pk, "amount_minor": -2000}],
+        refund_assignments={refund.pk: assigned_part},
+    )
+
+
+def test_private_unsplit_does_not_reach_the_shared_refund():
+    alice, bob, purchase, refund, groceries, housing, secret = _unshared_original()
+    _split_private_original(alice, purchase, refund, secret, housing, 0)
+    history = _category_history(refund)
+    spending = income_and_spending_totals(bob).spending_minor
+
+    unsplit_transaction(alice, purchase.pk, secret.pk)
+
+    seen = Transaction.objects.visible_to(bob).get(pk=refund.pk)
+    assert seen.category_id == groceries.pk, "private unsplit copied onto shared refund"
+    assert _category_history(refund) == history
+    assert income_and_spending_totals(bob).spending_minor == spending
+    assert RefundLink.objects.get(refund=refund).original_part is None
+
+
+def test_private_part_recategorization_does_not_reach_the_shared_refund():
+    alice, bob, purchase, refund, groceries, housing, secret = _unshared_original()
+    _split_private_original(alice, purchase, refund, secret, housing, 1)
+    link = RefundLink.objects.get(refund=refund)
+    history = _category_history(refund)
+    spending = income_and_spending_totals(bob).spending_minor
+
+    assign_split_part_category(alice, link.original_part_id, secret.pk)
+
+    seen = Transaction.objects.visible_to(bob).get(pk=refund.pk)
+    assert seen.category_id == groceries.pk, "private part recategorization copied onto shared refund"
+    assert _category_history(refund) == history
+    assert income_and_spending_totals(bob).spending_minor == spending
 
 
 def _former_member_refund():
@@ -204,6 +245,38 @@ def test_remaining_member_pair_unmark_leaves_former_member_refund_alone():
     _assert_untouched(alice, refund, groceries, history, spending)
 
 
+def _split_shared_original(bob, purchase, dining, groceries):
+    split_transaction(
+        bob,
+        purchase.pk,
+        [{"category_id": dining.pk, "amount_minor": -3000}, {"category_id": groceries.pk, "amount_minor": -2000}],
+    )
+
+
+def test_remaining_member_unsplit_leaves_former_member_refund_alone():
+    alice, bob, _household, purchase, refund, groceries, dining = _former_member_refund()
+    _split_shared_original(bob, purchase, dining, groceries)
+    history = _category_history(refund)
+    spending = income_and_spending_totals(alice).spending_minor
+
+    unsplit_transaction(bob, purchase.pk, dining.pk)
+
+    _assert_untouched(alice, refund, groceries, history, spending)
+    assert RefundLink.objects.get(refund=refund).original_part is None
+
+
+def test_remaining_member_part_recategorization_leaves_former_member_refund_alone():
+    alice, bob, _household, purchase, refund, groceries, dining = _former_member_refund()
+    _split_shared_original(bob, purchase, dining, groceries)
+    link = RefundLink.objects.get(refund=refund)
+    history = _category_history(refund)
+    spending = income_and_spending_totals(alice).spending_minor
+
+    assign_split_part_category(bob, link.original_part_id, dining.pk)
+
+    _assert_untouched(alice, refund, groceries, history, spending)
+
+
 def test_category_still_follows_while_the_same_members_see_both_sides():
     alice = make_person("alice")
     bob = make_person("bob")
@@ -262,6 +335,12 @@ def test_member_never_writes_another_members_private_refund_but_its_owner_still_
     link = RefundLink.objects.get(refund=refund)
     assert link.original_part.category_id == housing.pk
 
+    assign_split_part_category(bob, link.original_part_id, dining.pk)
+    _assert_untouched(alice, refund, groceries, history, spending, unseen)
+
+    unsplit_transaction(bob, purchase.pk, dining.pk)
+    _assert_untouched(alice, refund, groceries, history, spending, unseen)
+
     split_transaction(
         alice,
         purchase.pk,
@@ -271,3 +350,13 @@ def test_member_never_writes_another_members_private_refund_but_its_owner_still_
     refund.refresh_from_db()
     assert refund.category_id == housing.pk
     assert len(_category_history(refund)) == len(history) + 1
+
+    assign_split_part_category(alice, RefundLink.objects.get(refund=refund).original_part_id, dining.pk)
+    refund.refresh_from_db()
+    assert refund.category_id == dining.pk
+    assert len(_category_history(refund)) == len(history) + 2
+
+    unsplit_transaction(alice, purchase.pk, groceries.pk)
+    refund.refresh_from_db()
+    assert refund.category_id == groceries.pk
+    assert len(_category_history(refund)) == len(history) + 3
