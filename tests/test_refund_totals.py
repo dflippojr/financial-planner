@@ -1,0 +1,187 @@
+"""A refund link goes when its original stops counting (#570).
+
+The original stops counting when its import is undone, when it is deleted as a
+manual entry, or when it becomes a confirmed or auto-marked transfer or
+card-payment leg. The link is deleted with correction history on the refund,
+so the refund counts as ordinary income and spending never goes negative.
+"""
+
+from datetime import date
+
+import pytest
+from django.core.exceptions import ValidationError
+from django.test import Client
+from django.urls import reverse
+
+from finance.category_services import (
+    confirm_transfer_pair,
+    income_and_spending_totals,
+    link_refund,
+    refresh_transfer_pairs,
+    undo_transfer_pair,
+)
+from finance.csv_import.services import undo_import_batch
+from finance.manual_entry_services import add_manual_transaction, delete_manual_transaction
+from finance.models import (
+    Account,
+    AuditEvent,
+    RefundLink,
+    TransactionCorrectionHistory,
+    TransferPair,
+)
+from tests.test_categorization import make_account, make_household, make_person, make_transaction
+
+pytestmark = pytest.mark.django_db
+
+
+def _totals(person):
+    totals = income_and_spending_totals(person)
+    return totals.income_minor, totals.spending_minor
+
+
+def _link_history(refund):
+    return list(
+        TransactionCorrectionHistory.objects.filter(
+            transaction=refund, field_name=TransactionCorrectionHistory.Field.REFUND_LINK
+        )
+        .order_by("pk")
+        .values_list("previous_description", "new_description")
+    )
+
+
+def _assert_unlinked_income(owner, refund, *, income=2000, spending=0):
+    assert not RefundLink.objects.filter(refund=refund).exists()
+    assert _totals(owner) == (income, spending)
+    assert _link_history(refund) == [("unlinked", "linked"), ("linked", "unlinked")]
+
+
+def _checking_with_linked_refund(outflow_description):
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner, name="Synthetic Checking")
+    savings = make_account(owner, name="Synthetic Savings", account_type=Account.Type.SAVINGS)
+    outflow = make_transaction(owner, checking, amount_minor=-5000, description=outflow_description)
+    refund = make_transaction(owner, checking, amount_minor=2000, description="Synthetic return credit")
+    link_refund(owner, refund.pk, outflow.pk)
+    assert _totals(owner) == (0, 3000)
+    return owner, savings, outflow, refund
+
+
+def test_confirming_the_original_as_a_transfer_leg_drops_its_refund_link():
+    owner, savings, _outflow, refund = _checking_with_linked_refund("Synthetic purchase")
+    make_transaction(owner, savings, amount_minor=5000, description="Synthetic deposit")
+    refresh_transfer_pairs(owner)
+    pair = TransferPair.objects.get()
+    assert pair.status == TransferPair.Status.SUGGESTED
+
+    confirm_transfer_pair(owner, pair.pk)
+
+    _assert_unlinked_income(owner, refund)
+
+
+def test_an_auto_marked_original_drops_its_refund_link():
+    owner, savings, _outflow, refund = _checking_with_linked_refund("Synthetic transfer to savings")
+    make_transaction(owner, savings, amount_minor=5000, description="Synthetic transfer from checking")
+
+    refresh_transfer_pairs(owner)
+
+    assert TransferPair.objects.get().status == TransferPair.Status.AUTO_MARKED
+    _assert_unlinked_income(owner, refund)
+
+
+def test_undoing_the_pair_does_not_bring_the_link_back():
+    owner, savings, _outflow, refund = _checking_with_linked_refund("Synthetic transfer to savings")
+    make_transaction(owner, savings, amount_minor=5000, description="Synthetic transfer from checking")
+    refresh_transfer_pairs(owner)
+
+    undo_transfer_pair(owner, TransferPair.objects.get().pk)
+
+    _assert_unlinked_income(owner, refund, spending=5000)
+
+
+def test_a_dropped_refund_keeps_its_category():
+    owner, savings, _outflow, refund = _checking_with_linked_refund("Synthetic transfer to savings")
+    refund.refresh_from_db()
+    category, source = refund.category_id, refund.category_source
+    make_transaction(owner, savings, amount_minor=5000, description="Synthetic transfer from checking")
+
+    refresh_transfer_pairs(owner)
+
+    refund.refresh_from_db()
+    assert (refund.category_id, refund.category_source) == (category, source)
+
+
+def test_undoing_the_originals_import_drops_its_refund_link():
+    owner, _savings, outflow, refund = _checking_with_linked_refund("Synthetic purchase")
+
+    undo_import_batch(owner, outflow.account_id, outflow.import_batch_id)
+
+    _assert_unlinked_income(owner, refund)
+
+
+def test_deleting_a_manual_original_drops_its_refund_link():
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner, name="Synthetic Checking")
+    outflow = add_manual_transaction(
+        owner, checking.pk, transaction_date=date(2026, 1, 2), amount_minor=-5000, description="SYNTHETIC GROCER"
+    )
+    refund = make_transaction(owner, checking, amount_minor=2000, description="Synthetic return credit")
+    link_refund(owner, refund.pk, outflow.pk)
+
+    delete_manual_transaction(owner, outflow.pk)
+
+    _assert_unlinked_income(owner, refund)
+
+
+def test_linking_after_pairing_ends_the_same_way():
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner, name="Synthetic Checking")
+    savings = make_account(owner, name="Synthetic Savings", account_type=Account.Type.SAVINGS)
+    outflow = make_transaction(owner, checking, amount_minor=-5000, description="Synthetic transfer to savings")
+    refund = make_transaction(owner, checking, amount_minor=2000, description="Synthetic return credit")
+    make_transaction(owner, savings, amount_minor=5000, description="Synthetic transfer from checking")
+    refresh_transfer_pairs(owner)
+
+    with pytest.raises(ValidationError):
+        link_refund(owner, refund.pk, outflow.pk)
+
+    assert not RefundLink.objects.filter(refund=refund).exists()
+    assert _totals(owner) == (2000, 0)
+
+
+def test_a_hidden_private_refund_loses_its_link_without_the_actor_learning_of_it():
+    alice = make_person("alice")
+    bob = make_person("bob")
+    household = make_household(alice, bob)
+    joint = make_account(alice, name="Synthetic Joint", scope=Account.Scope.HOUSEHOLD, household=household)
+    hidden = make_account(bob, name="SYN-HIDDEN-PRIVATE")
+    purchase = make_transaction(alice, joint, amount_minor=-5000, description="Synthetic shared purchase")
+    refund = make_transaction(bob, hidden, amount_minor=2000, description="SYN-HIDDEN-REFUND")
+    link_refund(bob, refund.pk, purchase.pk)
+    assert _totals(bob) == (0, 3000)
+    events_before = set(AuditEvent.objects.values_list("pk", flat=True))
+
+    client = Client()
+    client.force_login(alice.user)
+    response = client.post(
+        reverse("csv-import-undo", args=[joint.pk, purchase.import_batch_id]), follow=True
+    )
+
+    assert not RefundLink.objects.filter(refund=refund).exists()
+    assert _totals(bob) == (2000, 0)
+    history = TransactionCorrectionHistory.objects.filter(
+        transaction=refund, field_name=TransactionCorrectionHistory.Field.REFUND_LINK
+    ).latest("pk")
+    assert (history.previous_description, history.new_description, history.actor_id) == ("linked", "unlinked", alice.pk)
+    new_events = AuditEvent.objects.exclude(pk__in=events_before)
+    assert list(new_events.values_list("action", flat=True)) == [AuditEvent.Action.IMPORT_UNDONE]
+    for event in new_events:
+        assert event.account_id == joint.pk
+        assert str(refund.pk) not in str(event.metadata)
+        assert "SYN-HIDDEN" not in str(event.metadata)
+    assert response.status_code == 200
+    page = response.content.decode()
+    assert "SYN-HIDDEN" not in page
+    assert "20.00" not in page

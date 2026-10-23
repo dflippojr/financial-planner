@@ -23,8 +23,9 @@ from hypothesis import strategies as st
 from finance.cash_flow import selected_accounts
 from finance.category_services import confirm_transfer_pair, link_refund
 from finance.csv_import.parser import Mapping
+from finance.csv_import.services import undo_import_batch
 from finance.export import minor_from_decimal_string, money_decimal
-from finance.models import Account, ImportBatch, TransferPair
+from finance.models import Account, ImportBatch, RefundLink, TransferPair
 from finance.transaction_export import iter_transaction_csv
 from finance.transaction_filters import visible_transaction_queryset
 
@@ -297,6 +298,61 @@ def test_a_refund_reduces_spending_only_when_its_original_was_counted(case):
         spending = sum(purchases) - sum(size for size, original in refunds if original < len(purchases))
         household = selected_accounts(owner, scope=Account.Scope.HOUSEHOLD, cash_flow_only=True)
         assert ledger.totals(owner, household) == ledger.Totals(income, spending, income - spending)
+
+
+@st.composite
+def later_exclusion_cases(draw):
+    transfer = draw(st.integers(1, MAX_MINOR))
+    other = st.integers(1, MAX_MINOR).filter(lambda size: size != transfer)
+    kept = draw(st.lists(other, min_size=0, max_size=3))
+    undone = draw(st.lists(other, min_size=0, max_size=3))
+    refunds = draw(st.lists(other, min_size=1, max_size=3))
+    # Indexes run over the kept purchases, then the undone ones, then the outgoing transfer leg.
+    originals = draw(st.lists(st.integers(0, len(kept) + len(undone)), min_size=len(refunds), max_size=len(refunds)))
+    # With transfer wording the pair is auto-marked at import; without it the member confirms it.
+    wording = draw(st.booleans())
+    return transfer, tuple(kept), tuple(undone), tuple(zip(refunds, originals, strict=True)), wording
+
+
+@given(later_exclusion_cases())
+def test_a_refund_stops_reducing_spending_when_its_original_stops_counting(case):
+    """Refunds linked first, then the original becomes a transfer leg or its import is undone (#570)."""
+    transfer, kept, undone, refunds, wording = case
+    day = date(2026, 8, 10)
+    out_name, in_name = ("SYN TRANSFER TO SAVINGS", "SYN TRANSFER FROM CHECKING") if wording else ("SYN MOVE OUT", "SYN MOVE IN")
+    undone_rows = [Row(day, -size, f"SYN UNDONE N{i}", "", f"SYN-U{i:04d}") for i, size in enumerate(undone)]
+    checking = [Row(day, -transfer, out_name, "", "SYN-T0000")]
+    checking += [Row(day, -size, f"SYN PURCHASE N{i}", "", f"SYN-P{i:04d}") for i, size in enumerate(kept)]
+    checking += [Row(day, size, f"SYN REFUND N{i}", "", f"SYN-R{i:04d}") for i, (size, _original) in enumerate(refunds)]
+    with ledger.isolated():
+        owner = ledger.make_member()
+        household = ledger.make_household(owner)
+        accounts = {
+            key: ledger.make_account(owner, ACCOUNT_TYPES[key], name=f"Synthetic {key.title()}", household=household)
+            for key in ("checking", "savings")
+        }
+        undone_import = ledger.import_rows(owner, accounts["checking"], HUNTINGTON, undone_rows)
+        ledger.import_rows(owner, accounts["checking"], HUNTINGTON, checking)
+        by_description = dict(ledger.active_rows([accounts["checking"]]).values_list("description", "pk"))
+        originals = [by_description[f"SYN PURCHASE N{i}"] for i in range(len(kept))]
+        originals += [by_description[f"SYN UNDONE N{i}"] for i in range(len(undone))]
+        originals.append(by_description[out_name])
+        for i, (_size, original) in enumerate(refunds):
+            link_refund(owner, by_description[f"SYN REFUND N{i}"], originals[original])
+
+        ledger.import_rows(owner, accounts["savings"], HUNTINGTON, [Row(day, transfer, in_name, "", "SYN-S0000")])
+        for pair in TransferPair.objects.filter(status=TransferPair.Status.SUGGESTED):
+            confirm_transfer_pair(owner, pair.pk)
+        if undone_import is not None:
+            undo_import_batch(owner, accounts["checking"].pk, undone_import.batch.pk)
+
+        assert TransferPair.objects.excluding_income_and_spending().count() == 1
+        # Only refunds of the kept purchases still reduce spending; the rest are income.
+        income = sum(size for size, original in refunds if original >= len(kept))
+        spending = sum(kept) - sum(size for size, original in refunds if original < len(kept))
+        selected = selected_accounts(owner, scope=Account.Scope.HOUSEHOLD, cash_flow_only=True)
+        assert ledger.totals(owner, selected) == ledger.Totals(income, spending, income - spending)
+        assert RefundLink.objects.count() == sum(1 for _size, original in refunds if original < len(kept))
 
 
 # 5. Exact money.
