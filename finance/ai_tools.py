@@ -574,6 +574,7 @@ def list_budgets(person, args):
         text=json.dumps({"month": month.isoformat()[:7], "page_url": url, "rows": rows}),
         figures=tuple(figures),
         account_ids=_account_ids(None, accounts),
+        budget_ids=tuple(card.budget.pk for card in cards[:MAX_TOOL_ROWS]),
     )
 
 
@@ -643,6 +644,8 @@ def projected_cash_flow_tool(person, args):
         text=json.dumps(payload),
         figures=tuple(figures),
         account_ids=_account_ids(None, accounts),
+        # Every planned item behind the projected months, not only the rows listed.
+        planned_item_ids=tuple(planned_query.values_list("pk", flat=True)),
     )
 
 
@@ -657,7 +660,8 @@ def list_planned_items(person, _args):
              "end_date": str(item.end_date) if item.end_date else None, "enabled": item.enabled,
              "scope": item.scope} for item in query.order_by("start_date", "pk")[:MAX_TOOL_ROWS]]
     return ToolResult(text=json.dumps({"page_url": url, "rows": rows}),
-                      figures=tuple(_figure(row["name"], row["amount_minor"], url, row["currency"]) for row in rows))
+                      figures=tuple(_figure(row["name"], row["amount_minor"], url, row["currency"]) for row in rows),
+                      planned_item_ids=tuple(row["id"] for row in rows))
 
 
 def _visible_account(person, account_id, name):

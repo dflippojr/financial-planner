@@ -121,10 +121,10 @@ def _bound(handler, conversation, turn):
     return call
 
 
-def _store(conversation, turn, kind, payload, account_ids):
+def _store(conversation, turn, kind, payload, account_ids, *, budget_ids=()):
     proposal = AiProposal.objects.create(conversation=conversation, message=turn, kind=kind, payload=payload)
     text = f"Proposal {proposal.pk} is shown to the member as a card. {NOTHING_APPLIED}"
-    return ToolResult(text=text, account_ids=tuple(sorted(set(account_ids))))
+    return ToolResult(text=text, account_ids=tuple(sorted(set(account_ids))), budget_ids=tuple(budget_ids))
 
 
 def _fail(text):
@@ -259,7 +259,9 @@ def _propose_set_budget(person, args, conversation, turn):
         "budget_id": existing.pk if existing else None,
         "before_amount_minor": amount_for(existing, month) if existing else None,
     }
-    return _store(conversation, turn, AiProposal.Kind.SET_BUDGET, payload, [])
+    # The card quotes the existing budget's amount.
+    return _store(conversation, turn, AiProposal.Kind.SET_BUDGET, payload, [],
+                  budget_ids=(existing.pk,) if existing else ())
 
 
 def _clean_tag_names(raw):

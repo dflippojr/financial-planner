@@ -409,8 +409,13 @@ def end_current_membership(person, *, audit_actor=None):
     AiPlanLink.objects.filter(person=person).exclude(connection__owner=person).delete()
     AiPlanLink.objects.filter(connection__owner=person).exclude(person=person).delete()
     from finance.chat_services import delete_conversations_without_access
+    from .models import Budget, PlannedItem
 
-    delete_conversations_without_access(account.pk for account in household_accounts)
+    delete_conversations_without_access(
+        (account.pk for account in household_accounts),
+        planned_item_ids=PlannedItem.objects.filter(household=own_membership.household).values_list("pk", flat=True),
+        budget_ids=Budget.objects.filter(household=own_membership.household).values_list("pk", flat=True),
+    )
     if audit_actor is not None:
         append_event(action=AuditEvent.Action.MEMBER_LEFT, actor=audit_actor, affected_member=person,
                      household=own_membership.household, target_id=person.pk)

@@ -265,7 +265,12 @@ def _budget_payload(budget, scope):
 
 
 _MONTH = date(2026, 3, 1)
-_TOOL_ARGS = {"list_planned_items": {}, "projected_cash_flow": {}, "list_budgets": {"month": "2026-03"}}
+_TOOL_ARGS = {
+    "list_planned_items": {}, "projected_cash_flow": {}, "list_budgets": {"month": "2026-03"},
+    # Its card quotes the existing household budget's amount.
+    "propose_set_budget": {"category": "ZQHOUSEHOLDROW", "amount_minor": 100, "month": "2026-03"},
+}
+_BUDGET_TOOLS = ("list_budgets", "propose_set_budget")
 
 
 def _ask_quoting(state, person, tool, text="What is planned?"):
@@ -298,12 +303,12 @@ def _make_private(owner, row):
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("tool", ["list_planned_items", "projected_cash_flow", "list_budgets"])
+@pytest.mark.parametrize("tool", ["list_planned_items", "projected_cash_flow", "list_budgets", "propose_set_budget"])
 def test_making_a_quoted_household_row_private_purges_other_members_chat(harness, tool):
     state, _url = harness
     owner, member, _third, household = _three_members(harness)
     marker = "ZQHOUSEHOLDROW"
-    row = _budget(owner, household, marker) if tool == "list_budgets" else _plan(owner, household, marker)
+    row = _budget(owner, household, marker) if tool in _BUDGET_TOOLS else _plan(owner, household, marker)
     conversation = _ask_quoting(state, member, tool)
     old_session = conversation.harness_session_id
     assert old_session

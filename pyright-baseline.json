@@ -614,12 +614,6 @@
  {
   "file": "finance/chat_services.py",
   "rule": "reportAttributeAccessIssue",
-  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Account]\"",
-  "count": 2
- },
- {
-  "file": "finance/chat_services.py",
-  "rule": "reportAttributeAccessIssue",
   "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[AiConversation]\"",
   "count": 2
  },

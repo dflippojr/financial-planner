@@ -360,6 +360,7 @@ def save_budget(principal, payload, *, budget=None):
         budget=budget,
     )
     is_new = budget.pk is None
+    was_household = not is_new and budget.scope == Budget.Scope.HOUSEHOLD
     changed = [] if is_new else (["scope"] if budget.scope != scope else [])
     budget.scope = scope
     budget.household = assigned_household
@@ -387,6 +388,10 @@ def save_budget(principal, payload, *, budget=None):
             if is_new or changed:
                 record(person, AuditEvent.Action.RECORD_CREATED if is_new else AuditEvent.Action.RECORD_EDITED,
                        AuditEvent.TargetType.BUDGET, budget.pk, audience=owned_audience(budget), fields=changed)
+            if was_household and budget.scope != Budget.Scope.HOUSEHOLD:
+                from .chat_services import delete_conversations_without_access
+
+                delete_conversations_without_access(budget_ids=(budget.pk,))
     except IntegrityError as exc:
         raise ValidationError(DUPLICATE_BUDGET) from exc
     return budget
