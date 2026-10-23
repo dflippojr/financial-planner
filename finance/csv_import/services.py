@@ -13,7 +13,7 @@ from finance.csv_import.parser import Preview, preview_csv
 from finance.csv_import.profiles import CSV_FILE_SOURCES, OFX_MAPPING
 from finance.lifecycle_services import (
     _DENIED,
-    _lock_visible_account_with_pair_counterparts,
+    _lock_visible_account_with_pair_and_refund_counterparts,
     _person_for,
     _visible_account_for_update,
     lock_actor_household,
@@ -253,7 +253,7 @@ def archive_batch(principal, account_id, batch_id, *, manual):
     seed_leg_ids = list(
         Transaction.objects.filter(import_batch_id=batch_id, account_id=account_id).values_list("pk", flat=True)
     )
-    account = _lock_visible_account_with_pair_counterparts(person, account_id, seed_leg_ids=seed_leg_ids)
+    account = _lock_visible_account_with_pair_and_refund_counterparts(person, account_id, seed_leg_ids=seed_leg_ids)
     if account.status != Account.Status.ACTIVE or account.archived_at is not None:
         raise PermissionDenied(_DENIED)
     batch = (

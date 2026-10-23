@@ -204,12 +204,33 @@ def _lock_accounts_in_pk_order(account_ids):
     list(Account.objects.select_for_update().filter(pk__in=ids).order_by("pk"))
 
 
-def _lock_visible_account_with_pair_counterparts(person, account_id, seed_leg_ids=None):
-    extras = _pair_counterpart_account_ids(account_id, seed_leg_ids)
+def _lock_visible_account_with_counterparts(person, account_id, extras):
     _lock_accounts_in_pk_order(pk for pk in extras if pk < account_id)
     account = _visible_account_for_update(person, account_id)
     _lock_accounts_in_pk_order(pk for pk in extras if pk > account_id)
     return account
+
+
+def _lock_visible_account_with_pair_counterparts(person, account_id, seed_leg_ids=None):
+    return _lock_visible_account_with_counterparts(
+        person, account_id, _pair_counterpart_account_ids(account_id, seed_leg_ids)
+    )
+
+
+def _lock_visible_account_with_pair_and_refund_counterparts(person, account_id, seed_leg_ids=None):
+    """Also lock the other accounts of the seed rows' refund links.
+
+    Archiving or deleting writes history on refunds in those accounts, so they
+    join the ordered account locks rather than being reached after this
+    account's rows are held.
+    """
+    from finance.category_services import account_ids_in_refunds_touching_transactions
+
+    if seed_leg_ids is None:
+        seed_leg_ids = list(Transaction.objects.filter(account_id=account_id).values_list("pk", flat=True))
+    extras = _pair_counterpart_account_ids(account_id, seed_leg_ids)
+    extras |= account_ids_in_refunds_touching_transactions(seed_leg_ids) - {account_id}
+    return _lock_visible_account_with_counterparts(person, account_id, extras)
 
 
 def create_account(person, *, name, account_type, household=None, share_mode=""):
@@ -314,7 +335,7 @@ def archive_account(principal, account_id):
     lock_actor_household(person)
     if not Account.objects.visible_to(person).filter(pk=account_id).exists():
         raise PermissionDenied(_DENIED)
-    account = _lock_visible_account_with_pair_counterparts(person, account_id)
+    account = _lock_visible_account_with_pair_and_refund_counterparts(person, account_id)
     _lock_ledgers((account.pk,))
     if account.scope == Account.Scope.HOUSEHOLD and not _actor_may_manage_sharing(person, account):
         raise PermissionDenied(_DENIED)
@@ -506,26 +527,6 @@ def leave_household(principal):
     end_current_membership(person, audit_actor=person)
 
 
-def _delete_counterpart_account_ids(account_id):
-    from finance.category_services import (
-        account_ids_in_pairs_touching_transactions,
-        account_ids_in_refunds_touching_transactions,
-    )
-
-    seed = list(Transaction.objects.filter(account_id=account_id).values_list("pk", flat=True))
-    counterparts = account_ids_in_pairs_touching_transactions(seed)
-    counterparts |= account_ids_in_refunds_touching_transactions(seed)
-    return counterparts - {account_id}
-
-
-def _lock_visible_account_for_delete(person, account_id):
-    extras = _delete_counterpart_account_ids(account_id)
-    _lock_accounts_in_pk_order(pk for pk in extras if pk < account_id)
-    account = _visible_account_for_update(person, account_id)
-    _lock_accounts_in_pk_order(pk for pk in extras if pk > account_id)
-    return account
-
-
 def _related_ids_for_account_delete(tx_ids):
     from finance.category_services import _pair_rows_touching, _refund_rows_touching
 
@@ -648,7 +649,7 @@ def delete_account(principal, account_id):
     lock_actor_household(person)
     if not Account.objects.visible_to(person).filter(pk=account_id).exists():
         raise PermissionDenied(_DENIED)
-    account = _lock_visible_account_for_delete(person, account_id)
+    account = _lock_visible_account_with_pair_and_refund_counterparts(person, account_id)
     if account.owner_id != person.pk:
         raise PermissionDenied(_DENIED)
     if not Account.objects.visible_to(person).filter(pk=account.pk).exists():
