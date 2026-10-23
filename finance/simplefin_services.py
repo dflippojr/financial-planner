@@ -19,7 +19,7 @@ from finance.csv_import.fingerprint import transaction_fingerprint
 from finance.csv_import.parser import parse_posted_date
 from finance.csv_import.profiles import POSTED_DATE_MAPPINGS
 from finance.date_bounds import activity_date_error
-from finance.encryption import decrypt_access_url, encrypt_access_url
+from finance.encryption import check_encryption_key, decrypt_access_url, encrypt_access_url
 from finance.audit_services import append_event
 from finance.audit_operations import execution, operation, outcome, member_operation
 from finance.lifecycle_services import _DENIED, _person_for, create_account, lock_actor_household
@@ -58,6 +58,10 @@ NO_CURRENCY = "SimpleFIN did not report a usable currency for it."
 UNSTORABLE_AMOUNT = "SimpleFIN sent an amount that could not be stored."
 INVALID_TOKEN = "That setup token is not a valid SimpleFIN token."  # noqa: S105 - not a secret
 UNSTORABLE_ID = "SimpleFIN sent a transaction id that could not be stored."
+KEY_NOT_CONFIGURED = (
+    "The server's encryption key is not configured, so your setup token was not used. "
+    "Ask whoever runs this server to set FIELD_ENCRYPTION_KEY, then connect again with the same token."
+)
 ALREADY_CONNECTED = "Disconnect the existing SimpleFIN connection before adding another."
 CLAIM_IN_PROGRESS = (
     "That setup token is already being claimed. Your connection appears here once SimpleFIN answers. "
@@ -244,11 +248,18 @@ def claim_connection(principal, setup_token: str) -> SimpleFinConnection:
     works once, so a second request with the same token (a double-clicked
     Connect) is refused before it reaches SimpleFIN. Otherwise SimpleFIN would
     answer 403 and the member would be told to treat the token as compromised.
+    The encryption key is checked first for the same reason: SimpleFIN mints
+    the Access URL when the token is claimed, so one the app cannot store
+    would be lost and the token spent.
     """
     person = _person_for(principal)
     if SimpleFinConnection.objects.filter(owner=person).exists():
         raise SimpleFinAlreadyClaimed(ALREADY_CONNECTED)
     claim_url = decode_setup_token(setup_token)
+    try:
+        check_encryption_key()
+    except ImproperlyConfigured:
+        raise SimpleFinError(KEY_NOT_CONFIGURED) from None
     claim = _start_claim(person, claim_url)
     try:
         # The other request stores its connection before it ends its claim.

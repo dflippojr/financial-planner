@@ -9,7 +9,16 @@ def _fernet():
         raise ImproperlyConfigured("FIELD_ENCRYPTION_KEY must be set.")
     if isinstance(key, str):
         key = key.encode("utf-8")
-    return Fernet(key)
+    try:
+        return Fernet(key)
+    except (TypeError, ValueError):
+        # Fernet's own message is generic, but never chain it: the key must not reach a traceback.
+        raise ImproperlyConfigured("FIELD_ENCRYPTION_KEY is not a valid Fernet key.") from None
+
+
+def check_encryption_key() -> None:
+    """Raise ImproperlyConfigured unless secrets can be encrypted with the current key."""
+    _fernet()
 
 
 def encrypt_secret(value: str) -> bytes:
