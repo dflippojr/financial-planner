@@ -9,7 +9,9 @@ see no canary and change nothing. The owner reaches every seeded object with
 the same URL, so the denials cannot pass because the seed is unreachable.
 A page that names an object in its POST body gets the same probe through
 its actions, and a page that accepts POST must declare its body ids or say
-why it names none.
+why it names none. So must an object route: its body probes post to the
+requester's own object and name another member's or household's in the
+body.
 
 A new route needs an entry here; test_every_route_is_classified_once fails
 until it has one.
@@ -30,6 +32,7 @@ from django.urls import URLPattern, URLResolver, get_resolver, reverse
 from django.utils import timezone
 
 from finance.category_suggestion_services import snapshot_hash
+from finance.csv_import.saved_mappings import SAVED_PROFILE_PREFIX
 from finance.models import (
     Account,
     AccountLink,
@@ -110,6 +113,30 @@ DENIED = (404, 405)
 PAGE_ANSWERS = (200, 302, 404)
 # A form that names an object the requester cannot see may also be refused as invalid.
 PAGE_POST_ANSWERS = (200, 302, 400, 404)
+# A form field's choices leave the object out, so the page shows the form again.
+INVALID_FORM = (200,)
+# The view redirects back whether or not the form was valid.
+REDIRECTED = (302,)
+
+
+@dataclass(frozen=True)
+class BodyProbe:
+    """A POST to the requester's own object that names another object in its body.
+
+    path builds the URL kwargs from the requester's own rows, so the path
+    lookup passes; data builds the form from one side of the world and those
+    rows. The member names the owner's private object and the outsider either
+    side's; both are refused and change nothing. refused lists the answers
+    the route gives. The owner's same POST on the first side changes
+    something, or passes owner_check when it writes nothing to the database,
+    so the probe reaches the body's lookup.
+    """
+
+    path: Callable[[SimpleNamespace], dict]
+    data: Callable[[SimpleNamespace, SimpleNamespace], dict]
+    sides: tuple[str, ...] = ("private", "shared")
+    refused: tuple[int, ...] = INVALID_FORM
+    owner_check: Callable[[object], bool] | None = None
 
 
 @dataclass(frozen=True)
@@ -121,7 +148,10 @@ class ObjectRoute:
     the object exists on: personal objects (passkeys, chats) are never
     shared, and household objects (categories, CSV mappings) are never
     private. data is minimal synthetic form data for the POST. post_only
-    marks a view that refuses GET, so the owner check posts instead.
+    marks a view that refuses GET, so the owner check posts instead. body
+    lists the further object ids its POST body may name. A route that
+    accepts POST needs body or a body_reason saying why its body names no
+    object.
     """
 
     kwargs: Callable[[SimpleNamespace], dict]
@@ -131,6 +161,8 @@ class ObjectRoute:
     # The sides where the owner's request succeeds, when that is not every side:
     # an account can only be shared while private and unshared while shared.
     owner_sides: tuple[str, ...] | None = None
+    body: dict[str, BodyProbe] = field(default_factory=dict)
+    body_reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -204,96 +236,309 @@ def _snapshot(side):
 PERSONAL = ("private",)
 HOUSEHOLD = ("shared",)
 
+RULE_FORM = {"owner_kind": "personal", "description_contains": "SYN rule", "priority": "0", "enabled": "on"}
+PLANNED_FORM = {
+    "name": "SYN planned",
+    "kind": "expense",
+    "amount": "1.00",
+    "start_date": "2026-01-01",
+    "cadence": "monthly",
+    "scope": "private",
+}
+GOAL_FORM = {"name": "SYN goal", "target_amount": "1.00"}
+MAPPING_FORM = {
+    "name": "SYN mapping",
+    "date_column": "Date",
+    "description_column": "Description",
+    "date_format": "iso",
+    "number_format": "dot_none",
+    "amount_mode": "signed",
+    "amount_column": "Amount",
+}
+CSV = b"Date,Description,Amount\n2026-01-01,SYN upload,-1.00\n"
+
+_PATH_ONLY = "acts on the object in its path alone; the body names no other object"
+_VALUES = "the body carries only values such as a name, date, amount, mode or flag, never an object id"
+
+
+def _own_txn(own):
+    return {"transaction_id": own.charge.pk}
+
+
+def _own_split(own):
+    return {"transaction_id": own.split.pk}
+
+
+def _upload(s, own):
+    return {
+        "action": "upload",
+        "csv_file": SimpleUploadedFile("syn.csv", CSV, content_type="text/csv"),
+        "import_profile": f"{SAVED_PROFILE_PREFIX}{s.mapping.pk}",
+    }
+
+
+def _uploaded(response):
+    form = response.context and response.context.get("upload_form")
+    return response.status_code == 200 and form is not None and form.is_valid()
+
+
 OBJECT_ROUTES = {
-    "chat-delete": ObjectRoute(lambda s: {"conversation_id": s.conversation.pk}, PERSONAL, post_only=True),
-    "chat-proposal-apply": ObjectRoute(lambda s: {"proposal_id": s.proposal.pk}, PERSONAL, post_only=True),
-    "chat-proposal-dismiss": ObjectRoute(lambda s: {"proposal_id": s.proposal.pk}, PERSONAL, post_only=True),
+    "chat-delete": ObjectRoute(
+        lambda s: {"conversation_id": s.conversation.pk}, PERSONAL, post_only=True, body_reason=_PATH_ONLY
+    ),
+    "chat-proposal-apply": ObjectRoute(
+        lambda s: {"proposal_id": s.proposal.pk}, PERSONAL, post_only=True, body_reason=_PATH_ONLY
+    ),
+    "chat-proposal-dismiss": ObjectRoute(
+        lambda s: {"proposal_id": s.proposal.pk}, PERSONAL, post_only=True, body_reason=_PATH_ONLY
+    ),
     "chat-turn": ObjectRoute(lambda s: {"turn_id": s.turn.pk}, PERSONAL),
     "spending-category-detail": ObjectRoute(lambda s: {"category_id": s.category.pk}, HOUSEHOLD),
-    "passkey-delete": ObjectRoute(lambda s: {"passkey_id": s.passkey.pk}, PERSONAL, post_only=True),
-    "revoke-session": ObjectRoute(lambda s: {"session_id": s.session.pk}, PERSONAL, post_only=True),
+    "passkey-delete": ObjectRoute(
+        lambda s: {"passkey_id": s.passkey.pk}, PERSONAL, post_only=True, body_reason=_PATH_ONLY
+    ),
+    "revoke-session": ObjectRoute(
+        lambda s: {"session_id": s.session.pk}, PERSONAL, post_only=True, body_reason=_PATH_ONLY
+    ),
     "category-rule-detail": ObjectRoute(
-        lambda s: {"rule_id": s.rule.pk}, data=lambda s: {"action": "apply"}
+        lambda s: {"rule_id": s.rule.pk},
+        data=lambda s: {"action": "apply"},
+        body={
+            "save-account": BodyProbe(
+                lambda own: {"rule_id": own.rule.pk},
+                lambda s, own: {**RULE_FORM, "action": "save", "account": s.account.pk, "category": own.category.pk},
+            ),
+            "save-category": BodyProbe(
+                lambda own: {"rule_id": own.rule.pk},
+                lambda s, own: {**RULE_FORM, "action": "save", "category": s.category.pk},
+                HOUSEHOLD,
+            ),
+            # The application need not belong to the rule in the path.
+            "reverse": BodyProbe(
+                lambda own: {"rule_id": own.rule.pk},
+                lambda s, own: {"action": "reverse", "application_id": s.application.pk},
+                refused=(404,),
+            ),
+        },
     ),
     "category-rule-application-reverse": ObjectRoute(
-        lambda s: {"application_id": s.application.pk}, post_only=True
+        lambda s: {"application_id": s.application.pk}, post_only=True, body_reason=_PATH_ONLY
     ),
     "csv-mapping-edit": ObjectRoute(
-        lambda s: {"mapping_id": s.mapping.pk}, HOUSEHOLD, data=lambda s: {"name": "SYN-renamed mapping"}
+        lambda s: {"mapping_id": s.mapping.pk},
+        HOUSEHOLD,
+        data=lambda s: {"name": "SYN-renamed mapping"},
+        # The member's own mapping is the household's, so the member reaches it legitimately.
+        body={
+            "default_accounts": BodyProbe(
+                lambda own: {"mapping_id": own.mapping.pk},
+                lambda s, own: {**MAPPING_FORM, "default_accounts": [s.account.pk]},
+            ),
+        },
     ),
-    "alert-mark-read": ObjectRoute(lambda s: {"alert_id": s.alert.pk}, PERSONAL, post_only=True),
-    "account-rename": ObjectRoute(_account, data=lambda s: {"name": "SYN-renamed"}, post_only=True),
+    "alert-mark-read": ObjectRoute(
+        lambda s: {"alert_id": s.alert.pk}, PERSONAL, post_only=True, body_reason=_PATH_ONLY
+    ),
+    "account-rename": ObjectRoute(
+        _account, data=lambda s: {"name": "SYN-renamed"}, post_only=True, body_reason=_VALUES
+    ),
     "account-share": ObjectRoute(
-        _account, data=lambda s: {"share_mode": "co_owned"}, post_only=True, owner_sides=("private",)
+        _account,
+        data=lambda s: {"share_mode": "co_owned"},
+        post_only=True,
+        owner_sides=("private",),
+        body_reason=_VALUES,
     ),
     "account-share-mode": ObjectRoute(
         _account,
         data=lambda s: {"share_mode": "lent", "confirm_give_up_ownership": "on"},
         post_only=True,
         owner_sides=("shared",),
+        body_reason=_VALUES,
     ),
-    "account-unshare": ObjectRoute(_account, post_only=True, owner_sides=("shared",)),
-    "account-archive": ObjectRoute(_account, post_only=True),
-    "account-delete": ObjectRoute(_account, data=lambda s: {"confirm_name": s.account.name}),
+    "account-unshare": ObjectRoute(_account, post_only=True, owner_sides=("shared",), body_reason=_PATH_ONLY),
+    "account-archive": ObjectRoute(_account, post_only=True, body_reason=_PATH_ONLY),
+    "account-delete": ObjectRoute(_account, data=lambda s: {"confirm_name": s.account.name}, body_reason=_VALUES),
     "account-balances": ObjectRoute(
-        _account, data=lambda s: {"snapshot_date": "2026-01-01", "amount": "1.00", "note": "SYN"}
+        _account,
+        data=lambda s: {"snapshot_date": "2026-01-01", "amount": "1.00", "note": "SYN"},
+        body_reason=_VALUES,
     ),
     "account-pair-loan": ObjectRoute(
-        lambda s: {"account_id": s.loan.pk}, data=lambda s: {"secured_asset": ""}, post_only=True
+        lambda s: {"account_id": s.loan.pk},
+        data=lambda s: {"secured_asset": ""},
+        post_only=True,
+        body={
+            "secured_asset": BodyProbe(
+                lambda own: {"account_id": own.loan.pk},
+                lambda s, own: {"secured_asset": s.asset.pk},
+                refused=REDIRECTED,
+            ),
+        },
     ),
     "account-debt-terms": ObjectRoute(
         lambda s: {"account_id": s.card.pk},
         data=lambda s: {"apr_percent": "1.000", "minimum_payment": "1.00"},
         post_only=True,
+        body_reason=_VALUES,
     ),
     "account-snapshot-edit": ObjectRoute(
-        _snapshot, data=lambda s: {"snapshot_date": "2026-01-01", "amount": "1.00", "note": "SYN"}
+        _snapshot,
+        data=lambda s: {"snapshot_date": "2026-01-01", "amount": "1.00", "note": "SYN"},
+        body_reason=_VALUES,
     ),
-    "account-snapshot-delete": ObjectRoute(_snapshot, post_only=True),
-    "csv-import-preview": ObjectRoute(_account, data=lambda s: {"action": "cancel"}),
+    "account-snapshot-delete": ObjectRoute(_snapshot, post_only=True, body_reason=_PATH_ONLY),
+    "csv-import-preview": ObjectRoute(
+        _account,
+        data=lambda s: {"action": "cancel"},
+        # The other actions name a stage by its token, which only the member's own session holds.
+        body={
+            "import_profile": BodyProbe(
+                lambda own: {"account_id": own.account.pk}, _upload, HOUSEHOLD, owner_check=_uploaded
+            ),
+        },
+    ),
     "csv-import-undo": ObjectRoute(
-        lambda s: {"account_id": s.account.pk, "batch_id": s.txn.import_batch_id}, post_only=True
+        lambda s: {"account_id": s.account.pk, "batch_id": s.txn.import_batch_id},
+        post_only=True,
+        body_reason=_PATH_ONLY,
     ),
     "transaction-saved-filter-apply": ObjectRoute(lambda s: {"filter_id": s.saved_filter.pk}, PERSONAL),
     "transaction-saved-filter-delete": ObjectRoute(
-        lambda s: {"filter_id": s.saved_filter.pk}, PERSONAL, post_only=True
+        lambda s: {"filter_id": s.saved_filter.pk}, PERSONAL, post_only=True, body_reason=_PATH_ONLY
     ),
-    "transaction-bulk-undo": ObjectRoute(lambda s: {"undo_id": s.undo.pk}, PERSONAL, post_only=True),
-    "suggestion-accept": ObjectRoute(lambda s: {"suggestion_id": s.suggestion.pk}, PERSONAL, post_only=True),
-    "suggestion-reject": ObjectRoute(lambda s: {"suggestion_id": s.suggestion.pk}, PERSONAL, post_only=True),
+    "transaction-bulk-undo": ObjectRoute(
+        lambda s: {"undo_id": s.undo.pk}, PERSONAL, post_only=True, body_reason=_PATH_ONLY
+    ),
+    "suggestion-accept": ObjectRoute(
+        lambda s: {"suggestion_id": s.suggestion.pk}, PERSONAL, post_only=True, body_reason=_PATH_ONLY
+    ),
+    "suggestion-reject": ObjectRoute(
+        lambda s: {"suggestion_id": s.suggestion.pk}, PERSONAL, post_only=True, body_reason=_PATH_ONLY
+    ),
     "transaction-edit": ObjectRoute(
-        _txn, data=lambda s: {"transaction_date": "2026-01-01", "description": "SYN-edited", "amount": "1.00"}
+        _txn,
+        data=lambda s: {"transaction_date": "2026-01-01", "description": "SYN-edited", "amount": "1.00"},
+        body_reason="the correction form carries only a date, description and amount; tags post to note-tags",
     ),
-    "transaction-delete": ObjectRoute(_manual, post_only=True),
+    "transaction-delete": ObjectRoute(_manual, post_only=True, body_reason=_PATH_ONLY),
     "transaction-receipt-upload": ObjectRoute(
-        _txn, data=lambda s: {"receipt": SimpleUploadedFile("syn.png", PNG, content_type="image/png")}, post_only=True
+        _txn,
+        data=lambda s: {"receipt": SimpleUploadedFile("syn.png", PNG, content_type="image/png")},
+        post_only=True,
+        body_reason="the body carries only the uploaded file",
     ),
     "transaction-receipt-download": ObjectRoute(_receipt),
-    "transaction-receipt-delete": ObjectRoute(_receipt, post_only=True),
-    "transaction-note-tags": ObjectRoute(_txn, data=lambda s: {"note": "SYN-note"}, post_only=True),
-    "transaction-categorize": ObjectRoute(_txn, data=lambda s: {"category": s.category.pk}, post_only=True),
-    "transaction-split": ObjectRoute(_txn, data=lambda s: {"part_count": "2"}, post_only=True),
-    "transaction-unsplit": ObjectRoute(_txn, data=lambda s: {"category": s.category.pk}, post_only=True),
+    "transaction-receipt-delete": ObjectRoute(_receipt, post_only=True, body_reason=_PATH_ONLY),
+    "transaction-note-tags": ObjectRoute(
+        _txn,
+        data=lambda s: {"note": "SYN-note"},
+        post_only=True,
+        body={"tags": BodyProbe(_own_txn, lambda s, own: {"tags": [s.tag.pk]}, HOUSEHOLD)},
+    ),
+    "transaction-categorize": ObjectRoute(
+        _txn,
+        data=lambda s: {"category": s.category.pk},
+        post_only=True,
+        body={"category": BodyProbe(_own_txn, lambda s, own: {"category": s.category.pk}, HOUSEHOLD, REDIRECTED)},
+    ),
+    "transaction-split": ObjectRoute(
+        _txn,
+        data=lambda s: {"part_count": "2"},
+        post_only=True,
+        body={
+            "part_category": BodyProbe(
+                _own_txn,
+                lambda s, own: {
+                    "part_count": "2",
+                    "part_0_category": s.category.pk,
+                    "part_0_amount": "-40.00",
+                    "part_1_category": own.category.pk,
+                    "part_1_amount": "-3.21",
+                },
+                HOUSEHOLD,
+            ),
+        },
+    ),
+    "transaction-unsplit": ObjectRoute(
+        _txn,
+        data=lambda s: {"category": s.category.pk},
+        post_only=True,
+        body={"category": BodyProbe(_own_split, lambda s, own: {"category": s.category.pk}, HOUSEHOLD, REDIRECTED)},
+    ),
     "transaction-split-part-category": ObjectRoute(
         lambda s: {"transaction_id": s.txn.pk, "part_id": s.part.pk},
         data=lambda s: {f"part{s.part.pk}-category": s.category.pk},
         post_only=True,
+        body={
+            "category": BodyProbe(
+                lambda own: {"transaction_id": own.split.pk, "part_id": own.part.pk},
+                lambda s, own: {f"part{own.part.pk}-category": s.category.pk},
+                HOUSEHOLD,
+                REDIRECTED,
+            ),
+        },
     ),
-    "transaction-link-refund": ObjectRoute(_manual, data=lambda s: {"original": s.txn.pk}, post_only=True),
-    "planned-item-edit": ObjectRoute(lambda s: {"item_id": s.planned.pk}),
-    "planned-item-disable": ObjectRoute(lambda s: {"item_id": s.planned.pk}, post_only=True),
-    "planned-item-enable": ObjectRoute(lambda s: {"item_id": s.planned.pk}, post_only=True),
-    "budget-edit": ObjectRoute(lambda s: {"budget_id": s.budget.pk}),
-    "budget-archive": ObjectRoute(lambda s: {"budget_id": s.budget.pk}, post_only=True),
+    "transaction-link-refund": ObjectRoute(
+        _manual,
+        data=lambda s: {"original": s.txn.pk},
+        post_only=True,
+        body={
+            "original": BodyProbe(
+                lambda own: {"transaction_id": own.refund.pk}, lambda s, own: {"original": s.charges[0].pk}
+            ),
+            # A split original needs one of its own parts.
+            "original_part": BodyProbe(
+                lambda own: {"transaction_id": own.refund.pk},
+                lambda s, own: {"original": s.txn.pk, "original_part": s.part.pk},
+            ),
+        },
+    ),
+    "planned-item-edit": ObjectRoute(
+        lambda s: {"item_id": s.planned.pk},
+        body={
+            "category": BodyProbe(
+                lambda own: {"item_id": own.planned.pk},
+                lambda s, own: {**PLANNED_FORM, "category": s.category.pk},
+                HOUSEHOLD,
+            ),
+            "replaces_series": BodyProbe(
+                lambda own: {"item_id": own.planned.pk},
+                lambda s, own: {**PLANNED_FORM, "replaces_series": s.series.pk},
+            ),
+        },
+    ),
+    "planned-item-disable": ObjectRoute(lambda s: {"item_id": s.planned.pk}, post_only=True, body_reason=_PATH_ONLY),
+    "planned-item-enable": ObjectRoute(lambda s: {"item_id": s.planned.pk}, post_only=True, body_reason=_PATH_ONLY),
+    "budget-edit": ObjectRoute(
+        lambda s: {"budget_id": s.budget.pk},
+        body_reason="the category field is disabled on edit and the view keeps the budget's own scope and category",
+    ),
+    "budget-archive": ObjectRoute(lambda s: {"budget_id": s.budget.pk}, post_only=True, body_reason=_VALUES),
     "budget-rollover-toggle": ObjectRoute(
-        lambda s: {"budget_id": s.budget.pk}, data=lambda s: {"enabled": "1"}, post_only=True
+        lambda s: {"budget_id": s.budget.pk}, data=lambda s: {"enabled": "1"}, post_only=True, body_reason=_VALUES
     ),
-    "budget-rollover-reset": ObjectRoute(lambda s: {"budget_id": s.budget.pk}),
-    "savings-goal-edit": ObjectRoute(lambda s: {"goal_id": s.goal.pk}),
-    "savings-goal-complete": ObjectRoute(lambda s: {"goal_id": s.goal.pk}, post_only=True),
-    "savings-goal-reopen": ObjectRoute(lambda s: {"goal_id": s.goal.pk}, post_only=True),
-    "savings-goal-archive": ObjectRoute(lambda s: {"goal_id": s.goal.pk}, post_only=True),
-    "savings-goal-unarchive": ObjectRoute(lambda s: {"goal_id": s.goal.pk}, post_only=True),
+    "budget-rollover-reset": ObjectRoute(lambda s: {"budget_id": s.budget.pk}, body_reason=_VALUES),
+    "savings-goal-edit": ObjectRoute(
+        lambda s: {"goal_id": s.goal.pk},
+        body={
+            # A goal depends only on a goal of the same scope.
+            "depends_on": BodyProbe(
+                lambda own: {"goal_id": own.goal.pk},
+                lambda s, own: {**GOAL_FORM, "scope": s.scope, "depends_on": s.goal.pk},
+            ),
+            "linked_account": BodyProbe(
+                lambda own: {"goal_id": own.goal.pk},
+                lambda s, own: {**GOAL_FORM, "scope": "private", "linked_account": s.account.pk},
+            ),
+        },
+    ),
+    "savings-goal-complete": ObjectRoute(lambda s: {"goal_id": s.goal.pk}, post_only=True, body_reason=_PATH_ONLY),
+    "savings-goal-reopen": ObjectRoute(lambda s: {"goal_id": s.goal.pk}, post_only=True, body_reason=_PATH_ONLY),
+    "savings-goal-archive": ObjectRoute(lambda s: {"goal_id": s.goal.pk}, post_only=True, body_reason=_PATH_ONLY),
+    "savings-goal-unarchive": ObjectRoute(
+        lambda s: {"goal_id": s.goal.pk}, post_only=True, body_reason=_PATH_ONLY
+    ),
 }
 
 # The object a query or form parameter names, when it is not an account.
@@ -314,8 +559,6 @@ PROBE = {
 FILTERS = ("account", "tag", "scope")
 WINDOW = ("date_from", "date_to")
 REMOTE_ID = "SYN-REMOTE-1"
-# A form field's choices leave the object out, so the page shows the form again.
-INVALID_FORM = (200,)
 
 
 def _series_action(action, series="series"):
@@ -351,17 +594,6 @@ RECURRING_ACTIONS = {
     "keep_cancelled": _series_action("keep_cancelled", "cancelled_series"),
     "dismiss_price": _series_action("dismiss_price"),
 }
-
-RULE_FORM = {"owner_kind": "personal", "description_contains": "SYN rule", "priority": "0", "enabled": "on"}
-PLANNED_FORM = {
-    "name": "SYN planned",
-    "kind": "expense",
-    "amount": "1.00",
-    "start_date": "2026-01-01",
-    "cadence": "monthly",
-    "scope": "private",
-}
-GOAL_FORM = {"name": "SYN goal", "target_amount": "1.00"}
 
 PAGE_ROUTES = {
     "settings-audit": PageRoute(query=("actor",)),
@@ -421,7 +653,9 @@ PAGE_ROUTES = {
     ),
     "settings-alerts": PageRoute(post_reason="the signed-in member's own notice settings; names no object"),
     "settings-data": PageRoute(),
-    "account-export": PageRoute(form=()),
+    "account-export": PageRoute(
+        form=(), post_reason="exports the signed-in member's own data; the body names no object"
+    ),
     "settings-ai": PageRoute(post_reason="records the member's answer to a policy version, not a member's object"),
     "alert-list": PageRoute(owner_canary=True),
     "account-list": PageRoute(owner_canary=True, post_reason="adds an account for the signed-in member"),
@@ -702,6 +936,9 @@ def _side_rows(owner, household, account, card, label, amount_minor, when, index
     scope = {"scope": "household", "household": household} if is_shared else {}
     sharing = {"share_mode": Account.ShareMode.CO_OWNED, **scope} if is_shared else {}
     loan = Account.objects.create(name=f"{label} loan", account_type=Account.Type.LOAN, owner=owner, **sharing)
+    asset = Account.objects.create(
+        name=f"{label} house", account_type=Account.Type.REAL_ESTATE, owner=owner, **sharing
+    )
     category = Category.objects.get(household=owner.memberships.get().household, name="Groceries")
     txn = seed_transaction(
         account, owner, amount_minor=-amount_minor, when=when, description=f"{label} split charge", index=index
@@ -788,6 +1025,7 @@ def _side_rows(owner, household, account, card, label, amount_minor, when, index
         account=account,
         card=card,
         loan=loan,
+        asset=asset,
         txn=txn,
         charges=charges,
         part=txn.splits.order_by("position").first(),
@@ -856,16 +1094,51 @@ def _series(person, name, status, members, index, cancelled_at=None):
 
 
 def _own_rows(person, household, when, index):
-    """The requester's own account, recurring series and SimpleFIN connection, for the ids a probe may use."""
+    """The requester's own rows: the ids a probe may use, and the objects a body probe posts to."""
     account = Account.objects.create(
         name=f"Synthetic {person.display_name} spending", account_type=Account.Type.CHECKING, owner=person
     )
     charge = seed_transaction(account, person, amount_minor=-4_321, when=when, description="Synthetic own stream", index=index)
     SimpleFinConnection.objects.create(owner=person, encrypted_access_url=b"synthetic-unused")
+    category = household.categories.get(name="Groceries")
+    split = seed_transaction(account, person, amount_minor=-4_000, when=when, description="Synthetic own split", index=index + 10)
+    for position, name in enumerate(("Groceries", "Dining"), start=1):
+        TransactionSplit.objects.create(
+            transaction=split, category=household.categories.get(name=name), amount_minor=-2_000, position=position
+        )
+    Transaction.objects.filter(pk=split.pk).update(category_source=Transaction.CategorySource.SPLIT)
+    name = f"Synthetic {person.display_name}"
     return SimpleNamespace(
         account=account,
+        charge=charge,
+        split=split,
+        part=split.splits.order_by("position").first(),
+        refund=seed_transaction(account, person, amount_minor=1_234, when=when, description="Synthetic own refund", index=index + 20),
+        loan=Account.objects.create(name=f"{name} loan", account_type=Account.Type.LOAN, owner=person),
         series=_series(person, "Synthetic own stream", RecurringSeries.Status.CONFIRMED, [charge], index),
-        category=household.categories.get(name="Groceries"),
+        category=category,
+        rule=CategoryRule.objects.create(owner_person=person, description_contains="Synthetic own split", category=category),
+        planned=PlannedItem.objects.create(
+            owner=person,
+            name=f"{name} planned",
+            kind=PlannedItem.Kind.EXPENSE,
+            amount_minor=1_000,
+            start_date=when,
+            cadence=PlannedItem.Cadence.MONTHLY,
+        ),
+        goal=SavingsGoal.objects.create(owner=person, name=f"{name} goal", target_amount_minor=1_000),
+        mapping=SavedCsvMapping.objects.create(
+            household=household,
+            name=f"{name} mapping",
+            headers=["Date", "Description", "Amount"],
+            date_column="Date",
+            description_column="Description",
+            date_format="iso",
+            number_format="dot_none",
+            amount_mode="signed",
+            amount_column="Amount",
+            created_by=person,
+        ),
     )
 
 
@@ -1140,6 +1413,73 @@ def test_owner_reaches_every_seeded_object(world, name, side):
     assert response.status_code not in (404, 405), f"the owner's {method} {url} answered {response.status_code}"
 
 
+def _body_cases():
+    """The member names the owner's private object; the outsider names either side's."""
+    return [
+        pytest.param(name, probe, side, who, id=f"{name}-{probe}-{side}-{who}")
+        for name, route in OBJECT_ROUTES.items()
+        for probe, body in route.body.items()
+        for who, sides in (("member", ("private",)), ("outsider", ("private", "shared")))
+        for side in body.sides
+        if side in sides
+    ]
+
+
+@pytest.mark.parametrize("name, probe, side, who", _body_cases())
+def test_body_ids_refuse_another_members_or_households_object(world, name, probe, side, who):
+    body = OBJECT_ROUTES[name].body[probe]
+    requester = getattr(world, who)
+    forbidden = PRIVATE_FORBIDDEN if who == "member" else OUTSIDER_FORBIDDEN
+    own = world.own[who]
+    url = reverse(name, kwargs=body.path(own))
+    data = body.data(world.sides[side], own)
+    before = _ledger(requester)
+    response = _client(requester).post(url, data)
+    label = f"POST {url} {data}"
+    assert response.status_code in body.refused, f"{label} answered {response.status_code}, not {body.refused}"
+    leaked = _leaks(response, forbidden)
+    assert not leaked, f"{label} leaked {leaked}"
+    changed = _changes(before, _ledger(requester))
+    assert not changed, f"refused {label} changed {changed}"
+    assert not (body.owner_check and body.owner_check(response)), f"{label} was accepted"
+
+
+@pytest.mark.parametrize(
+    "name, probe", [(name, probe) for name, route in OBJECT_ROUTES.items() for probe in route.body]
+)
+def test_owner_body_probe_changes_something(world, name, probe):
+    """The owner's same POST on their own object gets past the form's other checks, so the probes reach the lookup."""
+    body = OBJECT_ROUTES[name].body[probe]
+    own = world.own["owner"]
+    data = body.data(world.sides[body.sides[0]], own)
+    before = _ledger(world.owner)
+    response = _client(world.owner).post(reverse(name, kwargs=body.path(own)), data)
+    label = f"the owner's POST {name} {data}"
+    if body.owner_check:
+        assert body.owner_check(response), f"{label} was not accepted"
+    else:
+        assert response.status_code == 302, f"{label} answered {response.status_code}"
+        assert _changes(before, _ledger(world.owner)), f"{label} changed nothing"
+
+
+def _says_why(reason):
+    # A reason is a sentence about the body, so a placeholder such as "x" does not count.
+    return len(reason.split()) >= 4
+
+
+def test_every_object_route_that_takes_a_post_says_what_its_body_names(world):
+    """An object route that accepts POST declares the ids its body names, or why it names none."""
+    client = _client(world.owner)
+    silent = []
+    for name, route in OBJECT_ROUTES.items():
+        if route.body or _says_why(route.body_reason):
+            continue
+        side = world.sides[(route.owner_sides or route.sides)[0]]
+        if client.post(reverse(name, kwargs=route.kwargs(side))).status_code != 405:
+            silent.append(name)
+    assert not silent, f"object routes that accept POST without body or body_reason: {silent}"
+
+
 def _probe_value(world, param):
     target = getattr(world.sides["private"], PROBE.get(param, "account"))
     return [str(item.pk) for item in target] if isinstance(target, list) else str(target.pk)
@@ -1273,7 +1613,8 @@ def test_every_page_that_takes_a_post_says_what_it_names(world):
     silent = [
         name
         for name, route in PAGE_ROUTES.items()
-        if route.form is None and not route.actions and not route.post_reason.strip()
+        # An empty form still posts, but declares no id, so it needs a reason too.
+        if not route.form and not route.actions and not _says_why(route.post_reason)
         and client.post(reverse(name, kwargs=route.kwargs[0])).status_code != 405
     ]
     assert not silent, f"pages that accept POST without form, actions or post_reason: {silent}"
