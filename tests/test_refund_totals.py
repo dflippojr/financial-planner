@@ -15,6 +15,7 @@ from django.core.exceptions import ValidationError
 from django.db import connection, connections
 from django.test import Client
 from django.urls import reverse
+from django.utils.html import escape
 
 from finance import category_services, lifecycle_services
 from finance.category_services import (
@@ -436,6 +437,82 @@ def test_a_private_refund_is_untouched_by_a_pair_its_owner_cannot_see():
     assert _totals(bob) == (0, 3000)
     assert RefundLink.objects.visible_to(bob).filter(refund=refund).exists()
     assert _link_history(refund) == [("unlinked", "linked")]
+
+
+# Owner decision 2026-10-23, option (c): a member whose link was dropped for
+# them alone cannot relink while another member's link stands. There is no
+# per-member link and no relink that replaces the shared one.
+
+
+def _dropped_for_alice_with_another_purchase():
+    alice, bob, joint, refund = _household_refund_linked_by_bob(
+        "Synthetic transfer to savings", "Synthetic transfer from checking"
+    )
+    refresh_transfer_pairs(alice)
+    assert RefundLinkDrop.objects.filter(person=alice).exists()
+    other = make_transaction(
+        alice, joint, amount_minor=-4000, transaction_date=date(2026, 1, 3), description="Synthetic other purchase"
+    )
+    return alice, bob, refund, other
+
+
+def test_a_member_whose_link_was_dropped_for_them_alone_cannot_relink_while_another_link_stands():
+    alice, bob, refund, other = _dropped_for_alice_with_another_purchase()
+    original_id = RefundLink.objects.get(refund=refund).original_id
+    history_before = list(TransactionCorrectionHistory.objects.filter(transaction=refund).values_list("pk", flat=True))
+    totals_before = _totals(alice), _totals(bob)
+
+    with pytest.raises(ValidationError) as refused:
+        link_refund(alice, refund.pk, other.pk)
+
+    assert refused.value.messages == [category_services.REFUND_LINK_STANDS]
+    assert RefundLink.objects.get(refund=refund).original_id == original_id
+    assert list(RefundLinkDrop.objects.values_list("person_id", flat=True)) == [alice.pk]
+    assert list(TransactionCorrectionHistory.objects.filter(transaction=refund).values_list("pk", flat=True)) == (
+        history_before
+    )
+    assert (_totals(alice), _totals(bob)) == totals_before
+
+
+def test_the_refund_page_shows_the_standing_link_note_instead_of_the_link_form():
+    alice, bob, refund, other = _dropped_for_alice_with_another_purchase()
+    note = escape(category_services.REFUND_LINK_STANDS)
+    client = Client()
+    client.force_login(alice.user)
+    edit_url = reverse("transaction-edit", args=[refund.pk])
+
+    page = client.get(edit_url, {"original": other.pk}).content.decode()
+    posted = client.post(reverse("transaction-link-refund", args=[refund.pk]), {"original": other.pk})
+
+    assert note in page
+    assert "Link a refund" not in page
+    assert posted.status_code == 200
+    assert note in posted.content.decode()
+    assert "Link a refund" not in posted.content.decode()
+    assert not RefundLink.objects.filter(original=other).exists()
+    client.force_login(bob.user)
+    bobs_page = client.get(edit_url).content.decode()
+    assert "This refund is linked" in bobs_page
+    assert note not in bobs_page
+
+
+def test_a_member_relinks_by_hand_where_the_link_was_deleted_for_everyone():
+    owner, savings, outflow, refund = _checking_with_linked_refund("Synthetic transfer to savings")
+    make_transaction(owner, savings, amount_minor=5000, description="Synthetic transfer from checking")
+    refresh_transfer_pairs(owner)
+    undo_transfer_pair(owner, TransferPair.objects.get().pk)
+    client = Client()
+    client.force_login(owner.user)
+
+    page = client.get(reverse("transaction-edit", args=[refund.pk])).content.decode()
+    response = client.post(reverse("transaction-link-refund", args=[refund.pk]), {"original": outflow.pk})
+
+    assert "Link a refund" in page
+    assert escape(category_services.REFUND_LINK_STANDS) not in page
+    assert response.status_code == 302
+    assert RefundLink.objects.get(refund=refund).original_id == outflow.pk
+    assert _totals(owner) == (5000, 3000)
+    assert _link_history(refund) == [("unlinked", "linked"), ("linked", "unlinked"), ("unlinked", "linked")]
 
 
 def test_a_members_dropped_link_history_stays_hidden_after_the_link_is_deleted():
