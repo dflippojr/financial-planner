@@ -1195,27 +1195,19 @@ def _inherit_refund_part(person, refund, part, following_ids):
     link = refund.refund_link
     link.original_part = part
     link.save(update_fields=("original_part",))
-    if refund.pk not in following_ids:
-        return
-    previous = refund.category
-    refund.category = part.category
-    refund.category_source = Transaction.CategorySource.INHERITED
-    refund.save(update_fields=("category", "category_source", "updated_at"))
-    _record_text_history(
-        refund,
-        person,
-        TransactionCorrectionHistory.Field.CATEGORY,
-        _history_label(previous),
-        _history_label(part.category),
+    if refund.pk in following_ids:
+        apply_inherited_category(person, refund, part.category)
+
+
+def _following_refund_ids(person, refunds):
+    return set(
+        refunds_following_originals(person, Transaction.objects.filter(pk__in=[item.pk for item in refunds]))
+        .values_list("pk", flat=True)
     )
 
 
 def _apply_refund_assignments(person, visible_refunds, hidden_refunds, created_parts, refund_assignments):
-    following_ids = set(
-        refunds_following_originals(
-            person, Transaction.objects.filter(pk__in=[item.pk for item in (*visible_refunds, *hidden_refunds)])
-        ).values_list("pk", flat=True)
-    )
+    following_ids = _following_refund_ids(person, (*visible_refunds, *hidden_refunds))
     assigned = {}
     if visible_refunds:
         if refund_assignments is None:
@@ -1341,18 +1333,10 @@ def unsplit_transaction(principal, txn_id, category_id):
         previous_label,
         _history_label(category),
     )
+    following_ids = _following_refund_ids(person, refunds)
     for refund in refunds:
-        previous = refund.category
-        refund.category = category
-        refund.category_source = Transaction.CategorySource.INHERITED
-        refund.save(update_fields=("category", "category_source", "updated_at"))
-        _record_text_history(
-            refund,
-            person,
-            TransactionCorrectionHistory.Field.CATEGORY,
-            _history_label(previous),
-            _history_label(category),
-        )
+        if refund.pk in following_ids:
+            apply_inherited_category(person, refund, category)
     _refresh_household_transfer_pairs(person, [financial_transaction.pk])
     from finance.alert_services import schedule_after_category_change
 
@@ -1403,18 +1387,10 @@ def assign_split_part_category(principal, part_id, category_id):
         previous_label,
         new_label,
     )
+    following_ids = _following_refund_ids(person, refunds)
     for refund in refunds:
-        previous = refund.category
-        refund.category = category
-        refund.category_source = Transaction.CategorySource.INHERITED
-        refund.save(update_fields=("category", "category_source", "updated_at"))
-        _record_text_history(
-            refund,
-            person,
-            TransactionCorrectionHistory.Field.CATEGORY,
-            _history_label(previous),
-            _history_label(category),
-        )
+        if refund.pk in following_ids:
+            apply_inherited_category(person, refund, category)
     from finance.alert_services import schedule_after_category_change
 
     schedule_after_category_change()
