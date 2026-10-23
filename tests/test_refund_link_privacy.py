@@ -16,7 +16,14 @@ from finance.category_services import (
     undo_transfer_pair,
 )
 from finance.lifecycle_services import leave_household, unshare_account
-from finance.models import Account, Category, Transaction, TransactionCorrectionHistory, TransferPair
+from finance.models import (
+    Account,
+    Category,
+    RefundLink,
+    Transaction,
+    TransactionCorrectionHistory,
+    TransferPair,
+)
 from finance.rule_services import apply_rule, reverse_application, save_category_rule
 from tests.test_categorization import make_account, make_household, make_person, make_transaction
 
@@ -224,3 +231,42 @@ def test_category_still_follows_while_the_same_members_see_both_sides():
     assert shared_refund.category_id == dining.pk
     assert private_refund.category_id == dining.pk
     assert len(_category_history(shared_refund)) == len(history) + 1
+
+
+def test_member_never_writes_another_members_private_refund_but_its_owner_still_does():
+    alice = make_person("alice")
+    bob = make_person("bob")
+    household = make_household(alice, bob)
+    groceries = household.categories.get(name="Groceries")
+    dining = household.categories.get(name="Dining")
+    housing = household.categories.get(name="Housing")
+    shared = make_account(bob, name="Synthetic Bob Shared", scope=Account.Scope.HOUSEHOLD, household=household)
+    private = make_account(alice, name="Synthetic Alice Private")
+    purchase = make_transaction(bob, shared, amount_minor=-9000, description="Synthetic warehouse")
+    refund = make_transaction(alice, private, amount_minor=1500, description="Synthetic warehouse refund")
+    assign_category(bob, purchase.pk, groceries.pk)
+    link_refund(alice, refund.pk, purchase.pk)
+    history = _category_history(refund)
+    spending = income_and_spending_totals(alice).spending_minor
+
+    assign_category(bob, purchase.pk, dining.pk)
+    _assert_untouched(alice, refund, groceries, history, spending)
+
+    split_transaction(
+        bob,
+        purchase.pk,
+        [{"category_id": housing.pk, "amount_minor": -6000}, {"category_id": dining.pk, "amount_minor": -3000}],
+    )
+    _assert_untouched(alice, refund, groceries, history, spending)
+    link = RefundLink.objects.get(refund=refund)
+    assert link.original_part.category_id == housing.pk
+
+    split_transaction(
+        alice,
+        purchase.pk,
+        [{"category_id": dining.pk, "amount_minor": -6000}, {"category_id": housing.pk, "amount_minor": -3000}],
+        refund_assignments={refund.pk: 1},
+    )
+    refund.refresh_from_db()
+    assert refund.category_id == housing.pk
+    assert len(_category_history(refund)) == len(history) + 1
