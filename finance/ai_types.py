@@ -110,3 +110,5 @@ class ToolResult:
     ok: bool = True
     figures: tuple[dict, ...] = ()
     account_ids: tuple[int, ...] = ()
+    planned_item_ids: tuple[int, ...] = ()
+    budget_ids: tuple[int, ...] = ()

@@ -35,7 +35,7 @@ from .ai_types import (
 from .chat_proposals import proposal_tools
 from .lifecycle_services import _DENIED, _person_for
 from .input_limits import MAX_CHAT_PROMPT_CHARS, MAX_PAGE_CONTEXT_CHARS, MAX_CHAT_MESSAGES
-from .models import Account, AiConversation, AiConversationMessage, Person
+from .models import Account, AiConversation, AiConversationMessage, Budget, Person, PlannedItem
 from .category_services import current_household
 from .policy_services import household_ai_allowed, may_use_ai
 
@@ -130,54 +130,78 @@ def delete_conversations_for_account(account_id):
         AiConversation.objects.filter(pk__in=doomed).delete()
 
 
-def delete_conversations_without_access(account_ids):
-    """Delete conversations that used one of these accounts when their member can no longer see it.
+# The household rows a tool can quote, by the conversation field that records them.
+_USED_ROWS = {
+    "used_account_ids": Account,
+    "used_planned_item_ids": PlannedItem,
+    "used_budget_ids": Budget,
+}
 
-    Chat history is derived from what the member can see, so unsharing an account or
-    leaving a household purges it the same way deleting the account does.
+
+def delete_conversations_without_access(account_ids=(), *, planned_item_ids=(), budget_ids=()):
+    """Delete conversations that used one of these rows when their member can no longer see it.
+
+    Chat history is derived from what the member can see, so unsharing an account,
+    making a household planned item or budget private, or leaving a household
+    purges it the same way deleting the row does.
     """
-    affected = set(account_ids)
+    affected = {
+        field: set(ids)
+        for field, ids in (
+            ("used_account_ids", account_ids),
+            ("used_planned_item_ids", planned_item_ids),
+            ("used_budget_ids", budget_ids),
+        )
+    }
+    affected = {field: ids for field, ids in affected.items() if ids}
     if not affected:
         return
     visible_by_member = {}
     doomed = []
     for row in AiConversation.objects.select_related("member").iterator():
-        used = affected.intersection(row.used_account_ids or [])
-        if not used:
+        used = {field: ids.intersection(getattr(row, field) or []) for field, ids in affected.items()}
+        if not any(used.values()):
             continue
         if row.member_id not in visible_by_member:
-            visible_by_member[row.member_id] = set(
-                Account.objects.visible_to(row.member).filter(pk__in=affected).values_list("pk", flat=True)
-            )
-        if used - visible_by_member[row.member_id]:
+            visible_by_member[row.member_id] = {
+                field: set(
+                    _USED_ROWS[field].objects.visible_to(row.member).filter(pk__in=ids).values_list("pk", flat=True)
+                )
+                for field, ids in affected.items()
+            }
+        visible = visible_by_member[row.member_id]
+        if any(ids - visible[field] for field, ids in used.items()):
             doomed.append(row.pk)
     if doomed:
         AiConversation.objects.filter(pk__in=doomed).delete()
 
 
 def keep_conversation_if_visible(conversation_id):
-    """Before a reply is stored, purge its conversation if the member lost sight of an account it used.
+    """Before a reply is stored, purge its conversation if the member lost sight of a row it used.
 
-    Locks the used accounts first, as unsharing and leaving do, so a reply racing
-    one of them either commits before its purge scan or sees its committed result.
+    Locks the used rows first, accounts before the others, as unsharing, leaving
+    and a scope change do, so a reply racing one of them either commits before
+    its purge scan or sees its committed result.
     """
     conversation = AiConversation.objects.select_related("member").filter(pk=conversation_id).first()
     if conversation is None:
         return False
-    used = sorted(set(conversation.used_account_ids or []))
-    if used:
-        list(Account.objects.select_for_update().filter(pk__in=used).order_by("pk").values_list("pk", flat=True))
-    if _uses_only_visible_accounts(conversation, conversation.member):
+    for field, model in _USED_ROWS.items():
+        used = sorted(set(getattr(conversation, field) or []))
+        if used:
+            list(model.objects.select_for_update().filter(pk__in=used).order_by("pk").values_list("pk", flat=True))
+    if _uses_only_visible_rows(conversation, conversation.member):
         return True
     conversation.delete()
     return False
 
 
-def _uses_only_visible_accounts(conversation, person):
-    used = set(conversation.used_account_ids or [])
-    if not used:
-        return True
-    return Account.objects.visible_to(person).filter(pk__in=used).count() == len(used)
+def _uses_only_visible_rows(conversation, person):
+    for field, model in _USED_ROWS.items():
+        used = set(getattr(conversation, field) or [])
+        if used and model.objects.visible_to(person).filter(pk__in=used).count() != len(used):
+            return False
+    return True
 
 
 def sanitize_page_context(raw, person=None):
@@ -368,7 +392,8 @@ def answer_turn(turn, *, sleep=None, monotonic=None):
         with transaction.atomic():
             locked = _lock_conversation(conversation.pk)
             conversation.tool_call_count = locked.tool_call_count
-            conversation.used_account_ids = list(locked.used_account_ids or [])
+            for field in _USED_ROWS:
+                setattr(conversation, field, list(getattr(locked, field) or []))
             if locked.tool_call_count >= cap:
                 return ToolResult(text=TOOL_LIMIT, ok=False)
             locked.tool_call_count += 1
@@ -380,13 +405,18 @@ def answer_turn(turn, *, sleep=None, monotonic=None):
         collected.append(result)
         with transaction.atomic():
             locked = _lock_conversation(conversation.pk)
-            ids = list(locked.used_account_ids or [])
-            for account_id in result.account_ids:
-                if account_id not in ids:
-                    ids.append(account_id)
-            locked.used_account_ids = ids
-            locked.save(update_fields=("used_account_ids", "updated_at"))
-            conversation.used_account_ids = ids
+            for field, quoted in (
+                ("used_account_ids", result.account_ids),
+                ("used_planned_item_ids", result.planned_item_ids),
+                ("used_budget_ids", result.budget_ids),
+            ):
+                ids = list(getattr(locked, field) or [])
+                for row_id in quoted:
+                    if row_id not in ids:
+                        ids.append(row_id)
+                setattr(locked, field, ids)
+                setattr(conversation, field, ids)
+            locked.save(update_fields=(*_USED_ROWS, "updated_at"))
             conversation.tool_call_count = locked.tool_call_count
 
     tools = default_tools() + proposal_tools(conversation, turn)
@@ -395,8 +425,8 @@ def answer_turn(turn, *, sleep=None, monotonic=None):
     saved_session = (conversation.harness_session_id or "").strip()
     household = current_household(person)
     consent_held = household is None or household_ai_allowed(household)
-    # Earlier turns built from an account the member can no longer see are never resent.
-    history_held = consent_held and _uses_only_visible_accounts(conversation, person)
+    # Earlier turns built from a row the member can no longer see are never resent.
+    history_held = consent_held and _uses_only_visible_rows(conversation, person)
     follow_up = (
         history_held
         and bool(saved_session)
@@ -486,6 +516,8 @@ def _new_conversation(person, backend):
         backend=backend,
         expires_at=now + timedelta(days=expire_days()),
         used_account_ids=[],
+        used_planned_item_ids=[],
+        used_budget_ids=[],
     )
 
 
