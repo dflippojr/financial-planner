@@ -11,6 +11,7 @@ from .cash_flow import format_minor
 from .category_services import current_household
 from .audit_services import changed_names, owned_audience, record, snapshot
 from .models import Account, AuditEvent, BalanceSnapshot, SavingsGoal
+from .net_worth import signed_balance_minor
 
 SOURCE_SNAPSHOT = "snapshot"
 SOURCE_MANUAL = "manual"
@@ -59,7 +60,10 @@ def _current_amount(principal, goal, *, as_of, household_only=False):
                 .first()
             )
             if snapshot is not None:
-                return snapshot.amount_minor, SOURCE_SNAPSHOT, snapshot.snapshot_date, visible_account
+                # The balance Net worth shows: an amount owed is negative
+                # whatever its source, so a debt never counts as money saved.
+                current = signed_balance_minor(visible_account.account_type, snapshot.source, snapshot.amount_minor)
+                return current, SOURCE_SNAPSHOT, snapshot.snapshot_date, visible_account
     if goal.manual_amount_minor is not None and goal.manual_amount_date is not None and goal.manual_amount_date <= as_of:
         return goal.manual_amount_minor, SOURCE_MANUAL, goal.manual_amount_date, visible_account
     return 0, SOURCE_NONE, None, visible_account
