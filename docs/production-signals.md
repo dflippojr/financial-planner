@@ -59,7 +59,7 @@ docker ps -aq --filter "label=com.docker.compose.project=$Project" --filter labe
   Sort-Object Service | Format-Table -AutoSize
 ```
 
-Expect `db`, `app`, `backup` and `background`, each `running`. The `oneoff` filter leaves out containers that `docker compose run` left behind. `RestartCount`
+Expect `db`, `app`, `backup` and `background`, each `running`, and the one-shot `config-check` `exited`. A `background` that is `created` but never ran means `config-check` refused a setting, such as an invalid `SIMPLEFIN_SYNC_CRON` (#560): `docker compose logs config-check` names it, and so does a second line on `/health/`. The `oneoff` filter leaves out containers that `docker compose run` left behind. `RestartCount`
 counts Docker's automatic restarts of that container since it was created, so
 compare it between two readings: a count that rises, or a state of
 `restarting`, is a crash loop (as in #514). A recreated container starts again
@@ -138,7 +138,7 @@ after a deploy. The deployment runbook runs it; see
 one line per reason, when:
 
 - `/health/` does not return 200;
-- `X-App-Revision`, or any built image's revision label, is not `origin/main`;
+- `X-App-Revision`, or the revision label of any image built from this repository (including the one `config-check` last ran, which is `background`'s), is not `origin/main`;
 - any of the four containers is not running, or restarts during a 2 minute
   window, or has restarted since the deploy (by `RestartCount`, its start
   time, and for a new container its `start` events in `docker events`, which

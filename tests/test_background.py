@@ -2,6 +2,7 @@
 
 import io
 import logging
+import re
 import threading
 import runpy
 from datetime import timedelta
@@ -168,6 +169,40 @@ def test_entrypoint_bootstraps_django_once_then_starts_lanes(monkeypatch):
     runpy.run_path(str(Path(__file__).resolve().parents[1] / "scripts/background_loop.py"), run_name="__main__")
     setup.assert_called_once()
     main.assert_called_once()
+
+
+CONFIG_CHECK = Path(__file__).resolve().parents[1] / "scripts/check_background_config.py"
+
+
+def _run_config_check(monkeypatch):
+    monkeypatch.setattr("django.setup", Mock())
+    with pytest.raises(SystemExit) as exited:
+        runpy.run_path(str(CONFIG_CHECK), run_name="__main__")
+    return exited.value.code
+
+
+@pytest.mark.parametrize(
+    ("expression", "message"),
+    [("30 6 * * MON-FRI", "numbers only"), ("60 6 * * *", "minute outside 0-59"), ("30 6 31 2 *", "does not match a time")],
+)
+def test_config_check_refuses_a_schedule_background_would_refuse(expression, message, settings, monkeypatch, capsys):
+    # compose's config-check service runs this before background, so the
+    # refusal stops `up` instead of starting background into a restart loop.
+    settings.SIMPLEFIN_SYNC_CRON = expression
+
+    code = _run_config_check(monkeypatch)
+
+    assert code == 1
+    error = capsys.readouterr().err
+    assert re.search(rf"ValueError: SIMPLEFIN_SYNC_CRON [^\n]*{message}", error), error
+    assert "Traceback" not in error
+
+
+def test_config_check_passes_a_schedule_background_accepts(settings, monkeypatch, capsys):
+    settings.SIMPLEFIN_SYNC_CRON = "30 6 * * 1-5"
+
+    assert _run_config_check(monkeypatch) == 0
+    assert capsys.readouterr().err == ""
 
 
 def test_daily_failure_propagates_to_supervisor_and_closes_connections(monkeypatch):

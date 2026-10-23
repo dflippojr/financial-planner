@@ -1,15 +1,25 @@
 """The Docker smoke's verdict on an invalid SIMPLEFIN_SYNC_CRON (#531, #560).
 
 scripts/docker-smoke.sh starts the stack once per invalid schedule, records
-each case under SMOKE_INVALID_CRON_DIR (schedule, outcome, log) and runs this
-file with the app image's own pytest. The name keeps it out of the normal
-suite, which tests it against recorded outcomes in tests/test_docker_smoke.py.
+each case under SMOKE_INVALID_CRON_DIR and runs this file with the app image's
+own pytest. The name keeps it out of the normal suite, which tests it against
+recorded outcomes in tests/test_docker_smoke.py. Each case directory holds:
 
-The stack must refuse an invalid schedule with a message rather than
-crash-loop. Today restart: unless-stopped restarts the refusing background
-container, so that assertion is a strict expected failure for #560: once
-background refuses without restarting, it passes, strict turns that into a
-failure, and the marker has to go.
+- schedule: the SIMPLEFIN_SYNC_CRON value;
+- outcome: what Docker did with background (crash-loop, started or refused);
+- up-exit: the exit code of `docker compose up -d`;
+- log: the output of that `up` and every service's logs;
+- config-check-log: `docker compose logs config-check`;
+- app-health: the health of the app container that `up` left, once healthy
+  or after 240 seconds, or its status when it is not running (exited, absent);
+- health: the body of GET /health/;
+- backup-state: backup's "<status> <restart count>" afterwards.
+
+The stack must refuse an invalid schedule in the one-shot config-check service,
+so `up` fails naming it and background is never started into a restart loop,
+while backup keeps running and app stays healthy with its health page naming
+the variable. The smoke starts nothing after that `up`, so it cannot repair
+what the `up` left.
 """
 
 import os
@@ -36,7 +46,7 @@ def test_the_smoke_recorded_its_cases():
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case.name)
 def test_a_message_names_the_variable(case):
-    assert VALIDATION_ERROR.search(_read(case, "log")), _read(case, "schedule")
+    assert VALIDATION_ERROR.search(_read(case, "config-check-log")), _read(case, "schedule")
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case.name)
@@ -44,7 +54,25 @@ def test_background_does_not_keep_running(case):
     assert _read(case, "outcome").strip() != "started", _read(case, "schedule")
 
 
-@pytest.mark.xfail(strict=True, reason="#560")
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case.name)
 def test_background_is_refused_without_a_restart_loop(case):
     assert _read(case, "outcome").strip() == "refused", _read(case, "schedule")
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: case.name)
+def test_up_fails_naming_config_check(case):
+    assert _read(case, "up-exit").strip() != "0", _read(case, "schedule")
+    assert 'service "config-check" didn\'t complete successfully' in _read(case, "log"), _read(case, "schedule")
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: case.name)
+def test_backup_keeps_running_without_restarts(case):
+    assert _read(case, "backup-state").strip() == "running 0", _read(case, "schedule")
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: case.name)
+def test_app_stays_healthy_and_its_health_page_names_the_variable(case):
+    assert _read(case, "app-health").strip() == "healthy", _read(case, "schedule")
+    health = _read(case, "health")
+    assert health.startswith("ok\n"), health
+    assert "SIMPLEFIN_SYNC_CRON" in health, health

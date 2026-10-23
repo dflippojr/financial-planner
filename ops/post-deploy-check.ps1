@@ -45,8 +45,11 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $Services = @('db', 'app', 'backup', 'background')
+# config-check runs background's image once per `up` and exits, so only its
+# image revision is checked, not whether it is running.
+$OneShotServices = @('config-check')
 # Images built from this repository carry the revision label.
-$BuiltServices = @('app', 'backup', 'background')
+$BuiltServices = @('app', 'backup', 'background', 'config-check')
 $RevisionLabel = 'org.opencontainers.image.revision'
 # Compose starts a container with no unmet dependencies within seconds of creating it.
 $FirstStartSeconds = 60
@@ -151,7 +154,7 @@ function Get-ServiceContainers([string]$Service) {
 
 function Get-Snapshot {
     $snapshot = @{}
-    foreach ($service in $Services) { $snapshot[$service] = Get-ServiceContainers $service }
+    foreach ($service in $Services + $OneShotServices) { $snapshot[$service] = Get-ServiceContainers $service }
     return $snapshot
 }
 

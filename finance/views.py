@@ -185,6 +185,7 @@ from .scenario import (
     parse_scenario_tokens,
     visible_scenario_changes,
 )
+from .simplefin_schedule import validate_sync_schedule
 from .spending_trends import (
     category_spending_trend_report,
     category_trend_chart_data,
@@ -238,16 +239,23 @@ def health(request):
     """Report process and database readiness without exposing application data.
 
     The X-App-Revision header carries the image's short git SHA, so the
-    post-deploy check can confirm which commit is serving.
+    post-deploy check can confirm which commit is serving. A schedule that
+    compose's config-check refuses adds a line naming it: app does not wait
+    for that check, so it stays up and healthy while background is not started.
     """
     try:
         with connections["default"].cursor() as cursor:
             cursor.execute("SELECT 1")
             cursor.fetchone()
     except DatabaseError:
-        response = HttpResponse("unavailable\n", status=503, content_type="text/plain")
+        status, body = 503, "unavailable\n"
     else:
-        response = HttpResponse("ok\n", content_type="text/plain")
+        status, body = 200, "ok\n"
+    try:
+        validate_sync_schedule()
+    except ValueError as error:
+        body += f"background not started: {error} (docker compose logs config-check)\n"
+    response = HttpResponse(body, status=status, content_type="text/plain")
     response["X-App-Revision"] = settings.GIT_REVISION
     return response
 
