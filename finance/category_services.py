@@ -232,14 +232,65 @@ def _lock_owned_transactions(transactions):
     return locked
 
 
-def linked_refunds_for_originals(originals):
+def _refund_viewers_see_original():
+    """Every member who can see the refund can also see its original.
+
+    A private refund needs an original its owner sees: one of their own private
+    accounts, or a household account of the household they belong to now. A
+    household refund needs an original in an account of the same household.
+    """
+    original_account = "refund_link__original__account__"
+    owner_sees_original = Q(
+        **{f"{original_account}scope": Account.Scope.PRIVATE, f"{original_account}owner_id": F("account__owner_id")}
+    ) | Q(
+        Exists(
+            Membership.objects.filter(
+                person_id=OuterRef("account__owner_id"),
+                household_id=OuterRef(f"{original_account}household_id"),
+                ended_at__isnull=True,
+            )
+        ),
+        **{f"{original_account}scope": Account.Scope.HOUSEHOLD},
+    )
+    same_household = Q(
+        account__household_id__isnull=False,
+        **{
+            f"{original_account}scope": Account.Scope.HOUSEHOLD,
+            f"{original_account}household_id": F("account__household_id"),
+        },
+    )
+    return Q(owner_sees_original, account__scope=Account.Scope.PRIVATE) | Q(
+        same_household, account__scope=Account.Scope.HOUSEHOLD
+    )
+
+
+def refunds_following_originals(actor, refunds):
+    """Narrow a queryset of linked refunds to those that may copy their original's category.
+
+    Every path that copies an original's category onto its refunds goes through
+    here (#567). A refund follows only while every member who sees it also sees
+    the original, and only when `actor` sees the refund. Others keep their
+    category and get no correction history; their link still counts as before.
+    `actor` is None only for operator maintenance, which no viewer drives.
+    """
+    following = refunds.filter(_refund_viewers_see_original())
+    if actor is not None:
+        visible = Transaction.objects.visible_to(actor)  # pyright: ignore[reportAttributeAccessIssue] - QuerySet.as_manager() is untyped, as for every Transaction.objects.visible_to in the baseline
+        following = following.filter(pk__in=visible.values("pk"))
+    return following
+
+
+def linked_refunds_for_originals(actor, originals):
     ids = [txn.pk for txn in originals]
     if not ids:
         return []
     return list(
-        Transaction.objects.filter(
-            refund_link__original_id__in=ids,
-            status=Transaction.Status.ACTIVE,
+        refunds_following_originals(
+            actor,
+            Transaction.objects.filter(
+                refund_link__original_id__in=ids,
+                status=Transaction.Status.ACTIVE,
+            ),
         )
         .select_related("account", "category")
         .prefetch_related("tags")
@@ -299,7 +350,7 @@ def assign_category(principal, transaction_id, category_id):
             raise PermissionDenied(_DENIED)
     # Look up refunds under the household lock, which link_refund also takes first.
     lock_actor_household(person)
-    linked_refunds = linked_refunds_for_originals([financial_transaction])
+    linked_refunds = linked_refunds_for_originals(person, [financial_transaction])
     locked = _lock_owned_transactions([financial_transaction, *linked_refunds])
     # Recheck after locking: the account may have been unshared between the
     # first visibility query and the locks.
@@ -627,9 +678,12 @@ def _update_existing_pair(pair, scored, person):
 def _restore_refund_categories(original, actor):
     """Keep linked refunds in their original's category, as assign_category does."""
     refunds = (
-        Transaction.objects.select_for_update(of=("self",))
+        refunds_following_originals(
+            actor,
+            Transaction.objects.filter(refund_link__original=original, status=Transaction.Status.ACTIVE),
+        )
+        .select_for_update(of=("self",))
         .select_related("category")
-        .filter(refund_link__original=original, status=Transaction.Status.ACTIVE)
         .exclude(category_id=original.category_id)
         .order_by("pk")
     )
@@ -1137,24 +1191,23 @@ def _default_part_for_hidden_refunds(created_parts):
     return min(created_parts.values(), key=lambda part: (-abs(part.amount_minor), part.position))
 
 
-def _inherit_refund_part(person, refund, part):
-    previous = refund.category
-    refund.category = part.category
-    refund.category_source = Transaction.CategorySource.INHERITED
-    refund.save(update_fields=("category", "category_source", "updated_at"))
+def _inherit_refund_part(person, refund, part, following_ids):
     link = refund.refund_link
     link.original_part = part
     link.save(update_fields=("original_part",))
-    _record_text_history(
-        refund,
-        person,
-        TransactionCorrectionHistory.Field.CATEGORY,
-        _history_label(previous),
-        _history_label(part.category),
+    if refund.pk in following_ids:
+        apply_inherited_category(person, refund, part.category)
+
+
+def _following_refund_ids(person, refunds):
+    return set(
+        refunds_following_originals(person, Transaction.objects.filter(pk__in=[item.pk for item in refunds]))
+        .values_list("pk", flat=True)
     )
 
 
 def _apply_refund_assignments(person, visible_refunds, hidden_refunds, created_parts, refund_assignments):
+    following_ids = _following_refund_ids(person, (*visible_refunds, *hidden_refunds))
     assigned = {}
     if visible_refunds:
         if refund_assignments is None:
@@ -1172,9 +1225,9 @@ def _apply_refund_assignments(person, visible_refunds, hidden_refunds, created_p
             assigned[refund.pk] = created_parts[index]
     default_part = _default_part_for_hidden_refunds(created_parts) if hidden_refunds else None
     for refund in visible_refunds:
-        _inherit_refund_part(person, refund, assigned[refund.pk])
+        _inherit_refund_part(person, refund, assigned[refund.pk], following_ids)
     for refund in hidden_refunds:
-        _inherit_refund_part(person, refund, default_part)
+        _inherit_refund_part(person, refund, default_part, following_ids)
 
 
 def _replace_splits(parent, normalized):
@@ -1280,18 +1333,10 @@ def unsplit_transaction(principal, txn_id, category_id):
         previous_label,
         _history_label(category),
     )
+    following_ids = _following_refund_ids(person, refunds)
     for refund in refunds:
-        previous = refund.category
-        refund.category = category
-        refund.category_source = Transaction.CategorySource.INHERITED
-        refund.save(update_fields=("category", "category_source", "updated_at"))
-        _record_text_history(
-            refund,
-            person,
-            TransactionCorrectionHistory.Field.CATEGORY,
-            _history_label(previous),
-            _history_label(category),
-        )
+        if refund.pk in following_ids:
+            apply_inherited_category(person, refund, category)
     _refresh_household_transfer_pairs(person, [financial_transaction.pk])
     from finance.alert_services import schedule_after_category_change
 
@@ -1342,18 +1387,10 @@ def assign_split_part_category(principal, part_id, category_id):
         previous_label,
         new_label,
     )
+    following_ids = _following_refund_ids(person, refunds)
     for refund in refunds:
-        previous = refund.category
-        refund.category = category
-        refund.category_source = Transaction.CategorySource.INHERITED
-        refund.save(update_fields=("category", "category_source", "updated_at"))
-        _record_text_history(
-            refund,
-            person,
-            TransactionCorrectionHistory.Field.CATEGORY,
-            _history_label(previous),
-            _history_label(category),
-        )
+        if refund.pk in following_ids:
+            apply_inherited_category(person, refund, category)
     from finance.alert_services import schedule_after_category_change
 
     schedule_after_category_change()
