@@ -169,5 +169,9 @@ def test_populated_database_migrates_to_head(start):
         Person = new_apps.get_model("finance", "Person")
         assert Person.objects.filter(privacy_policy_dismissed_version__isnull=False).count() == 1
         assert not new_apps.get_model("finance", "Budget").objects.filter(rollover_started_month__year__lt=2000).exists()
+        # Conversations from before #569 recorded no planned items or budgets.
+        conversations = new_apps.get_model("finance", "AiConversation").objects.all()
+        assert conversations.exists()
+        assert {(tuple(row.used_planned_item_ids), tuple(row.used_budget_ids)) for row in conversations} == {((), ())}
     finally:
         MigrationExecutor(connection).migrate(head)

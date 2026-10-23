@@ -27,7 +27,7 @@ MODELS = (
     "RuleApplication", "RuleApplicationEntry", "Budget", "BudgetAmount", "BudgetRolloverReset", "Alert",
     "AlertSettings", "PrivacyPolicyVersion", "PrivacyPolicyAcceptance", "Invitation", "RecoveryCode",
     "MonthlyReview", "SavedTransactionFilter", "SheetComparisonSettings", "SheetMonthTotal",
-    "MemberSecurityEvent", "CategorySuggestion", "AiJob",
+    "MemberSecurityEvent", "CategorySuggestion", "AiJob", "AiConversation", "AiConversationMessage",
 )
 
 
@@ -436,6 +436,11 @@ class _Builder:
         self.create("CategorySuggestion", member=alex, transaction=row, category=self.cat[self.home.pk]["Streaming"],
                     provider="synthetic", backend="synthetic", snapshot_hash=_digest("suggestion"))
         self.create("AiJob", member=alex, feature="synthetic_feature", status="succeeded", finished_at=NOW)
+        for name, person in self.person.items():
+            conversation = self.create("AiConversation", member=person, title=f"Synthetic {name} chat",
+                                       used_account_ids=[self.acct["home_checking"].pk], turn_count=1,
+                                       tool_call_count=1, expires_at=NOW + timedelta(days=30))
+            self.create("AiConversationMessage", conversation=conversation, role="user", content="Synthetic question")
 
     def build(self):
         self.people()
