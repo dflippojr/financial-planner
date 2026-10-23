@@ -787,7 +787,7 @@ class GoalCase:
 
 @st.composite
 def goal_cases(draw):
-    account_type = draw(st.sampled_from(NET_WORTH_TYPES))
+    account_type = draw(st.sampled_from(Account.Type))
     sources = (MANUAL, SIMPLEFIN) if account_type in Account.SIMPLEFIN_TYPES else (MANUAL,)
     snapshots = draw(st.dictionaries(st.tuples(st.dates(EARLIEST, LATEST), st.sampled_from(sources)),
                                      amounts, min_size=1, max_size=4))
