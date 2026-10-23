@@ -15,18 +15,21 @@ from django.urls import reverse
 
 from finance.category_services import (
     confirm_transfer_pair,
+    downgrade_unevidenced_auto_marked_pairs,
     income_and_spending_totals,
     link_refund,
     refresh_transfer_pairs,
     undo_transfer_pair,
 )
 from finance.csv_import.services import undo_import_batch
-from finance.lifecycle_services import archive_account
+from finance.lifecycle_services import archive_account, delete_account
 from finance.manual_entry_services import add_manual_transaction, delete_manual_transaction
 from finance.models import (
     Account,
     AuditEvent,
     RefundLink,
+    RefundLinkDrop,
+    Transaction,
     TransactionCorrectionHistory,
     TransferPair,
 )
@@ -270,17 +273,114 @@ def test_auto_marking_a_private_leg_pair_drops_the_link_only_for_the_member_who_
     _assert_dropped_only_for_alice(alice, bob, joint, refund, events_before)
 
 
-def test_undoing_a_private_leg_pair_keeps_the_link_dropped_for_its_owner():
+def _unmark_by_undo(alice, savings, deposit):
+    undo_transfer_pair(alice, TransferPair.objects.get().pk)
+
+
+def _unmark_by_downgrade(alice, savings, deposit):
+    # A description edit takes away the transfer wording the auto-mark relied on.
+    Transaction.objects.filter(transfer_pairs_as_a__isnull=False).update(description="Synthetic purchase")
+    Transaction.objects.filter(pk=deposit.pk).update(description="Synthetic deposit")
+    downgrade_unevidenced_auto_marked_pairs()
+
+
+def _unmark_by_undoing_the_deposit_import(alice, savings, deposit):
+    undo_import_batch(alice, savings.pk, deposit.import_batch_id)
+
+
+def _unmark_by_archiving_the_savings(alice, savings, deposit):
+    archive_account(alice, savings.pk)
+
+
+def _unmark_by_deleting_the_savings(alice, savings, deposit):
+    delete_account(alice, savings.pk)
+
+
+@pytest.mark.parametrize(
+    ("unmark", "alice_after"),
+    [
+        (_unmark_by_undo, (5000, 3000)),
+        (_unmark_by_downgrade, (5000, 3000)),
+        (_unmark_by_undoing_the_deposit_import, (0, 3000)),
+        (_unmark_by_archiving_the_savings, (0, 3000)),
+        (_unmark_by_deleting_the_savings, (0, 3000)),
+    ],
+)
+def test_unmarking_a_private_leg_pair_brings_the_link_back_for_its_owner(unmark, alice_after):
+    """Owner decision 2026-10-23, option (a): a drop never outlives the pair that caused it."""
     alice, bob, joint, refund = _household_refund_linked_by_bob(
         "Synthetic transfer to savings", "Synthetic transfer from checking"
     )
+    savings = Account.objects.get(name="Synthetic Private Savings")
+    deposit = savings.transactions.get()
     refresh_transfer_pairs(alice)
+    assert _totals(alice) == (2000, 0)
+    events_before = set(AuditEvent.objects.values_list("pk", flat=True))
 
-    undo_transfer_pair(alice, TransferPair.objects.get().pk)
+    unmark(alice, savings, deposit)
 
-    # The purchase and deposit count again for Alice; the refund stays income.
-    assert _totals(alice) == (7000, 5000)
+    assert not RefundLinkDrop.objects.exists()
+    # Alice is back where she was before the mark, less any deposit that stopped counting.
+    assert _totals(alice) == alice_after
+    assert RefundLink.objects.visible_to(alice).filter(refund=refund).exists()
+    assert _visible_link_history(alice, refund) == [
+        ("unlinked", "linked"),
+        ("linked", "unlinked"),
+        ("unlinked", "linked"),
+    ]
+    # Bob saw nothing of the pair: his link, totals and history never moved.
     assert _totals(bob) == (0, 3000)
+    assert RefundLink.objects.visible_to(bob).filter(refund=refund).exists()
+    assert _visible_link_history(bob, refund) == [("unlinked", "linked")]
+    new_events = AuditEvent.objects.exclude(pk__in=events_before)
+    assert not new_events.filter(target_type=AuditEvent.TargetType.TRANSACTION, target_id=refund.pk).exists()
+
+
+def test_unmarking_one_of_two_marked_pairs_keeps_the_link_dropped_for_the_other():
+    """The database allows two marked pairs on one original; each holds its own drop."""
+    alice, bob, joint, refund = _household_refund_linked_by_bob("Synthetic purchase", "Synthetic deposit")
+    purchase = RefundLink.objects.get(refund=refund).original
+    first_savings = Account.objects.get(name="Synthetic Private Savings")
+    second_savings = make_account(alice, name="Synthetic Second Savings", account_type=Account.Type.SAVINGS)
+    second_deposit = make_transaction(alice, second_savings, amount_minor=5000, description="Synthetic deposit")
+    first = TransferPair.objects.create(
+        leg_a=purchase,
+        leg_b=first_savings.transactions.get(),
+        status=TransferPair.Status.SUGGESTED,
+        kind=TransferPair.Kind.TRANSFER,
+        confidence=TransferPair.Confidence.LOW,
+        reasons=[],
+    )
+    second = TransferPair.objects.create(
+        leg_a=purchase,
+        leg_b=second_deposit,
+        status=TransferPair.Status.SUGGESTED,
+        kind=TransferPair.Kind.TRANSFER,
+        confidence=TransferPair.Confidence.LOW,
+        reasons=[],
+    )
+    confirm_transfer_pair(alice, first.pk)
+    confirm_transfer_pair(alice, second.pk)
+    assert _totals(alice) == (2000, 0)
+
+    undo_transfer_pair(alice, first.pk)
+
+    # The purchase is still a leg of the second pair for Alice, so the refund stays income.
+    assert _totals(alice) == (7000, 0)
+    assert not RefundLink.objects.visible_to(alice).filter(refund=refund).exists()
+    assert _visible_link_history(alice, refund) == [("unlinked", "linked"), ("linked", "unlinked")]
+
+    undo_transfer_pair(alice, second.pk)
+
+    assert _totals(alice) == (10000, 3000)
+    assert RefundLink.objects.visible_to(alice).filter(refund=refund).exists()
+    assert _visible_link_history(alice, refund) == [
+        ("unlinked", "linked"),
+        ("linked", "unlinked"),
+        ("unlinked", "linked"),
+    ]
+    assert _totals(bob) == (0, 3000)
+    assert _visible_link_history(bob, refund) == [("unlinked", "linked")]
 
 
 def test_a_link_made_after_a_private_leg_pairing_is_dropped_for_the_member_who_sees_both_legs():

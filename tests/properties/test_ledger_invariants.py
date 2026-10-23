@@ -21,7 +21,7 @@ from hypothesis import example, given
 from hypothesis import strategies as st
 
 from finance.cash_flow import selected_accounts
-from finance.category_services import confirm_transfer_pair, link_refund
+from finance.category_services import confirm_transfer_pair, link_refund, undo_transfer_pair
 from finance.csv_import.parser import Mapping
 from finance.csv_import.services import undo_import_batch
 from finance.export import minor_from_decimal_string, money_decimal
@@ -365,18 +365,26 @@ def later_exclusion_cases(draw):
     private = draw(st.booleans())
     # Refunds linked after the pairing instead of before it.
     late = draw(st.booleans())
-    return transfer, tuple(kept), tuple(undone), tuple(zip(refunds, originals, by_member, strict=True)), wording, private, late
+    # The pair is undone at the end, which brings back the links it dropped but not those it deleted.
+    unpair = draw(st.booleans())
+    refund_cases = tuple(zip(refunds, originals, by_member, strict=True))
+    return transfer, tuple(kept), tuple(undone), refund_cases, wording, private, late, unpair
 
 
 @given(later_exclusion_cases())
+# A private-leg pair drops the owner's link, and undoing the pair must bring it back.
+@example((2, (), (), ((1, 0, False),), False, True, False, True))
+@example((2, (), (), ((1, 0, True),), True, True, True, True))
 def test_a_refund_stops_reducing_spending_when_its_original_stops_counting(case):
     """The original becomes a transfer leg or its import is undone, before or after the link (#570).
 
     With a private savings leg only its owner sees the pair, so only the owner
     stops counting the transfer and its refunds; the other member and the
     household scope count both, whichever member linked the refund and when.
+    Undoing the pair then restores the owner's dropped links, so the owner
+    counts the private leg pair as the member does plus the savings deposit.
     """
-    transfer, kept, undone, refunds, wording, private, late = case
+    transfer, kept, undone, refunds, wording, private, late, unpair = case
     day = date(2026, 8, 10)
     out_name, in_name = ("SYN TRANSFER TO SAVINGS", "SYN TRANSFER FROM CHECKING") if wording else ("SYN MOVE OUT", "SYN MOVE IN")
     undone_rows = [Row(day, -size, f"SYN UNDONE N{i}", "", f"SYN-U{i:04d}") for i, size in enumerate(undone)]
@@ -421,13 +429,17 @@ def test_a_refund_stops_reducing_spending_when_its_original_stops_counting(case)
             linked = link_all()
         if undone_import is not None:
             undo_import_batch(owner, accounts["checking"].pk, undone_import.batch.pk)
+        if unpair:
+            undo_transfer_pair(owner, TransferPair.objects.excluding_income_and_spending().get().pk)
 
-        assert TransferPair.objects.excluding_income_and_spending().count() == 1
+        assert TransferPair.objects.excluding_income_and_spending().count() == (0 if unpair else 1)
         # The owner sees the pair: only refunds of the kept purchases still reduce spending.
         income = sum(size for size, original, _m in refunds if original >= len(kept))
         spending = sum(kept) - sum(size for size, original, _m in refunds if original < len(kept))
         owner_view = ledger.Totals(income, spending, income - spending)
-        assert ledger.totals(owner) == owner_view
+        if unpair and not private:
+            # Both members see the deposit and the transfer again; the deleted links stay deleted.
+            owner_view = ledger.Totals(income + transfer, spending + transfer, income - spending)
         shared_view = owner_view
         to_transfer = [(i, size) for i, (size, original, _m) in enumerate(refunds) if original == transfer_index]
         still_linked = sum(1 for _s, original, _m in refunds if original < len(kept))
@@ -438,6 +450,10 @@ def test_a_refund_stops_reducing_spending_when_its_original_stops_counting(case)
             spending += transfer - linked_to_transfer
             shared_view = ledger.Totals(income, spending, income - spending)
             still_linked += sum(1 for i, _size in to_transfer if i in linked)
+            if unpair:
+                # The owner's dropped links count again; only the private deposit differs.
+                owner_view = ledger.Totals(income + transfer, spending, income + transfer - spending)
+        assert ledger.totals(owner) == owner_view
         assert ledger.totals(member) == shared_view
         for person in (owner, member):
             selected = selected_accounts(person, scope=Account.Scope.HOUSEHOLD, cash_flow_only=True)
