@@ -324,10 +324,16 @@ def archive_account(principal, account_id):
         account=account,
         status=ImportBatch.Status.ACTIVE,
     ).update(status=ImportBatch.Status.ARCHIVED, archived_at=now)
-    Transaction.objects.select_for_update().filter(
-        account=account,
-        status=Transaction.Status.ACTIVE,
-    ).update(status=Transaction.Status.ARCHIVED, archived_at=now)
+    archived_ids = list(
+        Transaction.objects.select_for_update()
+        .filter(account=account, status=Transaction.Status.ACTIVE)
+        .order_by("pk")
+        .values_list("pk", flat=True)
+    )
+    Transaction.objects.filter(pk__in=archived_ids).update(status=Transaction.Status.ARCHIVED, archived_at=now)
+    from finance.category_services import drop_refund_links_to_originals
+
+    drop_refund_links_to_originals(archived_ids, person)
     if account.status == Account.Status.ACTIVE:
         account.status = Account.Status.ARCHIVED
         account.archived_at = now

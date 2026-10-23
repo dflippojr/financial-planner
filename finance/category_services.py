@@ -634,6 +634,33 @@ def _snapshot_and_mark(pair, left, right, status, actor):
     label = "card payment" if pair.kind == TransferPair.Kind.CARD_PAYMENT else "transfer"
     _record_text_history(left, actor, TransactionCorrectionHistory.Field.EXCLUSION, "included", f"excluded:{label}")
     _record_text_history(right, actor, TransactionCorrectionHistory.Field.EXCLUSION, "included", f"excluded:{label}")
+    drop_refund_links_to_originals((left.pk, right.pk), actor)
+
+
+def drop_refund_links_to_originals(original_ids, actor):
+    """Delete the refund links of originals that stopped counting (#570).
+
+    An original stops counting when it is archived (an undone import, a deleted
+    manual entry, an archived account) or becomes a marked transfer or
+    card-payment leg. Its refunds then count as ordinary income and keep their
+    category. Each gets "linked" -> "unlinked" history whoever can see it; the
+    audit event is skipped for a refund the actor cannot see. The caller holds
+    the originals' row locks, so no link can be added to them meanwhile.
+    """
+    original_ids = sorted(set(original_ids))
+    if not original_ids:
+        return
+    links = list(
+        RefundLink.objects.select_for_update(of=("self",))
+        .select_related("refund")
+        .filter(original_id__in=original_ids)
+        .order_by("pk")
+    )
+    if not links:
+        return
+    RefundLink.objects.filter(pk__in=[link.pk for link in links]).delete()
+    for link in links:
+        _record_text_history(link.refund, actor, TransactionCorrectionHistory.Field.REFUND_LINK, "linked", "unlinked")
 
 
 _SETTLED_PAIR_STATUSES = (

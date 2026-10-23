@@ -21,6 +21,7 @@ from finance.category_services import (
     undo_transfer_pair,
 )
 from finance.csv_import.services import undo_import_batch
+from finance.lifecycle_services import archive_account
 from finance.manual_entry_services import add_manual_transaction, delete_manual_transaction
 from finance.models import (
     Account,
@@ -96,7 +97,8 @@ def test_undoing_the_pair_does_not_bring_the_link_back():
 
     undo_transfer_pair(owner, TransferPair.objects.get().pk)
 
-    _assert_unlinked_income(owner, refund, spending=5000)
+    # Both legs count again, so the +50.00 deposit is income beside the refund.
+    _assert_unlinked_income(owner, refund, income=7000, spending=5000)
 
 
 def test_a_dropped_refund_keeps_its_category():
@@ -185,3 +187,17 @@ def test_a_hidden_private_refund_loses_its_link_without_the_actor_learning_of_it
     page = response.content.decode()
     assert "SYN-HIDDEN" not in page
     assert "20.00" not in page
+
+
+def test_archiving_the_originals_account_drops_its_refund_link():
+    owner = make_person("owner")
+    make_household(owner)
+    card = make_account(owner, name="Synthetic Card", account_type=Account.Type.CREDIT_CARD)
+    checking = make_account(owner, name="Synthetic Checking")
+    outflow = make_transaction(owner, card, amount_minor=-5000, description="Synthetic purchase")
+    refund = make_transaction(owner, checking, amount_minor=2000, description="Synthetic return credit")
+    link_refund(owner, refund.pk, outflow.pk)
+
+    archive_account(owner, card.pk)
+
+    _assert_unlinked_income(owner, refund)
