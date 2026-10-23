@@ -4,6 +4,14 @@ import django.db.models.deletion
 from django.db import migrations, models
 
 
+def delete_member_only_history(apps, schema_editor):
+    # 0076 has no `only_for` and would list these rows to every viewer of the
+    # refund, disclosing another member's private pairing (#570). A rollback
+    # loses the member's own history instead.
+    history = apps.get_model("finance", "TransactionCorrectionHistory")
+    history.objects.filter(only_for__isnull=False).delete()
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -16,6 +24,8 @@ class Migration(migrations.Migration):
             name='only_for',
             field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='+', to='finance.person'),
         ),
+        # Reversed before the column is removed.
+        migrations.RunPython(migrations.RunPython.noop, delete_member_only_history),
         migrations.CreateModel(
             name='RefundLinkDrop',
             fields=[
@@ -23,9 +33,10 @@ class Migration(migrations.Migration):
                 ('created_at', models.DateTimeField(auto_now_add=True)),
                 ('link', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='drops', to='finance.refundlink')),
                 ('person', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='refund_link_drops', to='finance.person')),
+                ('pair', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='refund_link_drops', to='finance.transferpair')),
             ],
             options={
-                'constraints': [models.UniqueConstraint(fields=('link', 'person'), name='refund_link_drop_unique_person')],
+                'constraints': [models.UniqueConstraint(fields=('link', 'person', 'pair'), name='refund_link_drop_unique_person_pair')],
             },
         ),
     ]

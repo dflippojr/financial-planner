@@ -1104,20 +1104,23 @@ class RefundLink(models.Model):
 class RefundLinkDrop(models.Model):
     """A refund link that stopped counting for one member only (#570).
 
-    The original became a leg of a transfer pair that this member sees both legs
-    of, while another viewer of the refund does not, so the pair is excluded only
-    for this member (`exclusion_exists_for`). Everyone else keeps the link. The
-    member's "linked" -> "unlinked" history row is `only_for` them, so it stays
-    hidden from others even after the link itself is deleted.
+    The original became a leg of `pair`, a marked transfer pair that this member
+    sees both legs of, while another viewer of the refund does not, so the pair
+    is excluded only for this member (`exclusion_exists_for`). Everyone else
+    keeps the link. The member's "linked" -> "unlinked" history row is `only_for`
+    them, so it stays hidden from others even after the link itself is deleted.
+    Unmarking the pair deletes its drops, so the link counts again for the member
+    once no other marked pair holds a drop on it.
     """
 
     link = models.ForeignKey(RefundLink, on_delete=models.CASCADE, related_name="drops")
     person = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="refund_link_drops")
+    pair = models.ForeignKey(TransferPair, on_delete=models.CASCADE, related_name="refund_link_drops")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(fields=("link", "person"), name="refund_link_drop_unique_person"),
+            models.UniqueConstraint(fields=("link", "person", "pair"), name="refund_link_drop_unique_person_pair"),
         ]
 
     def __str__(self):

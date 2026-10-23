@@ -635,7 +635,7 @@ def _snapshot_and_mark(pair, left, right, status, actor):
     label = "card payment" if pair.kind == TransferPair.Kind.CARD_PAYMENT else "transfer"
     _record_text_history(left, actor, TransactionCorrectionHistory.Field.EXCLUSION, "included", f"excluded:{label}")
     _record_text_history(right, actor, TransactionCorrectionHistory.Field.EXCLUSION, "included", f"excluded:{label}")
-    drop_refund_links_for_pair(_locked_refund_links((left.pk, right.pk)), (left, right), actor)
+    drop_refund_links_for_pair(_locked_refund_links((left.pk, right.pk)), pair, (left, right), actor)
 
 
 def _locked_refund_links(original_ids):
@@ -682,7 +682,20 @@ def _account_viewer_ids(account):
     )
 
 
-def drop_refund_links_for_pair(links, legs, actor):
+def _record_member_link_history(refund, actor, person_id, previous, new):
+    # Listed only to `person_id`; no audit event, so no one else learns of it.
+    TransactionCorrectionHistory.objects.create(
+        transaction=refund,
+        actor=actor,
+        recorded_at=timezone.now(),
+        field_name=TransactionCorrectionHistory.Field.REFUND_LINK,
+        previous_description=previous,
+        new_description=new,
+        only_for_id=person_id,
+    )
+
+
+def drop_refund_links_for_pair(links, pair, legs, actor):
     """Drop locked refund links whose original is a leg of a marked pair (#570).
 
     A marked pair is excluded only for viewers who see both legs
@@ -690,7 +703,8 @@ def drop_refund_links_for_pair(links, legs, actor):
     its refund. When every viewer of the refund sees both legs, now and after any
     member joins (a private refund whose owner sees them, or a household refund
     whose legs are both in that household), the link is deleted as for an
-    archived original. Otherwise each such viewer gets a `RefundLinkDrop` and a
+    archived original. Otherwise each such viewer gets a `RefundLinkDrop` for
+    this pair and, unless another pair already dropped the link for them, a
     history row `only_for` them, with no audit event, so members who cannot
     see a leg keep their link, totals and history unchanged.
     """
@@ -712,20 +726,36 @@ def drop_refund_links_for_pair(links, legs, actor):
         if everyone:
             deleted.append(link)
             continue
-        already = set(link.drops.values_list("person_id", flat=True))
-        for person_id in sorted(seeing - already):
-            TransactionCorrectionHistory.objects.create(
-                transaction=link.refund,
-                actor=actor,
-                recorded_at=timezone.now(),
-                field_name=TransactionCorrectionHistory.Field.REFUND_LINK,
-                previous_description="linked",
-                new_description="unlinked",
-                only_for_id=person_id,
-            )
-            RefundLinkDrop.objects.create(link=link, person_id=person_id)
+        drops = list(link.drops.values_list("person_id", "pair_id"))
+        dropped_for = {person_id for person_id, _pair_id in drops}
+        held_by_pair = {person_id for person_id, pair_id in drops if pair_id == pair.pk}
+        for person_id in sorted(seeing - held_by_pair):
+            if person_id not in dropped_for:
+                _record_member_link_history(link.refund, actor, person_id, "linked", "unlinked")
+            RefundLinkDrop.objects.create(link=link, person_id=person_id, pair=pair)
     if deleted:
         _delete_refund_links(deleted, actor)
+
+
+def restore_refund_links_for_pair(pair, actor):
+    """Clear the drops an unmarked pair made, so those links count again (#570).
+
+    Owner decision 2026-10-23, option (a): a drop never outlives the pair that
+    caused it. A member whose link no other marked pair still drops gets an
+    "unlinked" -> "linked" history row `only_for` them, with no audit event.
+    The caller holds the legs' and the pair's row locks; the links are locked
+    here in pk order, as the mark path does.
+    """
+    links = {link.pk: link for link in _locked_refund_links((pair.leg_a_id, pair.leg_b_id))}
+    drops = RefundLinkDrop.objects.filter(pair=pair, link_id__in=links)
+    cleared = list(drops.order_by("pk").values_list("link_id", "person_id"))
+    if not cleared:
+        return
+    drops.delete()
+    still_dropped = set(RefundLinkDrop.objects.filter(link_id__in=links).values_list("link_id", "person_id"))
+    for link_id, person_id in cleared:
+        if (link_id, person_id) not in still_dropped:
+            _record_member_link_history(links[link_id].refund, actor, person_id, "unlinked", "linked")
 
 
 _SETTLED_PAIR_STATUSES = (
@@ -807,6 +837,7 @@ def _unmark_exclusion(pair, left, right, actor):
     _restore_refund_categories(right, actor)
     pair.status = TransferPair.Status.UNDONE
     pair.save(update_fields=("status", "updated_at"))
+    restore_refund_links_for_pair(pair, actor)
     _record_text_history(left, actor, TransactionCorrectionHistory.Field.EXCLUSION, "excluded", "included")
     _record_text_history(right, actor, TransactionCorrectionHistory.Field.EXCLUSION, "excluded", "included")
 
@@ -896,6 +927,7 @@ def _revalidate_marked_pairs(existing, locked_by_id, person):
         else:
             pair.status = TransferPair.Status.UNDONE
             pair.save(update_fields=("status", "updated_at"))
+            restore_refund_links_for_pair(pair, person)
 
 
 def downgrade_unevidenced_auto_marked_pairs():
@@ -972,6 +1004,7 @@ def unmark_locked_pairs(pairs, locked_by_id, person):
         else:
             pair.status = TransferPair.Status.UNDONE
             pair.save(update_fields=("status", "updated_at"))
+            restore_refund_links_for_pair(pair, person)
 
 
 def _revalidate_pairs_for_leg_ids(person, seed_leg_ids):
@@ -1552,7 +1585,7 @@ def link_refund(principal, refund_id, original_id, original_part_id=None):
     # a link made before the pairing; that viewer's link is dropped the same way.
     marked = TransferPair.objects.excluding_income_and_spending()  # pyright: ignore[reportAttributeAccessIssue] - QuerySet.as_manager() is untyped, as for the other excluding_income_and_spending calls in the baseline
     for pair in marked.filter(Q(leg_a=original) | Q(leg_b=original)).select_related("leg_a__account", "leg_b__account"):
-        drop_refund_links_for_pair([link], (pair.leg_a, pair.leg_b), person)
+        drop_refund_links_for_pair([link], pair, (pair.leg_a, pair.leg_b), person)
     _record_text_history(
         refund,
         person,
