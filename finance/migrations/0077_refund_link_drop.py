@@ -7,7 +7,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('finance', '0074_balance_snapshot_original_currency'),
+        ('finance', '0076_ai_conversation_backfill_quoted_rows'),
     ]
 
     operations = [
