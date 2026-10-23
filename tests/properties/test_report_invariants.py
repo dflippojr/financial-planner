@@ -2,11 +2,11 @@
 
 Several pages compute the same money a second time: net worth, the spending
 table and its donut, cash flow and the monthly review, the recurring totals,
-the projection and the bills calendar. Each bug in this class (#443, #510,
-#507, #508, #522, #509) was wrong but internally consistent, so a view-level
-example passed. These properties tie each view out against another view of
-the same data and against the generated synthetic ledger, never against a
-copy of the code under test. A law that an open bug still breaks is
+the projection, the bills calendar and savings goal progress. Each bug in this
+class (#443, #510, #507, #508, #522, #509, #571) was wrong but internally
+consistent, so a view-level example passed. These properties tie each view
+out against another view of the same data and against the generated synthetic
+ledger, never against a copy of the code under test. A law that an open bug still breaks is
 xfail(strict=True) with that bug's number and its shrunk counterexample.
 """
 
@@ -36,11 +36,20 @@ from finance.category_services import (
     link_refund,
 )
 from finance.lifecycle_services import archive_account
-from finance.models import Account, Category, PlannedItem, RecurringSeries, TransferPair
+from finance.models import (
+    Account,
+    BalanceSnapshot,
+    Category,
+    PlannedItem,
+    RecurringSeries,
+    SavingsGoal,
+    TransferPair,
+)
 from finance.monthly_review import review_for_viewer
 from finance.months import add_months, month_end
 from finance.net_worth import net_worth_report
 from finance.planning_services import projected_months_for, save_planned_item, visible_projection_inputs
+from finance.savings_goal_services import goal_progress
 from finance.snapshot_services import record_manual_snapshot
 from finance.year_end import year_end_report
 from tests.page_payload import json_script_payload
@@ -746,3 +755,76 @@ def test_private_activity_never_changes_a_household_total_another_member_sees(ca
 
         assert _household_views(member) == before
         assert _household_views(owner) == before
+
+
+# 7. Savings goals: a goal's current amount from a linked account is that account's net worth.
+
+SIMPLEFIN = BalanceSnapshot.Source.SIMPLEFIN
+MANUAL = BalanceSnapshot.Source.MANUAL
+GOAL_TARGET = 100_000
+
+
+@dataclass(frozen=True)
+class GoalCase:
+    shared: bool
+    account_type: str
+    snapshots: tuple  # ((day, source), amount_minor), several sources may share a day
+    as_of: date
+
+    def balance(self):
+        """The balance on `as_of`: the latest day, SimpleFIN over manual, an amount owed negative.
+
+        docs/data-model.md: a manual card or loan row stores the amount owed as
+        positive, and a SimpleFIN row keeps the protocol sign (owed negative).
+        """
+        known = [(day, source == SIMPLEFIN, source, amount) for (day, source), amount in self.snapshots
+                 if day <= self.as_of]
+        if not known:
+            return None
+        _, _, source, amount = max(known, key=lambda item: item[:2])
+        return -amount if self.account_type in LIABILITIES and source == MANUAL else amount
+
+
+@st.composite
+def goal_cases(draw):
+    account_type = draw(st.sampled_from(Account.Type))
+    sources = (MANUAL, SIMPLEFIN) if account_type in Account.SIMPLEFIN_TYPES else (MANUAL,)
+    snapshots = draw(st.dictionaries(st.tuples(st.dates(EARLIEST, LATEST), st.sampled_from(sources)),
+                                     amounts, min_size=1, max_size=4))
+    return GoalCase(
+        shared=draw(st.booleans()),
+        account_type=account_type,
+        snapshots=tuple(sorted(snapshots.items())),
+        as_of=draw(st.dates(EARLIEST, LATEST)),
+    )
+
+
+@given(goal_cases())
+@example(GoalCase(False, Account.Type.CREDIT_CARD, (((LATEST, MANUAL), 500_000),), LATEST))  # #571
+def test_a_linked_goal_counts_what_net_worth_shows_for_its_account(case):
+    with ledger.isolated():
+        owner, member = ledger.make_member("owner"), ledger.make_member("member")
+        household = ledger.make_household(owner, member)
+        account = ledger.make_account(owner, case.account_type, name="Synthetic Goal Account",
+                                      household=household if case.shared else None)
+        for (day, source), amount in case.snapshots:
+            BalanceSnapshot.objects.create(account=account, snapshot_date=day, amount_minor=amount, currency="USD",
+                                           source=source)
+        goal = SavingsGoal.objects.create(
+            owner=owner, name="SYN goal", target_amount_minor=GOAL_TARGET, linked_account=account,
+            scope=SavingsGoal.Scope.HOUSEHOLD if case.shared else SavingsGoal.Scope.PRIVATE,
+            household=household if case.shared else None,
+        )
+
+        expected = case.balance()
+        viewers = (owner, member) if case.shared else (owner,)
+        for person in viewers:
+            for household_only in (False, True) if case.shared else (False,):
+                progress = goal_progress(person, goal, today=case.as_of, household_only=household_only)
+                if expected is None:
+                    assert progress.source == "none"
+                    continue
+                worth = net_worth_report(person, date_from=case.as_of, date_to=case.as_of, accounts=[account],
+                                         today=TODAY)
+                assert progress.current_amount_minor == expected == worth.summary.net_minor
+                assert progress.reached is (expected >= GOAL_TARGET)

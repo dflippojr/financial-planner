@@ -32,10 +32,12 @@ def make_household(*people, name="Synthetic Household"):
     return household
 
 
-def make_account(owner, *, name="Synthetic Savings", scope=Account.Scope.PRIVATE, household=None):
+def make_account(
+    owner, *, name="Synthetic Savings", scope=Account.Scope.PRIVATE, household=None, account_type=Account.Type.SAVINGS
+):
     return Account.objects.create(
         name=name,
-        account_type=Account.Type.SAVINGS,
+        account_type=account_type,
         owner=owner,
         scope=scope,
         household=household,
@@ -407,6 +409,93 @@ def test_progress_prefers_simplefin_over_manual_on_the_same_day():
     progress = goal_progress(owner.user, goal, today=date(2026, 2, 15))
 
     assert progress.current_amount_minor == 60_000
+
+
+# Manual liability snapshots store the amount owed as positive; SimpleFIN keeps
+# the protocol sign, owed negative. Both mean 5,000.00 owed.
+OWED_5000 = [
+    pytest.param(BalanceSnapshot.Source.MANUAL, 500_000, id="manual"),
+    pytest.param(BalanceSnapshot.Source.SIMPLEFIN, -500_000, id="simplefin"),
+]
+LIABILITY_TYPES = [pytest.param(Account.Type.CREDIT_CARD, id="card"), pytest.param(Account.Type.LOAN, id="loan")]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("account_type", LIABILITY_TYPES)
+@pytest.mark.parametrize(("source", "stored_minor"), OWED_5000)
+def test_a_debt_is_never_counted_as_money_saved(account_type, source, stored_minor):
+    owner = make_person("owner")
+    make_household(owner)
+    debt = make_account(owner, name="Synthetic Debt", account_type=account_type)
+    add_snapshot(debt, date(2026, 8, 31), stored_minor, source=source)
+    goal = make_goal(owner, target_amount_minor=100_000, linked_account=debt)
+
+    progress = goal_progress(owner.user, goal, today=date(2026, 9, 1))
+
+    assert progress.current_amount_minor == -500_000
+    assert progress.current_amount_display == "-5,000.00 USD"
+    assert not progress.reached
+    assert progress.percent == 0
+    assert progress.remaining_minor == 600_000
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("account_type", LIABILITY_TYPES)
+@pytest.mark.parametrize(("source", "stored_minor"), OWED_5000)
+def test_a_household_goal_on_a_shared_debt_counts_it_as_owed(account_type, source, stored_minor):
+    owner = make_person("owner")
+    member = make_person("member")
+    household = make_household(owner, member)
+    debt = make_account(
+        owner, name="Synthetic Joint Debt", scope=Account.Scope.HOUSEHOLD, household=household,
+        account_type=account_type,
+    )
+    add_snapshot(debt, date(2026, 8, 31), stored_minor, source=source)
+    goal = make_goal(
+        owner, target_amount_minor=100_000, linked_account=debt, scope=SavingsGoal.Scope.HOUSEHOLD,
+        household=household,
+    )
+
+    for person in (owner, member):
+        progress = goal_progress(person.user, goal, today=date(2026, 9, 1), household_only=True)
+        assert progress.source == "snapshot"
+        assert progress.current_amount_minor == -500_000
+        assert not progress.reached
+
+
+@pytest.mark.django_db
+def test_goals_page_shows_a_debt_as_owed_and_not_reached():
+    owner = make_person("owner")
+    make_household(owner)
+    card = make_account(owner, name="Synthetic Card", account_type=Account.Type.CREDIT_CARD)
+    add_snapshot(card, timezone.localdate(), 500_000)
+    make_goal(owner, name="Card goal", target_amount_minor=100_000, target_date=None, linked_account=card)
+
+    page = signed_in(owner).get(reverse("savings-goals")).content.decode()
+
+    assert "−$5,000.00" in page
+    assert "0% complete" in page
+    assert "$6,000.00 remaining" in page
+    assert "Reached" not in page
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "account_type", [Account.Type.CHECKING, Account.Type.SAVINGS, Account.Type.INVESTMENT]
+)
+@pytest.mark.parametrize("source", [BalanceSnapshot.Source.MANUAL, BalanceSnapshot.Source.SIMPLEFIN])
+@pytest.mark.parametrize("stored_minor", [120_000, -30_000])
+def test_an_asset_goal_shows_the_snapshot_balance_unchanged(account_type, source, stored_minor):
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner, account_type=account_type)
+    add_snapshot(account, date(2026, 8, 31), stored_minor, source=source)
+    goal = make_goal(owner, target_amount_minor=100_000, linked_account=account)
+
+    progress = goal_progress(owner.user, goal, today=date(2026, 9, 1))
+
+    assert progress.current_amount_minor == stored_minor
+    assert progress.reached is (stored_minor >= 100_000)
 
 
 @pytest.mark.django_db

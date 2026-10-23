@@ -55,10 +55,12 @@ def make_household(*people):
     return household
 
 
-def make_account(owner, *, name="Synthetic Checking", scope=Account.Scope.PRIVATE, household=None):
+def make_account(
+    owner, *, name="Synthetic Checking", scope=Account.Scope.PRIVATE, household=None, account_type=Account.Type.CHECKING
+):
     return Account.objects.create(
         name=name,
-        account_type=Account.Type.CHECKING,
+        account_type=account_type,
         owner=owner,
         scope=scope,
         household=household,
@@ -303,6 +305,41 @@ def test_goal_already_funded_by_its_linked_balance_takes_no_surplus():
     assert rows["Camera"].already_funded and rows["Camera"].check == ON_TIME
     assert rows["Camera"].remaining_minor == 0
     assert month_label(rows["Laptop"]) == "2026-11"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("source", "stored_minor"),
+    [
+        # Both mean 5,000.00 owed: manual stores it positive, SimpleFIN negative.
+        pytest.param(BalanceSnapshot.Source.MANUAL, 500_000, id="manual"),
+        pytest.param(BalanceSnapshot.Source.SIMPLEFIN, -500_000, id="simplefin"),
+    ],
+)
+def test_a_goal_linked_to_a_debt_is_not_funded_by_it(source, stored_minor):
+    owner = make_person("owner")
+    monthly_surplus(owner, 300_000, 200_000)
+    card = make_account(owner, name="Synthetic Card", account_type=Account.Type.CREDIT_CARD)
+    BalanceSnapshot.objects.create(
+        account=card, snapshot_date=date(2026, 9, 30), amount_minor=stored_minor, currency="USD", source=source,
+    )
+    savings = make_account(owner, name="Synthetic Savings", account_type=Account.Type.SAVINGS)
+    BalanceSnapshot.objects.create(
+        account=savings, snapshot_date=date(2026, 9, 30), amount_minor=20_000, currency="USD",
+        source=BalanceSnapshot.Source.MANUAL,
+    )
+    make_goal(owner, "Card goal", 100_000, priority=1, linked_account=card)
+    make_goal(owner, "Camera", 100_000, priority=2, linked_account=savings)
+
+    rows = rows_by_name(build_funding_plan(owner.user, today=TODAY))
+
+    # 1,000.00 target less 5,000.00 owed: 6,000.00 to go at 1,000.00 a month.
+    assert not rows["Card goal"].already_funded
+    assert rows["Card goal"].current_display == "-5,000.00 USD"
+    assert rows["Card goal"].remaining_minor == 600_000
+    assert month_label(rows["Card goal"]) == "2027-04"
+    assert rows["Camera"].remaining_minor == 80_000
+    assert month_label(rows["Camera"]) == "2027-05"
 
 
 @pytest.mark.django_db
