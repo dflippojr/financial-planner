@@ -27,6 +27,7 @@ from .models import (
     Membership,
     Person,
     RefundLink,
+    RefundLinkDrop,
     Transaction,
     TransactionCorrectionHistory,
     TransactionSplit,
@@ -634,33 +635,96 @@ def _snapshot_and_mark(pair, left, right, status, actor):
     label = "card payment" if pair.kind == TransferPair.Kind.CARD_PAYMENT else "transfer"
     _record_text_history(left, actor, TransactionCorrectionHistory.Field.EXCLUSION, "included", f"excluded:{label}")
     _record_text_history(right, actor, TransactionCorrectionHistory.Field.EXCLUSION, "included", f"excluded:{label}")
-    drop_refund_links_to_originals((left.pk, right.pk), actor)
+    drop_refund_links_for_pair(_locked_refund_links((left.pk, right.pk)), (left, right), actor)
 
 
-def drop_refund_links_to_originals(original_ids, actor):
-    """Delete the refund links of originals that stopped counting (#570).
-
-    An original stops counting when it is archived (an undone import, a deleted
-    manual entry, an archived account) or becomes a marked transfer or
-    card-payment leg. Its refunds then count as ordinary income and keep their
-    category. Each gets "linked" -> "unlinked" history whoever can see it; the
-    audit event is skipped for a refund the actor cannot see. The caller holds
-    the originals' row locks, so no link can be added to them meanwhile.
-    """
+def _locked_refund_links(original_ids):
     original_ids = sorted(set(original_ids))
     if not original_ids:
-        return
-    links = list(
+        return []
+    return list(
         RefundLink.objects.select_for_update(of=("self",))
-        .select_related("refund")
+        .select_related("refund__account")
         .filter(original_id__in=original_ids)
         .order_by("pk")
     )
-    if not links:
-        return
+
+
+def _delete_refund_links(links, actor):
     RefundLink.objects.filter(pk__in=[link.pk for link in links]).delete()
     for link in links:
         _record_text_history(link.refund, actor, TransactionCorrectionHistory.Field.REFUND_LINK, "linked", "unlinked")
+
+
+def drop_refund_links_to_originals(original_ids, actor):
+    """Delete the refund links of archived originals (#570).
+
+    An original stops counting for every viewer when it is archived (an undone
+    import, a deleted manual entry, an archived account). Its refunds then count
+    as ordinary income and keep their category. Each gets "linked" -> "unlinked"
+    history whoever can see it; the audit event is skipped for a refund the
+    actor cannot see. The caller holds the originals' row locks, so no link can
+    be added to them meanwhile.
+    """
+    links = _locked_refund_links(original_ids)
+    if links:
+        _delete_refund_links(links, actor)
+
+
+def _account_viewer_ids(account):
+    """Members who see an account's rows now, as `Account.objects.visible_to` decides."""
+    if account.scope == Account.Scope.PRIVATE:
+        return {account.owner_id}
+    return set(
+        Membership.objects.filter(household_id=account.household_id, ended_at__isnull=True).values_list(
+            "person_id", flat=True
+        )
+    )
+
+
+def drop_refund_links_for_pair(links, legs, actor):
+    """Drop locked refund links whose original is a leg of a marked pair (#570).
+
+    A marked pair is excluded only for viewers who see both legs
+    (`exclusion_exists_for`), so a link stops counting only for those viewers of
+    its refund. When every viewer of the refund sees both legs, now and after any
+    member joins (a private refund whose owner sees them, or a household refund
+    whose legs are both in that household), the link is deleted as for an
+    archived original. Otherwise each such viewer gets a `RefundLinkDrop` and a
+    history row only they are shown, with no audit event, so members who cannot
+    see a leg keep their link, totals and history unchanged.
+    """
+    if not links:
+        return
+    leg_accounts = [leg.account for leg in legs]
+    see_both_legs = set.intersection(*(_account_viewer_ids(account) for account in leg_accounts))
+    deleted = []
+    for link in links:
+        refund_account = link.refund.account
+        seeing = _account_viewer_ids(refund_account) & see_both_legs
+        if refund_account.scope == Account.Scope.HOUSEHOLD:
+            everyone = all(
+                account.scope == Account.Scope.HOUSEHOLD and account.household_id == refund_account.household_id
+                for account in leg_accounts
+            )
+        else:
+            everyone = bool(seeing)
+        if everyone:
+            deleted.append(link)
+            continue
+        already = set(link.drops.values_list("person_id", flat=True))
+        for person_id in sorted(seeing - already):
+            history = TransactionCorrectionHistory.objects.create(
+                transaction=link.refund,
+                actor=actor,
+                recorded_at=timezone.now(),
+                field_name=TransactionCorrectionHistory.Field.REFUND_LINK,
+                previous_description="linked",
+                new_description="unlinked",
+            )
+            RefundLinkDrop.objects.create(link=link, person_id=person_id, history=history)
+    if deleted:
+        _delete_refund_links(deleted, actor)
 
 
 _SETTLED_PAIR_STATUSES = (
@@ -1475,7 +1539,7 @@ def link_refund(principal, refund_id, original_id, original_part_id=None):
     refund.category = inherited
     refund.category_source = Transaction.CategorySource.INHERITED
     refund.save(update_fields=("category", "category_source", "updated_at"))
-    RefundLink.objects.create(refund=refund, original=original, original_part=original_part)
+    link = RefundLink.objects.create(refund=refund, original=original, original_part=original_part)
     _record_text_history(
         refund,
         person,
@@ -1483,6 +1547,11 @@ def link_refund(principal, refund_id, original_id, original_part_id=None):
         "unlinked",
         "linked",
     )
+    # The original may be a marked leg for another viewer of the refund, as for
+    # a link made before the pairing; that viewer's link is dropped the same way.
+    marked = TransferPair.objects.excluding_income_and_spending()  # pyright: ignore[reportAttributeAccessIssue] - QuerySet.as_manager() is untyped, as for the other excluding_income_and_spending calls in the baseline
+    for pair in marked.filter(Q(leg_a=original) | Q(leg_b=original)).select_related("leg_a__account", "leg_b__account"):
+        drop_refund_links_for_pair([link], (pair.leg_a, pair.leg_b), person)
     _record_text_history(
         refund,
         person,
@@ -1502,14 +1571,19 @@ def _totals_base(principal, *, date_from=None, date_to=None, accounts=None, tag=
     person = _person_for(principal)
     visible_accounts = Account.objects.visible_to(person)
     is_transfer_leg = exclusion_exists_for(person)
+    links = RefundLink.objects.filter(refund_id=OuterRef("pk"))
+    # A link dropped for this person only (#570) is theirs alone, like the pair that dropped it.
+    is_refund = Exists(links.exclude(pk__in=RefundLinkDrop.objects.filter(person=person).values("link_id")))
     if accounts is not None:
         visible_accounts = visible_accounts.filter(pk__in=[getattr(item, "pk", item) for item in accounts])
         # Decided inside the query so totals cost no extra round trip.
+        not_household_only = Exists(visible_accounts.exclude(scope=Account.Scope.HOUSEHOLD))
         is_transfer_leg = Case(
-            When(Exists(visible_accounts.exclude(scope=Account.Scope.HOUSEHOLD)), then=is_transfer_leg),
+            When(not_household_only, then=is_transfer_leg),
             default=exclusion_exists_for(person, household_only=True),
             output_field=BooleanField(),
         )
+        is_refund = Case(When(not_household_only, then=is_refund), default=Exists(links), output_field=BooleanField())
     transactions = Transaction.objects.visible_to(person).filter(
         status=Transaction.Status.ACTIVE,
         kind=Transaction.Kind.CASH_FLOW,
@@ -1525,7 +1599,7 @@ def _totals_base(principal, *, date_from=None, date_to=None, accounts=None, tag=
         transactions = transactions.filter(transaction_date__lte=date_to)
     return transactions.annotate(
         _is_transfer_leg=is_transfer_leg,
-        _is_refund=Exists(RefundLink.objects.filter(refund_id=OuterRef("pk"))),
+        _is_refund=is_refund,
     ).filter(_is_transfer_leg=False)
 
 

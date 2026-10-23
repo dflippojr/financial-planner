@@ -524,17 +524,18 @@ def _excluded_transaction_ids(visible_txn_ids):
     return ids
 
 
-def _visible_refund_originals(visible_txn_ids):
+def _visible_refund_originals(person, visible_txn_ids):
+    # A link dropped for this person only (#570) is not theirs to export.
     links = RefundLink.objects.filter(
         refund_id__in=visible_txn_ids,
         original_id__in=visible_txn_ids,
-    )
+    ).exclude(drops__person=person)
     return {link.refund_id: (link.original_id, link.original_part_id) for link in links}
 
 
 def _transaction_rows(person, visible_txn_ids):
     excluded = _excluded_transaction_ids(visible_txn_ids)
-    refunds = _visible_refund_originals(visible_txn_ids)
+    refunds = _visible_refund_originals(person, visible_txn_ids)
     category_names = _visible_category_names(person)
     rows = []
     transactions = (
