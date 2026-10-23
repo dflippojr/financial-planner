@@ -59,6 +59,7 @@ Build a private, self hosted personal finance app that can eventually replace Ro
 - Keep monetary values exact (for example, integer minor units or decimal types), with an explicit currency.
 - Support an undo path for an erroneous import.
 - Require authentication and per-person authorization before exposing personal financial data on the network.
+- Route-level access sweep (#551): every URL route is classified in `tests/test_route_access_sweep.py`, so a new route needs an entry there (object, page or exempt with a reason). Another member's private object and, for an outsider, a household's object answer the same empty 404 as a missing one, never a redirect or 403.
 - Document backup and restore before treating the app as the primary record.
 - Use synthetic data in examples and development fixtures.
 

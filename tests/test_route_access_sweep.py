@@ -109,8 +109,8 @@ class ObjectRoute:
     private objects, or the household's shared ones. sides names the sides
     the object exists on: personal objects (passkeys, chats) are never
     shared, and household objects (categories, CSV mappings) are never
-    private. data is minimal synthetic form data for the POST. post_only marks
-a view that refuses GET, so the owner check posts instead.
+    private. data is minimal synthetic form data for the POST. post_only
+    marks a view that refuses GET, so the owner check posts instead.
     """
 
     kwargs: Callable[[SimpleNamespace], dict]

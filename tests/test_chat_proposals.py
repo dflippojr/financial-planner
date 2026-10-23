@@ -158,8 +158,8 @@ def test_a_forged_apply_on_another_members_proposal_is_refused(harness):
     intruder = Client()
     intruder.force_login(user_b)
     for name in ("chat-proposal-apply", "chat-proposal-dismiss"):
-        response = intruder.post(reverse(name, args=[proposal.pk]), follow=True)
-        assert "That suggestion is not available." in response.content.decode()
+        response = intruder.post(reverse(name, args=[proposal.pk]))
+        assert response.status_code == 404
     proposal.refresh_from_db()
     txn.refresh_from_db()
     assert proposal.status == AiProposal.Status.PENDING
