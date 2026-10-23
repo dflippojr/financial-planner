@@ -7,11 +7,15 @@ member's private object, and an outsider asking for a household's shared
 object, get the app's 404 (or a 405 for a method the view never accepts),
 see no canary and change nothing. The owner reaches every seeded object with
 the same URL, so the denials cannot pass because the seed is unreachable.
+A page that names an object in its POST body gets the same probe through
+its actions, and a page that accepts POST must declare its body ids or say
+why it names none.
 
 A new route needs an entry here; test_every_route_is_classified_once fails
 until it has one.
 """
 import io
+import re
 import uuid
 import zipfile
 from dataclasses import dataclass, field
@@ -28,6 +32,7 @@ from django.utils import timezone
 from finance.category_suggestion_services import snapshot_hash
 from finance.models import (
     Account,
+    AccountLink,
     AiConversation,
     AiConversationMessage,
     AiProposal,
@@ -48,17 +53,23 @@ from finance.models import (
     Passkey,
     PlannedItem,
     Receipt,
+    RecurringExclusion,
+    RecurringPriceAcknowledgement,
+    RecurringSeries,
+    RecurringSeriesMember,
     RefundLink,
     RuleApplication,
     RuleApplicationEntry,
     SavedCsvMapping,
     SavedTransactionFilter,
     SavingsGoal,
+    SimpleFinConnection,
     Tag,
     Transaction,
     TransactionCorrectionHistory,
     TransactionSplit,
     TransactionTag,
+    TransferPair,
 )
 from finance.category_services import ensure_household_categories
 from finance.policy_services import accept_policy, current_policy
@@ -123,6 +134,24 @@ class ObjectRoute:
 
 
 @dataclass(frozen=True)
+class FormAction:
+    """A POST a page takes that names an object in its body.
+
+    data builds the form from one side of the world and the requester's own
+    rows, so every other id in it is one the requester may use. The member
+    posts it naming the owner's private object and the outsider naming either
+    side's; both are refused and change nothing. refused lists the answers
+    the route gives: 404 from a lookup, or 200 when a form field's choices
+    leave the object out. The owner's same POST on the first side changes
+    something, so the probe reaches the lookup.
+    """
+
+    data: Callable[[SimpleNamespace, SimpleNamespace], dict]
+    sides: tuple[str, ...] = ("private", "shared")
+    refused: tuple[int, ...] = (404,)
+
+
+@dataclass(frozen=True)
 class PageRoute:
     """A route without an object id that reads financial data.
 
@@ -133,9 +162,12 @@ class PageRoute:
     object, an account by default) and scope gets each scope. owner_canary
     marks a page whose baseline shows the owner a canary, which proves the
     probe would see a leak. form lists POST fields that carry ids, for views
-    that take a form; None when the view takes no POST worth probing.
-    owner_post checks that the owner's same POST, with ids they may use, gets
-    past the view's other checks, so the probe reaches the authorization.
+    whose form may still succeed on the requester's own rows; None when the
+    view takes no such form. owner_post checks that the owner's same POST,
+    with ids they may use, gets past the view's other checks, so the probe
+    reaches the authorization. actions lists the POSTs that act on one named
+    object and must be refused outright. A page that accepts POST needs form,
+    actions or a post_reason saying why its body names no object.
     """
 
     query: tuple[str, ...] = ()
@@ -145,6 +177,8 @@ class PageRoute:
     extra: dict = field(default_factory=dict)
     kwargs: tuple[dict, ...] = ({},)
     owner_post: Callable[[SimpleNamespace, object], bool] | None = None
+    actions: dict[str, FormAction] = field(default_factory=dict)
+    post_reason: str = ""
 
 
 def _account(side):
@@ -279,6 +313,55 @@ PROBE = {
 
 FILTERS = ("account", "tag", "scope")
 WINDOW = ("date_from", "date_to")
+REMOTE_ID = "SYN-REMOTE-1"
+# A form field's choices leave the object out, so the page shows the form again.
+INVALID_FORM = (200,)
+
+
+def _series_action(action, series="series"):
+    return FormAction(lambda s, own: {"action": action, "series_id": getattr(s, series).pk})
+
+
+def _pair_action(action, pair):
+    return FormAction(lambda s, own: {"action": action, "pair_id": getattr(s, pair).pk})
+
+
+RECURRING_ACTIONS = {
+    "confirm": _series_action("confirm", "suggested_series"),
+    "dismiss": _series_action("dismiss", "suggested_series"),
+    "merge-source": FormAction(
+        lambda s, own: {"action": "merge", "series_id": s.series.pk, "target_id": own.series.pk}
+    ),
+    "merge-target": FormAction(
+        lambda s, own: {"action": "merge", "series_id": own.series.pk, "target_id": s.series.pk}
+    ),
+    "remove": FormAction(
+        lambda s, own: {"action": "remove", "series_id": s.series.pk, "transaction_id": s.series_charge.pk}
+    ),
+    "add": FormAction(
+        lambda s, own: {
+            "action": "add",
+            "series_id": own.series.pk,
+            "transaction_id": [charge.pk for charge in s.charges],
+        }
+    ),
+    "cancel": _series_action("cancel"),
+    "undo_cancel": _series_action("undo_cancel", "cancelled_series"),
+    "confirm_resume": _series_action("confirm_resume", "cancelled_series"),
+    "keep_cancelled": _series_action("keep_cancelled", "cancelled_series"),
+    "dismiss_price": _series_action("dismiss_price"),
+}
+
+RULE_FORM = {"owner_kind": "personal", "description_contains": "SYN rule", "priority": "0", "enabled": "on"}
+PLANNED_FORM = {
+    "name": "SYN planned",
+    "kind": "expense",
+    "amount": "1.00",
+    "start_date": "2026-01-01",
+    "cadence": "monthly",
+    "scope": "private",
+}
+GOAL_FORM = {"name": "SYN goal", "target_amount": "1.00"}
 
 PAGE_ROUTES = {
     "settings-audit": PageRoute(query=("actor",)),
@@ -296,19 +379,52 @@ PAGE_ROUTES = {
     "spending-by-category": PageRoute(query=FILTERS, baseline=WINDOW, owner_canary=True),
     "spending-category-uncategorized": PageRoute(query=FILTERS, baseline=WINDOW, owner_canary=True),
     "net-worth": PageRoute(query=("scope",), baseline=WINDOW, owner_canary=True),
-    "account-settings": PageRoute(owner_canary=True),
-    "simplefin-connections": PageRoute(),
-    "invite": PageRoute(),
-    "category-list": PageRoute(),
-    "category-rule-list": PageRoute(query=("category",), owner_canary=True),
-    "tag-list": PageRoute(),
-    "csv-mapping-list": PageRoute(),
-    "settings-alerts": PageRoute(),
+    "account-settings": PageRoute(
+        owner_canary=True, post_reason="password and Google sign-in for the signed-in member; names no object"
+    ),
+    "simplefin-connections": PageRoute(
+        actions={
+            "link": FormAction(
+                lambda s, own: {"intent": "link", "sf_id_0": REMOTE_ID, "action_0": "link", "account_id_0": s.account.pk}
+            ),
+        }
+    ),
+    "invite": PageRoute(post_reason="creates an invitation to the signed-in member's own household"),
+    "category-list": PageRoute(
+        actions={
+            "rename": FormAction(
+                lambda s, own: {"action": "rename", "category_id": s.category.pk, "name": "SYN renamed"}, HOUSEHOLD
+            ),
+        }
+    ),
+    "category-rule-list": PageRoute(
+        query=("category",),
+        owner_canary=True,
+        actions={
+            "account": FormAction(
+                lambda s, own: {**RULE_FORM, "account": s.account.pk, "category": own.category.pk},
+                refused=INVALID_FORM,
+            ),
+            "category": FormAction(
+                lambda s, own: {**RULE_FORM, "category": s.category.pk}, HOUSEHOLD, refused=INVALID_FORM
+            ),
+        },
+    ),
+    "tag-list": PageRoute(
+        actions={
+            "rename": FormAction(lambda s, own: {"action": "rename", "tag_id": s.tag.pk, "name": "SYN renamed"}, HOUSEHOLD),
+            "archive": FormAction(lambda s, own: {"action": "archive", "tag_id": s.tag.pk}, HOUSEHOLD),
+        }
+    ),
+    "csv-mapping-list": PageRoute(
+        actions={"delete": FormAction(lambda s, own: {"action": "delete", "mapping_id": s.mapping.pk}, HOUSEHOLD)}
+    ),
+    "settings-alerts": PageRoute(post_reason="the signed-in member's own notice settings; names no object"),
     "settings-data": PageRoute(),
     "account-export": PageRoute(form=()),
-    "settings-ai": PageRoute(),
+    "settings-ai": PageRoute(post_reason="records the member's answer to a policy version, not a member's object"),
     "alert-list": PageRoute(owner_canary=True),
-    "account-list": PageRoute(owner_canary=True),
+    "account-list": PageRoute(owner_canary=True, post_reason="adds an account for the signed-in member"),
     "csv-import": PageRoute(form=("account_id",), owner_canary=True),
     "transaction-list": PageRoute(query=(*FILTERS, "category"), baseline=WINDOW, owner_canary=True),
     "transaction-export": PageRoute(form=("account",)),
@@ -326,27 +442,78 @@ PAGE_ROUTES = {
         extra={"transaction_date": "2026-01-01", "direction": "out", "amount": "1.00", "description": "SYN"},
         owner_canary=True,
     ),
-    "transfer-review": PageRoute(),
-    "recurring-review": PageRoute(query=("merge_series", "add_series"), owner_canary=True),
+    "transfer-review": PageRoute(
+        actions={
+            "confirm": _pair_action("confirm", "suggested_pair"),
+            "dismiss": _pair_action("dismiss", "suggested_pair"),
+            "undo": _pair_action("undo", "marked_pair"),
+        }
+    ),
+    "recurring-review": PageRoute(
+        query=("merge_series", "add_series"), owner_canary=True, actions=RECURRING_ACTIONS
+    ),
     "recurring-create": PageRoute(
         form=("transaction_id",),
         extra={"step": "preview", "name": "SYN", "cadence": "monthly"},
         owner_canary=True,
         owner_post=lambda _world, response: response.context["preview"] is not None,
     ),
-    "planned-items": PageRoute(query=("scope",), owner_canary=True),
+    "planned-items": PageRoute(
+        query=("scope",),
+        owner_canary=True,
+        actions={
+            "category": FormAction(
+                lambda s, own: {**PLANNED_FORM, "category": s.category.pk}, HOUSEHOLD, refused=INVALID_FORM
+            ),
+            "replaces_series": FormAction(
+                lambda s, own: {**PLANNED_FORM, "replaces_series": s.series.pk}, refused=INVALID_FORM
+            ),
+        },
+    ),
     "bills-calendar": PageRoute(query=("scope",), form=("accounts",), owner_canary=True),
     "debt-payoff": PageRoute(query=("include",), owner_canary=True),
     "monthly-review": PageRoute(baseline=("month",), owner_canary=True),
-    "sheet-comparison": PageRoute(query=FILTERS, owner_canary=True),
+    "sheet-comparison": PageRoute(
+        query=FILTERS,
+        owner_canary=True,
+        post_reason="the member's own uploaded sheet; its token names a stage in the member's own session",
+    ),
     "year-end": PageRoute(query=("scope",), baseline=("year",), owner_canary=True),
     "year-end-csv": PageRoute(
         query=("scope",), baseline=("year",), kwargs=tuple({"section": section} for section in CSV_SECTIONS)
     ),
-    "budgets": PageRoute(baseline=("month",)),
-    "savings-goals": PageRoute(owner_canary=True),
+    "budgets": PageRoute(
+        baseline=("month",),
+        actions={
+            "category": FormAction(
+                lambda s, own: {
+                    "scope": "household",
+                    "category": s.category.pk,
+                    "amount": "1.00",
+                    "effective_month": "2026-01",
+                },
+                HOUSEHOLD,
+                refused=INVALID_FORM,
+            ),
+        },
+    ),
+    "savings-goals": PageRoute(
+        owner_canary=True,
+        actions={
+            # A goal depends only on a goal of the same scope.
+            "depends_on": FormAction(
+                lambda s, own: {**GOAL_FORM, "scope": s.scope, "depends_on": s.goal.pk}, refused=INVALID_FORM
+            ),
+            "linked_account": FormAction(
+                lambda s, own: {**GOAL_FORM, "scope": "private", "linked_account": s.account.pk},
+                refused=INVALID_FORM,
+            ),
+        },
+    ),
     "savings-goal-plan": PageRoute(query=("scope",), owner_canary=True),
-    "savings-goal-import": PageRoute(),
+    "savings-goal-import": PageRoute(
+        post_reason="the member's own goal file; its token names a stage in the member's own session"
+    ),
 }
 
 _SIGN_IN = "sign-in, recovery or re-authentication; runs before any financial data is read"
@@ -387,7 +554,7 @@ EXEMPT_ROUTES = {
     "chat-new": _OWN,
     "chat-delete-all": _OWN,
     "chat-warm": _OWN,
-    "chat-status": _AI_PROVIDER,
+    "chat-status": "status of the signed-in member's own chat backend; takes no object id",
     "alert-mark-all-read": _OWN,
     "monthly-review-regenerate": _OWN,
     "sheet-comparison-delete": _OWN,
@@ -461,21 +628,30 @@ TRACKED_MODELS = (
     AiProposal,
     Passkey,
     MemberSession,
+    TransferPair,
+    RecurringSeries,
+    RecurringSeriesMember,
+    RecurringExclusion,
+    RecurringPriceAcknowledgement,
+    SimpleFinConnection,
+    AccountLink,
     AuditEvent,
 )
 
 
 def _route_keys(patterns, prefix="", namespace=""):
+    """Each route's key, with its full pattern."""
     for entry in patterns:
         if isinstance(entry, URLResolver):
             inner = f"{namespace}{entry.namespace}:" if entry.namespace else namespace
             yield from _route_keys(entry.url_patterns, prefix + str(entry.pattern), inner)
         elif isinstance(entry, URLPattern):
-            yield f"{namespace}{entry.name}" if entry.name else prefix + str(entry.pattern)
+            pattern = prefix + str(entry.pattern)
+            yield (f"{namespace}{entry.name}" if entry.name else pattern), pattern
 
 
 def test_every_route_is_classified_once():
-    routes = list(_route_keys(get_resolver().url_patterns))
+    routes = [key for key, _pattern in _route_keys(get_resolver().url_patterns)]
     duplicated = sorted({key for key in routes if routes.count(key) > 1})
     assert not duplicated, f"routes share a key: {duplicated}"
     problems = []
@@ -488,6 +664,25 @@ def test_every_route_is_classified_once():
     for name, table in TABLES.items():
         problems += [f"{key} in {name} is no longer a route" for key in table if key not in routes]
     assert not problems, "\n".join(problems)
+
+
+# Exempt routes whose path id names no member's object.
+EXEMPT_IDS = (
+    "privacy-policy-version",
+    "csv-mappings/<int:mapping_id>/",
+    "categories/rules/<int:rule_id>/",
+    "categories/rules/applications/<int:application_id>/reverse/",
+)
+
+
+def test_every_route_with_an_id_in_its_path_is_an_object_route():
+    """A route that gains an id keeps its old entry, so its new shape must move it to OBJECT_ROUTES."""
+    misplaced = [
+        key
+        for key, pattern in _route_keys(get_resolver().url_patterns)
+        if re.search(r"<(int|uuid):", pattern) and key not in OBJECT_ROUTES and key not in EXEMPT_IDS
+    ]
+    assert not misplaced, f"routes with an id in the path that are not in OBJECT_ROUTES: {misplaced}"
 
 
 def test_every_exempt_route_says_why():
@@ -587,8 +782,9 @@ def _side_rows(owner, household, account, card, label, amount_minor, when, index
         effective_month=when.replace(day=1),
         amount_minor=BUDGET_MINOR if not is_shared else SHARED_MINOR,
     )
-    return SimpleNamespace(
+    side = SimpleNamespace(
         owner=owner,
+        scope="household" if is_shared else "private",
         account=account,
         card=card,
         loan=loan,
@@ -602,6 +798,74 @@ def _side_rows(owner, household, account, card, label, amount_minor, when, index
         application=application,
         budget=budget,
         category=category,
+    )
+    _transfer_pairs(side, when, index + 50)
+    side.suggested_series = _series(owner, f"{label} suggestion", RecurringSeries.Status.SUGGESTED, [], index + 60)
+    side.cancelled_series = _series(
+        owner,
+        f"{label} cancelled",
+        RecurringSeries.Status.CONFIRMED,
+        [manual],
+        index + 61,
+        # Cancelled before the side's charges, so keeping it cancelled drops the later one.
+        cancelled_at=timezone.now() - (timezone.localdate() - when) - timedelta(days=15),
+    )
+    return side
+
+
+def _transfer_pairs(side, when, index):
+    """A suggested and an auto-marked card payment from the side's checking account to its card."""
+    pairs = []
+    for offset, status in enumerate((TransferPair.Status.SUGGESTED, TransferPair.Status.AUTO_MARKED)):
+        amount = 5_150 + 100 * offset
+        legs = [
+            seed_transaction(
+                target, side.owner, amount_minor=sign * amount, when=when, description="SYN card payment", index=index + 2 * offset + leg
+            )
+            for leg, (target, sign) in enumerate(((side.account, -1), (side.card, 1)))
+        ]
+        pairs.append(
+            TransferPair.objects.create(
+                leg_a=legs[0],
+                leg_b=legs[1],
+                status=status,
+                kind=TransferPair.Kind.CARD_PAYMENT,
+                confidence=TransferPair.Confidence.HIGH,
+                reasons=["synthetic"],
+            )
+        )
+    side.suggested_pair, side.marked_pair = pairs
+
+
+def _series(person, name, status, members, index, cancelled_at=None):
+    series = RecurringSeries.objects.create(
+        person=person,
+        merchant_key=name.lower(),
+        display_name=name,
+        cadence=RecurringSeries.Cadence.MONTHLY,
+        typical_amount_minor=-1_000,
+        status=status,
+        confidence=RecurringSeries.Confidence.HIGH,
+        reasons=["synthetic"],
+        fingerprint=f"{index:064x}",
+        cancelled_at=cancelled_at,
+    )
+    for member in members:
+        RecurringSeriesMember.objects.create(series=series, transaction=member)
+    return series
+
+
+def _own_rows(person, household, when, index):
+    """The requester's own account, recurring series and SimpleFIN connection, for the ids a probe may use."""
+    account = Account.objects.create(
+        name=f"Synthetic {person.display_name} spending", account_type=Account.Type.CHECKING, owner=person
+    )
+    charge = seed_transaction(account, person, amount_minor=-4_321, when=when, description="Synthetic own stream", index=index)
+    SimpleFinConnection.objects.create(owner=person, encrypted_access_url=b"synthetic-unused")
+    return SimpleNamespace(
+        account=account,
+        series=_series(person, "Synthetic own stream", RecurringSeries.Status.CONFIRMED, [charge], index),
+        category=household.categories.get(name="Groceries"),
     )
 
 
@@ -676,8 +940,12 @@ def _personal_rows(side):
 
 
 @pytest.fixture
-def world(db, settings, tmp_path):
+def world(db, settings, tmp_path, monkeypatch):
     settings.RECEIPTS_DIR = str(tmp_path)
+    # Every connection lists one synthetic SimpleFIN account, and a sync never leaves the test.
+    remote = {"id": REMOTE_ID, "name": "SYN remote", "institution": "", "type": "", "currency": "USD"}
+    monkeypatch.setattr("finance.simplefin_views.load_remote_accounts", lambda connection: ([remote], []))
+    monkeypatch.setattr("finance.simplefin_views.sync_connection", lambda *args: {"result": "SYN synced"})
     base = build_report_world()
     owner, household, when = base.owner, base.household, base.when
     outsider = make_person("outsider")
@@ -722,6 +990,9 @@ def world(db, settings, tmp_path):
         side.tag = tag
     _personal_rows(private)
     private.series = base.series
+    private.series_charge = base.secret_charge
+    shared.series = _series(owner, f"{HOUSEHOLD_CANARY} stream", RecurringSeries.Status.CONFIRMED, [shared.txn], 262)
+    shared.series_charge = shared.txn
     private.planned = base.planned
     private.goal = base.goal
     shared.planned = PlannedItem.objects.create(
@@ -754,8 +1025,18 @@ def world(db, settings, tmp_path):
         amount_column="Amount",
         created_by=owner,
     )
+    own = {
+        "owner": _own_rows(owner, household, when, 300),
+        "member": _own_rows(base.member, household, when, 301),
+        "outsider": _own_rows(outsider, elsewhere, when, 302),
+    }
     return SimpleNamespace(
-        owner=owner, member=base.member, outsider=outsider, when=when, sides={"private": private, "shared": shared}
+        owner=owner,
+        member=base.member,
+        outsider=outsider,
+        when=when,
+        sides={"private": private, "shared": shared},
+        own=own,
     )
 
 
@@ -796,7 +1077,12 @@ def _text(response):
 
 def _leaks(response, forbidden):
     body = _text(response)
-    return [needle for needle in forbidden if needle in body]
+    # A bare minor amount such as 7777 can turn up inside a UUID or a timestamp, so it leaks only as a whole number.
+    return [
+        needle
+        for needle in forbidden
+        if (re.search(rf"(?<!\w){needle}(?!\w)", body) if needle.isdigit() else needle in body)
+    ]
 
 
 def _assert_denied(requester, url, data, forbidden):
@@ -937,6 +1223,60 @@ def test_pages_do_not_leak_through_ids_in_the_query(world, name, kwargs, who):
             row["id"] for row in added if any(row.get(column) in ids for column, ids in hidden.items())
         ]
         assert not trespass, f"POST {url} added {model} rows {trespass} on objects hidden from the {who}"
+
+
+def _action_cases():
+    """The member names the owner's private object; the outsider names either side's."""
+    return [
+        pytest.param(name, action, side, who, id=f"{name}-{action}-{side}-{who}")
+        for name, route in PAGE_ROUTES.items()
+        for action, form in route.actions.items()
+        for who, sides in (("member", ("private",)), ("outsider", ("private", "shared")))
+        for side in form.sides
+        if side in sides
+    ]
+
+
+@pytest.mark.parametrize("name, action, side, who", _action_cases())
+def test_page_actions_refuse_another_members_or_households_object(world, name, action, side, who):
+    form = PAGE_ROUTES[name].actions[action]
+    requester = getattr(world, who)
+    forbidden = PRIVATE_FORBIDDEN if who == "member" else OUTSIDER_FORBIDDEN
+    url = reverse(name)
+    data = form.data(world.sides[side], world.own[who])
+    before = _ledger(requester)
+    response = _client(requester).post(url, data)
+    label = f"POST {url} {data}"
+    assert response.status_code in form.refused, f"{label} answered {response.status_code}, not {form.refused}"
+    leaked = _leaks(response, forbidden)
+    assert not leaked, f"{label} leaked {leaked}"
+    changed = _changes(before, _ledger(requester))
+    assert not changed, f"refused {label} changed {changed}"
+
+
+@pytest.mark.parametrize(
+    "name, action", [(name, action) for name, route in PAGE_ROUTES.items() for action in route.actions]
+)
+def test_owner_page_action_changes_something(world, name, action):
+    """The owner's same POST gets past the form's other checks, so the probes reach the lookup."""
+    form = PAGE_ROUTES[name].actions[action]
+    data = form.data(world.sides[form.sides[0]], world.own["owner"])
+    before = _ledger(world.owner)
+    response = _client(world.owner).post(reverse(name), data)
+    assert response.status_code == 302, f"the owner's POST {name} {data} answered {response.status_code}"
+    assert _changes(before, _ledger(world.owner)), f"the owner's POST {name} {data} changed nothing"
+
+
+def test_every_page_that_takes_a_post_says_what_it_names(world):
+    """A page that accepts POST declares the ids its body names, or why it names none."""
+    client = _client(world.owner)
+    silent = [
+        name
+        for name, route in PAGE_ROUTES.items()
+        if route.form is None and not route.actions and not route.post_reason.strip()
+        and client.post(reverse(name, kwargs=route.kwargs[0])).status_code != 405
+    ]
+    assert not silent, f"pages that accept POST without form, actions or post_reason: {silent}"
 
 
 def _owner_canary_cases():
