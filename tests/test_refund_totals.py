@@ -331,3 +331,22 @@ def test_a_private_refund_is_untouched_by_a_pair_its_owner_cannot_see():
     assert _totals(bob) == (0, 3000)
     assert RefundLink.objects.visible_to(bob).filter(refund=refund).exists()
     assert _link_history(refund) == [("unlinked", "linked")]
+
+
+def test_a_members_dropped_link_history_stays_hidden_after_the_link_is_deleted():
+    """The member-only history row outlives the link: an undo later must not show Bob Alice's pairing."""
+    alice, bob, joint, refund = _household_refund_linked_by_bob(
+        "Synthetic transfer to savings", "Synthetic transfer from checking"
+    )
+    refresh_transfer_pairs(alice)
+    purchase = RefundLink.objects.get(refund=refund).original
+
+    undo_import_batch(bob, joint.pk, purchase.import_batch_id)
+
+    assert not RefundLink.objects.filter(refund=refund).exists()
+    assert _visible_link_history(bob, refund) == [("unlinked", "linked"), ("linked", "unlinked")]
+    assert _visible_link_history(alice, refund) == [
+        ("unlinked", "linked"),
+        ("linked", "unlinked"),
+        ("linked", "unlinked"),
+    ]
