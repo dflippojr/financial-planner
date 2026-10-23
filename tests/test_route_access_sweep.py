@@ -134,6 +134,8 @@ class PageRoute:
     marks a page whose baseline shows the owner a canary, which proves the
     probe would see a leak. form lists POST fields that carry ids, for views
     that take a form; None when the view takes no POST worth probing.
+    owner_post checks that the owner's same POST, with ids they may use, gets
+    past the view's other checks, so the probe reaches the authorization.
     """
 
     query: tuple[str, ...] = ()
@@ -142,6 +144,7 @@ class PageRoute:
     form: tuple[str, ...] | None = None
     extra: dict = field(default_factory=dict)
     kwargs: tuple[dict, ...] = ({},)
+    owner_post: Callable[[SimpleNamespace, object], bool] | None = None
 
 
 def _account(side):
@@ -270,8 +273,8 @@ PROBE = {
     "merge_series": "series",
     "add_series": "series",
     "suggestion_id": "suggestion",
-    "transaction_id": "txn",
-    "eligible_id": "txn",
+    "transaction_id": "charges",
+    "eligible_id": "charges",
 }
 
 FILTERS = ("account", "tag", "scope")
@@ -282,7 +285,13 @@ PAGE_ROUTES = {
     "chat": PageRoute(query=("c",), owner_canary=True),
     "more": PageRoute(),
     "chat-popover": PageRoute(query=("c",)),
-    "chat-send": PageRoute(form=("conversation_id",), extra={"prompt": "SYN question"}),
+    "chat-send": PageRoute(
+        form=("conversation_id",),
+        extra={"prompt": "SYN question"},
+        owner_post=lambda world, _response: world.sides["private"]
+        .conversation.messages.filter(content="SYN question")
+        .exists(),
+    ),
     "home": PageRoute(query=FILTERS, baseline=WINDOW, owner_canary=True),
     "spending-by-category": PageRoute(query=FILTERS, baseline=WINDOW, owner_canary=True),
     "spending-category-uncategorized": PageRoute(query=FILTERS, baseline=WINDOW, owner_canary=True),
@@ -323,6 +332,7 @@ PAGE_ROUTES = {
         form=("transaction_id",),
         extra={"step": "preview", "name": "SYN", "cadence": "monthly"},
         owner_canary=True,
+        owner_post=lambda _world, response: response.context["preview"] is not None,
     ),
     "planned-items": PageRoute(query=("scope",), owner_canary=True),
     "bills-calendar": PageRoute(query=("scope",), form=("accounts",), owner_canary=True),
@@ -510,6 +520,18 @@ def _side_rows(owner, household, account, card, label, amount_minor, when, index
     )
     Transaction.objects.filter(pk=txn.pk).update(category_source=Transaction.CategorySource.SPLIT)
     txn.refresh_from_db()
+    # Two plain charges: a manual recurring series needs at least two.
+    charges = [
+        seed_transaction(
+            account,
+            owner,
+            amount_minor=-amount_minor,
+            when=when - timedelta(days=30 * month),
+            description=f"{label} subscription",
+            index=index + 10 + month,
+        )
+        for month in (0, 1)
+    ]
     manual_batch = ImportBatch.objects.create(
         account=account,
         imported_by=owner,
@@ -571,6 +593,7 @@ def _side_rows(owner, household, account, card, label, amount_minor, when, index
         card=card,
         loan=loan,
         txn=txn,
+        charges=charges,
         part=txn.splits.order_by("position").first(),
         manual=manual,
         receipt=receipt,
@@ -671,6 +694,7 @@ def world(db, settings, tmp_path):
             base_url="http://synthetic.invalid",
             chat_backend="local",
             background_backend="local",
+            offer_local_chat=True,
         )
 
     private = _side_rows(owner, None, base.private, base.card, CANARY, SPLIT_MINOR, when, 100)
@@ -782,7 +806,8 @@ def _assert_denied(requester, url, data, forbidden):
         response = client.post(url, data) if method == "post" else client.get(url)
         label = f"{method.upper()} {url}"
         assert response.status_code in DENIED, f"{label} answered {response.status_code}, not 404"
-        assert not _leaks(response, forbidden), f"{label} leaked {_leaks(response, forbidden)}"
+        leaked = _leaks(response, forbidden)
+        assert not leaked, f"{label} leaked {leaked}"
         changed = _changes(before, _ledger(requester))
         assert not changed, f"denied {label} changed {changed}"
 
@@ -830,7 +855,8 @@ def test_owner_reaches_every_seeded_object(world, name, side):
 
 
 def _probe_value(world, param):
-    return str(getattr(world.sides["private"], PROBE.get(param, "account")).pk)
+    target = getattr(world.sides["private"], PROBE.get(param, "account"))
+    return [str(item.pk) for item in target] if isinstance(target, list) else str(target.pk)
 
 
 def _baseline(world, route):
@@ -855,7 +881,7 @@ def _probes(world, route):
 
 
 def _hidden_ids(requester):
-    """Accounts the requester cannot see, and the transactions and batches on them."""
+    """Accounts the requester cannot see, the transactions and batches on them, and others' chats."""
     hidden = set(
         Account.objects.exclude(pk__in=Account.objects.visible_to(requester).values("pk")).values_list("pk", flat=True)
     )
@@ -863,6 +889,7 @@ def _hidden_ids(requester):
         "account_id": hidden,
         "transaction_id": set(Transaction.objects.filter(account_id__in=hidden).values_list("pk", flat=True)),
         "import_batch_id": set(ImportBatch.objects.filter(account_id__in=hidden).values_list("pk", flat=True)),
+        "conversation_id": set(AiConversation.objects.exclude(member=requester).values_list("pk", flat=True)),
     }
 
 
@@ -887,7 +914,8 @@ def test_pages_do_not_leak_through_ids_in_the_query(world, name, kwargs, who):
         if route.form is not None and response.status_code == 405:
             break
         assert response.status_code in PAGE_ANSWERS, f"GET {url} {query} answered {response.status_code}"
-        assert not _leaks(response, forbidden), f"GET {url} {query} leaked {_leaks(response, forbidden)}"
+        leaked = _leaks(response, forbidden)
+        assert not leaked, f"GET {url} {query} leaked {leaked}"
     if route.form is None:
         return
     data = {**route.extra, **{param: _probe_value(world, param) for param in route.form}}
@@ -895,7 +923,8 @@ def test_pages_do_not_leak_through_ids_in_the_query(world, name, kwargs, who):
     before = _ledger(requester)
     response = client.post(url, data)
     assert response.status_code in PAGE_POST_ANSWERS, f"POST {url} {data} answered {response.status_code}"
-    assert not _leaks(response, forbidden), f"POST {url} {data} leaked {_leaks(response, forbidden)}"
+    leaked = _leaks(response, forbidden)
+    assert not leaked, f"POST {url} {data} leaked {leaked}"
     after = _ledger(requester)
     for model, rows in before.items():
         kept = {row["id"]: row for row in after[model]}
@@ -921,3 +950,11 @@ def test_owner_sees_the_canary_on_the_baseline_page(world, name):
     response = _client(world.owner).get(reverse(name, kwargs=route.kwargs[0]), query)
     assert response.status_code == 200, f"{name} {query} answered {response.status_code}"
     assert CANARY in _text(response), f"the owner does not see the canary on {name} {query}"
+
+
+@pytest.mark.parametrize("name", [name for name, route in PAGE_ROUTES.items() if route.owner_post])
+def test_owner_form_post_gets_past_the_other_checks(world, name):
+    route = PAGE_ROUTES[name]
+    data = {**route.extra, **{param: _probe_value(world, param) for param in route.form or ()}}
+    response = _client(world.owner).post(reverse(name, kwargs=route.kwargs[0]), data)
+    assert route.owner_post(world, response), f"the owner's POST {name} {data} did not reach its lookup"
