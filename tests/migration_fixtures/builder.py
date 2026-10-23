@@ -441,6 +441,8 @@ class _Builder:
                                        used_account_ids=[self.acct["home_checking"].pk], turn_count=1,
                                        tool_call_count=1, expires_at=NOW + timedelta(days=30))
             self.create("AiConversationMessage", conversation=conversation, role="user", content="Synthetic question")
+        # Drew's chat began while Drew still lived in the home, so 0076 deletes it.
+        self.m["AiConversation"].objects.filter(member=self.person["Drew"]).update(created_at=NOW - timedelta(days=800))
 
     def build(self):
         self.people()

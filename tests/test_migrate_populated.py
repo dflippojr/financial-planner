@@ -22,6 +22,8 @@ START_POINTS = {
 }
 # 0070 deletes recurring alerts raised before sources were recorded (#520).
 DELETED_ALERT_KINDS = ("recurring_price", "recurring_missed")
+# 0076 deletes chat that may have quoted a row its member no longer sees (#569).
+DELETED_CHAT_MEMBER = "Synthetic Drew"
 # 0060 appends the restorations it makes to the correction history.
 APPEND_ONLY = {"finance_transactioncorrectionhistory"}
 # Money columns a migration drops after copying their values elsewhere. Each
@@ -138,6 +140,14 @@ def test_populated_database_migrates_to_head(start):
         assert all(count for ((count, _),) in moved.values()), "seed a value in every moved money column"
         deleted_alerts = old_apps.get_model("finance", "Alert").objects.filter(kind__in=DELETED_ALERT_KINDS).count()
         assert deleted_alerts > 0
+        chats = old_apps.get_model("finance", "AiConversation").objects.filter(
+            member__display_name=DELETED_CHAT_MEMBER
+        )
+        deleted_chats = chats.count()
+        deleted_chat_messages = old_apps.get_model("finance", "AiConversationMessage").objects.filter(
+            conversation__in=chats
+        ).count()
+        assert deleted_chats > 0
 
         executor = MigrationExecutor(connection)
         executor.migrate(head)
@@ -145,7 +155,9 @@ def test_populated_database_migrates_to_head(start):
         print(f"start {target[0][1]}: {summary}; built in {built - began:.1f}s, migrated in {migrated - built:.1f}s")
 
         after = _counts()
-        expected = dict(counts, finance_alert=counts["finance_alert"] - deleted_alerts)
+        expected = dict(counts, finance_alert=counts["finance_alert"] - deleted_alerts,
+                        finance_aiconversation=counts["finance_aiconversation"] - deleted_chats,
+                        finance_aiconversationmessage=counts["finance_aiconversationmessage"] - deleted_chat_messages)
         for table, count in expected.items():
             if table in APPEND_ONLY:
                 assert after[table] >= count, table
@@ -169,9 +181,22 @@ def test_populated_database_migrates_to_head(start):
         Person = new_apps.get_model("finance", "Person")
         assert Person.objects.filter(privacy_policy_dismissed_version__isnull=False).count() == 1
         assert not new_apps.get_model("finance", "Budget").objects.filter(rollover_started_month__year__lt=2000).exists()
-        # Conversations from before #569 recorded no planned items or budgets.
-        conversations = new_apps.get_model("finance", "AiConversation").objects.all()
-        assert conversations.exists()
-        assert {(tuple(row.used_planned_item_ids), tuple(row.used_budget_ids)) for row in conversations} == {((), ())}
+        # Conversations from before #569 record every household plan and budget their member could see.
+        quoted = {
+            row.member.display_name: (row.used_planned_item_ids, row.used_budget_ids)
+            for row in new_apps.get_model("finance", "AiConversation").objects.select_related("member")
+        }
+        household_rows = [
+            sorted(new_apps.get_model("finance", name).objects.filter(
+                scope="household", household__name="Synthetic Home"
+            ).values_list("pk", flat=True))
+            for name in ("PlannedItem", "Budget")
+        ]
+        assert all(household_rows)
+        assert quoted == {
+            "Synthetic Alex": tuple(household_rows),
+            "Synthetic Blair": tuple(household_rows),
+            "Synthetic Casey": ([], []),
+        }
     finally:
         MigrationExecutor(connection).migrate(head)

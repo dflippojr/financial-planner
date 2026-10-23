@@ -384,3 +384,55 @@ def test_follow_up_does_not_resume_a_session_once_a_quoted_plan_is_out_of_sight(
     assert ("POST", f"/api/v1/sessions/{old_session}/messages") not in state.requests
     assert len(state.session_creates) == creates_before + 1
     assert not AiConversation.objects.filter(pk=conversation.pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_leaving_holds_the_households_planned_items_and_budgets_until_it_commits():
+    # A reply store locks the rows its conversation quoted, so it waits for the
+    # leave instead of reading the ending membership as current.
+    import threading
+    from unittest.mock import patch
+
+    from django.db import DatabaseError, connection, connections, transaction
+
+    import finance.chat_services as chat_services
+    from finance.models import Budget, Membership, PlannedItem
+
+    if connection.vendor != "postgresql":
+        pytest.skip("row locks can only be observed on PostgreSQL")
+    _a, owner, household = make_member("owner")
+    _b, member, _ = make_member("member", household=household, policy=current_policy())
+    rows = ((PlannedItem, _plan(owner, household, "ZQLOCKEDPLAN")), (Budget, _budget(owner, household, "ZQLOCKED")))
+    purging, release = threading.Event(), threading.Event()
+    purge = chat_services.delete_conversations_without_access
+    errors = []
+
+    def purge_after_pause(*args, **kwargs):
+        purging.set()
+        if not release.wait(timeout=30):
+            raise TimeoutError("The leave was never released")
+        return purge(*args, **kwargs)
+
+    def leave():
+        try:
+            leave_household(member)
+        except Exception as exc:  # noqa: BLE001 - reported to the main thread
+            errors.append(exc)
+        finally:
+            connections.close_all()
+
+    with patch.object(chat_services, "delete_conversations_without_access", purge_after_pause):
+        worker = threading.Thread(target=leave, daemon=True)
+        worker.start()
+        try:
+            assert purging.wait(timeout=10), errors
+            for model, row in rows:
+                with pytest.raises(DatabaseError), transaction.atomic():
+                    list(model.objects.select_for_update(nowait=True).filter(pk=row.pk))
+        finally:
+            release.set()
+            worker.join(timeout=30)
+
+    assert not worker.is_alive()
+    assert not errors
+    assert not Membership.objects.filter(person=member, ended_at__isnull=True).exists()
