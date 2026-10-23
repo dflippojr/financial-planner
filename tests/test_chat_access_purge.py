@@ -1,4 +1,4 @@
-"""Chat history is derived data: it goes when the member loses access to an account it used."""
+"""Chat history is derived data: it goes when the member loses access to a row it used."""
 
 from datetime import date, timedelta
 
@@ -233,4 +233,149 @@ def test_applying_a_proposal_while_its_account_is_unshared_does_not_deadlock():
     )
 
     assert txn.tags.filter(name="Synthetic").exists()
+    assert not AiConversation.objects.filter(pk=conversation.pk).exists()
+
+
+def _plan(owner, household, name, *, private=False):
+    from finance.models import PlannedItem
+
+    return PlannedItem.objects.create(
+        owner=owner, scope="private" if private else "household", household=None if private else household,
+        name=name, kind="expense", amount_minor=432_109, cadence="monthly", start_date=timezone.localdate(),
+    )
+
+
+def _plan_payload(item, scope):
+    return {"scope": scope, "name": item.name, "kind": item.kind, "amount_minor": item.amount_minor,
+            "start_date": item.start_date, "end_date": item.end_date, "cadence": item.cadence}
+
+
+def _budget(owner, household, name):
+    from finance.budget_services import save_budget
+    from finance.models import Category
+
+    category = Category.objects.create(household=household, name=name)
+    return save_budget(owner, {"scope": "household", "category": category, "amount_minor": 432_109,
+                               "effective_month": _MONTH, "rollover_enabled": False})
+
+
+def _budget_payload(budget, scope):
+    return {"scope": scope, "category": budget.category, "amount_minor": 432_109,
+            "effective_month": _MONTH, "rollover_enabled": False}
+
+
+_MONTH = date(2026, 3, 1)
+_TOOL_ARGS = {"list_planned_items": {}, "projected_cash_flow": {}, "list_budgets": {"month": "2026-03"}}
+
+
+def _ask_quoting(state, person, tool, text="What is planned?"):
+    state.need_tool = True
+    state.pending_tool_calls = [[{"call_id": "c1", "name": tool, "args": _TOOL_ARGS[tool]}]]
+    conversation = ask(person, text)
+    state.need_tool = False
+    return conversation
+
+
+def _three_members(harness):
+    _state, url = harness
+    _a, owner, household = make_member("owner")
+    _b, member, _ = make_member("member", household=household, policy=current_policy())
+    _c, third, _ = make_member("third", household=household, policy=current_policy())
+    for person in (owner, member, third):
+        connect_harness(person, base_url=url, token=TOKEN)
+    return owner, member, third, household
+
+
+def _make_private(owner, row):
+    from finance.budget_services import save_budget
+    from finance.models import Budget
+    from finance.planning_services import save_planned_item
+
+    if isinstance(row, Budget):
+        save_budget(owner, _budget_payload(row, "private"), budget=row)
+    else:
+        save_planned_item(owner, _plan_payload(row, "private"), item=row)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("tool", ["list_planned_items", "projected_cash_flow", "list_budgets"])
+def test_making_a_quoted_household_row_private_purges_other_members_chat(harness, tool):
+    state, _url = harness
+    owner, member, _third, household = _three_members(harness)
+    marker = "ZQHOUSEHOLDROW"
+    row = _budget(owner, household, marker) if tool == "list_budgets" else _plan(owner, household, marker)
+    conversation = _ask_quoting(state, member, tool)
+    old_session = conversation.harness_session_id
+    assert old_session
+    if tool != "projected_cash_flow":
+        assert marker in signed_in(member).get(reverse("chat") + f"?c={conversation.pk}").content.decode()
+    owners = _ask_quoting(state, owner, tool)
+
+    _make_private(owner, row)
+
+    assert not AiConversation.objects.filter(pk=conversation.pk).exists()
+    assert marker not in signed_in(member).get(reverse("chat") + f"?c={conversation.pk}").content.decode()
+    with pytest.raises(PermissionDenied):
+        ask(member, "Follow up", conversation_id=conversation.pk)
+    assert ("POST", f"/api/v1/sessions/{old_session}/messages") not in state.requests
+    # The owner still sees the row, so the owner's own conversation is kept.
+    assert AiConversation.objects.filter(pk=owners.pk).exists()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("tool", ["list_planned_items", "list_budgets"])
+def test_members_who_still_see_a_quoted_row_keep_their_chat(harness, tool):
+    state, _url = harness
+    owner, member, third, household = _three_members(harness)
+    if tool == "list_budgets":
+        _budget(owner, household, "ZQSTAYSSHARED")
+    else:
+        _plan(owner, household, "ZQSTAYSSHARED")
+    conversation = _ask_quoting(state, member, tool)
+    other = _budget(third, household, "ZQOTHER") if tool == "list_budgets" else _plan(third, household, "ZQOTHER")
+
+    _make_private(third, other)
+
+    # The conversation never quoted the row made private; what it quoted is still visible.
+    assert AiConversation.objects.filter(pk=conversation.pk).exists()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("tool", ["list_planned_items", "projected_cash_flow", "list_budgets"])
+def test_leaving_purges_chat_that_quoted_a_household_row_without_any_account(harness, tool):
+    state, _url = harness
+    owner, member, third, household = _three_members(harness)
+    if tool == "list_budgets":
+        _budget(owner, household, "ZQLEFTROW")
+    else:
+        _plan(owner, household, "ZQLEFTROW")
+    left_behind = _ask_quoting(state, member, tool)
+    assert not left_behind.used_account_ids
+    stays = _ask_quoting(state, third, tool)
+    owners = _ask_quoting(state, owner, tool)
+
+    leave_household(member)
+
+    assert not AiConversation.objects.filter(pk=left_behind.pk).exists()
+    assert AiConversation.objects.filter(pk__in=(stays.pk, owners.pk)).count() == 2
+
+
+@pytest.mark.django_db
+def test_follow_up_does_not_resume_a_session_once_a_quoted_plan_is_out_of_sight(harness):
+    from finance.models import PlannedItem
+
+    state, _url = harness
+    owner, member, _third, household = _three_members(harness)
+    item = _plan(owner, household, "ZQPLANBEHINDPURGE")
+    conversation = _ask_quoting(state, member, "list_planned_items")
+    old_session = conversation.harness_session_id
+    assert old_session
+
+    PlannedItem.objects.filter(pk=item.pk).update(scope="private", household=None)
+    creates_before = len(state.session_creates)
+    send_message(member, "Follow up", conversation_id=conversation.pk)
+    process_pending_turns(sleep=lambda _s: None)
+
+    assert ("POST", f"/api/v1/sessions/{old_session}/messages") not in state.requests
+    assert len(state.session_creates) == creates_before + 1
     assert not AiConversation.objects.filter(pk=conversation.pk).exists()
