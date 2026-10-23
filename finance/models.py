@@ -877,6 +877,9 @@ class TransactionCorrectionHistory(models.Model):
     previous_amount_minor = models.BigIntegerField(null=True, blank=True)
     new_amount_minor = models.BigIntegerField(null=True, blank=True)
     currency = models.CharField(max_length=3, blank=True, default="")
+    # Listed only to this member, such as a refund link dropped for them alone (#570).
+    # Deleting the member deletes the rows no one else may see.
+    only_for = models.ForeignKey(Person, on_delete=models.CASCADE, null=True, blank=True, related_name="+")
 
     class QuerySet(models.QuerySet):
         def visible_to(self, principal):
@@ -886,14 +889,10 @@ class TransactionCorrectionHistory(models.Model):
             pair_with_hidden_leg = TransferPair.objects.filter(
                 Q(leg_a_id=models.OuterRef("transaction_id")) | Q(leg_b_id=models.OuterRef("transaction_id"))
             ).exclude(leg_a_id__in=visible_transactions, leg_b_id__in=visible_transactions)
-            # A refund link dropped for one member only is that member's entry (#570).
-            others_drop = RefundLinkDrop.objects.filter(history_id=models.OuterRef("pk")).exclude(
-                person=_person_for(principal)
-            )
-            return self.filter(transaction_id__in=visible_transactions).exclude(
-                (Q(field_name=self.model.Field.EXCLUSION) & models.Exists(pair_with_hidden_leg))
-                | models.Exists(others_drop)
-            )
+            return self.filter(
+                Q(only_for__isnull=True) | Q(only_for=_person_for(principal)),
+                transaction_id__in=visible_transactions,
+            ).exclude(Q(field_name=self.model.Field.EXCLUSION) & models.Exists(pair_with_hidden_leg))
 
     objects = QuerySet.as_manager()
 
@@ -1108,18 +1107,12 @@ class RefundLinkDrop(models.Model):
     The original became a leg of a transfer pair that this member sees both legs
     of, while another viewer of the refund does not, so the pair is excluded only
     for this member (`exclusion_exists_for`). Everyone else keeps the link. The
-    history row is this member's "linked" -> "unlinked" entry, listed to no one else.
+    member's "linked" -> "unlinked" history row is `only_for` them, so it stays
+    hidden from others even after the link itself is deleted.
     """
 
     link = models.ForeignKey(RefundLink, on_delete=models.CASCADE, related_name="drops")
     person = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="refund_link_drops")
-    history = models.OneToOneField(
-        TransactionCorrectionHistory,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="refund_link_drop",
-    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

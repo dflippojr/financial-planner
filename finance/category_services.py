@@ -691,7 +691,7 @@ def drop_refund_links_for_pair(links, legs, actor):
     member joins (a private refund whose owner sees them, or a household refund
     whose legs are both in that household), the link is deleted as for an
     archived original. Otherwise each such viewer gets a `RefundLinkDrop` and a
-    history row only they are shown, with no audit event, so members who cannot
+    history row `only_for` them, with no audit event, so members who cannot
     see a leg keep their link, totals and history unchanged.
     """
     if not links:
@@ -714,15 +714,16 @@ def drop_refund_links_for_pair(links, legs, actor):
             continue
         already = set(link.drops.values_list("person_id", flat=True))
         for person_id in sorted(seeing - already):
-            history = TransactionCorrectionHistory.objects.create(
+            TransactionCorrectionHistory.objects.create(
                 transaction=link.refund,
                 actor=actor,
                 recorded_at=timezone.now(),
                 field_name=TransactionCorrectionHistory.Field.REFUND_LINK,
                 previous_description="linked",
                 new_description="unlinked",
+                only_for_id=person_id,
             )
-            RefundLinkDrop.objects.create(link=link, person_id=person_id, history=history)
+            RefundLinkDrop.objects.create(link=link, person_id=person_id)
     if deleted:
         _delete_refund_links(deleted, actor)
 
