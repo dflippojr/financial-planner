@@ -70,13 +70,14 @@ def classify_overlap(account, preview: Preview) -> Preview:
     reimport. Matching is limited to this account so a private ledger cannot
     hide overlap on a household account, and archived (undone) rows do not count.
     Rows on or after a transactions-mode SimpleFIN cut-over are invalid: the sync
-    supplies that period, and its descriptions differ from the bank's CSV.
+    supplies that period, and its descriptions differ from the bank's CSV. A
+    card row is compared by its posted date, the day SimpleFIN dates it by.
     """
     remaining = _active_fingerprint_counts(account)
     cutover = simplefin_cutover(account)
     classified = []
     for row in preview.rows:
-        if row.is_valid and cutover is not None and row.transaction_date >= cutover:
+        if row.is_valid and cutover is not None and row.cutover_date >= cutover:
             row = row.with_error(f"Covered by SimpleFIN from {cutover.isoformat()}.")
         if not row.is_valid:
             classified.append(row.classified("invalid"))

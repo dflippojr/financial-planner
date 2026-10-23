@@ -30,12 +30,15 @@ from finance.transaction_filters import visible_transaction_queryset
 
 from . import harness as ledger
 from .strategies import (
+    APPLE_CARD,
     CAPITAL_ONE,
     HUNTINGTON,
     MAX_MINOR,
     Row,
     overlapping_files,
     payee_memo,
+    posted_day,
+    posting_lags,
     rows,
     shapes,
     shifted,
@@ -119,6 +122,7 @@ def test_overlapping_files_give_the_same_ledger_in_any_order(case):
 
 @dataclass(frozen=True)
 class CutoverCase:
+    shape: object
     cutover: date
     world: tuple
     csv_files: tuple
@@ -132,17 +136,24 @@ def _feed_row(index, row):
     return replace(row, payee=f"SYN FEED N{index}", memo="")
 
 
+def _card_lags(shape):
+    """A card export may post a row days after its Transaction Date; other exports have one date."""
+    return posting_lags if shape.has_posted_date else None
+
+
 @st.composite
 def cutover_cases(draw):
+    shape = draw(st.sampled_from((HUNTINGTON, CAPITAL_ONE, APPLE_CARD)))
     cutover = draw(st.dates(date(2025, 3, 1), date(2026, 8, 1)))
-    world = draw(rows(min_size=1, max_size=10, unique=True,
+    world = draw(rows(min_size=1, max_size=10, unique=True, lag_strategy=_card_lags(shape),
                       day_strategy=st.integers(-45, 45).map(lambda offset: shifted(cutover, offset))))
     file_count = draw(st.integers(1, 3))
     feed_count = draw(st.integers(1, 3))
     csv_files = [[] for _ in range(file_count)]
     feeds = [[] for _ in range(feed_count)]
     for index, row in enumerate(world):
-        before = row.day < cutover
+        # SimpleFIN dates a row by its posted day, so that day decides which side owns it.
+        before = posted_day(row) < cutover
         # The side that owns a date always has the transaction; the other side may repeat it.
         if before or draw(st.booleans()):
             for file in draw(st.sets(st.integers(0, file_count - 1), min_size=1)):
@@ -153,7 +164,7 @@ def cutover_cases(draw):
     operations = [("csv", i) for i in range(file_count)] + [("sync", i) for i in range(feed_count)]
     repeats = draw(st.lists(st.sampled_from(operations), max_size=2))
     steps = draw(st.permutations(operations + repeats))
-    return CutoverCase(cutover, tuple(world), tuple(map(tuple, csv_files)), tuple(map(tuple, feeds)), tuple(steps))
+    return CutoverCase(shape, cutover, tuple(world), tuple(map(tuple, csv_files)), tuple(map(tuple, feeds)), tuple(steps))
 
 
 @given(cutover_cases())
@@ -161,23 +172,61 @@ def test_a_cutover_counts_each_transaction_once_in_any_mix_of_csv_and_simplefin(
     with ledger.isolated():
         owner = ledger.make_member()
         ledger.make_household(owner)
-        account = ledger.make_account(owner, Account.Type.CHECKING)
+        account = ledger.make_account(owner, case.shape.account_type)
         connection = ledger.link_simplefin(owner, account, case.cutover)
         for kind, index in case.steps:
             if kind == "csv":
-                ledger.import_rows(owner, account, HUNTINGTON, list(case.csv_files[index]))
+                ledger.import_rows(owner, account, case.shape, list(case.csv_files[index]))
             else:
                 ledger.sync(owner, connection, case.feeds[index])
 
+        # A CSV row keeps its Transaction Date; a SimpleFIN row is dated when it posted.
         expected_rows = Counter(
-            (row.day, row.amount_minor, "USD",
-             payee_memo(row) if row.day < case.cutover else _feed_row(index, row).payee)
+            (row.day, row.amount_minor, "USD", case.shape.stored_description(row))
+            if posted_day(row) < case.cutover
+            else (posted_day(row), row.amount_minor, "USD", _feed_row(index, row).payee)
             for index, row in enumerate(case.world)
         )
         assert ledger.content_counter([account]) == expected_rows
         expected = ledger.expected_totals([row.amount_minor for row in case.world])
         assert ledger.totals(owner, [account]) == expected
         assert ledger.report_income_and_spending(owner, [account]) == (expected.income, expected.spending)
+
+
+@st.composite
+def default_cutover_cases(draw):
+    """Rows already exported to a CSV, and later rows only the feed has, around a blank cut-over."""
+    shape = draw(st.sampled_from((HUNTINGTON, CAPITAL_ONE, APPLE_CARD)))
+    start = draw(st.dates(date(2025, 3, 1), date(2026, 8, 1)))
+    exported = draw(rows(min_size=1, max_size=6, unique=True, lag_strategy=_card_lags(shape),
+                         day_strategy=st.integers(0, 30).map(lambda offset: shifted(start, offset))))
+    # A transaction the export missed happens after every exported row, by either date.
+    after = max(posted_day(row) for row in exported)
+    later = draw(rows(min_size=0, max_size=4, lag_strategy=_card_lags(shape),
+                      day_strategy=st.integers(1, 30).map(lambda offset: shifted(after, offset))))
+    later = [replace(row, payee=f"{row.payee} L{index}", source_id=f"SYN-L{index:05d}")
+             for index, row in enumerate(later)]
+    return shape, exported, later
+
+
+@given(default_cutover_cases())
+def test_a_blank_cutover_after_a_csv_import_counts_each_transaction_once(case):
+    shape, exported, later = case
+    with ledger.isolated():
+        owner = ledger.make_member()
+        ledger.make_household(owner)
+        account = ledger.make_account(owner, shape.account_type)
+        ledger.import_rows(owner, account, shape, exported)
+        connection = ledger.link_simplefin(owner, account, None)
+        world = [*exported, *later]
+        ledger.sync(owner, connection, [(index, _feed_row(index, row)) for index, row in enumerate(world)])
+
+        expected_rows = Counter(_key(shape, row) for row in exported) + Counter(
+            (posted_day(row), row.amount_minor, "USD", _feed_row(len(exported) + index, row).payee)
+            for index, row in enumerate(later)
+        )
+        assert ledger.content_counter([account]) == expected_rows
+        assert ledger.totals(owner, [account]) == ledger.expected_totals([row.amount_minor for row in world])
 
 
 # 4. Transfers net to zero; a refund never reduces spending that was never counted.

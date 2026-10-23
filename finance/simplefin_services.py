@@ -16,6 +16,8 @@ from django.utils import timezone
 
 from finance.alert_email import notify_after_alert_run
 from finance.csv_import.fingerprint import transaction_fingerprint
+from finance.csv_import.parser import parse_posted_date
+from finance.csv_import.profiles import POSTED_DATE_MAPPINGS
 from finance.date_bounds import activity_date_error
 from finance.encryption import decrypt_access_url, encrypt_access_url
 from finance.audit_services import append_event
@@ -69,15 +71,30 @@ LINKS_CHANGED = "Account links changed while SimpleFIN was syncing. Sync again."
 UNEXPECTED_FAILURE = "The sync could not be completed. It will be retried on the next scheduled run."
 
 
-def default_cutover_date(account) -> date:
-    latest = (
-        Transaction.objects.filter(account=account, status=Transaction.Status.ACTIVE)
-        .order_by("-transaction_date")
-        .values_list("transaction_date", flat=True)
-        .first()
+def _latest_posted_date(active):
+    """The latest posted date a card export recorded for one of `active` rows, or None (#568)."""
+    latest = None
+    rows = active.filter(import_batch__source__in=POSTED_DATE_MAPPINGS).values_list(
+        "import_batch__source", "original_fields"
     )
+    for source, original_fields in rows.iterator():
+        mapping = POSTED_DATE_MAPPINGS[source]
+        cell = (original_fields or {}).get(mapping.posted_date_column)
+        posted = parse_posted_date(cell, mapping.date_format) if isinstance(cell, str) else None
+        if posted is not None and (latest is None or posted > latest):
+            latest = posted
+    return latest
+
+
+def default_cutover_date(account) -> date:
+    """The day after the latest active row, compared by the date SimpleFIN would give it."""
+    active = Transaction.objects.filter(account=account, status=Transaction.Status.ACTIVE)
+    latest = active.order_by("-transaction_date").values_list("transaction_date", flat=True).first()
     if latest is None:
         return timezone.localdate()
+    posted = _latest_posted_date(active)
+    if posted is not None and posted > latest:
+        latest = posted
     return latest + timedelta(days=1)
 
 

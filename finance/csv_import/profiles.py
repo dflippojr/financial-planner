@@ -75,6 +75,7 @@ APPLE_CARD_MAPPING = Mapping(
     amount_mode="signed",
     amount_column="Amount (USD)",
     invert_sign=True,
+    posted_date_column="Clearing Date",
 )
 
 APPLE_CARD_HEADER_ERROR = (
@@ -103,6 +104,7 @@ CAPITAL_ONE_MAPPING = Mapping(
     debit_column="Debit",
     credit_column="Credit",
     excluded_original_columns=("Card No.",),
+    posted_date_column="Posted Date",
 )
 
 CAPITAL_ONE_HEADER_ERROR = (
@@ -110,6 +112,13 @@ CAPITAL_ONE_HEADER_ERROR = (
     "Expected columns Transaction Date, Posted Date, Card No., Description, "
     "Category, Debit, and Credit."
 )
+
+
+# A stored row from these batches keeps its posted date in original_fields.
+POSTED_DATE_MAPPINGS = {
+    ImportBatch.Source.CAPITAL_ONE: CAPITAL_ONE_MAPPING,
+    ImportBatch.Source.APPLE_CARD: APPLE_CARD_MAPPING,
+}
 
 
 def normalize_profile(value):
