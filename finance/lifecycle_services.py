@@ -352,7 +352,8 @@ def end_current_membership(person, *, audit_actor=None):
 
     Shared by leave_household and the operator eviction command so the two
     cannot drift. Locks the household's current memberships in primary-key
-    order, then the person's household-scoped accounts.
+    order, then the person's household-scoped accounts, then the household's
+    planned items and budgets.
     """
     own_membership, current_memberships = lock_actor_household(person)
     if own_membership is None:
@@ -388,6 +389,20 @@ def end_current_membership(person, *, audit_actor=None):
         if account.scope == Account.Scope.HOUSEHOLD and account.household_id == own_membership.household_id
     ]
     _lock_ledgers(account.pk for account in household_accounts)
+    from .models import Budget, PlannedItem
+
+    # A reply store locks the planned items and budgets its conversation quoted,
+    # after its accounts, so it waits for this leave instead of reading the
+    # ending membership as current.
+    household_rows = {
+        model: list(
+            model.objects.select_for_update()
+            .filter(household=own_membership.household)
+            .order_by("pk")
+            .values_list("pk", flat=True)
+        )
+        for model in (PlannedItem, Budget)
+    }
     transitioned_at = timezone.now()
     transitions = _apply_shared_account_exit(
         person,
@@ -416,7 +431,11 @@ def end_current_membership(person, *, audit_actor=None):
     AiPlanLink.objects.filter(connection__owner=person).exclude(person=person).delete()
     from finance.chat_services import delete_conversations_without_access
 
-    delete_conversations_without_access(account.pk for account in household_accounts)
+    delete_conversations_without_access(
+        (account.pk for account in household_accounts),
+        planned_item_ids=household_rows[PlannedItem],
+        budget_ids=household_rows[Budget],
+    )
     if audit_actor is not None:
         append_event(action=AuditEvent.Action.MEMBER_LEFT, actor=audit_actor, affected_member=person,
                      household=own_membership.household, target_id=person.pk)

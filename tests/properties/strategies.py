@@ -35,6 +35,14 @@ class Row:
     payee: str
     memo: str
     source_id: str
+    # The day a card charge posted, when later than `day`; card exports carry it
+    # beside the Transaction Date, and SimpleFIN dates the row by it (#568).
+    posted: date | None = None
+
+
+def posted_day(row):
+    """The day SimpleFIN dates the transaction by, and so the day a cut-over compares."""
+    return row.posted or row.day
 
 
 def decimal_text(amount_minor):
@@ -75,7 +83,7 @@ def _capital_one(rows):
         ("Transaction Date", "Posted Date", "Card No.", "Description", "Category", "Debit", "Credit"),
         [
             (
-                r.day.isoformat(), r.day.isoformat(), "0000", r.payee, "Synthetic",
+                r.day.isoformat(), posted_day(r).isoformat(), "0000", r.payee, "Synthetic",
                 decimal_text(-r.amount_minor) if r.amount_minor < 0 else "",
                 decimal_text(r.amount_minor) if r.amount_minor > 0 else "",
             )
@@ -91,7 +99,7 @@ def _apple_card(rows):
          "Amount (USD)", "Purchased By"),
         [
             (
-                _mdy(r.day), _mdy(r.day), "SYNTHETIC", r.payee, "Synthetic",
+                _mdy(r.day), _mdy(posted_day(r)), "SYNTHETIC", r.payee, "Synthetic",
                 "Purchase" if r.amount_minor < 0 else "Credit",
                 decimal_text(-r.amount_minor), "Synthetic Member",
             )
@@ -135,14 +143,16 @@ class Shape:
     account_type: str
     render: object
     stored_description: object
+    # Whether the export has a posted date beside the transaction date.
+    has_posted_date: bool = False
 
     def __repr__(self):
         return f"Shape({self.profile!r})"
 
 
 HUNTINGTON = Shape("huntington", Account.Type.CHECKING, _huntington, payee_memo)
-CAPITAL_ONE = Shape("capital_one", Account.Type.CREDIT_CARD, _capital_one, lambda row: row.payee)
-APPLE_CARD = Shape("apple_card", Account.Type.CREDIT_CARD, _apple_card, lambda row: row.payee)
+CAPITAL_ONE = Shape("capital_one", Account.Type.CREDIT_CARD, _capital_one, lambda row: row.payee, True)
+APPLE_CARD = Shape("apple_card", Account.Type.CREDIT_CARD, _apple_card, lambda row: row.payee, True)
 OFX = Shape("ofx", Account.Type.CHECKING, _ofx, payee_memo)
 SHAPES = (HUNTINGTON, CAPITAL_ONE, APPLE_CARD, OFX)
 
@@ -159,16 +169,26 @@ amounts = st.one_of(
 ).flatmap(lambda size: st.sampled_from((size, -size)))
 
 
+# Days from purchase to posting on a card; zero is a charge that posts the same day.
+posting_lags = st.integers(0, 6)
+
+
 @st.composite
-def rows(draw, *, min_size=1, max_size=8, unique=False, day_strategy=days, amount_strategy=amounts):
-    """A list of rows with distinct source ids; `unique` also makes every description distinct."""
+def rows(draw, *, min_size=1, max_size=8, unique=False, day_strategy=days, amount_strategy=amounts,
+         lag_strategy=None):
+    """A list of rows with distinct source ids; `unique` also makes every description distinct.
+
+    With `lag_strategy`, each row posts that many days after its transaction date.
+    """
     count = draw(st.integers(min_size, max_size))
     result = []
     for index in range(count):
         payee = draw(descriptions)
         if unique:
             payee = f"{payee} N{index}"
-        result.append(Row(draw(day_strategy), draw(amount_strategy), payee, draw(memos), f"SYN-{index:05d}"))
+        day = draw(day_strategy)
+        posted = None if lag_strategy is None else shifted(day, draw(lag_strategy))
+        result.append(Row(day, draw(amount_strategy), payee, draw(memos), f"SYN-{index:05d}", posted))
     return result
 
 
@@ -201,7 +221,7 @@ def simplefin_payload(items):
                 "balance": "0.00",
                 "balance-date": simplefin_epoch(LATEST),
                 "transactions": [
-                    {"id": f"SYN-SF-{key}", "posted": simplefin_epoch(row.day),
+                    {"id": f"SYN-SF-{key}", "posted": simplefin_epoch(posted_day(row)),
                      "amount": decimal_text(row.amount_minor), "description": row.payee}
                     for key, row in items
                 ],

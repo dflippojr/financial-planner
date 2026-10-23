@@ -64,6 +64,9 @@ class Mapping:
     memo_column: str = ""
     source_id_column: str = ""
     excluded_original_columns: tuple[str, ...] = ()
+    # The column a card export uses for the day the charge posted. SimpleFIN
+    # dates rows by that day, so the cut-over compares it (#568).
+    posted_date_column: str = ""
 
 
 @dataclass(frozen=True)
@@ -76,10 +79,16 @@ class PreviewRow:
     errors: tuple[str, ...]
     source_transaction_id: str = ""
     overlap_status: str | None = None
+    posted_date: object | None = None
 
     @property
     def is_valid(self):
         return not self.errors
+
+    @property
+    def cutover_date(self):
+        """The day a SimpleFIN cut-over compares: the posted date when the row has one."""
+        return self.posted_date or self.transaction_date
 
     def classified(self, overlap_status):
         return replace(self, overlap_status=overlap_status)
@@ -270,6 +279,15 @@ def _validate_mapping(document, mapping):
         raise CsvInputError("One or more mapped columns are not present in the CSV.")
 
 
+def parse_posted_date(cell, date_format):
+    """The posted date in one cell, or None when it is blank, malformed or out of range."""
+    try:
+        parsed = datetime.strptime(cell.strip(), DATE_FORMATS[date_format][1]).date()
+    except ValueError:
+        return None
+    return None if activity_date_error(parsed) else parsed
+
+
 def _parse_date(row, indexes, mapping):
     """Return (date, error); exactly one of them is None."""
     pattern = DATE_FORMATS[mapping.date_format][1]
@@ -346,6 +364,12 @@ def _source_id_error(source_transaction_id):
     return None
 
 
+def _posted_date(row, indexes, mapping):
+    if not mapping.posted_date_column or mapping.posted_date_column not in indexes:
+        return None
+    return parse_posted_date(_cell(row, indexes, mapping.posted_date_column), mapping.date_format)
+
+
 def _preview_row(row, indexes, mapping):
     parsed_date, date_error = _parse_date(row, indexes, mapping)
     description = _description(row, indexes, mapping)
@@ -368,6 +392,7 @@ def _preview_row(row, indexes, mapping):
         currency,
         tuple(error for error in errors if error),
         source_transaction_id,
+        posted_date=_posted_date(row, indexes, mapping),
     )
 
 

@@ -413,6 +413,7 @@ def save_planned_item(principal, payload, *, item=None):
         raise PermissionDenied(_DENIED)
     if item.pk is not None:
         before = snapshot(item, PLANNED_AUDIT_FIELDS)
+    was_household = item.pk is not None and item.scope == PlannedItem.Scope.HOUSEHOLD
     item.scope = scope
     item.household = assigned_household
     item.name = payload["name"]
@@ -440,6 +441,10 @@ def save_planned_item(principal, payload, *, item=None):
             if changed:
                 record(person, action, AuditEvent.TargetType.PLANNED_ITEM, item.pk,
                        audience=owned_audience(item), fields=changed)
+        if was_household and item.scope != PlannedItem.Scope.HOUSEHOLD:
+            from .chat_services import delete_conversations_without_access
+
+            delete_conversations_without_access(planned_item_ids=(item.pk,))
     return item
 
 

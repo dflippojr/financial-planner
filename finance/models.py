@@ -2034,6 +2034,8 @@ class AiConversation(models.Model):
     backend = models.CharField(max_length=32, blank=True, default="")
     title = models.CharField(max_length=120, blank=True, default="")
     used_account_ids = models.JSONField(default=list)
+    used_planned_item_ids = models.JSONField(default=list)
+    used_budget_ids = models.JSONField(default=list)
     turn_count = models.PositiveIntegerField(default=0)
     tool_call_count = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)

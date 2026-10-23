@@ -242,7 +242,7 @@ def test_member_cannot_see_another_members_chat(harness):
     assert owned.title.encode() not in page.content
     denied = client.post(reverse("chat-delete", args=[owned.pk]))
     assert AiConversation.objects.filter(pk=owned.pk).exists()
-    assert denied.status_code == 302
+    assert denied.status_code == 404
 
 
 @pytest.mark.django_db
@@ -721,7 +721,7 @@ def test_chat_send_and_delete_cover_remaining_error_paths(harness):
 
     client.force_login(other_user)
     denied = client.post(reverse("chat-delete", args=[created.pk]))
-    assert denied.status_code == 302
+    assert denied.status_code == 404
     assert AiConversation.objects.filter(pk=created.pk).exists()
     with pytest.raises(PermissionDenied):
         delete_conversation(other, created.pk)
