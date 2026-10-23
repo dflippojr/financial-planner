@@ -6,13 +6,13 @@ import json
 
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
-from django.http import JsonResponse
+from django.http import Http404, JsonResponse
 from django.shortcuts import redirect, render
 from django.template.loader import render_to_string
 from django.urls import reverse
 from django.views.decorators.http import require_GET, require_POST
 
-from .access import request_person as _person
+from .access import request_person as _person, service_or_404
 from .ai_services import AiError, local_status, member_has_ai, resolve_ai, warm_for_chat
 from .ai_types import LOCAL_BACKEND
 from .chat_proposals import ProposalError, apply_proposal, card_for, dismiss_proposal, proposal_for
@@ -152,11 +152,8 @@ def chat_popover(request):
 @require_POST
 def chat_delete(request, conversation_id):
     person = _person(request)
-    try:
-        delete_conversation(person, conversation_id)
-        messages.success(request, "Conversation deleted.")
-    except PermissionDenied:
-        messages.error(request, "That conversation is not available.")
+    service_or_404(lambda: delete_conversation(person, conversation_id))
+    messages.success(request, "Conversation deleted.")
     return redirect("chat")
 
 
@@ -188,8 +185,7 @@ def chat_proposal_apply(request, proposal_id):
     person = _person(request)
     proposal = proposal_for(person, proposal_id)
     if proposal is None:
-        messages.error(request, "That suggestion is not available.")
-        return redirect("chat")
+        raise Http404
     try:
         apply_proposal(person, proposal_id)
         messages.success(request, "Suggestion applied.")
@@ -206,8 +202,7 @@ def chat_proposal_dismiss(request, proposal_id):
     person = _person(request)
     proposal = proposal_for(person, proposal_id)
     if proposal is None:
-        messages.error(request, "That suggestion is not available.")
-        return redirect("chat")
+        raise Http404
     try:
         dismiss_proposal(person, proposal_id)
     except ProposalError as exc:

@@ -91,7 +91,8 @@ def passkey_register(request):
 @never_cache
 @requires_recent_auth("remove-passkey", form_url_name="account-settings")
 def passkey_delete(request, passkey_id):
-    delete_passkey(request.user, passkey_id)
+    if delete_passkey(request.user, passkey_id) is None:
+        raise Http404
     return redirect("account-settings")
 
 
