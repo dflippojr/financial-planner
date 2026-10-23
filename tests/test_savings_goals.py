@@ -464,6 +464,22 @@ def test_a_household_goal_on_a_shared_debt_counts_it_as_owed(account_type, sourc
 
 
 @pytest.mark.django_db
+def test_goals_page_shows_a_debt_as_owed_and_not_reached():
+    owner = make_person("owner")
+    make_household(owner)
+    card = make_account(owner, name="Synthetic Card", account_type=Account.Type.CREDIT_CARD)
+    add_snapshot(card, timezone.localdate(), 500_000)
+    make_goal(owner, name="Card goal", target_amount_minor=100_000, target_date=None, linked_account=card)
+
+    page = signed_in(owner).get(reverse("savings-goals")).content.decode()
+
+    assert "−$5,000.00" in page
+    assert "0% complete" in page
+    assert "$6,000.00 remaining" in page
+    assert "Reached" not in page
+
+
+@pytest.mark.django_db
 @pytest.mark.parametrize(
     "account_type", [Account.Type.CHECKING, Account.Type.SAVINGS, Account.Type.INVESTMENT]
 )
