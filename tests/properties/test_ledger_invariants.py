@@ -21,10 +21,11 @@ from hypothesis import example, given
 from hypothesis import strategies as st
 
 from finance.cash_flow import selected_accounts
-from finance.category_services import confirm_transfer_pair, link_refund
+from finance.category_services import confirm_transfer_pair, link_refund, undo_transfer_pair
 from finance.csv_import.parser import Mapping
+from finance.csv_import.services import undo_import_batch
 from finance.export import minor_from_decimal_string, money_decimal
-from finance.models import Account, ImportBatch, TransferPair
+from finance.models import Account, ImportBatch, RefundLink, TransferPair
 from finance.transaction_export import iter_transaction_csv
 from finance.transaction_filters import visible_transaction_queryset
 
@@ -345,6 +346,119 @@ def test_a_refund_reduces_spending_only_when_its_original_was_counted(case):
         spending = sum(purchases) - sum(size for size, original in refunds if original < len(purchases))
         household = selected_accounts(owner, scope=Account.Scope.HOUSEHOLD, cash_flow_only=True)
         assert ledger.totals(owner, household) == ledger.Totals(income, spending, income - spending)
+
+
+@st.composite
+def later_exclusion_cases(draw):
+    transfer = draw(st.integers(1, MAX_MINOR))
+    other = st.integers(1, MAX_MINOR).filter(lambda size: size != transfer)
+    kept = draw(st.lists(other, min_size=0, max_size=3))
+    undone = draw(st.lists(other, min_size=0, max_size=3))
+    refunds = draw(st.lists(other, min_size=1, max_size=3))
+    # Indexes run over the kept purchases, then the undone ones, then the outgoing transfer leg.
+    originals = draw(st.lists(st.integers(0, len(kept) + len(undone)), min_size=len(refunds), max_size=len(refunds)))
+    # Whether the second member, rather than the owner, links each refund.
+    by_member = draw(st.lists(st.booleans(), min_size=len(refunds), max_size=len(refunds)))
+    # With transfer wording the pair is auto-marked at import; without it the owner confirms it.
+    wording = draw(st.booleans())
+    # A private savings leg makes the pair excluded for its owner only (#570, option a).
+    private = draw(st.booleans())
+    # Refunds linked after the pairing instead of before it.
+    late = draw(st.booleans())
+    # The pair is undone at the end, which brings back the links it dropped but not those it deleted.
+    unpair = draw(st.booleans())
+    refund_cases = tuple(zip(refunds, originals, by_member, strict=True))
+    return transfer, tuple(kept), tuple(undone), refund_cases, wording, private, late, unpair
+
+
+@given(later_exclusion_cases())
+# A private-leg pair drops the owner's link, and undoing the pair must bring it back.
+@example((2, (), (), ((1, 0, False),), False, True, False, True))
+@example((2, (), (), ((1, 0, True),), True, True, True, True))
+def test_a_refund_stops_reducing_spending_when_its_original_stops_counting(case):
+    """The original becomes a transfer leg or its import is undone, before or after the link (#570).
+
+    With a private savings leg only its owner sees the pair, so only the owner
+    stops counting the transfer and its refunds; the other member and the
+    household scope count both, whichever member linked the refund and when.
+    Undoing the pair then restores the owner's dropped links, so the owner
+    counts the private leg pair as the member does plus the savings deposit.
+    """
+    transfer, kept, undone, refunds, wording, private, late, unpair = case
+    day = date(2026, 8, 10)
+    out_name, in_name = ("SYN TRANSFER TO SAVINGS", "SYN TRANSFER FROM CHECKING") if wording else ("SYN MOVE OUT", "SYN MOVE IN")
+    undone_rows = [Row(day, -size, f"SYN UNDONE N{i}", "", f"SYN-U{i:04d}") for i, size in enumerate(undone)]
+    checking = [Row(day, -transfer, out_name, "", "SYN-T0000")]
+    checking += [Row(day, -size, f"SYN PURCHASE N{i}", "", f"SYN-P{i:04d}") for i, size in enumerate(kept)]
+    checking += [Row(day, size, f"SYN REFUND N{i}", "", f"SYN-R{i:04d}") for i, (size, _o, _m) in enumerate(refunds)]
+    transfer_index = len(kept) + len(undone)
+    with ledger.isolated():
+        owner = ledger.make_member()
+        member = ledger.make_member("member")
+        household = ledger.make_household(owner, member)
+        accounts = {
+            "checking": ledger.make_account(owner, ACCOUNT_TYPES["checking"], name="Synthetic Checking", household=household),
+            "savings": ledger.make_account(
+                owner, ACCOUNT_TYPES["savings"], name="Synthetic Savings", household=None if private else household
+            ),
+        }
+        undone_import = ledger.import_rows(owner, accounts["checking"], HUNTINGTON, undone_rows)
+        ledger.import_rows(owner, accounts["checking"], HUNTINGTON, checking)
+        by_description = dict(ledger.active_rows([accounts["checking"]]).values_list("description", "pk"))
+        originals = [by_description[f"SYN PURCHASE N{i}"] for i in range(len(kept))]
+        originals += [by_description[f"SYN UNDONE N{i}"] for i in range(len(undone))]
+        originals.append(by_description[out_name])
+
+        def link_all():
+            linked = set()
+            for i, (_size, original, by_member_) in enumerate(refunds):
+                try:
+                    link_refund(member if by_member_ else owner, by_description[f"SYN REFUND N{i}"], originals[original])
+                except ValidationError:
+                    # Refused only to a member who already sees the transfer leg as excluded.
+                    assert late and original == transfer_index and not (private and by_member_)
+                else:
+                    linked.add(i)
+            return linked
+
+        linked = set() if late else link_all()
+        ledger.import_rows(owner, accounts["savings"], HUNTINGTON, [Row(day, transfer, in_name, "", "SYN-S0000")])
+        for pair in TransferPair.objects.filter(status=TransferPair.Status.SUGGESTED):
+            confirm_transfer_pair(owner, pair.pk)
+        if late:
+            linked = link_all()
+        if undone_import is not None:
+            undo_import_batch(owner, accounts["checking"].pk, undone_import.batch.pk)
+        if unpair:
+            undo_transfer_pair(owner, TransferPair.objects.excluding_income_and_spending().get().pk)
+
+        assert TransferPair.objects.excluding_income_and_spending().count() == (0 if unpair else 1)
+        # The owner sees the pair: only refunds of the kept purchases still reduce spending.
+        income = sum(size for size, original, _m in refunds if original >= len(kept))
+        spending = sum(kept) - sum(size for size, original, _m in refunds if original < len(kept))
+        owner_view = ledger.Totals(income, spending, income - spending)
+        if unpair and not private:
+            # Both members see the deposit and the transfer again; the deleted links stay deleted.
+            owner_view = ledger.Totals(income + transfer, spending + transfer, income - spending)
+        shared_view = owner_view
+        to_transfer = [(i, size) for i, (size, original, _m) in enumerate(refunds) if original == transfer_index]
+        still_linked = sum(1 for _s, original, _m in refunds if original < len(kept))
+        if private:
+            # Without the savings leg the transfer is spending, and a refund linked to it reduces it.
+            linked_to_transfer = sum(size for i, size in to_transfer if i in linked)
+            income -= linked_to_transfer
+            spending += transfer - linked_to_transfer
+            shared_view = ledger.Totals(income, spending, income - spending)
+            still_linked += sum(1 for i, _size in to_transfer if i in linked)
+            if unpair:
+                # The owner's dropped links count again; only the private deposit differs.
+                owner_view = ledger.Totals(income + transfer, spending, income + transfer - spending)
+        assert ledger.totals(owner) == owner_view
+        assert ledger.totals(member) == shared_view
+        for person in (owner, member):
+            selected = selected_accounts(person, scope=Account.Scope.HOUSEHOLD, cash_flow_only=True)
+            assert ledger.totals(person, selected) == shared_view
+        assert RefundLink.objects.count() == still_linked
 
 
 # 5. Exact money.

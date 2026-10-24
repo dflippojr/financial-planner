@@ -877,6 +877,9 @@ class TransactionCorrectionHistory(models.Model):
     previous_amount_minor = models.BigIntegerField(null=True, blank=True)
     new_amount_minor = models.BigIntegerField(null=True, blank=True)
     currency = models.CharField(max_length=3, blank=True, default="")
+    # Listed only to this member, such as a refund link dropped for them alone (#570).
+    # Deleting the member deletes the rows no one else may see.
+    only_for = models.ForeignKey(Person, on_delete=models.CASCADE, null=True, blank=True, related_name="+")
 
     class QuerySet(models.QuerySet):
         def visible_to(self, principal):
@@ -886,9 +889,10 @@ class TransactionCorrectionHistory(models.Model):
             pair_with_hidden_leg = TransferPair.objects.filter(
                 Q(leg_a_id=models.OuterRef("transaction_id")) | Q(leg_b_id=models.OuterRef("transaction_id"))
             ).exclude(leg_a_id__in=visible_transactions, leg_b_id__in=visible_transactions)
-            return self.filter(transaction_id__in=visible_transactions).exclude(
-                Q(field_name=self.model.Field.EXCLUSION) & models.Exists(pair_with_hidden_leg)
-            )
+            return self.filter(
+                Q(only_for__isnull=True) | Q(only_for=_person_for(principal)),
+                transaction_id__in=visible_transactions,
+            ).exclude(Q(field_name=self.model.Field.EXCLUSION) & models.Exists(pair_with_hidden_leg))
 
     objects = QuerySet.as_manager()
 
@@ -1082,7 +1086,9 @@ class RefundLink(models.Model):
     class QuerySet(models.QuerySet):
         def visible_to(self, principal):
             visible_transactions = Transaction.objects.visible_to(principal).values("pk")
-            return self.filter(refund_id__in=visible_transactions, original_id__in=visible_transactions)
+            return self.filter(refund_id__in=visible_transactions, original_id__in=visible_transactions).exclude(
+                pk__in=RefundLinkDrop.objects.filter(person=_person_for(principal)).values("link_id")
+            )
 
     objects = QuerySet.as_manager()
 
@@ -1093,6 +1099,32 @@ class RefundLink(models.Model):
 
     def __str__(self):
         return f"Refund {self.refund_id} for {self.original_id}"
+
+
+class RefundLinkDrop(models.Model):
+    """A refund link that stopped counting for one member only (#570).
+
+    The original became a leg of `pair`, a marked transfer pair that this member
+    sees both legs of, while another viewer of the refund does not, so the pair
+    is excluded only for this member (`exclusion_exists_for`). Everyone else
+    keeps the link. The member's "linked" -> "unlinked" history row is `only_for`
+    them, so it stays hidden from others even after the link itself is deleted.
+    Unmarking the pair deletes its drops, so the link counts again for the member
+    once no other marked pair holds a drop on it.
+    """
+
+    link = models.ForeignKey(RefundLink, on_delete=models.CASCADE, related_name="drops")
+    person = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="refund_link_drops")
+    pair = models.ForeignKey(TransferPair, on_delete=models.CASCADE, related_name="refund_link_drops")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("link", "person", "pair"), name="refund_link_drop_unique_person_pair"),
+        ]
+
+    def __str__(self):
+        return f"Refund link drop {self.pk}"
 
 
 def monthly_from_annual_minor(annual_minor):

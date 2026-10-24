@@ -746,18 +746,6 @@
  {
   "file": "finance/export.py",
   "rule": "reportAttributeAccessIssue",
-  "message": "Cannot access attribute \"original_id\" for class \"RefundLink\"",
-  "count": 1
- },
- {
-  "file": "finance/export.py",
-  "rule": "reportAttributeAccessIssue",
-  "message": "Cannot access attribute \"original_part_id\" for class \"RefundLink\"",
-  "count": 1
- },
- {
-  "file": "finance/export.py",
-  "rule": "reportAttributeAccessIssue",
   "message": "Cannot access attribute \"owned_by\" for class \"BaseManager[AiConversation]\"",
   "count": 2
  },
@@ -765,12 +753,6 @@
   "file": "finance/export.py",
   "rule": "reportAttributeAccessIssue",
   "message": "Cannot access attribute \"owned_by\" for class \"BaseManager[AiProviderConnection]\"",
-  "count": 1
- },
- {
-  "file": "finance/export.py",
-  "rule": "reportAttributeAccessIssue",
-  "message": "Cannot access attribute \"refund_id\" for class \"RefundLink\"",
   "count": 1
  },
  {

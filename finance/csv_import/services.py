@@ -13,7 +13,7 @@ from finance.csv_import.parser import Preview, preview_csv
 from finance.csv_import.profiles import CSV_FILE_SOURCES, OFX_MAPPING
 from finance.lifecycle_services import (
     _DENIED,
-    _lock_visible_account_with_pair_counterparts,
+    _lock_visible_account_with_pair_and_refund_counterparts,
     _person_for,
     _visible_account_for_update,
     lock_actor_household,
@@ -253,7 +253,7 @@ def archive_batch(principal, account_id, batch_id, *, manual):
     seed_leg_ids = list(
         Transaction.objects.filter(import_batch_id=batch_id, account_id=account_id).values_list("pk", flat=True)
     )
-    account = _lock_visible_account_with_pair_counterparts(person, account_id, seed_leg_ids=seed_leg_ids)
+    account = _lock_visible_account_with_pair_and_refund_counterparts(person, account_id, seed_leg_ids=seed_leg_ids)
     if account.status != Account.Status.ACTIVE or account.archived_at is not None:
         raise PermissionDenied(_DENIED)
     batch = (
@@ -279,14 +279,19 @@ def archive_batch(principal, account_id, batch_id, *, manual):
         import_batch=batch,
         status=Transaction.Status.ACTIVE,
     ).update(status=Transaction.Status.ARCHIVED, archived_at=now)
+    from finance.category_services import (
+        drop_refund_links_to_originals,
+        refresh_transfer_pairs,
+        revalidate_pairs_touching_import_batch,
+    )
+
+    drop_refund_links_to_originals(removed_ids, person)
     from finance.models import BalanceSnapshot
 
     BalanceSnapshot.objects.filter(import_batch=batch).delete()
     batch.status = ImportBatch.Status.ARCHIVED
     batch.archived_at = now
     batch.save(update_fields=("status", "archived_at"))
-    from finance.category_services import refresh_transfer_pairs, revalidate_pairs_touching_import_batch
-
     revalidate_pairs_touching_import_batch(person, batch_id)
     transaction.on_commit(lambda: refresh_transfer_pairs(person, transaction_ids=seed_leg_ids))
     if not manual:

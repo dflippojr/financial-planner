@@ -524,8 +524,9 @@ def _excluded_transaction_ids(visible_txn_ids):
     return ids
 
 
-def _visible_refund_originals(visible_txn_ids):
-    links = RefundLink.objects.filter(
+def _visible_refund_originals(person, visible_txn_ids):
+    # A link dropped for this person only (#570) is not theirs to export.
+    links = RefundLink.objects.visible_to(person).filter(  # pyright: ignore[reportAttributeAccessIssue] - QuerySet.as_manager() is untyped, as for every RefundLink.objects.visible_to in the baseline
         refund_id__in=visible_txn_ids,
         original_id__in=visible_txn_ids,
     )
@@ -534,7 +535,7 @@ def _visible_refund_originals(visible_txn_ids):
 
 def _transaction_rows(person, visible_txn_ids):
     excluded = _excluded_transaction_ids(visible_txn_ids)
-    refunds = _visible_refund_originals(visible_txn_ids)
+    refunds = _visible_refund_originals(person, visible_txn_ids)
     category_names = _visible_category_names(person)
     rows = []
     transactions = (
