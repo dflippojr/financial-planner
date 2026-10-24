@@ -24,6 +24,11 @@ def executor():
         yield executor
     finally:
         MigrationExecutor(connection).migrate(head)
+        if connection.vendor == "postgresql":
+            # The rollback recreated the table; keep autovacuum off as
+            # tests/conftest.py does for every table (#555).
+            with connection.cursor() as cursor:
+                cursor.execute(f"ALTER TABLE {RefundLinkDrop._meta.db_table} SET (autovacuum_enabled = false)")
 
 
 @pytest.mark.django_db(transaction=True)
