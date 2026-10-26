@@ -373,8 +373,9 @@ def _consume_the_nonce(session):
 
 
 def _drop_the_nonce_from_the_state(session):
-    for state, _started_at in session["socialaccount_states"].values():
-        state.pop("google_flow_nonce")
+    # allauth stashes (state, started_at, provider_id); the state dict comes first.
+    for stashed in session["socialaccount_states"].values():
+        stashed[0].pop("google_flow_nonce")
 
 
 @pytest.mark.django_db
