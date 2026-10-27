@@ -296,3 +296,93 @@ def test_a_candidate_that_is_not_a_commit_fails_before_docker(tmp_path):
     assert result.returncode == 1
     assert "FAIL rehearsal: cannot resolve -Candidate fp538-no-such-revision" in result.stdout
     assert not log.exists()
+
+
+def _simulating_docker(tmp_path):
+    """A docker stand-in that acts like the commands that touch the host.
+
+    `compose config` resolves the backup bind mount from the env file's
+    BACKUP_DIR, as compose does, and `run -v SRC:/backups ... find /backups
+    -mindepth 1 -delete` empties SRC, following a symlink as Docker's mount
+    does. Everything else succeeds silently.
+    """
+    log = tmp_path / "docker-calls.log"
+    stub = tmp_path / "fake_docker.py"
+    stub.write_text(
+        "import json, os, shutil, sys\n"
+        "args = sys.argv[1:]\n"
+        f"with open({str(log)!r}, 'a', encoding='utf-8') as handle:\n"
+        "    handle.write(' '.join(args) + '\\n')\n"
+        "if args[:1] == ['compose'] and 'ls' in args:\n"
+        "    print('[]')\n"
+        "elif args[:1] == ['compose'] and 'config' in args:\n"
+        "    env_file = args[args.index('--env-file') + 1]\n"
+        "    values = dict(line.split('=', 1) for line in open(env_file, encoding='utf-8').read().splitlines())\n"
+        "    print(json.dumps({'services': {'backup': {'volumes': [\n"
+        "        {'type': 'bind', 'source': values['BACKUP_DIR'], 'target': '/backups'}]}}}))\n"
+        "elif args[:1] == ['run'] and 'find /backups -mindepth 1 -delete' in args:\n"
+        "    source = next(v.rsplit(':', 1)[0] for v in args if v.endswith(':/backups'))\n"
+        "    for name in os.listdir(source):\n"
+        "        path = os.path.join(source, name)\n"
+        "        shutil.rmtree(path) if os.path.isdir(path) and not os.path.islink(path) else os.unlink(path)\n"
+        "elif args[:2] == ['volume', 'inspect']:\n"
+        "    sys.exit(1)\n",
+        encoding="utf-8",
+    )
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    shim = bin_dir / "docker"
+    shim.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{stub}" "$@"\n', encoding="utf-8")
+    shim.chmod(0o755)
+    return bin_dir, log
+
+
+def test_a_planted_work_directory_is_never_mounted_or_emptied(tmp_path):
+    # Another local user pre-creates the directory a predictable work path
+    # would use, with backups linking to real backups (#582 review).
+    outside = tmp_path / "real-backups"
+    (outside / "signing").mkdir(parents=True)
+    (outside / "signing" / "backup-signing-key").write_text("synthetic sentinel", encoding="utf-8")
+    planted = tmp_path / "fp-rehearsal-planted"
+    planted.mkdir()
+    (planted / "backups").symlink_to(outside, target_is_directory=True)
+    bin_dir, log = _simulating_docker(tmp_path)
+    dump = tmp_path / "synthetic.dump"
+    dump.write_bytes(b"synthetic")
+    env = dict(os.environ, PATH=str(bin_dir) + os.pathsep + os.environ["PATH"], TMPDIR=str(tmp_path))
+
+    result = subprocess.run(
+        [POWERSHELL, "-NoProfile", "-NonInteractive", "-File", str(SCRIPT),
+         "-Candidate", "HEAD", "-DumpPath", str(dump), "-ProjectName", "fp-rehearsal-planted"],
+        capture_output=True, text=True, env=env, timeout=300, check=False, cwd=ROOT,
+    )
+
+    assert result.returncode == 1
+    assert (outside / "signing" / "backup-signing-key").read_text(encoding="utf-8") == "synthetic sentinel"
+    assert (planted / "backups").is_symlink()
+    calls = log.read_text(encoding="utf-8")
+    assert str(planted) not in calls
+    assert str(outside) not in calls
+
+
+def test_a_bind_source_that_links_outside_the_work_directory_is_reported(tmp_path):
+    outside = tmp_path / "real-backups"
+    outside.mkdir()
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "backups").symlink_to(outside, target_is_directory=True)
+    config = {"services": {"backup": {"volumes": [
+        {"type": "bind", "source": str(work / "backups"), "target": "/backups"},
+        {"type": "bind", "source": str(work / "backups" / "audit" / "application"), "target": "/operator-audit"},
+    ]}}}
+    (tmp_path / "config.json").write_text(json.dumps(config), encoding="utf-8")
+
+    problems = _ps(
+        f"ConvertTo-Json -Compress -InputObject @(Test-DisposableStorage (Get-Content -Raw "
+        f"{_ps_string(tmp_path / 'config.json')} | ConvertFrom-Json) 'fp-rehearsal-t' {_ps_string(work)})"
+    )
+
+    assert problems == [
+        f"backup mounts {work / 'backups'} writable",
+        f"backup mounts {work / 'backups' / 'audit' / 'application'} writable",
+    ]
