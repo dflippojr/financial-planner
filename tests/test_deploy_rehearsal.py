@@ -802,3 +802,138 @@ def test_the_checked_in_compose_file_passes_the_allowlist(tmp_path):
     assert result.returncode == 0, result.stderr
 
     assert json.loads(result.stdout) == []
+
+
+# Round 5 (#582 review 6452116896): these go through the real compose
+# normalizer, so they see the model the guard sees, not a hand-written one.
+_REAL_DOCKER = shutil.which("docker") or "docker"
+
+
+def _normalizing_docker(tmp_path, build_exit=1):
+    """A docker stand-in that hands `compose config` to the real CLI.
+
+    `config` needs no daemon. Every other call is only logged: `compose ls`
+    and `volume ls` list nothing, and `build` exits build_exit, so a candidate
+    the guard accepts stops at its first build.
+    """
+    log = tmp_path / "docker-calls.log"
+    stub = tmp_path / "fake_docker.py"
+    stub.write_text(
+        "import subprocess, sys\n"
+        "args = sys.argv[1:]\n"
+        f"with open({str(log)!r}, 'a', encoding='utf-8') as handle:\n"
+        "    handle.write(' '.join(args) + '\\n')\n"
+        "if args[:1] == ['compose'] and 'config' in args:\n"
+        f"    sys.exit(subprocess.run([{_REAL_DOCKER!r}, *args], check=False).returncode)\n"
+        "elif args[:1] == ['compose'] and 'ls' in args:\n"
+        "    print('[]')\n"
+        "elif args[:1] == ['compose'] and 'build' in args:\n"
+        f"    sys.exit({build_exit})\n",
+        encoding="utf-8",
+    )
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    shim = bin_dir / "docker"
+    shim.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{stub}" "$@"\n', encoding="utf-8")
+    shim.chmod(0o755)
+    return bin_dir, log
+
+
+def _candidate_with(tmp_path, anchor, addition, files=None):
+    """A candidate checkout of the checked-in compose.yml with addition after anchor."""
+    text = (ROOT / "compose.yml").read_text(encoding="utf-8")
+    assert text.count(anchor) == 1
+    repo = _candidate_repo(tmp_path, text.replace(anchor, anchor + addition))
+    in_tree = {"Dockerfile": "FROM scratch\n", "ops/backup/Dockerfile": "FROM scratch\n", **(files or {})}
+    for name, content in in_tree.items():
+        path = repo / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(content, Path):
+            path.unlink(missing_ok=True)
+            path.symlink_to(content)
+        else:
+            path.write_text(content, encoding="utf-8")
+    git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.test", "-c", "commit.gpgsign=false"]
+    for command in (["add", "-A"], ["commit", "-q", "--allow-empty", "-m", "candidate files"]):
+        subprocess.run(git + command, check=True, capture_output=True)
+    return repo
+
+
+def _rehearse_candidate(tmp_path, repo, bin_dir):
+    dump = tmp_path / "synthetic.dump"
+    dump.write_bytes(b"synthetic")
+    env = dict(os.environ, PATH=str(bin_dir) + os.pathsep + os.environ["PATH"], TMPDIR=str(tmp_path))
+    return subprocess.run(
+        [POWERSHELL, "-NoProfile", "-NonInteractive", "-File", str(repo / "ops" / SCRIPT.name),
+         "-Candidate", "HEAD", "-DumpPath", str(dump), "-ProjectName", "fp-rehearsal-t"],
+        capture_output=True, text=True, env=env, timeout=300, check=False, cwd=repo,
+    )
+
+
+_DB_IMAGE = "    image: postgres:18-alpine\n"
+
+
+@pytest.mark.parametrize("form", [
+    pytest.param("    env_file: {env}\n", id="string"),
+    pytest.param("    env_file:\n      - {env}\n", id="list"),
+    pytest.param("    env_file:\n      - path: {env}\n        required: false\n", id="long-form"),
+])
+def test_an_env_file_from_outside_the_work_directory_stops_before_anything_starts(tmp_path, form):
+    # Resolving env files would fold the host file into `environment`, a key
+    # the guard allows, and drop `env_file` from the model (#582 review r4 F1).
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    env = outside / "production.env"
+    env.write_text("SYNTHETIC_SECRET=synthetic-sentinel-value\n", encoding="utf-8")
+    repo = _candidate_with(tmp_path, _DB_IMAGE, form.format(env=env))
+    bin_dir, log = _normalizing_docker(tmp_path)
+
+    result = _rehearse_candidate(tmp_path, repo, bin_dir)
+
+    assert result.returncode == 1
+    assert ("FAIL rehearsal: storage outside the throwaway project: "
+            "service db env_file: reads a host file into the container's environment") in result.stdout
+    assert _started(log) == []
+    assert "synthetic-sentinel-value" not in result.stdout + log.read_text(encoding="utf-8")
+
+
+_BACKUP_CONTEXT = "      context: ops/backup\n"
+
+
+@pytest.mark.parametrize(("dockerfile", "files", "shown"), [
+    pytest.param("{outside}", None, "{outside}", id="absolute"),
+    pytest.param("../../../../outside/Dockerfile", None, "../../../../outside/Dockerfile", id="dotdot"),
+    pytest.param("Dockerfile.linked", {"ops/backup/Dockerfile.linked": "{outside}"}, "Dockerfile.linked",
+                 id="in-tree-symlink"),
+    pytest.param(None, {"ops/backup/Dockerfile": "{outside}"}, "Dockerfile", id="default-is-a-symlink"),
+])
+def test_a_dockerfile_outside_the_work_directory_stops_before_anything_starts(tmp_path, dockerfile, files, shown):
+    # Checking the build context alone left the Dockerfile path free (#582 review r4 F2).
+    outside = tmp_path / "outside" / "Dockerfile"
+    outside.parent.mkdir()
+    outside.write_text("FROM scratch\n# synthetic sentinel\n", encoding="utf-8")
+    addition = f"      dockerfile: {dockerfile.format(outside=outside)}\n" if dockerfile else ""
+    links = {name: Path(target.format(outside=outside)) for name, target in (files or {}).items()}
+    repo = _candidate_with(tmp_path, _BACKUP_CONTEXT, addition, links)
+    bin_dir, log = _normalizing_docker(tmp_path)
+
+    result = _rehearse_candidate(tmp_path, repo, bin_dir)
+
+    assert result.returncode == 1
+    assert "FAIL rehearsal: storage outside the throwaway project: service backup build: dockerfile " in result.stdout
+    assert f"dockerfile {shown.format(outside=outside)} is outside the work directory" in result.stdout
+    assert _started(log) == []
+
+
+def test_an_in_tree_dockerfile_passes_and_the_rehearsal_builds(tmp_path):
+    repo = _candidate_with(tmp_path, _BACKUP_CONTEXT, "      dockerfile: Dockerfile.rehearsal\n",
+                           {"ops/backup/Dockerfile.rehearsal": "FROM scratch\n"})
+    bin_dir, log = _normalizing_docker(tmp_path)
+
+    result = _rehearse_candidate(tmp_path, repo, bin_dir)
+
+    assert "ok   storage: only new fp-rehearsal-t-* volumes" in result.stdout
+    assert "FAIL rehearsal: building the candidate images failed" in result.stdout
+    configs = [call for call in log.read_text(encoding="utf-8").splitlines() if " config " in f" {call} "]
+    assert configs and all("--no-env-resolution" in call for call in configs)
+    assert any(" build " in f" {call} " for call in _started(log))
