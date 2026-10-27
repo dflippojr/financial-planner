@@ -72,6 +72,8 @@ $DockerEnvNames = @('PATH', 'HOME', 'TMPDIR', 'XDG_RUNTIME_DIR', 'SystemRoot', '
     'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP')
 $DockerEnvPrefixes = @('DOCKER_', 'BUILDKIT_')
 $RepoRoot = Split-Path -Parent $PSScriptRoot
+# `pwsh -File` passes a comma list as one string.
+$ExpectCountChange = @($ExpectCountChange | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 $script:Failures = New-Object System.Collections.Generic.List[string]
 
 function Add-Failure([string]$Reason) {
@@ -479,13 +481,17 @@ function Invoke-Rehearsal {
 
 function Invoke-Teardown {
     Assert-RehearsalProjectName $script:Project
-    if ($script:Built) {
-        # The containers write the backup tree as root; empty it from inside so
-        # no dump or audit file outlives the rehearsal.
-        [void](Invoke-Compose @('run', '--rm', '--no-deps', '-T', '--entrypoint', 'sh', 'backup', '-c', 'find /backups -mindepth 1 -delete'))
-    }
     if ((Invoke-Compose @('down', '--volumes', '--remove-orphans', '--timeout', '10')).ExitCode -ne 0) {
         Add-Failure "teardown: docker compose down failed for $($script:Project)"
+    }
+    $backupImage = "$($script:Project)-backup"
+    if ($script:Built -and (Invoke-Docker @('image', 'inspect', $backupImage)).ExitCode -eq 0) {
+        # The containers write the backup tree as root. Once they are gone, empty
+        # it from a plain container (compose would recreate the receipts volume)
+        # so no dump or audit file outlives the rehearsal.
+        $backups = Join-Path $script:WorkDir 'backups'
+        [void](Invoke-Docker @('run', '--rm', '--network', 'none', '-v', "${backups}:/backups", '--entrypoint', 'sh',
+            $backupImage, '-c', 'find /backups -mindepth 1 -delete'))
     }
     foreach ($service in $BuiltServices) {
         $image = "$($script:Project)-$service"
