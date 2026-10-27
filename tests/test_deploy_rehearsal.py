@@ -298,7 +298,7 @@ def test_a_candidate_that_is_not_a_commit_fails_before_docker(tmp_path):
     assert not log.exists()
 
 
-def _simulating_docker(tmp_path, volumes=None, existing_volumes=(), swap_work_dir_to=None):
+def _simulating_docker(tmp_path, volumes=None, existing_volumes=(), swap_work_dir_to=None, services=None, top_level=None):
     """A docker stand-in that acts like the commands that touch the host.
 
     `compose config` resolves the backup bind mount from the env file's
@@ -308,7 +308,9 @@ def _simulating_docker(tmp_path, volumes=None, existing_volumes=(), swap_work_di
     volume's driver_opts device names, as replacing /receipts does on such a
     volume. `volume ls` lists `existing_volumes`. With `swap_work_dir_to`,
     `build` moves the work directory aside and puts a link to that directory
-    in its place. Everything else succeeds silently.
+    in its place. `services` and `top_level` add to the resolved config, with
+    {BACKUP_DIR} and {WORK} standing for the backup and work directories.
+    Everything else succeeds silently.
     """
     log = tmp_path / "docker-calls.log"
     stub = tmp_path / "fake_docker.py"
@@ -316,6 +318,7 @@ def _simulating_docker(tmp_path, volumes=None, existing_volumes=(), swap_work_di
         "import json, os, shutil, sys\n"
         "args = sys.argv[1:]\n"
         f"volumes = json.loads({json.dumps(volumes or {})!r})\n"
+        f"extra = {json.dumps({'services': services or {}, 'top': top_level or {}})!r}\n"
         f"with open({str(log)!r}, 'a', encoding='utf-8') as handle:\n"
         "    handle.write(' '.join(args) + '\\n')\n"
         "def empty(source):\n"
@@ -327,8 +330,11 @@ def _simulating_docker(tmp_path, volumes=None, existing_volumes=(), swap_work_di
         "elif args[:1] == ['compose'] and 'config' in args:\n"
         "    env_file = args[args.index('--env-file') + 1]\n"
         "    values = dict(line.split('=', 1) for line in open(env_file, encoding='utf-8').read().splitlines())\n"
+        "    extra = json.loads(extra.replace('{BACKUP_DIR}', values['BACKUP_DIR'])\n"
+        "                       .replace('{WORK}', os.path.dirname(env_file)))\n"
         "    print(json.dumps({'volumes': volumes, 'services': {'backup': {'volumes': [\n"
-        "        {'type': 'bind', 'source': values['BACKUP_DIR'], 'target': '/backups'}]}}}))\n"
+        "        {'type': 'bind', 'source': values['BACKUP_DIR'], 'target': '/backups'}]}, **extra['services']},\n"
+        "        **extra['top']}))\n"
         "elif args[:1] == ['compose'] and 'build' in args and " + repr(swap_work_dir_to is not None) + ":\n"
         "    work = os.path.dirname(args[args.index('--env-file') + 1])\n"
         "    os.rename(work, work + '-moved')\n"
@@ -596,3 +602,200 @@ def test_a_work_directory_replaced_by_a_link_after_validation_is_not_emptied(tmp
     assert (outside / "backups" / "signing" / "backup-signing-key").read_text(encoding="utf-8") == "synthetic sentinel"
     assert "FAIL teardown: the work directory was replaced after it was created; left it unemptied" in result.stdout
     assert not [call for call in log.read_text(encoding="utf-8").splitlines() if "find /backups" in call]
+
+
+# Round 4 (#582 review 6451190854): the preflight is an allowlist. Each of these
+# could reach production storage or the host; each must stop the rehearsal
+# before it builds, starts, runs or tears down anything.
+_PROD = "container:financial-planner-backup-1"
+
+
+@pytest.mark.parametrize(("spec", "problem"), [
+    pytest.param({"volumes_from": [f"{_PROD}:rw"]}, "service sneaky volumes_from: inherits another container's mounts",
+                 id="volumes_from"),
+    pytest.param({"devices": [{"source": "/dev/sdb", "target": "/dev/sdb", "permissions": "rwm"}]},
+                 "service sneaky devices: maps host devices into the container", id="devices"),
+    pytest.param({"privileged": True}, "service sneaky privileged: gives the container the host's devices", id="privileged"),
+    pytest.param({"cap_add": ["SYS_ADMIN"]}, "service sneaky cap_add: adds kernel capabilities", id="cap_add"),
+    pytest.param({"pid": "host"}, "service sneaky pid: host shares a namespace outside the project", id="pid-host"),
+    pytest.param({"pid": _PROD}, f"service sneaky pid: {_PROD} shares a namespace outside the project", id="pid-container"),
+    pytest.param({"ipc": "host"}, "service sneaky ipc: host shares a namespace outside the project", id="ipc-host"),
+    pytest.param({"ipc": _PROD}, f"service sneaky ipc: {_PROD} shares a namespace outside the project", id="ipc-container"),
+    pytest.param({"network_mode": "host"}, "service sneaky network_mode: host shares a namespace outside the project",
+                 id="network_mode-host"),
+    pytest.param({"network_mode": _PROD}, f"service sneaky network_mode: {_PROD} shares a namespace outside the project",
+                 id="network_mode-container"),
+    pytest.param({"security_opt": ["apparmor=unconfined"]}, "service sneaky security_opt: apparmor=unconfined is not allowed",
+                 id="security_opt-apparmor"),
+    pytest.param({"security_opt": ["seccomp=unconfined"]}, "service sneaky security_opt: seccomp=unconfined is not allowed",
+                 id="security_opt-seccomp"),
+    pytest.param({"userns_mode": "host"}, "service sneaky userns_mode: shares the host's user namespace", id="userns_mode"),
+    pytest.param({"extends": {"service": "backup"}}, "service sneaky extends: pulls in a service the guard has not read",
+                 id="extends"),
+    pytest.param({"labels": {"com.docker.compose.project": "financial-planner"}},
+                 "service sneaky labels: not a key the guard knows", id="unknown-labels"),
+    pytest.param({"env_file": [{"path": "/srv/financial-planner/.env"}]},
+                 "service sneaky env_file: not a key the guard knows", id="unknown-env_file"),
+    pytest.param({"volumes": [{"type": "npipe", "source": "/var/run/docker.sock", "target": "/sock"}]},
+                 "service sneaky volumes: mount type 'npipe' is not bind, volume or tmpfs", id="mount-npipe"),
+    pytest.param({"volumes": [{"type": "image", "source": "financial-planner-app", "target": "/img"}]},
+                 "service sneaky volumes: mount type 'image' is not bind, volume or tmpfs", id="mount-image"),
+    pytest.param({"volumes": [{"type": "volume", "target": "/data"}]},
+                 "service sneaky volumes: volume '' is not a declared project volume", id="mount-anonymous-volume"),
+    pytest.param({"volumes": [{"type": "volume", "source": "financial-planner-receipts", "target": "/receipts"}]},
+                 "service sneaky volumes: volume 'financial-planner-receipts' is not a declared project volume",
+                 id="mount-undeclared-volume"),
+    pytest.param({"volumes": [{"type": "bind", "source": "/var/run/docker.sock", "target": "/var/run/docker.sock",
+                               "read_only": True}]},
+                 "service sneaky volumes: bind /var/run/docker.sock is outside the work directory", id="mount-read-only-socket"),
+    pytest.param({"volumes": [{"type": "bind", "source": "{BACKUP_DIR}", "target": "/b", "bind": {"propagation": "rshared"}}]},
+                 "service sneaky volumes: a bind mount sets bind.propagation", id="mount-bind-option"),
+    pytest.param({"volumes": [{"type": "tmpfs", "source": "/srv", "target": "/t"}]},
+                 "service sneaky volumes: a tmpfs mount sets source", id="mount-tmpfs-source"),
+    pytest.param({"build": {"context": "/srv/financial-planner"}},
+                 "service sneaky build: context /srv/financial-planner is outside the work directory", id="build-context"),
+    pytest.param({"build": {"context": "{WORK}/source", "network": "host"}}, "service sneaky build: sets network",
+                 id="build-option"),
+    pytest.param({"build": {"context": "{WORK}/source"}, "image": "financial-planner-app"},
+                 "service sneaky image: financial-planner-app is not a fp-rehearsal-t- image", id="build-retags-production"),
+    pytest.param({"networks": {"production": None}}, "service sneaky networks: production is not a project network",
+                 id="undeclared-network"),
+])
+def test_a_service_outside_the_allowlist_stops_before_anything_starts(tmp_path, spec, problem):
+    bin_dir, log = _simulating_docker(tmp_path, services={"sneaky": {"image": "alpine", **spec}})
+
+    result = _run_simulated(tmp_path, bin_dir)
+
+    assert result.returncode == 1
+    assert "FAIL rehearsal: storage outside the throwaway project: " in result.stdout
+    assert problem in result.stdout
+    assert _started(log) == []
+
+
+@pytest.mark.parametrize(("top", "problem"), [
+    pytest.param({"include": [{"path": ["/srv/financial-planner/compose.yml"]}]},
+                 "top-level include: not a key the guard knows", id="include"),
+    pytest.param({"secrets": {"key": {"file": "/srv/financial-planner/.env"}}},
+                 "top-level secrets: not a key the guard knows", id="secrets"),
+    pytest.param({"x-anything": {}}, "top-level x-anything: not a key the guard knows", id="extension"),
+    pytest.param({"networks": {"default": {"name": "financial-planner_default", "external": True}}},
+                 "network default is named financial-planner_default", id="network-name"),
+    pytest.param({"networks": {"default": {"name": "fp-rehearsal-t_default", "external": True}}},
+                 "network default sets external", id="network-external"),
+    pytest.param({"networks": {"default": {"name": "fp-rehearsal-t_default", "driver": "macvlan"}}},
+                 "network default uses driver macvlan", id="network-driver"),
+])
+def test_a_top_level_key_outside_the_allowlist_stops_before_anything_starts(tmp_path, top, problem):
+    bin_dir, log = _simulating_docker(tmp_path, top_level=top)
+
+    result = _run_simulated(tmp_path, bin_dir)
+
+    assert result.returncode == 1
+    assert problem in result.stdout
+    assert _started(log) == []
+
+
+def _candidate_repo(tmp_path, compose_text):
+    """A git checkout holding the script and a candidate compose.yml."""
+    repo = tmp_path / "repo"
+    (repo / "ops").mkdir(parents=True)
+    shutil.copy(SCRIPT, repo / "ops" / SCRIPT.name)
+    (repo / "compose.yml").write_text(compose_text, encoding="utf-8")
+    git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.test", "-c", "commit.gpgsign=false"]
+    for command in (["init", "-q"], ["add", "-A"], ["commit", "-q", "-m", "candidate"]):
+        subprocess.run(git + command, check=True, capture_output=True)
+    return repo
+
+
+_BENIGN = "services:\n  db:\n    image: postgres:18-alpine\n"
+
+
+@pytest.mark.parametrize(("compose_text", "problem"), [
+    pytest.param("include:\n  - /srv/financial-planner/compose.yml\n" + _BENIGN,
+                 "compose.yml include: pulls in compose files the guard has not read", id="include"),
+    pytest.param(_BENIGN + "  app:\n    Extends:\n      file: /srv/financial-planner/compose.yml\n      service: backup\n",
+                 "compose.yml extends: pulls in compose files the guard has not read", id="extends"),
+    pytest.param(_BENIGN + '"\\x69nclude": [/srv/financial-planner/compose.yml]\n',
+                 "compose.yml: a backslash escape could spell include or extends", id="escaped-key"),
+    pytest.param(_BENIGN + "? !!binary aW5jbHVkZQ==\n: [/srv/financial-planner/compose.yml]\n",
+                 "compose.yml: a YAML tag could spell include or extends", id="binary-key"),
+])
+def test_a_compose_file_that_pulls_in_another_stops_before_anything_starts(tmp_path, compose_text, problem):
+    # Compose resolves include and extends before `config` prints the model,
+    # so the guard reads the candidate's compose.yml itself.
+    repo = _candidate_repo(tmp_path, compose_text)
+    bin_dir, log = _simulating_docker(tmp_path)
+    dump = tmp_path / "synthetic.dump"
+    dump.write_bytes(b"synthetic")
+    env = dict(os.environ, PATH=str(bin_dir) + os.pathsep + os.environ["PATH"], TMPDIR=str(tmp_path))
+
+    result = subprocess.run(
+        [POWERSHELL, "-NoProfile", "-NonInteractive", "-File", str(repo / "ops" / SCRIPT.name),
+         "-Candidate", "HEAD", "-DumpPath", str(dump), "-ProjectName", "fp-rehearsal-t"],
+        capture_output=True, text=True, env=env, timeout=300, check=False, cwd=repo,
+    )
+
+    assert result.returncode == 1
+    assert problem in result.stdout
+    assert _started(log) == []
+    assert not [call for call in log.read_text(encoding="utf-8").splitlines() if " config " in f" {call} "]
+
+
+def _storage_problems(tmp_path, config, work):
+    (tmp_path / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    return _ps(
+        f"ConvertTo-Json -Compress -InputObject @(Test-DisposableStorage (Get-Content -Raw "
+        f"{_ps_string(tmp_path / 'config.json')} | ConvertFrom-Json) 'fp-rehearsal-t' {_ps_string(work)})"
+    )
+
+
+@pytest.mark.parametrize("mounts", [
+    pytest.param([{"type": "bind", "source": "{WORK}/backups", "target": "/backups"},
+                  {"type": "bind", "source": "{WORK}/backups/health", "target": "/h", "read_only": True,
+                   "bind": {"create_host_path": True}},
+                  {"type": "bind", "source": "{WORK}/source/ops/backup/rclone.conf.example", "target": "/c",
+                   "read_only": True}], id="bind-under-work-directory"),
+    pytest.param([{"type": "volume", "source": "receipts", "target": "/receipts", "volume": {"nocopy": True}}],
+                 id="new-local-project-volume"),
+    pytest.param([{"type": "tmpfs", "target": "/run/x", "tmpfs": {"size": 1048576, "mode": 1777}}], id="tmpfs"),
+])
+def test_each_allowed_mount_type_passes(tmp_path, mounts):
+    work = tmp_path / "work"
+    (work / "backups").mkdir(parents=True)
+    config = json.loads(json.dumps({
+        "name": "fp-rehearsal-t",
+        "networks": {"default": {"name": "fp-rehearsal-t_default", "ipam": {}}},
+        "volumes": {"receipts": {"name": "fp-rehearsal-t-receipts", "driver": "local"}},
+        "services": {"app": {
+            "build": {"context": "{WORK}/source", "dockerfile": "Dockerfile", "args": {"GIT_SHA": "abc"}},
+            "image": "fp-rehearsal-t-app",
+            "networks": {"default": None},
+            "tmpfs": ["/run/csv-staging:size=128m,mode=1777"],
+            "security_opt": ["no-new-privileges:true"],
+            "volumes": mounts,
+        }},
+    }).replace("{WORK}", str(work)))
+
+    assert _storage_problems(tmp_path, config, work) == []
+
+
+def test_the_checked_in_compose_file_passes_the_allowlist(tmp_path):
+    # `docker compose config` resolves the file without a daemon; the source
+    # sits in the work directory as the rehearsal extracts it.
+    work = tmp_path / "work"
+    source = work / "source"
+    source.mkdir(parents=True)
+    shutil.copy(ROOT / "compose.yml", source / "compose.yml")
+    result = subprocess.run(
+        [POWERSHELL, "-NoProfile", "-NonInteractive", "-Command",
+         f". '{SCRIPT}'; $script:Project = 'fp-rehearsal-t'; $work = {_ps_string(work)}; "
+         "$script:ComposeFile = Join-Path $work 'source/compose.yml'; $script:EnvFile = Join-Path $work 'rehearsal.env'; "
+         "New-RehearsalEnvFile $script:EnvFile (Join-Path $work 'backups') 41234 'abc123'; "
+         "$config = Invoke-Compose @('config', '--format', 'json'); if ($config.ExitCode -ne 0) { throw 'compose config failed' }; "
+         "ConvertTo-Json -Compress -InputObject @(@(Test-ComposeSource $script:ComposeFile) + "
+         "@(Test-DisposableStorage (($config.Output -join \"`n\") | ConvertFrom-Json) $script:Project $work))"],
+        capture_output=True, text=True, timeout=120, check=False, cwd=ROOT,
+    )
+    assert result.returncode == 0, result.stderr
+
+    assert json.loads(result.stdout) == []
