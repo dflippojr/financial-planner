@@ -17,9 +17,9 @@ import pytest
 
 ROOT = Path(__file__).parents[1]
 SCRIPT = ROOT / "ops" / "deploy-rehearsal.ps1"
-POWERSHELL = shutil.which("pwsh") or shutil.which("powershell")
-
-pytestmark = pytest.mark.skipif(POWERSHELL is None, reason="PowerShell is not installed")
+# The script targets PowerShell 7 on Linux, which the CI runners have; without
+# it these tests fail rather than skip.
+POWERSHELL = shutil.which("pwsh") or "pwsh"
 
 
 def _ps(body):
