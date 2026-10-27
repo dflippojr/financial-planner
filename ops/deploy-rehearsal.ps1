@@ -170,6 +170,30 @@ function New-RehearsalWorkDir {
     return [IO.Directory]::CreateTempSubdirectory('fp-rehearsal-work-').FullName
 }
 
+# What identifies the directory at $Path itself, not where a link there points:
+# device and inode on Linux. Someone who can write its parent could rename it
+# and put a link to real backups in its place; teardown compares this with the
+# value pinned at creation before it empties or removes anything. On Windows,
+# %TEMP% sits in the user's own profile, which no other account may write, so
+# only a reparse point is refused there. The check can still lose a race with a
+# swap between it and Docker opening the bind source: a work directory under a
+# parent another account can write, without the sticky bit, is outside what
+# this script defends.
+function Get-DirectoryIdentity([string]$Path) {
+    $item = [IO.DirectoryInfo]::new($Path)
+    if (-not $item.Exists -or $null -ne $item.LinkTarget) { return $null }
+    if ($IsWindows) { return $item.FullName }
+    $identity = & stat -c '%d:%i' -- $Path 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $identity) { return $null }
+    return ([string]@($identity)[0]).Trim()
+}
+
+# Whether $script:WorkDir is still the directory this run created.
+function Test-WorkDirIdentity {
+    if (-not $script:WorkDir -or -not $script:WorkDirIdentity) { return $false }
+    return (Get-DirectoryIdentity $script:WorkDir) -ceq $script:WorkDirIdentity
+}
+
 # $Path with every symlink or junction along it followed, as Docker follows them
 # in a bind source, or $null when it cannot be resolved. Parts that do not exist
 # yet are kept as written: compose creates them as plain directories.
@@ -231,10 +255,15 @@ function Test-UnderDirectory([string]$Path, [string]$Root) {
 }
 
 # Problems with the resolved compose config: a named volume outside the project,
-# or a writable bind mount whose source, links followed, is outside the work
-# directory. `down --volumes` deletes what compose resolves, and teardown empties
-# the backup tree, so either could reach another stack's storage.
-function Test-DisposableStorage($Config, [string]$Project, [string]$WorkDir) {
+# one that is not a plain local volume or that already exists, or a writable
+# bind mount whose source, links followed, is outside the work directory.
+# `down --volumes` deletes what compose resolves, restore replaces /receipts and
+# teardown empties the backup tree, so any of these could reach another stack's
+# storage. A prefixed name proves nothing about where the data lives: an
+# external volume, another driver or driver_opts (type=none, o=bind,
+# device=...) can put real storage behind it, and a volume that exists already
+# may be one, so only a new local volume without options counts as disposable.
+function Test-DisposableStorage($Config, [string]$Project, [string]$WorkDir, [string[]]$ExistingVolumes = @()) {
     $volumes = Get-Prop $Config 'volumes'
     if ($volumes) {
         foreach ($volume in $volumes.PSObject.Properties) {
@@ -242,6 +271,14 @@ function Test-DisposableStorage($Config, [string]$Project, [string]$WorkDir) {
             if (-not ($name.StartsWith("$Project-") -or $name.StartsWith("${Project}_"))) {
                 "volume $($volume.Name) is named $name"
             }
+            if (Get-Prop $volume.Value 'external') { "volume $($volume.Name) is external" }
+            $driver = Get-Prop $volume.Value 'driver'
+            if ($null -ne $driver -and [string]$driver -ne 'local') { "volume $($volume.Name) uses driver $driver" }
+            $options = Get-Prop $volume.Value 'driver_opts'
+            if ($null -ne $options -and @($options.PSObject.Properties).Count -gt 0) {
+                "volume $($volume.Name) sets driver_opts"
+            }
+            if ($name -and $ExistingVolumes -ccontains $name) { "volume $($volume.Name) ($name) already exists" }
         }
     }
     $services = Get-Prop $Config 'services'
@@ -444,6 +481,8 @@ function Invoke-Rehearsal {
 
     $port = if ($AppPort -gt 0) { $AppPort } else { Get-FreePort }
     $script:WorkDir = New-RehearsalWorkDir
+    $script:WorkDirIdentity = Get-DirectoryIdentity $script:WorkDir
+    if (-not $script:WorkDirIdentity) { throw 'cannot read the identity of the new work directory' }
     $source = Join-Path $script:WorkDir 'source'
     $backups = Join-Path $script:WorkDir 'backups'
     New-Item -ItemType Directory -Path $source, $backups | Out-Null
@@ -460,7 +499,11 @@ function Invoke-Rehearsal {
 
     $config = Invoke-Compose @('config', '--format', 'json')
     if ($config.ExitCode -ne 0) { throw 'docker compose config failed for the candidate' }
-    $problems = @(Test-DisposableStorage (($config.Output -join "`n") | ConvertFrom-Json) $script:Project $script:WorkDir)
+    # Absence from `compose ls` does not mean its volumes are new. One that
+    # exists is refused, not reused, and never armed for `down --volumes`.
+    $existing = Invoke-Docker @('volume', 'ls', '-q')
+    if ($existing.ExitCode -ne 0) { throw 'docker volume ls failed' }
+    $problems = @(Test-DisposableStorage (($config.Output -join "`n") | ConvertFrom-Json) $script:Project $script:WorkDir @($existing.Output))
     if ($problems.Count -gt 0) { throw "storage outside the throwaway project: $($problems -join '; ')" }
     Write-Pass "storage: volumes $($script:Project)-*, writable bind mounts under the work directory"
 
@@ -558,7 +601,9 @@ function Invoke-Teardown {
         # it from a plain container (compose would recreate the receipts volume)
         # so no dump or audit file outlives the rehearsal.
         $backups = Join-Path $script:WorkDir 'backups'
-        if (Test-UnderDirectory $backups $script:WorkDir) {
+        if (-not (Test-WorkDirIdentity)) {
+            Add-Failure 'teardown: the work directory was replaced after it was created; left it unemptied'
+        } elseif (Test-UnderDirectory $backups $script:WorkDir) {
             [void](Invoke-Docker @('run', '--rm', '--network', 'none', '-v', "${backups}:/backups", '--entrypoint', 'sh',
                 $backupImage, '-c', 'find /backups -mindepth 1 -delete'))
         } else {
@@ -602,6 +647,7 @@ $script:Sha = $null
 $script:Armed = $false
 $script:Built = $false
 $script:WorkDir = $null
+$script:WorkDirIdentity = $null
 $script:ProductionBefore = $null
 $script:Tables = 0
 $script:Migrations = 0
@@ -613,7 +659,9 @@ try {
     if ($script:Armed) {
         try { Invoke-Teardown } catch { Add-Failure "teardown: $(Get-ErrorText $_)" }
     }
-    if ($script:WorkDir -and (Test-Path -LiteralPath $script:WorkDir)) {
+    if ($script:WorkDir -and (Test-Path -LiteralPath $script:WorkDir) -and -not (Test-WorkDirIdentity)) {
+        Add-Failure "teardown: the work directory $($script:WorkDir) was replaced after it was created; left it in place"
+    } elseif ($script:WorkDir -and (Test-Path -LiteralPath $script:WorkDir)) {
         try {
             Remove-Item -LiteralPath $script:WorkDir -Recurse -Force
         } catch {

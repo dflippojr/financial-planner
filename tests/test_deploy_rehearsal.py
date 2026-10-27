@@ -298,33 +298,50 @@ def test_a_candidate_that_is_not_a_commit_fails_before_docker(tmp_path):
     assert not log.exists()
 
 
-def _simulating_docker(tmp_path):
+def _simulating_docker(tmp_path, volumes=None, existing_volumes=(), swap_work_dir_to=None):
     """A docker stand-in that acts like the commands that touch the host.
 
     `compose config` resolves the backup bind mount from the env file's
-    BACKUP_DIR, as compose does, and `run -v SRC:/backups ... find /backups
-    -mindepth 1 -delete` empties SRC, following a symlink as Docker's mount
-    does. Everything else succeeds silently.
+    BACKUP_DIR, as compose does, plus the top-level `volumes`, and `run -v
+    SRC:/backups ... find /backups -mindepth 1 -delete` empties SRC, following
+    a symlink as Docker's mount does. restore.sh empties the directory a
+    volume's driver_opts device names, as replacing /receipts does on such a
+    volume. `volume ls` lists `existing_volumes`. With `swap_work_dir_to`,
+    `build` moves the work directory aside and puts a link to that directory
+    in its place. Everything else succeeds silently.
     """
     log = tmp_path / "docker-calls.log"
     stub = tmp_path / "fake_docker.py"
     stub.write_text(
         "import json, os, shutil, sys\n"
         "args = sys.argv[1:]\n"
+        f"volumes = json.loads({json.dumps(volumes or {})!r})\n"
         f"with open({str(log)!r}, 'a', encoding='utf-8') as handle:\n"
         "    handle.write(' '.join(args) + '\\n')\n"
+        "def empty(source):\n"
+        "    for name in os.listdir(source):\n"
+        "        path = os.path.join(source, name)\n"
+        "        shutil.rmtree(path) if os.path.isdir(path) and not os.path.islink(path) else os.unlink(path)\n"
         "if args[:1] == ['compose'] and 'ls' in args:\n"
         "    print('[]')\n"
         "elif args[:1] == ['compose'] and 'config' in args:\n"
         "    env_file = args[args.index('--env-file') + 1]\n"
         "    values = dict(line.split('=', 1) for line in open(env_file, encoding='utf-8').read().splitlines())\n"
-        "    print(json.dumps({'services': {'backup': {'volumes': [\n"
+        "    print(json.dumps({'volumes': volumes, 'services': {'backup': {'volumes': [\n"
         "        {'type': 'bind', 'source': values['BACKUP_DIR'], 'target': '/backups'}]}}}))\n"
+        "elif args[:1] == ['compose'] and 'build' in args and " + repr(swap_work_dir_to is not None) + ":\n"
+        "    work = os.path.dirname(args[args.index('--env-file') + 1])\n"
+        "    os.rename(work, work + '-moved')\n"
+        "    os.symlink(" + repr(str(swap_work_dir_to)) + ", work, target_is_directory=True)\n"
+        "elif args[:1] == ['compose'] and any(a.endswith('/restore.sh') for a in args):\n"
+        "    for volume in volumes.values():\n"
+        "        device = (volume.get('driver_opts') or {}).get('device')\n"
+        "        if device and os.path.isdir(device):\n"
+        "            empty(device)\n"
         "elif args[:1] == ['run'] and 'find /backups -mindepth 1 -delete' in args:\n"
-        "    source = next(v.rsplit(':', 1)[0] for v in args if v.endswith(':/backups'))\n"
-        "    for name in os.listdir(source):\n"
-        "        path = os.path.join(source, name)\n"
-        "        shutil.rmtree(path) if os.path.isdir(path) and not os.path.islink(path) else os.unlink(path)\n"
+        "    empty(next(v.rsplit(':', 1)[0] for v in args if v.endswith(':/backups')))\n"
+        "elif args[:2] == ['volume', 'ls']:\n"
+        f"    print('\\n'.join({list(existing_volumes)!r}))\n"
         "elif args[:2] == ['volume', 'inspect']:\n"
         "    sys.exit(1)\n",
         encoding="utf-8",
@@ -464,7 +481,7 @@ def test_teardown_leaves_a_backup_directory_that_resolves_outside_the_work_direc
     result = subprocess.run(
         [POWERSHELL, "-NoProfile", "-NonInteractive", "-Command",
          f". '{SCRIPT}'; $script:Project = 'fp-rehearsal-t'; $script:WorkDir = {_ps_string(work)}; "
-         "$script:Built = $true; $script:ComposeFile = 'compose.yml'; $script:EnvFile = 'rehearsal.env'; "
+         "$script:WorkDirIdentity = Get-DirectoryIdentity $script:WorkDir; $script:Built = $true; $script:ComposeFile = 'compose.yml'; $script:EnvFile = 'rehearsal.env'; "
          "Invoke-Teardown; ConvertTo-Json -Compress -InputObject @($script:Failures)"],
         capture_output=True, text=True, env=env, timeout=120, check=False, cwd=ROOT,
     )
@@ -474,3 +491,108 @@ def test_teardown_leaves_a_backup_directory_that_resolves_outside_the_work_direc
     assert "teardown: the backup directory no longer resolves inside the work directory; left it unemptied" in (
         json.loads(result.stdout.splitlines()[-1]))
     assert not any(call.startswith("run ") for call in log.read_text(encoding="utf-8").splitlines())
+
+
+@pytest.mark.parametrize(("options", "problem"), [
+    ({"external": True}, "volume receipts is external"),
+    ({"driver": "rclone"}, "volume receipts uses driver rclone"),
+    ({"driver_opts": {"type": "none", "o": "bind", "device": "/srv/financial-planner/receipts"}},
+     "volume receipts sets driver_opts"),
+    ({"driver_opts": {"o": "rbind"}}, "volume receipts sets driver_opts"),
+    ({"driver": "local", "driver_opts": {"device": "/dev/sdb1"}}, "volume receipts sets driver_opts"),
+])
+def test_a_prefixed_volume_whose_storage_is_not_a_plain_local_volume_is_reported(tmp_path, options, problem):
+    # A project-prefixed name says nothing about where the volume's data lives (#582 review r2).
+    config = {"volumes": {
+        "postgres_data": {"name": "fp-rehearsal-t-postgres-data", "driver": "local"},
+        "receipts": {"name": "fp-rehearsal-t-receipts", **options},
+    }}
+    (tmp_path / "config.json").write_text(json.dumps(config), encoding="utf-8")
+
+    problems = _ps(
+        f"ConvertTo-Json -Compress -InputObject @(Test-DisposableStorage (Get-Content -Raw "
+        f"{_ps_string(tmp_path / 'config.json')} | ConvertFrom-Json) 'fp-rehearsal-t' {_ps_string(tmp_path)})"
+    )
+
+    assert problems == [problem]
+
+
+def test_a_volume_that_already_exists_is_reported(tmp_path):
+    config = {"volumes": {
+        "postgres_data": {"name": "fp-rehearsal-t-postgres-data"},
+        "receipts": {"name": "fp-rehearsal-t-receipts"},
+    }}
+    (tmp_path / "config.json").write_text(json.dumps(config), encoding="utf-8")
+
+    problems = _ps(
+        f"ConvertTo-Json -Compress -InputObject @(Test-DisposableStorage (Get-Content -Raw "
+        f"{_ps_string(tmp_path / 'config.json')} | ConvertFrom-Json) 'fp-rehearsal-t' {_ps_string(tmp_path)} "
+        "@('fp-rehearsal-t-receipts', 'financial-planner-receipts'))"
+    )
+
+    assert problems == ["volume receipts (fp-rehearsal-t-receipts) already exists"]
+
+
+def _run_simulated(tmp_path, bin_dir, *arguments):
+    dump = tmp_path / "synthetic.dump"
+    dump.write_bytes(b"synthetic")
+    env = dict(os.environ, PATH=str(bin_dir) + os.pathsep + os.environ["PATH"], TMPDIR=str(tmp_path))
+    return subprocess.run(
+        [POWERSHELL, "-NoProfile", "-NonInteractive", "-File", str(SCRIPT),
+         "-Candidate", "HEAD", "-DumpPath", str(dump), "-ProjectName", "fp-rehearsal-t", *arguments],
+        capture_output=True, text=True, env=env, timeout=300, check=False, cwd=ROOT,
+    )
+
+
+def _started(log):
+    """Docker calls that build, start, run or remove anything."""
+    return [call for call in log.read_text(encoding="utf-8").splitlines()
+            if call.startswith("run ") or any(f" {verb} " in f" {call} " for verb in ("build", "up", "down", "rm"))]
+
+
+def test_a_prefixed_volume_bound_to_an_outside_directory_stops_before_build(tmp_path):
+    outside = tmp_path / "real-receipts"
+    outside.mkdir()
+    (outside / "receipt.pdf").write_text("synthetic sentinel", encoding="utf-8")
+    bin_dir, log = _simulating_docker(tmp_path, volumes={
+        "postgres_data": {"name": "fp-rehearsal-t-postgres-data"},
+        "receipts": {"name": "fp-rehearsal-t-receipts",
+                     "driver_opts": {"type": "none", "o": "bind", "device": str(outside)}},
+    })
+
+    result = _run_simulated(tmp_path, bin_dir)
+
+    assert result.returncode == 1
+    assert "FAIL rehearsal: storage outside the throwaway project: volume receipts sets driver_opts" in result.stdout
+    assert (outside / "receipt.pdf").read_text(encoding="utf-8") == "synthetic sentinel"
+    assert _started(log) == []
+
+
+def test_a_volume_left_from_before_is_refused_not_reused_or_removed(tmp_path):
+    bin_dir, log = _simulating_docker(tmp_path, volumes={
+        "postgres_data": {"name": "fp-rehearsal-t-postgres-data"},
+        "receipts": {"name": "fp-rehearsal-t-receipts"},
+    }, existing_volumes=["fp-rehearsal-t-postgres-data"])
+
+    result = _run_simulated(tmp_path, bin_dir)
+
+    assert result.returncode == 1
+    assert ("FAIL rehearsal: storage outside the throwaway project: "
+            "volume postgres_data (fp-rehearsal-t-postgres-data) already exists") in result.stdout
+    assert _started(log) == []
+
+
+def test_a_work_directory_replaced_by_a_link_after_validation_is_not_emptied(tmp_path):
+    # Someone who can write the work directory's parent swaps it for a link to
+    # real backups once the mounts have been checked (#582 review r2).
+    outside = tmp_path / "real-parent"
+    (outside / "backups" / "signing").mkdir(parents=True)
+    (outside / "backups" / "signing" / "backup-signing-key").write_text("synthetic sentinel", encoding="utf-8")
+    bin_dir, log = _simulating_docker(tmp_path, swap_work_dir_to=outside)
+
+    result = _run_simulated(tmp_path, bin_dir)
+
+    assert result.returncode == 1
+    assert (outside / "backups" / "signing" / "backup-signing-key").read_text(encoding="utf-8") == "synthetic sentinel"
+    assert "FAIL teardown: the work directory was replaced after it was created; left it unemptied" in result.stdout
+    assert not [call for call in log.read_text(encoding="utf-8").splitlines() if "find /backups" in call]
