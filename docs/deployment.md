@@ -269,7 +269,7 @@ plus stale margin) and `AI_JOB_MAX_QUEUED_PER_MEMBER` (12) need no env change.
 Turns already claimed before the upgrade have no deadline and keep the existing
 heartbeat recovery.
 
-Review release notes and take a verified manual backup first. Then, in the checkout on `main`, note the running revision, pull the approved one, and run:
+Review release notes and take a verified manual backup first. **If the release adds a migration (any new file under `finance/migrations/` since the running revision), deploy only after the [deploy rehearsal](#deploy-rehearsal) prints PASS for it.** Then, in the checkout on `main`, note the running revision, pull the approved one, and run:
 
 ```powershell
 $PreviousSha = git rev-parse HEAD
@@ -305,6 +305,41 @@ If any other check fails, roll back:
 The `Docker smoke test` workflow (`.github/workflows/docker-smoke.yml`, called from `ci.yml` and needed by the `gate` job) runs on every pull request from this repository and every push to `main`, including Dependabot's, with no path filter. `scripts/docker-smoke.sh` builds the images and starts `db`, `app`, `backup` and `background` (after the one-shot `config-check`) from `compose.yml` with dummy values, a dummy `SIMPLEFIN_SYNC_CRON` and `BACKUP_CRON`, and throwaway volumes under the `fp-smoke` project. It requires `app` to report healthy and `/sign-in/` to return 200 (a redirect to first-run setup on an empty database). It then requires `backup` and `background` to stay `running` with `RestartCount` 0 for 90 seconds, checked every 5 seconds and once more when the time is up, and no Python traceback in any container's logs in that window. It builds only `app backup background`, as the upgrade does, and requires the `config-check` container to have run `background`'s image and revision. It runs the manual backup command above and restores the dump with `verify-restore.sh`. Finally it runs `docker compose up -d` on the whole stack with `SIMPLEFIN_SYNC_CRON` set to `30 6 * * MON-FRI` and then `60 6 * * *`, watches `background` under its normal `restart: unless-stopped` policy, then waits for the `app` container that `up` left to report healthy, reads `/health/` and reads `backup`'s state. It starts and creates nothing after that `up`, so it cannot repair what the `up` left. It records each case and judges them with `tests/docker_smoke_invalid_cron.py`, run with the app image's own pytest: `up` must exit non-zero naming `config-check`; `docker compose logs config-check` must hold the error itself (for example `ValueError: SIMPLEFIN_SYNC_CRON has a minute outside 0-59`), not only a traceback's source lines naming the variable; `background` must never run and never restart; `backup` must still be `running` with `RestartCount` 0; and `app` must be healthy, not stopped or absent, with `/health/` starting `ok` and naming `SIMPLEFIN_SYNC_CRON` (#560). It never touches the tower and refuses to run as the `financial-planner` compose project. It passes docker only `PATH`, `HOME` and the `DOCKER_*` connection settings, so an exported `POSTGRES_VOLUME_NAME`, `RECEIPTS_VOLUME_NAME`, `BACKUP_DIR`, `OFFSITE_*` or `COMPOSE_FILE` cannot reach it, names `compose.yml` explicitly so no override file applies, and stops before building or starting anything (and so before any `down --volumes`) unless `docker compose config` resolves every named volume into the smoke project and every writable bind mount into its temporary directory.
 
 A PostgreSQL major-version change cannot use these steps. Follow [PostgreSQL 16 to 18 upgrade](#postgresql-16-to-18-upgrade) instead.
+
+### Deploy rehearsal
+
+The production entrypoint runs `migrate --noinput` at container start, so without a rehearsal a release's migrations first meet real rows in production (#391 crashed on exactly that path). The weekly restore check proves a dump restores but never migrates it. `ops/deploy-rehearsal.ps1` (#538) migrates last night's dump with the candidate release in a throwaway stack first. Run it with PowerShell 7 (`pwsh`) from the checkout on the tower, before the upgrade steps above, for every release that adds a migration:
+
+```powershell
+git fetch origin
+git diff --stat HEAD origin/main -- finance/migrations   # any new file means: rehearse first
+./ops/deploy-rehearsal.ps1 -Candidate origin/main -ConfigPath $Config
+```
+
+`-Candidate` is any git revision in the checkout (a SHA, a tag or `origin/main`). The script:
+
+1. checks out the candidate with `git archive` into a temporary directory and builds its `app`, `backup` and `background` images under a throwaway Compose project, `fp-rehearsal-<random>` (or `-ProjectName fp-rehearsal-...`), with its own volumes, a free loopback port, a temporary `BACKUP_DIR` and dummy secrets. It reads only `BACKUP_DIR` from `$Config`. It refuses any project name without the `fp-rehearsal-` prefix, and so `financial-planner`, before it starts and again before `down --volumes`. Like the Docker smoke test, it gives docker only `PATH`, `HOME` and the `DOCKER_*` settings, and stops before building unless `docker compose config` resolves every volume into the throwaway project and every writable bind mount into its temporary directory;
+2. restores the newest nightly dump that has a signed manifest (`$BACKUP_DIR/nightly/financial_planner_*.dump` with `.sha256` and `.sha256.sig`) into the throwaway database with the candidate's `restore.sh`, which verifies the signature against `$BACKUP_DIR/signing/backup-signing-key.pub`. The backup directory is mounted read-only;
+3. counts every table's rows (`row-counts.sh`), starts the candidate `app`, which applies the pending migrations, waits up to `-MigrateTimeoutSeconds` (900) for it to report healthy, and counts again;
+4. starts the rest of the stack, takes one backup of the migrated database (with its restore check), then runs `reconcile_balances --json` and `ops/post-deploy-check.ps1` against the throwaway project;
+5. always tears down, on failure or Ctrl+C too: `down --volumes --remove-orphans` for the throwaway project, removes its three images, empties and deletes the temporary directory, and confirms no container or volume of the project is left.
+
+It prints one line per step and per table, then `PASS deploy rehearsal of <sha>: N tables compared, M migration(s) applied` and exits 0, or `FAIL ...: N problem(s); do not deploy` and exits 1. Output holds only table names, counts, states, exception types and SHAs, never a row, a log line or a secret; `restore.sh`, `migrate` and compose output is discarded. It also prints the production project's `docker compose ls` status before and after and fails if it changed. It never starts Docker: when Docker is not reachable it fails.
+
+A row count may only change on purpose. A table the migrations create is `new`; `django_migrations`, `django_content_type` and `auth_permission` may grow. Any other change, more rows or fewer, and any dropped table fails unless you name the table in `-ExpectCountChange` because the release notes or `tests/test_migrate_populated.py` declare that change (for example #520 and #569 deleted alerts and chat). `reconcile_balances` fails the rehearsal when it finds more `mismatch` windows than `-KnownMismatchWindows` (default 0). If production already shows mismatches on Settings → Data, fix them first or pass that count. The rehearsal's secrets are dummies, so encrypted fields such as SimpleFIN tokens stay sealed, and the sync schedules, the Agent Harness, local chat and notices are off: the restored copy never syncs, calls out or sends anything. A migration that must decrypt a field therefore fails here even though it would pass in production. Say so in its PR and deploy it with a verified backup and the rollback steps above.
+
+On FAIL, do not deploy. A `migrate:` line means the app did not become healthy (it lists the exception types it logged), a `counts:` FAIL names the table, and the post-deploy lines are the check's own. Open an issue with the FAIL lines, which carry no financial data.
+
+To prove the script without real data, build a synthetic dump with the #532 fixture builder and pass it as `-DumpPath`, which is restored without a signed manifest. `0061_savings_goal_wishlist` is the newest state the builder can seed; migrating it to head deletes the alerts and chat that #520 and #569 remove, and its synthetic balances leave 51 mismatch windows:
+
+```bash
+pip install -r requirements-test.txt
+bash scripts/build-synthetic-dump.sh .tmp/synthetic.dump 0061_savings_goal_wishlist
+pwsh ./ops/deploy-rehearsal.ps1 -Candidate HEAD -DumpPath .tmp/synthetic.dump \
+  -ExpectCountChange finance_alert,finance_aiconversation,finance_aiconversationmessage -KnownMismatchWindows 51
+```
+
+`tests/test_deploy_rehearsal.py` covers the project-name guard, the count comparison, the output and the stops before Docker without a daemon; the rehearsal itself needs Docker.
 
 ## PostgreSQL 16 to 18 upgrade
 
