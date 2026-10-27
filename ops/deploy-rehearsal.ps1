@@ -254,45 +254,170 @@ function Test-UnderDirectory([string]$Path, [string]$Root) {
     return ($resolved.TrimEnd('/', '\') + $separator).StartsWith($resolvedRoot.TrimEnd('/', '\') + $separator, $comparison)
 }
 
-# Problems with the resolved compose config: a named volume outside the project,
-# one that is not a plain local volume or that already exists, or a writable
-# bind mount whose source, links followed, is outside the work directory.
-# `down --volumes` deletes what compose resolves, restore replaces /receipts and
-# teardown empties the backup tree, so any of these could reach another stack's
-# storage. A prefixed name proves nothing about where the data lives: an
-# external volume, another driver or driver_opts (type=none, o=bind,
+# What the resolved compose config may hold. Test-DisposableStorage refuses
+# every other key, so a key a later candidate needs is judged and added here
+# first rather than passing because nothing looked at it.
+$KnownTopLevelKeys = @('name', 'services', 'volumes', 'networks')
+$KnownServiceKeys = @('build', 'command', 'cpus', 'depends_on', 'entrypoint', 'environment', 'expose', 'extra_hosts',
+    'healthcheck', 'image', 'init', 'ipc', 'mem_limit', 'mem_reservation', 'network_mode', 'networks', 'pid', 'ports',
+    'pull_policy', 'restart', 'security_opt', 'stop_grace_period', 'stop_signal', 'tmpfs', 'user', 'volumes', 'working_dir')
+# Keys a service could reach the host or another container's storage with,
+# named so the refusal says why.
+$RefusedServiceKeys = [ordered]@{
+    volumes_from = "inherits another container's mounts"
+    devices      = 'maps host devices into the container'
+    privileged   = "gives the container the host's devices"
+    cap_add      = 'adds kernel capabilities'
+    userns_mode  = "shares the host's user namespace"
+    extends      = 'pulls in a service the guard has not read'
+}
+$KnownVolumeKeys = @('name', 'driver', 'driver_opts', 'external')
+$KnownNetworkKeys = @('name', 'driver', 'ipam')
+# Per mount type, the keys a mount and its type's options may set.
+$KnownMountKeys = @{
+    bind   = @('type', 'source', 'target', 'read_only', 'bind')
+    volume = @('type', 'source', 'target', 'read_only', 'volume')
+    tmpfs  = @('type', 'target', 'read_only', 'tmpfs')
+}
+$KnownMountOptions = @{
+    bind   = @('create_host_path')
+    volume = @('nocopy', 'subpath')
+    tmpfs  = @('size', 'mode')
+}
+
+function Get-PropNames($Object) {
+    if ($Object -isnot [Management.Automation.PSCustomObject]) { return @() }
+    return @($Object.PSObject.Properties | ForEach-Object { $_.Name })
+}
+
+function Test-ProjectName([string]$Name, [string]$Project) {
+    return $Name.StartsWith("$Project-") -or $Name.StartsWith("${Project}_")
+}
+
+# Problems with one service's mounts. A bind's source, links followed, must be
+# under the work directory, read-only or not: a read-only bind of the Docker
+# socket still drives the daemon. A volume mount must name a project volume
+# declared at the top level, which Test-DisposableStorage checks; an anonymous
+# one is refused. tmpfs is memory only.
+function Test-ServiceMounts([string]$Service, $Mounts, [string[]]$DeclaredVolumes, [string]$WorkDir) {
+    foreach ($mount in @($Mounts)) {
+        if ($null -eq $mount) { continue }
+        $type = [string](Get-Prop $mount 'type')
+        if (-not $KnownMountKeys.ContainsKey($type)) {
+            "service $Service volumes: mount type '$type' is not bind, volume or tmpfs"
+            continue
+        }
+        foreach ($key in Get-PropNames $mount) {
+            if ($KnownMountKeys[$type] -cnotcontains $key) { "service $Service volumes: a $type mount sets $key" }
+        }
+        foreach ($key in Get-PropNames (Get-Prop $mount $type)) {
+            if ($KnownMountOptions[$type] -cnotcontains $key) { "service $Service volumes: a $type mount sets ${type}.$key" }
+        }
+        $source = [string](Get-Prop $mount 'source')
+        if ($type -eq 'bind' -and -not (Test-UnderDirectory $source $WorkDir)) {
+            "service $Service volumes: bind $source is outside the work directory"
+        } elseif ($type -eq 'volume' -and $DeclaredVolumes -cnotcontains $source) {
+            "service $Service volumes: volume '$source' is not a declared project volume"
+        }
+    }
+}
+
+# Problems with the resolved compose config, as an allowlist: only the keys
+# listed above, and of storage only new local project volumes, binds under the
+# work directory and tmpfs. `down --volumes` deletes what compose resolves,
+# restore replaces /receipts and teardown empties the backup tree, so anything
+# else could reach another stack's storage: volumes_from inherits a production
+# container's mounts, and a host namespace, device or capability reaches the
+# host itself. A prefixed volume name proves nothing about where the data
+# lives: an external volume, another driver or driver_opts (type=none, o=bind,
 # device=...) can put real storage behind it, and a volume that exists already
 # may be one, so only a new local volume without options counts as disposable.
+# Built images must carry the project's name, so a build never retags a
+# production image that teardown would then leave behind.
 function Test-DisposableStorage($Config, [string]$Project, [string]$WorkDir, [string[]]$ExistingVolumes = @()) {
+    foreach ($key in Get-PropNames $Config) {
+        if ($KnownTopLevelKeys -cnotcontains $key) { "top-level ${key}: not a key the guard knows" }
+    }
     $volumes = Get-Prop $Config 'volumes'
-    if ($volumes) {
-        foreach ($volume in $volumes.PSObject.Properties) {
-            $name = [string](Get-Prop $volume.Value 'name')
-            if (-not ($name.StartsWith("$Project-") -or $name.StartsWith("${Project}_"))) {
-                "volume $($volume.Name) is named $name"
-            }
-            if (Get-Prop $volume.Value 'external') { "volume $($volume.Name) is external" }
-            $driver = Get-Prop $volume.Value 'driver'
-            if ($null -ne $driver -and [string]$driver -ne 'local') { "volume $($volume.Name) uses driver $driver" }
-            $options = Get-Prop $volume.Value 'driver_opts'
-            if ($null -ne $options -and @($options.PSObject.Properties).Count -gt 0) {
-                "volume $($volume.Name) sets driver_opts"
-            }
-            if ($name -and $ExistingVolumes -ccontains $name) { "volume $($volume.Name) ($name) already exists" }
+    foreach ($volume in @(if ($volumes) { $volumes.PSObject.Properties })) {
+        $name = [string](Get-Prop $volume.Value 'name')
+        if (-not (Test-ProjectName $name $Project)) { "volume $($volume.Name) is named $name" }
+        if (Get-Prop $volume.Value 'external') { "volume $($volume.Name) is external" }
+        $driver = Get-Prop $volume.Value 'driver'
+        if ($null -ne $driver -and [string]$driver -ne 'local') { "volume $($volume.Name) uses driver $driver" }
+        $options = Get-Prop $volume.Value 'driver_opts'
+        if ($null -ne $options -and @(Get-PropNames $options).Count -gt 0) {
+            "volume $($volume.Name) sets driver_opts"
+        }
+        foreach ($key in Get-PropNames $volume.Value) {
+            if ($KnownVolumeKeys -cnotcontains $key) { "volume $($volume.Name) sets $key" }
+        }
+        if ($name -and $ExistingVolumes -ccontains $name) { "volume $($volume.Name) ($name) already exists" }
+    }
+    $declaredVolumes = @(Get-PropNames $volumes)
+    $networks = Get-Prop $Config 'networks'
+    foreach ($network in @(if ($networks) { $networks.PSObject.Properties })) {
+        $name = [string](Get-Prop $network.Value 'name')
+        if (-not (Test-ProjectName $name $Project)) { "network $($network.Name) is named $name" }
+        $driver = Get-Prop $network.Value 'driver'
+        if ($null -ne $driver -and [string]$driver -ne 'bridge') { "network $($network.Name) uses driver $driver" }
+        if (@(Get-PropNames (Get-Prop $network.Value 'ipam')).Count -gt 0) { "network $($network.Name) sets ipam" }
+        foreach ($key in Get-PropNames $network.Value) {
+            if ($KnownNetworkKeys -cnotcontains $key) { "network $($network.Name) sets $key" }
         }
     }
+    $declaredNetworks = @(Get-PropNames $networks)
     $services = Get-Prop $Config 'services'
-    if ($services) {
-        foreach ($service in $services.PSObject.Properties) {
-            foreach ($mount in @(Get-Prop $service.Value 'volumes')) {
-                if ($null -eq $mount -or (Get-Prop $mount 'type') -ne 'bind' -or (Get-Prop $mount 'read_only')) { continue }
-                $source = [string](Get-Prop $mount 'source')
-                if (-not (Test-UnderDirectory $source $WorkDir)) {
-                    "$($service.Name) mounts $source writable"
-                }
+    foreach ($service in @(if ($services) { $services.PSObject.Properties })) {
+        $name = $service.Name
+        $spec = $service.Value
+        foreach ($key in Get-PropNames $spec) {
+            if ($RefusedServiceKeys.Contains($key)) {
+                "service $name ${key}: $($RefusedServiceKeys[$key])"
+            } elseif ($KnownServiceKeys -cnotcontains $key) {
+                "service $name ${key}: not a key the guard knows"
             }
         }
+        foreach ($key in @('pid', 'ipc', 'network_mode')) {
+            $mode = [string](Get-Prop $spec $key)
+            if ($mode -eq 'host' -or $mode.StartsWith('container:')) { "service $name ${key}: $mode shares a namespace outside the project" }
+        }
+        foreach ($option in @(Get-Prop $spec 'security_opt')) {
+            if ($null -ne $option -and [string]$option -notin @('no-new-privileges', 'no-new-privileges:true')) {
+                "service $name security_opt: $option is not allowed"
+            }
+        }
+        $attached = Get-Prop $spec 'networks'
+        foreach ($network in @(if ($attached) { $attached.PSObject.Properties })) {
+            if ($declaredNetworks -cnotcontains $network.Name) { "service $name networks: $($network.Name) is not a project network" }
+            if ($null -ne $network.Value) { "service $name networks: $($network.Name) sets attachment options" }
+        }
+        $build = Get-Prop $spec 'build'
+        if ($null -ne $build) {
+            foreach ($key in Get-PropNames $build) {
+                if ($key -cnotin @('context', 'dockerfile', 'args')) { "service $name build: sets $key" }
+            }
+            $context = [string](Get-Prop $build 'context')
+            if (-not (Test-UnderDirectory $context $WorkDir)) { "service $name build: context $context is outside the work directory" }
+            $image = Get-Prop $spec 'image'
+            if ($null -ne $image -and -not ([string]$image).StartsWith("$Project-")) { "service $name image: $image is not a $Project- image" }
+        }
+        Test-ServiceMounts $name (Get-Prop $spec 'volumes') $declaredVolumes $WorkDir
     }
+}
+
+# Compose resolves include and extends before `config` prints the model, so
+# the model cannot show that the candidate's compose.yml pulled in a file the
+# guard never read. It is refused if it names either anywhere, in any case, or
+# holds a backslash or a !, the only ways YAML spells a key without its letters
+# ("\x69nclude", or a !!binary key).
+function Test-ComposeSource([string]$Path) {
+    $text = [IO.File]::ReadAllText($Path)
+    foreach ($key in @('include', 'extends')) {
+        if ($text -match $key) { "compose.yml ${key}: pulls in compose files the guard has not read" }
+    }
+    if ($text.Contains('\')) { 'compose.yml: a backslash escape could spell include or extends' }
+    if ($text.Contains('!')) { 'compose.yml: a YAML tag could spell include or extends' }
 }
 
 function ConvertFrom-EnvValue([string]$Raw) {
@@ -497,6 +622,9 @@ function Invoke-Rehearsal {
     New-RehearsalEnvFile $script:EnvFile $backups $port $script:Sha
     Write-Pass "candidate: $($script:Sha.Substring(0, 12)) as project $($script:Project) on 127.0.0.1:$port"
 
+    # -f names this file alone, so no override or COMPOSE_FILE adds another.
+    $problems = @(Test-ComposeSource $script:ComposeFile)
+    if ($problems.Count -gt 0) { throw "compose file the guard cannot vouch for: $($problems -join '; ')" }
     $config = Invoke-Compose @('config', '--format', 'json')
     if ($config.ExitCode -ne 0) { throw 'docker compose config failed for the candidate' }
     # Absence from `compose ls` does not mean its volumes are new. One that
@@ -505,7 +633,7 @@ function Invoke-Rehearsal {
     if ($existing.ExitCode -ne 0) { throw 'docker volume ls failed' }
     $problems = @(Test-DisposableStorage (($config.Output -join "`n") | ConvertFrom-Json) $script:Project $script:WorkDir @($existing.Output))
     if ($problems.Count -gt 0) { throw "storage outside the throwaway project: $($problems -join '; ')" }
-    Write-Pass "storage: volumes $($script:Project)-*, writable bind mounts under the work directory"
+    Write-Pass "storage: only new $($script:Project)-* volumes, bind mounts under the work directory and tmpfs"
 
     # From here the project may hold containers, volumes and images; teardown removes them.
     $script:Armed = $true

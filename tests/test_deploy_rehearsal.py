@@ -176,7 +176,9 @@ def test_storage_outside_the_throwaway_project_is_reported(tmp_path):
 
     assert problems == [
         "volume receipts is named financial-planner-receipts",
-        f"backup mounts {tmp_path / 'financial-planner-backups'} writable",
+        f"service backup volumes: bind {tmp_path / 'financial-planner-backups'} is outside the work directory",
+        # Read-only is no exemption: a read-only bind of the Docker socket still drives the daemon.
+        "service backup volumes: bind /etc/rclone.conf is outside the work directory",
     ]
 
 
@@ -192,7 +194,7 @@ def test_a_sibling_directory_sharing_the_prefix_is_outside_the_work_directory(tm
         f"'fp-rehearsal-t' {_ps_string(work)}) | ConvertTo-Json -Compress -AsArray"
     )
 
-    assert problems == [f"backup mounts {tmp_path / 'fp-rehearsal-t-other'} writable"]
+    assert problems == [f"service backup volumes: bind {tmp_path / 'fp-rehearsal-t-other'} is outside the work directory"]
 
 
 def test_the_newest_signed_nightly_dump_is_chosen(tmp_path):
@@ -411,8 +413,8 @@ def test_a_bind_source_that_links_outside_the_work_directory_is_reported(tmp_pat
     )
 
     assert problems == [
-        f"backup mounts {work / 'backups'} writable",
-        f"backup mounts {work / 'backups' / 'audit' / 'application'} writable",
+        f"service backup volumes: bind {work / 'backups'} is outside the work directory",
+        f"service backup volumes: bind {work / 'backups' / 'audit' / 'application'} is outside the work directory",
     ]
 
 
@@ -471,7 +473,8 @@ def test_a_path_that_cannot_be_resolved_is_refused(tmp_path):
     assert _ps(
         f"ConvertTo-Json -Compress -InputObject @(Test-DisposableStorage (Get-Content -Raw "
         f"{_ps_string(tmp_path / 'config.json')} | ConvertFrom-Json) 'fp-rehearsal-t' {_ps_string(tmp_path)})"
-    ) == [f"backup mounts {tmp_path / 'loop' / 'backups'} writable", "backup mounts relative/backups writable"]
+    ) == [f"service backup volumes: bind {tmp_path / 'loop' / 'backups'} is outside the work directory",
+          "service backup volumes: bind relative/backups is outside the work directory"]
     assert _ps(f"Test-UnderDirectory {_ps_string(tmp_path / 'x')} {_ps_string(tmp_path / 'loop')} | ConvertTo-Json") is False
 
 
