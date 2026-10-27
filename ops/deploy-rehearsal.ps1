@@ -162,11 +162,79 @@ function Get-Prop($Object, [string]$Name) {
     return $null
 }
 
+# A new, empty directory only this user can enter, named at random rather than
+# after -ProjectName. CreateTempSubdirectory creates it exclusively (mkdtemp,
+# mode 0700, on Linux), so a path someone else created first, or a symlink
+# they planted there, is never reused.
+function New-RehearsalWorkDir {
+    return [IO.Directory]::CreateTempSubdirectory('fp-rehearsal-work-').FullName
+}
+
+# $Path with every symlink or junction along it followed, as Docker follows them
+# in a bind source, or $null when it cannot be resolved. Parts that do not exist
+# yet are kept as written: compose creates them as plain directories.
+function Resolve-CanonicalPath([string]$Path) {
+    if (-not $Path -or -not [IO.Path]::IsPathFullyQualified($Path)) { return $null }
+    $separators = [char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+    $pending = [Collections.Generic.Stack[string]]::new()
+    $push = {
+        param([string]$Text)
+        $parts = $Text.Split($separators, [StringSplitOptions]::RemoveEmptyEntries)
+        for ($i = $parts.Count - 1; $i -ge 0; $i--) { $pending.Push($parts[$i]) }
+    }
+    $current = [IO.Path]::GetPathRoot($Path)
+    & $push $Path.Substring($current.Length)
+    $links = 0
+    $missing = $false
+    try {
+        while ($pending.Count -gt 0) {
+            $part = $pending.Pop()
+            if ($part -eq '.') { continue }
+            if ($part -eq '..') {
+                if ($missing) { return $null }
+                $parent = [IO.Path]::GetDirectoryName($current)
+                if ($parent) { $current = $parent }
+                continue
+            }
+            $next = [IO.Path]::Combine($current, $part)
+            if (-not $missing) {
+                $target = [IO.FileInfo]::new($next).LinkTarget
+                if ($null -ne $target) {
+                    if (++$links -gt 40) { return $null }
+                    if ([IO.Path]::IsPathRooted($target)) {
+                        $current = [IO.Path]::GetPathRoot($target)
+                        if (-not $current) { return $null }
+                        $target = $target.Substring($current.Length)
+                    }
+                    & $push $target
+                    continue
+                }
+                $missing = -not ([IO.Directory]::Exists($next) -or [IO.File]::Exists($next))
+            }
+            $current = $next
+        }
+    } catch {
+        return $null
+    }
+    return $current
+}
+
+# Whether $Path, links followed, is $Root or lies under it. False when either
+# cannot be resolved.
+function Test-UnderDirectory([string]$Path, [string]$Root) {
+    $resolvedRoot = Resolve-CanonicalPath $Root
+    $resolved = Resolve-CanonicalPath $Path
+    if (-not $resolvedRoot -or -not $resolved) { return $false }
+    $comparison = if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+    $separator = [IO.Path]::DirectorySeparatorChar
+    return ($resolved.TrimEnd('/', '\') + $separator).StartsWith($resolvedRoot.TrimEnd('/', '\') + $separator, $comparison)
+}
+
 # Problems with the resolved compose config: a named volume outside the project,
-# or a writable bind mount outside the work directory. `down --volumes` deletes
-# what compose resolves, so either could reach another stack's storage.
+# or a writable bind mount whose source, links followed, is outside the work
+# directory. `down --volumes` deletes what compose resolves, and teardown empties
+# the backup tree, so either could reach another stack's storage.
 function Test-DisposableStorage($Config, [string]$Project, [string]$WorkDir) {
-    $root = $WorkDir.TrimEnd('/', '\') + [IO.Path]::DirectorySeparatorChar
     $volumes = Get-Prop $Config 'volumes'
     if ($volumes) {
         foreach ($volume in $volumes.PSObject.Properties) {
@@ -182,7 +250,7 @@ function Test-DisposableStorage($Config, [string]$Project, [string]$WorkDir) {
             foreach ($mount in @(Get-Prop $service.Value 'volumes')) {
                 if ($null -eq $mount -or (Get-Prop $mount 'type') -ne 'bind' -or (Get-Prop $mount 'read_only')) { continue }
                 $source = [string](Get-Prop $mount 'source')
-                if (-not ($source.TrimEnd('/', '\') + [IO.Path]::DirectorySeparatorChar).StartsWith($root)) {
+                if (-not (Test-UnderDirectory $source $WorkDir)) {
                     "$($service.Name) mounts $source writable"
                 }
             }
@@ -375,10 +443,10 @@ function Invoke-Rehearsal {
     if ((Get-ProjectStatus $script:Project) -ne 'absent') { throw "project $($script:Project) already exists; remove it or pass another -ProjectName" }
 
     $port = if ($AppPort -gt 0) { $AppPort } else { Get-FreePort }
-    $script:WorkDir = Join-Path ([IO.Path]::GetTempPath()) $script:Project
+    $script:WorkDir = New-RehearsalWorkDir
     $source = Join-Path $script:WorkDir 'source'
     $backups = Join-Path $script:WorkDir 'backups'
-    New-Item -ItemType Directory -Force -Path $source, $backups | Out-Null
+    New-Item -ItemType Directory -Path $source, $backups | Out-Null
     $archive = Join-Path $script:WorkDir 'source.tar'
     & git -C $RepoRoot archive --format=tar -o $archive $script:Sha 2>$null
     if ($LASTEXITCODE -ne 0) { throw 'git archive of the candidate failed' }
@@ -490,8 +558,12 @@ function Invoke-Teardown {
         # it from a plain container (compose would recreate the receipts volume)
         # so no dump or audit file outlives the rehearsal.
         $backups = Join-Path $script:WorkDir 'backups'
-        [void](Invoke-Docker @('run', '--rm', '--network', 'none', '-v', "${backups}:/backups", '--entrypoint', 'sh',
-            $backupImage, '-c', 'find /backups -mindepth 1 -delete'))
+        if (Test-UnderDirectory $backups $script:WorkDir) {
+            [void](Invoke-Docker @('run', '--rm', '--network', 'none', '-v', "${backups}:/backups", '--entrypoint', 'sh',
+                $backupImage, '-c', 'find /backups -mindepth 1 -delete'))
+        } else {
+            Add-Failure 'teardown: the backup directory no longer resolves inside the work directory; left it unemptied'
+        }
     }
     foreach ($service in $BuiltServices) {
         $image = "$($script:Project)-$service"

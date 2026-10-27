@@ -363,6 +363,11 @@ def test_a_planted_work_directory_is_never_mounted_or_emptied(tmp_path):
     calls = log.read_text(encoding="utf-8")
     assert str(planted) not in calls
     assert str(outside) not in calls
+    # It got as far as emptying a backup tree: its own, in a fresh work directory it then removed.
+    emptied = [call for call in calls.splitlines() if call.startswith("run ") and "find /backups" in call]
+    assert len(emptied) == 1
+    assert f"-v {tmp_path}{os.sep}fp-rehearsal-work-" in emptied[0]
+    assert not list(tmp_path.glob("fp-rehearsal-work-*"))
 
 
 def test_a_bind_source_that_links_outside_the_work_directory_is_reported(tmp_path):
@@ -386,3 +391,86 @@ def test_a_bind_source_that_links_outside_the_work_directory_is_reported(tmp_pat
         f"backup mounts {work / 'backups'} writable",
         f"backup mounts {work / 'backups' / 'audit' / 'application'} writable",
     ]
+
+
+def test_each_work_directory_is_new_owner_only_and_not_named_after_the_project(tmp_path):
+    (tmp_path / "fp-rehearsal-x").mkdir()
+    env = dict(os.environ, TMPDIR=str(tmp_path))
+    result = subprocess.run(
+        [POWERSHELL, "-NoProfile", "-NonInteractive", "-Command",
+         f". '{SCRIPT}' -ProjectName fp-rehearsal-x; ConvertTo-Json -Compress @(New-RehearsalWorkDir; New-RehearsalWorkDir)"],
+        capture_output=True, text=True, env=env, timeout=120, check=False, cwd=ROOT,
+    )
+    assert result.returncode == 0, result.stderr
+    first, second = (Path(path) for path in json.loads(result.stdout))
+
+    assert first != second
+    for work in (first, second):
+        assert work.parent == tmp_path
+        assert work.name.startswith("fp-rehearsal-work-")
+        assert not work.is_symlink()
+        assert list(work.iterdir()) == []
+        if os.name != "nt":
+            assert work.stat().st_mode & 0o777 == 0o700
+    assert list((tmp_path / "fp-rehearsal-x").iterdir()) == []
+
+
+def _canonical(path):
+    return _ps(f"Resolve-CanonicalPath {_ps_string(path)} | ConvertTo-Json")
+
+
+def test_canonical_paths_follow_every_link_along_the_way(tmp_path):
+    real = tmp_path / "real"
+    (real / "inner").mkdir(parents=True)
+    (tmp_path / "relative").symlink_to("real", target_is_directory=True)
+    (real / "up").symlink_to("..", target_is_directory=True)
+    (tmp_path / "chain").symlink_to(tmp_path / "relative", target_is_directory=True)
+
+    assert _canonical(tmp_path / "chain" / "inner") == str(real / "inner")
+    assert _canonical(tmp_path / "relative" / "up" / "real" / "inner") == str(real / "inner")
+    # `..` after a link climbs from where the link lands, not from the link.
+    assert _canonical(f"{tmp_path / 'chain' / 'inner'}/../..") == str(tmp_path)
+    # Parts compose will create are kept as written under the resolved parent.
+    assert _canonical(tmp_path / "chain" / "audit" / "application") == str(real / "audit" / "application")
+
+
+def test_a_path_that_cannot_be_resolved_is_refused(tmp_path):
+    (tmp_path / "loop").symlink_to(tmp_path / "loop")
+    config = {"services": {"backup": {"volumes": [
+        {"type": "bind", "source": str(tmp_path / "loop" / "backups"), "target": "/backups"},
+        {"type": "bind", "source": "relative/backups", "target": "/backups"},
+    ]}}}
+    (tmp_path / "config.json").write_text(json.dumps(config), encoding="utf-8")
+
+    assert _canonical(tmp_path / "loop") is None
+    assert _canonical("relative/backups") is None
+    assert _canonical(f"{tmp_path / 'missing'}/../x") is None
+    assert _ps(
+        f"ConvertTo-Json -Compress -InputObject @(Test-DisposableStorage (Get-Content -Raw "
+        f"{_ps_string(tmp_path / 'config.json')} | ConvertFrom-Json) 'fp-rehearsal-t' {_ps_string(tmp_path)})"
+    ) == [f"backup mounts {tmp_path / 'loop' / 'backups'} writable", "backup mounts relative/backups writable"]
+    assert _ps(f"Test-UnderDirectory {_ps_string(tmp_path / 'x')} {_ps_string(tmp_path / 'loop')} | ConvertTo-Json") is False
+
+
+def test_teardown_leaves_a_backup_directory_that_resolves_outside_the_work_directory(tmp_path):
+    outside = tmp_path / "real-backups"
+    outside.mkdir()
+    (outside / "sentinel").write_text("synthetic sentinel", encoding="utf-8")
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "backups").symlink_to(outside, target_is_directory=True)
+    bin_dir, log = _simulating_docker(tmp_path)
+    env = dict(os.environ, PATH=str(bin_dir) + os.pathsep + os.environ["PATH"])
+    result = subprocess.run(
+        [POWERSHELL, "-NoProfile", "-NonInteractive", "-Command",
+         f". '{SCRIPT}'; $script:Project = 'fp-rehearsal-t'; $script:WorkDir = {_ps_string(work)}; "
+         "$script:Built = $true; $script:ComposeFile = 'compose.yml'; $script:EnvFile = 'rehearsal.env'; "
+         "Invoke-Teardown; ConvertTo-Json -Compress -InputObject @($script:Failures)"],
+        capture_output=True, text=True, env=env, timeout=120, check=False, cwd=ROOT,
+    )
+    assert result.returncode == 0, result.stderr
+
+    assert (outside / "sentinel").read_text(encoding="utf-8") == "synthetic sentinel"
+    assert "teardown: the backup directory no longer resolves inside the work directory; left it unemptied" in (
+        json.loads(result.stdout.splitlines()[-1]))
+    assert not any(call.startswith("run ") for call in log.read_text(encoding="utf-8").splitlines())
