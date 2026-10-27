@@ -638,7 +638,7 @@ _PROD = "container:financial-planner-backup-1"
     pytest.param({"labels": {"com.docker.compose.project": "financial-planner"}},
                  "service sneaky labels: not a key the guard knows", id="unknown-labels"),
     pytest.param({"env_file": [{"path": "/srv/financial-planner/.env"}]},
-                 "service sneaky env_file: not a key the guard knows", id="unknown-env_file"),
+                 "service sneaky env_file: reads a host file into the container's environment", id="env_file"),
     pytest.param({"volumes": [{"type": "npipe", "source": "/var/run/docker.sock", "target": "/sock"}]},
                  "service sneaky volumes: mount type 'npipe' is not bind, volume or tmpfs", id="mount-npipe"),
     pytest.param({"volumes": [{"type": "image", "source": "financial-planner-app", "target": "/img"}]},
@@ -794,7 +794,7 @@ def test_the_checked_in_compose_file_passes_the_allowlist(tmp_path):
          f". '{SCRIPT}'; $script:Project = 'fp-rehearsal-t'; $work = {_ps_string(work)}; "
          "$script:ComposeFile = Join-Path $work 'source/compose.yml'; $script:EnvFile = Join-Path $work 'rehearsal.env'; "
          "New-RehearsalEnvFile $script:EnvFile (Join-Path $work 'backups') 41234 'abc123'; "
-         "$config = Invoke-Compose @('config', '--format', 'json'); if ($config.ExitCode -ne 0) { throw 'compose config failed' }; "
+         "$config = Invoke-Compose @('config', '--no-env-resolution', '--format', 'json'); if ($config.ExitCode -ne 0) { throw 'compose config failed' }; "
          "ConvertTo-Json -Compress -InputObject @(@(Test-ComposeSource $script:ComposeFile) + "
          "@(Test-DisposableStorage (($config.Output -join \"`n\") | ConvertFrom-Json) $script:Project $work))"],
         capture_output=True, text=True, timeout=120, check=False, cwd=ROOT,

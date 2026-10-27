@@ -270,6 +270,7 @@ $RefusedServiceKeys = [ordered]@{
     cap_add      = 'adds kernel capabilities'
     userns_mode  = "shares the host's user namespace"
     extends      = 'pulls in a service the guard has not read'
+    env_file     = "reads a host file into the container's environment"
 }
 $KnownVolumeKeys = @('name', 'driver', 'driver_opts', 'external')
 $KnownNetworkKeys = @('name', 'driver', 'ipam')
@@ -333,7 +334,10 @@ function Test-ServiceMounts([string]$Service, $Mounts, [string[]]$DeclaredVolume
 # device=...) can put real storage behind it, and a volume that exists already
 # may be one, so only a new local volume without options counts as disposable.
 # Built images must carry the project's name, so a build never retags a
-# production image that teardown would then leave behind.
+# production image that teardown would then leave behind. A host file the
+# candidate names is read before any container runs: a build's context and
+# Dockerfile, links followed, must be under the work directory, and env_file
+# is refused outright.
 function Test-DisposableStorage($Config, [string]$Project, [string]$WorkDir, [string[]]$ExistingVolumes = @()) {
     foreach ($key in Get-PropNames $Config) {
         if ($KnownTopLevelKeys -cnotcontains $key) { "top-level ${key}: not a key the guard knows" }
@@ -399,6 +403,12 @@ function Test-DisposableStorage($Config, [string]$Project, [string]$WorkDir, [st
             }
             $context = [string](Get-Prop $build 'context')
             if (-not (Test-UnderDirectory $context $WorkDir)) { "service $name build: context $context is outside the work directory" }
+            # The builder reads the Dockerfile wherever it is: compose keeps the
+            # path as written, relative to the context unless it is absolute.
+            $dockerfile = [string](Get-Prop $build 'dockerfile')
+            if (-not $dockerfile) { $dockerfile = 'Dockerfile' }
+            $effective = if ([IO.Path]::IsPathFullyQualified($dockerfile)) { $dockerfile } else { [IO.Path]::Combine($context, $dockerfile) }
+            if (-not (Test-UnderDirectory $effective $WorkDir)) { "service $name build: dockerfile $dockerfile is outside the work directory" }
             $image = Get-Prop $spec 'image'
             if ($null -ne $image -and -not ([string]$image).StartsWith("$Project-")) { "service $name image: $image is not a $Project- image" }
         }
@@ -625,7 +635,9 @@ function Invoke-Rehearsal {
     # -f names this file alone, so no override or COMPOSE_FILE adds another.
     $problems = @(Test-ComposeSource $script:ComposeFile)
     if ($problems.Count -gt 0) { throw "compose file the guard cannot vouch for: $($problems -join '; ')" }
-    $config = Invoke-Compose @('config', '--format', 'json')
+    # Without --no-env-resolution compose reads each service's env_file and
+    # folds it into environment, dropping the key the guard refuses.
+    $config = Invoke-Compose @('config', '--no-env-resolution', '--format', 'json')
     if ($config.ExitCode -ne 0) { throw 'docker compose config failed for the candidate' }
     # Absence from `compose ls` does not mean its volumes are new. One that
     # exists is refused, not reused, and never armed for `down --volumes`.
