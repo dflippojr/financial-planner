@@ -1718,7 +1718,12 @@ class CategoryRuleForm(forms.Form):
         widget=forms.TextInput(attrs={"inputmode": "decimal"}),
     )
     category = forms.ModelChoiceField(queryset=Category.objects.none())
-    priority = forms.IntegerField(initial=0, help_text="Lower numbers run first within personal or household rules.")
+    priority = forms.IntegerField(
+        initial=0,
+        min_value=-(2**31),
+        max_value=2**31 - 1,
+        help_text="Lower numbers run first within personal or household rules.",
+    )
     enabled = forms.BooleanField(required=False, initial=True)
 
     def __init__(self, *args, principal=None, **kwargs):
@@ -1796,7 +1801,7 @@ class AlertSettingsForm(forms.Form):
     unusual_category_amount = forms.DecimalField(
         required=False,
         min_value=Decimal("0.00"),
-        max_digits=19,
+        max_digits=18,  # cents must fit the BIGINT column
         decimal_places=2,
         initial=Decimal("50.00"),
         label="Category unusual dollar floor",
@@ -1806,7 +1811,7 @@ class AlertSettingsForm(forms.Form):
     large_transaction_amount = forms.DecimalField(
         required=False,
         min_value=Decimal("0.01"),
-        max_digits=19,
+        max_digits=18,  # cents must fit the BIGINT column
         decimal_places=2,
         label="Large transaction threshold",
         help_text="USD. Leave blank to keep large-transaction alerts off. Also used for new-merchant unusual flags.",
@@ -1944,7 +1949,7 @@ class BillsCalendarForm(forms.Form):
     threshold_amount = forms.DecimalField(
         required=False,
         min_value=Decimal("0.00"),
-        max_digits=19,
+        max_digits=18,  # cents must fit the BIGINT column
         decimal_places=2,
         label="Highlight below",
         help_text="USD. Days whose expected balance is below this amount are highlighted. Leave blank for no highlight.",

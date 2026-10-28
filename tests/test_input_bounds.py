@@ -344,3 +344,11 @@ def test_ai_fact_total_cap_drops_whole_items_and_handles_nested_values():
     wide = {f"field{i}": "\\" * 500 for i in range(100)}
     bounded = bound_ai_facts(wide)
     assert len(json.dumps(bounded)) <= MAX_AI_FACTS_CHARS
+
+def test_inferred_rule_text_keeps_repeated_spaces():
+    # A rule matches the stored description as a plain substring, so the inferred text
+    # must appear in every description it was built from.
+    descriptions = [f"SQ *SYN   COFFEE {index}" for index in range(3)]
+    shared = shared_description_contains(descriptions)
+    assert shared == "SQ *SYN   COFFEE"
+    assert all(shared.casefold() in item.casefold() for item in descriptions)

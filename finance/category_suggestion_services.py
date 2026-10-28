@@ -252,7 +252,7 @@ def run_category_suggestion_job(person, job, *, backend, session_id="", on_sessi
 
 
 def shared_description_contains(descriptions):
-    texts = [re.sub(r"\s+", " ", (item or "")[:200]).strip() for item in descriptions[:BATCH_SIZE]]
+    texts = [(item or "")[:200].strip() for item in descriptions[:BATCH_SIZE]]
     texts = [item for item in texts if item]
     if len(texts) < MIN_RULE_ACCEPTS:
         return None
