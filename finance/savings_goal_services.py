@@ -83,7 +83,8 @@ def goal_progress(principal, goal, *, today, household_only=False):
     dated = goal.target_date is not None
     past_due = (not reached) and dated and goal.target_date < today
     remaining_minor = max(target_minor - current_minor, 0)
-    percent = min(100, max(0, round((current_minor / target_minor) * 100)))
+    # Exact integer math: an unreached goal never rounds up to 100%.
+    percent = 100 if reached else max(0, min(99, current_minor * 100 // target_minor))
     monthly_needed_minor = None
     if not reached and not past_due and dated:
         months = months_left(today, goal.target_date)

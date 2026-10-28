@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-import re
 from urllib.parse import urlencode
 
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -356,7 +355,7 @@ def _offer_text(txn):
         or txn.is_excluded_transfer
     ):
         return None
-    contains = re.sub(r"\s+", " ", txn.description or "").strip()[:200].strip()
+    contains = (txn.description or "").strip()[:200].strip()
     return contains if len(contains) >= MIN_OFFER_CONTAINS else None
 
 

@@ -9,6 +9,7 @@ file are listed and never deleted.
 import csv
 import io
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal, InvalidOperation
@@ -29,6 +30,8 @@ MAX_FILE_BYTES = 256 * 1024
 NUL_MESSAGE = "The file contains NUL bytes, so it is not a valid text file."
 MAX_ROWS = 300
 MAX_NAME_LENGTH = 150
+# A comma is only a thousands separator; "1,50" is not read as 150.
+THOUSANDS_GROUPED = re.compile(r"-?\d{1,3}(,\d{3})+(\.\d*)?")
 MAX_MINOR = 2**63 - 1
 MAX_PRIORITY = 1_000_000
 MAX_AMOUNT_TEXT = 40
@@ -181,6 +184,8 @@ def _amount_to_minor(amount):
 def _parse_amount(text):
     if len(text) > MAX_AMOUNT_TEXT:
         return None, "target_amount is outside the supported range."
+    if "," in text and not THOUSANDS_GROUPED.fullmatch(text.lstrip("$").strip()):
+        return None, "target_amount must be a number such as 1250.00."
     try:
         amount = Decimal(text.replace(",", "").lstrip("$").strip())
     except InvalidOperation:

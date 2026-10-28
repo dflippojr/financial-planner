@@ -243,3 +243,21 @@ def test_household_rules_never_block_a_new_personal_rule():
         owner, owner_kind="household", description_contains=COFFEE, category_id=dining(household).pk, priority=-1
     )
     assert {txn.pk for txn in preview_unsaved_rule(owner, household_rule)} == {others[1].pk}
+
+
+@pytest.mark.django_db
+def test_offer_keeps_repeated_spaces_so_the_rule_matches_its_rows():
+    # Bank exports often pad descriptions with runs of spaces; rules match the stored
+    # text as a plain substring, so the offer must not collapse them.
+    owner = make_person("offer-spaces")
+    household = make_household(owner)
+    account = make_account(owner)
+    padded = "SYNTHETIC   COFFEE"
+    edited = make_transaction(owner, account, amount_minor=-450, description=padded)
+    for index in range(2):
+        make_transaction(owner, account, amount_minor=-500 - index, description=f"{padded} #{index}")
+    client = Client()
+    client.force_login(owner.user)
+    offer = _categorize(client, edited, dining(household)).context["rule_offer"]
+    assert offer["count"] == 2
+    assert client.get(offer["url"]).context["form"].initial["description_contains"] == padded

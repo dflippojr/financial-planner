@@ -81,7 +81,7 @@ def fill_goals(remaining_by_goal, surplus_by_month, buffer_minor):
             funded[goal_id] = None
             remaining[goal_id] = remaining_minor
             queue.append(goal_id)
-    reserve = buffer_minor
+    reserve = max(buffer_minor, 0)
     months = []
     for index, surplus in enumerate(surplus_by_month):
         positive = max(surplus, 0)
@@ -138,7 +138,8 @@ def default_buffer_minor(principal, accounts, today):
         for offset in range(BUFFER_MONTHS, 0, -1)
     ]
     totals = income_and_spending_by_window(principal, windows, accounts=accounts)
-    return sum(pair[1] for pair in totals) // BUFFER_MONTHS
+    # A net refund can make a window's spending negative; a buffer is never below zero.
+    return max(0, sum(pair[1] for pair in totals) // BUFFER_MONTHS)
 
 
 def _buffer(principal, household, accounts, today):
