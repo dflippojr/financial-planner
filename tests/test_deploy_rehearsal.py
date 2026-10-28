@@ -941,3 +941,78 @@ def test_an_in_tree_dockerfile_passes_and_the_rehearsal_builds(tmp_path):
     configs = [call for call in log.read_text(encoding="utf-8").splitlines() if " config " in f" {call} "]
     assert configs and all("--no-env-resolution" in call for call in configs)
     assert any(" build " in f" {call} " for call in _started(log))
+
+
+# Round 6 (#582 review 6457345701): git archive keeps a committed symlink, so
+# the candidate's compose.yml itself could be a link to a compose file outside
+# the work directory whose inline settings pass the allowlist.
+_OUTSIDE_COMPOSE = (
+    "services:\n"
+    "  db:\n    image: postgres:18-alpine\n    environment:\n      POSTGRES_PASSWORD: synthetic-database-only\n"
+    "  app:\n    image: alpine:3.22\n"
+    "  backup:\n    image: alpine:3.22\n    environment:\n      SYNTHETIC_SECRET: outside-compose-sentinel\n"
+    "  background:\n    image: alpine:3.22\n"
+)
+
+
+@pytest.mark.parametrize("target", [
+    pytest.param("{outside}", id="absolute-outside"),
+    pytest.param("../../outside/production.yml", id="relative-outside"),
+    pytest.param("ops/compose.linked.yml", id="in-tree-link"),
+])
+def test_a_compose_file_that_is_a_symlink_stops_before_it_is_read(tmp_path, target):
+    outside = tmp_path / "outside" / "production.yml"
+    outside.parent.mkdir()
+    outside.write_text(_OUTSIDE_COMPOSE, encoding="utf-8")
+    repo = _candidate_repo(tmp_path, _BENIGN)
+    (repo / "ops" / "compose.linked.yml").write_text(_OUTSIDE_COMPOSE, encoding="utf-8")
+    (repo / "compose.yml").unlink()
+    (repo / "compose.yml").symlink_to(target.format(outside=outside))
+    git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.test", "-c", "commit.gpgsign=false"]
+    for command in (["add", "-A"], ["commit", "-q", "-m", "linked compose.yml"]):
+        subprocess.run(git + command, check=True, capture_output=True)
+    listed = subprocess.run(git + ["ls-tree", "HEAD", "compose.yml"], check=True, capture_output=True, text=True)
+    assert listed.stdout.startswith("120000 ")
+    bin_dir, log = _normalizing_docker(tmp_path, build_exit=0)
+
+    result = _rehearse_candidate(tmp_path, repo, bin_dir)
+
+    assert result.returncode == 1
+    assert ("FAIL rehearsal: compose file the guard cannot vouch for: "
+            "compose.yml is a symbolic link, which the guard does not follow") in result.stdout
+    assert _started(log) == []
+    calls = log.read_text(encoding="utf-8")
+    assert not [call for call in calls.splitlines() if " config " in f" {call} "]
+    assert "outside-compose-sentinel" not in result.stdout + calls
+
+
+@pytest.mark.parametrize(("make", "problem"), [
+    pytest.param(lambda source: (source / "ops").symlink_to(source.parent / "elsewhere"),
+                 "ops/compose.yml: ops is a symbolic link, which the guard does not follow", id="linked-directory"),
+    pytest.param(lambda source: (source / "ops").mkdir(),
+                 "ops/compose.yml is not a regular file in the candidate source", id="missing"),
+    pytest.param(lambda source: (source / "ops" / "compose.yml").mkdir(parents=True),
+                 "ops/compose.yml is not a regular file in the candidate source", id="a-directory"),
+])
+def test_a_candidate_file_behind_a_link_or_not_a_file_is_refused(tmp_path, make, problem):
+    source = tmp_path / "work" / "source"
+    source.mkdir(parents=True)
+    (tmp_path / "work" / "elsewhere").mkdir()
+    (tmp_path / "work" / "elsewhere" / "compose.yml").write_text(_BENIGN, encoding="utf-8")
+    make(source)
+
+    reason = _ps(f"ConvertTo-Json -InputObject (Test-CandidateFile {_ps_string(source / 'ops' / 'compose.yml')} "
+                 f"{_ps_string(source)})")
+
+    assert reason == problem
+
+
+def test_a_plain_candidate_file_may_be_read(tmp_path):
+    source = tmp_path / "work" / "source"
+    (source / "ops").mkdir(parents=True)
+    (source / "ops" / "compose.yml").write_text(_BENIGN, encoding="utf-8")
+
+    reason = _ps(f"ConvertTo-Json -InputObject (Test-CandidateFile {_ps_string(source / 'ops' / 'compose.yml')} "
+                 f"{_ps_string(source)})")
+
+    assert reason is None
