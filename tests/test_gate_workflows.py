@@ -83,7 +83,7 @@ def test_review_caller_grants_every_permission_review_v3_requests():
     # A called workflow can't hold more than its caller grants, and review-v3 reads the issues a pull request
     # closes, the spec it reviews against.
     review = _code("review.yml")
-    assert "uses: dflippojr/agent-harness/.github/workflows/review.yml@review-v3\n" in review
-    assert "tooling_ref: review-v3\n" in review
+    assert "uses: dflippojr/agent-harness/.github/workflows/review.yml@review-v4\n" in review
+    assert "tooling_ref: review-v4\n" in review
     assert _permissions(_header(review)) == {"  contents: read", "  pull-requests: write", "  checks: write",
                                              "  issues: read"}
