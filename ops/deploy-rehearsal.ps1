@@ -254,6 +254,29 @@ function Test-UnderDirectory([string]$Path, [string]$Root) {
     return ($resolved.TrimEnd('/', '\') + $separator).StartsWith($resolvedRoot.TrimEnd('/', '\') + $separator, $comparison)
 }
 
+# Why the script may not read $Path from the extracted candidate $Root, or
+# $null when it may. git archive keeps a committed symlink, so the candidate's
+# compose.yml could point at a compose file elsewhere on the host, whose inline
+# settings would then pass the allowlist unseen. No part of the path from $Root
+# down may be a link, and it must be a regular file that resolves under $Root.
+function Test-CandidateFile([string]$Path, [string]$Root) {
+    $relative = [IO.Path]::GetRelativePath($Root, $Path)
+    $current = $Root
+    $parts = @('.') + @($relative.Split([char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)))
+    foreach ($part in $parts) {
+        $current = [IO.Path]::Combine($current, $part)
+        $shown = [IO.Path]::GetRelativePath($Root, $current)
+        if ($null -ne [IO.FileInfo]::new($current).LinkTarget) {
+            if ($shown -eq $relative) { return "$relative is a symbolic link, which the guard does not follow" }
+            return "${relative}: $shown is a symbolic link, which the guard does not follow"
+        }
+    }
+    if ($relative.StartsWith('..') -or -not [IO.File]::Exists($Path) -or -not (Test-UnderDirectory $Path $Root)) {
+        return "$relative is not a regular file in the candidate source"
+    }
+    return $null
+}
+
 # What the resolved compose config may hold. Test-DisposableStorage refuses
 # every other key, so a key a later candidate needs is judged and added here
 # first rather than passing because nothing looked at it.
@@ -636,7 +659,11 @@ function Invoke-Rehearsal {
     New-RehearsalEnvFile $script:EnvFile $backups $port $script:Sha
     Write-Pass "candidate: $($script:Sha.Substring(0, 12)) as project $($script:Project) on 127.0.0.1:$port"
 
-    # -f names this file alone, so no override or COMPOSE_FILE adds another.
+    # -f names this file alone, so no override or COMPOSE_FILE adds another, and
+    # --env-file stops compose reading the candidate's .env: compose.yml is the
+    # only candidate file read before teardown is armed.
+    $linked = Test-CandidateFile $script:ComposeFile $source
+    if ($linked) { throw "compose file the guard cannot vouch for: $linked" }
     $problems = @(Test-ComposeSource $script:ComposeFile)
     if ($problems.Count -gt 0) { throw "compose file the guard cannot vouch for: $($problems -join '; ')" }
     # Without --no-env-resolution compose reads each service's env_file and
