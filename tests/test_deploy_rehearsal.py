@@ -719,9 +719,9 @@ _BENIGN = "services:\n  db:\n    image: postgres:18-alpine\n"
     pytest.param(_BENIGN + "  app:\n    Extends:\n      file: /srv/financial-planner/compose.yml\n      service: backup\n",
                  "compose.yml extends: pulls in compose files the guard has not read", id="extends"),
     pytest.param(_BENIGN + '"\\x69nclude": [/srv/financial-planner/compose.yml]\n',
-                 "compose.yml: a backslash escape could spell include or extends", id="escaped-key"),
+                 "compose.yml: a backslash escape could spell include, extends or env_file", id="escaped-key"),
     pytest.param(_BENIGN + "? !!binary aW5jbHVkZQ==\n: [/srv/financial-planner/compose.yml]\n",
-                 "compose.yml: a YAML tag could spell include or extends", id="binary-key"),
+                 "compose.yml: a YAML tag could spell include, extends or env_file", id="binary-key"),
 ])
 def test_a_compose_file_that_pulls_in_another_stops_before_anything_starts(tmp_path, compose_text, problem):
     # Compose resolves include and extends before `config` prints the model,
@@ -881,6 +881,8 @@ _DB_IMAGE = "    image: postgres:18-alpine\n"
 def test_an_env_file_from_outside_the_work_directory_stops_before_anything_starts(tmp_path, form):
     # Resolving env files would fold the host file into `environment`, a key
     # the guard allows, and drop `env_file` from the model (#582 review r4 F1).
+    # Compose before 5 (2.38 on the CI runners) does that even with
+    # --no-env-resolution, so the text is refused before `config` reads it.
     outside = tmp_path / "outside"
     outside.mkdir()
     env = outside / "production.env"
@@ -891,10 +893,12 @@ def test_an_env_file_from_outside_the_work_directory_stops_before_anything_start
     result = _rehearse_candidate(tmp_path, repo, bin_dir)
 
     assert result.returncode == 1
-    assert ("FAIL rehearsal: storage outside the throwaway project: "
-            "service db env_file: reads a host file into the container's environment") in result.stdout
+    assert ("FAIL rehearsal: compose file the guard cannot vouch for: "
+            "compose.yml env_file: reads a host file into the container's environment") in result.stdout
     assert _started(log) == []
-    assert "synthetic-sentinel-value" not in result.stdout + log.read_text(encoding="utf-8")
+    calls = log.read_text(encoding="utf-8")
+    assert not [call for call in calls.splitlines() if " config " in f" {call} "]
+    assert "synthetic-sentinel-value" not in result.stdout + calls
 
 
 _BACKUP_CONTEXT = "      context: ops/backup\n"

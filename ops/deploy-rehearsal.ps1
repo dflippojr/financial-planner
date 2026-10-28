@@ -418,16 +418,20 @@ function Test-DisposableStorage($Config, [string]$Project, [string]$WorkDir, [st
 
 # Compose resolves include and extends before `config` prints the model, so
 # the model cannot show that the candidate's compose.yml pulled in a file the
-# guard never read. It is refused if it names either anywhere, in any case, or
-# holds a backslash or a !, the only ways YAML spells a key without its letters
-# ("\x69nclude", or a !!binary key).
+# guard never read. Nor can it be trusted to show env_file: before Compose 5,
+# `config` reads every env_file even with --no-env-resolution and drops the
+# key from what it prints. compose.yml is refused if it names any of the three
+# anywhere, in any case, or holds a backslash or a !, the only ways YAML spells
+# a key without its letters ("\x69nclude", or a !!binary key). This runs
+# before `config`, so no env_file is read.
 function Test-ComposeSource([string]$Path) {
     $text = [IO.File]::ReadAllText($Path)
     foreach ($key in @('include', 'extends')) {
         if ($text -match $key) { "compose.yml ${key}: pulls in compose files the guard has not read" }
     }
-    if ($text.Contains('\')) { 'compose.yml: a backslash escape could spell include or extends' }
-    if ($text.Contains('!')) { 'compose.yml: a YAML tag could spell include or extends' }
+    if ($text -match 'env_file') { "compose.yml env_file: $($RefusedServiceKeys['env_file'])" }
+    if ($text.Contains('\')) { 'compose.yml: a backslash escape could spell include, extends or env_file' }
+    if ($text.Contains('!')) { 'compose.yml: a YAML tag could spell include, extends or env_file' }
 }
 
 function ConvertFrom-EnvValue([string]$Raw) {
@@ -636,7 +640,9 @@ function Invoke-Rehearsal {
     $problems = @(Test-ComposeSource $script:ComposeFile)
     if ($problems.Count -gt 0) { throw "compose file the guard cannot vouch for: $($problems -join '; ')" }
     # Without --no-env-resolution compose reads each service's env_file and
-    # folds it into environment, dropping the key the guard refuses.
+    # folds it into environment, dropping the key the guard refuses. Compose
+    # before 5 does that regardless, which is why Test-ComposeSource refuses
+    # env_file in the text first.
     $config = Invoke-Compose @('config', '--no-env-resolution', '--format', 'json')
     if ($config.ExitCode -ne 0) { throw 'docker compose config failed for the candidate' }
     # Absence from `compose ls` does not mean its volumes are new. One that
