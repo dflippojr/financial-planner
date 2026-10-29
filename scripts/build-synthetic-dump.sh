@@ -24,17 +24,20 @@ name="fp-synthetic-dump-$$"
 # The documented output is under .tmp/, which a clean checkout does not have.
 mkdir -p "$(dirname "$output")"
 
-cleanup() { docker rm -f "$name" >/dev/null 2>&1 || true; }
+# Only the container this run created: a name that already belongs to another
+# run makes `docker run` fail, and that container is not this run's to remove.
+container=""
+cleanup() { if [ -n "$container" ]; then docker rm -f "$container" >/dev/null 2>&1 || true; fi; }
 trap cleanup EXIT
 
-docker run -d --name "$name" --tmpfs /var/lib/postgresql:rw \
+container=$(docker run -d --name "$name" --tmpfs /var/lib/postgresql:rw \
   -e POSTGRES_USER=financial_planner -e POSTGRES_PASSWORD=synthetic -e POSTGRES_DB=financial_planner \
-  -p 127.0.0.1::5432 postgres:18-alpine -c fsync=off -c synchronous_commit=off >/dev/null
-until docker exec "$name" pg_isready -U financial_planner -d financial_planner >/dev/null 2>&1; do sleep 1; done
-port=$(docker port "$name" 5432/tcp | head -n 1 | sed 's/.*://')
+  -p 127.0.0.1::5432 postgres:18-alpine -c fsync=off -c synchronous_commit=off)
+until docker exec "$container" pg_isready -U financial_planner -d financial_planner >/dev/null 2>&1; do sleep 1; done
+port=$(docker port "$container" 5432/tcp | head -n 1 | sed 's/.*://')
 
 (cd "$repo_dir" && POSTGRES_HOST=127.0.0.1 POSTGRES_PORT="$port" POSTGRES_PASSWORD=synthetic \
   "$python_bin" -m tests.migration_fixtures.seed --finance-migration "$migration" --size "$size")
-docker exec "$name" pg_dump --username financial_planner --dbname financial_planner \
+docker exec "$container" pg_dump --username financial_planner --dbname financial_planner \
   --format custom --no-owner --no-privileges > "$output"
 echo "wrote $output"
