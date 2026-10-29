@@ -6,20 +6,26 @@ Migrate the newest verified nightly dump in a throwaway stack before a deploy th
 Run from the checkout on the tower with PowerShell 7 (pwsh) before every
 deploy whose release adds a migration, as docs/deployment.md describes. It:
 
-1. builds the candidate revision's images under a throwaway Compose project
-   (fp-rehearsal-*) with its own volumes, port, dummy secrets and a temporary
-   backup directory, never the production project or its storage;
-2. restores the newest signed nightly dump (or -DumpPath) into that project's
-   empty database with the candidate's restore.sh;
-3. starts the candidate's app, which runs `migrate --noinput` as production
+1. starts a Docker daemon of its own: rootless dockerd in a pinned
+   docker:dind-rootless container whose only host directory is the run's work
+   directory. Every compose command for the candidate goes to that daemon's
+   socket, never to the host's daemon, so whatever the candidate's compose
+   file holds cannot reach production's containers, volumes or files;
+2. builds the candidate revision's images there under a throwaway Compose
+   project (fp-rehearsal-*) with its own volumes, port, dummy secrets and a
+   temporary backup directory;
+3. restores a copy of the newest signed nightly dump (or -DumpPath) into that
+   project's empty database with the candidate's restore.sh;
+4. starts the candidate's app, which runs `migrate --noinput` as production
    does, and compares every table's row count before and after;
-4. starts the rest of the stack, takes one backup of the migrated database,
+5. starts the rest of the stack, takes one backup of the migrated database,
    then runs `reconcile_balances --json` and ops/post-deploy-check.ps1 against it;
-5. always tears the throwaway project down, its volumes and images included.
+6. always tears the throwaway project down, then removes the isolated daemon
+   with its data, so no container, volume or image of the run remains.
 
 It prints PASS or FAIL with table names, counts and states only, never a row,
-a log line or a secret, and exits 0 only on PASS. It never starts Docker; when
-Docker is not reachable it fails.
+a log line or a secret, and exits 0 only on PASS. It never starts the host's
+Docker; when that is not reachable it fails.
 
 .EXAMPLE
 git fetch origin
@@ -71,6 +77,18 @@ $BuiltServices = @('app', 'backup', 'background')
 $DockerEnvNames = @('PATH', 'HOME', 'TMPDIR', 'XDG_RUNTIME_DIR', 'SystemRoot', 'ProgramData', 'USERPROFILE',
     'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP')
 $DockerEnvPrefixes = @('DOCKER_', 'BUILDKIT_')
+# Settings that would point a docker command at another daemon; a command for
+# the isolated daemon drops them and names its socket instead.
+$DaemonEnvNames = @('DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_TLS', 'DOCKER_TLS_VERIFY', 'DOCKER_CERT_PATH')
+# The isolated daemon: rootless dockerd as the image's uid 1000, pinned by
+# digest. Not --privileged: it needs the host's rootlesskit AppArmor profile
+# (shipped with Ubuntu) to create its user namespace, /dev/net/tun for
+# slirp4netns, and seccomp and /proc unmasked so it can mount /proc for its
+# containers. Host networking lets the app's 127.0.0.1 port reach the host for
+# the post-deploy check; the containers themselves sit behind slirp4netns with
+# the host's loopback disabled.
+$IsolatedImage = 'docker:29-dind-rootless@sha256:ae083cc7de51e7a8e5a597f8fb774ca7914c408a95fc0f1477826a913479518a'
+$IsolatedStartSeconds = 120
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 # `pwsh -File` passes a comma list as one string.
 $ExpectCountChange = @($ExpectCountChange | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
@@ -500,10 +518,11 @@ function Get-FreePort {
     }
 }
 
-# Runs docker with only $DockerEnvNames and DOCKER_* in its environment. Output
-# is returned, never printed; stderr is dropped because restore and migrate
-# errors can quote row values.
-function Invoke-Docker([string[]]$Arguments) {
+# Runs docker with only $DockerEnvNames and DOCKER_* in its environment, or,
+# with $DockerHost, against that daemon alone. Output is returned, never
+# printed; stderr is dropped because restore and migrate errors can quote row
+# values.
+function Invoke-Docker([string[]]$Arguments, [string]$DockerHost) {
     $info = [Diagnostics.ProcessStartInfo]::new('docker')
     foreach ($argument in $Arguments) { $info.ArgumentList.Add($argument) }
     $info.UseShellExecute = $false
@@ -512,10 +531,12 @@ function Invoke-Docker([string[]]$Arguments) {
     $info.Environment.Clear()
     foreach ($entry in [Environment]::GetEnvironmentVariables().GetEnumerator()) {
         $name = [string]$entry.Key
+        if ($DockerHost -and $DaemonEnvNames -contains $name) { continue }
         if ($DockerEnvNames -contains $name -or @($DockerEnvPrefixes | Where-Object { $name.StartsWith($_) }).Count -gt 0) {
             $info.Environment[$name] = [string]$entry.Value
         }
     }
+    if ($DockerHost) { $info.Environment['DOCKER_HOST'] = $DockerHost }
     try {
         $process = [Diagnostics.Process]::Start($info)
     } catch {
@@ -529,8 +550,109 @@ function Invoke-Docker([string[]]$Arguments) {
     return [pscustomobject]@{ ExitCode = $process.ExitCode; Output = $lines }
 }
 
+# The isolated daemon's socket, in this run's work directory. There is no
+# fallback: without a work directory nothing may talk to the candidate's project.
+function Get-IsolatedHost {
+    if (-not $script:WorkDir) { throw 'no work directory, so no isolated daemon to send the command to' }
+    return "unix://$(Join-Path $script:WorkDir 'docker.sock')"
+}
+
+function Invoke-Isolated([string[]]$Arguments) {
+    return Invoke-Docker $Arguments (Get-IsolatedHost)
+}
+
+# Every compose command for the candidate goes to the isolated daemon, so a
+# service the allowlist never saw (one in an inactive profile, say) still runs
+# only there.
 function Invoke-Compose([string[]]$Arguments) {
-    return Invoke-Docker (@('compose', '-p', $script:Project, '-f', $script:ComposeFile, '--env-file', $script:EnvFile) + $Arguments)
+    return Invoke-Isolated (@('compose', '-p', $script:Project, '-f', $script:ComposeFile, '--env-file', $script:EnvFile) + $Arguments)
+}
+
+# Runs $Block with DOCKER_HOST naming the isolated daemon, for the helpers this
+# script starts (post-deploy-check.ps1, prod_signals.py), then restores the
+# environment.
+function Invoke-WithIsolatedDocker([scriptblock]$Block) {
+    $saved = @{}
+    foreach ($name in $DaemonEnvNames) {
+        $saved[$name] = [Environment]::GetEnvironmentVariable($name)
+        [Environment]::SetEnvironmentVariable($name, $null)
+    }
+    [Environment]::SetEnvironmentVariable('DOCKER_HOST', (Get-IsolatedHost))
+    try {
+        return & $Block
+    } finally {
+        foreach ($name in $DaemonEnvNames) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
+    }
+}
+
+function Get-IsolatedNames {
+    return [pscustomobject]@{ Container = "$($script:Project)-isolated"; Volume = "$($script:Project)-isolated-docker" }
+}
+
+# Starts the isolated daemon on the host's Docker with the script's own fixed
+# arguments: the pinned image, a new data volume, and the work directory at its
+# own path (compose sends host paths, so bind sources must match). Nothing
+# from the candidate reaches this command. It waits until the daemon answers
+# on its socket and reports itself rootless.
+function Start-IsolatedDaemon {
+    Assert-RehearsalProjectName $script:Project
+    $names = Get-IsolatedNames
+    $socket = Join-Path $script:WorkDir 'docker.sock'
+    $script:IsolatedStarted = $true
+    $run = Invoke-Docker @('run', '-d', '--name', $names.Container,
+        '--network', 'host',
+        '--security-opt', 'apparmor=rootlesskit', '--security-opt', 'seccomp=unconfined',
+        '--security-opt', 'systempaths=unconfined', '--device', '/dev/net/tun',
+        '-v', "$($names.Volume):/home/rootless/.local/share/docker",
+        '-v', "$($script:WorkDir):$($script:WorkDir)",
+        $IsolatedImage, 'dockerd', "--host=unix://$socket")
+    if ($run.ExitCode -ne 0) { throw 'the isolated daemon did not start; docs/deployment.md lists what it needs' }
+    $deadline = (Get-Date).AddSeconds($IsolatedStartSeconds)
+    while ($true) {
+        $info = Invoke-Isolated @('info', '--format', '{{range .SecurityOptions}}{{println .}}{{end}}')
+        if ($info.ExitCode -eq 0) {
+            if (@($info.Output) -notcontains 'name=rootless') { throw 'the daemon on the isolated socket is not rootless' }
+            return
+        }
+        if ((Get-Date) -ge $deadline) {
+            throw "the isolated daemon did not answer within $IsolatedStartSeconds seconds (it runs as uid 1000 and needs the work directory)"
+        }
+        Start-Sleep -Seconds 2
+    }
+}
+
+# Removes the isolated daemon, its containers, images and volumes with it, and
+# checks on the host's Docker that neither its container nor its data volume
+# remains.
+function Stop-IsolatedDaemon {
+    Assert-RehearsalProjectName $script:Project
+    $names = Get-IsolatedNames
+    [void](Invoke-Docker @('rm', '--force', '--volumes', $names.Container))
+    [void](Invoke-Docker @('volume', 'rm', '--force', $names.Volume))
+    $left = @((Invoke-Docker @('container', 'ls', '-a', '-q', '--filter', "name=^/$($names.Container)$")).Output)
+    $left += @((Invoke-Docker @('volume', 'ls', '-q', '--filter', "name=^$($names.Volume)$")).Output)
+    if (@($left | Where-Object { $_ }).Count -gt 0) {
+        Add-Failure "teardown: the isolated daemon $($names.Container) or its volume remains"
+    } else {
+        Write-Pass "teardown: the isolated daemon is gone, and every container, volume and image of $($script:Project) with it"
+    }
+}
+
+# Copies the chosen nightly dump, its receipts archive, manifest and signature,
+# and the public signing key into the work directory, so the isolated daemon
+# needs no host directory but that one. The files are root-only, so a short
+# container on the host's Docker copies them: the pinned image, no network,
+# the nightly directory and the key read-only.
+function Copy-NightlyDump([string]$Dump, [string]$PublicKey, [string]$Destination) {
+    $nightly = [IO.Path]::GetDirectoryName($Dump)
+    $stem = [IO.Path]::GetFileNameWithoutExtension($Dump)
+    $files = @(Get-ChildItem -LiteralPath $nightly -Filter "$stem.*" -File | ForEach-Object { "/nightly/$($_.Name)" })
+    $owner = "$((& id -u | Out-String).Trim()):$((& id -g | Out-String).Trim())"
+    $copy = Invoke-Docker (@('run', '--rm', '--network', 'none', '--user', '0:0', '--entrypoint', 'sh', '-e', "OWNER=$owner",
+            '-v', "${nightly}:/nightly:ro", '-v', "${PublicKey}:/signing.pub:ro", '-v', "${Destination}:/input",
+            $IsolatedImage, '-c', 'cp -- "$@" /input/ && cp /signing.pub /input/backup-signing-key.pub && chown -R "$OWNER" /input',
+            'copy') + $files)
+    if ($copy.ExitCode -ne 0) { throw 'copying the nightly dump into the work directory failed' }
 }
 
 # The status `docker compose ls` gives a project, such as running(5), or absent.
@@ -547,7 +669,7 @@ function Get-ContainerState([string]$Service) {
     $ids = Invoke-Compose @('ps', '--all', '-q', $Service)
     $id = @($ids.Output)[0]
     if (-not $id) { return [pscustomobject]@{ Id = $null; Status = 'absent'; Restarts = 0; Health = 'none' } }
-    $inspect = Invoke-Docker @('inspect', '--format', '{{.State.Status}} {{.RestartCount}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}', $id)
+    $inspect = Invoke-Isolated @('inspect', '--format', '{{.State.Status}} {{.RestartCount}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}', $id)
     $parts = @(@($inspect.Output)[0] -split ' ')
     if ($inspect.ExitCode -ne 0 -or $parts.Count -ne 3) { return [pscustomobject]@{ Id = $id; Status = 'unknown'; Restarts = 0; Health = 'none' } }
     return [pscustomobject]@{ Id = $id; Status = $parts[0]; Restarts = [int]$parts[1]; Health = $parts[2] }
@@ -569,8 +691,12 @@ function Wait-AppHealthy([int]$TimeoutSeconds) {
 function Write-TracebackTypes([string]$ContainerId, [datetime]$Since) {
     $sinceText = $Since.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture)
     $helper = Join-Path $RepoRoot 'scripts/prod_signals.py'
-    $output = & $Python $helper tracebacks --container $ContainerId --since $sinceText 2>$null
-    if ($LASTEXITCODE -ne 0 -or -not $output) { return }
+    $result = Invoke-WithIsolatedDocker {
+        $lines = & $Python $helper tracebacks --container $ContainerId --since $sinceText 2>$null
+        [pscustomobject]@{ Code = $LASTEXITCODE; Output = $lines }
+    }
+    $output = $result.Output
+    if ($result.Code -ne 0 -or -not $output) { return }
     $counts = ($output -join "`n") | ConvertFrom-Json
     if ($counts.tracebacks -gt 0) {
         $types = ($counts.types.PSObject.Properties | ForEach-Object { "$($_.Name) x$($_.Value)" }) -join ', '
@@ -647,7 +773,8 @@ function Invoke-Rehearsal {
     if (-not $script:WorkDirIdentity) { throw 'cannot read the identity of the new work directory' }
     $source = Join-Path $script:WorkDir 'source'
     $backups = Join-Path $script:WorkDir 'backups'
-    New-Item -ItemType Directory -Path $source, $backups | Out-Null
+    $inputs = Join-Path $script:WorkDir 'input'
+    New-Item -ItemType Directory -Path $source, $backups, $inputs | Out-Null
     $archive = Join-Path $script:WorkDir 'source.tar'
     & git -C $RepoRoot archive --format=tar -o $archive $script:Sha 2>$null
     if ($LASTEXITCODE -ne 0) { throw 'git archive of the candidate failed' }
@@ -666,6 +793,22 @@ function Invoke-Rehearsal {
     if ($linked) { throw "compose file the guard cannot vouch for: $linked" }
     $problems = @(Test-ComposeSource $script:ComposeFile)
     if ($problems.Count -gt 0) { throw "compose file the guard cannot vouch for: $($problems -join '; ')" }
+
+    # The dump is copied in, so the isolated daemon gets no host directory but
+    # the work directory. From here on every compose command goes to that
+    # daemon; the host's Docker only starts and removes it.
+    $name = [IO.Path]::GetFileName($dump)
+    if ($DumpPath) {
+        Copy-Item -LiteralPath $dump -Destination (Join-Path $inputs $name)
+    } else {
+        Copy-NightlyDump $dump $publicKey $inputs
+    }
+    Start-IsolatedDaemon
+    Write-Pass "isolated: rootless daemon $((Get-IsolatedNames).Container) on its own socket; the host's Docker never gets the candidate's compose file"
+
+    # The allowlist below stays as a second line: it judges the model compose
+    # prints, which leaves out a service in an inactive profile, so it is not
+    # what keeps the candidate away from production. The isolated daemon is.
     # Without --no-env-resolution compose reads each service's env_file and
     # folds it into environment, dropping the key the guard refuses. Compose
     # before 5 does that regardless, which is why Test-ComposeSource refuses
@@ -674,7 +817,7 @@ function Invoke-Rehearsal {
     if ($config.ExitCode -ne 0) { throw 'docker compose config failed for the candidate' }
     # Absence from `compose ls` does not mean its volumes are new. One that
     # exists is refused, not reused, and never armed for `down --volumes`.
-    $existing = Invoke-Docker @('volume', 'ls', '-q')
+    $existing = Invoke-Isolated @('volume', 'ls', '-q')
     if ($existing.ExitCode -ne 0) { throw 'docker volume ls failed' }
     $problems = @(Test-DisposableStorage (($config.Output -join "`n") | ConvertFrom-Json) $script:Project $script:WorkDir @($existing.Output))
     if ($problems.Count -gt 0) { throw "storage outside the throwaway project: $($problems -join '; ')" }
@@ -687,13 +830,12 @@ function Invoke-Rehearsal {
     Write-Pass "build: $($BuiltServices -join ', ')"
     if ((Invoke-Compose @('up', '-d', '--wait', '--wait-timeout', '180', 'db')).ExitCode -ne 0) { throw 'db did not report healthy' }
 
-    $name = [IO.Path]::GetFileName($dump)
     $restore = @('run', '--rm', '-T')
     if ($DumpPath) {
-        $restore += @('-v', "${dump}:/rehearsal/${name}:ro", '-e', 'RESTORE_ALLOW_UNVERIFIED=1')
+        $restore += @('-v', "$(Join-Path $inputs $name):/rehearsal/${name}:ro", '-e', 'RESTORE_ALLOW_UNVERIFIED=1')
     } else {
-        $restore += @('-v', "$([IO.Path]::GetDirectoryName($dump)):/rehearsal:ro",
-            '-v', "${publicKey}:/rehearsal-signing.pub:ro", '-e', 'BACKUP_SIGNING_PUBLIC_KEY=/rehearsal-signing.pub')
+        $restore += @('-v', "${inputs}:/rehearsal:ro",
+            '-v', "$(Join-Path $inputs 'backup-signing-key.pub'):/rehearsal-signing.pub:ro", '-e', 'BACKUP_SIGNING_PUBLIC_KEY=/rehearsal-signing.pub')
     }
     $restore += @('backup', '/opt/financial-planner/restore.sh', "/rehearsal/$name")
     if ((Invoke-Compose $restore).ExitCode -ne 0) { throw "restore.sh refused or failed on the $dumpKind" }
@@ -757,9 +899,12 @@ function Invoke-Rehearsal {
         '-StableSeconds', [string]$StableSeconds,
         '-StatusPath', (Join-Path $backups 'health/status'),
         '-Python', $Python)
-    $output = & ([Environment]::ProcessPath) @arguments 2>$null
-    $code = $LASTEXITCODE
-    foreach ($line in @($output)) { Write-Host "     post-deploy $line" }
+    $result = Invoke-WithIsolatedDocker {
+        $lines = & ([Environment]::ProcessPath) @arguments 2>$null
+        [pscustomobject]@{ Code = $LASTEXITCODE; Output = $lines }
+    }
+    $code = $result.Code
+    foreach ($line in @($result.Output)) { Write-Host "     post-deploy $line" }
     if ($code -ne 0) { Add-Failure "post-deploy: the check exited $code" } else { Write-Pass 'post-deploy: passed' }
 }
 
@@ -769,7 +914,7 @@ function Invoke-Teardown {
         Add-Failure "teardown: docker compose down failed for $($script:Project)"
     }
     $backupImage = "$($script:Project)-backup"
-    if ($script:Built -and (Invoke-Docker @('image', 'inspect', $backupImage)).ExitCode -eq 0) {
+    if ($script:Built -and (Invoke-Isolated @('image', 'inspect', $backupImage)).ExitCode -eq 0) {
         # The containers write the backup tree as root. Once they are gone, empty
         # it from a plain container (compose would recreate the receipts volume)
         # so no dump or audit file outlives the rehearsal.
@@ -777,31 +922,13 @@ function Invoke-Teardown {
         if (-not (Test-WorkDirIdentity)) {
             Add-Failure 'teardown: the work directory was replaced after it was created; left it unemptied'
         } elseif (Test-UnderDirectory $backups $script:WorkDir) {
-            [void](Invoke-Docker @('run', '--rm', '--network', 'none', '-v', "${backups}:/backups", '--entrypoint', 'sh',
+            [void](Invoke-Isolated @('run', '--rm', '--network', 'none', '-v', "${backups}:/backups", '--entrypoint', 'sh',
                 $backupImage, '-c', 'find /backups -mindepth 1 -delete'))
         } else {
             Add-Failure 'teardown: the backup directory no longer resolves inside the work directory; left it unemptied'
         }
     }
-    foreach ($service in $BuiltServices) {
-        $image = "$($script:Project)-$service"
-        if ((Invoke-Docker @('image', 'inspect', $image)).ExitCode -eq 0 -and (Invoke-Docker @('image', 'rm', $image)).ExitCode -ne 0) {
-            Add-Failure "teardown: could not remove image $image"
-        }
-    }
-    $left = @()
-    $label = "label=com.docker.compose.project=$($script:Project)"
-    foreach ($listing in @(@('container', 'ls', '-a', '-q', '--filter', $label), @('volume', 'ls', '-q', '--filter', $label))) {
-        $left += @((Invoke-Docker $listing).Output)
-    }
-    foreach ($volume in @("$($script:Project)-postgres-data", "$($script:Project)-receipts")) {
-        if ((Invoke-Docker @('volume', 'inspect', $volume)).ExitCode -eq 0) { $left += $volume }
-    }
-    if ($left.Count -gt 0) {
-        Add-Failure "teardown: $($left.Count) container(s) or volume(s) of $($script:Project) remain"
-    } else {
-        Write-Pass "teardown: no container, volume or image of $($script:Project) remains"
-    }
+    # Its images, volumes and any container left go with the isolated daemon.
 }
 
 function Get-ErrorText($ErrorRecord) {
@@ -818,6 +945,7 @@ if ($MyInvocation.InvocationName -eq '.') { return }
 $script:Project = $null
 $script:Sha = $null
 $script:Armed = $false
+$script:IsolatedStarted = $false
 $script:Built = $false
 $script:WorkDir = $null
 $script:WorkDirIdentity = $null
@@ -831,6 +959,9 @@ try {
 } finally {
     if ($script:Armed) {
         try { Invoke-Teardown } catch { Add-Failure "teardown: $(Get-ErrorText $_)" }
+    }
+    if ($script:IsolatedStarted) {
+        try { Stop-IsolatedDaemon } catch { Add-Failure "teardown: $(Get-ErrorText $_)" }
     }
     if ($script:WorkDir -and (Test-Path -LiteralPath $script:WorkDir) -and -not (Test-WorkDirIdentity)) {
         Add-Failure "teardown: the work directory $($script:WorkDir) was replaced after it was created; left it in place"

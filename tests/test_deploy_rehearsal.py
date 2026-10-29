@@ -351,7 +351,9 @@ def _simulating_docker(tmp_path, volumes=None, existing_volumes=(), swap_work_di
         "elif args[:2] == ['volume', 'ls']:\n"
         f"    print('\\n'.join({list(existing_volumes)!r}))\n"
         "elif args[:2] == ['volume', 'inspect']:\n"
-        "    sys.exit(1)\n",
+        "    sys.exit(1)\n"
+        "elif args[:1] == ['info'] and os.environ.get('DOCKER_HOST'):\n"
+        "    print('name=rootless')\n",
         encoding="utf-8",
     )
     bin_dir = tmp_path / "bin"
@@ -553,10 +555,17 @@ def _run_simulated(tmp_path, bin_dir, *arguments):
     )
 
 
+def _isolated_daemon_lifecycle(call):
+    """The script's own start and removal of the isolated daemon (#538, 2026-10-28)."""
+    return ((call.startswith("run -d --name fp-rehearsal-") and "dind-rootless@sha256:" in call)
+            or call.startswith(("rm --force --volumes fp-rehearsal-", "volume rm --force fp-rehearsal-")))
+
+
 def _started(log):
-    """Docker calls that build, start, run or remove anything."""
+    """Docker calls that build, start, run or remove anything of the candidate's."""
     return [call for call in log.read_text(encoding="utf-8").splitlines()
-            if call.startswith("run ") or any(f" {verb} " in f" {call} " for verb in ("build", "up", "down", "rm"))]
+            if not _isolated_daemon_lifecycle(call)
+            and (call.startswith("run ") or any(f" {verb} " in f" {call} " for verb in ("build", "up", "down", "rm")))]
 
 
 def test_a_prefixed_volume_bound_to_an_outside_directory_stops_before_build(tmp_path):
@@ -791,7 +800,7 @@ def test_the_checked_in_compose_file_passes_the_allowlist(tmp_path):
     shutil.copy(ROOT / "compose.yml", source / "compose.yml")
     result = subprocess.run(
         [POWERSHELL, "-NoProfile", "-NonInteractive", "-Command",
-         f". '{SCRIPT}'; $script:Project = 'fp-rehearsal-t'; $work = {_ps_string(work)}; "
+         f". '{SCRIPT}'; $script:Project = 'fp-rehearsal-t'; $work = {_ps_string(work)}; $script:WorkDir = $work; "
          "$script:ComposeFile = Join-Path $work 'source/compose.yml'; $script:EnvFile = Join-Path $work 'rehearsal.env'; "
          "New-RehearsalEnvFile $script:EnvFile (Join-Path $work 'backups') 41234 'abc123'; "
          "$config = Invoke-Compose @('config', '--no-env-resolution', '--format', 'json'); if ($config.ExitCode -ne 0) { throw 'compose config failed' }; "
@@ -819,7 +828,7 @@ def _normalizing_docker(tmp_path, build_exit=1):
     log = tmp_path / "docker-calls.log"
     stub = tmp_path / "fake_docker.py"
     stub.write_text(
-        "import subprocess, sys\n"
+        "import os, subprocess, sys\n"
         "args = sys.argv[1:]\n"
         f"with open({str(log)!r}, 'a', encoding='utf-8') as handle:\n"
         "    handle.write(' '.join(args) + '\\n')\n"
@@ -828,7 +837,9 @@ def _normalizing_docker(tmp_path, build_exit=1):
         "elif args[:1] == ['compose'] and 'ls' in args:\n"
         "    print('[]')\n"
         "elif args[:1] == ['compose'] and 'build' in args:\n"
-        f"    sys.exit({build_exit})\n",
+        f"    sys.exit({build_exit})\n"
+        "elif args[:1] == ['info'] and os.environ.get('DOCKER_HOST'):\n"
+        "    print('name=rootless')\n",
         encoding="utf-8",
     )
     bin_dir = tmp_path / "bin"
