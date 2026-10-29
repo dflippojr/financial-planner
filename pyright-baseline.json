@@ -702,12 +702,6 @@
   "count": 1
  },
  {
-  "file": "finance/debt_planner_services.py",
-  "rule": "reportAttributeAccessIssue",
-  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[BalanceSnapshot]\"",
-  "count": 1
- },
- {
   "file": "finance/export.py",
   "rule": "reportAttributeAccessIssue",
   "message": "Cannot access attribute \"actor_id\" for class \"BudgetRolloverReset\"",
@@ -1384,12 +1378,6 @@
   "rule": "reportOptionalSubscript",
   "message": "Object of type \"None\" is not subscriptable",
   "count": 2
- },
- {
-  "file": "finance/net_worth.py",
-  "rule": "reportAttributeAccessIssue",
-  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[BalanceSnapshot]\"",
-  "count": 1
  },
  {
   "file": "finance/net_worth_views.py",

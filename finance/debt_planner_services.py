@@ -3,20 +3,12 @@ from types import SimpleNamespace
 
 from django.utils import timezone
 
+from .balance_history import indexed_histories, last_on_or_before
 from .cash_flow import format_minor
 from .debt_planner import NEEDS_DETAILS, DebtInput, compare_to_minimums
-from .models import Account, BalanceSnapshot
+from .models import Account
 from .months import add_months, month_end
-from .net_worth import contribution_parts, last_on_or_before
-
-
-def _snapshot_rank(source):
-    return 1 if source == BalanceSnapshot.Source.SIMPLEFIN else 0
-
-
-def _ordered_snapshots(rows):
-    ordered = sorted(rows, key=lambda row: (row.snapshot_date, _snapshot_rank(row.source), row.pk))
-    return ordered, [row.snapshot_date for row in ordered]
+from .net_worth import contribution_parts
 
 
 def _owed_minor(account, snapshot):
@@ -26,22 +18,10 @@ def _owed_minor(account, snapshot):
     return liabilities
 
 
-def _load_snapshots(principal, accounts, today):
+def _latest_snapshots(principal, accounts, today):
     """Each account's latest snapshot on or before today, or None."""
-    grouped = {account.pk: [] for account in accounts}
-    latest = {}
-    if not accounts:
-        return latest
-    rows = BalanceSnapshot.objects.visible_to(principal).filter(
-        account_id__in=grouped,
-        snapshot_date__lte=today,
-    )
-    for row in rows:
-        grouped[row.account_id].append(row)
-    for account in accounts:
-        ordered, dates = _ordered_snapshots(grouped[account.pk])
-        latest[account.pk] = last_on_or_before(ordered, dates, today)
-    return latest
+    histories = indexed_histories(principal, accounts, today)
+    return {account_id: last_on_or_before(ordered, dates, today) for account_id, (ordered, dates) in histories.items()}
 
 
 def _catalog_row(account, snapshot):
@@ -82,7 +62,7 @@ def list_visible_debts(principal, today=None):
         )
         .order_by("name", "pk")
     )
-    snapshots = _load_snapshots(principal, accounts, today)
+    snapshots = _latest_snapshots(principal, accounts, today)
     return [_catalog_row(account, snapshots[account.pk]) for account in accounts]
 
 
