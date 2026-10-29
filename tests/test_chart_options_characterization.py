@@ -84,13 +84,27 @@ def _open(browser):  # noqa: F811 - the fixture's value
         context.close()
 
 
-def _scales(text, grid, stacked=False):
-    x = {"ticks": {"color": text, "maxRotation": 45, "minRotation": 0}, "grid": {"color": grid}}
-    y = {"ticks": {"color": text, "callback": "1,234.56"}, "title": {"display": True, "text": "USD", "color": text},
-         "grid": {"color": grid}}
-    if stacked:
-        x["stacked"] = y["stacked"] = True
-    return {"x": x, "y": y}
+# Expected axes, written out: light and dark palettes, plain and stacked (spending trend only).
+AXES = {
+    "x": {"ticks": {"color": T, "maxRotation": 45, "minRotation": 0}, "grid": {"color": G}},
+    "y": {"ticks": {"color": T, "callback": "1,234.56"}, "title": {"display": True, "text": "USD", "color": T},
+          "grid": {"color": G}},
+}
+STACKED_AXES = {
+    "x": {"stacked": True, "ticks": {"color": T, "maxRotation": 45, "minRotation": 0}, "grid": {"color": G}},
+    "y": {"stacked": True, "ticks": {"color": T, "callback": "1,234.56"},
+          "title": {"display": True, "text": "USD", "color": T}, "grid": {"color": G}},
+}
+DARK_AXES = {
+    "x": {"ticks": {"color": DARK, "maxRotation": 45, "minRotation": 0}, "grid": {"color": G}},
+    "y": {"ticks": {"color": DARK, "callback": "1,234.56"}, "title": {"display": True, "text": "USD", "color": DARK},
+          "grid": {"color": G}},
+}
+DARK_STACKED_AXES = {
+    "x": {"stacked": True, "ticks": {"color": DARK, "maxRotation": 45, "minRotation": 0}, "grid": {"color": G}},
+    "y": {"stacked": True, "ticks": {"color": DARK, "callback": "1,234.56"},
+          "title": {"display": True, "text": "USD", "color": DARK}, "grid": {"color": G}},
+}
 
 
 def test_cartesian_charts_share_axes_tooltips_and_keep_their_own_options(browser):  # noqa: F811
@@ -100,7 +114,7 @@ def test_cartesian_charts_share_axes_tooltips_and_keep_their_own_options(browser
     assert list(charts) == list(PAYLOADS)
     for kind in CARTESIAN:
         assert charts[kind]["sizing"] == [True, False], kind
-        assert charts[kind]["scales"] == _scales(T, G, stacked=kind == "spending-trend"), kind
+        assert charts[kind]["scales"] == (STACKED_AXES if kind == "spending-trend" else AXES), kind
         assert charts[kind]["labels"] == ["Rent: $1.00", "Rent: 7", "Rent: 7", "Rent: 7"], kind
     assert charts["spending"]["scales"] is None
     assert charts["spending"]["labels"] == ["Groceries: $1.00", "Groceries: 7", "Groceries: 7", "Groceries: 7"]
@@ -136,7 +150,7 @@ def test_charts_get_independent_scales_and_rebuild_on_theme_change(browser):  # 
         assert [chart["destroyed"] for chart in charts] == [True] * 6 + [False] * 6
         rebuilt = {chart["kind"]: chart for chart in charts[6:]}
         for kind in CARTESIAN:
-            assert rebuilt[kind]["scales"] == _scales(DARK, G, stacked=kind == "spending-trend"), kind
+            assert rebuilt[kind]["scales"] == (DARK_STACKED_AXES if kind == "spending-trend" else DARK_AXES), kind
         assert page.evaluate("window.Chart.defaults.color") == DARK
 
 
