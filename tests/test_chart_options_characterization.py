@@ -6,6 +6,7 @@ receives. Expected values are literal; nothing here rebuilds the options the way
 """
 
 import json
+from contextlib import contextmanager
 from pathlib import Path
 
 from django.conf import settings
@@ -69,13 +70,18 @@ def _page_html():
 </style><script>{STUB}</script><script>{SCRIPT}</script></head><body>{canvases}</body></html>"""
 
 
+@contextmanager
 def _open(browser):  # noqa: F811 - the fixture's value
-    page = browser.new_context(locale="en-US").new_page()
-    html = _page_html()
-    page.route(f"{ORIGIN}/**", lambda route: route.fulfill(
-        content_type="text/html", body=html if route.request.url == f"{ORIGIN}/" else "<p>drilldown</p>"))
-    page.goto(f"{ORIGIN}/")
-    return page
+    context = browser.new_context(locale="en-US")
+    try:
+        page = context.new_page()
+        html = _page_html()
+        page.route(f"{ORIGIN}/**", lambda route: route.fulfill(
+            content_type="text/html", body=html if route.request.url == f"{ORIGIN}/" else "<p>drilldown</p>"))
+        page.goto(f"{ORIGIN}/")
+        yield page
+    finally:
+        context.close()
 
 
 def _scales(text, grid, stacked=False):
@@ -88,9 +94,8 @@ def _scales(text, grid, stacked=False):
 
 
 def test_cartesian_charts_share_axes_tooltips_and_keep_their_own_options(browser):  # noqa: F811
-    page = _open(browser)
-    charts = {chart["kind"]: chart for chart in page.evaluate(SNAPSHOT_JS)}
-    page.context.close()
+    with _open(browser) as page:
+        charts = {chart["kind"]: chart for chart in page.evaluate(SNAPSHOT_JS)}
 
     assert list(charts) == list(PAYLOADS)
     for kind in CARTESIAN:
@@ -115,25 +120,24 @@ def test_cartesian_charts_share_axes_tooltips_and_keep_their_own_options(browser
 
 
 def test_charts_get_independent_scales_and_rebuild_on_theme_change(browser):  # noqa: F811
-    page = _open(browser)
-    distinct = page.evaluate("""() => {
-      const scales = window.__charts.map((c) => c.config.options.scales).filter(Boolean);
-      const parts = scales.flatMap((s) => [s, s.x, s.y, s.x.ticks, s.y.ticks, s.y.title, s.x.grid, s.y.grid]);
-      scales[0].x.ticks.color = 'mutated';
-      return new Set(parts).size === parts.length && scales.slice(1).every((s) => s.x.ticks.color !== 'mutated');
-    }""")
-    assert distinct
+    with _open(browser) as page:
+        distinct = page.evaluate("""() => {
+          const scales = window.__charts.map((c) => c.config.options.scales).filter(Boolean);
+          const parts = scales.flatMap((s) => [s, s.x, s.y, s.x.ticks, s.y.ticks, s.y.title, s.x.grid, s.y.grid]);
+          scales[0].x.ticks.color = 'mutated';
+          return new Set(parts).size === parts.length && scales.slice(1).every((s) => s.x.ticks.color !== 'mutated');
+        }""")
+        assert distinct
 
-    page.evaluate("""() => { document.documentElement.dataset.theme = 'dark';
-      window.dispatchEvent(new Event('financial-planner:themechange')); }""")
-    charts = page.evaluate(SNAPSHOT_JS)
+        page.evaluate("""() => { document.documentElement.dataset.theme = 'dark';
+          window.dispatchEvent(new Event('financial-planner:themechange')); }""")
+        charts = page.evaluate(SNAPSHOT_JS)
 
-    assert [chart["destroyed"] for chart in charts] == [True] * 6 + [False] * 6
-    rebuilt = {chart["kind"]: chart for chart in charts[6:]}
-    for kind in CARTESIAN:
-        assert rebuilt[kind]["scales"] == _scales(DARK, G, stacked=kind == "spending-trend"), kind
-    assert page.evaluate("window.Chart.defaults.color") == DARK
-    page.context.close()
+        assert [chart["destroyed"] for chart in charts] == [True] * 6 + [False] * 6
+        rebuilt = {chart["kind"]: chart for chart in charts[6:]}
+        for kind in CARTESIAN:
+            assert rebuilt[kind]["scales"] == _scales(DARK, G, stacked=kind == "spending-trend"), kind
+        assert page.evaluate("window.Chart.defaults.color") == DARK
 
 
 def test_chart_clicks_open_their_drilldown(browser):  # noqa: F811
@@ -143,8 +147,7 @@ def test_chart_clicks_open_their_drilldown(browser):  # noqa: F811
         ("spending-trend", "[{datasetIndex: 0, index: 1}]", "/drill/rent/"),
     ]
     for kind, elements, path in clicks:
-        page = _open(browser)
-        page.evaluate(f"""() => {{ const chart = window.__charts.find((c) => c.canvas.dataset.chart === '{kind}');
-          chart.config.options.onClick({{}}, []); chart.config.options.onClick({{}}, {elements}); }}""")
-        page.wait_for_url(f"{ORIGIN}{path}")
-        page.context.close()
+        with _open(browser) as page:
+            page.evaluate(f"""() => {{ const chart = window.__charts.find((c) => c.canvas.dataset.chart === '{kind}');
+              chart.config.options.onClick({{}}, []); chart.config.options.onClick({{}}, {elements}); }}""")
+            page.wait_for_url(f"{ORIGIN}{path}")
