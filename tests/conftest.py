@@ -18,6 +18,27 @@ def disposable_operator_journal(tmp_path_factory):
             os.environ[key] = value
 
 
+# Only tables still missing the setting are altered, so a pass with nothing to fix
+# is one catalog scan.
+AUTOVACUUM_OFF = (
+    "DO $$ DECLARE t text; BEGIN "
+    "FOR t IN SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+    "WHERE n.nspname = 'public' AND c.relkind = 'r' "
+    "AND NOT COALESCE('autovacuum_enabled=false' = ANY (c.reloptions), false) LOOP "
+    "EXECUTE format('ALTER TABLE %I SET (autovacuum_enabled = false)', t); "
+    "END LOOP; END $$"
+)
+
+
+def _turn_autovacuum_off(django_db_blocker):
+    from django.db import connection
+
+    if connection.vendor != "postgresql":
+        return
+    with django_db_blocker.unblock(), connection.cursor() as cursor:
+        cursor.execute(AUTOVACUUM_OFF)
+
+
 @pytest.fixture(scope="session")
 def django_db_setup(django_db_setup, django_db_blocker):
     # Keep PostgreSQL's planner statistics as created. Autovacuum vacuums the
@@ -25,17 +46,29 @@ def django_db_setup(django_db_setup, django_db_blocker):
     # which the transfer-exclusion subquery plans as a self-join of every
     # transaction and one test ran for ten minutes (#555). Without statistics
     # the planner sizes each table from its pages, as it does for real data.
-    from django.db import connection
+    _turn_autovacuum_off(django_db_blocker)
 
-    if connection.vendor != "postgresql":
-        return
-    with django_db_blocker.unblock(), connection.cursor() as cursor:
-        cursor.execute(
-            "DO $$ DECLARE t text; BEGIN "
-            "FOR t IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP "
-            "EXECUTE format('ALTER TABLE %I SET (autovacuum_enabled = false)', t); "
-            "END LOOP; END $$"
-        )
+
+def _is_transactional(item):
+    # The same test pytest-django uses to pick TransactionTestCase.
+    from pytest_django.fixtures import validate_django_db
+
+    marker = item.get_closest_marker("django_db")
+    if marker:
+        transaction, reset_sequences, *_ = validate_django_db(marker)
+        if transaction or reset_sequences:
+            return True
+    fixtures = getattr(item, "fixturenames", ())
+    return any(name in fixtures for name in ("transactional_db", "live_server", "django_db_reset_sequences"))
+
+
+@pytest.fixture(autouse=True)
+def keep_autovacuum_off(request):
+    # Migration tests run with transaction=True and migrate backward and
+    # forward, which drops and recreates tables without the setting (#596).
+    yield
+    if _is_transactional(request.node):
+        _turn_autovacuum_off(request.getfixturevalue("django_db_blocker"))
 
 
 @pytest.fixture(autouse=True)
