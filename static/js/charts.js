@@ -49,6 +49,36 @@
     return (value / 100).toLocaleString(undefined, { maximumFractionDigits: 2 });
   }
 
+  // Tooltip line for charts whose datasets carry preformatted "displays".
+  function datasetTooltipLabel(context) {
+    var displays = context.dataset.displays || [];
+    var display = displays[context.dataIndex];
+    if (display) {
+      return context.dataset.label + ": " + display;
+    }
+    return context.dataset.label + ": " + context.formattedValue;
+  }
+
+  // Chart.js mutates its options, so every chart gets fresh scale objects.
+  function cartesianScales(palette, stacked) {
+    var scales = {
+      x: {
+        ticks: { color: palette.text, maxRotation: 45, minRotation: 0 },
+        grid: { color: palette.grid },
+      },
+      y: {
+        ticks: { color: palette.text, callback: formatAxisMinor },
+        title: { display: true, text: "USD", color: palette.text },
+        grid: { color: palette.grid },
+      },
+    };
+    if (stacked) {
+      scales.x.stacked = true;
+      scales.y.stacked = true;
+    }
+    return scales;
+  }
+
   function goTo(url) {
     if (url) {
       window.location.assign(url);
@@ -222,14 +252,7 @@
                 var row = items.length ? periods[items[0].dataIndex] : null;
                 return row ? row.label + (row.projected ? " · Projected (estimate)" : "") : "";
               },
-              label: function (context) {
-                var displays = context.dataset.displays || [];
-                var display = displays[context.dataIndex];
-                if (display) {
-                  return context.dataset.label + ": " + display;
-                }
-                return context.dataset.label + ": " + context.formattedValue;
-              },
+              label: datasetTooltipLabel,
             },
           },
           financialPlanner: {
@@ -241,17 +264,7 @@
             }),
           },
         },
-        scales: {
-          x: {
-            ticks: { color: palette.text, maxRotation: 45, minRotation: 0 },
-            grid: { color: palette.grid },
-          },
-          y: {
-            ticks: { color: palette.text, callback: formatAxisMinor },
-            title: { display: true, text: "USD", color: palette.text },
-            grid: { color: palette.grid },
-          },
-        },
+        scales: cartesianScales(palette, false),
       },
     });
   }
@@ -287,28 +300,11 @@
           legend: { labels: { color: palette.text } },
           tooltip: {
             callbacks: {
-              label: function (context) {
-                var displays = context.dataset.displays || [];
-                var display = displays[context.dataIndex];
-                if (display) {
-                  return context.dataset.label + ": " + display;
-                }
-                return context.dataset.label + ": " + context.formattedValue;
-              },
+              label: datasetTooltipLabel,
             },
           },
         },
-        scales: {
-          x: {
-            ticks: { color: palette.text, maxRotation: 45, minRotation: 0 },
-            grid: { color: palette.grid },
-          },
-          y: {
-            ticks: { color: palette.text, callback: formatAxisMinor },
-            title: { display: true, text: "USD", color: palette.text },
-            grid: { color: palette.grid },
-          },
-        },
+        scales: cartesianScales(palette, false),
       },
     });
   }
@@ -367,28 +363,11 @@
           legend: { labels: { color: palette.text } },
           tooltip: {
             callbacks: {
-              label: function (context) {
-                var displays = context.dataset.displays || [];
-                var display = displays[context.dataIndex];
-                if (display) {
-                  return context.dataset.label + ": " + display;
-                }
-                return context.dataset.label + ": " + context.formattedValue;
-              },
+              label: datasetTooltipLabel,
             },
           },
         },
-        scales: {
-          x: {
-            ticks: { color: palette.text, maxRotation: 45, minRotation: 0 },
-            grid: { color: palette.grid },
-          },
-          y: {
-            ticks: { color: palette.text, callback: formatAxisMinor },
-            title: { display: true, text: "USD", color: palette.text },
-            grid: { color: palette.grid },
-          },
-        },
+        scales: cartesianScales(palette, false),
       },
     });
   }
@@ -496,30 +475,11 @@
           legend: { position: "bottom", labels: { color: palette.text } },
           tooltip: {
             callbacks: {
-              label: function (context) {
-                var displays = context.dataset.displays || [];
-                var display = displays[context.dataIndex];
-                if (display) {
-                  return context.dataset.label + ": " + display;
-                }
-                return context.dataset.label + ": " + context.formattedValue;
-              },
+              label: datasetTooltipLabel,
             },
           },
         },
-        scales: {
-          x: {
-            stacked: true,
-            ticks: { color: palette.text, maxRotation: 45, minRotation: 0 },
-            grid: { color: palette.grid },
-          },
-          y: {
-            stacked: true,
-            ticks: { color: palette.text, callback: formatAxisMinor },
-            title: { display: true, text: "USD", color: palette.text },
-            grid: { color: palette.grid },
-          },
-        },
+        scales: cartesianScales(palette, true),
       },
     });
   }
@@ -552,28 +512,11 @@
           legend: { display: false },
           tooltip: {
             callbacks: {
-              label: function (context) {
-                var displays = context.dataset.displays || [];
-                var display = displays[context.dataIndex];
-                if (display) {
-                  return context.dataset.label + ": " + display;
-                }
-                return context.dataset.label + ": " + context.formattedValue;
-              },
+              label: datasetTooltipLabel,
             },
           },
         },
-        scales: {
-          x: {
-            ticks: { color: palette.text, maxRotation: 45, minRotation: 0 },
-            grid: { color: palette.grid },
-          },
-          y: {
-            ticks: { color: palette.text, callback: formatAxisMinor },
-            title: { display: true, text: "USD", color: palette.text },
-            grid: { color: palette.grid },
-          },
-        },
+        scales: cartesianScales(palette, false),
       },
     });
   }
