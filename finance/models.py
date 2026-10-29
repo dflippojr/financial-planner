@@ -382,7 +382,13 @@ def clear_invalid_loan_pairings(account):
             loan.save(update_fields=("secured_asset", "updated_at"))
 
 
-class AccountQuerySet(models.QuerySet):
+class _PrivateOrHouseholdQuerySet(models.QuerySet):
+    """Rows a person owns privately, or shares with a household they belong to now.
+
+    Only for models with owner, scope ("private" or "household") and household
+    fields: Account, PlannedItem, SavingsGoal and Budget.
+    """
+
     def visible_to(self, principal):
         person = _person_for(principal)
         if person is None:
@@ -396,6 +402,8 @@ class AccountQuerySet(models.QuerySet):
             | Q(scope="household", household_id__in=current_households)
         )
 
+
+class AccountQuerySet(_PrivateOrHouseholdQuerySet):
     def for_cash_flow(self):
         return self.exclude(account_type__in=Account.NON_CASH_FLOW_TYPES)
 
@@ -1528,19 +1536,8 @@ class PlannedItem(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
-    class QuerySet(models.QuerySet):
-        def visible_to(self, principal):
-            person = _person_for(principal)
-            if person is None:
-                return self.none()
-            current_households = Membership.objects.filter(
-                person=person,
-                ended_at__isnull=True,
-            ).values("household_id")
-            return self.filter(
-                Q(owner=person, scope="private")
-                | Q(scope="household", household_id__in=current_households)
-            )
+    class QuerySet(_PrivateOrHouseholdQuerySet):
+        pass
 
     objects = QuerySet.as_manager()
 
@@ -1572,19 +1569,8 @@ class PlannedItem(models.Model):
         return f"{amount:,.2f} {self.currency}"
 
 
-class SavingsGoalQuerySet(models.QuerySet):
-    def visible_to(self, principal):
-        person = _person_for(principal)
-        if person is None:
-            return self.none()
-        current_households = Membership.objects.filter(
-            person=person,
-            ended_at__isnull=True,
-        ).values("household_id")
-        return self.filter(
-            Q(owner=person, scope="private")
-            | Q(scope="household", household_id__in=current_households)
-        )
+class SavingsGoalQuerySet(_PrivateOrHouseholdQuerySet):
+    pass
 
 
 class SavingsGoal(ArchivableModel):
@@ -2213,19 +2199,8 @@ class CategorySuggestion(models.Model):
         return f"AI · {kind} · {labels.get(self.backend, self.backend or 'Unknown backend')}"
 
 
-class BudgetQuerySet(models.QuerySet):
-    def visible_to(self, principal):
-        person = _person_for(principal)
-        if person is None:
-            return self.none()
-        current_households = Membership.objects.filter(
-            person=person,
-            ended_at__isnull=True,
-        ).values("household_id")
-        return self.filter(
-            Q(owner=person, scope="private")
-            | Q(scope="household", household_id__in=current_households)
-        )
+class BudgetQuerySet(_PrivateOrHouseholdQuerySet):
+    pass
 
 
 class Budget(ArchivableModel):
