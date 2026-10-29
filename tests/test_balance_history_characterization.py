@@ -4,6 +4,7 @@ Every account and balance is synthetic. Expected amounts are written out by hand
 """
 
 from datetime import date
+from types import SimpleNamespace
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -11,6 +12,7 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
+from finance.balance_history import last_on_or_before, ordered_history
 from finance.debt_planner_services import list_visible_debts
 from finance.models import Account, BalanceSnapshot, Household, Membership, Person
 from finance.net_worth import net_worth_report
@@ -228,3 +230,22 @@ def test_several_accounts_load_snapshots_in_one_query_per_entry_point():
         owed = debts(owner, date(2026, 3, 31))
     assert len(snapshot_queries(captured)) == 1
     assert sum(amount for _day, amount in owed.values()) == 10_000
+
+
+def test_history_breaks_a_same_date_same_source_tie_by_the_higher_pk():
+    # The unique constraint on account, date and source forbids these rows in the database.
+    rows = [
+        SimpleNamespace(pk=7, snapshot_date=date(2026, 3, 9), source=SIMPLEFIN),
+        SimpleNamespace(pk=9, snapshot_date=date(2026, 3, 9), source=MANUAL),
+        SimpleNamespace(pk=3, snapshot_date=date(2026, 3, 9), source=SIMPLEFIN),
+        SimpleNamespace(pk=5, snapshot_date=date(2026, 3, 2), source=SIMPLEFIN),
+    ]
+
+    ordered, dates = ordered_history(rows)
+
+    assert [row.pk for row in ordered] == [5, 9, 3, 7]
+    assert dates == [date(2026, 3, 2), date(2026, 3, 9), date(2026, 3, 9), date(2026, 3, 9)]
+    assert last_on_or_before(ordered, dates, date(2026, 3, 9)).pk == 7
+    assert last_on_or_before(ordered, dates, date(2026, 3, 8)).pk == 5
+    assert last_on_or_before(ordered, dates, date(2026, 3, 1)) is None
+    assert ordered_history([]) == ([], [])
