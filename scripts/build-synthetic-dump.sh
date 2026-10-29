@@ -21,6 +21,8 @@ size=${3:-small}
 python_bin="${PYTHON:-python}"
 repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 name="fp-synthetic-dump-$$"
+# The documented output is under .tmp/, which a clean checkout does not have.
+mkdir -p "$(dirname "$output")"
 
 cleanup() { docker rm -f "$name" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
