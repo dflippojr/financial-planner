@@ -28,6 +28,8 @@ from .bill_grouping import (
 )
 from .lifecycle_services import lock_actor_household
 from .models import (
+    MONTH_STEPS,
+    WEEK_STEP_DAYS,
     Account,
     AuditEvent,
     Membership,
@@ -76,15 +78,6 @@ def merchant_key(description):
     return " ".join(tokens)[: RecurringSeries._meta.get_field("merchant_key").max_length].rstrip()
 
 
-_WEEK_STEPS = {
-    RecurringSeries.Cadence.WEEKLY: 7,
-    RecurringSeries.Cadence.BIWEEKLY: 14,
-}
-_MONTH_STEPS = {
-    RecurringSeries.Cadence.MONTHLY: 1,
-    RecurringSeries.Cadence.QUARTERLY: 3,
-    RecurringSeries.Cadence.ANNUAL: 12,
-}
 # A bill due at the end of the month keeps its day after a month too short
 # for it: one on the 31st expects Mar 31 after a charge on Feb 28, and a charge
 # that slipped to Apr 1 stands for Mar 31 (#505). The anchor day comes from
@@ -100,7 +93,7 @@ def _on_day(value: date, day: int) -> date:
 
 def _anchor_day(recent, cadence):
     """The month-end day a calendar cadence keeps, from its latest charges' dates, or None."""
-    if cadence not in _MONTH_STEPS:
+    if cadence not in MONTH_STEPS:
         return None
     tolerance = CADENCE_DAYS[cadence][1]
     late = [value.day for value in recent if value.day >= MONTH_END_DAY]
@@ -138,8 +131,8 @@ def add_cadence(value: date, cadence: str, anchor_day: int | None = None) -> dat
     `anchor_day` is the month-end day a monthly, quarterly or annual bill keeps
     (see `_anchor_day`); without it the step keeps `value`'s own day.
     """
-    days = _WEEK_STEPS.get(cadence)
-    months = _MONTH_STEPS.get(cadence)
+    days = WEEK_STEP_DAYS.get(cadence)
+    months = MONTH_STEPS.get(cadence)
     if days is None and months is None:
         raise ValueError("Unknown cadence")
     try:

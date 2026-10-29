@@ -1263,14 +1263,7 @@ class RecurringSeries(models.Model):
 
     @property
     def annual_minor(self):
-        per_year = {
-            self.Cadence.WEEKLY: 52,
-            self.Cadence.BIWEEKLY: 26,
-            self.Cadence.MONTHLY: 12,
-            self.Cadence.QUARTERLY: 4,
-            self.Cadence.ANNUAL: 1,
-        }[self.cadence]
-        return abs(self.typical_amount_minor) * per_year
+        return abs(self.typical_amount_minor) * PERIODS_PER_YEAR[self.cadence]
 
     @property
     def monthly_minor(self):
@@ -1285,6 +1278,27 @@ class RecurringSeries(models.Model):
     def annual_display(self):
         amount = Decimal(self.annual_minor) / Decimal(100)
         return f"{amount:,.2f} {self.currency}"
+
+
+# Each cadence's step, defined once for detection, projection and totals (#597).
+# A cadence steps by days or by calendar months, never both. PlannedItem.Cadence
+# adds only ONE_TIME, which has no step.
+WEEK_STEP_DAYS: dict[str, int] = {
+    RecurringSeries.Cadence.WEEKLY: 7,
+    RecurringSeries.Cadence.BIWEEKLY: 14,
+}
+MONTH_STEPS: dict[str, int] = {
+    RecurringSeries.Cadence.MONTHLY: 1,
+    RecurringSeries.Cadence.QUARTERLY: 3,
+    RecurringSeries.Cadence.ANNUAL: 12,
+}
+PERIODS_PER_YEAR: dict[str, int] = {
+    RecurringSeries.Cadence.WEEKLY: 52,
+    RecurringSeries.Cadence.BIWEEKLY: 26,
+    RecurringSeries.Cadence.MONTHLY: 12,
+    RecurringSeries.Cadence.QUARTERLY: 4,
+    RecurringSeries.Cadence.ANNUAL: 1,
+}
 
 
 class RecurringSeriesMember(models.Model):

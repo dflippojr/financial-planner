@@ -1045,12 +1045,6 @@
  },
  {
   "file": "finance/models.py",
-  "rule": "reportArgumentType",
-  "message": "Argument of type \"str\" cannot be assigned to parameter \"key\" of type \"Cadence\" in function \"__getitem__\"",
-  "count": 1
- },
- {
-  "file": "finance/models.py",
   "rule": "reportAttributeAccessIssue",
   "message": "Cannot access attribute \"account_id\" for class \"BalanceSnapshot*\"",
   "count": 1
@@ -1600,12 +1594,6 @@
   "rule": "reportArgumentType",
   "message": "Argument of type \"str\" cannot be assigned to parameter \"key\" of type \"Cadence\" in function \"__getitem__\"",
   "count": 1
- },
- {
-  "file": "finance/recurring_services.py",
-  "rule": "reportArgumentType",
-  "message": "Argument of type \"str\" cannot be assigned to parameter \"key\" of type \"Cadence\" in function \"get\"",
-  "count": 2
  },
  {
   "file": "finance/recurring_services.py",

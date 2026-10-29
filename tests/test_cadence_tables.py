@@ -5,7 +5,7 @@ from itertools import pairwise
 
 import pytest
 
-from finance.models import RecurringSeries
+from finance.models import MONTH_STEPS, PERIODS_PER_YEAR, WEEK_STEP_DAYS, PlannedItem, RecurringSeries
 from finance.projection import occurrence_dates
 from finance.recurring_services import add_cadence
 
@@ -96,3 +96,12 @@ def test_calendar_cadence_occurrences_over_24_months(cadence, expected):
 def test_annual_minor_for_a_fixed_amount(cadence, annual):
     assert RecurringSeries(cadence=cadence, typical_amount_minor=-1001).annual_minor == annual
 
+
+
+def test_every_stepped_cadence_has_one_step_and_a_yearly_count():
+    stepped = set(PlannedItem.Cadence) - {PlannedItem.Cadence.ONE_TIME}
+
+    assert stepped == set(RecurringSeries.Cadence)
+    assert set(WEEK_STEP_DAYS) | set(MONTH_STEPS) == stepped
+    assert not set(WEEK_STEP_DAYS) & set(MONTH_STEPS)
+    assert set(PERIODS_PER_YEAR) == stepped
