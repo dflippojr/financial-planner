@@ -10,7 +10,7 @@ from django.urls import Resolver404, resolve
 
 from .ai_jobs import enqueue_review_phrasing
 from .ai_services import member_has_ai, run_structured
-from .ai_types import ProviderResult
+from .ai_types import ProviderResult, backend_display_name
 from .alert_services import settings_for
 from .category_services import current_household
 from .input_limits import MAX_AI_FACTS_CHARS, MAX_DESCRIPTION_CHARS, MAX_UNUSUAL_FLAGS
@@ -18,12 +18,6 @@ from .models import Account, MonthlyReview, RecurringSeries, Transaction
 from .policy_services import household_ai_allowed
 
 FEATURE = "monthly_review"
-BACKEND_LABELS = {
-    "local": "Local model",
-    "claude": "Claude",
-    "codex": "Codex",
-    "cursor": "Cursor",
-}
 DROP_KEYS = frozenset(
     {
         "url",
@@ -61,7 +55,7 @@ PROMPT = (
 
 
 def backend_label(backend):
-    return BACKEND_LABELS.get(backend, backend or "Unknown backend")
+    return backend_display_name(backend, "Unknown backend")
 
 
 def phrasing_label(backend):

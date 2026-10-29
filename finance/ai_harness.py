@@ -21,6 +21,7 @@ from .ai_types import (
     ModelStatus,
     ProviderResult,
     Usage,
+    backend_display_name,
     map_harness_failure,
 )
 
@@ -438,13 +439,7 @@ def _tool_payload(spec):
 
 
 def _label(name):
-    labels = {
-        LOCAL_BACKEND: "Local model",
-        "claude": "Claude",
-        "codex": "Codex",
-        "cursor": "Cursor",
-    }
-    return labels.get(name, name or "Unknown backend")
+    return backend_display_name(name, "Unknown backend")
 
 
 def _as_list(payload):

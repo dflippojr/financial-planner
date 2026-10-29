@@ -11,6 +11,8 @@ from django.db.models import F, Q
 from django.db.models.functions import Lower
 from django.utils import timezone
 
+from .ai_types import backend_display_name
+
 
 sha256_validator = RegexValidator(
     regex=r"^[0-9a-f]{64}$",
@@ -2204,13 +2206,7 @@ class CategorySuggestion(models.Model):
     @property
     def display_label(self):
         kind = "Agent Harness" if self.provider == "agent_harness" else (self.provider or "AI")
-        labels = {
-            "local": "Local model",
-            "claude": "Claude",
-            "codex": "Codex",
-            "cursor": "Cursor",
-        }
-        return f"AI · {kind} · {labels.get(self.backend, self.backend or 'Unknown backend')}"
+        return f"AI · {kind} · {backend_display_name(self.backend, 'Unknown backend')}"
 
 
 class BudgetQuerySet(models.QuerySet):

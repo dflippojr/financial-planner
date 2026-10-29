@@ -14,7 +14,7 @@ from django.views.decorators.http import require_GET, require_POST
 
 from .access import request_person as _person, service_or_404
 from .ai_services import AiError, local_status, member_has_ai, resolve_ai, warm_for_chat
-from .ai_types import LOCAL_BACKEND
+from .ai_types import LOCAL_BACKEND, backend_display_name
 from .chat_proposals import ProposalError, apply_proposal, card_for, dismiss_proposal, proposal_for
 from .chat_runner import recover_stale_turns
 from .chat_services import (
@@ -33,8 +33,7 @@ from .reauth import safe_next_url
 
 
 def _backend_label(backend):
-    labels = {LOCAL_BACKEND: "Local model", "claude": "Claude", "codex": "Codex", "cursor": "Cursor"}
-    return labels.get(backend, backend or "AI")
+    return backend_display_name(backend, "AI")
 
 
 @require_GET
