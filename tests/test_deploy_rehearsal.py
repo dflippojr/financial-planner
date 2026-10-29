@@ -944,6 +944,54 @@ def test_an_env_file_from_outside_the_work_directory_stops_before_anything_start
     assert "synthetic-sentinel-value" not in result.stdout + calls
 
 
+@pytest.mark.parametrize("form", [
+    pytest.param("    env_file: {env}\n", id="string"),
+    pytest.param("    env_file:\n      - {env}\n", id="list"),
+    pytest.param("    env_file:\n      - path: {env}\n        required: false\n", id="long-form"),
+])
+def test_an_env_file_through_the_real_normalizer_is_refused_by_the_model_check(tmp_path, form):
+    # The same candidates as above, past the text refusal: the real `docker
+    # compose config --no-env-resolution` normalizes them (no daemon) and the
+    # model check judges the result (#582 automated review of 25da419). Compose
+    # 5 keeps `env_file` and never reads the file, so the model check refuses
+    # it. Compose before 5 (2.38 on the CI runners) reads the file anyway and
+    # drops the key, which is why the text refusal comes first.
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    env = outside / "production.env"
+    env.write_text("SYNTHETIC_SECRET=synthetic-sentinel-value\n", encoding="utf-8")
+    text = (ROOT / "compose.yml").read_text(encoding="utf-8")
+    assert text.count(_DB_IMAGE) == 1
+    work = tmp_path / "work"
+    (work / "source").mkdir(parents=True)
+    (work / "source" / "compose.yml").write_text(text.replace(_DB_IMAGE, _DB_IMAGE + form.format(env=env)),
+                                                 encoding="utf-8")
+    version = subprocess.run([_REAL_DOCKER, "compose", "version", "--short"], capture_output=True, text=True,
+                             check=True).stdout.strip().lstrip("v")
+    result = subprocess.run(
+        [POWERSHELL, "-NoProfile", "-NonInteractive", "-Command",
+         f". '{SCRIPT}'; $script:Project = 'fp-rehearsal-t'; $work = {_ps_string(work)}; "
+         "$script:ComposeFile = Join-Path $work 'source/compose.yml'; $script:EnvFile = Join-Path $work 'rehearsal.env'; "
+         "New-RehearsalEnvFile $script:EnvFile (Join-Path $work 'backups') 41234 'abc123'; "
+         "$config = Invoke-Docker @('compose', '-p', $script:Project, '-f', $script:ComposeFile, '--env-file', $script:EnvFile, "
+         "'config', '--no-env-resolution', '--format', 'json'); if ($config.ExitCode -ne 0) { throw 'compose config failed' }; "
+         "ConvertTo-Json -Compress -InputObject @{ model = ($config.Output -join \"`n\"); "
+         "problems = @(Test-DisposableStorage (($config.Output -join \"`n\") | ConvertFrom-Json) $script:Project $work) }"],
+        capture_output=True, text=True, timeout=120, check=False, cwd=ROOT,
+    )
+    assert result.returncode == 0, result.stderr
+    checked = json.loads(result.stdout)
+    db = json.loads(checked["model"])["services"]["db"]
+
+    if int(version.split(".")[0]) >= 5:
+        assert "env_file" in db
+        assert "synthetic-sentinel-value" not in checked["model"]
+        assert checked["problems"] == ["service db env_file: reads a host file into the container's environment"]
+    else:
+        assert "env_file" not in db
+        assert db["environment"]["SYNTHETIC_SECRET"] == "synthetic-sentinel-value"
+
+
 _BACKUP_CONTEXT = "      context: ops/backup\n"
 
 
