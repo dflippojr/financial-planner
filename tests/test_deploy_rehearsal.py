@@ -20,6 +20,21 @@ SCRIPT = ROOT / "ops" / "deploy-rehearsal.ps1"
 # The script targets PowerShell 7 on Linux, which the CI runners have; without
 # it these tests fail rather than skip.
 POWERSHELL = shutil.which("pwsh") or "pwsh"
+# What the docker stand-ins answer `docker create` with, and the prefix every
+# command run inside the isolated container carries (#538, 2026-10-28).
+_FAKE_ID = "f" * 64
+_IN_ISOLATED = f"exec -e DOCKER_HOST=unix:///home/rootless/docker.sock {_FAKE_ID} docker "
+# Stand-in code that answers `create` with _FAKE_ID and unwraps a command run
+# inside the isolated container, so the branches after it see its own args.
+_UNWRAP = (
+    "isolated = args[:1] == ['exec']\n"
+    "if isolated:\n"
+    "    args = args[args.index('docker') + 1:]\n"
+    "if args[:1] == ['create']:\n"
+    f"    print({_FAKE_ID!r})\n"
+    "elif args[:1] == ['info'] and isolated:\n"
+    "    print('name=rootless')\n"
+)
 
 
 def _ps(body):
@@ -197,19 +212,21 @@ def test_a_sibling_directory_sharing_the_prefix_is_outside_the_work_directory(tm
     assert problems == [f"service backup volumes: bind {tmp_path / 'fp-rehearsal-t-other'} is outside the work directory"]
 
 
-def test_the_newest_signed_nightly_dump_is_chosen(tmp_path):
-    nightly = tmp_path / "nightly"
-    nightly.mkdir()
+def _nightly_names():
+    names = []
     for stamp, signed in (("20261025T073000Z", True), ("20261026T073000Z", True), ("20261027T073000Z", False)):
-        (nightly / f"financial_planner_{stamp}.dump").write_bytes(b"synthetic")
+        names.append(f"financial_planner_{stamp}.dump")
         if signed:
-            (nightly / f"financial_planner_{stamp}.sha256").write_text("synthetic", encoding="utf-8")
-            (nightly / f"financial_planner_{stamp}.sha256.sig").write_text("synthetic", encoding="utf-8")
+            names += [f"financial_planner_{stamp}.sha256", f"financial_planner_{stamp}.sha256.sig"]
+    return names
 
-    chosen = _ps(f"Find-NewestSignedDump {_ps_string(nightly)} | ConvertTo-Json")
 
-    assert Path(chosen).name == "financial_planner_20261026T073000Z.dump"
-    assert _ps(f"Find-NewestSignedDump {_ps_string(tmp_path / 'missing')} | ConvertTo-Json") is None
+def test_the_newest_signed_nightly_dump_is_chosen():
+    # The names come from a root helper's listing: the nightly directory is root-only.
+    listed = "@(" + ", ".join(_ps_string(name) for name in _nightly_names()) + ")"
+
+    assert _ps(f"Find-NewestSignedDump {listed} | ConvertTo-Json") == "financial_planner_20261026T073000Z.dump"
+    assert _ps("Find-NewestSignedDump @() | ConvertTo-Json") is None
 
 
 def test_the_throwaway_env_file_holds_dummy_values_and_its_own_volumes(tmp_path):
@@ -300,7 +317,8 @@ def test_a_candidate_that_is_not_a_commit_fails_before_docker(tmp_path):
     assert not log.exists()
 
 
-def _simulating_docker(tmp_path, volumes=None, existing_volumes=(), swap_work_dir_to=None, services=None, top_level=None):
+def _simulating_docker(tmp_path, volumes=None, existing_volumes=(), swap_work_dir_to=None, services=None, top_level=None,
+                       on_host=(), nightly=()):
     """A docker stand-in that acts like the commands that touch the host.
 
     `compose config` resolves the backup bind mount from the env file's
@@ -312,7 +330,11 @@ def _simulating_docker(tmp_path, volumes=None, existing_volumes=(), swap_work_di
     `build` moves the work directory aside and puts a link to that directory
     in its place. `services` and `top_level` add to the resolved config, with
     {BACKUP_DIR} and {WORK} standing for the backup and work directories.
-    Everything else succeeds silently.
+    Commands run inside the isolated container (`exec ... docker ...`) are
+    logged as sent and then handled as their own args: `volume ls` there lists
+    `existing_volumes`, and on the host a `container ls` or `volume ls` lists
+    the names in `on_host` its name filter matches. A root helper's
+    `ls -1A /nightly` lists `nightly`. Everything else succeeds silently.
     """
     log = tmp_path / "docker-calls.log"
     stub = tmp_path / "fake_docker.py"
@@ -327,7 +349,14 @@ def _simulating_docker(tmp_path, volumes=None, existing_volumes=(), swap_work_di
         "    for name in os.listdir(source):\n"
         "        path = os.path.join(source, name)\n"
         "        shutil.rmtree(path) if os.path.isdir(path) and not os.path.islink(path) else os.unlink(path)\n"
-        "if args[:1] == ['compose'] and 'ls' in args:\n"
+        + _UNWRAP +
+        "elif args[:2] in (['container', 'ls'], ['volume', 'ls']) and not isolated:\n"
+        "    import re\n"
+        "    pattern = next((a[5:] for a in args if a.startswith('name=')), None)\n"
+        f"    print('\\n'.join(n for n in {list(on_host)!r} if pattern and re.search(pattern, '/' + n)))\n"
+        "elif args[:1] == ['run'] and 'ls -1A /nightly' in args:\n"
+        f"    print('\\n'.join({list(nightly)!r}))\n"
+        "elif args[:1] == ['compose'] and 'ls' in args:\n"
         "    print('[]')\n"
         "elif args[:1] == ['compose'] and 'config' in args:\n"
         "    env_file = args[args.index('--env-file') + 1]\n"
@@ -351,9 +380,7 @@ def _simulating_docker(tmp_path, volumes=None, existing_volumes=(), swap_work_di
         "elif args[:2] == ['volume', 'ls']:\n"
         f"    print('\\n'.join({list(existing_volumes)!r}))\n"
         "elif args[:2] == ['volume', 'inspect']:\n"
-        "    sys.exit(1)\n"
-        "elif args[:1] == ['info'] and os.environ.get('DOCKER_HOST'):\n"
-        "    print('name=rootless')\n",
+        "    sys.exit(1)\n",
         encoding="utf-8",
     )
     bin_dir = tmp_path / "bin"
@@ -391,7 +418,7 @@ def test_a_planted_work_directory_is_never_mounted_or_emptied(tmp_path):
     assert str(planted) not in calls
     assert str(outside) not in calls
     # It got as far as emptying a backup tree: its own, in a fresh work directory it then removed.
-    emptied = [call for call in calls.splitlines() if call.startswith("run ") and "find /backups" in call]
+    emptied = [call for call in calls.splitlines() if call.startswith(_IN_ISOLATED + "run ") and "find /backups" in call]
     assert len(emptied) == 1
     assert f"-v {tmp_path}{os.sep}fp-rehearsal-work-" in emptied[0]
     assert not list(tmp_path.glob("fp-rehearsal-work-*"))
@@ -493,6 +520,7 @@ def test_teardown_leaves_a_backup_directory_that_resolves_outside_the_work_direc
         [POWERSHELL, "-NoProfile", "-NonInteractive", "-Command",
          f". '{SCRIPT}'; $script:Project = 'fp-rehearsal-t'; $script:WorkDir = {_ps_string(work)}; "
          "$script:WorkDirIdentity = Get-DirectoryIdentity $script:WorkDir; $script:Built = $true; $script:ComposeFile = 'compose.yml'; $script:EnvFile = 'rehearsal.env'; "
+         f"$script:IsolatedId = '{_FAKE_ID}'; "
          "Invoke-Teardown; ConvertTo-Json -Compress -InputObject @($script:Failures)"],
         capture_output=True, text=True, env=env, timeout=120, check=False, cwd=ROOT,
     )
@@ -501,7 +529,7 @@ def test_teardown_leaves_a_backup_directory_that_resolves_outside_the_work_direc
     assert (outside / "sentinel").read_text(encoding="utf-8") == "synthetic sentinel"
     assert "teardown: the backup directory no longer resolves inside the work directory; left it unemptied" in (
         json.loads(result.stdout.splitlines()[-1]))
-    assert not any(call.startswith("run ") for call in log.read_text(encoding="utf-8").splitlines())
+    assert not any(" run " in f" {call} " for call in log.read_text(encoding="utf-8").splitlines())
 
 
 @pytest.mark.parametrize(("options", "problem"), [
@@ -557,13 +585,17 @@ def _run_simulated(tmp_path, bin_dir, *arguments):
 
 def _isolated_daemon_lifecycle(call):
     """The script's own start and removal of the isolated daemon (#538, 2026-10-28)."""
-    return ((call.startswith("run -d --name fp-rehearsal-") and "dind-rootless@sha256:" in call)
-            or call.startswith(("rm --force --volumes fp-rehearsal-", "volume rm --force fp-rehearsal-")))
+    return call in (f"start {_FAKE_ID}", f"rm --force --volumes {_FAKE_ID}") or call.startswith(
+        "volume rm --force fp-rehearsal-")
 
 
 def _started(log):
-    """Docker calls that build, start, run or remove anything of the candidate's."""
-    return [call for call in log.read_text(encoding="utf-8").splitlines()
+    """Docker calls that build, start, run or remove anything of the candidate's.
+
+    A command inside the isolated container counts by what it runs there.
+    """
+    calls = [call.removeprefix(_IN_ISOLATED) for call in log.read_text(encoding="utf-8").splitlines()]
+    return [call for call in calls
             if not _isolated_daemon_lifecycle(call)
             and (call.startswith("run ") or any(f" {verb} " in f" {call} " for verb in ("build", "up", "down", "rm")))]
 
@@ -800,10 +832,11 @@ def test_the_checked_in_compose_file_passes_the_allowlist(tmp_path):
     shutil.copy(ROOT / "compose.yml", source / "compose.yml")
     result = subprocess.run(
         [POWERSHELL, "-NoProfile", "-NonInteractive", "-Command",
-         f". '{SCRIPT}'; $script:Project = 'fp-rehearsal-t'; $work = {_ps_string(work)}; $script:WorkDir = $work; "
+         f". '{SCRIPT}'; $script:Project = 'fp-rehearsal-t'; $work = {_ps_string(work)}; "
          "$script:ComposeFile = Join-Path $work 'source/compose.yml'; $script:EnvFile = Join-Path $work 'rehearsal.env'; "
          "New-RehearsalEnvFile $script:EnvFile (Join-Path $work 'backups') 41234 'abc123'; "
-         "$config = Invoke-Compose @('config', '--no-env-resolution', '--format', 'json'); if ($config.ExitCode -ne 0) { throw 'compose config failed' }; "
+         "$config = Invoke-Docker @('compose', '-p', $script:Project, '-f', $script:ComposeFile, '--env-file', $script:EnvFile, "
+         "'config', '--no-env-resolution', '--format', 'json'); if ($config.ExitCode -ne 0) { throw 'compose config failed' }; "
          "ConvertTo-Json -Compress -InputObject @(@(Test-ComposeSource $script:ComposeFile) + "
          "@(Test-DisposableStorage (($config.Output -join \"`n\") | ConvertFrom-Json) $script:Project $work))"],
         capture_output=True, text=True, timeout=120, check=False, cwd=ROOT,
@@ -828,18 +861,17 @@ def _normalizing_docker(tmp_path, build_exit=1):
     log = tmp_path / "docker-calls.log"
     stub = tmp_path / "fake_docker.py"
     stub.write_text(
-        "import os, subprocess, sys\n"
+        "import subprocess, sys\n"
         "args = sys.argv[1:]\n"
         f"with open({str(log)!r}, 'a', encoding='utf-8') as handle:\n"
         "    handle.write(' '.join(args) + '\\n')\n"
-        "if args[:1] == ['compose'] and 'config' in args:\n"
+        + _UNWRAP +
+        "elif args[:1] == ['compose'] and 'config' in args:\n"
         f"    sys.exit(subprocess.run([{_REAL_DOCKER!r}, *args], check=False).returncode)\n"
         "elif args[:1] == ['compose'] and 'ls' in args:\n"
         "    print('[]')\n"
         "elif args[:1] == ['compose'] and 'build' in args:\n"
-        f"    sys.exit({build_exit})\n"
-        "elif args[:1] == ['info'] and os.environ.get('DOCKER_HOST'):\n"
-        "    print('name=rootless')\n",
+        f"    sys.exit({build_exit})\n",
         encoding="utf-8",
     )
     bin_dir = tmp_path / "bin"
@@ -1039,31 +1071,32 @@ _BACKUP_RECEIPTS = '      - receipts:/receipts\n    command: ["/opt/financial-pl
 
 
 def _daemon_aware_docker(tmp_path):
-    """A docker stand-in that records which daemon each call reaches.
+    """A docker stand-in that records where each command runs.
 
-    Calls with DOCKER_HOST set go to `isolated.log` with that address, all
-    others to `host.log`. `compose config` goes to the real CLI (no daemon).
-    The isolated daemon reports itself rootless. A `compose ... run backup`
-    that reaches the host daemon does there what Docker would: it creates each
-    writable bind source of that service, read from the full model with every
-    profile active (`config` prints `create_host_path` as an empty `bind`). On the isolated daemon those paths are its own, so
-    the stand-in leaves the host alone.
+    Commands run inside the isolated container (`exec ... docker ...`) go to
+    `isolated.log` as their own args; every other call goes to `host.log` as
+    sent, with any DOCKER_HOST it carried. `compose config` goes to the real
+    CLI (no daemon). A `compose ... run backup` the host's Docker receives
+    does there what Docker would: it creates each writable bind source of that
+    service, read from the full model with every profile active (`config`
+    prints `create_host_path` as an empty `bind`). Inside the isolated
+    container those paths are its own, so the stand-in leaves the host alone.
     """
     stub = tmp_path / "fake_docker.py"
     stub.write_text(
         "import json, os, subprocess, sys\n"
         "args = sys.argv[1:]\n"
-        "isolated = os.environ.get('DOCKER_HOST')\n"
-        f"log = {str(tmp_path / 'isolated.log')!r} if isolated else {str(tmp_path / 'host.log')!r}\n"
-        "with open(log, 'a', encoding='utf-8') as handle:\n"
-        "    handle.write((isolated + ' | ' if isolated else '') + ' '.join(args) + '\\n')\n"
+        "sent = ' '.join(args)\n"
+        + _UNWRAP +
+        "if isolated:\n"
+        f"    open({str(tmp_path / 'isolated.log')!r}, 'a', encoding='utf-8').write(' '.join(args) + '\\n')\n"
+        "else:\n"
+        "    host = os.environ.get('DOCKER_HOST')\n"
+        f"    open({str(tmp_path / 'host.log')!r}, 'a', encoding='utf-8').write((f'DOCKER_HOST={{host}} ' if host else '') + sent + '\\n')\n"
         "if args[:1] == ['compose'] and 'config' in args:\n"
         f"    sys.exit(subprocess.run([{_REAL_DOCKER!r}, *args], check=False).returncode)\n"
         "elif args[:1] == ['compose'] and 'ls' in args:\n"
         "    print('[]')\n"
-        "elif args[:1] == ['info'] and isolated:\n"
-        "    print('name=seccomp,profile=builtin')\n"
-        "    print('name=rootless')\n"
         "elif args[:1] == ['compose'] and 'run' in args and 'backup' in args and not isolated:\n"
         "    model = args[:args.index('run')] + ['--profile', '*', 'config', '--format', 'json']\n"
         f"    resolved = subprocess.run([{_REAL_DOCKER!r}, *model], capture_output=True, text=True, check=False)\n"
@@ -1115,18 +1148,95 @@ def test_a_service_hidden_in_an_inactive_profile_never_reaches_the_host_daemon(t
     # created on the host, and nothing else there changed.
     assert not created.exists()
     assert sorted(path.name for path in outside.iterdir()) == ["sentinel"]
-    # The host daemon heard only the script's own commands: no compose project
-    # other than listing projects, so never the candidate's compose file.
+    # The host's Docker ran no compose project but listing projects, so it
+    # never got the candidate's compose file except as a command it passed,
+    # unread, into the isolated container.
     compose_on_host = [call for call in host if call.startswith("compose ") and not call.startswith("compose ls ")]
     assert compose_on_host == []
-    assert not [call for call in host if "compose.yml" in call or "rehearsal.env" in call]
-    # Every compose call, the hidden service's build and run included, went to
-    # the isolated daemon's socket inside this run's work directory.
-    compose_isolated = [call for call in isolated if " | compose " in call]
-    assert any(" build " in call for call in compose_isolated)
+    assert not [call for call in host if ("compose.yml" in call or "rehearsal.env" in call) and not call.startswith("exec ")]
+    # The host's Docker heard only the script's own commands, none carrying a
+    # DOCKER_HOST a candidate could have redirected (#582 automated review of
+    # 1884e63: a socket in the work directory can be swapped for a link).
+    assert not [call for call in host if call.startswith("DOCKER_HOST=")]
+    verbs = {call.split(" ", 2)[0] if not call.startswith(("compose ", "container ", "volume ")) else
+             " ".join(call.split(" ", 2)[:2]) for call in host}
+    assert verbs <= {"info", "compose ls", "container ls", "volume ls", "create", "start", "exec", "rm", "volume rm"}
+    # Every compose call, the hidden service's build and run included, ran
+    # inside the isolated container this run created, so compose read its
+    # build inputs there too.
+    assert all(call.startswith(_IN_ISOLATED) for call in host if call.startswith("exec "))
+    compose_isolated = [call for call in isolated if call.startswith("compose ")]
+    assert any(" build " in f" {call} " for call in compose_isolated)
     assert any(" run " in call and " backup " in call for call in compose_isolated)
-    sockets = {call.split(" | ", 1)[0] for call in isolated}
-    assert len(sockets) == 1
-    (socket,) = sockets
-    assert socket.startswith(f"unix://{tmp_path}{os.sep}fp-rehearsal-work-")
     assert result.stdout.rstrip().endswith("problem(s); do not deploy")
+
+
+# #582 automated review of 1884e63: teardown removed what another run under the
+# same -ProjectName had created, trusted failed removals and listings, and the
+# nightly path listed a root-only directory as the operator.
+def test_an_isolated_daemon_left_by_another_run_is_refused_not_removed(tmp_path):
+    bin_dir, log = _simulating_docker(tmp_path, on_host=["fp-rehearsal-t-isolated"])
+
+    result = _run_simulated(tmp_path, bin_dir)
+
+    assert result.returncode == 1
+    assert ("FAIL rehearsal: fp-rehearsal-t-isolated or its volume already exists; "
+            "another rehearsal may be running as fp-rehearsal-t") in result.stdout
+    calls = log.read_text(encoding="utf-8").splitlines()
+    assert not [call for call in calls if call.startswith(("create ", "run -d ", "rm ", "volume rm "))]
+    assert _started(log) == []
+
+
+def test_teardown_that_cannot_remove_or_confirm_the_isolated_daemon_fails(tmp_path):
+    bin_dir, _ = _recording_docker(tmp_path, 1)
+    env = dict(os.environ, PATH=str(bin_dir) + os.pathsep + os.environ["PATH"])
+    result = subprocess.run(
+        [POWERSHELL, "-NoProfile", "-NonInteractive", "-Command",
+         f". '{SCRIPT}'; $script:Project = 'fp-rehearsal-t'; $script:IsolatedId = '{_FAKE_ID}'; "
+         "$script:IsolatedVolumeOwned = $true; Stop-IsolatedDaemon; ConvertTo-Json -Compress -InputObject @($script:Failures)"],
+        capture_output=True, text=True, env=env, timeout=120, check=False, cwd=ROOT,
+    )
+    assert result.returncode == 0, result.stderr
+
+    failures = json.loads(result.stdout.splitlines()[-1])
+    assert "teardown: could not remove the isolated daemon fp-rehearsal-t-isolated" in failures
+    assert "teardown: could not remove the isolated daemon's volume fp-rehearsal-t-isolated-docker" in failures
+    assert "teardown: cannot confirm that the isolated daemon fp-rehearsal-t-isolated and its volume are gone" in failures
+    assert "ok   teardown:" not in result.stdout
+
+
+def test_a_root_only_nightly_directory_is_listed_and_copied_by_a_root_helper(tmp_path):
+    backups = tmp_path / "production-backups"
+    nightly = backups / "nightly"
+    nightly.mkdir(parents=True)
+    for name in _nightly_names():
+        (nightly / name).write_text("synthetic", encoding="utf-8")
+    # As the backup scheduler's umask leaves it: the operator cannot list it.
+    nightly.chmod(0)
+    config = tmp_path / "production.env"
+    config.write_text(f"BACKUP_DIR={backups}\n", encoding="utf-8")
+    bin_dir, log = _simulating_docker(tmp_path, nightly=_nightly_names())
+    env = dict(os.environ, PATH=str(bin_dir) + os.pathsep + os.environ["PATH"], TMPDIR=str(tmp_path))
+    try:
+        result = subprocess.run(
+            [POWERSHELL, "-NoProfile", "-NonInteractive", "-File", str(SCRIPT),
+             "-Candidate", "HEAD", "-ConfigPath", str(config), "-ProjectName", "fp-rehearsal-t"],
+            capture_output=True, text=True, env=env, timeout=300, check=False, cwd=ROOT,
+        )
+    finally:
+        nightly.chmod(0o700)
+
+    calls = log.read_text(encoding="utf-8").splitlines()
+    helpers = [call for call in calls if call.startswith("run --rm --network none --user 0:0 ")]
+    assert len(helpers) == 2, result.stdout
+    listing, copy = helpers
+    assert f"--mount type=bind,source={nightly},target=/nightly,readonly" in listing
+    assert f"--mount type=bind,source={nightly},target=/nightly,readonly" in copy
+    assert f"--mount type=bind,source={backups}/signing/backup-signing-key.pub,target=/signing.pub,readonly" in copy
+    assert " copy financial_planner_20261026T073000Z " in copy
+    # The isolated daemon gets the copy in the work directory, not BACKUP_DIR.
+    restore = next(call for call in calls if call.startswith(_IN_ISOLATED) and "restore.sh" in call)
+    assert str(backups) not in restore
+    assert "/input:/rehearsal:ro" in restore
+    assert "restore.sh /rehearsal/financial_planner_20261026T073000Z.dump" in restore
+    assert not [call for call in calls if call.startswith("create ") and str(backups) in call]
