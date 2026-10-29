@@ -1016,3 +1016,106 @@ def test_a_plain_candidate_file_may_be_read(tmp_path):
                  f"{_ps_string(source)})")
 
     assert reason is None
+
+
+# Owner decision 2026-10-28 (#538, after review r6 of #582): the rehearsal runs
+# in its own isolated Docker daemon. Review r6 hid `backup` in an inactive
+# profile: `config` leaves it out, so the allowlist never sees its mounts, yet
+# `build` and `run backup` name it and select it anyway. Whatever the allowlist
+# misses, the candidate's compose project must reach only the isolated daemon.
+_HIDDEN_BACKUP = "  backup:\n    profiles: [hidden]\n"
+_BACKUP_RECEIPTS = '      - receipts:/receipts\n    command: ["/opt/financial-planner/run-backups.sh"]\n'
+
+
+def _daemon_aware_docker(tmp_path):
+    """A docker stand-in that records which daemon each call reaches.
+
+    Calls with DOCKER_HOST set go to `isolated.log` with that address, all
+    others to `host.log`. `compose config` goes to the real CLI (no daemon).
+    The isolated daemon reports itself rootless. A `compose ... run backup`
+    that reaches the host daemon does there what Docker would: it creates each
+    writable bind source of that service, read from the full model with every
+    profile active (`config` prints `create_host_path` as an empty `bind`). On the isolated daemon those paths are its own, so
+    the stand-in leaves the host alone.
+    """
+    stub = tmp_path / "fake_docker.py"
+    stub.write_text(
+        "import json, os, subprocess, sys\n"
+        "args = sys.argv[1:]\n"
+        "isolated = os.environ.get('DOCKER_HOST')\n"
+        f"log = {str(tmp_path / 'isolated.log')!r} if isolated else {str(tmp_path / 'host.log')!r}\n"
+        "with open(log, 'a', encoding='utf-8') as handle:\n"
+        "    handle.write((isolated + ' | ' if isolated else '') + ' '.join(args) + '\\n')\n"
+        "if args[:1] == ['compose'] and 'config' in args:\n"
+        f"    sys.exit(subprocess.run([{_REAL_DOCKER!r}, *args], check=False).returncode)\n"
+        "elif args[:1] == ['compose'] and 'ls' in args:\n"
+        "    print('[]')\n"
+        "elif args[:1] == ['info'] and isolated:\n"
+        "    print('name=seccomp,profile=builtin')\n"
+        "    print('name=rootless')\n"
+        "elif args[:1] == ['compose'] and 'run' in args and 'backup' in args and not isolated:\n"
+        "    model = args[:args.index('run')] + ['--profile', '*', 'config', '--format', 'json']\n"
+        f"    resolved = subprocess.run([{_REAL_DOCKER!r}, *model], capture_output=True, text=True, check=False)\n"
+        f"    if resolved.returncode:\n"
+        f"        open({str(tmp_path / 'stub-errors.log')!r}, 'a', encoding='utf-8').write(resolved.stderr)\n"
+        "    for mount in json.loads(resolved.stdout)['services']['backup'].get('volumes', []):\n"
+        "        if mount.get('type') == 'bind' and not mount.get('read_only'):\n"
+        "            os.makedirs(mount['source'], exist_ok=True)\n",
+        encoding="utf-8",
+    )
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    shim = bin_dir / "docker"
+    shim.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{stub}" "$@"\n', encoding="utf-8")
+    shim.chmod(0o755)
+    return bin_dir
+
+
+def _calls(path):
+    return path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+
+
+def test_a_service_hidden_in_an_inactive_profile_never_reaches_the_host_daemon(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "sentinel").write_text("synthetic sentinel", encoding="utf-8")
+    created = outside / "created-by-hidden-service"
+    text = (ROOT / "compose.yml").read_text(encoding="utf-8")
+    assert text.count("  backup:\n") == 1 and text.count(_BACKUP_RECEIPTS) == 1
+    text = text.replace("  backup:\n", _HIDDEN_BACKUP).replace(_BACKUP_RECEIPTS, (
+        "      - type: bind\n"
+        f"        source: {created}\n"
+        "        target: /receipts\n"
+        "        bind:\n"
+        "          create_host_path: true\n"
+        '    command: ["/opt/financial-planner/run-backups.sh"]\n'))
+    repo = _candidate_with(tmp_path, "name: financial-planner\n", "", None)
+    (repo / "compose.yml").write_text(text, encoding="utf-8")
+    git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.test", "-c", "commit.gpgsign=false"]
+    for command in (["add", "-A"], ["commit", "-q", "-m", "hide backup in a profile"]):
+        subprocess.run(git + command, check=True, capture_output=True)
+    bin_dir = _daemon_aware_docker(tmp_path)
+
+    result = _rehearse_candidate(tmp_path, repo, bin_dir)
+
+    host = _calls(tmp_path / "host.log")
+    isolated = _calls(tmp_path / "isolated.log")
+    # The hidden service's writable bind outside the work directory was never
+    # created on the host, and nothing else there changed.
+    assert not created.exists()
+    assert sorted(path.name for path in outside.iterdir()) == ["sentinel"]
+    # The host daemon heard only the script's own commands: no compose project
+    # other than listing projects, so never the candidate's compose file.
+    compose_on_host = [call for call in host if call.startswith("compose ") and not call.startswith("compose ls ")]
+    assert compose_on_host == []
+    assert not [call for call in host if "compose.yml" in call or "rehearsal.env" in call]
+    # Every compose call, the hidden service's build and run included, went to
+    # the isolated daemon's socket inside this run's work directory.
+    compose_isolated = [call for call in isolated if " | compose " in call]
+    assert any(" build " in call for call in compose_isolated)
+    assert any(" run " in call and " backup " in call for call in compose_isolated)
+    sockets = {call.split(" | ", 1)[0] for call in isolated}
+    assert len(sockets) == 1
+    (socket,) = sockets
+    assert socket.startswith(f"unix://{tmp_path}{os.sep}fp-rehearsal-work-")
+    assert result.stdout.rstrip().endswith("problem(s); do not deploy")
