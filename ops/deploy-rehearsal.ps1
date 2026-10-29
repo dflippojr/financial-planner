@@ -77,9 +77,6 @@ $BuiltServices = @('app', 'backup', 'background')
 $DockerEnvNames = @('PATH', 'HOME', 'TMPDIR', 'XDG_RUNTIME_DIR', 'SystemRoot', 'ProgramData', 'USERPROFILE',
     'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP')
 $DockerEnvPrefixes = @('DOCKER_', 'BUILDKIT_')
-# Settings that would point a docker command at another daemon; a command for
-# the isolated daemon drops them and names its socket instead.
-$DaemonEnvNames = @('DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_TLS', 'DOCKER_TLS_VERIFY', 'DOCKER_CERT_PATH')
 # The isolated daemon: rootless dockerd as the image's uid 1000, pinned by
 # digest. Not --privileged: it needs the host's rootlesskit AppArmor profile
 # (shipped with Ubuntu) to create its user namespace, /dev/net/tun for
@@ -89,6 +86,12 @@ $DaemonEnvNames = @('DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_TLS', 'DOCKER_TLS_V
 # the host's loopback disabled.
 $IsolatedImage = 'docker:29-dind-rootless@sha256:ae083cc7de51e7a8e5a597f8fb774ca7914c408a95fc0f1477826a913479518a'
 $IsolatedStartSeconds = 120
+# The daemon's socket, inside the isolated container's own filesystem. The
+# docker and compose clients for the candidate run there too (docker exec), so
+# no host process connects to a path a candidate could replace, and every file
+# compose reads (build contexts, Dockerfiles) resolves in a filesystem that
+# holds nothing of the host's but the work directory.
+$IsolatedSocket = 'unix:///home/rootless/docker.sock'
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 # `pwsh -File` passes a comma list as one string.
 $ExpectCountChange = @($ExpectCountChange | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
@@ -494,16 +497,14 @@ function Read-EnvValue([string]$Path, [string]$Key) {
     return $value
 }
 
-# The newest nightly dump with a manifest and signature beside it. restore.sh
-# checks the signature and the digests before it restores anything.
-function Find-NewestSignedDump([string]$NightlyDir) {
-    if (-not (Test-Path -LiteralPath $NightlyDir -PathType Container)) { return $null }
-    $dumps = Get-ChildItem -LiteralPath $NightlyDir -Filter 'financial_planner_*.dump' -File | Sort-Object Name -Descending
+# Of the file names in the nightly directory, the newest dump with a manifest
+# and signature beside it. restore.sh checks the signature and the digests
+# before it restores anything.
+function Find-NewestSignedDump([string[]]$Names) {
+    $dumps = @($Names | Where-Object { $_ -cmatch '^financial_planner_[A-Za-z0-9_-]+\.dump$' } | Sort-Object -Descending)
     foreach ($dump in $dumps) {
-        $stem = $dump.FullName.Substring(0, $dump.FullName.Length - '.dump'.Length)
-        if ((Test-Path -LiteralPath "$stem.sha256" -PathType Leaf) -and (Test-Path -LiteralPath "$stem.sha256.sig" -PathType Leaf)) {
-            return $dump.FullName
-        }
+        $stem = $dump.Substring(0, $dump.Length - '.dump'.Length)
+        if ($Names -ccontains "$stem.sha256" -and $Names -ccontains "$stem.sha256.sig") { return $dump }
     }
     return $null
 }
@@ -518,11 +519,10 @@ function Get-FreePort {
     }
 }
 
-# Runs docker with only $DockerEnvNames and DOCKER_* in its environment, or,
-# with $DockerHost, against that daemon alone. Output is returned, never
-# printed; stderr is dropped because restore and migrate errors can quote row
-# values.
-function Invoke-Docker([string[]]$Arguments, [string]$DockerHost) {
+# Runs docker with only $DockerEnvNames and DOCKER_* in its environment. Output
+# is returned, never printed; stderr is dropped because restore and migrate
+# errors can quote row values.
+function Invoke-Docker([string[]]$Arguments) {
     $info = [Diagnostics.ProcessStartInfo]::new('docker')
     foreach ($argument in $Arguments) { $info.ArgumentList.Add($argument) }
     $info.UseShellExecute = $false
@@ -531,12 +531,10 @@ function Invoke-Docker([string[]]$Arguments, [string]$DockerHost) {
     $info.Environment.Clear()
     foreach ($entry in [Environment]::GetEnvironmentVariables().GetEnumerator()) {
         $name = [string]$entry.Key
-        if ($DockerHost -and $DaemonEnvNames -contains $name) { continue }
         if ($DockerEnvNames -contains $name -or @($DockerEnvPrefixes | Where-Object { $name.StartsWith($_) }).Count -gt 0) {
             $info.Environment[$name] = [string]$entry.Value
         }
     }
-    if ($DockerHost) { $info.Environment['DOCKER_HOST'] = $DockerHost }
     try {
         $process = [Diagnostics.Process]::Start($info)
     } catch {
@@ -550,38 +548,39 @@ function Invoke-Docker([string[]]$Arguments, [string]$DockerHost) {
     return [pscustomobject]@{ ExitCode = $process.ExitCode; Output = $lines }
 }
 
-# The isolated daemon's socket, in this run's work directory. There is no
-# fallback: without a work directory nothing may talk to the candidate's project.
-function Get-IsolatedHost {
-    if (-not $script:WorkDir) { throw 'no work directory, so no isolated daemon to send the command to' }
-    return "unix://$(Join-Path $script:WorkDir 'docker.sock')"
-}
-
+# Runs docker inside the isolated container against its own daemon. There is
+# no fallback: until this run has created that container, nothing may talk to
+# the candidate's project.
 function Invoke-Isolated([string[]]$Arguments) {
-    return Invoke-Docker $Arguments (Get-IsolatedHost)
+    if (-not $script:IsolatedId) { throw 'the isolated daemon is not running, so nothing may talk to the candidate''s project' }
+    return Invoke-Docker (@('exec', '-e', "DOCKER_HOST=$IsolatedSocket", $script:IsolatedId, 'docker') + $Arguments)
 }
 
-# Every compose command for the candidate goes to the isolated daemon, so a
-# service the allowlist never saw (one in an inactive profile, say) still runs
-# only there.
+# Every compose command for the candidate runs in the isolated container, so a
+# service the allowlist never saw (one in an inactive profile, say) is built
+# and run only there, from files only there.
 function Invoke-Compose([string[]]$Arguments) {
     return Invoke-Isolated (@('compose', '-p', $script:Project, '-f', $script:ComposeFile, '--env-file', $script:EnvFile) + $Arguments)
 }
 
-# Runs $Block with DOCKER_HOST naming the isolated daemon, for the helpers this
-# script starts (post-deploy-check.ps1, prod_signals.py), then restores the
-# environment.
+# Runs $Block with a `docker` first on PATH that runs each command inside the
+# isolated container, for the helpers this script starts (post-deploy-check.ps1,
+# prod_signals.py), then restores PATH and removes it. The shim lives in a new
+# directory of its own, never in the work directory the candidate can write.
 function Invoke-WithIsolatedDocker([scriptblock]$Block) {
-    $saved = @{}
-    foreach ($name in $DaemonEnvNames) {
-        $saved[$name] = [Environment]::GetEnvironmentVariable($name)
-        [Environment]::SetEnvironmentVariable($name, $null)
-    }
-    [Environment]::SetEnvironmentVariable('DOCKER_HOST', (Get-IsolatedHost))
+    $real = @(Get-Command docker -CommandType Application -ErrorAction Stop)[0].Source
+    $bin = [IO.Directory]::CreateTempSubdirectory('fp-rehearsal-bin-').FullName
+    $shim = Join-Path $bin 'docker'
+    "#!/bin/sh`nexec '$real' exec -e 'DOCKER_HOST=$IsolatedSocket' '$($script:IsolatedId)' docker `"`$@`"`n" |
+        Set-Content -LiteralPath $shim -NoNewline -Encoding utf8NoBOM
+    [IO.File]::SetUnixFileMode($shim, [IO.UnixFileMode]'UserRead, UserWrite, UserExecute')
+    $path = $env:PATH
+    $env:PATH = $bin + [IO.Path]::PathSeparator + $path
     try {
         return & $Block
     } finally {
-        foreach ($name in $DaemonEnvNames) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
+        $env:PATH = $path
+        Remove-Item -LiteralPath $bin -Recurse -Force
     }
 }
 
@@ -591,27 +590,41 @@ function Get-IsolatedNames {
 
 # Starts the isolated daemon on the host's Docker with the script's own fixed
 # arguments: the pinned image, a new data volume, and the work directory at its
-# own path (compose sends host paths, so bind sources must match). Nothing
-# from the candidate reaches this command. It waits until the daemon answers
-# on its socket and reports itself rootless.
+# own path (compose names bind sources by their host paths). Nothing from the
+# candidate reaches this command. A container or volume of that name refuses
+# the run rather than being reused or, later, removed: it may be another
+# rehearsal's under the same -ProjectName. Teardown removes only what this run
+# created. It waits until the daemon answers and reports itself rootless.
 function Start-IsolatedDaemon {
     Assert-RehearsalProjectName $script:Project
     $names = Get-IsolatedNames
-    $socket = Join-Path $script:WorkDir 'docker.sock'
-    $script:IsolatedStarted = $true
-    $run = Invoke-Docker @('run', '-d', '--name', $names.Container,
+    foreach ($listing in @(@('container', 'ls', '-a', '-q', '--filter', "name=^/$($names.Container)$"),
+            @('volume', 'ls', '-q', '--filter', "name=^$($names.Volume)$"))) {
+        $found = Invoke-Docker $listing
+        if ($found.ExitCode -ne 0) { throw 'cannot list containers and volumes on the host''s Docker' }
+        if (@($found.Output).Count -gt 0) {
+            throw "$($names.Container) or its volume already exists; another rehearsal may be running as $($script:Project)"
+        }
+    }
+    $created = Invoke-Docker @('create', '--name', $names.Container,
         '--network', 'host',
         '--security-opt', 'apparmor=rootlesskit', '--security-opt', 'seccomp=unconfined',
         '--security-opt', 'systempaths=unconfined', '--device', '/dev/net/tun',
         '-v', "$($names.Volume):/home/rootless/.local/share/docker",
         '-v', "$($script:WorkDir):$($script:WorkDir)",
-        $IsolatedImage, 'dockerd', "--host=unix://$socket")
-    if ($run.ExitCode -ne 0) { throw 'the isolated daemon did not start; docs/deployment.md lists what it needs' }
+        $IsolatedImage, 'dockerd', "--host=$IsolatedSocket")
+    $id = [string]@($created.Output)[-1]
+    if ($created.ExitCode -ne 0 -or $id -notmatch '^[0-9a-f]{64}$') { throw 'creating the isolated daemon failed' }
+    $script:IsolatedId = $id
+    $script:IsolatedVolumeOwned = $true
+    if ((Invoke-Docker @('start', $script:IsolatedId)).ExitCode -ne 0) {
+        throw 'the isolated daemon did not start; docs/deployment.md lists what it needs'
+    }
     $deadline = (Get-Date).AddSeconds($IsolatedStartSeconds)
     while ($true) {
         $info = Invoke-Isolated @('info', '--format', '{{range .SecurityOptions}}{{println .}}{{end}}')
         if ($info.ExitCode -eq 0) {
-            if (@($info.Output) -notcontains 'name=rootless') { throw 'the daemon on the isolated socket is not rootless' }
+            if (@($info.Output) -notcontains 'name=rootless') { throw 'the isolated daemon is not rootless' }
             return
         }
         if ((Get-Date) -ge $deadline) {
@@ -621,37 +634,64 @@ function Start-IsolatedDaemon {
     }
 }
 
-# Removes the isolated daemon, its containers, images and volumes with it, and
-# checks on the host's Docker that neither its container nor its data volume
-# remains.
+# Removes the isolated container this run created, and with it every
+# container, image and volume inside, then its data volume, and confirms on
+# the host's Docker that neither remains. A failed removal or a listing that
+# cannot be read is a failure, never taken for "gone".
 function Stop-IsolatedDaemon {
     Assert-RehearsalProjectName $script:Project
     $names = Get-IsolatedNames
-    [void](Invoke-Docker @('rm', '--force', '--volumes', $names.Container))
-    [void](Invoke-Docker @('volume', 'rm', '--force', $names.Volume))
-    $left = @((Invoke-Docker @('container', 'ls', '-a', '-q', '--filter', "name=^/$($names.Container)$")).Output)
-    $left += @((Invoke-Docker @('volume', 'ls', '-q', '--filter', "name=^$($names.Volume)$")).Output)
-    if (@($left | Where-Object { $_ }).Count -gt 0) {
-        Add-Failure "teardown: the isolated daemon $($names.Container) or its volume remains"
-    } else {
+    $before = $script:Failures.Count
+    if ($script:IsolatedId -and (Invoke-Docker @('rm', '--force', '--volumes', $script:IsolatedId)).ExitCode -ne 0) {
+        Add-Failure "teardown: could not remove the isolated daemon $($names.Container)"
+    }
+    if ($script:IsolatedVolumeOwned -and (Invoke-Docker @('volume', 'rm', '--force', $names.Volume)).ExitCode -ne 0) {
+        Add-Failure "teardown: could not remove the isolated daemon's volume $($names.Volume)"
+    }
+    $checks = @()
+    if ($script:IsolatedId) { $checks += , @('container', 'ls', '-a', '-q', '--filter', "id=$($script:IsolatedId)") }
+    if ($script:IsolatedVolumeOwned) { $checks += , @('volume', 'ls', '-q', '--filter', "name=^$($names.Volume)$") }
+    foreach ($listing in $checks) {
+        $left = Invoke-Docker $listing
+        if ($left.ExitCode -ne 0) {
+            Add-Failure "teardown: cannot confirm that the isolated daemon $($names.Container) and its volume are gone"
+        } elseif (@($left.Output).Count -gt 0) {
+            Add-Failure "teardown: the isolated daemon $($names.Container) or its volume remains"
+        }
+    }
+    if ($script:Failures.Count -eq $before) {
         Write-Pass "teardown: the isolated daemon is gone, and every container, volume and image of $($script:Project) with it"
     }
 }
 
-# Copies the chosen nightly dump, its receipts archive, manifest and signature,
-# and the public signing key into the work directory, so the isolated daemon
-# needs no host directory but that one. The files are root-only, so a short
-# container on the host's Docker copies them: the pinned image, no network,
-# the nightly directory and the key read-only.
-function Copy-NightlyDump([string]$Dump, [string]$PublicKey, [string]$Destination) {
-    $nightly = [IO.Path]::GetDirectoryName($Dump)
-    $stem = [IO.Path]::GetFileNameWithoutExtension($Dump)
-    $files = @(Get-ChildItem -LiteralPath $nightly -Filter "$stem.*" -File | ForEach-Object { "/nightly/$($_.Name)" })
+# Runs the pinned image as root on the host's Docker, with no network and
+# $Mounts read-only except the destination, for the two steps that need to
+# read root-only backups. --mount fails on a missing source rather than
+# creating it.
+function Invoke-BackupHelper([string[]]$Mounts, [string[]]$Command) {
+    $arguments = @('run', '--rm', '--network', 'none', '--user', '0:0', '--entrypoint', 'sh')
+    foreach ($mount in $Mounts) { $arguments += @('--mount', $mount) }
+    return Invoke-Docker ($arguments + @($IsolatedImage, '-c') + $Command)
+}
+
+# The file names in the nightly directory, which the backup scheduler's umask
+# leaves readable by root alone.
+function Get-NightlyNames([string]$Nightly) {
+    $listed = Invoke-BackupHelper @("type=bind,source=$Nightly,target=/nightly,readonly") @('ls -1A /nightly')
+    if ($listed.ExitCode -ne 0) { throw 'cannot list BACKUP_DIR/nightly' }
+    return @($listed.Output)
+}
+
+# Copies the chosen dump, its receipts archive, manifest and signature, and
+# the public signing key into the work directory, owned by the operator, so
+# the isolated daemon needs no host directory but that one.
+function Copy-NightlyDump([string]$Nightly, [string]$Dump, [string]$PublicKey, [string]$Destination) {
+    $stem = $Dump.Substring(0, $Dump.Length - '.dump'.Length)
     $owner = "$((& id -u | Out-String).Trim()):$((& id -g | Out-String).Trim())"
-    $copy = Invoke-Docker (@('run', '--rm', '--network', 'none', '--user', '0:0', '--entrypoint', 'sh', '-e', "OWNER=$owner",
-            '-v', "${nightly}:/nightly:ro", '-v', "${PublicKey}:/signing.pub:ro", '-v', "${Destination}:/input",
-            $IsolatedImage, '-c', 'cp -- "$@" /input/ && cp /signing.pub /input/backup-signing-key.pub && chown -R "$OWNER" /input',
-            'copy') + $files)
+    $copy = Invoke-BackupHelper @("type=bind,source=$Nightly,target=/nightly,readonly",
+        "type=bind,source=$PublicKey,target=/signing.pub,readonly", "type=bind,source=$Destination,target=/input") @(
+        'for f in /nightly/"$1".*; do cp -- "$f" /input/; done && cp /signing.pub /input/backup-signing-key.pub && chown -R "$2" /input',
+        'copy', $stem, $owner)
     if ($copy.ExitCode -ne 0) { throw 'copying the nightly dump into the work directory failed' }
 }
 
@@ -755,14 +795,18 @@ function Invoke-Rehearsal {
     } else {
         $backupDir = Read-EnvValue $ConfigPath 'BACKUP_DIR'
         if (-not $backupDir) { throw '-ConfigPath has no BACKUP_DIR' }
-        $dump = Find-NewestSignedDump (Join-Path $backupDir 'nightly')
-        if (-not $dump) { throw 'no signed nightly dump in BACKUP_DIR/nightly; run a backup first' }
-        $publicKey = Join-Path $backupDir 'signing/backup-signing-key.pub'
-        $dumpKind = "nightly $([IO.Path]::GetFileName($dump))"
     }
 
     $docker = Invoke-Docker @('info', '--format', '{{.ServerVersion}}')
     if ($docker.ExitCode -ne 0) { throw 'Docker is not reachable; start it yourself, this script never does' }
+    if (-not $DumpPath) {
+        # The nightly directory is root-only, so a helper container lists it.
+        $nightly = Join-Path $backupDir 'nightly'
+        $dump = Find-NewestSignedDump (Get-NightlyNames $nightly)
+        if (-not $dump) { throw 'no signed nightly dump in BACKUP_DIR/nightly; run a backup first' }
+        $publicKey = Join-Path $backupDir 'signing/backup-signing-key.pub'
+        $dumpKind = "nightly $dump"
+    }
     $script:ProductionBefore = Get-ProjectStatus $ProductionProject
     Write-Pass "production: project $ProductionProject is $($script:ProductionBefore)"
     if ((Get-ProjectStatus $script:Project) -ne 'absent') { throw "project $($script:Project) already exists; remove it or pass another -ProjectName" }
@@ -801,10 +845,10 @@ function Invoke-Rehearsal {
     if ($DumpPath) {
         Copy-Item -LiteralPath $dump -Destination (Join-Path $inputs $name)
     } else {
-        Copy-NightlyDump $dump $publicKey $inputs
+        Copy-NightlyDump $nightly $name $publicKey $inputs
     }
     Start-IsolatedDaemon
-    Write-Pass "isolated: rootless daemon $((Get-IsolatedNames).Container) on its own socket; the host's Docker never gets the candidate's compose file"
+    Write-Pass "isolated: rootless daemon $((Get-IsolatedNames).Container); compose for the candidate runs inside it, never against the host's Docker"
 
     # The allowlist below stays as a second line: it judges the model compose
     # prints, which leaves out a service in an inactive profile, so it is not
@@ -945,7 +989,8 @@ if ($MyInvocation.InvocationName -eq '.') { return }
 $script:Project = $null
 $script:Sha = $null
 $script:Armed = $false
-$script:IsolatedStarted = $false
+$script:IsolatedId = $null
+$script:IsolatedVolumeOwned = $false
 $script:Built = $false
 $script:WorkDir = $null
 $script:WorkDirIdentity = $null
@@ -960,7 +1005,7 @@ try {
     if ($script:Armed) {
         try { Invoke-Teardown } catch { Add-Failure "teardown: $(Get-ErrorText $_)" }
     }
-    if ($script:IsolatedStarted) {
+    if ($script:IsolatedId -or $script:IsolatedVolumeOwned) {
         try { Stop-IsolatedDaemon } catch { Add-Failure "teardown: $(Get-ErrorText $_)" }
     }
     if ($script:WorkDir -and (Test-Path -LiteralPath $script:WorkDir) -and -not (Test-WorkDirIdentity)) {
