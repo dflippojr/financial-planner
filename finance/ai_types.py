@@ -61,11 +61,14 @@ BACKEND_DISPLAY_NAMES = {
     "codex": "Codex",
     "cursor": "Cursor",
 }
+UNKNOWN_BACKEND_LABEL = "Unknown backend"
 
 
-def backend_display_name(backend: str, empty: str) -> str:
+def backend_display_name(backend: str | None, empty: str) -> str:
     # Each caller passes its own empty-value fallback; unknown nonempty IDs show verbatim.
-    return BACKEND_DISPLAY_NAMES.get(backend, backend or empty)
+    if not backend:
+        return empty
+    return BACKEND_DISPLAY_NAMES.get(backend, backend)
 
 
 @dataclass(frozen=True)
