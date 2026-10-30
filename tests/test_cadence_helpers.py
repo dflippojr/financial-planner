@@ -2,11 +2,12 @@
 
 import pytest
 
+from finance import recurring_services
 from finance.bills_calendar import _income_tolerance
 from finance.models import RecurringSeries
 from finance.projection import CADENCE_ONE_TIME
 from finance.recurring_review import cadence_tolerance_days
-from finance.recurring_services import CADENCE_DAYS
+from finance.recurring_services import CADENCE_DAYS, cadence_interval_days
 
 Cadence = RecurringSeries.Cadence
 CASES = [
@@ -25,6 +26,16 @@ def test_every_cadence_is_pinned():
 @pytest.mark.parametrize(("cadence", "interval", "tolerance"), CASES)
 def test_cadence_table(cadence, interval, tolerance):
     assert CADENCE_DAYS[cadence] == (interval, tolerance)
+
+
+@pytest.mark.parametrize(("cadence", "interval", "tolerance"), CASES)
+def test_helpers_read_the_named_fields(cadence, interval, tolerance):
+    assert cadence_interval_days(cadence) == interval
+    assert recurring_services.cadence_tolerance_days(cadence) == tolerance
+
+
+def test_tolerance_has_one_definition():
+    assert cadence_tolerance_days is recurring_services.cadence_tolerance_days
 
 
 @pytest.mark.parametrize(("cadence", "interval", "tolerance"), CASES)

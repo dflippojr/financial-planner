@@ -1592,12 +1592,6 @@
  {
   "file": "finance/recurring_services.py",
   "rule": "reportArgumentType",
-  "message": "Argument of type \"str\" cannot be assigned to parameter \"key\" of type \"Cadence\" in function \"__getitem__\"",
-  "count": 1
- },
- {
-  "file": "finance/recurring_services.py",
-  "rule": "reportArgumentType",
   "message": "Argument of type \"tuple[Unknown | None, Unknown | Literal[-1, 0]]\" cannot be assigned to parameter \"key\" of type \"tuple[Unknown | None, None]\" in function \"__setitem__\"",
   "count": 1
  },

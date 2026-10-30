@@ -19,7 +19,7 @@ from .models import (
     RecurringSeries,
     _person_for,
 )
-from .recurring_services import CADENCE_DAYS, next_charge_date
+from .recurring_services import cadence_tolerance_days, next_charge_date
 
 # A member's AlertSettings.recurring_price_percent; this is its default.
 DEFAULT_PRICE_CHANGE_PERCENT = 10
@@ -54,10 +54,6 @@ def next_expected_date(series):
     # None when there is no charge, or when the last one is so far in the
     # future that the next would fall past the end of the calendar.
     return next_charge_date([row.transaction_date for row in _ordered_transactions(series)], series.cadence)
-
-
-def cadence_tolerance_days(cadence):
-    return CADENCE_DAYS[cadence][1]
 
 
 def _counts_in_review(series):
