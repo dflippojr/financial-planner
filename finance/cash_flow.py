@@ -9,6 +9,7 @@ from django.utils import timezone
 
 from .category_services import income_and_spending_by_window, income_and_spending_totals
 from .models import Account, Category, ImportBatch, Transaction
+from .money_display import format_minor
 from .months import add_months
 
 
@@ -29,11 +30,6 @@ INVESTMENT_NOTICE = (
 
 
 CATEGORY_PALETTE_SIZE = 8
-
-
-def format_minor(amount_minor, currency="USD"):
-    amount = Decimal(amount_minor) / Decimal(100)
-    return f"{amount:,.2f} {currency}"
 
 
 def previous_equal_range(date_from, date_to):

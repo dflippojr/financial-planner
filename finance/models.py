@@ -1,6 +1,6 @@
 import uuid
 from .input_limits import BUDGET_MONTH_FLOOR, MAX_DESCRIPTION_CHARS
-from decimal import Decimal
+from .money_display import format_minor
 from fractions import Fraction
 
 from django.conf import settings
@@ -727,8 +727,7 @@ class Transaction(ArchivableModel):
 
     @property
     def amount_display(self):
-        amount = Decimal(self.amount_minor) / Decimal(100)
-        return f"{amount:,.2f} {self.currency}"
+        return format_minor(self.amount_minor, self.currency)
 
     @property
     def category_display(self):
@@ -944,8 +943,7 @@ class TransactionCorrectionHistory(models.Model):
         return f"Correction of {self.field_name}"
 
     def _amount_display(self, minor):
-        amount = Decimal(minor) / Decimal(100)
-        return f"{amount:,.2f} {self.currency}"
+        return format_minor(minor, self.currency)
 
     @property
     def previous_display(self):
@@ -1067,8 +1065,7 @@ class TransactionSplit(models.Model):
 
     @property
     def amount_display(self):
-        amount = Decimal(self.amount_minor) / Decimal(100)
-        return f"{amount:,.2f} {self.transaction.currency}"
+        return format_minor(self.amount_minor, self.transaction.currency)
 
 
 class RefundLink(models.Model):
@@ -1258,8 +1255,7 @@ class RecurringSeries(models.Model):
 
     @property
     def amount_display(self):
-        amount = Decimal(self.typical_amount_minor) / Decimal(100)
-        return f"{amount:,.2f} {self.currency}"
+        return format_minor(self.typical_amount_minor, self.currency)
 
     @property
     def annual_minor(self):
@@ -1278,13 +1274,11 @@ class RecurringSeries(models.Model):
 
     @property
     def monthly_display(self):
-        amount = Decimal(self.monthly_minor) / Decimal(100)
-        return f"{amount:,.2f} {self.currency}"
+        return format_minor(self.monthly_minor, self.currency)
 
     @property
     def annual_display(self):
-        amount = Decimal(self.annual_minor) / Decimal(100)
-        return f"{amount:,.2f} {self.currency}"
+        return format_minor(self.annual_minor, self.currency)
 
 
 class RecurringSeriesMember(models.Model):
@@ -1568,8 +1562,7 @@ class PlannedItem(models.Model):
 
     @property
     def amount_display(self):
-        amount = Decimal(self.amount_minor) / Decimal(100)
-        return f"{amount:,.2f} {self.currency}"
+        return format_minor(self.amount_minor, self.currency)
 
 
 class SavingsGoalQuerySet(models.QuerySet):
