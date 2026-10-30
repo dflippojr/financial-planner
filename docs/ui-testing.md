@@ -6,7 +6,7 @@ Contract version: 1
 
 Public repo dflippojr/financial-planner. Use only scripts/ui_instance.py from this checkout. Never use Docker, financial-planner production compose, live Postgres, .env, a reused server or an existing browser profile. Python 3.12+, Node 22+, Bash (Git Bash on Windows), gh 2.99+ and playwright-cli are required.
 
-Setup: create .venv (py -3.13 -m venv .venv on Windows), install requirements-test.txt with its Python, python -m playwright install chromium webkit, npm ci, npx playwright install chromium webkit, bash scripts/build_css.sh. Windows Python: .venv/Scripts/python.exe; Linux: .venv/bin/python. No real bank, Google, SMTP or paid AI credentials are needed.
+Setup: create .venv (py -3.13 -m venv .venv on Windows), install requirements-test.lock with its Python, python -m playwright install chromium webkit, npm ci, npx playwright install chromium webkit, bash scripts/build_css.sh. Windows Python: .venv/Scripts/python.exe; Linux: .venv/bin/python. No real bank, Google, SMTP or paid AI credentials are needed.
 
 The launcher refuses inherited DATABASE*, POSTGRES_*, PG*, DB_HOST/DB_NAME/DB_URL/DB_PASSWORD before startup. It uses an allowlisted environment, ui_settings, fresh SQLite db.sqlite3 under system-temp financial-planner-ui-*, and isolated receipts/csv-staging/operator-audit storage. No .env loading. Email is in-memory; operator AI/Google settings are discarded. A fresh loopback fake Agent Harness and owned chat worker replace external models. Do not link providers or sync accounts. Inspect launcher/ui_settings and run python -m pytest tests/test_ui_instance.py -q -m "not browser" before sign-in.
 
