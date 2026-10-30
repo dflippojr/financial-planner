@@ -52,4 +52,5 @@ jobs:
       - run: python -m pip install pip-audit
       # To ignore an advisory that has no fixed release, add
       # --ignore-vuln <ID> here with a dated justification comment.
-      - run: pip-audit -r requirements.txt
+      # The locked versions, not a fresh resolve: they are what the image ships.
+      - run: pip-audit --disable-pip -r requirements.lock

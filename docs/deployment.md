@@ -461,7 +461,7 @@ root causes remain separate performance work.
 
 ## Reviewing a dependency pull request
 
-Dependabot opens version and security update PRs. There is no auto-merge; the owner approves every merge. Keep exact pins in `requirements.txt`. Treat `django-allauth` upgrades as needing the Google sign-in tests as well as the rest of the suite.
+Dependabot opens version and security update PRs. There is no auto-merge; the owner approves every merge. Keep exact pins in `requirements.txt`. Dependabot edits the inputs, not the hashed locks, so the lint job fails until someone runs `bash scripts/lock.sh` on the branch and commits `requirements.lock` and `requirements-test.lock`. Treat `django-allauth` upgrades as needing the Google sign-in tests as well as the rest of the suite.
 
 On the PR branch:
 
