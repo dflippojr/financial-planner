@@ -4,26 +4,16 @@ from datetime import timedelta
 from types import SimpleNamespace
 
 from .cash_flow import GROUPING_MONTH, format_minor, period_label
+from .models import MONTH_STEPS, WEEK_STEP_DAYS
 from .months import add_months, month_end
 
 HORIZONS = (3, 6, 12, 24)
 DEFAULT_HORIZON = 12
 CADENCE_ONE_TIME = "one_time"
-CADENCE_WEEKLY = "weekly"
-CADENCE_BIWEEKLY = "biweekly"
-CADENCE_MONTHLY = "monthly"
-CADENCE_QUARTERLY = "quarterly"
-CADENCE_ANNUAL = "annual"
 KIND_INCOME = "income"
 KIND_EXPENSE = "expense"
 SOURCE_PLANNED = "planned"
 SOURCE_SERIES = "series"
-_WEEK_DAYS = {CADENCE_WEEKLY: 7, CADENCE_BIWEEKLY: 14}
-_CALENDAR_MONTHS = {
-    CADENCE_MONTHLY: 1,
-    CADENCE_QUARTERLY: 3,
-    CADENCE_ANNUAL: 12,
-}
 
 
 def first_projection_month(today):
@@ -38,12 +28,12 @@ def _shift(start, months, anchor_day):
 def _first_on_or_after(start, cadence, window_start, anchor_day=None):
     if start >= window_start:
         return start
-    days = _WEEK_DAYS.get(cadence)
+    days = WEEK_STEP_DAYS.get(cadence)
     if days is not None:
         delta = (window_start - start).days
         steps = (delta + days - 1) // days
         return start + timedelta(days=steps * days)
-    months = _CALENDAR_MONTHS.get(cadence)
+    months = MONTH_STEPS.get(cadence)
     if months is None:
         raise ValueError(f"Unknown cadence {cadence}.")
     total_months = (window_start.year - start.year) * 12 + (window_start.month - start.month)
@@ -56,10 +46,10 @@ def _first_on_or_after(start, cadence, window_start, anchor_day=None):
 
 
 def _advance_from_start(start, current, cadence, anchor_day=None):
-    days = _WEEK_DAYS.get(cadence)
+    days = WEEK_STEP_DAYS.get(cadence)
     if days is not None:
         return current + timedelta(days=days)
-    months = _CALENDAR_MONTHS.get(cadence)
+    months = MONTH_STEPS.get(cadence)
     if months is None:
         raise ValueError(f"Unknown cadence {cadence}.")
     elapsed = (current.year - start.year) * 12 + (current.month - start.month)
