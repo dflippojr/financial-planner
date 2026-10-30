@@ -173,3 +173,37 @@ def test_recurring_series_displays(typical, cadence, currency, amount, monthly, 
 
 def test_cash_flow_keeps_exporting_the_shared_formatter():
     assert format_minor is money_display.format_minor
+
+
+@pytest.mark.parametrize(("minor", "currency", "expected"), CASES)
+def test_recurring_series_amount_display_keeps_the_sign(minor, currency, expected):
+    series = RecurringSeries(
+        typical_amount_minor=minor,
+        cadence=RecurringSeries.Cadence.MONTHLY,
+        currency=currency,
+    )
+    assert series.amount_display == expected
+
+
+@pytest.mark.parametrize(("minor", "currency", "expected"), CASES)
+def test_recurring_series_monthly_display_of_a_monthly_series_drops_the_sign(
+    minor, currency, expected
+):
+    series = RecurringSeries(
+        typical_amount_minor=minor,
+        cadence=RecurringSeries.Cadence.MONTHLY,
+        currency=currency,
+    )
+    assert series.monthly_display == expected.removeprefix("-")
+
+
+@pytest.mark.parametrize(("minor", "currency", "expected"), CASES)
+def test_recurring_series_annual_display_of_an_annual_series_drops_the_sign(
+    minor, currency, expected
+):
+    series = RecurringSeries(
+        typical_amount_minor=minor,
+        cadence=RecurringSeries.Cadence.ANNUAL,
+        currency=currency,
+    )
+    assert series.annual_display == expected.removeprefix("-")
