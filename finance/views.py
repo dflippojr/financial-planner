@@ -1380,7 +1380,7 @@ def transfer_review(request):
 
 
 def _money_display(minor, currency):
-    return f"{Decimal(minor) / Decimal(100):,.2f} {currency}"
+    return format_minor(minor, currency)
 
 
 def _recurring_chart_data(confirmed, monthly_minor, annual_minor, monthly_display, annual_display):
