@@ -8,7 +8,7 @@
 #
 # Like CI, the server keeps its data in memory with durability off; every
 # database here is thrown away. Pass -n 4 to use 4 xdist workers as CI does
-# (pip install -r requirements-test.txt).
+# (pip install -r requirements-test.lock).
 #
 # Usage: scripts/test_postgres.sh [pytest args...]
 set -euo pipefail

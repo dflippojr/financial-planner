@@ -305,14 +305,17 @@ flowchart LR
 Requirements: Python 3.13, and Docker for PostgreSQL tests or the full stack.
 
 ```console
-python -m pip install -r requirements.txt
+python -m pip install --require-hashes --only-binary :all: -r requirements-test.lock
 python manage.py migrate --settings=financial_planner.test_settings
 python -m pytest                  # fast suite on in-memory SQLite
 bash scripts/test_postgres.sh     # same suite on PostgreSQL 18 (needs Docker)
-# browser layout tests: pip install -r requirements-test.txt, python -m playwright install chromium,
-# bash scripts/build_css.sh, then
+# browser layout tests: python -m playwright install chromium, bash scripts/build_css.sh, then
 python -m pytest -m browser -n 4
 ```
+
+`requirements.txt` and `requirements-test.txt` are the hand-edited inputs. After changing one, run
+`bash scripts/lock.sh` and commit `requirements.lock` and `requirements-test.lock`; CI fails if they are
+out of date. The production image installs `requirements.lock`, which has no test tools.
 
 Load synthetic demo records with `python manage.py loaddata synthetic_demo`. Never substitute a real
 statement or transaction export into a committed fixture.
