@@ -23,6 +23,11 @@ ROWS = (
 )
 
 
+def row_date(today, days_ago):
+    """A row's date: budgets count the current month only, so it never reaches back past the first (#607)."""
+    return max(today - timedelta(days=days_ago), today.replace(day=1))
+
+
 def seed_phone_data():
     """Load the synthetic household and add rows, budgets and an alert; return the person."""
     call_command("loaddata", "synthetic_demo", verbosity=0)
@@ -37,7 +42,7 @@ def seed_phone_data():
         transaction = Transaction.objects.create(
             account=account,
             import_batch=batch,
-            transaction_date=today - timedelta(days=days_ago),
+            transaction_date=row_date(today, days_ago),
             amount_minor=amount,
             description=description,
             kind=Transaction.Kind.CASH_FLOW,
