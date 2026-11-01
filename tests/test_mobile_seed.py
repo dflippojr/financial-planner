@@ -45,14 +45,9 @@ def _problems(today):
     return problems
 
 
-def test_the_scanned_dates_cover_a_full_leap_year():
-    assert isleap(2028) and date(2028, 2, 29) in EVERY_DATE and date(2028, 2, 29) in SEEDED_DATES
-    assert len(EVERY_DATE) >= 366
-    assert {day.day for day in SEEDED_DATES} >= set(range(1, 30))
-
-
 @pytest.mark.parametrize("days_ago", sorted({row[0] for row in ROWS}))
 def test_every_row_date_stays_in_the_current_month_and_never_ahead(days_ago):
+    assert isleap(2028) and date(2028, 2, 29) in EVERY_DATE and len(EVERY_DATE) >= 366
     for today in EVERY_DATE:
         day = row_date(today, days_ago)
         assert (day.year, day.month) == (today.year, today.month), today
@@ -62,6 +57,7 @@ def test_every_row_date_stays_in_the_current_month_and_never_ahead(days_ago):
 @pytest.mark.django_db
 def test_seed_holds_on_the_dates_a_calendar_can_break():
     """The failure names each broken date, so a red run reads as a scan's result."""
+    assert date(2028, 2, 29) in SEEDED_DATES and {day.day for day in SEEDED_DATES} >= set(range(1, 30))
     failures = {}
     for today in SEEDED_DATES:
         with patch("django.utils.timezone.localdate", return_value=today), transaction.atomic():
