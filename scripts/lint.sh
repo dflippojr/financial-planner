@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Static analysis, as the lint job in ci.yml runs it: ruff with the rules in
 # pyproject.toml, then pyright in basic mode on finance/ and financial_planner/
-# against pyright-baseline.json. Needs requirements-test.txt.
+# against pyright-baseline.json. Needs requirements-test.lock.
 #
 # Usage: bash scripts/lint.sh
 set -euo pipefail

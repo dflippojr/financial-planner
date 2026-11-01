@@ -36,8 +36,8 @@ WORKDIR /app
 
 RUN addgroup --system app && adduser --system --ingroup app app
 
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.lock ./
+RUN pip install --no-cache-dir --require-hashes --only-binary :all: -r requirements.lock
 
 COPY --chown=app:app . .
 COPY --from=css --chown=app:app /src/static/dist/app.css /app/static/dist/app.css
