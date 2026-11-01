@@ -247,6 +247,8 @@ CSV_FIELDS = {
         "currency",
         "source",
         "note",
+        "net_contribution_minor",
+        "net_contribution_decimal",
     ),
 }
 
