@@ -33,7 +33,7 @@ from .projection import (
     SOURCE_SERIES,
     occurrence_dates,
 )
-from .recurring_services import CADENCE_DAYS
+from .recurring_services import cadence_tolerance_days
 
 logger = logging.getLogger(__name__)
 
@@ -290,7 +290,7 @@ def _income_tolerance(cadence):
     # A one-time item has no cadence to slip against, so only a same-day deposit matches it.
     if cadence == CADENCE_ONE_TIME:
         return 0
-    return CADENCE_DAYS[cadence][1]
+    return cadence_tolerance_days(cadence)
 
 
 def _previous_occurrence(item, on_date):
