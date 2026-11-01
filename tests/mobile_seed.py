@@ -12,7 +12,6 @@ from finance.models import Account, Budget, Category, Household, ImportBatch, Pe
 
 ROWS = (
     # (days ago, amount minor, description, category name or None)
-    # Budgets count the current month only, so a row never reaches back past its first day (#607).
     (1, -8642, "Kroger #512 with an unusually long store description", "Groceries"),
     (1, 269000, "Payroll deposit", None),
     (1, -4118, "Shell Oil 5741", None),
@@ -24,6 +23,11 @@ ROWS = (
 )
 
 
+def row_date(today, days_ago):
+    """A row's date: budgets count the current month only, so it never reaches back past the first (#607)."""
+    return max(today - timedelta(days=days_ago), today.replace(day=1))
+
+
 def seed_phone_data():
     """Load the synthetic household and add rows, budgets and an alert; return the person."""
     call_command("loaddata", "synthetic_demo", verbosity=0)
@@ -33,13 +37,12 @@ def seed_phone_data():
     account = Account.objects.get(name="Synthetic Checking")
     batch = ImportBatch.objects.filter(account=account).first()
     today = timezone.localdate()
-    month = today.replace(day=1)
     categories = {category.name: category for category in Category.objects.filter(household=household)}
     for index, (days_ago, amount, description, category_name) in enumerate(ROWS):
         transaction = Transaction.objects.create(
             account=account,
             import_batch=batch,
-            transaction_date=max(today - timedelta(days=days_ago), month),
+            transaction_date=row_date(today, days_ago),
             amount_minor=amount,
             description=description,
             kind=Transaction.Kind.CASH_FLOW,
@@ -50,6 +53,7 @@ def seed_phone_data():
         category = categories.get(category_name) if category_name else None
         if category is not None:
             assign_category(person.user, transaction.pk, category.pk)
+    month = today.replace(day=1)
     for name, amount in (("Dining", 50_000), ("Groceries", 60_000), ("Transportation", 25_000)):
         category = categories.get(name)
         if category is not None:

@@ -10,22 +10,25 @@ from django.test import Client
 
 from finance.budget_services import dashboard_budget_summary
 from finance.models import Transaction
-from tests.mobile_seed import ROWS, seed_phone_data
+from tests.mobile_seed import ROWS, row_date, seed_phone_data
 
-pytestmark = pytest.mark.django_db
 
-# Every day of the leap year 2028, with the year changes on either side of it.
-FIRST_DAY = date(2027, 12, 1)
-LAST_DAY = date(2029, 1, 31)
+def _days(first, last):
+    return [first + timedelta(days=offset) for offset in range((last - first).days + 1)]
+
+
+# A leap year, with the year changes on either side of it.
+EVERY_DATE = _days(date(2027, 12, 1), date(2029, 1, 31))
+# Seeding takes about 0.2 s, so the whole seed runs on the dates a calendar can break: a new year
+# and a whole leap February, which holds every day of the month from 1 to 29.
+SEEDED_DATES = _days(date(2027, 12, 31), date(2028, 1, 7)) + _days(date(2028, 2, 1), date(2028, 3, 1))
 
 
 def _problems(today):
-    """What the layout tests need from the seed, checked through the pages they open on this date."""
+    """What the layout tests need from the seed, checked through the page they open on this date."""
     person = seed_phone_data()
     problems = []
-    dates = list(
-        Transaction.objects.filter(source_row_number__gte=100).values_list("transaction_date", flat=True)
-    )
+    dates = list(Transaction.objects.filter(source_row_number__gte=100).values_list("transaction_date", flat=True))
     if len(dates) != len(ROWS):
         problems.append(f"{len(dates)} of {len(ROWS)} rows")
     if any(day.replace(day=1) != today.replace(day=1) for day in dates):
@@ -42,18 +45,30 @@ def _problems(today):
     return problems
 
 
-def test_seed_holds_on_every_date():
-    """Scan every date: the failure names each broken date, so a red run reads as the scan's result."""
-    assert isleap(2028) and (LAST_DAY - FIRST_DAY).days + 1 >= 366
+def test_the_scanned_dates_cover_a_full_leap_year():
+    assert isleap(2028) and date(2028, 2, 29) in EVERY_DATE and date(2028, 2, 29) in SEEDED_DATES
+    assert len(EVERY_DATE) >= 366
+    assert {day.day for day in SEEDED_DATES} >= set(range(1, 30))
+
+
+@pytest.mark.parametrize("days_ago", sorted({row[0] for row in ROWS}))
+def test_every_row_date_stays_in_the_current_month_and_never_ahead(days_ago):
+    for today in EVERY_DATE:
+        day = row_date(today, days_ago)
+        assert (day.year, day.month) == (today.year, today.month), today
+        assert day <= today, today
+
+
+@pytest.mark.django_db
+def test_seed_holds_on_the_dates_a_calendar_can_break():
+    """The failure names each broken date, so a red run reads as a scan's result."""
     failures = {}
-    for offset in range((LAST_DAY - FIRST_DAY).days + 1):
-        today = FIRST_DAY + timedelta(days=offset)
+    for today in SEEDED_DATES:
         with patch("django.utils.timezone.localdate", return_value=today), transaction.atomic():
             problems = _problems(today)
             transaction.set_rollback(True)
         if problems:
             failures[today] = problems
-    days_of_month = sorted({day.day for day in failures})
-    summary = [f"{len(failures)} broken dates, on days of the month {days_of_month}:"]
+    summary = [f"{len(failures)} broken dates, on days of the month {sorted({day.day for day in failures})}:"]
     summary += [f"{day.isoformat()}: {'; '.join(problems)}" for day, problems in failures.items()]
     assert not failures, "\n".join(summary)
