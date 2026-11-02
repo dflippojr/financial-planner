@@ -18,6 +18,7 @@ from django.urls import reverse
 from django.utils.html import escape
 
 from finance import category_services, lifecycle_services
+from finance.cash_flow import selected_accounts
 from finance.category_services import (
     confirm_transfer_pair,
     downgrade_unevidenced_auto_marked_pairs,
@@ -27,7 +28,14 @@ from finance.category_services import (
     undo_transfer_pair,
 )
 from finance.csv_import.services import undo_import_batch
-from finance.lifecycle_services import archive_account, delete_account, leave_household
+from finance.lifecycle_services import (
+    archive_account,
+    change_account_share_mode,
+    delete_account,
+    leave_household,
+    share_account,
+    unshare_account,
+)
 from finance.manual_entry_services import add_manual_transaction, delete_manual_transaction
 from finance.models import (
     Account,
@@ -532,6 +540,221 @@ def test_a_members_dropped_link_history_stays_hidden_after_the_link_is_deleted()
         ("linked", "unlinked"),
         ("linked", "unlinked"),
     ]
+
+
+# Sharing a pair's private leg (#579, owner decision 2026-11-02): the pair is now
+# excluded for more members, so the drop rule runs again when an account is
+# shared or its share mode changes. Unsharing and leaving never run it.
+
+
+def _household_totals(person):
+    totals = income_and_spending_totals(person, selected_accounts(person, scope=Account.Scope.HOUSEHOLD, cash_flow_only=True))
+    return totals.income_minor, totals.spending_minor
+
+
+def _marked_private_leg_pair():
+    """The scenario in #579: Bob links the refund, then Alice's private deposit marks the pair."""
+    alice, bob, joint, refund = _household_refund_linked_by_bob(
+        "Synthetic transfer to savings", "Synthetic transfer from checking"
+    )
+    refresh_transfer_pairs(alice)
+    assert TransferPair.objects.get().status == TransferPair.Status.AUTO_MARKED
+    assert _totals(alice) == (2000, 0)
+    assert _totals(bob) == (0, 3000)
+    return alice, bob, refund, Account.objects.get(name="Synthetic Private Savings")
+
+
+def _assert_link_deleted_for_everyone(alice, bob, refund):
+    for person in (alice, bob):
+        assert _totals(person) == (2000, 0)
+        assert _household_totals(person) == (2000, 0)
+    assert not RefundLink.objects.filter(refund=refund).exists()
+    assert not RefundLinkDrop.objects.exists()
+    # Bob sees only the shared row. Alice also keeps the row she alone saw when the pair was marked.
+    assert _visible_link_history(bob, refund) == [("unlinked", "linked"), ("linked", "unlinked")]
+    assert _visible_link_history(alice, refund) == [
+        ("unlinked", "linked"),
+        ("linked", "unlinked"),
+        ("linked", "unlinked"),
+    ]
+
+
+@pytest.mark.parametrize("mode", [Account.ShareMode.CO_OWNED, Account.ShareMode.LENT])
+def test_sharing_a_pairs_private_leg_deletes_the_link_for_every_viewer(mode):
+    alice, bob, refund, savings = _marked_private_leg_pair()
+
+    share_account(alice, savings.pk, mode)
+
+    _assert_link_deleted_for_everyone(alice, bob, refund)
+
+
+def test_changing_the_share_mode_of_a_pairs_leg_runs_the_rule_again():
+    """An account shared before this rule existed has a stale link; the mode change repairs it."""
+    alice, bob, refund, savings = _marked_private_leg_pair()
+    household = refund.account.household
+    Account.objects.filter(pk=savings.pk).update(
+        scope=Account.Scope.HOUSEHOLD, household=household, share_mode=Account.ShareMode.CO_OWNED
+    )
+    assert _totals(bob) == (0, -2000)
+
+    change_account_share_mode(alice, savings.pk, Account.ShareMode.LENT)
+
+    _assert_link_deleted_for_everyone(alice, bob, refund)
+
+
+def test_changing_the_share_mode_after_the_share_changes_nothing_more():
+    alice, bob, refund, savings = _marked_private_leg_pair()
+    share_account(alice, savings.pk, Account.ShareMode.CO_OWNED)
+
+    change_account_share_mode(alice, savings.pk, Account.ShareMode.LENT)
+
+    _assert_link_deleted_for_everyone(alice, bob, refund)
+
+
+def test_the_share_tells_the_actor_nothing_about_a_private_refund_they_cannot_see():
+    alice = make_person("alice")
+    bob = make_person("bob")
+    household = make_household(alice, bob)
+    joint = make_account(alice, name="Synthetic Joint", scope=Account.Scope.HOUSEHOLD, household=household)
+    savings = make_account(alice, name="Synthetic Private Savings", account_type=Account.Type.SAVINGS)
+    bob_card = make_account(bob, name="Synthetic Bob Card")
+    purchase = make_transaction(alice, joint, amount_minor=-5000, description="Synthetic transfer to savings")
+    refund = make_transaction(bob, bob_card, amount_minor=2000, description="Synthetic return credit")
+    link_refund(bob, refund.pk, purchase.pk)
+    make_transaction(alice, savings, amount_minor=5000, description="Synthetic transfer from checking")
+    refresh_transfer_pairs(alice)
+    assert RefundLink.objects.filter(refund=refund).exists()
+    assert _totals(bob) == (0, 3000)
+    events_before = set(AuditEvent.objects.values_list("pk", flat=True))
+
+    share_account(alice, savings.pk, Account.ShareMode.CO_OWNED)
+
+    assert not RefundLink.objects.filter(refund=refund).exists()
+    assert _totals(bob) == (2000, 0)
+    assert _totals(alice) == (0, 0)
+    assert _visible_link_history(bob, refund) == [("unlinked", "linked"), ("linked", "unlinked")]
+    assert _visible_link_history(alice, refund) == []
+    new_events = AuditEvent.objects.exclude(pk__in=events_before)
+    assert not new_events.filter(target_type=AuditEvent.TargetType.TRANSACTION, target_id=refund.pk).exists()
+
+
+def _household_refund_of_a_pair_with_two_private_legs():
+    """Alice sees both private legs, so the link stops counting for her alone."""
+    alice = make_person("alice")
+    bob = make_person("bob")
+    household = make_household(alice, bob)
+    joint = make_account(alice, name="Synthetic Joint", scope=Account.Scope.HOUSEHOLD, household=household)
+    checking = make_account(alice, name="Synthetic Private Checking")
+    savings = make_account(alice, name="Synthetic Private Savings", account_type=Account.Type.SAVINGS)
+    purchase = make_transaction(alice, checking, amount_minor=-5000, description="Synthetic transfer to savings")
+    refund = make_transaction(alice, joint, amount_minor=2000, description="Synthetic return credit")
+    link_refund(alice, refund.pk, purchase.pk)
+    make_transaction(alice, savings, amount_minor=5000, description="Synthetic transfer from checking")
+    refresh_transfer_pairs(alice)
+    assert RefundLinkDrop.objects.filter(person=alice).count() == 1
+    assert _totals(alice) == (2000, 0)
+    return alice, bob, joint, savings, refund
+
+
+def _link_state(refund):
+    return (
+        list(RefundLink.objects.filter(refund=refund).values_list("pk", "original_id")),
+        list(RefundLinkDrop.objects.order_by("pk").values_list("pk", "link_id", "person_id", "pair_id")),
+        list(TransactionCorrectionHistory.objects.filter(transaction=refund).order_by("pk").values_list("pk", flat=True)),
+    )
+
+
+def test_sharing_one_leg_keeps_the_link_while_another_viewer_still_cannot_see_the_other():
+    alice, bob, _joint, savings, refund = _household_refund_of_a_pair_with_two_private_legs()
+    before = _link_state(refund)
+    bob_spending = _totals(bob)[1]
+
+    share_account(alice, savings.pk, Account.ShareMode.CO_OWNED)
+
+    assert _link_state(refund) == before
+    assert _totals(alice) == (2000, 0)
+    assert _totals(bob)[1] == bob_spending
+
+
+def test_unsharing_the_refunds_account_leaves_an_existing_drop_in_place():
+    """Owner decision 2026-11-02: Alice alone sees the refund now, yet the rule does not run again."""
+    alice, _bob, joint, _savings, refund = _household_refund_of_a_pair_with_two_private_legs()
+    before = _link_state(refund)
+
+    unshare_account(alice, joint.pk)
+
+    assert _link_state(refund) == before
+    assert _totals(alice) == (2000, 0)
+
+
+def test_unsharing_a_pairs_leg_leaves_an_existing_drop_in_place():
+    alice, _bob, _joint, savings, refund = _household_refund_of_a_pair_with_two_private_legs()
+    share_account(alice, savings.pk, Account.ShareMode.CO_OWNED)
+    before = _link_state(refund)
+
+    unshare_account(alice, savings.pk)
+
+    assert _link_state(refund) == before
+    assert _totals(alice) == (2000, 0)
+
+
+@pytest.mark.parametrize("leaver", ["alice", "bob"])
+def test_leaving_the_household_leaves_an_existing_drop_in_place(leaver):
+    """Owner decision 2026-11-02, for the member who holds the drop and for another."""
+    alice, bob, _joint, _savings, refund = _household_refund_of_a_pair_with_two_private_legs()
+    before = _link_state(refund)
+
+    leave_household(alice if leaver == "alice" else bob)
+
+    assert _link_state(refund) == before
+    assert _totals(alice)[1] == 0
+
+
+def test_a_link_deleted_by_a_share_does_not_come_back_on_unshare():
+    alice, bob, refund, savings = _marked_private_leg_pair()
+    share_account(alice, savings.pk, Account.ShareMode.CO_OWNED)
+    before = _link_state(refund)
+
+    unshare_account(alice, savings.pk)
+
+    assert _link_state(refund) == before
+    assert not RefundLink.objects.filter(refund=refund).exists()
+    assert _totals(bob) == (2000, 5000)
+
+
+def _refund_in_a_third_account_of_a_private_leg_pair():
+    alice = make_person("alice")
+    bob = make_person("bob")
+    household = make_household(alice, bob)
+    shared = {"scope": Account.Scope.HOUSEHOLD, "household": household}
+    joint = make_account(alice, name="Synthetic Joint", **shared)
+    card = make_account(bob, name="Synthetic Card", **shared)
+    savings = make_account(alice, name="Synthetic Private Savings", account_type=Account.Type.SAVINGS)
+    purchase = make_transaction(alice, joint, amount_minor=-5000, description="Synthetic transfer to savings")
+    refund = make_transaction(bob, card, amount_minor=2000, description="Synthetic return credit")
+    link_refund(bob, refund.pk, purchase.pk)
+    make_transaction(alice, savings, amount_minor=5000, description="Synthetic transfer from checking")
+    refresh_transfer_pairs(alice)
+    return alice, joint, card, savings, refund
+
+
+@pytest.mark.parametrize("change", ["share", "share_mode"])
+def test_changing_a_legs_sharing_locks_the_counterpart_and_refund_accounts_first(monkeypatch, change):
+    """The rule writes history on a refund reached only through the pair's other leg."""
+    alice, joint, card, savings, refund = _refund_in_a_third_account_of_a_private_leg_pair()
+    if change == "share_mode":
+        Account.objects.filter(pk=savings.pk).update(
+            scope=Account.Scope.HOUSEHOLD, household=joint.household, share_mode=Account.ShareMode.CO_OWNED
+        )
+    locked = _spy_on_account_locks(monkeypatch)
+
+    if change == "share":
+        share_account(alice, savings.pk, Account.ShareMode.CO_OWNED)
+    else:
+        change_account_share_mode(alice, savings.pk, Account.ShareMode.LENT)
+
+    assert {joint.pk, card.pk} <= set(locked)
+    assert not RefundLink.objects.filter(refund=refund).exists()
 
 
 # Archiving writes history on the refunds of its originals, which may sit in
