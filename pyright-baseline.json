@@ -1256,12 +1256,6 @@
  {
   "file": "finance/monthly_review.py",
   "rule": "reportAttributeAccessIssue",
-  "message": "Cannot access attribute \"excluding_income_and_spending\" for class \"BaseManager[TransferPair]\"",
-  "count": 1
- },
- {
-  "file": "finance/monthly_review.py",
-  "rule": "reportAttributeAccessIssue",
   "message": "Cannot access attribute \"isoformat\" for class \"object\"",
   "count": 2
  },
@@ -1941,12 +1935,6 @@
   "file": "finance/transaction_filters.py",
   "rule": "reportAttributeAccessIssue",
   "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Transaction]\"",
-  "count": 1
- },
- {
-  "file": "finance/unusual_spending.py",
-  "rule": "reportAttributeAccessIssue",
-  "message": "Cannot access attribute \"excluding_income_and_spending\" for class \"BaseManager[TransferPair]\"",
   "count": 1
  },
  {

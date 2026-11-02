@@ -22,6 +22,7 @@ from .cash_flow import (
     spending_by_category_report,
     spending_category_detail_url,
 )
+from .category_services import excluded_transfer_ids as _excluded_transfer_ids
 from .category_services import income_and_spending_totals
 from .models import (
     Account,
@@ -33,7 +34,6 @@ from .models import (
     RecurringSeries,
     SavingsGoal,
     Transaction,
-    TransferPair,
 )
 from .months import add_months, month_end, month_start
 from .net_worth import net_worth_report
@@ -387,14 +387,6 @@ def _net_worth_facts(principal, start, end):
         "net_worth_change_minor": change_minor,
         "net_worth_change_display": "—" if change_minor is None else format_minor(change_minor),
         "net_worth_url": _net_worth_url(start, end),
-    }
-
-
-def _excluded_transfer_ids(principal):
-    return {
-        tx_id
-        for pair in TransferPair.objects.excluding_income_and_spending().visible_to(principal)
-        for tx_id in (pair.leg_a_id, pair.leg_b_id)
     }
 
 

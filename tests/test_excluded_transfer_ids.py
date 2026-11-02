@@ -12,7 +12,7 @@ from datetime import date
 import pytest
 from django.utils import timezone
 
-from finance import monthly_review, unusual_spending
+from finance import category_services, monthly_review, unusual_spending
 from finance.models import Account, Transaction, TransferPair
 from tests.test_categorization import make_account, make_household, make_person, make_transaction
 
@@ -90,3 +90,8 @@ def test_owner_sees_the_pair_with_their_private_leg_as_well(world):
 def test_unmarked_and_archived_pairs_are_excluded_for_nobody(world):
     for viewer in (world["owner"], world["member"]):
         assert not _excluded_ids(viewer) & world["unmarked"]
+
+
+def test_both_reports_share_one_definition():
+    assert unusual_spending._excluded_transfer_ids is category_services.excluded_transfer_ids
+    assert monthly_review._excluded_transfer_ids is category_services.excluded_transfer_ids
