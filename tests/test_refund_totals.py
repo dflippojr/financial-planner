@@ -548,7 +548,9 @@ def test_a_members_dropped_link_history_stays_hidden_after_the_link_is_deleted()
 
 
 def _household_totals(person):
-    totals = income_and_spending_totals(person, selected_accounts(person, scope=Account.Scope.HOUSEHOLD, cash_flow_only=True))
+    totals = income_and_spending_totals(
+        person, accounts=selected_accounts(person, scope=Account.Scope.HOUSEHOLD, cash_flow_only=True)
+    )
     return totals.income_minor, totals.spending_minor
 
 

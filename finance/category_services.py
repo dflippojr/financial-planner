@@ -738,6 +738,48 @@ def drop_refund_links_for_pair(links, pair, legs, actor):
         _delete_refund_links(deleted, actor)
 
 
+def _marked_pairs_touching_account(account_id):
+    marked = TransferPair.objects.excluding_income_and_spending()  # pyright: ignore[reportAttributeAccessIssue] - QuerySet.as_manager() is untyped, as for the other excluding_income_and_spending calls in the baseline
+    return marked.filter(Q(leg_a__account_id=account_id) | Q(leg_b__account_id=account_id))
+
+
+def account_ids_for_refund_link_rule(account_id):
+    """Accounts `reapply_refund_link_drops_for_account` reads or writes for this account.
+
+    The other leg's account, and the account of any refund linked to either leg,
+    which can be neither leg's account and is reached only through the pair.
+    """
+    legs = set()
+    for leg_ids in _marked_pairs_touching_account(account_id).values_list("leg_a_id", "leg_b_id"):
+        legs.update(leg_ids)
+    if not legs:
+        return set()
+    legs_and_refunds = Q(pk__in=legs) | Q(refund_link__original_id__in=legs)
+    return set(Transaction.objects.filter(legs_and_refunds).values_list("account_id", flat=True))
+
+
+def reapply_refund_link_drops_for_account(account_id, actor):
+    """Run the drop rule again for marked pairs with a leg in this account (#579).
+
+    Sharing a leg's account, or changing its share mode, can make the pair
+    excluded for more members, so a link standing for them no longer has a
+    counted original. Owner decision 2026-11-02: only these two changes run it.
+    Unsharing and leaving do not, so they neither delete a link nor touch a
+    `RefundLinkDrop`. The caller has saved the account and holds the locks of
+    `account_ids_for_refund_link_rule`; legs are read here so that their accounts
+    show the new scope.
+    """
+    pairs = (
+        _marked_pairs_touching_account(account_id)
+        .select_for_update(of=("self",))
+        .select_related("leg_a__account", "leg_b__account")
+        .order_by("pk")
+    )
+    for pair in pairs:
+        links = _locked_refund_links((pair.leg_a_id, pair.leg_b_id))
+        drop_refund_links_for_pair(links, pair, (pair.leg_a, pair.leg_b), actor)
+
+
 def restore_refund_links_for_pair(pair, actor):
     """Clear the drops an unmarked pair made, so those links count again (#570).
 
