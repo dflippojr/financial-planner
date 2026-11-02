@@ -16,7 +16,7 @@ accounts private inside a shared household.
 
 | Status | Scope | Process |
 |---|---|---|
-| In production on a home server, used daily by a two-person household | ~37k lines of application code, ~41k lines of tests, 59 schema migrations | 100+ merged pull requests, each tied to a specified GitHub issue and reviewed before merge |
+| Deployed on a home server; not yet in daily household use | ~37k lines of application code, ~41k lines of tests, 59 schema migrations | 100+ merged pull requests, each tied to a specified GitHub issue and reviewed before merge |
 
 ---
 
