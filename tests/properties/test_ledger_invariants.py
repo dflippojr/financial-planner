@@ -25,6 +25,7 @@ from finance.category_services import confirm_transfer_pair, link_refund, undo_t
 from finance.csv_import.parser import Mapping
 from finance.csv_import.services import undo_import_batch
 from finance.export import minor_from_decimal_string, money_decimal
+from finance.lifecycle_services import change_account_share_mode, share_account
 from finance.models import Account, ImportBatch, RefundLink, TransferPair
 from finance.transaction_export import iter_transaction_csv
 from finance.transaction_filters import visible_transaction_queryset
@@ -348,6 +349,25 @@ def test_a_refund_reduces_spending_only_when_its_original_was_counted(case):
         assert ledger.totals(owner, household) == ledger.Totals(income, spending, income - spending)
 
 
+# How a private savings leg joins the household after the links exist (#579). The
+# last case stands for an account shared before the rule ran on a share, which
+# only a later share-mode change can repair.
+SHARE_AFTER_LINKING = (None, "share", "share_lent", "share_then_change_mode", "shared_earlier_then_change_mode")
+
+
+def _share_savings_after_linking(owner, savings, household, how):
+    if how == "shared_earlier_then_change_mode":
+        Account.objects.filter(pk=savings.pk).update(
+            scope=Account.Scope.HOUSEHOLD, household=household, share_mode=Account.ShareMode.CO_OWNED
+        )
+    elif how == "share_lent":
+        share_account(owner, savings.pk, Account.ShareMode.LENT)
+    elif how is not None:
+        share_account(owner, savings.pk, Account.ShareMode.CO_OWNED)
+    if how in ("share_then_change_mode", "shared_earlier_then_change_mode"):
+        change_account_share_mode(owner, savings.pk, Account.ShareMode.LENT)
+
+
 @st.composite
 def later_exclusion_cases(draw):
     transfer = draw(st.integers(1, MAX_MINOR))
@@ -367,14 +387,19 @@ def later_exclusion_cases(draw):
     late = draw(st.booleans())
     # The pair is undone at the end, which brings back the links it dropped but not those it deleted.
     unpair = draw(st.booleans())
+    # The private savings leg is shared after the links, which ends in the household case (#579).
+    share = draw(st.sampled_from(SHARE_AFTER_LINKING)) if private else None
     refund_cases = tuple(zip(refunds, originals, by_member, strict=True))
-    return transfer, tuple(kept), tuple(undone), refund_cases, wording, private, late, unpair
+    return transfer, tuple(kept), tuple(undone), refund_cases, wording, private, late, unpair, share
 
 
 @given(later_exclusion_cases())
 # A private-leg pair drops the owner's link, and undoing the pair must bring it back.
-@example((2, (), (), ((1, 0, False),), False, True, False, True))
-@example((2, (), (), ((1, 0, True),), True, True, True, True))
+@example((2, (), (), ((1, 0, False),), False, True, False, True, None))
+@example((2, (), (), ((1, 0, True),), True, True, True, True, None))
+# The scenario in #579: the member links, the pair is marked, the owner shares the savings leg.
+@example((2, (), (), ((1, 0, True),), True, True, False, False, "share"))
+@example((2, (), (), ((1, 0, True),), True, True, False, False, "shared_earlier_then_change_mode"))
 def test_a_refund_stops_reducing_spending_when_its_original_stops_counting(case):
     """The original becomes a transfer leg or its import is undone, before or after the link (#570).
 
@@ -383,8 +408,10 @@ def test_a_refund_stops_reducing_spending_when_its_original_stops_counting(case)
     household scope count both, whichever member linked the refund and when.
     Undoing the pair then restores the owner's dropped links, so the owner
     counts the private leg pair as the member does plus the savings deposit.
+    Sharing the savings leg after the links, or changing its share mode, ends
+    as if it had been a household account all along (#579).
     """
-    transfer, kept, undone, refunds, wording, private, late, unpair = case
+    transfer, kept, undone, refunds, wording, private, late, unpair, share = case
     day = date(2026, 8, 10)
     out_name, in_name = ("SYN TRANSFER TO SAVINGS", "SYN TRANSFER FROM CHECKING") if wording else ("SYN MOVE OUT", "SYN MOVE IN")
     undone_rows = [Row(day, -size, f"SYN UNDONE N{i}", "", f"SYN-U{i:04d}") for i, size in enumerate(undone)]
@@ -427,6 +454,7 @@ def test_a_refund_stops_reducing_spending_when_its_original_stops_counting(case)
             confirm_transfer_pair(owner, pair.pk)
         if late:
             linked = link_all()
+        _share_savings_after_linking(owner, accounts["savings"], household, share)
         if undone_import is not None:
             undo_import_batch(owner, accounts["checking"].pk, undone_import.batch.pk)
         if unpair:
@@ -437,13 +465,14 @@ def test_a_refund_stops_reducing_spending_when_its_original_stops_counting(case)
         income = sum(size for size, original, _m in refunds if original >= len(kept))
         spending = sum(kept) - sum(size for size, original, _m in refunds if original < len(kept))
         owner_view = ledger.Totals(income, spending, income - spending)
-        if unpair and not private:
+        private_leg = private and share is None
+        if unpair and not private_leg:
             # Both members see the deposit and the transfer again; the deleted links stay deleted.
             owner_view = ledger.Totals(income + transfer, spending + transfer, income - spending)
         shared_view = owner_view
         to_transfer = [(i, size) for i, (size, original, _m) in enumerate(refunds) if original == transfer_index]
         still_linked = sum(1 for _s, original, _m in refunds if original < len(kept))
-        if private:
+        if private_leg:
             # Without the savings leg the transfer is spending, and a refund linked to it reduces it.
             linked_to_transfer = sum(size for i, size in to_transfer if i in linked)
             income -= linked_to_transfer

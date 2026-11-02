@@ -1107,7 +1107,8 @@ class RefundLinkDrop(models.Model):
     keeps the link. The member's "linked" -> "unlinked" history row is `only_for`
     them, so it stays hidden from others even after the link itself is deleted.
     Unmarking the pair deletes its drops, so the link counts again for the member
-    once no other marked pair holds a drop on it.
+    once no other marked pair holds a drop on it. Unsharing an account or leaving
+    the household leaves drops in place (#579).
     """
 
     link = models.ForeignKey(RefundLink, on_delete=models.CASCADE, related_name="drops")
