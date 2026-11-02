@@ -169,6 +169,16 @@ def exclusion_exists_for(principal, *, household_only=False):
     )
 
 
+def excluded_transfer_ids(principal):
+    """The leg ids of every excluded transfer pair both of whose legs `principal` sees.
+
+    The set form of `exclusion_exists_for`'s default rule, shared by the reports
+    that need the ids in Python so their income and spending cannot drift apart.
+    """
+    pairs = TransferPair.objects.excluding_income_and_spending().visible_to(principal)  # pyright: ignore[reportAttributeAccessIssue] - QuerySet.as_manager() is untyped, as for the baselined TransferPair.objects call in exclusion_exists_for
+    return {tx_id for pair in pairs for tx_id in (pair.leg_a_id, pair.leg_b_id)}
+
+
 def with_transfer_state(principal, financial_transaction):
     """Attach the viewer-scoped transfer state to an already loaded transaction."""
     financial_transaction._excluded = (
