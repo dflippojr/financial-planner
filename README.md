@@ -16,7 +16,7 @@ accounts private inside a shared household.
 
 | Status | Scope | Process |
 |---|---|---|
-| Deployed on a home server; not yet in daily household use | about 49k lines of application Python, about 66k lines of tests (Python, Nov 2026), over 70 schema migrations | 100+ merged pull requests, each tied to a specified GitHub issue and reviewed before merge |
+| Built for a two-person household; running on a home server | about 49k lines of application Python, about 66k lines of tests (Python, Nov 2026), over 70 schema migrations | 100+ merged pull requests, each tied to a specified GitHub issue and reviewed before merge |
 
 ---
 
