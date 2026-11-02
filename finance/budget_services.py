@@ -13,6 +13,7 @@ from .access import require_person as _person
 from .audit_services import owned_audience, record
 from .cash_flow import _combine_category_spending, format_minor, selected_accounts
 from .category_services import current_household, spending_by_category_by_window
+from .edit_permission_services import check_can_edit
 from .input_limits import BUDGET_MONTH_FLOOR, BUDGET_FUTURE_MONTHS, MAX_CARRY_MONTHS
 from .models import Account, AuditEvent, Budget, BudgetAmount, BudgetRolloverReset, Category
 from .months import add_months, month_end, month_start
@@ -44,15 +45,6 @@ def parse_month(raw, *, today=None):
         return month_start(today)
     return min(max(month_start(parsed), BUDGET_MONTH_FLOOR),
                add_months(month_start(today), BUDGET_FUTURE_MONTHS))
-
-
-def _check_can_edit(person, budget):
-    household = current_household(person)
-    if budget.scope == Budget.Scope.HOUSEHOLD:
-        if household is None or budget.household_id != household.pk:
-            raise PermissionDenied(_DENIED)
-    elif budget.owner_id != person.pk:
-        raise PermissionDenied(_DENIED)
 
 
 def report_scope_for(budget):
@@ -325,7 +317,7 @@ def _ensure_unique_active(person, *, scope, household, category, budget=None):
 def save_budget(principal, payload, *, budget=None):
     person = _person(principal, check_authenticated=False)
     if budget is not None:
-        _check_can_edit(person, budget)
+        check_can_edit(person, budget)
         if budget.scope != payload["scope"] and budget.owner_id != person.pk:
             raise PermissionDenied(_DENIED)
         incoming_category = payload.get("category")
@@ -399,7 +391,7 @@ def save_budget(principal, payload, *, budget=None):
 
 def set_budget_archived(principal, budget, archived):
     person = _person(principal, check_authenticated=False)
-    _check_can_edit(person, budget)
+    check_can_edit(person, budget)
     if archived:
         if budget.status == Budget.Status.ARCHIVED:
             return budget
@@ -446,7 +438,7 @@ def _new_rollover_period_start(budget):
 @transaction.atomic
 def set_budget_rollover(principal, budget, enabled, *, month):
     person = _person(principal, check_authenticated=False)
-    _check_can_edit(person, budget)
+    check_can_edit(person, budget)
     month = validate_budget_month(month)
     was_enabled = budget.rollover_enabled
     if enabled:
@@ -470,7 +462,7 @@ def set_budget_rollover(principal, budget, enabled, *, month):
 
 def reset_budget_rollover(principal, budget, *, month):
     person = _person(principal, check_authenticated=False)
-    _check_can_edit(person, budget)
+    check_can_edit(person, budget)
     month = validate_budget_month(month)
     try:
         with transaction.atomic():

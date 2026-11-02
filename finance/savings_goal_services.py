@@ -10,6 +10,7 @@ from .access import require_person as _person
 from .cash_flow import format_minor
 from .category_services import current_household
 from .audit_services import changed_names, owned_audience, record, snapshot
+from .edit_permission_services import check_can_edit
 from .models import Account, AuditEvent, BalanceSnapshot, SavingsGoal
 from .net_worth import signed_balance_minor
 
@@ -112,15 +113,6 @@ def goal_progress(principal, goal, *, today, household_only=False):
     )
 
 
-def _check_can_edit(person, goal):
-    household = current_household(person)
-    if goal.scope == SavingsGoal.Scope.HOUSEHOLD:
-        if household is None or goal.household_id != household.pk:
-            raise PermissionDenied(_DENIED)
-    elif goal.owner_id != person.pk:
-        raise PermissionDenied(_DENIED)
-
-
 GOAL_AUDIT_FIELDS = {
     "scope": "scope", "name": "name", "target": "target_amount_minor", "date": "target_date",
     "account": "linked_account_id", "amount": "manual_amount_minor", "priority": "priority",
@@ -221,7 +213,7 @@ def save_savings_goal(principal, payload, *, goal=None):
         goal = SavingsGoal(owner=person)
         before = None
     else:
-        _check_can_edit(person, goal)
+        check_can_edit(person, goal)
         if goal.scope != scope and goal.owner_id != person.pk:
             raise PermissionDenied(_DENIED)
         _check_dependents_keep_scope(goal, scope)
@@ -249,7 +241,7 @@ def save_savings_goal(principal, payload, *, goal=None):
 
 def set_savings_goal_completed(principal, goal, completed):
     person = _person(principal, check_authenticated=False)
-    _check_can_edit(person, goal)
+    check_can_edit(person, goal)
     was_completed = goal.completed_at is not None
     goal.completed_at = timezone.now() if completed else None
     with transaction.atomic():
@@ -261,7 +253,7 @@ def set_savings_goal_completed(principal, goal, completed):
 
 def set_savings_goal_archived(principal, goal, archived):
     person = _person(principal, check_authenticated=False)
-    _check_can_edit(person, goal)
+    check_can_edit(person, goal)
     was_archived = goal.status == SavingsGoal.Status.ARCHIVED
     if archived:
         goal.status = SavingsGoal.Status.ARCHIVED
