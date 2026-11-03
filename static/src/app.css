@@ -724,6 +724,13 @@
   margin-top: 0.25rem;
 }
 
+.chat-md li > p,
+.chat-md li > pre,
+.chat-md li > blockquote,
+.chat-md li > .chat-md-table {
+  margin-top: 0.5rem;
+}
+
 .chat-md a {
   text-decoration: underline;
 }

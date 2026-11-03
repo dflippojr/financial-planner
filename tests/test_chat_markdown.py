@@ -138,6 +138,32 @@ def test_each_nested_list_keeps_its_own_type():
     )
 
 
+TABLE_IN_ITEM = (
+    '<div class="chat-md-table" tabindex="0" role="region" aria-label="Table"><table><thead><tr>'
+    '<th scope="col">A</th><th scope="col">B</th><th scope="col">C</th></tr></thead>'
+    "<tbody><tr><td>1</td><td>2</td><td>3</td></tr></tbody></table></div>"
+)
+
+
+def test_a_table_indented_under_a_list_item_renders_in_the_item():
+    source = "1. Spending:\n\n   | A | B | C |\n   |---|---|---|\n   | 1 | 2 | 3 |\n2. Next"
+    assert body(source) == f"<ol><li>Spending:{TABLE_IN_ITEM}</li><li>Next</li></ol>"
+
+
+def test_a_fence_indented_under_a_list_item_is_a_code_block():
+    assert body("- Run this:\n  ```\n  **literal**\n  ```\n- done") == (
+        "<ul><li>Run this:<pre><code>**literal**</code></pre></li><li>done</li></ul>"
+    )
+
+
+def test_list_items_hold_further_paragraphs():
+    assert body("1. one\n\n   second para\n2. two") == "<ol><li>one<p>second para</p></li><li>two</li></ol>"
+
+
+def test_a_third_list_level_is_text_in_the_second():
+    assert body("- a\n  - b\n    - c\n- d") == "<ul><li>a<ul><li>b<br>- c</li></ul></li><li>d</li></ul>"
+
+
 def test_ordered_list_keeps_its_start_and_nests():
     assert body("3. three\n4. four\n   1. sub") == '<ol start="3"><li>three</li><li>four<ol><li>sub</li></ol></li></ol>'
 

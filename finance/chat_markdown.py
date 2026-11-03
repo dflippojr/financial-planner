@@ -19,6 +19,8 @@ from django.utils.safestring import mark_safe
 
 # Block quotes nest at most this deep; a deeper ">" is shown as text, which also bounds recursion.
 MAX_QUOTE_DEPTH = 3
+# Lists nest at most this deep (a list and one nested level); a deeper marker is shown as text.
+MAX_LIST_DEPTH = 2
 # Emphasis nests at most this deep; anything inside the last level is shown as text.
 MAX_INLINE_DEPTH = 6
 
@@ -47,7 +49,7 @@ _URL_REFUSED = frozenset("\\\"'<>`")
 def render(text):
     """The reply as safe HTML: one div.chat-md holding only markup built from the subset."""
     lines = str(text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    return mark_safe('<div class="chat-md">' + "".join(_blocks(lines, 0)) + "</div>")  # noqa: S308 - every literal is escaped by _text; tags come only from this module
+    return mark_safe('<div class="chat-md">' + "".join(_blocks(lines, 0, 0)) + "</div>")  # noqa: S308 - every literal is escaped by _text; tags come only from this module
 
 
 def safe_href(url):
@@ -150,19 +152,20 @@ def _table_starts(lines, i):
     return len(header) == len(delimiter) and all(_DELIMITER_CELL.fullmatch(cell) for cell in delimiter)
 
 
-def _starts_block(lines, i, depth):
+def _starts_block(lines, i, depth, lists):
     line = lines[i]
     return bool(
         _FENCE.match(line)
         or _HEADING.fullmatch(line)
         or _is_rule(line)
         or (depth < MAX_QUOTE_DEPTH and _QUOTE.match(line))
-        or _LIST_ITEM.fullmatch(line)
+        or (lists < MAX_LIST_DEPTH and _LIST_ITEM.fullmatch(line))
         or _table_starts(lines, i)
     )
 
 
-def _blocks(lines, depth):
+def _blocks(lines, depth, lists):
+    """Block markup for lines; depth counts enclosing quotes and lists enclosing lists."""
     out = []
     i = 0
     while i < len(lines):
@@ -178,13 +181,13 @@ def _blocks(lines, depth):
             out.append("<hr>")
             i += 1
         elif depth < MAX_QUOTE_DEPTH and _QUOTE.match(line):
-            i = _quote(lines, i, depth, out)
-        elif item := _LIST_ITEM.fullmatch(line):
-            i = _list(lines, i, item, depth, out)
+            i = _quote(lines, i, depth, lists, out)
+        elif lists < MAX_LIST_DEPTH and (item := _LIST_ITEM.fullmatch(line)):
+            i = _list(lines, i, item, depth, lists, out)
         elif _table_starts(lines, i):
             i = _table(lines, i, out)
         else:
-            i = _paragraph(lines, i, depth, out)
+            i = _paragraph(lines, i, depth, lists, out)
     return out
 
 
@@ -202,91 +205,91 @@ def _code_block(lines, i, fence, out):
     return i
 
 
-def _quote(lines, i, depth, out):
+def _quote(lines, i, depth, lists, out):
     inner = []
     while i < len(lines) and (match := _QUOTE.match(lines[i])):
         inner.append(match[1])
         i += 1
-    out.append("<blockquote>" + "".join(_blocks(inner, depth + 1)) + "</blockquote>")
+    out.append("<blockquote>" + "".join(_blocks(inner, depth + 1, lists)) + "</blockquote>")
     return i
 
 
-def _paragraph(lines, i, depth, out):
+def _paragraph(lines, i, depth, lists, out):
     start = i
     i += 1
-    while i < len(lines) and not _is_blank(lines[i]) and not _starts_block(lines, i, depth):
+    while i < len(lines) and not _is_blank(lines[i]) and not _starts_block(lines, i, depth, lists):
         i += 1
     out.append("<p>" + _lines_html(lines[start:i]) + "</p>")
     return i
 
 
-class _Item:
-    def __init__(self, text):
-        self.lines = [text]
-        self.children = []
-        self.children_ordered = False
-
-
-def _ordered(marker):
-    return marker[0].isdigit()
+def _indent(line):
+    return len(line) - len(line.lstrip(" "))
 
 
 class _List:
-    """One list with at most one nested level; deeper items join the nested level."""
+    """One list. Each item's body (its first line plus indented lines) is parsed as blocks."""
 
     def __init__(self, first):
         self.base = len(first[1])
         self.ordered = _ordered(first[2])
         self.start = int(first[2][:-1]) if self.ordered else 1
         self.items = []
+        self.column = 0
 
-    def take(self, line, after_blank, starts_block):
-        """Add line to the list, or return False when the line ends it."""
+    def opens_item(self, line):
+        """The marker match when line starts a sibling item of this list, else None."""
         item = _LIST_ITEM.fullmatch(line)
-        indent = len(line) - len(line.lstrip(" "))
-        if item and indent < self.base + 2:
-            if _ordered(item[2]) != self.ordered:
-                return False
-            self.items.append(_Item(item[3]))
-            return True
-        last = self.items[-1]
-        if item:
-            if not last.children:
-                last.children_ordered = _ordered(item[2])
-            last.children.append(_Item(item[3]))
-            return True
-        if indent >= self.base + 2 or not (after_blank or starts_block):
-            (last.children[-1] if last.children else last).lines.append(line)
-            return True
-        return False
+        if item and _indent(line) < self.base + 2 and _ordered(item[2]) == self.ordered:
+            return item
+        return None
 
-    def html(self):
+    def add_item(self, item):
+        # Body lines are dedented to the item's content column, so nested blocks parse as blocks.
+        self.column = len(item[1]) + len(item[2]) + 1
+        self.items.append([item[3]])
+
+    def add_line(self, line):
+        self.items[-1].append(line[min(_indent(line), self.column):])
+
+    def html(self, depth, lists):
         tag = "ol" if self.ordered else "ul"
         parts = [f'<ol start="{self.start}">' if self.ordered and self.start != 1 else f"<{tag}>"]
-        for item in self.items:
-            parts.append("<li>" + _lines_html(item.lines))
-            if item.children:
-                child_tag = "ol" if item.children_ordered else "ul"
-                parts.append(f"<{child_tag}>")
-                parts.extend("<li>" + _lines_html(child.lines) + "</li>" for child in item.children)
-                parts.append(f"</{child_tag}>")
-            parts.append("</li>")
+        for body in self.items:
+            blocks = _blocks(body, depth, lists + 1)
+            # A leading paragraph sits directly in the item, as in a tight list.
+            if blocks and blocks[0].startswith("<p>"):
+                blocks[0] = blocks[0][3:-4]
+            parts.append("<li>" + "".join(blocks) + "</li>")
         parts.append(f"</{tag}>")
         return "".join(parts)
 
 
-def _list(lines, i, first, depth, out):
+def _ordered(marker):
+    return marker[0].isdigit()
+
+
+def _list(lines, i, first, depth, lists, out):
     builder = _List(first)
+    builder.add_item(first)
+    i += 1
     blank = False
     while i < len(lines):
-        if _is_blank(lines[i]):
+        line = lines[i]
+        if _is_blank(line):
             blank = True
-        elif builder.take(lines[i], blank, _starts_block(lines, i, depth)):
+        elif item := builder.opens_item(line):
+            builder.add_item(item)
+            blank = False
+        elif _indent(line) >= builder.base + 2 or not (blank or _starts_block(lines, i, depth, lists)):
+            if blank:
+                builder.add_line("")
+            builder.add_line(line)
             blank = False
         else:
             break
         i += 1
-    out.append(builder.html())
+    out.append(builder.html(depth, lists))
     return i
 
 
