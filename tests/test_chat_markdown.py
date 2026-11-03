@@ -85,6 +85,16 @@ def test_bold_italic_and_both():
     )
 
 
+@pytest.mark.parametrize(("source", "html"), [
+    ("**Budget: *on track***", "<p><strong>Budget: <em>on track</em></strong></p>"),
+    ("*italic **bold***", "<p><em>italic <strong>bold</strong></em></p>"),
+    ("**run `a**b` now**", "<p><strong>run <code>a**b</code> now</strong></p>"),
+    ("**a** and **b**", "<p><strong>a</strong> and <strong>b</strong></p>"),
+])
+def test_nested_emphasis_and_code_inside_emphasis(source, html):
+    assert body(source) == html
+
+
 def test_emphasis_ignores_snake_case_and_spaced_arithmetic():
     assert body("account_id_value costs 5 * 3 * 2") == "<p>account_id_value costs 5 * 3 * 2</p>"
 
@@ -120,6 +130,12 @@ def test_headings_never_outrank_the_page(source, html):
 
 def test_unordered_list_with_one_nested_level():
     assert body("- a\n- b\n  - b1\n  - b2\n- c") == "<ul><li>a</li><li>b<ul><li>b1</li><li>b2</li></ul></li><li>c</li></ul>"
+
+
+def test_each_nested_list_keeps_its_own_type():
+    assert body("- Categories\n  - Rent\n- Steps\n  1. Save") == (
+        "<ul><li>Categories<ul><li>Rent</li></ul></li><li>Steps<ol><li>Save</li></ol></li></ul>"
+    )
 
 
 def test_ordered_list_keeps_its_start_and_nests():

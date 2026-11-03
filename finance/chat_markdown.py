@@ -22,17 +22,18 @@ MAX_QUOTE_DEPTH = 3
 # Emphasis nests at most this deep; anything inside the last level is shown as text.
 MAX_INLINE_DEPTH = 6
 
-# Inline matches are bounded so each start position does a fixed amount of work (no ReDoS).
-_SPAN = r"(?:.{0,998}?\S)?"
+# Inline matches are bounded so each start position does a fixed amount of work (no ReDoS). An
+# emphasis body steps over single-backtick code spans whole, so a "**" inside code never closes it.
+_BODY = r"(?:`[^`]{1,200}`|[^`]){1,1000}?"
 _INLINE = re.compile(
     r"\\(?P<esc>[!-/:-@\[-`{-~])"
     r"|(?<!`)(?P<tick>`+)(?!`)(?P<code>.{1,1000}?)(?<!`)(?P=tick)(?!`)"
     r"|\[(?P<label>[^\[\]]{1,500})\]\((?P<url>[^\s()]{1,2048})\)"
-    r"|\*\*\*(?P<both>\S" + _SPAN + r")\*\*\*"
-    r"|\*\*(?P<strong>\S" + _SPAN + r")\*\*"
-    r"|(?<!\w)__(?P<strong2>\S" + _SPAN + r")__(?!\w)"
-    r"|(?<!\*)\*(?P<em>[^\s*](?:.{0,998}?[^\s*])?)\*(?!\*)"
-    r"|(?<!\w)_(?P<em2>[^\s_](?:.{0,998}?[^\s_])?)_(?!\w)"
+    r"|\*\*\*(?P<both>(?=\S)" + _BODY + r"(?<=\S))\*\*\*(?!\*)"
+    r"|\*\*(?P<strong>(?=\S)" + _BODY + r"(?<=\S))\*\*(?!\*)"
+    r"|(?<!\w)__(?P<strong2>(?=\S)" + _BODY + r"(?<=\S))__(?!\w)"
+    r"|(?<!\*)\*(?P<em>(?=[^\s*])" + _BODY + r"(?:(?<=[^\s*])|(?<=\*\*)))\*(?!\*)"
+    r"|(?<!\w)_(?P<em2>(?=[^\s_])" + _BODY + r"(?<=[^\s_]))_(?!\w)"
 )
 
 _FENCE = re.compile(r" {0,3}(`{3,}|~{3,})")
@@ -223,6 +224,7 @@ class _Item:
     def __init__(self, text):
         self.lines = [text]
         self.children = []
+        self.children_ordered = False
 
 
 def _ordered(marker):
@@ -237,7 +239,6 @@ class _List:
         self.ordered = _ordered(first[2])
         self.start = int(first[2][:-1]) if self.ordered else 1
         self.items = []
-        self.nested_ordered = False
 
     def take(self, line, after_blank, starts_block):
         """Add line to the list, or return False when the line ends it."""
@@ -251,7 +252,7 @@ class _List:
         last = self.items[-1]
         if item:
             if not last.children:
-                self.nested_ordered = _ordered(item[2])
+                last.children_ordered = _ordered(item[2])
             last.children.append(_Item(item[3]))
             return True
         if indent >= self.base + 2 or not (after_blank or starts_block):
@@ -262,10 +263,10 @@ class _List:
     def html(self):
         tag = "ol" if self.ordered else "ul"
         parts = [f'<ol start="{self.start}">' if self.ordered and self.start != 1 else f"<{tag}>"]
-        child_tag = "ol" if self.nested_ordered else "ul"
         for item in self.items:
             parts.append("<li>" + _lines_html(item.lines))
             if item.children:
+                child_tag = "ol" if item.children_ordered else "ul"
                 parts.append(f"<{child_tag}>")
                 parts.extend("<li>" + _lines_html(child.lines) + "</li>" for child in item.children)
                 parts.append(f"</{child_tag}>")
