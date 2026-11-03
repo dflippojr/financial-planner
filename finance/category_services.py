@@ -886,12 +886,14 @@ def _restore_refund_categories(original, actor, record_history=_record_text_hist
             Transaction.objects.filter(refund_link__original=original, status=Transaction.Status.ACTIVE),
         )
         .select_for_update(of=("self",))
-        .select_related("account", "category", "refund_link__original_part__category")
+        .select_related("account", "category")
         .order_by("pk")
     )
+    links = RefundLink.objects.filter(original=original).select_related("refund", "original_part__category")
+    parts = {link.refund.pk: link.original_part for link in links}
     whole_category = None if original.category_id is None else Category.objects.get(pk=original.category_id)
     for refund in refunds:
-        part = refund.refund_link.original_part
+        part = parts.get(refund.pk)
         new_category = whole_category if part is None else part.category
         if refund.category != new_category:
             apply_inherited_category(actor, refund, new_category, record_history)
@@ -1279,10 +1281,15 @@ def _visible_pair(principal, pair_id):
 
 
 def _record_pair_event(person, leg, action, pair):
-    # Transfer confirm/dismiss/undo is a member decision on the first leg's account.
+    # Transfer confirm/dismiss/undo is a member decision, recorded on the given leg's
+    # account unless a viewer there cannot see the other leg: then on the other
+    # leg's account, so the event reveals the pair to no one who cannot see it (#580).
+    other = pair.leg_b if leg.pk == pair.leg_a_id else pair.leg_a
+    if not _account_viewer_ids(leg.account) <= _account_viewer_ids(other.account):
+        leg, other = other, leg
     record(person, action, AuditEvent.TargetType.TRANSACTION, leg.pk,
            audience={"account": Account(pk=leg.account_id)}, fields=("kind",),
-           metadata={"transaction_id": pair.leg_b_id if leg.pk == pair.leg_a_id else pair.leg_a_id})
+           metadata={"transaction_id": other.pk})
 
 
 @transaction.atomic

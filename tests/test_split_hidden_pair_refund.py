@@ -22,7 +22,7 @@ pytestmark = pytest.mark.django_db
 
 
 class Scenario:
-    def __init__(self, *, private_leg=True):
+    def __init__(self, *, private_leg=True, inflow_first=False):
         self.alice = make_person("alice")
         self.bob = make_person("bob")
         household = make_household(self.alice, self.bob)
@@ -30,9 +30,7 @@ class Scenario:
         self.dining = household.categories.get(name="Dining")
         self.housing = household.categories.get(name="Housing")
         joint = make_account(self.bob, name="Synthetic Joint", scope=Account.Scope.HOUSEHOLD, household=household)
-        self.purchase = make_transaction(self.bob, joint, amount_minor=-5000, description="Synthetic market")
-        self.refund = make_transaction(self.bob, joint, amount_minor=2000, description="Synthetic market refund")
-        self.other_account = (
+        other_account = (
             make_account(self.alice, name="Synthetic Alice Savings", account_type=Account.Type.SAVINGS)
             if private_leg
             else make_account(
@@ -43,7 +41,12 @@ class Scenario:
                 household=household,
             )
         )
-        self.inflow = make_transaction(self.alice, self.other_account, amount_minor=5000, description="Synthetic in")
+        if inflow_first:
+            self.inflow = make_transaction(self.alice, other_account, amount_minor=5000, description="Synthetic in")
+        self.purchase = make_transaction(self.bob, joint, amount_minor=-5000, description="Synthetic market")
+        self.refund = make_transaction(self.bob, joint, amount_minor=2000, description="Synthetic market refund")
+        if not inflow_first:
+            self.inflow = make_transaction(self.alice, other_account, amount_minor=5000, description="Synthetic in")
 
     def mark_pair(self, category=None):
         """Marked after the purchase is categorized, so the snapshot holds `category`."""
@@ -198,3 +201,16 @@ def test_undoing_a_pair_everyone_sees_still_records_for_everyone():
     assert _category_rows(scene.bob, scene.refund)[-1] == ("Dining", "Groceries")
     assert _category_rows(scene.alice, scene.refund)[-1] == ("Dining", "Groceries")
     assert _refund_audit_events(scene.refund) == events + 1
+
+
+@pytest.mark.parametrize("inflow_first", [True, False])
+def test_undoing_a_hidden_pair_writes_no_event_the_other_member_can_read(inflow_first):
+    scene = Scenario(inflow_first=inflow_first)
+    scene.mark_pair()
+    bob_events = set(AuditEvent.objects.visible_to(scene.bob).values_list("pk", flat=True))
+    alice_events = set(AuditEvent.objects.visible_to(scene.alice).values_list("pk", flat=True))
+
+    undo_transfer_pair(scene.alice, scene.pair.pk)
+
+    assert not AuditEvent.objects.visible_to(scene.bob).exclude(pk__in=bob_events).exists()
+    assert AuditEvent.objects.visible_to(scene.alice).exclude(pk__in=alice_events).count() == 1
