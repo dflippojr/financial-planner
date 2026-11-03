@@ -12,10 +12,8 @@ from finance.policy_services import accept_policy, publish_policy
 from tests.browser_support import CSS, SCREEN_DIR, browser, page_session  # noqa: F401
 from tests.test_chat import TOKEN, harness  # noqa: F401
 
-pytestmark = [
-    pytest.mark.django_db(transaction=True),
-    pytest.mark.skipif(not CSS.exists(), reason="CSS must be built"),
-]
+# These tests measure the compiled CSS, so a missing build fails them rather than skipping.
+pytestmark = pytest.mark.django_db(transaction=True)
 
 MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October"]
 COLUMNS = ["Category", *MONTHS, "Synthetic note"]
@@ -51,6 +49,7 @@ LAYOUT_JS = """(scope) => {
 
 
 def _member(url):
+    assert CSS.exists(), "Build the CSS first: bash scripts/build_css.sh"
     person = Person.objects.get(user__username="synthetic_alex")
     accept_policy(person, publish_policy(material=True, body="Synthetic markdown policy"))
     connect_harness(person, base_url=url, token=TOKEN)
