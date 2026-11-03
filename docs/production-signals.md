@@ -29,7 +29,7 @@ $Config = 'D:\financial-planner-config\production.env'
 | Deployed SHA | `X-App-Revision` and every image label match the merged `main` | the last build | owner only: the sweep's `http` fetch reads the body, not headers |
 | Container state and `RestartCount` | all four `running`, count not rising | live | owner only: needs `docker` |
 | Tracebacks per container, last 24 h | 0 | live, over a 24 h window | owner only: needs `docker logs` |
-| Backup status | `state` is `ok` | the last backup run, nightly at 03:30 | owner only: the status file is `key=value` text, which the sweep's `file` fetch cannot parse |
+| Backup status | `state` is `ok` | the last backup run, nightly at 03:30 | owner only: the status file is `key=value` text; the sweep's `file` fetch returns it whole, which is not a time |
 | Balance reconciliation | `counts.mismatch` is 0 | the last SimpleFIN sync, daily at 06:30 | owner only: needs `docker compose exec` |
 
 ## Health
@@ -176,16 +176,9 @@ runs a command, so it covers only `/health/`:
   which is wanted: `background` is not running. The block lists no `public`
   values (the sweep accepts none with whitespace), so a sweep issue never
   shows the body, only that the value was unexpected or the HTTP status class.
-- The deployed SHA is only in the `X-App-Revision` header, which the sweep's
-  `http` fetch cannot read, so the block has no `deployed_sha` signal and
-  sweep issues carry an unknown SHA. Check it by hand under
-  [Health](#health).
-- The backup status file (`/srv/backups/financial-planner/health/status` on
-  the tower) is `key=value` text. The `file` fetch reads JSON or the whole text,
-  and a freshness signal on the whole text cannot be read as a time, so backup
-  freshness stays an owner-run check under [Backup status](#backup-status).
-- Container state, tracebacks and reconciliation need `docker`, which no
-  fetch type runs. They stay owner-run by the owner's decision on #632.
+- No `deployed_sha` signal, so sweep issues for this repo carry an unknown
+  SHA. That and every other check marked "owner only" in the
+  [signal table](#production-signals) stay manual; the table says why.
 
 ```yaml production-signals
 signals:
