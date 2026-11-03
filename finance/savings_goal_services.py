@@ -2,7 +2,6 @@ from types import SimpleNamespace
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.db.models import Case, Value, When
 from django.utils import timezone
 
 from .access import DENIED as _DENIED
@@ -12,7 +11,7 @@ from .category_services import current_household
 from .audit_services import changed_names, owned_audience, record, snapshot
 from .edit_permission_services import check_can_edit
 from .models import Account, AuditEvent, BalanceSnapshot, SavingsGoal
-from .net_worth import signed_balance_minor
+from .net_worth import signed_balance_minor, source_rank_expression
 
 SOURCE_SNAPSHOT = "snapshot"
 SOURCE_MANUAL = "manual"
@@ -45,18 +44,13 @@ def _current_amount(principal, goal, *, as_of, household_only=False):
         if visible_account is not None:
             # Same precedence as Accounts and Net worth: the latest date on or
             # before as_of, and on one date a SimpleFIN snapshot outranks a
-            # manual one.
+            # manual one, and both outrank a calculated one.
             snapshot = (
                 BalanceSnapshot.objects.filter(
                     account_id=goal.linked_account_id,
                     snapshot_date__lte=as_of,
                 )
-                .annotate(
-                    _source_rank=Case(
-                        When(source=BalanceSnapshot.Source.SIMPLEFIN, then=Value(1)),
-                        default=Value(0),
-                    )
-                )
+                .annotate(_source_rank=source_rank_expression())
                 .order_by("-snapshot_date", "-_source_rank", "-pk")
                 .first()
             )

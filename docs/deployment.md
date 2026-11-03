@@ -269,6 +269,8 @@ plus stale margin) and `AI_JOB_MAX_QUEUED_PER_MEMBER` (12) need no env change.
 Turns already claimed before the upgrade have no deadline and keep the existing
 heartbeat recovery.
 
+Calculated past balances (#636) add migration 0078, which adds `calculated` to `BalanceSnapshot.source` and to its check constraint. It changes no existing row and needs no env change. Rolling it back (`python manage.py migrate finance 0077`) deletes every calculated balance first, because the old constraint allows only `simplefin` and `manual`; members can calculate them again after a later upgrade. SimpleFIN and manual balances are untouched either way. Take the usual verified manual backup before deploying it.
+
 Review release notes and take a verified manual backup first. Then, in the checkout on `main`, note the running revision, pull the approved one, and run:
 
 ```powershell

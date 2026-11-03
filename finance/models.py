@@ -1426,6 +1426,10 @@ class BalanceSnapshot(models.Model):
     class Source(models.TextChoices):
         SIMPLEFIN = "simplefin", "SimpleFIN"
         MANUAL = "manual", "Manual"
+        # Derived from transactions, working back from the earliest SimpleFIN or
+        # manual balance (#636). Stored in the SimpleFIN protocol sign: an amount
+        # owed on a credit card is negative. Ranks below both other sources.
+        CALCULATED = "calculated", "Calculated"
 
     account = models.ForeignKey(Account, on_delete=models.CASCADE, related_name="balance_snapshots")
     snapshot_date = models.DateField()
@@ -1473,7 +1477,7 @@ class BalanceSnapshot(models.Model):
                 name="balance_snapshot_original_complete",
             ),
             models.CheckConstraint(
-                condition=Q(source__in=("simplefin", "manual")),
+                condition=Q(source__in=("simplefin", "manual", "calculated")),
                 name="balance_snapshot_source_valid",
             ),
             models.CheckConstraint(

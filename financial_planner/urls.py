@@ -185,6 +185,16 @@ urlpatterns = [
     path("accounts/<int:account_id>/archive/", account_views.account_archive, name="account-archive"),
     path("accounts/<int:account_id>/delete/", account_views.account_delete, name="account-delete"),
     path("accounts/<int:account_id>/balances/", net_worth_views.account_balances, name="account-balances"),
+    path(
+        "accounts/<int:account_id>/balances/calculate/",
+        net_worth_views.account_balances_calculate,
+        name="account-balances-calculate",
+    ),
+    path(
+        "accounts/<int:account_id>/balances/calculated/delete/",
+        net_worth_views.account_calculated_delete,
+        name="account-calculated-delete",
+    ),
     path("accounts/<int:account_id>/pair/", net_worth_views.account_pair_loan, name="account-pair-loan"),
     path("accounts/<int:account_id>/debt-terms/", net_worth_views.account_debt_terms, name="account-debt-terms"),
     path(

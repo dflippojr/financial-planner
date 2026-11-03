@@ -2,6 +2,7 @@ from bisect import bisect_right
 from types import SimpleNamespace
 from urllib.parse import urlencode
 
+from django.db.models import Case, IntegerField, Value, When
 from django.urls import reverse
 from django.utils import timezone
 
@@ -19,16 +20,36 @@ from .models import Account, BalanceSnapshot
 
 CARRIED_FORWARD = "carried forward"
 
+PROTOCOL_SIGN_SOURCES = (BalanceSnapshot.Source.SIMPLEFIN, BalanceSnapshot.Source.CALCULATED)
+
+# On one account and date, SimpleFIN outranks manual, and both outrank a
+# calculated row (#636), whichever was saved first.
+SOURCE_RANK = {
+    BalanceSnapshot.Source.SIMPLEFIN: 2,
+    BalanceSnapshot.Source.MANUAL: 1,
+    BalanceSnapshot.Source.CALCULATED: 0,
+}
+
+
+def source_rank_expression():
+    """SOURCE_RANK as a database expression, for ordering a snapshot queryset."""
+    return Case(
+        *(When(source=source, then=Value(rank)) for source, rank in SOURCE_RANK.items()),
+        default=Value(0),
+        output_field=IntegerField(),
+    )
+
 
 def contribution_parts(account_type, source, amount_minor):
     """Split a snapshot into asset and liability minor units.
 
-    Credit-card and loan SimpleFIN rows keep the protocol sign (owed is negative).
-    Manual rows for those types store the amount owed as a positive number.
+    Credit-card and loan SimpleFIN rows keep the protocol sign (owed is negative),
+    and so do calculated rows (#636). Manual rows for those types store the
+    amount owed as a positive number.
     """
     if account_type not in Account.LIABILITY_TYPES:
         return amount_minor, 0
-    owed = -amount_minor if source == BalanceSnapshot.Source.SIMPLEFIN else amount_minor
+    owed = -amount_minor if source in PROTOCOL_SIGN_SOURCES else amount_minor
     if owed >= 0:
         return 0, owed
     return -owed, 0
@@ -41,7 +62,7 @@ def signed_balance_minor(account_type, source, amount_minor):
 
 
 def _source_rank(source):
-    return 1 if source == BalanceSnapshot.Source.SIMPLEFIN else 0
+    return SOURCE_RANK.get(source, 0)
 
 
 def _ordered_snapshots(rows):
@@ -77,6 +98,7 @@ def _indexed_snapshots(principal, accounts, date_to):
 def _account_month_row(account, snapshot, window):
     assets, liabilities = contribution_parts(account.account_type, snapshot.source, snapshot.amount_minor)
     carried = snapshot.snapshot_date < window.calendar_start
+    calculated = snapshot.source == BalanceSnapshot.Source.CALCULATED
     return SimpleNamespace(
         account_id=account.pk,
         account_name=account.name,
@@ -89,6 +111,7 @@ def _account_month_row(account, snapshot, window):
         source=snapshot.source,
         source_badge=CARRIED_FORWARD if carried else snapshot.source,
         carried_forward=carried,
+        is_calculated=calculated,
         is_estimate=account.is_physical_asset(),
     )
 
@@ -134,6 +157,7 @@ def _month_period(window, accounts, indexed, today):
         net_display=format_minor(net),
         omitted_untracked=omitted,
         carried_forward=sum(1 for row in rows if row.carried_forward),
+        calculated=sum(1 for row in rows if row.is_calculated),
         accounts=rows,
         equity_lines=_equity_lines(accounts, rows),
     )
@@ -239,6 +263,7 @@ def _account_chart_row(row):
         "source": row.source,
         "source_badge": row.source_badge,
         "carried_forward": row.carried_forward,
+        "is_calculated": row.is_calculated,
         "is_estimate": row.is_estimate,
     }
 
@@ -253,6 +278,7 @@ def _period_chart_row(period):
         "liabilities_display": period.liabilities_display,
         "net_display": period.net_display,
         "omitted_untracked": period.omitted_untracked,
+        "calculated": period.calculated,
         "accounts": [_account_chart_row(row) for row in period.accounts],
         "equity_lines": [
             {
