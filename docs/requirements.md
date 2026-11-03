@@ -1,6 +1,6 @@
 # Requirements
 
-Updated: 2026-11-02. This is a working product brief; open questions are explicit.
+Updated: 2026-11-03. This is a working product brief; open questions are explicit.
 
 ## Goal
 
@@ -461,6 +461,7 @@ AI refinements (owner, 2026-10-02, #91 and #94):
 - **Desktop chat window (#341, owner approved #316 revision 2).** Tile beads (#342) are its only opener. The non-modal 380 px window can be dragged or moved with the keyboard inside the viewport outside the sidebar. Pin prevents automatic collapse; otherwise five idle minutes collapses it to a draggable 320 by 52 px pill. Pending replies and unsent drafts pause the timer. Each page redraws it from per-tab sessionStorage containing only open/collapsed/pinned flags, conversation id, coordinates, dragged flag and last activity time. No message text, drafts or figures are stored there. The member-checked thread endpoint restores only the member's unexpired conversation; the next question uses the current page context, which can be removed. Phones retain the Chat tab.
 - **Chat runs in the background (#218).** Sending stores the question and a pending reply and returns at once; no web request waits on Agent Harness. A chat lane in the `background` container, separate from the batch job loop (no quiet window, no batch backoff), picks the turn up within about a second and answers app-tool calls as the member who asked, with that member's visibility. Turns in one conversation run one at a time. The page shows "Thinking…" and a static script polls for the reply (first check at 0.5 s, then every second; the harness session is polled at 0.25 s, 0.5 s, then every 0.6 s, #245); without JavaScript it says to refresh. A turn whose runner stops sending heartbeats, or that sits unclaimed for a full session timeout while no runner is alive, ends as failed with the usual unavailable message.
 - **Local model in chat.** Offered only after a synthetic-data evaluation shows reliable tool calling.
+- **Chat replies render markdown safely (#634, owner decision 2026-11-03).** Assistant replies show a sanitized subset: paragraphs and line breaks, bold, italics, inline code, fenced code blocks, headings (drawn as h3 to h6 at bubble size), lists with one nested level, pipe tables (a wide table scrolls inside the bubble) and block quotes. `finance/chat_markdown.py` escapes every literal and writes only its own tags, so HTML in a reply shows as text. A link is kept only for a same-origin path starting with a single `/` (no `//`, backslash, whitespace, control character or quote); every other URL, including `javascript:`, `data:`, `http(s)://` and protocol-relative ones, stays text, and bare URLs are never linked. Saved turns use the `chat_markdown_html` filter and the live chat-turn JSON carries the same markup as `content_html`. User and error turns stay plain text.
 
 ## Sign in with ChatGPT as an AI backend (2026-10-02, #92)
 

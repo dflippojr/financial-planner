@@ -15,11 +15,24 @@
     return ul;
   }
 
+  // An assistant reply arrives as server-rendered markdown (issue #634): the same escaped markup
+  // the saved turn shows, swapped in for the Thinking row. Parsing it never runs scripts.
+  function showMarkdown(article, html) {
+    var slot = article.querySelector("[data-chat-turn-slot]");
+    var parsed = new DOMParser().parseFromString(html, "text/html");
+    var nodes = Array.from(parsed.body.childNodes, function (node) { return document.importNode(node, true); });
+    slot.replaceWith.apply(slot, nodes);
+  }
+
   function render(article, data) {
     var label = article.querySelector("[data-chat-turn-label]");
     var body = article.querySelector("[data-chat-turn-body]");
     if (data.role === "error" && label) label.textContent = label.textContent + " (error)";
-    body.textContent = data.content || "";
+    if (data.role !== "error" && typeof data.content_html === "string" && article.querySelector("[data-chat-turn-slot]")) {
+      showMarkdown(article, data.content_html);
+    } else {
+      body.textContent = data.content || "";
+    }
     if (data.figures && data.figures.length) {
       article.appendChild(list("mt-2 list-disc pl-5 text-sm", data.figures, function (li, figure) {
         var text = figure.label + ": " + figure.amount_display;
