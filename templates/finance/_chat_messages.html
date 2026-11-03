@@ -1,4 +1,4 @@
-<div class="space-y-3 mb-4{% if composer_fixed %} lg:mb-0 lg:flex lg:flex-col lg:gap-4 lg:space-y-0{% endif %}"{% if not popover %} aria-live="polite"{% endif %}>
+{% load ui %}<div class="space-y-3 mb-4{% if composer_fixed %} lg:mb-0 lg:flex lg:flex-col lg:gap-4 lg:space-y-0{% endif %}"{% if not popover %} aria-live="polite"{% endif %}>
   {% for item in chat_messages %}
   <article class="rounded-box border border-base-300 p-3 {% if item.role == "user" %}bg-base-200 max-md:ml-8{% if composer_fixed %} lg:max-w-[520px] lg:self-end{% endif %}{% else %}bg-base-100 max-md:mr-8{% endif %}"{% if item.status == "pending" %} data-chat-turn-url="{% url 'chat-turn' item.pk %}" aria-busy="true"{% endif %}>
     {% if item.role == "user" %}
@@ -9,10 +9,12 @@
     <p class="text-sm font-semibold" data-chat-turn-label>{{ chat_backend_label }}</p>
     {% endif %}
     {% if item.status == "pending" %}
-    <div class="flex items-center gap-2.5">
+    <div class="flex items-center gap-2.5" data-chat-turn-slot>
       <span class="chat-thinking" data-chat-thinking hidden aria-hidden="true"><span></span><span></span><span></span></span>
       <p class="whitespace-pre-wrap" data-chat-turn-body>Thinking… refresh to see the answer.</p>
     </div>
+    {% elif item.role == "assistant" %}
+    {{ item.content|chat_markdown_html }}
     {% else %}
     <p class="whitespace-pre-wrap">{{ item.content }}</p>
     {% endif %}
