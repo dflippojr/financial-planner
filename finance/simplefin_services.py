@@ -666,10 +666,28 @@ def _error_applies_to_remote(item: dict, remote: dict) -> bool:
     return bool(err_conn and conn_id and err_conn == conn_id)
 
 
+def _is_api_usage_notice(item) -> bool:
+    """A `gen.api` item naming no account or connection: advice to the developer, not missing data (#629).
+
+    The protocol: "Error in how the API is being used. This is meant for the
+    developer and not the user." Bridge sends it when the requested date range
+    passes 45 days (recommended) or 90 days (capped), so treating it as an
+    unreliable listing held back every import. A missing transaction list
+    still marks the account unreliable on its own.
+    """
+    return (
+        isinstance(item, dict)
+        and str(item.get("code") or "").strip().lower() == "gen.api"
+        and not (item.get("account_id") or item.get("conn_id"))
+    )
+
+
 def _transactions_unreliable(remote: dict, payload: dict) -> bool:
     if "transactions" not in remote or remote.get("transactions") is None:
         return True
     for item in payload.get("errlist") or []:
+        if _is_api_usage_notice(item):
+            continue
         if not isinstance(item, dict) or not (item.get("account_id") or item.get("conn_id")):
             # An error naming no account or connection may affect any of them.
             return True

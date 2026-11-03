@@ -702,8 +702,18 @@ def test_same_account_id_at_two_institutions_stays_separate(monkeypatch):
         # An error naming no account or connection, or a bare string, may affect any account.
         ([{"code": "gen.partial", "msg": "Incomplete data."}], ()),
         (["Incomplete data."], ()),
+        # SimpleFIN's date-range notices are API-usage advice, not missing data (#629).
+        ([{"code": "gen.api", "msg": "Requested date range exceeds limit of 90 days and was capped."}],
+         ("first", "second")),
+        ([{"code": "gen.api",
+           "msg": "Requested date range exceeds recommended range of 45 days. In the future, this may be capped."}],
+         ("first", "second")),
+        # A usage notice does not cancel a real unnamed error next to it.
+        ([{"code": "gen.api", "msg": "Requested date range exceeds limit of 90 days and was capped."},
+          {"code": "act.missingdata", "msg": "Incomplete transaction listing."}], ()),
     ],
-    ids=["account-error", "connection-error", "unnamed-error", "bare-string"],
+    ids=["account-error", "connection-error", "unnamed-error", "bare-string", "range-capped", "range-recommended",
+         "notice-plus-unnamed-error"],
 )
 def test_a_provider_error_holds_back_only_the_accounts_it_may_affect(monkeypatch, errlist, batched):
     owner = make_person("owner")
