@@ -240,7 +240,7 @@ def test_a_blank_or_missing_currency_syncs_as_usd_without_asking_for_a_rate(monk
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("currency", ["https://example.test/points", "C4D"])
+@pytest.mark.parametrize("currency", ["US", "https://example.test/points", "C4D"])
 def test_an_unusable_currency_is_skipped_without_asking_for_a_rate(monkeypatch, currency):
     calls = []
     patch_rates(monkeypatch, RATES, calls=calls)
@@ -292,8 +292,9 @@ def test_the_connections_page_shows_each_remote_accounts_currency(monkeypatch):
 
 
 @pytest.mark.django_db
-def test_the_connections_page_says_a_blank_currency_is_treated_as_usd(monkeypatch):
-    owner, _checking, _savings, _connection = link_both(monkeypatch, two_account_payload(cad_currency=""))
+@pytest.mark.parametrize("currency", ["", "   "])
+def test_the_connections_page_says_a_blank_currency_is_treated_as_usd(monkeypatch, currency):
+    owner, _checking, _savings, _connection = link_both(monkeypatch, two_account_payload(cad_currency=currency))
 
     page = signed_in(owner).get(reverse("simplefin-connections")).content.decode()
 

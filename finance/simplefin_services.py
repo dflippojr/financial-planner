@@ -231,7 +231,7 @@ def _account_row(key: str, item: dict, names: dict[str, str]) -> dict:
         "name": clean_text(item.get("name") or "Account")[:200],
         "institution": names.get(conn_id) or clean_text(item.get("conn_name") or "")[:200],
         "type": clean_text(reported_type)[:80] or "Not provided by SimpleFIN",
-        "currency": clean_text(item.get("currency") or "")[:10],
+        "currency": clean_text(item.get("currency") or "").strip()[:10],
     }
 
 
