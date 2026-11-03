@@ -328,12 +328,12 @@ def apply_manual_category(person, txn, category):
     )
 
 
-def apply_inherited_category(person, refund, category):
+def apply_inherited_category(person, refund, category, record_history=_record_text_history):
     previous = refund.category
     refund.category = category
     refund.category_source = Transaction.CategorySource.INHERITED
     refund.save(update_fields=("category", "category_source", "updated_at"))
-    _record_text_history(
+    record_history(
         refund,
         person,
         TransactionCorrectionHistory.Field.CATEGORY,
@@ -693,17 +693,59 @@ def _account_viewer_ids(account):
     )
 
 
-def _record_member_link_history(refund, actor, person_id, previous, new):
+def _legs_seeing_viewers(leg_accounts):
+    return set.intersection(*(_account_viewer_ids(account) for account in leg_accounts))
+
+
+def _every_viewer_always_sees_legs(account, leg_accounts, see_both_legs):
+    """Every viewer of `account` sees both legs, now and after any member joins.
+
+    A private account's owner must see them; a household account needs both legs
+    in that household, since a later member would see only the household's accounts.
+    """
+    if account.scope == Account.Scope.HOUSEHOLD:
+        return all(
+            leg_account.scope == Account.Scope.HOUSEHOLD and leg_account.household_id == account.household_id
+            for leg_account in leg_accounts
+        )
+    return account.owner_id in see_both_legs
+
+
+def _record_member_history(txn, actor, person_id, field_name, previous, new):
     # Listed only to `person_id`; no audit event, so no one else learns of it.
     TransactionCorrectionHistory.objects.create(
-        transaction=refund,
+        transaction=txn,
         actor=actor,
         recorded_at=timezone.now(),
-        field_name=TransactionCorrectionHistory.Field.REFUND_LINK,
+        field_name=field_name,
         previous_description=previous,
         new_description=new,
         only_for_id=person_id,
     )
+
+
+def _record_member_link_history(refund, actor, person_id, previous, new):
+    _record_member_history(refund, actor, person_id, TransactionCorrectionHistory.Field.REFUND_LINK, previous, new)
+
+
+def _pair_category_history_recorder(left, right):
+    """Record an unmark's category changes so they reveal the pair to no one who cannot see it (#580).
+
+    A row whose every viewer sees both legs, now and after any member joins, is
+    an ordinary correction. Otherwise each viewer who sees both legs gets a row
+    `only_for` them, with no audit event, and the others get nothing.
+    """
+    leg_accounts = (left.account, right.account)
+    see_both_legs = _legs_seeing_viewers(leg_accounts)
+
+    def record(txn, actor, field_name, previous, new):
+        if _every_viewer_always_sees_legs(txn.account, leg_accounts, see_both_legs):
+            _record_text_history(txn, actor, field_name, previous, new)
+        elif previous != new:
+            for person_id in sorted(_account_viewer_ids(txn.account) & see_both_legs):
+                _record_member_history(txn, actor, person_id, field_name, previous, new)
+
+    return record
 
 
 def drop_refund_links_for_pair(links, pair, legs, actor):
@@ -722,19 +764,12 @@ def drop_refund_links_for_pair(links, pair, legs, actor):
     if not links:
         return
     leg_accounts = [leg.account for leg in legs]
-    see_both_legs = set.intersection(*(_account_viewer_ids(account) for account in leg_accounts))
+    see_both_legs = _legs_seeing_viewers(leg_accounts)
     deleted = []
     for link in links:
         refund_account = link.refund.account
         seeing = _account_viewer_ids(refund_account) & see_both_legs
-        if refund_account.scope == Account.Scope.HOUSEHOLD:
-            everyone = all(
-                account.scope == Account.Scope.HOUSEHOLD and account.household_id == refund_account.household_id
-                for account in leg_accounts
-            )
-        else:
-            everyone = bool(seeing)
-        if everyone:
+        if _every_viewer_always_sees_legs(refund_account, leg_accounts, see_both_legs):
             deleted.append(link)
             continue
         drops = list(link.drops.values_list("person_id", "pair_id"))
@@ -850,31 +885,40 @@ def _update_existing_pair(pair, scored, person):
         pair.save(update_fields=("confidence", "kind", "reasons", "updated_at"))
 
 
-def _restore_refund_categories(original, actor):
-    """Keep linked refunds in their original's category, as assign_category does."""
+def _restore_refund_categories(original, actor, record_history=_record_text_history):
+    """Keep linked refunds in their original's category, as assign_category does.
+
+    A refund linked to a part of a split original follows that part, since a
+    split original's own category is empty. A refund already there is untouched.
+    """
     refunds = (
         refunds_following_originals(
             actor,
             Transaction.objects.filter(refund_link__original=original, status=Transaction.Status.ACTIVE),
         )
         .select_for_update(of=("self",))
-        .select_related("category")
-        .exclude(category_id=original.category_id)
+        .select_related("account", "category")
         .order_by("pk")
     )
-    new_category = None if original.category_id is None else Category.objects.get(pk=original.category_id)
+    links = RefundLink.objects.filter(original=original).select_related("refund", "original_part__category")
+    parts = {link.refund.pk: link.original_part for link in links}
+    whole_category = None if original.category_id is None else Category.objects.get(pk=original.category_id)
     for refund in refunds:
-        apply_inherited_category(actor, refund, new_category)
+        part = parts.get(refund.pk)
+        new_category = whole_category if part is None else part.category
+        if refund.category != new_category:
+            apply_inherited_category(actor, refund, new_category, record_history)
 
 
-def _restore_snapshot_category(leg, category_id, actor):
-    if leg.category_id == category_id:
+def _restore_snapshot_category(leg, category_id, actor, record_history):
+    # A split leg's category stays empty; its parts hold the categories.
+    if _is_split(leg) or leg.category_id == category_id:
         return
     previous = leg.category
     restored = None if category_id is None else Category.objects.get(pk=category_id)
     leg.category = restored
     leg.save(update_fields=("category", "updated_at"))
-    _record_text_history(
+    record_history(
         leg,
         actor,
         TransactionCorrectionHistory.Field.CATEGORY,
@@ -884,10 +928,11 @@ def _restore_snapshot_category(leg, category_id, actor):
 
 
 def _unmark_exclusion(pair, left, right, actor):
-    _restore_snapshot_category(left, pair.leg_a_category_id_at_mark, actor)
-    _restore_snapshot_category(right, pair.leg_b_category_id_at_mark, actor)
-    _restore_refund_categories(left, actor)
-    _restore_refund_categories(right, actor)
+    record_history = _pair_category_history_recorder(left, right)
+    _restore_snapshot_category(left, pair.leg_a_category_id_at_mark, actor, record_history)
+    _restore_snapshot_category(right, pair.leg_b_category_id_at_mark, actor, record_history)
+    _restore_refund_categories(left, actor, record_history)
+    _restore_refund_categories(right, actor, record_history)
     pair.status = TransferPair.Status.UNDONE
     pair.save(update_fields=("status", "updated_at"))
     restore_refund_links_for_pair(pair, actor)
@@ -1247,10 +1292,17 @@ def _visible_pair(principal, pair_id):
 
 
 def _record_pair_event(person, leg, action, pair):
-    # Transfer confirm/dismiss/undo is a member decision on the first leg's account.
+    # Transfer confirm/dismiss/undo is a member decision, recorded on the given leg's
+    # account unless a viewer there, now or after joining, cannot see the other leg:
+    # then on the other leg's account, so the event reveals the pair to no one who
+    # cannot see it (#580).
+    other = pair.leg_b if leg.pk == pair.leg_a_id else pair.leg_a
+    leg_accounts = (leg.account, other.account)
+    if not _every_viewer_always_sees_legs(leg.account, leg_accounts, _legs_seeing_viewers(leg_accounts)):
+        leg, other = other, leg
     record(person, action, AuditEvent.TargetType.TRANSACTION, leg.pk,
            audience={"account": Account(pk=leg.account_id)}, fields=("kind",),
-           metadata={"transaction_id": pair.leg_b_id if leg.pk == pair.leg_a_id else pair.leg_a_id})
+           metadata={"transaction_id": other.pk})
 
 
 @transaction.atomic
