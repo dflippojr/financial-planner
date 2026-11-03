@@ -15,7 +15,7 @@ from finance.category_services import (
     split_transaction,
     undo_transfer_pair,
 )
-from finance.models import Account, Transaction, TransactionCorrectionHistory, TransferPair
+from finance.models import Account, Membership, Transaction, TransactionCorrectionHistory, TransferPair
 from tests.test_categorization import make_account, make_household, make_person, make_transaction
 
 pytestmark = pytest.mark.django_db
@@ -214,3 +214,25 @@ def test_undoing_a_hidden_pair_writes_no_event_the_other_member_can_read(inflow_
 
     assert not AuditEvent.objects.visible_to(scene.bob).exclude(pk__in=bob_events).exists()
     assert AuditEvent.objects.visible_to(scene.alice).exclude(pk__in=alice_events).count() == 1
+
+
+def test_a_member_who_joins_after_the_undo_cannot_read_what_it_wrote():
+    scene = Scenario()
+    scene.mark_pair(category=scene.groceries)
+    scene.link()
+    assign_category(scene.bob, scene.purchase.pk, scene.dining.pk)
+    membership = Membership.objects.get(person=scene.bob)
+    household = membership.household
+    purchase_rows = _category_rows(scene.bob, scene.purchase)
+    refund_rows = _category_rows(scene.bob, scene.refund)
+    bob_events = set(AuditEvent.objects.visible_to(scene.bob).values_list("pk", flat=True))
+    membership.delete()
+
+    undo_transfer_pair(scene.alice, scene.pair.pk)
+
+    assert _category_rows(scene.alice, scene.purchase)[-1] == ("Dining", "Groceries")
+    assert _category_rows(scene.alice, scene.refund)[-1] == ("Dining", "Groceries")
+    Membership.objects.create(person=scene.bob, household=household)
+    assert _category_rows(scene.bob, scene.purchase) == purchase_rows
+    assert _category_rows(scene.bob, scene.refund) == refund_rows
+    assert not AuditEvent.objects.visible_to(scene.bob).exclude(pk__in=bob_events).exists()

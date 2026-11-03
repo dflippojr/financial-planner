@@ -693,6 +693,24 @@ def _account_viewer_ids(account):
     )
 
 
+def _legs_seeing_viewers(leg_accounts):
+    return set.intersection(*(_account_viewer_ids(account) for account in leg_accounts))
+
+
+def _every_viewer_always_sees_legs(account, leg_accounts, see_both_legs):
+    """Every viewer of `account` sees both legs, now and after any member joins.
+
+    A private account's owner must see them; a household account needs both legs
+    in that household, since a later member would see only the household's accounts.
+    """
+    if account.scope == Account.Scope.HOUSEHOLD:
+        return all(
+            leg_account.scope == Account.Scope.HOUSEHOLD and leg_account.household_id == account.household_id
+            for leg_account in leg_accounts
+        )
+    return account.owner_id in see_both_legs
+
+
 def _record_member_history(txn, actor, person_id, field_name, previous, new):
     # Listed only to `person_id`; no audit event, so no one else learns of it.
     TransactionCorrectionHistory.objects.create(
@@ -713,18 +731,18 @@ def _record_member_link_history(refund, actor, person_id, previous, new):
 def _pair_category_history_recorder(left, right):
     """Record an unmark's category changes so they reveal the pair to no one who cannot see it (#580).
 
-    A row whose every viewer sees both legs is an ordinary correction. Otherwise
-    each viewer who sees both legs gets a row `only_for` them, with no audit
-    event, and the others get nothing.
+    A row whose every viewer sees both legs, now and after any member joins, is
+    an ordinary correction. Otherwise each viewer who sees both legs gets a row
+    `only_for` them, with no audit event, and the others get nothing.
     """
-    see_both_legs = _account_viewer_ids(left.account) & _account_viewer_ids(right.account)
+    leg_accounts = (left.account, right.account)
+    see_both_legs = _legs_seeing_viewers(leg_accounts)
 
     def record(txn, actor, field_name, previous, new):
-        viewers = _account_viewer_ids(txn.account)
-        if viewers <= see_both_legs:
+        if _every_viewer_always_sees_legs(txn.account, leg_accounts, see_both_legs):
             _record_text_history(txn, actor, field_name, previous, new)
         elif previous != new:
-            for person_id in sorted(viewers & see_both_legs):
+            for person_id in sorted(_account_viewer_ids(txn.account) & see_both_legs):
                 _record_member_history(txn, actor, person_id, field_name, previous, new)
 
     return record
@@ -746,19 +764,12 @@ def drop_refund_links_for_pair(links, pair, legs, actor):
     if not links:
         return
     leg_accounts = [leg.account for leg in legs]
-    see_both_legs = set.intersection(*(_account_viewer_ids(account) for account in leg_accounts))
+    see_both_legs = _legs_seeing_viewers(leg_accounts)
     deleted = []
     for link in links:
         refund_account = link.refund.account
         seeing = _account_viewer_ids(refund_account) & see_both_legs
-        if refund_account.scope == Account.Scope.HOUSEHOLD:
-            everyone = all(
-                account.scope == Account.Scope.HOUSEHOLD and account.household_id == refund_account.household_id
-                for account in leg_accounts
-            )
-        else:
-            everyone = bool(seeing)
-        if everyone:
+        if _every_viewer_always_sees_legs(refund_account, leg_accounts, see_both_legs):
             deleted.append(link)
             continue
         drops = list(link.drops.values_list("person_id", "pair_id"))
@@ -1282,10 +1293,12 @@ def _visible_pair(principal, pair_id):
 
 def _record_pair_event(person, leg, action, pair):
     # Transfer confirm/dismiss/undo is a member decision, recorded on the given leg's
-    # account unless a viewer there cannot see the other leg: then on the other
-    # leg's account, so the event reveals the pair to no one who cannot see it (#580).
+    # account unless a viewer there, now or after joining, cannot see the other leg:
+    # then on the other leg's account, so the event reveals the pair to no one who
+    # cannot see it (#580).
     other = pair.leg_b if leg.pk == pair.leg_a_id else pair.leg_a
-    if not _account_viewer_ids(leg.account) <= _account_viewer_ids(other.account):
+    leg_accounts = (leg.account, other.account)
+    if not _every_viewer_always_sees_legs(leg.account, leg_accounts, _legs_seeing_viewers(leg_accounts)):
         leg, other = other, leg
     record(person, action, AuditEvent.TargetType.TRANSACTION, leg.pk,
            audience={"account": Account(pk=leg.account_id)}, fields=("kind",),
