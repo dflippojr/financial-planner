@@ -222,6 +222,7 @@ def tls_server(tmp_path):
     client_context = ssl.create_default_context(cafile=str(tmp_path / "cert.pem"))
     listener = socket.create_server(("127.0.0.1", 0))
     stop = threading.Event()
+    requests = []
 
     def serve(respond):
         def run():
@@ -235,15 +236,18 @@ def tls_server(tmp_path):
                 request = b""
                 while b"\r\n\r\n" not in request:
                     request += tls.recv(4096)
+                requests.append(request)
                 try:
                     respond(tls, stop)
                 except OSError:
                     pass
 
         thread = threading.Thread(target=run, daemon=True)
+        serve.thread = thread
         thread.start()
         return thread
 
+    serve.requests = requests
     yield listener.getsockname()[1], client_context, serve
     stop.set()
     listener.close()
@@ -268,6 +272,24 @@ def test_guarded_connection_completes_a_real_https_exchange(monkeypatch, tls_ser
     with urlopen(Request(f"https://localhost:{port}/accounts"), timeout=5, context=context,
                  deadline=deadline) as response:
         assert read_capped(response, limit=1024 * 1024, deadline=deadline) == body
+
+
+def test_requests_name_this_app_not_python_urllib(monkeypatch, tls_server):
+    # Cloudflare in front of SimpleFIN Bridge answers urllib's default User-Agent
+    # with 403 (error 1010), which the claim flow reports as a spent token.
+    port, context, serve = tls_server
+    _allow_loopback(monkeypatch)
+    serve(lambda tls, stop: tls.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"))
+
+    deadline = time.monotonic() + 10
+    with urlopen(Request(f"https://localhost:{port}/claim", method="POST", data=b""), timeout=5,
+                 context=context, deadline=deadline) as response:
+        read_capped(response, limit=1024, deadline=deadline)
+    serve.thread.join(5)
+
+    headers = serve.requests[0].lower()
+    assert b"user-agent: " + simplefin_client.USER_AGENT.lower().encode() in headers
+    assert b"python-urllib" not in headers
 
 
 def test_guarded_connection_refuses_loopback_for_real(tls_server):
