@@ -464,8 +464,15 @@ class _Conversion:
 
 
 def _remote_currency(remote: dict) -> str | None:
-    """USD, another ISO 4217-shaped code, or None when the provider sent nothing usable."""
-    return currency_code(remote.get("currency"))
+    """USD, another ISO 4217-shaped code, or None when the provider sent something unusable.
+
+    A missing or blank currency is taken as USD (owner decision, #627): SimpleFIN
+    sends "" for Vanguard accounts, and skipping them would repeat on every sync.
+    """
+    raw = remote.get("currency")
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return APP_CURRENCY
+    return currency_code(raw)
 
 
 def _conversion_for(remote: dict, rates: RateBook) -> _Conversion | None:
