@@ -167,9 +167,12 @@ containers were created.
 
 The agent-ops signal sweep reads the fenced block below from this file on
 `main`; see the [agent-ops convention](https://github.com/dflippojr/agent-ops/blob/main/docs/production-signals.md).
-It runs on the Linux tower, so the block names the tower's Tailscale Serve URL
-rather than the Windows placeholders above. Its fetches are read-only and none
-runs a command, so it covers only `/health/`:
+It runs on the Linux tower. This repository is public, so the block does not
+name the tower's host: it reads the full `/health/` URL from
+`~/.config/agent-ops/signals/financial-planner-health.url` on the tower
+(`url_file`, one line, not committed). Errors and issues name that file, never
+its contents. Its fetches are read-only and none runs a command, so it covers
+only `/health/`:
 
 - `/health/` answers `ok` followed by a newline, so the expected value is
   `"ok\n"`. A refused sync schedule adds a second line and the signal fails,
@@ -184,7 +187,7 @@ runs a command, so it covers only `/health/`:
 signals:
   - id: health
     kind: health
-    description: /health/ over the tower's Tailscale Serve URL answers 200 with only "ok".
-    fetch: {type: http, url: "https://dflippotower.tail7c9f1e.ts.net:10443/health/", json: false}
+    description: /health/ on the deployed app answers 200 with only "ok".
+    fetch: {type: http, url_file: ~/.config/agent-ops/signals/financial-planner-health.url, json: false}
     expect: {equals: "ok\n"}
 ```
