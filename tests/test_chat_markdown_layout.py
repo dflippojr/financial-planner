@@ -1,5 +1,7 @@
 """Markdown replies in Chromium (#634): live and saved turns match, and a wide table scrolls in its bubble."""
 
+from pathlib import Path
+
 import pytest
 from playwright.sync_api import expect
 
@@ -7,7 +9,7 @@ from finance.ai_services import connect_harness
 from finance.chat_services import send_message
 from finance.models import AiConversation, AiConversationMessage, Person
 from finance.policy_services import accept_policy, publish_policy
-from tests.browser_support import CSS, browser, page_session  # noqa: F401
+from tests.browser_support import CSS, SCREEN_DIR, browser, page_session  # noqa: F401
 from tests.test_chat import TOKEN, harness  # noqa: F401
 
 pytestmark = [
@@ -15,7 +17,8 @@ pytestmark = [
     pytest.mark.skipif(not CSS.exists(), reason="CSS must be built"),
 ]
 
-COLUMNS = ["Category", "January", "February", "March", "April", "May", "June", "Synthetic note"]
+MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October"]
+COLUMNS = ["Category", *MONTHS, "Synthetic note"]
 REPLY = "\n".join([
     "## Spending by month",
     "",
@@ -26,7 +29,7 @@ REPLY = "\n".join([
     "",
     "| " + " | ".join(COLUMNS) + " |",
     "|" + "---|" * len(COLUMNS),
-    "| Dining | $1,234.56 | $1,111.11 | $1,222.22 | $1,333.33 | $1,444.44 | $1,555.55 | A long synthetic remark |",
+    "| Dining | " + " | ".join("$1,234.56" for _month in MONTHS) + " | A long synthetic remark |",
     "",
     '<img src=x onerror="window.__chatXss = 1">',
 ])
@@ -67,9 +70,10 @@ def _check(page, scope):
     return page.locator(f"{scope} article:last-of-type .chat-md").evaluate("(el) => el.outerHTML")
 
 
-def test_chat_page_live_reply_matches_the_saved_one_at_phone_width(page_session, harness):  # noqa: F811
+@pytest.mark.parametrize(("viewport", "scheme"), [((390, 844), "light"), ((1440, 900), "dark")], ids=["phone", "desktop"])
+def test_chat_page_live_reply_matches_the_saved_one(page_session, harness, viewport, scheme):  # noqa: F811
     _state, url = harness
-    context, page = page_session((390, 844), "light", "/")
+    context, page = page_session(viewport, scheme, "/")
     try:
         person = _member(url)
         # No chat lane runs beside the live server, so the reply stays pending until the test answers it.
@@ -79,6 +83,8 @@ def test_chat_page_live_reply_matches_the_saved_one_at_phone_width(page_session,
         _answer(conversation)
         expect(page.locator("main article:last-of-type .chat-md h4")).to_have_text("Spending by month")
         live = _check(page, "main")
+        if SCREEN_DIR:
+            page.locator("main article:last-of-type").screenshot(path=str(Path(SCREEN_DIR) / f"chat-markdown-{scheme}.png"))
         page.reload()
         page.wait_for_load_state("networkidle")
         saved = _check(page, "main")
