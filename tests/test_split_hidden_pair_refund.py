@@ -100,6 +100,7 @@ def test_split_that_unmarks_a_hidden_pair_keeps_the_refunds_part_category():
     scene.mark_pair()
     scene.link()
     assert _category_rows(scene.bob, scene.refund) == []
+    events = _refund_audit_events(scene.refund)
 
     scene.split()
 
@@ -108,7 +109,7 @@ def test_split_that_unmarks_a_hidden_pair_keeps_the_refunds_part_category():
     scene.refund.refresh_from_db()
     assert scene.refund.category_id == scene.groceries.pk
     assert [new for _previous, new in _category_rows(scene.bob, scene.refund)] == ["Groceries"]
-    assert _refund_audit_events(scene.refund) == 1
+    assert _refund_audit_events(scene.refund) == events + 1, "only the part assignment is audited"
 
 
 def test_split_does_not_restore_the_snapshot_onto_the_split_leg_or_its_refund():
