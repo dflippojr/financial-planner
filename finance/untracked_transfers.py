@@ -37,18 +37,6 @@ def is_investment_row(txn):
     return txn.kind == Transaction.Kind.INVESTMENT_ACTIVITY or txn.account.account_type == Account.Type.INVESTMENT
 
 
-def markable(transactions):
-    """Narrow a transaction queryset to rows that may carry the mark.
-
-    Cash flow only, outside investment accounts (both already neutral), and not
-    a linked refund, which follows its purchase instead of counting on its own.
-    """
-    return (
-        transactions.filter(kind=Transaction.Kind.CASH_FLOW, refund_link__isnull=True)
-        .exclude(account__account_type=Account.Type.INVESTMENT)
-    )
-
-
 def mark_refusal(txn):
     """Why `txn` cannot be marked, or None. `txn` carries the viewer's `_excluded`."""
     if is_investment_row(txn):

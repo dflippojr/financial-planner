@@ -1114,7 +1114,11 @@ def transaction_categorize(request, transaction_id):
 def transaction_untracked_transfer(request, transaction_id):
     """Mark or unmark a row as a transfer to or from an account the planner doesn't track (#642)."""
     _visible_active_transaction(request.user, transaction_id)
-    marked = request.POST.get("action") == "mark"
+    action = request.POST.get("action")
+    if action not in ("mark", "unmark"):
+        messages.error(request, "Choose whether to mark or unmark the transfer.")
+        return redirect("transaction-edit", transaction_id=transaction_id)
+    marked = action == "mark"
     service = mark_untracked_transfer if marked else unmark_untracked_transfer
     try:
         _service_or_404(lambda: service(request.user, transaction_id))

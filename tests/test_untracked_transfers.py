@@ -55,7 +55,7 @@ from finance.models import (
     TransactionCorrectionHistory,
     TransferPair,
 )
-from finance.monthly_review import compute_monthly_review_facts
+from finance.monthly_review import compute_monthly_review_facts, review_for_viewer
 from finance.reauth import RECENT_AUTH_SESSION_KEY
 from finance.rule_services import apply_rule, preview_rule, reverse_application, save_category_rule
 from finance.spending_trends import spending_category_trend_report
@@ -266,6 +266,12 @@ def test_edit_page_marks_and_unmarks_and_the_list_label_follows(world):
     assert "Remove transfer mark" in page
 
     assert client.post(url, {"action": "unmark"}).status_code == 302
+    buy.refresh_from_db()
+    assert buy.untracked_transfer is False
+
+    refused = client.post(url, {"action": "unmark"}, follow=True).content.decode()
+    assert "This row is not marked as a transfer to or from an untracked account." in refused
+    client.post(url, {"action": "something-else"})
     buy.refresh_from_db()
     assert buy.untracked_transfer is False
 
@@ -548,3 +554,27 @@ def test_rules_still_never_assign_the_transfer_category(world):
             owner_person=owner, description_contains="synthetic", action=CategoryRule.Action.UNTRACKED_TRANSFER,
             category=world["shopping"], scope_household=household,
         )
+
+
+def test_a_review_stored_before_a_mark_says_it_may_disagree_until_regenerated(world):
+    owner = world["owner"]
+    review_for_viewer(owner, MONTH[0], today=TODAY)
+    client = Client()
+    client.force_login(owner.user)
+    page_url = reverse("monthly-review") + "?month=2026-08"
+    hint = "marked or unmarked as transfers to or from an untracked account since this review"
+    assert hint not in client.get(page_url).content.decode()
+
+    mark_untracked_transfer(owner, world["buy"].pk)
+
+    page = client.get(page_url)
+    cash = cash_flow_report(owner, date_from=MONTH[0], date_to=MONTH[1], today=TODAY).periods[0]
+    stored = page.context["review"].facts
+    # The stored review stays as it was (#509), so the page says why it differs.
+    assert stored["spending_minor"] == cash.spending_minor + 100_000
+    assert hint in page.content.decode()
+
+    client.post(reverse("monthly-review-regenerate"), {"month": "2026-08"})
+    page = client.get(page_url)
+    assert page.context["review"].facts["spending_minor"] == cash.spending_minor
+    assert hint not in page.content.decode()

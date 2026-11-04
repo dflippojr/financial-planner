@@ -3,7 +3,7 @@ from urllib.parse import urlencode
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.db.models import Case, Exists, OuterRef, Prefetch, Q, Subquery, Value, When
+from django.db.models import BooleanField, Case, Exists, ExpressionWrapper, OuterRef, Prefetch, Q, Subquery, Value, When
 from django.db.models.functions import Coalesce
 from django.urls import reverse
 from django.utils import timezone
@@ -22,7 +22,7 @@ from .category_services import (
 )
 from .audit_services import changed_names, origin, record, snapshot
 from .untracked_transfers import history_label as untracked_history_label
-from .untracked_transfers import markable, set_mark
+from .untracked_transfers import set_mark
 from .lifecycle_services import lock_actor_household
 from .models import (
     Account,
@@ -324,29 +324,30 @@ def _is_winning_rule(txn, rule, rules=None):
     return winner is not None and winner.pk == rule.pk
 
 
-def _candidate_queryset(person, *, untracked=False):
-    """Rows a rule may change: active cash flow, not a linked refund, not already excluded.
+# A category rule never overwrites a category set by hand or split into parts.
+# Marking a row as an untracked transfer (#642) keeps its category, so an
+# untracked-transfer rule reaches those rows too, but never an investment account.
+_CATEGORIZABLE = ~Q(category_source__in=(Transaction.CategorySource.MANUAL, Transaction.CategorySource.SPLIT))
+_MARKABLE = ~Q(account__account_type=Account.Type.INVESTMENT)
 
-    A category rule never overwrites a category set by hand, inherited from a
-    purchase, or split into parts. Marking a row as an untracked transfer
-    (#642) keeps its category, so an untracked-transfer rule also reaches
-    hand-categorized and split rows, but never an investment account.
-    """
-    rows = (
+
+def _candidate_base(person):
+    """Rows any rule may change: active cash flow, not inherited from a purchase or a
+    linked refund, and not already left out of income and spending."""
+    return (
         Transaction.objects.visible_to(person)
         .filter(status=Transaction.Status.ACTIVE, kind=Transaction.Kind.CASH_FLOW)
         .exclude(category_source=Transaction.CategorySource.INHERITED)
         .filter(Q(refund_link__isnull=True))
-    )
-    if untracked:
-        rows = markable(rows)
-    else:
-        rows = rows.exclude(
-            category_source__in=(Transaction.CategorySource.MANUAL, Transaction.CategorySource.SPLIT)
-        )
-    return (
-        rows.annotate(_excluded=exclusion_exists_for(person))
+        .annotate(_excluded=exclusion_exists_for(person))
         .filter(_excluded=False)
+    )
+
+
+def _candidate_queryset(person, *, untracked=False):
+    return (
+        _candidate_base(person)
+        .filter(_MARKABLE if untracked else _CATEGORIZABLE)
         .select_related("account", "category", "account__owner", "account__household")
     )
 
@@ -653,6 +654,26 @@ def _eligible_ids(person, locked, *, untracked=False):
     )
 
 
+def _eligible_by_action(person, locked):
+    """`(categorizable ids, markable ids)` among locked rows, in one query."""
+    rows = (
+        _candidate_base(person)
+        .filter(_CATEGORIZABLE | _MARKABLE, pk__in=[item.pk for item in locked])
+        .annotate(
+            _categorizable=ExpressionWrapper(_CATEGORIZABLE, output_field=BooleanField()),
+            _markable=ExpressionWrapper(_MARKABLE, output_field=BooleanField()),
+        )
+        .values_list("pk", "_categorizable", "_markable")
+    )
+    categorizable, markable_ids = set(), set()
+    for pk, can_categorize, can_mark in rows:
+        if can_categorize:
+            categorizable.add(pk)
+        if can_mark:
+            markable_ids.add(pk)
+    return categorizable, markable_ids
+
+
 def _still_eligible(person, locked, *, untracked=False):
     """Recheck eligibility once rows are locked.
 
@@ -746,8 +767,7 @@ def apply_enabled_rules_to_transactions(principal, transactions):
     # skips investment accounts instead (#642).
     requested_ids = {item.pk for item in transactions}
     all_locked = [item for item in _lock_transactions(person, transactions) if item.pk in requested_ids]
-    categorizable = _eligible_ids(person, all_locked)
-    markable_ids = _eligible_ids(person, all_locked, untracked=True)
+    categorizable, markable_ids = _eligible_by_action(person, all_locked)
     locked = [item for item in all_locked if item.pk in categorizable or item.pk in markable_ids]
     by_rule = {}
     rules_by_account = {}

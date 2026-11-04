@@ -19,6 +19,11 @@ def drop_untracked_rows(apps, schema_editor):
     application.objects.filter(rule__in=untracked_rules).delete()
     untracked_rules.delete()
     history.objects.filter(field_name="untracked").delete()
+    if schema_editor.connection.vendor == "postgresql":
+        # Fire the deferred foreign-key checks for these deletes now: PostgreSQL
+        # refuses the ALTER TABLE steps that follow while trigger events are pending.
+        schema_editor.execute("SET CONSTRAINTS ALL IMMEDIATE")
+        schema_editor.execute("SET CONSTRAINTS ALL DEFERRED")
 
 
 class Migration(migrations.Migration):
