@@ -65,11 +65,14 @@ class Window:
 def eligible_accounts(accounts=None):
     """Active cash accounts with a transactions-mode link or at least two snapshots.
 
-    An account whose balances were converted from another currency is left out."""
+    Calculated snapshots (#636) do not count: they are derived from the very
+    transactions reconciliation checks. An account whose balances were
+    converted from another currency is left out."""
     accounts = Account.objects.all() if accounts is None else accounts
     linked = AccountLink.objects.filter(account_id=OuterRef("pk"), mode=AccountLink.Mode.TRANSACTIONS)
     snapshot_days = (
         BalanceSnapshot.objects.filter(account_id=OuterRef("pk"))
+        .exclude(source=BalanceSnapshot.Source.CALCULATED)
         .order_by()
         .values("account_id")
         .annotate(days=Count("snapshot_date", distinct=True))
@@ -96,11 +99,14 @@ def _balances(accounts):
 
     Transaction sign is net worth's signed balance: money owed is negative,
     whether a card balance came from SimpleFIN or was typed as the amount owed.
+    Calculated rows (#636) are left out: they would always match.
     """
     types = {account.pk: account.account_type for account in accounts}
     chosen = {}
-    rows = BalanceSnapshot.objects.filter(account_id__in=types).values_list(
-        "account_id", "snapshot_date", "source", "amount_minor"
+    rows = (
+        BalanceSnapshot.objects.filter(account_id__in=types)
+        .exclude(source=BalanceSnapshot.Source.CALCULATED)
+        .values_list("account_id", "snapshot_date", "source", "amount_minor")
     )
     for account_id, day, source, amount in rows:
         key = (account_id, day)

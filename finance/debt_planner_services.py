@@ -7,11 +7,11 @@ from .cash_flow import format_minor
 from .debt_planner import NEEDS_DETAILS, DebtInput, compare_to_minimums
 from .models import Account, BalanceSnapshot
 from .months import add_months, month_end
-from .net_worth import contribution_parts, last_on_or_before
+from .net_worth import SOURCE_RANK, contribution_parts, last_on_or_before
 
 
 def _snapshot_rank(source):
-    return 1 if source == BalanceSnapshot.Source.SIMPLEFIN else 0
+    return SOURCE_RANK.get(source, 0)
 
 
 def _ordered_snapshots(rows):

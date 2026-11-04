@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.db.models import Case, Sum, Value, When
+from django.db.models import Sum
 from django.urls import reverse
 from django.utils import timezone
 
@@ -23,6 +23,7 @@ from .models import (
     Transaction,
 )
 from .months import add_months, month_end
+from .net_worth import source_rank_expression
 from .pass_isolation import for_each_member
 from .planning_services import visible_projection_inputs
 from .recurring_review import is_overdue
@@ -245,12 +246,7 @@ def _latest_snapshots(accounts, *, as_of):
     account_ids = [account.pk for account in accounts]
     rows = (
         BalanceSnapshot.objects.filter(account_id__in=account_ids, snapshot_date__lte=as_of)
-        .annotate(
-            _source_rank=Case(
-                When(source=BalanceSnapshot.Source.SIMPLEFIN, then=Value(1)),
-                default=Value(0),
-            )
-        )
+        .annotate(_source_rank=source_rank_expression())
         .order_by("account_id", "-snapshot_date", "-_source_rank", "-pk")
     )
     latest = {}
