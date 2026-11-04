@@ -740,12 +740,6 @@
  {
   "file": "finance/export.py",
   "rule": "reportAttributeAccessIssue",
-  "message": "Cannot access attribute \"excluding_income_and_spending\" for class \"BaseManager[TransferPair]\"",
-  "count": 1
- },
- {
-  "file": "finance/export.py",
-  "rule": "reportAttributeAccessIssue",
   "message": "Cannot access attribute \"owned_by\" for class \"BaseManager[AiConversation]\"",
   "count": 2
  },

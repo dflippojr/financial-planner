@@ -22,6 +22,7 @@ from .models import (
     Account,
     Budget,
     Category,
+    CategoryRule,
     NTFY_TOPIC_VALIDATOR,
     Tag,
     PlannedItem,
@@ -1357,6 +1358,8 @@ class BulkTransactionEditForm(forms.Form):
     ACTION_ADD_TAGS = "add_tags"
     ACTION_REMOVE_TAGS = "remove_tags"
     ACTION_APPEND_NOTE = "append_note"
+    ACTION_MARK_UNTRACKED = "mark_untracked"
+    ACTION_UNMARK_UNTRACKED = "unmark_untracked"
 
     action = forms.ChoiceField(
         choices=(
@@ -1364,6 +1367,8 @@ class BulkTransactionEditForm(forms.Form):
             (ACTION_ADD_TAGS, "Add tags"),
             (ACTION_REMOVE_TAGS, "Remove tags"),
             (ACTION_APPEND_NOTE, "Append note"),
+            (ACTION_MARK_UNTRACKED, "Mark as transfer to or from an account I don't track"),
+            (ACTION_UNMARK_UNTRACKED, "Remove untracked-transfer mark"),
         )
     )
     select_matching = forms.BooleanField(required=False)
@@ -1717,7 +1722,22 @@ class CategoryRuleForm(forms.Form):
         help_text="Optional. Negative is money out; positive is money in.",
         widget=forms.TextInput(attrs={"inputmode": "decimal"}),
     )
-    category = forms.ModelChoiceField(queryset=Category.objects.none())
+    # Not "action": the rule pages already post that name for save, apply and reverse.
+    rule_action = forms.ChoiceField(
+        choices=CategoryRule.Action.choices,
+        initial=CategoryRule.Action.CATEGORIZE,
+        required=False,
+        label="Then",
+        help_text=(
+            "Mark as untracked transfer leaves matching rows out of income and spending, "
+            "for money moved to or from an account the planner doesn't track. Their category is kept."
+        ),
+    )
+    category = forms.ModelChoiceField(
+        queryset=Category.objects.none(),
+        required=False,
+        help_text="Required to set a category; left empty to mark as untracked transfer.",
+    )
     priority = forms.IntegerField(
         initial=0,
         min_value=-(2**31),
@@ -1734,6 +1754,16 @@ class CategoryRuleForm(forms.Form):
             Account.objects.visible_to(principal).for_cash_flow().order_by("name", "pk")
         )
         self.fields["category"].queryset = assignable_categories(principal)
+
+    def clean(self):
+        cleaned = super().clean()
+        # A form posted without the field (older pages, chat proposals) sets a category.
+        cleaned["rule_action"] = cleaned.get("rule_action") or CategoryRule.Action.CATEGORIZE
+        if cleaned["rule_action"] == CategoryRule.Action.UNTRACKED_TRANSFER:
+            cleaned["category"] = None
+        elif "category" in cleaned and cleaned.get("category") is None:
+            self.add_error("category", "Choose a category, or mark as untracked transfer.")
+        return cleaned
 
     def clean_min_amount(self):
         amount = self.cleaned_data.get("min_amount")

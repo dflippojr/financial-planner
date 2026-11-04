@@ -282,6 +282,11 @@ urlpatterns = [
         views.transaction_split_part_category,
         name="transaction-split-part-category",
     ),
+    path(
+        "transactions/<int:transaction_id>/untracked-transfer/",
+        views.transaction_untracked_transfer,
+        name="transaction-untracked-transfer",
+    ),
     path("transactions/<int:transaction_id>/refund/", views.transaction_link_refund, name="transaction-link-refund"),
     path("categories/", RedirectView.as_view(pattern_name="category-list", permanent=True, query_string=True)),
     path(

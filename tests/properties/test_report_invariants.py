@@ -50,6 +50,7 @@ from finance.months import add_months, month_end
 from finance.net_worth import net_worth_report
 from finance.planning_services import projected_months_for, save_planned_item, visible_projection_inputs
 from finance.savings_goal_services import goal_progress
+from finance.untracked_transfers import mark_untracked_transfer
 from finance.snapshot_services import record_manual_snapshot
 from finance.year_end import year_end_report
 from tests.page_payload import json_script_payload
@@ -828,3 +829,35 @@ def test_a_linked_goal_counts_what_net_worth_shows_for_its_account(case):
                                          today=TODAY)
                 assert progress.current_amount_minor == expected == worth.summary.net_minor
                 assert progress.reached is (expected >= GOAL_TARGET)
+
+
+# 8. Untracked transfers (#642): a marked row leaves every view at once, for every viewer.
+
+@st.composite
+def untracked_cases(draw):
+    case = draw(cash_flow_cases())
+    marked = draw(st.frozensets(st.integers(0, len(case.rows) - 1)))
+    return case, marked
+
+
+@given(untracked_cases())
+def test_rows_marked_as_untracked_transfers_leave_every_view_in_every_scope(data):
+    case, marked = data
+    with ledger.isolated():
+        people, accounts = _cash_world(case.files)
+        viewer = people["viewer"]
+        pks = _rows_by_description(accounts.values())
+        for index in sorted(marked):
+            key, row = case.rows[index]
+            mark_untracked_transfer(people[CASH_ACCOUNTS[key][0]], pks[row.payee])
+
+        for scope, keys in SCOPE_ACCOUNTS.items():
+            by_month = _report_by_month(viewer, scope)
+            counted = [row for index, (where, row) in enumerate(case.rows) if where in keys and index not in marked]
+            for first, last in _months():
+                assert by_month[first] == _month_totals(viewer, scope, first, last) == _period_sums(counted, first, last)
+            spending = spending_by_category_report(viewer, date_from=FIRST_MONTH, date_to=LAST_DAY, scope=scope)
+            assert spending.total_spending_minor == _period_sums(counted, FIRST_MONTH, LAST_DAY).spending
+        assert _report_by_month(people["other"], HOUSEHOLD) == _report_by_month(viewer, HOUSEHOLD)
+        review = review_for_viewer(viewer, case.review_month, today=TODAY)
+        assert _review_totals(review) == _report_by_month(viewer, "")[case.review_month]

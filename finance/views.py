@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from urllib.parse import urlencode
 
 from django.conf import settings
+from django.contrib import messages
 from django.contrib.auth import authenticate, logout, update_session_auth_hash
 from django.contrib.auth.decorators import login_not_required
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -232,6 +233,7 @@ from .category_services import (
     undo_transfer_pair,
 )
 from .rule_services import manual_rule_offer
+from .untracked_transfers import mark_refusal, mark_untracked_transfer, unmark_untracked_transfer
 
 
 @login_not_required
@@ -1052,6 +1054,9 @@ def _render_transaction_edit(
             "unsplit_form": UnsplitTransactionForm(principal=request.user),
             "part_forms": part_forms,
             "is_split": financial_transaction.category_source == Transaction.CategorySource.SPLIT,
+            "can_mark_untracked": (
+                not financial_transaction.untracked_transfer and mark_refusal(financial_transaction) is None
+            ),
             "rule_offer": manual_rule_offer(request.user, financial_transaction),
             "transaction": financial_transaction,
             "correction_history": correction_history,
@@ -1101,6 +1106,27 @@ def transaction_categorize(request, transaction_id):
             )
         except ValidationError:
             pass
+    return redirect("transaction-edit", transaction_id=transaction_id)
+
+
+@require_POST
+@never_cache
+def transaction_untracked_transfer(request, transaction_id):
+    """Mark or unmark a row as a transfer to or from an account the planner doesn't track (#642)."""
+    _visible_active_transaction(request.user, transaction_id)
+    marked = request.POST.get("action") == "mark"
+    service = mark_untracked_transfer if marked else unmark_untracked_transfer
+    try:
+        _service_or_404(lambda: service(request.user, transaction_id))
+    except ValidationError as exc:
+        messages.error(request, _first_message(exc, "The transfer mark could not be changed."))
+    else:
+        messages.success(
+            request,
+            "Marked as a transfer to or from an account you don't track. It no longer counts as income or spending."
+            if marked
+            else "Transfer mark removed. The transaction counts as income or spending again.",
+        )
     return redirect("transaction-edit", transaction_id=transaction_id)
 
 

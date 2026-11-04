@@ -12,6 +12,7 @@ from decimal import Decimal
 from django.apps import apps
 from django.core.exceptions import PermissionDenied
 
+from .category_services import excluded_transfer_ids
 from .spreadsheet import spreadsheet_text
 from .models import (
     FORMER_MEMBER_LABEL,
@@ -95,6 +96,7 @@ CSV_FIELDS = {
         "category_id",
         "category_name",
         "excluded_from_income_and_spending",
+        "untracked_transfer",
         "refund_original_id",
         "refund_original_part_id",
         "status",
@@ -292,10 +294,13 @@ transactions.csv / transactions.json
   id, account_id, import_batch_id, transaction_date, amount_minor,
   amount_decimal, currency, description, note, kind, source_row_number,
   source_transaction_id, category_id, category_name,
-  excluded_from_income_and_spending, refund_original_id, refund_original_part_id, status, archived_at,
-  fingerprint, import_source
-  excluded_from_income_and_spending is true only when both legs of an
-  excluding transfer pair are visible. refund_original_id is set only when the
+  excluded_from_income_and_spending, untracked_transfer, refund_original_id, refund_original_part_id,
+  status, archived_at, fingerprint, import_source
+  excluded_from_income_and_spending is true when the row is marked as a
+  transfer to or from an untracked account, or when both legs of an
+  excluding transfer pair are visible. untracked_transfer is true when a member
+  or a rule marked the row as a transfer to or from an account the planner
+  doesn't track. refund_original_id is set only when the
   original transaction is also visible. refund_original_part_id is set when that
   original is split and the chosen part is on a visible transaction. note is the
   member-entered free-text note. import_source is the source of the row's
@@ -516,18 +521,6 @@ def _visible_tag_names(person):
     return dict(Tag.objects.visible_to(person).values_list("pk", "name"))
 
 
-def _excluded_transaction_ids(visible_txn_ids):
-    pairs = TransferPair.objects.excluding_income_and_spending().filter(
-        leg_a_id__in=visible_txn_ids,
-        leg_b_id__in=visible_txn_ids,
-    )
-    ids = set()
-    for pair in pairs:
-        ids.add(pair.leg_a_id)
-        ids.add(pair.leg_b_id)
-    return ids
-
-
 def _visible_refund_originals(person, visible_txn_ids):
     # A link dropped for this person only (#570) is not theirs to export.
     links = RefundLink.objects.visible_to(person).filter(  # pyright: ignore[reportAttributeAccessIssue] - QuerySet.as_manager() is untyped, as for every RefundLink.objects.visible_to in the baseline
@@ -538,7 +531,9 @@ def _visible_refund_originals(person, visible_txn_ids):
 
 
 def _transaction_rows(person, visible_txn_ids):
-    excluded = _excluded_transaction_ids(visible_txn_ids)
+    # The same exclusion rule as every report: marked transfer pairs whose legs
+    # are both visible, and rows marked as untracked transfers (#642).
+    excluded = excluded_transfer_ids(person)
     refunds = _visible_refund_originals(person, visible_txn_ids)
     category_names = _visible_category_names(person)
     rows = []
@@ -566,6 +561,7 @@ def _transaction_rows(person, visible_txn_ids):
                 "category_id": txn.category_id,
                 "category_name": category_names.get(txn.category_id, ""),
                 "excluded_from_income_and_spending": txn.pk in excluded,
+                "untracked_transfer": txn.untracked_transfer,
                 "refund_original_id": original_id,
                 "refund_original_part_id": original_part_id,
                 "status": txn.status,
