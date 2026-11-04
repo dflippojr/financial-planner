@@ -25,6 +25,7 @@ from finance.models import (
     Transaction,
 )
 from finance.bills_calendar import calendar_inputs
+from finance.category_services import link_refund
 from finance.planning_services import projected_months_for, visible_projection_inputs
 from finance.savings_goal_plan import (
     ALREADY_FUNDED,
@@ -38,6 +39,7 @@ from finance.savings_goal_plan import (
     target_check,
 )
 from finance.savings_goal_services import save_savings_goal
+from tests.test_categorization import make_transaction
 
 PASSWORD = "Synthetic-passphrase-42!"
 TODAY = date(2026, 10, 1)
@@ -1116,3 +1118,32 @@ def test_a_charge_the_projection_ignores_never_ranks_a_household_series():
     for person in (owner, member):
         assert [i.amount_minor for i in household_series_inputs(person)] == [90_000]
         assert [i.amount_minor for i in household_series_inputs(person, account=account_a)] == [90_000]
+
+
+@pytest.mark.django_db
+def test_default_buffer_never_goes_below_zero_when_a_refund_outweighs_spending():
+    # A refund in the buffer window for an earlier purchase makes that window's
+    # spending negative; the buffer must not turn into extra money to allocate.
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    purchase = make_transaction(
+        owner, account, transaction_date=date(2026, 6, 5), amount_minor=-90_000, description="Synthetic laptop"
+    )
+    refund = make_transaction(
+        owner, account, transaction_date=date(2026, 8, 5), amount_minor=90_000, description="Synthetic laptop return"
+    )
+    link_refund(owner, refund.pk, purchase.pk)
+    monthly_surplus(owner, 300_000, 200_000)
+    make_goal(owner, "Bike", 130_000, priority=1)
+
+    plan = build_funding_plan(owner.user, today=TODAY)
+
+    assert plan.buffer_minor == 0
+    assert all(month.held_display == "0.00 USD" for month in plan.months)
+
+
+def test_fill_goals_treats_a_negative_buffer_as_none():
+    funded, months = fill_goals([(1, 1_100)], [1_000, 1_000], -100)
+    assert months[0].held_minor == 0 and months[0].available_minor == 1_000
+    assert funded == {1: 1}

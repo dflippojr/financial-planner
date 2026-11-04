@@ -423,3 +423,9 @@ def test_comma_radix_statement_reimports_as_duplicates(import_client):
     for content in (comma, fixture()):
         response = upload(client, account, content)
         assert (response.context["preview"].new_count, response.context["preview"].duplicate_count) == (0, 2)
+
+
+@pytest.mark.parametrize("charset", [b"ISO-8859-1", b"8859-1"])
+def test_iso_8859_1_header_charset(charset):
+    content = fixture().replace(b"CHARSET:1252", b"CHARSET:" + charset).replace(b"Weekly &amp; fresh", b"Synthetic caf\xe9")
+    assert read_ofx(content).rows[0].cells[3] == "Synthetic café"

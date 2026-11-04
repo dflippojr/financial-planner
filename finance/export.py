@@ -247,6 +247,8 @@ CSV_FIELDS = {
         "currency",
         "source",
         "note",
+        "net_contribution_minor",
+        "net_contribution_decimal",
     ),
 }
 
@@ -344,10 +346,12 @@ recurring_exclusions.csv / recurring_exclusions.json
   transaction_id
 
 balance_snapshots.csv / balance_snapshots.json
-  Dated account balances (SimpleFIN or manual) for visible accounts:
+  Dated account balances (SimpleFIN, manual or calculated from transactions) for visible accounts:
   id, account_id, snapshot_date, amount_minor, amount_decimal, currency, source, note,
   net_contribution_minor, net_contribution_decimal.
   net_contribution_minor is null except on manual statement entries.
+  A credit-card or loan amount keeps the SimpleFIN sign (owed is negative) on simplefin and
+  calculated rows; a manual row stores the amount owed as a positive number.
   Present only when the balance snapshot model exists in this installation.
 
 privacy_policy_acceptances.csv / privacy_policy_acceptances.json

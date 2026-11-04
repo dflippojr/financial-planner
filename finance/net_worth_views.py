@@ -9,6 +9,14 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
 from .account_views import _active_visible_account, _service_or_404
+from .calculated_balances import (
+    CalculationError,
+    calculate,
+    calculated_count,
+    delete_calculated_balances,
+    is_calculable,
+    save_calculated_balances,
+)
 from .cash_flow import default_date_range, format_minor
 from .forms import DebtTermsForm, ManualBalanceForm, NetWorthFilterForm, PairLoanForm
 from .lifecycle_services import update_debt_terms
@@ -151,8 +159,67 @@ def account_balances(request, account_id):
             "performance": performance,
             "pair_form": pair_form,
             "debt_terms_form": debt_terms_form,
+            "can_calculate": is_calculable(account),
+            "calculated_count": sum(1 for snapshot in snapshots if snapshot.source == BalanceSnapshot.Source.CALCULATED),
         },
     )
+
+
+@require_http_methods(["GET", "POST"])
+@never_cache
+def account_balances_calculate(request, account_id):
+    """Preview past month-end balances calculated from transactions (GET), then save them (POST).
+
+    The POST recalculates on the server; the browser never sends amounts.
+    """
+    account = _active_visible_account(request.user, account_id)
+    if not is_calculable(account):
+        raise Http404
+    if request.method == "POST":
+        try:
+            result = save_calculated_balances(request.user, account.pk)
+        except CalculationError as exc:
+            messages.error(request, str(exc))
+            return redirect("account-balances-calculate", account.pk)
+        except PermissionDenied as exc:
+            raise Http404 from exc
+        messages.success(request, f"Saved {result.saved} calculated balance{'' if result.saved == 1 else 's'}.")
+        return redirect("account-balances", account.pk)
+    calculation = error = None
+    rows = []
+    try:
+        calculation = calculate(account)
+    except CalculationError as exc:
+        error = str(exc)
+    if calculation is not None:
+        rows = [
+            {
+                "month_end": row.month_end,
+                "balance_display": format_minor(row.balance_minor, account.currency),
+                "incomplete": row.incomplete,
+            }
+            for row in reversed(calculation.rows)
+        ]
+    return render(
+        request,
+        "finance/account_balances_calculate.html",
+        {
+            "account": account,
+            "calculation": calculation,
+            "rows": rows,
+            "error": error,
+            "existing_count": calculated_count(account),
+        },
+    )
+
+
+@require_POST
+@never_cache
+def account_calculated_delete(request, account_id):
+    account = _active_visible_account(request.user, account_id)
+    deleted = _service_or_404(lambda: delete_calculated_balances(request.user, account.pk))
+    messages.success(request, f"Deleted {deleted} calculated balance{'' if deleted == 1 else 's'}.")
+    return redirect("account-balances", account.pk)
 
 
 def _visible_manual_snapshot(user, account_id, snapshot_id):

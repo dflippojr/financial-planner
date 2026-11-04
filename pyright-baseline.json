@@ -1045,12 +1045,6 @@
  },
  {
   "file": "finance/models.py",
-  "rule": "reportArgumentType",
-  "message": "Argument of type \"str\" cannot be assigned to parameter \"key\" of type \"Cadence\" in function \"__getitem__\"",
-  "count": 1
- },
- {
-  "file": "finance/models.py",
   "rule": "reportAttributeAccessIssue",
   "message": "Cannot access attribute \"account_id\" for class \"BalanceSnapshot*\"",
   "count": 1
@@ -1258,12 +1252,6 @@
   "rule": "reportArgumentType",
   "message": "Argument of type \"list[Unknown]\" cannot be assigned to parameter \"value\" of type \"str\" in function \"__setitem__\"",
   "count": 2
- },
- {
-  "file": "finance/monthly_review.py",
-  "rule": "reportAttributeAccessIssue",
-  "message": "Cannot access attribute \"excluding_income_and_spending\" for class \"BaseManager[TransferPair]\"",
-  "count": 1
  },
  {
   "file": "finance/monthly_review.py",
@@ -1594,18 +1582,6 @@
   "rule": "reportArgumentType",
   "message": "Argument of type \"int | None\" cannot be assigned to parameter \"months\" of type \"int\" in function \"add_months\"",
   "count": 1
- },
- {
-  "file": "finance/recurring_services.py",
-  "rule": "reportArgumentType",
-  "message": "Argument of type \"str\" cannot be assigned to parameter \"key\" of type \"Cadence\" in function \"__getitem__\"",
-  "count": 1
- },
- {
-  "file": "finance/recurring_services.py",
-  "rule": "reportArgumentType",
-  "message": "Argument of type \"str\" cannot be assigned to parameter \"key\" of type \"Cadence\" in function \"get\"",
-  "count": 2
  },
  {
   "file": "finance/recurring_services.py",
@@ -1959,12 +1935,6 @@
   "file": "finance/transaction_filters.py",
   "rule": "reportAttributeAccessIssue",
   "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Transaction]\"",
-  "count": 1
- },
- {
-  "file": "finance/unusual_spending.py",
-  "rule": "reportAttributeAccessIssue",
-  "message": "Cannot access attribute \"excluding_income_and_spending\" for class \"BaseManager[TransferPair]\"",
   "count": 1
  },
  {

@@ -2,7 +2,8 @@
 # Run locally what the CI gate runs on every pull request, before pushing.
 #
 #   1. The statement-file guard (guards.yml).
-#   2. ruff and pyright (lint.yml, scripts/lint.sh).
+#   2. The hashed locks match their inputs, ruff and pyright (lint.yml,
+#      scripts/lock.sh, scripts/lint.sh).
 #   3. The migration-number collision check (guards.yml) and the migration
 #      completeness check (postgres.yml).
 #   4. The suite on a throwaway PostgreSQL 18 with coverage, failing below the
@@ -12,7 +13,7 @@
 #
 # Not covered here: pip-audit, the SonarCloud scan, the Playwright UI journeys
 # (npm run test:ui), the disposable UI smoke and the Docker smoke build. CI
-# runs those. Requires Docker, requirements-test.txt, pytest-cov, Chromium
+# runs those. Requires Docker, requirements-test.lock, Chromium
 # (python -m playwright install chromium) and built CSS (scripts/build_css.sh).
 # On Windows some tests skip, so coverage here runs about a point below CI's.
 #
@@ -24,6 +25,9 @@ cd "$(dirname "$0")/.."
 
 echo "== Statement-file guard"
 "$python_bin" scripts/check_statement_files.py
+
+echo "== Locks match their inputs"
+PYTHON="$python_bin" bash scripts/lock.sh --check
 
 PYTHON="$python_bin" bash scripts/lint.sh
 

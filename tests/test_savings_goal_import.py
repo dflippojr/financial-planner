@@ -92,6 +92,23 @@ def test_amounts_convert_exactly_to_minor_units_and_reject_ambiguous_ones():
 
 
 @pytest.mark.django_db
+def test_commas_are_accepted_only_as_thousands_separators():
+    owner = make_person("owner")
+    content = csv_file(
+        'Grouped,"$1,250.00",1,,,,',
+        'Millions,"1,000,000",2,,,,',
+        'Decimal comma,"1,50",3,,,,',
+        'Short group,"12,5",4,,,,',
+        'Uneven groups,"1,2,3",5,,,,',
+    )
+
+    rows = preview_goal_import(owner.user, content).rows
+
+    assert [row.target_amount_minor for row in rows[:2]] == [125_000, 100_000_000]
+    assert all(row.errors for row in rows[2:])
+
+
+@pytest.mark.django_db
 def test_row_validation_messages_name_the_row_and_column():
     owner = make_person("owner")
     content = csv_file(

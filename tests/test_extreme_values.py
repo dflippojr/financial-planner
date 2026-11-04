@@ -4,10 +4,12 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
+from django.core.exceptions import ValidationError
 from django.test import Client
 from django.urls import reverse
 
 from finance.csv_import.parser import preview_csv, read_csv
+from finance.forms import AlertSettingsForm, BillsCalendarForm, CategoryRuleForm
 from finance.date_bounds import TOO_EARLY_ERROR, TOO_LATE_ERROR, activity_date_error
 from finance.models import Account, BalanceSnapshot, RecurringSeries
 from finance.performance import _pct_display, account_performance
@@ -183,3 +185,23 @@ def test_activity_date_check_lists_out_of_range_rows_without_details():
     assert f"IDs: {old.pk}" in text
     assert "Synthetic Secret Payee" not in text
     assert "12.34" not in text
+
+
+@pytest.mark.parametrize("form_class,field", [
+    (AlertSettingsForm, "unusual_category_amount"),
+    (AlertSettingsForm, "large_transaction_amount"),
+    (BillsCalendarForm, "threshold_amount"),
+])
+def test_money_settings_reject_amounts_whose_cents_overflow_bigint(form_class, field):
+    form_field = form_class.base_fields[field]
+    assert form_field.clean("9999999999999999.99") == Decimal("9999999999999999.99")
+    with pytest.raises(ValidationError):
+        form_field.clean("99999999999999999.99")
+
+
+def test_rule_priority_fits_the_integer_column():
+    priority = CategoryRuleForm.base_fields["priority"]
+    assert priority.clean("2147483647") == 2147483647
+    for value in ("2147483648", "-2147483649"):
+        with pytest.raises(ValidationError):
+            priority.clean(value)

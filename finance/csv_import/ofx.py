@@ -48,6 +48,8 @@ def _encoding(content):
     header = content.split(b"<", 1)[0]
     if b"CHARSET:1252" in header or b"CHARSET:WINDOWS-1252" in header:
         return "cp1252"
+    if b"CHARSET:ISO-8859-1" in header or b"CHARSET:8859-1" in header:
+        return "latin-1"
     return "utf-8-sig"
 
 

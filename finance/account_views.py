@@ -23,7 +23,7 @@ from .lifecycle_services import (
 )
 from .reauth import requires_recent_auth
 from .models import Account, BalanceSnapshot, ImportBatch, Person, Transaction
-from .net_worth import signed_balance_minor
+from .net_worth import signed_balance_minor, source_rank_expression
 
 
 def _active_visible_account(user, account_id):
@@ -36,7 +36,7 @@ def _active_visible_account(user, account_id):
 def _visible_accounts(user):
     latest = BalanceSnapshot.objects.filter(account_id=OuterRef("pk")).order_by(
         "-snapshot_date",
-        "-source",
+        source_rank_expression().desc(),
         "-pk",
     )
     return (

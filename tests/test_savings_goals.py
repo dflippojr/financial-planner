@@ -525,3 +525,17 @@ def test_a_member_edit_keeps_the_owners_private_linked_account():
     goal.refresh_from_db()
     assert goal.name == "Vacation renamed"
     assert goal.linked_account_id == private.pk
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("current_minor,percent", [(996_000, 99), (999_999, 99), (1_000_000, 100), (1_200_000, 100)])
+def test_percent_reads_100_only_once_the_goal_is_reached(current_minor, percent):
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    add_snapshot(account, date(2026, 2, 1), current_minor)
+    goal = make_goal(owner, target_amount_minor=1_000_000, linked_account=account)
+
+    progress = goal_progress(owner.user, goal, today=date(2026, 2, 15))
+
+    assert progress.percent == percent

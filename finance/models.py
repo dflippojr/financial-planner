@@ -1,6 +1,6 @@
 import uuid
 from .input_limits import BUDGET_MONTH_FLOOR, MAX_DESCRIPTION_CHARS
-from decimal import Decimal
+from .money_display import format_minor
 from fractions import Fraction
 
 from django.conf import settings
@@ -727,8 +727,7 @@ class Transaction(ArchivableModel):
 
     @property
     def amount_display(self):
-        amount = Decimal(self.amount_minor) / Decimal(100)
-        return f"{amount:,.2f} {self.currency}"
+        return format_minor(self.amount_minor, self.currency)
 
     @property
     def category_display(self):
@@ -944,8 +943,7 @@ class TransactionCorrectionHistory(models.Model):
         return f"Correction of {self.field_name}"
 
     def _amount_display(self, minor):
-        amount = Decimal(minor) / Decimal(100)
-        return f"{amount:,.2f} {self.currency}"
+        return format_minor(minor, self.currency)
 
     @property
     def previous_display(self):
@@ -1067,8 +1065,7 @@ class TransactionSplit(models.Model):
 
     @property
     def amount_display(self):
-        amount = Decimal(self.amount_minor) / Decimal(100)
-        return f"{amount:,.2f} {self.transaction.currency}"
+        return format_minor(self.amount_minor, self.transaction.currency)
 
 
 class RefundLink(models.Model):
@@ -1110,7 +1107,8 @@ class RefundLinkDrop(models.Model):
     keeps the link. The member's "linked" -> "unlinked" history row is `only_for`
     them, so it stays hidden from others even after the link itself is deleted.
     Unmarking the pair deletes its drops, so the link counts again for the member
-    once no other marked pair holds a drop on it.
+    once no other marked pair holds a drop on it. Unsharing an account or leaving
+    the household leaves drops in place (#579).
     """
 
     link = models.ForeignKey(RefundLink, on_delete=models.CASCADE, related_name="drops")
@@ -1258,19 +1256,11 @@ class RecurringSeries(models.Model):
 
     @property
     def amount_display(self):
-        amount = Decimal(self.typical_amount_minor) / Decimal(100)
-        return f"{amount:,.2f} {self.currency}"
+        return format_minor(self.typical_amount_minor, self.currency)
 
     @property
     def annual_minor(self):
-        per_year = {
-            self.Cadence.WEEKLY: 52,
-            self.Cadence.BIWEEKLY: 26,
-            self.Cadence.MONTHLY: 12,
-            self.Cadence.QUARTERLY: 4,
-            self.Cadence.ANNUAL: 1,
-        }[self.cadence]
-        return abs(self.typical_amount_minor) * per_year
+        return abs(self.typical_amount_minor) * PERIODS_PER_YEAR[self.cadence]
 
     @property
     def monthly_minor(self):
@@ -1278,13 +1268,32 @@ class RecurringSeries(models.Model):
 
     @property
     def monthly_display(self):
-        amount = Decimal(self.monthly_minor) / Decimal(100)
-        return f"{amount:,.2f} {self.currency}"
+        return format_minor(self.monthly_minor, self.currency)
 
     @property
     def annual_display(self):
-        amount = Decimal(self.annual_minor) / Decimal(100)
-        return f"{amount:,.2f} {self.currency}"
+        return format_minor(self.annual_minor, self.currency)
+
+
+# Each cadence's step, defined once for detection, projection and totals (#597).
+# A cadence steps by days or by calendar months, never both. PlannedItem.Cadence
+# adds only ONE_TIME, which has no step.
+WEEK_STEP_DAYS: dict[str, int] = {
+    RecurringSeries.Cadence.WEEKLY: 7,
+    RecurringSeries.Cadence.BIWEEKLY: 14,
+}
+MONTH_STEPS: dict[str, int] = {
+    RecurringSeries.Cadence.MONTHLY: 1,
+    RecurringSeries.Cadence.QUARTERLY: 3,
+    RecurringSeries.Cadence.ANNUAL: 12,
+}
+PERIODS_PER_YEAR: dict[str, int] = {
+    RecurringSeries.Cadence.WEEKLY: 52,
+    RecurringSeries.Cadence.BIWEEKLY: 26,
+    RecurringSeries.Cadence.MONTHLY: 12,
+    RecurringSeries.Cadence.QUARTERLY: 4,
+    RecurringSeries.Cadence.ANNUAL: 1,
+}
 
 
 class RecurringSeriesMember(models.Model):
@@ -1417,6 +1426,10 @@ class BalanceSnapshot(models.Model):
     class Source(models.TextChoices):
         SIMPLEFIN = "simplefin", "SimpleFIN"
         MANUAL = "manual", "Manual"
+        # Derived from transactions, working back from the earliest SimpleFIN or
+        # manual balance (#636). Stored in the SimpleFIN protocol sign: an amount
+        # owed on a credit card is negative. Ranks below both other sources.
+        CALCULATED = "calculated", "Calculated"
 
     account = models.ForeignKey(Account, on_delete=models.CASCADE, related_name="balance_snapshots")
     snapshot_date = models.DateField()
@@ -1464,7 +1477,7 @@ class BalanceSnapshot(models.Model):
                 name="balance_snapshot_original_complete",
             ),
             models.CheckConstraint(
-                condition=Q(source__in=("simplefin", "manual")),
+                condition=Q(source__in=("simplefin", "manual", "calculated")),
                 name="balance_snapshot_source_valid",
             ),
             models.CheckConstraint(
@@ -1568,8 +1581,7 @@ class PlannedItem(models.Model):
 
     @property
     def amount_display(self):
-        amount = Decimal(self.amount_minor) / Decimal(100)
-        return f"{amount:,.2f} {self.currency}"
+        return format_minor(self.amount_minor, self.currency)
 
 
 class SavingsGoalQuerySet(models.QuerySet):

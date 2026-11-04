@@ -2,6 +2,7 @@
 # core.autocrlf=true would otherwise turn "#!/bin/sh" into "#!/bin/sh\r" and
 # the container fails with "exec ...: no such file or directory".
 *.sh text eol=lf
+requirements*.lock text eol=lf
 Dockerfile text eol=lf
 ops/backup/Dockerfile text eol=lf
 scripts/css_pins.env text eol=lf

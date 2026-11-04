@@ -26,6 +26,10 @@ MAX_CLAIM_BYTES = 8 * 1024
 MAX_FETCH_BYTES = 25 * 1024 * 1024
 READ_CHUNK_BYTES = 64 * 1024
 _SSL = ssl.create_default_context()
+# SimpleFIN Bridge sits behind Cloudflare, which refuses urllib's default
+# "Python-urllib/3.x" User-Agent with a 403 (error 1010). A 403 on claim reads
+# as a spent token, so every request names this app instead.
+USER_AGENT = "financial-planner/1.0 (self-hosted)"
 
 NOT_FINISHED = "SimpleFIN did not finish responding. Try again later."
 TOO_LARGE = "SimpleFIN returned a response larger than this app accepts."
@@ -167,6 +171,7 @@ def urlopen(request, timeout=None, context=None, deadline=None):
     """
     deadline = deadline if deadline is not None else time.monotonic() + FETCH_DEADLINE_SECONDS
     opener = build_opener(ProxyHandler({}), _GuardedHTTPSHandler(context or _SSL, deadline), _RefuseRedirects())
+    opener.addheaders = [("User-Agent", USER_AGENT)]
     return opener.open(request, timeout=timeout)
 
 
