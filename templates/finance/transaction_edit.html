@@ -3,6 +3,7 @@
 {% block title %}Correct transaction · Financial Planner{% endblock %}
 {% block content %}
 <h1 class="mb-4 text-2xl font-bold">Correct transaction</h1>
+{% include "finance/_messages.html" %}
 <p class="mb-4 opacity-80">{{ transaction.account.name }} · {{ transaction.import_batch.get_source_display }} · {{ transaction.currency }}</p>
 <form method="post" class="mb-8 max-w-lg">
   {% csrf_token %}
@@ -84,6 +85,27 @@
 </div>
 {% endif %}
 <p class="mb-8 max-w-lg text-sm"><a class="btn btn-link min-h-11" href="{% url 'category-list' %}">Manage categories</a></p>
+{% endif %}
+{% if transaction.untracked_transfer %}
+<section class="mb-8 max-w-lg" aria-labelledby="untracked-heading">
+  <h2 id="untracked-heading" class="mb-3 text-xl font-semibold">Transfer to or from an account you don't track</h2>
+  <p class="mb-3">Shown as “{{ transaction.category_display }}”. It is left out of income and spending for everyone who can see it.</p>
+  <form method="post" action="{% url 'transaction-untracked-transfer' transaction.pk %}">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="unmark">
+    <button type="submit" class="btn btn-outline">Remove transfer mark</button>
+  </form>
+</section>
+{% elif can_mark_untracked %}
+<section class="mb-8 max-w-lg" aria-labelledby="untracked-heading">
+  <h2 id="untracked-heading" class="mb-3 text-xl font-semibold">Transfer to or from an account you don't track</h2>
+  <p class="mb-3 text-sm opacity-80">For money moved to or from an account the planner has no transactions for, such as a brokerage or a savings account you haven't imported. The row stops counting as income or spending for everyone who can see it; its category is kept.</p>
+  <form method="post" action="{% url 'transaction-untracked-transfer' transaction.pk %}">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="mark">
+    <button type="submit" class="btn btn-outline">Mark as transfer to or from an account I don't track</button>
+  </form>
+</section>
 {% endif %}
 {% if not refund_link and not transaction.is_excluded_transfer %}
 <form method="post" action="{% url 'transaction-split' transaction.pk %}" class="mb-8 max-w-lg" id="split-form" data-parent-amount="{{ transaction.amount_minor }}">

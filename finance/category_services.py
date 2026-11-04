@@ -10,7 +10,9 @@ from types import SimpleNamespace
 from django.conf import settings
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.db.models import BooleanField, Case, Count, Exists, F, IntegerField, OuterRef, Q, Sum, Value, When
+from django.db.models import (
+    BooleanField, Case, Count, Exists, ExpressionWrapper, F, IntegerField, OuterRef, Q, Sum, Value, When,
+)
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 
@@ -149,34 +151,43 @@ def assignable_categories(principal):
 
 
 def exclusion_exists_for(principal, *, household_only=False):
-    """Whether a row is one leg of an excluded transfer pair, as `principal` sees it.
+    """Whether a row is left out of income and spending as a transfer, as `principal` sees it.
 
-    By default both legs must be visible to the viewer. With `household_only`
-    both legs must sit in household accounts, so a household-scope calculation
-    gives every member the same answer: a pair with one private leg counts its
-    household leg as income or spending, even for the private leg's owner.
+    The one exclusion rule every report uses. A row is left out when it is
+    marked as a transfer to or from an untracked account (#642), which holds for
+    every viewer because the mark is on the row, or when it is one leg of an
+    excluded transfer pair. A row that is both is still one row, so it is left
+    out once. By default a pair counts only when both legs are visible to the
+    viewer. With `household_only` both legs must sit in household accounts, so a
+    household-scope calculation gives every member the same answer: a pair with
+    one private leg counts its household leg as income or spending, even for
+    the private leg's owner.
     """
     visible = Transaction.objects.visible_to(principal)
     if household_only:
         visible = visible.filter(account__scope=Account.Scope.HOUSEHOLD)
     visible = visible.values("pk")
-    return Exists(
+    is_pair_leg = Exists(
         TransferPair.objects.excluding_income_and_spending().filter(
             Q(leg_a_id=OuterRef("pk")) | Q(leg_b_id=OuterRef("pk")),
             leg_a_id__in=visible,
             leg_b_id__in=visible,
         )
     )
+    return ExpressionWrapper(Q(untracked_transfer=True) | Q(is_pair_leg), output_field=BooleanField())
 
 
 def excluded_transfer_ids(principal):
-    """The leg ids of every excluded transfer pair both of whose legs `principal` sees.
+    """The ids of every visible row `exclusion_exists_for(principal)` leaves out.
 
-    The set form of `exclusion_exists_for`'s default rule, shared by the reports
-    that need the ids in Python so their income and spending cannot drift apart.
+    The set form of the same expression, shared by the reports that need the ids
+    in Python, so their income and spending cannot drift from the totals.
     """
-    pairs = TransferPair.objects.excluding_income_and_spending().visible_to(principal)  # pyright: ignore[reportAttributeAccessIssue] - QuerySet.as_manager() is untyped, as for the baselined TransferPair.objects call in exclusion_exists_for
-    return {tx_id for pair in pairs for tx_id in (pair.leg_a_id, pair.leg_b_id)}
+    return set(
+        Transaction.objects.visible_to(principal)  # pyright: ignore[reportAttributeAccessIssue] - QuerySet.as_manager() is untyped, as for every Transaction.objects.visible_to in the baseline
+        .filter(exclusion_exists_for(principal))
+        .values_list("pk", flat=True)
+    )
 
 
 def with_transfer_state(principal, financial_transaction):

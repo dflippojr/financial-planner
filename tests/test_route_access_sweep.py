@@ -482,6 +482,12 @@ OBJECT_ROUTES = {
             ),
         },
     ),
+    "transaction-untracked-transfer": ObjectRoute(
+        _txn,
+        data=lambda s: {"action": "mark"},
+        post_only=True,
+        body_reason="the body carries only mark or unmark",
+    ),
     "transaction-link-refund": ObjectRoute(
         _manual,
         data=lambda s: {"original": s.txn.pk},

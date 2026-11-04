@@ -208,7 +208,7 @@ def record(actor, action, target_type, target_id, *, audience, fields=(), metada
     )
 
 
-CORRECTION_FIELDS = {"category": "category", "refund_link": "refund"}
+CORRECTION_FIELDS = {"category": "category", "refund_link": "refund", "untracked": "untracked_transfer"}
 
 
 def record_correction(txn, actor, history):

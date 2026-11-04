@@ -676,8 +676,14 @@ class Transaction(ArchivableModel):
         default=CategorySource.UNSET,
         blank=True,
     )
+    # A transfer to or from an account the planner doesn't track (#642). Set on
+    # the row, so it holds for every viewer; left out of income and spending
+    # through `exclusion_exists_for`, like a marked transfer pair.
+    untracked_transfer = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    UNTRACKED_TRANSFER_LABEL = "Transfer (untracked account)"
 
     class QuerySet(models.QuerySet):
         def visible_to(self, principal):
@@ -703,6 +709,11 @@ class Transaction(ArchivableModel):
             models.CheckConstraint(
                 condition=Q(category_source__in=("", "manual", "rule", "inherited", "split")),
                 name="transaction_category_source_valid",
+            ),
+            # Investment activity is already neutral, so it is never marked (#642).
+            models.CheckConstraint(
+                condition=Q(untracked_transfer=False) | ~Q(kind="investment_activity"),
+                name="transaction_untracked_not_investment",
             ),
             models.CheckConstraint(
                 condition=(
@@ -731,6 +742,8 @@ class Transaction(ArchivableModel):
 
     @property
     def category_display(self):
+        if self.untracked_transfer:
+            return self.UNTRACKED_TRANSFER_LABEL
         if self.is_excluded_transfer:
             return "Transfer"
         if self.category_source == self.CategorySource.SPLIT:
@@ -854,6 +867,7 @@ class TransactionCorrectionHistory(models.Model):
         NOTE = "note", "Note"
         TAGS = "tags", "Tags"
         DELETED = "deleted", "Deleted"
+        UNTRACKED = "untracked", "Untracked transfer"
 
     transaction = models.ForeignKey(
         Transaction,
@@ -917,7 +931,10 @@ class TransactionCorrectionHistory(models.Model):
                         currency="",
                     )
                     | Q(
-                        field_name__in=("description", "category", "exclusion", "refund_link", "note", "tags", "deleted"),
+                        field_name__in=(
+                            "description", "category", "exclusion", "refund_link", "note", "tags", "deleted",
+                            "untracked",
+                        ),
                         previous_date__isnull=True,
                         new_date__isnull=True,
                         previous_amount_minor__isnull=True,
@@ -957,6 +974,7 @@ class TransactionCorrectionHistory(models.Model):
             self.Field.NOTE,
             self.Field.TAGS,
             self.Field.DELETED,
+            self.Field.UNTRACKED,
         ):
             return self.previous_description
         return self._amount_display(self.previous_amount_minor)
@@ -973,6 +991,7 @@ class TransactionCorrectionHistory(models.Model):
             self.Field.NOTE,
             self.Field.TAGS,
             self.Field.DELETED,
+            self.Field.UNTRACKED,
         ):
             return self.new_description
         return self._amount_display(self.new_amount_minor)
@@ -1703,7 +1722,22 @@ class CategoryRule(models.Model):
     )
     min_amount_minor = models.BigIntegerField(null=True, blank=True)
     max_amount_minor = models.BigIntegerField(null=True, blank=True)
-    category = models.ForeignKey(Category, on_delete=models.PROTECT, related_name="category_rules")
+
+    class Action(models.TextChoices):
+        CATEGORIZE = "categorize", "Set category"
+        UNTRACKED_TRANSFER = "untracked_transfer", "Mark as untracked transfer"
+
+    # A rule either sets a category or marks rows as transfers to or from an
+    # untracked account (#642); it never assigns the system Transfer category.
+    action = models.CharField(max_length=18, choices=Action, default=Action.CATEGORIZE)
+    category = models.ForeignKey(
+        Category, on_delete=models.PROTECT, null=True, blank=True, related_name="category_rules"
+    )
+    # The household whose accounts the rule may reach. A categorize rule takes it
+    # from its category; an untracked-transfer rule has no category, so it is stored.
+    scope_household = models.ForeignKey(
+        Household, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
+    )
     priority = models.IntegerField(default=0)
     enabled = models.BooleanField(default=True)
     # Set when the member confirms the preview with "Apply"; cleared on edit.
@@ -1753,10 +1787,30 @@ class CategoryRule(models.Model):
                 ),
                 name="category_rule_amount_range_ordered",
             ),
+            models.CheckConstraint(
+                condition=(
+                    Q(action="categorize", category__isnull=False, scope_household__isnull=True)
+                    | Q(action="untracked_transfer", category__isnull=True, scope_household__isnull=False)
+                ),
+                name="category_rule_action_target",
+            ),
         ]
 
     def __str__(self):
         return self.description_contains
+
+    @property
+    def marks_untracked_transfer(self):
+        return self.action == self.Action.UNTRACKED_TRANSFER
+
+    @property
+    def rule_household_id(self):
+        """The household a personal rule's household-account matches must belong to."""
+        # Django adds each foreign key's <name>_id attribute at runtime; pyright runs without Django stubs.
+        category = self.category
+        if category is not None:
+            return category.household_id  # pyright: ignore[reportAttributeAccessIssue] - runtime FK id attribute
+        return self.scope_household_id  # pyright: ignore[reportAttributeAccessIssue] - runtime FK id attribute
 
 
 class RuleApplication(models.Model):
@@ -1797,6 +1851,9 @@ class RuleApplicationEntry(models.Model):
         related_name="+",
     )
     previous_category_source = models.CharField(max_length=9, blank=True, default="")
+    # True when this application marked the row as an untracked transfer (#642)
+    # rather than changing its category; reversing it removes the mark.
+    marked_untracked = models.BooleanField(default=False)
     reversed_at = models.DateTimeField(null=True, blank=True)
 
     class QuerySet(models.QuerySet):
