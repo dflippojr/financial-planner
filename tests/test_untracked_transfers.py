@@ -57,7 +57,7 @@ from finance.models import (
 )
 from finance.monthly_review import compute_monthly_review_facts, review_for_viewer
 from finance.reauth import RECENT_AUTH_SESSION_KEY
-from finance.rule_services import apply_rule, preview_rule, reverse_application, save_category_rule
+from finance.rule_services import apply_rule, preview_rule, reverse_application, save_category_rule, set_rule_enabled
 from finance.spending_trends import spending_category_trend_report
 from finance.untracked_transfers import (
     ALREADY_EXCLUDED,
@@ -578,3 +578,47 @@ def test_a_review_stored_before_a_mark_says_it_may_disagree_until_regenerated(wo
     page = client.get(page_url)
     assert page.context["review"].facts["spending_minor"] == cash.spending_minor
     assert hint not in page.content.decode()
+
+
+def test_reversing_a_rule_keeps_a_mark_a_member_set_again_after_removing_the_rules(world):
+    owner, buy = world["owner"], world["buy"]
+    rule = _untracked_rule(owner, "brokerage buy")
+    application, _skipped = apply_rule(owner, rule.pk)
+    unmark_untracked_transfer(owner, buy.pk)
+    mark_untracked_transfer(owner, buy.pk)
+
+    result = reverse_application(owner, application.pk)
+
+    buy.refresh_from_db()
+    assert buy.untracked_transfer is True
+    assert result.restored == 0
+    assert result.skipped_manual == 1
+
+
+def test_category_and_mark_applications_reverse_independently(world):
+    owner, household = world["owner"], world["household"]
+    row = world["txn"](world["private"], -4_000, "SYNTHETIC VANGUARD TRANSFER")
+    dining = Category.objects.get(household=household, name="Dining")
+    category_rule = save_category_rule(
+        owner, owner_kind="personal", description_contains="vanguard", account_id=None,
+        min_amount_minor=None, max_amount_minor=None, category_id=dining.pk, priority=0,
+    )
+    category_application, _ = apply_rule(owner, category_rule.pk)
+    row.refresh_from_db()
+    assert row.category == dining
+    set_rule_enabled(owner, category_rule.pk, False)
+    mark_rule = _untracked_rule(owner, "vanguard")
+    mark_application, _ = apply_rule(owner, mark_rule.pk)
+    row.refresh_from_db()
+    assert row.untracked_transfer is True
+
+    # The mark did not change the category, so it does not block restoring it.
+    assert reverse_application(owner, category_application.pk).restored == 1
+    row.refresh_from_db()
+    assert row.category_id is None
+    assert row.untracked_transfer is True
+
+    assert reverse_application(owner, mark_application.pk).restored == 1
+    row.refresh_from_db()
+    assert row.category_id is None
+    assert row.untracked_transfer is False

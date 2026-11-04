@@ -895,13 +895,16 @@ def reverse_application(principal, application_id):
         Transaction.objects.visible_to(person).filter(pk__in=[item.pk for item in locked]).values_list("pk", flat=True)
     )
     by_id = {item.pk: item for item in locked if item.pk in visible_ids}
-    superseded_ids = set(
+    # A later application supersedes this one on a row only when it changed the
+    # same thing: a category, or the untracked-transfer mark (#642).
+    superseded = set(
         RuleApplicationEntry.objects.filter(
             transaction_id__in=[entry.transaction_id for entry in entries],
             application_id__gt=application.pk,
             reversed_at__isnull=True,
-        ).values_list("transaction_id", flat=True)
+        ).values_list("transaction_id", "marked_untracked")
     )
+    remarked_ids = _marks_changed_since(application, entries)
     now = timezone.now()
     restored = 0
     skipped_manual = 0
@@ -912,13 +915,13 @@ def reverse_application(principal, application_id):
                 continue
             entry.reversed_at = now
             entry.save(update_fields=("reversed_at",))
-            if txn.pk in superseded_ids:
+            if (txn.pk, entry.marked_untracked) in superseded:
                 # A later rule application changed this row; reversing this older
                 # one must not undo the newer category.
                 skipped_manual += 1
                 continue
             if entry.marked_untracked:
-                if _unmark_reversed_entry(person, txn):
+                if txn.pk not in remarked_ids and _unmark_reversed_entry(person, txn):
                     restored += 1
                 else:
                     skipped_manual += 1
@@ -960,6 +963,22 @@ def reverse_application(principal, application_id):
     return ReverseResult(restored=restored, skipped_manual=skipped_manual)
 
 
+def _marks_changed_since(application, entries):
+    """Rows whose untracked-transfer mark a member or another rule changed after this
+    application marked them. Reversing must leave such a mark alone: it is no
+    longer the one this application made."""
+    marked_ids = [entry.transaction_id for entry in entries if entry.marked_untracked]
+    if not marked_ids:
+        return set()
+    return set(
+        TransactionCorrectionHistory.objects.filter(
+            transaction_id__in=marked_ids,
+            field_name=TransactionCorrectionHistory.Field.UNTRACKED,
+            recorded_at__gt=application.applied_at,
+        ).values_list("transaction_id", flat=True)
+    )
+
+
 def _unmark_reversed_entry(person, txn):
     """Remove the mark an untracked-transfer rule set (#642), unless a member already removed it."""
     if not txn.untracked_transfer:
@@ -994,8 +1013,12 @@ def _category_before(entry, application):
     category = entry.previous_category
     source = entry.previous_category_source
     later_applied_at = application.applied_at
+    # Only earlier category changes form the chain; an untracked-transfer mark
+    # never changed the category (#642).
     earlier = (
-        RuleApplicationEntry.objects.filter(transaction_id=entry.transaction_id, application_id__lt=application.pk)
+        RuleApplicationEntry.objects.filter(
+            transaction_id=entry.transaction_id, application_id__lt=application.pk, marked_untracked=False
+        )
         .select_related("application", "previous_category")
         .order_by("-application_id")
     )
