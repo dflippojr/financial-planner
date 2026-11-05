@@ -17,7 +17,7 @@ from . import chat_markdown
 from .access import request_person as _person, service_or_404
 from .ai_api import label as api_label
 from .ai_services import AiError, local_status, member_has_ai, resolve_ai, warm_for_chat
-from .ai_types import API_KINDS, LOCAL_BACKEND
+from .ai_types import API_KINDS, LOCAL_BACKEND, backend_display_name
 from .chat_attachment_parsing import TOO_LARGE, AttachmentRejected, parse_upload
 from .chat_attachments import (
     attachments_for,
@@ -51,8 +51,7 @@ ATTACHMENT_ACCEPT = ".csv,.xlsx,.pdf,text/csv,application/pdf,application/vnd.op
 
 
 def _backend_label(backend):
-    labels = {LOCAL_BACKEND: "Local model", "claude": "Claude", "codex": "Codex", "cursor": "Cursor"}
-    return labels.get(backend, backend or "AI")
+    return backend_display_name(backend, "AI")
 
 
 def provider_label(person, connection, backend):
