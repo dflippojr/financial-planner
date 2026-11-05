@@ -672,6 +672,24 @@
   }
 }
 
+/* Charts in chat replies (#646): a fixed-height box the responsive canvas fills, so a chart fits
+   the phone bubble and the popover without widening the page. chat-charts.js grows the box for
+   a horizontal bar chart with many categories. */
+.chat-chart {
+  min-width: 0;
+}
+
+.chat-chart-canvas {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  height: 14rem;
+}
+
+.chat-chart-canvas[data-chat-chart-style="donut"] {
+  height: 16rem;
+}
+
 /* Assistant replies rendered from markdown (issue #634). finance/chat_markdown.py writes plain
    tags, so they are styled here; preflight strips list markers, heading sizes and table borders. */
 .chat-md {
