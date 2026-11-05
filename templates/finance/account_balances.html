@@ -44,6 +44,23 @@
     </form>
   </div>
 </section>
+{% if can_calculate or calculated_count %}
+<section class="card bg-base-100 shadow-sm mb-6 max-w-lg" aria-labelledby="past-balances">
+  <div class="card-body">
+    <h2 id="past-balances" class="card-title">Past balances</h2>
+    <p>Fill in month-end balances before the earliest SimpleFIN or manual balance, worked back from it through this account's transactions. Net worth labels them calculated.{% if calculated_count %} This account has {{ calculated_count }} calculated balance{{ calculated_count|pluralize }}; after an import is undone or transactions change, calculate again.{% endif %}</p>
+    <div class="flex flex-wrap gap-2">
+      {% if can_calculate %}<a class="btn btn-primary" href="{% url 'account-balances-calculate' account.pk %}">Calculate past balances</a>{% endif %}
+      {% if calculated_count %}
+      <form method="post" action="{% url 'account-calculated-delete' account.pk %}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-error">Delete calculated balances</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+</section>
+{% endif %}
 <div class="overflow-x-auto">
   <table class="table table-zebra">
     <thead class="sticky top-0 z-10 bg-base-200">
@@ -64,7 +81,7 @@
         {% if account.account_type == "investment" %}
         <td class="text-right">{% if snapshot.net_contribution_display %}{% include "finance/_amount.html" with value=snapshot.net_contribution_display tone="" %}{% else %}—{% endif %}</td>
         {% endif %}
-        <td><span class="badge">{{ snapshot.source }}</span></td>
+        <td><span class="badge{% if snapshot.source == "calculated" %} badge-ghost{% endif %}">{{ snapshot.source }}</span></td>
         <td>{{ snapshot.note }}</td>
         <td>
           {% if snapshot.source == "manual" %}

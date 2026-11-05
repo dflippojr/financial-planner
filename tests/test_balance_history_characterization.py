@@ -249,3 +249,19 @@ def test_history_breaks_a_same_date_same_source_tie_by_the_higher_pk():
     assert last_on_or_before(ordered, dates, date(2026, 3, 8)).pk == 5
     assert last_on_or_before(ordered, dates, date(2026, 3, 1)) is None
     assert ordered_history([]) == ([], [])
+
+
+def test_history_ranks_a_calculated_row_below_manual_and_simplefin_on_the_same_date():
+    # A calculated month-end balance (#636) never displaces a reported one.
+    rows = [
+        SimpleNamespace(pk=9, snapshot_date=date(2026, 3, 31), source=BalanceSnapshot.Source.CALCULATED),
+        SimpleNamespace(pk=4, snapshot_date=date(2026, 3, 31), source=MANUAL),
+        SimpleNamespace(pk=8, snapshot_date=date(2026, 4, 30), source=BalanceSnapshot.Source.CALCULATED),
+        SimpleNamespace(pk=2, snapshot_date=date(2026, 4, 30), source=SIMPLEFIN),
+    ]
+
+    ordered, dates = ordered_history(rows)
+
+    assert [row.pk for row in ordered] == [9, 4, 8, 2]
+    assert last_on_or_before(ordered, dates, date(2026, 3, 31)).pk == 4
+    assert last_on_or_before(ordered, dates, date(2026, 4, 30)).pk == 2

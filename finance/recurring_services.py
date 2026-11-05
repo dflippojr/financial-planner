@@ -28,6 +28,8 @@ from .bill_grouping import (
 )
 from .lifecycle_services import lock_actor_household
 from .models import (
+    MONTH_STEPS,
+    WEEK_STEP_DAYS,
     Account,
     AuditEvent,
     Membership,
@@ -70,21 +72,20 @@ CADENCE_ORDER = (
 )
 
 
+def cadence_interval_days(cadence):
+    return CADENCE_DAYS[cadence][0]
+
+
+def cadence_tolerance_days(cadence):
+    return CADENCE_DAYS[cadence][1]
+
+
 def merchant_key(description):
     tokens = re.sub(r"[^a-z]+", " ", description.casefold()).split()
     # Cut here, not at save time, so grouping and the stored key always agree.
     return " ".join(tokens)[: RecurringSeries._meta.get_field("merchant_key").max_length].rstrip()
 
 
-_WEEK_STEPS = {
-    RecurringSeries.Cadence.WEEKLY: 7,
-    RecurringSeries.Cadence.BIWEEKLY: 14,
-}
-_MONTH_STEPS = {
-    RecurringSeries.Cadence.MONTHLY: 1,
-    RecurringSeries.Cadence.QUARTERLY: 3,
-    RecurringSeries.Cadence.ANNUAL: 12,
-}
 # A bill due at the end of the month keeps its day after a month too short
 # for it: one on the 31st expects Mar 31 after a charge on Feb 28, and a charge
 # that slipped to Apr 1 stands for Mar 31 (#505). The anchor day comes from
@@ -100,9 +101,9 @@ def _on_day(value: date, day: int) -> date:
 
 def _anchor_day(recent, cadence):
     """The month-end day a calendar cadence keeps, from its latest charges' dates, or None."""
-    if cadence not in _MONTH_STEPS:
+    if cadence not in MONTH_STEPS:
         return None
-    tolerance = CADENCE_DAYS[cadence][1]
+    tolerance = cadence_tolerance_days(cadence)
     late = [value.day for value in recent if value.day >= MONTH_END_DAY]
     slipped = [value for value in recent if value.day <= tolerance]
     # A bill due on the 1st that once posted early on the 30th stays a 1st bill.
@@ -121,7 +122,7 @@ def _anchored(value: date, cadence: str, anchor_day: int | None) -> tuple:
     Any other charge keeps its own day.
     """
     if anchor_day is not None:
-        tolerance = CADENCE_DAYS[cadence][1]
+        tolerance = cadence_tolerance_days(cadence)
         candidates = [_on_day(value, anchor_day)]
         if (value.year, value.month) != (1, 1):
             candidates.append(_on_day(add_months(value, -1), anchor_day))
@@ -138,8 +139,8 @@ def add_cadence(value: date, cadence: str, anchor_day: int | None = None) -> dat
     `anchor_day` is the month-end day a monthly, quarterly or annual bill keeps
     (see `_anchor_day`); without it the step keeps `value`'s own day.
     """
-    days = _WEEK_STEPS.get(cadence)
-    months = _MONTH_STEPS.get(cadence)
+    days = WEEK_STEP_DAYS.get(cadence)
+    months = MONTH_STEPS.get(cadence)
     if days is None and months is None:
         raise ValueError("Unknown cadence")
     try:
@@ -279,7 +280,7 @@ def _day_class(value, cadence):
     """All `_anchor_day` reads of a date: its month-end day, an early-month slip, or neither."""
     if value.day >= MONTH_END_DAY:
         return value.day
-    return -1 if value.day <= CADENCE_DAYS[cadence][1] else 0
+    return -1 if value.day <= cadence_tolerance_days(cadence) else 0
 
 
 class _ChainState(NamedTuple):
@@ -303,7 +304,7 @@ def _longest_chain(ordered, dates, cadence):
     the charge before it (`_day_class`), which with the next charge decides
     the next anchor. A bill due mid-month has one state per charge.
     """
-    tolerance = CADENCE_DAYS[cadence][1]
+    tolerance = cadence_tolerance_days(cadence)
     days = [value.toordinal() for value in dates]
     # states[index][(anchor, previous charge's class)] is that charge's best chain in that state.
     states = [{(_anchor_day((value,), cadence), None): _ChainState(1, -1, None, (value,))} for value in dates]
@@ -497,9 +498,7 @@ class _CadenceChains:
                 best_cadence = cadence
                 continue
             if len(chain) == len(best) and best_cadence is not None:
-                current_interval, _ = CADENCE_DAYS[cadence]
-                best_interval, _ = CADENCE_DAYS[best_cadence]
-                if current_interval > best_interval:
+                if cadence_interval_days(cadence) > cadence_interval_days(best_cadence):
                     best = chain
                     best_cadence = cadence
         if best_cadence is None:
@@ -721,7 +720,7 @@ def _recompute_series_from_members(series, *, extra_reasons=()):
 
 def irregular_history_notes(ordered, cadence):
     """Plain-language flags for history that detection itself would not accept."""
-    tolerance = CADENCE_DAYS[cadence][1]
+    tolerance = cadence_tolerance_days(cadence)
     notes = []
     dates = [item.transaction_date for item in ordered]
     if any(
@@ -1526,7 +1525,7 @@ def _continue_from_household_charges(bills, eligible):
     for bill in sorted(anchored, key=lambda bill: (bill.current is None, min(series.pk for series in bill.copies))):
         anchor = bill.anchor
         owners = {series.person_id for series in bill.copies}
-        tolerance = CADENCE_DAYS[anchor.cadence][1]
+        tolerance = cadence_tolerance_days(anchor.cadence)
         last = bill.last_on
         for txn in by_merchant.get(anchor.merchant_key, ()):
             if txn.pk in taken or txn.transaction_date <= last or removed[txn.pk] & owners:

@@ -38,7 +38,7 @@
       <tr>
         <th scope="col">Match</th>
         <th scope="col">Type</th>
-        <th scope="col">Category</th>
+        <th scope="col">Action</th>
         <th scope="col">Priority</th>
         <th scope="col">Enabled</th>
       </tr>
@@ -48,7 +48,7 @@
       <tr{% if item.inactive %} data-rule-inactive="true"{% endif %}>
         <td><a class="link" href="{% url 'category-rule-detail' item.pk %}">{{ item.description_contains }}</a></td>
         <td>{% if item.owner_household_id %}Household{% else %}Personal{% endif %}</td>
-        <td>{{ item.category.name }}</td>
+        <td>{% if item.marks_untracked_transfer %}Mark as transfer (untracked account){% else %}{{ item.category.name }}{% endif %}</td>
         <td>{{ item.priority }}</td>
         <td>{% if item.inactive %}Inactive{% elif not item.enabled %}No{% elif not item.confirmed_at %}Not applied yet{% else %}Yes{% endif %}</td>
       </tr>

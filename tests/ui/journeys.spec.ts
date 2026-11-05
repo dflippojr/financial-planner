@@ -94,6 +94,29 @@ test('Category and description corrections persist with synthetic actor history'
   await audit(page, 'transaction_corrected', 'transaction', id);
 });
 
+test('Untracked transfer mark leaves the row out, shows in the list, and unmarking restores it (#642)', async ({ page }) => {
+  const edit = await openShellCorrection(page);
+  const id = edit.split('/')[2];
+  const section = page.locator('section').filter({ has: page.getByRole('heading', { name: "Transfer to or from an account you don't track" }) });
+  await submit(page, section.getByRole('button', { name: "Mark as transfer to or from an account I don't track", exact: true }));
+  await expect(main(page).getByRole('alert').filter({ hasText: 'no longer counts as income or spending' })).toBeVisible();
+  await page.goto(edit);
+  await expect(section).toContainText('Shown as “Transfer (untracked account)”');
+  await expect(page.locator('ol li').filter({ hasText: 'Untracked transfer:' })).toContainText('Synthetic Alex');
+  await expect(page.locator('ol li').filter({ hasText: 'Untracked transfer:' })).toContainText('Counted in income and spending → Transfer (untracked account)');
+  await page.goto('/transactions/');
+  await expect(page.locator('tr').filter({ hasText: 'Shell Oil 5741' })).toContainText('Transfer (untracked account)');
+  await audit(page, 'transaction_corrected', 'transaction', id);
+  await page.goto(edit);
+  await submit(page, section.getByRole('button', { name: 'Remove transfer mark', exact: true }));
+  await page.goto(edit);
+  await expect(section.getByRole('button', { name: "Mark as transfer to or from an account I don't track", exact: true })).toBeVisible();
+  await page.goto('/transactions/');
+  await expect(page.locator('tr').filter({ hasText: 'Shell Oil 5741' })).not.toContainText('Transfer (untracked account)');
+  await page.goto('/settings/audit/?action=transaction_corrected');
+  await expect(page.locator('tbody tr').filter({ hasText: 'transaction #' + id }).filter({ hasText: 'untracked_transfer' })).toHaveCount(2);
+});
+
 test('Note and tag add/remove persist; tag membership has an audit event', async ({ page }) => {
   const edit = await openShellCorrection(page);
   await page.getByLabel('Note', { exact: true }).fill('Synthetic UI note');

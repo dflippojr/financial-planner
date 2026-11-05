@@ -67,10 +67,13 @@
               {% if period.carried_forward %}
               <span class="block">{% include "finance/_status.html" with word=period.carried_forward|stringformat:"d"|add:" carried forward" icon="projected" %}</span>
               {% endif %}
+              {% if period.calculated %}
+              <span class="block">{% include "finance/_status.html" with word=period.calculated|stringformat:"d"|add:" calculated" icon="projected" %}</span>
+              {% endif %}
               {% if period.omitted_untracked %}
               <span class="block">{% include "finance/_status.html" with word=period.omitted_untracked|stringformat:"d"|add:" not yet tracked" %}</span>
               {% endif %}
-              {% if not period.carried_forward and not period.omitted_untracked and period.accounts %}
+              {% if not period.carried_forward and not period.calculated and not period.omitted_untracked and period.accounts %}
               <span class="opacity-80">All current</span>
               {% endif %}
               {% if period.accounts %}
@@ -79,7 +82,7 @@
                 <ul class="mt-2 flex flex-col gap-2">
                   {% for row in period.accounts %}
                   <li class="flex flex-wrap items-baseline justify-between gap-x-3">
-                    <span>{{ row.account_name }}{% if row.is_estimate %} <span class="badge badge-ghost badge-sm">estimate</span>{% endif %}</span>
+                    <span>{{ row.account_name }}{% if row.is_estimate %} <span class="badge badge-ghost badge-sm">estimate</span>{% endif %}{% if row.is_calculated %} <span class="badge badge-ghost badge-sm">calculated</span>{% endif %}</span>
                     {% include "finance/_amount.html" with value=row.amount_display tone="" %}
                     <span class="basis-full text-xs opacity-80">As of {{ row.snapshot_date|date:"Y-m-d" }} · {{ row.source_badge }}</span>
                   </li>
@@ -112,7 +115,7 @@
       {% for row in latest.accounts %}
       <li class="flex min-h-12 items-center justify-between gap-3 border-t border-base-300 py-2">
         <span class="flex min-w-0 flex-col">
-          <span>{{ row.account_name }}{% if row.is_estimate %} <span class="badge badge-ghost badge-sm">estimate</span>{% endif %}</span>
+          <span>{{ row.account_name }}{% if row.is_estimate %} <span class="badge badge-ghost badge-sm">estimate</span>{% endif %}{% if row.is_calculated %} <span class="badge badge-ghost badge-sm">calculated</span>{% endif %}</span>
           <span class="text-xs opacity-80">{% if row.carried_forward %}Carried forward from {{ row.snapshot_date|date:"M j" }}{% else %}{{ row.snapshot_date|date:"M j" }} · {{ row.source_badge }}{% endif %}</span>
         </span>
         <span class="whitespace-nowrap font-semibold">{% include "finance/_amount.html" with value=row.amount_display tone="" %}</span>

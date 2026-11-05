@@ -1,5 +1,6 @@
 # Test-only tools used by CI on top of the runtime requirements. Not installed
-# in the Docker image.
+# in the Docker image. After editing this file or requirements.txt, regenerate
+# the locks that CI and the image install from: bash scripts/lock.sh (#605).
 -r requirements.txt
 # Static analysis (scripts/lint.sh, #530). django-types lets pyright see
 # Django's model fields and managers.
@@ -9,6 +10,9 @@ ruff==0.17.2
 # Property tests of ledger invariants in tests/properties (#533).
 hypothesis==6.170.6
 playwright==1.64.1
+pytest-cov==7.1.0
 pytest-xdist==3.8.0
 # Used directly by the disposable HTTP lifecycle tests.
 requests==2.34.2
+# Generates and checks the hashed locks (scripts/lock.sh, #605).
+uv==0.13.6

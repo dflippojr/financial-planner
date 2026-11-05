@@ -1,8 +1,8 @@
 """Each account's balance snapshots in order, for net worth and debt planning (#586).
 
 A history is a pair of lists: the snapshots sorted oldest first and their dates.
-Later dates win; on the same date SimpleFIN outranks a manual entry, then the
-higher pk wins. An account with no eligible snapshot has an empty history, which
+Later dates win; on the same date SimpleFIN outranks a manual entry, both
+outrank a calculated row (#636), then the higher pk wins. An account with no eligible snapshot has an empty history, which
 callers treat as an unknown balance, never as zero.
 """
 
@@ -11,8 +11,17 @@ from bisect import bisect_right
 from .models import BalanceSnapshot
 
 
+# On one account and date, SimpleFIN outranks manual, and both outrank a
+# calculated row (#636), whichever was saved first.
+SOURCE_RANK = {
+    BalanceSnapshot.Source.SIMPLEFIN: 2,
+    BalanceSnapshot.Source.MANUAL: 1,
+    BalanceSnapshot.Source.CALCULATED: 0,
+}
+
+
 def _source_rank(source):
-    return 1 if source == BalanceSnapshot.Source.SIMPLEFIN else 0
+    return SOURCE_RANK.get(source, 0)
 
 
 def ordered_history(rows):

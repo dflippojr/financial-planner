@@ -14,8 +14,9 @@ from .cash_flow import (
     spending_by_category_report,
     spending_category_detail_url,
 )
+from .category_services import excluded_transfer_ids as _excluded_transfer_ids
 from .models import _person_for
-from .models import Account, Alert, Transaction, TransferPair
+from .models import Account, Alert, Transaction
 from .months import add_months, month_end, month_start
 from .recurring_services import merchant_key
 
@@ -43,14 +44,6 @@ def _flag_rank(item):
 def bounded_flags(flags):
     omitted = getattr(flags, "omitted_count", 0) + max(0, len(flags) - MAX_UNUSUAL_FLAGS)
     return BoundedFlags(sorted(flags, key=_flag_rank)[:MAX_UNUSUAL_FLAGS], omitted_count=omitted)
-
-
-def _excluded_transfer_ids(principal):
-    return {
-        tx_id
-        for pair in TransferPair.objects.excluding_income_and_spending().visible_to(principal)
-        for tx_id in (pair.leg_a_id, pair.leg_b_id)
-    }
 
 
 def _category_thresholds(prefs):
