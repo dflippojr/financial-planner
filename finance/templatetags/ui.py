@@ -2,6 +2,7 @@ import json
 import re
 
 from django import template
+from django.template.defaultfilters import date as date_filter
 from django.forms.widgets import CheckboxInput, CheckboxSelectMultiple, FileInput, RadioSelect, Select, Textarea
 
 from finance import chat_markdown
@@ -38,6 +39,19 @@ def daisy_widget(field):
             classes += " input-error"
     merged = f"{existing} {classes}".strip()
     return field.as_widget(attrs={**widget.attrs, "class": merged})
+
+
+@register.filter
+def date_range(start, end):
+    """Label a date range as "Nov 2 – Nov 5, 2026", naming the start year when it differs.
+
+    "Nov 1, 2025 – Nov 5, 2026" keeps a 13-month range from reading like five days (#665).
+    Either end missing gives an empty string.
+    """
+    if not start or not end:
+        return ""
+    start_format = "M j" if start.year == end.year else "M j, Y"
+    return f"{date_filter(start, start_format)} \N{EN DASH} {date_filter(end, 'M j, Y')}"
 
 
 # The "1,240.00 USD" shape every *_display money string uses (cash_flow.format_minor and the models).
