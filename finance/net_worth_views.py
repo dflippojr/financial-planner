@@ -8,6 +8,8 @@ from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
+from . import account_sort
+from .access import request_person
 from .account_views import _active_visible_account, _service_or_404
 from .calculated_balances import (
     CalculationError,
@@ -18,7 +20,7 @@ from .calculated_balances import (
     save_calculated_balances,
 )
 from .cash_flow import default_date_range, format_minor
-from .forms import DebtTermsForm, ManualBalanceForm, NetWorthFilterForm, PairLoanForm
+from .forms import AccountSortForm, DebtTermsForm, ManualBalanceForm, NetWorthFilterForm, PairLoanForm
 from .lifecycle_services import update_debt_terms
 from .models import Account, BalanceSnapshot
 from .net_worth import net_worth_chart_data, net_worth_preset_links, net_worth_report, signed_balance_minor
@@ -54,6 +56,7 @@ def net_worth(request):
         date_from = date_to = scope = None
     report = None
     performance_rows = []
+    sort = account_sort.saved_order(request_person(request, missing_ok=True), account_sort.NET_WORTH)
     if date_from is not None:
         report = net_worth_report(
             request.user,
@@ -78,7 +81,21 @@ def net_worth(request):
             "performance_rows": performance_rows,
             "range_from": date_from,
             "range_to": date_to,
+            "panel_accounts": _panel_accounts(report, sort),
+            "sort_form": AccountSortForm(initial={"page": account_sort.NET_WORTH, "sort": sort}),
         },
+    )
+
+
+def _panel_accounts(report, sort):
+    """The By account rows for the latest month in the member's order; the report itself stays as built."""
+    if report is None or not report.periods:
+        return []
+    return account_sort.sort_rows(
+        report.periods[-1].accounts,
+        sort,
+        name=lambda row: row.account_name,
+        balance=lambda row: row.assets_minor - row.liabilities_minor,
     )
 
 

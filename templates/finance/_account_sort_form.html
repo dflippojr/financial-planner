@@ -1,0 +1,24 @@
+{% comment %}
+Sort control for a balance-by-account list (#655). A plain POST form, so it works without
+JavaScript: the save view stores the member's choice for this page and reloads it. Pass
+sort_form, sort_id (unique on the page) and sort_label; keep_filters carries the Net worth
+range back.
+{% endcomment %}
+<form method="post" action="{% url 'account-sort' %}" class="flex max-w-md flex-wrap items-end gap-2" data-account-sort="{{ sort_form.initial.page }}">
+  {% csrf_token %}
+  <input type="hidden" name="page" value="{{ sort_form.initial.page }}">
+  {% if keep_filters %}
+  {% if request.GET.date_from %}<input type="hidden" name="date_from" value="{{ request.GET.date_from }}">{% endif %}
+  {% if request.GET.date_to %}<input type="hidden" name="date_to" value="{{ request.GET.date_to }}">{% endif %}
+  {% if request.GET.scope %}<input type="hidden" name="scope" value="{{ request.GET.scope }}">{% endif %}
+  {% endif %}
+  <div class="flex min-w-0 flex-1 flex-col gap-1">
+    <label for="{{ sort_id }}" class="text-sm">{{ sort_label }}</label>
+    <select id="{{ sort_id }}" name="sort" class="select select-bordered min-h-11 w-full">
+      {% for value, label in sort_form.fields.sort.choices %}
+      <option value="{{ value }}"{% if value == sort_form.initial.sort %} selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <button type="submit" class="btn min-h-11">Sort</button>
+</form>

@@ -111,8 +111,13 @@
   {% if latest %}
   <section aria-labelledby="net-worth-accounts" class="rounded-box border border-base-300 bg-base-100 px-4 pb-2">
     <h2 id="net-worth-accounts" class="pt-4 pb-2 font-semibold">By account · {{ latest.label }}</h2>
+    {% if panel_accounts %}
+    <div class="pb-3">
+      {% include "finance/_account_sort_form.html" with sort_id="net-worth-account-sort" sort_label="Sort by" keep_filters=True %}
+    </div>
+    {% endif %}
     <ul>
-      {% for row in latest.accounts %}
+      {% for row in panel_accounts %}
       <li class="flex min-h-12 items-center justify-between gap-3 border-t border-base-300 py-2">
         <span class="flex min-w-0 flex-col">
           <span>{{ row.account_name }}{% if row.is_estimate %} <span class="badge badge-ghost badge-sm">estimate</span>{% endif %}{% if row.is_calculated %} <span class="badge badge-ghost badge-sm">calculated</span>{% endif %}</span>
