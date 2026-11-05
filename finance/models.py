@@ -2606,6 +2606,43 @@ class BillsCalendarSettings(models.Model):
         return f"Bills calendar settings for {self.person_id}"
 
 
+class AccountSortOrder(models.TextChoices):
+    NAME_ASC = "name_asc", "Name A–Z"
+    NAME_DESC = "name_desc", "Name Z–A"
+    BALANCE_DESC = "balance_desc", "Balance high→low"
+    BALANCE_ASC = "balance_asc", "Balance low→high"
+
+
+# Blank means the page's own order.
+_ACCOUNT_SORT_VALUES = ("", *AccountSortOrder.values)
+
+
+class AccountSortSettings(models.Model):
+    """How one member sorts the balance-by-account lists (#655); blank keeps the page's own order."""
+
+    Order = AccountSortOrder
+
+    person = models.OneToOneField(Person, on_delete=models.CASCADE, related_name="account_sort_settings")
+    net_worth_sort = models.CharField(max_length=16, blank=True, default="", choices=AccountSortOrder.choices)
+    accounts_sort = models.CharField(max_length=16, blank=True, default="", choices=AccountSortOrder.choices)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(net_worth_sort__in=_ACCOUNT_SORT_VALUES),
+                name="account_sort_net_worth_valid",
+            ),
+            models.CheckConstraint(
+                condition=Q(accounts_sort__in=_ACCOUNT_SORT_VALUES),
+                name="account_sort_accounts_valid",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Account sort settings {self.pk}"
+
+
 class MonthlyReview(models.Model):
     person = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="monthly_reviews")
     month = models.DateField()

@@ -805,6 +805,7 @@ EXEMPT_ROUTES = {
     "alert-mark-all-read": _OWN,
     "monthly-review-regenerate": _OWN,
     "sheet-comparison-delete": _OWN,
+    "account-sort": _OWN,
     "savings-goal-buffer": _OWN,
     "ai-connect": _AI_PROVIDER,
     "ai-disconnect": _AI_PROVIDER,

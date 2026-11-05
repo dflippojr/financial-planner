@@ -825,6 +825,7 @@ def _release_household_owned_rows(person):
 
 def _delete_personal_records(person):
     from .models import (
+        AccountSortSettings,
         Alert,
         AlertSettings,
         AiJob,
@@ -876,6 +877,7 @@ def _delete_personal_records(person):
     BillsCalendarSettings.objects.filter(person=person).delete()
     SheetMonthTotal.objects.filter(member=person).delete()
     SheetComparisonSettings.objects.filter(member=person).delete()
+    AccountSortSettings.objects.filter(person=person).delete()
     from .models import MemberSecurityEvent, Passkey
     from .security_services import revoke_indexed_sessions_for_user
 

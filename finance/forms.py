@@ -15,6 +15,7 @@ from .input_limits import MAX_DESCRIPTION_CHARS
 from .date_bounds import EARLIEST_ACTIVITY_DATE, TOO_EARLY_ERROR, activity_date_error
 from .cash_flow import MAX_REPORT_DATE, MAX_REPORT_PERIODS, default_date_range, period_count
 from .projection import DEFAULT_HORIZON, HORIZONS
+from .account_sort import CHOICES as ACCOUNT_SORT_CHOICES, PAGE_FIELDS as ACCOUNT_SORT_PAGES
 
 from .auth_services import validated_username
 from .policy_services import current_policy
@@ -513,6 +514,13 @@ class NetWorthFilterForm(forms.Form):
                 f"That range has more than {MAX_REPORT_PERIODS} periods. Choose a shorter range.",
             )
         return cleaned
+
+
+class AccountSortForm(forms.Form):
+    """Saves how a member sorts one page's balance-by-account list (#655)."""
+
+    page = forms.ChoiceField(choices=[(page, page) for page in ACCOUNT_SORT_PAGES])
+    sort = forms.ChoiceField(label="Sort by", required=False, choices=ACCOUNT_SORT_CHOICES)
 
 
 class ManualBalanceForm(forms.Form):

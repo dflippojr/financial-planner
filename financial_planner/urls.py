@@ -167,6 +167,7 @@ urlpatterns = [
     path("join/", views.join, name="join"),
     path("recover/", views.recover, name="recover"),
     path("accounts/", account_views.account_list, name="account-list"),
+    path("accounts/sort/", account_views.account_sort_save, name="account-sort"),
     path(
         "accounts/connections/",
         RedirectView.as_view(pattern_name="simplefin-connections", permanent=True, query_string=True),
