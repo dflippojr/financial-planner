@@ -32,7 +32,13 @@ from .ai_types import (
     ToolResult,
     UNAVAILABLE,
 )
-from .chat_attachments import attachment_context, attachment_tools, delete_conversations, store_attachment
+from .chat_attachments import (
+    attached_for_other_backend,
+    attachment_context,
+    attachment_tools,
+    delete_conversations,
+    store_attachment,
+)
 from .chat_proposals import proposal_tools
 from .lifecycle_services import _DENIED, _person_for
 from .input_limits import MAX_CHAT_PROMPT_CHARS, MAX_PAGE_CONTEXT_CHARS, MAX_CHAT_MESSAGES
@@ -435,8 +441,13 @@ def answer_turn(turn, *, sleep=None, monotonic=None):
     saved_session = (conversation.harness_session_id or "").strip()
     household = current_household(person)
     consent_held = household is None or household_ai_allowed(household)
-    # Earlier turns built from a row the member can no longer see are never resent.
-    history_held = consent_held and _uses_only_visible_rows(conversation, person)
+    # Earlier turns built from a row the member can no longer see are never resent, nor
+    # turns that may quote a file attached for another provider than this one (#644).
+    history_held = (
+        consent_held
+        and _uses_only_visible_rows(conversation, person)
+        and not attached_for_other_backend(conversation, backend)
+    )
     follow_up = (
         history_held
         and bool(saved_session)

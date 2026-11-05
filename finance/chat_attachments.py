@@ -167,6 +167,14 @@ def _readable(person, conversation_id, backend):
     return visible_attachments(person).filter(conversation_id=conversation_id, backend=backend)
 
 
+def attached_for_other_backend(conversation, backend):
+    """Whether the conversation holds a file the upload warning named another provider for.
+
+    Earlier turns may quote that file, so they are not resent to this provider.
+    """
+    return AiChatAttachment.objects.filter(conversation=conversation).exclude(backend=backend).exists()
+
+
 def attachment_context(person, conversation, backend):
     """A context block listing the readable attachments, or None when there are none."""
     rows = list(_readable(person, conversation.pk, backend).defer(*_LIST_ONLY).order_by("pk"))

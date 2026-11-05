@@ -17,6 +17,7 @@ from django.utils import timezone
 
 from finance.ai_services import connect_harness
 from finance.category_services import ensure_household_categories
+from finance.lifecycle_services import delete_member_data
 from finance.chat_attachment_parsing import PASSWORD_PROTECTED, TOO_LARGE, UNSUPPORTED, parse_upload
 from finance.chat_attachments import (
     DATA_NOT_INSTRUCTIONS,
@@ -335,6 +336,22 @@ def test_read_tool_caps_characters_per_call(harness, monkeypatch):
     assert "[page text cut at 70 characters]" in cut.text and "next_offset=1" in cut.text
 
 
+@pytest.mark.django_db
+def test_earlier_turns_are_not_resent_to_a_provider_the_file_was_not_attached_for(provider):  # noqa: F811
+    _user, person, _household = api_member(ANTHROPIC)
+    provider.script = [(200, anthropic_text("First answer quoting the file.")), (200, anthropic_text("Second."))]
+    conversation, attachment = _attach(person)
+    process_pending_turns(sleep=no_sleep)
+    AiChatAttachment.objects.filter(pk=attachment.pk).update(backend="claude")
+    send_message(person, "And now?", conversation_id=conversation.pk)
+    process_pending_turns(sleep=no_sleep)
+    first, second = provider.requests
+    assert [item["content"] for item in second["body"]["messages"]] == ["And now?"]
+    assert "Attached files" not in second["body"].get("system", "")
+    assert "budget.csv" not in str(second["body"])
+    assert "budget.csv" in first["body"]["system"]
+
+
 # --- Access follows the conversation ---------------------------------------
 
 
@@ -469,8 +486,9 @@ def test_automatic_deletes_when_a_row_is_lost_remove_files(harness):
 def test_deleting_the_member_removes_their_files(harness):
     _client, person, _household = _harness_member(harness)
     _conversation, attachment = _attach(person)
-    AiConversation.objects.filter(member=person).delete()
+    delete_member_data(person, {})
     assert not AiChatAttachment.objects.filter(pk=attachment.pk).exists()
+    assert not AiConversation.objects.exists()
 
 
 # --- Instructions inside a file only ever become a card --------------------
