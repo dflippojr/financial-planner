@@ -10,7 +10,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("finance", "0082_account_sort_settings"),
+        ("finance", "0083_ai_proposal_item_cards"),
     ]
 
     operations = [
