@@ -23,6 +23,7 @@ import posixpath
 import re
 import subprocess
 import sys
+import threading
 import zipfile
 import zlib
 from dataclasses import dataclass, field
@@ -55,6 +56,8 @@ MAX_ZIP_TOTAL_BYTES = 64 * 1024 * 1024
 MAX_TREE_PART_BYTES = 4 * 1024 * 1024
 MAX_ELEMENTS_PER_ITEM = 50_000
 MAX_SHARED_STRINGS = 1_000_000
+# Real workbook parts nest a handful of levels; deeper nesting is refused as unreadable.
+MAX_XML_DEPTH = 32
 
 TOO_LARGE = "That file is larger than 10 MB. Attach a smaller file."
 UNSUPPORTED = "Attach a CSV, XLSX or PDF file. Other file types can't be read."
@@ -177,7 +180,22 @@ def _decode_text(data: bytes) -> str:
     return data.decode("latin-1")
 
 
+# The csv module's field limit is process-wide. It is raised to the upload cap only while a
+# chat CSV is read, under this lock, and restored, so a long cell is truncated rather than
+# refused and nothing else sees the change for longer than one parse.
+_CSV_LIMIT_LOCK = threading.Lock()
+
+
 def _parse_csv(data: bytes):
+    with _CSV_LIMIT_LOCK:
+        previous = csv.field_size_limit(max(len(data), 1) + 1)
+        try:
+            return _read_csv(data)
+        finally:
+            csv.field_size_limit(previous)
+
+
+def _read_csv(data: bytes):
     text = _decode_text(data)
     try:
         dialect = csv.Sniffer().sniff(text[:8192], delimiters=",;\t|")
@@ -322,22 +340,29 @@ def _stream(payload, tags):
 
     Everything else is dropped from the tree as soon as it ends, and each yielded element
     is dropped once the caller moves on, so memory holds one item at a time however large
-    the part. An item with too many descendants is refused.
+    the part. Nesting deeper than MAX_XML_DEPTH and items with too many descendants are
+    refused, so the work per event stays constant.
     """
     stack = []
+    open_items = 0
     inside = 0
     # The payload came through _read_member, which refused any DTD.
     for event, element in ElementTree.iterparse(io.BytesIO(payload), events=("start", "end")):  # noqa: S314 - DTDs are refused
+        name = _local(element.tag)
         if event == "start":
-            stack.append(element)
-            if any(_local(item.tag) in tags for item in stack[:-1]):
+            if len(stack) >= MAX_XML_DEPTH:
+                raise AttachmentRejected(UNREADABLE)
+            if open_items:
                 inside += 1
                 if inside > MAX_ELEMENTS_PER_ITEM:
                     raise AttachmentRejected(TOO_MUCH_TEXT)
+            stack.append(element)
+            open_items += name in tags
             continue
         stack.pop()
-        name = _local(element.tag)
-        if any(_local(item.tag) in tags for item in stack):
+        if name in tags:
+            open_items -= 1
+        if open_items:
             continue  # Part of an item still being read.
         if name in tags:
             inside = 0

@@ -66,8 +66,24 @@ def test_csv_name_with_binary_bytes_is_unsupported():
     _rejected("budget.csv", b"Category\x00,Amount", parsing.UNSUPPORTED)
 
 
-def test_csv_with_an_unterminated_huge_field_is_unreadable():
-    _rejected("broken.csv", b'"' + b"x" * 200_000, parsing.UNREADABLE)
+def test_csv_cells_longer_than_the_csv_module_default_are_truncated_not_refused():
+    import csv
+
+    before = csv.field_size_limit()
+    data = b"Note,Amount\n" + b"x" * 131_073 + b",12\n"
+    rows = _rows(parse_upload(upload("long-cell.csv", data)))
+    assert rows[1][1][0] == "x" * (parsing.MAX_CELL_CHARS - 1) + "…" and rows[1][1][1] == "12"
+    assert csv.field_size_limit() == before
+
+
+def test_csv_with_a_broken_dialect_is_unreadable(monkeypatch):
+    import csv
+
+    def broken(*_args, **_kwargs):
+        raise csv.Error("synthetic")
+
+    monkeypatch.setattr(parsing.csv, "reader", broken)
+    _rejected("broken.csv", b"a,b\n", parsing.UNREADABLE)
 
 
 @pytest.mark.parametrize("name", ["notes.txt", "budget.html", "budget"])
@@ -385,8 +401,12 @@ def test_names_are_one_plain_line():
 
 
 MEMORY_PROBE = """
-import resource, sys
-resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024,) * 2)
+import sys
+try:
+    import resource
+    resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024,) * 2)
+except ImportError:  # Not POSIX: the parse still runs, without the memory ceiling.
+    pass
 sys.path.insert(0, sys.argv[1])
 from finance import chat_attachment_parsing as parsing
 data = open(sys.argv[2], "rb").read()
@@ -398,7 +418,6 @@ except parsing.AttachmentRejected as exc:
 """
 
 
-@pytest.mark.skipif(not hasattr(__import__("os"), "fork"), reason="RLIMIT_AS is POSIX-only")
 @pytest.mark.parametrize("shared", [
     '<x a="1"/>' * 3_000_000,
     "<si><r><t>a</t></r><r><t>b</t></r></si>" * 700_000,
@@ -420,6 +439,19 @@ def test_bloated_xml_parts_are_streamed_within_a_small_memory_limit(tmp_path, sh
                           timeout=120, check=False)
     assert done.returncode == 0, done.stderr[-500:]
     assert done.stdout.strip() == "parsed [[1, ['kept']]]"
+
+
+def test_deep_nesting_is_refused_in_linear_time():
+    import time
+
+    deep = "<n>" * 100_000 + "</n>" * 100_000
+    data = make_xlsx([("S", rows_xml([["a"]]))], shared_strings=deep)
+    assert len(data) < 10_000
+    started = time.monotonic()
+    _rejected("deep.xlsx", data, parsing.UNREADABLE)
+    assert time.monotonic() - started < 2
+    nested_item = "<si>" + "<r>" * 40 + "</r>" * 40 + "</si>"
+    _rejected("deep-item.xlsx", make_xlsx([("S", rows_xml([["a"]]))], shared_strings=nested_item), parsing.UNREADABLE)
 
 
 def test_stream_limits_items_strings_and_styles(monkeypatch):
