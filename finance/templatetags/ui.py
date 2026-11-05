@@ -88,6 +88,28 @@ def chat_markdown_html(text):
 
 
 @register.filter
+def chat_chart_rows(chart):
+    """A stored chat chart (#646) as table rows: each label with every series' display amount."""
+    labels = chart.get("labels") or []
+    series = chart.get("series") or []
+    return [
+        {"label": label, "cells": [(item.get("displays") or [""] * len(labels))[index] for item in series]}
+        for index, label in enumerate(labels)
+    ]
+
+
+@register.filter
+def chat_chart_payload(chart):
+    """Only what the browser draws from: the style, labels and series of a stored chat chart."""
+    return {
+        "kind": chart.get("kind"),
+        "style": chart.get("style"),
+        "labels": chart.get("labels") or [],
+        "series": chart.get("series") or [],
+    }
+
+
+@register.filter
 def lookup(mapping, key):
     if not mapping:
         return None

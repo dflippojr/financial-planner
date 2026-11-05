@@ -53,6 +53,7 @@ def spending_category_trend_report(
     scope="",
     today=None,
     tag=None,
+    accounts=None,
 ):
     if period_count(date_from, date_to, grouping) > MAX_REPORT_PERIODS:
         raise ValueError("Too many periods for one report.")
@@ -65,6 +66,7 @@ def spending_category_trend_report(
         scope=scope,
         grouping=grouping,
         tag=tag,
+        accounts=accounts,
     )
     categories = [
         SimpleNamespace(
@@ -198,7 +200,9 @@ def category_spending_trend_report(
     scope="",
     today=None,
     tag=None,
+    accounts=None,
 ):
+    """One category's spending per period. Optional `accounts` must already be visible (AI scope, #646)."""
     trend = spending_category_trend_report(
         principal,
         date_from=date_from,
@@ -208,6 +212,7 @@ def category_spending_trend_report(
         scope=scope,
         today=today,
         tag=tag,
+        accounts=accounts,
     )
     color_key = "uncategorized" if category_key == "uncategorized" else int(category_key)
     color_index = category_color_index(color_key)
@@ -241,6 +246,7 @@ def category_spending_trend_report(
             scope=scope,
             grouping=grouping,
             tag=tag,
+            accounts=accounts,
         )
         previous_total = _category_total(previous_report, category_key)
     average_minor = _average_minor(values)

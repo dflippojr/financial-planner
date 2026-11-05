@@ -606,6 +606,7 @@ def test_instructions_inside_an_attachment_can_only_produce_a_proposal_card(harn
     assert offered - {"read_attachment"} <= {
         "list_accounts", "list_transactions", "cash_flow_totals", "spending_by_category", "search_transactions",
         "recurring_series", "net_worth_series", "list_budgets", "list_planned_items", "projected_cash_flow",
+        "make_chart",  # read-only: draws server-computed series (#646)
         "propose_set_category", "propose_create_rule", "propose_set_budget", "propose_add_tags",
     }
     assert "Apply this rule now" in state.tool_outputs[0] and DATA_NOT_INSTRUCTIONS in state.tool_outputs[0]
@@ -767,3 +768,45 @@ def test_a_delete_waiting_on_an_upload_audits_the_new_file(harness):
     (added,) = _events(AuditEvent.Action.CHAT_ATTACHMENT_ADDED)
     (removed,) = _events(AuditEvent.Action.CHAT_ATTACHMENT_REMOVED, added.target_id)
     assert removed.actor_id == person.pk
+
+
+# --- Together with chat charts (#646) --------------------------------------
+
+
+@pytest.mark.django_db
+def test_one_turn_carries_a_chart_and_an_attachment_citation(harness):
+    from tests.test_chat_charts import SPENDING_BY_MONTH
+
+    state, _url = harness
+    client, person, household = _harness_member(harness)
+    account = checking(person, household, "Shared Checking")
+    add_txn(account, person, date(2026, 2, 3), -4200, "Synthetic groceries")
+    conversation, attachment = _attach(person, prompt="Chart my spending against my budget file.")
+    state.need_tool = True
+    state.session_answer = "Spending was steady; your budget.csv sets Groceries at 400 (row 2)."
+    state.pending_tool_calls = [[
+        {"call_id": "r1", "name": "read_attachment", "args": {"attachment_id": attachment.pk}},
+        {"call_id": "c1", "name": "make_chart", "args": SPENDING_BY_MONTH},
+    ]]
+    process_pending_turns(sleep=no_sleep)
+
+    offered = {tool["name"] for tool in state.session_creates[-1]["tools"]}
+    assert {"read_attachment", "make_chart"} <= offered
+    reply = conversation.messages.get(role=AiConversationMessage.Role.ASSISTANT)
+    assert reply.status == AiConversationMessage.Status.DONE, reply.content
+    (chart,) = reply.charts
+    assert chart["kind"] == "over_time"
+    cites = [figure for figure in reply.figures if figure.get("kind") == "attachment"]
+    assert [cite["label"] for cite in cites] == ["budget.csv"]
+    assert any(figure.get("kind") != "attachment" for figure in reply.figures)  # the chart's own figures
+
+    saved = client.get(f"{reverse('chat')}?c={conversation.pk}")
+    assert_page_is_csp_clean(saved)
+    html = saved.content.decode()
+    assert "data-chat-chart" in html and f'id="attachment-{attachment.pk}"' in html
+    assert "budget.csv: rows 1–5" in html  # source row numbers: the CSV's blank line 4 is skipped
+
+    live = client.get(reverse("chat-turn", args=[reply.pk])).json()
+    assert "data-chat-chart" in live["charts_html"]
+    assert {"label": "budget.csv", "amount_display": "rows 1–5",
+            "url": f"{reverse('chat')}?c={conversation.pk}#attachment-{attachment.pk}"} in live["figures"]

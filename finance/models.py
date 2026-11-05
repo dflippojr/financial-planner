@@ -2149,6 +2149,9 @@ class AiConversationMessage(models.Model):
     content = models.TextField()
     backend = models.CharField(max_length=32, blank=True, default="")
     figures = models.JSONField(default=list)
+    # Charts the make_chart tool computed for this reply (#646): the validated spec
+    # and the server's series. Never pinned elsewhere; deleted with the conversation.
+    charts = models.JSONField(default=list)
     notices = models.JSONField(default=list)
     page_context = models.JSONField(default=dict)
     created_at = models.DateTimeField(auto_now_add=True)

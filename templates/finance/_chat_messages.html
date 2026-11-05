@@ -34,6 +34,7 @@
       {% endfor %}
     </ul>
     {% endif %}
+    {% if item.charts %}{% include "finance/_chat_charts.html" with charts=item.charts %}{% endif %}
     {% if item.figures %}
     {# Collapsed by default (owner, 2026-11-04): the reply leads, the figures it used open on demand. #}
     <details class="mt-2 text-sm" data-chat-figures>

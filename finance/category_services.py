@@ -1717,11 +1717,13 @@ def link_refund(principal, refund_id, original_id, original_part_id=None):
     return refund
 
 
-def _totals_base(principal, *, date_from=None, date_to=None, accounts=None, tag=None):
+def _totals_base(principal, *, date_from=None, date_to=None, accounts=None, tag=None, q=None):
     """Visible, countable cash-flow rows: no transfer legs, with a refund flag.
 
     A selection of household accounts only is a household-scope calculation,
     so transfer pairs are judged by their household legs (`exclusion_exists_for`).
+    Optional `q` keeps the rows the transaction list's search matches, and
+    narrows the visible set like `tag`; it never widens it.
     """
     person = _person_for(principal)
     visible_accounts = Account.objects.visible_to(person)
@@ -1748,6 +1750,10 @@ def _totals_base(principal, *, date_from=None, date_to=None, accounts=None, tag=
         from .tag_services import apply_tag_filter
 
         transactions = apply_tag_filter(transactions, tag)
+    if q:
+        from .transaction_filters import search_q
+
+        transactions = transactions.filter(search_q(q))
     if date_from:
         transactions = transactions.filter(transaction_date__gte=date_from)
     if date_to:
@@ -1903,11 +1909,12 @@ def income_and_spending_by_tag(principal, tags, *, date_from=None, date_to=None,
     return {tag_id: grouped.get(tag_id, (0, 0)) for tag_id in wanted}
 
 
-def income_and_spending_by_window(principal, windows, *, accounts=None, tag=None):
+def income_and_spending_by_window(principal, windows, *, accounts=None, tag=None, q=None):
     """Income and spending for each `(start, end)` window in one grouped query.
 
     Windows must not overlap. Returns one `(income_minor, spending_minor)` pair
-    per window, in order, with zeros for windows that have no activity.
+    per window, in order, with zeros for windows that have no activity. Optional
+    `q` counts only the rows the transaction list's search matches.
     """
     windows = list(windows)
     if not windows:
@@ -1918,6 +1925,7 @@ def income_and_spending_by_window(principal, windows, *, accounts=None, tag=None
         date_to=max(end for _, end in windows),
         accounts=accounts,
         tag=tag,
+        q=q,
     )
     bucket = Case(
         *(
