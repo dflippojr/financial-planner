@@ -332,3 +332,36 @@ def test_the_member_export_includes_charts(harness):  # noqa: F811
     _charted_conversation(harness, alpha)
     rows = collect_export_tables(alpha)["ai_conversation_messages"]
     assert [row["charts"][0]["kind"] for row in rows if row["charts"]] == ["over_time"]
+
+
+def test_a_budget_chart_covers_the_month_of_date_from_and_needs_no_date_to():
+    _user, alpha, *_rest = seed()
+    next_month = (timezone.localdate().replace(day=1) + timedelta(days=32)).replace(day=1)
+    chart = _chart(make_chart(alpha, {"kind": "budget_vs_actual", "report": "budgets",
+                                      "date_from": next_month.isoformat()}))
+    assert chart["page_url"] == reverse("budgets") + f"?month={next_month.isoformat()[:7]}"
+    assert chart["spec"]["date_from"] == next_month.isoformat()
+    # A stray date_to does not move or break the month.
+    again = _chart(make_chart(alpha, {"kind": "budget_vs_actual", "report": "budgets",
+                                      "date_from": "2026-03-17", "date_to": "2026-01-01"}))
+    assert again["page_url"].endswith("month=2026-03") and again["spec"]["date_to"] == "2026-03-31"
+
+
+def test_charts_link_to_the_private_scope_they_draw_while_household_consent_is_incomplete():
+    alpha, _beta, household, _custom, _private = _household_without_consent()
+    shared = checking(alpha, household, "Synthetic Shared Checking")
+    add_txn(shared, alpha, date(2026, 3, 6), -9000, "Synthetic shared groceries")
+    march = {"date_from": "2026-03-01", "date_to": "2026-03-31"}
+    client = Client()
+    client.force_login(alpha.user)
+    over_time = _chart(make_chart(alpha, {"kind": "over_time", "report": "spending", **march}))
+    assert _values(over_time) == [4200]
+    assert "scope=private" in over_time["page_url"]
+    page = client.get(over_time["page_url"]).context["chart_data"]["periods"]
+    assert [row["spending_minor"] for row in page if not row.get("projected")] == [4200]
+    breakdown = _chart(make_chart(alpha, {"kind": "category_breakdown", "report": "spending", **march}))
+    assert "scope=private" in breakdown["page_url"]
+    rows = client.get(breakdown["page_url"]).context["chart_data"]["rows"]
+    assert sum(row["spending_minor"] for row in rows) == sum(_values(breakdown)) == 4200
+    worth = _chart(make_chart(alpha, {"kind": "over_time", "report": "net_worth", **march}))
+    assert "scope=private" in worth["page_url"]

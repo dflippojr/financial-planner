@@ -677,6 +677,7 @@
    a horizontal bar chart with many categories. */
 .chat-chart {
   min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .chat-chart-canvas {

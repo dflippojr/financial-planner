@@ -10,7 +10,7 @@ the figures the matching report tool would give it.
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, timedelta
 from urllib.parse import urlencode
 
 from django.urls import reverse
@@ -26,6 +26,7 @@ from .ai_tools import (
     _transaction_scope,
     _visible_account,
     ai_nameable_categories,
+    household_consent_complete,
     withheld_category_ids,
 )
 from .ai_types import ToolResult, ToolSpec
@@ -213,8 +214,13 @@ def _validated(person, args):
         raise ChartError(f"Charts of kind {kind} are drawn as: {', '.join(KINDS[kind]['styles'])}.")
     today = timezone.localdate()
     default_from, default_to = default_date_range(today)
-    date_from = _date(args, "date_from", default_from)
-    date_to = _date(args, "date_to", default_to)
+    if kind == BUDGET_VS_ACTUAL:
+        # Budgets are monthly: the chart covers the whole month holding date_from; date_to is not used.
+        date_from = _date(args, "date_from", today).replace(day=1)
+        date_to = (date_from + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+    else:
+        date_from = _date(args, "date_from", default_from)
+        date_to = _date(args, "date_to", default_to)
     if date_from > date_to:
         raise ChartError("date_from must be on or before date_to.")
     spec = {"kind": kind, "report": report, "style": style, "date_from": date_from, "date_to": date_to}
@@ -224,6 +230,10 @@ def _validated(person, args):
         raise ChartError(error)
     spec["account"] = account
     spec["scope"] = _scope(args.get("scope"))
+    if not spec["scope"] and not household_consent_complete(person):
+        # Until household consent is complete the tools see only private accounts, so the chart
+        # and the report page it links to both say so (cash_flow_totals does the same).
+        spec["scope"] = Account.Scope.PRIVATE
     if report == "category":
         spec["category"] = _category(person, args)
     if report == "merchant":

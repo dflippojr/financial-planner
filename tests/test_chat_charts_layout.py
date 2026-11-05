@@ -178,3 +178,37 @@ def test_popover_draws_every_chart_kind_live_and_saved(page_session, harness, sc
         assert _check(page, "#ai-popover", charts) == live
     finally:
         context.close()
+
+
+def test_a_long_unbroken_chart_title_wraps_inside_the_phone_bubble(page_session, harness):  # noqa: F811
+    _state, url = harness
+    context, page = page_session((390, 844), "light", "/")
+    try:
+        page.add_init_script(CSP_WATCH)
+        person = _member(url)
+        needle = "SYN" + "x" * 77
+        account = Account.objects.get(name="Synthetic Checking")
+        today = timezone.localdate()
+        Transaction.objects.create(
+            account=account, import_batch=ImportBatch.objects.filter(account=account).first(),
+            transaction_date=today, amount_minor=-1234, description=needle, kind=Transaction.Kind.CASH_FLOW,
+            source_row_number=900, fingerprint=b"longtitle".hex().ljust(64, "e"),
+            original_fields={"synthetic": "chart"},
+        )
+        result = make_chart(person, {"kind": "over_time", "report": "merchant", "description_contains": needle,
+                                     "date_from": today.replace(day=1).isoformat(), "date_to": today.isoformat()})
+        assert result.ok, result.text
+        conversation = send_message(person, "Chart that merchant")
+        page.goto(page.url.split("?")[0].rstrip("/") + f"/chat/?c={conversation.pk}")
+        page.locator("main [data-chat-turn-url] [data-chat-thinking]").wait_for(state="visible")
+        _answer(conversation, list(result.charts))
+        live = _check(page, "main", list(result.charts))
+        caption = page.locator("main figcaption").evaluate(
+            "(el) => { const a = el.closest('article').getBoundingClientRect(); const c = el.getBoundingClientRect(); "
+            "return c.right <= a.right + 0.5 && el.scrollWidth <= el.clientWidth + 1; }")
+        assert caption is True
+        page.reload()
+        page.wait_for_load_state("networkidle")
+        assert _check(page, "main", list(result.charts)) == live
+    finally:
+        context.close()
