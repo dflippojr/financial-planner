@@ -1,4 +1,3 @@
-from bisect import bisect_right
 from types import SimpleNamespace
 from urllib.parse import urlencode
 
@@ -6,6 +5,7 @@ from django.db.models import Case, IntegerField, Value, When
 from django.urls import reverse
 from django.utils import timezone
 
+from .balance_history import SOURCE_RANK, indexed_histories, last_on_or_before
 from .cash_flow import (
     GROUPING_MONTH,
     MAX_REPORT_PERIODS,
@@ -21,14 +21,6 @@ from .models import Account, BalanceSnapshot
 CARRIED_FORWARD = "carried forward"
 
 PROTOCOL_SIGN_SOURCES = (BalanceSnapshot.Source.SIMPLEFIN, BalanceSnapshot.Source.CALCULATED)
-
-# On one account and date, SimpleFIN outranks manual, and both outrank a
-# calculated row (#636), whichever was saved first.
-SOURCE_RANK = {
-    BalanceSnapshot.Source.SIMPLEFIN: 2,
-    BalanceSnapshot.Source.MANUAL: 1,
-    BalanceSnapshot.Source.CALCULATED: 0,
-}
 
 
 def source_rank_expression():
@@ -59,40 +51,6 @@ def signed_balance_minor(account_type, source, amount_minor):
     """A snapshot as its net-worth contribution: an amount owed is negative whatever its source."""
     assets, liabilities = contribution_parts(account_type, source, amount_minor)
     return assets - liabilities
-
-
-def _source_rank(source):
-    return SOURCE_RANK.get(source, 0)
-
-
-def _ordered_snapshots(rows):
-    ordered = sorted(rows, key=lambda row: (row.snapshot_date, _source_rank(row.source), row.pk))
-    return ordered, [row.snapshot_date for row in ordered]
-
-
-def last_on_or_before(ordered, dates, as_of):
-    index = bisect_right(dates, as_of) - 1
-    if index < 0:
-        return None
-    return ordered[index]
-
-
-def _load_snapshots(principal, accounts, date_to):
-    grouped = {account.pk: [] for account in accounts}
-    if not accounts:
-        return grouped
-    rows = BalanceSnapshot.objects.visible_to(principal).filter(
-        account_id__in=grouped,
-        snapshot_date__lte=date_to,
-    )
-    for row in rows:
-        grouped[row.account_id].append(row)
-    return grouped
-
-
-def _indexed_snapshots(principal, accounts, date_to):
-    raw = _load_snapshots(principal, accounts, date_to)
-    return {account.pk: _ordered_snapshots(raw[account.pk]) for account in accounts}
 
 
 def _account_month_row(account, snapshot, window):
@@ -241,7 +199,7 @@ def net_worth_report(principal, *, date_from, date_to, scope="", today=None, acc
         for account in selected_accounts(principal, scope=scope, accounts=accounts)
         if any(counts_on(account, window.end) for window in windows)
     ]
-    indexed = _indexed_snapshots(principal, accounts, date_to)
+    indexed = indexed_histories(principal, accounts, date_to)
     periods = [_month_period(window, accounts, indexed, today) for window in windows]
     return SimpleNamespace(
         accounts=accounts,
