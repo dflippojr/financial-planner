@@ -18,6 +18,7 @@ from django.db import transaction
 from django.urls import reverse
 
 from .access import DENIED as _DENIED
+from .ai_jobs import _connection_marker
 from .ai_types import ToolResult, ToolSpec
 from .audit_services import append_event, personal_audience, record
 from .chat_attachment_parsing import KIND_LABELS, AttachmentRejected, ParsedAttachment
@@ -37,12 +38,15 @@ _LIST_ONLY = ("data", "content")
 
 
 def provider_key(connection, backend):
-    """The provider an upload warning names: the chat backend and the connection that serves it.
+    """The provider an upload warning names: the chat backend and the connect that serves it.
 
     Two connections can share a backend name (a member's own local model and the household's),
-    so a file is tied to both.
+    and reconnecting a harness, even to another server, keeps its row, so a file is tied to the
+    backend and the connection marker (row id and connected_at) the jobs lane uses for sessions.
     """
-    return f"{backend}@{connection.pk}" if connection is not None else str(backend or "")
+    if connection is None:
+        return str(backend or "")
+    return f"{backend}@{_connection_marker(connection)}"
 
 
 def visible_attachments(principal):
@@ -107,11 +111,7 @@ def delete_conversations(query, *, actor=None):
         ids = list(query.values_list("pk", flat=True))
         if not ids:
             return 0
-        # Uploads lock their conversation (send_message), so taking the same locks here means
-        # an upload either commits before this scan, and is audited, or never lands at all.
-        ids = list(
-            AiConversation.objects.select_for_update().filter(pk__in=ids).order_by("pk").values_list("pk", flat=True)
-        )
+        ids = _lock_conversations(ids)
         attachments = list(
             AiChatAttachment.objects.filter(conversation_id__in=ids)
             .select_related("conversation__member")
@@ -121,6 +121,14 @@ def delete_conversations(query, *, actor=None):
             _record_removed(item, actor)
         deleted, _rows = AiConversation.objects.filter(pk__in=ids).delete()
         return deleted
+
+
+def _lock_conversations(ids):
+    """Lock conversations in id order. Uploads take the same lock (send_message), so an upload
+    either commits before the attachment scan that follows, and is audited, or never lands."""
+    return list(
+        AiConversation.objects.select_for_update().filter(pk__in=ids).order_by("pk").values_list("pk", flat=True)
+    )
 
 
 def _record_removed(item, actor):

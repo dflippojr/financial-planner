@@ -187,7 +187,11 @@ def test_xlsx_with_a_dtd_is_refused():
     lambda xml: xml.encode("utf-16-le"),
     lambda xml: ('<?xml version="1.0" encoding="UTF-16"?>' + xml).encode("utf-8"),
     lambda xml: ("<?xml version='1.0' encoding='ISO-8859-1'?>" + xml).encode("latin-1"),
-], ids=["utf16-bom", "utf16-no-bom", "declared-utf16", "declared-latin1"])
+    lambda xml: ("<?xml version='1.0'" + " " * 600 + "encoding='ISO-8859-1'?>" + xml).encode("latin-1"),
+    lambda xml: ('<?xml version="1.0"' + " " * 600 + 'encoding="UNKNOWN"?>' + xml).encode("utf-8"),
+    lambda xml: ('<?xml version="1.0" encoding="utf-8"' + xml).encode("utf-8"),
+], ids=["utf16-bom", "utf16-no-bom", "declared-utf16", "declared-latin1", "padded-latin1", "padded-unknown",
+        "unterminated-declaration"])
 def test_xlsx_parts_not_in_utf8_are_refused_so_a_dtd_cannot_hide(encode):
     # A DTD in UTF-16 would slip past a byte search and expand entities before any limit.
     hostile = (
@@ -201,6 +205,13 @@ def test_xlsx_parts_not_in_utf8_are_refused_so_a_dtd_cannot_hide(encode):
             payload = encode(hostile) if info.filename == "xl/worksheets/sheet1.xml" else source.read(info)
             target.writestr(info.filename, payload)
     _rejected("utf16.xlsx", rebuilt.getvalue(), parsing.UNREADABLE)
+
+
+def test_an_unknown_encoding_reaching_the_parser_is_unreadable_not_an_error(monkeypatch):
+    # Belt and braces: if a declaration ever slipped past the check, LookupError is still a refusal.
+    monkeypatch.setattr(parsing, "_is_utf8_xml", lambda payload: True)
+    data = make_xlsx([("Budget", rows_xml([["x"]]))], sheet_xml_prefix='<?xml version="1.0" encoding="UNKNOWN"?>')
+    _rejected("unknown.xlsx", data, parsing.UNREADABLE)
 
 
 def test_xlsx_utf8_declarations_and_bom_are_read():

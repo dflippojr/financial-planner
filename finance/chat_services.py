@@ -549,7 +549,10 @@ def _lock_conversation(pk):
 
 def _lock_member(person):
     """Serialise one member's quota checks so two requests cannot both pass the cap."""
-    Person.objects.select_for_update().filter(pk=person.pk).first()
+    # NO KEY UPDATE still serialises these checks but leaves the row's key free, so an audit
+    # event that references this member (a conversation delete holding the conversation
+    # lock this send waits for) can insert without a deadlock (#644).
+    Person.objects.select_for_update(no_key=True).filter(pk=person.pk).first()
 
 
 @transaction.atomic

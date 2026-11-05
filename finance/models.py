@@ -2211,7 +2211,7 @@ class AiChatAttachment(models.Model):
     size_bytes = models.PositiveIntegerField()
     # The provider named in the upload warning (chat backend and connection,
     # chat_attachments.provider_key); the file is read only while chat still uses it.
-    provider = models.CharField(max_length=64)
+    provider = models.CharField(max_length=120)
     data = models.BinaryField()
     # {"sheets": [{"name", "rows": [[row number, [cells]]]}]} or {"pages": [text]}.
     content = models.JSONField(default=dict)

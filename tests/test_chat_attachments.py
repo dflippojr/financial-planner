@@ -617,3 +617,131 @@ def test_instructions_inside_an_attachment_can_only_produce_a_proposal_card(harn
     txn.refresh_from_db()
     assert txn.category_id is None
     assert not Transaction.objects.filter(category__in=Category.objects.filter(name="Dining")).exists()
+
+
+@pytest.mark.django_db
+def test_reconnecting_the_harness_makes_earlier_files_unreadable(harness):
+    # A reconnect keeps the connection row, even to another server, so the key carries connected_at.
+    _state, url = harness
+    _client, person, _household = _harness_member(harness)
+    conversation, attachment = _attach(person)
+    before = _key(person)
+    assert read_attachment(person, conversation.pk, before, {"attachment_id": attachment.pk}).ok
+    connect_harness(person, base_url=url, token=TOKEN)
+    after = _key(person)
+    assert after != before and after.split("@")[0] == before.split("@")[0] == "claude"
+    assert not read_attachment(person, conversation.pk, after, {"attachment_id": attachment.pk}).ok
+    assert attachment_context(person, conversation, after) is None
+
+
+# --- Uploads racing a conversation delete (PostgreSQL row locks) -----------
+
+
+def _race(first_action, pause_after, competing_action):
+    """Run first_action until pause_after returns (its locks held), then competing_action until
+    PostgreSQL shows it blocked on the first worker, then let both finish. Returns errors by role."""
+    import threading
+    from unittest.mock import patch
+
+    from django.db import connection, connections
+
+    from tests.lock_races import JOIN_SECONDS, WAIT_SECONDS, wait_until_blocked_by
+
+    module, name = pause_after
+    original = getattr(module, name)
+    held, release, competing_done = threading.Event(), threading.Event(), threading.Event()
+    errors, pids = {}, {}
+
+    def pausing(*args, **kwargs):
+        result = original(*args, **kwargs)
+        if threading.current_thread().name == "first":
+            held.set()
+            release.wait(timeout=JOIN_SECONDS)
+        return result
+
+    def run(action, role):
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SET lock_timeout = '15s'")
+                cursor.execute("SELECT pg_backend_pid()")
+                pids[role] = cursor.fetchone()[0]
+            action()
+        except Exception as exc:  # noqa: BLE001 - reported to the test
+            errors[role] = exc
+        finally:
+            connections.close_all()
+            if role == "competing":
+                competing_done.set()
+
+    first = threading.Thread(target=run, args=(first_action, "first"), name="first", daemon=True)
+    competing = threading.Thread(target=run, args=(competing_action, "competing"), name="competing", daemon=True)
+    with patch.object(module, name, pausing):
+        try:
+            first.start()
+            assert held.wait(timeout=WAIT_SECONDS), f"first worker never took its locks: {errors}"
+            competing.start()
+            deadline = WAIT_SECONDS
+            while "competing" not in pids and deadline > 0:
+                competing_done.wait(0.02)
+                deadline -= 0.02
+            wait_until_blocked_by(pids["competing"], pids["first"], competing_done, errors)
+        finally:
+            release.set()
+            first.join(timeout=JOIN_SECONDS)
+            competing.join(timeout=JOIN_SECONDS)
+    assert not first.is_alive() and not competing.is_alive()
+    return errors
+
+
+def _postgres_only():
+    from django.db import connection
+
+    if connection.vendor != "postgresql":
+        pytest.skip("row-lock races can only be exercised on PostgreSQL")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_an_upload_waiting_on_a_delete_is_refused_and_stores_nothing(harness):
+    from finance import chat_attachments
+
+    _postgres_only()
+    _client, person, _household = _harness_member(harness)
+    conversation, first_file = _attach(person)
+    parsed, key = parse_upload(upload("late.csv", b"a\n1\n")), _key(person)
+    messages_before = AiConversationMessage.objects.count()
+
+    errors = _race(
+        lambda: delete_conversation(person, conversation.pk),
+        (chat_attachments, "_lock_conversations"),
+        lambda: send_message(person, "Late file.", conversation_id=conversation.pk, attachment=parsed,
+                             warned_provider=key),
+    )
+
+    assert "first" not in errors
+    assert isinstance(errors.get("competing"), PermissionDenied)
+    assert not AiConversation.objects.exists() and not AiChatAttachment.objects.exists()
+    assert AiConversationMessage.objects.count() == 0 < messages_before
+    assert len(_events(AuditEvent.Action.CHAT_ATTACHMENT_REMOVED, first_file.pk)) == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_delete_waiting_on_an_upload_audits_the_new_file(harness):
+    import finance.chat_services as chat_services
+
+    _postgres_only()
+    _client, person, _household = _harness_member(harness)
+    conversation = send_message(person, "Hello there.")
+    parsed, key = parse_upload(upload("racing.csv", b"a\n1\n")), _key(person)
+
+    errors = _race(
+        lambda: send_message(person, "With a file.", conversation_id=conversation.pk, attachment=parsed,
+                             warned_provider=key),
+        (chat_services, "store_attachment"),
+        lambda: delete_conversation(person, conversation.pk),
+    )
+
+    assert errors == {}
+    assert not AiConversation.objects.exists() and not AiChatAttachment.objects.exists()
+    (added,) = _events(AuditEvent.Action.CHAT_ATTACHMENT_ADDED)
+    (removed,) = _events(AuditEvent.Action.CHAT_ATTACHMENT_REMOVED, added.target_id)
+    assert removed.actor_id == person.pk

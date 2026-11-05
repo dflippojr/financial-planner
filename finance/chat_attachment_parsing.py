@@ -73,7 +73,8 @@ _OLE_ENCRYPTION = "EncryptionInfo".encode("utf-16-le")
 _DTD = re.compile(rb"<!(?:DOCTYPE|ENTITY)", re.IGNORECASE)
 # The DTD search reads raw bytes, so it holds only for UTF-8 (or ASCII) parts: anything
 # else (UTF-16 by BOM, by its NUL bytes or by declaration) is refused before parsing.
-_XML_ENCODING = re.compile(rb"""^\s*<\?xml[^>]*?encoding\s*=\s*["']([A-Za-z0-9._-]+)["']""")
+_XML_DECLARATION = re.compile(rb"^\s*<\?xml\b(.*?)\?>", re.DOTALL)
+_XML_ENCODING = re.compile(rb"""\bencoding\s*=\s*["']([^"']*)["']""")
 _UTF8_NAMES = frozenset({b"utf-8", b"utf8", b"us-ascii", b"ascii"})
 _WIDE_BOMS = (b"\xff\xfe", b"\xfe\xff")
 _REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -254,7 +255,7 @@ def _parse_xlsx(data: bytes):
         except AttachmentRejected:
             raise
         except (ElementTree.ParseError, zipfile.BadZipFile, KeyError, TypeError, ValueError, OSError, EOFError,
-                NotImplementedError, RuntimeError, zlib.error):
+                NotImplementedError, RuntimeError, LookupError, zlib.error):
             raise AttachmentRejected(UNREADABLE) from None
 
 
@@ -296,8 +297,13 @@ def _is_utf8_xml(payload: bytes) -> bool:
     """Whether expat will read these bytes as UTF-8, so the byte-level DTD search is complete."""
     if b"\x00" in payload or payload.startswith(_WIDE_BOMS):
         return False
-    declared = _XML_ENCODING.match(payload.removeprefix(b"\xef\xbb\xbf")[:512])
-    return declared is None or declared.group(1).lower() in _UTF8_NAMES
+    body = payload.removeprefix(b"\xef\xbb\xbf")
+    declaration = _XML_DECLARATION.match(body)
+    if declaration is None:
+        # No declaration means UTF-8 to expat; an unterminated one is refused here.
+        return not body.lstrip().startswith(b"<?xml")
+    declared = _XML_ENCODING.search(declaration.group(1))
+    return declared is None or declared.group(1).strip().lower() in _UTF8_NAMES
 
 
 def _parse_xml(payload):
