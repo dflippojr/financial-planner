@@ -362,6 +362,26 @@ def test_goal_rows_with_problems_are_shown_and_another_members_goal_stays_unavai
 
 
 @pytest.mark.django_db
+def test_oversized_and_malformed_fields_are_refused_on_their_row_and_stored_capped(harness):
+    state, _client, person, _household = _setup(harness)
+    _propose(state, person, "propose_savings_goals", {"items": [
+        {"name": "x" * 10000, "target_amount_minor": 100000},
+        {"name": "Boat", "target_amount_minor": 100000, "priority": "first" * 1000},
+        {"name": "Car", "target_amount_minor": 99.5},
+        {"name": "Bike", "target_amount_minor": 50000, "priority": "2"},
+    ]})
+    rows = AiProposal.objects.get().payload["items"]
+    assert [row["error"] for row in rows] == [
+        "Name: enter a name of up to 150 characters.",
+        "Priority: enter a whole number from 1 to 1,000,000.",
+        "Amount: enter a whole number of cents greater than zero.",
+        None,
+    ]
+    assert len(rows[0]["values"]["name"]) == 200 and len(rows[1]["values"]["priority"]) == 200
+    assert rows[3]["values"]["priority"] == 2
+
+
+@pytest.mark.django_db
 def test_a_changed_goal_goes_stale(harness):
     state, client, person, _household = _setup(harness)
     fund = _goal(person)

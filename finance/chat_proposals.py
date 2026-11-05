@@ -66,6 +66,7 @@ REFUSED = "That suggestion cannot be applied."
 # Item cards (#659): one card, a checkbox per item, a result per item.
 MAX_CARD_ITEMS = 25
 MAX_PRIORITY = 1_000_000
+MAX_FIELD_CHARS = 200
 NOTHING_TICKED = "Tick at least one item to apply, or Dismiss the suggestion."
 NONE_APPLIED = "None of the ticked items could be applied."
 # Hidden and missing rows answer alike, so the model learns nothing from the difference.
@@ -401,6 +402,14 @@ def _whole_minor(value):
     return minor if 0 < minor <= MAX_SIGNED_BIGINT else None
 
 
+def _whole_or_text(raw, key):
+    """An integer field as given, or its capped text for validation to refuse."""
+    value = raw.get(key)
+    if value is None or (isinstance(value, int) and not isinstance(value, bool)):
+        return value
+    return _field(raw, key) or None
+
+
 def _int_or_none(value):
     if value is None or isinstance(value, bool):
         return None
@@ -417,6 +426,11 @@ def _dollars(minor):
 
 def _text(value):
     return "" if value is None else str(value).strip()
+
+
+def _field(raw, key):
+    """A model-supplied text field, capped so an oversized value is refused, not stored whole."""
+    return _text(raw.get(key))[:MAX_FIELD_CHARS]
 
 
 def _iso(value):
@@ -501,10 +515,10 @@ def _planned_overrides(person, raw, values, item):
     """Apply the model's fields to `values`; returns the first problem or None."""
     error = None
     for key in ("name", "kind", "cadence", "start_date"):
-        if _text(raw.get(key)):
-            values[key] = _text(raw.get(key))
+        if _field(raw, key):
+            values[key] = _field(raw, key)
     if "end_date" in raw:
-        values["end_date"] = _text(raw.get("end_date")) or None
+        values["end_date"] = _field(raw, "end_date") or None
     if "amount_minor" in raw:
         minor = _whole_minor(raw.get("amount_minor"))
         if minor is None:
@@ -539,7 +553,7 @@ def _planned_row(person, raw):
             return {**row, "error": ITEM_UNAVAILABLE}
         values = _planned_values(item)
     if action == "end":
-        values["end_date"] = _text(raw.get("end_date")) or timezone.localdate().isoformat()
+        values["end_date"] = _field(raw, "end_date") or timezone.localdate().isoformat()
         error = None
     else:
         error = _planned_overrides(person, raw, values, item)
@@ -593,56 +607,76 @@ def _goal_values(goal):
     }
 
 
+class _RowProblem(Exception):
+    """A member-facing reason one card row cannot be applied."""
+
+
 def _goal_check(person, values, goal, goals):
     """(problem, None) or (None, save_savings_goal payload). `goals` are the ones a dependency may name."""
+    try:
+        return None, _goal_payload(person, values, goal, goals)
+    except _RowProblem as exc:
+        return str(exc), None
+
+
+def _goal_payload(person, values, goal, goals):
     name = _text(values.get("name"))
     if not name or len(name) > 150:
-        return "Name: enter a name of up to 150 characters.", None
+        raise _RowProblem("Name: enter a name of up to 150 characters.")
     minor = values.get("target_amount_minor")
     if not isinstance(minor, int) or minor <= 0:
-        return "Target amount: enter an amount greater than zero.", None
-    target_date = None
-    if values.get("target_date"):
-        try:
-            target_date = date.fromisoformat(str(values["target_date"]))
-        except ValueError:
-            return "Target date: Enter a valid date.", None
-    priority = values.get("priority")
-    if priority not in (None, ""):
-        priority = _int_or_none(priority)
-        if priority is None or not 1 <= priority <= MAX_PRIORITY:
-            return "Priority: enter a whole number from 1 to 1,000,000.", None
-    else:
-        priority = None
+        raise _RowProblem("Target amount: enter an amount greater than zero.")
     scope = values.get("scope")
     household = current_household(person) if scope == SavingsGoal.Scope.HOUSEHOLD else None
     if scope == SavingsGoal.Scope.HOUSEHOLD and household is None:
-        return "Join a household before adding a household savings goal.", None
-    dependency = None
-    if values.get("depends_on_id") not in (None, ""):
-        dependency = goals.filter(pk=_int_or_none(values["depends_on_id"])).first()
-        if dependency is None:
-            return DEPENDENCY_UNAVAILABLE, None
-        try:
-            validate_dependency(person, goal or SavingsGoal(owner=person), dependency, scope=scope, household=household)
-        except PermissionDenied:
-            return DEPENDENCY_UNAVAILABLE, None
-        except ValidationError as exc:
-            return f"Buy after: {_first_message(exc, REFUSED, stringify=True)}", None
-    return None, {
+        raise _RowProblem("Join a household before adding a household savings goal.")
+    return {
         "scope": scope,
         "name": name,
         "target_amount_minor": minor,
-        "target_date": target_date,
-        "priority": priority,
-        "depends_on": dependency,
+        "target_date": _goal_target_date(values.get("target_date")),
+        "priority": _goal_priority(values.get("priority")),
+        "depends_on": _goal_dependency(person, values.get("depends_on_id"), goal, goals, scope, household),
     }
+
+
+def _goal_target_date(value):
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError as exc:
+        raise _RowProblem("Target date: Enter a valid date.") from exc
+
+
+def _goal_priority(value):
+    if value in (None, ""):
+        return None
+    priority = _int_or_none(value)
+    if priority is None or not 1 <= priority <= MAX_PRIORITY:
+        raise _RowProblem("Priority: enter a whole number from 1 to 1,000,000.")
+    return priority
+
+
+def _goal_dependency(person, depends_on_id, goal, goals, scope, household):
+    if depends_on_id in (None, ""):
+        return None
+    dependency = goals.filter(pk=_int_or_none(depends_on_id)).first()
+    if dependency is None:
+        raise _RowProblem(DEPENDENCY_UNAVAILABLE)
+    try:
+        validate_dependency(person, goal or SavingsGoal(owner=person), dependency, scope=scope, household=household)
+    except PermissionDenied as exc:
+        raise _RowProblem(DEPENDENCY_UNAVAILABLE) from exc
+    except ValidationError as exc:
+        raise _RowProblem(f"Buy after: {_first_message(exc, REFUSED, stringify=True)}") from exc
+    return dependency
 
 
 def _goal_overrides(raw, values):
     error = None
-    if _text(raw.get("name")):
-        values["name"] = _text(raw.get("name"))
+    if _field(raw, "name"):
+        values["name"] = _field(raw, "name")
     if "target_amount_minor" in raw:
         minor = _whole_minor(raw.get("target_amount_minor"))
         if minor is None:
@@ -650,11 +684,11 @@ def _goal_overrides(raw, values):
         else:
             values["target_amount_minor"] = minor
     if "target_date" in raw:
-        values["target_date"] = _text(raw.get("target_date")) or None
+        values["target_date"] = _field(raw, "target_date") or None
     if "priority" in raw:
-        values["priority"] = raw.get("priority")
+        values["priority"] = _whole_or_text(raw, "priority")
     if "depends_on_goal_id" in raw:
-        values["depends_on_id"] = raw.get("depends_on_goal_id")
+        values["depends_on_id"] = _whole_or_text(raw, "depends_on_goal_id")
     return error
 
 
