@@ -32,6 +32,16 @@ from .ai_types import (
     ToolResult,
     UNAVAILABLE,
 )
+from .chat_attachments import (
+    acknowledge_provider,
+    attachment_context,
+    attachment_tools,
+    delete_conversations,
+    provider_key,
+    provider_needs_warning,
+    store_attachment,
+)
+from .chat_attachment_parsing import AttachmentRejected
 from .chat_charts import MAX_CHARTS_PER_REPLY, chart_tools
 from .chat_proposals import proposal_tools
 from .lifecycle_services import _DENIED, _person_for
@@ -51,6 +61,14 @@ PENDING_LIMIT = "Wait for your earlier questions to be answered before asking an
 CONVERSATION_LIMIT = "You have reached the limit of open conversations. Delete one from Chat to start another."
 TILE_UNAVAILABLE = "This tile or its filters are no longer available to AI. Reopen the tile and ask again."
 LOCAL_HIDDEN = "Chat on the local model is not offered yet. Choose Claude in Settings → AI."
+PROVIDER_CHANGED = (
+    "Your AI provider changed since this page loaded, so the file was not sent. "
+    "Reload the page, check which provider the warning names, and attach it again."
+)
+PROVIDER_SWITCH_UNSEEN = (
+    "Your AI provider changed since this page loaded, and this conversation has attached files. "
+    "Reload the page to see which provider they will go to, then ask again."
+)
 NO_CHAT_BACKEND = "No chat backend is available yet. Sign in to Claude on the harness, then choose it in Settings → AI."
 
 
@@ -87,7 +105,7 @@ def purge_expired(person=None):
     query = AiConversation.objects.filter(expires_at__lte=timezone.now())
     if person is not None:
         query = query.filter(member=person)
-    query.delete()
+    delete_conversations(query)
 
 
 def start_conversation(principal):
@@ -113,12 +131,12 @@ def delete_conversation(principal, conversation_id):
     row = AiConversation.objects.owned_by(person).filter(pk=conversation_id).first()
     if row is None:
         raise PermissionDenied(_DENIED)
-    row.delete()
+    delete_conversations(AiConversation.objects.filter(pk=row.pk), actor=person)
 
 
 def delete_all_conversations(principal):
     person = _person_for(principal)
-    AiConversation.objects.owned_by(person).delete()
+    delete_conversations(AiConversation.objects.owned_by(person), actor=person)
 
 
 def delete_conversations_for_account(account_id):
@@ -128,7 +146,7 @@ def delete_conversations_for_account(account_id):
         if account_id in ids:
             doomed.append(row.pk)
     if doomed:
-        AiConversation.objects.filter(pk__in=doomed).delete()
+        delete_conversations(AiConversation.objects.filter(pk__in=doomed))
 
 
 # The household rows a tool can quote, by the conversation field that records them.
@@ -174,7 +192,7 @@ def delete_conversations_without_access(account_ids=(), *, planned_item_ids=(), 
         if any(ids - visible[field] for field, ids in used.items()):
             doomed.append(row.pk)
     if doomed:
-        AiConversation.objects.filter(pk__in=doomed).delete()
+        delete_conversations(AiConversation.objects.filter(pk__in=doomed))
 
 
 def keep_conversation_if_visible(conversation_id):
@@ -193,7 +211,7 @@ def keep_conversation_if_visible(conversation_id):
             list(model.objects.select_for_update().filter(pk__in=used).order_by("pk").values_list("pk", flat=True))
     if _uses_only_visible_rows(conversation, conversation.member):
         return True
-    conversation.delete()
+    delete_conversations(AiConversation.objects.filter(pk=conversation.pk))
     return False
 
 
@@ -273,13 +291,28 @@ def page_context_from_request(request):
     )
 
 
-def send_message(principal, text, *, conversation_id=None, page_context=None, start_new=False):
-    """Store the question and a pending reply; the chat runner answers it in the background."""
+def send_message(
+    principal, text, *, conversation_id=None, page_context=None, start_new=False, attachment=None, warned_provider=None,
+):
+    """Store the question and a pending reply; the chat runner answers it in the background.
+
+    ``attachment`` is a file already parsed by chat_attachment_parsing. It is stored
+    with the question in one transaction, so a refused file leaves nothing behind.
+    ``warned_provider`` is the provider (chat_attachments.provider_key) the member's page
+    named in its warnings. A new file is refused, before anything is written, when chat has
+    since moved to another provider. In a conversation that holds files, a provider the chat
+    has not yet warned about (owner decision 5) is recorded as warned when the page named
+    it, and the send is refused when the page still named the previous one.
+    """
     if len(text or "") > MAX_CHAT_PROMPT_CHARS:
         raise AiError(f"Questions must be at most {MAX_CHAT_PROMPT_CHARS:,} characters.")
     person = _person_for(principal)
     purge_expired(person)
-    _connection, backend = chat_backend_for(person)
+    connection, backend = chat_backend_for(person)
+    provider = provider_key(connection, backend)
+    if attachment is not None and warned_provider != provider:
+        # Checked before any conversation or question is written, so nothing is stored.
+        raise AttachmentRejected(PROVIDER_CHANGED)
     prompt = (text or "").strip()
     if not prompt:
         raise AiError("Enter a question.")
@@ -296,7 +329,11 @@ def send_message(principal, text, *, conversation_id=None, page_context=None, st
         conversation = _new_conversation(person, backend)
     with transaction.atomic():
         _lock_member(person)
-        conversation = _lock_conversation(conversation.pk)
+        try:
+            conversation = _lock_conversation(conversation.pk)
+        except AiConversation.DoesNotExist:
+            # Deleted while this send waited for its lock.
+            raise PermissionDenied(_DENIED) from None
         pending = AiConversationMessage.objects.filter(
             conversation__member=person, status=AiConversationMessage.Status.PENDING
         ).count()
@@ -306,6 +343,11 @@ def send_message(principal, text, *, conversation_id=None, page_context=None, st
             raise AiError(TURN_LIMIT, LIMIT_REACHED)
         if conversation.tool_call_count >= max_tool_calls():
             raise AiError(TOOL_LIMIT, LIMIT_REACHED)
+        if provider_needs_warning(conversation, provider):
+            # The page showed the switch warning only if it was rendered for this provider.
+            if warned_provider != provider:
+                raise AttachmentRejected(PROVIDER_SWITCH_UNSEEN)
+            acknowledge_provider(conversation, provider)
 
         question = AiConversationMessage.objects.create(
             conversation=conversation,
@@ -313,6 +355,8 @@ def send_message(principal, text, *, conversation_id=None, page_context=None, st
             content=prompt,
             page_context=context_payload,
         )
+        if attachment is not None:
+            store_attachment(person, conversation, question, attachment, provider=provider)
         conversation.turn_count += 1
         if not conversation.title:
             conversation.title = prompt[:80]
@@ -420,19 +464,32 @@ def answer_turn(turn, *, sleep=None, monotonic=None):
             locked.save(update_fields=(*_USED_ROWS, "updated_at"))
             conversation.tool_call_count = locked.tool_call_count
 
-    tools = default_tools() + chart_tools() + proposal_tools(conversation, turn)
+    provider = provider_key(connection, backend)
+    tools = (
+        default_tools() + chart_tools() + proposal_tools(conversation, turn)
+        + attachment_tools(conversation, provider)
+    )
     harness_context = _harness_context(context_payload)
+    attached = attachment_context(person, conversation, provider)
+    if attached is not None:
+        harness_context.append(attached)
     marker = _connection_marker(connection)
     saved_session = (conversation.harness_session_id or "").strip()
     household = current_household(person)
     consent_held = household is None or household_ai_allowed(household)
-    # Earlier turns built from a row the member can no longer see are never resent.
-    history_held = consent_held and _uses_only_visible_rows(conversation, person)
+    # Earlier turns built from a row the member can no longer see are never resent, nor turns
+    # that may quote attached files to a provider the chat has not yet warned about (#644).
+    history_held = (
+        consent_held
+        and _uses_only_visible_rows(conversation, person)
+        and not provider_needs_warning(conversation, provider)
+    )
     follow_up = (
         history_held
         and bool(saved_session)
         and (conversation.harness_connection or "") == marker
         and (conversation.backend or "") == backend
+        and (conversation.harness_session_reads_attachments or attached is None)
     )
     session_id = saved_session if follow_up else ""
 
@@ -441,9 +498,14 @@ def answer_turn(turn, *, sleep=None, monotonic=None):
             locked = _lock_conversation(conversation.pk)
             locked.harness_session_id = new_id
             locked.harness_connection = marker
-            locked.save(update_fields=("harness_session_id", "harness_connection", "updated_at"))
+            # Every session started here registers read_attachment (attachment_tools).
+            locked.harness_session_reads_attachments = True
+            locked.save(update_fields=(
+                "harness_session_id", "harness_connection", "harness_session_reads_attachments", "updated_at",
+            ))
             conversation.harness_session_id = new_id
             conversation.harness_connection = marker
+            conversation.harness_session_reads_attachments = True
 
     result = run_conversation(
         person,
@@ -462,6 +524,8 @@ def answer_turn(turn, *, sleep=None, monotonic=None):
         allow_tool=allow_tool,
         history=_api_history(conversation, question) if history_held and connection.kind in API_KINDS else (),
         tool_budget=tool_budget,
+        # The connection the tools (and the attachment provider key) were bound to above.
+        connection=connection,
     )
     with transaction.atomic():
         locked = _lock_conversation(conversation.pk)
@@ -508,7 +572,10 @@ def _lock_conversation(pk):
 
 def _lock_member(person):
     """Serialise one member's quota checks so two requests cannot both pass the cap."""
-    Person.objects.select_for_update().filter(pk=person.pk).first()
+    # NO KEY UPDATE still serialises these checks but leaves the row's key free, so an audit
+    # event that references this member (a conversation delete holding the conversation
+    # lock this send waits for) can insert without a deadlock (#644).
+    Person.objects.select_for_update(no_key=True).filter(pk=person.pk).first()
 
 
 @transaction.atomic

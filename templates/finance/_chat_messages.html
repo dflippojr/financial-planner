@@ -18,6 +18,21 @@
     {% else %}
     <p class="whitespace-pre-wrap">{{ item.content }}</p>
     {% endif %}
+    {% if item.attachment_list %}
+    <ul class="mt-2 flex flex-col gap-1" aria-label="Attached files">
+      {% for attachment in item.attachment_list %}
+      <li id="{% if popover %}popover-{% endif %}attachment-{{ attachment.pk }}" class="flex flex-wrap items-center gap-x-2 rounded-box border border-base-300 bg-base-100 pl-2 text-sm" data-chat-attachment="{{ attachment.kind }}">
+        <svg xmlns="http://www.w3.org/2000/svg" class="size-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21 11-8.5 8.5a5.5 5.5 0 0 1-7.8-7.8l9.2-9.2a3.7 3.7 0 0 1 5.2 5.2l-9.2 9.2a1.8 1.8 0 0 1-2.6-2.6L16 5.6"/></svg>
+        <span class="min-w-0 break-all font-medium">{{ attachment.original_name }}</span>
+        <span class="text-xs">{{ attachment.description }}</span>
+        <form method="post" action="{% url 'chat-attachment-remove' attachment.pk %}" class="ml-auto" data-confirm="Remove this file from the conversation? Its text is deleted.">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-ghost btn-xs min-h-11 min-w-11" aria-label="Remove {{ attachment.original_name }}">Remove</button>
+        </form>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
     {% if item.charts %}{% include "finance/_chat_charts.html" with charts=item.charts %}{% endif %}
     {% if item.figures %}
     {# Collapsed by default (owner, 2026-11-04): the reply leads, the figures it used open on demand. #}
@@ -42,4 +57,8 @@
   {% empty %}
   <p class="text-sm opacity-80">Ask a question about income, spending, transactions, budgets, or net worth.</p>
   {% endfor %}
+  {% if chat_attachment_switch %}
+  {# Owner decision 5 (#644): name the new provider before it reads files attached under another one. #}
+  <p role="status" class="rounded-box border border-warning p-3 text-sm" data-chat-provider-switch>This conversation's attached files will go to <strong>{{ chat_provider_label }}</strong> with your next question. Chat used a different AI provider or connection when they were attached.</p>
+  {% endif %}
 </div>

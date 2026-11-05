@@ -593,7 +593,10 @@ def run_conversation(
     allow_tool=None,
     history=(),
     tool_budget=None,
+    connection=None,
 ):
+    """Run a chat turn. ``connection``, when given, is the one the caller already vetted and
+    bound its tools to (chat attachments, #644), so no later lookup can pick another server."""
     use_tools_only = bool(tools) if tools_only is None else bool(tools_only)
     return _run(
         principal,
@@ -613,6 +616,7 @@ def run_conversation(
         allow_tool=allow_tool,
         history=history,
         tool_budget=tool_budget,
+        connection=connection,
     )
 
 

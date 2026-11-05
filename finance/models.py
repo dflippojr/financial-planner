@@ -2087,6 +2087,14 @@ class AiConversation(models.Model):
     used_account_ids = models.JSONField(default=list)
     used_planned_item_ids = models.JSONField(default=list)
     used_budget_ids = models.JSONField(default=list)
+    # Providers (chat backend and connection, chat_attachments.provider_key) the chat has warned
+    # will receive this conversation's files (#644, owner decision 5): the provider named at
+    # upload, and each provider whose switch warning the member saw before asking again. Only
+    # these may read the files or be resent earlier turns. Kept after a file is removed.
+    attachment_providers = models.JSONField(default=list)
+    # Whether the saved harness session was started with read_attachment among its tools.
+    # A session started before #644 cannot call it, so a turn with files starts a new one.
+    harness_session_reads_attachments = models.BooleanField(default=False)
     turn_count = models.PositiveIntegerField(default=0)
     tool_call_count = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -2167,6 +2175,60 @@ class AiConversationMessage(models.Model):
 
     def __str__(self):
         return f"AI message {self.pk}"
+
+
+class AiChatAttachment(models.Model):
+    """A file a member attached to one conversation (#644), parsed to text at upload.
+
+    It exists only in that conversation: it cascades with the conversation, so
+    every way a conversation is deleted (the member's delete, expiry, losing
+    sight of a row it used, account or member deletion) deletes the file bytes
+    and their parsed text with it. Both live only in this row, never on disk.
+    """
+
+    class Kind(models.TextChoices):
+        CSV = "csv", "CSV"
+        XLSX = "xlsx", "XLSX"
+        PDF = "pdf", "PDF"
+
+    conversation = models.ForeignKey(AiConversation, on_delete=models.CASCADE, related_name="attachments")
+    # The question the file was sent with, for showing it in the thread.
+    message = models.ForeignKey(
+        AiConversationMessage, on_delete=models.CASCADE, null=True, blank=True, related_name="attachments"
+    )
+    original_name = models.CharField(max_length=255)
+    kind = models.CharField(max_length=8, choices=Kind)
+    size_bytes = models.PositiveIntegerField()
+    # Provenance: the provider named in the upload warning (chat backend and connection,
+    # chat_attachments.provider_key). Who may read the file is decided by the conversation's
+    # attachment_providers, which a warned provider switch extends (owner decision 5).
+    provider = models.CharField(max_length=120)
+    data = models.BinaryField()
+    # {"sheets": [{"name", "rows": [[row number, [cells]]]}]} or {"pages": [text]}.
+    content = models.JSONField(default=dict)
+    # {"sheets": [{"name", "rows", "columns"}]} or {"pages", "truncated"}: listed without loading content.
+    summary = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            # Access follows the conversation: whoever may open it, and nobody else.
+            return self.filter(conversation__in=AiConversation.QuerySet(AiConversation).visible_to(principal))
+
+    objects = QuerySet.as_manager()
+
+    class Meta:
+        ordering = ("pk",)
+        constraints = [
+            models.CheckConstraint(condition=Q(kind__in=("csv", "xlsx", "pdf")), name="ai_chat_attachment_kind_valid"),
+            models.CheckConstraint(
+                condition=Q(size_bytes__gt=0, size_bytes__lte=10 * 1024 * 1024),
+                name="ai_chat_attachment_size_within_cap",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Chat attachment {self.pk}"
 
 
 class AiProposal(models.Model):

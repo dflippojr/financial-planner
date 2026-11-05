@@ -36,6 +36,7 @@ from finance.csv_import.saved_mappings import SAVED_PROFILE_PREFIX
 from finance.models import (
     Account,
     AccountLink,
+    AiChatAttachment,
     AiConversation,
     AiConversationMessage,
     AiProposal,
@@ -285,6 +286,9 @@ def _uploaded(response):
 OBJECT_ROUTES = {
     "chat-delete": ObjectRoute(
         lambda s: {"conversation_id": s.conversation.pk}, PERSONAL, post_only=True, body_reason=_PATH_ONLY
+    ),
+    "chat-attachment-remove": ObjectRoute(
+        lambda s: {"attachment_id": s.attachment.pk}, PERSONAL, post_only=True, body_reason=_PATH_ONLY
     ),
     "chat-proposal-apply": ObjectRoute(
         lambda s: {"proposal_id": s.proposal.pk}, PERSONAL, post_only=True, body_reason=_PATH_ONLY
@@ -1172,6 +1176,18 @@ def _personal_rows(side):
     )
     question = AiConversationMessage.objects.create(
         conversation=side.conversation, role=AiConversationMessage.Role.USER, content=f"{CANARY} question"
+    )
+    from finance.chat_attachments import provider_key
+    from finance.chat_services import chat_backend_for
+
+    # As an upload leaves it: the provider its warning named is recorded on the conversation.
+    provider = provider_key(*chat_backend_for(owner))
+    AiConversation.objects.filter(pk=side.conversation.pk).update(attachment_providers=[provider])
+    side.attachment = AiChatAttachment.objects.create(
+        conversation=side.conversation, message=question, original_name=f"{CANARY}.csv", kind="csv",
+        size_bytes=4, provider=provider, data=b"a,b\n",
+        content={"sheets": [{"name": "CSV", "rows": [[1, [CANARY]]]}]},
+        summary={"sheets": [{"name": "CSV", "rows": 1, "columns": 1}]},
     )
     side.turn = AiConversationMessage.objects.create(
         conversation=side.conversation,

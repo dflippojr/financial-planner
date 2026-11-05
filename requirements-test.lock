@@ -910,6 +910,12 @@ pyopenssl==26.4.0 \
     # via
     #   -c requirements.lock
     #   webauthn
+pypdf==6.21.4 \
+    --hash=sha256:33e4fb41ca352810eb4e9838aa0d82d6888a5f8bf682f43e99cce5faa666255c \
+    --hash=sha256:c8817e3f888d47a087872ded69812c1ef30cacb871d6e053e0c00bbaf0bc2163
+    # via
+    #   -c requirements.lock
+    #   -r requirements.txt
 pyright==1.1.414 \
     --hash=sha256:2a6b4b3298c9eec174c5ed83bd338de6eee82df2992f3e1930e6199d381be36f \
     --hash=sha256:523c0a97c60da6333234955c277730c9cf4f5bd6d5399e7b7d2b0fc5d3599524

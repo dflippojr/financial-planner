@@ -1,0 +1,493 @@
+"""Hostile-file parsing for chat attachments (#644). Every fixture is synthetic and built in memory."""
+
+import io
+import json
+import zipfile
+from types import SimpleNamespace
+
+import pytest
+
+from finance import chat_attachment_parsing as parsing
+from finance import chat_attachment_pdf
+from finance.chat_attachment_parsing import AttachmentRejected, parse_upload
+from tests.chat_attachment_fixtures import (
+    BUDGET_CSV,
+    MAIN_NS,
+    budget_xlsx,
+    encrypted_office_file,
+    legacy_xls_file,
+    make_pdf,
+    make_xlsx,
+    rows_xml,
+    upload,
+)
+
+
+def _rows(parsed, sheet=0):
+    return parsed.content["sheets"][sheet]["rows"]
+
+
+def _rejected(name, data, message):
+    with pytest.raises(AttachmentRejected) as caught:
+        parse_upload(upload(name, data))
+    assert str(caught.value) == message
+
+
+# --- CSV -------------------------------------------------------------------
+
+
+def test_csv_rows_keep_source_row_numbers_and_skip_blank_rows():
+    parsed = parse_upload(upload("budget.csv", BUDGET_CSV.encode()))
+    assert parsed.kind == "csv"
+    assert _rows(parsed) == [
+        [1, ["Category", "Monthly budget"]],
+        [2, ["Groceries", "400"]],
+        [3, ["Dining", "150"]],
+        [5, ["Rent", "1200"]],
+    ]
+    assert parsed.summary == {"sheets": [{"name": "CSV", "rows": 4, "columns": 2}]}
+    assert parsed.size_bytes == len(BUDGET_CSV.encode())
+
+
+def test_csv_sniffs_semicolons_and_decodes_windows_text():
+    data = "Kategorie;Betrag\nCaf\xe9;12,50\n".encode("cp1252")
+    parsed = parse_upload(upload("export.CSV", data))
+    assert _rows(parsed) == [[1, ["Kategorie", "Betrag"]], [2, ["Café", "12,50"]]]
+
+
+def test_csv_cells_are_truncated_and_trailing_blanks_dropped():
+    data = ("A," + "x" * 5000 + ",,\n").encode()
+    row = _rows(parse_upload(upload("long.csv", data)))[0][1]
+    assert len(row) == 2
+    assert len(row[1]) == parsing.MAX_CELL_CHARS and row[1].endswith("…")
+
+
+def test_csv_name_with_binary_bytes_is_unsupported():
+    _rejected("budget.csv", b"Category\x00,Amount", parsing.UNSUPPORTED)
+
+
+def test_csv_cells_longer_than_the_csv_module_default_are_truncated_not_refused():
+    import csv
+
+    before = csv.field_size_limit()
+    data = b"Note,Amount\n" + b"x" * 131_073 + b",12\n"
+    rows = _rows(parse_upload(upload("long-cell.csv", data)))
+    assert rows[1][1][0] == "x" * (parsing.MAX_CELL_CHARS - 1) + "…" and rows[1][1][1] == "12"
+    assert csv.field_size_limit() == before
+
+
+def test_csv_with_a_broken_dialect_is_unreadable(monkeypatch):
+    import csv
+
+    def broken(*_args, **_kwargs):
+        raise csv.Error("synthetic")
+
+    monkeypatch.setattr(parsing.csv, "reader", broken)
+    _rejected("broken.csv", b"a,b\n", parsing.UNREADABLE)
+
+
+@pytest.mark.parametrize("name", ["notes.txt", "budget.html", "budget"])
+def test_text_under_another_name_is_unsupported(name):
+    _rejected(name, BUDGET_CSV.encode(), parsing.UNSUPPORTED)
+
+
+def test_csv_limits(monkeypatch):
+    monkeypatch.setattr(parsing, "MAX_ROWS", 3)
+    _rejected("rows.csv", b"a\nb\nc\nd\n", parsing.TOO_MANY_ROWS)
+    _rejected("cols.csv", (",".join(["v"] * 101) + "\n").encode(), parsing.TOO_MANY_COLUMNS)
+    monkeypatch.setattr(parsing, "MAX_TEXT_CHARS", 10)
+    _rejected("text.csv", b"abcdef\nghijkl\n", parsing.TOO_MUCH_TEXT)
+
+
+def test_empty_and_blank_files_are_refused():
+    _rejected("empty.csv", b"", parsing.EMPTY)
+    _rejected("blank.csv", b"\n,,\n\n", parsing.EMPTY)
+
+
+# --- size ------------------------------------------------------------------
+
+
+def test_over_the_size_cap_is_refused_by_declared_and_by_read_size(settings):
+    settings.CHAT_ATTACHMENT_MAX_BYTES = 10
+    _rejected("big.csv", b"a,b\n" * 10, parsing.TOO_LARGE)
+
+    class LyingUpload(io.BytesIO):
+        name = "big.csv"
+        size = 1
+
+    with pytest.raises(AttachmentRejected, match="larger than 10 MB"):
+        parse_upload(LyingUpload(b"a,b\n" * 10))
+
+
+# --- XLSX ------------------------------------------------------------------
+
+
+def test_xlsx_reads_cached_values_only():
+    shared = '<si><t>Category</t></si><si><r><t>Gro</t></r><r><t>ceries</t></r><rPh><t>ignored</t></rPh></si>'
+    sheet = (
+        '<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="inlineStr"><is><t>Amount</t></is></c></row>'
+        '<row r="2"><c r="A2" t="s"><v>1</v></c><c r="B2"><f>SECRET_FORMULA()</f><v>400</v></c>'
+        '<c r="C2" t="b"><v>1</v></c><c r="D2" t="e"><v>#DIV/0!</v></c><c r="E2" t="str"><f>A2</f><v>Groceries</v></c></row>'
+        '<row r="4"><c t="inlineStr"><is><t>no ref</t></is></c><c><v>0.1</v></c><c t="b"><v>0</v></c></row>'
+        '<row r="5"><c r="A5" t="s"><v>99</v></c><c r="B5"/></row>'
+    )
+    parsed = parse_upload(upload("budget.xlsx", make_xlsx([("Budget", sheet)], shared_strings=shared)))
+    assert parsed.kind == "xlsx"
+    assert _rows(parsed) == [
+        [1, ["Category", "Amount"]],
+        [2, ["Groceries", "400", "TRUE", "#DIV/0!", "Groceries"]],
+        [4, ["no ref", "0.1", "FALSE"]],
+    ]
+    assert "SECRET_FORMULA" not in json.dumps(parsed.content)
+
+
+def test_xlsx_formats_dates_by_style_including_1904_workbooks():
+    styles = (
+        '<numFmts><numFmt numFmtId="164" formatCode="yyyy\\-mm\\-dd"/><numFmt numFmtId="165" formatCode="&quot;$&quot;#,##0"/>'
+        '<numFmt numFmtId="166" formatCode="General"/></numFmts>'
+        '<cellXfs><xf numFmtId="0"/><xf numFmtId="14"/><xf numFmtId="164"/><xf numFmtId="165"/><xf numFmtId="22"/>'
+        '<xf numFmtId="166"/></cellXfs>'
+    )
+    sheet = (
+        '<row r="1"><c r="A1" s="1"><v>46023</v></c><c r="B1" s="2"><v>46024</v></c><c r="C1" s="3"><v>46023</v></c>'
+        '<c r="D1" s="4"><v>46023.5</v></c><c r="E1" s="5"><v>7</v></c><c r="F1" s="1"><v>-5</v></c>'
+        '<c r="G1"><v>1234.5600000000001</v></c><c r="H1"><v>abc</v></c><c r="I1"><v>NaN</v></c></row>'
+    )
+    parsed = parse_upload(upload("dates.xlsx", make_xlsx([("Dates", sheet)], styles=styles)))
+    assert _rows(parsed)[0][1] == [
+        "2026-01-01", "2026-01-02", "46023", "2026-01-01 12:00", "7", "-5", "1234.56", "abc", "NaN",
+    ]
+    late = '<row r="1"><c r="A1" s="1"><v>0</v></c><c r="B1" s="1"><v>2958465</v></c></row>'
+    parsed = parse_upload(upload("dates.xlsx", make_xlsx([("Dates", late)], styles=styles, date1904=True)))
+    # The last serial the 1900 system can show overflows a 1904 workbook: it stays a number.
+    assert _rows(parsed)[0][1] == ["1904-01-01", "2958465"]
+
+
+def test_xlsx_never_opens_macros_external_links_or_chart_sheets():
+    marker = "SYNTHETIC-MARKER-NEVER-READ"
+    extra_rels = (
+        '<Relationship Id="rIdX" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink" '
+        'Target="externalLinks/externalLink1.xml"/>'
+        '<Relationship Id="rIdE" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
+        'Target="https://example.invalid/sheet.xml" TargetMode="External"/>'
+        '<Relationship Id="rIdOut" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
+        'Target="../../outside.xml"/>'
+    )
+    extra = {
+        "xl/vbaProject.bin": marker.encode(),
+        "xl/externalLinks/externalLink1.xml": f'<externalLink xmlns="{MAIN_NS}"><v>{marker}</v></externalLink>',
+        "outside.xml": f'<worksheet xmlns="{MAIN_NS}"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>{marker}</t></is></c></row></sheetData></worksheet>',
+    }
+    data = make_xlsx([("Budget", rows_xml([["Rent", 1200]]))], extra_rels=extra_rels, extra_members=extra)
+    parsed = parse_upload(upload("macro.xlsx", data))
+    assert marker not in json.dumps(parsed.content)
+    assert [sheet["name"] for sheet in parsed.summary["sheets"]] == ["Budget"]
+
+
+def test_xlsx_with_absolute_targets_and_several_sheets():
+    data = make_xlsx([("One", rows_xml([["a"]])), ("Two\nlines", rows_xml([["b"], ["c"]]))])
+    parsed = parse_upload(upload("two.xlsx", data))
+    assert parsed.summary["sheets"] == [
+        {"name": "One", "rows": 1, "columns": 1},
+        {"name": "Two lines", "rows": 2, "columns": 1},
+    ]
+
+
+def test_xlsx_with_a_dtd_is_refused():
+    data = make_xlsx([("Budget", rows_xml([["x"]]))], sheet_xml_prefix='<!DOCTYPE worksheet [<!ENTITY a "aaaa">]>')
+    _rejected("dtd.xlsx", data, parsing.UNREADABLE)
+
+
+@pytest.mark.parametrize("encode", [
+    lambda xml: xml.encode("utf-16"),
+    lambda xml: xml.encode("utf-16-le"),
+    lambda xml: ('<?xml version="1.0" encoding="UTF-16"?>' + xml).encode("utf-8"),
+    lambda xml: ("<?xml version='1.0' encoding='ISO-8859-1'?>" + xml).encode("latin-1"),
+    lambda xml: ("<?xml version='1.0'" + " " * 600 + "encoding='ISO-8859-1'?>" + xml).encode("latin-1"),
+    lambda xml: ('<?xml version="1.0"' + " " * 600 + 'encoding="UNKNOWN"?>' + xml).encode("utf-8"),
+    lambda xml: ('<?xml version="1.0" encoding="utf-8"' + xml).encode("utf-8"),
+], ids=["utf16-bom", "utf16-no-bom", "declared-utf16", "declared-latin1", "padded-latin1", "padded-unknown",
+        "unterminated-declaration"])
+def test_xlsx_parts_not_in_utf8_are_refused_so_a_dtd_cannot_hide(encode):
+    # A DTD in UTF-16 would slip past a byte search and expand entities before any limit.
+    hostile = (
+        '<!DOCTYPE worksheet [<!ENTITY a "aaaaaaaaaa"><!ENTITY b "&a;&a;&a;&a;&a;">]>'
+        f'<worksheet xmlns="{MAIN_NS}"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>&b;</t></is></c></row></sheetData></worksheet>'
+    )
+    data = make_xlsx([("Budget", rows_xml([["x"]]))])
+    rebuilt = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(data)) as source, zipfile.ZipFile(rebuilt, "w") as target:
+        for info in source.infolist():
+            payload = encode(hostile) if info.filename == "xl/worksheets/sheet1.xml" else source.read(info)
+            target.writestr(info.filename, payload)
+    _rejected("utf16.xlsx", rebuilt.getvalue(), parsing.UNREADABLE)
+
+
+def test_an_unknown_encoding_reaching_the_parser_is_unreadable_not_an_error(monkeypatch):
+    # Belt and braces: if a declaration ever slipped past the check, LookupError is still a refusal.
+    monkeypatch.setattr(parsing, "_is_utf8_xml", lambda payload: True)
+    data = make_xlsx([("Budget", rows_xml([["x"]]))], sheet_xml_prefix='<?xml version="1.0" encoding="UNKNOWN"?>')
+    _rejected("unknown.xlsx", data, parsing.UNREADABLE)
+
+
+def test_xlsx_utf8_declarations_and_bom_are_read():
+    data = make_xlsx([("Budget", rows_xml([["ok"]]))], sheet_xml_prefix='\ufeff<?xml version="1.0" encoding="utf-8"?>')
+    assert _rows(parse_upload(upload("bom.xlsx", data))) == [[1, ["ok"]]]
+
+
+def test_xlsx_zip_bomb_is_refused_from_its_directory(monkeypatch):
+    monkeypatch.setattr(parsing, "MAX_ZIP_MEMBER_BYTES", 1000)
+    padded = make_xlsx([("Budget", rows_xml([["x"]]))], extra_members={"xl/media/pad.bin": b"\x00" * 5000})
+    _rejected("bomb.xlsx", padded, parsing.TOO_MUCH_TEXT)
+    monkeypatch.setattr(parsing, "MAX_ZIP_MEMBER_BYTES", 10_000)
+    monkeypatch.setattr(parsing, "MAX_ZIP_TOTAL_BYTES", 5100)
+    _rejected("bomb.xlsx", padded, parsing.TOO_MUCH_TEXT)
+    monkeypatch.setattr(parsing, "MAX_ZIP_MEMBERS", 3)
+    _rejected("many.xlsx", padded, parsing.UNREADABLE)
+
+
+def test_xlsx_member_that_inflates_past_its_cap_is_refused(monkeypatch):
+    data = make_xlsx([("Budget", rows_xml([["x" * 50] for _ in range(50)]))])
+    monkeypatch.setattr(parsing, "_checked_members", lambda archive: {info.filename: info for info in archive.infolist()})
+    monkeypatch.setattr(parsing, "MAX_ZIP_MEMBER_BYTES", 400)
+    _rejected("lying.xlsx", data, parsing.TOO_MUCH_TEXT)
+
+
+def test_xlsx_limits(monkeypatch):
+    _rejected("cols.xlsx", make_xlsx([("S", '<row r="1"><c r="DA1" t="inlineStr"><is><t>far</t></is></c></row>')]),
+              parsing.TOO_MANY_COLUMNS)
+    blank_far = make_xlsx([("S", '<row r="1"><c r="A1"><v>1</v></c><c r="DA1"/></row>')])
+    assert _rows(parse_upload(upload("ok.xlsx", blank_far))) == [[1, ["1"]]]
+    monkeypatch.setattr(parsing, "MAX_SHEETS", 1)
+    _rejected("sheets.xlsx", make_xlsx([("A", rows_xml([["a"]])), ("B", rows_xml([["b"]]))]), parsing.TOO_MANY_SHEETS)
+    monkeypatch.setattr(parsing, "MAX_SHEETS", 20)
+    monkeypatch.setattr(parsing, "MAX_TEXT_CHARS", 5)
+    _rejected("text.xlsx", make_xlsx([("A", rows_xml([["abc"]])), ("B", rows_xml([["def"]]))]), parsing.TOO_MUCH_TEXT)
+
+
+def test_xlsx_password_and_legacy_workbooks_are_refused_with_their_own_message():
+    _rejected("protected.xlsx", encrypted_office_file(), parsing.PASSWORD_PROTECTED)
+    _rejected("old.xls", legacy_xls_file(), parsing.LEGACY_XLS)
+
+
+def test_encrypted_zip_member_is_treated_as_password_protected():
+    data = bytearray(budget_xlsx())
+    # Set the encryption bit on every local and central directory header.
+    for signature, offset in ((b"PK\x03\x04", 6), (b"PK\x01\x02", 8)):
+        start = 0
+        while (index := data.find(signature, start)) != -1:
+            data[index + offset] |= 0x1
+            start = index + 4
+    _rejected("zip.xlsx", bytes(data), parsing.PASSWORD_PROTECTED)
+
+
+def test_a_corrupt_deflate_stream_is_unreadable_not_an_error():
+    data = bytearray(make_xlsx([("Budget", rows_xml([[f"row {index} " + "x" * 40] for index in range(200)]))]))
+    with zipfile.ZipFile(io.BytesIO(bytes(data))) as archive:
+        info = archive.getinfo("xl/worksheets/sheet1.xml")
+    start = info.header_offset + 30 + len(info.filename.encode()) + len(info.extra)
+    for index in range(start + 5, start + 40):
+        data[index] ^= 0xFF
+    _rejected("damaged.xlsx", bytes(data), parsing.UNREADABLE)
+
+
+def test_other_zip_files_and_broken_workbooks():
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("word/document.xml", "<document/>")
+    _rejected("letter.docx", buffer.getvalue(), parsing.UNSUPPORTED)
+    _rejected("broken.xlsx", b"PK\x03\x04not really a zip", parsing.UNREADABLE)
+    no_sheets = make_xlsx([])
+    _rejected("none.xlsx", no_sheets, parsing.EMPTY)
+    bad_xml = make_xlsx([("S", "<row><c")])
+    _rejected("bad.xlsx", bad_xml, parsing.UNREADABLE)
+
+
+# --- PDF -------------------------------------------------------------------
+
+
+def test_pdf_text_is_extracted_page_by_page_in_a_child_process():
+    data = make_pdf(["Synthetic budget\nRent 1200", "Page two text"])
+    parsed = parse_upload(upload("statement.pdf", data))
+    assert parsed.kind == "pdf"
+    assert parsed.content == {"pages": ["Synthetic budget\nRent 1200", "Page two text"]}
+    assert parsed.summary == {"pages": 2, "truncated": False}
+
+
+def test_pdf_that_needs_a_password_is_refused_but_owner_only_restrictions_are_read():
+    _rejected("locked.pdf", make_pdf(["secret"], user_password="synthetic-pw"), parsing.PASSWORD_PROTECTED)
+    parsed = parse_upload(upload("restricted.pdf", make_pdf(["opens without a password"], owner_password="owner-pw")))
+    assert parsed.content["pages"] == ["opens without a password"]
+
+
+def test_pdf_page_cap_and_empty_text(monkeypatch):
+    monkeypatch.setattr(parsing, "MAX_PAGES", 1)
+    _rejected("long.pdf", make_pdf(["one", "two"]), parsing.TOO_MANY_PAGES)
+    monkeypatch.setattr(parsing, "MAX_PAGES", 5)
+    _rejected("scan.pdf", make_pdf([""]), parsing.NO_PDF_TEXT)
+    _rejected("broken.pdf", b"%PDF-1.7\nnot a pdf at all", parsing.UNREADABLE)
+
+
+def test_pdf_time_cap_kills_a_slow_parse(monkeypatch, tmp_path, settings):
+    slow = tmp_path / "slow_worker.py"
+    slow.write_text("import time\ntime.sleep(30)\n")
+    monkeypatch.setattr(parsing, "_PDF_WORKER", slow)
+    settings.CHAT_ATTACHMENT_PDF_TIMEOUT_SECONDS = 1
+    _rejected("slow.pdf", make_pdf(["x"]), parsing.PDF_TIMEOUT)
+
+
+@pytest.mark.parametrize("script", [
+    "import sys\nsys.exit(3)\n",
+    "print('not json')\n",
+    "print('[1, 2]')\n",
+    "print('{\"pages\": [1]}')\n",
+])
+def test_pdf_worker_failures_are_unreadable(monkeypatch, tmp_path, script):
+    worker = tmp_path / "worker.py"
+    worker.write_text(script)
+    monkeypatch.setattr(parsing, "_PDF_WORKER", worker)
+    _rejected("odd.pdf", make_pdf(["x"]), parsing.UNREADABLE)
+
+
+def test_pdf_worker_that_cannot_start_is_unreadable(monkeypatch):
+    def refuse(*_args, **_kwargs):
+        raise OSError("synthetic")
+
+    monkeypatch.setattr(parsing.subprocess, "run", refuse)
+    _rejected("odd.pdf", make_pdf(["x"]), parsing.UNREADABLE)
+
+
+def test_pdf_extract_caps_characters_and_reports_errors():
+    data = make_pdf(["abcdef", "ghijkl", "mnopqr"])
+    assert chat_attachment_pdf.extract(data, 10, 8) == {"pages": ["abcdef", "gh"], "page_count": 3, "truncated": True}
+    assert chat_attachment_pdf.extract(data, 10, 12) == {
+        "pages": ["abcdef", "ghijkl"], "page_count": 3, "truncated": True,
+    }
+    assert chat_attachment_pdf.extract(data, 2, 100) == {"error": "pages", "pages": 3}
+    assert chat_attachment_pdf.extract(b"%PDF-garbage", 2, 100) == {"error": "unreadable"}
+    locked = make_pdf(["x"], user_password="pw")
+    assert chat_attachment_pdf.extract(locked, 2, 100) == {"error": "password"}
+
+
+def test_pdf_truncated_summary_is_kept(monkeypatch):
+    monkeypatch.setattr(parsing, "_run_pdf_worker", lambda data, timeout: {"pages": ["abc"], "page_count": 4, "truncated": True})
+    parsed = parse_upload(upload("cut.pdf", make_pdf(["x"])))
+    assert parsed.summary == {"pages": 4, "truncated": True}
+
+
+def test_pdf_worker_main_reads_stdin_and_writes_json(monkeypatch):
+    limits = []
+    monkeypatch.setattr(chat_attachment_pdf, "_limit_resources", limits.append)
+    out = io.StringIO()
+    status = chat_attachment_pdf.main(["worker", "5", "100", "7"], stdin=io.BytesIO(make_pdf(["hello"])), stdout=out)
+    assert status == 0
+    assert json.loads(out.getvalue())["pages"] == ["hello"]
+    assert limits == [7]
+
+
+def test_pdf_worker_limits_its_own_resources(monkeypatch):
+    calls = []
+    fake = SimpleNamespace(RLIMIT_AS="as", RLIMIT_CPU="cpu", setrlimit=lambda kind, value: calls.append((kind, value)))
+    monkeypatch.setitem(__import__("sys").modules, "resource", fake)
+    chat_attachment_pdf._limit_resources(9)
+    assert calls == [("as", (chat_attachment_pdf.MEMORY_BYTES,) * 2), ("cpu", (9, 9))]
+
+
+def test_names_are_one_plain_line():
+    assert parsing.safe_name("C:\\Users\\x\\bud\nget\x07.csv") == "bud get .csv"
+    assert parsing.safe_name("../..") == "attachment"
+    assert parsing.safe_name("") == "attachment"
+    assert len(parsing.safe_name("a" * 400 + ".csv")) == parsing.MAX_NAME_CHARS
+
+
+MEMORY_PROBE = """
+import sys
+try:
+    import resource
+    resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024,) * 2)
+except ImportError:  # Not POSIX: the parse still runs, without the memory ceiling.
+    pass
+sys.path.insert(0, sys.argv[1])
+from finance import chat_attachment_parsing as parsing
+data = open(sys.argv[2], "rb").read()
+try:
+    content, _summary = parsing._parse_xlsx(data)
+    print("parsed", content["sheets"][0]["rows"])
+except parsing.AttachmentRejected as exc:
+    print("rejected", exc)
+"""
+
+
+@pytest.mark.parametrize("shared", [
+    '<x a="1"/>' * 3_000_000,
+    "<si><r><t>a</t></r><r><t>b</t></r></si>" * 700_000,
+], ids=["attribute-bloat", "rich-run-strings"])
+def test_bloated_xml_parts_are_streamed_within_a_small_memory_limit(tmp_path, shared):
+    # Tens of megabytes of markup that compress to almost nothing. Built whole as a tree, each
+    # of these ran a 512 MiB process out of memory (#647 review); streamed, one item at a time
+    # is in memory.
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    data = make_xlsx([("Budget", rows_xml([["kept"]]))], shared_strings=shared)
+    assert len(data) < 1_000_000
+    path = tmp_path / "bloat.xlsx"
+    path.write_bytes(data)
+    root = str(Path(__file__).resolve().parents[1])
+    done = subprocess.run([sys.executable, "-c", MEMORY_PROBE, root, str(path)], capture_output=True, text=True,
+                          timeout=120, check=False)
+    assert done.returncode == 0, done.stderr[-500:]
+    assert done.stdout.strip() == "parsed [[1, ['kept']]]"
+
+
+def test_deep_nesting_is_refused_in_linear_time():
+    import time
+
+    deep = "<n>" * 100_000 + "</n>" * 100_000
+    data = make_xlsx([("S", rows_xml([["a"]]))], shared_strings=deep)
+    assert len(data) < 10_000
+    started = time.monotonic()
+    _rejected("deep.xlsx", data, parsing.UNREADABLE)
+    assert time.monotonic() - started < 2
+    nested_item = "<si>" + "<r>" * 40 + "</r>" * 40 + "</si>"
+    _rejected("deep-item.xlsx", make_xlsx([("S", rows_xml([["a"]]))], shared_strings=nested_item), parsing.UNREADABLE)
+
+
+def test_stream_limits_items_strings_and_styles(monkeypatch):
+    monkeypatch.setattr(parsing, "MAX_ELEMENTS_PER_ITEM", 3)
+    wide = make_xlsx([("S", '<row r="1">' + '<c r="A1"/>' * 5 + "</row>")])
+    _rejected("wide.xlsx", wide, parsing.TOO_MUCH_TEXT)
+    styles = make_xlsx([("S", rows_xml([["a"]]))], styles="<cellXfs>" + '<xf numFmtId="0"/>' * 5 + "</cellXfs>")
+    _rejected("styles.xlsx", styles, parsing.TOO_MUCH_TEXT)
+    monkeypatch.setattr(parsing, "MAX_ELEMENTS_PER_ITEM", 50_000)
+    monkeypatch.setattr(parsing, "MAX_SHARED_STRINGS", 2)
+    strings = make_xlsx([("S", rows_xml([["a"]]))], shared_strings="<si><t>a</t></si>" * 3)
+    _rejected("strings.xlsx", strings, parsing.TOO_MUCH_TEXT)
+    monkeypatch.setattr(parsing, "MAX_TREE_PART_BYTES", 10)
+    _rejected("tree.xlsx", strings, parsing.TOO_MUCH_TEXT)
+
+
+@pytest.mark.parametrize("method", [zipfile.ZIP_BZIP2, zipfile.ZIP_LZMA], ids=["bzip2", "lzma"])
+def test_xlsx_members_compressed_other_than_deflate_are_refused_before_any_is_opened(method, monkeypatch):
+    # ZipExtFile.read(n) bounds DEFLATE output but not BZIP2 or LZMA: a few hundred bytes can
+    # inflate to hundreds of megabytes inside one read (#647 review). Excel only writes DEFLATE.
+    source = make_xlsx([("Budget", rows_xml([["Groceries", 400]]))])
+    rebuilt = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(source)) as original, zipfile.ZipFile(rebuilt, "w", method) as target:
+        for info in original.infolist():
+            target.writestr(info.filename, original.read(info))
+    opened = []
+    monkeypatch.setattr(zipfile.ZipFile, "open", lambda self, *args, **kwargs: opened.append(args) or 1 / 0)
+    _rejected("packed.xlsx", rebuilt.getvalue(), parsing.UNREADABLE)
+    assert opened == []
+
+
+def test_memory_exhaustion_while_parsing_is_a_clean_refusal(monkeypatch):
+    def exhausted(_data):
+        raise MemoryError
+
+    for name, data, target in (("b.xlsx", budget_xlsx(), "_parse_xlsx"), ("b.csv", BUDGET_CSV.encode(), "_parse_csv"),
+                               ("b.pdf", make_pdf(["x"]), "_parse_pdf")):
+        monkeypatch.setattr(parsing, target, exhausted)
+        _rejected(name, data, parsing.TOO_MUCH_TEXT)

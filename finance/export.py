@@ -384,6 +384,7 @@ ai_conversation_messages.csv / ai_conversation_messages.json
   Messages, cited figures (amounts and page links), charts (the chart request
   and the amounts drawn), notices, and page context (route and query only) for
   those conversations.
+  Files attached to a chat, and their text, are not included (#644).
 
 budgets.csv / budgets.json
   Monthly spending budgets visible to this member: private budgets they own
