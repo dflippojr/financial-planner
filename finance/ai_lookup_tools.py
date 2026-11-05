@@ -25,9 +25,9 @@ from .ai_tools import (
     _parse_date,
     _scope,
     _visible_account,
+    ai_nameable_categories,
     household_consent_complete,
     visible_accounts,
-    withheld_category_ids,
 )
 from .ai_types import ToolResult, ToolSpec
 from .category_services import current_household
@@ -339,9 +339,7 @@ def debt_payoff(person, args):
     comparison = plan.comparison
     if comparison is not None:
         payoff_by_id = {debt.account_id: debt for debt in comparison.chosen.debts}
-    for row in plan.catalog:
-        if row.account_id not in allowed:
-            continue
+    for row in [row for row in plan.catalog if row.account_id in allowed][:MAX_TOOL_ROWS]:
         rows.append({
             "account_id": row.account_id,
             "name": row.name,
@@ -368,7 +366,7 @@ def debt_payoff(person, args):
         "page_url": url,
         "strategy": strategy,
         "extra_minor": extra_minor,
-        "debts": rows[:MAX_TOOL_ROWS],
+        "debts": rows,
         "plan": None,
     }
     figures.append(_figure("Extra monthly payment", extra_minor, url))
@@ -450,11 +448,14 @@ def cash_flow_what_if(person, args):
         horizon = DEFAULT_HORIZON
     if horizon not in HORIZONS:
         horizon = DEFAULT_HORIZON
-    scope = _scope(args.get("scope"))
     raw = args.get("changes") or []
     if not isinstance(raw, list):
         return ToolResult(text="changes must be a list.", ok=False)
     accounts, include_household = _ai_scope(person)
+    scope = _scope(args.get("scope"))
+    if not scope and not include_household:
+        # As the other report links do while consent is incomplete, so Home shows the same projection.
+        scope = Account.Scope.PRIVATE
     inputs = visible_projection_inputs(person, scope=scope, accounts=accounts, include_household=include_household)
     requested = raw[:MAX_CHANGES]
     parsed = []
@@ -525,7 +526,10 @@ def cash_flow_what_if(person, args):
 def list_rules(person, args):
     consent = household_consent_complete(person)
     allowed = _allowed_account_ids(person)
-    withheld = withheld_category_ids(person)
+    # Only names the member can see and an AI backend may read now: a household
+    # category under incomplete consent, or one from a household the member
+    # left (an inactive personal rule), is withheld.
+    nameable = set(ai_nameable_categories(person).values_list("pk", flat=True))
     needle = str(args.get("q") or "").strip().lower()
     list_url = reverse("category-rule-list")
     # The Rules page lists nothing for a member outside a household.
@@ -548,7 +552,7 @@ def list_rules(person, args):
                 account = {"id": None, "name": "Account not visible to the assistant"}
         category = None
         if rule.category_id is not None:
-            category = WITHHELD_CATEGORY_NAME if rule.category_id in withheld else rule.category.name
+            category = rule.category.name if rule.category_id in nameable else WITHHELD_CATEGORY_NAME
         rows.append({
             "id": rule.pk,
             "owner": "household" if rule.owner_household_id else "personal",

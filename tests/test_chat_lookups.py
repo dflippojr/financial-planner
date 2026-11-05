@@ -346,10 +346,11 @@ def test_what_if_matches_the_home_scenario_and_ignores_rows_outside_scope(world)
         {"type": "amount", "planned_item_id": world["beta_planned"].pk, "amount_minor": 1},
         {"type": "add", "kind": "expense", "amount_minor": -5, "cadence": "monthly", "start_date": "bad", "name": "x"},
         "not a change",
+        {"type": "pause", "series_id": 999_999, "pause_from": timezone.localdate().isoformat()},
     ]
     result = run_tool(world["alpha"], default_tools(), "cash_flow_what_if", args)
     payload = assert_grounded(result)
-    assert payload["ignored_changes"] == [2, 3, 4]
+    assert payload["ignored_changes"] == [2, 3, 4, 5]
     assert len(payload["changes"]) == 2
     assert world["income"].pk in result.planned_item_ids
     assert world["beta_planned"].pk not in result.planned_item_ids
@@ -362,6 +363,18 @@ def test_what_if_matches_the_home_scenario_and_ignores_rows_outside_scope(world)
     assert [(row.label, row.baseline.net_minor, row.scenario.net_minor, row.difference_minor) for row in rows] == [
         (m["label"], m["baseline_net_minor"], m["scenario_net_minor"], m["difference_minor"]) for m in payload["months"]
     ]
+
+
+@pytest.mark.django_db
+def test_what_if_links_the_private_projection_while_consent_is_incomplete(world):
+    _withhold_consent(world)
+    payload = assert_grounded(run_tool(world["alpha"], default_tools(), "cash_flow_what_if",
+                                       _args(world)["cash_flow_what_if"]))
+    assert "scope=private" in payload["page_url"]
+    page = _client(world).get(payload["page_url"])
+    assert page.status_code == 200
+    assert [row.scenario.net_minor for row in page.context["scenario_comparison"]] == [
+        month["scenario_net_minor"] for month in payload["months"]]
 
 
 @pytest.mark.django_db
