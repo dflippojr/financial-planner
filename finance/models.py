@@ -2101,9 +2101,10 @@ class AiConversation(models.Model):
     used_account_ids = models.JSONField(default=list)
     used_planned_item_ids = models.JSONField(default=list)
     used_budget_ids = models.JSONField(default=list)
-    # Chat backends files were ever attached for (#644). Kept after a file is removed: earlier
-    # turns may quote it, so they are resent only to a backend in this list.
-    attachment_backends = models.JSONField(default=list)
+    # Providers (chat backend and connection, chat_attachments.provider_key) files were ever
+    # attached for (#644). Kept after a file is removed: earlier turns may quote it, so they
+    # are resent only while chat uses that same provider.
+    attachment_providers = models.JSONField(default=list)
     # Whether the saved harness session was started with read_attachment among its tools.
     # A session started before #644 cannot call it, so a turn with files starts a new one.
     harness_session_reads_attachments = models.BooleanField(default=False)
@@ -2208,8 +2209,9 @@ class AiChatAttachment(models.Model):
     original_name = models.CharField(max_length=255)
     kind = models.CharField(max_length=8, choices=Kind)
     size_bytes = models.PositiveIntegerField()
-    # The chat backend named in the upload warning; the file is read only while chat still uses it.
-    backend = models.CharField(max_length=32)
+    # The provider named in the upload warning (chat backend and connection,
+    # chat_attachments.provider_key); the file is read only while chat still uses it.
+    provider = models.CharField(max_length=64)
     data = models.BinaryField()
     # {"sheets": [{"name", "rows": [[row number, [cells]]]}]} or {"pages": [text]}.
     content = models.JSONField(default=dict)

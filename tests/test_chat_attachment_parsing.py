@@ -141,9 +141,10 @@ def test_xlsx_formats_dates_by_style_including_1904_workbooks():
     assert _rows(parsed)[0][1] == [
         "2026-01-01", "2026-01-02", "46023", "2026-01-01 12:00", "7", "-5", "1234.56", "abc", "NaN",
     ]
-    parsed = parse_upload(upload("dates.xlsx", make_xlsx([("Dates", '<row r="1"><c r="A1" s="1"><v>0</v></c></row>')],
-                                                      styles=styles, date1904=True)))
-    assert _rows(parsed)[0][1] == ["1904-01-01"]
+    late = '<row r="1"><c r="A1" s="1"><v>0</v></c><c r="B1" s="1"><v>2958465</v></c></row>'
+    parsed = parse_upload(upload("dates.xlsx", make_xlsx([("Dates", late)], styles=styles, date1904=True)))
+    # The last serial the 1900 system can show overflows a 1904 workbook: it stays a number.
+    assert _rows(parsed)[0][1] == ["1904-01-01", "2958465"]
 
 
 def test_xlsx_never_opens_macros_external_links_or_chart_sheets():

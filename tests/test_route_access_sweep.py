@@ -1179,7 +1179,7 @@ def _personal_rows(side):
     )
     side.attachment = AiChatAttachment.objects.create(
         conversation=side.conversation, message=question, original_name=f"{CANARY}.csv", kind="csv",
-        size_bytes=4, backend="claude", data=b"a,b\n",
+        size_bytes=4, provider="claude@1", data=b"a,b\n",
         content={"sheets": [{"name": "CSV", "rows": [[1, [CANARY]]]}]},
         summary={"sheets": [{"name": "CSV", "rows": 1, "columns": 1}]},
     )

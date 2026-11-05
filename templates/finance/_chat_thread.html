@@ -64,9 +64,11 @@ the thread keeps one narrow column.
   <input type="hidden" name="page_route" value="{{ page_context.route|default:request.path }}">
   <input type="hidden" name="page_query" value="{{ page_context.query|default:request.GET.urlencode }}">
   <input type="hidden" name="next" value="{{ chat_next|default:request.get_full_path }}">
-  {# The warning names the provider before anything is uploaded (owner decision 3, #644); the
-     server refuses a file if chat has moved to another provider since this page loaded. #}
-  <input type="hidden" name="attachment_backend" value="{{ chat_backend }}">
+  {% comment %}
+  The warning names the provider before anything is uploaded (owner decision 3, #644); the
+  server refuses a file if chat has moved to another provider since this page loaded.
+  {% endcomment %}
+  <input type="hidden" name="attachment_provider" value="{{ chat_provider_key }}">
   <div class="flex flex-wrap items-center gap-x-3 gap-y-1{% if composer_fixed %} max-md:mb-2 lg:mx-auto lg:mb-2 lg:max-w-[760px]{% endif %}" data-chat-attach>
     <label class="flex min-h-11 items-center">
       <span class="sr-only">Attach a CSV, XLSX or PDF file</span>

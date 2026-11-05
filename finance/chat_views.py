@@ -19,7 +19,7 @@ from .ai_api import label as api_label
 from .ai_services import AiError, local_status, member_has_ai, resolve_ai, warm_for_chat
 from .ai_types import API_KINDS, LOCAL_BACKEND
 from .chat_attachment_parsing import TOO_LARGE, AttachmentRejected, parse_upload
-from .chat_attachments import attachments_for, max_per_conversation, remove_attachment
+from .chat_attachments import attachments_for, max_per_conversation, provider_key, remove_attachment
 from .chat_proposals import ProposalError, apply_proposal, card_for, dismiss_proposal, proposal_for
 from .chat_runner import recover_stale_turns
 from .chat_services import (
@@ -88,7 +88,7 @@ def chat_send(request):
         conversation = send_message(
             person, prompt, conversation_id=conversation_id, page_context=page_context,
             start_new=wants_json and conversation_id is None, attachment=attachment,
-            warned_backend=request.POST.get("attachment_backend") or "",
+            warned_provider=request.POST.get("attachment_provider") or "",
         )
     except (PermissionDenied, AiError, AttachmentRejected) as exc:
         return _chat_send_error(request, exc, next_url, wants_json)
@@ -171,7 +171,7 @@ def _popover_response(person, conversation, request):
         "html": render_to_string("finance/_chat_messages.html", context, request=request),
         "messageCount": len(context["chat_messages"]),
         "providerLabel": context["chat_provider_label"],
-        "providerBackend": context["chat_backend"] or "",
+        "providerKey": context["chat_provider_key"],
     }, headers={"Cache-Control": "no-store"})
 
 
@@ -373,7 +373,7 @@ def _chat_context(person, conversation, request):
         for item in messages_qs:
             item.cards = [card_for(person, proposal) for proposal in item.proposals.all()]
     by_message = defaultdict(list)
-    for attachment in attachments_for(conversation, backend):
+    for attachment in attachments_for(conversation, provider_key(connection, backend)):
         by_message[attachment["message_id"]].append(attachment)
     for item in messages_qs:
         item.attachment_list = by_message.get(item.pk, [])
@@ -382,6 +382,7 @@ def _chat_context(person, conversation, request):
         "chat_backend": backend,
         "chat_backend_label": _backend_label(backend),
         "chat_provider_label": provider_label(person, connection, backend),
+        "chat_provider_key": provider_key(connection, backend),
         "chat_attachment_accept": ATTACHMENT_ACCEPT,
         "chat_attachment_limit": max_per_conversation(),
         "chat_show_local": show_local,

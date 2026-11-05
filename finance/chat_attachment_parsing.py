@@ -475,6 +475,16 @@ def _cell_value(cell, strings, date_styles, epoch) -> str:
     return _number_text(value, _int(cell.get("s"), -1) in date_styles, epoch)
 
 
+def _excel_moment(number: float, epoch):
+    """The date a serial shows, or None when it is outside what the workbook's epoch can show."""
+    if not 0 <= number <= _MAX_SERIAL:
+        return None
+    try:
+        return epoch + timedelta(days=number)
+    except OverflowError:  # A 1904 workbook ends four years before the shared bound.
+        return None
+
+
 def _number_text(value: str, is_date: bool, epoch) -> str:
     try:
         number = float(value)
@@ -482,8 +492,8 @@ def _number_text(value: str, is_date: bool, epoch) -> str:
         return _cell_text(value)
     if not math.isfinite(number):
         return _cell_text(value)
-    if is_date and 0 <= number <= _MAX_SERIAL:
-        moment = epoch + timedelta(days=number)
+    moment = _excel_moment(number, epoch) if is_date else None
+    if moment is not None:
         if moment.hour or moment.minute or moment.second:
             return moment.strftime("%Y-%m-%d %H:%M")
         return moment.date().isoformat()

@@ -36,6 +36,15 @@ MAX_READ_CHARS = 12_000
 _LIST_ONLY = ("data", "content")
 
 
+def provider_key(connection, backend):
+    """The provider an upload warning names: the chat backend and the connection that serves it.
+
+    Two connections can share a backend name (a member's own local model and the household's),
+    so a file is tied to both.
+    """
+    return f"{backend}@{connection.pk}" if connection is not None else str(backend or "")
+
+
 def visible_attachments(principal):
     """Attachments in conversations this member can open (AiChatAttachment.QuerySet.visible_to)."""
     return AiChatAttachment.QuerySet(AiChatAttachment).visible_to(principal)
@@ -45,7 +54,7 @@ def max_per_conversation():
     return max(1, int(getattr(settings, "CHAT_ATTACHMENT_MAX_PER_CONVERSATION", 5)))
 
 
-def store_attachment(person, conversation, message, parsed: ParsedAttachment, *, backend) -> AiChatAttachment:
+def store_attachment(person, conversation, message, parsed: ParsedAttachment, *, provider) -> AiChatAttachment:
     """Save a parsed file in the caller's transaction, with the conversation row already locked.
 
     The audit append refuses to run outside a transaction, so a file and its event commit together.
@@ -59,14 +68,14 @@ def store_attachment(person, conversation, message, parsed: ParsedAttachment, *,
         original_name=parsed.name,
         kind=parsed.kind,
         size_bytes=parsed.size_bytes,
-        backend=backend,
+        provider=provider,
         data=parsed.data,
         content=parsed.content,
         summary=parsed.summary,
     )
-    if backend not in (conversation.attachment_backends or []):
-        conversation.attachment_backends = [*(conversation.attachment_backends or []), backend]
-        conversation.save(update_fields=("attachment_backends", "updated_at"))
+    if provider not in (conversation.attachment_providers or []):
+        conversation.attachment_providers = [*(conversation.attachment_providers or []), provider]
+        conversation.save(update_fields=("attachment_providers", "updated_at"))
     record(person, AuditEvent.Action.CHAT_ATTACHMENT_ADDED, AuditEvent.TargetType.CHAT_ATTACHMENT, attachment.pk,
            audience=personal_audience(person), metadata={"conversation_id": conversation.pk}, verified=True)
     return attachment
@@ -98,6 +107,11 @@ def delete_conversations(query, *, actor=None):
         ids = list(query.values_list("pk", flat=True))
         if not ids:
             return 0
+        # Uploads lock their conversation (send_message), so taking the same locks here means
+        # an upload either commits before this scan, and is audited, or never lands at all.
+        ids = list(
+            AiConversation.objects.select_for_update().filter(pk__in=ids).order_by("pk").values_list("pk", flat=True)
+        )
         attachments = list(
             AiChatAttachment.objects.filter(conversation_id__in=ids)
             .select_related("conversation__member")
@@ -124,12 +138,12 @@ def _record_removed(item, actor):
     )
 
 
-def attachments_for(conversation, backend):
+def attachments_for(conversation, provider):
     """Display rows for the conversation's attachments, without their bytes or text."""
     if conversation is None:
         return []
     rows = AiChatAttachment.objects.filter(conversation=conversation).order_by("pk").values(
-        "pk", "message_id", "original_name", "kind", "summary", "backend"
+        "pk", "message_id", "original_name", "kind", "summary", "provider"
     )
     return [
         {
@@ -139,7 +153,7 @@ def attachments_for(conversation, backend):
             "kind": row["kind"],
             "description": describe(row["kind"], row["summary"]),
             # A file attached while chat used another provider is not sent to this one.
-            "readable": row["backend"] == backend,
+            "readable": row["provider"] == provider,
         }
         for row in rows
     ]
@@ -165,23 +179,23 @@ def describe(kind, summary) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _readable(person, conversation_id, backend):
+def _readable(person, conversation_id, provider):
     """Attachments the model may read in this turn: this conversation, this member, this provider."""
-    return visible_attachments(person).filter(conversation_id=conversation_id, backend=backend)
+    return visible_attachments(person).filter(conversation_id=conversation_id, provider=provider)
 
 
-def attached_for_other_backend(conversation, backend):
+def attached_for_other_provider(conversation, provider):
     """Whether a file was ever attached to the conversation for another provider than this one.
 
     Earlier turns may quote that file, even after it was removed, so they are not resent here.
     """
-    used = AiConversation.objects.filter(pk=conversation.pk).values_list("attachment_backends", flat=True).first()
-    return any(item != backend for item in used or [])
+    used = AiConversation.objects.filter(pk=conversation.pk).values_list("attachment_providers", flat=True).first()
+    return any(item != provider for item in used or [])
 
 
-def attachment_context(person, conversation, backend):
+def attachment_context(person, conversation, provider):
     """A context block listing the readable attachments, or None when there are none."""
-    rows = list(_readable(person, conversation.pk, backend).defer(*_LIST_ONLY).order_by("pk"))
+    rows = list(_readable(person, conversation.pk, provider).defer(*_LIST_ONLY).order_by("pk"))
     if not rows:
         return None
     lines = [
@@ -211,8 +225,8 @@ def _context_line(row):
     return "; ".join(parts)
 
 
-def attachment_tools(conversation, backend):
-    """The read tool, bound to one conversation and the backend the turn runs on.
+def attachment_tools(conversation, provider):
+    """The read tool, bound to one conversation and the provider the turn runs on.
 
     It is offered on every turn, so a harness session started before the first
     file was attached can still call it.
@@ -220,7 +234,7 @@ def attachment_tools(conversation, backend):
     conversation_id = conversation.pk
 
     def handler(person, args):
-        return read_attachment(person, conversation_id, backend, args or {})
+        return read_attachment(person, conversation_id, provider, args or {})
 
     return (
         ToolSpec(
@@ -247,8 +261,8 @@ def attachment_tools(conversation, backend):
     )
 
 
-def read_attachment(person, conversation_id, backend, args):
-    readable = _readable(person, conversation_id, backend)
+def read_attachment(person, conversation_id, provider, args):
+    readable = _readable(person, conversation_id, provider)
     try:
         attachment_id = int(args.get("attachment_id"))
     except (TypeError, ValueError):

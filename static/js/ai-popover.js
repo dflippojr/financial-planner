@@ -146,7 +146,7 @@
     if (typeof data.providerLabel === "string" && data.providerLabel) {
       pop.querySelectorAll("[data-chat-provider]").forEach(function (node) { node.textContent = data.providerLabel; });
       pop.querySelectorAll("[data-chat-attach-input]").forEach(function (input) { input.disabled = false; });
-      form.elements.attachment_backend.value = typeof data.providerBackend === "string" ? data.providerBackend : "";
+      form.elements.attachment_provider.value = typeof data.providerKey === "string" ? data.providerKey : "";
     }
     // Only member-checked, server-rendered markup enters the thread; no scripts are evaluated.
     const parsed = new DOMParser().parseFromString(data.html, "text/html");

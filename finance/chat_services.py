@@ -33,10 +33,11 @@ from .ai_types import (
     UNAVAILABLE,
 )
 from .chat_attachments import (
-    attached_for_other_backend,
+    attached_for_other_provider,
     attachment_context,
     attachment_tools,
     delete_conversations,
+    provider_key,
     store_attachment,
 )
 from .chat_attachment_parsing import AttachmentRejected
@@ -285,20 +286,25 @@ def page_context_from_request(request):
 
 
 def send_message(
-    principal, text, *, conversation_id=None, page_context=None, start_new=False, attachment=None, warned_backend=None,
+    principal, text, *, conversation_id=None, page_context=None, start_new=False, attachment=None, warned_provider=None,
 ):
     """Store the question and a pending reply; the chat runner answers it in the background.
 
     ``attachment`` is a file already parsed by chat_attachment_parsing. It is stored
     with the question in one transaction, so a refused file leaves nothing behind.
-    ``warned_backend`` is the backend the attach warning named on the member's page;
-    a file is refused when chat has since moved to another provider.
+    ``warned_provider`` is the provider (chat_attachments.provider_key) the attach warning
+    named on the member's page; a file is refused, before anything is written, when chat
+    has since moved to another provider.
     """
     if len(text or "") > MAX_CHAT_PROMPT_CHARS:
         raise AiError(f"Questions must be at most {MAX_CHAT_PROMPT_CHARS:,} characters.")
     person = _person_for(principal)
     purge_expired(person)
-    _connection, backend = chat_backend_for(person)
+    connection, backend = chat_backend_for(person)
+    provider = provider_key(connection, backend)
+    if attachment is not None and warned_provider != provider:
+        # Checked before any conversation or question is written, so nothing is stored.
+        raise AttachmentRejected(PROVIDER_CHANGED)
     prompt = (text or "").strip()
     if not prompt:
         raise AiError("Enter a question.")
@@ -315,7 +321,11 @@ def send_message(
         conversation = _new_conversation(person, backend)
     with transaction.atomic():
         _lock_member(person)
-        conversation = _lock_conversation(conversation.pk)
+        try:
+            conversation = _lock_conversation(conversation.pk)
+        except AiConversation.DoesNotExist:
+            # Deleted while this send waited for its lock.
+            raise PermissionDenied(_DENIED) from None
         pending = AiConversationMessage.objects.filter(
             conversation__member=person, status=AiConversationMessage.Status.PENDING
         ).count()
@@ -333,9 +343,7 @@ def send_message(
             page_context=context_payload,
         )
         if attachment is not None:
-            if warned_backend != backend:
-                raise AttachmentRejected(PROVIDER_CHANGED)
-            store_attachment(person, conversation, question, attachment, backend=backend)
+            store_attachment(person, conversation, question, attachment, provider=provider)
         conversation.turn_count += 1
         if not conversation.title:
             conversation.title = prompt[:80]
@@ -443,9 +451,10 @@ def answer_turn(turn, *, sleep=None, monotonic=None):
             locked.save(update_fields=(*_USED_ROWS, "updated_at"))
             conversation.tool_call_count = locked.tool_call_count
 
-    tools = default_tools() + proposal_tools(conversation, turn) + attachment_tools(conversation, backend)
+    provider = provider_key(connection, backend)
+    tools = default_tools() + proposal_tools(conversation, turn) + attachment_tools(conversation, provider)
     harness_context = _harness_context(context_payload)
-    attached = attachment_context(person, conversation, backend)
+    attached = attachment_context(person, conversation, provider)
     if attached is not None:
         harness_context.append(attached)
     marker = _connection_marker(connection)
@@ -457,7 +466,7 @@ def answer_turn(turn, *, sleep=None, monotonic=None):
     history_held = (
         consent_held
         and _uses_only_visible_rows(conversation, person)
-        and not attached_for_other_backend(conversation, backend)
+        and not attached_for_other_provider(conversation, provider)
     )
     follow_up = (
         history_held

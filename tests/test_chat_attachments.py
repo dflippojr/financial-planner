@@ -20,7 +20,8 @@ from finance.category_services import ensure_household_categories
 from finance.lifecycle_services import delete_member_data
 from finance.chat_attachment_parsing import PASSWORD_PROTECTED, TOO_LARGE, UNSUPPORTED, parse_upload
 from finance.chat_attachments import (
-    attached_for_other_backend,
+    attached_for_other_provider,
+    provider_key,
     DATA_NOT_INSTRUCTIONS,
     NONE_ATTACHED,
     NOT_AVAILABLE,
@@ -88,12 +89,16 @@ def _harness_member(harness, username="owner", household=None):
 
 def _attach(person, name="budget.csv", data=None, *, conversation_id=None, prompt="Read my budget."):
     data = BUDGET_CSV.encode() if data is None else data
-    _connection, backend = chat_backend_for(person)
     conversation = send_message(
         person, prompt, conversation_id=conversation_id, attachment=parse_upload(upload(name, data)),
-        warned_backend=backend,
+        warned_provider=_key(person),
     )
     return conversation, AiChatAttachment.objects.filter(conversation=conversation).order_by("-pk").first()
+
+
+def _key(person):
+    """The provider key the member's attach warning names now."""
+    return provider_key(*chat_backend_for(person))
 
 
 def _events(action, target_id=None):
@@ -110,7 +115,7 @@ def _events(action, target_id=None):
 def test_chat_page_upload_stores_the_file_with_its_question_and_audits_it(harness):
     client, person, _household = _harness_member(harness)
     response = client.post(reverse("chat-send"), {
-        "prompt": "Compare my budget with spending.", "attachment_backend": "claude",
+        "prompt": "Compare my budget with spending.", "attachment_provider": _key(person),
         "attachment": upload("budget.csv", BUDGET_CSV.encode(), "text/csv"),
     })
     attachment = AiChatAttachment.objects.get()
@@ -120,7 +125,7 @@ def test_chat_page_upload_stores_the_file_with_its_question_and_audits_it(harnes
     assert attachment.message_id == question.pk
     assert attachment.original_name == "budget.csv"
     assert attachment.kind == "csv"
-    assert attachment.backend == "claude"
+    assert attachment.provider == _key(person) and attachment.provider.startswith("claude@")
     assert bytes(attachment.data) == BUDGET_CSV.encode()
     assert attachment.summary == {"sheets": [{"name": "CSV", "rows": 4, "columns": 2}]}
     (event,) = _events(AuditEvent.Action.CHAT_ATTACHMENT_ADDED)
@@ -180,7 +185,7 @@ def test_the_per_conversation_cap_refuses_the_whole_send(harness, settings):
     conversation, _first = _attach(person)
     before = AiConversationMessage.objects.count()
     response = client.post(reverse("chat-send"), {
-        "prompt": "And this one.", "conversation_id": conversation.pk, "attachment_backend": "claude",
+        "prompt": "And this one.", "conversation_id": conversation.pk, "attachment_provider": _key(person),
         "attachment": upload("more.csv", b"a\n1\n"),
     }, **JSON)
     assert response.status_code == 409
@@ -191,9 +196,9 @@ def test_the_per_conversation_cap_refuses_the_whole_send(harness, settings):
 
 @pytest.mark.django_db
 def test_popover_upload_returns_the_thread_with_the_file_and_the_provider(harness):
-    client, _person, _household = _harness_member(harness)
+    client, person, _household = _harness_member(harness)
     response = client.post(reverse("chat-send"), {
-        "prompt": "What does this say?", "attachment_backend": "claude",
+        "prompt": "What does this say?", "attachment_provider": _key(person),
         "attachment": upload("statement.pdf", make_pdf(["Synthetic statement"])),
     }, **JSON)
     data = response.json()
@@ -214,14 +219,21 @@ def test_upload_needs_a_member_who_may_chat(harness):
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("warned", ["anthropic_api", ""], ids=["other-provider", "missing"])
+@pytest.mark.parametrize("warned", ["anthropic_api@1", "claude@999999", "claude", ""],
+                         ids=["other-backend", "same-backend-other-connection", "backend-only", "missing"])
 def test_a_file_is_refused_when_the_provider_changed_after_the_warning(harness, warned):
+    # E.g. the page named the member's own local model, and another tab chose the household's.
     client, _person, _household = _harness_member(harness)
-    response = client.post(reverse("chat-send"), {
-        "prompt": "Read this.", "attachment_backend": warned, "attachment": upload("budget.csv", BUDGET_CSV.encode()),
-    }, **JSON)
-    assert response.status_code == 409
-    assert response.json()["error"] == PROVIDER_CHANGED
+    for headers in (JSON, {}):
+        response = client.post(reverse("chat-send"), {
+            "prompt": "Read this.", "attachment_provider": warned, "attachment": upload("budget.csv", BUDGET_CSV.encode()),
+        }, **headers)
+        assert response.status_code in (409, 302)
+    assert client.post(reverse("chat-send"), {
+        "prompt": "Read this.", "attachment_provider": warned, "attachment": upload("budget.csv", BUDGET_CSV.encode()),
+    }, **JSON).json()["error"] == PROVIDER_CHANGED
+    # Nothing at all is written, not even a new conversation for a fresh popover.
+    assert not AiConversation.objects.exists()
     assert not AiChatAttachment.objects.exists()
     assert not AiConversationMessage.objects.exists()
 
@@ -258,13 +270,13 @@ def test_the_attach_warning_shows_the_api_key_provider_before_upload(provider): 
 
 @pytest.mark.django_db
 def test_the_attach_warning_shows_the_harness_provider(harness):
-    client, _person, _household = _harness_member(harness)
+    client, person, _household = _harness_member(harness)
     html = client.get(reverse("chat")).content.decode()
     assert "<strong data-chat-provider>Claude through the agent harness</strong>" in html
-    assert '<input type="hidden" name="attachment_backend" value="claude">' in html
+    assert f'<input type="hidden" name="attachment_provider" value="{_key(person)}">' in html
     popover = client.get(reverse("chat-popover")).json()
     assert popover["providerLabel"] == "Claude through the agent harness"
-    assert popover["providerBackend"] == "claude"
+    assert popover["providerKey"] == _key(person)
 
 
 # --- The read tool and model context ---------------------------------------
@@ -343,26 +355,26 @@ def test_read_tool_pages_pdfs_and_rejects_bad_arguments(harness):
     _client, person, _household = _harness_member(harness)
     conversation, pdf = _attach(person, "statement.pdf", make_pdf(["Page one", "Page two", "Page three"]))
     _conversation, sheet = _attach(person, "budget.xlsx", budget_xlsx(), conversation_id=conversation.pk)
-    pages = read_attachment(person, conversation.pk, "claude", {"attachment_id": pdf.pk, "offset": 1, "limit": 1})
+    pages = read_attachment(person, conversation.pk, _key(person), {"attachment_id": pdf.pk, "offset": 1, "limit": 1})
     assert pages.ok and "--- page 2 ---\nPage two" in pages.text and "next_offset=2" in pages.text
     assert pages.figures[0]["amount_display"] == "page 2"
-    both = read_attachment(person, conversation.pk, "claude", {"attachment_id": pdf.pk, "limit": 50})
+    both = read_attachment(person, conversation.pk, _key(person), {"attachment_id": pdf.pk, "limit": 50})
     assert "pages 1-3 of 3." in both.text and both.figures[0]["amount_display"] == "pages 1–3"
-    past = read_attachment(person, conversation.pk, "claude", {"attachment_id": pdf.pk, "offset": 9})
+    past = read_attachment(person, conversation.pk, _key(person), {"attachment_id": pdf.pk, "offset": 9})
     assert past.ok and "no page at offset 9" in past.text
-    by_number = read_attachment(person, conversation.pk, "claude", {"attachment_id": sheet.pk, "sheet": "1", "offset": 2})
+    by_number = read_attachment(person, conversation.pk, _key(person), {"attachment_id": sheet.pk, "sheet": "1", "offset": 2})
     assert 'row 3: ["Dining", "150"]' in by_number.text
     assert by_number.figures[0]["amount_display"] == "sheet Budget, rows 3–3"
-    missing_sheet = read_attachment(person, conversation.pk, "claude", {"attachment_id": sheet.pk, "sheet": "Nope"})
+    missing_sheet = read_attachment(person, conversation.pk, _key(person), {"attachment_id": sheet.pk, "sheet": "Nope"})
     assert not missing_sheet.ok and 'Sheets: "Budget"' in missing_sheet.text
-    no_rows = read_attachment(person, conversation.pk, "claude", {"attachment_id": sheet.pk, "offset": 10})
+    no_rows = read_attachment(person, conversation.pk, _key(person), {"attachment_id": sheet.pk, "offset": 10})
     assert "no rows at offset 10" in no_rows.text
     AiChatAttachment.objects.filter(pk=pdf.pk).update(summary={"pages": 3, "truncated": True})
-    listed = attachment_context(person, conversation, "claude")["content"]
+    listed = attachment_context(person, conversation, _key(person))["content"]
     assert f'id={pdf.pk}; name="statement.pdf"; type=PDF; pages=3; text_truncated=true' in listed
     assert 'sheets="Budget" (3 rows, 2 columns)' in listed
     for bad in ({}, {"attachment_id": "x"}, {"attachment_id": 999_999}):
-        result = read_attachment(person, conversation.pk, "claude", bad)
+        result = read_attachment(person, conversation.pk, _key(person), bad)
         assert not result.ok and result.text == NOT_AVAILABLE
 
 
@@ -373,14 +385,14 @@ def test_read_tool_caps_characters_per_call_and_continues_long_rows_and_pages(ha
     monkeypatch.setattr(chat_attachments, "MAX_READ_CHARS", 70)
     _client, person, _household = _harness_member(harness)
     conversation, sheet = _attach(person)
-    result = read_attachment(person, conversation.pk, "claude", {"attachment_id": sheet.pk, "limit": 4})
+    result = read_attachment(person, conversation.pk, _key(person), {"attachment_id": sheet.pk, "limit": 4})
     assert result.text.count("row ") == 2 and "next_offset=2" in result.text
 
     wide = ",".join(f"cell{index:02d}-" + "w" * 10 for index in range(12)) + "\nshort\n"
     _conversation, wide_sheet = _attach(person, "wide.csv", wide.encode(), conversation_id=conversation.pk)
     seen, column = [], 1
     for _ in range(12):
-        part = read_attachment(person, conversation.pk, "claude", {"attachment_id": wide_sheet.pk, "column": column})
+        part = read_attachment(person, conversation.pk, _key(person), {"attachment_id": wide_sheet.pk, "column": column})
         assert part.ok and len(part.text.splitlines()[-1]) < 120
         seen.extend(cell for cell in (f"cell{index:02d}-" for index in range(12)) if cell in part.text)
         if "next_column=" not in part.text:
@@ -388,21 +400,21 @@ def test_read_tool_caps_characters_per_call_and_continues_long_rows_and_pages(ha
             break
         column = int(part.text.split("next_column=")[1].split()[0])
     assert seen == [f"cell{index:02d}-" for index in range(12)]
-    past = read_attachment(person, conversation.pk, "claude", {"attachment_id": wide_sheet.pk, "column": 99})
+    past = read_attachment(person, conversation.pk, _key(person), {"attachment_id": wide_sheet.pk, "column": 99})
     assert "row 1 has 12 columns" in past.text
 
     long_page = "".join(chr(97 + index % 26) for index in range(150))
     _conversation, pdf = _attach(person, "s.pdf", make_pdf([long_page, "short"]), conversation_id=conversation.pk)
-    first = read_attachment(person, conversation.pk, "claude", {"attachment_id": pdf.pk})
+    first = read_attachment(person, conversation.pk, _key(person), {"attachment_id": pdf.pk})
     assert "characters 1-70 of 150. next_char_offset=70" in first.text
-    second = read_attachment(person, conversation.pk, "claude", {"attachment_id": pdf.pk, "char_offset": 70})
-    third = read_attachment(person, conversation.pk, "claude", {"attachment_id": pdf.pk, "char_offset": 140})
+    second = read_attachment(person, conversation.pk, _key(person), {"attachment_id": pdf.pk, "char_offset": 70})
+    third = read_attachment(person, conversation.pk, _key(person), {"attachment_id": pdf.pk, "char_offset": 140})
     assert "characters 141-150 of 150. next_offset=1" in third.text
     text = "".join(part.text.split("--- page 1 ---\n")[1] for part in (first, second, third))
     assert text == long_page
-    beyond = read_attachment(person, conversation.pk, "claude", {"attachment_id": pdf.pk, "char_offset": 999})
+    beyond = read_attachment(person, conversation.pk, _key(person), {"attachment_id": pdf.pk, "char_offset": 999})
     assert "page 1 has 150 characters" in beyond.text
-    both = read_attachment(person, conversation.pk, "claude", {"attachment_id": pdf.pk, "offset": 1})
+    both = read_attachment(person, conversation.pk, _key(person), {"attachment_id": pdf.pk, "offset": 1})
     assert "--- page 2 ---\nshort" in both.text
 
 
@@ -411,6 +423,7 @@ def test_earlier_turns_are_not_resent_to_another_provider_even_after_the_file_is
     _user, person, _household = api_member(ANTHROPIC)
     provider.script = [(200, anthropic_text("Groceries is 400 per budget.csv.")), (200, openai_text("Second."))]
     conversation, attachment = _attach(person)
+    anthropic_key = _key(person)
     process_pending_turns(sleep=no_sleep)
     remove_attachment(person, attachment.pk)
     connect_api_key(person, kind=OPENAI, key=KEYS[OPENAI])
@@ -421,8 +434,8 @@ def test_earlier_turns_are_not_resent_to_another_provider_even_after_the_file_is
     assert first["path"] == "/v1/messages" and second["path"] == "/v1/responses"
     assert second["body"]["input"] == [{"role": "user", "content": "And now?"}]
     assert "Groceries" not in str(second["body"])
-    assert not attached_for_other_backend(conversation, ANTHROPIC)
-    assert attached_for_other_backend(conversation, OPENAI)
+    assert not attached_for_other_provider(conversation, anthropic_key)
+    assert attached_for_other_provider(conversation, _key(person))
 
 
 # --- Access follows the conversation ---------------------------------------
@@ -436,9 +449,9 @@ def test_another_member_and_another_conversation_cannot_list_or_read_it(harness)
     args = {"attachment_id": attachment.pk}
 
     # Another member, even naming this conversation's id.
-    other = read_attachment(person_b, conversation.pk, "claude", args)
+    other = read_attachment(person_b, conversation.pk, _key(person_b), args)
     assert not other.ok and other.text == NONE_ATTACHED and "Groceries" not in other.text
-    assert attachment_context(person_b, conversation, "claude") is None
+    assert attachment_context(person_b, conversation, _key(person_b)) is None
     assert not visible_attachments(person_b).exists()
     assert client_b.post(reverse("chat-attachment-remove", args=[attachment.pk])).status_code == 404
     assert "budget.csv" not in client_b.get(f"{reverse('chat')}?c={conversation.pk}").content.decode()
@@ -448,14 +461,14 @@ def test_another_member_and_another_conversation_cannot_list_or_read_it(harness)
     # The same member's other conversation: its bound tool and context never see the file.
     second = send_message(person_a, "A new topic.", start_new=True)
     assert second.pk != conversation.pk
-    (tool,) = attachment_tools(second, "claude")
+    (tool,) = attachment_tools(second, _key(person_a))
     elsewhere = tool.handler(person_a, args)
     assert not elsewhere.ok and "Groceries" not in elsewhere.text
-    assert attachment_context(person_a, second, "claude") is None
+    assert attachment_context(person_a, second, _key(person_a)) is None
     assert "budget.csv" not in client_a.get(f"{reverse('chat')}?c={second.pk}").content.decode()
 
     # The owner, in the conversation it was attached to.
-    (tool,) = attachment_tools(conversation, "claude")
+    (tool,) = attachment_tools(conversation, _key(person_a))
     assert tool.handler(person_a, args).ok
     assert AiChatAttachment.objects.filter(pk=attachment.pk).exists()
 
@@ -466,16 +479,16 @@ def test_an_expired_conversation_hides_its_files(harness):
     conversation, attachment = _attach(person)
     AiConversation.objects.filter(pk=conversation.pk).update(expires_at=timezone.now() - timedelta(minutes=1))
     assert not visible_attachments(person).exists()
-    assert not read_attachment(person, conversation.pk, "claude", {"attachment_id": attachment.pk}).ok
+    assert not read_attachment(person, conversation.pk, _key(person), {"attachment_id": attachment.pk}).ok
 
 
 @pytest.mark.django_db
 def test_a_file_is_not_sent_to_a_provider_the_warning_did_not_name(harness):
     client, person, _household = _harness_member(harness)
     conversation, attachment = _attach(person)
-    AiChatAttachment.objects.filter(pk=attachment.pk).update(backend="anthropic_api")
-    assert not read_attachment(person, conversation.pk, "claude", {"attachment_id": attachment.pk}).ok
-    assert attachment_context(person, conversation, "claude") is None
+    AiChatAttachment.objects.filter(pk=attachment.pk).update(provider="anthropic_api@1")
+    assert not read_attachment(person, conversation.pk, _key(person), {"attachment_id": attachment.pk}).ok
+    assert attachment_context(person, conversation, _key(person)) is None
     html = client.get(f"{reverse('chat')}?c={conversation.pk}").content.decode()
     assert "Not sent to the current AI provider. Attach it again to use it here." in html
 
