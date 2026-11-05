@@ -1,6 +1,7 @@
 """Keep every operator journal written by tests in disposable storage."""
 import os
 import sys
+import threading
 
 import pytest
 
@@ -69,6 +70,62 @@ def keep_autovacuum_off(request):
     yield
     if _is_transactional(request.node):
         _turn_autovacuum_off(request.getfixturevalue("django_db_blocker"))
+
+
+class _OneRequestAtATime:
+    """Lets one live-server request at a time use a connection shared with every request thread.
+
+    The lock is taken in the WSGI app, after the request line has been read, so an idle keep-alive
+    socket never holds it. It is released when the server finishes that request, after the
+    response has been written and closed, whatever path the request took.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._owner = None
+
+    def acquire(self):
+        self._lock.acquire()
+        self._owner = threading.get_ident()
+
+    def release(self):
+        # Only the request thread that took the lock compares equal here.
+        if self._owner == threading.get_ident():
+            self._owner = None
+            self._lock.release()
+
+    def wrap_app(self, app):
+        def one_at_a_time(environ, start_response):
+            self.acquire()
+            return app(environ, start_response)
+
+        return one_at_a_time
+
+    def wrap_handler(self, handler_class):
+        gate = self
+
+        class OneRequestAtATimeHandler(handler_class):
+            def handle_one_request(self):
+                try:
+                    super().handle_one_request()
+                finally:
+                    gate.release()
+
+        return OneRequestAtATimeHandler
+
+
+@pytest.fixture(scope="session")
+def live_server(live_server):
+    # With in-memory SQLite, pytest-django hands the test thread's one connection to every request
+    # thread. Two requests inside atomic() at once (the Chat page polls each pending turn, and each
+    # poll opens one) corrupt its savepoint bookkeeping, and since an in-memory connection is never
+    # closed, every later live-server test on that xdist worker failed (#653). Serialize them.
+    if live_server.thread.connections_override:
+        gate = _OneRequestAtATime()
+        server = live_server.thread.httpd
+        server.RequestHandlerClass = gate.wrap_handler(server.RequestHandlerClass)
+        server.set_app(gate.wrap_app(server.get_app()))
+    return live_server
 
 
 @pytest.fixture(autouse=True)
