@@ -31,7 +31,7 @@
         <h2 class="text-sm font-semibold opacity-80">Net cash flow</h2>
       {% ai_tile "cash-flow-totals" has_data=report.has_visible_transactions date_from=range_from date_to=range_to %}
         <p class="text-4xl font-bold tracking-tight">{% include "finance/_amount.html" with value=report.summary.net_display tone="" %}</p>
-        <p class="text-sm opacity-80">{% if range_from and range_to %}{{ range_from|date:"M j" }} – {{ range_to|date:"M j, Y" }} · {% endif %}{{ report.summary.net_change.label }}</p>
+        <p class="text-sm opacity-80">{% if range_from and range_to %}{{ range_from|date_range:range_to }} · {% endif %}{{ report.summary.net_change.label }}</p>
       </div>
       <div class="flex flex-col gap-1 md:border-l md:border-base-300 md:pl-6">
         <h2 class="text-sm font-semibold opacity-80">Income</h2>
