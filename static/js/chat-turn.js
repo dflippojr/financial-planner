@@ -15,20 +15,42 @@
     return ul;
   }
 
+  // An assistant reply arrives as server-rendered markdown (issue #634): the same escaped markup
+  // the saved turn shows, swapped in for the Thinking row. Parsing it never runs scripts.
+  function showMarkdown(article, html) {
+    var slot = article.querySelector("[data-chat-turn-slot]");
+    var parsed = new DOMParser().parseFromString(html, "text/html");
+    var nodes = Array.from(parsed.body.childNodes, function (node) { return document.importNode(node, true); });
+    slot.replaceWith.apply(slot, nodes);
+  }
+
   function render(article, data) {
     var label = article.querySelector("[data-chat-turn-label]");
     var body = article.querySelector("[data-chat-turn-body]");
     if (data.role === "error" && label) label.textContent = label.textContent + " (error)";
-    body.textContent = data.content || "";
+    if (data.role !== "error" && typeof data.content_html === "string" && article.querySelector("[data-chat-turn-slot]")) {
+      showMarkdown(article, data.content_html);
+    } else {
+      body.textContent = data.content || "";
+    }
     if (data.figures && data.figures.length) {
-      article.appendChild(list("mt-2 list-disc pl-5 text-sm", data.figures, function (li, figure) {
+      // Same collapsed Sources block the saved turn renders (_chat_messages.html).
+      var details = document.createElement("details");
+      details.className = "mt-2 text-sm";
+      details.setAttribute("data-chat-figures", "");
+      var summary = document.createElement("summary");
+      summary.className = "cursor-pointer py-3";
+      summary.textContent = "Sources (" + data.figures.length + ")";
+      details.appendChild(summary);
+      article.appendChild(details);
+      details.appendChild(list("list-disc pl-5", data.figures, function (li, figure) {
         var text = figure.label + ": " + figure.amount_display;
         if (!figure.url) {
           li.textContent = text;
           return;
         }
         var link = document.createElement("a");
-        link.className = "link";
+        link.className = "link inline-flex min-h-11 items-center";
         link.href = figure.url;
         link.textContent = text;
         li.appendChild(link);

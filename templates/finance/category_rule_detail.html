@@ -4,7 +4,7 @@
 <h2 class="mb-4 text-xl font-semibold">Rule: {{ rule.description_contains }}</h2>
 <p class="mb-4"><a class="link" href="{% url 'category-rule-list' %}">All rules</a></p>
 {% if rule.inactive %}
-<p role="status" class="alert mb-4" data-rule-inactive="true">Inactive: this personal rule's category belongs to a household you are no longer a member of.</p>
+<p role="status" class="alert mb-4" data-rule-inactive="true">{% if rule.marks_untracked_transfer %}Inactive: this personal rule was made in a household you are no longer a member of.{% else %}Inactive: this personal rule's category belongs to a household you are no longer a member of.{% endif %}</p>
 {% endif %}
 {% if apply_error %}<p class="errorlist text-error mb-4" role="alert">{{ apply_error }}</p>{% endif %}
 <form method="post" class="max-w-lg mb-8">
@@ -29,6 +29,9 @@
   {% endif %}
 </div>
 <h2 class="mb-3 text-xl font-semibold">Preview ({{ match_count }})</h2>
+{% if rule.marks_untracked_transfer %}
+<p class="mb-3 max-w-2xl text-sm opacity-80">Applying marks these rows as transfers to or from an account you don't track: they stop counting as income or spending for everyone who can see them, and keep their category. Reversing an application removes the marks it made.</p>
+{% endif %}
 {% include "finance/_rule_preview_table.html" with matches=matches %}
 <form method="post" class="mb-8">
   {% csrf_token %}

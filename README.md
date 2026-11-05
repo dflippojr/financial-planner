@@ -11,12 +11,12 @@ accounts private inside a shared household.
 ![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-v4-06B6D4?logo=tailwindcss&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker_Compose-4_services-2496ED?logo=docker&logoColor=white)
 ![Tailscale](https://img.shields.io/badge/Tailscale-HTTPS-242424?logo=tailscale&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-1900+_pytest-0A9EDC?logo=pytest&logoColor=white)
+![Tests](https://img.shields.io/badge/tests-4000+_pytest-0A9EDC?logo=pytest&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 | Status | Scope | Process |
 |---|---|---|
-| In production on a home server, used daily by a two-person household | ~37k lines of application code, ~41k lines of tests, 59 schema migrations | 100+ merged pull requests, each tied to a specified GitHub issue and reviewed before merge |
+| Built for a two-person household; running on a home server | about 49k lines of application Python, about 66k lines of tests (Python, Nov 2026), over 70 schema migrations | 100+ merged pull requests, each tied to a specified GitHub issue and reviewed before merge |
 
 ---
 
@@ -125,7 +125,7 @@ flowchart LR
 | Layer | Choice | Why |
 |---|---|---|
 | Web | Django 5.2, server-rendered templates | Built-in ORM, migrations, sessions, and auth; no SPA to maintain for a household app |
-| UI | Tailwind CSS v4 + daisyUI 5, Chart.js | Modern, themeable UI (light and dark) compiled by Tailwind's standalone binary, so the repo has **no Node toolchain** |
+| UI | Tailwind CSS v4 + daisyUI 5, Chart.js | Modern, themeable UI (light and dark) compiled by Tailwind's standalone binary, so the CSS build needs **no Node toolchain** (Node 22 is needed only for the Playwright UI tests in `tests/ui`) |
 | Data | PostgreSQL 18 | Durable, constraint-rich storage; integrity rules live in the schema, not just in code |
 | Money | Integer cents (`BigInteger`) + ISO 4217 currency | Exact arithmetic, no floating-point drift anywhere in the pipeline |
 | Auth | Django sessions, django-allauth (Google), optional passkeys, recovery codes | Invitation-only household with password or Google sign-in and re-authentication for sensitive actions |
@@ -207,7 +207,7 @@ flowchart LR
 
 ## Domain model
 
-A simplified view of the core entities (59 migrations, 54 model classes in total).
+A simplified view of the core entities (over 70 migrations and about 60 model classes in total).
 
 ```mermaid
 erDiagram
@@ -264,7 +264,7 @@ erDiagram
 - [`finance/net_worth.py`](finance/net_worth.py): monthly net worth with carry-forward and per-source sign handling.
 
 **Testing and quality**
-- About 1,900 pytest tests across importers, authorization, reporting, deployment scripts, and UI.
+- More than 4,000 pytest test cases (counted after parametrization) across importers, authorization, reporting, deployment scripts, and UI.
 - The suite runs on in-memory SQLite for speed and on PostgreSQL 18, the production engine, in the `PostgreSQL 18` GitHub Actions workflow on every pull request and push to `main` (it also checks migrations on an empty database). Run the same locally with a throwaway container via [`scripts/test_postgres.sh`](scripts/test_postgres.sh).
 - Browser layout tests drive headless Chromium through Playwright at phone and desktop widths, in the `Playwright layout` workflow on every pull request and push to `main`.
 - An agent verification skill ([`.claude/skills/verify`](.claude/skills/verify/SKILL.md)) launches a disposable synthetic instance, health-checks it, drives the main path in a browser and saves evidence, then verifies cleanup.
@@ -305,14 +305,17 @@ flowchart LR
 Requirements: Python 3.13, and Docker for PostgreSQL tests or the full stack.
 
 ```console
-python -m pip install -r requirements.txt
+python -m pip install --require-hashes --only-binary :all: -r requirements-test.lock
 python manage.py migrate --settings=financial_planner.test_settings
 python -m pytest                  # fast suite on in-memory SQLite
 bash scripts/test_postgres.sh     # same suite on PostgreSQL 18 (needs Docker)
-# browser layout tests: pip install -r requirements-test.txt, python -m playwright install chromium,
-# bash scripts/build_css.sh, then
+# browser layout tests: python -m playwright install chromium, bash scripts/build_css.sh, then
 python -m pytest -m browser -n 4
 ```
+
+`requirements.txt` and `requirements-test.txt` are the hand-edited inputs. After changing one, run
+`bash scripts/lock.sh` and commit `requirements.lock` and `requirements-test.lock`; CI fails if they are
+out of date. The production image installs `requirements.lock`, which has no test tools.
 
 Load synthetic demo records with `python manage.py loaddata synthetic_demo`. Never substitute a real
 statement or transaction export into a committed fixture.
@@ -382,8 +385,9 @@ or `workflow_dispatch` events accepted. `ops/github/install-runner.ps1` configur
 ephemeral registration under a dedicated non-administrator account; the owner applies it to the host
 and reprovisions after each job. These controls do not sandbox untrusted PR text read by the reviewer.
 See [review runner setup](docs/review-runner.md). The workflow is a thin caller of
-the shared reviewer in `dflippojr/agent-harness` (`.github/workflows/review.yml@review-v1`), which holds the review
-logic and posts an `Automated Code Review` check that passes on a clean review and fails on findings.
+the shared reviewer in `dflippojr/agent-harness`, which holds the review logic and posts an `Automated Code Review`
+check that passes on a clean review and fails on findings. The workflow pins that reviewer to a release tag in
+`.github/workflows/review.yml`.
 
 `.github/workflows/ci.yml` runs on every pull request and every push to `main`. It calls the guards,
 PostgreSQL, SonarCloud, Playwright and Docker smoke workflows and ends in one check, `gate`, which fails when
@@ -400,8 +404,7 @@ owner applied `gate-change-approved` after the newest push. The ruleset for `mai
 `.github/workflows/sonar.yml` runs the test suite with coverage and reports it to SonarCloud on every
 push to `main`, on pull requests from branches of this repository, and on demand (`gh workflow run sonar.yml`).
 It uses the `SONARCLOUD_TOKEN` repository secret, is skipped for pull requests from forks, and fails the
-check when the SonarCloud quality gate fails (including 80% coverage on new code). A local SonarQube server
-(`localhost:9000`) remains available as a pre-push check.
+check when the SonarCloud quality gate fails (including 80% coverage on new code).
 
 </details>
 

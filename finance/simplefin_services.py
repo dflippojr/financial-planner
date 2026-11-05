@@ -231,7 +231,7 @@ def _account_row(key: str, item: dict, names: dict[str, str]) -> dict:
         "name": clean_text(item.get("name") or "Account")[:200],
         "institution": names.get(conn_id) or clean_text(item.get("conn_name") or "")[:200],
         "type": clean_text(reported_type)[:80] or "Not provided by SimpleFIN",
-        "currency": clean_text(item.get("currency") or "")[:10],
+        "currency": clean_text(item.get("currency") or "").strip()[:10],
     }
 
 
@@ -464,8 +464,15 @@ class _Conversion:
 
 
 def _remote_currency(remote: dict) -> str | None:
-    """USD, another ISO 4217-shaped code, or None when the provider sent nothing usable."""
-    return currency_code(remote.get("currency"))
+    """USD, another ISO 4217-shaped code, or None when the provider sent something unusable.
+
+    A missing or blank currency is taken as USD (owner decision, #627): SimpleFIN
+    sends "" for Vanguard accounts, and skipping them would repeat on every sync.
+    """
+    raw = remote.get("currency")
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return APP_CURRENCY
+    return currency_code(raw)
 
 
 def _conversion_for(remote: dict, rates: RateBook) -> _Conversion | None:
@@ -659,10 +666,28 @@ def _error_applies_to_remote(item: dict, remote: dict) -> bool:
     return bool(err_conn and conn_id and err_conn == conn_id)
 
 
+def _is_api_usage_notice(item) -> bool:
+    """A `gen.api` item naming no account or connection: advice to the developer, not missing data (#629).
+
+    The protocol: "Error in how the API is being used. This is meant for the
+    developer and not the user." Bridge sends it when the requested date range
+    passes 45 days (recommended) or 90 days (capped), so treating it as an
+    unreliable listing held back every import. A missing transaction list
+    still marks the account unreliable on its own.
+    """
+    return (
+        isinstance(item, dict)
+        and str(item.get("code") or "").strip().lower() == "gen.api"
+        and not (item.get("account_id") or item.get("conn_id"))
+    )
+
+
 def _transactions_unreliable(remote: dict, payload: dict) -> bool:
     if "transactions" not in remote or remote.get("transactions") is None:
         return True
     for item in payload.get("errlist") or []:
+        if _is_api_usage_notice(item):
+            continue
         if not isinstance(item, dict) or not (item.get("account_id") or item.get("conn_id")):
             # An error naming no account or connection may affect any of them.
             return True

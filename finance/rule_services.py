@@ -3,7 +3,8 @@ from urllib.parse import urlencode
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.db.models import Case, Exists, OuterRef, Prefetch, Q, Subquery, Value, When
+from django.db.models import BooleanField, Case, Exists, ExpressionWrapper, OuterRef, Prefetch, Q, Subquery, Value, When
+from django.db.models.functions import Coalesce
 from django.urls import reverse
 from django.utils import timezone
 
@@ -15,10 +16,13 @@ from .category_services import (
     _restore_refund_categories,
     assignable_categories,
     current_household,
+    drop_refund_links_to_originals,
     ensure_household_categories,
     exclusion_exists_for,
 )
 from .audit_services import changed_names, origin, record, snapshot
+from .untracked_transfers import history_label as untracked_history_label
+from .untracked_transfers import set_mark
 from .lifecycle_services import lock_actor_household
 from .models import (
     Account,
@@ -66,8 +70,31 @@ def _validate_rule_account(rule, person, household):
 
 
 def _validate_rule_category(rule, household):
+    if rule.marks_untracked_transfer:
+        # The mark is its own action (#642); the rule never carries a category.
+        if rule.category_id is not None or rule.scope_household_id != household.pk:
+            raise ValidationError("Choose a household category.")
+        return
     if rule.category.household_id != household.pk or rule.category.code == Category.Code.TRANSFER:
         raise ValidationError("Choose a household category.")
+
+
+def _rule_category(person, action, category_id):
+    """The rule's category: an assignable one, or None for an untracked-transfer rule."""
+    if action == CategoryRule.Action.UNTRACKED_TRANSFER:
+        return None
+    if action != CategoryRule.Action.CATEGORIZE:
+        raise ValidationError("Choose what the rule does.")
+    category = assignable_categories(person).filter(pk=category_id).first()
+    if category is None:
+        raise PermissionDenied(_DENIED)
+    return category
+
+
+def _set_rule_action(rule, action, category, household):
+    rule.action = action
+    rule.category = category
+    rule.scope_household = household if action == CategoryRule.Action.UNTRACKED_TRANSFER else None
 
 
 def _visible_rule_account(person, account_id):
@@ -105,7 +132,7 @@ def _set_rule_owner(rule, person, household, owner_kind):
 RULE_AUDIT_FIELDS = {
     "match": "description_contains", "account": "account_id", "amount": "min_amount_minor",
     "target": "max_amount_minor", "category": "category_id", "priority": "priority", "enabled": "enabled",
-    "owner": "owner_household_id",
+    "owner": "owner_household_id", "kind": "action",
 }
 
 
@@ -139,6 +166,7 @@ def save_category_rule(
     category_id,
     priority,
     enabled=True,
+    action=CategoryRule.Action.CATEGORIZE,
 ):
     person = _person_for(principal)
     household = current_household(person)
@@ -151,9 +179,7 @@ def save_category_rule(
         raise ValidationError("Enter text to match in the description.")
     if min_amount_minor is not None and max_amount_minor is not None and min_amount_minor > max_amount_minor:
         raise ValidationError("The minimum amount must be at most the maximum.")
-    category = assignable_categories(person).filter(pk=category_id).first()
-    if category is None:
-        raise PermissionDenied(_DENIED)
+    category = _rule_category(person, action, category_id)
     rule = _rule_for_save(person, household, rule_id, owner_kind, enabled)
     before = snapshot(rule, RULE_AUDIT_FIELDS) if rule.pk else None
     _set_rule_owner(rule, person, household, owner_kind)
@@ -161,7 +187,7 @@ def save_category_rule(
     rule.account = _visible_rule_account(person, account_id)
     rule.min_amount_minor = min_amount_minor
     rule.max_amount_minor = max_amount_minor
-    rule.category = category
+    _set_rule_action(rule, action, category, household)
     rule.priority = priority
     rule.enabled = enabled
     # A new or edited rule must be previewed and applied again before it
@@ -214,11 +240,16 @@ def personal_rule_is_inactive(rule):
     if cached is None:
         cached = not Membership.objects.filter(
             person_id=rule.owner_person_id,
-            household_id=rule.category.household_id,
+            household_id=rule.rule_household_id,
             ended_at__isnull=True,
         ).exists()
         rule._cached_inactive = cached
     return cached
+
+
+# The household a rule reaches, as `CategoryRule.rule_household_id` reads it, for
+# use inside a subquery on the rule.
+_RULE_HOUSEHOLD = Coalesce(OuterRef("category__household_id"), OuterRef("scope_household_id"))
 
 
 def ordered_rules_for_account(account, *, confirmed_only=False):
@@ -231,7 +262,7 @@ def ordered_rules_for_account(account, *, confirmed_only=False):
     rules = list(enabled.filter(eligible).select_related("category", "account", "owner_person")
         .annotate(_cached_inactive=~Exists(Membership.objects.filter(
             person_id=OuterRef("owner_person_id"),
-            household_id=OuterRef("category__household_id"),
+            household_id=_RULE_HOUSEHOLD,
             ended_at__isnull=True,
         )))
         .order_by("priority", "pk")
@@ -261,7 +292,7 @@ def _rule_owner_matches_transaction(rule, txn):
         return False
     if txn.account.scope != Account.Scope.HOUSEHOLD:
         return True
-    return txn.account.household_id == rule.category.household_id
+    return txn.account.household_id == rule.rule_household_id
 
 
 def _rule_fields_match(rule, description, account_id, amount_minor):
@@ -293,16 +324,30 @@ def _is_winning_rule(txn, rule, rules=None):
     return winner is not None and winner.pk == rule.pk
 
 
-def _candidate_queryset(person):
+# A category rule never overwrites a category set by hand or split into parts.
+# Marking a row as an untracked transfer (#642) keeps its category, so an
+# untracked-transfer rule reaches those rows too, but never an investment account.
+_CATEGORIZABLE = ~Q(category_source__in=(Transaction.CategorySource.MANUAL, Transaction.CategorySource.SPLIT))
+_MARKABLE = ~Q(account__account_type=Account.Type.INVESTMENT)
+
+
+def _candidate_base(person):
+    """Rows any rule may change: active cash flow, not inherited from a purchase or a
+    linked refund, and not already left out of income and spending."""
     return (
         Transaction.objects.visible_to(person)
         .filter(status=Transaction.Status.ACTIVE, kind=Transaction.Kind.CASH_FLOW)
-        .exclude(category_source=Transaction.CategorySource.MANUAL)
         .exclude(category_source=Transaction.CategorySource.INHERITED)
-        .exclude(category_source=Transaction.CategorySource.SPLIT)
         .filter(Q(refund_link__isnull=True))
         .annotate(_excluded=exclusion_exists_for(person))
         .filter(_excluded=False)
+    )
+
+
+def _candidate_queryset(person, *, untracked=False):
+    return (
+        _candidate_base(person)
+        .filter(_MARKABLE if untracked else _CATEGORIZABLE)
         .select_related("account", "category", "account__owner", "account__household")
     )
 
@@ -408,7 +453,7 @@ def _offer_rules(person, household_id):
             _visible=Q(owner_person=person) | Q(owner_household_id=household_id),
             _member=Exists(current.filter(person_id=OuterRef("owner_person_id"), household_id=household_id)),
             _cached_inactive=~Exists(current.filter(
-                person_id=OuterRef("owner_person_id"), household_id=OuterRef("category__household_id")
+                person_id=OuterRef("owner_person_id"), household_id=_RULE_HOUSEHOLD
             )),
         )
         .order_by("priority", "pk")
@@ -424,7 +469,7 @@ def _offer_personal_rule_applies(rule, row, person, household_id):
         return False
     if row["account__scope"] == Account.Scope.HOUSEHOLD:
         # Every current member sees the household's accounts.
-        return rule._member and rule.category.household_id == household_id
+        return rule._member and rule.rule_household_id == household_id
     # A private row in scope is the viewer's own.
     return rule.owner_person_id == person.pk
 
@@ -436,7 +481,7 @@ def _offer_row_blocked(row, rules, person, household_id):
 
 
 def _matching_queryset(person, rule):
-    qs = _candidate_queryset(person)
+    qs = _candidate_queryset(person, untracked=rule.marks_untracked_transfer)
     if rule.account_id:
         qs = qs.filter(account_id=rule.account_id)
     if rule.min_amount_minor is not None:
@@ -450,7 +495,7 @@ def _matching_queryset(person, rule):
             return qs.none()
         qs = qs.filter(account_id__in=_personal_account_ids(rule.owner_person)).filter(
             Q(account__scope=Account.Scope.PRIVATE)
-            | Q(account__scope=Account.Scope.HOUSEHOLD, account__household_id=rule.category.household_id)
+            | Q(account__scope=Account.Scope.HOUSEHOLD, account__household_id=rule.rule_household_id)
         )
     # Match descriptions in Python with casefold, exactly like automatic
     # application, so preview, manual apply, and auto-apply agree (database
@@ -571,6 +616,10 @@ def _history_new_label(category, rule):
     return f"{_history_label(category)} (rule: {rule.description_contains})"
 
 
+def _rule_suffix(rule):
+    return f" (rule: {rule.description_contains})"
+
+
 def _linked_refunds(transactions):
     original_ids = [txn.pk for txn in transactions]
     if not original_ids:
@@ -597,15 +646,41 @@ def _lock_transactions(person, transactions):
     )
 
 
-def _still_eligible(person, locked):
+def _eligible_ids(person, locked, *, untracked=False):
+    return set(
+        _candidate_queryset(person, untracked=untracked)
+        .filter(pk__in=[item.pk for item in locked])
+        .values_list("pk", flat=True)
+    )
+
+
+def _eligible_by_action(person, locked):
+    """`(categorizable ids, markable ids)` among locked rows, in one query."""
+    rows = (
+        _candidate_base(person)
+        .filter(_CATEGORIZABLE | _MARKABLE, pk__in=[item.pk for item in locked])
+        .annotate(
+            _categorizable=ExpressionWrapper(_CATEGORIZABLE, output_field=BooleanField()),
+            _markable=ExpressionWrapper(_MARKABLE, output_field=BooleanField()),
+        )
+        .values_list("pk", "_categorizable", "_markable")
+    )
+    categorizable, markable_ids = set(), set()
+    for pk, can_categorize, can_mark in rows:
+        if can_categorize:
+            categorizable.add(pk)
+        if can_mark:
+            markable_ids.add(pk)
+    return categorizable, markable_ids
+
+
+def _still_eligible(person, locked, *, untracked=False):
     """Recheck eligibility once rows are locked.
 
     A transfer confirmed (or a row reclassified) between the preview query and
-    the lock must not be categorized by the rule.
+    the lock must not be categorized or marked by the rule.
     """
-    eligible_ids = set(
-        _candidate_queryset(person).filter(pk__in=[item.pk for item in locked]).values_list("pk", flat=True)
-    )
+    eligible_ids = _eligible_ids(person, locked, untracked=untracked)
     return [item for item in locked if item.pk in eligible_ids]
 
 
@@ -625,7 +700,9 @@ def _apply_to_locked(person, rule, locked, *, require_first_match=True):
     ).values_list("refund_id", flat=True))
     rules_by_account = _rules_by_account(locked) if require_first_match else {}
     for txn in locked:
-        if txn.category_source in (Transaction.CategorySource.MANUAL, Transaction.CategorySource.SPLIT):
+        if not rule.marks_untracked_transfer and txn.category_source in (
+            Transaction.CategorySource.MANUAL, Transaction.CategorySource.SPLIT
+        ):
             skipped_manual += 1
             continue
         if txn.category_source == Transaction.CategorySource.INHERITED or txn.pk in refund_ids:
@@ -668,7 +745,7 @@ def apply_rule(principal, rule_id, *, previewed_version=None):
     preview = _winning_rows(list(_matching_queryset(person, rule).order_by("pk")), rule)
     if not preview:
         return None, 0
-    locked = _still_eligible(person, _lock_transactions(person, preview))
+    locked = _still_eligible(person, _lock_transactions(person, preview), untracked=rule.marks_untracked_transfer)
     # Re-read the rule once rows are locked: a save that committed meanwhile
     # must not leave the old category applied under the updated rule.
     person, rule = _rule_or_404(principal, rule_id)
@@ -685,17 +762,17 @@ def apply_enabled_rules_to_transactions(principal, transactions):
         return []
     person = _person_for(principal)
     # Same eligibility as preview and manual apply: active cash-flow rows that
-    # are not excluded as transfers or card payments and are not refunds.
+    # are not excluded as transfers or card payments and are not refunds. A
+    # category rule also skips hand-set categories; an untracked-transfer rule
+    # skips investment accounts instead (#642).
     requested_ids = {item.pk for item in transactions}
-    locked = [
-        item for item in _still_eligible(person, _lock_transactions(person, transactions)) if item.pk in requested_ids
-    ]
+    all_locked = [item for item in _lock_transactions(person, transactions) if item.pk in requested_ids]
+    categorizable, markable_ids = _eligible_by_action(person, all_locked)
+    locked = [item for item in all_locked if item.pk in categorizable or item.pk in markable_ids]
     by_rule = {}
     rules_by_account = {}
     owner_accounts = {}
     for txn in locked:
-        if _protected_source(txn):
-            continue
         # Automatic application only uses rules whose preview was confirmed.
         if txn.account_id not in rules_by_account:
             rules = ordered_rules_for_account(txn.account, confirmed_only=True)
@@ -707,6 +784,11 @@ def apply_enabled_rules_to_transactions(principal, transactions):
             rules_by_account[txn.account_id] = rules
         winner = first_matching_rule(txn, rules_by_account[txn.account_id])
         if winner is None:
+            continue
+        if winner.marks_untracked_transfer:
+            if txn.pk not in markable_ids:
+                continue
+        elif txn.pk not in categorizable or _protected_source(txn):
             continue
         bucket = by_rule.setdefault(winner.pk, {"rule": winner, "rows": []})
         bucket["rows"].append(txn)
@@ -725,14 +807,25 @@ def _apply_automatic_rule_groups(person, by_rule):
         RuleApplication(rule=payload["rule"], applied_by=person, applied_at=now)
         for payload in by_rule.values()
     ])
-    changed, history, entries = [], [], []
+    changed, marked, history, entries = [], [], [], []
     for application, payload in zip(applications, by_rule.values(), strict=True):
         rule = payload["rule"]
         for txn in payload["rows"]:
             entries.append(RuleApplicationEntry(
                 application=application, transaction=txn, previous_category=txn.category,
-                previous_category_source=txn.category_source,
+                previous_category_source=txn.category_source, marked_untracked=rule.marks_untracked_transfer,
             ))
+            if rule.marks_untracked_transfer:
+                history.append(TransactionCorrectionHistory(
+                    transaction=txn, actor=person, recorded_at=now,
+                    field_name=TransactionCorrectionHistory.Field.UNTRACKED,
+                    previous_description=untracked_history_label(False),
+                    new_description=untracked_history_label(True, _rule_suffix(rule)),
+                ))
+                txn.untracked_transfer = True
+                txn.updated_at = now
+                marked.append(txn)
+                continue
             previous_label = _history_label(txn.category)
             new_label = _history_new_label(rule.category, rule)
             if previous_label != new_label:
@@ -756,9 +849,15 @@ def _apply_automatic_rule_groups(person, by_rule):
             category_id=Case(*[
                 When(pk__in=[txn.pk for txn in payload["rows"]], then=Value(payload["rule"].category_id))
                 for payload in by_rule.values()
+                if not payload["rule"].marks_untracked_transfer
             ], output_field=Transaction._meta.get_field("category").target_field),
             category_source=Transaction.CategorySource.RULE, updated_at=now,
         )
+    if marked:
+        marked_ids = [txn.pk for txn in marked]
+        Transaction.objects.filter(pk__in=marked_ids).update(untracked_transfer=True, updated_at=now)
+        # A marked purchase stops counting, so its refund links go, as on the edit page.
+        drop_refund_links_to_originals(marked_ids, person)
     TransactionCorrectionHistory.objects.bulk_create(history)
     RuleApplicationEntry.objects.bulk_create(entries)
     # Most imports have no linked refunds. Query once, and preserve the existing
@@ -796,13 +895,16 @@ def reverse_application(principal, application_id):
         Transaction.objects.visible_to(person).filter(pk__in=[item.pk for item in locked]).values_list("pk", flat=True)
     )
     by_id = {item.pk: item for item in locked if item.pk in visible_ids}
-    superseded_ids = set(
+    # A later application supersedes this one on a row only when it changed the
+    # same thing: a category, or the untracked-transfer mark (#642).
+    superseded = set(
         RuleApplicationEntry.objects.filter(
             transaction_id__in=[entry.transaction_id for entry in entries],
             application_id__gt=application.pk,
             reversed_at__isnull=True,
-        ).values_list("transaction_id", flat=True)
+        ).values_list("transaction_id", "marked_untracked")
     )
+    remarked_ids = _marks_changed_since(application, entries)
     now = timezone.now()
     restored = 0
     skipped_manual = 0
@@ -813,10 +915,16 @@ def reverse_application(principal, application_id):
                 continue
             entry.reversed_at = now
             entry.save(update_fields=("reversed_at",))
-            if txn.pk in superseded_ids:
+            if (txn.pk, entry.marked_untracked) in superseded:
                 # A later rule application changed this row; reversing this older
                 # one must not undo the newer category.
                 skipped_manual += 1
+                continue
+            if entry.marked_untracked:
+                if txn.pk not in remarked_ids and _unmark_reversed_entry(person, txn):
+                    restored += 1
+                else:
+                    skipped_manual += 1
                 continue
             if txn.category_source in (
                 Transaction.CategorySource.MANUAL,
@@ -855,6 +963,30 @@ def reverse_application(principal, application_id):
     return ReverseResult(restored=restored, skipped_manual=skipped_manual)
 
 
+def _marks_changed_since(application, entries):
+    """Rows whose untracked-transfer mark a member or another rule changed after this
+    application marked them. Reversing must leave such a mark alone: it is no
+    longer the one this application made."""
+    marked_ids = [entry.transaction_id for entry in entries if entry.marked_untracked]
+    if not marked_ids:
+        return set()
+    return set(
+        TransactionCorrectionHistory.objects.filter(
+            transaction_id__in=marked_ids,
+            field_name=TransactionCorrectionHistory.Field.UNTRACKED,
+            recorded_at__gt=application.applied_at,
+        ).values_list("transaction_id", flat=True)
+    )
+
+
+def _unmark_reversed_entry(person, txn):
+    """Remove the mark an untracked-transfer rule set (#642), unless a member already removed it."""
+    if not txn.untracked_transfer:
+        return False
+    set_mark(person, txn, False)
+    return True
+
+
 def _carry_into_transfer_snapshots(txn, removed, restored):
     """Keep a marked transfer's category snapshot in step with a reversal.
 
@@ -881,8 +1013,12 @@ def _category_before(entry, application):
     category = entry.previous_category
     source = entry.previous_category_source
     later_applied_at = application.applied_at
+    # Only earlier category changes form the chain; an untracked-transfer mark
+    # never changed the category (#642).
     earlier = (
-        RuleApplicationEntry.objects.filter(transaction_id=entry.transaction_id, application_id__lt=application.pk)
+        RuleApplicationEntry.objects.filter(
+            transaction_id=entry.transaction_id, application_id__lt=application.pk, marked_untracked=False
+        )
         .select_related("application", "previous_category")
         .order_by("-application_id")
     )

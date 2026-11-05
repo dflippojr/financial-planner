@@ -22,6 +22,7 @@ from .cash_flow import (
     spending_by_category_report,
     spending_category_detail_url,
 )
+from .category_services import excluded_transfer_ids as _excluded_transfer_ids
 from .category_services import income_and_spending_totals
 from .models import (
     Account,
@@ -33,7 +34,7 @@ from .models import (
     RecurringSeries,
     SavingsGoal,
     Transaction,
-    TransferPair,
+    TransactionCorrectionHistory,
 )
 from .months import add_months, month_end, month_start
 from .net_worth import net_worth_report
@@ -390,14 +391,6 @@ def _net_worth_facts(principal, start, end):
     }
 
 
-def _excluded_transfer_ids(principal):
-    return {
-        tx_id
-        for pair in TransferPair.objects.excluding_income_and_spending().visible_to(principal)
-        for tx_id in (pair.leg_a_id, pair.leg_b_id)
-    }
-
-
 def _large_transaction_facts(principal, start, end):
     from .models import _person_for
 
@@ -535,6 +528,25 @@ def has_newer_transactions(principal, review):
         )
         .exists()
     )
+
+
+def has_changed_transfer_marks(principal, review):
+    """Whether a visible row for the review's month was marked or unmarked as an
+    untracked transfer (#642) after the review was generated.
+
+    The mark moves the row in or out of income and spending, so, as for a late
+    import (#509), the stored review stays as it was and the page says why it
+    may disagree with cash flow.
+    """
+    month_rows = Transaction.objects.visible_to(principal).filter(  # pyright: ignore[reportAttributeAccessIssue] - QuerySet.as_manager() is untyped, as for every Transaction.objects.visible_to in the baseline
+        transaction_date__gte=review.month,
+        transaction_date__lte=month_end(review.month),
+    )
+    return TransactionCorrectionHistory.objects.filter(
+        transaction_id__in=month_rows.values("pk"),
+        field_name=TransactionCorrectionHistory.Field.UNTRACKED,
+        recorded_at__gt=review.generated_at,
+    ).exists()
 
 
 def review_for_viewer(principal, month, *, today=None, force=False):

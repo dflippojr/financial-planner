@@ -1,6 +1,6 @@
 import uuid
 from .input_limits import BUDGET_MONTH_FLOOR, MAX_DESCRIPTION_CHARS
-from decimal import Decimal
+from .money_display import format_minor
 from fractions import Fraction
 
 from django.conf import settings
@@ -684,8 +684,14 @@ class Transaction(ArchivableModel):
         default=CategorySource.UNSET,
         blank=True,
     )
+    # A transfer to or from an account the planner doesn't track (#642). Set on
+    # the row, so it holds for every viewer; left out of income and spending
+    # through `exclusion_exists_for`, like a marked transfer pair.
+    untracked_transfer = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    UNTRACKED_TRANSFER_LABEL = "Transfer (untracked account)"
 
     class QuerySet(models.QuerySet):
         def visible_to(self, principal):
@@ -712,6 +718,11 @@ class Transaction(ArchivableModel):
                 condition=Q(category_source__in=("", "manual", "rule", "inherited", "split")),
                 name="transaction_category_source_valid",
             ),
+            # Investment activity is already neutral, so it is never marked (#642).
+            models.CheckConstraint(
+                condition=Q(untracked_transfer=False) | ~Q(kind="investment_activity"),
+                name="transaction_untracked_not_investment",
+            ),
             models.CheckConstraint(
                 condition=(
                     Q(status="active", archived_at__isnull=True)
@@ -735,11 +746,12 @@ class Transaction(ArchivableModel):
 
     @property
     def amount_display(self):
-        amount = Decimal(self.amount_minor) / Decimal(100)
-        return f"{amount:,.2f} {self.currency}"
+        return format_minor(self.amount_minor, self.currency)
 
     @property
     def category_display(self):
+        if self.untracked_transfer:
+            return self.UNTRACKED_TRANSFER_LABEL
         if self.is_excluded_transfer:
             return "Transfer"
         if self.category_source == self.CategorySource.SPLIT:
@@ -863,6 +875,7 @@ class TransactionCorrectionHistory(models.Model):
         NOTE = "note", "Note"
         TAGS = "tags", "Tags"
         DELETED = "deleted", "Deleted"
+        UNTRACKED = "untracked", "Untracked transfer"
 
     transaction = models.ForeignKey(
         Transaction,
@@ -926,7 +939,10 @@ class TransactionCorrectionHistory(models.Model):
                         currency="",
                     )
                     | Q(
-                        field_name__in=("description", "category", "exclusion", "refund_link", "note", "tags", "deleted"),
+                        field_name__in=(
+                            "description", "category", "exclusion", "refund_link", "note", "tags", "deleted",
+                            "untracked",
+                        ),
                         previous_date__isnull=True,
                         new_date__isnull=True,
                         previous_amount_minor__isnull=True,
@@ -952,8 +968,7 @@ class TransactionCorrectionHistory(models.Model):
         return f"Correction of {self.field_name}"
 
     def _amount_display(self, minor):
-        amount = Decimal(minor) / Decimal(100)
-        return f"{amount:,.2f} {self.currency}"
+        return format_minor(minor, self.currency)
 
     @property
     def previous_display(self):
@@ -967,6 +982,7 @@ class TransactionCorrectionHistory(models.Model):
             self.Field.NOTE,
             self.Field.TAGS,
             self.Field.DELETED,
+            self.Field.UNTRACKED,
         ):
             return self.previous_description
         return self._amount_display(self.previous_amount_minor)
@@ -983,6 +999,7 @@ class TransactionCorrectionHistory(models.Model):
             self.Field.NOTE,
             self.Field.TAGS,
             self.Field.DELETED,
+            self.Field.UNTRACKED,
         ):
             return self.new_description
         return self._amount_display(self.new_amount_minor)
@@ -1075,8 +1092,7 @@ class TransactionSplit(models.Model):
 
     @property
     def amount_display(self):
-        amount = Decimal(self.amount_minor) / Decimal(100)
-        return f"{amount:,.2f} {self.transaction.currency}"
+        return format_minor(self.amount_minor, self.transaction.currency)
 
 
 class RefundLink(models.Model):
@@ -1118,7 +1134,8 @@ class RefundLinkDrop(models.Model):
     keeps the link. The member's "linked" -> "unlinked" history row is `only_for`
     them, so it stays hidden from others even after the link itself is deleted.
     Unmarking the pair deletes its drops, so the link counts again for the member
-    once no other marked pair holds a drop on it.
+    once no other marked pair holds a drop on it. Unsharing an account or leaving
+    the household leaves drops in place (#579).
     """
 
     link = models.ForeignKey(RefundLink, on_delete=models.CASCADE, related_name="drops")
@@ -1266,19 +1283,11 @@ class RecurringSeries(models.Model):
 
     @property
     def amount_display(self):
-        amount = Decimal(self.typical_amount_minor) / Decimal(100)
-        return f"{amount:,.2f} {self.currency}"
+        return format_minor(self.typical_amount_minor, self.currency)
 
     @property
     def annual_minor(self):
-        per_year = {
-            self.Cadence.WEEKLY: 52,
-            self.Cadence.BIWEEKLY: 26,
-            self.Cadence.MONTHLY: 12,
-            self.Cadence.QUARTERLY: 4,
-            self.Cadence.ANNUAL: 1,
-        }[self.cadence]
-        return abs(self.typical_amount_minor) * per_year
+        return abs(self.typical_amount_minor) * PERIODS_PER_YEAR[self.cadence]
 
     @property
     def monthly_minor(self):
@@ -1286,13 +1295,32 @@ class RecurringSeries(models.Model):
 
     @property
     def monthly_display(self):
-        amount = Decimal(self.monthly_minor) / Decimal(100)
-        return f"{amount:,.2f} {self.currency}"
+        return format_minor(self.monthly_minor, self.currency)
 
     @property
     def annual_display(self):
-        amount = Decimal(self.annual_minor) / Decimal(100)
-        return f"{amount:,.2f} {self.currency}"
+        return format_minor(self.annual_minor, self.currency)
+
+
+# Each cadence's step, defined once for detection, projection and totals (#597).
+# A cadence steps by days or by calendar months, never both. PlannedItem.Cadence
+# adds only ONE_TIME, which has no step.
+WEEK_STEP_DAYS: dict[str, int] = {
+    RecurringSeries.Cadence.WEEKLY: 7,
+    RecurringSeries.Cadence.BIWEEKLY: 14,
+}
+MONTH_STEPS: dict[str, int] = {
+    RecurringSeries.Cadence.MONTHLY: 1,
+    RecurringSeries.Cadence.QUARTERLY: 3,
+    RecurringSeries.Cadence.ANNUAL: 12,
+}
+PERIODS_PER_YEAR: dict[str, int] = {
+    RecurringSeries.Cadence.WEEKLY: 52,
+    RecurringSeries.Cadence.BIWEEKLY: 26,
+    RecurringSeries.Cadence.MONTHLY: 12,
+    RecurringSeries.Cadence.QUARTERLY: 4,
+    RecurringSeries.Cadence.ANNUAL: 1,
+}
 
 
 class RecurringSeriesMember(models.Model):
@@ -1425,6 +1453,10 @@ class BalanceSnapshot(models.Model):
     class Source(models.TextChoices):
         SIMPLEFIN = "simplefin", "SimpleFIN"
         MANUAL = "manual", "Manual"
+        # Derived from transactions, working back from the earliest SimpleFIN or
+        # manual balance (#636). Stored in the SimpleFIN protocol sign: an amount
+        # owed on a credit card is negative. Ranks below both other sources.
+        CALCULATED = "calculated", "Calculated"
 
     account = models.ForeignKey(Account, on_delete=models.CASCADE, related_name="balance_snapshots")
     snapshot_date = models.DateField()
@@ -1472,7 +1504,7 @@ class BalanceSnapshot(models.Model):
                 name="balance_snapshot_original_complete",
             ),
             models.CheckConstraint(
-                condition=Q(source__in=("simplefin", "manual")),
+                condition=Q(source__in=("simplefin", "manual", "calculated")),
                 name="balance_snapshot_source_valid",
             ),
             models.CheckConstraint(
@@ -1565,8 +1597,7 @@ class PlannedItem(models.Model):
 
     @property
     def amount_display(self):
-        amount = Decimal(self.amount_minor) / Decimal(100)
-        return f"{amount:,.2f} {self.currency}"
+        return format_minor(self.amount_minor, self.currency)
 
 
 class SavingsGoalQuerySet(_PrivateOrHouseholdQuerySet):
@@ -1677,7 +1708,22 @@ class CategoryRule(models.Model):
     )
     min_amount_minor = models.BigIntegerField(null=True, blank=True)
     max_amount_minor = models.BigIntegerField(null=True, blank=True)
-    category = models.ForeignKey(Category, on_delete=models.PROTECT, related_name="category_rules")
+
+    class Action(models.TextChoices):
+        CATEGORIZE = "categorize", "Set category"
+        UNTRACKED_TRANSFER = "untracked_transfer", "Mark as untracked transfer"
+
+    # A rule either sets a category or marks rows as transfers to or from an
+    # untracked account (#642); it never assigns the system Transfer category.
+    action = models.CharField(max_length=18, choices=Action, default=Action.CATEGORIZE)
+    category = models.ForeignKey(
+        Category, on_delete=models.PROTECT, null=True, blank=True, related_name="category_rules"
+    )
+    # The household whose accounts the rule may reach. A categorize rule takes it
+    # from its category; an untracked-transfer rule has no category, so it is stored.
+    scope_household = models.ForeignKey(
+        Household, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
+    )
     priority = models.IntegerField(default=0)
     enabled = models.BooleanField(default=True)
     # Set when the member confirms the preview with "Apply"; cleared on edit.
@@ -1727,10 +1773,30 @@ class CategoryRule(models.Model):
                 ),
                 name="category_rule_amount_range_ordered",
             ),
+            models.CheckConstraint(
+                condition=(
+                    Q(action="categorize", category__isnull=False, scope_household__isnull=True)
+                    | Q(action="untracked_transfer", category__isnull=True, scope_household__isnull=False)
+                ),
+                name="category_rule_action_target",
+            ),
         ]
 
     def __str__(self):
         return self.description_contains
+
+    @property
+    def marks_untracked_transfer(self):
+        return self.action == self.Action.UNTRACKED_TRANSFER
+
+    @property
+    def rule_household_id(self):
+        """The household a personal rule's household-account matches must belong to."""
+        # Django adds each foreign key's <name>_id attribute at runtime; pyright runs without Django stubs.
+        category = self.category
+        if category is not None:
+            return category.household_id  # pyright: ignore[reportAttributeAccessIssue] - runtime FK id attribute
+        return self.scope_household_id  # pyright: ignore[reportAttributeAccessIssue] - runtime FK id attribute
 
 
 class RuleApplication(models.Model):
@@ -1771,6 +1837,9 @@ class RuleApplicationEntry(models.Model):
         related_name="+",
     )
     previous_category_source = models.CharField(max_length=9, blank=True, default="")
+    # True when this application marked the row as an untracked transfer (#642)
+    # rather than changing its category; reversing it removes the mark.
+    marked_untracked = models.BooleanField(default=False)
     reversed_at = models.DateTimeField(null=True, blank=True)
 
     class QuerySet(models.QuerySet):
