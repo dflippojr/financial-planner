@@ -10,12 +10,13 @@ from django.test import Client
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from tests.chat_helpers import ask
-from tests.test_chat import TOKEN, checking, harness, make_member  # noqa: F401 - harness is a fixture
+from tests.test_chat import TOKEN, add_txn, checking, harness, make_member  # noqa: F401 - harness is a fixture
 
 from finance.ai_lookup_tools import lookup_tools
 from finance.ai_services import connect_harness
 from finance.ai_tools import MAX_TOOL_ROWS, WITHHELD_CATEGORY_NAME, default_tools, run_tool
 from finance.category_services import ensure_household_categories
+from finance.debt_planner_services import build_debt_plan
 from finance.lifecycle_services import update_debt_terms
 from finance.models import (
     Account,
@@ -24,6 +25,8 @@ from finance.models import (
     Category,
     CategoryRule,
     PlannedItem,
+    RecurringSeries,
+    RecurringSeriesMember,
     SavingsGoal,
 )
 from finance.monthly_review_ai import paragraph_is_grounded
@@ -287,6 +290,38 @@ def test_private_goal_linked_to_a_shared_account_withholds_progress_without_cons
 
 
 @pytest.mark.django_db
+def test_goal_linked_to_an_account_the_member_cannot_see_falls_back_like_the_page(world):
+    # Beta can see the household goal but not alpha's private account it is linked to.
+    hh_goal = world["hh_goal"]
+    hh_goal.linked_account = world["private"]
+    hh_goal.manual_amount_minor = 31_400
+    hh_goal.manual_amount_date = timezone.localdate()
+    hh_goal.save(update_fields=["linked_account", "manual_amount_minor", "manual_amount_date"])
+    result = run_tool(world["beta"], default_tools(), "savings_goals", {})
+    payload = assert_grounded(result)
+    row = next(row for row in payload["rows"] if row["id"] == hh_goal.pk)
+    assert row["saved_minor"] == 31_400 and row["saved_source"] == "manual"
+    assert row["linked_account"] is None and "progress" not in row
+    assert world["private"].pk not in result.account_ids
+    assert "150000" not in json.dumps(payload)
+    client = Client()
+    client.force_login(world["beta"].user)
+    cards = {card.goal.pk: card for card in client.get(payload["page_url"]).context["cards"]}
+    assert cards[hh_goal.pk].current_amount_minor == row["saved_minor"]
+
+
+@pytest.mark.django_db
+def test_savings_goals_caps_rows(world):
+    SavingsGoal.objects.bulk_create(
+        SavingsGoal(owner=world["alpha"], name=f"SYN cap goal {index:03}", target_amount_minor=1_000 + index)
+        for index in range(MAX_TOOL_ROWS + 5)
+    )
+    payload = assert_grounded(run_tool(world["alpha"], default_tools(), "savings_goals", {}))
+    assert len(payload["rows"]) == MAX_TOOL_ROWS and payload["truncated"] is True
+    assert payload["rows"][0]["name"] == "A-SYN-GOAL"
+
+
+@pytest.mark.django_db
 def test_goal_plan_is_withheld_when_a_household_buffer_shapes_it_without_consent(world):
     household = world["household"]
     household.savings_buffer_minor = 4_242
@@ -323,6 +358,17 @@ def test_debt_payoff_matches_the_debt_page_and_validates_choices(world):
     assert not run_tool(world["alpha"], default_tools(), "debt_payoff", {"account_ids": [world["beta_card"].pk]}).ok
     assert not run_tool(world["alpha"], default_tools(), "debt_payoff", {"strategy": "lottery"}).ok
     assert not run_tool(world["alpha"], default_tools(), "debt_payoff", {"extra_minor": -1}).ok
+
+
+@pytest.mark.django_db
+def test_debt_payoff_simulates_only_debts_in_the_consent_scope(world):
+    _withhold_consent(world)
+    payload = assert_grounded(run_tool(world["alpha"], default_tools(), "debt_payoff", {}))
+    alone = build_debt_plan(world["alpha"], include_ids=[world["card"].pk], extra_minor=0, strategy="minimums",
+                            custom_order=[], today=timezone.localdate())
+    assert payload["plan"]["total_interest_minor"] == alone.comparison.chosen.total_interest_minor
+    assert f"include={world['loan'].pk}" not in payload["page_url"]
+    assert not run_tool(world["alpha"], default_tools(), "debt_payoff", {"account_ids": [world["loan"].pk]}).ok
 
 
 @pytest.mark.django_db
@@ -363,6 +409,31 @@ def test_what_if_matches_the_home_scenario_and_ignores_rows_outside_scope(world)
     assert [(row.label, row.baseline.net_minor, row.scenario.net_minor, row.difference_minor) for row in rows] == [
         (m["label"], m["baseline_net_minor"], m["scenario_net_minor"], m["difference_minor"]) for m in payload["months"]
     ]
+
+
+@pytest.mark.django_db
+def test_what_if_pauses_a_recurring_series_like_home(world):
+    today = timezone.localdate()
+    series = RecurringSeries.objects.create(
+        person=world["alpha"], merchant_key="syn streaming", display_name="SYN-STREAMING",
+        cadence=RecurringSeries.Cadence.MONTHLY, typical_amount_minor=-1_599,
+        status=RecurringSeries.Status.CONFIRMED, confidence=RecurringSeries.Confidence.HIGH,
+        reasons=["synthetic"], fingerprint="c" * 64,
+    )
+    for offset in (3, 2, 1):
+        day = add_months(today.replace(day=5), -offset)
+        txn = add_txn(world["private"], world["alpha"], day, -1_599, "SYN-STREAMING")
+        RecurringSeriesMember.objects.create(series=series, transaction=txn)
+    first = add_months(today.replace(day=1), 1)
+    result = run_tool(world["alpha"], default_tools(), "cash_flow_what_if", {"horizon": 3, "changes": [
+        {"type": "pause", "series_id": series.pk, "pause_from": first.isoformat()}]})
+    payload = assert_grounded(result)
+    assert payload["ignored_changes"] == []
+    assert "SYN-STREAMING" in payload["changes"][0]["summary"]
+    assert [month["difference_minor"] for month in payload["months"]] == [1_599] * 3
+    page = _client(world).get(payload["page_url"])
+    assert [(row.baseline.net_minor, row.scenario.net_minor) for row in page.context["scenario_comparison"]] == [
+        (m["baseline_net_minor"], m["scenario_net_minor"]) for m in payload["months"]]
 
 
 @pytest.mark.django_db

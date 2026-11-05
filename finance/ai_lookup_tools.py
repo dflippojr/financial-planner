@@ -182,6 +182,7 @@ def savings_goals(person, _args):
     today = timezone.localdate()
     consent = household_consent_complete(person)
     allowed = _allowed_account_ids(person)
+    seen = set(Account.objects.visible_to(person).values_list("pk", flat=True))  # pyright: ignore[reportAttributeAccessIssue] - QuerySet.as_manager() is untyped
     goals = SavingsGoal.objects.visible_to(person)  # pyright: ignore[reportAttributeAccessIssue] - QuerySet.as_manager() is untyped, as in balance_history.py
     if not consent:
         goals = goals.filter(scope=SavingsGoal.Scope.PRIVATE, owner=person)
@@ -197,9 +198,11 @@ def savings_goals(person, _args):
     shown = goals[:MAX_TOOL_ROWS]
     shown_ids = {goal.pk for goal in shown}
     for goal in shown:
-        # A private goal linked to an account outside the consent scope would
-        # quote that account's balance, so its progress is withheld.
-        withheld = goal.linked_account_id is not None and goal.linked_account_id not in allowed
+        # A private goal linked to a shared account outside the consent scope
+        # would quote that account's balance, so its progress is withheld. An
+        # account the member cannot see at all falls back to the manual amount
+        # inside goal_progress, as on the Savings goals page.
+        withheld = goal.linked_account_id in seen and goal.linked_account_id not in allowed
         progress = goal_progress(person, goal, today=today)
         linked = progress.linked_account if not withheld else None
         if linked is not None:
@@ -245,7 +248,7 @@ def savings_goals(person, _args):
         if goal.scope == SavingsGoal.Scope.HOUSEHOLD:
             account_ids |= _household_account_ids(person, allowed)
         rows.append(row)
-    payload = {"page_url": list_url, "plan_url": plan_url, "rows": rows}
+    payload = {"page_url": list_url, "plan_url": plan_url, "rows": rows, "truncated": len(goals) > MAX_TOOL_ROWS}
     if plan_note:
         payload["plan_note"] = plan_note
     return ToolResult(text=json.dumps(payload), figures=tuple(figures), account_ids=tuple(sorted(account_ids)))
