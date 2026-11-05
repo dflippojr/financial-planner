@@ -18,6 +18,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import math
 import posixpath
 import re
 import subprocess
@@ -69,6 +70,11 @@ _OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 # An encrypted Office file is an OLE container holding an EncryptionInfo stream.
 _OLE_ENCRYPTION = "EncryptionInfo".encode("utf-16-le")
 _DTD = re.compile(rb"<!(?:DOCTYPE|ENTITY)", re.IGNORECASE)
+# The DTD search reads raw bytes, so it holds only for UTF-8 (or ASCII) parts: anything
+# else (UTF-16 by BOM, by its NUL bytes or by declaration) is refused before parsing.
+_XML_ENCODING = re.compile(rb"""^\s*<\?xml[^>]*?encoding\s*=\s*["']([A-Za-z0-9._-]+)["']""")
+_UTF8_NAMES = frozenset({b"utf-8", b"utf8", b"us-ascii", b"ascii"})
+_WIDE_BOMS = (b"\xff\xfe", b"\xfe\xff")
 _REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 _WORKSHEET_REL = "/worksheet"
 _CELL_REF = re.compile(r"^([A-Za-z]{1,3})(\d+)$")
@@ -280,9 +286,17 @@ def _read_member(archive, members, path):
     if len(payload) > MAX_ZIP_MEMBER_BYTES:
         raise AttachmentRejected(TOO_MUCH_TEXT)
     # No entity expansion and no external fetches: a workbook part never needs a DTD.
-    if _DTD.search(payload):
+    if not _is_utf8_xml(payload) or _DTD.search(payload):
         raise AttachmentRejected(UNREADABLE)
     return payload
+
+
+def _is_utf8_xml(payload: bytes) -> bool:
+    """Whether expat will read these bytes as UTF-8, so the byte-level DTD search is complete."""
+    if b"\x00" in payload or payload.startswith(_WIDE_BOMS):
+        return False
+    declared = _XML_ENCODING.match(payload.removeprefix(b"\xef\xbb\xbf")[:512])
+    return declared is None or declared.group(1).lower() in _UTF8_NAMES
 
 
 def _parse_xml(payload):
@@ -465,7 +479,7 @@ def _number_text(value: str, is_date: bool, epoch) -> str:
         number = float(value)
     except ValueError:
         return _cell_text(value)
-    if number != number or number in (float("inf"), float("-inf")):
+    if not math.isfinite(number):
         return _cell_text(value)
     if is_date and 0 <= number <= _MAX_SERIAL:
         moment = epoch + timedelta(days=number)

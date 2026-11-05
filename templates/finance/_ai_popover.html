@@ -37,8 +37,9 @@
       <div class="flex flex-col gap-1" data-chat-attach>
         <label class="flex min-h-11 items-center">
           <span class="sr-only">Attach a CSV, XLSX or PDF file</span>
-          <input type="file" name="attachment" accept=".csv,.xlsx,.pdf,text/csv,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="file-input file-input-sm min-h-11 w-full" aria-describedby="ai-popover-attachment-note">
+          <input type="file" name="attachment" accept=".csv,.xlsx,.pdf,text/csv,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="file-input file-input-sm min-h-11 w-full" aria-describedby="ai-popover-attachment-note" disabled data-chat-attach-input>
         </label>
+        {# The picker stays disabled until the thread load names the provider (#644). #}
         <p id="ai-popover-attachment-note" class="text-xs" data-chat-attach-note>An attached file's contents go to <strong data-chat-provider>your AI provider</strong>. CSV, XLSX or PDF, up to 10 MB.</p>
       </div>
       <div class="flex items-center justify-between gap-2">

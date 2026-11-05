@@ -64,6 +64,9 @@ def store_attachment(person, conversation, message, parsed: ParsedAttachment, *,
         content=parsed.content,
         summary=parsed.summary,
     )
+    if backend not in (conversation.attachment_backends or []):
+        conversation.attachment_backends = [*(conversation.attachment_backends or []), backend]
+        conversation.save(update_fields=("attachment_backends", "updated_at"))
     record(person, AuditEvent.Action.CHAT_ATTACHMENT_ADDED, AuditEvent.TargetType.CHAT_ATTACHMENT, attachment.pk,
            audience=personal_audience(person), metadata={"conversation_id": conversation.pk}, verified=True)
     return attachment
@@ -168,11 +171,12 @@ def _readable(person, conversation_id, backend):
 
 
 def attached_for_other_backend(conversation, backend):
-    """Whether the conversation holds a file the upload warning named another provider for.
+    """Whether a file was ever attached to the conversation for another provider than this one.
 
-    Earlier turns may quote that file, so they are not resent to this provider.
+    Earlier turns may quote that file, even after it was removed, so they are not resent here.
     """
-    return AiChatAttachment.objects.filter(conversation=conversation).exclude(backend=backend).exists()
+    used = AiConversation.objects.filter(pk=conversation.pk).values_list("attachment_backends", flat=True).first()
+    return any(item != backend for item in used or [])
 
 
 def attachment_context(person, conversation, backend):
@@ -233,6 +237,8 @@ def attachment_tools(conversation, backend):
                     "sheet": {"type": "string", "description": "Sheet name or 1-based number; first sheet by default."},
                     "offset": {"type": "integer", "description": "Rows or pages to skip; starts at 0."},
                     "limit": {"type": "integer", "description": f"Rows (up to {MAX_ROWS_PER_READ}) or pages (up to {MAX_PAGES_PER_READ})."},
+                    "column": {"type": "integer", "description": "Continue one long row from this 1-based column (next_column)."},
+                    "char_offset": {"type": "integer", "description": "Continue one long PDF page from this character (next_char_offset)."},
                 },
                 "required": ["attachment_id"],
             },
@@ -288,53 +294,102 @@ def _read_rows(row, offset, args):
         return ToolResult(text=f"No such sheet. Sheets: {names}.", ok=False)
     sheet = sheets[index]
     rows = sheet.get("rows") or []
+    header = f"Attachment {row.pk}: {json.dumps(row.original_name)} ({KIND_LABELS.get(row.kind, row.kind)})"
+    if row.kind == AiChatAttachment.Kind.XLSX:
+        header += f", sheet {json.dumps(str(sheet.get('name') or ''))} ({index + 1} of {len(sheets)})"
+    if offset >= len(rows):
+        return ToolResult(text=f"{header}: no rows at offset {offset}; it has {len(rows)} rows.", ok=True)
+    column = max(1, _integer(args.get("column"), 1))
+    if column > 1 or len(_row_line(rows[offset])) > MAX_READ_CHARS:
+        return _read_long_row(row, sheet, rows, offset, column, header)
     limit = max(1, min(_integer(args.get("limit"), DEFAULT_ROWS), MAX_ROWS_PER_READ))
     lines = []
     used = 0
     end = offset
-    for number, cells in rows[offset:offset + limit]:
-        line = f"row {number}: {json.dumps(cells, ensure_ascii=False)}"
+    for item in rows[offset:offset + limit]:
+        line = _row_line(item)
         if lines and used + len(line) > MAX_READ_CHARS:
             break
-        lines.append(line[:MAX_READ_CHARS])
+        lines.append(line)
         used += len(line)
         end += 1
-    name = json.dumps(str(sheet.get("name") or ""))
-    header = f"Attachment {row.pk}: {json.dumps(row.original_name)} ({KIND_LABELS.get(row.kind, row.kind)})"
-    if row.kind == AiChatAttachment.Kind.XLSX:
-        header += f", sheet {name} ({index + 1} of {len(sheets)})"
-    if not lines:
-        return ToolResult(text=f"{header}: no rows at offset {offset}; it has {len(rows)} rows.", ok=True)
     first, last = rows[offset][0], rows[end - 1][0]
     header += f", rows {offset + 1}-{end} of {len(rows)} (sheet rows {first}-{last})."
     if end < len(rows):
         header += f" next_offset={end}"
-    detail = f"sheet {sheet.get('name')}, rows {first}–{last}" if row.kind == AiChatAttachment.Kind.XLSX else f"rows {first}–{last}"
-    return ToolResult(text="\n".join([header, DATA_NOT_INSTRUCTIONS, *lines]), figures=(_cite(row, detail),))
+    return ToolResult(text="\n".join([header, DATA_NOT_INSTRUCTIONS, *lines]),
+                      figures=(_cite(row, _rows_detail(row, sheet, f"rows {first}–{last}")),))
+
+
+def _row_line(item):
+    number, cells = item
+    return f"row {number}: {json.dumps(cells, ensure_ascii=False)}"
+
+
+def _rows_detail(row, sheet, text):
+    return f"sheet {sheet.get('name')}, {text}" if row.kind == AiChatAttachment.Kind.XLSX else text
+
+
+def _read_long_row(row, sheet, rows, offset, column, header):
+    """One row too long for a single read, returned a run of columns at a time."""
+    number, cells = rows[offset]
+    if column > len(cells):
+        return ToolResult(text=f"{header}: row {number} has {len(cells)} columns.", ok=True)
+    taken = []
+    for cell in cells[column - 1:]:
+        if taken and len(json.dumps([*taken, cell], ensure_ascii=False)) > MAX_READ_CHARS:
+            break
+        taken.append(cell)
+    last = column + len(taken) - 1
+    header += f", row {number} (row {offset + 1} of {len(rows)}), columns {column}-{last} of {len(cells)}."
+    if last < len(cells):
+        header += f" next_column={last + 1} (same offset)"
+    elif offset + 1 < len(rows):
+        header += f" next_offset={offset + 1}"
+    line = f"row {number} columns {column}-{last}: {json.dumps(taken, ensure_ascii=False)}"
+    return ToolResult(text="\n".join([header, DATA_NOT_INSTRUCTIONS, line]),
+                      figures=(_cite(row, _rows_detail(row, sheet, f"row {number}")),))
 
 
 def _read_pages(row, offset, args):
     pages = (row.content or {}).get("pages") or []
-    limit = max(1, min(_integer(args.get("limit"), DEFAULT_PAGES), MAX_PAGES_PER_READ))
     header = f"Attachment {row.pk}: {json.dumps(row.original_name)} (PDF)"
     if offset >= len(pages):
         return ToolResult(text=f"{header}: no page at offset {offset}; it has {len(pages)} pages.", ok=True)
+    char_offset = max(0, _integer(args.get("char_offset"), 0))
+    if char_offset or len(pages[offset]) > MAX_READ_CHARS:
+        return _read_long_page(row, pages, offset, char_offset, header)
+    limit = max(1, min(_integer(args.get("limit"), DEFAULT_PAGES), MAX_PAGES_PER_READ))
     blocks = []
     used = 0
     end = offset
     for number, text in enumerate(pages[offset:offset + limit], start=offset + 1):
-        room = MAX_READ_CHARS - used
-        if blocks and len(text) > room:
+        if blocks and used + len(text) > MAX_READ_CHARS:
             break
-        body = text if len(text) <= room else text[:room] + f"\n[page text cut at {MAX_READ_CHARS:,} characters]"
-        blocks.append(f"--- page {number} ---\n{body}")
-        used += len(body)
+        blocks.append(f"--- page {number} ---\n{text}")
+        used += len(text)
         end = number
     header += f", pages {offset + 1}-{end} of {len(pages)}."
     if end < len(pages):
         header += f" next_offset={end}"
     detail = f"page {offset + 1}" if end == offset + 1 else f"pages {offset + 1}–{end}"
     return ToolResult(text="\n".join([header, DATA_NOT_INSTRUCTIONS, *blocks]), figures=(_cite(row, detail),))
+
+
+def _read_long_page(row, pages, offset, char_offset, header):
+    """One page too long for a single read, returned a run of characters at a time."""
+    text = pages[offset]
+    number = offset + 1
+    if char_offset >= len(text):
+        return ToolResult(text=f"{header}: page {number} has {len(text)} characters.", ok=True)
+    end = min(len(text), char_offset + MAX_READ_CHARS)
+    header += f", page {number} of {len(pages)}, characters {char_offset + 1}-{end} of {len(text)}."
+    if end < len(text):
+        header += f" next_char_offset={end} (same offset)"
+    elif number < len(pages):
+        header += f" next_offset={number}"
+    body = f"--- page {number} ---\n{text[char_offset:end]}"
+    return ToolResult(text="\n".join([header, DATA_NOT_INSTRUCTIONS, body]), figures=(_cite(row, f"page {number}"),))
 
 
 def _require_person(principal) -> Person:

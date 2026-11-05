@@ -110,6 +110,7 @@ def test_attach_a_file_in_the_desktop_popover(page_session, harness):  # noqa: F
         # The thread load fills in the member's provider before anything can be sent.
         expect(note).to_contain_text(f"An attached file's contents go to {PROVIDER}.")
         picker = popover.locator("input[name=attachment]")
+        expect(picker).to_be_enabled()
         assert _height(picker) >= 44
         picker.set_input_files(files=[{"name": "statement.pdf", "mimeType": "application/pdf",
                                        "buffer": make_pdf(["Synthetic statement"])}])
@@ -124,6 +125,24 @@ def test_attach_a_file_in_the_desktop_popover(page_session, harness):  # noqa: F
         assert page.evaluate(NO_SIDEWAYS_SCROLL)
         assert AiChatAttachment.objects.get().original_name == "statement.pdf"
         assert violations == []
+    finally:
+        context.close()
+
+
+def test_the_popover_picker_stays_disabled_when_the_provider_is_unknown(page_session, harness):  # noqa: F811
+    _state, url = harness
+    context, page = page_session((1280, 800), "light", "/")
+    try:
+        _member(url)
+        page.reload()
+        page.wait_for_load_state("networkidle")
+        # The thread request fails, so the warning can't name the provider: no file may be attached.
+        page.route("**/chat/popover/**", lambda route: route.fulfill(status=500, body="synthetic failure"))
+        page.evaluate("() => window.AiPopover.open({origin: document.querySelector('main h1')})")
+        popover = page.locator("#ai-popover")
+        expect(popover.locator("[data-pop-error]")).to_contain_text("Chat could not load")
+        expect(popover.locator("input[name=attachment]")).to_be_disabled()
+        expect(popover.locator("#ai-popover-attachment-note")).to_contain_text("your AI provider")
     finally:
         context.close()
 

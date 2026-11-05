@@ -2101,6 +2101,9 @@ class AiConversation(models.Model):
     used_account_ids = models.JSONField(default=list)
     used_planned_item_ids = models.JSONField(default=list)
     used_budget_ids = models.JSONField(default=list)
+    # Chat backends files were ever attached for (#644). Kept after a file is removed: earlier
+    # turns may quote it, so they are resent only to a backend in this list.
+    attachment_backends = models.JSONField(default=list)
     turn_count = models.PositiveIntegerField(default=0)
     tool_call_count = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -2213,12 +2216,8 @@ class AiChatAttachment(models.Model):
 
     class QuerySet(models.QuerySet):
         def visible_to(self, principal):
-            # Access follows the conversation (AiConversation.QuerySet.visible_to): whoever
-            # may open it, and nobody else.
-            person = _person_for(principal)
-            if person is None:
-                return self.none()
-            return self.filter(conversation__member=person, conversation__expires_at__gt=timezone.now())
+            # Access follows the conversation: whoever may open it, and nobody else.
+            return self.filter(conversation__in=AiConversation.QuerySet(AiConversation).visible_to(principal))
 
     objects = QuerySet.as_manager()
 

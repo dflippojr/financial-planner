@@ -15,11 +15,12 @@ from django.test import Client
 from django.urls import reverse
 from django.utils import timezone
 
-from finance.ai_services import connect_harness
+from finance.ai_services import connect_api_key, connect_harness, set_api_defaults
 from finance.category_services import ensure_household_categories
 from finance.lifecycle_services import delete_member_data
 from finance.chat_attachment_parsing import PASSWORD_PROTECTED, TOO_LARGE, UNSUPPORTED, parse_upload
 from finance.chat_attachments import (
+    attached_for_other_backend,
     DATA_NOT_INSTRUCTIONS,
     NONE_ATTACHED,
     NOT_AVAILABLE,
@@ -59,8 +60,8 @@ from tests.chat_attachment_fixtures import (
     make_pdf,
     upload,
 )
-from tests.fake_provider import anthropic_text, anthropic_tool
-from tests.test_ai_api_key import ANTHROPIC, OPENAI, provider  # noqa: F401 - provider is a fixture
+from tests.fake_provider import anthropic_text, anthropic_tool, openai_text
+from tests.test_ai_api_key import ANTHROPIC, KEYS, OPENAI, provider  # noqa: F401 - provider is a fixture
 from tests.test_ai_api_key import _member as api_member
 from tests.test_chat import TOKEN, add_txn, checking, make_member
 from tests.test_chat import harness as harness_fixture  # noqa: F401 - registers the harness fixture
@@ -323,7 +324,7 @@ def test_read_tool_pages_pdfs_and_rejects_bad_arguments(harness):
 
 
 @pytest.mark.django_db
-def test_read_tool_caps_characters_per_call(harness, monkeypatch):
+def test_read_tool_caps_characters_per_call_and_continues_long_rows_and_pages(harness, monkeypatch):
     from finance import chat_attachments
 
     monkeypatch.setattr(chat_attachments, "MAX_READ_CHARS", 70)
@@ -331,25 +332,54 @@ def test_read_tool_caps_characters_per_call(harness, monkeypatch):
     conversation, sheet = _attach(person)
     result = read_attachment(person, conversation.pk, "claude", {"attachment_id": sheet.pk, "limit": 4})
     assert result.text.count("row ") == 2 and "next_offset=2" in result.text
-    _conversation, pdf = _attach(person, "s.pdf", make_pdf(["x" * 100, "short"]), conversation_id=conversation.pk)
-    cut = read_attachment(person, conversation.pk, "claude", {"attachment_id": pdf.pk, "limit": 2})
-    assert "[page text cut at 70 characters]" in cut.text and "next_offset=1" in cut.text
+
+    wide = ",".join(f"cell{index:02d}-" + "w" * 10 for index in range(12)) + "\nshort\n"
+    _conversation, wide_sheet = _attach(person, "wide.csv", wide.encode(), conversation_id=conversation.pk)
+    seen, column = [], 1
+    for _ in range(12):
+        part = read_attachment(person, conversation.pk, "claude", {"attachment_id": wide_sheet.pk, "column": column})
+        assert part.ok and len(part.text.splitlines()[-1]) < 120
+        seen.extend(cell for cell in (f"cell{index:02d}-" for index in range(12)) if cell in part.text)
+        if "next_column=" not in part.text:
+            assert "next_offset=1" in part.text
+            break
+        column = int(part.text.split("next_column=")[1].split()[0])
+    assert seen == [f"cell{index:02d}-" for index in range(12)]
+    past = read_attachment(person, conversation.pk, "claude", {"attachment_id": wide_sheet.pk, "column": 99})
+    assert "row 1 has 12 columns" in past.text
+
+    long_page = "".join(chr(97 + index % 26) for index in range(150))
+    _conversation, pdf = _attach(person, "s.pdf", make_pdf([long_page, "short"]), conversation_id=conversation.pk)
+    first = read_attachment(person, conversation.pk, "claude", {"attachment_id": pdf.pk})
+    assert "characters 1-70 of 150. next_char_offset=70" in first.text
+    second = read_attachment(person, conversation.pk, "claude", {"attachment_id": pdf.pk, "char_offset": 70})
+    third = read_attachment(person, conversation.pk, "claude", {"attachment_id": pdf.pk, "char_offset": 140})
+    assert "characters 141-150 of 150. next_offset=1" in third.text
+    text = "".join(part.text.split("--- page 1 ---\n")[1] for part in (first, second, third))
+    assert text == long_page
+    beyond = read_attachment(person, conversation.pk, "claude", {"attachment_id": pdf.pk, "char_offset": 999})
+    assert "page 1 has 150 characters" in beyond.text
+    both = read_attachment(person, conversation.pk, "claude", {"attachment_id": pdf.pk, "offset": 1})
+    assert "--- page 2 ---\nshort" in both.text
 
 
 @pytest.mark.django_db
-def test_earlier_turns_are_not_resent_to_a_provider_the_file_was_not_attached_for(provider):  # noqa: F811
+def test_earlier_turns_are_not_resent_to_another_provider_even_after_the_file_is_removed(provider):  # noqa: F811
     _user, person, _household = api_member(ANTHROPIC)
-    provider.script = [(200, anthropic_text("First answer quoting the file.")), (200, anthropic_text("Second."))]
+    provider.script = [(200, anthropic_text("Groceries is 400 per budget.csv.")), (200, openai_text("Second."))]
     conversation, attachment = _attach(person)
     process_pending_turns(sleep=no_sleep)
-    AiChatAttachment.objects.filter(pk=attachment.pk).update(backend="claude")
+    remove_attachment(person, attachment.pk)
+    connect_api_key(person, kind=OPENAI, key=KEYS[OPENAI])
+    set_api_defaults(person, kind=OPENAI, chat_model="", background_model="", use_chat=True, use_background=False)
     send_message(person, "And now?", conversation_id=conversation.pk)
     process_pending_turns(sleep=no_sleep)
     first, second = provider.requests
-    assert [item["content"] for item in second["body"]["messages"]] == ["And now?"]
-    assert "Attached files" not in second["body"].get("system", "")
-    assert "budget.csv" not in str(second["body"])
-    assert "budget.csv" in first["body"]["system"]
+    assert first["path"] == "/v1/messages" and second["path"] == "/v1/responses"
+    assert second["body"]["input"] == [{"role": "user", "content": "And now?"}]
+    assert "Groceries" not in str(second["body"])
+    assert not attached_for_other_backend(conversation, ANTHROPIC)
+    assert attached_for_other_backend(conversation, OPENAI)
 
 
 # --- Access follows the conversation ---------------------------------------

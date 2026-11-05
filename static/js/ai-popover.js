@@ -142,8 +142,10 @@
     state.conversationId = data.conversationId;
     count = data.messageCount;
     // The attach warning names the member's current AI provider (#644).
+    // The file picker stays disabled until the warning can name that provider.
     if (typeof data.providerLabel === "string" && data.providerLabel) {
       pop.querySelectorAll("[data-chat-provider]").forEach(function (node) { node.textContent = data.providerLabel; });
+      pop.querySelectorAll("[data-chat-attach-input]").forEach(function (input) { input.disabled = false; });
     }
     // Only member-checked, server-rendered markup enters the thread; no scripts are evaluated.
     const parsed = new DOMParser().parseFromString(data.html, "text/html");
