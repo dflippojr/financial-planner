@@ -26,7 +26,15 @@ from .chat_attachments import (
     provider_needs_warning,
     remove_attachment,
 )
-from .chat_proposals import ProposalError, apply_proposal, card_for, dismiss_proposal, proposal_for
+from .chat_proposals import (
+    ITEM_FAILED,
+    ITEM_STALE,
+    ProposalError,
+    apply_proposal,
+    card_for,
+    dismiss_proposal,
+    proposal_for,
+)
 from .chat_runner import recover_stale_turns
 from .chat_services import (
     chat_backend_for,
@@ -238,6 +246,31 @@ def _back_to_chat(proposal):
     return redirect(f"{reverse('chat')}?c={proposal.conversation_id}#proposal-{proposal.pk}")
 
 
+def _ticked_items(request):
+    """The item indexes ticked on an item card (#659), or None when the form has no checkboxes."""
+    if request.POST.get("item_selection") != "1":
+        return None
+    ticked = set()
+    for value in request.POST.getlist("item"):
+        try:
+            ticked.add(int(value))
+        except ValueError:
+            continue
+    return ticked
+
+
+def _applied_message(proposal):
+    result = proposal.result or {}
+    if "items" not in result:
+        return "Suggestion applied."
+    count = result.get("count") or 0
+    failed = sum(1 for item in result["items"] if item.get("status") in (ITEM_FAILED, ITEM_STALE))
+    text = f"Applied {count} item{'s' if count != 1 else ''}."
+    if failed:
+        text += " Some ticked items could not be applied; the card shows why."
+    return text
+
+
 @require_POST
 def chat_proposal_apply(request, proposal_id):
     person = _person(request)
@@ -245,8 +278,8 @@ def chat_proposal_apply(request, proposal_id):
     if proposal is None:
         raise Http404
     try:
-        apply_proposal(person, proposal_id)
-        messages.success(request, "Suggestion applied.")
+        applied = apply_proposal(person, proposal_id, selected=_ticked_items(request))
+        messages.success(request, _applied_message(applied))
     except ProposalError as exc:
         messages.error(request, str(exc))
     except PermissionDenied:
