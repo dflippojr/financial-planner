@@ -4,7 +4,8 @@
   const parent = Number(form.dataset.parentAmount || "0");
   const remaining = document.getElementById("split-remaining");
   function cents(value) {
-    const parsed = Number(value);
+    // Same formats the server takes: "$1,234.50", "1,234.50", "1234.5".
+    const parsed = Number(String(value).replace(/[$,\s]/g, ""));
     if (!Number.isFinite(parsed)) return 0;
     return Math.round(parsed * 100);
   }
