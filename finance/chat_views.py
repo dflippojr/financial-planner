@@ -284,6 +284,11 @@ def chat_turn(request, turn_id):
                     for item in turn.figures or ()
                     if isinstance(item, dict)
                 ],
+                # The same include the saved turn renders, so a live chart matches it (#646).
+                "charts_html": (
+                    render_to_string("finance/_chat_charts.html", {"charts": turn.charts}, request=request)
+                    if turn.charts else ""
+                ),
                 "notices": [str(item) for item in turn.notices or ()],
                 "proposals": proposals,
             }

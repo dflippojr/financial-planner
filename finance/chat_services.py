@@ -32,6 +32,7 @@ from .ai_types import (
     ToolResult,
     UNAVAILABLE,
 )
+from .chat_charts import MAX_CHARTS_PER_REPLY, chart_tools
 from .chat_proposals import proposal_tools
 from .lifecycle_services import _DENIED, _person_for
 from .input_limits import MAX_CHAT_PROMPT_CHARS, MAX_PAGE_CONTEXT_CHARS, MAX_CHAT_MESSAGES
@@ -419,7 +420,7 @@ def answer_turn(turn, *, sleep=None, monotonic=None):
             locked.save(update_fields=(*_USED_ROWS, "updated_at"))
             conversation.tool_call_count = locked.tool_call_count
 
-    tools = default_tools() + proposal_tools(conversation, turn)
+    tools = default_tools() + chart_tools() + proposal_tools(conversation, turn)
     harness_context = _harness_context(context_payload)
     marker = _connection_marker(connection)
     saved_session = (conversation.harness_session_id or "").strip()
@@ -473,14 +474,18 @@ def answer_turn(turn, *, sleep=None, monotonic=None):
     if not result.ok:
         return failed_reply(failure_text(result.failure_code), backend=backend, notices=result.notices)
     figures = []
+    charts = []
     for item in collected:
         figures.extend(item.figures)
+        charts.extend(item.charts)
     return {
         "status": AiConversationMessage.Status.DONE,
         "role": AiConversationMessage.Role.ASSISTANT,
         "content": result.answer or "",
         "backend": backend,
         "figures": list(figures),
+        # Stored with the turn and deleted with its conversation (#646).
+        "charts": charts[:MAX_CHARTS_PER_REPLY],
         "notices": list(result.notices),
     }
 
@@ -492,6 +497,7 @@ def failed_reply(text, *, backend="", notices=()):
         "content": text,
         "backend": backend,
         "figures": [],
+        "charts": [],
         "notices": list(notices),
     }
 

@@ -33,6 +33,12 @@
     } else {
       body.textContent = data.content || "";
     }
+    if (typeof data.charts_html === "string" && data.charts_html) {
+      // Charts come as the saved turn's server-rendered include (#646), then draw from its stored series.
+      var parsedCharts = new DOMParser().parseFromString(data.charts_html, "text/html");
+      Array.from(parsedCharts.body.childNodes, function (node) { article.appendChild(document.importNode(node, true)); });
+      if (window.ChatCharts) window.ChatCharts.start(article);
+    }
     if (data.figures && data.figures.length) {
       // Same collapsed Sources block the saved turn renders (_chat_messages.html).
       var details = document.createElement("details");

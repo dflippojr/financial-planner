@@ -208,6 +208,7 @@ CSV_FIELDS = {
         "content",
         "backend",
         "figures",
+        "charts",
         "notices",
         "page_context",
         "created_at",
@@ -380,8 +381,9 @@ ai_conversations.csv / ai_conversations.json
   Another member's conversations are omitted.
 
 ai_conversation_messages.csv / ai_conversation_messages.json
-  Messages, cited figures (amounts and page links), notices, and page context
-  (route and query only) for those conversations.
+  Messages, cited figures (amounts and page links), charts (the chart request
+  and the amounts drawn), notices, and page context (route and query only) for
+  those conversations.
 
 budgets.csv / budgets.json
   Monthly spending budgets visible to this member: private budgets they own
@@ -829,6 +831,7 @@ def _ai_conversation_message_rows(person):
                 "content": row.content,
                 "backend": row.backend,
                 "figures": row.figures,
+                "charts": row.charts,
                 "notices": row.notices,
                 "page_context": row.page_context,
                 "created_at": row.created_at,
