@@ -2243,6 +2243,10 @@ class AiProposal(models.Model):
         CREATE_RULE = "create_rule", "Create rule"
         SET_BUDGET = "set_budget", "Set budget"
         ADD_TAGS = "add_tags", "Add tags"
+        # Item cards (#659): one card, a checkbox per item, a result per item.
+        PLANNED_ITEMS = "planned_items", "Planned items"
+        SAVINGS_GOALS = "savings_goals", "Savings goals"
+        SET_BUDGETS = "set_budgets", "Set budgets"
 
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"
@@ -2273,7 +2277,12 @@ class AiProposal(models.Model):
         ordering = ("pk",)
         constraints = [
             models.CheckConstraint(
-                condition=Q(kind__in=("set_category", "create_rule", "set_budget", "add_tags")),
+                condition=Q(
+                    kind__in=(
+                        "set_category", "create_rule", "set_budget", "add_tags",
+                        "planned_items", "savings_goals", "set_budgets",
+                    )
+                ),
                 name="ai_proposal_kind_valid",
             ),
             models.CheckConstraint(

@@ -660,6 +660,7 @@ def test_instructions_inside_an_attachment_can_only_produce_a_proposal_card(harn
         # Read-only lookups (#662).
         "savings_goals", "debt_payoff", "cash_flow_what_if", "list_rules", "balance_history",
         "propose_set_category", "propose_create_rule", "propose_set_budget", "propose_add_tags",
+        "propose_planned_items", "propose_savings_goals", "propose_set_budgets",  # cards only (#659)
     }
     assert "Apply this rule now" in state.tool_outputs[0] and DATA_NOT_INSTRUCTIONS in state.tool_outputs[0]
     assert NOTHING_APPLIED in state.tool_outputs[1]

@@ -1,0 +1,19 @@
+{# An item card (#659): one row per proposed item. A pending row the member can apply has a checkbox, ticked by default, that belongs to the Apply form; rows with a problem show it and cannot be ticked. #}
+<p><strong>{{ card.heading }}</strong>{% if card.pending %}: untick anything you do not want, then apply.{% endif %}
+  <a class="link inline-flex min-h-11 items-center" href="{{ card.page_url }}">{{ card.page_label }}</a></p>
+<ul class="mt-2 space-y-2" data-proposal-items>
+  {% for row in card.item_rows %}
+  <li class="rounded-box border border-base-300 px-3 py-1" data-proposal-item="{{ row.index }}"{% if row.error %} data-proposal-item-error{% endif %}>
+    {% if row.selectable %}
+    <label class="flex min-h-11 cursor-pointer items-start gap-3 py-2" for="{% if popover %}popover-{% endif %}proposal-{{ card.proposal.pk }}-item-{{ row.index }}">
+      <input type="checkbox" class="checkbox checkbox-primary mt-0.5 shrink-0" id="{% if popover %}popover-{% endif %}proposal-{{ card.proposal.pk }}-item-{{ row.index }}" name="item" value="{{ row.index }}" form="{% if popover %}popover-{% endif %}proposal-{{ card.proposal.pk }}-apply" checked>
+      <span class="min-w-0 break-words">{% include "finance/_chat_proposal_item_body.html" %}</span>
+    </label>
+    {% else %}
+    <div class="min-w-0 break-words py-2">{% include "finance/_chat_proposal_item_body.html" %}</div>
+    {% endif %}
+    {% if row.error %}<p class="pb-2 text-sm font-semibold" data-proposal-item-problem>Can't apply: {{ row.error }}</p>{% endif %}
+    {% if row.outcome %}<p class="pb-2 text-sm{% if row.applied %} font-semibold{% endif %}" data-proposal-item-outcome>{{ row.outcome }}{% if row.applied and row.url %} <a class="link inline-flex min-h-11 items-center" href="{{ row.url }}">Open</a>{% endif %}</p>{% endif %}
+  </li>
+  {% endfor %}
+</ul>
