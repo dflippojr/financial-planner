@@ -238,6 +238,8 @@ def _validated(person, args):
         raise ChartError(error)
     spec["account"] = account
     spec["scope"] = _scope(args.get("scope"))
+    if report == "net_worth":
+        _net_worth_scope(person, spec["scope"])
     if not spec["scope"] and not household_consent_complete(person):
         # Until household consent is complete the tools see only private accounts, so the chart
         # and the report page it links to both say so (cash_flow_totals does the same).
@@ -268,6 +270,18 @@ def _date(args, key, fallback):
         return date.fromisoformat(str(value)[:10])
     except ValueError:
         raise ChartError(f"{key} must be a date like 2026-01-31.") from None
+
+
+def _net_worth_scope(person, scope):
+    """The Net worth page shows all visible accounts or the household's, never private ones alone."""
+    if scope == Account.Scope.PRIVATE:
+        raise ChartError("Net worth charts show all visible accounts (no scope) or scope household.")
+    if not household_consent_complete(person):
+        # Until consent is complete the tools see private accounts only, which that page cannot show.
+        raise ChartError(
+            "Net worth charts are available once every household member has accepted the AI policy. "
+            "Until then, net_worth_series gives the figures."
+        )
 
 
 def _budget_month(value, today):

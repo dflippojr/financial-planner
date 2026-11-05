@@ -99,7 +99,7 @@ def test_spending_by_month_chart_in_a_reply_equals_the_spending_report_to_the_ce
 
 
 def test_income_net_and_weekly_charts_use_the_cash_flow_report():
-    _user, alpha, *_rest = seed()
+    user, alpha, *_rest = seed()
     report = json.loads(cash_flow_totals(alpha, {**H1, "grouping": "month"}).text)["periods"]
     income = _chart(make_chart(alpha, {"kind": "over_time", "report": "income", "style": "line", **H1}))
     net = _chart(make_chart(alpha, {"kind": "over_time", "report": "net", **H1}))
@@ -111,6 +111,12 @@ def test_income_net_and_weekly_charts_use_the_cash_flow_report():
     weeks = json.loads(cash_flow_totals(alpha, {"date_from": "2026-03-01", "date_to": "2026-04-30",
                                                 "grouping": "week"}).text)["periods"]
     assert _values(weekly) == [period["spending_minor"] for period in weeks]
+    # Each chart's link opens Home for the same range and grouping, which shows the same cents.
+    for chart, field in ((income, "income_minor"), (net, "net_minor"), (weekly, "spending_minor")):
+        page = _page_context(user, chart["page_url"])["chart_data"]["periods"]
+        actual = [row for row in page if not row["projected"]]
+        assert [row["label"] for row in actual] == chart["labels"]
+        assert [row[field] for row in actual] == _values(chart)
 
 
 def test_category_breakdown_matches_the_spending_by_category_page():
@@ -150,7 +156,7 @@ def test_budget_vs_actual_matches_the_budget_cards():
 
 
 def test_compare_periods_matches_two_spending_reports():
-    _user, alpha, *_rest = seed()
+    user, alpha, *_rest = seed()
     chart = _chart(make_chart(alpha, {"kind": "compare_periods", "report": "spending",
                                       "date_from": "2026-06-01", "date_to": "2026-06-30",
                                       "compare_from": "2026-01-01", "compare_to": "2026-01-31"}))
@@ -160,6 +166,12 @@ def test_compare_periods_matches_two_spending_reports():
             name: rows.get(name, 0) for name in chart["labels"]
         }
     assert [series["name"] for series in chart["series"]] == ["2026-06-01 to 2026-06-30", "2026-01-01 to 2026-01-31"]
+    # The link opens Spending by category for the first range; the same page for the second range
+    # shows the second series.
+    for index, link in enumerate((chart["page_url"], chart["page_url"].replace("2026-06-01", "2026-01-01")
+                                  .replace("2026-06-30", "2026-01-31"))):
+        rows = {row["name"]: row["spending_minor"] for row in _page_context(user, link)["chart_data"]["rows"]}
+        assert [rows.get(name, 0) for name in chart["labels"]] == _values(chart, index)
 
 
 def test_category_merchant_and_net_worth_over_time_match_their_pages():
@@ -365,8 +377,18 @@ def test_charts_link_to_the_private_scope_they_draw_while_household_consent_is_i
     assert "scope=private" in breakdown["page_url"]
     rows = client.get(breakdown["page_url"]).context["chart_data"]["rows"]
     assert sum(row["spending_minor"] for row in rows) == sum(_values(breakdown)) == 4200
-    worth = _chart(make_chart(alpha, {"kind": "over_time", "report": "net_worth", **march}))
-    assert "scope=private" in worth["page_url"]
+    # The Net worth page has no private-only view, so a net worth chart waits for consent.
+    worth = make_chart(alpha, {"kind": "over_time", "report": "net_worth", **march})
+    assert not worth.ok and "accepted the AI policy" in worth.text
+
+
+def test_a_net_worth_chart_refuses_the_private_scope_its_page_cannot_show():
+    user, alpha, *_rest = seed()
+    result = make_chart(alpha, {"kind": "over_time", "report": "net_worth", "scope": "private", **H1})
+    assert not result.ok and "scope household" in result.text
+    household = _chart(make_chart(alpha, {"kind": "over_time", "report": "net_worth", "scope": "household", **H1}))
+    page = _page_context(user, household["page_url"])["chart_data"]["periods"]
+    assert _values(household) == [row["net_minor"] for row in page]
 
 
 def test_a_budget_chart_refuses_a_month_the_budgets_page_would_clamp():
