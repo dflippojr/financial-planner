@@ -364,6 +364,10 @@ def debt_payoff(person, args):
         payoff_by_id = {debt.account_id: debt for debt in comparison.chosen.debts}
     in_scope = [row for row in plan.catalog if row.account_id in allowed]
     for row in in_scope[:MAX_TOOL_ROWS]:
+        # The APR rides in the label of this debt's money figures, so it is cited
+        # like an amount; with no balance and no minimum there is nothing to carry it.
+        apr = f" at {row.apr_percent}% APR" if row.apr_percent is not None else ""
+        citable_apr = row.apr_percent is not None and (row.owed_minor is not None or row.minimum_payment_minor is not None)
         rows.append({
             "account_id": row.account_id,
             "name": row.name,
@@ -371,7 +375,7 @@ def debt_payoff(person, args):
             "owed_minor": row.owed_minor,
             "owed_display": row.owed_display,
             "balance_as_of": row.snapshot_date.isoformat() if row.snapshot_date else None,
-            "apr_percent": _percent(row.apr_percent),
+            "apr_percent": _percent(row.apr_percent) if citable_apr else None,
             "minimum_payment_minor": row.minimum_payment_minor,
             "ready": row.ready,
             "missing": list(row.missing),
@@ -379,10 +383,9 @@ def debt_payoff(person, args):
             "payoff": row.payoff_label,
         })
         if row.owed_minor is not None:
-            apr = f" at {row.apr_percent}% APR" if row.apr_percent is not None else ""
             figures.append(_figure(f"{row.name} owed{apr}", row.owed_minor, url))
         if row.minimum_payment_minor is not None:
-            figures.append(_figure(f"{row.name} minimum payment", row.minimum_payment_minor, url))
+            figures.append(_figure(f"{row.name} minimum payment{apr}", row.minimum_payment_minor, url))
         if row.account_id in payoff_by_id and payoff_by_id[row.account_id].remaining_minor > 0:
             remaining = payoff_by_id[row.account_id].remaining_minor
             rows[-1]["remaining_at_end_minor"] = remaining
@@ -541,6 +544,11 @@ def cash_flow_what_if(person, args):
     }
     if len(raw) > MAX_CHANGES:
         payload["changes_truncated"] = True
+    if not include_household:
+        payload["page_note"] = (
+            "Household consent is incomplete, so this projection also leaves out any recurring series that "
+            "charges a shared account. Home's private view still counts such a series, so its totals can differ."
+        )
     return ToolResult(
         text=json.dumps(payload),
         figures=tuple(figures),

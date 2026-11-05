@@ -418,6 +418,19 @@ def test_debt_payoff_flags_a_capped_catalog_and_records_every_simulated_debt(wor
 
 
 @pytest.mark.django_db
+def test_debt_apr_is_cited_without_a_balance_and_withheld_without_any_amount(world):
+    no_balance = Account.objects.create(name="A-SYN-NO-BALANCE", account_type=Account.Type.CREDIT_CARD,
+                                        owner=world["alpha"], apr_percent=Decimal("18.375"),
+                                        minimum_payment_minor=4_000)
+    bare = Account.objects.create(name="A-SYN-BARE", account_type=Account.Type.CREDIT_CARD, owner=world["alpha"],
+                                  apr_percent=Decimal("21.125"))
+    payload = assert_grounded(run_tool(world["alpha"], default_tools(), "debt_payoff", {}))
+    rows = {row["account_id"]: row for row in payload["debts"]}
+    assert rows[no_balance.pk]["apr_percent"] == "18.375" and not rows[no_balance.pk]["ready"]
+    assert rows[bare.pk]["apr_percent"] is None and "21.125" not in json.dumps(payload)
+
+
+@pytest.mark.django_db
 def test_debt_payoff_caps_its_month_rows(world):
     # Minimums barely above the interest stretch the plan far past MAX_TOOL_ROWS months.
     update_debt_terms(world["user_a"], world["card"].pk, apr_percent=Decimal("1.000"), minimum_payment_minor=2_000,
@@ -488,6 +501,7 @@ def test_what_if_links_the_private_projection_while_consent_is_incomplete(world)
     payload = assert_grounded(run_tool(world["alpha"], default_tools(), "cash_flow_what_if",
                                        _args(world)["cash_flow_what_if"]))
     assert "scope=private" in payload["page_url"]
+    assert "can differ" in payload["page_note"]
     page = _client(world).get(payload["page_url"])
     assert page.status_code == 200
     assert [row.scenario.net_minor for row in page.context["scenario_comparison"]] == [
@@ -502,6 +516,7 @@ def test_what_if_refuses_the_household_projection_while_consent_is_incomplete(wo
     accept_policy(world["beta"], current_policy())
     payload = assert_grounded(run_tool(world["alpha"], default_tools(), "cash_flow_what_if", {"scope": "household"}))
     assert "scope=household" in payload["page_url"]
+    assert "page_note" not in payload
 
 
 @pytest.mark.django_db
