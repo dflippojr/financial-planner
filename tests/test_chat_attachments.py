@@ -634,6 +634,28 @@ def test_reconnecting_the_harness_makes_earlier_files_unreadable(harness):
     assert attachment_context(person, conversation, after) is None
 
 
+@pytest.mark.django_db
+def test_the_turn_runs_on_the_connection_its_tools_were_bound_to(harness, monkeypatch):
+    # A second lookup inside run_conversation could land on a server a reconnect just put in
+    # place; the turn must use the connection answer_turn bound the attachment tool to.
+    import finance.ai_services as ai_services
+
+    state, _url = harness
+    _client, person, _household = _harness_member(harness)
+    _conversation, attachment = _attach(person)
+
+    def no_second_lookup(*_args, **_kwargs):
+        raise AssertionError("run_conversation resolved the connection again")
+
+    monkeypatch.setattr(ai_services, "resolve_ai", no_second_lookup)
+    state.need_tool = True
+    state.pending_tool_calls = [[{"call_id": "r1", "name": "read_attachment", "args": {"attachment_id": attachment.pk}}]]
+    process_pending_turns(sleep=no_sleep)
+    reply = AiConversationMessage.objects.filter(role__in=("assistant", "error")).get()
+    assert reply.status == AiConversationMessage.Status.DONE, reply.content
+    assert 'row 2: ["Groceries", "400"]' in state.tool_outputs[-1]
+
+
 # --- Uploads racing a conversation delete (PostgreSQL row locks) -----------
 
 

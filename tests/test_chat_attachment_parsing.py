@@ -382,3 +382,55 @@ def test_names_are_one_plain_line():
     assert parsing.safe_name("../..") == "attachment"
     assert parsing.safe_name("") == "attachment"
     assert len(parsing.safe_name("a" * 400 + ".csv")) == parsing.MAX_NAME_CHARS
+
+
+MEMORY_PROBE = """
+import resource, sys
+resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024,) * 2)
+sys.path.insert(0, sys.argv[1])
+from finance import chat_attachment_parsing as parsing
+data = open(sys.argv[2], "rb").read()
+try:
+    content, _summary = parsing._parse_xlsx(data)
+    print("parsed", content["sheets"][0]["rows"])
+except parsing.AttachmentRejected as exc:
+    print("rejected", exc)
+"""
+
+
+@pytest.mark.skipif(not hasattr(__import__("os"), "fork"), reason="RLIMIT_AS is POSIX-only")
+@pytest.mark.parametrize("shared", [
+    '<x a="1"/>' * 3_000_000,
+    "<si><r><t>a</t></r><r><t>b</t></r></si>" * 700_000,
+], ids=["attribute-bloat", "rich-run-strings"])
+def test_bloated_xml_parts_are_streamed_within_a_small_memory_limit(tmp_path, shared):
+    # Tens of megabytes of markup that compress to almost nothing. Built whole as a tree, each
+    # of these ran a 512 MiB process out of memory (#647 review); streamed, one item at a time
+    # is in memory.
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    data = make_xlsx([("Budget", rows_xml([["kept"]]))], shared_strings=shared)
+    assert len(data) < 1_000_000
+    path = tmp_path / "bloat.xlsx"
+    path.write_bytes(data)
+    root = str(Path(__file__).resolve().parents[1])
+    done = subprocess.run([sys.executable, "-c", MEMORY_PROBE, root, str(path)], capture_output=True, text=True,
+                          timeout=120, check=False)
+    assert done.returncode == 0, done.stderr[-500:]
+    assert done.stdout.strip() == "parsed [[1, ['kept']]]"
+
+
+def test_stream_limits_items_strings_and_styles(monkeypatch):
+    monkeypatch.setattr(parsing, "MAX_ELEMENTS_PER_ITEM", 3)
+    wide = make_xlsx([("S", '<row r="1">' + '<c r="A1"/>' * 5 + "</row>")])
+    _rejected("wide.xlsx", wide, parsing.TOO_MUCH_TEXT)
+    styles = make_xlsx([("S", rows_xml([["a"]]))], styles="<cellXfs>" + '<xf numFmtId="0"/>' * 5 + "</cellXfs>")
+    _rejected("styles.xlsx", styles, parsing.TOO_MUCH_TEXT)
+    monkeypatch.setattr(parsing, "MAX_ELEMENTS_PER_ITEM", 50_000)
+    monkeypatch.setattr(parsing, "MAX_SHARED_STRINGS", 2)
+    strings = make_xlsx([("S", rows_xml([["a"]]))], shared_strings="<si><t>a</t></si>" * 3)
+    _rejected("strings.xlsx", strings, parsing.TOO_MUCH_TEXT)
+    monkeypatch.setattr(parsing, "MAX_TREE_PART_BYTES", 10)
+    _rejected("tree.xlsx", strings, parsing.TOO_MUCH_TEXT)

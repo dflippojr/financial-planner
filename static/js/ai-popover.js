@@ -29,6 +29,7 @@
   let timer = null;
   let count = 0;
   let draftVersion = 0;
+  let fileVersion = 0;
   let answerReady = false;
   let sending = false;
   let restoring = false;
@@ -312,6 +313,9 @@
     pop.addEventListener(name, activity, {capture: true, passive: true});
   });
   composer.addEventListener("input", function () { draftVersion += 1; activity(); });
+  if (form.elements.attachment) {
+    form.elements.attachment.addEventListener("change", function () { fileVersion += 1; activity(); });
+  }
   pop.querySelectorAll("[data-pop-followup]").forEach(function (button) {
     button.addEventListener("click", function () {
       composer.value = button.textContent.trim(); draftVersion += 1; composer.focus(); activity();
@@ -326,6 +330,7 @@
     activity();
     const version = generation;
     const submittedDraftVersion = draftVersion;
+    const submittedFileVersion = fileVersion;
     try {
       const response = await fetch(form.action, {method: "POST", body: new FormData(form),
         headers: {Accept: "application/json", "X-CSRFToken": form.elements.csrfmiddlewaretoken.value},
@@ -337,8 +342,9 @@
       if (!response.ok || !data.ok) throw new Error(data.error || "Chat could not send your question.");
       if (version === generation) {
         if (draftVersion === submittedDraftVersion) composer.value = "";
-        // The file went with this question; it is listed in the thread now.
-        if (form.elements.attachment) form.elements.attachment.value = "";
+        // The file went with this question and is listed in the thread now. A file chosen
+        // for the next question while this one was sending stays selected.
+        if (form.elements.attachment && fileVersion === submittedFileVersion) form.elements.attachment.value = "";
         install(data);
       }
     } catch (failure) { error.textContent = failure.message || "Chat could not send your question."; }

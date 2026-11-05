@@ -50,6 +50,11 @@ MAX_SHEET_NAME_CHARS = 100
 MAX_ZIP_MEMBERS = 2_000
 MAX_ZIP_MEMBER_BYTES = 32 * 1024 * 1024
 MAX_ZIP_TOTAL_BYTES = 64 * 1024 * 1024
+# Parts read whole into a tree (workbook and its relationships) stay small; sheets, shared
+# strings and styles are streamed, keeping only the element being read in memory.
+MAX_TREE_PART_BYTES = 4 * 1024 * 1024
+MAX_ELEMENTS_PER_ITEM = 50_000
+MAX_SHARED_STRINGS = 1_000_000
 
 TOO_LARGE = "That file is larger than 10 MB. Attach a smaller file."
 UNSUPPORTED = "Attach a CSV, XLSX or PDF file. Other file types can't be read."
@@ -278,14 +283,15 @@ def _checked_members(archive):
     return members
 
 
-def _read_member(archive, members, path):
+def _read_member(archive, members, path, limit=None):
     """A member's bytes, read with a hard cap whatever its header claims. DTDs are refused."""
     info = members.get(path)
     if info is None:
         return None
+    cap = MAX_ZIP_MEMBER_BYTES if limit is None else min(limit, MAX_ZIP_MEMBER_BYTES)
     with archive.open(info) as handle:
-        payload = handle.read(MAX_ZIP_MEMBER_BYTES + 1)
-    if len(payload) > MAX_ZIP_MEMBER_BYTES:
+        payload = handle.read(cap + 1)
+    if len(payload) > cap:
         raise AttachmentRejected(TOO_MUCH_TEXT)
     # No entity expansion and no external fetches: a workbook part never needs a DTD.
     if not _is_utf8_xml(payload) or _DTD.search(payload):
@@ -311,12 +317,41 @@ def _parse_xml(payload):
     return ElementTree.fromstring(payload)  # noqa: S314 - DTDs are refused before parsing
 
 
+def _stream(payload, tags):
+    """Yield (element, ancestor tags) for each element named in tags, as it ends.
+
+    Everything else is dropped from the tree as soon as it ends, and each yielded element
+    is dropped once the caller moves on, so memory holds one item at a time however large
+    the part. An item with too many descendants is refused.
+    """
+    stack = []
+    inside = 0
+    # The payload came through _read_member, which refused any DTD.
+    for event, element in ElementTree.iterparse(io.BytesIO(payload), events=("start", "end")):  # noqa: S314 - DTDs are refused
+        if event == "start":
+            stack.append(element)
+            if any(_local(item.tag) in tags for item in stack[:-1]):
+                inside += 1
+                if inside > MAX_ELEMENTS_PER_ITEM:
+                    raise AttachmentRejected(TOO_MUCH_TEXT)
+            continue
+        stack.pop()
+        name = _local(element.tag)
+        if any(_local(item.tag) in tags for item in stack):
+            continue  # Part of an item still being read.
+        if name in tags:
+            inside = 0
+            yield element, [_local(item.tag) for item in stack]
+        if stack:
+            del stack[-1][:]
+
+
 def _local(tag) -> str:
     return tag.rsplit("}", 1)[-1] if isinstance(tag, str) else ""
 
 
 def _read_workbook(archive, members):
-    workbook = _parse_xml(_read_member(archive, members, "xl/workbook.xml"))
+    workbook = _parse_xml(_read_member(archive, members, "xl/workbook.xml", MAX_TREE_PART_BYTES))
     date1904 = False
     sheets = []
     for element in workbook.iter():
@@ -347,7 +382,7 @@ def _read_workbook(archive, members):
 
 def _worksheet_targets(archive, members):
     """Relationship id -> worksheet part. Chart sheets, macros and external links are never opened."""
-    payload = _read_member(archive, members, "xl/_rels/workbook.xml.rels")
+    payload = _read_member(archive, members, "xl/_rels/workbook.xml.rels", MAX_TREE_PART_BYTES)
     if payload is None:
         return {}
     targets = {}
@@ -369,9 +404,8 @@ def _shared_strings(archive, members):
     if payload is None:
         return []
     strings = []
-    for item in _parse_xml(payload):
-        if _local(item.tag) != "si":
-            continue
+    total = 0
+    for item, _ancestors in _stream(payload, {"si"}):
         parts = []
         for child in item:
             tag = _local(child.tag)
@@ -380,7 +414,11 @@ def _shared_strings(archive, members):
             elif tag == "r":
                 # A rich-text run; phonetic guides (rPh) are skipped.
                 parts.extend(run.text or "" for run in child if _local(run.tag) == "t")
-        strings.append(_cell_text("".join(parts)))
+        text = _cell_text("".join(parts))
+        total += len(text)
+        if len(strings) >= MAX_SHARED_STRINGS or total > MAX_TEXT_CHARS:
+            raise AttachmentRejected(TOO_MUCH_TEXT)
+        strings.append(text)
     return strings
 
 
@@ -389,17 +427,15 @@ def _date_styles(archive, members):
     payload = _read_member(archive, members, "xl/styles.xml")
     if payload is None:
         return frozenset()
-    root = _parse_xml(payload)
     custom = {}
     styles = []
-    for element in root:
-        tag = _local(element.tag)
-        if tag == "numFmts":
-            for item in element:
-                if _local(item.tag) == "numFmt":
-                    custom[_int(item.get("numFmtId"))] = str(item.get("formatCode") or "")
-        elif tag == "cellXfs":
-            styles = [_int(item.get("numFmtId")) for item in element if _local(item.tag) == "xf"]
+    for item, ancestors in _stream(payload, {"numFmt", "xf"}):
+        if _local(item.tag) == "numFmt" and "numFmts" in ancestors:
+            custom[_int(item.get("numFmtId"))] = str(item.get("formatCode") or "")
+        elif _local(item.tag) == "xf" and ancestors[-1:] == ["cellXfs"]:
+            if len(styles) >= MAX_ELEMENTS_PER_ITEM:
+                raise AttachmentRejected(TOO_MUCH_TEXT)
+            styles.append(_int(item.get("numFmtId")))
     return frozenset(
         index for index, format_id in enumerate(styles)
         if format_id in _DATE_FORMAT_IDS or (format_id in custom and _is_date_format(custom[format_id]))
@@ -432,10 +468,7 @@ def _read_sheet(payload, name, strings, date_styles, epoch):
     if payload is None:
         return rows
     previous_row = 0
-    # The payload came through _read_member, which refused any DTD.
-    for _event, element in ElementTree.iterparse(io.BytesIO(payload), events=("end",)):  # noqa: S314 - DTDs are refused
-        if _local(element.tag) != "row":
-            continue
+    for element, _ancestors in _stream(payload, {"row"}):
         number = _int(element.get("r"), previous_row + 1)
         previous_row = number
         cells = {}
@@ -450,7 +483,6 @@ def _read_sheet(payload, name, strings, date_styles, epoch):
                     raise AttachmentRejected(TOO_MANY_COLUMNS)
                 continue
             cells[column] = _cell_value(cell, strings, date_styles, epoch)
-        element.clear()
         if cells:
             rows.add(number, [cells.get(index, "") for index in range(1, max(cells) + 1)])
     return rows

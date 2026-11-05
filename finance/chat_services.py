@@ -508,6 +508,8 @@ def answer_turn(turn, *, sleep=None, monotonic=None):
         allow_tool=allow_tool,
         history=_api_history(conversation, question) if history_held and connection.kind in API_KINDS else (),
         tool_budget=tool_budget,
+        # The connection the tools (and the attachment provider key) were bound to above.
+        connection=connection,
     )
     with transaction.atomic():
         locked = _lock_conversation(conversation.pk)

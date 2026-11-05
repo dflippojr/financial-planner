@@ -129,6 +129,36 @@ def test_attach_a_file_in_the_desktop_popover(page_session, harness):  # noqa: F
         context.close()
 
 
+def test_a_file_chosen_while_the_popover_sends_stays_selected(page_session, harness):  # noqa: F811
+    _state, url = harness
+    context, page = page_session((1280, 800), "light", "/")
+    try:
+        _member(url)
+        page.reload()
+        page.wait_for_load_state("networkidle")
+        page.evaluate("() => window.AiPopover.open({origin: document.querySelector('main h1')})")
+        popover = page.locator("#ai-popover")
+        picker = popover.locator("input[name=attachment]")
+        expect(picker).to_be_enabled()
+        picker.set_input_files(files=[{"name": "first.csv", "mimeType": "text/csv", "buffer": b"a\n1\n"}])
+        popover.locator("textarea").fill("First question.")
+        # Hold the send open while the member picks the next file.
+        gate = {"route": None}
+        page.route("**/chat/send/", lambda route: gate.update(route=route))
+        popover.locator("#ai-popover-form").get_by_role("button", name="Send").click()
+        for _ in range(100):
+            if gate["route"] is not None:
+                break
+            page.wait_for_timeout(50)
+        assert gate["route"] is not None
+        picker.set_input_files(files=[{"name": "second.csv", "mimeType": "text/csv", "buffer": b"b\n2\n"}])
+        gate["route"].continue_()
+        expect(popover.locator("[data-chat-attachment]")).to_contain_text("first.csv")
+        assert picker.evaluate("(el) => el.files.length && el.files[0].name") == "second.csv"
+    finally:
+        context.close()
+
+
 def test_the_popover_picker_stays_disabled_when_the_provider_is_unknown(page_session, harness):  # noqa: F811
     _state, url = harness
     context, page = page_session((1280, 800), "light", "/")
