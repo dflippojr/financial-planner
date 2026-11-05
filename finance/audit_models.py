@@ -23,6 +23,8 @@ CHANGED_FIELDS = frozenset({
     "priority", "color", "description", "currency", "interval", "price",
     # Savings-goal wishlist (#295): field names only.
     "dependency", "time_sensitive", "buffer",
+    # Transfers to or from an untracked account (#642).
+    "untracked_transfer",
 })
 METADATA_INT_KEYS = frozenset({
     "batch_id", "new_count", "duplicate_count", "invalid_count", "row_count", "history_id",

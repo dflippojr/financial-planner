@@ -1,0 +1,17 @@
+{% load static ui %}{% for chart in charts %}
+<figure class="chat-chart mt-3" data-chat-chart data-chart-lib="{% static 'vendor/chart.umd.min.js' %}">
+  <figcaption class="text-sm font-semibold">{{ chart.title }}</figcaption>
+  {# Drawn by static/js/chat-charts.js from the server's stored series; the model supplies no numbers (#646). #}
+  <div class="chat-chart-canvas" data-chat-chart-style="{{ chart.style }}" data-chat-chart-rows="{{ chart.labels|length }}">
+    <canvas role="img" aria-label="{{ chart.summary }}"></canvas>
+  </div>
+  {{ chart|chat_chart_payload|json_script }}
+  {# A table ignores the 1px width sr-only sets, so the wrapper clips it instead. #}
+  <div class="sr-only"><table>
+    <caption>{{ chart.title }}</caption>
+    <thead><tr><th scope="col">{% if chart.kind == "over_time" %}Period{% elif chart.kind == "budget_vs_actual" %}Budget{% else %}Category{% endif %}</th>{% for series in chart.series %}<th scope="col">{{ series.name }}</th>{% endfor %}</tr></thead>
+    <tbody>{% for row in chart|chat_chart_rows %}<tr><td>{{ row.label }}</td>{% for cell in row.cells %}<td>{{ cell }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+  </table></div>
+  <a class="link inline-flex min-h-11 items-center text-sm" href="{{ chart.page_url }}">Open the report</a>
+</figure>
+{% endfor %}

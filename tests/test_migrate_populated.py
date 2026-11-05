@@ -148,6 +148,9 @@ def test_populated_database_migrates_to_head(start):
             conversation__in=chats
         ).count()
         assert deleted_chats > 0
+        # 0079 (#642) must leave every rule's category as it was.
+        rule_categories = dict(old_apps.get_model("finance", "CategoryRule").objects.values_list("pk", "category_id"))
+        assert rule_categories
 
         executor = MigrationExecutor(connection)
         executor.migrate(head)
@@ -173,6 +176,15 @@ def test_populated_database_migrates_to_head(start):
             null_count = _scalar(f"SELECT COUNT(*) FROM {quote(table)} WHERE {quote(column)} IS NULL")  # noqa: S608 - identifiers come from the schema and are quoted by quote_name; no values
             assert null_count == 0, (table, column)
             assert _column_is_nullable(table, column) is not True, (table, column)
+
+        # 0079 (#642) marks nothing: no row is an untracked transfer, and every
+        # existing rule still sets the category it set before.
+        assert not new_apps.get_model("finance", "Transaction").objects.filter(untracked_transfer=True).exists()
+        Rule = new_apps.get_model("finance", "CategoryRule")
+        assert set(Rule.objects.values_list("action", flat=True)) == {"categorize"}
+        assert dict(Rule.objects.values_list("pk", "category_id")) == rule_categories
+        assert not Rule.objects.filter(scope_household__isnull=False).exists()
+        assert not new_apps.get_model("finance", "RuleApplicationEntry").objects.filter(marked_untracked=True).exists()
 
         # The data migrations on the way did their jobs on populated rows.
         Pair = new_apps.get_model("finance", "TransferPair")

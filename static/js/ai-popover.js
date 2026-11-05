@@ -146,6 +146,7 @@
     thread.replaceChildren(...Array.from(parsed.body.childNodes, function (node) { return document.importNode(node, true); }));
     thread.setAttribute("aria-busy", String(!!thread.querySelector("[data-chat-turn-url]")));
     if (window.ChatTurns) window.ChatTurns.start(thread);
+    if (window.ChatCharts) window.ChatCharts.start(thread);
     draw();
     scroll.scrollTop = scroll.scrollHeight;
   }
