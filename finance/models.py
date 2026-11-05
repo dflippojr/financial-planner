@@ -2213,8 +2213,9 @@ class AiChatAttachment(models.Model):
     original_name = models.CharField(max_length=255)
     kind = models.CharField(max_length=8, choices=Kind)
     size_bytes = models.PositiveIntegerField()
-    # The provider named in the upload warning (chat backend and connection,
-    # chat_attachments.provider_key); the file is read only while chat still uses it.
+    # Provenance: the provider named in the upload warning (chat backend and connection,
+    # chat_attachments.provider_key). Who may read the file is decided by the conversation's
+    # attachment_providers, which a warned provider switch extends (owner decision 5).
     provider = models.CharField(max_length=120)
     data = models.BinaryField()
     # {"sheets": [{"name", "rows": [[row number, [cells]]]}]} or {"pages": [text]}.
