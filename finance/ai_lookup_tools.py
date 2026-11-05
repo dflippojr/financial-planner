@@ -378,9 +378,12 @@ def debt_payoff(person, args):
         payoff_by_id = {debt.account_id: debt for debt in comparison.chosen.debts}
     in_scope = [row for row in plan.catalog if row.account_id in allowed]
     for row in in_scope[:MAX_TOOL_ROWS]:
-        # The APR rides in the label of this debt's money figures, so it is cited
-        # like an amount; with no balance and no minimum there is nothing to carry it.
+        # Owed and payoff are cited from Debt payoff, which shows them; the APR and
+        # minimum from the account's Balances page, which shows its debt terms and
+        # balances. With no balance and no minimum nothing carries the APR.
         apr = f" at {row.apr_percent}% APR" if row.apr_percent is not None else ""
+        terms_url = reverse("account-balances", args=[row.account_id])
+        as_of = f" on {row.snapshot_date.isoformat()}" if row.snapshot_date else ""
         citable_apr = row.apr_percent is not None and (row.owed_minor is not None or row.minimum_payment_minor is not None)
         rows.append({
             "account_id": row.account_id,
@@ -397,10 +400,11 @@ def debt_payoff(person, args):
             "payoff": row.payoff_label,
         })
         if row.owed_minor is not None:
-            as_of = f" on {row.snapshot_date.isoformat()}" if row.snapshot_date else ""
-            figures.append(_figure(f"{row.name} owed{as_of}{apr}, payoff {row.payoff_label}", row.owed_minor, url))
+            figures.append(_figure(f"{row.name} owed{as_of}, payoff {row.payoff_label}", row.owed_minor, url))
         if row.minimum_payment_minor is not None:
-            figures.append(_figure(f"{row.name} minimum payment{apr}", row.minimum_payment_minor, url))
+            figures.append(_figure(f"{row.name} minimum payment{apr}", row.minimum_payment_minor, terms_url))
+        elif apr and row.owed_minor is not None:
+            figures.append(_figure(f"{row.name} balance{as_of}{apr}", row.owed_minor, terms_url))
         if row.account_id in payoff_by_id and payoff_by_id[row.account_id].remaining_minor > 0:
             remaining = payoff_by_id[row.account_id].remaining_minor
             rows[-1]["remaining_at_end_minor"] = remaining
@@ -507,6 +511,12 @@ def cash_flow_what_if(person, args):
         # As the other report links do while consent is incomplete, so Home shows the same projection.
         scope = Account.Scope.PRIVATE
     inputs = visible_projection_inputs(person, scope=scope, accounts=accounts, include_household=include_household)
+    if not include_household and _input_keys(inputs) != _input_keys(visible_projection_inputs(person, scope=scope)):
+        # Home's private view would count a recurring series that also charges a
+        # shared account; its totals could not be cited, and quoting them would
+        # reach household charges, so the what-if waits for consent.
+        return ToolResult(text=f"This projection includes a recurring series that also charges a shared account, "
+                               f"so it is {CONSENT_WITHHELD}.", ok=False)
     requested = raw[:MAX_CHANGES]
     parsed = []
     ignored = []
@@ -562,17 +572,17 @@ def cash_flow_what_if(person, args):
     }
     if len(raw) > MAX_CHANGES:
         payload["changes_truncated"] = True
-    if not include_household:
-        payload["page_note"] = (
-            "Household consent is incomplete, so this projection also leaves out any recurring series that "
-            "charges a shared account. Home's private view still counts such a series, so its totals can differ."
-        )
     return ToolResult(
         text=json.dumps(payload),
         figures=tuple(figures),
         account_ids=_account_ids(None, accounts),
         planned_item_ids=tuple(sorted(source_id for source_id in planned_by_id if source_id > 0)),
     )
+
+
+def _input_keys(inputs):
+    return sorted((item.source, item.source_id, item.amount_minor, item.cadence, item.start, item.end or item.start)
+                  for item in inputs)
 
 
 # Rules

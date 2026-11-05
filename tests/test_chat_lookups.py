@@ -440,9 +440,16 @@ def test_debt_apr_is_cited_without_a_balance_and_withheld_without_any_amount(wor
                                         minimum_payment_minor=4_000)
     bare = Account.objects.create(name="A-SYN-BARE", account_type=Account.Type.CREDIT_CARD, owner=world["alpha"],
                                   apr_percent=Decimal("21.125"))
-    payload = assert_grounded(run_tool(world["alpha"], default_tools(), "debt_payoff", {}))
+    result = run_tool(world["alpha"], default_tools(), "debt_payoff", {})
+    payload = assert_grounded(result)
     rows = {row["account_id"]: row for row in payload["debts"]}
     assert rows[no_balance.pk]["apr_percent"] == "18.375" and not rows[no_balance.pk]["ready"]
+    # The terms are cited from the account's Balances page, which shows them.
+    terms = next(f for f in result.figures if f["label"] == "A-SYN-NO-BALANCE minimum payment at 18.375% APR")
+    page = _client(world).get(terms["url"])
+    assert terms["url"] == reverse("account-balances", args=[no_balance.pk]) and page.status_code == 200
+    html = page.content.decode()
+    assert 'name="apr_percent" value="18.375"' in html and 'name="minimum_payment" value="40"' in html
     assert rows[bare.pk]["apr_percent"] is None and "21.125" not in json.dumps(payload)
 
 
@@ -517,7 +524,6 @@ def test_what_if_links_the_private_projection_while_consent_is_incomplete(world)
     payload = assert_grounded(run_tool(world["alpha"], default_tools(), "cash_flow_what_if",
                                        _args(world)["cash_flow_what_if"]))
     assert "scope=private" in payload["page_url"]
-    assert "can differ" in payload["page_note"]
     page = _client(world).get(payload["page_url"])
     assert page.status_code == 200
     assert [row.scenario.net_minor for row in page.context["scenario_comparison"]] == [
@@ -532,7 +538,29 @@ def test_what_if_refuses_the_household_projection_while_consent_is_incomplete(wo
     accept_policy(world["beta"], current_policy())
     payload = assert_grounded(run_tool(world["alpha"], default_tools(), "cash_flow_what_if", {"scope": "household"}))
     assert "scope=household" in payload["page_url"]
-    assert "page_note" not in payload
+
+
+@pytest.mark.django_db
+def test_what_if_waits_for_consent_when_home_would_count_a_shared_charge(world):
+    series = RecurringSeries.objects.create(
+        person=world["alpha"], merchant_key="syn mixed gym", display_name="SYN-MIXED-GYM",
+        cadence=RecurringSeries.Cadence.MONTHLY, typical_amount_minor=-1_599,
+        status=RecurringSeries.Status.CONFIRMED, confidence=RecurringSeries.Confidence.HIGH,
+        reasons=["synthetic"], fingerprint="d" * 64,
+    )
+    today = timezone.localdate()
+    for offset, account in ((3, world["shared"]), (2, world["private"]), (1, world["private"])):
+        txn = add_txn(account, world["alpha"], add_months(today.replace(day=6), -offset), -1_599, "SYN-MIXED-GYM")
+        RecurringSeriesMember.objects.create(series=series, transaction=txn)
+    _withhold_consent(world)
+    refused = run_tool(world["alpha"], default_tools(), "cash_flow_what_if", _args(world)["cash_flow_what_if"])
+    assert not refused.ok and "withheld" in refused.text and "1599" not in refused.text
+    accept_policy(world["beta"], current_policy())
+    payload = assert_grounded(run_tool(world["alpha"], default_tools(), "cash_flow_what_if",
+                                       _args(world)["cash_flow_what_if"]))
+    page = _client(world).get(payload["page_url"])
+    assert [row.scenario.net_minor for row in page.context["scenario_comparison"]] == [
+        month["scenario_net_minor"] for month in payload["months"]]
 
 
 @pytest.mark.django_db
