@@ -658,6 +658,7 @@ def test_instructions_inside_an_attachment_can_only_produce_a_proposal_card(harn
         "recurring_series", "net_worth_series", "list_budgets", "list_planned_items", "projected_cash_flow",
         "make_chart",  # read-only: draws server-computed series (#646)
         "propose_set_category", "propose_create_rule", "propose_set_budget", "propose_add_tags",
+        "propose_planned_items", "propose_savings_goals", "propose_set_budgets",  # cards only (#659)
     }
     assert "Apply this rule now" in state.tool_outputs[0] and DATA_NOT_INSTRUCTIONS in state.tool_outputs[0]
     assert NOTHING_APPLIED in state.tool_outputs[1]
