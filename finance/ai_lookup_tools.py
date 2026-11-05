@@ -56,6 +56,10 @@ from .scenario import (
 )
 
 MAX_EXTRA_MINOR = 2**63 - 1
+ARCHIVED_HISTORY = (
+    "That account is archived, so it has no Balances page to cite; use net_worth_series for the "
+    "month-end balances Net worth still shows for it."
+)
 CONSENT_WITHHELD = "withheld until every household member accepts the AI policy"
 
 
@@ -141,7 +145,7 @@ def lookup_tools():
             name="balance_history",
             description=(
                 "One visible account's recorded balances, newest first, with each balance's source "
-                "(simplefin, calculated, manual) and note. Give account_id or account_name; optional "
+                "(simplefin, calculated, manual) and note. Active accounts only. Give account_id or account_name; optional "
                 "date_from and date_to."
             ),
             parameters={
@@ -247,6 +251,9 @@ def savings_goals(person, _args):
         plan_row = None if withheld else plan_rows.get(goal.pk)
         if plan_row is not None:
             row["projected_completion"] = plan_row
+            # The month is cited from the Savings plan page, which shows it beside what is left to fund.
+            figures.append(_figure(f"{goal.name} projected funding: {plan_row['funded_month']}",
+                                   progress.remaining_minor, plan_row["url"], goal.currency))
         rows.append(row)
     if any(goal.scope == SavingsGoal.Scope.HOUSEHOLD for goal in shown):
         account_ids |= _household_account_ids(allowed)
@@ -623,10 +630,12 @@ def balance_history(person, args):
     if args.get("account_id") is None and not args.get("account_name"):
         return ToolResult(text="Give account_id or account_name.", ok=False)
     account, error = _visible_account(person, args.get("account_id"), args.get("account_name"))
-    if account is None and not error.startswith("account_id"):
-        # Net worth keeps archived accounts' history, so the lookup does too.
-        account = _archived_account(person, args.get("account_id"), args.get("account_name"))
     if account is None:
+        if not error.startswith("account_id") and _archived_account(
+            person, args.get("account_id"), args.get("account_name")
+        ) is not None:
+            # Only an active account has a Balances page that shows every recorded balance.
+            return ToolResult(text=ARCHIVED_HISTORY, ok=False)
         return ToolResult(text=error, ok=False)
     date_from = _parse_date(args.get("date_from"), None)
     date_to = _parse_date(args.get("date_to"), None)
@@ -637,11 +646,7 @@ def balance_history(person, args):
         query = query.filter(snapshot_date__lte=date_to)
     # The account's Balances page order.
     snapshots = list(query.order_by("-snapshot_date", "-source", "-pk")[: MAX_TOOL_ROWS + 1])
-    if account.status == Account.Status.ACTIVE:
-        url = reverse("account-balances", args=[account.pk])
-    else:
-        net_query = {"date_from": date_from.isoformat(), "date_to": date_to.isoformat()} if date_from and date_to else {}
-        url = f"{reverse('net-worth')}?{urlencode(net_query)}" if net_query else reverse("net-worth")
+    url = reverse("account-balances", args=[account.pk])
     rows = []
     figures = []
     for snapshot in snapshots[:MAX_TOOL_ROWS]:

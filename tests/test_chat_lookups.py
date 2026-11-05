@@ -8,6 +8,7 @@ import pytest
 from django.db import connection
 from django.test import Client
 from django.test.utils import CaptureQueriesContext
+from django.urls import reverse
 from django.utils import timezone
 from tests.chat_helpers import ask
 from tests.test_chat import TOKEN, add_txn, checking, harness, make_member  # noqa: F401 - harness is a fixture
@@ -271,6 +272,10 @@ def test_savings_goals_match_the_goals_and_plan_pages(world):
     for row in payload["rows"]:
         expected = funded[row["id"]]
         completion = row["projected_completion"]["funded_month"]
+        # The month is cited, linked to the plan page that shows it.
+        assert paragraph_is_grounded(f"{row['name']} is funded by {completion}.", list(result.figures))
+        cite = next(f for f in result.figures if f["label"] == f"{row['name']} projected funding: {completion}")
+        assert cite["url"] == payload["plan_url"] and cite["amount_minor"] == expected.remaining_minor
         if expected.funded_month is not None:
             assert completion == expected.funded_month.isoformat()[:7]
         else:
@@ -591,7 +596,7 @@ def test_balance_history_lists_sources_and_notes_like_the_balances_page(world):
 
 
 @pytest.mark.django_db
-def test_balance_history_signs_debts_caps_rows_and_keeps_archived_history(world):
+def test_balance_history_signs_debts_caps_rows_and_refuses_archived_history(world):
     card = world["card"]
     start = timezone.localdate() - timedelta(days=200)
     BalanceSnapshot.objects.bulk_create(
@@ -606,27 +611,29 @@ def test_balance_history_signs_debts_caps_rows_and_keeps_archived_history(world)
     card.status = Account.Status.ARCHIVED
     card.archived_at = timezone.now()
     card.save(update_fields=["status", "archived_at"])
-    archived = assert_grounded(run_tool(world["alpha"], default_tools(), "balance_history", {"account_id": card.pk}))
-    assert archived["account"]["status"] == "archived"
-    assert _client(world).get(archived["page_url"]).status_code == 200
+    # No page shows every balance of an archived account, so none is quoted; Net worth's month ends remain.
+    archived = run_tool(world["alpha"], default_tools(), "balance_history", {"account_id": card.pk})
+    assert not archived.ok and "net_worth_series" in archived.text and "400000" not in archived.text
+    assert _client(world).get(reverse("account-balances", args=[card.pk])).status_code == 404
 
 
 @pytest.mark.django_db
-def test_archived_history_keeps_the_consent_scope(world):
+def test_archived_refusal_keeps_the_consent_scope(world):
     for account in (world["shared"], world["beta_card"]):
         account.status = Account.Status.ARCHIVED
         account.archived_at = timezone.now()
         account.save(update_fields=["status", "archived_at"])
     _withhold_consent(world)
+    # Out of scope, an archived account answers like a missing one: no hint that it exists.
     for args in ({"account_id": world["shared"].pk}, {"account_name": "HH-SYN-SHARED"},
                  {"account_id": world["beta_card"].pk}):
         result = run_tool(world["alpha"], default_tools(), "balance_history", args)
-        assert not result.ok and str(SHARED_BALANCE) not in result.text
+        assert not result.ok and result.text == "That account is not visible."
     accept_policy(world["beta"], current_policy())
-    shared = assert_grounded(run_tool(world["alpha"], default_tools(), "balance_history",
-                                      {"account_id": world["shared"].pk}))
-    assert shared["rows"][0]["balance_minor"] == SHARED_BALANCE
-    assert not run_tool(world["alpha"], default_tools(), "balance_history", {"account_id": world["beta_card"].pk}).ok
+    shared = run_tool(world["alpha"], default_tools(), "balance_history", {"account_id": world["shared"].pk})
+    assert not shared.ok and "archived" in shared.text
+    beta = run_tool(world["alpha"], default_tools(), "balance_history", {"account_id": world["beta_card"].pk})
+    assert beta.text == "That account is not visible."
 
 
 @pytest.mark.django_db
