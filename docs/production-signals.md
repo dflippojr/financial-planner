@@ -1,9 +1,10 @@
 # Production signals
 
-How to read the tower's production state without changing it. The box-level
-signal sweep (dflippojr/agent-ops#52) and the post-deploy check
-(`ops/post-deploy-check.ps1`) use these commands, and an operator can run them
-by hand.
+How to read the tower's production state without changing it. The post-deploy
+check (`ops/post-deploy-check.ps1`) uses these commands, and an operator can run
+them by hand. The box-level signal sweep (dflippojr/agent-ops#52, `ao signals`)
+reads only the [`production-signals` block](#signals-the-sweep-reads) at the
+end of this page; the other checks stay owner-run.
 
 Every command here only reads. None restarts, recreates, migrates or writes
 anything, and none prints amounts, names, log lines or error text: only
@@ -22,14 +23,14 @@ $BackupDir = 'D:\financial-planner-backups'   # BACKUP_DIR from production.env
 $Config = 'D:\financial-planner-config\production.env'
 ```
 
-| Signal | Healthy | Fresh as of |
-| --- | --- | --- |
-| `/health/` status | 200 and `ok` | live |
-| Deployed SHA | `X-App-Revision` and every image label match the merged `main` | the last build |
-| Container state and `RestartCount` | all four `running`, count not rising | live |
-| Tracebacks per container, last 24 h | 0 | live, over a 24 h window |
-| Backup status | `state` is `ok` | the last backup run, nightly at 03:30 |
-| Balance reconciliation | `counts.mismatch` is 0 | the last SimpleFIN sync, daily at 06:30 |
+| Signal | Healthy | Fresh as of | Read by |
+| --- | --- | --- | --- |
+| `/health/` status | 200 and `ok` | live | the sweep (`health`) and the owner |
+| Deployed SHA | `X-App-Revision` and every image label match the merged `main` | the last build | owner only: the sweep's `http` fetch reads the body, not headers |
+| Container state and `RestartCount` | all four `running`, count not rising | live | owner only: needs `docker` |
+| Tracebacks per container, last 24 h | 0 | live, over a 24 h window | owner only: needs `docker logs` |
+| Backup status | `state` is `ok` | the last backup run, nightly at 03:30 | owner only: the status file is `key=value` text; the sweep's `file` fetch returns it whole, which is not a time |
+| Balance reconciliation | `counts.mismatch` is 0 | the last SimpleFIN sync, daily at 06:30 | owner only: needs `docker compose exec` |
 
 ## Health
 
@@ -161,3 +162,32 @@ from the env file and nothing else. Pass `-HealthUrl`, `-StatusPath`,
 images record no SHA.
 Without `-Since`, it dates the deploy from when the `app` and `background`
 containers were created.
+
+## Signals the sweep reads
+
+The agent-ops signal sweep reads the fenced block below from this file on
+`main`; see the [agent-ops convention](https://github.com/dflippojr/agent-ops/blob/main/docs/production-signals.md).
+It runs on the Linux tower. This repository is public, so the block does not
+name the tower's host: it reads the full `/health/` URL from
+`~/.config/agent-ops/signals/financial-planner-health.url` on the tower
+(`url_file`, one line, not committed). Errors and issues name that file, never
+its contents. Its fetches are read-only and none runs a command, so it covers
+only `/health/`:
+
+- `/health/` answers `ok` followed by a newline, so the expected value is
+  `"ok\n"`. A refused sync schedule adds a second line and the signal fails,
+  which is wanted: `background` is not running. The block lists no `public`
+  values (the sweep accepts none with whitespace), so a sweep issue never
+  shows the body, only that the value was unexpected or the HTTP status class.
+- No `deployed_sha` signal, so sweep issues for this repo carry an unknown
+  SHA. That and every other check marked "owner only" in the
+  [signal table](#production-signals) stay manual; the table says why.
+
+```yaml production-signals
+signals:
+  - id: health
+    kind: health
+    description: /health/ on the deployed app answers 200 with only "ok".
+    fetch: {type: http, url_file: ~/.config/agent-ops/signals/financial-planner-health.url, json: false}
+    expect: {equals: "ok\n"}
+```

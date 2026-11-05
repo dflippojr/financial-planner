@@ -12,6 +12,7 @@ from django.template.loader import render_to_string
 from django.urls import reverse
 from django.views.decorators.http import require_GET, require_POST
 
+from . import chat_markdown
 from .access import request_person as _person, service_or_404
 from .ai_services import AiError, local_status, member_has_ai, resolve_ai, warm_for_chat
 from .ai_types import LOCAL_BACKEND, backend_display_name
@@ -269,6 +270,10 @@ def chat_turn(request, turn_id):
             {
                 "role": turn.role,
                 "content": turn.content,
+                # The same markup the saved turn renders; error turns stay plain text (#634).
+                "content_html": (
+                    chat_markdown.render(turn.content) if turn.role == AiConversationMessage.Role.ASSISTANT else None
+                ),
                 "figures": [
                     {
                         "url": _local_url(item.get("url")),
@@ -278,6 +283,11 @@ def chat_turn(request, turn_id):
                     for item in turn.figures or ()
                     if isinstance(item, dict)
                 ],
+                # The same include the saved turn renders, so a live chart matches it (#646).
+                "charts_html": (
+                    render_to_string("finance/_chat_charts.html", {"charts": turn.charts}, request=request)
+                    if turn.charts else ""
+                ),
                 "notices": [str(item) for item in turn.notices or ()],
                 "proposals": proposals,
             }

@@ -42,7 +42,7 @@ def apply_transaction_filters(transactions, filters, principal):
     if filters.get("scope"):
         transactions = transactions.filter(account__scope=filters["scope"])
     if filters.get("q"):
-        transactions = transactions.filter(_search_q(filters["q"]))
+        transactions = transactions.filter(search_q(filters["q"]))
     if filters.get("tag"):
         transactions = apply_tag_filter(transactions, filters["tag"])
     transactions = _apply_amount_filters(transactions, filters)
@@ -189,7 +189,8 @@ def visible_transaction_queryset(principal):
     )
 
 
-def _search_q(needle):
+def search_q(needle):
+    """The rows the transaction list's search box matches: description, note, payee or memo."""
     match = Q(description__icontains=needle) | Q(note__icontains=needle)
     for key in PAYEE_MEMO_KEYS:
         match |= Q(**{f"original_fields__{key}__icontains": needle})

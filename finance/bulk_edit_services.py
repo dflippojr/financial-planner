@@ -29,6 +29,7 @@ from .models import (
     _person_for,
 )
 from .tag_services import NOTE_TOO_LONG
+from .untracked_transfers import set_mark
 
 BULK_EDIT_CAP = 500
 UNDO_MINUTES = 10
@@ -36,14 +37,19 @@ ACTION_CATEGORY = "set_category"
 ACTION_ADD_TAGS = "add_tags"
 ACTION_REMOVE_TAGS = "remove_tags"
 ACTION_APPEND_NOTE = "append_note"
-ACTIONS = (ACTION_CATEGORY, ACTION_ADD_TAGS, ACTION_REMOVE_TAGS, ACTION_APPEND_NOTE)
+ACTION_MARK_UNTRACKED = "mark_untracked"
+ACTION_UNMARK_UNTRACKED = "unmark_untracked"
+UNTRACKED_ACTIONS = (ACTION_MARK_UNTRACKED, ACTION_UNMARK_UNTRACKED)
+ACTIONS = (ACTION_CATEGORY, ACTION_ADD_TAGS, ACTION_REMOVE_TAGS, ACTION_APPEND_NOTE, *UNTRACKED_ACTIONS)
 SKIP_INVESTMENT = "investment_activity"
+SKIP_INVESTMENT_ACCOUNT = "investment_account"
 SKIP_SPLIT = "split_parent"
 SKIP_TRANSFER = "transfer_or_card_payment"
 SKIP_LINKED_REFUND = "linked_refund"
 SKIP_NOTE_TOO_LONG = "note_too_long"
 SKIP_LABELS = {
     SKIP_INVESTMENT: "Investment activity",
+    SKIP_INVESTMENT_ACCOUNT: "Investment accounts (already left out of income and spending)",
     SKIP_SPLIT: "Split parents (edit parts on the split page)",
     SKIP_TRANSFER: "Transfers and card payments",
     SKIP_LINKED_REFUND: "Linked refunds (follow their purchase)",
@@ -139,9 +145,22 @@ def _candidate_rows(person, matching, transaction_ids, select_matching):
     return matching_count, False, rows
 
 
+def _untracked_skip_reason(txn, action):
+    if action == ACTION_MARK_UNTRACKED:
+        if txn.account.account_type == Account.Type.INVESTMENT:
+            return SKIP_INVESTMENT_ACCOUNT
+        if transaction_is_linked_refund(txn):
+            return SKIP_LINKED_REFUND
+        if txn.is_excluded_transfer and not txn.untracked_transfer:
+            return SKIP_TRANSFER
+    return None
+
+
 def _skip_reason(txn, action, note_line=""):
     if txn.kind == Transaction.Kind.INVESTMENT_ACTIVITY:
         return SKIP_INVESTMENT
+    if action in UNTRACKED_ACTIONS:
+        return _untracked_skip_reason(txn, action)
     if action == ACTION_CATEGORY:
         if transaction_is_linked_refund(txn):
             return SKIP_LINKED_REFUND
@@ -170,6 +189,8 @@ def _will_change(txn, action, *, category=None, tags=None, note_line=""):
         return any(tag.pk in have for tag in tags)
     if action == ACTION_APPEND_NOTE:
         return bool(note_line)
+    if action in UNTRACKED_ACTIONS:
+        return txn.untracked_transfer != (action == ACTION_MARK_UNTRACKED)
     return False
 
 
@@ -336,11 +357,17 @@ def _row_snapshot(txn, action):
         "previous_category_source": txn.category_source,
         "previous_note": txn.note or "",
         "previous_tag_ids": sorted(tag.pk for tag in txn.tags.all()),
+        "previous_untracked_transfer": txn.untracked_transfer,
     }
     return payload
 
 
-BULK_AUDIT_FIELDS = {ACTION_CATEGORY: ("category",), ACTION_ADD_TAGS: ("tags",), ACTION_REMOVE_TAGS: ("tags",)}
+BULK_AUDIT_FIELDS = {
+    ACTION_CATEGORY: ("category",), ACTION_ADD_TAGS: ("tags",), ACTION_REMOVE_TAGS: ("tags",),
+    ACTION_MARK_UNTRACKED: ("untracked_transfer",), ACTION_UNMARK_UNTRACKED: ("untracked_transfer",),
+}
+# Actions that change what counts as spending, so budgets and alerts refresh.
+SPENDING_ACTIONS = (ACTION_CATEGORY, *UNTRACKED_ACTIONS)
 
 
 def _record_bulk(person, audit_action, txns, operation_id, bulk_action):
@@ -418,6 +445,8 @@ def apply_bulk_edit(
                 _apply_tags(person, txn, tags, add=True)
             elif action == ACTION_REMOVE_TAGS:
                 _apply_tags(person, txn, tags, add=False)
+            elif action in UNTRACKED_ACTIONS:
+                set_mark(person, txn, action == ACTION_MARK_UNTRACKED)
             else:
                 _apply_note(person, txn, note_line)
             txn.refresh_from_db()
@@ -430,7 +459,7 @@ def apply_bulk_edit(
         expires_at=timezone.now() + timedelta(minutes=UNDO_MINUTES),
         snapshot={"action": action, "rows": snapshots},
     )
-    if action == ACTION_CATEGORY:
+    if action in SPENDING_ACTIONS:
         from finance.alert_services import schedule_after_category_change
 
         schedule_after_category_change()
@@ -518,10 +547,12 @@ def undo_bulk_edit(principal, undo_id):
                     previous,
                     txn.note,
                 )
+            elif action in UNTRACKED_ACTIONS:
+                set_mark(person, txn, item["previous_untracked_transfer"])
     record.undone_at = timezone.now()
     record.save(update_fields=("undone_at",))
     _record_bulk(person, AuditEvent.Action.BULK_UNDONE, [by_id[item["id"]] for item in rows], record.pk, action)
-    if action == ACTION_CATEGORY:
+    if action in SPENDING_ACTIONS:
         from finance.alert_services import schedule_after_category_change
 
         schedule_after_category_change()

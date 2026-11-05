@@ -364,6 +364,9 @@ OBJECT_ROUTES = {
         data=lambda s: {"snapshot_date": "2026-01-01", "amount": "1.00", "note": "SYN"},
         body_reason=_VALUES,
     ),
+    # The POST recalculates on the server; the browser sends no amounts or ids.
+    "account-balances-calculate": ObjectRoute(_account, body_reason=_PATH_ONLY),
+    "account-calculated-delete": ObjectRoute(_account, post_only=True, body_reason=_PATH_ONLY),
     "account-pair-loan": ObjectRoute(
         lambda s: {"account_id": s.loan.pk},
         data=lambda s: {"secured_asset": ""},
@@ -478,6 +481,12 @@ OBJECT_ROUTES = {
                 REDIRECTED,
             ),
         },
+    ),
+    "transaction-untracked-transfer": ObjectRoute(
+        _txn,
+        data=lambda s: {"action": "mark"},
+        post_only=True,
+        body_reason="the body carries only mark or unmark",
     ),
     "transaction-link-refund": ObjectRoute(
         _manual,

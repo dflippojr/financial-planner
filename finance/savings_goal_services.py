@@ -2,7 +2,6 @@ from types import SimpleNamespace
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.db.models import Case, Value, When
 from django.utils import timezone
 
 from .access import DENIED as _DENIED
@@ -10,8 +9,9 @@ from .access import require_person as _person
 from .cash_flow import format_minor
 from .category_services import current_household
 from .audit_services import changed_names, owned_audience, record, snapshot
+from .edit_permission_services import check_can_edit
 from .models import Account, AuditEvent, BalanceSnapshot, SavingsGoal
-from .net_worth import signed_balance_minor
+from .net_worth import signed_balance_minor, source_rank_expression
 
 SOURCE_SNAPSHOT = "snapshot"
 SOURCE_MANUAL = "manual"
@@ -44,18 +44,13 @@ def _current_amount(principal, goal, *, as_of, household_only=False):
         if visible_account is not None:
             # Same precedence as Accounts and Net worth: the latest date on or
             # before as_of, and on one date a SimpleFIN snapshot outranks a
-            # manual one.
+            # manual one, and both outrank a calculated one.
             snapshot = (
                 BalanceSnapshot.objects.filter(
                     account_id=goal.linked_account_id,
                     snapshot_date__lte=as_of,
                 )
-                .annotate(
-                    _source_rank=Case(
-                        When(source=BalanceSnapshot.Source.SIMPLEFIN, then=Value(1)),
-                        default=Value(0),
-                    )
-                )
+                .annotate(_source_rank=source_rank_expression())
                 .order_by("-snapshot_date", "-_source_rank", "-pk")
                 .first()
             )
@@ -110,15 +105,6 @@ def goal_progress(principal, goal, *, today, household_only=False):
         completed=goal.completed_at is not None,
         archived=goal.status == SavingsGoal.Status.ARCHIVED,
     )
-
-
-def _check_can_edit(person, goal):
-    household = current_household(person)
-    if goal.scope == SavingsGoal.Scope.HOUSEHOLD:
-        if household is None or goal.household_id != household.pk:
-            raise PermissionDenied(_DENIED)
-    elif goal.owner_id != person.pk:
-        raise PermissionDenied(_DENIED)
 
 
 GOAL_AUDIT_FIELDS = {
@@ -221,7 +207,7 @@ def save_savings_goal(principal, payload, *, goal=None):
         goal = SavingsGoal(owner=person)
         before = None
     else:
-        _check_can_edit(person, goal)
+        check_can_edit(person, goal)
         if goal.scope != scope and goal.owner_id != person.pk:
             raise PermissionDenied(_DENIED)
         _check_dependents_keep_scope(goal, scope)
@@ -249,7 +235,7 @@ def save_savings_goal(principal, payload, *, goal=None):
 
 def set_savings_goal_completed(principal, goal, completed):
     person = _person(principal, check_authenticated=False)
-    _check_can_edit(person, goal)
+    check_can_edit(person, goal)
     was_completed = goal.completed_at is not None
     goal.completed_at = timezone.now() if completed else None
     with transaction.atomic():
@@ -261,7 +247,7 @@ def set_savings_goal_completed(principal, goal, completed):
 
 def set_savings_goal_archived(principal, goal, archived):
     person = _person(principal, check_authenticated=False)
-    _check_can_edit(person, goal)
+    check_can_edit(person, goal)
     was_archived = goal.status == SavingsGoal.Status.ARCHIVED
     if archived:
         goal.status = SavingsGoal.Status.ARCHIVED

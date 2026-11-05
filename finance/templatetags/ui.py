@@ -4,6 +4,8 @@ import re
 from django import template
 from django.forms.widgets import CheckboxInput, CheckboxSelectMultiple, FileInput, RadioSelect, Select, Textarea
 
+from finance import chat_markdown
+
 
 register = template.Library()
 
@@ -77,6 +79,34 @@ def amount_tone_class(display, tone=""):
     if choice == "out":
         return "tabular-nums text-right amount-out"
     return "tabular-nums text-right"
+
+
+@register.filter
+def chat_markdown_html(text):
+    """An assistant reply as the markdown subset in finance.chat_markdown (#634)."""
+    return chat_markdown.render(text)
+
+
+@register.filter
+def chat_chart_rows(chart):
+    """A stored chat chart (#646) as table rows: each label with every series' display amount."""
+    labels = chart.get("labels") or []
+    series = chart.get("series") or []
+    return [
+        {"label": label, "cells": [(item.get("displays") or [""] * len(labels))[index] for item in series]}
+        for index, label in enumerate(labels)
+    ]
+
+
+@register.filter
+def chat_chart_payload(chart):
+    """Only what the browser draws from: the style, labels and series of a stored chat chart."""
+    return {
+        "kind": chart.get("kind"),
+        "style": chart.get("style"),
+        "labels": chart.get("labels") or [],
+        "series": chart.get("series") or [],
+    }
 
 
 @register.filter

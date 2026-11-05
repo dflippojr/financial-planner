@@ -129,3 +129,5 @@ class ToolResult:
     account_ids: tuple[int, ...] = ()
     planned_item_ids: tuple[int, ...] = ()
     budget_ids: tuple[int, ...] = ()
+    # Server-computed chart specs and series (#646); the model never supplies their numbers.
+    charts: tuple[dict, ...] = ()

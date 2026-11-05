@@ -138,12 +138,20 @@ def _actor_may_manage_sharing(person, account):
     return True
 
 
+def _lock_visible_account_for_refund_link_rule(person, account_id):
+    """Lock the account and those the refund link rule reaches from it, in pk order."""
+    from finance.category_services import account_ids_for_refund_link_rule
+
+    extras = account_ids_for_refund_link_rule(account_id) - {account_id}
+    return _lock_visible_account_with_counterparts(person, account_id, extras)
+
+
 @transaction.atomic
 def share_account(principal, account_id, share_mode):
     """Share the actor's private account with their current household."""
     person = _person_for(principal)
     membership, _memberships = lock_actor_household(person)
-    account = _visible_account_for_update(person, account_id)
+    account = _lock_visible_account_for_refund_link_rule(person, account_id)
     _lock_ledgers((account.pk,))
     mode = _parsed_share_mode(share_mode)
     if (
@@ -159,6 +167,9 @@ def share_account(principal, account_id, share_mode):
     account.save(update_fields=("scope", "household", "share_mode", "updated_at"))
     clear_invalid_loan_pairings(account)
     append_event(account=account, action=AuditEvent.Action.ACCOUNT_SHARED, actor=person, changed_fields=("scope", "share_mode"))
+    from finance.category_services import reapply_refund_link_drops_for_account
+
+    reapply_refund_link_drops_for_account(account.pk, person)
     return account
 
 
@@ -167,7 +178,7 @@ def change_account_share_mode(principal, account_id, share_mode, *, confirm_give
     """Switch a household account between co-owned and lent. Owner only."""
     person = _person_for(principal)
     membership, _memberships = lock_actor_household(person)
-    account = _visible_account_for_update(person, account_id)
+    account = _lock_visible_account_for_refund_link_rule(person, account_id)
     _lock_ledgers((account.pk,))
     mode = _parsed_share_mode(share_mode)
     if (
@@ -186,6 +197,9 @@ def change_account_share_mode(principal, account_id, share_mode, *, confirm_give
     account.share_mode = mode
     account.save(update_fields=("share_mode", "updated_at"))
     append_event(account=account, action=AuditEvent.Action.SHARE_MODE_CHANGED, actor=person, changed_fields=("share_mode",))
+    from finance.category_services import reapply_refund_link_drops_for_account
+
+    reapply_refund_link_drops_for_account(account.pk, person)
     return account
 
 
