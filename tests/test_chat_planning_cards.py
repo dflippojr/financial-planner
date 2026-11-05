@@ -4,6 +4,7 @@ The model only stores a proposal. Apply, posted by the member without JavaScript
 ticked rows through the normal services and records a result per row.
 """
 
+import json
 import re
 from datetime import date
 
@@ -49,8 +50,15 @@ PASTED_LIST = [
 
 
 def _apply(client, proposal, ticked=None, *, follow=False):
-    """Post the card's Apply form the way a browser without JavaScript does."""
-    data = {} if ticked is None else {"item_selection": "1", "item": [str(index) for index in ticked]}
+    """Post the card's Apply form the way a browser without JavaScript does.
+
+    With `ticked` omitted every row the card renders a checkbox for stays ticked, as on the page.
+    """
+    if ticked is None:
+        html = client.get(reverse("chat")).content.decode()
+        ticked = [int(value) for value in re.findall(
+            rf'id="proposal-{proposal.pk}-item-\d+" name="item" value="(\d+)"', html)]
+    data = {"item_selection": "1", "item": [str(index) for index in ticked]}
     return client.post(reverse("chat-proposal-apply", args=[proposal.pk]), data, follow=follow)
 
 
@@ -219,7 +227,8 @@ def test_when_no_ticked_row_applies_the_whole_card_goes_stale(harness):
     assert proposal.payload["items"][0]["values"]["end_date"] == timezone.localdate().isoformat()
     rent.name = "Rent (renamed)"
     rent.save()
-    page = _apply(client, proposal, follow=True)
+    # A page loaded before the rename still posts the row as ticked.
+    page = _apply(client, proposal, ticked=[0], follow=True)
     assert NONE_APPLIED in page.content.decode()
     proposal.refresh_from_db()
     assert proposal.status == AiProposal.Status.STALE
@@ -389,7 +398,7 @@ def test_a_changed_goal_goes_stale(harness):
     _propose(state, person, "propose_savings_goals", {"items": [{"goal_id": fund.pk, "target_amount_minor": 600000}]})
     proposal = AiProposal.objects.get()
     save_savings_goal(person, {"scope": "private", "target_amount_minor": 550000}, goal=fund)
-    _apply(client, proposal)
+    _apply(client, proposal, ticked=[0])  # a page loaded before the change
     fund.refresh_from_db()
     assert fund.target_amount_minor == 550000
     proposal.refresh_from_db()
@@ -464,7 +473,7 @@ def test_a_moved_budget_goes_stale_on_its_row(harness):
         person, {"scope": "household", "category": groceries, "effective_month": date(2026, 3, 1), "amount_minor": 42000},
         budget=existing,
     )
-    _apply(client, proposal)
+    _apply(client, proposal, ticked=[0, 1])  # a page loaded before the budget moved
     assert amount_for(existing, date(2026, 3, 1)) == 42000
     assert _statuses(proposal) == ["stale", "created"]
 
@@ -623,8 +632,82 @@ def test_applying_a_budget_row_locks_the_budget_before_comparing_it(harness):
         {"category": "Groceries", "amount_minor": 45000},
     ]})
     with CaptureQueriesContext(connection) as queries:
-        _apply(client, AiProposal.objects.get())
+        _apply(client, AiProposal.objects.get(), ticked=[0])
     budget_reads = [q["sql"] for q in queries.captured_queries
                     if 'FROM "finance_budget"' in q["sql"] and q["sql"].lstrip().startswith("SELECT")]
     assert budget_reads and "FOR UPDATE" in budget_reads[0]
     assert amount_for(existing, date(2026, 3, 1)) == 45000
+
+
+# --- Review findings at c3f1f0c ---------------------------------------------
+
+
+@pytest.mark.django_db
+def test_an_apply_form_without_checkboxes_applies_every_valid_row(harness):
+    state, client, person, _household = _setup(harness)
+    _propose(state, person, "propose_planned_items", {"items": PASTED_LIST[1:]})
+    proposal = AiProposal.objects.get()
+    client.post(reverse("chat-proposal-apply", args=[proposal.pk]))
+    assert _statuses(proposal) == ["created", "created"]
+
+
+@pytest.mark.django_db
+def test_nul_characters_from_the_model_never_reach_the_stored_payload(harness):
+    state, _client, person, household = _setup(harness)
+    _category(household)
+    _propose(state, person, "propose_savings_goals", {"items": [
+        {"name": "Car\u0000", "target_amount_minor": 100000},
+        {"name": "Boat", "target_amount_minor": 100000, "priority": "x\u0000"},
+    ]})
+    _propose(state, person, "propose_planned_items", {"items": [
+        {**PASTED_LIST[2], "cadence": "monthly\u0000"}, PASTED_LIST[1],
+    ]})
+    _propose(state, person, "propose_set_budgets", {"month": "2026-03", "items": [
+        {"category": "Pets\u0000", "amount_minor": 100}, {"category": "Dining", "amount_minor": 100},
+    ]})
+    payloads = [proposal.payload for proposal in AiProposal.objects.order_by("pk")]
+    assert len(payloads) == 3
+    assert "\x00" not in json.dumps(payloads, ensure_ascii=False) and "\\u0000" not in json.dumps(payloads)
+    assert payloads[0]["items"][0]["values"]["name"] == "Car"
+
+
+@pytest.mark.django_db
+def test_a_pending_budget_row_whose_budget_changed_says_so_and_cannot_be_ticked(harness):
+    state, client, person, household = _setup(harness)
+    groceries = _category(household, "Groceries")
+    existing = save_budget(person, {"scope": "household", "category": groceries,
+                                    "effective_month": date(2026, 3, 1), "amount_minor": 40000})
+    _propose(state, person, "propose_set_budgets", {"month": "2026-03", "items": [
+        {"category": "Groceries", "amount_minor": 45000}, {"category": "Dining", "amount_minor": 25000},
+    ]})
+    save_budget(person, {"scope": "household", "category": groceries, "effective_month": date(2026, 3, 1),
+                         "amount_minor": 42000}, budget=existing)
+    html = client.get(reverse("chat")).content.decode()
+    assert "This changed after the suggestion was made." in html
+    assert html.count('name="item"') == 1
+
+
+@pytest.mark.django_db
+def test_an_unchanged_budget_row_is_never_counted_as_applied(harness):
+    from django.contrib.auth import get_user_model
+
+    from tests.test_chat import PASSWORD
+
+    state, client, person, household = _setup(harness)
+    groceries = _category(household, "Groceries")
+    save_budget(person, {"scope": "household", "category": groceries, "effective_month": date(2026, 3, 1),
+                         "amount_minor": 40000})
+    other_user = get_user_model().objects.create_user(username="housemate", password=PASSWORD)
+    Membership.objects.create(person=Person.objects.create(user=other_user, display_name="Housemate"),
+                              household=household)
+    _propose(state, person, "propose_set_budgets", {"month": "2026-03", "items": [
+        {"category": "Groceries", "amount_minor": 40000}, {"category": "Dining", "amount_minor": 25000},
+    ]})
+    proposal = AiProposal.objects.get()
+    html = client.get(reverse("chat")).content.decode()
+    assert html.count('name="item"') == 1 and "nothing would change" in html.lower()
+    # Even a forged tick of the unchanged row neither counts nor writes an audit event.
+    _apply(client, proposal, ticked=[0, 1])
+    proposal.refresh_from_db()
+    assert proposal.result["count"] == 1 and proposal.result["items"][0]["status"] != "updated"
+    assert _chat_events(AuditEvent.TargetType.BUDGET).count() == proposal.result["count"]

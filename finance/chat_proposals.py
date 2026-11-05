@@ -201,7 +201,7 @@ def _fail(text):
 
 
 def _category_by_name(person, name):
-    cleaned = str(name or "").strip()
+    cleaned = _text(name)
     if not cleaned:
         return None
     # A household's own category name stays unknown to the model until
@@ -427,7 +427,8 @@ def _dollars(minor):
 
 
 def _text(value):
-    return "" if value is None else str(value).strip()
+    # PostgreSQL's jsonb refuses NUL, so model text never carries one into a stored payload.
+    return "" if value is None else str(value).replace("\x00", "").strip()
 
 
 def _field(raw, key):
@@ -1088,6 +1089,9 @@ def _apply_goal_row(person, _payload, row):
 
 
 def _apply_budget_row(person, payload, row):
+    if row["before_amount_minor"] is not None and row["before_amount_minor"] == row["amount_minor"]:
+        # Proposed before household consent, so the model was not told; nothing to write or audit.
+        raise ValidationError(NOTHING_CHANGES)
     budget, existing, _month = _change_budget(
         person, row["category_id"], payload["scope"], payload["month"], row["amount_minor"],
         row["budget_id"], row["before_amount_minor"],
@@ -1381,14 +1385,31 @@ def _describe_goal(person, _payload, item, pending):
     )
 
 
-def _describe_budget(person, _payload, item, _pending):
+def _describe_budget(person, payload, item, pending):
     category_id = item.get("category_id")
     title = _category_name(person, category_id) if category_id else (_text(item.get("label")) or "Unnamed category")
     amount = _money(item.get("amount_minor"))
     before = item.get("before_amount_minor")
-    if before is None:
-        return {"title": title, "summary": f"New budget of {amount}"}
-    return {"title": title, "changes": [{"label": "Amount", "before": _money(before), "after": amount}]}
+    row = (
+        {"title": title, "summary": f"New budget of {amount}"} if before is None
+        else {"title": title, "changes": [{"label": "Amount", "before": _money(before), "after": amount}]}
+    )
+    if item.get("error") or not pending:
+        return row
+    if before == item.get("amount_minor"):
+        return {"title": title, "unavailable": True, "summary": f"Already {amount}; nothing would change."}
+    if _budget_snapshot(person, payload, category_id) != (item.get("budget_id"), before):
+        row.update(unavailable=True, summary="This changed after the suggestion was made. Ask again for a fresh one.")
+    return row
+
+
+def _budget_snapshot(person, payload, category_id):
+    """(budget id, amount for the card's month) as the member sees it now, or (None, None)."""
+    category = assignable_categories(person).filter(pk=category_id).first()
+    existing = _budget_for(person, payload.get("scope"), category) if category is not None else None
+    if existing is None:
+        return None, None
+    return existing.pk, amount_for(existing, parse_month(payload.get("month")))
 
 
 def _card_planned_items(person, proposal, payload, card):
