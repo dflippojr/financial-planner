@@ -4,6 +4,7 @@ The model only stores a proposal. Apply, posted by the member without JavaScript
 ticked rows through the normal services and records a result per row.
 """
 
+import re
 from datetime import date
 
 import pytest
@@ -560,3 +561,70 @@ def test_instructions_in_an_attachment_or_description_cannot_create_anything_wit
     _apply(client, AiProposal.objects.get(kind=AiProposal.Kind.PLANNED_ITEMS), ticked=[1])
     assert list(PlannedItem.objects.values_list("name", flat=True)) == ["Car insurance"]
     assert not SavingsGoal.objects.exists()
+
+
+# --- Review findings at 7a2a7c1 ---------------------------------------------
+
+
+@pytest.mark.django_db
+def test_a_household_budget_amount_never_reaches_the_model_before_consent(harness):
+    from django.contrib.auth import get_user_model
+
+    from tests.test_chat import PASSWORD
+
+    state, _client, person, household = _setup(harness)
+    dining = _category(household)
+    save_budget(person, {"scope": "household", "category": dining, "effective_month": date(2026, 3, 1),
+                         "amount_minor": 40000})
+    other_user = get_user_model().objects.create_user(username="housemate", password=PASSWORD)
+    Membership.objects.create(person=Person.objects.create(user=other_user, display_name="Housemate"),
+                              household=household)
+    outputs = []
+    for guess in (40000, 41000):
+        _propose(state, person, "propose_set_budgets", {"month": "2026-03", "items": [
+            {"category": "Dining", "amount_minor": guess},
+        ]})
+        outputs.append(re.sub(r"Proposal \d+", "Proposal N", state.tool_outputs[-1]))
+    # A right guess and a wrong guess answer alike.
+    assert outputs[0] == outputs[1] and "Nothing would change" not in outputs[0]
+
+
+@pytest.mark.django_db
+def test_an_invalid_goal_row_hides_the_goals_name_once_the_member_loses_access(harness):
+    state, client, person, household = _setup(harness)
+    _user, other, _ = make_member("other", household=household, policy=current_policy())
+    shared = save_savings_goal(other, {"scope": "household", "name": "Shared roof", "target_amount_minor": 900000})
+    planned = _planned(other, name="Shared rent", scope="household")
+    _propose(state, person, "propose_savings_goals", {"items": [
+        {"goal_id": shared.pk, "target_date": "someday"}, {"name": "Bike", "target_amount_minor": 50000},
+    ]})
+    _propose(state, person, "propose_planned_items", {"items": [
+        {"planned_item_id": planned.pk, "start_date": "2026-13-45"}, PASTED_LIST[2],
+    ]})
+    assert "Shared roof" in client.get(reverse("chat")).content.decode()
+    SavingsGoal.objects.filter(pk=shared.pk).update(scope="private", household=None)
+    PlannedItem.objects.filter(pk=planned.pk).update(scope="private", household=None)
+    html = client.get(reverse("chat")).content.decode()
+    assert "Shared roof" not in html and "Shared rent" not in html
+
+
+@pytest.mark.django_db
+def test_applying_a_budget_row_locks_the_budget_before_comparing_it(harness):
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    if not connection.features.has_select_for_update:
+        pytest.skip("Row locks need PostgreSQL")
+    state, client, person, household = _setup(harness)
+    groceries = _category(household, "Groceries")
+    existing = save_budget(person, {"scope": "household", "category": groceries,
+                                    "effective_month": date(2026, 3, 1), "amount_minor": 40000})
+    _propose(state, person, "propose_set_budgets", {"month": "2026-03", "items": [
+        {"category": "Groceries", "amount_minor": 45000},
+    ]})
+    with CaptureQueriesContext(connection) as queries:
+        _apply(client, AiProposal.objects.get())
+    budget_reads = [q["sql"] for q in queries.captured_queries
+                    if 'FROM "finance_budget"' in q["sql"] and q["sql"].lstrip().startswith("SELECT")]
+    assert budget_reads and "FOR UPDATE" in budget_reads[0]
+    assert amount_for(existing, date(2026, 3, 1)) == 45000

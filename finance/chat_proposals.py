@@ -301,8 +301,10 @@ def _propose_create_rule(person, args, conversation, turn):
     )
 
 
-def _budget_for(person, scope, category):
+def _budget_for(person, scope, category, *, lock=False):
     query = Budget.objects.filter(status=Budget.Status.ACTIVE, scope=scope, category=category)
+    if lock:
+        query = query.select_for_update()
     if scope == Budget.Scope.PRIVATE:
         return query.filter(owner=person).first()
     household = current_household(person)
@@ -765,7 +767,10 @@ def _budget_row(person, raw, month, scope, seen):
         if existing is not None:
             row["budget_id"] = existing.pk
             row["before_amount_minor"] = amount_for(existing, month)
-            if row["before_amount_minor"] == minor:
+            # Before household consent (#521) a household budget's amount must not reach the
+            # model, so a no-op row answers like any other; Apply then just keeps the amount.
+            visible_to_model = scope == Budget.Scope.PRIVATE or household_consent_complete(person)
+            if visible_to_model and row["before_amount_minor"] == minor:
                 row["error"] = NOTHING_CHANGES
     return row
 
@@ -927,25 +932,32 @@ def _apply_create_rule(person, payload):
     return {"rule_id": saved.pk, "count": count}
 
 
-def _apply_set_budget(person, payload):
-    category = assignable_categories(person).filter(pk=payload["category_id"]).first()
+def _change_budget(person, category_id, scope, month_text, amount_minor, budget_id, before_amount_minor):
+    """Save one proposed budget amount after re-checking it, holding the budget's row lock throughout.
+
+    Returns (budget, existing, month); raises _Stale when the budget moved since the suggestion.
+    """
+    category = assignable_categories(person).filter(pk=category_id).first()
     if category is None:
         raise _Stale(NO_LONGER_APPLIES)
-    month = parse_month(payload["month"])
-    existing = _budget_for(person, payload["scope"], category)
-    if (existing.pk if existing else None) != payload["budget_id"]:
+    month = parse_month(month_text)
+    existing = _budget_for(person, scope, category, lock=True)
+    if (existing.pk if existing else None) != budget_id:
         raise _Stale(NO_LONGER_APPLIES)
-    if existing is not None and amount_for(existing, month) != payload["before_amount_minor"]:
+    if existing is not None and amount_for(existing, month) != before_amount_minor:
         raise _Stale(NO_LONGER_APPLIES)
     budget = save_budget(
         person,
-        {
-            "scope": payload["scope"],
-            "category": category,
-            "effective_month": month,
-            "amount_minor": payload["amount_minor"],
-        },
+        {"scope": scope, "category": category, "effective_month": month, "amount_minor": amount_minor},
         budget=existing,
+    )
+    return budget, existing, month
+
+
+def _apply_set_budget(person, payload):
+    budget, _existing, month = _change_budget(
+        person, payload["category_id"], payload["scope"], payload["month"], payload["amount_minor"],
+        payload["budget_id"], payload["before_amount_minor"],
     )
     return {"budget_id": budget.pk, "month": month_start(month).isoformat()}
 
@@ -1076,19 +1088,9 @@ def _apply_goal_row(person, _payload, row):
 
 
 def _apply_budget_row(person, payload, row):
-    category = assignable_categories(person).filter(pk=row["category_id"]).first()
-    if category is None:
-        raise _Stale(NO_LONGER_APPLIES)
-    month = parse_month(payload["month"])
-    existing = _budget_for(person, payload["scope"], category)
-    if (existing.pk if existing else None) != row["budget_id"]:
-        raise _Stale(NO_LONGER_APPLIES)
-    if existing is not None and amount_for(existing, month) != row["before_amount_minor"]:
-        raise _Stale(NO_LONGER_APPLIES)
-    budget = save_budget(
-        person,
-        {"scope": payload["scope"], "category": category, "effective_month": month, "amount_minor": row["amount_minor"]},
-        budget=existing,
+    budget, existing, _month = _change_budget(
+        person, row["category_id"], payload["scope"], payload["month"], row["amount_minor"],
+        row["budget_id"], row["before_amount_minor"],
     )
     return {"status": ITEM_CREATED if existing is None else ITEM_UPDATED, "id": budget.pk}
 
@@ -1306,8 +1308,9 @@ def _describe_planned(person, _payload, item, pending):
     verb = "End" if action == "end" else "Edit"
     current = _visible_planned(person).filter(pk=item.get("id")).first() if item.get("id") else None
     if current is None:
-        # A refused row's name is the model's own text; a stored snapshot is never shown once hidden.
-        if item.get("error"):
+        # A row refused for an unknown target holds only the model's own text; a row that found
+        # its target holds that target's snapshot, which is never shown once the target is hidden.
+        if item.get("error") and item.get("id") is None:
             return {"title": f"{verb}: {name}", "unavailable": True}
         return {"title": f"{verb} a planned item", "unavailable": True,
                 "summary": "This planned item is no longer available."}
@@ -1369,7 +1372,7 @@ def _describe_goal(person, _payload, item, pending):
         return {"title": f"New goal: {name}", "summary": " ".join(parts)}
     current = _visible_goals(person).filter(pk=item.get("id")).first() if item.get("id") else None
     if current is None:
-        if item.get("error"):
+        if item.get("error") and item.get("id") is None:
             return {"title": f"Adjust: {name}", "unavailable": True}
         return {"title": "Adjust a goal", "unavailable": True, "summary": "This goal is no longer available."}
     return _describe_edit(
