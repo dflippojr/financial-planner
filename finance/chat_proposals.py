@@ -468,6 +468,10 @@ def _visible_planned(person):
     return PlannedItem.objects.visible_to(person)  # pyright: ignore[reportAttributeAccessIssue] - QuerySet.as_manager() is untyped, as for every PlannedItem.objects.visible_to in the baseline
 
 
+def _visible_budgets(person):
+    return Budget.objects.visible_to(person)  # pyright: ignore[reportAttributeAccessIssue] - QuerySet.as_manager() is untyped, as for every Budget.objects.visible_to in the baseline
+
+
 def _visible_goals(person):
     return SavingsGoal.objects.visible_to(person)  # pyright: ignore[reportAttributeAccessIssue] - QuerySet.as_manager() is untyped, as for every SavingsGoal.objects.visible_to in the baseline
 
@@ -1392,6 +1396,10 @@ def _describe_budget(person, payload, item, pending):
     title = _category_name(person, category_id) if category_id else (_text(item.get("label")) or "Unnamed category")
     amount = _money(item.get("amount_minor"))
     before = item.get("before_amount_minor")
+    budget_id = item.get("budget_id")
+    if budget_id is not None and not _visible_budgets(person).filter(pk=budget_id).exists():
+        # Whatever the card's status, a budget the member can no longer see shows no stored amount.
+        return {"title": title, "unavailable": True, "summary": "This budget is no longer available."}
     row = (
         {"title": title, "summary": f"New budget of {amount}"} if before is None
         else {"title": title, "changes": [{"label": "Amount", "before": _money(before), "after": amount}]}

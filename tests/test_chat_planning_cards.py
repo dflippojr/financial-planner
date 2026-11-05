@@ -730,3 +730,27 @@ def test_an_unchanged_budget_row_is_never_counted_as_applied(harness):
     proposal.refresh_from_db()
     assert proposal.result["count"] == 1 and proposal.result["items"][0]["status"] != "updated"
     assert _chat_events(AuditEvent.TargetType.BUDGET).count() == proposal.result["count"]
+
+
+# --- Review finding at df7bb7a ----------------------------------------------
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("resolve", ["pending", "dismissed"])
+def test_a_hidden_budget_never_shows_its_stored_amount(harness, resolve):
+    state, client, person, household = _setup(harness)
+    _user, other, _ = make_member("other", household=household, policy=current_policy())
+    groceries = _category(household, "Groceries")
+    budget = save_budget(other, {"scope": "household", "category": groceries,
+                                 "effective_month": date(2026, 3, 1), "amount_minor": 41234})
+    _propose(state, person, "propose_set_budgets", {"month": "2026-03", "items": [
+        {"category": "Groceries", "amount_minor": 45000}, {"category": "Dining", "amount_minor": 25000},
+    ]})
+    proposal = AiProposal.objects.get()
+    assert "412.34 USD" in client.get(reverse("chat")).content.decode()
+    if resolve == "dismissed":
+        client.post(reverse("chat-proposal-dismiss", args=[proposal.pk]))
+    # The other member takes the budget private without the usual purge running.
+    Budget.objects.filter(pk=budget.pk).update(scope="private", household=None)
+    html = client.get(reverse("chat")).content.decode()
+    assert "412.34 USD" not in html and "This budget is no longer available." in html
