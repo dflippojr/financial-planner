@@ -117,7 +117,8 @@ def proposal_tools(conversation, turn):
         ("propose_planned_items", (
             "Suggest creating, editing or ending planned income and expense items, many in one card with a "
             "checkbox each. Amounts are positive cents, dates YYYY-MM-DD. Edit and end take planned_item_id "
-            "from list_planned_items; end sets end_date (today when omitted). The member must confirm."
+            "from list_planned_items; end sets end_date (today when omitted); an empty category clears it. "
+            "The member must confirm."
         ), {"items": _items_schema({
             "action": {"type": "string", "enum": ["create", "edit", "end"]},
             "planned_item_id": {"type": "integer"},
@@ -528,12 +529,13 @@ def _planned_overrides(person, raw, values, item):
             error = AMOUNT_PROBLEM
         else:
             values["amount_minor"] = minor
-    if _text(raw.get("category")):
-        category = _category_by_name(person, raw.get("category"))
-        if category is None:
+    if "category" in raw:
+        # An explicit blank clears the category, as the page's empty choice does; omitted keeps it.
+        category = _category_by_name(person, raw.get("category")) if _text(raw.get("category")) else None
+        if category is None and _text(raw.get("category")):
             error = error or CATEGORY_PROBLEM
         else:
-            values["category_id"] = category.pk
+            values["category_id"] = category.pk if category is not None else None
     values["scope"], error = _item_scope(raw, values["scope"], error)
     if item is not None and values["scope"] != item.scope:
         error = error or SCOPE_CHANGE

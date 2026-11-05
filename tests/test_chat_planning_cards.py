@@ -151,6 +151,25 @@ def test_edit_and_end_target_existing_items_and_show_before_and_after(harness):
 
 
 @pytest.mark.django_db
+def test_an_explicit_blank_category_clears_it_and_an_omitted_one_keeps_it(harness):
+    state, client, person, household = _setup(harness)
+    housing = _category(household, "Housing")
+    rent = _planned(person, category=housing)
+    gym = _planned(person, name="Gym", amount_minor=2680, category=housing)
+    _propose(state, person, "propose_planned_items", {"items": [
+        {"planned_item_id": rent.pk, "category": ""},
+        {"planned_item_id": gym.pk, "amount_minor": 2700},
+    ]})
+    proposal = AiProposal.objects.get()
+    assert [row["error"] for row in proposal.payload["items"]] == [None, None]
+    assert "Category: Housing → <strong>No category</strong>" in client.get(reverse("chat")).content.decode()
+    _apply(client, proposal)
+    rent.refresh_from_db()
+    gym.refresh_from_db()
+    assert (rent.category_id, gym.category_id, gym.amount_minor) == (None, housing.pk, 2700)
+
+
+@pytest.mark.django_db
 def test_an_invalid_row_shows_its_reason_and_never_blocks_or_joins_the_others(harness):
     state, client, person, household = _setup(harness)
     _category(household)
