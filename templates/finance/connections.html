@@ -86,7 +86,7 @@
               <td>{{ row.institution }}</td>
               <td>{{ row.type }}</td>
               <td>
-                {{ row.currency|upper|default:"Not provided by SimpleFIN" }}
+                {% if row.currency %}{{ row.currency|upper }}{% else %}Not provided by SimpleFIN; treated as USD{% endif %}
                 {% if row.currency and row.currency|upper != "USD" %}
                 <p class="text-xs opacity-70">Converted to USD at the ECB rate for each transaction's date. The original amount is kept.</p>
                 {% endif %}

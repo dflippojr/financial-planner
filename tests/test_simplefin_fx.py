@@ -218,7 +218,29 @@ def test_a_later_sync_converts_an_account_that_was_skipped(monkeypatch):
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("currency", ["", "https://example.test/points", "C4D"])
+@pytest.mark.parametrize("currency", ["", "   ", None, "missing"])
+def test_a_blank_or_missing_currency_syncs_as_usd_without_asking_for_a_rate(monkeypatch, currency):
+    # SimpleFIN sends "" for Vanguard accounts; the owner chose to treat that as USD (#627).
+    calls = []
+    patch_rates(monkeypatch, RATES, calls=calls)
+    payload = two_account_payload(cad_currency=currency)
+    if currency == "missing":
+        del payload["accounts"][1]["currency"]
+    owner, _checking, savings, connection = link_both(monkeypatch, payload)
+
+    result = sync_connection(owner, connection.pk, ignore_rate_limit=True)
+
+    assert calls == []
+    assert result["unconverted"] == []
+    txn = Transaction.objects.get(account=savings)
+    assert (txn.amount_minor, txn.currency) == (-1000, "USD")
+    assert "fx" not in txn.original_fields
+    snapshot = BalanceSnapshot.objects.get(account=savings)
+    assert (snapshot.amount_minor, snapshot.original_currency) == (20000, "")
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("currency", ["US", "https://example.test/points", "C4D"])
 def test_an_unusable_currency_is_skipped_without_asking_for_a_rate(monkeypatch, currency):
     calls = []
     patch_rates(monkeypatch, RATES, calls=calls)
@@ -267,6 +289,17 @@ def test_the_connections_page_shows_each_remote_accounts_currency(monkeypatch):
     assert "<th scope=\"col\">Currency</th>" in page
     assert "CAD" in page
     assert "Converted to USD at the ECB rate" in page
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("currency", ["", "   "])
+def test_the_connections_page_says_a_blank_currency_is_treated_as_usd(monkeypatch, currency):
+    owner, _checking, _savings, _connection = link_both(monkeypatch, two_account_payload(cad_currency=currency))
+
+    page = signed_in(owner).get(reverse("simplefin-connections")).content.decode()
+
+    assert "Not provided by SimpleFIN; treated as USD" in page
+    assert "Converted to USD at the ECB rate" not in page
 
 
 @pytest.mark.parametrize(

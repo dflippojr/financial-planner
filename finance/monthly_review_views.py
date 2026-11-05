@@ -7,6 +7,7 @@ from django.views.decorators.http import require_GET, require_POST
 from .access import request_person as _person
 from .monthly_review import (
     earliest_review_month,
+    has_changed_transfer_marks,
     has_newer_transactions,
     latest_closed_month,
     parse_review_month,
@@ -50,6 +51,7 @@ def monthly_review(request):
             "next_url": _list_url(next_month) if next_month <= closed else None,
             "regenerate_url": reverse("monthly-review-regenerate"),
             "has_newer_transactions": has_newer_transactions(person, review),
+            "has_changed_transfer_marks": has_changed_transfer_marks(person, review),
         },
     )
 

@@ -4,6 +4,8 @@ import re
 from django import template
 from django.forms.widgets import CheckboxInput, CheckboxSelectMultiple, FileInput, RadioSelect, Select, Textarea
 
+from finance import chat_markdown
+
 
 register = template.Library()
 
@@ -77,6 +79,12 @@ def amount_tone_class(display, tone=""):
     if choice == "out":
         return "tabular-nums text-right amount-out"
     return "tabular-nums text-right"
+
+
+@register.filter
+def chat_markdown_html(text):
+    """An assistant reply as the markdown subset in finance.chat_markdown (#634)."""
+    return chat_markdown.render(text)
 
 
 @register.filter

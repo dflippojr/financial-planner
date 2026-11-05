@@ -31,6 +31,7 @@ def _form_from_rule(rule, principal, data=None):
         "account": rule.account_id,
         "min_amount": None if rule.min_amount_minor is None else Decimal(rule.min_amount_minor) / Decimal(100),
         "max_amount": None if rule.max_amount_minor is None else Decimal(rule.max_amount_minor) / Decimal(100),
+        "rule_action": rule.action,
         "category": rule.category_id,
         "priority": rule.priority,
         "enabled": rule.enabled,
@@ -53,9 +54,10 @@ def _save_from_form(request, form, rule_id=None):
         account_id=None if form.cleaned_data["account"] is None else form.cleaned_data["account"].pk,
         min_amount_minor=_amount_to_minor(form.cleaned_data["min_amount"]),
         max_amount_minor=_amount_to_minor(form.cleaned_data["max_amount"]),
-        category_id=form.cleaned_data["category"].pk,
+        category_id=None if form.cleaned_data["category"] is None else form.cleaned_data["category"].pk,
         priority=form.cleaned_data["priority"],
         enabled=form.cleaned_data["enabled"],
+        action=form.cleaned_data["rule_action"],
     )
 
 
