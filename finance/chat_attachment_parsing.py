@@ -73,6 +73,7 @@ TOO_MANY_COLUMNS = f"A sheet in that file uses more than {MAX_COLUMNS} columns. 
 TOO_MUCH_TEXT = "That file has too much text to read. Split it and attach the parts you need."
 TOO_MANY_PAGES = f"That PDF has more than {MAX_PAGES} pages. Attach only the pages you need."
 
+_BOUNDED_COMPRESSION = frozenset({zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED})
 _PDF_MAGIC = b"%PDF-"
 _ZIP_MAGIC = b"PK\x03\x04"
 _OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
@@ -118,12 +119,13 @@ def parse_upload(uploaded_file) -> ParsedAttachment:
     data = _read_upload(uploaded_file)
     name = safe_name(getattr(uploaded_file, "name", "") or "")
     kind = sniff(data, name)
-    if kind == PDF:
-        content, summary = _parse_pdf(data)
-    elif kind == XLSX:
-        content, summary = _parse_xlsx(data)
-    else:
-        content, summary = _parse_csv(data)
+    parser = {PDF: _parse_pdf, XLSX: _parse_xlsx}.get(kind, _parse_csv)
+    try:
+        content, summary = parser(data)
+    except MemoryError:
+        # Whatever slipped past the limits, running out of memory refuses the file; nothing
+        # was stored yet, and the partial parse is released when this frame unwinds.
+        raise AttachmentRejected(TOO_MUCH_TEXT) from None
     return ParsedAttachment(name=name, kind=kind, data=data, content=content, summary=summary)
 
 
@@ -289,6 +291,10 @@ def _checked_members(archive):
     total = 0
     members = {}
     for info in infos:
+        if info.compress_type not in _BOUNDED_COMPRESSION:
+            # ZipExtFile.read(n) caps DEFLATE output but not BZIP2 or LZMA: a few hundred bytes
+            # could inflate to hundreds of megabytes inside one read. Excel writes only these two.
+            raise AttachmentRejected(UNREADABLE)
         if info.flag_bits & 0x1:
             # An encrypted zip member: Excel never writes one, so treat it as protected.
             raise AttachmentRejected(PASSWORD_PROTECTED)

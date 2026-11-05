@@ -466,3 +466,28 @@ def test_stream_limits_items_strings_and_styles(monkeypatch):
     _rejected("strings.xlsx", strings, parsing.TOO_MUCH_TEXT)
     monkeypatch.setattr(parsing, "MAX_TREE_PART_BYTES", 10)
     _rejected("tree.xlsx", strings, parsing.TOO_MUCH_TEXT)
+
+
+@pytest.mark.parametrize("method", [zipfile.ZIP_BZIP2, zipfile.ZIP_LZMA], ids=["bzip2", "lzma"])
+def test_xlsx_members_compressed_other_than_deflate_are_refused_before_any_is_opened(method, monkeypatch):
+    # ZipExtFile.read(n) bounds DEFLATE output but not BZIP2 or LZMA: a few hundred bytes can
+    # inflate to hundreds of megabytes inside one read (#647 review). Excel only writes DEFLATE.
+    source = make_xlsx([("Budget", rows_xml([["Groceries", 400]]))])
+    rebuilt = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(source)) as original, zipfile.ZipFile(rebuilt, "w", method) as target:
+        for info in original.infolist():
+            target.writestr(info.filename, original.read(info))
+    opened = []
+    monkeypatch.setattr(zipfile.ZipFile, "open", lambda self, *args, **kwargs: opened.append(args) or 1 / 0)
+    _rejected("packed.xlsx", rebuilt.getvalue(), parsing.UNREADABLE)
+    assert opened == []
+
+
+def test_memory_exhaustion_while_parsing_is_a_clean_refusal(monkeypatch):
+    def exhausted(_data):
+        raise MemoryError
+
+    for name, data, target in (("b.xlsx", budget_xlsx(), "_parse_xlsx"), ("b.csv", BUDGET_CSV.encode(), "_parse_csv"),
+                               ("b.pdf", make_pdf(["x"]), "_parse_pdf")):
+        monkeypatch.setattr(parsing, target, exhausted)
+        _rejected(name, data, parsing.TOO_MUCH_TEXT)
