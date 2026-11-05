@@ -19,11 +19,15 @@
     <p class="whitespace-pre-wrap">{{ item.content }}</p>
     {% endif %}
     {% if item.figures %}
-    <ul class="mt-2 list-disc pl-5 text-sm">
-      {% for figure in item.figures %}
-      <li><a class="link inline-flex min-h-11 items-center" href="{{ figure.url }}">{{ figure.label }}: {{ figure.amount_display }}</a></li>
-      {% endfor %}
-    </ul>
+    {# Collapsed by default (owner, 2026-11-04): the reply leads, the figures it used open on demand. #}
+    <details class="mt-2 text-sm" data-chat-figures>
+      <summary class="cursor-pointer py-3">Sources ({{ item.figures|length }})</summary>
+      <ul class="list-disc pl-5">
+        {% for figure in item.figures %}
+        <li><a class="link inline-flex min-h-11 items-center" href="{{ figure.url }}">{{ figure.label }}: {{ figure.amount_display }}</a></li>
+        {% endfor %}
+      </ul>
+    </details>
     {% endif %}
     {% for card in item.cards %}{% include "finance/_chat_proposal.html" %}{% endfor %}
     {% if item.notices %}
