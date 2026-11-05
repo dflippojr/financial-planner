@@ -166,26 +166,37 @@ def _money_values(node, key=""):
         yield node
 
 
-def _rate_values(node, key=""):
+# Keys whose values the model does not state as figures: row ids and links, and the
+# member's own text (names, rule text, notes, category names), which may hold digits.
+UNSTATED_KEYS = {"id", "account_id", "url", "page_url", "plan_url", "name", "description_contains", "note",
+                 "category", "ignored_changes", "linked_account"}
+
+
+def _stated_values(node, key=""):
+    """Every scalar a tool result states, money as dollars, in a sentence for the grounding check."""
+    if key in UNSTATED_KEYS:
+        return
     if isinstance(node, dict):
         for child, value in node.items():
-            yield from _rate_values(value, str(child))
+            yield from _stated_values(value, str(child))
     elif isinstance(node, list):
         for item in node:
-            yield from _rate_values(item, key)
-    elif key in {"percent", "apr_percent"} and node is not None:
-        yield node
+            yield from _stated_values(item, key)
+    elif isinstance(node, bool) or node is None:
+        return
+    elif isinstance(node, int) and key.endswith("_minor"):
+        yield key, f"{node / 100:.2f}"
+    else:
+        yield key, str(node)
 
 
 def assert_grounded(result):
-    """Every amount and rate a tool returns can be cited back to a figure link (the monthly review's grounding rule)."""
+    """Every number a tool result states can be cited back to a figure link (the monthly review's grounding rule)."""
     assert result.ok, result.text
     payload = json.loads(result.text)
     amounts = list(_money_values(payload))
-    stated = " ".join(f"{amount / 100:.2f}" for amount in amounts)
-    assert paragraph_is_grounded(stated, list(result.figures)), stated
-    rates = " ".join(f"{rate}%" for rate in _rate_values(payload))
-    assert paragraph_is_grounded(rates, list(result.figures)), rates
+    for key, value in _stated_values(payload):
+        assert paragraph_is_grounded(value, list(result.figures)), f"{key}={value!r} has no figure"
     cited = {figure["amount_minor"] for figure in result.figures}
     assert set(amounts) <= cited
     for figure in result.figures:

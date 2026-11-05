@@ -225,7 +225,13 @@ def savings_goals(person, _args):
             "linked_account": {"id": linked.pk, "name": linked.name} if linked is not None else None,
             "url": list_url,
         }
-        figures.append(_figure(f"{goal.name} target", goal.target_amount_minor, list_url, goal.currency))
+        # Dates, rank and percent ride in the labels so every number the row states is cited.
+        target_label = f"{goal.name} target"
+        if goal.target_date:
+            target_label += f" by {goal.target_date.isoformat()}"
+        if goal.priority is not None:
+            target_label += f", rank {goal.priority}"
+        figures.append(_figure(target_label, goal.target_amount_minor, list_url, goal.currency))
         if withheld:
             row["progress"] = CONSENT_WITHHELD
         else:
@@ -241,7 +247,8 @@ def savings_goals(person, _args):
                 "past_due": progress.past_due,
                 "monthly_needed_minor": progress.monthly_needed_minor,
             })
-            figures.append(_figure(f"{goal.name} saved ({progress.percent}% of target)", progress.current_amount_minor,
+            as_of = f" as of {progress.as_of.isoformat()}" if progress.as_of else ""
+            figures.append(_figure(f"{goal.name} saved{as_of} ({progress.percent}% of target)", progress.current_amount_minor,
                                    list_url, goal.currency))
             figures.append(_figure(f"{goal.name} remaining", progress.remaining_minor, list_url, goal.currency))
             if progress.monthly_needed_minor is not None:
@@ -390,7 +397,8 @@ def debt_payoff(person, args):
             "payoff": row.payoff_label,
         })
         if row.owed_minor is not None:
-            figures.append(_figure(f"{row.name} owed{apr}", row.owed_minor, url))
+            as_of = f" on {row.snapshot_date.isoformat()}" if row.snapshot_date else ""
+            figures.append(_figure(f"{row.name} owed{as_of}{apr}, payoff {row.payoff_label}", row.owed_minor, url))
         if row.minimum_payment_minor is not None:
             figures.append(_figure(f"{row.name} minimum payment{apr}", row.minimum_payment_minor, url))
         if row.account_id in payoff_by_id and payoff_by_id[row.account_id].remaining_minor > 0:
@@ -424,7 +432,10 @@ def debt_payoff(person, args):
                 for month in months
             ],
         }
-        figures.append(_figure("Total interest", chosen.total_interest_minor, url))
+        figures.append(_figure(
+            f"Total interest over {len(chosen.months)} months from {plan.start.isoformat()[:7]}",
+            chosen.total_interest_minor, url,
+        ))
         figures.append(_figure("Interest paying minimums only", comparison.baseline.total_interest_minor, url))
         if comparison.interest_saved_minor is not None:
             figures.append(_figure("Interest saved", comparison.interest_saved_minor, url))
@@ -607,7 +618,6 @@ def list_rules(person, args):
             "max_amount_minor": rule.max_amount_minor,
             "action": rule.action,
             "category": category,
-            "priority": rule.priority,
             "enabled": rule.enabled,
             "confirmed": rule.confirmed_at is not None,
             "inactive": bool(getattr(rule, "inactive", False)),
@@ -619,6 +629,7 @@ def list_rules(person, args):
             figures.append(_figure(f"Rule '{rule.description_contains[:60]}' maximum amount", rule.max_amount_minor, url))
     if any(rule.owner_household_id for rule in shown):
         account_ids |= _household_account_ids(allowed)
+    # Rows keep the Rules page's order: the order in which rules are tried.
     payload = {"page_url": list_url, "rows": rows, "truncated": len(rules) > MAX_TOOL_ROWS}
     return ToolResult(text=json.dumps(payload), figures=tuple(figures), account_ids=tuple(sorted(account_ids)))
 
