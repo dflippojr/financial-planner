@@ -168,13 +168,6 @@ def _allowed_account_ids(person):
     return set(visible_accounts(person, include_archived=True).values_list("pk", flat=True))
 
 
-def _household_account_ids(allowed_ids):
-    """Shared accounts in scope, recorded with a household row so leaving the household purges the chat."""
-    return set(
-        Account.objects.filter(pk__in=allowed_ids, scope=Account.Scope.HOUSEHOLD).values_list("pk", flat=True)
-    )
-
-
 def _percent(value):
     return None if value is None else str(value)
 
@@ -262,8 +255,6 @@ def savings_goals(person, _args):
             figures.append(_figure(f"{goal.name} projected funding: {plan_row['funded_month']}",
                                    progress.remaining_minor, plan_row["url"], goal.currency))
         rows.append(row)
-    if any(goal.scope == SavingsGoal.Scope.HOUSEHOLD for goal in shown):
-        account_ids |= _household_account_ids(allowed)
     if plan_rows:
         # Funding months come from the whole projection: every account and planned item in its scope.
         account_ids |= allowed if consent else _private_account_ids(person, allowed)
@@ -272,7 +263,9 @@ def savings_goals(person, _args):
     if plan_note:
         payload["plan_note"] = plan_note
     return ToolResult(text=json.dumps(payload), figures=tuple(figures), account_ids=tuple(sorted(account_ids)),
-                      planned_item_ids=planned_item_ids)
+                      planned_item_ids=planned_item_ids,
+                      # Every goal listed, and every goal the funding plan filled before them.
+                      goal_ids=tuple(sorted(shown_ids | set(plan_rows))))
 
 
 def _private_account_ids(person, allowed):
@@ -637,11 +630,10 @@ def list_rules(person, args):
             figures.append(_figure(f"Rule '{rule.description_contains[:60]}' minimum amount", rule.min_amount_minor, url))
         if rule.max_amount_minor is not None:
             figures.append(_figure(f"Rule '{rule.description_contains[:60]}' maximum amount", rule.max_amount_minor, url))
-    if any(rule.owner_household_id for rule in shown):
-        account_ids |= _household_account_ids(allowed)
     # Rows keep the Rules page's order: the order in which rules are tried.
     payload = {"page_url": list_url, "rows": rows, "truncated": len(rules) > MAX_TOOL_ROWS}
-    return ToolResult(text=json.dumps(payload), figures=tuple(figures), account_ids=tuple(sorted(account_ids)))
+    return ToolResult(text=json.dumps(payload), figures=tuple(figures), account_ids=tuple(sorted(account_ids)),
+                      rule_ids=tuple(rule.pk for rule in shown))
 
 
 # Balance history

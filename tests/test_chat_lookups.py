@@ -5,6 +5,7 @@ from datetime import timedelta
 from decimal import Decimal
 
 import pytest
+from django.core.exceptions import PermissionDenied
 from django.db import connection
 from django.test import Client
 from django.test.utils import CaptureQueriesContext
@@ -17,10 +18,13 @@ from finance.ai_lookup_tools import lookup_tools
 from finance.ai_services import connect_harness
 from finance.ai_tools import MAX_TOOL_ROWS, WITHHELD_CATEGORY_NAME, default_tools, run_tool
 from finance.category_services import ensure_household_categories
+from finance.chat_runner import process_pending_turns
+from finance.chat_services import delete_conversations_without_access, send_message
 from finance.debt_planner_services import build_debt_plan
-from finance.lifecycle_services import update_debt_terms
+from finance.lifecycle_services import delete_account, leave_household, unshare_account, update_debt_terms
 from finance.models import (
     Account,
+    AiConversation,
     AiConversationMessage,
     BalanceSnapshot,
     Category,
@@ -34,6 +38,8 @@ from finance.monthly_review_ai import paragraph_is_grounded
 from finance.money_display import format_minor
 from finance.months import add_months
 from finance.policy_services import accept_policy, current_policy
+from finance.rule_services import save_category_rule
+from finance.savings_goal_services import save_savings_goal
 
 LOOKUPS = ("savings_goals", "debt_payoff", "cash_flow_what_if", "list_rules", "balance_history")
 SHARED_BALANCE = 7_654_321
@@ -704,9 +710,121 @@ def test_a_chat_turn_uses_each_lookup_end_to_end(harness, world, name):  # noqa:
     assert paragraph_is_grounded(reply.figures[0]["amount_display"], reply.figures)
     expected = set(run_tool(world["alpha"], default_tools(), name, args).account_ids)
     assert expected and expected <= set(conversation.used_account_ids)
-    if name in {"savings_goals", "list_rules"}:
-        # A household goal or rule is purged with the household's accounts when the member leaves;
-        # no goal or rule names the loan, so only that link records it.
-        assert world["loan"].pk in conversation.used_account_ids
+    if name == "savings_goals":
+        assert world["hh_goal"].pk in conversation.used_goal_ids
+    if name == "list_rules":
+        assert set(conversation.used_rule_ids) == {world["own_rule"].pk, world["hh_rule"].pk}
     if name == "cash_flow_what_if":
         assert world["income"].pk in conversation.used_planned_item_ids
+
+
+# Quoted goals and rules purge the conversation when access ends (owner decision 2026-11-05, #662).
+
+
+def _lookup_chat(state, url, person, name, args=None):
+    connect_harness(person, base_url=url, token=TOKEN)
+    state.need_tool = True
+    state.pending_tool_calls = [[{"call_id": "c1", "name": name, "args": args or {}}]]
+    conversation = ask(person, f"Synthetic {name} question")
+    state.need_tool = False
+    return conversation
+
+
+def _exists(conversation):
+    return AiConversation.objects.filter(pk=conversation.pk).exists()
+
+
+@pytest.mark.django_db
+def test_leaving_purges_a_chat_that_quoted_only_a_household_rule(harness):  # noqa: F811 - pytest fixture value
+    state, url = harness
+    _a, alpha, household = make_member("rule_alpha")
+    _b, beta, _ = make_member("rule_beta", household=household, policy=current_policy())
+    ensure_household_categories(household)
+    rule = CategoryRule.objects.create(owner_household=household, description_contains="HH-SYN-ONLY-RULE",
+                                       category=household.categories.get(name="Dining"))
+    beta_chat = _lookup_chat(state, url, beta, "list_rules")
+    alpha_chat = _lookup_chat(state, url, alpha, "list_rules")
+    beta_chat.refresh_from_db()
+    # No shared account exists, so the rule id is the only record of what was quoted.
+    assert beta_chat.used_rule_ids == [rule.pk] and beta_chat.used_account_ids == []
+    leave_household(beta)
+    assert not _exists(beta_chat)
+    assert _exists(alpha_chat)
+
+
+@pytest.mark.django_db
+def test_unsharing_an_unrelated_account_keeps_a_chat_that_quoted_only_a_household_rule(harness, world):  # noqa: F811
+    state, url = harness
+    world["own_rule"].delete()  # the remaining visible rule names no account
+    chat = _lookup_chat(state, url, world["alpha"], "list_rules")
+    chat.refresh_from_db()
+    assert chat.used_rule_ids == [world["hh_rule"].pk] and chat.used_account_ids == []
+    unshare_account(world["alpha"], world["shared"].pk)
+    assert _exists(chat)
+
+
+@pytest.mark.django_db
+def test_making_a_quoted_household_goal_private_purges_the_other_members_chat(harness, world):  # noqa: F811
+    state, url = harness
+    beta_chat = _lookup_chat(state, url, world["beta"], "savings_goals")
+    alpha_chat = _lookup_chat(state, url, world["alpha"], "savings_goals")
+    beta_chat.refresh_from_db()
+    assert world["hh_goal"].pk in beta_chat.used_goal_ids
+    goal = world["hh_goal"]
+    save_savings_goal(world["alpha"], {"scope": SavingsGoal.Scope.PRIVATE, "name": goal.name,
+                                       "target_amount_minor": goal.target_amount_minor}, goal=goal)
+    assert not _exists(beta_chat)
+    assert _exists(alpha_chat)  # the owner still sees the goal they made private
+
+
+@pytest.mark.django_db
+def test_a_deleted_quoted_goal_purges_the_chat(harness, world):  # noqa: F811 - pytest fixture value
+    state, url = harness
+    chat = _lookup_chat(state, url, world["beta"], "savings_goals")
+    chat.refresh_from_db()
+    goal_pk = world["hh_goal"].pk
+    assert goal_pk in chat.used_goal_ids
+    SavingsGoal.objects.filter(pk=goal_pk).delete()
+    delete_conversations_without_access(goal_ids=(goal_pk,))
+    assert not _exists(chat)
+
+
+@pytest.mark.django_db
+def test_a_reply_after_a_quoted_goal_is_gone_purges_the_chat(harness, world):  # noqa: F811 - pytest fixture value
+    state, url = harness
+    chat = _lookup_chat(state, url, world["beta"], "savings_goals")
+    SavingsGoal.objects.filter(pk=world["hh_goal"].pk).delete()
+    send_message(world["beta"], "And now?", conversation_id=chat.pk)
+    process_pending_turns(sleep=lambda _s: None)
+    assert not _exists(chat)
+
+
+@pytest.mark.django_db
+def test_deleting_the_account_a_rule_names_purges_chats_that_quoted_the_rule(world):
+    account = checking(world["alpha"], world["household"], "HH-SYN-RULE-ACCOUNT")
+    rule = CategoryRule.objects.create(owner_household=world["household"], description_contains="HH-SYN-ACCT-RULE",
+                                       category=world["household"].categories.get(name="Dining"), account=account)
+    # A chat that recorded only the rule, not its account.
+    chat = AiConversation.objects.create(member=world["beta"], expires_at=timezone.now() + timedelta(days=1),
+                                         used_rule_ids=[rule.pk])
+    other = AiConversation.objects.create(member=world["beta"], expires_at=timezone.now() + timedelta(days=1),
+                                          used_rule_ids=[world["hh_rule"].pk])
+    delete_account(world["alpha"], account.pk)
+    assert not CategoryRule.objects.filter(pk=rule.pk).exists()
+    assert not _exists(chat)
+    assert _exists(other)
+
+
+@pytest.mark.django_db
+def test_a_household_rule_cannot_be_made_personal_so_its_chats_stay(harness, world):  # noqa: F811
+    state, url = harness
+    chat = _lookup_chat(state, url, world["beta"], "list_rules")
+    rule = world["hh_rule"]
+    with pytest.raises(PermissionDenied):
+        save_category_rule(world["beta"], rule_id=rule.pk, owner_kind="personal",
+                           description_contains=rule.description_contains, account_id=None,
+                           min_amount_minor=None, max_amount_minor=None, category_id=rule.category_id,
+                           priority=rule.priority)
+    rule.refresh_from_db()
+    assert rule.owner_household_id == world["household"].pk
+    assert _exists(chat)
