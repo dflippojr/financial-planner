@@ -24,6 +24,7 @@ import re
 import subprocess
 import sys
 import zipfile
+import zlib
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -253,7 +254,7 @@ def _parse_xlsx(data: bytes):
         except AttachmentRejected:
             raise
         except (ElementTree.ParseError, zipfile.BadZipFile, KeyError, TypeError, ValueError, OSError, EOFError,
-                NotImplementedError, RuntimeError):
+                NotImplementedError, RuntimeError, zlib.error):
             raise AttachmentRejected(UNREADABLE) from None
 
 

@@ -2104,6 +2104,9 @@ class AiConversation(models.Model):
     # Chat backends files were ever attached for (#644). Kept after a file is removed: earlier
     # turns may quote it, so they are resent only to a backend in this list.
     attachment_backends = models.JSONField(default=list)
+    # Whether the saved harness session was started with read_attachment among its tools.
+    # A session started before #644 cannot call it, so a turn with files starts a new one.
+    harness_session_reads_attachments = models.BooleanField(default=False)
     turn_count = models.PositiveIntegerField(default=0)
     tool_call_count = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)

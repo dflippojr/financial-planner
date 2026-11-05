@@ -33,6 +33,8 @@ from finance.chat_attachments import (
 from finance.chat_proposals import NOTHING_APPLIED
 from finance.chat_runner import process_pending_turns
 from finance.chat_services import (
+    PROVIDER_CHANGED,
+    chat_backend_for,
     conversations_for,
     delete_all_conversations,
     delete_conversation,
@@ -86,7 +88,11 @@ def _harness_member(harness, username="owner", household=None):
 
 def _attach(person, name="budget.csv", data=None, *, conversation_id=None, prompt="Read my budget."):
     data = BUDGET_CSV.encode() if data is None else data
-    conversation = send_message(person, prompt, conversation_id=conversation_id, attachment=parse_upload(upload(name, data)))
+    _connection, backend = chat_backend_for(person)
+    conversation = send_message(
+        person, prompt, conversation_id=conversation_id, attachment=parse_upload(upload(name, data)),
+        warned_backend=backend,
+    )
     return conversation, AiChatAttachment.objects.filter(conversation=conversation).order_by("-pk").first()
 
 
@@ -104,7 +110,7 @@ def _events(action, target_id=None):
 def test_chat_page_upload_stores_the_file_with_its_question_and_audits_it(harness):
     client, person, _household = _harness_member(harness)
     response = client.post(reverse("chat-send"), {
-        "prompt": "Compare my budget with spending.",
+        "prompt": "Compare my budget with spending.", "attachment_backend": "claude",
         "attachment": upload("budget.csv", BUDGET_CSV.encode(), "text/csv"),
     })
     attachment = AiChatAttachment.objects.get()
@@ -174,7 +180,8 @@ def test_the_per_conversation_cap_refuses_the_whole_send(harness, settings):
     conversation, _first = _attach(person)
     before = AiConversationMessage.objects.count()
     response = client.post(reverse("chat-send"), {
-        "prompt": "And this one.", "conversation_id": conversation.pk, "attachment": upload("more.csv", b"a\n1\n"),
+        "prompt": "And this one.", "conversation_id": conversation.pk, "attachment_backend": "claude",
+        "attachment": upload("more.csv", b"a\n1\n"),
     }, **JSON)
     assert response.status_code == 409
     assert "at most 1 attachments" in response.json()["error"]
@@ -186,7 +193,8 @@ def test_the_per_conversation_cap_refuses_the_whole_send(harness, settings):
 def test_popover_upload_returns_the_thread_with_the_file_and_the_provider(harness):
     client, _person, _household = _harness_member(harness)
     response = client.post(reverse("chat-send"), {
-        "prompt": "What does this say?", "attachment": upload("statement.pdf", make_pdf(["Synthetic statement"])),
+        "prompt": "What does this say?", "attachment_backend": "claude",
+        "attachment": upload("statement.pdf", make_pdf(["Synthetic statement"])),
     }, **JSON)
     data = response.json()
     assert data["ok"] is True
@@ -203,6 +211,19 @@ def test_upload_needs_a_member_who_may_chat(harness):
     response = client.post(reverse("chat-send"), {"prompt": "Hi", "attachment": upload("b.csv", b"a\n1\n")}, **JSON)
     assert response.status_code == 409
     assert not AiChatAttachment.objects.exists()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("warned", ["anthropic_api", ""], ids=["other-provider", "missing"])
+def test_a_file_is_refused_when_the_provider_changed_after_the_warning(harness, warned):
+    client, _person, _household = _harness_member(harness)
+    response = client.post(reverse("chat-send"), {
+        "prompt": "Read this.", "attachment_backend": warned, "attachment": upload("budget.csv", BUDGET_CSV.encode()),
+    }, **JSON)
+    assert response.status_code == 409
+    assert response.json()["error"] == PROVIDER_CHANGED
+    assert not AiChatAttachment.objects.exists()
+    assert not AiConversationMessage.objects.exists()
 
 
 # --- Provider warning ------------------------------------------------------
@@ -240,8 +261,10 @@ def test_the_attach_warning_shows_the_harness_provider(harness):
     client, _person, _household = _harness_member(harness)
     html = client.get(reverse("chat")).content.decode()
     assert "<strong data-chat-provider>Claude through the agent harness</strong>" in html
+    assert '<input type="hidden" name="attachment_backend" value="claude">' in html
     popover = client.get(reverse("chat-popover")).json()
     assert popover["providerLabel"] == "Claude through the agent harness"
+    assert popover["providerBackend"] == "claude"
 
 
 # --- The read tool and model context ---------------------------------------
@@ -293,6 +316,26 @@ def test_harness_session_offers_the_tool_and_follow_ups_list_later_files(harness
     output = state.tool_outputs[-1]
     assert 'sheet "Budget" (1 of 1), rows 1-3 of 3' in output
     assert 'row 2: ["Groceries", "400"]' in output
+
+
+@pytest.mark.django_db
+def test_a_harness_session_started_before_the_tool_existed_is_replaced_once_a_file_is_attached(harness):
+    state, _url = harness
+    _client, person, _household = _harness_member(harness)
+    conversation = send_message(person, "Hello there.")
+    process_pending_turns(sleep=no_sleep)
+    assert AiConversation.objects.get(pk=conversation.pk).harness_session_reads_attachments is True
+    # As a session saved before #644 would look: it never registered read_attachment.
+    AiConversation.objects.filter(pk=conversation.pk).update(harness_session_reads_attachments=False)
+    send_message(person, "No file yet.", conversation_id=conversation.pk)
+    process_pending_turns(sleep=no_sleep)
+    assert len(state.session_creates) == 1  # without a file, the old session carries on
+
+    _attach(person, conversation_id=conversation.pk)
+    process_pending_turns(sleep=no_sleep)
+    assert len(state.session_creates) == 2
+    assert "read_attachment" in [tool["name"] for tool in state.session_creates[-1]["tools"]]
+    assert AiConversation.objects.get(pk=conversation.pk).harness_session_reads_attachments is True
 
 
 @pytest.mark.django_db

@@ -88,6 +88,7 @@ def chat_send(request):
         conversation = send_message(
             person, prompt, conversation_id=conversation_id, page_context=page_context,
             start_new=wants_json and conversation_id is None, attachment=attachment,
+            warned_backend=request.POST.get("attachment_backend") or "",
         )
     except (PermissionDenied, AiError, AttachmentRejected) as exc:
         return _chat_send_error(request, exc, next_url, wants_json)
@@ -170,6 +171,7 @@ def _popover_response(person, conversation, request):
         "html": render_to_string("finance/_chat_messages.html", context, request=request),
         "messageCount": len(context["chat_messages"]),
         "providerLabel": context["chat_provider_label"],
+        "providerBackend": context["chat_backend"] or "",
     }, headers={"Cache-Control": "no-store"})
 
 

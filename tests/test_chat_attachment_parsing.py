@@ -253,6 +253,16 @@ def test_encrypted_zip_member_is_treated_as_password_protected():
     _rejected("zip.xlsx", bytes(data), parsing.PASSWORD_PROTECTED)
 
 
+def test_a_corrupt_deflate_stream_is_unreadable_not_an_error():
+    data = bytearray(make_xlsx([("Budget", rows_xml([[f"row {index} " + "x" * 40] for index in range(200)]))]))
+    with zipfile.ZipFile(io.BytesIO(bytes(data))) as archive:
+        info = archive.getinfo("xl/worksheets/sheet1.xml")
+    start = info.header_offset + 30 + len(info.filename.encode()) + len(info.extra)
+    for index in range(start + 5, start + 40):
+        data[index] ^= 0xFF
+    _rejected("damaged.xlsx", bytes(data), parsing.UNREADABLE)
+
+
 def test_other_zip_files_and_broken_workbooks():
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:

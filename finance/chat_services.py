@@ -39,6 +39,7 @@ from .chat_attachments import (
     delete_conversations,
     store_attachment,
 )
+from .chat_attachment_parsing import AttachmentRejected
 from .chat_proposals import proposal_tools
 from .lifecycle_services import _DENIED, _person_for
 from .input_limits import MAX_CHAT_PROMPT_CHARS, MAX_PAGE_CONTEXT_CHARS, MAX_CHAT_MESSAGES
@@ -57,6 +58,10 @@ PENDING_LIMIT = "Wait for your earlier questions to be answered before asking an
 CONVERSATION_LIMIT = "You have reached the limit of open conversations. Delete one from Chat to start another."
 TILE_UNAVAILABLE = "This tile or its filters are no longer available to AI. Reopen the tile and ask again."
 LOCAL_HIDDEN = "Chat on the local model is not offered yet. Choose Claude in Settings → AI."
+PROVIDER_CHANGED = (
+    "Your AI provider changed since this page loaded, so the file was not sent. "
+    "Reload the page, check which provider the warning names, and attach it again."
+)
 NO_CHAT_BACKEND = "No chat backend is available yet. Sign in to Claude on the harness, then choose it in Settings → AI."
 
 
@@ -279,11 +284,15 @@ def page_context_from_request(request):
     )
 
 
-def send_message(principal, text, *, conversation_id=None, page_context=None, start_new=False, attachment=None):
+def send_message(
+    principal, text, *, conversation_id=None, page_context=None, start_new=False, attachment=None, warned_backend=None,
+):
     """Store the question and a pending reply; the chat runner answers it in the background.
 
     ``attachment`` is a file already parsed by chat_attachment_parsing. It is stored
     with the question in one transaction, so a refused file leaves nothing behind.
+    ``warned_backend`` is the backend the attach warning named on the member's page;
+    a file is refused when chat has since moved to another provider.
     """
     if len(text or "") > MAX_CHAT_PROMPT_CHARS:
         raise AiError(f"Questions must be at most {MAX_CHAT_PROMPT_CHARS:,} characters.")
@@ -324,6 +333,8 @@ def send_message(principal, text, *, conversation_id=None, page_context=None, st
             page_context=context_payload,
         )
         if attachment is not None:
+            if warned_backend != backend:
+                raise AttachmentRejected(PROVIDER_CHANGED)
             store_attachment(person, conversation, question, attachment, backend=backend)
         conversation.turn_count += 1
         if not conversation.title:
@@ -453,6 +464,7 @@ def answer_turn(turn, *, sleep=None, monotonic=None):
         and bool(saved_session)
         and (conversation.harness_connection or "") == marker
         and (conversation.backend or "") == backend
+        and (conversation.harness_session_reads_attachments or attached is None)
     )
     session_id = saved_session if follow_up else ""
 
@@ -461,9 +473,14 @@ def answer_turn(turn, *, sleep=None, monotonic=None):
             locked = _lock_conversation(conversation.pk)
             locked.harness_session_id = new_id
             locked.harness_connection = marker
-            locked.save(update_fields=("harness_session_id", "harness_connection", "updated_at"))
+            # Every session started here registers read_attachment (attachment_tools).
+            locked.harness_session_reads_attachments = True
+            locked.save(update_fields=(
+                "harness_session_id", "harness_connection", "harness_session_reads_attachments", "updated_at",
+            ))
             conversation.harness_session_id = new_id
             conversation.harness_connection = marker
+            conversation.harness_session_reads_attachments = True
 
     result = run_conversation(
         person,
