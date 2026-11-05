@@ -69,7 +69,20 @@ class PercentField(forms.DecimalField):
 
 
 class WholePercentField(forms.IntegerField):
-    """A whole-number percent: `10`, ` 10 `, `10%`."""
+    """A whole-number percent: `10`, ` 10 `, `10%`.
+
+    Rendered as a text input: a browser's number input drops `10%` before it
+    is sent, so the trailing `%` would never reach to_python. min/max still
+    apply on the server.
+    """
+
+    widget = forms.TextInput
+
+    def widget_attrs(self, widget):
+        attrs = super().widget_attrs(widget)
+        if isinstance(widget, forms.TextInput) and not isinstance(widget, forms.NumberInput):
+            attrs.setdefault("inputmode", "numeric")
+        return attrs
 
     def to_python(self, value):
         return super().to_python(_strip_percent(value))

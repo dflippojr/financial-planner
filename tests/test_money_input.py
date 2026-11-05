@@ -19,6 +19,7 @@ import finance.forms
 from finance.category_services import ensure_household_categories
 from finance.models import (
     Account,
+    AlertSettings,
     Budget,
     Household,
     Membership,
@@ -177,6 +178,34 @@ def test_alert_percent_fields_accept_a_trailing_percent():
     assert form.cleaned_data["recurring_price_percent"] == 15
     assert form.cleaned_data["unusual_category_percent"] == 60
     assert form.cleaned_data["unusual_category_amount"] == Decimal("1000")
+
+
+def test_percent_inputs_render_as_text_so_a_browser_lets_a_percent_sign_through():
+    # A type=number input drops "15%" before it is sent, so the parser would never see it.
+    form = finance.forms.AlertSettingsForm()
+    for name in ("recurring_price_percent", "unusual_category_percent"):
+        html = str(form[name])
+        assert 'type="text"' in html, html
+        assert 'inputmode="numeric"' in html, html
+    apr = str(finance.forms.DebtTermsForm()["apr_percent"])
+    assert 'type="text"' in apr and 'inputmode="decimal"' in apr
+
+
+@pytest.mark.django_db
+def test_alert_settings_page_saves_a_percent_typed_with_a_percent_sign():
+    owner = make_person("owner")
+    make_household(owner)
+    client = signed_in(owner)
+    page = client.get(reverse("settings-alerts")).content.decode()
+    assert 'name="recurring_price_percent"' in page
+    response = client.post(
+        reverse("settings-alerts"),
+        {"recurring_price_enabled": "on", "recurring_price_percent": "25%", "unusual_category_percent": " 60 % "},
+    )
+    assert response.status_code == 302
+    prefs = AlertSettings.objects.get(person=owner)
+    assert prefs.recurring_price_percent == 25
+    assert prefs.unusual_category_percent == 60
 
 
 def test_debt_terms_apr_accepts_a_trailing_percent_and_payment_accepts_dollars():
