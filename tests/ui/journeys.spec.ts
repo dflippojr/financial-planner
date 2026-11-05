@@ -143,12 +143,15 @@ test('Split validates total, persists exact parts, and unsplits', async ({ page 
   const form = page.locator('#split-form');
   await form.getByLabel('Part 1 category').selectOption({ label: 'Transportation' });
   await form.getByLabel('Part 2 category').selectOption({ label: 'Dining' });
-  await form.getByLabel('Part 1 amount').fill('-20.00');
+  // Formatted amounts count in the live total and save like plain ones (#657).
+  await form.getByLabel('Part 1 amount').fill('-$20.00');
   await form.getByLabel('Part 2 amount').fill('-20.00');
+  await expect(page.locator('#split-remaining')).toHaveText('Remaining: -1.18');
   await submit(page, form.getByRole('button', { name: 'Save split' }));
   await expect(page.getByRole('heading', { name: 'Split parts', exact: true })).toHaveCount(0);
   await expect(main(page).getByRole('alert')).toBeVisible();
   await form.getByLabel('Part 2 amount').fill('-21.18');
+  await expect(page.locator('#split-remaining')).toHaveText('Remaining: 0.00');
   await submit(page, form.getByRole('button', { name: 'Save split' }));
   await page.goto(edit);
   await expect(page.getByRole('heading', { name: 'Split parts', exact: true })).toBeVisible();

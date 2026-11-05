@@ -12,6 +12,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from .input_limits import MAX_DESCRIPTION_CHARS
+from .money_input import MoneyField, PercentField, WholePercentField
 from .date_bounds import EARLIEST_ACTIVITY_DATE, TOO_EARLY_ERROR, activity_date_error
 from .cash_flow import MAX_REPORT_DATE, MAX_REPORT_PERIODS, default_date_range, period_count
 from .projection import DEFAULT_HORIZON, HORIZONS
@@ -194,14 +195,14 @@ class TransactionFilterForm(forms.Form):
             (Account.Scope.HOUSEHOLD, "Household"),
         ),
     )
-    amount_min = forms.DecimalField(
+    amount_min = MoneyField(
         max_digits=19,
         decimal_places=2,
         required=False,
         label="Amount min",
         widget=forms.TextInput(attrs={"inputmode": "decimal"}),
     )
-    amount_max = forms.DecimalField(
+    amount_max = MoneyField(
         max_digits=19,
         decimal_places=2,
         required=False,
@@ -367,7 +368,7 @@ class ScenarioChangeForm(forms.Form):
     )
     name = forms.CharField(max_length=150, required=False)
     kind = forms.ChoiceField(choices=PlannedItem.Kind.choices, required=False)
-    amount = forms.DecimalField(
+    amount = MoneyField(
         required=False,
         min_value=Decimal("0.01"),
         max_digits=19,
@@ -525,12 +526,12 @@ class AccountSortForm(forms.Form):
 
 class ManualBalanceForm(forms.Form):
     snapshot_date = forms.DateField(label="Date", widget=forms.DateInput(attrs={"type": "date"}))
-    amount = forms.DecimalField(
+    amount = MoneyField(
         max_digits=19,
         decimal_places=2,
         widget=forms.TextInput(attrs={"inputmode": "decimal"}),
     )
-    net_contribution = forms.DecimalField(
+    net_contribution = MoneyField(
         label="Net contributions this period",
         max_digits=19,
         decimal_places=2,
@@ -693,7 +694,7 @@ def _correction_history_rows(transaction, actor, recorded_at, new_date, new_desc
 class TransactionCorrectionForm(forms.Form):
     transaction_date = forms.DateField(label="Date", widget=forms.DateInput(attrs={"type": "date"}))
     description = forms.CharField(max_length=MAX_DESCRIPTION_CHARS, widget=forms.Textarea(attrs={"rows": 3}))
-    amount = forms.DecimalField(
+    amount = MoneyField(
         max_digits=19,
         decimal_places=2,
         help_text="Negative is money out; positive is money in.",
@@ -767,7 +768,7 @@ class ManualTransactionForm(forms.Form):
         choices=((DIRECTION_OUT, "Out (spending, payment, withdrawal)"), (DIRECTION_IN, "In (income, deposit, refund)")),
         initial=DIRECTION_OUT,
     )
-    amount = forms.DecimalField(
+    amount = MoneyField(
         max_digits=19,
         decimal_places=2,
         min_value=Decimal("0.01"),
@@ -827,7 +828,7 @@ class TransactionCategoryForm(forms.Form):
 
 class RefundSearchForm(forms.Form):
     refund_search = forms.CharField(required=False, max_length=255, label="Purchase description")
-    refund_amount = forms.DecimalField(
+    refund_amount = MoneyField(
         required=False, decimal_places=2, max_digits=19, min_value=Decimal("0.01"), label="Purchase amount",
         widget=forms.TextInput(attrs={"inputmode": "decimal", "autocomplete": "off"}),
     )
@@ -954,7 +955,7 @@ class SplitTransactionForm(forms.Form):
                 label=f"Part {index + 1} category",
                 initial=initial_category,
             )
-            self.fields[f"part_{index}_amount"] = forms.DecimalField(
+            self.fields[f"part_{index}_amount"] = MoneyField(
                 max_digits=19,
                 decimal_places=2,
                 label=f"Part {index + 1} amount",
@@ -1147,7 +1148,7 @@ class AccountRenameForm(forms.Form):
 
 
 class DebtTermsForm(forms.Form):
-    apr_percent = forms.DecimalField(
+    apr_percent = PercentField(
         label="APR percent",
         max_digits=6,
         decimal_places=3,
@@ -1156,7 +1157,7 @@ class DebtTermsForm(forms.Form):
         widget=forms.TextInput(attrs={"inputmode": "decimal"}),
         help_text="Annual percentage rate, for example 19.990.",
     )
-    minimum_payment = forms.DecimalField(
+    minimum_payment = MoneyField(
         label="Minimum payment",
         max_digits=19,
         decimal_places=2,
@@ -1203,7 +1204,7 @@ class DebtPlannerForm(forms.Form):
             ("custom", "Custom order"),
         )
     )
-    extra = forms.DecimalField(
+    extra = MoneyField(
         label="Extra monthly payment",
         required=False,
         min_value=0,
@@ -1407,7 +1408,7 @@ class TransferWindowForm(forms.Form):
 class PlannedItemForm(forms.Form):
     name = forms.CharField(max_length=150)
     kind = forms.ChoiceField(choices=PlannedItem.Kind.choices)
-    amount = forms.DecimalField(
+    amount = MoneyField(
         min_value=Decimal("0.01"),
         max_digits=19,
         decimal_places=2,
@@ -1476,7 +1477,7 @@ class PlannedItemForm(forms.Form):
 
 class SavingsGoalForm(forms.Form):
     name = forms.CharField(max_length=150)
-    target_amount = forms.DecimalField(
+    target_amount = MoneyField(
         min_value=Decimal("0.01"),
         max_digits=19,
         decimal_places=2,
@@ -1511,7 +1512,7 @@ class SavingsGoalForm(forms.Form):
         required=False,
         empty_label="No linked account",
     )
-    manual_amount = forms.DecimalField(
+    manual_amount = MoneyField(
         required=False,
         max_digits=19,
         decimal_places=2,
@@ -1629,7 +1630,7 @@ class GoalImportForm(forms.Form):
 
 
 class SavingsBufferForm(forms.Form):
-    buffer = forms.DecimalField(
+    buffer = MoneyField(
         required=False,
         min_value=Decimal("0"),
         max_value=Decimal("10000000000"),
@@ -1653,7 +1654,7 @@ class BudgetForm(forms.Form):
         empty_label="Overall monthly total",
         help_text="Leave blank for an overall spending total.",
     )
-    amount = forms.DecimalField(
+    amount = MoneyField(
         min_value=Decimal("0.01"),
         max_digits=19,
         decimal_places=2,
@@ -1714,7 +1715,7 @@ class CategoryRuleForm(forms.Form):
     )
     description_contains = forms.CharField(max_length=200, label="Description contains")
     account = forms.ModelChoiceField(queryset=Account.objects.none(), required=False, empty_label="Any accessible account")
-    min_amount = forms.DecimalField(
+    min_amount = MoneyField(
         max_digits=19,
         decimal_places=2,
         required=False,
@@ -1722,7 +1723,7 @@ class CategoryRuleForm(forms.Form):
         help_text="Optional. Negative is money out; positive is money in.",
         widget=forms.TextInput(attrs={"inputmode": "decimal"}),
     )
-    max_amount = forms.DecimalField(
+    max_amount = MoneyField(
         max_digits=19,
         decimal_places=2,
         required=False,
@@ -1795,7 +1796,7 @@ class CategoryRuleForm(forms.Form):
 class AlertSettingsForm(forms.Form):
     sync_enabled = forms.BooleanField(required=False, label="Sync failures and re-linking")
     recurring_price_enabled = forms.BooleanField(required=False, label="Recurring price changes")
-    recurring_price_percent = forms.IntegerField(
+    recurring_price_percent = WholePercentField(
         required=False,
         min_value=1,
         max_value=100,
@@ -1828,7 +1829,7 @@ class AlertSettingsForm(forms.Form):
         label="AI unusual-spending summary",
         help_text="On by default when an AI backend is connected. Phrases this month's flags in two or three sentences. The flags stay the source of truth.",
     )
-    unusual_category_percent = forms.IntegerField(
+    unusual_category_percent = WholePercentField(
         required=False,
         min_value=1,
         max_value=1000,
@@ -1836,7 +1837,7 @@ class AlertSettingsForm(forms.Form):
         label="Category unusual percent",
         help_text="Flag a category when this month exceeds its trailing 6-month median by at least this percent and by the dollar floor.",
     )
-    unusual_category_amount = forms.DecimalField(
+    unusual_category_amount = MoneyField(
         required=False,
         min_value=Decimal("0.00"),
         max_digits=18,  # cents must fit the BIGINT column
@@ -1846,7 +1847,7 @@ class AlertSettingsForm(forms.Form):
         help_text="USD. Combined with the percent: both must be exceeded versus the trailing 6-month median.",
         widget=forms.TextInput(attrs={"inputmode": "decimal"}),
     )
-    large_transaction_amount = forms.DecimalField(
+    large_transaction_amount = MoneyField(
         required=False,
         min_value=Decimal("0.01"),
         max_digits=18,  # cents must fit the BIGINT column
@@ -1957,7 +1958,7 @@ class SheetColumnMappingForm(forms.Form):
 
 
 class SheetToleranceForm(forms.Form):
-    tolerance = forms.DecimalField(
+    tolerance = MoneyField(
         min_value=Decimal("0.00"),
         max_value=Decimal("1000000.00"),
         max_digits=12,
@@ -1984,7 +1985,7 @@ class BillsCalendarForm(forms.Form):
         label="Checking and savings accounts",
         help_text="Expected balance starts from these accounts' latest snapshots.",
     )
-    threshold_amount = forms.DecimalField(
+    threshold_amount = MoneyField(
         required=False,
         min_value=Decimal("0.00"),
         max_digits=18,  # cents must fit the BIGINT column
