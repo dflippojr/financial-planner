@@ -5,6 +5,7 @@ is deleted with it; the attach control names the provider; access follows the co
 All data is synthetic.
 """
 
+import re
 from datetime import date, timedelta
 from html import unescape
 from types import SimpleNamespace
@@ -20,7 +21,7 @@ from finance.category_services import ensure_household_categories
 from finance.lifecycle_services import delete_member_data
 from finance.chat_attachment_parsing import PASSWORD_PROTECTED, TOO_LARGE, UNSUPPORTED, parse_upload
 from finance.chat_attachments import (
-    attached_for_other_provider,
+    provider_needs_warning,
     provider_key,
     DATA_NOT_INSTRUCTIONS,
     NONE_ATTACHED,
@@ -35,6 +36,7 @@ from finance.chat_proposals import NOTHING_APPLIED
 from finance.chat_runner import process_pending_turns
 from finance.chat_services import (
     PROVIDER_CHANGED,
+    PROVIDER_SWITCH_UNSEEN,
     chat_backend_for,
     conversations_for,
     delete_all_conversations,
@@ -63,7 +65,7 @@ from tests.chat_attachment_fixtures import (
     make_pdf,
     upload,
 )
-from tests.fake_provider import anthropic_text, anthropic_tool, openai_text
+from tests.fake_provider import anthropic_text, anthropic_tool, openai_text, openai_tool
 from tests.test_ai_api_key import ANTHROPIC, KEYS, OPENAI, provider  # noqa: F401 - provider is a fixture
 from tests.test_ai_api_key import _member as api_member
 from tests.test_chat import TOKEN, add_txn, checking, make_member
@@ -418,24 +420,83 @@ def test_read_tool_caps_characters_per_call_and_continues_long_rows_and_pages(ha
     assert "--- page 2 ---\nshort" in both.text
 
 
+def _switch_to_openai(person):
+    connect_api_key(person, kind=OPENAI, key=KEYS[OPENAI])
+    set_api_defaults(person, kind=OPENAI, chat_model="", background_model="", use_chat=True, use_background=False)
+
+
 @pytest.mark.django_db
-def test_earlier_turns_are_not_resent_to_another_provider_even_after_the_file_is_removed(provider):  # noqa: F811
+def test_after_a_provider_switch_the_chat_names_the_new_provider_and_then_it_reads_the_file(provider):  # noqa: F811
+    # Owner decision 5 (2026-11-05): no re-attach; a fresh warning names the new provider first.
+    user, person, _household = api_member(ANTHROPIC)
+    client = Client()
+    client.force_login(user)
+    conversation, attachment = _attach(person)
+    anthropic_key = _key(person)
+    provider.script = [
+        (200, anthropic_text("Groceries is 400 per budget.csv.")),
+        (200, openai_tool("read_attachment", {"attachment_id": attachment.pk, "limit": 2})),
+        (200, openai_text("OpenAI read budget.csv: Groceries 400 (row 2).")),
+    ]
+    process_pending_turns(sleep=no_sleep)
+    page = client.get(f"{reverse('chat')}?c={conversation.pk}").content.decode()
+    assert "data-chat-provider-switch" not in page
+
+    _switch_to_openai(person)
+    openai_key = _key(person)
+    assert openai_key != anthropic_key
+    # Before the warning has been shown, OpenAI reads nothing.
+    assert not read_attachment(person, conversation.pk, openai_key, {"attachment_id": attachment.pk}).ok
+    page = client.get(f"{reverse('chat')}?c={conversation.pk}")
+    assert_page_is_csp_clean(page)
+    text = " ".join(re.sub(r"<[^>]+>", " ", unescape(page.content.decode())).split())
+    assert "This conversation's attached files will go to OpenAI API (your key) with your next question." in text
+    popover = client.get(f"{reverse('chat-popover')}?c={conversation.pk}").json()
+    assert "data-chat-provider-switch" in popover["html"] and "OpenAI API (your key)" in popover["html"]
+
+    # A page from before the switch still named Anthropic: the question is refused, nothing stored.
+    stale = client.post(reverse("chat-send"), {
+        "prompt": "And now?", "conversation_id": conversation.pk, "attachment_provider": anthropic_key,
+    }, **JSON)
+    assert stale.status_code == 409 and stale.json()["error"] == PROVIDER_SWITCH_UNSEEN
+    assert conversation.messages.count() == 2
+
+    # Asked from the page that showed the warning: OpenAI may now read the file.
+    sent = client.post(reverse("chat-send"), {
+        "prompt": "And now?", "conversation_id": conversation.pk, "attachment_provider": openai_key,
+    }, **JSON)
+    assert sent.status_code == 200
+    process_pending_turns(sleep=no_sleep)
+    first, second, third = provider.requests
+    assert second["path"] == "/v1/responses"
+    assert 'name="budget.csv"' in second["body"]["instructions"]
+    # Earlier turns are resent once the new provider has been named.
+    assert [item["content"] for item in second["body"]["input"]][-1] == "And now?"
+    assert len(second["body"]["input"]) == 3
+    output = [item for item in third["body"]["input"] if item.get("type") == "function_call_output"][-1]["output"]
+    assert 'row 2: ["Groceries", "400"]' in output
+    reply = conversation.messages.filter(role=AiConversationMessage.Role.ASSISTANT).last()
+    assert reply.status == AiConversationMessage.Status.DONE and reply.content.startswith("OpenAI read")
+    assert "data-chat-provider-switch" not in client.get(f"{reverse('chat')}?c={conversation.pk}").content.decode()
+    assert AiConversation.objects.get(pk=conversation.pk).attachment_providers == [anthropic_key, openai_key]
+
+
+@pytest.mark.django_db
+def test_earlier_turns_are_not_resent_to_a_provider_the_chat_has_not_named(provider):  # noqa: F811
+    # A switch between the send and the answer (the runner resolves the provider again): the new
+    # provider was never named, so it gets neither the files nor the earlier turns quoting them.
     _user, person, _household = api_member(ANTHROPIC)
     provider.script = [(200, anthropic_text("Groceries is 400 per budget.csv.")), (200, openai_text("Second."))]
     conversation, attachment = _attach(person)
-    anthropic_key = _key(person)
     process_pending_turns(sleep=no_sleep)
     remove_attachment(person, attachment.pk)
-    connect_api_key(person, kind=OPENAI, key=KEYS[OPENAI])
-    set_api_defaults(person, kind=OPENAI, chat_model="", background_model="", use_chat=True, use_background=False)
-    send_message(person, "And now?", conversation_id=conversation.pk)
+    send_message(person, "And now?", conversation_id=conversation.pk, warned_provider=_key(person))
+    _switch_to_openai(person)
     process_pending_turns(sleep=no_sleep)
-    first, second = provider.requests
-    assert first["path"] == "/v1/messages" and second["path"] == "/v1/responses"
+    _first, second = provider.requests
     assert second["body"]["input"] == [{"role": "user", "content": "And now?"}]
     assert "Groceries" not in str(second["body"])
-    assert not attached_for_other_provider(conversation, anthropic_key)
-    assert attached_for_other_provider(conversation, _key(person))
+    assert provider_needs_warning(conversation, _key(person))
 
 
 # --- Access follows the conversation ---------------------------------------
@@ -480,17 +541,6 @@ def test_an_expired_conversation_hides_its_files(harness):
     AiConversation.objects.filter(pk=conversation.pk).update(expires_at=timezone.now() - timedelta(minutes=1))
     assert not visible_attachments(person).exists()
     assert not read_attachment(person, conversation.pk, _key(person), {"attachment_id": attachment.pk}).ok
-
-
-@pytest.mark.django_db
-def test_a_file_is_not_sent_to_a_provider_the_warning_did_not_name(harness):
-    client, person, _household = _harness_member(harness)
-    conversation, attachment = _attach(person)
-    AiChatAttachment.objects.filter(pk=attachment.pk).update(provider="anthropic_api@1")
-    assert not read_attachment(person, conversation.pk, _key(person), {"attachment_id": attachment.pk}).ok
-    assert attachment_context(person, conversation, _key(person)) is None
-    html = client.get(f"{reverse('chat')}?c={conversation.pk}").content.decode()
-    assert "Not sent to the current AI provider. Attach it again to use it here." in html
 
 
 # --- Every delete removes the file and its text ----------------------------
@@ -621,40 +671,23 @@ def test_instructions_inside_an_attachment_can_only_produce_a_proposal_card(harn
 
 
 @pytest.mark.django_db
-def test_reconnecting_the_harness_makes_earlier_files_unreadable(harness):
+def test_a_harness_reconnect_also_needs_the_fresh_warning_before_files_are_read(harness):
     # A reconnect keeps the connection row, even to another server, so the key carries connected_at.
-    _state, url = harness
-    _client, person, _household = _harness_member(harness)
+    state, url = harness
+    client, person, _household = _harness_member(harness)
     conversation, attachment = _attach(person)
+    process_pending_turns(sleep=no_sleep)
     before = _key(person)
-    assert read_attachment(person, conversation.pk, before, {"attachment_id": attachment.pk}).ok
     connect_harness(person, base_url=url, token=TOKEN)
     after = _key(person)
     assert after != before and after.split("@")[0] == before.split("@")[0] == "claude"
     assert not read_attachment(person, conversation.pk, after, {"attachment_id": attachment.pk}).ok
     assert attachment_context(person, conversation, after) is None
-
-
-@pytest.mark.django_db
-def test_the_turn_runs_on_the_connection_its_tools_were_bound_to(harness, monkeypatch):
-    # A second lookup inside run_conversation could land on a server a reconnect just put in
-    # place; the turn must use the connection answer_turn bound the attachment tool to.
-    import finance.ai_services as ai_services
-
-    state, _url = harness
-    _client, person, _household = _harness_member(harness)
-    _conversation, attachment = _attach(person)
-
-    def no_second_lookup(*_args, **_kwargs):
-        raise AssertionError("run_conversation resolved the connection again")
-
-    monkeypatch.setattr(ai_services, "resolve_ai", no_second_lookup)
-    state.need_tool = True
-    state.pending_tool_calls = [[{"call_id": "r1", "name": "read_attachment", "args": {"attachment_id": attachment.pk}}]]
-    process_pending_turns(sleep=no_sleep)
-    reply = AiConversationMessage.objects.filter(role__in=("assistant", "error")).get()
-    assert reply.status == AiConversationMessage.Status.DONE, reply.content
-    assert 'row 2: ["Groceries", "400"]' in state.tool_outputs[-1]
+    html = client.get(f"{reverse('chat')}?c={conversation.pk}").content.decode()
+    assert "data-chat-provider-switch" in html and "Claude through the agent harness" in html
+    send_message(person, "Again?", conversation_id=conversation.pk, warned_provider=after)
+    assert read_attachment(person, conversation.pk, after, {"attachment_id": attachment.pk}).ok
+    assert attachment_context(person, conversation, after) is not None
 
 
 # --- Uploads racing a conversation delete (PostgreSQL row locks) -----------
@@ -810,3 +843,31 @@ def test_one_turn_carries_a_chart_and_an_attachment_citation(harness):
     assert "data-chat-chart" in live["charts_html"]
     assert {"label": "budget.csv", "amount_display": "rows 1–5",
             "url": f"{reverse('chat')}?c={conversation.pk}#attachment-{attachment.pk}"} in live["figures"]
+
+
+# --- The data export leaves attachments out (owner decision 6) -------------
+
+
+@pytest.mark.django_db
+def test_the_data_export_leaves_attached_files_and_their_text_out(harness):
+    import io
+    import zipfile
+
+    from finance.export import collect_export_tables, write_export_zip
+
+    _client, person, _household = _harness_member(harness)
+    canary_text = "ZQ-ATTACHED-CONTENT-7731"
+    canary_name = "ZQ-attached-name.csv"
+    conversation, attachment = _attach(person, canary_name, f"Note\n{canary_text}\n".encode(),
+                                       prompt="Read the synthetic file.")
+    tables = collect_export_tables(person)
+    # The conversation and its question are exported as before; the file is not.
+    assert any(row["id"] == conversation.pk for row in tables["ai_conversations"])
+    assert not any("attachment" in name for name in tables)
+    assert canary_text not in str(tables) and canary_name not in str(tables)
+    archive = zipfile.ZipFile(io.BytesIO(write_export_zip(person)))
+    assert not any("attachment" in name.lower() for name in archive.namelist())
+    assert b"Files attached to a chat, and their text, are not included" in archive.read("README.txt")
+    everything = b"".join(archive.read(name) for name in archive.namelist())
+    assert canary_text.encode() not in everything and canary_name.encode() not in everything
+    assert bytes(AiChatAttachment.objects.get(pk=attachment.pk).data).find(canary_text.encode()) >= 0

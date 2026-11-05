@@ -33,11 +33,12 @@ from .ai_types import (
     UNAVAILABLE,
 )
 from .chat_attachments import (
-    attached_for_other_provider,
+    acknowledge_provider,
     attachment_context,
     attachment_tools,
     delete_conversations,
     provider_key,
+    provider_needs_warning,
     store_attachment,
 )
 from .chat_attachment_parsing import AttachmentRejected
@@ -63,6 +64,10 @@ LOCAL_HIDDEN = "Chat on the local model is not offered yet. Choose Claude in Set
 PROVIDER_CHANGED = (
     "Your AI provider changed since this page loaded, so the file was not sent. "
     "Reload the page, check which provider the warning names, and attach it again."
+)
+PROVIDER_SWITCH_UNSEEN = (
+    "Your AI provider changed since this page loaded, and this conversation has attached files. "
+    "Reload the page to see which provider they will go to, then ask again."
 )
 NO_CHAT_BACKEND = "No chat backend is available yet. Sign in to Claude on the harness, then choose it in Settings → AI."
 
@@ -293,9 +298,11 @@ def send_message(
 
     ``attachment`` is a file already parsed by chat_attachment_parsing. It is stored
     with the question in one transaction, so a refused file leaves nothing behind.
-    ``warned_provider`` is the provider (chat_attachments.provider_key) the attach warning
-    named on the member's page; a file is refused, before anything is written, when chat
-    has since moved to another provider.
+    ``warned_provider`` is the provider (chat_attachments.provider_key) the member's page
+    named in its warnings. A new file is refused, before anything is written, when chat has
+    since moved to another provider. In a conversation that holds files, a provider the chat
+    has not yet warned about (owner decision 5) is recorded as warned when the page named
+    it, and the send is refused when the page still named the previous one.
     """
     if len(text or "") > MAX_CHAT_PROMPT_CHARS:
         raise AiError(f"Questions must be at most {MAX_CHAT_PROMPT_CHARS:,} characters.")
@@ -336,6 +343,11 @@ def send_message(
             raise AiError(TURN_LIMIT, LIMIT_REACHED)
         if conversation.tool_call_count >= max_tool_calls():
             raise AiError(TOOL_LIMIT, LIMIT_REACHED)
+        if provider_needs_warning(conversation, provider):
+            # The page showed the switch warning only if it was rendered for this provider.
+            if warned_provider != provider:
+                raise AttachmentRejected(PROVIDER_SWITCH_UNSEEN)
+            acknowledge_provider(conversation, provider)
 
         question = AiConversationMessage.objects.create(
             conversation=conversation,
@@ -465,12 +477,12 @@ def answer_turn(turn, *, sleep=None, monotonic=None):
     saved_session = (conversation.harness_session_id or "").strip()
     household = current_household(person)
     consent_held = household is None or household_ai_allowed(household)
-    # Earlier turns built from a row the member can no longer see are never resent, nor
-    # turns that may quote a file attached for another provider than this one (#644).
+    # Earlier turns built from a row the member can no longer see are never resent, nor turns
+    # that may quote attached files to a provider the chat has not yet warned about (#644).
     history_held = (
         consent_held
         and _uses_only_visible_rows(conversation, person)
-        and not attached_for_other_provider(conversation, provider)
+        and not provider_needs_warning(conversation, provider)
     )
     follow_up = (
         history_held

@@ -146,12 +146,12 @@ def _record_removed(item, actor):
     )
 
 
-def attachments_for(conversation, provider):
+def attachments_for(conversation):
     """Display rows for the conversation's attachments, without their bytes or text."""
     if conversation is None:
         return []
     rows = AiChatAttachment.objects.filter(conversation=conversation).order_by("pk").values(
-        "pk", "message_id", "original_name", "kind", "summary", "provider"
+        "pk", "message_id", "original_name", "kind", "summary"
     )
     return [
         {
@@ -160,8 +160,6 @@ def attachments_for(conversation, provider):
             "original_name": row["original_name"],
             "kind": row["kind"],
             "description": describe(row["kind"], row["summary"]),
-            # A file attached while chat used another provider is not sent to this one.
-            "readable": row["provider"] == provider,
         }
         for row in rows
     ]
@@ -187,18 +185,41 @@ def describe(kind, summary) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _warned_providers(conversation_id):
+    return AiConversation.objects.filter(pk=conversation_id).values_list("attachment_providers", flat=True).first() or []
+
+
 def _readable(person, conversation_id, provider):
-    """Attachments the model may read in this turn: this conversation, this member, this provider."""
-    return visible_attachments(person).filter(conversation_id=conversation_id, provider=provider)
+    """Attachments the model may read in this turn: this conversation, this member, and only once
+    the chat has warned that their contents go to this provider (owner decision 5)."""
+    if provider not in _warned_providers(conversation_id):
+        return AiChatAttachment.objects.none()
+    return visible_attachments(person).filter(conversation_id=conversation_id)
 
 
-def attached_for_other_provider(conversation, provider):
-    """Whether a file was ever attached to the conversation for another provider than this one.
+def provider_needs_warning(conversation, provider):
+    """Whether the chat must name this provider before it reads the conversation's files.
 
-    Earlier turns may quote that file, even after it was removed, so they are not resent here.
+    Owner decision 5 (2026-11-05): after a provider switch or reconnect, files already attached
+    stay readable by the new provider, but only after the chat has shown a fresh warning naming
+    it. Until then the provider reads nothing from them, and earlier turns that may quote them
+    are not resent to it. A conversation that ever held a file keeps needing the warning, even
+    after the file was removed, because earlier answers can still quote it.
     """
-    used = AiConversation.objects.filter(pk=conversation.pk).values_list("attachment_providers", flat=True).first()
-    return any(item != provider for item in used or [])
+    if conversation is None:
+        return False
+    warned = _warned_providers(conversation.pk)
+    if provider in warned:
+        return False
+    return bool(warned) or AiChatAttachment.objects.filter(conversation_id=conversation.pk).exists()
+
+
+def acknowledge_provider(conversation, provider):
+    """Record that the chat has warned this provider will read the files. Caller holds the lock."""
+    warned = list(conversation.attachment_providers or [])
+    if provider not in warned:
+        conversation.attachment_providers = [*warned, provider]
+        conversation.save(update_fields=("attachment_providers", "updated_at"))
 
 
 def attachment_context(person, conversation, provider):

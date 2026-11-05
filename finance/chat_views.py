@@ -19,7 +19,13 @@ from .ai_api import label as api_label
 from .ai_services import AiError, local_status, member_has_ai, resolve_ai, warm_for_chat
 from .ai_types import API_KINDS, LOCAL_BACKEND
 from .chat_attachment_parsing import TOO_LARGE, AttachmentRejected, parse_upload
-from .chat_attachments import attachments_for, max_per_conversation, provider_key, remove_attachment
+from .chat_attachments import (
+    attachments_for,
+    max_per_conversation,
+    provider_key,
+    provider_needs_warning,
+    remove_attachment,
+)
 from .chat_proposals import ProposalError, apply_proposal, card_for, dismiss_proposal, proposal_for
 from .chat_runner import recover_stale_turns
 from .chat_services import (
@@ -378,7 +384,7 @@ def _chat_context(person, conversation, request):
         for item in messages_qs:
             item.cards = [card_for(person, proposal) for proposal in item.proposals.all()]
     by_message = defaultdict(list)
-    for attachment in attachments_for(conversation, provider_key(connection, backend)):
+    for attachment in attachments_for(conversation):
         by_message[attachment["message_id"]].append(attachment)
     for item in messages_qs:
         item.attachment_list = by_message.get(item.pk, [])
@@ -388,6 +394,9 @@ def _chat_context(person, conversation, request):
         "chat_backend_label": _backend_label(backend),
         "chat_provider_label": provider_label(person, connection, backend),
         "chat_provider_key": provider_key(connection, backend),
+        # Owner decision 5: after a switch or reconnect, name the new provider before it reads
+        # the conversation's files. Sending from this page records that it was shown.
+        "chat_attachment_switch": provider_needs_warning(conversation, provider_key(connection, backend)),
         "chat_attachment_accept": ATTACHMENT_ACCEPT,
         "chat_attachment_limit": max_per_conversation(),
         "chat_show_local": show_local,

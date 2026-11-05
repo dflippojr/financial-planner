@@ -2101,9 +2101,10 @@ class AiConversation(models.Model):
     used_account_ids = models.JSONField(default=list)
     used_planned_item_ids = models.JSONField(default=list)
     used_budget_ids = models.JSONField(default=list)
-    # Providers (chat backend and connection, chat_attachments.provider_key) files were ever
-    # attached for (#644). Kept after a file is removed: earlier turns may quote it, so they
-    # are resent only while chat uses that same provider.
+    # Providers (chat backend and connection, chat_attachments.provider_key) the chat has warned
+    # will receive this conversation's files (#644, owner decision 5): the provider named at
+    # upload, and each provider whose switch warning the member saw before asking again. Only
+    # these may read the files or be resent earlier turns. Kept after a file is removed.
     attachment_providers = models.JSONField(default=list)
     # Whether the saved harness session was started with read_attachment among its tools.
     # A session started before #644 cannot call it, so a turn with files starts a new one.

@@ -188,3 +188,37 @@ def test_the_popover_stays_closed_on_a_phone_where_the_chat_page_attaches(page_s
         expect(page.locator("#ai-popover")).to_be_hidden()
     finally:
         context.close()
+
+
+@pytest.mark.parametrize(("viewport", "scheme"), [((390, 844), "light"), ((1440, 900), "dark")], ids=["phone", "desktop"])
+def test_the_provider_switch_warning_shows_before_the_new_provider_reads(page_session, harness, viewport, scheme):  # noqa: F811
+    # Owner decision 5: a reconnect (or switch) keeps files readable after a fresh, visible warning.
+    from finance.ai_services import connect_harness
+    from finance.chat_attachment_parsing import parse_upload
+    from finance.chat_attachments import provider_key
+    from finance.chat_services import chat_backend_for, send_message
+    from tests.chat_attachment_fixtures import upload
+    from tests.test_chat import TOKEN
+
+    _state, url = harness
+    context, page = page_session(viewport, scheme, "/")
+    try:
+        person = _member(url)
+        key = provider_key(*chat_backend_for(person))
+        conversation = send_message(person, "Read my budget.", attachment=parse_upload(upload("budget.csv", BUDGET_CSV.encode())),
+                                    warned_provider=key)
+        connect_harness(person, base_url=url, token=TOKEN)
+        page.goto(page.url.split("?")[0].rstrip("/") + f"/chat/?c={conversation.pk}")
+        page.wait_for_load_state("networkidle")
+        warning = page.locator("main [data-chat-provider-switch]")
+        warning.scroll_into_view_if_needed()
+        expect(warning).to_be_visible()
+        expect(warning).to_contain_text(f"This conversation's attached files will go to {PROVIDER} with your next question.")
+        assert page.evaluate(NO_SIDEWAYS_SCROLL)
+        page.locator("#chat-send-form textarea[name=prompt]").fill("Again, please.")
+        page.locator("#chat-send-form").get_by_role("button", name="Send").click()
+        page.wait_for_load_state("networkidle")
+        expect(page.locator("main [data-chat-provider-switch]")).to_have_count(0)
+        assert provider_key(*chat_backend_for(person)) in type(conversation).objects.get(pk=conversation.pk).attachment_providers
+    finally:
+        context.close()
