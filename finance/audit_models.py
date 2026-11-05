@@ -30,6 +30,7 @@ METADATA_INT_KEYS = frozenset({
     "batch_id", "new_count", "duplicate_count", "invalid_count", "row_count", "history_id",
     "bulk_edit_id", "rule_application_id", "surviving_id", "source_id", "proposal_id",
     "transaction_id", "account_id", "undo_id", "connection_id", "usage_id", "job_id", "turn_id", "attempt",
+    "conversation_id",
 })
 METADATA_ENUM_KEYS = {
     "operation": frozenset({"simplefin_sync", "ai_claim", "ai_attempt", "ai_recovery", "ai_job", "ai_inference", "chat_turn",
@@ -176,6 +177,8 @@ class AuditEvent(models.Model):
         RECURRING_PRICE_ACKNOWLEDGED = "recurring_price_ack", "Recurring price change acknowledged"
         RECEIPT_ATTACHED = "receipt_attached", "Receipt attached"
         RECEIPT_REMOVED = "receipt_removed", "Receipt removed"
+        CHAT_ATTACHMENT_ADDED = "chat_attachment_added", "Chat attachment added"
+        CHAT_ATTACHMENT_REMOVED = "chat_attachment_removed", "Chat attachment removed"
         DOWNLOAD_PREPARED = "download_prepared", "Download response prepared"
 
     class Outcome(models.TextChoices):
@@ -216,6 +219,7 @@ class AuditEvent(models.Model):
         RULE = "rule", "Category rule"
         RECURRING = "recurring", "Recurring series"
         RECEIPT = "receipt", "Receipt"
+        CHAT_ATTACHMENT = "chat_attachment", "Chat attachment"
         EXPORT = "export", "Data download"
         BULK_EDIT = "bulk_edit", "Bulk edit"
         AI_JOB = "ai_job", "AI job"
@@ -374,7 +378,7 @@ _WORKFLOW_ACTIONS = (
     _A.BULK_APPLIED, _A.BULK_UNDONE, _A.RULE_APPLIED, _A.RULE_REVERSED, _A.RECURRING_CONFIRMED,
     _A.RECURRING_DISMISSED, _A.RECURRING_MERGED, _A.RECURRING_ADDED, _A.RECURRING_REMOVED,
     _A.RECURRING_CANCELED, _A.RECURRING_RESUMED, _A.RECURRING_PRICE_ACKNOWLEDGED, _A.RECEIPT_ATTACHED,
-    _A.RECEIPT_REMOVED, _A.DOWNLOAD_PREPARED,
+    _A.RECEIPT_REMOVED, _A.CHAT_ATTACHMENT_ADDED, _A.CHAT_ATTACHMENT_REMOVED, _A.DOWNLOAD_PREPARED,
 )
 # Target type None: any workflow target type, checked by the caller's typed call sites.
 ACTION_SPECS.update({action: (None, AUDIENCE_FLEXIBLE, set(CHANGED_FIELDS)) for action in _WORKFLOW_ACTIONS})

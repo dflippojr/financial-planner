@@ -26,7 +26,7 @@
       <button type="button" class="btn btn-xs btn-outline" data-pop-followup>Explain this</button>
       <button type="button" class="btn btn-xs btn-outline" data-pop-followup>What changed?</button>
     </div>
-    <form id="ai-popover-form" method="post" action="{% url 'chat-send' %}" class="p-3 space-y-2">
+    <form id="ai-popover-form" method="post" action="{% url 'chat-send' %}" enctype="multipart/form-data" class="p-3 space-y-2">
       {% csrf_token %}
       <input type="hidden" name="conversation_id" value="">
       <input type="hidden" name="tile_context" value="">
@@ -34,6 +34,13 @@
       <input type="hidden" name="page_query" value="{{ request.GET.urlencode }}">
       <input type="hidden" name="next" value="{% url 'chat' %}">
       <label class="block"><span class="sr-only">Question about your data</span><textarea name="prompt" rows="2" class="textarea textarea-bordered w-full" required></textarea></label>
+      <div class="flex flex-col gap-1" data-chat-attach>
+        <label class="flex min-h-11 items-center">
+          <span class="sr-only">Attach a CSV, XLSX or PDF file</span>
+          <input type="file" name="attachment" accept=".csv,.xlsx,.pdf,text/csv,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="file-input file-input-sm min-h-11 w-full" aria-describedby="ai-popover-attachment-note">
+        </label>
+        <p id="ai-popover-attachment-note" class="text-xs" data-chat-attach-note>An attached file's contents go to <strong data-chat-provider>your AI provider</strong>. CSV, XLSX or PDF, up to 10 MB.</p>
+      </div>
       <div class="flex items-center justify-between gap-2">
         <p class="text-xs">Opinion, not financial advice.</p>
         <button type="submit" class="btn btn-primary btn-sm">Send</button>

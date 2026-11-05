@@ -32,6 +32,7 @@ from .ai_types import (
     ToolResult,
     UNAVAILABLE,
 )
+from .chat_attachments import attachment_context, attachment_tools, delete_conversations, store_attachment
 from .chat_proposals import proposal_tools
 from .lifecycle_services import _DENIED, _person_for
 from .input_limits import MAX_CHAT_PROMPT_CHARS, MAX_PAGE_CONTEXT_CHARS, MAX_CHAT_MESSAGES
@@ -86,7 +87,7 @@ def purge_expired(person=None):
     query = AiConversation.objects.filter(expires_at__lte=timezone.now())
     if person is not None:
         query = query.filter(member=person)
-    query.delete()
+    delete_conversations(query)
 
 
 def start_conversation(principal):
@@ -112,12 +113,12 @@ def delete_conversation(principal, conversation_id):
     row = AiConversation.objects.owned_by(person).filter(pk=conversation_id).first()
     if row is None:
         raise PermissionDenied(_DENIED)
-    row.delete()
+    delete_conversations(AiConversation.objects.filter(pk=row.pk), actor=person)
 
 
 def delete_all_conversations(principal):
     person = _person_for(principal)
-    AiConversation.objects.owned_by(person).delete()
+    delete_conversations(AiConversation.objects.owned_by(person), actor=person)
 
 
 def delete_conversations_for_account(account_id):
@@ -127,7 +128,7 @@ def delete_conversations_for_account(account_id):
         if account_id in ids:
             doomed.append(row.pk)
     if doomed:
-        AiConversation.objects.filter(pk__in=doomed).delete()
+        delete_conversations(AiConversation.objects.filter(pk__in=doomed))
 
 
 # The household rows a tool can quote, by the conversation field that records them.
@@ -173,7 +174,7 @@ def delete_conversations_without_access(account_ids=(), *, planned_item_ids=(), 
         if any(ids - visible[field] for field, ids in used.items()):
             doomed.append(row.pk)
     if doomed:
-        AiConversation.objects.filter(pk__in=doomed).delete()
+        delete_conversations(AiConversation.objects.filter(pk__in=doomed))
 
 
 def keep_conversation_if_visible(conversation_id):
@@ -192,7 +193,7 @@ def keep_conversation_if_visible(conversation_id):
             list(model.objects.select_for_update().filter(pk__in=used).order_by("pk").values_list("pk", flat=True))
     if _uses_only_visible_rows(conversation, conversation.member):
         return True
-    conversation.delete()
+    delete_conversations(AiConversation.objects.filter(pk=conversation.pk))
     return False
 
 
@@ -272,8 +273,12 @@ def page_context_from_request(request):
     )
 
 
-def send_message(principal, text, *, conversation_id=None, page_context=None, start_new=False):
-    """Store the question and a pending reply; the chat runner answers it in the background."""
+def send_message(principal, text, *, conversation_id=None, page_context=None, start_new=False, attachment=None):
+    """Store the question and a pending reply; the chat runner answers it in the background.
+
+    ``attachment`` is a file already parsed by chat_attachment_parsing. It is stored
+    with the question in one transaction, so a refused file leaves nothing behind.
+    """
     if len(text or "") > MAX_CHAT_PROMPT_CHARS:
         raise AiError(f"Questions must be at most {MAX_CHAT_PROMPT_CHARS:,} characters.")
     person = _person_for(principal)
@@ -312,6 +317,8 @@ def send_message(principal, text, *, conversation_id=None, page_context=None, st
             content=prompt,
             page_context=context_payload,
         )
+        if attachment is not None:
+            store_attachment(person, conversation, question, attachment, backend=backend)
         conversation.turn_count += 1
         if not conversation.title:
             conversation.title = prompt[:80]
@@ -419,8 +426,11 @@ def answer_turn(turn, *, sleep=None, monotonic=None):
             locked.save(update_fields=(*_USED_ROWS, "updated_at"))
             conversation.tool_call_count = locked.tool_call_count
 
-    tools = default_tools() + proposal_tools(conversation, turn)
+    tools = default_tools() + proposal_tools(conversation, turn) + attachment_tools(conversation, backend)
     harness_context = _harness_context(context_payload)
+    attached = attachment_context(person, conversation, backend)
+    if attached is not None:
+        harness_context.append(attached)
     marker = _connection_marker(connection)
     saved_session = (conversation.harness_session_id or "").strip()
     household = current_household(person)

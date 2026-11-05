@@ -1,0 +1,141 @@
+"""Attaching a file in Chromium (#644): the Chat page on phone and desktop, and the desktop popover.
+
+The warning names the provider before anything is uploaded, the controls keep 44 px targets, the
+page never scrolls sideways, and no Content Security Policy violation is reported.
+"""
+
+from pathlib import Path
+
+import pytest
+from playwright.sync_api import expect
+
+from finance.models import AiChatAttachment
+from tests.browser_support import SCREEN_DIR, browser, page_session  # noqa: F401
+from tests.chat_attachment_fixtures import BUDGET_CSV, make_pdf
+from tests.test_chat import harness  # noqa: F401
+from tests.test_chat_markdown_layout import _member
+
+pytestmark = pytest.mark.django_db(transaction=True)
+
+PROVIDER = "Claude through the agent harness"
+NO_SIDEWAYS_SCROLL = "() => document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+
+
+def _height(locator):
+    # Layout height: the popover opens with a scale animation that would shrink a bounding box.
+    return locator.evaluate("(el) => el.offsetHeight")
+
+
+def _csp_watch(page):
+    violations = []
+    page.on("console", lambda message: violations.append(message.text) if "Content Security Policy" in message.text else None)
+    return violations
+
+
+@pytest.mark.parametrize(("viewport", "scheme"), [((390, 844), "light"), ((1440, 900), "dark")], ids=["phone", "desktop"])
+def test_attach_a_file_on_the_chat_page(page_session, harness, viewport, scheme):  # noqa: F811
+    _state, url = harness
+    context, page = page_session(viewport, scheme, "/")
+    violations = _csp_watch(page)
+    try:
+        _member(url)
+        page.goto(page.url.split("?")[0].rstrip("/") + "/chat/")
+        page.wait_for_load_state("networkidle")
+        note = page.locator("#chat-attachment-note")
+        expect(note).to_be_visible()
+        expect(note).to_contain_text(f"An attached file's contents go to {PROVIDER}.")
+        picker = page.locator("#chat-send-form input[name=attachment]")
+        expect(picker).to_be_visible()
+        assert _height(picker) >= 44
+        assert picker.get_attribute("aria-describedby") == "chat-attachment-note"
+        assert page.evaluate(NO_SIDEWAYS_SCROLL)
+
+        picker.set_input_files(files=[{"name": "budget.csv", "mimeType": "text/csv", "buffer": BUDGET_CSV.encode()}])
+        page.locator("#chat-send-form textarea[name=prompt]").fill("Compare my budget with spending.")
+        page.locator("#chat-send-form").get_by_role("button", name="Send").click()
+        page.wait_for_url("**/chat/?c=*")
+        chip = page.locator("main [data-chat-attachment]")
+        expect(chip).to_have_count(1)
+        expect(chip).to_contain_text("budget.csv")
+        expect(chip).to_contain_text("CSV · 4 rows")
+        chip.scroll_into_view_if_needed()
+        expect(chip).to_be_visible()
+        remove = chip.get_by_role("button", name="Remove budget.csv")
+        assert _height(remove) >= 44
+        assert page.evaluate(NO_SIDEWAYS_SCROLL)
+        assert AiChatAttachment.objects.get().original_name == "budget.csv"
+        if SCREEN_DIR:
+            page.screenshot(path=str(Path(SCREEN_DIR) / f"chat-attachment-{scheme}.png"))
+
+        page.on("dialog", lambda dialog: dialog.accept())
+        remove.click()
+        page.wait_for_load_state("networkidle")
+        expect(page.locator("main [data-chat-attachment]")).to_have_count(0)
+        assert not AiChatAttachment.objects.exists()
+        assert violations == []
+    finally:
+        context.close()
+
+
+def test_a_refused_file_shows_why_on_the_chat_page(page_session, harness):  # noqa: F811
+    _state, url = harness
+    context, page = page_session((390, 844), "light", "/")
+    try:
+        _member(url)
+        page.goto(page.url.split("?")[0].rstrip("/") + "/chat/")
+        page.locator("#chat-send-form input[name=attachment]").set_input_files(
+            files=[{"name": "notes.txt", "mimeType": "text/plain", "buffer": b"plain synthetic notes"}]
+        )
+        page.locator("#chat-send-form textarea[name=prompt]").fill("Read this.")
+        page.locator("#chat-send-form").get_by_role("button", name="Send").click()
+        page.wait_for_load_state("networkidle")
+        expect(page.get_by_role("status").filter(has_text="Attach a CSV, XLSX or PDF file")).to_be_visible()
+        assert not AiChatAttachment.objects.exists()
+    finally:
+        context.close()
+
+
+def test_attach_a_file_in_the_desktop_popover(page_session, harness):  # noqa: F811
+    _state, url = harness
+    context, page = page_session((1280, 800), "light", "/")
+    violations = _csp_watch(page)
+    try:
+        _member(url)
+        page.reload()
+        page.wait_for_load_state("networkidle")
+        page.evaluate("() => window.AiPopover.open({origin: document.querySelector('main h1')})")
+        popover = page.locator("#ai-popover")
+        expect(popover).to_be_visible()
+        note = popover.locator("#ai-popover-attachment-note")
+        # The thread load fills in the member's provider before anything can be sent.
+        expect(note).to_contain_text(f"An attached file's contents go to {PROVIDER}.")
+        picker = popover.locator("input[name=attachment]")
+        assert _height(picker) >= 44
+        picker.set_input_files(files=[{"name": "statement.pdf", "mimeType": "application/pdf",
+                                       "buffer": make_pdf(["Synthetic statement"])}])
+        popover.locator("textarea").fill("What does this say?")
+        popover.locator("#ai-popover-form").get_by_role("button", name="Send").click()
+        chip = popover.locator("[data-chat-attachment]")
+        expect(chip).to_have_count(1)
+        expect(chip).to_contain_text("statement.pdf")
+        expect(chip).to_contain_text("PDF · 1 page")
+        assert picker.evaluate("(el) => el.value") == ""
+        assert popover.locator("[data-pop-scroll]").evaluate("(el) => el.scrollWidth <= el.clientWidth + 1")
+        assert page.evaluate(NO_SIDEWAYS_SCROLL)
+        assert AiChatAttachment.objects.get().original_name == "statement.pdf"
+        assert violations == []
+    finally:
+        context.close()
+
+
+def test_the_popover_stays_closed_on_a_phone_where_the_chat_page_attaches(page_session, harness):  # noqa: F811
+    _state, url = harness
+    context, page = page_session((390, 844), "light", "/")
+    try:
+        _member(url)
+        page.reload()
+        page.wait_for_load_state("networkidle")
+        page.evaluate("() => window.AiPopover && window.AiPopover.open({origin: document.querySelector('main h1')})")
+        expect(page.locator("#ai-popover")).to_be_hidden()
+    finally:
+        context.close()

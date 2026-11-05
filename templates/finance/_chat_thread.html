@@ -58,12 +58,20 @@ the thread keeps one narrow column.
 </div>
 </div>
 {% endif %}
-<form method="post" action="{% url 'chat-send' %}" class="space-y-2{% if composer_fixed %} max-md:fixed max-md:inset-x-0 max-md:bottom-[calc(4rem+env(safe-area-inset-bottom))] max-md:z-20 max-md:space-y-0 max-md:border-t max-md:border-base-300 max-md:bg-base-100 max-md:p-3 lg:sticky lg:bottom-0 lg:space-y-0 lg:rounded-b-box lg:border-t lg:border-base-300 lg:bg-base-100 lg:px-6 lg:py-4{% endif %}" id="chat-send-form" data-pending-label="Thinking…">
+<form method="post" action="{% url 'chat-send' %}" enctype="multipart/form-data" class="space-y-2{% if composer_fixed %} max-md:fixed max-md:inset-x-0 max-md:bottom-[calc(4rem+env(safe-area-inset-bottom))] max-md:z-20 max-md:space-y-0 max-md:border-t max-md:border-base-300 max-md:bg-base-100 max-md:p-3 lg:sticky lg:bottom-0 lg:space-y-0 lg:rounded-b-box lg:border-t lg:border-base-300 lg:bg-base-100 lg:px-6 lg:py-4{% endif %}" id="chat-send-form" data-pending-label="Thinking…">
   {% csrf_token %}
   {% if conversation %}<input type="hidden" name="conversation_id" value="{{ conversation.pk }}">{% endif %}
   <input type="hidden" name="page_route" value="{{ page_context.route|default:request.path }}">
   <input type="hidden" name="page_query" value="{{ page_context.query|default:request.GET.urlencode }}">
   <input type="hidden" name="next" value="{{ chat_next|default:request.get_full_path }}">
+  {# The warning names the provider before anything is uploaded (owner decision 3, #644). #}
+  <div class="flex flex-wrap items-center gap-x-3 gap-y-1{% if composer_fixed %} max-md:mb-2 lg:mx-auto lg:mb-2 lg:max-w-[760px]{% endif %}" data-chat-attach>
+    <label class="flex min-h-11 items-center">
+      <span class="sr-only">Attach a CSV, XLSX or PDF file</span>
+      <input type="file" name="attachment" accept="{{ chat_attachment_accept }}" class="file-input file-input-sm min-h-11 w-full max-w-[17rem]" aria-describedby="chat-attachment-note">
+    </label>
+    <p id="chat-attachment-note" class="text-xs" data-chat-attach-note>An attached file's contents go to <strong data-chat-provider>{{ chat_provider_label }}</strong>. CSV, XLSX or PDF, up to 10 MB.</p>
+  </div>
   <div class="{% if composer_fixed %}max-md:flex max-md:items-end max-md:gap-2 lg:mx-auto lg:flex lg:max-w-[760px] lg:items-end lg:gap-2.5{% endif %}">
   <label class="form-control{% if composer_fixed %} max-md:flex-1 lg:flex-1{% endif %}">
     <span class="label-text{% if composer_fixed %} max-md:sr-only lg:sr-only{% endif %}">Question</span>

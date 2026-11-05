@@ -2180,6 +2180,62 @@ class AiConversationMessage(models.Model):
         return f"AI message {self.pk}"
 
 
+class AiChatAttachment(models.Model):
+    """A file a member attached to one conversation (#644), parsed to text at upload.
+
+    It exists only in that conversation: it cascades with the conversation, so
+    every way a conversation is deleted (the member's delete, expiry, losing
+    sight of a row it used, account or member deletion) deletes the file bytes
+    and their parsed text with it. Both live only in this row, never on disk.
+    """
+
+    class Kind(models.TextChoices):
+        CSV = "csv", "CSV"
+        XLSX = "xlsx", "XLSX"
+        PDF = "pdf", "PDF"
+
+    conversation = models.ForeignKey(AiConversation, on_delete=models.CASCADE, related_name="attachments")
+    # The question the file was sent with, for showing it in the thread.
+    message = models.ForeignKey(
+        AiConversationMessage, on_delete=models.CASCADE, null=True, blank=True, related_name="attachments"
+    )
+    original_name = models.CharField(max_length=255)
+    kind = models.CharField(max_length=8, choices=Kind)
+    size_bytes = models.PositiveIntegerField()
+    # The chat backend named in the upload warning; the file is read only while chat still uses it.
+    backend = models.CharField(max_length=32)
+    data = models.BinaryField()
+    # {"sheets": [{"name", "rows": [[row number, [cells]]]}]} or {"pages": [text]}.
+    content = models.JSONField(default=dict)
+    # {"sheets": [{"name", "rows", "columns"}]} or {"pages", "truncated"}: listed without loading content.
+    summary = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class QuerySet(models.QuerySet):
+        def visible_to(self, principal):
+            # Access follows the conversation (AiConversation.QuerySet.visible_to): whoever
+            # may open it, and nobody else.
+            person = _person_for(principal)
+            if person is None:
+                return self.none()
+            return self.filter(conversation__member=person, conversation__expires_at__gt=timezone.now())
+
+    objects = QuerySet.as_manager()
+
+    class Meta:
+        ordering = ("pk",)
+        constraints = [
+            models.CheckConstraint(condition=Q(kind__in=("csv", "xlsx", "pdf")), name="ai_chat_attachment_kind_valid"),
+            models.CheckConstraint(
+                condition=Q(size_bytes__gt=0, size_bytes__lte=10 * 1024 * 1024),
+                name="ai_chat_attachment_size_within_cap",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Chat attachment {self.pk}"
+
+
 class AiProposal(models.Model):
     """A change the chat model suggested. Nothing is written until the member presses Apply."""
 

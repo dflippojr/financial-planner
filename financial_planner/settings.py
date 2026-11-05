@@ -296,6 +296,11 @@ AI_CHAT_STALE_SECONDS = int(os.environ.get("AI_CHAT_STALE_SECONDS", "60"))
 # harness session timeout plus the stale-job margin.
 AI_CHAT_MAX_PENDING_PER_MEMBER = int(os.environ.get("AI_CHAT_MAX_PENDING_PER_MEMBER", "3"))
 AI_CHAT_MAX_CONVERSATIONS = int(os.environ.get("AI_CHAT_MAX_CONVERSATIONS", "50"))
+# Chat attachments (#644): CSV, XLSX or PDF files parsed to text at upload and stored
+# in the database with their conversation, so every conversation delete removes them.
+CHAT_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024
+CHAT_ATTACHMENT_MAX_PER_CONVERSATION = 5
+CHAT_ATTACHMENT_PDF_TIMEOUT_SECONDS = int(os.environ.get("CHAT_ATTACHMENT_PDF_TIMEOUT_SECONDS", "15"))
 if os.environ.get("AI_CHAT_TURN_MAX_SECONDS"):
     AI_CHAT_TURN_MAX_SECONDS = int(os.environ["AI_CHAT_TURN_MAX_SECONDS"])
 AI_JOB_MAX_QUEUED_PER_MEMBER = int(os.environ.get("AI_JOB_MAX_QUEUED_PER_MEMBER", "12"))

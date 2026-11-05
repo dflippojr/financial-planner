@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections import defaultdict
 
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
@@ -14,11 +15,15 @@ from django.views.decorators.http import require_GET, require_POST
 
 from . import chat_markdown
 from .access import request_person as _person, service_or_404
+from .ai_api import label as api_label
 from .ai_services import AiError, local_status, member_has_ai, resolve_ai, warm_for_chat
-from .ai_types import LOCAL_BACKEND
+from .ai_types import API_KINDS, LOCAL_BACKEND
+from .chat_attachment_parsing import TOO_LARGE, AttachmentRejected, parse_upload
+from .chat_attachments import attachments_for, max_per_conversation, remove_attachment
 from .chat_proposals import ProposalError, apply_proposal, card_for, dismiss_proposal, proposal_for
 from .chat_runner import recover_stale_turns
 from .chat_services import (
+    chat_backend_for,
     chat_local_enabled,
     conversations_for,
     delete_all_conversations,
@@ -33,9 +38,28 @@ from .policy_services import may_use_ai
 from .reauth import safe_next_url
 
 
+# A chat form body without a parsed file but larger than this held a file the memory-only
+# upload handler dropped (FILE_UPLOAD_MAX_MEMORY_SIZE): refuse it rather than send the question alone.
+DROPPED_UPLOAD_BYTES = 1024 * 1024
+ATTACHMENT_ACCEPT = ".csv,.xlsx,.pdf,text/csv,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
 def _backend_label(backend):
     labels = {LOCAL_BACKEND: "Local model", "claude": "Claude", "codex": "Codex", "cursor": "Cursor"}
     return labels.get(backend, backend or "AI")
+
+
+def provider_label(person, connection, backend):
+    """Where an attached file's contents go: the member's current chat provider, in words (#644)."""
+    if backend in API_KINDS:
+        return f"{api_label(backend)} (your key)"
+    if backend == LOCAL_BACKEND:
+        if connection is not None and connection.owner_id != person.id:
+            return "the local model on your household's home server"
+        return "the local model on your home server"
+    if not backend:
+        return "your AI provider"
+    return f"{_backend_label(backend)} through the agent harness"
 
 
 @require_GET
@@ -60,17 +84,34 @@ def chat_send(request):
     next_url = safe_next_url(request, request.POST.get("next"), default=reverse("chat"))
     try:
         conversation_id = _send_conversation_id(conversation_id, wants_json)
+        attachment = _posted_attachment(request, person)
         conversation = send_message(
             person, prompt, conversation_id=conversation_id, page_context=page_context,
-            start_new=wants_json and conversation_id is None,
+            start_new=wants_json and conversation_id is None, attachment=attachment,
         )
-    except (PermissionDenied, AiError) as exc:
+    except (PermissionDenied, AiError, AttachmentRejected) as exc:
         return _chat_send_error(request, exc, next_url, wants_json)
     if wants_json:
         return _popover_response(person, conversation, request)
     if next_url.rstrip("/").endswith("chat") or next_url.startswith(reverse("chat")):
         return redirect(f"{reverse('chat')}?c={conversation.pk}")
     return redirect(next_url)
+
+
+def _posted_attachment(request, person):
+    """The parsed file sent with a question, or None. A refused file raises AttachmentRejected."""
+    upload = request.FILES.get("attachment")
+    if upload is None:
+        try:
+            length = int(request.META.get("CONTENT_LENGTH") or 0)
+        except ValueError:
+            length = 0
+        if length > DROPPED_UPLOAD_BYTES:
+            raise AttachmentRejected(TOO_LARGE)
+        return None
+    # Parse only for a member who may chat now; send_message checks the same again.
+    chat_backend_for(person)
+    return parse_upload(upload)
 
 
 def _posted_page_context(request):
@@ -128,6 +169,7 @@ def _popover_response(person, conversation, request):
         "conversationId": conversation.pk if conversation else None,
         "html": render_to_string("finance/_chat_messages.html", context, request=request),
         "messageCount": len(context["chat_messages"]),
+        "providerLabel": context["chat_provider_label"],
     }, headers={"Cache-Control": "no-store"})
 
 
@@ -156,6 +198,14 @@ def chat_delete(request, conversation_id):
     service_or_404(lambda: delete_conversation(person, conversation_id))
     messages.success(request, "Conversation deleted.")
     return redirect("chat")
+
+
+@require_POST
+def chat_attachment_remove(request, attachment_id):
+    person = _person(request)
+    conversation_id = service_or_404(lambda: remove_attachment(person, attachment_id))
+    messages.success(request, "Attachment removed.")
+    return redirect(f"{reverse('chat')}?c={conversation_id}")
 
 
 @require_POST
@@ -320,10 +370,18 @@ def _chat_context(person, conversation, request):
                                          .prefetch_related("proposals")[:MAX_CHAT_MESSAGES])))
         for item in messages_qs:
             item.cards = [card_for(person, proposal) for proposal in item.proposals.all()]
+    by_message = defaultdict(list)
+    for attachment in attachments_for(conversation, backend):
+        by_message[attachment["message_id"]].append(attachment)
+    for item in messages_qs:
+        item.attachment_list = by_message.get(item.pk, [])
     return {
         "chat_ready": bool(member_has_ai(person) and connection is not None and backend),
         "chat_backend": backend,
         "chat_backend_label": _backend_label(backend),
+        "chat_provider_label": provider_label(person, connection, backend),
+        "chat_attachment_accept": ATTACHMENT_ACCEPT,
+        "chat_attachment_limit": max_per_conversation(),
         "chat_show_local": show_local,
         "conversation": conversation,
         "chat_messages": messages_qs,

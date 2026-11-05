@@ -3,6 +3,9 @@ Django==5.2.18
 django-allauth[socialaccount]==65.20.1
 gunicorn==26.2.0
 psycopg[binary]==3.3.6
+# Text from PDFs attached to chat (#644). Pure Python, no required dependencies;
+# it runs in a child process with a time and memory cap.
+pypdf==6.21.4
 pytest==9.1.1
 pytest-django==4.14.0
 webauthn==3.0.1

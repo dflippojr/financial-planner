@@ -141,6 +141,10 @@
   function install(data) {
     state.conversationId = data.conversationId;
     count = data.messageCount;
+    // The attach warning names the member's current AI provider (#644).
+    if (typeof data.providerLabel === "string" && data.providerLabel) {
+      pop.querySelectorAll("[data-chat-provider]").forEach(function (node) { node.textContent = data.providerLabel; });
+    }
     // Only member-checked, server-rendered markup enters the thread; no scripts are evaluated.
     const parsed = new DOMParser().parseFromString(data.html, "text/html");
     thread.replaceChildren(...Array.from(parsed.body.childNodes, function (node) { return document.importNode(node, true); }));
@@ -330,6 +334,8 @@
       if (!response.ok || !data.ok) throw new Error(data.error || "Chat could not send your question.");
       if (version === generation) {
         if (draftVersion === submittedDraftVersion) composer.value = "";
+        // The file went with this question; it is listed in the thread now.
+        if (form.elements.attachment) form.elements.attachment.value = "";
         install(data);
       }
     } catch (failure) { error.textContent = failure.message || "Chat could not send your question."; }
