@@ -165,13 +165,26 @@ def _money_values(node, key=""):
         yield node
 
 
+def _rate_values(node, key=""):
+    if isinstance(node, dict):
+        for child, value in node.items():
+            yield from _rate_values(value, str(child))
+    elif isinstance(node, list):
+        for item in node:
+            yield from _rate_values(item, key)
+    elif key in {"percent", "apr_percent"} and node is not None:
+        yield node
+
+
 def assert_grounded(result):
-    """Every amount a tool returns can be cited back to a figure link (the monthly review's grounding rule)."""
+    """Every amount and rate a tool returns can be cited back to a figure link (the monthly review's grounding rule)."""
     assert result.ok, result.text
     payload = json.loads(result.text)
     amounts = list(_money_values(payload))
     stated = " ".join(f"{amount / 100:.2f}" for amount in amounts)
     assert paragraph_is_grounded(stated, list(result.figures)), stated
+    rates = " ".join(f"{rate}%" for rate in _rate_values(payload))
+    assert paragraph_is_grounded(rates, list(result.figures)), rates
     cited = {figure["amount_minor"] for figure in result.figures}
     assert set(amounts) <= cited
     for figure in result.figures:
@@ -290,6 +303,20 @@ def test_private_goal_linked_to_a_shared_account_withholds_progress_without_cons
 
 
 @pytest.mark.django_db
+def test_savings_goals_record_what_the_funding_plan_read(world):
+    result = run_tool(world["alpha"], default_tools(), "savings_goals", {})
+    assert {world["income"].pk, world["hh_planned"].pk} <= set(result.planned_item_ids)
+    assert world["beta_planned"].pk not in result.planned_item_ids
+    assert {world["card"].pk, world["loan"].pk, world["private"].pk} <= set(result.account_ids)
+
+    world["linked_goal"].delete()
+    _withhold_consent(world)
+    held = run_tool(world["alpha"], default_tools(), "savings_goals", {})
+    assert held.planned_item_ids == (world["income"].pk,)
+    assert world["shared"].pk not in held.account_ids and world["card"].pk in held.account_ids
+
+
+@pytest.mark.django_db
 def test_goal_linked_to_an_account_the_member_cannot_see_falls_back_like_the_page(world):
     # Beta can see the household goal but not alpha's private account it is linked to.
     hh_goal = world["hh_goal"]
@@ -372,6 +399,25 @@ def test_debt_payoff_simulates_only_debts_in_the_consent_scope(world):
 
 
 @pytest.mark.django_db
+def test_debt_payoff_flags_a_capped_catalog_and_records_every_simulated_debt(world):
+    today = timezone.localdate()
+    extra = Account.objects.bulk_create(
+        Account(name=f"SYN cap card {index:03}", account_type=Account.Type.CREDIT_CARD, owner=world["alpha"],
+                scope=Account.Scope.PRIVATE, apr_percent=Decimal("5.000"), minimum_payment_minor=1_000)
+        for index in range(MAX_TOOL_ROWS + 2)
+    )
+    BalanceSnapshot.objects.bulk_create(
+        BalanceSnapshot(account=account, snapshot_date=today, amount_minor=500, currency="USD",
+                        source=BalanceSnapshot.Source.MANUAL)
+        for account in extra
+    )
+    result = run_tool(world["alpha"], default_tools(), "debt_payoff", {})
+    payload = assert_grounded(result)
+    assert len(payload["debts"]) == MAX_TOOL_ROWS and payload["debts_truncated"] is True
+    assert {account.pk for account in extra} <= set(result.account_ids)
+
+
+@pytest.mark.django_db
 def test_debt_payoff_caps_its_month_rows(world):
     # Minimums barely above the interest stretch the plan far past MAX_TOOL_ROWS months.
     update_debt_terms(world["user_a"], world["card"].pk, apr_percent=Decimal("1.000"), minimum_payment_minor=2_000,
@@ -446,6 +492,16 @@ def test_what_if_links_the_private_projection_while_consent_is_incomplete(world)
     assert page.status_code == 200
     assert [row.scenario.net_minor for row in page.context["scenario_comparison"]] == [
         month["scenario_net_minor"] for month in payload["months"]]
+
+
+@pytest.mark.django_db
+def test_what_if_refuses_the_household_projection_while_consent_is_incomplete(world):
+    _withhold_consent(world)
+    refused = run_tool(world["alpha"], default_tools(), "cash_flow_what_if", {"scope": "household"})
+    assert not refused.ok and "withheld" in refused.text
+    accept_policy(world["beta"], current_policy())
+    payload = assert_grounded(run_tool(world["alpha"], default_tools(), "cash_flow_what_if", {"scope": "household"}))
+    assert "scope=household" in payload["page_url"]
 
 
 @pytest.mark.django_db

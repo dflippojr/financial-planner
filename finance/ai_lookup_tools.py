@@ -33,7 +33,7 @@ from .ai_types import ToolResult, ToolSpec
 from .category_services import current_household
 from .debt_planner import STRATEGIES, STRATEGY_CUSTOM, STRATEGY_MINIMUMS
 from .debt_planner_services import build_debt_plan, list_visible_debts
-from .models import Account, BalanceSnapshot, SavingsGoal
+from .models import Account, BalanceSnapshot, PlannedItem, SavingsGoal
 from .net_worth import signed_balance_minor
 from .planning_services import visible_projection_inputs
 from .projection import DEFAULT_HORIZON, HORIZONS, SOURCE_PLANNED, SOURCE_SERIES, project_cash_flow
@@ -164,7 +164,7 @@ def _allowed_account_ids(person):
     return set(visible_accounts(person, include_archived=True).values_list("pk", flat=True))
 
 
-def _household_account_ids(person, allowed_ids):
+def _household_account_ids(allowed_ids):
     """Shared accounts in scope, recorded with a household row so leaving the household purges the chat."""
     return set(
         Account.objects.filter(pk__in=allowed_ids, scope=Account.Scope.HOUSEHOLD).values_list("pk", flat=True)
@@ -191,6 +191,7 @@ def savings_goals(person, _args):
         F("priority").asc(nulls_last=True), F("target_date").asc(nulls_last=True), "name", "pk"
     ))
     plan_rows, plan_url, plan_note = _funding_plan(person, today, goals, consent=consent, allowed=allowed)
+    planned_item_ids = ()
     list_url = reverse("savings-goals")
     rows = []
     figures = []
@@ -236,7 +237,8 @@ def savings_goals(person, _args):
                 "past_due": progress.past_due,
                 "monthly_needed_minor": progress.monthly_needed_minor,
             })
-            figures.append(_figure(f"{goal.name} saved", progress.current_amount_minor, list_url, goal.currency))
+            figures.append(_figure(f"{goal.name} saved ({progress.percent}% of target)", progress.current_amount_minor,
+                                   list_url, goal.currency))
             figures.append(_figure(f"{goal.name} remaining", progress.remaining_minor, list_url, goal.currency))
             if progress.monthly_needed_minor is not None:
                 figures.append(
@@ -245,13 +247,31 @@ def savings_goals(person, _args):
         plan_row = None if withheld else plan_rows.get(goal.pk)
         if plan_row is not None:
             row["projected_completion"] = plan_row
-        if goal.scope == SavingsGoal.Scope.HOUSEHOLD:
-            account_ids |= _household_account_ids(person, allowed)
         rows.append(row)
+    if any(goal.scope == SavingsGoal.Scope.HOUSEHOLD for goal in shown):
+        account_ids |= _household_account_ids(allowed)
+    if plan_rows:
+        # Funding months come from the whole projection: every account and planned item in its scope.
+        account_ids |= allowed if consent else _private_account_ids(person, allowed)
+        planned_item_ids = _plan_planned_item_ids(person, consent)
     payload = {"page_url": list_url, "plan_url": plan_url, "rows": rows, "truncated": len(goals) > MAX_TOOL_ROWS}
     if plan_note:
         payload["plan_note"] = plan_note
-    return ToolResult(text=json.dumps(payload), figures=tuple(figures), account_ids=tuple(sorted(account_ids)))
+    return ToolResult(text=json.dumps(payload), figures=tuple(figures), account_ids=tuple(sorted(account_ids)),
+                      planned_item_ids=planned_item_ids)
+
+
+def _private_account_ids(person, allowed):
+    return set(Account.objects.filter(pk__in=allowed, scope=Account.Scope.PRIVATE, owner=person)
+               .values_list("pk", flat=True))
+
+
+def _plan_planned_item_ids(person, consent):
+    """The enabled planned items the Savings plan's projection reads for this scope."""
+    planned = PlannedItem.objects.visible_to(person).filter(enabled=True)  # pyright: ignore[reportAttributeAccessIssue] - QuerySet.as_manager() is untyped
+    if not consent:
+        planned = planned.filter(scope=PlannedItem.Scope.PRIVATE, owner=person)
+    return tuple(sorted(planned.values_list("pk", flat=True)))
 
 
 def _funding_plan(person, today, goals, *, consent, allowed):
@@ -342,7 +362,8 @@ def debt_payoff(person, args):
     comparison = plan.comparison
     if comparison is not None:
         payoff_by_id = {debt.account_id: debt for debt in comparison.chosen.debts}
-    for row in [row for row in plan.catalog if row.account_id in allowed][:MAX_TOOL_ROWS]:
+    in_scope = [row for row in plan.catalog if row.account_id in allowed]
+    for row in in_scope[:MAX_TOOL_ROWS]:
         rows.append({
             "account_id": row.account_id,
             "name": row.name,
@@ -358,7 +379,8 @@ def debt_payoff(person, args):
             "payoff": row.payoff_label,
         })
         if row.owed_minor is not None:
-            figures.append(_figure(f"{row.name} owed", row.owed_minor, url))
+            apr = f" at {row.apr_percent}% APR" if row.apr_percent is not None else ""
+            figures.append(_figure(f"{row.name} owed{apr}", row.owed_minor, url))
         if row.minimum_payment_minor is not None:
             figures.append(_figure(f"{row.name} minimum payment", row.minimum_payment_minor, url))
         if row.account_id in payoff_by_id and payoff_by_id[row.account_id].remaining_minor > 0:
@@ -370,6 +392,7 @@ def debt_payoff(person, args):
         "strategy": strategy,
         "extra_minor": extra_minor,
         "debts": rows,
+        "debts_truncated": len(in_scope) > MAX_TOOL_ROWS,
         "plan": None,
     }
     figures.append(_figure("Extra monthly payment", extra_minor, url))
@@ -404,7 +427,8 @@ def debt_payoff(person, args):
     return ToolResult(
         text=json.dumps(payload),
         figures=tuple(figures),
-        account_ids=tuple(sorted(row["account_id"] for row in rows)),
+        # Every in-scope debt, listed or simulated, not only the rows shown.
+        account_ids=tuple(sorted(row.account_id for row in in_scope)),
     )
 
 
@@ -456,6 +480,8 @@ def cash_flow_what_if(person, args):
         return ToolResult(text="changes must be a list.", ok=False)
     accounts, include_household = _ai_scope(person)
     scope = _scope(args.get("scope"))
+    if scope == Account.Scope.HOUSEHOLD and not include_household:
+        return ToolResult(text=f"The household projection is {CONSENT_WITHHELD}.", ok=False)
     if not scope and not include_household:
         # As the other report links do while consent is incomplete, so Home shows the same projection.
         scope = Account.Scope.PRIVATE
@@ -544,7 +570,8 @@ def list_rules(person, args):
     rows = []
     figures = []
     account_ids = set()
-    for rule in rules[:MAX_TOOL_ROWS]:
+    shown = rules[:MAX_TOOL_ROWS]
+    for rule in shown:
         url = reverse("category-rule-detail", args=[rule.pk])
         account = None
         if rule.account_id is not None:
@@ -575,8 +602,8 @@ def list_rules(person, args):
             figures.append(_figure(f"Rule '{rule.description_contains[:60]}' minimum amount", rule.min_amount_minor, url))
         if rule.max_amount_minor is not None:
             figures.append(_figure(f"Rule '{rule.description_contains[:60]}' maximum amount", rule.max_amount_minor, url))
-        if rule.owner_household_id:
-            account_ids |= _household_account_ids(person, allowed)
+    if any(rule.owner_household_id for rule in shown):
+        account_ids |= _household_account_ids(allowed)
     payload = {"page_url": list_url, "rows": rows, "truncated": len(rules) > MAX_TOOL_ROWS}
     return ToolResult(text=json.dumps(payload), figures=tuple(figures), account_ids=tuple(sorted(account_ids)))
 
