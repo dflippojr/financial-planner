@@ -13,6 +13,7 @@ import json
 from datetime import date, timedelta
 from urllib.parse import urlencode
 
+from django.core.exceptions import ValidationError
 from django.urls import reverse
 from django.utils import timezone
 
@@ -30,7 +31,7 @@ from .ai_tools import (
     withheld_category_ids,
 )
 from .ai_types import ToolResult, ToolSpec
-from .budget_services import month_budget_cards
+from .budget_services import month_budget_cards, validate_budget_month
 from .cash_flow import (
     GROUPING_MONTH,
     GROUPING_WEEK,
@@ -216,8 +217,15 @@ def _validated(person, args):
     default_from, default_to = default_date_range(today)
     if kind == BUDGET_VS_ACTUAL:
         # Budgets are monthly: the chart covers the whole month holding date_from; date_to is not used.
-        date_from = _date(args, "date_from", today).replace(day=1)
+        date_from = _budget_month(_date(args, "date_from", today), today)
         date_to = (date_from + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+        if not household_consent_complete(person):
+            # The Budgets page counts a budget's spending on every account the member sees, and that
+            # page has no private-only view, so a chart limited to private accounts could not match it.
+            raise ChartError(
+                "Budget charts are available once every household member has accepted the AI policy. "
+                "Until then, list_budgets gives the figures."
+            )
     else:
         date_from = _date(args, "date_from", default_from)
         date_to = _date(args, "date_to", default_to)
@@ -260,6 +268,14 @@ def _date(args, key, fallback):
         return date.fromisoformat(str(value)[:10])
     except ValueError:
         raise ChartError(f"{key} must be a date like 2026-01-31.") from None
+
+
+def _budget_month(value, today):
+    """The month holding value, inside the range the Budgets page shows (it clamps anything else)."""
+    try:
+        return validate_budget_month(value, today=today)
+    except ValidationError:
+        raise ChartError("Budget charts cover January 2000 through the next 24 months.") from None
 
 
 def _grouping(args, report):

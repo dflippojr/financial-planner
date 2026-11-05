@@ -253,8 +253,10 @@ def test_a_withheld_category_gives_the_missing_category_error_and_breakdowns_wit
     breakdown = _chart(make_chart(alpha, {"kind": "category_breakdown", "report": "spending", **march}))
     assert CUSTOM not in json.dumps(breakdown)
     assert breakdown["labels"] == [WITHHELD_CATEGORY_NAME]
-    budgets = _chart(make_chart(alpha, {"kind": "budget_vs_actual", "report": "budgets", **march}))
-    assert CUSTOM not in json.dumps(budgets) and budgets["labels"] == [WITHHELD_CATEGORY_NAME]
+    # The Budgets page counts shared spending too, so a private-only budget chart could not match it.
+    budgets = make_chart(alpha, {"kind": "budget_vs_actual", "report": "budgets", **march})
+    assert not budgets.ok and not budgets.charts and CUSTOM not in budgets.text
+    assert "accepted the AI policy" in budgets.text
 
     accept_policy(beta, current_policy())
     assert _chart(make_chart(alpha, {**over_time, "category_id": custom.pk}))["labels"] == ["March 2026"]
@@ -365,3 +367,12 @@ def test_charts_link_to_the_private_scope_they_draw_while_household_consent_is_i
     assert sum(row["spending_minor"] for row in rows) == sum(_values(breakdown)) == 4200
     worth = _chart(make_chart(alpha, {"kind": "over_time", "report": "net_worth", **march}))
     assert "scope=private" in worth["page_url"]
+
+
+def test_a_budget_chart_refuses_a_month_the_budgets_page_would_clamp():
+    _user, alpha, *_rest = seed()
+    far = (timezone.localdate().replace(day=1) + timedelta(days=31 * 26)).replace(day=1)
+    for month in (far.isoformat(), "1999-12-01"):
+        result = make_chart(alpha, {"kind": "budget_vs_actual", "report": "budgets", "date_from": month})
+        assert not result.ok and not result.charts
+        assert "January 2000 through the next 24 months" in result.text
