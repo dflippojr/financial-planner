@@ -101,6 +101,20 @@ def test_sending_lands_at_the_new_question_with_its_reply_below(page_session, ha
         assert reply_spot["inView"], reply_spot
         # Nothing took focus: the composer stays as the reader left it and the keyboard stays shut.
         assert page.evaluate("() => document.activeElement === document.body")
+        # The anchor moved the sequential focus start: Tab goes on from the new turn, not the page top.
+        page.keyboard.press("Tab")
+        focus = page.evaluate(
+            """(ids) => {
+              const el = document.activeElement;
+              const question = document.getElementById(ids.question);
+              return {
+                after: !!(question.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING),
+                inReplyOrComposer: !!el.closest('#' + ids.reply + ', main #chat-send-form'),
+              };
+            }""",
+            {"question": f"turn-{question.pk}", "reply": f"turn-{reply.pk}"},
+        )
+        assert focus == {"after": True, "inReplyOrComposer": True}, focus
     finally:
         context.close()
 
