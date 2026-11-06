@@ -325,6 +325,14 @@ OBJECT_ROUTES = {
             ),
         },
     ),
+    "recurring-note": ObjectRoute(
+        lambda s: {"series_id": s.series.pk},
+        data=lambda s: {"action": "save", "note": "SYN note line"},
+        body_reason=(
+            "its transaction ids are only compared with the charges the server reads from the series "
+            "in its path; any other id refuses the apply and nothing is looked up by it"
+        ),
+    ),
     "category-rule-application-reverse": ObjectRoute(
         lambda s: {"application_id": s.application.pk}, post_only=True, body_reason=_PATH_ONLY
     ),
