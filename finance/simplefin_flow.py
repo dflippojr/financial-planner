@@ -69,7 +69,7 @@ def _live(flow) -> dict | None:
 
 
 def start_flow(connection, kind: str, conn_id: str = "") -> dict:
-    """Start (or restart) the connection's flow with a baseline from the stored read."""
+    """Start the connection's flow with a baseline from the stored read."""
     with transaction.atomic():
         connection = _locked(connection.pk)
         if kind == FIX:
@@ -83,8 +83,12 @@ def start_flow(connection, kind: str, conn_id: str = "") -> dict:
             name, conn_id = "", ""
         else:
             raise FlowError("Unknown SimpleFIN action.")
-        flow = {"kind": kind, "conn_id": conn_id, "name": name, "baseline": baseline,
-                "started": _now(), "requests": 0, "last_request": None}
+        # A flow still open (another tab, or a second Fix before the first
+        # finished) hands on its request count and spacing: a new baseline
+        # never buys new requests.
+        active = _live(connection.flow) or {}
+        flow = {"kind": kind, "conn_id": conn_id, "name": name, "baseline": baseline, "started": _now(),
+                "requests": int(active.get("requests") or 0), "last_request": active.get("last_request")}
         SimpleFinConnection.objects.filter(pk=connection.pk).update(flow=flow)
     return {"ok": True, "url": BRIDGE_URL, "first_check_in": CHECK_DELAYS[0], "max_checks": FLOW_MAX_REQUESTS}
 

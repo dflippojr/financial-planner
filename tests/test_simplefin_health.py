@@ -396,6 +396,22 @@ def test_the_flow_lives_on_the_connection_so_a_second_tab_shares_its_limits(monk
 
 
 @pytest.mark.django_db
+def test_starting_again_keeps_the_open_flows_request_count_and_spacing(monkeypatch):
+    owner, connection, stub = connected(monkeypatch, feed(north_at=timezone.now() - timedelta(hours=40)))
+    sync_connection(owner, connection.pk)
+    first, second = signed_in(owner), signed_in(owner)
+    post_json(first, "simplefin-flow-start", {"kind": "fix", "conn_id": "CON-N"})
+    stub.calls.clear()
+    assert post_json(first, "simplefin-flow-check")["state"] == "pending"
+
+    post_json(second, "simplefin-flow-start", {"kind": "add"})
+
+    assert post_json(second, "simplefin-flow-check")["state"] == "wait"
+    assert len(stub.calls) == 1
+    assert fresh(connection).flow["requests"] == 1
+
+
+@pytest.mark.django_db
 def test_a_check_stops_when_the_daily_budget_is_used(monkeypatch):
     owner, connection, stub = connected(monkeypatch, feed(north_at=timezone.now() - timedelta(hours=40)))
     sync_connection(owner, connection.pk)

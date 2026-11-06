@@ -19,7 +19,7 @@ from django.db import transaction
 from django.utils import timezone
 from django.utils.html import strip_tags
 
-from finance.simplefin_errors import clean_text, sanitize_provider_message
+from finance.simplefin_errors import clean_text, is_api_usage_notice, sanitize_provider_message
 
 logger = logging.getLogger(__name__)
 
@@ -42,13 +42,6 @@ def _balance_moment(value) -> datetime | None:
         return datetime.fromtimestamp(stamp, tz=UTC)
     except (TypeError, ValueError, OverflowError, OSError):
         return None
-
-
-def _is_api_usage_notice(item: dict) -> bool:
-    # "Meant for the developer and not the user" (protocol); see #629.
-    return str(item.get("code") or "").strip().lower() == "gen.api" and not (
-        item.get("account_id") or item.get("conn_id")
-    )
 
 
 def _bank_key(account: dict) -> str:
@@ -132,7 +125,7 @@ def _attach_errors(payload: dict, banks: dict[str, dict]) -> list[str]:
         if isinstance(item, str):
             _place_general(banks, general, sanitize_provider_message(item))
             continue
-        if not isinstance(item, dict) or _is_api_usage_notice(item):
+        if not isinstance(item, dict) or is_api_usage_notice(item):
             continue
         message = sanitize_provider_message(item.get("msg") or "") or "SimpleFIN reported an error."
         conn_id = clean_text(item.get("conn_id") or "")

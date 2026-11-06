@@ -120,6 +120,27 @@ def test_closing_the_pop_up_counts_as_cancel(flow_page, viewport):
         context.close()
 
 
+def test_cancel_before_the_start_request_finishes_waits_for_it(flow_page):
+    context, page, stub, _now = flow_page("desktop")
+    try:
+        held = []
+        page.route("**/settings/connections/flow/start/", lambda route: held.append(route))
+        cancels = []
+        page.on("request", lambda request: cancels.append(request) if request.url.endswith("/flow/cancel/") else None)
+        with page.expect_request("**/settings/connections/flow/start/"):
+            page.get_by_role("link", name="Fix Synthetic North Bank").click()
+        page.get_by_role("button", name="Cancel").click()
+        page.wait_for_timeout(300)
+        assert cancels == []  # Cancel waits for the server to have the flow.
+
+        stub.calls.clear()
+        held[0].continue_()
+        expect(page.get_by_text("Cancelled. Synced", exact=False).first).to_be_visible()
+        assert len(stub.calls) == 1
+    finally:
+        context.close()
+
+
 def test_a_pop_up_that_reads_closed_at_once_waits_for_done_or_cancel(flow_page):
     context, page, stub, _now = flow_page("desktop")
     try:

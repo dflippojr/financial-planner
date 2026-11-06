@@ -46,6 +46,20 @@ def _from_deprecated_errors(errors) -> list[str]:
     return [sanitize_provider_message(item) for item in errors if isinstance(item, str)]
 
 
+def is_api_usage_notice(item) -> bool:
+    """A `gen.api` item naming no account or connection: advice to the developer, not missing data (#629).
+
+    The protocol: "Error in how the API is being used. This is meant for the
+    developer and not the user." Bridge sends it when the requested date range
+    passes 45 days (recommended) or 90 days (capped).
+    """
+    return (
+        isinstance(item, dict)
+        and str(item.get("code") or "").strip().lower() == "gen.api"
+        and not (item.get("account_id") or item.get("conn_id"))
+    )
+
+
 def provider_errors(payload: dict) -> list[str]:
     messages = _from_errlist(payload.get("errlist") or [])
     messages.extend(_from_deprecated_errors(payload.get("errors") or []))

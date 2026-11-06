@@ -111,6 +111,10 @@
 
   function check(current) {
     if (flow !== current || current.busy || current.cancelling) return;
+    if (!current.started) {
+      current.pendingCheck = true;  // Runs once the server has the flow.
+      return;
+    }
     current.busy = true;
     setBusy(true);
     text.textContent = "Checking SimpleFIN…";
@@ -143,7 +147,8 @@
     closePopup();
     setBusy(true);
     text.textContent = "Closing SimpleFIN…";
-    post(cancelUrl, {}).then(function (data) {
+    // Cancel only after the start request finished, so it finds the flow it ends.
+    current.ready.then(function () { return post(cancelUrl, {}); }).then(function (data) {
       if (flow !== current) return;
       settle(data.message || "Cancelled.");
     }, function () {
@@ -176,23 +181,26 @@
   function begin(kind, connId, url) {
     if (flow || lingering) return;
     var win = openPopup(url);
-    var current = {kind: kind, win: win, openedAt: Date.now(), timer: null, watch: null, busy: false, cancelling: false};
+    var current = {kind: kind, win: win, openedAt: Date.now(), timer: null, watch: null, busy: false,
+                   cancelling: false, started: false, pendingCheck: false, ready: null};
     flow = current;
     result.hidden = true;
     panel.hidden = false;
     blocked.hidden = win !== null;
     text.textContent = win ? WAITING : "Pop-up blocked. " + WAITING;
     if (win) current.watch = setInterval(watchClosed, WATCH_MS);
-    post(startUrl, {kind: kind, conn_id: connId}).then(function (data) {
-      if (flow !== current) return;
+    current.ready = post(startUrl, {kind: kind, conn_id: connId}).then(function (data) {
+      current.started = !!data.ok;
+      if (flow !== current || current.cancelling) return;
       if (!data.ok) {
         closePopup();
         finish(data.message || "That could not be started.", false);
         return;
       }
-      if (!current.manual) schedule(current, data.first_check_in);
+      if (current.pendingCheck) check(current);
+      else if (!current.manual) schedule(current, data.first_check_in);
     }, function () {
-      if (flow !== current) return;
+      if (flow !== current || current.cancelling) return;
       closePopup();
       finish("The app could not be reached. Reload the page to try again.", false);
     });
