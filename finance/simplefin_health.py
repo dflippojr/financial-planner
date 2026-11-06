@@ -19,7 +19,7 @@ from django.db import transaction
 from django.utils import timezone
 from django.utils.html import strip_tags
 
-from finance.simplefin_errors import clean_text, is_api_usage_notice, sanitize_provider_message
+from finance.simplefin_errors import clean_text, is_api_usage_notice, remote_account_key, sanitize_provider_message
 
 logger = logging.getLogger(__name__)
 
@@ -84,8 +84,6 @@ def _account_banks(payload: dict) -> dict[str, set[str]]:
     overwriting the other, so an error is placed only when its name points
     to exactly one bank.
     """
-    from finance.simplefin_services import remote_account_key
-
     owners: dict[str, set[str]] = {}
     for account in payload.get("accounts") or []:
         if isinstance(account, dict) and account.get("id"):

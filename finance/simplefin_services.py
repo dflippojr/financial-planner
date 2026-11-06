@@ -6,7 +6,7 @@ import logging
 from datetime import date, datetime, timedelta, UTC
 from types import SimpleNamespace
 from decimal import Decimal, Inexact, InvalidOperation, localcontext
-from urllib.parse import quote, urlsplit
+from urllib.parse import urlsplit
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied
@@ -45,6 +45,7 @@ from finance.simplefin_errors import (
     clean_text,
     is_api_usage_notice,
     provider_errors,
+    remote_account_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -199,19 +200,6 @@ def _connection_name_by_id(payload: dict) -> dict[str, str]:
         if isinstance(item, dict) and item.get("conn_id"):
             names[clean_text(item["conn_id"])] = clean_text(item.get("name") or "")[:200]
     return names
-
-
-def remote_account_key(item: dict) -> str:
-    """Stable key for a SimpleFIN account.
-
-    Account ids are unique only within one provider connection, so the key
-    includes the connection id when SimpleFIN reports one.
-    """
-    # Percent-encode each part so a ':' inside an id can never make two
-    # different accounts share one key.
-    account_id = quote(clean_text(item["id"]), safe="")
-    conn_id = quote(clean_text(item.get("conn_id") or ""), safe="")
-    return f"{conn_id}:{account_id}" if conn_id else account_id
 
 
 def _remote_accounts(payload: dict):

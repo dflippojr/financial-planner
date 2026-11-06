@@ -609,3 +609,40 @@ def test_no_push_without_ntfy_and_the_state_waits_for_a_delivered_push(monkeypat
     push_health_changes(connection.pk)
     push_health_changes(connection.pk)
     assert len(outbox) == 1
+
+
+@pytest.mark.django_db
+def test_a_bank_name_outside_latin_1_still_reaches_ntfy_over_http(monkeypatch, settings):
+    import threading
+    from email.header import decode_header, make_header
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    received = []
+
+    class Ntfy(BaseHTTPRequestHandler):
+        def log_message(self, format, *args):
+            return
+
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers["Content-Length"])).decode("utf-8")
+            received.append((str(make_header(decode_header(self.headers["Title"]))), body))
+            self.send_response(200)
+            self.end_headers()
+
+    server = HTTPServer(("127.0.0.1", 0), Ntfy)
+    threading.Thread(target=server.handle_request, daemon=True).start()
+    settings.NTFY_URL = f"http://127.0.0.1:{server.server_port}"
+    settings.NTFY_TRANSPORT = "http"
+    settings.ALERT_EMAIL_BASE_URL = "https://planner.example.invalid"
+    payload = feed(north_at=timezone.now() - timedelta(hours=40))
+    payload["connections"][0]["name"] = "Synthetic Bank – Joint"  # An en dash: not Latin-1.
+    owner, connection, _stub = connected(monkeypatch, payload)
+    opt_in(owner)
+    sync_connection(owner, connection.pk)
+
+    try:
+        assert push_health_changes(connection.pk) == 1
+    finally:
+        server.server_close()
+    assert received[0][0] == "Synthetic Bank – Joint needs attention"
+    assert "Synthetic Bank – Joint" in received[0][1]

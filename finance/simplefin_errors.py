@@ -1,4 +1,5 @@
 import re
+from urllib.parse import quote
 
 from django.utils.html import strip_tags
 
@@ -44,6 +45,19 @@ def _from_deprecated_errors(errors) -> list[str]:
     if not isinstance(errors, list):
         return []
     return [sanitize_provider_message(item) for item in errors if isinstance(item, str)]
+
+
+def remote_account_key(item: dict) -> str:
+    """Stable key for a SimpleFIN account.
+
+    Account ids are unique only within one provider connection, so the key
+    includes the connection id when SimpleFIN reports one.
+    """
+    # Percent-encode each part so a ':' inside an id can never make two
+    # different accounts share one key.
+    account_id = quote(clean_text(item["id"]), safe="")
+    conn_id = quote(clean_text(item.get("conn_id") or ""), safe="")
+    return f"{conn_id}:{account_id}" if conn_id else account_id
 
 
 def is_api_usage_notice(item) -> bool:
