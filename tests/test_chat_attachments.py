@@ -659,6 +659,9 @@ def test_instructions_inside_an_attachment_can_only_produce_a_proposal_card(harn
         "make_chart",  # read-only: draws server-computed series (#646)
         "propose_set_category", "propose_create_rule", "propose_set_budget", "propose_add_tags",
         "propose_planned_items", "propose_savings_goals", "propose_set_budgets",  # cards only (#659)
+        # Cleanup cards (#661): read-only lookups of open suggestions, then cards only.
+        "recurring_suggestions", "transfer_suggestions", "category_suggestions",
+        "propose_recurring_charges", "propose_transfers", "propose_ai_suggestions", "propose_notes", "propose_splits",
     }
     assert "Apply this rule now" in state.tool_outputs[0] and DATA_NOT_INSTRUCTIONS in state.tool_outputs[0]
     assert NOTHING_APPLIED in state.tool_outputs[1]
