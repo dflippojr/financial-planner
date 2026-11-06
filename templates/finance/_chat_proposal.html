@@ -11,6 +11,8 @@
   <p>{{ card.scope_label }} budget for <strong>{{ card.category_name }}</strong>, {{ card.month_label }}:
     {% if card.before_amount %}{{ card.before_amount }} → <strong>{{ card.new_amount }}</strong>{% else %}new budget of <strong>{{ card.new_amount }}</strong>{% endif %}.
     <a class="link inline-flex min-h-11 items-center" href="{{ card.budgets_url }}">Open budgets</a></p>
+  {% elif card.item_rows is not None %}
+  {% include "finance/_chat_proposal_items.html" %}
   {% endif %}
   {% if card.transactions %}
   <ul class="mt-2 space-y-1 text-sm">
@@ -23,9 +25,10 @@
   {% if card.matches %}{% include "finance/_rule_preview_table.html" with matches=card.matches %}{% if card.more %}<p class="text-sm opacity-80">and {{ card.more }} more</p>{% endif %}{% endif %}
   {% if card.pending %}
   <div class="mt-2 flex flex-wrap gap-2">
-    <form method="post" action="{% url 'chat-proposal-apply' card.proposal.pk %}">
+    <form method="post" action="{% url 'chat-proposal-apply' card.proposal.pk %}" id="{% if popover %}popover-{% endif %}proposal-{{ card.proposal.pk }}-apply">
       {% csrf_token %}
-      <button type="submit" class="btn btn-primary min-h-11"{% if card.unavailable %} disabled{% endif %}>Apply</button>
+      {% if card.item_rows is not None %}<input type="hidden" name="item_selection" value="1">{% endif %}
+      <button type="submit" class="btn btn-primary min-h-11"{% if card.unavailable %} disabled{% endif %}>{% if card.item_rows is not None %}Apply ticked items{% else %}Apply{% endif %}</button>
     </form>
     <form method="post" action="{% url 'chat-proposal-dismiss' card.proposal.pk %}">
       {% csrf_token %}
@@ -33,7 +36,11 @@
     </form>
   </div>
   {% elif card.proposal.status == "applied" %}
+  {% if card.item_rows is not None %}
+  <p class="mt-2 text-sm font-semibold" role="status">Applied {{ card.result_count }} of {{ card.count }} item{{ card.count|pluralize }}.</p>
+  {% else %}
   <p class="mt-2 text-sm font-semibold" role="status">Applied{% if card.result_count is not None %} to {{ card.result_count }}{% endif %}.{% if card.rule_url %} <a class="link inline-flex min-h-11 items-center" href="{{ card.rule_url }}">Open rule</a>{% endif %}</p>
+  {% endif %}
   {% elif card.proposal.status == "dismissed" %}
   <p class="mt-2 text-sm opacity-80">Dismissed.</p>
   {% else %}

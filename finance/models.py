@@ -2089,6 +2089,8 @@ class AiConversation(models.Model):
     used_account_ids = models.JSONField(default=list)
     used_planned_item_ids = models.JSONField(default=list)
     used_budget_ids = models.JSONField(default=list)
+    used_goal_ids = models.JSONField(default=list)
+    used_rule_ids = models.JSONField(default=list)
     # Providers (chat backend and connection, chat_attachments.provider_key) the chat has warned
     # will receive this conversation's files (#644, owner decision 5): the provider named at
     # upload, and each provider whose switch warning the member saw before asking again. Only
@@ -2241,6 +2243,18 @@ class AiProposal(models.Model):
         CREATE_RULE = "create_rule", "Create rule"
         SET_BUDGET = "set_budget", "Set budget"
         ADD_TAGS = "add_tags", "Add tags"
+        # Item cards (#659): one card, a checkbox per item, a result per item.
+        PLANNED_ITEMS = "planned_items", "Planned items"
+        SAVINGS_GOALS = "savings_goals", "Savings goals"
+        SET_BUDGETS = "set_budgets", "Set budgets"
+        # Cleanup cards (#661), the same checkbox card.
+        RECURRING = "recurring", "Recurring charges"
+        TRANSFERS = "transfers", "Transfers"
+        AI_SUGGESTIONS = "ai_suggestions", "AI category suggestions"
+        NOTES = "notes", "Notes"
+        SPLITS = "splits", "Splits"
+        # Balance cards (#660), the same checkbox card.
+        BALANCES = "balances", "Balances"
 
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"
@@ -2271,7 +2285,14 @@ class AiProposal(models.Model):
         ordering = ("pk",)
         constraints = [
             models.CheckConstraint(
-                condition=Q(kind__in=("set_category", "create_rule", "set_budget", "add_tags")),
+                condition=Q(
+                    kind__in=(
+                        "set_category", "create_rule", "set_budget", "add_tags",
+                        "planned_items", "savings_goals", "set_budgets",
+                        "recurring", "transfers", "ai_suggestions", "notes", "splits",
+                        "balances",
+                    )
+                ),
                 name="ai_proposal_kind_valid",
             ),
             models.CheckConstraint(
