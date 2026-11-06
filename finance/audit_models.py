@@ -25,6 +25,8 @@ CHANGED_FIELDS = frozenset({
     "dependency", "time_sensitive", "buffer",
     # Transfers to or from an untracked account (#642).
     "untracked_transfer",
+    # Sinking funds (#670): field names only, never amounts.
+    "fund", "planned_item", "assigned",
 })
 METADATA_INT_KEYS = frozenset({
     "batch_id", "new_count", "duplicate_count", "invalid_count", "row_count", "history_id",

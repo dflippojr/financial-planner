@@ -1643,6 +1643,20 @@ class SavingsGoal(ArchivableModel):
     )
     manual_amount_minor = models.BigIntegerField(null=True, blank=True)
     manual_amount_date = models.DateField(null=True, blank=True)
+    # Sinking fund (#670): the goal holds a share of linked_account. Its current
+    # amount is the sum of its FundEntry rows, not the account's whole balance.
+    # A share goal whose account was deleted keeps its entries, so the account
+    # requirement lives in the service, not a constraint.
+    share_of_account = models.BooleanField(default=False)
+    funds_planned_item = models.OneToOneField(
+        PlannedItem,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="funding_goal",
+    )
+    # Only transactions on or after this date can draw the fund down.
+    planned_item_linked_on = models.DateField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -1673,6 +1687,14 @@ class SavingsGoal(ArchivableModel):
                 name="savings_goal_manual_amount_paired_with_date",
             ),
             models.CheckConstraint(
+                condition=Q(share_of_account=False) | Q(manual_amount_minor__isnull=True),
+                name="savings_goal_share_has_no_manual_amount",
+            ),
+            models.CheckConstraint(
+                condition=Q(funds_planned_item__isnull=True) | Q(share_of_account=True),
+                name="savings_goal_planned_item_requires_share",
+            ),
+            models.CheckConstraint(
                 condition=(
                     Q(status="active", archived_at__isnull=True)
                     | Q(status="archived", archived_at__isnull=False)
@@ -1683,6 +1705,122 @@ class SavingsGoal(ArchivableModel):
 
     def __str__(self):
         return self.name
+
+
+class FundEntry(models.Model):
+    """One change to a sinking fund's assigned amount (#670); the rows are its history.
+
+    Assignments add (positive), releases and draw-downs take out (negative). A
+    draw-down records the transaction that paid the linked planned item; undoing
+    it keeps the row, so the same transaction never draws the fund down again.
+    """
+
+    class Kind(models.TextChoices):
+        ASSIGN = "assign", "Assigned"
+        RELEASE = "release", "Released"
+        DRAW_DOWN = "draw_down", "Drawn down"
+
+    class Reason(models.TextChoices):
+        MANUAL = "manual", "By hand"
+        MONTHLY = "monthly", "Monthly set-aside"
+        BALANCE_DROP = "balance_drop", "Balance dropped below assigned"
+        PLANNED = "planned", "Planned expense posted"
+
+    goal = models.ForeignKey(SavingsGoal, on_delete=models.CASCADE, related_name="fund_entries")
+    kind = models.CharField(max_length=9, choices=Kind)
+    reason = models.CharField(max_length=12, choices=Reason)
+    amount_minor = models.BigIntegerField()
+    currency = models.CharField(max_length=3, default="USD")
+    entry_date = models.DateField()
+    # First of the month a monthly set-aside was confirmed for.
+    month = models.DateField(null=True, blank=True)
+    transaction = models.ForeignKey(
+        Transaction,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="fund_draw_downs",
+    )
+    # The planned item's occurrence the draw-down paid.
+    occurrence_date = models.DateField(null=True, blank=True)
+    actor = models.ForeignKey(
+        Person, on_delete=models.SET_NULL, null=True, blank=True, related_name="fund_entries"
+    )
+    undone_at = models.DateTimeField(null=True, blank=True)
+    undone_by = models.ForeignKey(
+        Person, on_delete=models.SET_NULL, null=True, blank=True, related_name="undone_fund_entries"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    @staticmethod
+    def counted_filter():
+        """Entries that make up the assigned amount.
+
+        An undone draw-down, or one whose transaction was archived (an undone
+        import), no longer counts. A draw-down whose transaction was deleted
+        with its account still counts: the payment happened.
+        """
+        return Q(undone_at__isnull=True) & (Q(transaction__isnull=True) | Q(transaction__status="active"))
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(condition=Q(currency="USD"), name="fund_entry_currency_usd"),
+            models.CheckConstraint(
+                condition=Q(kind__in=("assign", "release", "draw_down")), name="fund_entry_kind_valid"
+            ),
+            models.CheckConstraint(
+                condition=Q(reason__in=("manual", "monthly", "balance_drop", "planned")),
+                name="fund_entry_reason_valid",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(kind="assign", amount_minor__gt=0, reason__in=("manual", "monthly"))
+                    | Q(kind="release", amount_minor__lt=0, reason__in=("manual", "balance_drop"))
+                    | Q(kind="draw_down", amount_minor__lt=0, reason="planned")
+                ),
+                name="fund_entry_kind_amount_reason",
+            ),
+            models.CheckConstraint(
+                condition=Q(month__isnull=True) | Q(reason="monthly"),
+                name="fund_entry_month_only_monthly",
+            ),
+            models.CheckConstraint(
+                condition=Q(reason="monthly", month__isnull=False) | ~Q(reason="monthly"),
+                name="fund_entry_monthly_has_month",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(kind="draw_down", occurrence_date__isnull=False)
+                    | Q(occurrence_date__isnull=True, transaction__isnull=True, undone_at__isnull=True)
+                    & ~Q(kind="draw_down")
+                ),
+                name="fund_entry_draw_down_fields",
+            ),
+            # One draw-down per transaction ever, undone or not.
+            models.UniqueConstraint(
+                fields=("transaction",),
+                condition=Q(transaction__isnull=False),
+                name="fund_entry_unique_transaction",
+            ),
+            models.UniqueConstraint(
+                fields=("goal", "month"),
+                condition=Q(month__isnull=False),
+                name="fund_entry_unique_goal_month",
+            ),
+            models.UniqueConstraint(
+                fields=("goal", "occurrence_date"),
+                condition=Q(kind="draw_down", undone_at__isnull=True),
+                name="fund_entry_unique_live_occurrence",
+            ),
+        ]
+        indexes = [models.Index(fields=("goal", "entry_date"), name="fund_entry_goal_date_idx")]
+
+    def __str__(self):
+        return f"Fund entry {self.pk}"
+
+    @property
+    def amount_display(self):
+        return format_minor(self.amount_minor, self.currency)
 
 
 class CategoryRule(models.Model):
@@ -2482,6 +2620,7 @@ class Alert(models.Model):
         EXPECTED_BALANCE = "expected_balance", "Expected balance"
         IMPORT_DUE = "import_due", "Import due"
         RECONCILIATION = "reconciliation", "Balance reconciliation"
+        FUND = "fund", "Sinking funds"
 
     recipient = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="alerts")
     kind = models.CharField(max_length=20, choices=Kind)
@@ -2520,6 +2659,7 @@ class Alert(models.Model):
                         "expected_balance",
                         "import_due",
                         "reconciliation",
+                        "fund",
                     )
                 ),
                 name="alert_kind_valid",
@@ -2554,6 +2694,7 @@ class AlertSettings(models.Model):
     monthly_review_ai_enabled = models.BooleanField(default=True)
     expected_balance_enabled = models.BooleanField(default=False)
     import_due_enabled = models.BooleanField(default=True)
+    fund_enabled = models.BooleanField(default=True)
     unusual_spending_enabled = models.BooleanField(default=True)
     unusual_spending_ai_enabled = models.BooleanField(default=True)
     unusual_category_percent = models.PositiveIntegerField(default=50)

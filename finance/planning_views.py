@@ -2,15 +2,32 @@ from decimal import Decimal
 
 from django.core.exceptions import ValidationError
 from django.shortcuts import get_object_or_404, redirect, render
+from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods, require_POST
 
 from .access import request_person as _person
 from .access import service_or_404 as _service_or_404
+from .access import visible_rows
 from .category_services import current_household
 from .forms import PlannedItemForm
-from .models import PlannedItem
+from .models import PlannedItem, SavingsGoal
+from .savings_goal_services import goal_progress
 from .planning_services import save_planned_item, set_planned_item_enabled
+
+
+def _attach_funding_cards(user, items):
+    """Give each planned expense its funding goal's progress (#670) when the viewer sees that goal."""
+    today = timezone.localdate()
+    by_item = {
+        goal.funds_planned_item_id: goal
+        for goal in visible_rows(SavingsGoal, user)
+        .filter(share_of_account=True, funds_planned_item_id__in=[item.pk for item in items])
+        .select_related("funds_planned_item", "linked_account")
+    }
+    for item in items:
+        goal = by_item.get(item.pk)
+        item.funding_card = goal_progress(user, goal, today=today) if goal is not None else None
 
 
 def _visible_item(user, item_id):
@@ -62,7 +79,8 @@ def planned_item_list(request):
     if request.method == "POST" and form.is_valid():
         _service_or_404(lambda: save_planned_item(request.user, form.save_payload()), also=(ValidationError,))
         return redirect("planned-items")
-    items = PlannedItem.objects.visible_to(request.user).order_by("start_date", "name", "pk")
+    items = list(PlannedItem.objects.visible_to(request.user).order_by("start_date", "name", "pk"))
+    _attach_funding_cards(request.user, items)
     return render(
         request,
         "finance/planned_items.html",
