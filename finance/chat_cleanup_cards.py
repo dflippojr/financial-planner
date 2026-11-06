@@ -43,6 +43,7 @@ from .category_suggestion_services import accept_suggestion, reject_suggestion, 
 from .chat_proposals import (
     ACTION_UNKNOWN,
     CATEGORY_PROBLEM,
+    MAX_CARD_ITEMS,
     ITEM_ACCEPTED,
     ITEM_CONFIRMED,
     ITEM_DISMISSED,
@@ -246,7 +247,7 @@ def category_suggestions(person, _args):
 
 
 def _items_schema(properties, required):
-    return {"type": "array", "maxItems": 25,
+    return {"type": "array", "maxItems": MAX_CARD_ITEMS,
             "items": {"type": "object", "properties": properties, "required": list(required)}}
 
 
