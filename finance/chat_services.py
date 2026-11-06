@@ -47,7 +47,16 @@ from .chat_cleanup_cards import cleanup_lookup_tools
 from .chat_proposals import proposal_tools
 from .lifecycle_services import _DENIED, _person_for
 from .input_limits import MAX_CHAT_PROMPT_CHARS, MAX_PAGE_CONTEXT_CHARS, MAX_CHAT_MESSAGES
-from .models import Account, AiConversation, AiConversationMessage, Budget, Person, PlannedItem
+from .models import (
+    Account,
+    AiConversation,
+    AiConversationMessage,
+    Budget,
+    CategoryRule,
+    Person,
+    PlannedItem,
+    SavingsGoal,
+)
 from .category_services import current_household
 from .policy_services import household_ai_allowed, may_use_ai
 
@@ -155,15 +164,20 @@ _USED_ROWS = {
     "used_account_ids": Account,
     "used_planned_item_ids": PlannedItem,
     "used_budget_ids": Budget,
+    "used_goal_ids": SavingsGoal,
+    "used_rule_ids": CategoryRule,
 }
 
 
-def delete_conversations_without_access(account_ids=(), *, planned_item_ids=(), budget_ids=()):
+def delete_conversations_without_access(
+    account_ids=(), *, planned_item_ids=(), budget_ids=(), goal_ids=(), rule_ids=()
+):
     """Delete conversations that used one of these rows when their member can no longer see it.
 
     Chat history is derived from what the member can see, so unsharing an account,
-    making a household planned item or budget private, or leaving a household
-    purges it the same way deleting the row does.
+    making a household planned item, budget or savings goal private, making a
+    household rule personal, or leaving a household purges it the same way
+    deleting the row does.
     """
     affected = {
         field: set(ids)
@@ -171,6 +185,8 @@ def delete_conversations_without_access(account_ids=(), *, planned_item_ids=(), 
             ("used_account_ids", account_ids),
             ("used_planned_item_ids", planned_item_ids),
             ("used_budget_ids", budget_ids),
+            ("used_goal_ids", goal_ids),
+            ("used_rule_ids", rule_ids),
         )
     }
     affected = {field: ids for field, ids in affected.items() if ids}
@@ -455,6 +471,8 @@ def answer_turn(turn, *, sleep=None, monotonic=None):
                 ("used_account_ids", result.account_ids),
                 ("used_planned_item_ids", result.planned_item_ids),
                 ("used_budget_ids", result.budget_ids),
+                ("used_goal_ids", result.goal_ids),
+                ("used_rule_ids", result.rule_ids),
             ):
                 ids = list(getattr(locked, field) or [])
                 for row_id in quoted:
@@ -592,6 +610,8 @@ def _new_conversation(person, backend):
         used_account_ids=[],
         used_planned_item_ids=[],
         used_budget_ids=[],
+        used_goal_ids=[],
+        used_rule_ids=[],
     )
 
 
