@@ -17,10 +17,10 @@ from .audit_services import record
 from .cash_flow import format_minor, selected_accounts
 from .category_services import current_household, income_and_spending_by_window
 from .lifecycle_services import lock_actor_household
-from .models import Account, AuditEvent, SavingsGoal
+from .models import Account, AuditEvent, RecurringSeriesMember, SavingsGoal, Transaction
 from .months import add_months, month_end, month_start
 from .planning_services import visible_projection_inputs
-from .projection import DEFAULT_HORIZON, HORIZONS, project_cash_flow
+from .projection import DEFAULT_HORIZON, HORIZONS, SOURCE_SERIES, project_cash_flow
 from .savings_goal_services import goal_progress
 
 SCOPE_ALL = ""
@@ -130,14 +130,18 @@ def _scope_inputs(principal, scope):
     return selected_accounts(principal, cash_flow_only=True, accounts=accounts), inputs
 
 
-def default_buffer_minor(principal, accounts, today):
-    """One month of average actual spending over the last complete months (integer division)."""
+def _buffer_windows(today):
+    """The last complete months the default buffer averages, oldest first."""
     this_month = month_start(today)
-    windows = [
+    return [
         (add_months(this_month, -offset), month_end(add_months(this_month, -offset)))
         for offset in range(BUFFER_MONTHS, 0, -1)
     ]
-    totals = income_and_spending_by_window(principal, windows, accounts=accounts)
+
+
+def default_buffer_minor(principal, accounts, today):
+    """One month of average actual spending over the last complete months (integer division)."""
+    totals = income_and_spending_by_window(principal, _buffer_windows(today), accounts=accounts)
     # A net refund can make a window's spending negative; a buffer is never below zero.
     return max(0, sum(pair[1] for pair in totals) // BUFFER_MONTHS)
 
@@ -203,6 +207,7 @@ def build_funding_plan(principal, *, today, scope=SCOPE_ALL, horizon=DEFAULT_HOR
     return SimpleNamespace(
         scope=scope,
         horizon=horizon,
+        today=today,
         rows=rows,
         flagged=[row for row in rows if row.flagged],
         months=[
@@ -219,7 +224,59 @@ def build_funding_plan(principal, *, today, scope=SCOPE_ALL, horizon=DEFAULT_HOR
         buffer_source=buffer_source,
         can_set_buffer=household is not None,
         needs_household=household is None and scope == SavingsGoal.Scope.HOUSEHOLD,
+        # What the plan read, for plan_account_ids.
+        accounts=accounts,
+        inputs=inputs,
+        linked_account_ids=frozenset(
+            progress.linked_account.pk for progress in progress_by_id.values() if progress.linked_account is not None
+        ),
     )
+
+
+def plan_account_ids(principal, plan):
+    """Every account a funding plan's numbers came from (#682).
+
+    The surplus and default buffer are computed over the scope's live cash-flow
+    accounts, so each counts even when it adds nothing. An archived or
+    non-cash-flow account counts only when its rows fed the plan: a stored
+    charge of a projected recurring series, or, for the default buffer, a
+    transaction inside the months it averages. Each open goal's visible linked
+    account counts too, because its balance sets what is left to fund, and goals
+    fill from one surplus in rank order.
+    """
+    ids = {
+        account.pk
+        for account in plan.accounts
+        if account.status == Account.Status.ACTIVE and account.archived_at is None
+    }
+    ids |= plan.linked_account_ids
+    series_ids = set()
+    for item in plan.inputs:
+        if item.source == SOURCE_SERIES:
+            series_ids.add(item.source_id)
+            if item.last_account_id is not None:
+                ids.add(item.last_account_id)
+    if series_ids:
+        ids |= set(
+            RecurringSeriesMember.objects.filter(series_id__in=series_ids).values_list(
+                "transaction__account_id", flat=True
+            )
+        )
+    if plan.buffer_source == BUFFER_DEFAULT and plan.accounts:
+        windows = _buffer_windows(plan.today)
+        ids |= set(
+            Transaction.objects.visible_to(principal)  # pyright: ignore[reportAttributeAccessIssue] - QuerySet.as_manager() is untyped
+            .filter(
+                status=Transaction.Status.ACTIVE,
+                kind=Transaction.Kind.CASH_FLOW,
+                account__in=[account.pk for account in plan.accounts],
+                transaction_date__gte=windows[0][0],
+                transaction_date__lte=windows[-1][1],
+            )
+            .values_list("account_id", flat=True)
+            .distinct()
+        )
+    return ids
 
 
 def set_savings_buffer(principal, buffer_minor):
