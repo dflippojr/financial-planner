@@ -11,7 +11,7 @@ from django.core.validators import MaxValueValidator
 from django.db.models import Q
 from django.utils import timezone
 
-from .input_limits import MAX_DESCRIPTION_CHARS
+from .input_limits import AUTO_NOTE_MAX_CHARS, MAX_DESCRIPTION_CHARS
 from .money_input import MoneyField, PercentField, WholePercentField
 from .date_bounds import EARLIEST_ACTIVITY_DATE, TOO_EARLY_ERROR, activity_date_error
 from .cash_flow import MAX_REPORT_DATE, MAX_REPORT_PERIODS, default_date_range, period_count
@@ -1754,6 +1754,16 @@ class CategoryRuleForm(forms.Form):
         help_text="Lower numbers run first within personal or household rules.",
     )
     enabled = forms.BooleanField(required=False, initial=True)
+    note = forms.CharField(
+        required=False,
+        max_length=AUTO_NOTE_MAX_CHARS,
+        label="Note for new transactions",
+        help_text=(
+            "Optional. One line added below the note of each new transaction this rule applies to, "
+            "visible to everyone who can see that transaction. Existing transactions get it only "
+            "when you add it to them from the rule's page."
+        ),
+    )
 
     def __init__(self, *args, principal=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1791,6 +1801,21 @@ class CategoryRuleForm(forms.Form):
         if not MIN_SIGNED_BIGINT <= minor_units <= MAX_SIGNED_BIGINT:
             raise ValidationError(AMOUNT_RANGE_ERROR)
         return amount
+
+
+class AutoNoteForm(forms.Form):
+    """A recurring series' note (#684); the service trims it to one line."""
+
+    note = forms.CharField(
+        required=False,
+        max_length=AUTO_NOTE_MAX_CHARS,
+        label="Note for new charges",
+        help_text=(
+            "One line added below the note of each new charge that joins this series, visible to "
+            "everyone who can see that charge. Leave empty to stop adding a note. Existing charges "
+            "get it only when you add it to them below."
+        ),
+    )
 
 
 class AlertSettingsForm(forms.Form):

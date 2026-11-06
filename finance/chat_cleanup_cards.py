@@ -20,8 +20,10 @@ from .access import DENIED as _DENIED
 from .ai_tools import (
     MAX_TOOL_ROWS,
     WITHHELD_CATEGORY_NAME,
+    TransactionLabels,
     _figure,
     ai_nameable_categories,
+    labelled_transactions,
     visible_accounts,
 )
 from .ai_types import ToolResult, ToolSpec
@@ -196,9 +198,12 @@ def _ai_pairs(person):
     ).select_related("leg_a", "leg_b", "leg_a__account", "leg_b__account")
 
 
-def _leg(txn):
-    return {"transaction_id": txn.pk, "date": str(txn.transaction_date), "account_id": txn.account_id,
-            "amount_minor": txn.amount_minor, "description": txn.description}
+def _leg(txn, labelled, labels):
+    row = {"transaction_id": txn.pk, "date": str(txn.transaction_date), "account_id": txn.account_id,
+           "amount_minor": txn.amount_minor, "description": txn.description}
+    if txn.pk in labelled:
+        row.update(labels.fields(labelled[txn.pk]))
+    return row
 
 
 def _direction(pair):
@@ -211,10 +216,12 @@ def transfer_suggestions(person, _args):
     shown = list(_ai_pairs(person).filter(status=TransferPair.Status.SUGGESTED).order_by("-updated_at", "-pk")
                  [:MAX_TOOL_ROWS])
     rows = []
+    labels = TransactionLabels(person)
+    labelled = labelled_transactions(person, [pk for pair in shown for pk in (pair.leg_a_id, pair.leg_b_id)])
     for pair in shown:
         outgoing, incoming = _direction(pair)
         rows.append({"pair_id": pair.pk, "kind": pair.kind, "confidence": pair.confidence,
-                     "from": _leg(outgoing), "to": _leg(incoming)})
+                     "from": _leg(outgoing, labelled, labels), "to": _leg(incoming, labelled, labels)})
     accounts = {pair.leg_a.account_id for pair in shown} | {pair.leg_b.account_id for pair in shown}
     return ToolResult(text=json.dumps({"url": url, "rows": rows}), account_ids=tuple(sorted(accounts)))
 
@@ -247,9 +254,12 @@ def category_suggestions(person, _args):
         transaction__category_source=Transaction.CategorySource.UNSET,
     ).order_by("-pk")
     shown = list(islice((row for row in candidates.iterator(chunk_size=200) if _suggestion_open(row)), MAX_TOOL_ROWS))
+    labels = TransactionLabels(person)
+    labelled = labelled_transactions(person, [row.transaction_id for row in shown])
     rows = [{
         "suggestion_id": row.pk, "transaction_id": row.transaction_id, "date": str(row.transaction.transaction_date),
         "amount_minor": row.transaction.amount_minor, "description": row.transaction.description,
+        **(labels.fields(labelled[row.transaction_id]) if row.transaction_id in labelled else {}),
         "suggested_category": row.category.name if row.category_id in nameable else WITHHELD_CATEGORY_NAME,
     } for row in shown]
     return ToolResult(text=json.dumps({"url": reverse("transaction-list"), "rows": rows}),

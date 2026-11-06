@@ -1,5 +1,5 @@
 import uuid
-from .input_limits import BUDGET_MONTH_FLOOR, MAX_DESCRIPTION_CHARS
+from .input_limits import AUTO_NOTE_MAX_CHARS, BUDGET_MONTH_FLOOR, MAX_DESCRIPTION_CHARS
 from .money_display import format_minor
 from fractions import Fraction
 
@@ -1192,6 +1192,11 @@ class RecurringSeries(models.Model):
     is_active = models.BooleanField(default=True)
     cancelled_at = models.DateTimeField(null=True, blank=True)
     confirmed_at = models.DateTimeField(null=True, blank=True)
+    # A one-line note added to each new charge that joins a confirmed series (#684).
+    # note_updated_at is when it was last set: only charges imported after it get the
+    # line on their own, so setting or editing it never changes past notes.
+    note = models.CharField(max_length=AUTO_NOTE_MAX_CHARS, blank=True, default="")
+    note_updated_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -1731,6 +1736,8 @@ class CategoryRule(models.Model):
     # Set when the member confirms the preview with "Apply"; cleared on edit.
     # Only confirmed rules apply automatically to imports and syncs.
     confirmed_at = models.DateTimeField(null=True, blank=True)
+    # A one-line note added to each new transaction the rule applies to (#684).
+    note = models.CharField(max_length=AUTO_NOTE_MAX_CHARS, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

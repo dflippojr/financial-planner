@@ -1,0 +1,54 @@
+{% comment %}
+"Add the note to existing transactions" (#684): the preview of rows that would get the note line,
+then a confirm form that posts their ids and the previewed version. Pass rows, note, error, undo,
+version_name, version and disabled ("disabled" or empty).
+{% endcomment %}
+<section class="mb-8" data-auto-note-existing>
+  <h2 class="mb-3 text-xl font-semibold">Add the note to existing transactions ({{ rows|length }})</h2>
+  <p class="mb-3 max-w-2xl text-sm opacity-80">New transactions get the note on their own. Existing ones change only if you confirm here: the line “{{ note }}” is added below each one's note. Rows that already have it, or whose note would pass 2,000 characters, are left out.</p>
+  {% if undo %}
+  <form method="post" action="{% url 'transaction-bulk-undo' undo.pk %}" class="mb-3">
+    {% csrf_token %}
+    <div role="status" class="alert alert-info">
+      <span>Note added.</span>
+      <button type="submit" class="btn btn-sm">Undo</button>
+    </div>
+  </form>
+  {% endif %}
+  {% if error %}<p class="errorlist text-error mb-3" role="alert">{{ error }}</p>{% endif %}
+  <div class="overflow-x-auto mb-3">
+    <table class="table table-zebra">
+      <thead class="sticky top-0 z-10 bg-base-200">
+        <tr>
+          <th scope="col">Date</th>
+          <th scope="col">Account</th>
+          <th scope="col">Description</th>
+          <th scope="col" class="text-right">Amount</th>
+          <th scope="col">Current note</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for txn in rows %}
+        <tr>
+          <td>{{ txn.transaction_date }}</td>
+          <td>{{ txn.account.name }}</td>
+          <td>{{ txn.description }}</td>
+          <td class="text-right">{{ txn.amount_display }}</td>
+          <td class="max-w-xs truncate" title="{{ txn.note }}">{{ txn.note|default:"—" }}</td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="5">No existing transactions need this note.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if rows %}
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="{{ apply_action|default:'apply_note' }}">
+    <input type="hidden" name="{{ version_name }}" value="{{ version }}">
+    {% for txn in rows %}<input type="hidden" name="transaction_id" value="{{ txn.pk }}">{% endfor %}
+    <button type="submit" class="btn btn-primary"{% if disabled %} disabled{% endif %}>Add the note to {{ rows|length }} transaction{{ rows|length|pluralize }}</button>
+  </form>
+  {% endif %}
+</section>

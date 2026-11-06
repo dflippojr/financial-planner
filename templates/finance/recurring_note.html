@@ -1,0 +1,16 @@
+{% extends "finance/base.html" %}
+{% block title %}Recurring note · Financial Planner{% endblock %}
+{% block content %}
+<h1 class="mb-2 text-2xl font-bold">Note for {{ series.display_name }}</h1>
+<p class="mb-4"><a href="{% url 'recurring-review' %}" class="link">Back to recurring charges</a></p>
+{% include "finance/_messages.html" %}
+<form method="post" class="max-w-lg mb-8">
+  {% csrf_token %}
+  <input type="hidden" name="action" value="save">
+  {% include "finance/_form_fields.html" with form=form %}
+  <button type="submit" class="btn btn-primary">Save note</button>
+</form>
+{% if series.note %}
+{% include "finance/_auto_note_existing.html" with rows=rows note=series.note error=apply_error undo=note_undo version_name="note_version" version=note_version apply_action="apply" disabled="" %}
+{% endif %}
+{% endblock %}

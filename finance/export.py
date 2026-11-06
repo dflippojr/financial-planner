@@ -26,6 +26,7 @@ from .models import (
     BudgetAmount,
     BudgetRolloverReset,
     Category,
+    CategoryRule,
     ImportBatch,
     PrivacyPolicyAcceptance,
     RecurringExclusion,
@@ -53,6 +54,7 @@ ENTITY_FILES = (
     "receipts",
     "recurring_series",
     "recurring_exclusions",
+    "category_rules",
     "privacy_policy_acceptances",
     "ai_connections",
     "ai_jobs",
@@ -152,8 +154,26 @@ CSV_FIELDS = {
         "member_transaction_ids",
         "member_sources",
         "fingerprint",
+        "note",
+        "note_updated_at",
     ),
     "recurring_exclusions": ("transaction_id",),
+    "category_rules": (
+        "id",
+        "owner_kind",
+        "description_contains",
+        "account_id",
+        "min_amount_minor",
+        "max_amount_minor",
+        "action",
+        "category_id",
+        "category_name",
+        "priority",
+        "enabled",
+        "confirmed_at",
+        "note",
+        "created_at",
+    ),
     "privacy_policy_acceptances": (
         "id",
         "policy_version",
@@ -343,13 +363,24 @@ recurring_series.csv / recurring_series.json
   id, merchant_key, display_name, cadence, typical_amount_minor,
   typical_amount_decimal, currency, status, confidence, is_active,
   cancelled_at, acknowledged_amount_minor, member_transaction_ids,
-  member_sources, fingerprint
+  member_sources, fingerprint, note, note_updated_at
   member_sources is a JSON object mapping each member transaction id to
-  detected or manual.
+  detected or manual. note is the line added to each new charge that joins
+  the series; note_updated_at is when it was last set.
 
 recurring_exclusions.csv / recurring_exclusions.json
   Transaction ids this member excluded from recurring detection.
   transaction_id
+
+category_rules.csv / category_rules.json
+  This member's personal rules and their current household's rules.
+  id, owner_kind (personal or household), description_contains, account_id,
+  min_amount_minor, max_amount_minor, action (categorize or
+  untracked_transfer), category_id, category_name, priority, enabled,
+  confirmed_at, note, created_at
+  account_id and category_name are empty when the member can no longer see
+  that account or category. note is the line added to each new transaction
+  the rule applies to.
 
 balance_snapshots.csv / balance_snapshots.json
   Dated account balances (SimpleFIN, manual or calculated from transactions) for visible accounts:
@@ -714,6 +745,34 @@ def _recurring_series_rows(person):
                     str(member.transaction_id): member.source for member in series.members.all()
                 },
                 "fingerprint": series.fingerprint,
+                "note": series.note,
+                "note_updated_at": series.note_updated_at,
+            }
+        )
+    return rows
+
+
+def _category_rule_rows(person):
+    visible_accounts = set(Account.objects.visible_to(person).values_list("pk", flat=True))  # pyright: ignore[reportAttributeAccessIssue] - QuerySet.as_manager() is untyped, as for every Account.objects.visible_to in the baseline
+    categories = dict(Category.objects.visible_to(person).values_list("pk", "name"))  # pyright: ignore[reportAttributeAccessIssue] - QuerySet.as_manager() is untyped, as for every Category.objects.visible_to in the baseline
+    rows = []
+    for rule in CategoryRule.objects.visible_to(person).order_by("pk"):  # pyright: ignore[reportAttributeAccessIssue] - QuerySet.as_manager() is untyped, as for every CategoryRule.objects.visible_to in the baseline
+        rows.append(
+            {
+                "id": rule.pk,
+                "owner_kind": "household" if rule.owner_household_id else "personal",
+                "description_contains": rule.description_contains,
+                "account_id": rule.account_id if rule.account_id in visible_accounts else None,
+                "min_amount_minor": rule.min_amount_minor,
+                "max_amount_minor": rule.max_amount_minor,
+                "action": rule.action,
+                "category_id": rule.category_id if rule.category_id in categories else None,
+                "category_name": categories.get(rule.category_id, ""),
+                "priority": rule.priority,
+                "enabled": rule.enabled,
+                "confirmed_at": rule.confirmed_at,
+                "note": rule.note,
+                "created_at": rule.created_at,
             }
         )
     return rows
@@ -920,6 +979,7 @@ def collect_export_tables(person) -> dict[str, list[dict]]:
         "receipts": _receipt_rows(person),
         "recurring_series": _recurring_series_rows(person),
         "recurring_exclusions": _recurring_exclusion_rows(person),
+        "category_rules": _category_rule_rows(person),
         "privacy_policy_acceptances": _privacy_acceptance_rows(person),
         "ai_connections": _ai_connection_rows(person),
         "ai_jobs": _ai_job_rows(person),

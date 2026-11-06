@@ -21,6 +21,13 @@ from .category_services import (
     exclusion_exists_for,
 )
 from .audit_services import changed_names, origin, record, snapshot
+from .auto_notes import (
+    NO_NOTE_TO_ADD,
+    append_note_lines,
+    apply_line_to_existing,
+    rule_source,
+    validate_note_line,
+)
 from .untracked_transfers import history_label as untracked_history_label
 from .untracked_transfers import set_mark
 from .lifecycle_services import lock_actor_household
@@ -132,8 +139,12 @@ def _set_rule_owner(rule, person, household, owner_kind):
 RULE_AUDIT_FIELDS = {
     "match": "description_contains", "account": "account_id", "amount": "min_amount_minor",
     "target": "max_amount_minor", "category": "category_id", "priority": "priority", "enabled": "enabled",
-    "owner": "owner_household_id", "kind": "action",
+    "owner": "owner_household_id", "kind": "action", "note": "note",
 }
+# Fields whose change alters what a rule does to a transaction's category or mark,
+# so the rule must be previewed and applied again. A note-only edit keeps it
+# confirmed: the note reaches only new transactions on its own (#684).
+RULE_MATCH_FIELDS = {key: value for key, value in RULE_AUDIT_FIELDS.items() if key != "note"}
 
 
 def _rule_audience(rule):
@@ -167,11 +178,14 @@ def save_category_rule(
     priority,
     enabled=True,
     action=CategoryRule.Action.CATEGORIZE,
+    note=None,
 ):
+    """Create or edit a rule. `note` None keeps the stored note (blank for a new rule)."""
     person = _person_for(principal)
     household = current_household(person)
     if household is None:
         raise PermissionDenied(_DENIED)
+    note_line = None if note is None else validate_note_line(note)
     lock_actor_household(person)
     ensure_household_categories(household)
     cleaned = (description_contains or "").strip()
@@ -182,6 +196,7 @@ def save_category_rule(
     category = _rule_category(person, action, category_id)
     rule = _rule_for_save(person, household, rule_id, owner_kind, enabled)
     before = snapshot(rule, RULE_AUDIT_FIELDS) if rule.pk else None
+    match_before = snapshot(rule, RULE_MATCH_FIELDS) if rule.pk else None
     _set_rule_owner(rule, person, household, owner_kind)
     rule.description_contains = cleaned
     rule.account = _visible_rule_account(person, account_id)
@@ -190,9 +205,12 @@ def save_category_rule(
     _set_rule_action(rule, action, category, household)
     rule.priority = priority
     rule.enabled = enabled
+    if note_line is not None:
+        rule.note = note_line
     # A new or edited rule must be previewed and applied again before it
-    # categorizes imports and syncs on its own.
-    rule.confirmed_at = None
+    # categorizes imports and syncs on its own; a note-only edit stays confirmed.
+    if match_before is None or changed_names(match_before, snapshot(rule, RULE_MATCH_FIELDS)):
+        rule.confirmed_at = None
     _validate_rule_account(rule, person, household)
     _validate_rule_category(rule, household)
     rule.save()
@@ -756,6 +774,29 @@ def apply_rule(principal, rule_id, *, previewed_version=None):
 
 
 @transaction.atomic
+def apply_rule_note_to_existing(principal, rule_id, *, previewed_version, expected_ids):
+    """Add the rule's note to the previewed existing matches, once the member confirms.
+
+    previewed_version is the rule's updated_at from the preview page and
+    expected_ids the rows it listed: if either moved, nothing is written.
+    Returns (changed rows, bulk-edit undo record).
+    """
+    person, rule = _rule_or_404(principal, rule_id)
+    lock_actor_household(person)
+    person, rule = _rule_or_404(principal, rule_id)
+    if not rule.enabled:
+        raise ValidationError("Enable the rule before applying it.")
+    if rule.updated_at.isoformat() != previewed_version:
+        raise ValidationError(RULE_CHANGED_SINCE_PREVIEW)
+    if not rule.note:
+        raise ValidationError(NO_NOTE_TO_ADD)
+    rows = _winning_rows(list(_matching_queryset(person, rule).order_by("pk")), rule)
+    wanted = {txn.pk for txn in rows}
+    locked = [txn for txn in _lock_transactions(person, rows) if txn.pk in wanted]
+    return apply_line_to_existing(person, locked, rule.note, rule_source(rule), expected_ids)
+
+
+@transaction.atomic
 def apply_enabled_rules_to_transactions(principal, transactions):
     """Apply enabled rules to newly imported rows. Call after transfer refresh."""
     if not transactions:
@@ -793,7 +834,15 @@ def apply_enabled_rules_to_transactions(principal, transactions):
         bucket = by_rule.setdefault(winner.pk, {"rule": winner, "rows": []})
         bucket["rows"].append(txn)
     with origin(AuditEvent.Source.RULE, per_row=False):
-        return _apply_automatic_rule_groups(person, by_rule)
+        applications = _apply_automatic_rule_groups(person, by_rule)
+    # Only here, for new rows: a member's own Apply never adds a rule's note to
+    # existing transactions; that is apply_rule_note_to_existing's confirm step (#684).
+    append_note_lines(person, [
+        (txn, payload["rule"].note, rule_source(payload["rule"]))
+        for payload in by_rule.values() if payload["rule"].note
+        for txn in payload["rows"]
+    ])
+    return applications
 
 
 def _apply_automatic_rule_groups(person, by_rule):

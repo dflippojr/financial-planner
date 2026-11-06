@@ -3,6 +3,7 @@
 {% block settings_content %}
 <h2 class="mb-4 text-xl font-semibold">Rule: {{ rule.description_contains }}</h2>
 <p class="mb-4"><a class="link" href="{% url 'category-rule-list' %}">All rules</a></p>
+{% include "finance/_messages.html" %}
 {% if rule.inactive %}
 <p role="status" class="alert mb-4" data-rule-inactive="true">{% if rule.marks_untracked_transfer %}Inactive: this personal rule was made in a household you are no longer a member of.{% else %}Inactive: this personal rule's category belongs to a household you are no longer a member of.{% endif %}</p>
 {% endif %}
@@ -39,6 +40,9 @@
   <input type="hidden" name="rule_version" value="{{ rule.updated_at.isoformat }}">
   <button type="submit" class="btn btn-primary"{% if not rule.enabled or rule.inactive %} disabled{% endif %}>Apply to matching transactions</button>
 </form>
+{% if rule.note %}
+{% include "finance/_auto_note_existing.html" with rows=note_rows note=rule.note error=note_error undo=note_undo version_name="rule_version" version=rule.updated_at.isoformat disabled=rule.enabled|yesno:",disabled" %}
+{% endif %}
 <h2 class="mb-3 text-xl font-semibold">Application history</h2>
 <div class="overflow-x-auto">
   <table class="table table-zebra">
