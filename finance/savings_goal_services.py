@@ -305,10 +305,14 @@ def _apply_planned_item(goal, payload, *, today):
         goal.funds_planned_item = None
         goal.planned_item_linked_on = None
         return
-    if goal.funds_planned_item_id != item.pk:
+    newly_linked = goal.funds_planned_item_id != item.pk
+    if newly_linked:
         goal.funds_planned_item = item
         goal.planned_item_linked_on = today
-    if payload.get("target_amount_minor") is None:
+    # A blank target takes the item's amount; a payload that leaves the target
+    # out keeps it, unless this is a new goal that has none yet.
+    blank_target = "target_amount_minor" in payload and payload["target_amount_minor"] is None
+    if blank_target or (goal.pk is None and "target_amount_minor" not in payload):
         goal.target_amount_minor = item.amount_minor
     if "target_date" in payload and payload["target_date"] is None:
         goal.target_date = next_occurrence(item, today)

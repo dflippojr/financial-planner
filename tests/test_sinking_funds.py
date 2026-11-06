@@ -329,8 +329,8 @@ def test_linking_a_planned_item_sets_target_and_date_and_shows_the_monthly_set_a
     item = make_item(owner, amount=120_000, start=date(2026, 3, 15))
     today = timezone.localdate()
     response = signed_in(owner).get(reverse("savings-goals") + f"?fund_item={item.pk}")
-    page = response.content.decode()
-    assert 'name="share_of_account" checked' in page.replace("  ", " ") or "checked" in page
+    initial = response.context["add_form"].initial
+    assert (initial["share_of_account"], initial["funds_planned_item"], initial["name"]) == (True, item.pk, item.name)
     response = signed_in(owner).post(
         reverse("savings-goals"),
         {"name": "Synthetic Insurance Fund", "target_amount": "", "scope": "private",
@@ -388,6 +388,19 @@ def test_an_item_taken_private_no_longer_drives_a_household_fund():
     goal.refresh_from_db()
     assert fund_due_date(goal, TODAY) == date(2027, 6, 1)
     assert goal_progress(member, goal, today=TODAY).funded_item is None
+
+
+@pytest.mark.django_db
+def test_an_edit_that_leaves_the_target_out_keeps_a_linked_funds_target():
+    owner = make_person("owner")
+    account = make_account(owner)
+    item = make_item(owner, amount=120_000)
+    goal = save_savings_goal(owner, {"scope": "private", "name": "Synthetic Fund", "share_of_account": True,
+                                     "linked_account": account, "funds_planned_item": item,
+                                     "target_amount_minor": 150_000})
+    save_savings_goal(owner, {"scope": "private", "name": "Synthetic Renamed", "funds_planned_item": item}, goal=goal)
+    goal.refresh_from_db()
+    assert (goal.name, goal.target_amount_minor, goal.funds_planned_item_id) == ("Synthetic Renamed", 150_000, item.pk)
 
 
 # -- monthly suggestion and confirmation --
