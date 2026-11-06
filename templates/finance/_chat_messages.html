@@ -1,6 +1,7 @@
 {% load ui %}<div class="space-y-3 mb-4{% if composer_fixed %} lg:mb-0 lg:flex lg:flex-col lg:gap-4 lg:space-y-0{% endif %}"{% if not popover %} aria-live="polite"{% endif %}>
   {% for item in chat_messages %}
-  <article class="rounded-box border border-base-300 p-3 {% if item.role == "user" %}bg-base-200 max-md:ml-8{% if composer_fixed %} lg:max-w-[520px] lg:self-end{% endif %}{% else %}bg-base-100 max-md:mr-8{% endif %}"{% if item.status == "pending" %} data-chat-turn-url="{% url 'chat-turn' item.pk %}" aria-busy="true"{% endif %}>
+  {# A stable id per turn (#686): chat_send anchors to the question, a proposal reload to its reply. #}
+  <article id="{% if popover %}popover-{% endif %}turn-{{ item.pk }}" data-chat-role="{{ item.role }}" class="scroll-mt-4 rounded-box border border-base-300 p-3 {% if item.role == "user" %}bg-base-200 max-md:ml-8{% if composer_fixed %} lg:max-w-[520px] lg:self-end{% endif %}{% else %}bg-base-100 max-md:mr-8{% endif %}"{% if item.status == "pending" %} data-chat-turn-url="{% url 'chat-turn' item.pk %}" aria-busy="true"{% endif %}>
     {% if item.role == "user" %}
     <p class="text-sm font-semibold">You</p>
     {% elif item.role == "error" %}
