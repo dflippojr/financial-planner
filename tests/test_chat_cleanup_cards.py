@@ -633,3 +633,37 @@ def test_pairs_suggestions_and_splits_hidden_after_the_suggestion_fail_without_n
     pair.refresh_from_db()
     assert pair.status == TransferPair.Status.SUGGESTED
     assert not Transaction.objects.filter(category__isnull=False).exists()
+
+
+@pytest.mark.django_db
+def test_a_card_of_only_refused_splits_still_shows_the_parts_and_records_the_account(harness):
+    state, client, person, household = _setup(harness)
+    _category(household, "Groceries")
+    account = checking(person, household, "Shared Checking")
+    store = add_txn(account, person, DAY, -6000, "SYN big box store")
+    conversation = _propose(state, person, "propose_splits", {"items": [{"transaction_id": store.pk, "parts": [
+        {"category": "Groceries", "amount_minor": 4000}, {"category": "Dining", "amount_minor": 2500}]}]})
+    proposal = _proposal(AiProposal.Kind.SPLITS)
+    assert "The parts add up to 65.00 USD; the transaction is 60.00 USD." in state.tool_outputs[-1]
+    conversation.refresh_from_db()
+    assert account.pk in conversation.used_account_ids
+
+    html = client.get(reverse("chat")).content.decode()
+    assert "Groceries 40.00 USD · Dining 25.00 USD" in html and SPLIT_SUM_ERROR in html
+    assert 'name="item"' not in html and "disabled" in html
+    response = _apply(client, proposal, ticked=[0], follow=True)
+    proposal.refresh_from_db()
+    assert proposal.status == AiProposal.Status.PENDING and not store.splits.exists()
+    assert "Tick at least one item" in response.content.decode()
+
+
+@pytest.mark.django_db
+def test_a_refused_proposal_still_records_the_accounts_its_answer_quoted(harness):
+    state, _client, person, household = _setup(harness)
+    account = checking(person, household, "Shared Checking")
+    full = add_txn(account, person, DAY, -4500, "SYN market")
+    Transaction.objects.filter(pk=full.pk).update(note="x" * 1997)
+    conversation = _propose(state, person, "propose_notes", {"items": [{"transaction_id": full.pk, "note": "More"}]})
+    assert not AiProposal.objects.exists() and NOTE_WOULD_BE_TOO_LONG in state.tool_outputs[-1]
+    conversation.refresh_from_db()
+    assert account.pk in conversation.used_account_ids

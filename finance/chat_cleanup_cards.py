@@ -507,14 +507,19 @@ def _split_row(person, raw, seen):
     return row
 
 
-def _proposer(kind, build_row):
-    """A propose handler: one row per item, each checked alone; touched accounts are recorded as used."""
+def _proposer(kind, build_row, *, show_refused=False):
+    """A propose handler: one row per item, each checked alone; touched accounts are recorded as used.
+
+    With `show_refused`, a card where at least one row found its target is stored even when none can be
+    applied, so the member sees what was proposed and why it was refused.
+    """
     def propose(person, args, conversation, turn):
         items, dropped = _raw_items(args)
         seen = set()
         rows = [build_row(person, raw, seen) for raw in items]
         accounts = [account for row in rows for account in row.pop("accounts", [])]
-        return _store_items(conversation, turn, kind, rows, dropped, account_ids=accounts)
+        keep = show_refused and any(row["id"] is not None for row in rows)
+        return _store_items(conversation, turn, kind, rows, dropped, account_ids=accounts, keep_refused=keep)
 
     return propose
 
@@ -523,7 +528,8 @@ _propose_recurring = _proposer(AiProposal.Kind.RECURRING, _recurring_row)
 _propose_transfers = _proposer(AiProposal.Kind.TRANSFERS, _transfer_row)
 _propose_ai_suggestions = _proposer(AiProposal.Kind.AI_SUGGESTIONS, _suggestion_row)
 _propose_notes = _proposer(AiProposal.Kind.NOTES, _note_row)
-_propose_splits = _proposer(AiProposal.Kind.SPLITS, _split_row)
+# A refused split still shows its parts and the reason (#661).
+_propose_splits = _proposer(AiProposal.Kind.SPLITS, _split_row, show_refused=True)
 
 
 # ---------------------------------------------------------------------------

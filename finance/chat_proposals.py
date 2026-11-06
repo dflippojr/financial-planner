@@ -372,10 +372,21 @@ def _raw_items(args):
 
 
 def _store_items(conversation, turn, kind, rows, dropped, *, extra=None, account_ids=(), planned_item_ids=(),
-                 budget_ids=()):
+                 budget_ids=(), keep_refused=False):
+    """Store one item card. With no usable row it is refused, unless `keep_refused` asks for the card anyway.
+
+    The rows the answer touched are recorded as used either way, since a refusal can quote them.
+    """
+    used = partial(
+        ToolResult,
+        account_ids=tuple(sorted(set(account_ids))),
+        planned_item_ids=tuple(sorted(set(planned_item_ids))),
+        budget_ids=tuple(sorted(set(budget_ids))),
+    )
     problems = "; ".join(f"item {number}: {row['error']}" for number, row in enumerate(rows, 1) if row["error"])
-    if not any(row["error"] is None for row in rows):
-        return _fail(f"Nothing could be proposed. {problems}." if problems else "Nothing could be proposed: no items.")
+    if not keep_refused and not any(row["error"] is None for row in rows):
+        text = f"Nothing could be proposed. {problems}." if problems else "Nothing could be proposed: no items."
+        return used(text=text, ok=False)
     payload = {**(extra or {}), "items": rows}
     proposal = AiProposal.objects.create(conversation=conversation, message=turn, kind=kind, payload=payload)
     text = (
@@ -386,12 +397,7 @@ def _store_items(conversation, turn, kind, rows, dropped, *, extra=None, account
         text += f" These items cannot be applied as written; the card shows why: {problems}."
     if dropped:
         text += f" {NEUTRAL_DROPPED} A card holds at most {MAX_CARD_ITEMS} items."
-    return ToolResult(
-        text=text,
-        account_ids=tuple(sorted(set(account_ids))),
-        planned_item_ids=tuple(sorted(set(planned_item_ids))),
-        budget_ids=tuple(sorted(set(budget_ids))),
-    )
+    return used(text=text)
 
 
 def _whole_minor(value):
