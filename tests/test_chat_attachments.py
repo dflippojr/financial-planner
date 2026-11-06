@@ -122,8 +122,8 @@ def test_chat_page_upload_stores_the_file_with_its_question_and_audits_it(harnes
     })
     attachment = AiChatAttachment.objects.get()
     assert response.status_code == 302
-    assert response["Location"] == f"{reverse('chat')}?c={attachment.conversation_id}"
     question = AiConversationMessage.objects.get(role=AiConversationMessage.Role.USER)
+    assert response["Location"] == f"{reverse('chat')}?c={attachment.conversation_id}#turn-{question.pk}"
     assert attachment.message_id == question.pk
     assert attachment.original_name == "budget.csv"
     assert attachment.kind == "csv"
