@@ -1,3 +1,4 @@
 <span class="block font-medium">{{ row.title }}</span>
 {% if row.summary %}<span class="block text-sm">{{ row.summary }}</span>{% endif %}
+{% if row.note %}<span class="block text-sm">Note: <strong>{{ row.note }}</strong></span>{% endif %}
 {% for change in row.changes %}<span class="block text-sm">{{ change.label }}: {{ change.before }} → <strong>{{ change.after }}</strong></span>{% endfor %}

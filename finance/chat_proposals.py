@@ -91,6 +91,8 @@ class ProposalError(Exception):
 
 def proposal_tools(conversation, turn):
     """Tools bound to one chat turn. Their handlers only create AiProposal rows."""
+    from .chat_cleanup_cards import cleanup_tool_rows  # it builds on this module's helpers
+
     tools = (
         ("propose_set_category", "Suggest setting the category on transactions, by id. The member must confirm.", {
             "transaction_ids": {"type": "array", "items": {"type": "integer"}},
@@ -154,7 +156,7 @@ def proposal_tools(conversation, turn):
             "items": _items_schema({"category": {"type": "string"}, "amount_minor": {"type": "integer"}},
                                    required=["category", "amount_minor"]),
         }, ["items"], _propose_set_budgets),
-    )
+    ) + cleanup_tool_rows()
     return tuple(
         ToolSpec(
             name=name,
@@ -369,10 +371,22 @@ def _raw_items(args):
     return items, len(raw) - len(items)
 
 
-def _store_items(conversation, turn, kind, rows, dropped, *, extra=None, planned_item_ids=(), budget_ids=()):
+def _store_items(conversation, turn, kind, rows, dropped, *, extra=None, account_ids=(), planned_item_ids=(),
+                 budget_ids=(), keep_refused=False):
+    """Store one item card. With no usable row it is refused, unless `keep_refused` asks for the card anyway.
+
+    The rows the answer touched are recorded as used either way, since a refusal can quote them.
+    """
+    used = partial(
+        ToolResult,
+        account_ids=tuple(sorted(set(account_ids))),
+        planned_item_ids=tuple(sorted(set(planned_item_ids))),
+        budget_ids=tuple(sorted(set(budget_ids))),
+    )
     problems = "; ".join(f"item {number}: {row['error']}" for number, row in enumerate(rows, 1) if row["error"])
-    if not any(row["error"] is None for row in rows):
-        return _fail(f"Nothing could be proposed. {problems}." if problems else "Nothing could be proposed: no items.")
+    if not keep_refused and not any(row["error"] is None for row in rows):
+        text = f"Nothing could be proposed. {problems}." if problems else "Nothing could be proposed: no items."
+        return used(text=text, ok=False)
     payload = {**(extra or {}), "items": rows}
     proposal = AiProposal.objects.create(conversation=conversation, message=turn, kind=kind, payload=payload)
     text = (
@@ -383,11 +397,7 @@ def _store_items(conversation, turn, kind, rows, dropped, *, extra=None, planned
         text += f" These items cannot be applied as written; the card shows why: {problems}."
     if dropped:
         text += f" {NEUTRAL_DROPPED} A card holds at most {MAX_CARD_ITEMS} items."
-    return ToolResult(
-        text=text,
-        planned_item_ids=tuple(sorted(set(planned_item_ids))),
-        budget_ids=tuple(sorted(set(budget_ids))),
-    )
+    return used(text=text)
 
 
 def _whole_minor(value):
@@ -839,8 +849,9 @@ def apply_proposal(principal, proposal_id, *, selected=None):
                 # The approving member is the actor; the proposal and a fresh operation ID
                 # survive the conversation (and its proposals) being deleted.
                 with origin(AuditEvent.Source.CHAT, correlation_id=uuid.uuid4(), proposal_id=proposal.pk):
-                    if proposal.kind in _ITEM_APPLIERS:
-                        result = _apply_items(person, proposal.payload, selected, _ITEM_APPLIERS[proposal.kind])
+                    appliers = _item_appliers()
+                    if proposal.kind in appliers:
+                        result = _apply_items(person, proposal.payload, selected, appliers[proposal.kind])
                     else:
                         result = _APPLIERS[proposal.kind](person, proposal.payload)
             except PermissionDenied as exc:
@@ -1011,6 +1022,15 @@ ITEM_CREATED = "created"
 ITEM_UPDATED = "updated"
 ITEM_ENDED = "ended"
 ITEM_SKIPPED = "skipped"
+# Cleanup cards (#661): each names what Apply did to its row.
+ITEM_CONFIRMED = "confirmed"
+ITEM_DISMISSED = "dismissed"
+ITEM_MARKED = "marked"
+ITEM_UNMARKED = "unmarked"
+ITEM_ACCEPTED = "accepted"
+ITEM_REJECTED = "rejected"
+ITEM_NOTED = "noted"
+ITEM_SPLIT = "split"
 ITEM_FAILED = "failed"
 ITEM_STALE = "stale"
 ITEM_INVALID = "invalid"
@@ -1110,7 +1130,13 @@ _ITEM_APPLIERS = {
     AiProposal.Kind.SAVINGS_GOALS: _apply_goal_row,
     AiProposal.Kind.SET_BUDGETS: _apply_budget_row,
 }
-ITEM_KINDS = frozenset(_ITEM_APPLIERS)
+
+
+def _item_appliers():
+    """Every item card's row applier, the cleanup cards (#661) included."""
+    from .chat_cleanup_cards import CLEANUP_APPLIERS  # it builds on this module's helpers
+
+    return {**_ITEM_APPLIERS, **CLEANUP_APPLIERS}
 
 
 # ---------------------------------------------------------------------------
@@ -1124,7 +1150,9 @@ def card_for(person, proposal):
     card = {"proposal": proposal, "kind": proposal.kind, "pending": proposal.status == AiProposal.Status.PENDING}
     if proposal.status == AiProposal.Status.STALE:
         card["stale_reason"] = (proposal.result or {}).get("reason") or NO_LONGER_APPLIES
-    builder = _CARD_BUILDERS[proposal.kind]
+    from .chat_cleanup_cards import CLEANUP_CARD_BUILDERS  # it builds on this module's helpers
+
+    builder = _CARD_BUILDERS.get(proposal.kind) or CLEANUP_CARD_BUILDERS[proposal.kind]
     builder(person, proposal, payload, card)
     return card
 
@@ -1222,12 +1250,20 @@ def _card_set_budget(person, proposal, payload, card):
 # Item cards: each row reads its target fresh as the member; payload values are what
 # the model proposed, never another member's data.
 
-_OUTCOME_TEXT = {
+_APPLIED_TEXT = {
     ITEM_CREATED: "Created.",
     ITEM_UPDATED: "Updated.",
     ITEM_ENDED: "Ended.",
-    ITEM_SKIPPED: "Skipped: not ticked.",
+    ITEM_CONFIRMED: "Confirmed.",
+    ITEM_DISMISSED: "Dismissed.",
+    ITEM_MARKED: "Marked.",
+    ITEM_UNMARKED: "Unmarked.",
+    ITEM_ACCEPTED: "Accepted.",
+    ITEM_REJECTED: "Rejected.",
+    ITEM_NOTED: "Note added.",
+    ITEM_SPLIT: "Split.",
 }
+_OUTCOME_TEXT = {**_APPLIED_TEXT, ITEM_SKIPPED: "Skipped: not ticked."}
 
 
 def _outcome_text(outcome):
@@ -1247,7 +1283,7 @@ def _card_items(person, proposal, payload, card, describe):
         row["index"] = index
         row["error"] = item.get("error")
         row["outcome"] = _outcome_text(outcomes[index]) if index < len(outcomes) else ""
-        row["applied"] = index < len(outcomes) and outcomes[index].get("status") in (ITEM_CREATED, ITEM_UPDATED, ITEM_ENDED)
+        row["applied"] = index < len(outcomes) and outcomes[index].get("status") in _APPLIED_TEXT
         row["selectable"] = card["pending"] and not row["error"] and not row["unavailable"]
         rows.append(row)
     card["item_rows"] = rows
