@@ -2227,6 +2227,8 @@ class AiConversation(models.Model):
     used_account_ids = models.JSONField(default=list)
     used_planned_item_ids = models.JSONField(default=list)
     used_budget_ids = models.JSONField(default=list)
+    used_goal_ids = models.JSONField(default=list)
+    used_rule_ids = models.JSONField(default=list)
     # Providers (chat backend and connection, chat_attachments.provider_key) the chat has warned
     # will receive this conversation's files (#644, owner decision 5): the provider named at
     # upload, and each provider whose switch warning the member saw before asking again. Only
