@@ -127,8 +127,11 @@
         giveUp(current, data.message || "SimpleFIN could not be checked.");
       }
     }, function () {
-      if (flow !== current) return;
-      finish("The app could not be reached. Reload the page to try again.", false);
+      if (flow !== current || current.cancelling) return;
+      // Keep the window, its close watcher and Cancel: the flow is still open.
+      current.busy = false;
+      setBusy(false);
+      text.textContent = "The app could not be reached. Press Done to check again, or Cancel.";
     });
   }
 

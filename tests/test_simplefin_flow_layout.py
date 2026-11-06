@@ -179,6 +179,25 @@ def test_when_checks_run_out_the_pop_up_stays_watched_until_cancel_closes_it(flo
         context.close()
 
 
+def test_a_check_that_cannot_reach_the_app_keeps_the_pop_up_and_cancel(flow_page):
+    context, page, stub, _now = flow_page("desktop")
+    try:
+        page.route("**/settings/connections/flow/check/", lambda route: route.abort())
+        open_fix(page)
+        page.get_by_role("button", name="Done").click()
+        expect(page.locator("#simplefin-flow-text")).to_contain_text("could not be reached")
+        expect(page.get_by_role("button", name="Cancel")).to_be_visible()
+
+        page.unroute("**/settings/connections/flow/check/")
+        stub.calls.clear()
+        page.evaluate("() => { window.__popups[0].closed = true; }")  # The member closes it.
+
+        expect(page.get_by_text("Cancelled. Synced", exact=False).first).to_be_visible()
+        assert len(stub.calls) == 1
+    finally:
+        context.close()
+
+
 @pytest.mark.parametrize("viewport", VIEWPORTS)
 def test_a_blocked_pop_up_falls_back_to_a_normal_link(flow_page, viewport):
     context, page, _stub, _now = flow_page(viewport)
