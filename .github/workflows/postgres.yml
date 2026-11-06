@@ -37,13 +37,15 @@ jobs:
           - name: postgres (suite)
             group: suite
             markers: "not browser and not migration and not property"
-            # About 1.5 times its runs on this PR. If the suite outgrows it,
-            # find the slow tests in the --durations list rather than raising
-            # this, or split it again.
+            # About twice the 7 minutes this job took when it was split off
+            # in November 2026. If the suite outgrows it, find the slow tests
+            # in the --durations list rather than raising this.
             timeout: 15
           - name: postgres (property tests and migrations)
             group: property
             markers: "property and not browser and not migration"
+            # About twice the 6 minutes it took then, 4.5 of them the
+            # property tests.
             timeout: 12
     timeout-minutes: ${{ matrix.timeout }}
     env:
