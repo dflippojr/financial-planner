@@ -171,10 +171,8 @@
   function watchClosed() {
     var current = flow;
     if (!current || !current.win || current.cancelling) return;
-    var closed;
-    try { closed = current.win.closed; } catch (error) { closed = false; }
     // Any close counts as Cancel (owner decision 5 on #694).
-    if (closed) cancelFlow();
+    if (isClosed(current.win)) cancelFlow();
   }
 
   function begin(kind, connId, url) {

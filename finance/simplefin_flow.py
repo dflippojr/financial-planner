@@ -27,7 +27,7 @@ from django.db import transaction
 from finance.models import SimpleFinConnection
 from finance.simplefin_budget import BUDGET_USED, SimpleFinBudgetExceeded, interactive_requests_left
 from finance.simplefin_errors import SimpleFinError
-from finance.simplefin_health import balance_moment, find_bank, stored_banks
+from finance.simplefin_health import balance_moment, find_bank, has_stored_read, stored_banks
 
 # SimpleFIN documents no deep link for re-authenticating one bank or for
 # adding an institution, and `connections[]` carries no manage URL
@@ -80,6 +80,9 @@ def start_flow(connection, kind: str, conn_id: str = "") -> dict:
             baseline = {"balance_date": bank.get("balance_date"), "had_errors": bool(bank.get("errors"))}
             name = bank.get("name") or "The bank"
         elif kind == ADD:
+            if not has_stored_read(connection):
+                # With no read to compare against, every bank would look new.
+                raise FlowError("SimpleFIN's bank list hasn't been read yet. Sync first, then add a bank.")
             baseline = {"conn_ids": [bank.get("conn_id") for bank in stored_banks(connection)]}
             name, conn_id = "", ""
         else:

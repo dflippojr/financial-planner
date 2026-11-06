@@ -541,6 +541,17 @@ def test_add_a_bank_succeeds_when_a_new_bank_appears_ready_to_link(monkeypatch):
 
 
 @pytest.mark.django_db
+def test_add_a_bank_is_refused_before_any_read_is_stored(monkeypatch):
+    owner, connection, stub = connected(monkeypatch, feed(north_at=timezone.now()))
+    response = signed_in(owner).post(
+        reverse("simplefin-flow-start"), json.dumps({"kind": "add"}), content_type="application/json")
+
+    assert response.status_code == 400
+    assert "hasn't been read yet" in response.json()["message"]
+    assert fresh(connection).flow == {} and stub.calls == []
+
+
+@pytest.mark.django_db
 def test_a_fix_for_an_unknown_bank_is_refused(monkeypatch):
     owner, connection, _stub = connected(monkeypatch, feed(north_at=timezone.now()))
     sync_connection(owner, connection.pk)

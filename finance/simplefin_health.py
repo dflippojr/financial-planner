@@ -35,7 +35,7 @@ def _text(value, limit) -> str:
     return " ".join(strip_tags(clean_text(value or "")).split())[:limit]
 
 
-def _balance_moment(value) -> datetime | None:
+def _epoch_moment(value) -> datetime | None:
     if isinstance(value, bool) or value in (None, ""):
         return None
     try:
@@ -70,7 +70,7 @@ def _collect_banks(payload: dict) -> dict[str, dict]:
         bank = banks.setdefault(key, {"conn_id": key, "name": _fallback_bank_name(account), "newest": None,
                                       "errors": [], "accounts": 0})
         bank["accounts"] += 1
-        moment = _balance_moment(account.get("balance-date"))
+        moment = _epoch_moment(account.get("balance-date"))
         if moment is not None and (bank["newest"] is None or moment > bank["newest"]):
             bank["newest"] = moment
     return banks
@@ -180,8 +180,17 @@ def bank_state(bank: dict, now=None) -> str:
     return OK
 
 
+def stored_read(connection) -> dict:
+    """The connection's newest stored /accounts read, or {} before the first one."""
+    return connection.last_read if isinstance(connection.last_read, dict) else {}
+
+
+def has_stored_read(connection) -> bool:
+    return isinstance(stored_read(connection).get("banks"), list)
+
+
 def stored_banks(connection) -> list[dict]:
-    read = connection.last_read if isinstance(connection.last_read, dict) else {}
+    read = stored_read(connection)
     banks = read.get("banks")
     return [bank for bank in banks if isinstance(bank, dict)] if isinstance(banks, list) else []
 

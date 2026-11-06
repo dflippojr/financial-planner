@@ -37,7 +37,7 @@ from finance.models import (
 from finance.fx_rates import APP_CURRENCY, RateBook, RateUnavailable, currency_code, to_usd_minor
 from finance.simplefin_budget import reserve_request
 from finance.simplefin_client import CLAIM_DEADLINE_SECONDS, claim_access_url, fetch_accounts
-from finance.simplefin_health import read_record, schedule_health_push
+from finance.simplefin_health import read_record, schedule_health_push, stored_read
 from finance.simplefin_errors import (
     SimpleFinAlreadyClaimed,
     SimpleFinError,
@@ -309,7 +309,7 @@ def store_read(connection_id, payload: dict, listing: list[dict], now) -> dict:
 
 def stored_listing(connection: SimpleFinConnection) -> list[dict] | None:
     """The account rows from the newest read, or None before the first read."""
-    read = connection.last_read if isinstance(connection.last_read, dict) else {}
+    read = stored_read(connection)
     accounts = read.get("accounts")
     if not isinstance(accounts, list):
         return None

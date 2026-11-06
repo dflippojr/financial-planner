@@ -25,7 +25,7 @@ from .simplefin_budget import (
 )
 from .simplefin_errors import SimpleFinAlreadyClaimed, SimpleFinError, SimpleFinRateLimited
 from .simplefin_flow import BRIDGE_URL, FlowError, cancel_flow, check_flow, start_flow
-from .simplefin_health import bank_rows
+from .simplefin_health import bank_rows, stored_read
 from .simplefin_schedule import next_scheduled_sync
 from .simplefin_services import (
     claim_connection,
@@ -87,7 +87,7 @@ def _choices_from_post(request, remotes):
 
 
 def _stored_messages(connection):
-    read = connection.last_read if isinstance(connection.last_read, dict) else {}
+    read = stored_read(connection)
     found = read.get("messages")
     return [message for message in found if isinstance(message, str)] if isinstance(found, list) else []
 
@@ -246,7 +246,7 @@ def connections(request):
 def _health_context(connection):
     if connection is None:
         return {}
-    read = connection.last_read if isinstance(connection.last_read, dict) else {}
+    read = stored_read(connection)
     return {
         "banks": bank_rows(connection),
         "read_at": _parse_time(read.get("at")),
