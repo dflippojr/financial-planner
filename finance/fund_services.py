@@ -3,8 +3,10 @@
 Money never moves on its own, except a draw-down when the linked planned
 expense posts (`fund_draw_downs`). Every change is a `FundEntry` row, so a
 fund's history is its rows. Writes that add money lock the account row first,
-then the goal rows in id order, so two members confirming at once can never
-assign more than the balance together.
+Every write locks the goal rows first (in id order), then the account rows (in
+id order) when money comes back into a fund, so two members confirming at once
+can never assign more than the balance together. Goals before accounts is also
+the order a chat edit takes, so the two never deadlock.
 """
 
 from datetime import date
@@ -46,6 +48,10 @@ NOTHING_CHOSEN_ERROR = "Choose at least one fund to set money aside for."
 NOT_DRAW_DOWN_ERROR = "Only a draw-down can be undone."
 ALREADY_UNDONE_ERROR = "That draw-down was already undone."
 NOT_ON_ACCOUNT_ERROR = "That fund is not in this account."
+UNDO_ROOM_ERROR = (
+    "Undoing would put {amount} back, more than {account}'s unassigned balance of {unassigned}. "
+    "Release money from another fund first."
+)
 
 
 def _record(person, goal, *, metadata=None):
@@ -173,10 +179,8 @@ def assign_to_fund(principal, goal, amount_minor, *, today=None):
         raise ValidationError(POSITIVE_ERROR)
     _check_fund(person, goal)
     with transaction.atomic():
-        account = _lock_account(person, goal)
         goal = _lock_goals(person, [goal])[goal.pk]
-        if goal.linked_account_id != account.pk:
-            raise ValidationError(FUND_ACCOUNT_ERROR)
+        account = _lock_account(person, goal)
         _check_room(account_position(account, today=today), amount_minor)
         entry = FundEntry.objects.create(
             goal=goal, kind=FundEntry.Kind.ASSIGN, reason=FundEntry.Reason.MANUAL,
@@ -330,11 +334,11 @@ def confirm_set_asides(principal, picks, *, today=None):
         if amount <= 0:
             raise ValidationError(POSITIVE_ERROR)
     with transaction.atomic():
-        accounts = {}
-        for goal, _amount in sorted(picks, key=lambda pick: pick[0].linked_account_id or 0):
-            if goal.linked_account_id not in accounts:
-                accounts[goal.linked_account_id] = _lock_account(person, goal)
         locked = _lock_goals(person, [goal for goal, _amount in picks])
+        accounts = {}
+        for current in sorted(locked.values(), key=lambda goal: goal.linked_account_id or 0):
+            if current.linked_account_id not in accounts:
+                accounts[current.linked_account_id] = _lock_account(person, current)
         totals = {}
         for goal, amount in picks:
             current = locked[goal.pk]
@@ -370,6 +374,20 @@ def undo_draw_down(principal, entry):
             raise ValidationError(NOT_DRAW_DOWN_ERROR)
         if current.undone_at is not None:
             raise ValidationError(ALREADY_UNDONE_ERROR)
+        restored = -current.amount_minor
+        counted = FundEntry.objects.filter(pk=current.pk).filter(FundEntry.counted_filter()).exists()
+        if restored > 0 and counted and goal.linked_account_id is not None:
+            # The money comes back out of the account's unassigned balance, which
+            # another fund may have taken since; the same check as an assignment.
+            account = _lock_account(person, goal)
+            position = account_position(account, today=timezone.localdate())
+            if restored > position.unassigned_minor:
+                raise ValidationError(
+                    UNDO_ROOM_ERROR.format(
+                        amount=format_minor(restored), account=account.name,
+                        unassigned=format_minor(max(position.unassigned_minor, 0)),
+                    )
+                )
         current.undone_at = timezone.now()
         current.undone_by = person
         current.save(update_fields=("undone_at", "undone_by"))

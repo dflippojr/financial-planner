@@ -134,10 +134,10 @@ def drawn_occurrences(goal, item):
 def next_occurrence(item, on_or_after, *, skip=()):
     """The planned item's first occurrence on or after a date, leaving out `skip`, or None.
 
-    The search runs a year past the later of the date and the item's start, so a
-    far-off one-time expense is still found.
+    The search runs a year past the later of the date and the item's start, so an
+    item that starts years from now is still found.
     """
-    window_start = max(on_or_after, item.start_date) if item.cadence == PlannedItem.Cadence.ONE_TIME else on_or_after
+    window_start = max(on_or_after, item.start_date)
     hits = occurrence_dates(
         item.start_date,
         item.end_date,
@@ -153,13 +153,15 @@ def fund_due_date(goal, today, *, drawn=None):
 
     An occurrence the fund already paid (a counted draw-down, even one that
     posted a few days early) no longer counts, so the date rolls forward after
-    each payment. `drawn` is those dates when the caller already has them.
+    each payment. An item with no unpaid occurrence left gives no date: its
+    stored target date is the paid occurrence's. `drawn` is those dates when the
+    caller already has them.
     """
     item = linked_item(goal)
     if item is not None:
         if drawn is None:
             drawn = drawn_occurrences(goal, item)
-        return next_occurrence(item, today, skip=drawn) or goal.target_date
+        return next_occurrence(item, today, skip=drawn)
     return goal.target_date
 
 

@@ -1114,3 +1114,143 @@ def test_projection_does_not_expect_an_occurrence_from_before_the_link():
     )
     set_asides = [c for m in report.projected_periods for c in m.contributions if c.source == SOURCE_SET_ASIDE]
     assert set_asides == []
+
+
+# -- third review round --
+
+
+@pytest.mark.django_db
+def test_undoing_a_draw_down_cannot_put_back_more_than_the_unassigned_balance():
+    owner = make_person("owner")
+    savings = make_account(owner)
+    checking = make_account(owner, name="Synthetic Checking", account_type=Account.Type.CHECKING)
+    add_balance(savings, 100_000)
+    first = make_fund(owner, savings, name="Synthetic First")
+    second = make_fund(owner, savings, name="Synthetic Second")
+    item = make_item(owner, amount=100_000, start=date(2026, 12, 10))
+    link_item(first, item, linked_on=date(2026, 11, 1))
+    assign_to_fund(owner, first, 100_000, today=TODAY)
+    make_transaction(owner, checking, on=date(2026, 12, 10), amount_minor=-100_000,
+                     description="SYNTHETIC CAR INSURANCE")
+    [drawn] = apply_fund_draw_downs(today=date(2026, 12, 11))
+    # The payment came from checking, so the savings money is unassigned again; B takes it.
+    assign_to_fund(owner, second, 100_000, today=TODAY)
+    with pytest.raises(ValidationError, match="Release money from another fund first"):
+        undo_draw_down(owner, drawn)
+    assert account_position(savings, today=TODAY).shortfall_minor == 0
+    release_from_fund(owner, second, 100_000, today=TODAY)
+    undo_draw_down(owner, drawn)
+    assert assigned_minor(first) == 100_000
+
+
+@pytest.mark.django_db
+def test_deleting_the_account_of_an_undone_import_keeps_its_draw_down_uncounted():
+    from finance.lifecycle_services import delete_account
+
+    owner, savings, checking, fund, _item = _drawn_fund()
+    txn = make_transaction(owner, checking, on=date(2026, 12, 10), amount_minor=-100_000,
+                           description="SYNTHETIC CAR INSURANCE")
+    apply_fund_draw_downs(today=date(2026, 12, 11))
+    Transaction.objects.filter(pk=txn.pk).update(status=Transaction.Status.ARCHIVED, archived_at=timezone.now())
+    release_from_fund(owner, fund, 100_000, today=TODAY)
+    assert assigned_minor(fund) == 0
+    delete_account(owner, checking.pk)
+    entry = FundEntry.objects.get(kind="draw_down", goal=fund)
+    assert entry.transaction_id is None and entry.undone_at is not None
+    assert assigned_minor(fund) == 0
+
+
+@pytest.mark.django_db
+def test_deleting_a_payments_account_keeps_a_counted_draw_down():
+    from finance.lifecycle_services import delete_account
+
+    owner, savings, checking, fund, _item = _drawn_fund()
+    make_transaction(owner, checking, on=date(2026, 12, 10), amount_minor=-60_000,
+                     description="SYNTHETIC CAR INSURANCE")
+    item = fund.funds_planned_item
+    item.amount_minor = 60_000
+    item.save()
+    apply_fund_draw_downs(today=date(2026, 12, 11))
+    delete_account(owner, checking.pk)
+    entry = FundEntry.objects.get(kind="draw_down", goal=fund)
+    assert entry.transaction_id is None and entry.undone_at is None
+    assert assigned_minor(fund) == 40_000
+
+
+def test_the_fund_does_not_pay_an_occurrence_it_already_paid_early():
+    from types import SimpleNamespace
+
+    item = PlannedItem(pk=7, owner_id=1, scope="private", kind="expense", amount_minor=120_000,
+                       start_date=date(2026, 12, 1), cadence="annual", enabled=True)
+    goal = SavingsGoal(pk=1, owner_id=1, scope="private", target_amount_minor=120_000, share_of_account=True)
+    goal.funds_planned_item = item
+    # December 1's payment drew the fund down in November; the projection still lists it.
+    payment = SimpleNamespace(source="planned", source_id=7, kind="expense", amount_minor=120_000)
+    months = [_month(date(2026, 12, 1), [payment]), _month(date(2027, 1, 1))]
+    schedule = fund_schedule([goal], {1: 0}, months, {1: {date(2026, 12, 1)}})
+    december = schedule[date(2026, 12, 1)]
+    assert december.covered == {}
+    # Saving starts for next December and is not spent on the paid occurrence.
+    first = suggested_set_aside(120_000, 0, date(2027, 12, 1), on=date(2026, 12, 1))
+    assert [amount for _goal, amount in december.set_asides] == [first]
+    january = [amount for _goal, amount in schedule[date(2027, 1, 1)].set_asides]
+    assert january == [suggested_set_aside(120_000, first, date(2027, 12, 1), on=date(2027, 1, 1))]
+
+
+@pytest.mark.django_db
+def test_linking_an_annual_expense_that_starts_years_away_takes_its_first_date():
+    owner = make_person("owner")
+    account = make_account(owner)
+    far = timezone.localdate() + timedelta(days=760)
+    item = make_item(owner, amount=240_000, start=far)
+    goal = save_savings_goal(owner, {"scope": "private", "name": "Synthetic Far Fund", "share_of_account": True,
+                                     "linked_account": account, "funds_planned_item": item,
+                                     "target_amount_minor": None, "target_date": None})
+    assert goal.target_date == far
+    assert goal_progress(owner, goal, today=timezone.localdate()).monthly_needed_minor is not None
+
+
+@pytest.mark.django_db
+def test_a_paid_one_time_item_asks_for_nothing_more():
+    owner, _savings, checking, fund, item = _drawn_fund()
+    item.cadence = PlannedItem.Cadence.ONE_TIME
+    item.save()
+    make_transaction(owner, checking, on=date(2026, 12, 9), amount_minor=-100_000,
+                     description="SYNTHETIC CAR INSURANCE")
+    assert len(apply_fund_draw_downs(today=date(2026, 12, 9))) == 1
+    fund.refresh_from_db()
+    assert fund_due_date(fund, date(2026, 12, 9)) is None
+    row = next(row for row in monthly_set_asides(owner, today=date(2026, 12, 9)).rows if row.goal.pk == fund.pk)
+    assert row.suggested_minor is None
+
+
+@pytest.mark.django_db
+def test_fund_writes_lock_the_goal_before_the_account():
+    """Goal, then account: the order a chat edit (which holds the goal) takes, so none deadlock."""
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    if connection.vendor != "postgresql":
+        pytest.skip("SQLite emits no FOR UPDATE")
+    owner = make_person("owner")
+    account = make_account(owner)
+    other = make_account(owner, name="Synthetic Other Cash")
+    add_balance(account, 100_000)
+    fund = make_fund(owner, account)
+
+    def lock_order(action):
+        with CaptureQueriesContext(connection) as queries:
+            action()
+        locked = {'FROM "finance_savingsgoal"': "goal", 'FROM "finance_account"': "account"}
+        return [
+            name
+            for q in queries if "FOR UPDATE" in q["sql"]
+            for prefix, name in locked.items() if prefix in q["sql"]
+        ]
+
+    assert lock_order(lambda: assign_to_fund(owner, fund, 1_000, today=TODAY))[:2] == ["goal", "account"]
+    assert lock_order(lambda: confirm_set_asides(owner, [(fund, 1_000)], today=TODAY))[:2] == ["goal", "account"]
+    release_from_fund(owner, fund, 2_000, today=TODAY)
+    payload = {"scope": "private", "name": fund.name, "share_of_account": True, "linked_account": other,
+               "target_amount_minor": fund.target_amount_minor}
+    assert lock_order(lambda: save_savings_goal(owner, payload, goal=fund))[:2] == ["goal", "account"]

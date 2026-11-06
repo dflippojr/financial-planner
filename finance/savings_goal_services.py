@@ -396,16 +396,14 @@ def save_savings_goal(principal, payload, *, goal=None):
 
 
 def _lock_fund_rows(goal, account):
-    """Lock a saved goal's old and new accounts in id order, then the goal; return the goal as saved.
+    """Lock the goal, then its saved and new accounts in id order; return the goal as saved.
 
-    The same order as an assignment (account, then goal), so the two never deadlock.
+    The same order as an assignment and a chat edit (goal, then account), so none deadlock.
     """
-    saved_account_id = SavingsGoal.objects.filter(pk=goal.pk).values_list("linked_account_id", flat=True).first()
+    saved = SavingsGoal.objects.select_for_update(of=("self",)).get(pk=goal.pk)
+    saved_account_id = saved.linked_account_id  # pyright: ignore[reportAttributeAccessIssue] - runtime FK id attribute
     ids = sorted({pk for pk in (saved_account_id, account.pk if account is not None else None) if pk is not None})
     list(Account.objects.select_for_update().filter(pk__in=ids).order_by("pk").values_list("pk", flat=True))
-    saved = SavingsGoal.objects.select_for_update(of=("self",)).get(pk=goal.pk)
-    if saved.linked_account_id is not None and saved.linked_account_id not in ids:  # pyright: ignore[reportAttributeAccessIssue] - runtime FK id attribute
-        raise ValidationError(FUND_MOVE_ERROR)
     return saved
 
 

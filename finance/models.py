@@ -1707,6 +1707,23 @@ class SavingsGoal(ArchivableModel):
         return self.name
 
 
+def _detach_draw_downs(collector, field, sub_objs, using):
+    """A draw-down's transaction is deleted (with its account): keep the draw-down, unlinked.
+
+    One whose transaction was already archived (an undone import) did not count,
+    so it is marked undone first; otherwise losing the link would make it count again.
+    """
+    archived = Transaction.objects.using(using).filter(
+        pk__in=[entry.transaction_id for entry in sub_objs if entry.transaction_id is not None],  # pyright: ignore[reportAttributeAccessIssue] - runtime FK id attribute
+        status=Transaction.Status.ARCHIVED,
+    ).values_list("pk", flat=True)
+    archived = set(archived)
+    stale = [entry for entry in sub_objs if entry.transaction_id in archived and entry.undone_at is None]  # pyright: ignore[reportAttributeAccessIssue] - runtime FK id attribute
+    if stale:
+        collector.add_field_update(FundEntry._meta.get_field("undone_at"), timezone.now(), stale)
+    models.SET_NULL(collector, field, sub_objs, using)
+
+
 class FundEntry(models.Model):
     """One change to a sinking fund's assigned amount (#670); the rows are its history.
 
@@ -1736,7 +1753,7 @@ class FundEntry(models.Model):
     month = models.DateField(null=True, blank=True)
     transaction = models.ForeignKey(
         Transaction,
-        on_delete=models.SET_NULL,
+        on_delete=_detach_draw_downs,
         null=True,
         blank=True,
         related_name="fund_draw_downs",

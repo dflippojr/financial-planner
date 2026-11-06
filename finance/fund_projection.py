@@ -40,6 +40,15 @@ def _planned_payments(month):
     return paid
 
 
+def _unpaid_part(item, start, payment, drawn):
+    """The month's projected payment for the item, less occurrences the fund already paid early."""
+    hits = occurrence_dates(item.start_date, item.end_date, item.cadence, start, month_end(start))
+    if not hits:
+        return payment
+    unpaid = sum(1 for hit in hits if hit not in drawn)
+    return payment * unpaid // len(hits)
+
+
 def fund_schedule(goals, held_now, months, drawn_by_goal=None):
     """Per month start: [(goal, set-aside minor)] and {planned item id: minor paid from funds}.
 
@@ -55,7 +64,8 @@ def fund_schedule(goals, held_now, months, drawn_by_goal=None):
         covered = {}
         payments = _planned_payments(month)
         for goal in goals:
-            due = fund_due_date(goal, month.start, drawn=(drawn_by_goal or {}).get(goal.pk, set()))
+            drawn = (drawn_by_goal or {}).get(goal.pk, set())
+            due = fund_due_date(goal, month.start, drawn=drawn)
             amount = suggested_set_aside(goal.target_amount_minor, held[goal.pk], due, on=month.start)
             if amount:
                 held[goal.pk] += amount
@@ -63,7 +73,8 @@ def fund_schedule(goals, held_now, months, drawn_by_goal=None):
             item = linked_item(goal)
             if item is None or not payments.get(item.pk):
                 continue
-            paid = min(held[goal.pk], payments[item.pk])
+            payment = _unpaid_part(item, month.start, payments[item.pk], drawn)
+            paid = min(held[goal.pk], payment)
             if paid > 0:
                 held[goal.pk] -= paid
                 covered[item.pk] = covered.get(item.pk, 0) + paid
