@@ -19,10 +19,8 @@ from tests.browser_support import CSS, browser, page_session  # noqa: F401
 from tests.test_simplefin import connect_owner
 from tests.test_simplefin_health import Feed, feed
 
-pytestmark = [
-    pytest.mark.django_db(transaction=True),
-    pytest.mark.skipif(not CSS.exists(), reason="CSS must be built"),
-]
+# No CSS-built skip: only the width check needs the stylesheet.
+pytestmark = pytest.mark.django_db(transaction=True)
 
 VIEWPORTS = {"desktop": (1280, 800), "phone": (375, 667)}
 
@@ -86,7 +84,8 @@ def test_fix_opens_a_pop_up_and_shows_the_waiting_state(flow_page, viewport):
         assert "popup" in opened["features"]
         expect(page.get_by_role("button", name="Done")).to_be_visible()
         expect(page.get_by_role("button", name="Cancel")).to_be_visible()
-        assert page.evaluate("() => document.documentElement.scrollWidth <= innerWidth")
+        if CSS.exists():  # Width needs the stylesheet; CI always builds it before these tests.
+            assert page.evaluate("() => document.documentElement.scrollWidth <= innerWidth")
         assert_accessible(page.content())
     finally:
         context.close()
