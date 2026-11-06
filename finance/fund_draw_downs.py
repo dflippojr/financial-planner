@@ -198,7 +198,7 @@ def draw_down_goal(goal, *, today, transaction_ids=None):
 def apply_fund_draw_downs(*, today=None, transaction_ids=None):
     """Run draw-downs for every fund with a linked planned item, each fund in its own transaction.
 
-    `transaction_ids` narrows the search to newly imported rows. One fund's
+    `transaction_ids` narrows the search to given rows. One fund's
     failure is logged by id and error type only and the rest still run.
     """
     today = today or timezone.localdate()

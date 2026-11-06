@@ -470,19 +470,6 @@ def after_new_transactions(rows):
     return created
 
 
-def _draw_down_funds_for(pks):
-    """Draw sinking funds down for planned expenses among new rows; never fails the alerts."""
-    from .fund_draw_downs import apply_fund_draw_downs
-    from .pass_isolation import database_unavailable
-
-    try:
-        apply_fund_draw_downs(transaction_ids=pks)
-    except Exception as exc:  # The daily pass retries every fund.
-        if database_unavailable(exc):
-            raise
-        logger.error("Fund draw-down after new transactions failed (%s).", type(exc).__name__)
-
-
 def after_category_change():
     return evaluate_active_budget_alerts()
 
@@ -496,7 +483,6 @@ def schedule_after_new_transactions(transactions):
 
     def _run():
         after_new_transactions(Transaction.objects.filter(pk__in=pks))
-        _draw_down_funds_for(pks)
 
     transaction.on_commit(_run)
 

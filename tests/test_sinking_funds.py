@@ -661,14 +661,10 @@ def test_household_fund_never_draws_on_a_private_transaction():
 
 
 @pytest.mark.django_db
-def test_daily_pass_runs_draw_downs_and_import_hook_too():
-    from finance.alert_services import after_new_transactions
-
+def test_daily_pass_runs_draw_downs():
     owner, _savings, checking, fund, _item = _drawn_fund()
     txn = make_transaction(owner, checking, on=date(2026, 12, 10), amount_minor=-120_000,
                            description="SYNTHETIC CAR INSURANCE")
-    after_new_transactions(Transaction.objects.filter(pk=txn.pk))
-    # The hook uses today's date, which may be before the synthetic payment; the pass below pins it.
     run_daily_alert_pass(today=date(2026, 12, 12))
     assert FundEntry.objects.filter(transaction=txn, kind="draw_down").count() == 1
 
