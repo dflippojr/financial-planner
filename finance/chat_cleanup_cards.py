@@ -325,17 +325,8 @@ def _recurring_row(person, raw, seen):
     if series is None:
         row["error"] = ITEM_UNAVAILABLE
     elif _claim(row, series.pk, seen):
-        row.update(id=series.pk, before=_series_snapshot(series))
+        row.update(id=series.pk, before=_series_snapshot(series), accounts=list(_series_account_ids([series.pk])))
     return row
-
-
-def _propose_recurring(person, args, conversation, turn):
-    items, dropped = _raw_items(args)
-    seen = set()
-    rows = [_recurring_row(person, raw, seen) for raw in items]
-    ids = [row["id"] for row in rows if row["id"] is not None]
-    return _store_items(conversation, turn, AiProposal.Kind.RECURRING, rows, dropped,
-                        account_ids=_series_account_ids(ids))
 
 
 # Transfers --------------------------------------------------------------------
@@ -376,14 +367,6 @@ def _transfer_row(person, raw, seen):
     return row
 
 
-def _propose_transfers(person, args, conversation, turn):
-    items, dropped = _raw_items(args)
-    seen = set()
-    rows = [_transfer_row(person, raw, seen) for raw in items]
-    accounts = [account for row in rows for account in row.pop("accounts", [])]
-    return _store_items(conversation, turn, AiProposal.Kind.TRANSFERS, rows, dropped, account_ids=accounts)
-
-
 # AI category suggestions -------------------------------------------------------
 
 
@@ -404,14 +387,6 @@ def _suggestion_row(person, raw, seen):
         row.update(id=suggestion.pk, before=_suggestion_snapshot(suggestion),
                    accounts=[suggestion.transaction.account_id])
     return row
-
-
-def _propose_ai_suggestions(person, args, conversation, turn):
-    items, dropped = _raw_items(args)
-    seen = set()
-    rows = [_suggestion_row(person, raw, seen) for raw in items]
-    accounts = [account for row in rows for account in row.pop("accounts", [])]
-    return _store_items(conversation, turn, AiProposal.Kind.AI_SUGGESTIONS, rows, dropped, account_ids=accounts)
 
 
 # Notes ------------------------------------------------------------------------
@@ -440,14 +415,6 @@ def _note_row(person, raw, seen):
         elif len(_with_note(txn.note or "", line)) > MAX_NOTE_CHARS:
             row["error"] = NOTE_WOULD_BE_TOO_LONG
     return row
-
-
-def _propose_notes(person, args, conversation, turn):
-    items, dropped = _raw_items(args)
-    seen = set()
-    rows = [_note_row(person, raw, seen) for raw in items]
-    accounts = [account for row in rows for account in row.pop("accounts", [])]
-    return _store_items(conversation, turn, AiProposal.Kind.NOTES, rows, dropped, account_ids=accounts)
 
 
 # Splits -----------------------------------------------------------------------
@@ -540,12 +507,23 @@ def _split_row(person, raw, seen):
     return row
 
 
-def _propose_splits(person, args, conversation, turn):
-    items, dropped = _raw_items(args)
-    seen = set()
-    rows = [_split_row(person, raw, seen) for raw in items]
-    accounts = [account for row in rows for account in row.pop("accounts", [])]
-    return _store_items(conversation, turn, AiProposal.Kind.SPLITS, rows, dropped, account_ids=accounts)
+def _proposer(kind, build_row):
+    """A propose handler: one row per item, each checked alone; touched accounts are recorded as used."""
+    def propose(person, args, conversation, turn):
+        items, dropped = _raw_items(args)
+        seen = set()
+        rows = [build_row(person, raw, seen) for raw in items]
+        accounts = [account for row in rows for account in row.pop("accounts", [])]
+        return _store_items(conversation, turn, kind, rows, dropped, account_ids=accounts)
+
+    return propose
+
+
+_propose_recurring = _proposer(AiProposal.Kind.RECURRING, _recurring_row)
+_propose_transfers = _proposer(AiProposal.Kind.TRANSFERS, _transfer_row)
+_propose_ai_suggestions = _proposer(AiProposal.Kind.AI_SUGGESTIONS, _suggestion_row)
+_propose_notes = _proposer(AiProposal.Kind.NOTES, _note_row)
+_propose_splits = _proposer(AiProposal.Kind.SPLITS, _split_row)
 
 
 # ---------------------------------------------------------------------------
@@ -560,8 +538,22 @@ def _visible_or_denied(query, pk):
     return found
 
 
+def _locked_transaction(person, pk):
+    """The row locked the way the manual services lock it (household, accounts, rows), or denied."""
+    return _lock_accounts_and_transactions(person, [_visible_or_denied(_ai_transactions(person), pk)])[0]
+
+
+def _locked(model, pk):
+    """Re-read a target under its row lock, so the snapshot check and the service see the same row."""
+    found = model.objects.select_for_update(of=("self",)).filter(pk=pk).first()
+    if found is None:
+        raise PermissionDenied(_DENIED)
+    return found
+
+
 def _apply_recurring_row(person, _payload, row):
-    series = _visible_or_denied(_ai_series(person), row["id"])
+    # apply_proposal already holds the household lock, the service's first lock.
+    series = _locked(RecurringSeries, _visible_or_denied(_ai_series(person), row["id"]).pk)
     if _series_snapshot(series) != row["before"]:
         raise _Stale(_already(series.status))
     if row["action"] == "confirm":
@@ -574,6 +566,8 @@ def _apply_recurring_row(person, _payload, row):
 def _apply_transfer_row(person, _payload, row):
     if row.get("target") == "pair":
         pair = _visible_or_denied(_ai_pairs(person), row["id"])
+        _lock_accounts_and_transactions(person, [pair.leg_a, pair.leg_b])
+        pair = _locked(TransferPair, pair.pk)
         if pair.status != row["before"]["status"]:
             raise _Stale(_already(pair.status))
         if row["action"] == "confirm":
@@ -581,7 +575,7 @@ def _apply_transfer_row(person, _payload, row):
             return {"status": ITEM_CONFIRMED, "id": pair.pk}
         dismiss_transfer_pair(person, pair.pk)
         return {"status": ITEM_DISMISSED, "id": pair.pk}
-    txn = _visible_or_denied(_ai_transactions(person), row["id"])
+    txn = _locked_transaction(person, row["id"])
     if txn.untracked_transfer != row["before"]["untracked"]:
         raise _Stale(NO_LONGER_APPLIES)
     if row["action"] == "mark":
@@ -592,24 +586,26 @@ def _apply_transfer_row(person, _payload, row):
 
 
 def _apply_suggestion_row(person, _payload, row):
-    suggestion = _visible_or_denied(_ai_suggestions(person), row["id"])
+    found = _visible_or_denied(_ai_suggestions(person), row["id"])
+    txn = _locked_transaction(person, found.transaction_id)
+    suggestion = _locked(CategorySuggestion, found.pk)
+    suggestion.transaction = txn
     if suggestion.status != CategorySuggestion.Status.PENDING:
         raise _Stale(_already(suggestion.status))
     if _suggestion_snapshot(suggestion) != row["before"] or not _suggestion_open(suggestion):
         raise _Stale(NO_LONGER_APPLIES)
     if row["action"] == "reject":
         reject_suggestion(person, suggestion.pk)
-        return {"status": ITEM_REJECTED, "id": suggestion.transaction_id}
+        return {"status": ITEM_REJECTED, "id": txn.pk}
     accepted = accept_suggestion(person, suggestion.pk)
     if accepted.status != CategorySuggestion.Status.ACCEPTED:
         # The service rejects a suggestion it may no longer apply; the row's savepoint undoes that.
         raise _Stale(NO_LONGER_APPLIES)
-    return {"status": ITEM_ACCEPTED, "id": suggestion.transaction_id}
+    return {"status": ITEM_ACCEPTED, "id": txn.pk}
 
 
 def _apply_note_row(person, _payload, row):
-    found = _visible_or_denied(_ai_transactions(person), row["id"])
-    txn = _lock_accounts_and_transactions(person, [found])[0]
+    txn = _locked_transaction(person, row["id"])
     if _note_hash(txn.note) != row["before"]["note_hash"]:
         raise _Stale(NO_LONGER_APPLIES)
     if len(_with_note(txn.note or "", row["note"])) > MAX_NOTE_CHARS:
@@ -620,7 +616,7 @@ def _apply_note_row(person, _payload, row):
 
 
 def _apply_split_row(person, _payload, row):
-    txn = _visible_or_denied(_ai_transactions(person), row["id"])
+    txn = _locked_transaction(person, row["id"])
     if _split_snapshot(txn) != row["before"]:
         raise _Stale(NO_LONGER_APPLIES)
     parts = [{"category_id": part["category_id"], "amount_minor": part["amount_minor"]} for part in row["parts"]]

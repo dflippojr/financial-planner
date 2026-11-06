@@ -159,6 +159,7 @@ def test_a_series_confirmed_after_the_suggestion_goes_stale_alone(harness):
     html = client.get(reverse("chat")).content.decode()
     assert "Already confirmed." in html and html.count('name="item"') == 1
 
+    # Posts every index, including rows the page renders without a checkbox, to exercise Apply's own re-check.
     _apply(client, proposal, ticked=[0, 1])
     assert _statuses(proposal) == ["stale", "confirmed"]
     assert proposal.result["items"][0]["message"] == "Already confirmed."
@@ -285,6 +286,7 @@ def test_a_pair_dismissed_after_the_suggestion_goes_stale_and_a_refused_mark_sho
 
     html = client.get(reverse("chat")).content.decode()
     assert "Already dismissed." in html and html.count('name="item"') == 1
+    # Posts every index, including rows the page renders without a checkbox, to exercise Apply's own re-check.
     _apply(client, proposal, ticked=[0, 1, 2])
     assert _statuses(proposal) == ["stale", "invalid", "unmarked"]
     assert not Transaction.objects.get(pk=marked.pk).untracked_transfer
@@ -350,6 +352,7 @@ def test_a_suggestion_handled_or_overtaken_after_the_proposal_goes_stale(harness
 
     html = client.get(reverse("chat")).content.decode()
     assert "Already rejected." in html and CHANGED in html and 'name="item"' not in html
+    # Posts every index, including rows the page renders without a checkbox, to exercise Apply's own re-check.
     _apply(client, proposal, ticked=[0, 1])
     proposal.refresh_from_db()
     assert proposal.status == AiProposal.Status.STALE
@@ -514,6 +517,7 @@ def test_split_parts_that_do_not_add_up_are_refused_and_the_card_shows_them(harn
     assert "Groceries 40.00 USD · Dining 25.00 USD" in html and html.count("data-proposal-item-problem") == 3
     assert html.count('name="item"') == 1
 
+    # Posts every index, including rows the page renders without a checkbox, to exercise Apply's own re-check.
     _apply(client, proposal, ticked=[0, 1, 2, 3])
     assert _statuses(proposal) == ["invalid", "invalid", "invalid", "split"]
     assert Transaction.objects.filter(category_source=Transaction.CategorySource.SPLIT).get().pk == ok.pk
@@ -595,3 +599,37 @@ def test_lookup_amounts_are_cited_as_figures():
     result = next(tool for tool in cleanup_lookup_tools() if tool.name == "recurring_suggestions").handler(person, {})
     assert [figure["amount_display"] for figure in result.figures] == [format_minor(-1599, "USD")]
     assert result.account_ids == (account.pk,)
+
+
+@pytest.mark.django_db
+def test_pairs_suggestions_and_splits_hidden_after_the_suggestion_fail_without_naming_them(harness):
+    state, client, person, household = _setup(harness)
+    dining = _category(household, "Dining")
+    _category(household, "Groceries")
+    kept = checking(person, household, "Shared Checking")
+    hidden = checking(person, household, "Shared Savings")
+    pair = _pair(add_txn(kept, person, DAY, -5000, "SYN out"), add_txn(hidden, person, DAY, 5000, "SYN hidden in"))
+    suggestion = _suggestion(person, add_txn(hidden, person, DAY, -1200, "SYN hidden cafe"), dining)
+    store = add_txn(hidden, person, DAY, -6000, "SYN hidden store")
+    _propose(state, person, "propose_transfers", {"items": [{"action": "confirm", "pair_id": pair.pk}]})
+    _propose(state, person, "propose_ai_suggestions", {"items": [{"suggestion_id": suggestion.pk, "action": "accept"}]})
+    _propose(state, person, "propose_splits", {"items": [{"transaction_id": store.pk, "parts": [
+        {"category": "Groceries", "amount_minor": 3000}, {"category": "Dining", "amount_minor": 3000}]}]})
+    proposals = list(AiProposal.objects.order_by("pk"))
+    assert [proposal.kind for proposal in proposals] == ["transfers", "ai_suggestions", "splits"]
+    _hide(hidden)
+
+    html = client.get(reverse("chat")).content.decode()
+    assert "SYN hidden" not in html and 'name="item"' not in html
+    for text in ("This transfer pair is not available.", "This suggestion is not available.",
+                 "This transaction is not available."):
+        assert text in html
+    for proposal in proposals:
+        # Posts the stored index to exercise Apply's own re-check; the page renders no checkbox.
+        _apply(client, proposal, ticked=[0])
+        proposal.refresh_from_db()
+        assert proposal.status == AiProposal.Status.STALE
+        assert proposal.result["items"] == [{"status": "failed", "message": ITEM_UNAVAILABLE}]
+    pair.refresh_from_db()
+    assert pair.status == TransferPair.Status.SUGGESTED
+    assert not Transaction.objects.filter(category__isnull=False).exists()
