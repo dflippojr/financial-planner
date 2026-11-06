@@ -191,7 +191,7 @@ def test_a_sync_stores_bank_health_and_the_page_renders_it_without_a_live_reques
     assert html.count("data-simplefin-fix=") == 1
     assert 'data-simplefin-fix="CON-N"' in html
     assert "data-simplefin-add" in html
-    assert f"SimpleFIN requests in the last 24 hours: 1 of {DAILY_REQUEST_CAP}." in html
+    assert f"SimpleFIN requests in the last 24 hours: 1 of {DAILY_REQUEST_CAP}. The last 2 are kept" in html
     assert "noopener" in html
 
 

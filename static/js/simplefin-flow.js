@@ -2,7 +2,10 @@
   // Fix and Add a bank on SimpleFIN Bridge in a pop-up (#694). This page keeps
   // the only reference to the pop-up, cuts the pop-up's way back (opener =
   // null), and never reads anything from it: it only checks whether it is
-  // closed and closes it. Success is decided by the server from SimpleFIN reads.
+  // closed and asks it to close. Success is decided by the server from
+  // SimpleFIN reads. Browsers ignore close() on a cross-origin pop-up whose
+  // opener was cut, so when the window stays open the page asks the member to
+  // close it and reloads once it is gone.
   var root = document.getElementById("simplefin-flow");
   if (!root) return;
   var csrf = root.getAttribute("data-csrf") || "";
@@ -21,8 +24,10 @@
   // example by a cross-origin opener policy), not closed by the member.
   var EARLY_CLOSE_MS = 3000;
   var RELOAD_MS = 1500;
+  var CLOSE_SETTLE_MS = 300;
   var WAITING = "Waiting for SimpleFIN…";
   var flow = null;
+  var lingering = null;
 
   function post(url, body) {
     return fetch(url, {
@@ -45,9 +50,37 @@
     return win;
   }
 
+  function isClosed(win) {
+    try { return win.closed; } catch (error) { return false; }
+  }
+
   function closePopup() {
     if (!flow || !flow.win) return;
     try { if (!flow.win.closed) flow.win.close(); } catch (error) { /* Nothing more the page can do. */ }
+  }
+
+  function reloadWhenClosed() {
+    if (lingering && isClosed(lingering.win)) {
+      clearInterval(lingering.watch);
+      lingering = null;
+      window.location.reload();
+    }
+  }
+
+  // The flow is over: close the pop-up, then reload, or ask the member to close it.
+  function settle(message) {
+    var win = flow && flow.win;
+    closePopup();
+    stopTimers();
+    flow = null;
+    setTimeout(function () {
+      if (!win || isClosed(win)) {
+        finish(message, true);
+        return;
+      }
+      finish(message + " Close the SimpleFIN window to finish.", false);
+      lingering = {win: win, watch: setInterval(reloadWhenClosed, WATCH_MS)};
+    }, CLOSE_SETTLE_MS);
   }
 
   function stopTimers() {
@@ -86,8 +119,7 @@
       current.busy = false;
       setBusy(false);
       if (data.state === "success") {
-        closePopup();
-        finish(data.message, true);
+        settle(data.message);
       } else if (data.state === "pending") {
         text.textContent = WAITING + " " + data.checks_left + " more check" + (data.checks_left === 1 ? "" : "s") + " left.";
         schedule(current, data.next_check_in);
@@ -113,10 +145,10 @@
     text.textContent = "Closing SimpleFIN…";
     post(cancelUrl, {}).then(function (data) {
       if (flow !== current) return;
-      finish(data.message || "Cancelled.", true);
+      settle(data.message || "Cancelled.");
     }, function () {
       if (flow !== current) return;
-      finish("Cancelled. The next scheduled sync will pick up any changes.", false);
+      settle("Cancelled. The next scheduled sync will pick up any changes.");
     });
   }
 
@@ -136,7 +168,7 @@
   }
 
   function begin(kind, connId, url) {
-    if (flow) return;
+    if (flow || lingering) return;
     var win = openPopup(url);
     var current = {kind: kind, win: win, openedAt: Date.now(), timer: null, watch: null, busy: false, cancelling: false};
     flow = current;
@@ -172,6 +204,8 @@
   cancel.addEventListener("click", cancelFlow);
   // iPhone pauses timers in a background tab; look again when this page returns.
   document.addEventListener("visibilitychange", function () {
-    if (document.visibilityState === "visible") watchClosed();
+    if (document.visibilityState !== "visible") return;
+    watchClosed();
+    reloadWhenClosed();
   });
 })();

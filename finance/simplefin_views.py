@@ -16,7 +16,13 @@ from .forms import SimpleFinSetupForm
 from .models import Account, AccountLink, SimpleFinConnection
 from .reauth import requires_recent_auth
 from .security_services import EVENT_TYPES, record_security_event
-from .simplefin_budget import DAILY_REQUEST_CAP, SimpleFinBudgetExceeded, interactive_requests_left, requests_used
+from .simplefin_budget import (
+    DAILY_REQUEST_CAP,
+    SCHEDULED_RESERVE,
+    SimpleFinBudgetExceeded,
+    interactive_requests_left,
+    requests_used,
+)
 from .simplefin_errors import SimpleFinAlreadyClaimed, SimpleFinError, SimpleFinRateLimited
 from .simplefin_flow import BRIDGE_URL, FlowError, cancel_flow, check_flow, start_flow
 from .simplefin_health import bank_rows
@@ -246,6 +252,7 @@ def _health_context(connection):
         "read_at": _parse_time(read.get("at")),
         "requests_used": requests_used(connection),
         "request_cap": DAILY_REQUEST_CAP,
+        "scheduled_reserve": SCHEDULED_RESERVE,
         "budget_left": interactive_requests_left(connection),
         "bridge_url": BRIDGE_URL,
     }

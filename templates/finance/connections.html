@@ -55,7 +55,7 @@
     {% if not can_sync_now %}
     <p class="text-sm opacity-80">{% if budget_left %}Sync now is limited to once every 15 minutes.{% else %}SimpleFIN's daily request budget is used up. The next scheduled sync still runs.{% endif %}</p>
     {% endif %}
-    <p class="text-sm opacity-80" id="simplefin-budget">SimpleFIN requests in the last 24 hours: {{ requests_used }} of {{ request_cap }}.</p>
+    <p class="text-sm opacity-80" id="simplefin-budget">SimpleFIN requests in the last 24 hours: {{ requests_used }} of {{ request_cap }}. The last {{ scheduled_reserve }} are kept for the scheduled sync.</p>
   </div>
 </section>
 

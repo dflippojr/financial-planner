@@ -1,8 +1,8 @@
 """The SimpleFIN Fix and Add pop-up states in Chromium, desktop and phone (#694).
 
-window.open is replaced by a stub that records the pop-up instead of opening
-SimpleFIN Bridge, and fetch_accounts is a synthetic feed, so nothing leaves
-the test.
+Most tests replace window.open with a stub that records the pop-up. The
+real-window tests open a real pop-up whose Bridge address is answered by a
+local stub page. fetch_accounts is a synthetic feed, so nothing leaves the test.
 """
 
 from datetime import timedelta
@@ -43,14 +43,18 @@ CLOSED_POPUP = "() => window.__popups.length === 1 && window.__popups[0].closed"
 
 @pytest.fixture
 def flow_page(page_session, monkeypatch):  # noqa: F811 - the imported pytest fixture, injected by name
-    def open_page(viewport):
+    def open_page(viewport, stub_window=True):
         person = Person.objects.get(user__username="synthetic_alex")
         now = timezone.now()
         connection = connect_owner(person, monkeypatch, feed(north_at=now - timedelta(hours=40)))
         stub = Feed(monkeypatch, feed(north_at=now - timedelta(hours=40)))
         sync_connection(person, connection.pk)
         context, page = page_session(VIEWPORTS[viewport], "light", "/settings/connections/")
-        context.add_init_script(STUB_WINDOW)
+        if stub_window:
+            context.add_init_script(STUB_WINDOW)
+        else:
+            context.route(BRIDGE_URL + "**", lambda route: route.fulfill(
+                status=200, content_type="text/html", body="<title>Synthetic Bridge</title><p>Synthetic Bridge</p>"))
         page.reload()
         page.wait_for_load_state("networkidle")
         return context, page, stub, now
@@ -150,5 +154,59 @@ def test_a_blocked_pop_up_falls_back_to_a_normal_link(flow_page, viewport):
         expect(link).to_have_attribute("rel", "noopener noreferrer")
         expect(page.get_by_role("button", name="Done")).to_be_visible()
         assert popup(page) == []
+    finally:
+        context.close()
+
+
+def open_real_fix(context, page):
+    with context.expect_page() as opened:
+        page.get_by_role("link", name="Fix Synthetic North Bank").click()
+    window = opened.value
+    window.wait_for_load_state()
+    expect(page.locator("#simplefin-flow-text")).to_have_text("Waiting for SimpleFIN…")
+    return window
+
+
+def test_a_real_pop_up_opens_bridge_with_no_way_back_to_the_app(flow_page):
+    context, page, _stub, _now = flow_page("desktop", stub_window=False)
+    try:
+        window = open_real_fix(context, page)
+
+        assert window.url == BRIDGE_URL
+        assert window.evaluate("() => window.opener === null")
+        # Still watched: the early-close guard did not mistake it for closed.
+        page.wait_for_timeout(1500)
+        expect(page.locator("#simplefin-flow-panel")).to_be_visible()
+    finally:
+        context.close()
+
+
+def test_closing_a_real_pop_up_cancels_and_syncs(flow_page):
+    context, page, stub, _now = flow_page("desktop", stub_window=False)
+    try:
+        window = open_real_fix(context, page)
+        stub.calls.clear()
+        page.wait_for_timeout(3200)
+        window.close()
+
+        expect(page.get_by_text("Cancelled. Synced", exact=False).first).to_be_visible()
+        assert len(stub.calls) == 1
+    finally:
+        context.close()
+
+
+def test_success_with_a_real_pop_up_reloads_once_the_window_is_gone(flow_page):
+    context, page, stub, now = flow_page("desktop", stub_window=False)
+    try:
+        window = open_real_fix(context, page)
+        stub.payload = feed(north_at=now - timedelta(minutes=5))
+        page.get_by_role("button", name="Done").click()
+
+        expect(page.get_by_text("Synthetic North Bank is up to date.", exact=False).first).to_be_visible()
+        if not window.is_closed():
+            # Browsers ignore close() once the pop-up's opener is cut: the member is asked instead.
+            expect(page.locator("#simplefin-flow-result")).to_contain_text("Close the SimpleFIN window to finish.")
+            window.close()
+        expect(page.get_by_role("link", name="Fix Synthetic North Bank")).to_have_count(0, timeout=15_000)
     finally:
         context.close()
