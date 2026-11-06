@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from itertools import islice
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.urls import reverse
@@ -43,7 +44,6 @@ from .category_suggestion_services import accept_suggestion, reject_suggestion, 
 from .chat_proposals import (
     ACTION_UNKNOWN,
     CATEGORY_PROBLEM,
-    MAX_CARD_ITEMS,
     ITEM_ACCEPTED,
     ITEM_CONFIRMED,
     ITEM_DISMISSED,
@@ -58,6 +58,7 @@ from .chat_proposals import (
     _category_by_name,
     _category_name,
     _int_or_none,
+    _items_schema,
     _raw_items,
     _Stale,
     _store_items,
@@ -200,12 +201,20 @@ def _leg(txn):
             "amount_minor": txn.amount_minor, "description": txn.description}
 
 
+def _direction(pair):
+    """(outgoing leg, incoming leg) by the money's sign, whatever order the legs were imported in."""
+    return (pair.leg_a, pair.leg_b) if pair.leg_a.amount_minor < 0 else (pair.leg_b, pair.leg_a)
+
+
 def transfer_suggestions(person, _args):
     url = reverse("transfer-review")
     shown = list(_ai_pairs(person).filter(status=TransferPair.Status.SUGGESTED).order_by("-updated_at", "-pk")
                  [:MAX_TOOL_ROWS])
-    rows = [{"pair_id": pair.pk, "kind": pair.kind, "confidence": pair.confidence,
-             "from": _leg(pair.leg_a), "to": _leg(pair.leg_b)} for pair in shown]
+    rows = []
+    for pair in shown:
+        outgoing, incoming = _direction(pair)
+        rows.append({"pair_id": pair.pk, "kind": pair.kind, "confidence": pair.confidence,
+                     "from": _leg(outgoing), "to": _leg(incoming)})
     accounts = {pair.leg_a.account_id for pair in shown} | {pair.leg_b.account_id for pair in shown}
     return ToolResult(text=json.dumps({"url": url, "rows": rows}), account_ids=tuple(sorted(accounts)))
 
@@ -230,8 +239,14 @@ def _suggestion_open(suggestion):
 
 def category_suggestions(person, _args):
     nameable = set(ai_nameable_categories(person).values_list("pk", flat=True))
-    candidates = _ai_suggestions(person).filter(status=CategorySuggestion.Status.PENDING).order_by("-pk")
-    shown = [row for row in candidates[: MAX_TOOL_ROWS * 2] if _suggestion_open(row)][:MAX_TOOL_ROWS]
+    # Rows already categorized are filtered in the query; the snapshot check needs Python, so the
+    # scan continues past overtaken rows until it has a full page of open ones.
+    candidates = _ai_suggestions(person).filter(
+        status=CategorySuggestion.Status.PENDING,
+        transaction__category__isnull=True,
+        transaction__category_source=Transaction.CategorySource.UNSET,
+    ).order_by("-pk")
+    shown = list(islice((row for row in candidates.iterator(chunk_size=200) if _suggestion_open(row)), MAX_TOOL_ROWS))
     rows = [{
         "suggestion_id": row.pk, "transaction_id": row.transaction_id, "date": str(row.transaction.transaction_date),
         "amount_minor": row.transaction.amount_minor, "description": row.transaction.description,
@@ -246,11 +261,6 @@ def category_suggestions(person, _args):
 # ---------------------------------------------------------------------------
 
 
-def _items_schema(properties, required):
-    return {"type": "array", "maxItems": MAX_CARD_ITEMS,
-            "items": {"type": "object", "properties": properties, "required": list(required)}}
-
-
 def cleanup_tool_rows():
     """(name, description, properties, required, handler) for chat_proposals.proposal_tools."""
     return (
@@ -260,7 +270,7 @@ def cleanup_tool_rows():
         ), {"items": _items_schema({
             "series_id": {"type": "integer"},
             "action": {"type": "string", "enum": ["confirm", "dismiss"]},
-        }, ["series_id", "action"])}, ["items"], _propose_recurring),
+        }, required=["series_id", "action"])}, ["items"], _propose_recurring),
         ("propose_transfers", (
             "Suggest transfer cleanup, many in one card with a checkbox each: confirm or dismiss a suggested "
             "pair (pair_id from transfer_suggestions), or mark or unmark one transaction as a transfer to or "
@@ -269,21 +279,21 @@ def cleanup_tool_rows():
             "action": {"type": "string", "enum": ["confirm", "dismiss", "mark", "unmark"]},
             "pair_id": {"type": "integer"},
             "transaction_id": {"type": "integer"},
-        }, ["action"])}, ["items"], _propose_transfers),
+        }, required=["action"])}, ["items"], _propose_transfers),
         ("propose_ai_suggestions", (
             "Suggest accepting or rejecting pending AI category suggestions in bulk, one card with a checkbox "
             "each. suggestion_id comes from category_suggestions. The member must confirm."
         ), {"items": _items_schema({
             "suggestion_id": {"type": "integer"},
             "action": {"type": "string", "enum": ["accept", "reject"]},
-        }, ["suggestion_id", "action"])}, ["items"], _propose_ai_suggestions),
+        }, required=["suggestion_id", "action"])}, ["items"], _propose_ai_suggestions),
         ("propose_notes", (
             "Suggest adding a note line to transactions, by id, one card with a checkbox each. The line is "
             "added below any existing note. The member must confirm."
         ), {"items": _items_schema({
             "transaction_id": {"type": "integer"},
             "note": {"type": "string"},
-        }, ["transaction_id", "note"])}, ["items"], _propose_notes),
+        }, required=["transaction_id", "note"])}, ["items"], _propose_notes),
         ("propose_splits", (
             "Suggest splitting transactions across categories, one card row per transaction. Each part is a "
             "category and positive cents; the parts take the transaction's sign and must add up exactly to "
@@ -295,7 +305,7 @@ def cleanup_tool_rows():
                 "properties": {"category": {"type": "string"}, "amount_minor": {"type": "integer"}},
                 "required": ["category", "amount_minor"],
             }},
-        }, ["transaction_id", "parts"])}, ["items"], _propose_splits),
+        }, required=["transaction_id", "parts"])}, ["items"], _propose_splits),
     )
 
 
@@ -681,9 +691,10 @@ def _describe_transfer(person, _payload, item, pending):
                 .filter(pk=item.get("id")).first() if item.get("id") else None)
         if pair is None:
             return _gone(f"{verb} a transfer pair", "This transfer pair is not available.")
+        outgoing, incoming = _direction(pair)
         row = {
-            "title": f"{verb} transfer: {pair.leg_a.description} → {pair.leg_b.description}",
-            "summary": f"{_transaction_line(pair.leg_a)} → {_transaction_line(pair.leg_b)}",
+            "title": f"{verb} transfer: {outgoing.description} → {incoming.description}",
+            "summary": f"{_transaction_line(outgoing)} → {_transaction_line(incoming)}",
             "url": reverse("transfer-review"),
         }
         if pending and not item.get("error") and pair.status != (item.get("before") or {}).get("status"):

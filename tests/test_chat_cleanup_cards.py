@@ -667,3 +667,36 @@ def test_a_refused_proposal_still_records_the_accounts_its_answer_quoted(harness
     assert not AiProposal.objects.exists() and NOTE_WOULD_BE_TOO_LONG in state.tool_outputs[-1]
     conversation.refresh_from_db()
     assert account.pk in conversation.used_account_ids
+
+
+@pytest.mark.django_db
+def test_the_suggestion_lookup_reaches_actionable_rows_behind_many_overtaken_ones():
+    _user, person, household = make_member("solo")
+    dining = _category(household, "Dining")
+    account = checking(person, household, "Shared Checking")
+    actionable = _suggestion(person, add_txn(account, person, DAY, -1200, "SYN oldest cafe"), dining)
+    overtaken = [add_txn(account, person, DAY, -100 - number, f"SYN overtaken {number}") for number in range(101)]
+    for txn in overtaken:
+        _suggestion(person, txn, dining)
+    Transaction.objects.filter(pk__in=[txn.pk for txn in overtaken]).update(
+        category=dining, category_source=Transaction.CategorySource.MANUAL)
+    tool = next(tool for tool in cleanup_lookup_tools() if tool.name == "category_suggestions")
+    rows = json.loads(tool.handler(person, {}).text)["rows"]
+    assert [row["suggestion_id"] for row in rows] == [actionable.pk]
+
+
+@pytest.mark.django_db
+def test_a_transfer_reads_from_the_outgoing_leg_whichever_was_imported_first(harness):
+    state, client, person, household = _setup(harness)
+    checking_account = checking(person, household, "Shared Checking")
+    savings = checking(person, household, "Shared Savings")
+    incoming = add_txn(savings, person, DAY, 5000, "SYN arrives in savings")
+    outgoing = add_txn(checking_account, person, DAY, -5000, "SYN leaves checking")
+    pair = _pair(outgoing, incoming)
+    assert pair.leg_a_id == incoming.pk
+    _propose(state, person, "transfer_suggestions", {})
+    row = json.loads(state.tool_outputs[-1])["rows"][0]
+    assert (row["from"]["transaction_id"], row["to"]["transaction_id"]) == (outgoing.pk, incoming.pk)
+    _propose(state, person, "propose_transfers", {"items": [{"action": "confirm", "pair_id": pair.pk}]})
+    html = client.get(reverse("chat")).content.decode()
+    assert "Confirm transfer: SYN leaves checking → SYN arrives in savings" in html
