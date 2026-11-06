@@ -110,23 +110,56 @@ def linked_item(goal):
     return item
 
 
-def next_occurrence(item, on_or_after):
-    """The planned item's first occurrence on or after a date, or None."""
+def occurrence_tolerance_days(cadence):
+    """Days either side of an occurrence a payment may post: the recurring cadence tolerance.
+
+    A one-time item takes the annual tolerance.
+    """
+    from .recurring_services import cadence_tolerance_days
+
+    if cadence == PlannedItem.Cadence.ONE_TIME:
+        cadence = PlannedItem.Cadence.ANNUAL
+    return cadence_tolerance_days(cadence)
+
+
+def drawn_occurrences(goal, item):
+    """The item's occurrence dates that already hold a counted draw-down from this fund."""
+    return set(
+        FundEntry.objects.filter(goal_id=goal.pk, planned_item_id=item.pk, kind=FundEntry.Kind.DRAW_DOWN)
+        .filter(FundEntry.counted_filter())
+        .values_list("occurrence_date", flat=True)
+    )
+
+
+def next_occurrence(item, on_or_after, *, skip=()):
+    """The planned item's first occurrence on or after a date, leaving out `skip`, or None.
+
+    The search runs a year past the later of the date and the item's start, so a
+    far-off one-time expense is still found.
+    """
+    window_start = max(on_or_after, item.start_date) if item.cadence == PlannedItem.Cadence.ONE_TIME else on_or_after
     hits = occurrence_dates(
         item.start_date,
         item.end_date,
         item.cadence,
         on_or_after,
-        on_or_after + timedelta(days=_NEXT_OCCURRENCE_DAYS),
+        window_start + timedelta(days=_NEXT_OCCURRENCE_DAYS),
     )
-    return hits[0] if hits else None
+    return next((hit for hit in hits if hit not in skip), None)
 
 
-def fund_due_date(goal, today):
-    """When a share goal's money is needed: the linked item's next occurrence, else its target date."""
+def fund_due_date(goal, today, *, drawn=None):
+    """When a share goal's money is needed: the linked item's next unpaid occurrence, else its target date.
+
+    An occurrence the fund already paid (a counted draw-down, even one that
+    posted a few days early) no longer counts, so the date rolls forward after
+    each payment. `drawn` is those dates when the caller already has them.
+    """
     item = linked_item(goal)
     if item is not None:
-        return next_occurrence(item, today) or goal.target_date
+        if drawn is None:
+            drawn = drawn_occurrences(goal, item)
+        return next_occurrence(item, today, skip=drawn) or goal.target_date
     return goal.target_date
 
 

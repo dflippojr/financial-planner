@@ -1780,7 +1780,8 @@ class FundEntry(models.Model):
                 condition=(
                     Q(kind="assign", amount_minor__gt=0, reason__in=("manual", "monthly"))
                     | Q(kind="release", amount_minor__lt=0, reason__in=("manual", "balance_drop"))
-                    | Q(kind="draw_down", amount_minor__lt=0, reason="planned")
+                    # A payment that found the fund empty draws nothing but is still recorded.
+                    | Q(kind="draw_down", amount_minor__lte=0, reason="planned")
                 ),
                 name="fund_entry_kind_amount_reason",
             ),

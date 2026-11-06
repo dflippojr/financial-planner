@@ -110,7 +110,7 @@ class Migration(migrations.Migration):
         ),
         migrations.AddConstraint(
             model_name='fundentry',
-            constraint=models.CheckConstraint(condition=models.Q(models.Q(('amount_minor__gt', 0), ('kind', 'assign'), ('reason__in', ('manual', 'monthly'))), models.Q(('amount_minor__lt', 0), ('kind', 'release'), ('reason__in', ('manual', 'balance_drop'))), models.Q(('amount_minor__lt', 0), ('kind', 'draw_down'), ('reason', 'planned')), _connector='OR'), name='fund_entry_kind_amount_reason'),
+            constraint=models.CheckConstraint(condition=models.Q(models.Q(('amount_minor__gt', 0), ('kind', 'assign'), ('reason__in', ('manual', 'monthly'))), models.Q(('amount_minor__lt', 0), ('kind', 'release'), ('reason__in', ('manual', 'balance_drop'))), models.Q(('amount_minor__lte', 0), ('kind', 'draw_down'), ('reason', 'planned')), _connector='OR'), name='fund_entry_kind_amount_reason'),
         ),
         migrations.AddConstraint(
             model_name='fundentry',

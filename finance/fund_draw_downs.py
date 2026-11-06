@@ -29,28 +29,19 @@ from django.utils import timezone
 from .access import visible_rows
 from .audit_services import append_event, owned_audience
 from .category_services import exclusion_exists_for
-from .funds import assigned_minor, linked_item
+from .funds import assigned_minor, drawn_occurrences, linked_item, occurrence_tolerance_days
 from .models import (
     Account,
     AuditEvent,
     FundEntry,
     Membership,
-    PlannedItem,
     SavingsGoal,
     Transaction,
 )
 from .projection import occurrence_dates
-from .recurring_services import _in_confirmed_amount_band, cadence_tolerance_days, merchant_key
+from .recurring_services import _in_confirmed_amount_band, merchant_key
 
 logger = logging.getLogger(__name__)
-ONE_TIME_TOLERANCE_CADENCE = "annual"
-
-
-def occurrence_tolerance_days(cadence):
-    """Days either side of an occurrence a payment may post: the recurring cadence tolerance."""
-    if cadence == PlannedItem.Cadence.ONE_TIME:
-        cadence = ONE_TIME_TOLERANCE_CADENCE
-    return cadence_tolerance_days(cadence)
 
 
 def _reader(goal):
@@ -93,15 +84,6 @@ def _identity_matches(item, txn, *, name_key, series_key):
     if series_key and description_key.strip() == series_key:
         return True
     return bool(name_key) and f" {name_key} " in description_key
-
-
-def _taken_occurrences(goal, item):
-    """The item's occurrence dates that already hold a counted draw-down from this fund."""
-    return set(
-        FundEntry.objects.filter(goal=goal, planned_item=item, kind=FundEntry.Kind.DRAW_DOWN)
-        .filter(FundEntry.counted_filter())
-        .values_list("occurrence_date", flat=True)
-    )
 
 
 def _retire_stale(goal, item, occurrence):
@@ -158,7 +140,7 @@ def draw_down_goal(goal, *, today, transaction_ids=None):
     name_key = merchant_key(item.name)
     series_key = item.replaces_series.merchant_key if item.replaces_series_id and item.replaces_series else ""
     rows = [txn for txn in rows if _identity_matches(item, txn, name_key=name_key, series_key=series_key)]
-    taken = _taken_occurrences(goal, item)
+    taken = drawn_occurrences(goal, item)
     used = set()
     created = []
     for occurrence in occurrences:
@@ -178,9 +160,9 @@ def draw_down_goal(goal, *, today, transaction_ids=None):
                 row.pk,
             ),
         )
-        held = assigned_minor(goal)
-        if held <= 0:
-            break
+        # An empty fund still records the payment (drawing nothing), so money
+        # assigned later is never taken for an occurrence already paid.
+        held = max(assigned_minor(goal), 0)
         _retire_stale(goal, item, occurrence)
         entry = FundEntry.objects.create(
             goal=goal,

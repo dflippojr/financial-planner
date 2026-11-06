@@ -12,12 +12,19 @@ chat read the projection without set-asides: the funding plan already fills
 goals from the surplus, so subtracting set-asides there would count a fund twice.
 """
 
+from datetime import timedelta
 from types import SimpleNamespace
 
 from .cash_flow import format_minor
 from .fund_services import suggested_set_aside
-from .funds import assigned_by_goal, fund_due_date, linked_item, open_funds
-from .models import FundEntry
+from .funds import (
+    assigned_by_goal,
+    drawn_occurrences,
+    fund_due_date,
+    linked_item,
+    occurrence_tolerance_days,
+    open_funds,
+)
 from .months import month_end, month_start
 from .projection import KIND_EXPENSE, SOURCE_PLANNED, occurrence_dates
 
@@ -33,7 +40,7 @@ def _planned_payments(month):
     return paid
 
 
-def fund_schedule(goals, held_now, months):
+def fund_schedule(goals, held_now, months, drawn_by_goal=None):
     """Per month start: [(goal, set-aside minor)] and {planned item id: minor paid from funds}.
 
     `months` are the projected months in order, `held_now` what each fund will
@@ -48,7 +55,7 @@ def fund_schedule(goals, held_now, months):
         covered = {}
         payments = _planned_payments(month)
         for goal in goals:
-            due = fund_due_date(goal, month.start)
+            due = fund_due_date(goal, month.start, drawn=(drawn_by_goal or {}).get(goal.pk, set()))
             amount = suggested_set_aside(goal.target_amount_minor, held[goal.pk], due, on=month.start)
             if amount:
                 held[goal.pk] += amount
@@ -64,24 +71,25 @@ def fund_schedule(goals, held_now, months):
     return schedule
 
 
-def held_when_projection_starts(goals, assigned, *, today):
+def held_when_projection_starts(goals, assigned, drawn_by_goal, *, today):
     """Each fund's assigned amount less the payments its item still owes this month.
 
     The projection starts next month, so an occurrence of the linked item this
     month that has not drawn the fund down yet is expected to, up to what the
-    fund holds.
+    fund holds. An occurrence too early to draw this fund (before it was
+    linked, less the posting tolerance) is not.
     """
     held = dict(assigned)
     for goal in goals:
         item = linked_item(goal)
         if item is None:
             continue
-        drawn = set(
-            FundEntry.objects.filter(goal=goal, planned_item=item, kind=FundEntry.Kind.DRAW_DOWN)
-            .filter(FundEntry.counted_filter())
-            .values_list("occurrence_date", flat=True)
-        )
-        for hit in occurrence_dates(item.start_date, item.end_date, item.cadence, month_start(today), month_end(today)):
+        drawn = drawn_by_goal.get(goal.pk, set())
+        earliest = month_start(today)
+        if goal.planned_item_linked_on is not None:
+            tolerance = timedelta(days=occurrence_tolerance_days(item.cadence))
+            earliest = max(earliest, goal.planned_item_linked_on - tolerance)
+        for hit in occurrence_dates(item.start_date, item.end_date, item.cadence, earliest, month_end(today)):
             if hit not in drawn:
                 held[goal.pk] -= min(max(held[goal.pk], 0), item.amount_minor)
     return held
@@ -141,6 +149,7 @@ def apply_fund_set_asides(principal, months, *, today, scope=""):
     goals = open_funds(principal, scope=scope)
     if not goals:
         return months
-    held = held_when_projection_starts(goals, assigned_by_goal([goal.pk for goal in goals]), today=today)
-    schedule = fund_schedule(goals, held, months)
+    drawn = {goal.pk: drawn_occurrences(goal, item) for goal in goals if (item := linked_item(goal)) is not None}
+    held = held_when_projection_starts(goals, assigned_by_goal([goal.pk for goal in goals]), drawn, today=today)
+    schedule = fund_schedule(goals, held, months, drawn)
     return tuple(_with_overlay(month, schedule[month.start]) for month in months)

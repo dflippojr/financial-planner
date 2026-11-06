@@ -406,7 +406,10 @@ def fund_history(principal, goal):
                 entry=entry,
                 visible_transaction=entry.transaction if transaction_id in visible else None,
                 counted=is_counted,
-                can_undo=entry.kind == FundEntry.Kind.DRAW_DOWN and entry.undone_at is None and is_counted,
+                can_undo=(
+                    entry.kind == FundEntry.Kind.DRAW_DOWN and entry.amount_minor < 0
+                    and entry.undone_at is None and is_counted
+                ),
             )
         )
     return rows

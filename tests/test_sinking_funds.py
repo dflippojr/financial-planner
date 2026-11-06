@@ -1047,3 +1047,70 @@ def test_moving_a_fund_waits_for_an_assignment_in_flight_and_then_refuses():
     fund.refresh_from_db()
     assert fund.linked_account_id == first.pk
     assert account_position(first, today=TODAY).assigned_minor == 5_000
+
+
+# -- second review round: far-off items, early and unfunded payments, pre-link occurrences --
+
+
+@pytest.mark.django_db
+def test_linking_a_one_time_expense_years_away_still_takes_its_date():
+    owner = make_person("owner")
+    account = make_account(owner)
+    far = timezone.localdate() + timedelta(days=730)
+    item = make_item(owner, amount=500_000, start=far, cadence=PlannedItem.Cadence.ONE_TIME)
+    goal = save_savings_goal(owner, {"scope": "private", "name": "Synthetic Roof Fund", "share_of_account": True,
+                                     "linked_account": account, "funds_planned_item": item,
+                                     "target_amount_minor": None, "target_date": None})
+    assert goal.target_date == far
+    assert goal_progress(owner, goal, today=timezone.localdate()).monthly_needed_minor is not None
+
+
+@pytest.mark.django_db
+def test_an_early_payment_rolls_the_due_date_to_the_next_occurrence():
+    owner, _savings, checking, fund, _item = _drawn_fund()
+    # Due December 10; paid December 8, inside the tolerance.
+    make_transaction(owner, checking, on=date(2026, 12, 8), amount_minor=-100_000,
+                     description="SYNTHETIC CAR INSURANCE")
+    assert len(apply_fund_draw_downs(today=date(2026, 12, 8))) == 1
+    assert fund_due_date(fund, date(2026, 12, 9)) == date(2027, 12, 10)
+    row = next(row for row in monthly_set_asides(owner, today=date(2026, 12, 9)).rows if row.goal.pk == fund.pk)
+    assert row.suggested_minor == suggested_set_aside(120_000, 0, date(2027, 12, 10), on=date(2026, 12, 9))
+    assert row.suggested_minor < 120_000
+
+
+@pytest.mark.django_db
+def test_a_payment_that_finds_the_fund_empty_never_takes_money_assigned_later():
+    owner = make_person("owner")
+    savings = make_account(owner)
+    checking = make_account(owner, name="Synthetic Checking", account_type=Account.Type.CHECKING)
+    add_balance(savings, 200_000)
+    fund = make_fund(owner, savings)
+    item = make_item(owner, amount=120_000, start=date(2026, 11, 10))
+    link_item(fund, item, linked_on=date(2026, 11, 1))
+    paid = make_transaction(owner, checking, on=date(2026, 11, 10), amount_minor=-120_000,
+                            description="SYNTHETIC CAR INSURANCE")
+    created = apply_fund_draw_downs(today=date(2026, 11, 11))
+    assert [(entry.transaction_id, entry.amount_minor) for entry in created] == [(paid.pk, 0)]
+    assign_to_fund(owner, fund, 50_000, today=date(2026, 11, 12))
+    assert apply_fund_draw_downs(today=date(2026, 11, 13)) == []
+    assert assigned_minor(fund) == 50_000
+    page = signed_in(owner).get(reverse("savings-goal-fund", args=[fund.pk])).content.decode()
+    assert "Undo" not in page
+
+
+@pytest.mark.django_db
+def test_projection_does_not_expect_an_occurrence_from_before_the_link():
+    owner = make_person("owner")
+    account = make_account(owner)
+    add_balance(account, 500_000)
+    fund = make_fund(owner, account, target=120_000)
+    item = make_item(owner, amount=120_000, start=date(2026, 11, 1))
+    # Linked and fully funded on November 20, after this year's November 1 payment.
+    link_item(fund, item, linked_on=date(2026, 11, 20))
+    assign_to_fund(owner, fund, 120_000, today=date(2026, 11, 20))
+    report = cash_flow_with_projection(
+        owner, date_from=date(2026, 6, 1), date_to=date(2026, 11, 30), grouping="month",
+        today=date(2026, 11, 20), horizon=3,
+    )
+    set_asides = [c for m in report.projected_periods for c in m.contributions if c.source == SOURCE_SET_ASIDE]
+    assert set_asides == []
