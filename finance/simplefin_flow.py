@@ -19,6 +19,7 @@ limit across flows.
 
 from __future__ import annotations
 
+import secrets
 import time
 
 from django.db import transaction
@@ -87,17 +88,21 @@ def start_flow(connection, kind: str, conn_id: str = "") -> dict:
         # finished) hands on its request count and spacing: a new baseline
         # never buys new requests.
         active = _live(connection.flow) or {}
-        flow = {"kind": kind, "conn_id": conn_id, "name": name, "baseline": baseline, "started": _now(),
+        # The page sends this id with every check and Cancel, so a page whose
+        # flow was replaced (another tab started one) can't act on the new one.
+        flow = {"id": secrets.token_hex(8), "kind": kind, "conn_id": conn_id, "name": name,
+                "baseline": baseline, "started": _now(),
                 "requests": int(active.get("requests") or 0), "last_request": active.get("last_request")}
         SimpleFinConnection.objects.filter(pk=connection.pk).update(flow=flow)
-    return {"ok": True, "url": BRIDGE_URL, "first_check_in": CHECK_DELAYS[0], "max_checks": FLOW_MAX_REQUESTS}
+    return {"ok": True, "flow_id": flow["id"], "url": BRIDGE_URL, "first_check_in": CHECK_DELAYS[0],
+            "max_checks": FLOW_MAX_REQUESTS}
 
 
 def _end(connection_id, flow) -> None:
     """Clear the flow, unless a newer one has started since."""
     with transaction.atomic():
         current = _locked(connection_id).flow
-        if isinstance(current, dict) and current.get("started") == flow.get("started"):
+        if isinstance(current, dict) and current.get("id") == flow.get("id"):
             SimpleFinConnection.objects.filter(pk=connection_id).update(flow={})
 
 
@@ -109,18 +114,19 @@ def _spacing_left(flow) -> int:
     return 0 if elapsed >= FLOW_MIN_SPACING else int(FLOW_MIN_SPACING - elapsed) + 1
 
 
-def _claim(connection_id, *, closing: bool):
+def _claim(connection_id, flow_id: str, *, closing: bool):
     """Under the row lock, decide whether the flow may send one more request, and record it.
 
     Returns (decision, flow, wait): decision is "go", "gone", "exhausted",
-    "wait" or "budget". A closing claim (Cancel) always ends the flow.
+    "wait" or "budget". A closing claim (Cancel) always ends the flow. A
+    request for a flow that is not the open one is "gone" and changes nothing.
     """
     with transaction.atomic():
         connection = _locked(connection_id)
         flow = _live(connection.flow)
-        if flow is None:
-            decision, wait = "gone", 0
-        elif flow["requests"] >= FLOW_MAX_REQUESTS:
+        if flow is None or not flow_id or flow.get("id") != flow_id:
+            return "gone", None, 0
+        if flow["requests"] >= FLOW_MAX_REQUESTS:
             decision, wait = "exhausted", 0
         elif _spacing_left(flow):
             decision, wait = "wait", _spacing_left(flow)
@@ -129,7 +135,7 @@ def _claim(connection_id, *, closing: bool):
         else:
             decision, wait = "go", 0
             flow = {**flow, "requests": flow["requests"] + 1, "last_request": _now()}
-        ends = closing or decision in {"gone", "exhausted", "budget"}
+        ends = closing or decision in {"exhausted", "budget"}
         SimpleFinConnection.objects.filter(pk=connection_id).update(flow={} if ends else flow)
     return decision, flow, wait
 
@@ -150,11 +156,12 @@ def _sync(user, connection) -> str:
 
 
 def _fixed(flow, connection) -> bool:
+    """The bank's error cleared, or a newer balance-date appeared (#694, criterion 2)."""
     bank = find_bank(connection, flow["conn_id"])
-    if bank is None or bank.get("errors"):
+    if bank is None:
         return False
     baseline = flow["baseline"]
-    if baseline.get("had_errors"):
+    if baseline.get("had_errors") and not bank.get("errors"):
         return True
     newest = balance_moment(bank)
     before = balance_moment(baseline)
@@ -180,8 +187,8 @@ def _gave_up_message(flow) -> str:
     return NOT_REFRESHED if flow["kind"] == FIX else NO_NEW_BANK
 
 
-def check_flow(user, connection) -> dict:
-    decision, flow, wait = _claim(connection.pk, closing=False)
+def check_flow(user, connection, flow_id: str) -> dict:
+    decision, flow, wait = _claim(connection.pk, flow_id, closing=False)
     if decision == "gone" or flow is None:
         return {"state": "gone", "message": NO_FLOW}
     if decision == "exhausted":
@@ -206,9 +213,9 @@ def check_flow(user, connection) -> dict:
     return {"state": "pending", "next_check_in": delay, "checks_left": FLOW_MAX_REQUESTS - flow["requests"]}
 
 
-def cancel_flow(user, connection) -> dict:
+def cancel_flow(user, connection, flow_id: str) -> dict:
     """Stop watching; sync once if the flow and the daily budget still allow it."""
-    decision, flow, _wait = _claim(connection.pk, closing=True)
+    decision, flow, _wait = _claim(connection.pk, flow_id, closing=True)
     if flow is None:
         return {"state": "cancelled", "message": "Cancelled."}
     if decision != "go":

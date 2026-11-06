@@ -110,7 +110,7 @@
     current.busy = true;
     setBusy(true);
     text.textContent = "Checking SimpleFIN…";
-    post(checkUrl, {}).then(function (data) {
+    post(checkUrl, {flow_id: current.flowId}).then(function (data) {
       if (flow !== current || current.cancelling) return;
       current.busy = false;
       setBusy(false);
@@ -140,7 +140,7 @@
     setBusy(true);
     text.textContent = "Closing SimpleFIN…";
     // Cancel only after the start request finished, so it finds the flow it ends.
-    current.ready.then(function () { return post(cancelUrl, {}); }).then(function (data) {
+    current.ready.then(function () { return post(cancelUrl, {flow_id: current.flowId}); }).then(function (data) {
       if (flow !== current) return;
       settle(data.message || "Cancelled.");
     }, function () {
@@ -171,6 +171,7 @@
     if (win) current.watch = setInterval(watchClosed, WATCH_MS);
     current.ready = post(startUrl, {kind: kind, conn_id: connId}).then(function (data) {
       current.started = !!data.ok;
+      current.flowId = data.flow_id || "";
       if (flow !== current || current.cancelling) return;
       if (!data.ok) {
         closePopup();

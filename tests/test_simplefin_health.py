@@ -289,7 +289,13 @@ def test_requests_older_than_24_hours_leave_the_budget(monkeypatch):
 
 
 def post_json(client, name, body=None):
-    return client.post(reverse(name), json.dumps(body or {}), content_type="application/json").json()
+    """POST JSON. A start remembers its flow id on the client; check and cancel send it, as the page does."""
+    if body is None and name in {"simplefin-flow-check", "simplefin-flow-cancel"}:
+        body = {"flow_id": getattr(client, "flow_id", "")}
+    data = client.post(reverse(name), json.dumps(body or {}), content_type="application/json").json()
+    if name == "simplefin-flow-start" and data.get("flow_id"):
+        client.flow_id = data["flow_id"]
+    return data
 
 
 def rewind_flow(connection, seconds):
@@ -383,15 +389,17 @@ def test_a_check_whose_import_fails_is_not_a_success(monkeypatch):
 
 
 @pytest.mark.django_db
-def test_the_flow_lives_on_the_connection_so_a_second_tab_shares_its_limits(monkeypatch):
+def test_the_flow_lives_on_the_connection_so_repeated_checks_share_its_limits(monkeypatch):
     owner, connection, stub = connected(monkeypatch, feed(north_at=timezone.now() - timedelta(hours=40)))
     sync_connection(owner, connection.pk)
     first, second = signed_in(owner), signed_in(owner)
-    post_json(first, "simplefin-flow-start", {"kind": "fix", "conn_id": "CON-N"})
+    flow_id = post_json(first, "simplefin-flow-start", {"kind": "fix", "conn_id": "CON-N"})["flow_id"]
     stub.calls.clear()
 
     assert post_json(first, "simplefin-flow-check")["state"] == "pending"
-    assert post_json(second, "simplefin-flow-check")["state"] == "wait"
+    # Another session sending the same flow's id (a double click, a retried request) shares its spacing.
+    assert post_json(second, "simplefin-flow-check", {"flow_id": flow_id})["state"] == "wait"
+    assert post_json(second, "simplefin-flow-check", {"flow_id": "not-this-flow"})["state"] == "gone"
     assert len(stub.calls) == 1
 
 
@@ -409,6 +417,43 @@ def test_starting_again_keeps_the_open_flows_request_count_and_spacing(monkeypat
     assert post_json(second, "simplefin-flow-check")["state"] == "wait"
     assert len(stub.calls) == 1
     assert fresh(connection).flow["requests"] == 1
+
+
+@pytest.mark.django_db
+def test_a_replaced_flow_can_neither_check_nor_cancel_the_new_one(monkeypatch):
+    now = timezone.now()
+    payload = feed(north_at=now - timedelta(hours=40), errlist_extra=[
+        {"code": "con.auth", "msg": "Synthetic union sign in again", "conn_id": "CON-C"}])
+    owner, connection, stub = connected(monkeypatch, payload)
+    sync_connection(owner, connection.pk)
+    first, second = signed_in(owner), signed_in(owner)
+    post_json(first, "simplefin-flow-start", {"kind": "fix", "conn_id": "CON-N"})
+    post_json(second, "simplefin-flow-start", {"kind": "fix", "conn_id": "CON-C"})
+    stub.calls.clear()
+
+    # The first tab's flow (North) was replaced: it never reports Credit Union fixed.
+    assert post_json(first, "simplefin-flow-check")["state"] == "gone"
+    assert post_json(first, "simplefin-flow-cancel") == {"state": "cancelled", "message": "Cancelled."}
+    assert stub.calls == []
+    assert fresh(connection).flow["conn_id"] == "CON-C"
+
+    stub.payload = feed(north_at=now - timedelta(hours=40))
+    assert post_json(second, "simplefin-flow-check") == {
+        "state": "success", "message": "Synthetic Credit Union is up to date."}
+
+
+@pytest.mark.django_db
+def test_a_newer_balance_date_is_success_even_while_an_error_remains(monkeypatch):
+    now = timezone.now()
+    owner, connection, stub = connected(monkeypatch, feed(
+        north_at=now - timedelta(hours=40), north_errors=["Synthetic sign in again"]))
+    sync_connection(owner, connection.pk)
+    client = signed_in(owner)
+    post_json(client, "simplefin-flow-start", {"kind": "fix", "conn_id": "CON-N"})
+
+    stub.payload = feed(north_at=now - timedelta(minutes=5), north_errors=["Synthetic sign in again"])
+
+    assert post_json(client, "simplefin-flow-check")["state"] == "success"
 
 
 @pytest.mark.django_db

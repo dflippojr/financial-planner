@@ -306,7 +306,7 @@ def connections_flow_start(request):
 def connections_flow_check(request):
     connection = _owned_connection(request)
     try:
-        return _flow_response(request, check_flow(request.user, connection))
+        return _flow_response(request, check_flow(request.user, connection, str(_json_body(request).get("flow_id") or "")))
     except PermissionDenied as exc:
         raise Http404 from exc
 
@@ -316,7 +316,7 @@ def connections_flow_check(request):
 def connections_flow_cancel(request):
     connection = _owned_connection(request)
     try:
-        return _flow_response(request, cancel_flow(request.user, connection))
+        return _flow_response(request, cancel_flow(request.user, connection, str(_json_body(request).get("flow_id") or "")))
     except PermissionDenied as exc:
         raise Http404 from exc
 
