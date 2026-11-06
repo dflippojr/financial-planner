@@ -9,6 +9,7 @@ Pass colspan.
       <div class="min-w-0 flex-1">
         <h3 class="font-semibold">Charges in {{ series.display_name }}</h3>
         {% if series.reasons %}<p class="text-sm opacity-80">{{ series.reasons|join:"; " }}</p>{% endif %}
+        {% if series.note and not series.shared_by_other %}<p class="text-sm" data-series-note>Note for new charges: {{ series.note }} · <a class="link" href="{% url 'recurring-note' series.pk %}">Edit</a></p>{% endif %}
         <ul class="mt-2 flex flex-col gap-1">
           {% include "finance/_recurring_members.html" %}
         </ul>
