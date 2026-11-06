@@ -75,25 +75,23 @@ def _collect_banks(payload: dict) -> dict[str, dict]:
     return banks
 
 
-def _account_banks(payload: dict) -> dict[str, str]:
-    """Account id (bare, and conn_id-qualified) -> conn_id.
+def _account_banks(payload: dict) -> dict[str, set[str]]:
+    """Every name an error may use for an account -> the banks (conn_ids) it could mean.
 
-    Account ids are unique only within one bank, so a bare id that two banks
-    share maps to no bank: an error naming only that id stays connection-wide
-    rather than landing on the wrong bank.
+    Account ids are unique only within one bank. An error may name the raw id
+    or the app's percent-encoded "conn_id:account_id" key (the import path
+    accepts both). Raw ids and keys are collected side by side, never one
+    overwriting the other, so an error is placed only when its name points
+    to exactly one bank.
     """
-    owners: dict[str, str] = {}
-    shared: set[str] = set()
+    from finance.simplefin_services import remote_account_key
+
+    owners: dict[str, set[str]] = {}
     for account in payload.get("accounts") or []:
         if isinstance(account, dict) and account.get("id"):
-            key = _bank_key(account)
-            account_id = clean_text(account["id"])
-            if owners.get(account_id, key) != key:
-                shared.add(account_id)
-            owners.setdefault(account_id, key)
-            owners[f"{key}:{account_id}"] = key
-    for account_id in shared:
-        owners.pop(account_id, None)
+            bank = _bank_key(account)
+            owners.setdefault(clean_text(account["id"]), set()).add(bank)
+            owners.setdefault(remote_account_key(account), set()).add(bank)
     return owners
 
 
@@ -131,7 +129,8 @@ def _attach_errors(payload: dict, banks: dict[str, dict]) -> list[str]:
         conn_id = clean_text(item.get("conn_id") or "")
         account_id = clean_text(item.get("account_id") or "")
         if not conn_id and account_id:
-            conn_id = owners.get(account_id, "")
+            candidates = owners.get(account_id, set())
+            conn_id = next(iter(candidates)) if len(candidates) == 1 else ""
         if conn_id and conn_id in banks:
             _add_error(banks[conn_id], message)
         else:

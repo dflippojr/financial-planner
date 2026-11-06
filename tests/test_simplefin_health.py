@@ -175,6 +175,25 @@ def test_an_account_id_two_banks_share_never_lands_on_the_wrong_bank():
     assert general == ["Synthetic shared id failed."]
 
 
+def test_a_raw_account_id_that_looks_like_another_banks_key_stays_with_its_own_bank():
+    payload = feed(north_at=timezone.now(), errlist_extra=[
+        {"code": "act.failed", "msg": "Synthetic colon id failed.", "account_id": "CON-C:checking"},
+    ])
+    payload["accounts"][0]["id"] = "CON-C:checking"  # North's raw id
+    payload["accounts"][2]["id"] = "checking"  # Credit Union
+    banks, general = parse_health(payload)
+    by_id = {bank["conn_id"]: bank for bank in banks}
+
+    # The raw id and Credit Union's "CON-C:checking" key collide: placed on neither bank.
+    assert by_id["CON-N"]["errors"] == [] and by_id["CON-C"]["errors"] == []
+    assert general == ["Synthetic colon id failed."]
+
+    # The app's own key for North's account (the colon percent-encoded) is unambiguous.
+    payload["errlist"] = [{"code": "act.failed", "msg": "Synthetic keyed id failed.", "account_id": "CON-N:CON-C%3Achecking"}]
+    banks, _ = parse_health(payload)
+    assert {bank["conn_id"]: bank for bank in banks}["CON-N"]["errors"] == ["Synthetic keyed id failed."]
+
+
 def test_provider_error_text_is_sanitized_before_it_is_stored():
     payload = feed(north_at=timezone.now(), north_errors=[
         "<script>alert(1)</script>Sign in at https://demo:secret@bridge.example.test/x again",
