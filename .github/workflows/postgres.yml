@@ -18,13 +18,34 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  # Two jobs on the same steps, split by the property marker (issue #685).
+  # The single job reached 14m57s against its 15-minute limit, and the
+  # Hypothesis property tests (tests/properties) were 12 of the 15 slowest
+  # tests in its --durations list. The property job also runs the migration
+  # checks, so the two finish closer together. scripts/check_postgres_split.py
+  # proves the jobs together still run exactly the tests the single job ran.
+  # gate in ci.yml needs this whole workflow, so it needs both jobs.
   postgres:
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    # About twice the parallel job, which took 6.5 to 9 minutes in October
-    # 2026 (issue #358). If the suite outgrows it, find the slow tests in the
-    # --durations list rather than raising this.
-    timeout-minutes: 15
+    strategy:
+      # A failure in one job must not cancel the other, so both report.
+      fail-fast: false
+      matrix:
+        include:
+          - name: postgres (suite)
+            group: suite
+            markers: "not browser and not migration and not property"
+            # About 1.5 times its runs on this PR. If the suite outgrows it,
+            # find the slow tests in the --durations list rather than raising
+            # this, or split it again.
+            timeout: 15
+          - name: postgres (property tests and migrations)
+            group: property
+            markers: "property and not browser and not migration"
+            timeout: 12
+    timeout-minutes: ${{ matrix.timeout }}
     env:
       POSTGRES_HOST: 127.0.0.1
       POSTGRES_PORT: "5432"
@@ -61,7 +82,16 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install --require-hashes --only-binary :all: -r requirements-test.lock
 
+      # Collection only, no database: compares the node ids each job selects
+      # with the old single job's, so a marker change cannot drop a test.
+      - name: Check the split jobs run exactly the old test set
+        if: matrix.group == 'property'
+        env:
+          FINANCIAL_PLANNER_TEST_DB: postgres
+        run: python scripts/check_postgres_split.py
+
       - name: Check migrations are complete and apply to an empty database
+        if: matrix.group == 'property'
         env:
           DJANGO_SECRET_KEY: ci-only-not-a-secret
         run: |
@@ -74,6 +104,7 @@ jobs:
       # step so the output, with build and migrate timings, is easy to attach
       # to a migration PR. The small fixture size keeps it near 1.5 minutes.
       - name: Migrate a populated synthetic database to head
+        if: matrix.group == 'property'
         timeout-minutes: 5
         env:
           FINANCIAL_PLANNER_TEST_DB: postgres
@@ -87,4 +118,4 @@ jobs:
       - name: Run tests on PostgreSQL 18
         env:
           FINANCIAL_PLANNER_TEST_DB: postgres
-        run: python -m pytest tests -q -p no:cacheprovider -n 4 --dist worksteal -m "not browser and not migration" --durations=15
+        run: python -m pytest tests -q -p no:cacheprovider -n 4 --dist worksteal -m "${{ matrix.markers }}" --durations=15
