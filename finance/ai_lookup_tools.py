@@ -38,7 +38,7 @@ from .net_worth import signed_balance_minor
 from .planning_services import visible_projection_inputs
 from .projection import DEFAULT_HORIZON, HORIZONS, SOURCE_PLANNED, SOURCE_SERIES, project_cash_flow
 from .rule_services import list_visible_rules
-from .savings_goal_plan import SCOPE_ALL, build_funding_plan
+from .savings_goal_plan import SCOPE_ALL, build_funding_plan, plan_account_ids
 from .savings_goal_services import goal_progress
 from .scenario import (
     CHANGE_ADD,
@@ -187,7 +187,8 @@ def savings_goals(person, _args):
     goals = list(goals.select_related("depends_on").order_by(
         F("priority").asc(nulls_last=True), F("target_date").asc(nulls_last=True), "name", "pk"
     ))
-    plan_rows, plan_url, plan_note = _funding_plan(person, today, goals, consent=consent, allowed=allowed)
+    plan_rows, plan_url, plan_note, plan_accounts = _funding_plan(person, today, goals, consent=consent,
+                                                                  allowed=allowed)
     planned_item_ids = ()
     list_url = reverse("savings-goals")
     rows = []
@@ -256,8 +257,8 @@ def savings_goals(person, _args):
                                    progress.remaining_minor, plan_row["url"], goal.currency))
         rows.append(row)
     if plan_rows:
-        # Funding months come from the whole projection: every account and planned item in its scope.
-        account_ids |= allowed if consent else _private_account_ids(person, allowed)
+        # Funding months come from the whole projection: the accounts it read and every planned item in its scope.
+        account_ids |= plan_accounts & allowed
         planned_item_ids = _plan_planned_item_ids(person, consent)
     payload = {"page_url": list_url, "plan_url": plan_url, "rows": rows, "truncated": len(goals) > MAX_TOOL_ROWS}
     if plan_note:
@@ -266,11 +267,6 @@ def savings_goals(person, _args):
                       planned_item_ids=planned_item_ids,
                       # Every goal listed, and every goal the funding plan filled before them.
                       goal_ids=tuple(sorted(shown_ids | set(plan_rows))))
-
-
-def _private_account_ids(person, allowed):
-    return set(Account.objects.filter(pk__in=allowed, scope=Account.Scope.PRIVATE, owner=person)
-               .values_list("pk", flat=True))
 
 
 def _plan_planned_item_ids(person, consent):
@@ -300,7 +296,7 @@ def _funding_plan(person, today, goals, *, consent, allowed):
             goal.linked_account_id is not None and goal.linked_account_id not in allowed for goal in goals
         )
         if buffer_set or linked_outside:
-            return {}, url, f"Projected completion is {CONSENT_WITHHELD}."
+            return {}, url, f"Projected completion is {CONSENT_WITHHELD}.", set()
     plan = build_funding_plan(person, today=today, scope=scope, horizon=DEFAULT_HORIZON)
     rows = {}
     for row in plan.rows:
@@ -311,7 +307,7 @@ def _funding_plan(person, today, goals, *, consent, allowed):
         else:
             when = f"not within {DEFAULT_HORIZON} months"
         rows[row.goal.pk] = {"funded_month": when, "target_check": row.check, "url": url}
-    return rows, url, ""
+    return rows, url, "", plan_account_ids(person, plan)
 
 
 # Debt payoff

@@ -188,6 +188,20 @@ def _with_whole_bills(principal, rows, replaced):
     return widened
 
 
+def replaced_series_ids(principal, planned_item_ids):
+    """Every series the given planned items replace, widened to whole household bills (#522).
+
+    The series whose stored charges decide which recurring charges a plan
+    leaves out of the projection, as `visible_projection_inputs` decides it.
+    """
+    replaced = set(
+        PlannedItem.objects.filter(pk__in=list(planned_item_ids), replaces_series__isnull=False).values_list(
+            "replaces_series_id", flat=True
+        )
+    )
+    return _with_whole_bills(principal, [], replaced)
+
+
 def visible_projection_inputs(principal, *, account=None, scope="", accounts=None, include_household=True):
     """Planned items and confirmed series behind the projection.
 
