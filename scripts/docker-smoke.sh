@@ -21,8 +21,8 @@
 # It builds only the services docs/deployment.md builds, so config-check must
 # come from background's image, as it does on an upgrade.
 #
-# Called by .github/workflows/docker-smoke.yml. Dummy values only: no secrets,
-# no real paths, nothing is pushed. A local run is possible, but it is a
+# Called by .github/workflows/docker-smoke.yml. Dummy values only: credentials
+# are generated for each run, no real paths, nothing is pushed. A local run is possible, but it is a
 # disposable stack under its own project, volumes and ports; it refuses to run
 # as the production project, ignores exported compose settings, and stops
 # before starting anything if compose resolves a volume or writable bind mount
@@ -255,12 +255,20 @@ backup_dir="$work_dir/backups"
 env_file="$work_dir/smoke.env"
 mkdir -p "$backup_dir"
 
+# Fresh throwaway credentials each run, written only to the env file and never
+# printed. Hex needs no quoting and holds no $ for compose to interpolate. The
+# encryption key must be a Fernet key: 32 random bytes in urlsafe base64. The
+# invalid-cron cases copy this env file, so the whole run shares one password.
+postgres_password=$(python3 -I -c 'import secrets; print(secrets.token_hex(32))')
+django_secret_key=$(python3 -I -c 'import secrets; print(secrets.token_hex(32))')
+field_encryption_key=$(python3 -I -c 'import base64, secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())')
+
 cat > "$env_file" <<ENV
-POSTGRES_PASSWORD=smoke-only-not-a-secret
-DJANGO_SECRET_KEY=smoke-only-not-a-secret
+POSTGRES_PASSWORD=$postgres_password
+DJANGO_SECRET_KEY=$django_secret_key
 DJANGO_ALLOWED_HOSTS=smoke.example.test
 DJANGO_CSRF_TRUSTED_ORIGINS=https://smoke.example.test
-FIELD_ENCRYPTION_KEY=dGVzdC1maWVsZC1lbmNyeXB0aW9uLWtleS0zMmJ5dGU=
+FIELD_ENCRYPTION_KEY=$field_encryption_key
 BACKUP_DIR=$backup_dir
 APP_PORT=$app_port
 POSTGRES_VOLUME_NAME=${COMPOSE_PROJECT_NAME}-postgres-data
