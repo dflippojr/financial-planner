@@ -14,67 +14,84 @@ goals from the surplus, so subtracting set-asides there would count a fund twice
 
 from types import SimpleNamespace
 
-from .access import visible_rows
 from .cash_flow import format_minor
 from .fund_services import suggested_set_aside
-from .funds import assigned_by_goal, fund_due_date, fund_matches_account, linked_item
-from .models import Account, SavingsGoal
-from .months import month_end
-from .projection import KIND_EXPENSE, occurrence_dates
+from .funds import assigned_by_goal, fund_due_date, linked_item, open_funds
+from .models import FundEntry
+from .months import month_end, month_start
+from .projection import KIND_EXPENSE, SOURCE_PLANNED, occurrence_dates
 
 SOURCE_SET_ASIDE = "set_aside"
 
 
-def _open_funds(principal, *, scope=""):
-    accounts = visible_rows(Account, principal).filter(status=Account.Status.ACTIVE, archived_at__isnull=True)
-    goals = visible_rows(SavingsGoal, principal).filter(
-        share_of_account=True,
-        status=SavingsGoal.Status.ACTIVE,
-        completed_at__isnull=True,
-        linked_account__in=accounts,
-    )
-    if scope:
-        goals = goals.filter(scope=scope)
-    goals = goals.select_related("linked_account", "funds_planned_item").order_by("pk")
-    return [goal for goal in goals if fund_matches_account(goal, goal.linked_account)]
+def _planned_payments(month):
+    """{planned item id: minor} the month's projection spends on each planned expense."""
+    paid = {}
+    for contribution in month.contributions:
+        if contribution.source == SOURCE_PLANNED and contribution.kind == KIND_EXPENSE:
+            paid[contribution.source_id] = paid.get(contribution.source_id, 0) + contribution.amount_minor
+    return paid
 
 
-def fund_schedule(goals, assigned, months):
+def fund_schedule(goals, held_now, months):
     """Per month start: [(goal, set-aside minor)] and {planned item id: minor paid from funds}.
 
-    `months` are the projection's month starts in order; `assigned` is each
-    goal's assigned amount today. Pure: no queries beyond the goals' loaded
-    planned items.
+    `months` are the projected months in order, `held_now` what each fund will
+    hold when the projection starts. A fund pays its item what that month's
+    projection spends on it (a scenario's changed amount included), up to what
+    the fund holds by then. Pure: no queries beyond the goals' loaded items.
     """
-    held = dict(assigned)
+    held = dict(held_now)
     schedule = {}
-    for start in months:
-        end = month_end(start)
+    for month in months:
         set_asides = []
         covered = {}
+        payments = _planned_payments(month)
         for goal in goals:
-            due = fund_due_date(goal, start)
-            amount = suggested_set_aside(goal.target_amount_minor, held[goal.pk], due, on=start)
+            due = fund_due_date(goal, month.start)
+            amount = suggested_set_aside(goal.target_amount_minor, held[goal.pk], due, on=month.start)
             if amount:
                 held[goal.pk] += amount
                 set_asides.append((goal, amount))
             item = linked_item(goal)
-            if item is None:
+            if item is None or not payments.get(item.pk):
                 continue
-            for _hit in occurrence_dates(item.start_date, item.end_date, item.cadence, start, end):
-                paid = min(held[goal.pk], item.amount_minor)
-                if paid > 0:
-                    held[goal.pk] -= paid
-                    covered[item.pk] = covered.get(item.pk, 0) + paid
-        schedule[start] = SimpleNamespace(set_asides=set_asides, covered=covered)
+            paid = min(held[goal.pk], payments[item.pk])
+            if paid > 0:
+                held[goal.pk] -= paid
+                covered[item.pk] = covered.get(item.pk, 0) + paid
+        schedule[month.start] = SimpleNamespace(set_asides=set_asides, covered=covered)
     return schedule
+
+
+def held_when_projection_starts(goals, assigned, *, today):
+    """Each fund's assigned amount less the payments its item still owes this month.
+
+    The projection starts next month, so an occurrence of the linked item this
+    month that has not drawn the fund down yet is expected to, up to what the
+    fund holds.
+    """
+    held = dict(assigned)
+    for goal in goals:
+        item = linked_item(goal)
+        if item is None:
+            continue
+        drawn = set(
+            FundEntry.objects.filter(goal=goal, planned_item=item, kind=FundEntry.Kind.DRAW_DOWN)
+            .filter(FundEntry.counted_filter())
+            .values_list("occurrence_date", flat=True)
+        )
+        for hit in occurrence_dates(item.start_date, item.end_date, item.cadence, month_start(today), month_end(today)):
+            if hit not in drawn:
+                held[goal.pk] -= min(max(held[goal.pk], 0), item.amount_minor)
+    return held
 
 
 def _with_overlay(month, entry):
     contributions = []
     spending = month.spending_minor
     for contribution in month.contributions:
-        paid = entry.covered.get(contribution.source_id) if contribution.source == "planned" else None
+        paid = entry.covered.get(contribution.source_id) if contribution.source == SOURCE_PLANNED else None
         if paid and contribution.kind == KIND_EXPENSE:
             paid = min(paid, contribution.amount_minor)
             remaining = contribution.amount_minor - paid
@@ -117,12 +134,13 @@ def _with_overlay(month, entry):
     )
 
 
-def apply_fund_set_asides(principal, months, *, scope=""):
+def apply_fund_set_asides(principal, months, *, today, scope=""):
     """Projected months with each visible fund's set-asides added and its planned item paid from the fund."""
     if not months:
         return months
-    goals = _open_funds(principal, scope=scope)
+    goals = open_funds(principal, scope=scope)
     if not goals:
         return months
-    schedule = fund_schedule(goals, assigned_by_goal([goal.pk for goal in goals]), [month.start for month in months])
+    held = held_when_projection_starts(goals, assigned_by_goal([goal.pk for goal in goals]), today=today)
+    schedule = fund_schedule(goals, held, months)
     return tuple(_with_overlay(month, schedule[month.start]) for month in months)

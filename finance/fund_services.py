@@ -28,6 +28,7 @@ from .funds import (
     fund_matches_account,
     latest_signed_balance,
     matching_funds,
+    open_funds,
 )
 from .models import Account, AuditEvent, FundEntry, SavingsGoal
 from .months import month_start
@@ -271,21 +272,7 @@ def monthly_set_asides(principal, *, today):
     A fund already confirmed this month shows its entry instead.
     """
     month = month_start(today)
-    visible_accounts = visible_rows(Account, principal).filter(
-        status=Account.Status.ACTIVE, archived_at__isnull=True
-    )
-    goals = [
-        goal
-        for goal in visible_rows(SavingsGoal, principal)
-        .filter(
-            share_of_account=True,
-            status=SavingsGoal.Status.ACTIVE,
-            completed_at__isnull=True,
-            linked_account__in=visible_accounts,
-        )
-        .select_related("linked_account", "funds_planned_item")
-        if fund_matches_account(goal, goal.linked_account)
-    ]
+    goals = open_funds(principal)
     assigned = assigned_by_goal([goal.pk for goal in goals])
     confirmed = {
         entry.goal.pk: entry

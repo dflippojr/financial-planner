@@ -12,7 +12,8 @@ A transaction pays an occurrence of the fund's linked planned item when it:
   merchant of the recurring series the item replaces, or the item's name
   inside the description (compared as merchant keys).
 
-Each occurrence draws at most once and each transaction at most once ever. The
+Each occurrence of the linked item draws at most once (a fund relinked to
+another item starts afresh) and each transaction at most once ever. The
 draw-down is the transaction's amount, capped at what the fund holds, so a fund
 never goes below zero. A draw-down whose transaction is later archived (an
 undone import) stops counting; a re-imported copy can then draw the occurrence.
@@ -94,19 +95,20 @@ def _identity_matches(item, txn, *, name_key, series_key):
     return bool(name_key) and f" {name_key} " in description_key
 
 
-def _taken_occurrences(goal):
-    """Occurrence dates that already hold a counted draw-down."""
+def _taken_occurrences(goal, item):
+    """The item's occurrence dates that already hold a counted draw-down from this fund."""
     return set(
-        FundEntry.objects.filter(goal=goal, kind=FundEntry.Kind.DRAW_DOWN)
+        FundEntry.objects.filter(goal=goal, planned_item=item, kind=FundEntry.Kind.DRAW_DOWN)
         .filter(FundEntry.counted_filter())
         .values_list("occurrence_date", flat=True)
     )
 
 
-def _retire_stale(goal, occurrence):
+def _retire_stale(goal, item, occurrence):
     """A live draw-down for this occurrence whose transaction was archived gives way to a new one."""
     FundEntry.objects.filter(
-        goal=goal, kind=FundEntry.Kind.DRAW_DOWN, occurrence_date=occurrence, undone_at__isnull=True
+        goal=goal, planned_item=item, kind=FundEntry.Kind.DRAW_DOWN, occurrence_date=occurrence,
+        undone_at__isnull=True
     ).filter(transaction__status=Transaction.Status.ARCHIVED).update(undone_at=timezone.now())
 
 
@@ -156,7 +158,7 @@ def draw_down_goal(goal, *, today, transaction_ids=None):
     name_key = merchant_key(item.name)
     series_key = item.replaces_series.merchant_key if item.replaces_series_id and item.replaces_series else ""
     rows = [txn for txn in rows if _identity_matches(item, txn, name_key=name_key, series_key=series_key)]
-    taken = _taken_occurrences(goal)
+    taken = _taken_occurrences(goal, item)
     used = set()
     created = []
     for occurrence in occurrences:
@@ -179,7 +181,7 @@ def draw_down_goal(goal, *, today, transaction_ids=None):
         held = assigned_minor(goal)
         if held <= 0:
             break
-        _retire_stale(goal, occurrence)
+        _retire_stale(goal, item, occurrence)
         entry = FundEntry.objects.create(
             goal=goal,
             kind=FundEntry.Kind.DRAW_DOWN,
@@ -187,6 +189,7 @@ def draw_down_goal(goal, *, today, transaction_ids=None):
             amount_minor=-min(abs(txn.amount_minor), held),
             entry_date=txn.transaction_date,
             transaction=txn,
+            planned_item=item,
             occurrence_date=occurrence,
         )
         _record_draw_down(goal, reader, txn)

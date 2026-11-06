@@ -638,6 +638,23 @@ def test_an_undone_import_stops_its_draw_down_counting_and_a_reimport_draws_agai
 
 
 @pytest.mark.django_db
+def test_a_fund_relinked_to_another_item_draws_for_its_occurrences():
+    owner, _savings, checking, fund, item = _drawn_fund()
+    make_transaction(owner, checking, on=date(2026, 12, 10), amount_minor=-50_000,
+                     description="SYNTHETIC CAR INSURANCE")
+    # A smaller first payment draws the old item's December occurrence.
+    item.amount_minor = 50_000
+    item.save()
+    assert len(apply_fund_draw_downs(today=date(2026, 12, 12))) == 1
+    other = make_item(owner, name="Synthetic Home Insurance", amount=40_000, start=date(2026, 12, 10))
+    link_item(fund, other, linked_on=date(2026, 12, 1))
+    paid = make_transaction(owner, checking, on=date(2026, 12, 11), amount_minor=-40_000,
+                            description="SYNTHETIC HOME INSURANCE")
+    created = apply_fund_draw_downs(today=date(2026, 12, 12))
+    assert [(entry.transaction_id, entry.planned_item_id) for entry in created] == [(paid.pk, other.pk)]
+
+
+@pytest.mark.django_db
 def test_household_fund_never_draws_on_a_private_transaction():
     owner = make_person("owner")
     member = make_person("member")
@@ -739,11 +756,61 @@ def test_cash_flow_page_labels_set_asides():
     assert "monthly set-aside" in page
 
 
+def _month(start, contributions=()):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(start=start, contributions=tuple(contributions))
+
+
 def test_fund_schedule_is_pure_and_stops_once_reached():
     goal = SavingsGoal(pk=1, target_amount_minor=30_000, target_date=date(2027, 1, 31), share_of_account=True)
-    months = [date(2026, 12, 1), date(2027, 1, 1), date(2027, 2, 1)]
+    months = [_month(date(2026, 12, 1)), _month(date(2027, 1, 1)), _month(date(2027, 2, 1))]
     schedule = fund_schedule([goal], {1: 0}, months)
-    assert [[amount for _goal, amount in schedule[m].set_asides] for m in months] == [[15_000], [15_000], []]
+    assert [[amount for _goal, amount in schedule[m.start].set_asides] for m in months] == [[15_000], [15_000], []]
+
+
+def test_fund_schedule_pays_what_the_scenario_spends_on_the_item():
+    from types import SimpleNamespace
+
+    item = PlannedItem(pk=7, owner_id=1, scope="private", kind="expense", amount_minor=120_000,
+                       start_date=date(2026, 12, 10), cadence="annual", enabled=True)
+    goal = SavingsGoal(pk=1, owner_id=1, scope="private", target_amount_minor=120_000, share_of_account=True)
+    goal.funds_planned_item = item
+    # The scenario halves December's payment: the fund pays $600 and keeps $600.
+    payment = SimpleNamespace(source="planned", source_id=7, kind="expense", amount_minor=60_000)
+    months = [_month(date(2026, 12, 1), [payment]), _month(date(2027, 1, 1))]
+    schedule = fund_schedule([goal], {1: 120_000}, months)
+    assert schedule[date(2026, 12, 1)].covered == {7: 60_000}
+    # January asks for the rest of next December's renewal: (120,000 - 60,000) over 12 months.
+    assert [amount for _goal, amount in schedule[date(2027, 1, 1)].set_asides] == [5_000]
+
+
+@pytest.mark.django_db
+def test_projection_expects_this_months_payment_before_carrying_the_fund_forward():
+    owner = make_person("owner")
+    account = make_account(owner)
+    add_balance(account, 500_000)
+    fund = make_fund(owner, account, target=120_000)
+    item = make_item(owner, amount=120_000, start=date(2026, 11, 20))
+    link_item(fund, item)
+    assign_to_fund(owner, fund, 120_000, today=TODAY)
+    report = cash_flow_with_projection(
+        owner, date_from=date(2026, 6, 1), date_to=date(2026, 11, 30), grouping="month", today=TODAY, horizon=3,
+    )
+    december = report.projected_periods[0]
+    # November 20's payment will empty the fund, so December starts saving for next November.
+    set_asides = [c.amount_minor for c in december.contributions if c.source == SOURCE_SET_ASIDE]
+    assert set_asides == [10_000]
+    # Once that payment has drawn the fund down, it is not expected twice.
+    paid = make_transaction(owner, make_account(owner, name="Synthetic Checking", account_type=Account.Type.CHECKING),
+                            on=date(2026, 11, 20), amount_minor=-120_000, description="SYNTHETIC CAR INSURANCE")
+    apply_fund_draw_downs(today=date(2026, 11, 21))
+    assert FundEntry.objects.filter(transaction=paid).exists()
+    report = cash_flow_with_projection(
+        owner, date_from=date(2026, 6, 1), date_to=date(2026, 11, 30), grouping="month", today=TODAY, horizon=3,
+    )
+    set_asides = [c.amount_minor for c in report.projected_periods[0].contributions if c.source == SOURCE_SET_ASIDE]
+    assert set_asides == [10_000]
 
 
 # -- visibility --
@@ -908,3 +975,75 @@ def test_money_parsing_of_fund_forms_uses_money_field():
     form = FundMoveForm({"action": "assign", "amount": "$1,000.25"})
     assert form.is_valid() and form.amount_minor() == 100_025
     assert Decimal("0.01") == FundMoveForm.base_fields["amount"].min_value
+
+
+@pytest.mark.django_db(transaction=True)
+def test_moving_a_fund_waits_for_an_assignment_in_flight_and_then_refuses():
+    """An edit that moves a fund checks its money under the assignment's locks (PostgreSQL only)."""
+    import threading
+    from unittest.mock import patch
+
+    from django.db import connection, connections
+
+    from finance import fund_services
+    from tests.lock_races import JOIN_SECONDS, wait_until_blocked_by
+
+    if connection.vendor != "postgresql":
+        pytest.skip("row locks need PostgreSQL")
+    owner = make_person("owner")
+    first = make_account(owner, name="Synthetic First Cash")
+    second = make_account(owner, name="Synthetic Second Cash")
+    add_balance(first, 100_000)
+    add_balance(second, 100_000)
+    fund = make_fund(owner, first)
+    stale = SavingsGoal.objects.get(pk=fund.pk)
+    locked, release = threading.Event(), threading.Event()
+    done = {"assign": threading.Event(), "move": threading.Event()}
+    pids, errors, outcome = {}, [], {}
+    original_check = fund_services._check_room
+
+    def pausing_check(position, amount_minor):
+        original_check(position, amount_minor)
+        if threading.current_thread().name == "assign":
+            locked.set()
+            release.wait(JOIN_SECONDS)
+
+    def run(name, action):
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SET lock_timeout = '15s'")
+                cursor.execute("SELECT pg_backend_pid()")
+                pids[name] = cursor.fetchone()[0]
+            outcome[name] = action()
+        except Exception as exc:  # noqa: BLE001 - reported to the main thread
+            outcome[name] = exc
+        finally:
+            connections.close_all()
+            done[name].set()
+
+    payload = {"scope": "private", "name": fund.name, "share_of_account": True, "linked_account": second,
+               "target_amount_minor": fund.target_amount_minor}
+    with patch.object(fund_services, "_check_room", pausing_check):
+        assign = threading.Thread(
+            target=run, args=("assign", lambda: assign_to_fund(owner, fund, 5_000, today=TODAY)), name="assign",
+            daemon=True,
+        )
+        assign.start()
+        assert locked.wait(JOIN_SECONDS), outcome
+        move = threading.Thread(
+            target=run, args=("move", lambda: save_savings_goal(owner, payload, goal=stale)), name="move", daemon=True
+        )
+        move.start()
+        try:
+            while "move" not in pids and not done["move"].is_set():
+                done["move"].wait(0.02)
+            wait_until_blocked_by(pids.get("move"), pids["assign"], done["move"], errors)
+        finally:
+            release.set()
+            assign.join(JOIN_SECONDS)
+            move.join(JOIN_SECONDS)
+    assert isinstance(outcome["assign"], FundEntry), outcome
+    assert isinstance(outcome["move"], ValidationError) and FUND_MOVE_ERROR in outcome["move"].messages, outcome
+    fund.refresh_from_db()
+    assert fund.linked_account_id == first.pk
+    assert account_position(first, today=TODAY).assigned_minor == 5_000

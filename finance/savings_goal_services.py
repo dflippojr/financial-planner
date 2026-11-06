@@ -349,30 +349,36 @@ def save_savings_goal(principal, payload, *, goal=None):
     validate_dependency(person, goal, dependency, scope=scope, household=assigned_household)
     share = bool(payload["share_of_account"]) if "share_of_account" in payload else goal.share_of_account
     item = payload["funds_planned_item"] if "funds_planned_item" in payload else goal.funds_planned_item
+    account = None
     if share or goal.share_of_account:
         account = (
             _linked_account(person, goal, payload["linked_account"])
             if "linked_account" in payload
             else goal.linked_account
         )
-        validate_fund(
-            goal, share=share, account=account, scope=scope, household=assigned_household,
-            owner_id=goal.owner_id if goal.owner_id is not None else person.pk,  # pyright: ignore[reportAttributeAccessIssue] - runtime FK id attribute
-        )
-    if share and item is not None and (
-        "funds_planned_item" in payload or goal.scope != scope
-    ):
-        validate_planned_item_link(person, goal, item, scope=scope, household=assigned_household, share=share)
-    if goal.pk is None and payload.get("target_amount_minor") is None and (not share or item is None):
-        raise ValidationError(TARGET_REQUIRED_ERROR)
-    _apply_payload(person, goal, payload)
-    _apply_planned_item(goal, payload, today=timezone.localdate())
-    goal.scope = scope
-    goal.household = assigned_household
-    goal.name = payload["name"] if "name" in payload else goal.name
-    goal.currency = "USD"
-    goal.depends_on = dependency
     with transaction.atomic():
+        if share or goal.share_of_account:
+            # Check the fund's money against its saved state under the locks
+            # assignments take, so no assignment can land between this check
+            # and the save that moves or ends the fund.
+            saved = _lock_fund_rows(goal, account) if goal.pk is not None else goal
+            validate_fund(
+                saved, share=share, account=account, scope=scope, household=assigned_household,
+                owner_id=goal.owner_id if goal.owner_id is not None else person.pk,  # pyright: ignore[reportAttributeAccessIssue] - runtime FK id attribute
+            )
+        if share and item is not None and (
+            "funds_planned_item" in payload or goal.scope != scope
+        ):
+            validate_planned_item_link(person, goal, item, scope=scope, household=assigned_household, share=share)
+        if goal.pk is None and payload.get("target_amount_minor") is None and (not share or item is None):
+            raise ValidationError(TARGET_REQUIRED_ERROR)
+        _apply_payload(person, goal, payload)
+        _apply_planned_item(goal, payload, today=timezone.localdate())
+        goal.scope = scope
+        goal.household = assigned_household
+        goal.name = payload["name"] if "name" in payload else goal.name
+        goal.currency = "USD"
+        goal.depends_on = dependency
         goal.save()
         if before is None:
             record(person, AuditEvent.Action.RECORD_CREATED, AuditEvent.TargetType.GOAL, goal.pk,
@@ -387,6 +393,20 @@ def save_savings_goal(principal, payload, *, goal=None):
 
             delete_conversations_without_access(goal_ids=(goal.pk,))
     return goal
+
+
+def _lock_fund_rows(goal, account):
+    """Lock a saved goal's old and new accounts in id order, then the goal; return the goal as saved.
+
+    The same order as an assignment (account, then goal), so the two never deadlock.
+    """
+    saved_account_id = SavingsGoal.objects.filter(pk=goal.pk).values_list("linked_account_id", flat=True).first()
+    ids = sorted({pk for pk in (saved_account_id, account.pk if account is not None else None) if pk is not None})
+    list(Account.objects.select_for_update().filter(pk__in=ids).order_by("pk").values_list("pk", flat=True))
+    saved = SavingsGoal.objects.select_for_update(of=("self",)).get(pk=goal.pk)
+    if saved.linked_account_id is not None and saved.linked_account_id not in ids:  # pyright: ignore[reportAttributeAccessIssue] - runtime FK id attribute
+        raise ValidationError(FUND_MOVE_ERROR)
+    return saved
 
 
 def set_savings_goal_completed(principal, goal, completed):

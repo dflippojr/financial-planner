@@ -378,9 +378,11 @@ def cash_flow_with_projection(
         # planned items, they are left out of a single-account view.
         from .fund_projection import apply_fund_set_asides
 
-        report.projected_periods = apply_fund_set_asides(principal, report.projected_periods, scope=scope)
+        report.projected_periods = apply_fund_set_asides(
+            principal, report.projected_periods, today=today, scope=scope
+        )
         report.scenario_projected_periods = apply_fund_set_asides(
-            principal, report.scenario_projected_periods, scope=scope
+            principal, report.scenario_projected_periods, today=today, scope=scope
         )
     report.projection_has_set_asides = any(
         getattr(period, "set_aside_minor", 0) for period in report.projected_periods

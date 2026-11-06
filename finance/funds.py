@@ -14,6 +14,7 @@ from datetime import timedelta
 
 from django.db.models import Sum
 
+from .access import visible_rows
 from .models import Account, BalanceSnapshot, FundEntry, PlannedItem, SavingsGoal
 from .net_worth import signed_balance_minor, source_rank_expression
 from .projection import occurrence_dates
@@ -127,3 +128,18 @@ def fund_due_date(goal, today):
     if item is not None:
         return next_occurrence(item, today) or goal.target_date
     return goal.target_date
+
+
+def open_funds(principal, *, scope=""):
+    """Active, unfinished funds the viewer can see whose account they can see and that still match it."""
+    accounts = visible_rows(Account, principal).filter(status=Account.Status.ACTIVE, archived_at__isnull=True)
+    goals = visible_rows(SavingsGoal, principal).filter(
+        share_of_account=True,
+        status=SavingsGoal.Status.ACTIVE,
+        completed_at__isnull=True,
+        linked_account__in=accounts,
+    )
+    if scope:
+        goals = goals.filter(scope=scope)
+    goals = goals.select_related("linked_account", "funds_planned_item").order_by("pk")
+    return [goal for goal in goals if fund_matches_account(goal, goal.linked_account)]

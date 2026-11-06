@@ -1741,7 +1741,11 @@ class FundEntry(models.Model):
         blank=True,
         related_name="fund_draw_downs",
     )
-    # The planned item's occurrence the draw-down paid.
+    # The planned item, and its occurrence, the draw-down paid. A fund relinked
+    # to another item starts a fresh set of occurrences.
+    planned_item = models.ForeignKey(
+        PlannedItem, on_delete=models.SET_NULL, null=True, blank=True, related_name="fund_draw_downs"
+    )
     occurrence_date = models.DateField(null=True, blank=True)
     actor = models.ForeignKey(
         Person, on_delete=models.SET_NULL, null=True, blank=True, related_name="fund_entries"
@@ -1791,7 +1795,8 @@ class FundEntry(models.Model):
             models.CheckConstraint(
                 condition=(
                     Q(kind="draw_down", occurrence_date__isnull=False)
-                    | Q(occurrence_date__isnull=True, transaction__isnull=True, undone_at__isnull=True)
+                    | Q(occurrence_date__isnull=True, transaction__isnull=True, planned_item__isnull=True,
+                        undone_at__isnull=True)
                     & ~Q(kind="draw_down")
                 ),
                 name="fund_entry_draw_down_fields",
@@ -1808,8 +1813,8 @@ class FundEntry(models.Model):
                 name="fund_entry_unique_goal_month",
             ),
             models.UniqueConstraint(
-                fields=("goal", "occurrence_date"),
-                condition=Q(kind="draw_down", undone_at__isnull=True),
+                fields=("goal", "planned_item", "occurrence_date"),
+                condition=Q(kind="draw_down", undone_at__isnull=True, planned_item__isnull=False),
                 name="fund_entry_unique_live_occurrence",
             ),
         ]
