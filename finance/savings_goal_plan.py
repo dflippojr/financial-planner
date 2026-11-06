@@ -15,12 +15,12 @@ from .access import DENIED as _DENIED
 from .access import require_person as _person
 from .audit_services import record
 from .cash_flow import format_minor, selected_accounts
-from .category_services import current_household, income_and_spending_by_window
+from .category_services import current_household, income_and_spending_by_window, spending_account_ids
 from .lifecycle_services import lock_actor_household
-from .models import Account, AuditEvent, RecurringSeriesMember, SavingsGoal, Transaction
+from .models import Account, AuditEvent, RecurringSeriesMember, SavingsGoal
 from .months import add_months, month_end, month_start
-from .planning_services import visible_projection_inputs
-from .projection import DEFAULT_HORIZON, HORIZONS, SOURCE_SERIES, project_cash_flow
+from .planning_services import replaced_series_ids, visible_projection_inputs
+from .projection import DEFAULT_HORIZON, HORIZONS, SOURCE_PLANNED, SOURCE_SERIES, project_cash_flow
 from .savings_goal_services import goal_progress
 
 SCOPE_ALL = ""
@@ -239,10 +239,12 @@ def plan_account_ids(principal, plan):
     The surplus and default buffer are computed over the scope's live cash-flow
     accounts, so each counts even when it adds nothing. An archived or
     non-cash-flow account counts only when its rows fed the plan: a stored
-    charge of a projected recurring series, or, for the default buffer, a
-    transaction inside the months it averages. Each open goal's visible linked
-    account counts too, because its balance sets what is left to fund, and goals
-    fill from one surplus in rank order.
+    charge of a projected recurring series, a stored charge of a series a
+    planned item replaces (whose history decides which charges leave the
+    projection), or, for the default buffer, a row it counts as spending in
+    the months it averages. Each open goal's visible linked account counts too,
+    because its balance sets what is left to fund, and goals fill from one
+    surplus in rank order.
     """
     ids = {
         account.pk
@@ -251,11 +253,16 @@ def plan_account_ids(principal, plan):
     }
     ids |= plan.linked_account_ids
     series_ids = set()
+    planned_ids = set()
     for item in plan.inputs:
-        if item.source == SOURCE_SERIES:
+        if item.source == SOURCE_PLANNED:
+            planned_ids.add(item.source_id)
+        elif item.source == SOURCE_SERIES:
             series_ids.add(item.source_id)
             if item.last_account_id is not None:
                 ids.add(item.last_account_id)
+    if planned_ids:
+        series_ids |= replaced_series_ids(principal, planned_ids)
     if series_ids:
         ids |= set(
             RecurringSeriesMember.objects.filter(series_id__in=series_ids).values_list(
@@ -264,17 +271,8 @@ def plan_account_ids(principal, plan):
         )
     if plan.buffer_source == BUFFER_DEFAULT and plan.accounts:
         windows = _buffer_windows(plan.today)
-        ids |= set(
-            Transaction.objects.visible_to(principal)  # pyright: ignore[reportAttributeAccessIssue] - QuerySet.as_manager() is untyped
-            .filter(
-                status=Transaction.Status.ACTIVE,
-                kind=Transaction.Kind.CASH_FLOW,
-                account__in=[account.pk for account in plan.accounts],
-                transaction_date__gte=windows[0][0],
-                transaction_date__lte=windows[-1][1],
-            )
-            .values_list("account_id", flat=True)
-            .distinct()
+        ids |= spending_account_ids(
+            principal, date_from=windows[0][0], date_to=windows[-1][1], accounts=plan.accounts
         )
     return ids
 

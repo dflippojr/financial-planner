@@ -377,14 +377,55 @@ def test_savings_goals_record_archived_accounts_the_projection_and_buffer_read(w
         txn = add_txn(account, world["alpha"], add_months(today.replace(day=6), -offset), -4_500, "SYN-GYM")
         RecurringSeriesMember.objects.create(series=series, transaction=txn)
     # Last month's spending on an archived account still sets the default buffer.
-    add_txn(spent, world["alpha"], add_months(today.replace(day=10), -1), -8_000, "SYN-OLD-SPEND")
+    last_month = add_months(today.replace(day=10), -1)
+    add_txn(spent, world["alpha"], last_month, -8_000, "SYN-OLD-SPEND")
+    # Income and an untracked transfer are not spending, so they leave the buffer alone.
+    paid = _archived(checking(world["alpha"], world["household"], "HH-SYN-OLD-PAY"))
+    add_txn(paid, world["alpha"], last_month, 8_000, "SYN-OLD-PAY")
+    moved = _archived(checking(world["alpha"], world["household"], "HH-SYN-OLD-MOVE"))
+    transfer = add_txn(moved, world["alpha"], last_month, -8_000, "SYN-OLD-MOVE")
+    transfer.untracked_transfer = True
+    transfer.save(update_fields=["untracked_transfer"])
     result = run_tool(world["alpha"], default_tools(), "savings_goals", {})
     payload = assert_grounded(result)
     goal = next(row for row in payload["rows"] if row["id"] == world["goal"].pk)
     assert goal["projected_completion"]["funded_month"][:4].isdigit()  # funded by the projection
     assert set(result.account_ids) == {
         old_card.pk, spent.pk, world["shared"].pk, world["private"].pk, world["card"].pk}
-    assert idle.pk not in result.account_ids
+    assert not {idle.pk, paid.pk, moved.pk} & set(result.account_ids)
+
+
+@pytest.mark.django_db
+def test_savings_goals_record_the_bill_history_behind_a_replaced_charge(world):
+    today = timezone.localdate()
+    old = _archived(checking(world["alpha"], world["household"], "HH-SYN-OLD-UTILITY"))
+
+    def series(person, key):
+        return RecurringSeries.objects.create(
+            person=person, merchant_key="syn utility", display_name="SYN-UTILITY",
+            cadence=RecurringSeries.Cadence.MONTHLY, typical_amount_minor=-9_000,
+            status=RecurringSeries.Status.CONFIRMED, confidence=RecurringSeries.Confidence.HIGH,
+            reasons=["synthetic"], fingerprint=key * 64,
+        )
+
+    mine, theirs = series(world["alpha"], "e"), series(world["beta"], "f")
+    # One household bill: both members' copies share the live charges; beta's
+    # copy also holds the bill's earlier charge on an archived account.
+    for offset in (3, 2, 1):
+        txn = add_txn(world["shared"], world["alpha"], add_months(today.replace(day=8), -offset), -9_000,
+                      "SYN-UTILITY")
+        RecurringSeriesMember.objects.create(series=mine, transaction=txn)
+        RecurringSeriesMember.objects.create(series=theirs, transaction=txn)
+    early = add_txn(old, world["beta"], add_months(today.replace(day=8), -4), -9_000, "SYN-UTILITY")
+    RecurringSeriesMember.objects.create(series=theirs, transaction=early)
+    plan = _planned(world["alpha"], "HH-SYN-PLANNED utility", 9_500, kind=PlannedItem.Kind.EXPENSE,
+                    household=world["household"])
+    plan.replaces_series = theirs
+    plan.save(update_fields=["replaces_series"])
+    result = run_tool(world["alpha"], default_tools(), "savings_goals", {})
+    # The plan replaces the whole bill, so alpha's copy leaves the projection
+    # because of history that includes the archived account.
+    assert old.pk in result.account_ids
 
 
 @pytest.mark.django_db
