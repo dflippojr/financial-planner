@@ -2414,6 +2414,8 @@ class AiProposal(models.Model):
         AI_SUGGESTIONS = "ai_suggestions", "AI category suggestions"
         NOTES = "notes", "Notes"
         SPLITS = "splits", "Splits"
+        # Balance cards (#660), the same checkbox card.
+        BALANCES = "balances", "Balances"
 
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"
@@ -2449,6 +2451,7 @@ class AiProposal(models.Model):
                         "set_category", "create_rule", "set_budget", "add_tags",
                         "planned_items", "savings_goals", "set_budgets",
                         "recurring", "transfers", "ai_suggestions", "notes", "splits",
+                        "balances",
                     )
                 ),
                 name="ai_proposal_kind_valid",
