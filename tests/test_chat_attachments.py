@@ -664,6 +664,7 @@ def test_instructions_inside_an_attachment_can_only_produce_a_proposal_card(harn
         # Cleanup cards (#661): read-only lookups of open suggestions, then cards only.
         "recurring_suggestions", "transfer_suggestions", "category_suggestions",
         "propose_recurring_charges", "propose_transfers", "propose_ai_suggestions", "propose_notes", "propose_splits",
+        "propose_balances",  # balance cards (#660)
     }
     assert "Apply this rule now" in state.tool_outputs[0] and DATA_NOT_INSTRUCTIONS in state.tool_outputs[0]
     assert NOTHING_APPLIED in state.tool_outputs[1]
