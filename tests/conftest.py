@@ -232,7 +232,57 @@ class _BrowserTraces:
         self.test_id = None
 
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--coverage-shard",
+        metavar="K/N",
+        help="run only shard K of N (1-based) of the selected tests; sonar.yml splits its coverage run this way",
+    )
+
+
+def _parse_shard(value):
+    try:
+        index, count = (int(part) for part in value.split("/"))
+    except ValueError:
+        raise pytest.UsageError(f"--coverage-shard expects K/N, for example 1/3, not {value!r}") from None
+    if not 1 <= index <= count:
+        raise pytest.UsageError(f"--coverage-shard {value}: K must be between 1 and N")
+    return index, count
+
+
+class _CoverageShard:
+    """Keep one of N disjoint parts of the selected tests (issue #691).
+
+    Sorting by node id, rather than using collection order, gives every
+    process the same split even if collection order varied. Taking every Nth
+    test spreads each module, including the slow property tests that sit
+    together, across all shards. scripts/check_coverage_shards.py proves from
+    each shard's JUnit report that the shards together ran every selected
+    test exactly once.
+    """
+
+    def __init__(self, index, count):
+        self.index = index
+        self.count = count
+
+    # trylast: after -m has deselected tests, so the split is of the tests
+    # that will run.
+    @pytest.hookimpl(trylast=True)
+    def pytest_collection_modifyitems(self, config, items):
+        order = {nodeid: position for position, nodeid in enumerate(sorted(item.nodeid for item in items))}
+        keep, drop = [], []
+        for item in items:
+            (keep if order[item.nodeid] % self.count == self.index - 1 else drop).append(item)
+        if drop:
+            config.hook.pytest_deselected(items=drop)
+        items[:] = keep
+
+
 def pytest_configure(config):
+    shard = config.getoption("--coverage-shard")
+    if shard:
+        config.pluginmanager.register(_CoverageShard(*_parse_shard(shard)), "coverage-shard")
+
     directory = os.environ.get("PLAYWRIGHT_TRACE_DIR")
     if not directory:
         return
