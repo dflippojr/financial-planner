@@ -1404,6 +1404,8 @@ class SimpleFinConnection(models.Model):
     request_log = models.JSONField(default=list, blank=True)
     # conn_id -> the health state ("ok", "stale", "error") last pushed over ntfy.
     health_alerts = models.JSONField(default=dict, blank=True)
+    # The open Fix or Add pop-up flow (finance.simplefin_flow), or {}.
+    flow = models.JSONField(default=dict, blank=True)
 
     class QuerySet(models.QuerySet):
         def owned_by(self, principal):

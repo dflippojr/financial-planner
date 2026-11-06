@@ -83,14 +83,24 @@ def _collect_banks(payload: dict) -> dict[str, dict]:
 
 
 def _account_banks(payload: dict) -> dict[str, str]:
-    """Account id (bare, and conn_id-qualified) -> conn_id."""
-    owners = {}
+    """Account id (bare, and conn_id-qualified) -> conn_id.
+
+    Account ids are unique only within one bank, so a bare id that two banks
+    share maps to no bank: an error naming only that id stays connection-wide
+    rather than landing on the wrong bank.
+    """
+    owners: dict[str, str] = {}
+    shared: set[str] = set()
     for account in payload.get("accounts") or []:
         if isinstance(account, dict) and account.get("id"):
             key = _bank_key(account)
             account_id = clean_text(account["id"])
+            if owners.get(account_id, key) != key:
+                shared.add(account_id)
             owners.setdefault(account_id, key)
             owners[f"{key}:{account_id}"] = key
+    for account_id in shared:
+        owners.pop(account_id, None)
     return owners
 
 

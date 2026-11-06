@@ -1026,9 +1026,9 @@ def disconnect_connection(principal, connection_id) -> None:
 def _sync_scheduled(connection):
     if execution.get() is None:
         with operation():
-            sync_connection(connection.owner, connection.pk, ignore_rate_limit=True)
+            sync_connection(connection.owner, connection.pk, ignore_rate_limit=True, scheduled=True)
     else:
-        sync_connection(connection.owner, connection.pk, ignore_rate_limit=True)
+        sync_connection(connection.owner, connection.pk, ignore_rate_limit=True, scheduled=True)
 
 
 def _record_unexpected_failure(connection):

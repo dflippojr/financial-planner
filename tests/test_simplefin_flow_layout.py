@@ -120,6 +120,23 @@ def test_closing_the_pop_up_counts_as_cancel(flow_page, viewport):
         context.close()
 
 
+def test_a_pop_up_that_reads_closed_at_once_waits_for_done_or_cancel(flow_page):
+    context, page, stub, _now = flow_page("desktop")
+    try:
+        page.get_by_role("link", name="Fix Synthetic North Bank").click()
+        # What Chromium reports for a live pop-up whose page sends a cross-origin opener policy.
+        page.evaluate("() => { window.__popups[0].closed = true; }")
+        stub.calls.clear()
+
+        expect(page.locator("#simplefin-flow-text")).to_contain_text("can't see the SimpleFIN window")
+        expect(page.get_by_role("button", name="Cancel")).to_be_visible()
+        assert stub.calls == []
+        page.get_by_role("button", name="Cancel").click()
+        expect(page.get_by_text("Cancelled.", exact=False).first).to_be_visible()
+    finally:
+        context.close()
+
+
 @pytest.mark.parametrize("viewport", VIEWPORTS)
 def test_done_detects_success_closes_the_pop_up_and_reports_the_bank_up_to_date(flow_page, viewport):
     context, page, stub, now = flow_page(viewport)

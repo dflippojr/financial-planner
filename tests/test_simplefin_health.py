@@ -159,6 +159,22 @@ def test_errors_attach_to_their_bank_and_unnamed_ones_stay_general():
     assert {bank_state(bank, now) for bank in banks} == {ERROR}
 
 
+def test_an_account_id_two_banks_share_never_lands_on_the_wrong_bank():
+    now = timezone.now()
+    payload = feed(north_at=now, errlist_extra=[
+        {"code": "act.failed", "msg": "Synthetic shared id failed.", "account_id": "checking"},
+        {"code": "act.failed", "msg": "Synthetic qualified id failed.", "account_id": "CON-C:checking"},
+    ])
+    payload["accounts"][0]["id"] = "checking"  # North
+    payload["accounts"][2]["id"] = "checking"  # Credit Union
+    banks, general = parse_health(payload)
+    by_id = {bank["conn_id"]: bank for bank in banks}
+
+    assert by_id["CON-N"]["errors"] == []
+    assert by_id["CON-C"]["errors"] == ["Synthetic qualified id failed."]
+    assert general == ["Synthetic shared id failed."]
+
+
 def test_provider_error_text_is_sanitized_before_it_is_stored():
     payload = feed(north_at=timezone.now(), north_errors=[
         "<script>alert(1)</script>Sign in at https://demo:secret@bridge.example.test/x again",
@@ -276,12 +292,10 @@ def post_json(client, name, body=None):
     return client.post(reverse(name), json.dumps(body or {}), content_type="application/json").json()
 
 
-def rewind_flow(client, seconds):
-    session = client.session
-    flow = session[simplefin_flow.SESSION_KEY]
+def rewind_flow(connection, seconds):
+    flow = fresh(connection).flow
     flow["last_request"] -= seconds
-    session[simplefin_flow.SESSION_KEY] = flow
-    session.save()
+    SimpleFinConnection.objects.filter(pk=connection.pk).update(flow=flow)
 
 
 @pytest.mark.django_db
@@ -301,7 +315,7 @@ def test_fix_succeeds_when_the_error_clears_and_needs_no_second_request(monkeypa
 
     assert result == {"state": "success", "message": "Synthetic North Bank is up to date."}
     assert len(stub.calls) == 1  # The check was the sync.
-    assert simplefin_flow.SESSION_KEY not in client.session
+    assert fresh(connection).flow == {}
     assert b"Synthetic North Bank is up to date." in client.get(reverse("simplefin-connections")).content
 
 
@@ -315,7 +329,7 @@ def test_fix_of_a_stale_bank_succeeds_on_a_newer_balance_date(monkeypatch):
 
     # Same balance date: not fixed yet.
     assert post_json(client, "simplefin-flow-check")["state"] == "pending"
-    rewind_flow(client, simplefin_flow.FLOW_MIN_SPACING)
+    rewind_flow(connection, simplefin_flow.FLOW_MIN_SPACING)
     stub.payload = feed(north_at=now - timedelta(minutes=5))
     assert post_json(client, "simplefin-flow-check")["state"] == "success"
 
@@ -337,13 +351,48 @@ def test_checks_are_spaced_and_capped_then_say_simplefin_has_not_refreshed(monke
 
     states = []
     for _ in range(simplefin_flow.FLOW_MAX_REQUESTS - 1):
-        rewind_flow(client, simplefin_flow.FLOW_MIN_SPACING)
+        rewind_flow(connection, simplefin_flow.FLOW_MIN_SPACING)
         states.append(post_json(client, "simplefin-flow-check"))
 
     assert [state["state"] for state in states] == ["pending", "pending", "exhausted"]
     assert states[-1]["message"] == simplefin_flow.NOT_REFRESHED
     assert len(stub.calls) == simplefin_flow.FLOW_MAX_REQUESTS
     assert post_json(client, "simplefin-flow-check")["state"] == "gone"
+
+
+@pytest.mark.django_db
+def test_a_check_whose_import_fails_is_not_a_success(monkeypatch):
+    from finance.simplefin_errors import SimpleFinError
+
+    now = timezone.now()
+    owner, connection, stub = connected(monkeypatch, feed(north_at=now, north_errors=["Synthetic sign in again"]))
+    sync_connection(owner, connection.pk)
+    client = signed_in(owner)
+    post_json(client, "simplefin-flow-start", {"kind": "fix", "conn_id": "CON-N"})
+
+    def import_fails(*args, **kwargs):
+        raise SimpleFinError("Synthetic import failure.")
+
+    stub.payload = feed(north_at=now)
+    monkeypatch.setattr("finance.simplefin_services._import_links", import_fails)
+    result = post_json(client, "simplefin-flow-check")
+
+    assert result["state"] == "pending"
+    # The read itself was stored, but the flow waits for a sync that completes.
+    assert bank_rows(fresh(connection))[1]["errors"] == []
+
+
+@pytest.mark.django_db
+def test_the_flow_lives_on_the_connection_so_a_second_tab_shares_its_limits(monkeypatch):
+    owner, connection, stub = connected(monkeypatch, feed(north_at=timezone.now() - timedelta(hours=40)))
+    sync_connection(owner, connection.pk)
+    first, second = signed_in(owner), signed_in(owner)
+    post_json(first, "simplefin-flow-start", {"kind": "fix", "conn_id": "CON-N"})
+    stub.calls.clear()
+
+    assert post_json(first, "simplefin-flow-check")["state"] == "pending"
+    assert post_json(second, "simplefin-flow-check")["state"] == "wait"
+    assert len(stub.calls) == 1
 
 
 @pytest.mark.django_db
@@ -390,7 +439,7 @@ def test_add_a_bank_succeeds_when_a_new_bank_appears_ready_to_link(monkeypatch):
     post_json(client, "simplefin-flow-start", {"kind": "add"})
 
     assert post_json(client, "simplefin-flow-check")["state"] == "pending"
-    rewind_flow(client, simplefin_flow.FLOW_MIN_SPACING)
+    rewind_flow(connection, simplefin_flow.FLOW_MIN_SPACING)
     stub.payload = feed(north_at=now, add_bank=True)
     result = post_json(client, "simplefin-flow-check")
 

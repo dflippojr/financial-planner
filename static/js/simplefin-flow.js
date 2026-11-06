@@ -122,7 +122,7 @@
         settle(data.message);
       } else if (data.state === "pending") {
         text.textContent = WAITING + " " + data.checks_left + " more check" + (data.checks_left === 1 ? "" : "s") + " left.";
-        schedule(current, data.next_check_in);
+        if (!current.manual) schedule(current, data.next_check_in);
       } else if (data.state === "wait") {
         text.textContent = WAITING;
         schedule(current, data.retry_in);
@@ -159,9 +159,15 @@
     try { closed = current.win.closed; } catch (error) { closed = false; }
     if (!closed) return;
     if (Date.now() - current.openedAt < EARLY_CLOSE_MS) {
-      // Keep Done and Cancel; the member says when they are finished.
+      // Chromium reads a live pop-up as closed when its page sends a
+      // Cross-Origin-Opener-Policy; a member rarely closes it this fast. The
+      // page can no longer tell, so it stops checking on its own and waits
+      // for Done or Cancel.
       clearInterval(current.watch);
+      clearTimeout(current.timer);
       current.win = null;
+      current.manual = true;
+      text.textContent = "This page can't see the SimpleFIN window. Press Done when you've finished there, or Cancel.";
       return;
     }
     cancelFlow();
@@ -184,7 +190,7 @@
         finish(data.message || "That could not be started.", false);
         return;
       }
-      schedule(current, data.first_check_in);
+      if (!current.manual) schedule(current, data.first_check_in);
     }, function () {
       if (flow !== current) return;
       closePopup();
