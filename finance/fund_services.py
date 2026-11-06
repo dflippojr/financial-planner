@@ -57,14 +57,16 @@ def account_position(account, *, today):
 
     `funds` lists every matching fund, archived and completed ones too, since
     they hold money until it is released. A shortfall is the amount assigned
-    beyond the balance (a missing balance counts as zero).
+    beyond the balance (a missing balance counts as zero), at most what the
+    funds hold.
     """
     balance, as_of = latest_signed_balance(account, as_of=today)
     funds = list(matching_funds(account).select_related("funds_planned_item"))
     assigned = assigned_by_goal([goal.pk for goal in funds])
     total = sum(assigned.values())
     unassigned = (balance or 0) - total
-    shortfall = max(total - (balance or 0), 0)
+    # Capped at what the funds hold: an overdrawn account with empty funds has nothing to reduce.
+    shortfall = min(max(total - (balance or 0), 0), max(total, 0))
     rows = [
         SimpleNamespace(
             goal=goal,
