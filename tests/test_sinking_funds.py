@@ -61,6 +61,7 @@ from finance.savings_goal_services import (
     SOURCE_SNAPSHOT,
     goal_progress,
     save_savings_goal,
+    set_savings_goal_archived,
 )
 
 PASSWORD = "Synthetic-passphrase-42!"
@@ -1318,3 +1319,88 @@ def test_a_zero_dollar_draw_down_can_be_undone():
     assert "Undo" in page
     undo_draw_down(owner, zero)
     assert fund_due_date(fund, date(2026, 11, 9)) == date(2026, 11, 10)
+
+
+# -- fifth review round --
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("closing", ["completed", "archived"])
+def test_a_fund_closed_after_paying_early_still_keeps_that_payment_out_of_the_projection(closing):
+    owner = make_person("owner")
+    savings = make_account(owner)
+    checking = make_account(owner, name="Synthetic Checking", account_type=Account.Type.CHECKING)
+    add_balance(savings, 200_000)
+    fund = make_fund(owner, savings, target=120_000)
+    item = make_item(owner, amount=120_000, start=date(2026, 12, 1), cadence=PlannedItem.Cadence.ONE_TIME)
+    link_item(fund, item, linked_on=date(2026, 11, 1))
+    assign_to_fund(owner, fund, 120_000, today=TODAY)
+    # December 1's payment posts November 29 and draws the fund down; then the member closes the fund.
+    make_transaction(owner, checking, on=date(2026, 11, 29), amount_minor=-120_000,
+                     description="SYNTHETIC CAR INSURANCE")
+    assert len(apply_fund_draw_downs(today=date(2026, 11, 29))) == 1
+    if closing == "completed":
+        fund.completed_at = timezone.now()
+        fund.save()
+    else:
+        set_savings_goal_archived(owner, fund, True)
+    report = cash_flow_with_projection(
+        owner, date_from=date(2026, 6, 1), date_to=date(2026, 11, 30), grouping="month",
+        today=date(2026, 11, 29), horizon=3,
+    )
+    december = report.projected_periods[0]
+    [planned] = [c for c in december.contributions if c.source == "planned" and c.source_id == item.pk]
+    assert (planned.amount_minor, planned.already_paid_minor) == (0, 120_000)
+    assert not [c for c in december.contributions if c.source == SOURCE_SET_ASIDE]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("cadence", [PlannedItem.Cadence.ANNUAL, PlannedItem.Cadence.ONE_TIME])
+def test_a_late_unpaid_occurrence_stays_due_while_its_payment_can_still_post(cadence):
+    owner, _savings, _checking, fund, item = _drawn_fund()
+    item.cadence = cadence
+    item.save()
+    fund.refresh_from_db()
+    # Due December 10 and not paid yet. Two days late it can still post (5-day tolerance).
+    assert fund_due_date(fund, date(2026, 12, 12)) == date(2026, 12, 10)
+    row = next(row for row in monthly_set_asides(owner, today=date(2026, 12, 12)).rows if row.goal.pk == fund.pk)
+    assert row.due_date == date(2026, 12, 10)
+    assert row.suggested_minor == 20_000  # the rest of the target, now
+    # The goal page agrees: not past due, the same amount needed this month.
+    progress = goal_progress(owner, fund, today=date(2026, 12, 12))
+    assert (progress.past_due, progress.monthly_needed_minor) == (False, 20_000)
+    # Once the window closes the occurrence can no longer draw this fund.
+    after = fund_due_date(fund, date(2026, 12, 16))
+    assert after == (date(2027, 12, 10) if cadence == PlannedItem.Cadence.ANNUAL else None)
+
+
+@pytest.mark.django_db
+def test_projection_expects_a_late_payment_that_can_still_post():
+    owner = make_person("owner")
+    account = make_account(owner)
+    add_balance(account, 500_000, on=date(2026, 11, 1))
+    fund = make_fund(owner, account, target=120_000)
+    item = make_item(owner, amount=120_000, start=date(2026, 11, 28))
+    link_item(fund, item, linked_on=date(2026, 11, 1))
+    assign_to_fund(owner, fund, 120_000, today=date(2026, 11, 2))
+    # December 1: November 28's payment has not posted yet but still can, and will empty the fund.
+    report = cash_flow_with_projection(
+        owner, date_from=date(2026, 6, 1), date_to=date(2026, 12, 31), grouping="month",
+        today=date(2026, 12, 1), horizon=3,
+    )
+    january = next(m for m in report.projected_periods if m.start == date(2027, 1, 1))
+    set_asides = [c.amount_minor for c in january.contributions if c.source == SOURCE_SET_ASIDE]
+    assert set_asides == [suggested_set_aside(120_000, 0, date(2027, 11, 28), on=date(2027, 1, 1))]
+
+
+@pytest.mark.django_db
+def test_an_archived_fund_still_raises_the_shortfall_alert():
+    owner = make_person("owner")
+    account = make_account(owner)
+    add_balance(account, 100_000, on=TODAY - timedelta(days=3))
+    fund = make_fund(owner, account)
+    assign_to_fund(owner, fund, 100_000, today=TODAY)
+    set_savings_goal_archived(owner, fund, True)
+    add_balance(account, 50_000, source=BalanceSnapshot.Source.SIMPLEFIN)
+    alerts = evaluate_fund_alerts(today=TODAY)
+    assert [alert.dedupe_key for alert in alerts] == [f"fund-shortfall:{account.pk}:{TODAY.isoformat()}"]

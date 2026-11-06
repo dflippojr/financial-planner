@@ -95,20 +95,26 @@ def goal_progress(principal, goal, *, today, household_only=False):
     reached = current_minor >= target_minor
     due_date = goal.target_date
     funded_item = None
+    ask_by = due_date
     if goal.share_of_account:
         from .funds import fund_due_date, linked_item
 
         # A fund for a planned item is due at the item's next occurrence.
         due_date = fund_due_date(goal, today)
         funded_item = linked_item(goal)
+        ask_by = due_date
+        if funded_item is not None and due_date is not None and due_date < today:
+            # A late occurrence that can still post: not past due, the rest is needed now
+            # (as the monthly suggestion asks).
+            ask_by = today
     dated = due_date is not None
-    past_due = (not reached) and dated and due_date < today
+    past_due = (not reached) and dated and ask_by < today
     remaining_minor = max(target_minor - current_minor, 0)
     # Exact integer math: an unreached goal never rounds up to 100%.
     percent = 100 if reached else max(0, min(99, current_minor * 100 // target_minor))
     monthly_needed_minor = None
     if not reached and not past_due and dated:
-        months = months_left(today, due_date)
+        months = months_left(today, ask_by)
         monthly_needed_minor = -(-remaining_minor // months)
     return SimpleNamespace(
         goal=goal,

@@ -148,21 +148,39 @@ def next_occurrence(item, on_or_after, *, skip=()):
     return next((hit for hit in hits if hit not in skip), None)
 
 
-def fund_due_date(goal, today, *, drawn=None):
+def fund_due_date(goal, today, *, drawn=None, overdue=True):
     """When a share goal's money is needed: the linked item's next unpaid occurrence, else its target date.
 
     An occurrence the fund already paid (a counted draw-down, even one that
     posted a few days early) no longer counts, so the date rolls forward after
-    each payment. An item with no unpaid occurrence left gives no date: its
-    stored target date is the paid occurrence's. `drawn` is those dates when the
-    caller already has them.
+    each payment. An unpaid occurrence that is overdue stays due while its
+    payment can still post and draw the fund down (the cadence tolerance after
+    it), so the date never rolls past a payment that is merely late; once that
+    window closes the occurrence can no longer draw this fund. `overdue=False`
+    looks only from `today` on, for a projected month whose earlier occurrences
+    the projection already paid. An item with no unpaid occurrence left gives no
+    date: its stored target date is the paid occurrence's. `drawn` is those
+    dates when the caller already has them.
     """
     item = linked_item(goal)
     if item is not None:
         if drawn is None:
             drawn = drawn_occurrences(goal, item)
-        return next_occurrence(item, today, skip=drawn)
+        return next_occurrence(item, _unpaid_window_start(goal, item, today) if overdue else today, skip=drawn)
     return goal.target_date
+
+
+def _unpaid_window_start(goal, item, today):
+    """The earliest occurrence that may still draw this fund down: within the posting tolerance before today.
+
+    Never earlier than the tolerance before the link, since an older occurrence
+    cannot draw a fund linked after it.
+    """
+    tolerance = timedelta(days=occurrence_tolerance_days(item.cadence))
+    start = today - tolerance
+    if goal.planned_item_linked_on is not None:
+        start = max(start, goal.planned_item_linked_on - tolerance)
+    return start
 
 
 def open_funds(principal, *, scope=""):

@@ -28,6 +28,7 @@ from .funds import (
     fund_due_date,
     fund_matches_account,
     latest_signed_balance,
+    linked_item,
     matching_funds,
     open_funds,
 )
@@ -289,6 +290,9 @@ def monthly_set_asides(principal, *, today):
         if goal.linked_account_id not in positions:
             positions[goal.linked_account_id] = account_position(goal.linked_account, today=today)
         due = fund_due_date(goal, today)
+        # A linked item's occurrence that is overdue but can still post needs
+        # the rest of its money now.
+        ask_by = today if due is not None and due < today and linked_item(goal) is not None else due
         rows.append(
             SimpleNamespace(
                 goal=goal,
@@ -297,7 +301,7 @@ def monthly_set_asides(principal, *, today):
                 assigned_display=format_minor(assigned[goal.pk], goal.currency),
                 target_display=format_minor(goal.target_amount_minor, goal.currency),
                 due_date=due,
-                suggested_minor=suggested_set_aside(goal.target_amount_minor, assigned[goal.pk], due, on=today),
+                suggested_minor=suggested_set_aside(goal.target_amount_minor, assigned[goal.pk], ask_by, on=today),
                 confirmed=confirmed.get(goal.pk),
             )
         )
@@ -445,10 +449,13 @@ def evaluate_fund_alerts(*, today=None):
     today = today or timezone.localdate()
     created = []
     month = month_start(today)
-    fund_owners = SavingsGoal.objects.filter(share_of_account=True, status=SavingsGoal.Status.ACTIVE)
-    if not fund_owners.exists():
+    if not SavingsGoal.objects.filter(share_of_account=True).exists():
         return created
-    for person in Person.objects.filter(user__is_active=True).order_by("pk"):
+    # Only active funds get suggestions; archived and completed ones still hold
+    # money, so the shortfall check below covers them too.
+    has_active_funds = SavingsGoal.objects.filter(share_of_account=True, status=SavingsGoal.Status.ACTIVE).exists()
+    people = Person.objects.filter(user__is_active=True).order_by("pk") if has_active_funds else Person.objects.none()
+    for person in people:
         plan = monthly_set_asides(person, today=today)
         if not plan.pending:
             continue
