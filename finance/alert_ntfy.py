@@ -5,6 +5,7 @@ price (issue #420). It never carries account names, numbers or balances. Logs
 record only success or failure: never the token, the topic or the message.
 """
 
+import base64
 import logging
 import re
 import urllib.request
@@ -31,13 +32,24 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def header_text(value):
+    """A header value urllib can send: non-ASCII text (a bank or series name) as one RFC 2047 word.
+
+    urllib writes headers as Latin-1, so a title such as "Bank – Joint" would
+    otherwise fail to send. ntfy decodes RFC 2047 encoded header values.
+    """
+    if value.isascii():
+        return value
+    return "=?UTF-8?B?" + base64.b64encode(value.encode("utf-8")).decode("ascii") + "?="
+
+
 class HttpTransport:
     """POST one message to NTFY_URL/<topic>; a single attempt, no retries."""
 
     opener = urllib.request.build_opener(_NoRedirect)
 
     def send(self, topic, title, body, click_url, tags=""):
-        headers = {"Title": title, "Content-Type": "text/plain; charset=utf-8"}
+        headers = {"Title": header_text(title), "Content-Type": "text/plain; charset=utf-8"}
         if tags:
             headers["Tags"] = tags
         if click_url:
@@ -99,6 +111,16 @@ def _send(topic, title, body, click_url, tags):
 
 def _link_line(label, url):
     return f"\n\n{label}: {url}" if url else ""
+
+
+def send_connection_notice(prefs, title, body, tags):
+    """One SimpleFIN bank-health push (#694). Names the bank only: never accounts, numbers or balances."""
+    if not ntfy_notices_available() or not prefs.ntfy_enabled or not valid_topic(prefs.ntfy_topic):
+        return False
+    link = _absolute(reverse("simplefin-connections"))
+    sent = _send(prefs.ntfy_topic, title, body + _link_line("Open Connections", link), link, tags)
+    outcome(prefs.person, "ntfy_delivery", phase="succeeded" if sent else "failed")
+    return sent
 
 
 @member_operation
