@@ -78,7 +78,8 @@ jobs:
       # their coverage into this shard's data file. Browser tests run in
       # playwright.yml (no Chromium here). A shard alone covers less than
       # the floor, so --cov-fail-under=0 here and the scan job applies the
-      # .coveragerc fail_under to the combined data.
+      # .coveragerc fail_under to the combined data. If a shard nears its
+      # limit, find the slow tests in the --durations list.
       - name: Run tests with coverage
         timeout-minutes: 20
         env:
@@ -87,7 +88,7 @@ jobs:
           python -m pytest tests -q -n 4 --dist worksteal -m "not browser"
           --coverage-shard ${{ matrix.shard }}/3
           --cov=. --cov-report= --cov-fail-under=0
-          --junitxml=junit-shard-${{ matrix.shard }}.xml
+          --junitxml=junit-shard-${{ matrix.shard }}.xml --durations=15
 
       - name: Upload coverage data
         uses: actions/upload-artifact@v7
