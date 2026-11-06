@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('finance', '0083_ai_proposal_item_cards'),
+        ('finance', '0084_ai_conversation_used_goals_and_rules'),
     ]
 
     operations = [
