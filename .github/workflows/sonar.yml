@@ -19,9 +19,20 @@ name: SonarCloud
 # database service. That only exercises migrations against SQLite; the
 # PostgreSQL 18 run (suite and migrations) lives in postgres.yml.
 #
-# Coverage is produced here (pytest-cov Cobertura XML) before the scanner
-# runs. sonar.qualitygate.wait then fails the check when the SonarCloud
-# quality gate fails, including coverage on new code (Sonar way: 80%).
+# Coverage is produced here before the scanner runs. sonar.qualitygate.wait
+# then fails the check when the SonarCloud quality gate fails, including
+# coverage on new code (Sonar way: 80%).
+#
+# The coverage run is split into three shards (issue #691). As one job it took
+# 9 to 18 minutes against its 20-minute step limit, depending on the runner:
+# about 5,000 tests, none dominant, so only fewer tests per runner shortens
+# it. Each shard runs every third test (pytest --coverage-shard K/N, see
+# tests/conftest.py) and uploads its coverage data and JUnit report. The scan
+# job proves from those reports that the shards together ran every
+# non-browser test exactly once (scripts/check_coverage_shards.py), combines
+# the data, applies the .coveragerc fail_under floor to the combined total and
+# writes the coverage.xml the scanner reads. Combined, the shards measure the
+# same lines and branches the single run did.
 on:
   workflow_call:
   workflow_dispatch:
@@ -35,10 +46,64 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  sonar:
+  coverage:
+    name: coverage (${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
     # Secrets are not passed to pull requests from forks; skip rather than fail.
     # Every other event runs, including manual runs of ci.yml or this file.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    strategy:
+      # Every shard reports, so one failure does not hide another's.
+      fail-fast: false
+      matrix:
+        # To change the count, change the 3 in the job name, in
+        # --coverage-shard and in scripts/ci-local.sh
+        # (tests/test_check_coverage_shards.py keeps them in step).
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements*.lock
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --require-hashes --only-binary :all: -r requirements-test.lock
+
+      # 4 xdist workers, matching the runner's 4 vCPUs; pytest-cov merges
+      # their coverage into this shard's data file. Browser tests run in
+      # playwright.yml (no Chromium here). A shard alone covers less than
+      # the floor, so --cov-fail-under=0 here and the scan job applies the
+      # .coveragerc fail_under to the combined data.
+      - name: Run tests with coverage
+        timeout-minutes: 20
+        env:
+          COVERAGE_FILE: .coverage.shard-${{ matrix.shard }}
+        run: >
+          python -m pytest tests -q -n 4 --dist worksteal -m "not browser"
+          --coverage-shard ${{ matrix.shard }}/3
+          --cov=. --cov-report= --cov-fail-under=0
+          --junitxml=junit-shard-${{ matrix.shard }}.xml
+
+      - name: Upload coverage data
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-shard-${{ matrix.shard }}
+          path: |
+            .coverage.shard-${{ matrix.shard }}
+            junit-shard-${{ matrix.shard }}.xml
+          # .coverage.* files are hidden, which upload-artifact skips by default.
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 3
+
+  sonar:
+    runs-on: ubuntu-latest
+    needs: coverage
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@v7
@@ -52,21 +117,28 @@ jobs:
           cache: pip
           cache-dependency-path: requirements*.lock
 
+      # The full set: the shard check collects the tests, which imports Django.
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install --require-hashes --only-binary :all: -r requirements-test.lock
 
-      # 4 xdist workers, as in postgres.yml; pytest-cov merges their coverage.
-      # Serially this step took 12 to 19 minutes depending on the runner.
-      # Browser tests run in playwright.yml (no Chromium here).
-      # Fails below the fail_under floor in .coveragerc.
-      - name: Run tests with coverage
-        timeout-minutes: 20
-        run: >
-          python -m pytest tests -q -n 4 --dist worksteal -m "not browser"
-          --cov=.
-          --cov-report=xml:coverage.xml --cov-report=term
+      - name: Download coverage data
+        uses: actions/download-artifact@v8
+        with:
+          pattern: coverage-shard-*
+          path: coverage-shards
+          merge-multiple: true
+
+      - name: Check the shards ran every non-browser test exactly once
+        run: python scripts/check_coverage_shards.py coverage-shards/junit-shard-*.xml
+
+      # coverage report fails below the fail_under floor in .coveragerc.
+      - name: Combine coverage and apply the floor
+        run: |
+          python -m coverage combine coverage-shards
+          python -m coverage report
+          python -m coverage xml -o coverage.xml
 
       - name: Scan with SonarCloud
         uses: SonarSource/sonarqube-scan-action@d209202bc7d53ff1cc128f7f907dac145c9d6ae9 # v8

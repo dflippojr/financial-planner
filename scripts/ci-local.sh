@@ -5,8 +5,9 @@
 #   2. The hashed locks match their inputs, ruff and pyright (lint.yml,
 #      scripts/lock.sh, scripts/lint.sh).
 #   3. The migration-number collision check (guards.yml), the migration
-#      completeness check and the check that the split PostgreSQL jobs run
-#      the old single job's tests (postgres.yml).
+#      completeness check, the check that the split PostgreSQL jobs run
+#      the old single job's tests (postgres.yml) and the check that the
+#      coverage shards split the suite exactly (sonar.yml, by collection).
 #   4. The suite on a throwaway PostgreSQL 18 with coverage, failing below the
 #      .coveragerc floor (postgres.yml plus the coverage run in sonar.yml). It
 #      includes the populated migration test postgres.yml runs as its own step.
@@ -41,6 +42,9 @@ DJANGO_SETTINGS_MODULE=financial_planner.test_settings \
 
 echo "== The split PostgreSQL jobs run the old test set"
 FINANCIAL_PLANNER_TEST_DB=postgres "$python_bin" scripts/check_postgres_split.py
+
+echo "== The coverage shards in sonar.yml split the suite exactly"
+"$python_bin" scripts/check_coverage_shards.py --collect 3
 
 echo "== Suite on PostgreSQL 18 with the coverage floor"
 bash scripts/test_postgres.sh -n 4 --dist worksteal -m "not browser" --cov=. --cov-report=term
