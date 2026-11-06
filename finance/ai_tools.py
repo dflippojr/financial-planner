@@ -47,6 +47,8 @@ INSTRUCTION_CONTEXT = (
 
 
 def default_tools():
+    from .ai_lookup_tools import lookup_tools  # it builds on this module's helpers
+
     return (
         ToolSpec(
             name="list_accounts",
@@ -168,7 +170,7 @@ def default_tools():
             },
             handler=projected_cash_flow_tool,
         ),
-    )
+    ) + lookup_tools()
 
 
 def run_tool(person, tools, name, args):

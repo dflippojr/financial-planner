@@ -212,6 +212,7 @@ def save_savings_goal(principal, payload, *, goal=None):
             raise PermissionDenied(_DENIED)
         _check_dependents_keep_scope(goal, scope)
         before = snapshot(goal, GOAL_AUDIT_FIELDS)
+    was_household = goal.pk is not None and goal.scope == SavingsGoal.Scope.HOUSEHOLD
     dependency = payload["depends_on"] if "depends_on" in payload else goal.depends_on
     validate_dependency(person, goal, dependency, scope=scope, household=assigned_household)
     _apply_payload(person, goal, payload)
@@ -230,6 +231,10 @@ def save_savings_goal(principal, payload, *, goal=None):
             if changed:
                 record(person, AuditEvent.Action.RECORD_EDITED, AuditEvent.TargetType.GOAL, goal.pk,
                        audience=owned_audience(goal), fields=changed)
+        if was_household and goal.scope != SavingsGoal.Scope.HOUSEHOLD:
+            from .chat_services import delete_conversations_without_access
+
+            delete_conversations_without_access(goal_ids=(goal.pk,))
     return goal
 
 

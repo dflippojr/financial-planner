@@ -424,19 +424,22 @@ def end_current_membership(person, *, audit_actor=None):
         if account.scope == Account.Scope.HOUSEHOLD and account.household_id == own_membership.household_id
     ]
     _lock_ledgers(account.pk for account in household_accounts)
-    from .models import Budget, PlannedItem
+    from .models import Budget, CategoryRule, PlannedItem, SavingsGoal
 
-    # A reply store locks the planned items and budgets its conversation quoted,
-    # after its accounts, so it waits for this leave instead of reading the
-    # ending membership as current.
+    # A reply store locks the planned items, budgets, goals and rules its
+    # conversation quoted, after its accounts and in that order, so it waits for
+    # this leave instead of reading the ending membership as current.
     household_rows = {
         model: list(
             model.objects.select_for_update()
-            .filter(household=own_membership.household)
+            .filter(**{field: own_membership.household})
             .order_by("pk")
             .values_list("pk", flat=True)
         )
-        for model in (PlannedItem, Budget)
+        for model, field in (
+            (PlannedItem, "household"), (Budget, "household"), (SavingsGoal, "household"),
+            (CategoryRule, "owner_household"),
+        )
     }
     transitioned_at = timezone.now()
     transitions = _apply_shared_account_exit(
@@ -470,6 +473,8 @@ def end_current_membership(person, *, audit_actor=None):
         (account.pk for account in household_accounts),
         planned_item_ids=household_rows[PlannedItem],
         budget_ids=household_rows[Budget],
+        goal_ids=household_rows[SavingsGoal],
+        rule_ids=household_rows[CategoryRule],
     )
     if audit_actor is not None:
         append_event(action=AuditEvent.Action.MEMBER_LEFT, actor=audit_actor, affected_member=person,
@@ -654,6 +659,11 @@ def _delete_rule_history_for_account(account, tx_ids):
     unused = account_rule_ids - still_used
     RuleApplication.objects.filter(rule_id__in=unused).delete()
     CategoryRule.objects.filter(pk__in=unused).delete()
+    if unused:
+        from finance.chat_services import delete_conversations_without_access
+
+        # A deleted rule is no longer visible to anyone who quoted it in chat.
+        delete_conversations_without_access(rule_ids=unused)
 
 
 @transaction.atomic
