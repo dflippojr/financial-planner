@@ -13,6 +13,7 @@ stops refreshing between reads still turns stale.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import UTC, datetime, timedelta
 
 from django.db import transaction
@@ -98,10 +99,15 @@ def _add_error(bank: dict, message: str) -> None:
         bank["errors"].append(message)
 
 
+def _names(name: str, message: str) -> bool:
+    """Whether the message names the bank as a whole word ("Chase" is not in "Purchase")."""
+    pattern = r"(?<![^\W_])" + re.escape(name) + r"(?![^\W_])"
+    return re.search(pattern, message, re.IGNORECASE) is not None
+
+
 def _named_bank(banks: dict[str, dict], message: str) -> dict | None:
     """A general message that names exactly one bank belongs to that bank."""
-    lowered = message.lower()
-    named = [bank for bank in banks.values() if len(bank["name"]) >= 3 and bank["name"].lower() in lowered]
+    named = [bank for bank in banks.values() if len(bank["name"]) >= 3 and _names(bank["name"], message)]
     return named[0] if len(named) == 1 else None
 
 

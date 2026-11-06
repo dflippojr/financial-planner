@@ -194,6 +194,18 @@ def test_a_raw_account_id_that_looks_like_another_banks_key_stays_with_its_own_b
     assert {bank["conn_id"]: bank for bank in banks}["CON-N"]["errors"] == ["Synthetic keyed id failed."]
 
 
+def test_a_bank_name_inside_another_word_does_not_claim_the_message():
+    payload = feed(north_at=timezone.now(), errors=[
+        "Purchase transactions are temporarily unavailable.", "Synthetic North Bank: sign in again."])
+    payload["connections"][1]["name"] = "Chase"
+    banks, general = parse_health(payload)
+    by_id = {bank["conn_id"]: bank for bank in banks}
+
+    assert by_id["CON-C"]["errors"] == []
+    assert by_id["CON-N"]["errors"] == ["Synthetic North Bank: sign in again."]
+    assert general == ["Purchase transactions are temporarily unavailable."]
+
+
 def test_provider_error_text_is_sanitized_before_it_is_stored():
     payload = feed(north_at=timezone.now(), north_errors=[
         "<script>alert(1)</script>Sign in at https://demo:secret@bridge.example.test/x again",

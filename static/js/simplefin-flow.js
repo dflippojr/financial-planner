@@ -90,6 +90,7 @@
     flow = null;
     panel.hidden = true;
     blocked.hidden = true;
+    done.hidden = false;
     setBusy(false);
     result.textContent = message || "";
     result.hidden = !message;
@@ -102,7 +103,7 @@
   }
 
   function check(current) {
-    if (flow !== current || current.busy || current.cancelling) return;
+    if (flow !== current || current.busy || current.cancelling || current.over) return;
     if (!current.started) {
       current.pendingCheck = true;  // Runs once the server has the flow.
       return;
@@ -123,7 +124,7 @@
         text.textContent = WAITING;
         schedule(current, data.retry_in);
       } else {
-        finish(data.message || "SimpleFIN could not be checked.", true);
+        giveUp(current, data.message || "SimpleFIN could not be checked.");
       }
     }, function () {
       if (flow !== current) return;
@@ -131,9 +132,24 @@
     });
   }
 
+  // The checks are over but the pop-up may still be in use: keep watching it,
+  // and let Cancel (or closing it) close it and reload with the outcome.
+  function giveUp(current, message) {
+    clearTimeout(current.timer);
+    current.over = message;
+    text.textContent = message;
+    done.hidden = true;
+    if (!current.win || isClosed(current.win)) finish(message, true);
+  }
+
   function cancelFlow() {
     var current = flow;
     if (!current || current.cancelling) return;
+    if (current.over) {
+      current.cancelling = true;
+      settle(current.over);
+      return;
+    }
     current.cancelling = true;
     stopTimers();
     closePopup();

@@ -5,6 +5,7 @@ real-window tests open a real pop-up whose Bridge address is answered by a
 local stub page. fetch_accounts is a synthetic feed, so nothing leaves the test.
 """
 
+import json
 from datetime import timedelta
 
 import pytest
@@ -156,6 +157,24 @@ def test_done_detects_success_closes_the_pop_up_and_reports_the_bank_up_to_date(
         # The page reloads with the fresh health: the bank no longer needs a fix.
         expect(page.get_by_role("link", name="Fix Synthetic North Bank")).to_have_count(0, timeout=15_000)
         page.wait_for_load_state("networkidle")
+    finally:
+        context.close()
+
+
+def test_when_checks_run_out_the_pop_up_stays_watched_until_cancel_closes_it(flow_page):
+    context, page, _stub, _now = flow_page("desktop")
+    try:
+        message = "SimpleFIN hasn't refreshed yet; we'll pick it up at the next sync."
+        page.route("**/settings/connections/flow/check/", lambda route: route.fulfill(
+            status=200, content_type="application/json", body=json.dumps({"state": "exhausted", "message": message})))
+        open_fix(page)
+        page.get_by_role("button", name="Done").click()
+
+        expect(page.locator("#simplefin-flow-text")).to_have_text(message)
+        expect(page.get_by_role("button", name="Done")).to_be_hidden()
+        assert popup(page)[0]["closed"] is False
+        page.get_by_role("button", name="Cancel").click()
+        page.wait_for_function(CLOSED_POPUP)
     finally:
         context.close()
 
