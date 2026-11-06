@@ -31,6 +31,9 @@
             {% endif %}
             <span>{{ item.get_kind_display }}</span>
           </span>
+          {% if item.funding_card %}
+          <span class="mt-1 block text-sm"><a class="link" href="{% url 'savings-goal-fund' item.funding_card.goal.pk %}">Funded by {{ item.funding_card.goal.name }}</a>{% if item.funding_card.monthly_needed_display %} · set aside {{ item.funding_card.monthly_needed_display|amount_text|cut:"+" }}/month{% endif %}</span>
+          {% endif %}
           <span class="mt-1 block text-sm opacity-80 md:hidden">
             {{ item.get_cadence_display }} · {{ item.start_date|date:"Y-m-d" }}{% if item.end_date %} to {{ item.end_date|date:"Y-m-d" }}{% endif %} · {% if item.enabled %}Enabled{% else %}Disabled{% endif %}
           </span>

@@ -861,3 +861,88 @@ def test_rows_marked_as_untracked_transfers_leave_every_view_in_every_scope(data
         assert _report_by_month(people["other"], HOUSEHOLD) == _report_by_month(viewer, HOUSEHOLD)
         review = review_for_viewer(viewer, case.review_month, today=TODAY)
         assert _review_totals(review) == _report_by_month(viewer, "")[case.review_month]
+
+
+# 9. Sinking funds (#670): the funds plus the unassigned rest are the account's net-worth balance.
+
+FUND_TYPES = (Account.Type.CHECKING, Account.Type.SAVINGS)
+
+
+@dataclass(frozen=True)
+class FundCase:
+    shared: bool
+    account_type: str
+    snapshots: tuple  # ((day, source), amount_minor)
+    moves: tuple  # (fund index, signed amount): positive assigns, negative releases
+
+
+@st.composite
+def fund_cases(draw):
+    snapshots = draw(st.dictionaries(st.tuples(st.dates(EARLIEST, LATEST), st.sampled_from((MANUAL, SIMPLEFIN))),
+                                     st.integers(-50_000, 500_000), min_size=0, max_size=3))
+    moves = draw(st.lists(st.tuples(st.integers(0, 2), st.integers(-200_000, 200_000).filter(bool)), max_size=8))
+    return FundCase(
+        shared=draw(st.booleans()),
+        account_type=draw(st.sampled_from(FUND_TYPES)),
+        snapshots=tuple(sorted(snapshots.items())),
+        moves=tuple(moves),
+    )
+
+
+@given(fund_cases())
+# An overdrawn account whose funds hold nothing has nothing to reduce, so no shortfall.
+@example(FundCase(False, Account.Type.CHECKING, (((EARLIEST, MANUAL), -1),), ()))
+@example(FundCase(False, Account.Type.SAVINGS, (((LATEST, MANUAL), 100),), ((0, 100), (1, 1), (0, -100), (1, 100))))
+def test_funds_and_unassigned_add_up_to_the_net_worth_balance(case):
+    from django.core.exceptions import ValidationError
+
+    from finance.fund_services import account_position, assign_to_fund, release_from_fund
+
+    with ledger.isolated():
+        owner, member = ledger.make_member("owner"), ledger.make_member("member")
+        household = ledger.make_household(owner, member)
+        account = ledger.make_account(owner, case.account_type, name="Synthetic Fund Account",
+                                      household=household if case.shared else None)
+        for (day, source), amount in case.snapshots:
+            BalanceSnapshot.objects.create(account=account, snapshot_date=day, amount_minor=amount, currency="USD",
+                                           source=source)
+        funds = [
+            SavingsGoal.objects.create(
+                owner=owner, name=f"SYN fund {index}", target_amount_minor=GOAL_TARGET, linked_account=account,
+                share_of_account=True,
+                scope=SavingsGoal.Scope.HOUSEHOLD if case.shared else SavingsGoal.Scope.PRIVATE,
+                household=household if case.shared else None,
+            )
+            for index in range(3)
+        ]
+        expected = {fund.pk: 0 for fund in funds}
+        actor = member if case.shared else owner
+        for index, amount in case.moves:
+            fund = funds[index]
+            before = account_position(account, today=LATEST)
+            try:
+                if amount > 0:
+                    assign_to_fund(actor, fund, amount, today=LATEST)
+                else:
+                    release_from_fund(actor, fund, -amount, today=LATEST)
+            except ValidationError:
+                # Refused only when it would assign beyond the balance or release more than the fund holds.
+                if amount > 0:
+                    assert before.balance_minor is None or amount > before.unassigned_minor
+                else:
+                    assert -amount > expected[fund.pk]
+                continue
+            expected[fund.pk] += amount
+
+        position = account_position(account, today=LATEST)
+        assert {row.goal.pk: row.assigned_minor for row in position.funds} == expected
+        worth = net_worth_report(owner, date_from=LATEST, date_to=LATEST, accounts=[account], today=TODAY)
+        balance = position.balance_minor or 0
+        if position.balance_minor is not None:
+            assert position.balance_minor == worth.summary.net_minor
+        assert position.assigned_minor + position.unassigned_minor == balance
+        # Assignment alone never takes the funds beyond the balance.
+        assert position.shortfall_minor == 0
+        for fund in funds:
+            progress = goal_progress(owner, fund, today=LATEST)
+            assert progress.current_amount_minor == expected[fund.pk] >= 0

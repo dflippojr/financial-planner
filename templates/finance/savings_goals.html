@@ -7,13 +7,37 @@
   <div class="page-header-text">
     <h1 class="text-2xl font-bold">Savings goals</h1>
     <div class="page-header-helper">
-      <p>Progress toward a target, optionally by a date. Never changes the projection. Amounts in USD.</p>
+      <p>Progress toward a target, optionally by a date. Only sinking-fund set-asides change the projection. Amounts in USD.</p>
       <p><a class="link" href="{% url 'savings-goal-plan' %}">Funding plan</a> · <a class="link" href="{% url 'savings-goal-import' %}">Import a wishlist</a></p>
     </div>
   </div>
   <div class="page-header-actions">{% include "finance/_savings_goals_header_actions.html" %}</div>
 </header>
 <div class="page-columns">
+<div class="flex flex-col gap-6">
+{% if fund_positions %}
+<section aria-labelledby="funds-heading" class="flex flex-col gap-4">
+  <h2 id="funds-heading" class="text-lg font-semibold">Sinking funds</h2>
+  {% if set_asides %}
+  <div class="card border border-base-300 bg-base-100">
+    <div class="card-body gap-2 p-4">
+      <h3 class="text-base font-semibold">Set-asides for {{ set_asides.month|date:"F Y" }}</h3>
+      {% if set_asides.pending %}
+      <p>{{ set_asides.pending|length }} fund{{ set_asides.pending|length|pluralize }} {{ set_asides.pending|length|pluralize:"has,have" }} a suggested set-aside to confirm.</p>
+      <p><a class="btn btn-sm btn-primary" href="{% url 'fund-set-asides' %}">Review set-asides</a></p>
+      {% else %}
+      <p>Nothing left to confirm this month. <a class="link" href="{% url 'fund-set-asides' %}">See set-asides</a></p>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+  <div class="grid gap-4 md:grid-cols-2">
+    {% for position in fund_positions %}
+    {% include "finance/_fund_account_panel.html" with position=position heading_level="h3" %}
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
 <section aria-labelledby="goals-list-heading">
   <h2 id="goals-list-heading" class="sr-only">Your savings goals</h2>
   {% if cards %}
@@ -37,6 +61,9 @@
           {% if card.goal.time_sensitive %}
           <span class="badge badge-sm badge-warning">Time-sensitive</span>
           {% endif %}
+          {% if card.share_of_account %}
+          <span class="badge badge-sm badge-outline">Sinking fund</span>
+          {% endif %}
           {% if card.archived %}
           <span class="badge badge-sm badge-ghost">Archived</span>
           {% endif %}
@@ -54,15 +81,17 @@
         </p>
         <progress class="progress {% if card.reached or card.completed %}progress-success{% elif card.past_due %}progress-error{% else %}progress-primary{% endif %} w-full" value="{{ card.percent }}" max="100" aria-label="{{ card.goal.name }}: {{ card.percent }} percent saved"></progress>
         <p class="text-sm opacity-80">
-          {% if card.goal.target_date %}Target date {{ card.goal.target_date|date:"Y-m-d" }}{% else %}No target date{% endif %}
+          {% if card.share_of_account %}{% if card.due_date %}Needed by {{ card.due_date|date:"Y-m-d" }}{% if card.funded_item %} (next {{ card.funded_item.name }}){% endif %}{% else %}No date{% endif %}{% elif card.goal.target_date %}Target date {{ card.goal.target_date|date:"Y-m-d" }}{% else %}No target date{% endif %}
           {% if card.goal.depends_on %}· Buy after {{ card.goal.depends_on.name }}{% endif %}
           · {{ card.percent }}% complete
         </p>
         {% if not card.reached and not card.past_due %}
-        <p class="text-sm tabular-nums opacity-80">{{ card.remaining_display|amount_text|cut:"+" }} remaining{% if card.monthly_needed_display %} · {{ card.monthly_needed_display|amount_text|cut:"+" }}/month needed{% endif %}</p>
+        <p class="text-sm tabular-nums opacity-80">{{ card.remaining_display|amount_text|cut:"+" }} remaining{% if card.monthly_needed_display %} · {{ card.monthly_needed_display|amount_text|cut:"+" }}/month {% if card.share_of_account %}set-aside{% else %}needed{% endif %}{% endif %}</p>
         {% endif %}
         <p class="text-xs opacity-80">
-          {% if card.source == "snapshot" %}
+          {% if card.source == "fund" %}
+          Assigned share{% if card.linked_account %} of {{ card.linked_account.name }}{% endif %} · <a class="link" href="{% url 'savings-goal-fund' card.goal.pk %}">Fund and history</a>
+          {% elif card.source == "snapshot" %}
           From linked account{% if card.linked_account %} {{ card.linked_account.name }}{% endif %} as of {{ card.as_of|date:"Y-m-d" }}
           {% elif card.source == "manual" %}
           Manual amount as of {{ card.as_of|date:"Y-m-d" }}
@@ -78,8 +107,9 @@
   <p class="card border border-base-300 bg-base-100 p-4">No savings goals yet.</p>
   {% endif %}
 </section>
+</div>
 <aside class="page-side" aria-label="Add a savings goal">
-  <section id="add-goal" class="card border border-base-300 bg-base-100" aria-labelledby="add-goal-heading">
+  <section id="add-goal" class="card border border-base-300 bg-base-100" aria-labelledby="add-goal-heading"{% if open_add_form %} data-prefilled="fund"{% endif %}>
     <div class="card-body">
       <h2 id="add-goal-heading" class="card-title text-base">Add savings goal</h2>
       <form method="post">

@@ -50,3 +50,12 @@ def first_message(exc, fallback, *, stringify=False):
     if not messages:
         return fallback
     return str(messages[0]) if stringify else messages[0]
+
+
+def visible_rows(model, principal):
+    """`model.objects.visible_to(principal)` for a model with a scoped manager.
+
+    Those managers come from QuerySet.as_manager(), which pyright cannot type,
+    so new code calls this instead of repeating the same suppression.
+    """
+    return model.objects.visible_to(principal)  # pyright: ignore[reportAttributeAccessIssue] - QuerySet.as_manager() is untyped

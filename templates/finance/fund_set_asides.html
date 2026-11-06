@@ -1,0 +1,56 @@
+{% extends "finance/base.html" %}
+{% load ui %}
+{% block title %}Set-asides · Financial Planner{% endblock %}
+{% block content %}
+{% include "finance/_page_header.html" with title="Monthly set-asides" helper="Suggested for each sinking fund: what it still needs, divided by the months until it is due. Nothing moves until you confirm." %}
+<p class="mb-4"><a class="link" href="{% url 'savings-goals' %}">Savings goals</a> · {{ plan.month|date:"F Y" }}</p>
+{% include "finance/_messages.html" %}
+<section aria-labelledby="pending-heading" class="mb-6 max-w-3xl">
+  <h2 id="pending-heading" class="mb-2 text-lg font-semibold">To confirm this month</h2>
+  {% if form.rows %}
+  <form method="post" class="card border border-base-300 bg-base-100">
+    <div class="card-body gap-3 p-4">
+      {% csrf_token %}
+      {% if form.non_field_errors %}<div role="alert" class="alert alert-error">{{ form.non_field_errors.0 }}</div>{% endif %}
+      {% for item in form.row_fields %}
+      <fieldset class="flex flex-col gap-2 border-b border-base-300 pb-3">
+        <legend class="font-medium break-words">{{ item.row.goal.name }}</legend>
+        <p class="text-sm opacity-80">
+          {{ item.row.account.name }} · holds {{ item.row.assigned_display|amount_text|cut:"+" }} of {{ item.row.target_display|amount_text|cut:"+" }}{% if item.row.due_date %} · needed by {{ item.row.due_date|date:"Y-m-d" }}{% endif %} · suggested {{ item.row.suggested_display|amount_text|cut:"+" }}
+          {% if item.row.limited %}<span class="block">Capped at what is left unassigned in {{ item.row.account.name }}.</span>{% endif %}
+        </p>
+        <label class="flex items-center gap-2">{{ item.pick|daisy_widget }} <span>{{ item.pick.label }}</span></label>
+        {% with field=item.amount %}{% include "finance/_form_field.html" %}{% endwith %}
+      </fieldset>
+      {% endfor %}
+      <div><button type="submit" class="btn btn-primary">Confirm checked set-asides</button></div>
+    </div>
+  </form>
+  {% else %}
+  <p class="card border border-base-300 bg-base-100 p-4">Nothing to set aside this month.</p>
+  {% endif %}
+</section>
+{% if confirmed_rows %}
+<section aria-labelledby="confirmed-heading" class="mb-6 max-w-3xl">
+  <h2 id="confirmed-heading" class="mb-2 text-lg font-semibold">Confirmed this month</h2>
+  <ul class="card border border-base-300 bg-base-100 p-4">
+    {% for row in confirmed_rows %}
+    <li><a class="link" href="{% url 'savings-goal-fund' row.goal.pk %}">{{ row.goal.name }}</a> · {{ row.confirmed.amount_display|amount_text|cut:"+" }}{% if row.confirmed.actor %} by {{ row.confirmed.actor.display_name }}{% endif %}</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+{% if idle_rows %}
+<section aria-labelledby="idle-heading" class="mb-6 max-w-3xl">
+  <h2 id="idle-heading" class="mb-2 text-lg font-semibold">No suggestion</h2>
+  <ul class="card border border-base-300 bg-base-100 p-4">
+    {% for row in idle_rows %}
+    <li><a class="link" href="{% url 'savings-goal-fund' row.goal.pk %}">{{ row.goal.name }}</a> · {% if row.assigned_minor >= row.goal.target_amount_minor %}fully funded{% elif not row.due_date %}no date, so assign by hand{% else %}past its date{% endif %}</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+{% for position in plan.positions %}
+<div class="mb-4 max-w-3xl">{% include "finance/_fund_account_panel.html" with position=position %}</div>
+{% endfor %}
+{% endblock %}
