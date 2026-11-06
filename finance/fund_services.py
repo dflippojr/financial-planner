@@ -2,8 +2,7 @@
 
 Money never moves on its own, except a draw-down when the linked planned
 expense posts (`fund_draw_downs`). Every change is a `FundEntry` row, so a
-fund's history is its rows. Writes that add money lock the account row first,
-Every write locks the goal rows first (in id order), then the account rows (in
+fund's history is its rows. Every write locks the goal rows first (in id order), then the account rows (in
 id order) when money comes back into a fund, so two members confirming at once
 can never assign more than the balance together. Goals before accounts is also
 the order a chat edit takes, so the two never deadlock.
@@ -424,10 +423,7 @@ def fund_history(principal, goal):
                 entry=entry,
                 visible_transaction=entry.transaction if transaction_id in visible else None,
                 counted=is_counted,
-                can_undo=(
-                    entry.kind == FundEntry.Kind.DRAW_DOWN and entry.amount_minor < 0
-                    and entry.undone_at is None and is_counted
-                ),
+                can_undo=entry.kind == FundEntry.Kind.DRAW_DOWN and entry.undone_at is None and is_counted,
             )
         )
     return rows

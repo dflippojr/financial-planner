@@ -50,7 +50,8 @@ def _unpaid_part(item, start, payment, drawn):
 
 
 def fund_schedule(goals, held_now, months, drawn_by_goal=None):
-    """Per month start: [(goal, set-aside minor)] and {planned item id: minor paid from funds}.
+    """Per month start: set-asides [(goal, minor)], `covered` {item id: minor the fund pays} and
+    `already_paid` {item id: minor of occurrences the fund paid early, which are no longer spending}.
 
     `months` are the projected months in order, `held_now` what each fund will
     hold when the projection starts. A fund pays its item what that month's
@@ -62,6 +63,7 @@ def fund_schedule(goals, held_now, months, drawn_by_goal=None):
     for month in months:
         set_asides = []
         covered = {}
+        already_paid = {}
         payments = _planned_payments(month)
         for goal in goals:
             drawn = (drawn_by_goal or {}).get(goal.pk, set())
@@ -74,11 +76,14 @@ def fund_schedule(goals, held_now, months, drawn_by_goal=None):
             if item is None or not payments.get(item.pk):
                 continue
             payment = _unpaid_part(item, month.start, payments[item.pk], drawn)
+            if payment < payments[item.pk]:
+                # Paid early from the fund, before the projection starts: not spending again.
+                already_paid[item.pk] = payments[item.pk] - payment
             paid = min(held[goal.pk], payment)
             if paid > 0:
                 held[goal.pk] -= paid
                 covered[item.pk] = covered.get(item.pk, 0) + paid
-        schedule[month.start] = SimpleNamespace(set_asides=set_asides, covered=covered)
+        schedule[month.start] = SimpleNamespace(set_asides=set_asides, covered=covered, already_paid=already_paid)
     return schedule
 
 
@@ -110,18 +115,23 @@ def _with_overlay(month, entry):
     contributions = []
     spending = month.spending_minor
     for contribution in month.contributions:
-        paid = entry.covered.get(contribution.source_id) if contribution.source == SOURCE_PLANNED else None
-        if paid and contribution.kind == KIND_EXPENSE:
-            paid = min(paid, contribution.amount_minor)
-            remaining = contribution.amount_minor - paid
-            spending -= paid
+        planned = contribution.source == SOURCE_PLANNED and contribution.kind == KIND_EXPENSE
+        paid = entry.covered.get(contribution.source_id, 0) if planned else 0
+        early = entry.already_paid.get(contribution.source_id, 0) if planned else 0
+        if paid or early:
+            early = min(early, contribution.amount_minor)
+            paid = min(paid, contribution.amount_minor - early)
+            remaining = contribution.amount_minor - early - paid
+            spending -= early + paid
             contribution = SimpleNamespace(
                 **{
                     **vars(contribution),
                     "amount_minor": remaining,
                     "amount_display": format_minor(remaining),
                     "paid_from_fund_minor": paid,
-                    "paid_from_fund_display": format_minor(paid),
+                    "paid_from_fund_display": format_minor(paid) if paid else "",
+                    "already_paid_minor": early,
+                    "already_paid_display": format_minor(early) if early else "",
                 }
             )
         contributions.append(contribution)

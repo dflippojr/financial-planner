@@ -182,7 +182,7 @@
                 {% if item.source == "set_aside" %}
                 <li>Set aside: {{ item.name }} · {{ item.amount_display }}</li>
                 {% else %}
-                <li>{{ item.name }} · {{ item.occurrence_count }}× · {{ item.amount_display }}{% if item.paid_from_fund_display %} · paid from fund: {{ item.paid_from_fund_display }}{% endif %}</li>
+                <li>{{ item.name }} · {{ item.occurrence_count }}× · {{ item.amount_display }}{% if item.paid_from_fund_display %} · paid from fund: {{ item.paid_from_fund_display }}{% endif %}{% if item.already_paid_display %} · already paid from fund: {{ item.already_paid_display }}{% endif %}</li>
                 {% endif %}
                 {% endfor %}
               </ul>

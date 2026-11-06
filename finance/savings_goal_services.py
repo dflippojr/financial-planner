@@ -347,21 +347,24 @@ def save_savings_goal(principal, payload, *, goal=None):
     was_household = goal.pk is not None and goal.scope == SavingsGoal.Scope.HOUSEHOLD
     dependency = payload["depends_on"] if "depends_on" in payload else goal.depends_on
     validate_dependency(person, goal, dependency, scope=scope, household=assigned_household)
-    share = bool(payload["share_of_account"]) if "share_of_account" in payload else goal.share_of_account
-    item = payload["funds_planned_item"] if "funds_planned_item" in payload else goal.funds_planned_item
-    account = None
-    if share or goal.share_of_account:
-        account = (
-            _linked_account(person, goal, payload["linked_account"])
-            if "linked_account" in payload
-            else goal.linked_account
-        )
     with transaction.atomic():
-        if share or goal.share_of_account:
-            # Check the fund's money against its saved state under the locks
-            # assignments take, so no assignment can land between this check
-            # and the save that moves or ends the fund.
-            saved = _lock_fund_rows(goal, account) if goal.pk is not None else goal
+        saved = goal
+        if goal.pk is not None:
+            # Decide from the goal as saved, locked the way assignments lock it:
+            # the caller's copy may predate another request that made it a fund
+            # and gave it money.
+            saved = SavingsGoal.objects.select_for_update(of=("self",)).get(pk=goal.pk)
+            _take_fund_fields(goal, saved)
+        share = bool(payload["share_of_account"]) if "share_of_account" in payload else saved.share_of_account
+        item = payload["funds_planned_item"] if "funds_planned_item" in payload else goal.funds_planned_item
+        if share or saved.share_of_account:
+            account = (
+                _linked_account(person, goal, payload["linked_account"])
+                if "linked_account" in payload
+                else goal.linked_account
+            )
+            if goal.pk is not None:
+                _lock_fund_accounts(saved, account)
             validate_fund(
                 saved, share=share, account=account, scope=scope, household=assigned_household,
                 owner_id=goal.owner_id if goal.owner_id is not None else person.pk,  # pyright: ignore[reportAttributeAccessIssue] - runtime FK id attribute
@@ -395,16 +398,23 @@ def save_savings_goal(principal, payload, *, goal=None):
     return goal
 
 
-def _lock_fund_rows(goal, account):
-    """Lock the goal, then its saved and new accounts in id order; return the goal as saved.
+def _take_fund_fields(goal, saved):
+    """Give the caller's copy of a goal the fund fields as saved, so a stale copy never overwrites them."""
+    names = ["share_of_account", "funds_planned_item_id", "planned_item_linked_on"]
+    if saved.share_of_account:
+        names.append("linked_account_id")
+    for name in names:
+        setattr(goal, name, getattr(saved, name))
+
+
+def _lock_fund_accounts(saved, account):
+    """Lock the fund's saved and new accounts in id order, after its goal row.
 
     The same order as an assignment and a chat edit (goal, then account), so none deadlock.
     """
-    saved = SavingsGoal.objects.select_for_update(of=("self",)).get(pk=goal.pk)
     saved_account_id = saved.linked_account_id  # pyright: ignore[reportAttributeAccessIssue] - runtime FK id attribute
     ids = sorted({pk for pk in (saved_account_id, account.pk if account is not None else None) if pk is not None})
     list(Account.objects.select_for_update().filter(pk__in=ids).order_by("pk").values_list("pk", flat=True))
-    return saved
 
 
 def set_savings_goal_completed(principal, goal, completed):

@@ -1094,8 +1094,6 @@ def test_a_payment_that_finds_the_fund_empty_never_takes_money_assigned_later():
     assign_to_fund(owner, fund, 50_000, today=date(2026, 11, 12))
     assert apply_fund_draw_downs(today=date(2026, 11, 13)) == []
     assert assigned_minor(fund) == 50_000
-    page = signed_in(owner).get(reverse("savings-goal-fund", args=[fund.pk])).content.decode()
-    assert "Undo" not in page
 
 
 @pytest.mark.django_db
@@ -1254,3 +1252,69 @@ def test_fund_writes_lock_the_goal_before_the_account():
     payload = {"scope": "private", "name": fund.name, "share_of_account": True, "linked_account": other,
                "target_amount_minor": fund.target_amount_minor}
     assert lock_order(lambda: save_savings_goal(owner, payload, goal=fund))[:2] == ["goal", "account"]
+
+
+# -- fourth review round --
+
+
+@pytest.mark.django_db
+def test_a_stale_goal_edit_cannot_end_a_fund_that_gained_money_meanwhile():
+    owner = make_person("owner")
+    account = make_account(owner)
+    add_balance(account, 100_000)
+    goal = SavingsGoal.objects.create(owner=owner, name="Synthetic Plain", target_amount_minor=50_000)
+    stale = SavingsGoal.objects.get(pk=goal.pk)
+    # Another request makes it a fund and gives it money.
+    save_savings_goal(owner, {"scope": "private", "name": "Synthetic Plain", "share_of_account": True,
+                              "linked_account": account, "target_amount_minor": 50_000}, goal=goal)
+    assign_to_fund(owner, SavingsGoal.objects.get(pk=goal.pk), 40_000, today=TODAY)
+    # The stale edit form still shows an ordinary goal.
+    with pytest.raises(ValidationError, match=re.escape(FUND_OFF_ERROR)):
+        save_savings_goal(owner, {"scope": "private", "name": "Synthetic Plain", "share_of_account": False,
+                                  "target_amount_minor": 50_000}, goal=stale)
+    # An edit that leaves the fund fields out keeps them as saved.
+    stale = SavingsGoal.objects.get(pk=goal.pk)
+    stale.share_of_account = False
+    save_savings_goal(owner, {"scope": "private", "name": "Synthetic Renamed"}, goal=stale)
+    goal.refresh_from_db()
+    assert goal.share_of_account and goal.linked_account_id == account.pk
+    assert assigned_minor(goal) == 40_000
+
+
+def test_an_occurrence_paid_early_is_not_projected_as_spending_again():
+    from types import SimpleNamespace
+
+    from finance.fund_projection import _with_overlay
+
+    item = PlannedItem(pk=7, owner_id=1, scope="private", kind="expense", amount_minor=120_000,
+                       start_date=date(2026, 12, 1), cadence="one_time", enabled=True)
+    goal = SavingsGoal(pk=1, owner_id=1, scope="private", target_amount_minor=120_000, share_of_account=True)
+    goal.funds_planned_item = item
+    payment = SimpleNamespace(source="planned", source_id=7, kind="expense", amount_minor=120_000,
+                              name="Synthetic Item", cadence="one_time", occurrence_count=1, amount_display="")
+    month = SimpleNamespace(start=date(2026, 12, 1), contributions=(payment,), income_minor=0,
+                            spending_minor=120_000)
+    schedule = fund_schedule([goal], {1: 0}, [month], {1: {date(2026, 12, 1)}})
+    shown = _with_overlay(month, schedule[date(2026, 12, 1)])
+    assert shown.spending_minor == 0
+    [planned] = [c for c in shown.contributions if c.source == "planned"]
+    assert (planned.amount_minor, planned.already_paid_minor, planned.paid_from_fund_minor) == (0, 120_000, 0)
+
+
+@pytest.mark.django_db
+def test_a_zero_dollar_draw_down_can_be_undone():
+    owner = make_person("owner")
+    savings = make_account(owner)
+    checking = make_account(owner, name="Synthetic Checking", account_type=Account.Type.CHECKING)
+    add_balance(savings, 200_000)
+    fund = make_fund(owner, savings)
+    item = make_item(owner, amount=120_000, start=date(2026, 11, 10))
+    link_item(fund, item, linked_on=date(2026, 11, 1))
+    make_transaction(owner, checking, on=date(2026, 11, 10), amount_minor=-120_000,
+                     description="SYNTHETIC CAR INSURANCE")
+    [zero] = apply_fund_draw_downs(today=date(2026, 11, 11))
+    assert zero.amount_minor == 0
+    page = signed_in(owner).get(reverse("savings-goal-fund", args=[fund.pk])).content.decode()
+    assert "Undo" in page
+    undo_draw_down(owner, zero)
+    assert fund_due_date(fund, date(2026, 11, 9)) == date(2026, 11, 10)
