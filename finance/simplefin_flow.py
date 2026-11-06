@@ -221,6 +221,10 @@ def cancel_flow(user, connection, flow_id: str) -> dict:
     decision, flow, _wait = _claim(connection.pk, flow_id, closing=True)
     if flow is None:
         return {"state": "cancelled", "message": "Cancelled."}
+    if decision == "wait":
+        # A check synced less than a minute ago: report what it found.
+        connection.refresh_from_db()
+        return {"state": "cancelled", "message": f"Cancelled. {connection.last_sync_result}".strip()}
     if decision != "go":
         return {"state": "cancelled", "message": "Cancelled. The next scheduled sync will pick up any changes."}
     outcome = _sync(user, connection)

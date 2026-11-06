@@ -111,7 +111,8 @@
     current.busy = true;
     setBusy(true);
     text.textContent = "Checking SimpleFIN…";
-    post(checkUrl, {flow_id: current.flowId}).then(function (data) {
+    current.checking = post(checkUrl, {flow_id: current.flowId}).then(function (data) {
+      current.lastCheck = data;
       if (flow !== current || current.cancelling) return;
       current.busy = false;
       setBusy(false);
@@ -158,8 +159,14 @@
     closePopup();
     setBusy(true);
     text.textContent = "Closing SimpleFIN…";
-    // Cancel only after the start request finished, so it finds the flow it ends.
-    current.ready.then(function () { return post(cancelUrl, {flow_id: current.flowId}); }).then(function (data) {
+    // Cancel only after the start request and any check in flight finished: the
+    // cancel finds the flow it ends, and a check's sync is shown, not lost.
+    var settled = function (promise) { return (promise || Promise.resolve()).catch(function () {}); };
+    settled(current.ready).then(function () { return settled(current.checking); }).then(function () {
+      var last = current.lastCheck;
+      if (last && ["success", "exhausted", "budget"].indexOf(last.state) !== -1) return last;
+      return post(cancelUrl, {flow_id: current.flowId});
+    }).then(function (data) {
       if (flow !== current) return;
       settle(data.message || "Cancelled.");
     }, function () {

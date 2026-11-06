@@ -201,7 +201,10 @@ def bank_rows(connection, now=None) -> list[dict]:
     rows = []
     for bank in stored_banks(connection):
         state = bank_state(bank, now)
-        rows.append({**bank, "state": state, "newest": balance_moment(bank), "needs_fix": state != OK})
+        newest = balance_moment(bank)
+        # Shown alongside an error: a bank can be both behind and failing.
+        stale = newest is not None and now - newest > STALE_AFTER
+        rows.append({**bank, "state": state, "stale": stale, "newest": newest, "needs_fix": state != OK})
     return rows
 
 

@@ -236,6 +236,9 @@ def test_a_sync_stores_bank_health_and_the_page_renders_it_without_a_live_reques
     assert "Synthetic North Bank" in html and "Synthetic Credit Union" in html
     assert "Synthetic sign-in needed" in html and "<b>Synthetic</b>" not in html
     assert html.count("data-simplefin-fix=") == 1
+    # North is both 40 hours behind and erroring: both flags show.
+    north = html[html.index('data-bank="CON-N"'):html.index("</li>", html.index('data-bank="CON-N"'))]
+    assert ">Error</span>" in north and ">Stale</span>" in north
     assert 'data-simplefin-fix="CON-N"' in html
     assert "data-simplefin-add" in html
     assert f"SimpleFIN requests in the last 24 hours: 1 of {DAILY_REQUEST_CAP}. The last 2 are kept" in html
@@ -518,7 +521,8 @@ def test_cancel_syncs_once_when_allowed_and_not_right_after_a_check(monkeypatch)
     post_json(client, "simplefin-flow-check")
     stub.calls.clear()
     cancelled = post_json(client, "simplefin-flow-cancel")
-    assert cancelled["message"] == "Cancelled. The next scheduled sync will pick up any changes."
+    # No second sync a moment after the check: it reports what that check found.
+    assert cancelled["message"].startswith("Cancelled. Synced ")
     assert stub.calls == []
 
 

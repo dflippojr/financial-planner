@@ -198,6 +198,25 @@ def test_a_check_that_cannot_reach_the_app_keeps_the_pop_up_and_cancel(flow_page
         context.close()
 
 
+def test_cancel_during_a_check_waits_for_it_and_shows_its_result(flow_page):
+    context, page, stub, now = flow_page("desktop")
+    try:
+        held = []
+        page.route("**/settings/connections/flow/check/", lambda route: held.append(route))
+        open_fix(page)
+        stub.payload = feed(north_at=now - timedelta(minutes=5))
+        with page.expect_request("**/settings/connections/flow/check/"):
+            page.get_by_role("button", name="Done").click()
+        page.get_by_role("button", name="Cancel").click()
+        page.wait_for_function(CLOSED_POPUP)  # Closed at once.
+
+        held[0].continue_()
+        # The check's success is shown rather than lost to the cancel.
+        expect(page.get_by_text("Synthetic North Bank is up to date.").first).to_be_visible()
+    finally:
+        context.close()
+
+
 @pytest.mark.parametrize("viewport", VIEWPORTS)
 def test_a_blocked_pop_up_falls_back_to_a_normal_link(flow_page, viewport):
     context, page, _stub, _now = flow_page(viewport)
