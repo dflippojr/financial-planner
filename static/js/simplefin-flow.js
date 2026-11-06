@@ -1,11 +1,11 @@
 (function () {
   // Fix and Add a bank on SimpleFIN Bridge in a pop-up (#694). This page keeps
-  // the only reference to the pop-up, cuts the pop-up's way back (opener =
-  // null), and never reads anything from it: it only checks whether it is
-  // closed and asks it to close. Success is decided by the server from
-  // SimpleFIN reads. Browsers ignore close() on a cross-origin pop-up whose
-  // opener was cut, so when the window stays open the page asks the member to
-  // close it and reloads once it is gone.
+  // the only reference to the pop-up and never reads anything from it: it
+  // only checks whether it is closed and closes it. Success is decided by the
+  // server from SimpleFIN reads. The pop-up keeps its opener link (owner
+  // decision 4 on #694): browsers ignore close() on a cross-origin pop-up
+  // whose opener was cut. Should a browser still refuse, the page asks the
+  // member to close the window and reloads once it is gone.
   var root = document.getElementById("simplefin-flow");
   if (!root) return;
   var csrf = root.getAttribute("data-csrf") || "";
@@ -20,9 +20,6 @@
   var result = document.getElementById("simplefin-flow-result");
   var FEATURES = "popup,width=520,height=720";
   var WATCH_MS = 1000;
-  // A pop-up that reads as closed this soon was cut off by the browser (for
-  // example by a cross-origin opener policy), not closed by the member.
-  var EARLY_CLOSE_MS = 3000;
   var RELOAD_MS = 1500;
   var CLOSE_SETTLE_MS = 300;
   var WAITING = "Waiting for SimpleFIN…";
@@ -42,12 +39,7 @@
   }
 
   function openPopup(url) {
-    var win = null;
-    try { win = window.open("", "simplefin-bridge", FEATURES); } catch (error) { win = null; }
-    if (!win) return null;
-    try { win.opener = null; } catch (error) { /* An already-open cross-origin pop-up keeps its own. */ }
-    try { win.location.href = url; } catch (error) { return null; }
-    return win;
+    try { return window.open(url, "simplefin-bridge", FEATURES) || null; } catch (error) { return null; }
   }
 
   function isClosed(win) {
@@ -126,7 +118,7 @@
         settle(data.message);
       } else if (data.state === "pending") {
         text.textContent = WAITING + " " + data.checks_left + " more check" + (data.checks_left === 1 ? "" : "s") + " left.";
-        if (!current.manual) schedule(current, data.next_check_in);
+        schedule(current, data.next_check_in);
       } else if (data.state === "wait") {
         text.textContent = WAITING;
         schedule(current, data.retry_in);
@@ -162,26 +154,14 @@
     if (!current || !current.win || current.cancelling) return;
     var closed;
     try { closed = current.win.closed; } catch (error) { closed = false; }
-    if (!closed) return;
-    if (Date.now() - current.openedAt < EARLY_CLOSE_MS) {
-      // Chromium reads a live pop-up as closed when its page sends a
-      // Cross-Origin-Opener-Policy; a member rarely closes it this fast. The
-      // page can no longer tell, so it stops checking on its own and waits
-      // for Done or Cancel.
-      clearInterval(current.watch);
-      clearTimeout(current.timer);
-      current.win = null;
-      current.manual = true;
-      text.textContent = "This page can't see the SimpleFIN window. Press Done when you've finished there, or Cancel.";
-      return;
-    }
-    cancelFlow();
+    // Any close counts as Cancel (owner decision 5 on #694).
+    if (closed) cancelFlow();
   }
 
   function begin(kind, connId, url) {
     if (flow || lingering) return;
     var win = openPopup(url);
-    var current = {kind: kind, win: win, openedAt: Date.now(), timer: null, watch: null, busy: false,
+    var current = {kind: kind, win: win, timer: null, watch: null, busy: false,
                    cancelling: false, started: false, pendingCheck: false, ready: null};
     flow = current;
     result.hidden = true;
@@ -198,7 +178,7 @@
         return;
       }
       if (current.pendingCheck) check(current);
-      else if (!current.manual) schedule(current, data.first_check_in);
+      else schedule(current, data.first_check_in);
     }, function () {
       if (flow !== current || current.cancelling) return;
       closePopup();

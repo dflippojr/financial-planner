@@ -62,7 +62,7 @@ def flow_page(page_session, monkeypatch):  # noqa: F811 - the imported pytest fi
 
 def popup(page):
     return page.evaluate("() => window.__popups.map(p => ({href: p.location.href, closed: p.closed, "
-                         "opener: p.opener === null, features: p.features}))")
+                         "keepsOpener: p.opener === window, features: p.features}))")
 
 
 def open_fix(page):
@@ -80,7 +80,7 @@ def test_fix_opens_a_pop_up_and_shows_the_waiting_state(flow_page, viewport):
 
         [opened] = popup(page)
         assert opened["href"] == BRIDGE_URL
-        assert opened["opener"] is True  # The pop-up gets no way back to this page.
+        assert opened["keepsOpener"] is True  # Kept so the page can close it (owner decision 4 on #694).
         assert "popup" in opened["features"]
         expect(page.get_by_role("button", name="Done")).to_be_visible()
         expect(page.get_by_role("button", name="Cancel")).to_be_visible()
@@ -108,14 +108,15 @@ def test_cancel_closes_the_pop_up_and_syncs_once(flow_page, viewport):
 
 @pytest.mark.parametrize("viewport", VIEWPORTS)
 def test_closing_the_pop_up_counts_as_cancel(flow_page, viewport):
-    context, page, _stub, _now = flow_page(viewport)
+    context, page, stub, _now = flow_page(viewport)
     try:
         open_fix(page)
-        # Past the early-close guard, the member closes the window themselves.
-        page.wait_for_timeout(3200)
+        stub.calls.clear()
+        # Even straight after opening: any close counts as Cancel (owner decision 5 on #694).
         page.evaluate("() => { window.__popups[0].closed = true; }")
 
-        expect(page.get_by_text("Cancelled.", exact=False).first).to_be_visible()
+        expect(page.get_by_text("Cancelled. Synced", exact=False).first).to_be_visible()
+        assert len(stub.calls) == 1
     finally:
         context.close()
 
@@ -137,23 +138,6 @@ def test_cancel_before_the_start_request_finishes_waits_for_it(flow_page):
         held[0].continue_()
         expect(page.get_by_text("Cancelled. Synced", exact=False).first).to_be_visible()
         assert len(stub.calls) == 1
-    finally:
-        context.close()
-
-
-def test_a_pop_up_that_reads_closed_at_once_waits_for_done_or_cancel(flow_page):
-    context, page, stub, _now = flow_page("desktop")
-    try:
-        page.get_by_role("link", name="Fix Synthetic North Bank").click()
-        # What Chromium reports for a live pop-up whose page sends a cross-origin opener policy.
-        page.evaluate("() => { window.__popups[0].closed = true; }")
-        stub.calls.clear()
-
-        expect(page.locator("#simplefin-flow-text")).to_contain_text("can't see the SimpleFIN window")
-        expect(page.get_by_role("button", name="Cancel")).to_be_visible()
-        assert stub.calls == []
-        page.get_by_role("button", name="Cancel").click()
-        expect(page.get_by_text("Cancelled.", exact=False).first).to_be_visible()
     finally:
         context.close()
 
@@ -195,6 +179,15 @@ def test_a_blocked_pop_up_falls_back_to_a_normal_link(flow_page, viewport):
         context.close()
 
 
+def wait_closed(page, window):
+    """The pop-up may close before a "close" listener could attach, so poll its state."""
+    for _ in range(50):
+        if window.is_closed():
+            return
+        page.wait_for_timeout(200)
+    raise AssertionError("the app did not close the pop-up")
+
+
 def open_real_fix(context, page):
     with context.expect_page() as opened:
         page.get_by_role("link", name="Fix Synthetic North Bank").click()
@@ -204,16 +197,30 @@ def open_real_fix(context, page):
     return window
 
 
-def test_a_real_pop_up_opens_bridge_with_no_way_back_to_the_app(flow_page):
+def test_a_real_pop_up_opens_bridge_and_stays_watched(flow_page):
     context, page, _stub, _now = flow_page("desktop", stub_window=False)
     try:
         window = open_real_fix(context, page)
 
         assert window.url == BRIDGE_URL
-        assert window.evaluate("() => window.opener === null")
-        # Still watched: the early-close guard did not mistake it for closed.
         page.wait_for_timeout(1500)
         expect(page.locator("#simplefin-flow-panel")).to_be_visible()
+        assert not window.is_closed()
+    finally:
+        context.close()
+
+
+def test_cancel_closes_a_real_pop_up_itself(flow_page):
+    context, page, stub, _now = flow_page("desktop", stub_window=False)
+    try:
+        window = open_real_fix(context, page)
+        stub.calls.clear()
+        page.get_by_role("button", name="Cancel").click()
+
+        wait_closed(page, window)
+        expect(page.get_by_text("Cancelled. Synced", exact=False).first).to_be_visible()
+        assert len(stub.calls) == 1
+        expect(page.get_by_text("Close the SimpleFIN window")).to_have_count(0)
     finally:
         context.close()
 
@@ -223,7 +230,6 @@ def test_closing_a_real_pop_up_cancels_and_syncs(flow_page):
     try:
         window = open_real_fix(context, page)
         stub.calls.clear()
-        page.wait_for_timeout(3200)
         window.close()
 
         expect(page.get_by_text("Cancelled. Synced", exact=False).first).to_be_visible()
@@ -232,18 +238,16 @@ def test_closing_a_real_pop_up_cancels_and_syncs(flow_page):
         context.close()
 
 
-def test_success_with_a_real_pop_up_reloads_once_the_window_is_gone(flow_page):
+def test_success_closes_a_real_pop_up_itself_and_reloads(flow_page):
     context, page, stub, now = flow_page("desktop", stub_window=False)
     try:
         window = open_real_fix(context, page)
         stub.payload = feed(north_at=now - timedelta(minutes=5))
         page.get_by_role("button", name="Done").click()
 
+        wait_closed(page, window)
         expect(page.get_by_text("Synthetic North Bank is up to date.", exact=False).first).to_be_visible()
-        if not window.is_closed():
-            # Browsers ignore close() once the pop-up's opener is cut: the member is asked instead.
-            expect(page.locator("#simplefin-flow-result")).to_contain_text("Close the SimpleFIN window to finish.")
-            window.close()
+        expect(page.get_by_text("Close the SimpleFIN window")).to_have_count(0)
         expect(page.get_by_role("link", name="Fix Synthetic North Bank")).to_have_count(0, timeout=15_000)
     finally:
         context.close()
