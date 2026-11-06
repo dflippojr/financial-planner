@@ -2247,6 +2247,12 @@ class AiProposal(models.Model):
         PLANNED_ITEMS = "planned_items", "Planned items"
         SAVINGS_GOALS = "savings_goals", "Savings goals"
         SET_BUDGETS = "set_budgets", "Set budgets"
+        # Cleanup cards (#661), the same checkbox card.
+        RECURRING = "recurring", "Recurring charges"
+        TRANSFERS = "transfers", "Transfers"
+        AI_SUGGESTIONS = "ai_suggestions", "AI category suggestions"
+        NOTES = "notes", "Notes"
+        SPLITS = "splits", "Splits"
 
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"
@@ -2281,6 +2287,7 @@ class AiProposal(models.Model):
                     kind__in=(
                         "set_category", "create_rule", "set_budget", "add_tags",
                         "planned_items", "savings_goals", "set_budgets",
+                        "recurring", "transfers", "ai_suggestions", "notes", "splits",
                     )
                 ),
                 name="ai_proposal_kind_valid",

@@ -43,6 +43,7 @@ from .chat_attachments import (
 )
 from .chat_attachment_parsing import AttachmentRejected
 from .chat_charts import MAX_CHARTS_PER_REPLY, chart_tools
+from .chat_cleanup_cards import cleanup_lookup_tools
 from .chat_proposals import proposal_tools
 from .lifecycle_services import _DENIED, _person_for
 from .input_limits import MAX_CHAT_PROMPT_CHARS, MAX_PAGE_CONTEXT_CHARS, MAX_CHAT_MESSAGES
@@ -484,7 +485,7 @@ def answer_turn(turn, *, sleep=None, monotonic=None):
 
     provider = provider_key(connection, backend)
     tools = (
-        default_tools() + chart_tools() + proposal_tools(conversation, turn)
+        default_tools() + chart_tools() + cleanup_lookup_tools() + proposal_tools(conversation, turn)
         + attachment_tools(conversation, provider)
     )
     harness_context = _harness_context(context_payload)
