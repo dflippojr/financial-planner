@@ -25,6 +25,7 @@ from .auto_notes import (
     NO_NOTE_TO_ADD,
     append_note_lines,
     apply_line_to_existing,
+    rows_needing_line,
     rule_source,
     validate_note_line,
 )
@@ -349,22 +350,27 @@ _CATEGORIZABLE = ~Q(category_source__in=(Transaction.CategorySource.MANUAL, Tran
 _MARKABLE = ~Q(account__account_type=Account.Type.INVESTMENT)
 
 
-def _candidate_base(person):
+def _candidate_base(person, *, keep_marked=False):
     """Rows any rule may change: active cash flow, not inherited from a purchase or a
-    linked refund, and not already left out of income and spending."""
+    linked refund, and not already left out of income and spending.
+
+    keep_marked also keeps rows left out only by an untracked-transfer mark: an
+    untracked-transfer rule's note reaches the rows it already marked (#684).
+    """
+    left_out = Q(_excluded=False) | Q(untracked_transfer=True) if keep_marked else Q(_excluded=False)
     return (
         Transaction.objects.visible_to(person)
         .filter(status=Transaction.Status.ACTIVE, kind=Transaction.Kind.CASH_FLOW)
         .exclude(category_source=Transaction.CategorySource.INHERITED)
         .filter(Q(refund_link__isnull=True))
         .annotate(_excluded=exclusion_exists_for(person))
-        .filter(_excluded=False)
+        .filter(left_out)
     )
 
 
-def _candidate_queryset(person, *, untracked=False):
+def _candidate_queryset(person, *, untracked=False, keep_marked=False):
     return (
-        _candidate_base(person)
+        _candidate_base(person, keep_marked=keep_marked)
         .filter(_MARKABLE if untracked else _CATEGORIZABLE)
         .select_related("account", "category", "account__owner", "account__household")
     )
@@ -498,8 +504,11 @@ def _offer_row_blocked(row, rules, person, household_id):
     return winner is not None and winner.priority <= 0
 
 
-def _matching_queryset(person, rule):
-    qs = _candidate_queryset(person, untracked=rule.marks_untracked_transfer)
+def _matching_queryset(person, rule, *, for_note=False):
+    """The rows the rule matches now. for_note keeps rows an untracked-transfer rule already marked."""
+    qs = _candidate_queryset(
+        person, untracked=rule.marks_untracked_transfer, keep_marked=for_note and rule.marks_untracked_transfer
+    )
     if rule.account_id:
         qs = qs.filter(account_id=rule.account_id)
     if rule.min_amount_minor is not None:
@@ -544,11 +553,11 @@ def _winning_rows(rows, rule):
     return [txn for txn in rows if _is_winning_rule(txn, rule, rules_by_account[txn.account_id])]
 
 
-def _preview_rows(person, rule):
+def _preview_rows(person, rule, *, for_note=False):
     """Matching rows for display, with current-category labels limited to what
     the viewer can still see (a category from a household they left stays hidden)."""
     return list(
-        _matching_queryset(person, rule)
+        _matching_queryset(person, rule, for_note=for_note)
         .select_related(None)
         .select_related("account", "account__owner", "account__household")
         .prefetch_related(Prefetch("category", queryset=Category.objects.visible_to(person)))
@@ -773,6 +782,15 @@ def apply_rule(principal, rule_id, *, previewed_version=None):
         return _apply_to_locked(person, rule, locked)
 
 
+def rule_note_matches(principal, rule):
+    """The existing rows the rule's note would be added to (#684): its current matches,
+    plus any an untracked-transfer rule already marked, that still need the line."""
+    if not rule.note:
+        return []
+    person = _person_for(principal)
+    return rows_needing_line(_winning_rows(_preview_rows(person, rule, for_note=True), rule), rule.note)
+
+
 @transaction.atomic
 def apply_rule_note_to_existing(principal, rule_id, *, previewed_version, expected_token):
     """Add the rule's note to the previewed existing matches, once the member confirms.
@@ -790,7 +808,7 @@ def apply_rule_note_to_existing(principal, rule_id, *, previewed_version, expect
         raise ValidationError(RULE_CHANGED_SINCE_PREVIEW)
     if not rule.note:
         raise ValidationError(NO_NOTE_TO_ADD)
-    rows = _winning_rows(list(_matching_queryset(person, rule).order_by("pk")), rule)
+    rows = _winning_rows(list(_matching_queryset(person, rule, for_note=True).order_by("pk")), rule)
     wanted = {txn.pk for txn in rows}
     locked = [txn for txn in _lock_transactions(person, rows) if txn.pk in wanted]
     return apply_line_to_existing(person, locked, rule.note, rule_source(rule), expected_token)

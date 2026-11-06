@@ -8,7 +8,7 @@ from django.views.decorators.http import require_http_methods, require_POST
 
 from .access import first_message as _first_message
 from .access import service_or_404 as _service_or_404
-from .auto_notes import preview_token, rows_needing_line
+from .auto_notes import preview_token
 from .auto_note_views import note_undo_for, remember_note_undo
 from .category_services import current_household, ensure_household_categories
 from .forms import CategoryRuleForm
@@ -22,6 +22,7 @@ from .rule_services import (
     personal_rule_is_inactive,
     preview_rule,
     reverse_application,
+    rule_note_matches,
     save_category_rule,
     set_rule_enabled,
 )
@@ -201,7 +202,7 @@ def category_rule_detail(request, rule_id):
         return posted
     rule, matches = _service_or_404(lambda: preview_rule(request.user, rule.pk))
     rule.inactive = personal_rule_is_inactive(rule)
-    note_rows = rows_needing_line(matches, rule.note) if rule.note else []
+    note_rows = _service_or_404(lambda: rule_note_matches(request.user, rule))
     note_token = preview_token(note_rows)
     return render(
         request,

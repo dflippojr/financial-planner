@@ -540,3 +540,35 @@ def test_a_preview_of_more_than_a_thousand_rows_can_still_be_confirmed():
 
     assert response.status_code == 302
     assert Transaction.objects.filter(note=NOTE).count() == 1_006
+
+
+@pytest.mark.django_db
+def test_an_untracked_transfer_rule_offers_its_note_to_the_rows_it_already_marked():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    marked = make_transaction(owner, account, description="SYN PAYMENT APP MOVE", amount_minor=-7_000)
+    rule = save_category_rule(
+        owner, owner_kind="personal", description_contains="payment app", account_id=None,
+        min_amount_minor=None, max_amount_minor=None, category_id=None, priority=0,
+        action=CategoryRule.Action.UNTRACKED_TRANSFER,
+    )
+    apply_rule(owner, rule.pk)
+    marked.refresh_from_db()
+    assert marked.untracked_transfer is True
+    rule = save_category_rule(
+        owner, rule_id=rule.pk, owner_kind="personal", description_contains="payment app", account_id=None,
+        min_amount_minor=None, max_amount_minor=None, category_id=None, priority=0,
+        action=CategoryRule.Action.UNTRACKED_TRANSFER, note="Rent share to the landlord app",
+    )
+    client = Client()
+    client.force_login(owner.user)
+    url = reverse("category-rule-detail", args=[rule.pk])
+
+    page = client.get(url).content.decode()
+    assert "Add the note to existing transactions (1)" in page
+    response = _submit_apply_form(client, url, page)
+
+    assert response.status_code == 302
+    marked.refresh_from_db()
+    assert marked.note == "Rent share to the landlord app"
