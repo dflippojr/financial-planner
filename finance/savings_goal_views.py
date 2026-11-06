@@ -9,9 +9,11 @@ from django.views.decorators.http import require_http_methods, require_POST
 
 from .access import request_person as _person
 from .access import service_or_404 as _service_or_404
+from .access import visible_rows
 from .category_services import current_household
 from .forms import SavingsGoalForm
-from .models import SavingsGoal
+from .fund_services import monthly_set_asides, visible_fund_accounts
+from .models import PlannedItem, SavingsGoal
 from .savings_goal_services import (
     goal_progress,
     save_savings_goal,
@@ -24,9 +26,19 @@ def _visible_goal(user, goal_id):
     return get_object_or_404(SavingsGoal.objects.visible_to(user), pk=goal_id)
 
 
-def _form(request, person, data=None, instance=None):
+def _fund_prefill(request):
+    """Start the add form as a fund for a planned item (?fund_item=<id>), when the viewer can see it."""
+    raw = request.GET.get("fund_item", "")
+    if not raw.isdigit():
+        return None
+    item = visible_rows(PlannedItem, request.user).filter(pk=int(raw), kind=PlannedItem.Kind.EXPENSE).first()
+    if item is None:
+        return None
+    return {"name": item.name, "scope": item.scope, "share_of_account": True, "funds_planned_item": item.pk}
+
+
+def _form(request, person, data=None, instance=None, initial=None):
     household = current_household(person)
-    initial = None
     if instance is not None and data is None:
         initial = {
             "name": instance.name,
@@ -43,6 +55,8 @@ def _form(request, person, data=None, instance=None):
                 else None
             ),
             "manual_amount_date": instance.manual_amount_date,
+            "share_of_account": instance.share_of_account,
+            "funds_planned_item": instance.funds_planned_item_id,
         }
     return SavingsGoalForm(
         data,
@@ -58,19 +72,28 @@ def _form(request, person, data=None, instance=None):
 @never_cache
 def savings_goal_list(request):
     person = _person(request)
-    form = _form(request, person, request.POST if request.method == "POST" else None)
+    prefill = _fund_prefill(request) if request.method == "GET" else None
+    form = _form(request, person, request.POST if request.method == "POST" else None, initial=prefill)
     if request.method == "POST" and form.is_valid():
         _service_or_404(lambda: save_savings_goal(request.user, form.save_payload()), also=(ValidationError,))
         return redirect("savings-goals")
     today = timezone.localdate()
-    goals = SavingsGoal.objects.visible_to(request.user).select_related("depends_on").order_by(
-        F("priority").asc(nulls_last=True), F("target_date").asc(nulls_last=True), "name", "pk"
-    )
+    goals = SavingsGoal.objects.visible_to(request.user).select_related(
+        "depends_on", "funds_planned_item", "linked_account"
+    ).order_by(F("priority").asc(nulls_last=True), F("target_date").asc(nulls_last=True), "name", "pk")
     cards = [goal_progress(request.user, goal, today=today) for goal in goals]
+    fund_positions = visible_fund_accounts(request.user, today=today)
+    set_asides = monthly_set_asides(request.user, today=today) if fund_positions else None
     return render(
         request,
         "finance/savings_goals.html",
-        {"cards": cards, "add_form": form},
+        {
+            "cards": cards,
+            "add_form": form,
+            "fund_positions": fund_positions,
+            "set_asides": set_asides,
+            "open_add_form": prefill is not None,
+        },
     )
 
 

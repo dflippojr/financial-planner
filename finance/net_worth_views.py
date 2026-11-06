@@ -21,6 +21,7 @@ from .calculated_balances import (
 )
 from .cash_flow import default_date_range, format_minor
 from .forms import AccountSortForm, DebtTermsForm, ManualBalanceForm, NetWorthFilterForm, PairLoanForm
+from .fund_services import account_fund_summary
 from .lifecycle_services import update_debt_terms
 from .models import Account, BalanceSnapshot
 from .net_worth import net_worth_chart_data, net_worth_preset_links, net_worth_report, signed_balance_minor
@@ -176,6 +177,7 @@ def account_balances(request, account_id):
             "performance": performance,
             "pair_form": pair_form,
             "debt_terms_form": debt_terms_form,
+            "fund_position": account_fund_summary(request.user, account, today=timezone.localdate()),
             "can_calculate": is_calculable(account),
             "calculated_count": sum(1 for snapshot in snapshots if snapshot.source == BalanceSnapshot.Source.CALCULATED),
         },

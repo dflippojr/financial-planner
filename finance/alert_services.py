@@ -43,6 +43,7 @@ _KIND_ENABLED_FIELD = {
     Alert.Kind.EXPECTED_BALANCE: "expected_balance_enabled",
     Alert.Kind.IMPORT_DUE: "import_due_enabled",
     Alert.Kind.UNUSUAL_SPENDING: "unusual_spending_enabled",
+    Alert.Kind.FUND: "fund_enabled",
 }
 READ_RETENTION_DAYS = 180
 UNREAD_RETENTION_DAYS = 180
@@ -155,6 +156,7 @@ _ALERT_TOGGLES = (
     "sync_enabled", "recurring_price_enabled", "recurring_missed_enabled", "budget_enabled",
     "large_transaction_enabled", "monthly_review_enabled", "monthly_review_ai_enabled",
     "expected_balance_enabled", "unusual_spending_enabled", "unusual_spending_ai_enabled", "import_due_enabled",
+    "fund_enabled",
 )
 _ALERT_THRESHOLDS = (
     "unusual_category_percent", "unusual_category_floor_minor", "large_transaction_minor", "recurring_price_percent",
@@ -180,6 +182,7 @@ def save_alert_settings(
     unusual_category_floor_minor=5_000,
     recurring_price_percent=10,
     import_due_enabled=True,
+    fund_enabled=True,
 ):
     person = _person_for(principal)
     if person is None:
@@ -196,6 +199,7 @@ def save_alert_settings(
     prefs.monthly_review_ai_enabled = bool(monthly_review_ai_enabled)
     prefs.expected_balance_enabled = bool(expected_balance_enabled)
     prefs.import_due_enabled = bool(import_due_enabled)
+    prefs.fund_enabled = bool(fund_enabled)
     prefs.unusual_spending_enabled = bool(unusual_spending_enabled)
     prefs.unusual_spending_ai_enabled = bool(unusual_spending_ai_enabled)
     prefs.unusual_category_percent = int(unusual_category_percent)
@@ -531,6 +535,8 @@ def run_daily_alert_pass(*, today=None, now=None):
     from .auth_services import purge_expired_login_throttles
     from .backup_health import evaluate_backup_alerts
     from .bills_calendar import evaluate_expected_balance_alerts
+    from .fund_draw_downs import apply_fund_draw_downs
+    from .fund_services import evaluate_fund_alerts
     from .import_due import evaluate_import_due_alerts
     from .monthly_review import generate_due_monthly_reviews
     from .passkey_services import purge_stale_pending_sign_ins
@@ -547,6 +553,9 @@ def run_daily_alert_pass(*, today=None, now=None):
         # Before the monthly review and expected-balance steps, which read series.
         ("recurring_refresh", partial(refresh_all_recurring_series, today=today), False),
         ("budget_alerts", partial(evaluate_active_budget_alerts, today=today), True),
+        # Draw-downs first, so the set-aside notice sees what the funds hold now.
+        ("fund_draw_downs", partial(apply_fund_draw_downs, today=today), False),
+        ("fund_alerts", partial(evaluate_fund_alerts, today=today), True),
         ("large_transaction_alerts", evaluate_recent_large_transactions, True),
         ("monthly_reviews", partial(generate_due_monthly_reviews, today=today), False),
         ("backup_alerts", partial(evaluate_backup_alerts, today=today, now=now), True),

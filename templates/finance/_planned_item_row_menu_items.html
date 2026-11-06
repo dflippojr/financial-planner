@@ -3,6 +3,10 @@ Row menu entries for one planned item (issue #337): Edit, then Disable or Enable
 same views the row's buttons used.
 {% endcomment %}
 <li><a href="{% url 'planned-item-edit' item.pk %}">Edit</a></li>
+{% if item.kind == "expense" %}
+{% if item.funding_card %}<li><a href="{% url 'savings-goal-fund' item.funding_card.goal.pk %}">Open its fund</a></li>
+{% else %}<li><a href="{% url 'savings-goals' %}?fund_item={{ item.pk }}#add-goal">Fund with a savings goal</a></li>{% endif %}
+{% endif %}
 <li>
   {% if item.enabled %}
   <form method="post" action="{% url 'planned-item-disable' item.pk %}">

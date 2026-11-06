@@ -50,6 +50,7 @@ from finance.models import (
     Category,
     CategoryRule,
     CategorySuggestion,
+    FundEntry,
     Household,
     ImportBatch,
     MemberSession,
@@ -560,6 +561,21 @@ OBJECT_ROUTES = {
     "savings-goal-unarchive": ObjectRoute(
         lambda s: {"goal_id": s.goal.pk}, post_only=True, body_reason=_PATH_ONLY
     ),
+    "savings-goal-fund": ObjectRoute(
+        lambda s: {"goal_id": s.fund.pk},
+        data=lambda s: {"action": "release", "amount": "0.01"},
+        body_reason=_VALUES,
+    ),
+    "savings-goal-fund-undo": ObjectRoute(
+        lambda s: {"goal_id": s.fund.pk, "entry_id": s.fund_entry.pk}, post_only=True, body_reason=_PATH_ONLY
+    ),
+    "fund-shortfall": ObjectRoute(
+        _account,
+        data=lambda s: {f"reduce_{s.fund.pk}": "0.01"},
+        body_reason=(
+            "its fields are keyed by the funds of the account in the path; any other fund id in the body is ignored"
+        ),
+    ),
 }
 
 # The object a query or form parameter names, when it is not an account.
@@ -766,6 +782,11 @@ PAGE_ROUTES = {
         },
     ),
     "savings-goal-plan": PageRoute(query=("scope",), owner_canary=True),
+    "fund-set-asides": PageRoute(
+        post_reason=(
+            "its fields are keyed by the requester's own visible funds with a suggestion; any other id is ignored"
+        ),
+    ),
     "savings-goal-import": PageRoute(
         post_reason="the member's own goal file; its token names a stage in the member's own session"
     ),
@@ -881,6 +902,7 @@ TRACKED_MODELS = (
     Budget,
     BudgetAmount,
     SavingsGoal,
+    FundEntry,
     Alert,
     AiConversation,
     AiConversationMessage,
@@ -1063,6 +1085,23 @@ def _side_rows(owner, household, account, card, label, amount_minor, when, index
         category=category,
     )
     _transfer_pairs(side, when, index + 50)
+    # A sinking fund in the side's account (#670), with a draw-down to undo.
+    side.fund = SavingsGoal.objects.create(
+        owner=owner,
+        name=f"{label} fund",
+        target_amount_minor=amount_minor,
+        linked_account=account,
+        share_of_account=True,
+        **scope,
+    )
+    FundEntry.objects.create(
+        goal=side.fund, kind=FundEntry.Kind.ASSIGN, reason=FundEntry.Reason.MANUAL,
+        amount_minor=amount_minor, entry_date=when,
+    )
+    side.fund_entry = FundEntry.objects.create(
+        goal=side.fund, kind=FundEntry.Kind.DRAW_DOWN, reason=FundEntry.Reason.PLANNED,
+        amount_minor=-100, entry_date=when, transaction=txn, occurrence_date=when,
+    )
     side.suggested_series = _series(owner, f"{label} suggestion", RecurringSeries.Status.SUGGESTED, [], index + 60)
     side.cancelled_series = _series(
         owner,

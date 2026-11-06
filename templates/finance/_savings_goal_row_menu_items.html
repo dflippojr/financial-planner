@@ -3,6 +3,7 @@ Row menu entries for one savings goal (issue #337): Edit, Mark complete or Reope
 or Unarchive, posting to the same views the card's buttons used.
 {% endcomment %}
 <li><a href="{% url 'savings-goal-edit' card.goal.pk %}">Edit</a></li>
+{% if card.share_of_account %}<li><a href="{% url 'savings-goal-fund' card.goal.pk %}">Fund and history</a></li>{% endif %}
 <li>
   {% if card.completed %}
   <form method="post" action="{% url 'savings-goal-reopen' card.goal.pk %}">
