@@ -936,8 +936,8 @@ def test_migration_keeps_existing_goals_whole_account_or_manual():
     from django.db import connection
     from django.db.migrations.executor import MigrationExecutor
 
-    before = [("finance", "0085_ai_proposal_cleanup_cards")]
-    after = [("finance", "0086_sinking_funds")]
+    before = [("finance", "0086_ai_proposal_balance_cards")]
+    after = [("finance", "0087_sinking_funds")]
     executor = MigrationExecutor(connection)
     head = executor.loader.graph.leaf_nodes()
     try:
