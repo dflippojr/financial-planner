@@ -1404,3 +1404,75 @@ def test_an_archived_fund_still_raises_the_shortfall_alert():
     add_balance(account, 50_000, source=BalanceSnapshot.Source.SIMPLEFIN)
     alerts = evaluate_fund_alerts(today=TODAY)
     assert [alert.dedupe_key for alert in alerts] == [f"fund-shortfall:{account.pk}:{TODAY.isoformat()}"]
+
+
+# -- sixth review round --
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("change", ["unlinked", "relinked"])
+def test_an_early_payment_stays_paid_in_the_projection_after_the_fund_changes_its_link(change):
+    owner = make_person("owner")
+    savings = make_account(owner)
+    checking = make_account(owner, name="Synthetic Checking", account_type=Account.Type.CHECKING)
+    add_balance(savings, 200_000)
+    fund = make_fund(owner, savings, target=120_000)
+    item = make_item(owner, amount=120_000, start=date(2026, 12, 1), cadence=PlannedItem.Cadence.ONE_TIME)
+    link_item(fund, item, linked_on=date(2026, 11, 1))
+    assign_to_fund(owner, fund, 120_000, today=TODAY)
+    make_transaction(owner, checking, on=date(2026, 11, 29), amount_minor=-120_000,
+                     description="SYNTHETIC CAR INSURANCE")
+    assert len(apply_fund_draw_downs(today=date(2026, 11, 29))) == 1
+    # The next day the member points the fund elsewhere (or nowhere).
+    other = make_item(owner, name="Synthetic Roof", amount=50_000, start=date(2027, 6, 1),
+                      cadence=PlannedItem.Cadence.ONE_TIME) if change == "relinked" else None
+    fund.funds_planned_item = other
+    fund.planned_item_linked_on = date(2026, 11, 30) if other else None
+    fund.save()
+    report = cash_flow_with_projection(
+        owner, date_from=date(2026, 6, 1), date_to=date(2026, 11, 30), grouping="month",
+        today=date(2026, 11, 30), horizon=3,
+    )
+    december = report.projected_periods[0]
+    [planned] = [c for c in december.contributions if c.source == "planned" and c.source_id == item.pk]
+    assert (planned.amount_minor, planned.already_paid_minor) == (0, 120_000)
+
+
+@pytest.mark.django_db
+def test_fund_writes_lock_the_household_before_the_goal():
+    """Memberships, then goal, then account: a membership exit locks accounts before goals, so a
+    fund write must queue behind it on the memberships rather than deadlock."""
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    if connection.vendor != "postgresql":
+        pytest.skip("SQLite emits no FOR UPDATE")
+    owner = make_person("owner")
+    partner = make_person("partner")
+    household = make_household(owner, partner)
+    account = make_account(owner, household=household)
+    other = make_account(owner, name="Synthetic Other Cash", household=household)
+    add_balance(account, 100_000)
+    fund = make_fund(owner, account, household=household)
+
+    def lock_order(action):
+        with CaptureQueriesContext(connection) as queries:
+            action()
+        locked = {'FROM "finance_membership"': "membership", 'FROM "finance_savingsgoal"': "goal",
+                  'FROM "finance_account"': "account"}
+        order = []
+        for q in queries:
+            if "FOR UPDATE" not in q["sql"]:
+                continue
+            for prefix, name in locked.items():
+                if prefix in q["sql"] and name not in order:
+                    order.append(name)
+        return order
+
+    expected = ["membership", "goal", "account"]
+    assert lock_order(lambda: assign_to_fund(partner, fund, 1_000, today=TODAY))[:3] == expected
+    assert lock_order(lambda: confirm_set_asides(partner, [(fund, 1_000)], today=TODAY))[:3] == expected
+    assert lock_order(lambda: release_from_fund(partner, fund, 2_000, today=TODAY))[:2] == expected[:2]
+    payload = {"scope": "household", "name": fund.name, "share_of_account": True, "linked_account": other,
+               "target_amount_minor": fund.target_amount_minor}
+    assert lock_order(lambda: save_savings_goal(partner, payload, goal=fund))[:3] == expected

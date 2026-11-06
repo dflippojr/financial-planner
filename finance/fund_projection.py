@@ -15,8 +15,6 @@ goals from the surplus, so subtracting set-asides there would count a fund twice
 from datetime import timedelta
 from types import SimpleNamespace
 
-from django.db.models import F
-
 from .access import visible_rows
 from .cash_flow import format_minor
 from .fund_services import suggested_set_aside
@@ -53,35 +51,35 @@ def _unpaid_part(item, start, payment, drawn):
     return payment * unpaid // len(hits)
 
 
-def _drawn_by_item(goals, drawn_by_goal, closed_draws):
-    """{item id: (item, occurrence dates any fund already paid)}, open and closed funds together."""
+def _drawn_by_item(goals, drawn_by_goal, recorded):
+    """{item id: (item, occurrence dates any fund already paid)}: the open funds' and every recorded payment."""
     by_item = {}
     for goal in goals:
         item = linked_item(goal)
         if item is not None:
             _item, dates = by_item.setdefault(item.pk, (item, set()))
             dates |= (drawn_by_goal or {}).get(goal.pk, set())
-    for item, dates in (closed_draws or {}).values():
+    for item, dates in (recorded or {}).values():
         _item, known = by_item.setdefault(item.pk, (item, set()))
         known |= dates
     return by_item
 
 
-def fund_schedule(goals, held_now, months, drawn_by_goal=None, closed_draws=None):
+def fund_schedule(goals, held_now, months, drawn_by_goal=None, recorded=None):
     """Per month start: set-asides [(goal, minor)], `covered` {item id: minor the fund pays} and
     `already_paid` {item id: minor of occurrences a fund paid early, which are no longer spending}.
 
     `months` are the projected months in order, `held_now` what each fund will
     hold when the projection starts. A fund pays its item what that month's
     projection spends on it (a scenario's changed amount included), up to what
-    the fund holds by then. `closed_draws` {item id: (item, dates)} are the
-    payments of funds no longer open (completed, archived, out of view of the
-    set-aside list): they still mark those occurrences as paid, though those
-    funds set nothing aside. Pure: no queries beyond the goals' loaded items.
+    the fund holds by then. `recorded` {item id: (item, dates)} are the
+    occurrences any visible fund already paid, read from its draw-downs
+    whatever that fund's status or current link: they are no longer spending,
+    and no fund pays them again. Pure: no queries beyond the goals' loaded items.
     """
     held = dict(held_now)
     schedule = {}
-    paid_dates = _drawn_by_item(goals, drawn_by_goal, closed_draws)
+    paid_dates = _drawn_by_item(goals, drawn_by_goal, recorded)
     for month in months:
         set_asides = []
         covered = {}
@@ -189,34 +187,28 @@ def _with_overlay(month, entry):
     )
 
 
-def _closed_draws(principal, open_ids, *, scope=""):
-    """{item id: (item, paid dates)} for visible funds outside `open_ids` whose linked item they already paid.
+def _recorded_payments(principal, *, scope=""):
+    """{item id: (item, paid dates)} from every counted draw-down of a fund the viewer can see.
 
-    A fund completed or archived after paying an occurrence early still paid
-    it, so the projection must not count that occurrence as spending again.
+    Read from each draw-down's recorded item, whatever the fund's status or
+    current link: a fund completed, archived, unlinked or relinked after paying
+    an occurrence early still paid it, so the projection must not count that
+    occurrence as spending again.
     """
-    goals = visible_rows(SavingsGoal, principal).filter(share_of_account=True, funds_planned_item__isnull=False)
+    goals = visible_rows(SavingsGoal, principal)
     if scope:
         goals = goals.filter(scope=scope)
-    goals = goals.exclude(pk__in=open_ids)
-    paid = {}
-    for goal_id, occurrence in (
-        FundEntry.objects.filter(
-            goal__in=goals, kind=FundEntry.Kind.DRAW_DOWN, planned_item_id=F("goal__funds_planned_item_id")
-        )
+    entries = (
+        FundEntry.objects.filter(goal__in=goals, kind=FundEntry.Kind.DRAW_DOWN, planned_item__isnull=False)
         .filter(FundEntry.counted_filter())
-        .values_list("goal_id", "occurrence_date")
-    ):
-        paid.setdefault(goal_id, set()).add(occurrence)
-    closed = {}
-    if not paid:
-        return closed
-    for goal in goals.filter(pk__in=list(paid)).select_related("funds_planned_item").order_by("pk"):
-        item = linked_item(goal)
-        if item is not None:
-            _item, known = closed.setdefault(item.pk, (item, set()))
-            known |= paid[goal.pk]
-    return closed
+        .select_related("planned_item")
+        .order_by("pk")
+    )
+    paid = {}
+    for entry in entries:
+        _item, dates = paid.setdefault(entry.planned_item_id, (entry.planned_item, set()))  # pyright: ignore[reportAttributeAccessIssue] - runtime FK id attribute
+        dates.add(entry.occurrence_date)
+    return paid
 
 
 def apply_fund_set_asides(principal, months, *, today, scope=""):
@@ -224,10 +216,10 @@ def apply_fund_set_asides(principal, months, *, today, scope=""):
     if not months:
         return months
     goals = open_funds(principal, scope=scope)
-    closed = _closed_draws(principal, {goal.pk for goal in goals}, scope=scope)
-    if not goals and not closed:
+    paid = _recorded_payments(principal, scope=scope)
+    if not goals and not paid:
         return months
     drawn = {goal.pk: drawn_occurrences(goal, item) for goal in goals if (item := linked_item(goal)) is not None}
     held = held_when_projection_starts(goals, assigned_by_goal([goal.pk for goal in goals]), drawn, today=today)
-    schedule = fund_schedule(goals, held, months, drawn, closed)
+    schedule = fund_schedule(goals, held, months, drawn, paid)
     return tuple(_with_overlay(month, schedule[month.start]) for month in months)

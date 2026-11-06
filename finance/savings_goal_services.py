@@ -356,9 +356,12 @@ def save_savings_goal(principal, payload, *, goal=None):
     with transaction.atomic():
         saved = goal
         if goal.pk is not None:
-            # Decide from the goal as saved, locked the way assignments lock it:
-            # the caller's copy may predate another request that made it a fund
-            # and gave it money.
+            # Decide from the goal as saved, locked the way assignments lock it
+            # (household memberships, then the goal): the caller's copy may
+            # predate another request that made it a fund and gave it money.
+            from .lifecycle_services import lock_actor_household
+
+            lock_actor_household(person)
             saved = SavingsGoal.objects.select_for_update(of=("self",)).get(pk=goal.pk)
             _take_fund_fields(goal, saved)
         share = bool(payload["share_of_account"]) if "share_of_account" in payload else saved.share_of_account

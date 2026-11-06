@@ -2,10 +2,12 @@
 
 Money never moves on its own, except a draw-down when the linked planned
 expense posts (`fund_draw_downs`). Every change is a `FundEntry` row, so a
-fund's history is its rows. Every write locks the goal rows first (in id order), then the account rows (in
+fund's history is its rows. Every write locks the writer's household
+memberships first, then the goal rows (in id order), then the account rows (in
 id order) when money comes back into a fund, so two members confirming at once
-can never assign more than the balance together. Goals before accounts is also
-the order a chat edit takes, so the two never deadlock.
+can never assign more than the balance together. Memberships first is the order
+a chat edit and a membership exit take, and goals before accounts the order a
+chat edit takes, so none of them deadlock.
 """
 
 from datetime import date
@@ -32,6 +34,7 @@ from .funds import (
     matching_funds,
     open_funds,
 )
+from .lifecycle_services import lock_actor_household
 from .models import Account, AuditEvent, FundEntry, SavingsGoal
 from .months import month_start
 from .savings_goal_services import months_left
@@ -147,7 +150,13 @@ def _lock_account(person, goal):
 
 
 def _lock_goals(person, goals):
-    """Lock the goals in id order and re-check each with its saved state."""
+    """Lock the household's memberships, then the goals in id order; re-check each with its saved state.
+
+    The memberships come first, as a chat apply and a membership exit take
+    them, so a fund write waits for an exit (which locks accounts before
+    goals) instead of deadlocking with it.
+    """
+    lock_actor_household(person)
     ids = sorted({goal.pk for goal in goals})
     locked = {
         goal.pk: goal
