@@ -329,8 +329,8 @@ OBJECT_ROUTES = {
         lambda s: {"series_id": s.series.pk},
         data=lambda s: {"action": "save", "note": "SYN note line"},
         body_reason=(
-            "its transaction ids are only compared with the charges the server reads from the series "
-            "in its path; any other id refuses the apply and nothing is looked up by it"
+            "it posts only a note, a version and a digest of the previewed charges, which the server "
+            "recomputes from the series in its path"
         ),
     ),
     "category-rule-application-reverse": ObjectRoute(

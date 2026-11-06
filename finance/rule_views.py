@@ -8,8 +8,8 @@ from django.views.decorators.http import require_http_methods, require_POST
 
 from .access import first_message as _first_message
 from .access import service_or_404 as _service_or_404
-from .auto_notes import rows_needing_line
-from .auto_note_views import note_undo_for, posted_ids, remember_note_undo
+from .auto_notes import preview_token, rows_needing_line
+from .auto_note_views import note_undo_for, remember_note_undo
 from .category_services import current_household, ensure_household_categories
 from .forms import CategoryRuleForm
 from .models import CategoryRule, Person
@@ -146,11 +146,10 @@ def _post_apply_rule(request, rule, errors):
 
 def _post_apply_rule_note(request, rule, errors):
     """Add the rule's note to the existing matches the page previewed (#684)."""
-    expected = posted_ids(request)
     try:
         changed, undo = _service_or_404(lambda: apply_rule_note_to_existing(
             request.user, rule.pk, previewed_version=request.POST.get("rule_version") or "",
-            expected_ids=expected,
+            expected_token=request.POST.get("preview_token") or "",
         ))
     except ValidationError as exc:
         errors["note"] = _first_message(exc, "The note could not be added.")
@@ -203,6 +202,7 @@ def category_rule_detail(request, rule_id):
     rule, matches = _service_or_404(lambda: preview_rule(request.user, rule.pk))
     rule.inactive = personal_rule_is_inactive(rule)
     note_rows = rows_needing_line(matches, rule.note) if rule.note else []
+    note_token = preview_token(note_rows)
     return render(
         request,
         "finance/category_rule_detail.html",
@@ -214,6 +214,7 @@ def category_rule_detail(request, rule_id):
             "applications": list_visible_applications(request.user, rule),
             "apply_error": errors.get("apply"),
             "note_rows": note_rows,
+            "note_token": note_token,
             "note_error": errors.get("note"),
             "note_undo": note_undo_for(request, f"rule:{rule.pk}"),
         },

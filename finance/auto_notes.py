@@ -14,6 +14,7 @@ step, which can be undone like a bulk edit.
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from datetime import timedelta
 
@@ -98,18 +99,30 @@ def rows_needing_line(rows, line):
     return [txn for txn in rows if appended_note(txn.note or "", line) is not None]
 
 
-def apply_line_to_existing(actor, locked, line, source, expected_ids):
+def preview_token(rows):
+    """One bounded form value naming exactly the previewed rows, however many there are.
+
+    The confirm form posts this instead of one field per row (a large rule
+    would pass Django's 1,000-field limit); the apply recomputes it from the
+    rows it reads under lock and refuses when they differ.
+    """
+    ids = ",".join(str(pk) for pk in sorted(txn.pk for txn in rows))
+    return hashlib.sha256(ids.encode("ascii")).hexdigest()
+
+
+def apply_line_to_existing(actor, locked, line, source, expected_token):
     """The confirm step: add the line to exactly the previewed rows, with a bulk-edit undo record.
 
     `locked` holds the rows re-read under lock. If the rows that need the line
-    are not exactly the ones the member previewed, nothing is written.
+    are not exactly the ones the member previewed (`expected_token`, from
+    `preview_token`), nothing is written.
     """
     if not line:
         raise ValidationError(NO_NOTE_TO_ADD)
     targets = rows_needing_line(locked, line)
     if not targets:
         raise ValidationError(NOTHING_TO_ADD)
-    if expected_ids is not None and {txn.pk for txn in targets} != set(expected_ids):
+    if preview_token(targets) != expected_token:
         raise ValidationError(NOTE_PREVIEW_CHANGED)
     previous = {txn.pk: txn.note or "" for txn in targets}
     now = timezone.now()

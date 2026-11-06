@@ -774,11 +774,11 @@ def apply_rule(principal, rule_id, *, previewed_version=None):
 
 
 @transaction.atomic
-def apply_rule_note_to_existing(principal, rule_id, *, previewed_version, expected_ids):
+def apply_rule_note_to_existing(principal, rule_id, *, previewed_version, expected_token):
     """Add the rule's note to the previewed existing matches, once the member confirms.
 
     previewed_version is the rule's updated_at from the preview page and
-    expected_ids the rows it listed: if either moved, nothing is written.
+    expected_token the preview_token of the rows it listed: if either moved, nothing is written.
     Returns (changed rows, bulk-edit undo record).
     """
     person, rule = _rule_or_404(principal, rule_id)
@@ -793,7 +793,7 @@ def apply_rule_note_to_existing(principal, rule_id, *, previewed_version, expect
     rows = _winning_rows(list(_matching_queryset(person, rule).order_by("pk")), rule)
     wanted = {txn.pk for txn in rows}
     locked = [txn for txn in _lock_transactions(person, rows) if txn.pk in wanted]
-    return apply_line_to_existing(person, locked, rule.note, rule_source(rule), expected_ids)
+    return apply_line_to_existing(person, locked, rule.note, rule_source(rule), expected_token)
 
 
 @transaction.atomic

@@ -14,7 +14,7 @@ from django.test import Client
 from django.urls import reverse
 from django.utils import timezone
 
-from finance.auto_notes import NOTE_PREVIEW_CHANGED, clean_note_line
+from finance.auto_notes import NOTE_PREVIEW_CHANGED, clean_note_line, preview_token
 from finance.bulk_edit_services import undo_bulk_edit
 from finance.export import collect_export_tables
 from finance.models import Account, Category, CategoryRule, RecurringSeries, Transaction, TransactionCorrectionHistory
@@ -176,18 +176,18 @@ def test_adding_a_rules_note_to_existing_matches_needs_the_previewed_rows_and_ca
     already = _with_note(make_transaction(owner, account, description="GOODYEAR SYN 3", amount_minor=-1003), NOTE)
     rule = _rule(owner, household, note=NOTE)
     version = rule.updated_at.isoformat()
-    expected = sorted([plain.pk, noted.pk])
+    expected = preview_token([plain, noted])
 
     with pytest.raises(ValidationError, match="changed since the preview"):
-        apply_rule_note_to_existing(owner, rule.pk, previewed_version=version, expected_ids=[plain.pk])
+        apply_rule_note_to_existing(owner, rule.pk, previewed_version=version, expected_token=preview_token([plain]))
     with pytest.raises(ValidationError, match=RULE_CHANGED_SINCE_PREVIEW):
-        apply_rule_note_to_existing(owner, rule.pk, previewed_version="stale", expected_ids=expected)
+        apply_rule_note_to_existing(owner, rule.pk, previewed_version="stale", expected_token=expected)
     plain.refresh_from_db()
     assert plain.note == ""
 
-    changed, undo = apply_rule_note_to_existing(owner, rule.pk, previewed_version=version, expected_ids=expected)
+    changed, undo = apply_rule_note_to_existing(owner, rule.pk, previewed_version=version, expected_token=expected)
 
-    assert sorted(txn.pk for txn in changed) == expected
+    assert sorted(txn.pk for txn in changed) == sorted([plain.pk, noted.pk])
     for txn, note in ((plain, NOTE), (noted, f"Own note\n{NOTE}"), (already, NOTE)):
         txn.refresh_from_db()
         assert txn.note == note
@@ -228,7 +228,7 @@ def test_rule_page_sets_the_note_previews_existing_rows_and_applies_on_confirm()
     assert "Add the note to 1 transaction" in page
 
     response = client.post(url, {
-        "action": "apply_note", "rule_version": rule.updated_at.isoformat(), "transaction_id": [old.pk],
+        "action": "apply_note", "rule_version": rule.updated_at.isoformat(), "preview_token": preview_token([old]),
     })
     assert response.status_code == 302
     old.refresh_from_db()
@@ -248,7 +248,7 @@ def test_another_member_cannot_add_a_personal_rules_note():
     rule = _rule(owner, household, note=NOTE)
 
     with pytest.raises(PermissionDenied):
-        apply_rule_note_to_existing(other, rule.pk, previewed_version=rule.updated_at.isoformat(), expected_ids=None)
+        apply_rule_note_to_existing(other, rule.pk, previewed_version=rule.updated_at.isoformat(), expected_token="")
     client = Client()
     client.force_login(other.user)
     assert client.get(reverse("category-rule-detail", args=[rule.pk])).status_code == 404
@@ -379,10 +379,10 @@ def test_setting_a_series_note_previews_then_adds_it_to_existing_charges_on_conf
     assert sorted(txn.pk for txn in preview) == sorted(row.pk for row in rows)
     with pytest.raises(ValidationError, match=NOTE_PREVIEW_CHANGED):
         apply_recurring_note_to_existing(owner, series.pk, previewed_version=note_version(series),
-                                         expected_ids=[rows[0].pk])
+                                         expected_token=preview_token(rows[:1]))
 
     _changed, undo = apply_recurring_note_to_existing(
-        owner, series.pk, previewed_version=note_version(series), expected_ids=[txn.pk for txn in preview])
+        owner, series.pk, previewed_version=note_version(series), expected_token=preview_token(preview))
 
     for row in rows:
         row.refresh_from_db()
@@ -407,7 +407,7 @@ def test_an_edited_series_note_needs_a_fresh_preview():
 
     with pytest.raises(ValidationError, match="changed since its preview"):
         apply_recurring_note_to_existing(owner, series.pk, previewed_version=version,
-                                         expected_ids=[row.pk for row in rows])
+                                         expected_token=preview_token(rows))
 
 
 @pytest.mark.django_db
@@ -421,7 +421,7 @@ def test_only_the_owner_of_a_confirmed_series_can_set_or_apply_its_note():
     with pytest.raises(PermissionDenied):
         set_recurring_series_note(other, series.pk, "Not mine")
     with pytest.raises(PermissionDenied):
-        apply_recurring_note_to_existing(other, series.pk, previewed_version="", expected_ids=None)
+        apply_recurring_note_to_existing(other, series.pk, previewed_version="", expected_token="")
     client = Client()
     client.force_login(other.user)
     assert client.get(reverse("recurring-note", args=[series.pk])).status_code == 404
@@ -461,7 +461,7 @@ def test_series_note_page_saves_previews_and_applies():
 
     series.refresh_from_db()
     response = client.post(url, {"action": "apply", "note_version": note_version(series),
-                                 "transaction_id": [row.pk for row in rows]})
+                                 "preview_token": preview_token(rows)})
     assert response.status_code == 302
     for row in rows:
         row.refresh_from_db()
@@ -496,3 +496,47 @@ def test_export_includes_rule_and_series_notes_for_rules_the_member_can_see():
     assert rules[mine.pk]["note"] == NOTE and rules[mine.pk]["owner_kind"] == "personal"
     assert rules[shared.pk]["note"] == "Household line" and rules[shared.pk]["owner_kind"] == "household"
     assert rules[mine.pk]["category_name"] == "Groceries"
+
+
+def _bulk_matches(owner, account, count, description):
+    batch = make_transaction(owner, account, description=f"{description} seed").import_batch
+    Transaction.objects.bulk_create([
+        Transaction(
+            account=account, import_batch=batch, transaction_date=date(2025, 1, 1), amount_minor=-100 - index,
+            description=f"{description} {index}", source_row_number=index + 3,
+            fingerprint=f"{index:064x}", original_fields={},
+        )
+        for index in range(count)
+    ])
+
+
+def _submit_apply_form(client, url, page):
+    """Post the page's "Add the note" form exactly as a browser would, hidden fields and all."""
+    import re
+
+    form = page[page.index('<section class="mb-8" data-auto-note-existing>'):]
+    form = form[form.index("<form method=\"post\">"):form.index("</form>")]
+    fields = re.findall(r'<input type="hidden" name="([^"]+)" value="([^"]*)">', form)
+    data = {}
+    for name, value in fields:
+        data.setdefault(name, []).append(value)
+    return client.post(url, data)
+
+
+@pytest.mark.django_db
+def test_a_preview_of_more_than_a_thousand_rows_can_still_be_confirmed():
+    owner = make_person("owner")
+    household = make_household(owner)
+    account = make_account(owner)
+    _bulk_matches(owner, account, 1_005, "GOODYEAR SYN BULK")
+    rule = _rule(owner, household, note=NOTE)
+    client = Client()
+    client.force_login(owner.user)
+    url = reverse("category-rule-detail", args=[rule.pk])
+
+    page = client.get(url).content.decode()
+    assert "Add the note to existing transactions (1006)" in page
+    response = _submit_apply_form(client, url, page)
+
+    assert response.status_code == 302
+    assert Transaction.objects.filter(note=NOTE).count() == 1_006

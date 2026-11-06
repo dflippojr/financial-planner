@@ -1390,11 +1390,11 @@ def recurring_note_preview(principal, series_id):
 
 
 @transaction.atomic
-def apply_recurring_note_to_existing(principal, series_id, *, previewed_version, expected_ids):
+def apply_recurring_note_to_existing(principal, series_id, *, previewed_version, expected_token):
     """Add the series' note to the previewed existing charges, once the member confirms.
 
-    previewed_version is note_version(series) from the preview page; if the note or
-    the previewed rows moved, nothing is written. Returns (changed rows, undo record).
+    previewed_version is note_version(series) and expected_token the preview_token
+    from the preview page; if the note or the previewed rows moved, nothing is written. Returns (changed rows, undo record).
     """
     person = _person_for(principal)
     lock_actor_household(person)
@@ -1409,7 +1409,7 @@ def apply_recurring_note_to_existing(principal, series_id, *, previewed_version,
         .filter(pk__in=ids, status=Transaction.Status.ACTIVE)
         .order_by("pk")
     )
-    return apply_line_to_existing(person, locked, series.note, recurring_source(series), expected_ids)
+    return apply_line_to_existing(person, locked, series.note, recurring_source(series), expected_token)
 
 
 class ManualSeriesError(ValueError):

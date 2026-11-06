@@ -41,7 +41,7 @@
   <button type="submit" class="btn btn-primary"{% if not rule.enabled or rule.inactive %} disabled{% endif %}>Apply to matching transactions</button>
 </form>
 {% if rule.note %}
-{% include "finance/_auto_note_existing.html" with rows=note_rows note=rule.note error=note_error undo=note_undo version_name="rule_version" version=rule.updated_at.isoformat disabled=rule.enabled|yesno:",disabled" %}
+{% include "finance/_auto_note_existing.html" with rows=note_rows token=note_token note=rule.note error=note_error undo=note_undo version_name="rule_version" version=rule.updated_at.isoformat disabled=rule.enabled|yesno:",disabled" %}
 {% endif %}
 <h2 class="mb-3 text-xl font-semibold">Application history</h2>
 <div class="overflow-x-auto">

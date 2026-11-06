@@ -9,6 +9,7 @@ from django.views.decorators.http import require_http_methods
 
 from .access import first_message as _first_message
 from .access import service_or_404 as _service_or_404
+from .auto_notes import preview_token
 from .bulk_edit_views import active_bulk_undo
 from .forms import AutoNoteForm
 from .recurring_services import (
@@ -36,13 +37,6 @@ def note_undo_for(request, target):
     return undo
 
 
-def posted_ids(request):
-    try:
-        return [int(raw) for raw in request.POST.getlist("transaction_id")]
-    except (TypeError, ValueError) as exc:
-        raise Http404 from exc
-
-
 @require_http_methods(["GET", "POST"])
 @never_cache
 def recurring_note(request, series_id):
@@ -62,11 +56,10 @@ def recurring_note(request, series_id):
                     messages.success(request, "Note saved. New charges in this series will get it.")
                     return redirect("recurring-note", series_id=series_id)
         elif action == "apply":
-            expected = posted_ids(request)
             try:
                 changed, undo = _service_or_404(lambda: apply_recurring_note_to_existing(
                     request.user, series_id, previewed_version=request.POST.get("note_version") or "",
-                    expected_ids=expected,
+                    expected_token=request.POST.get("preview_token") or "",
                 ))
             except ValidationError as exc:
                 error = _first_message(exc, "The note could not be added.")
@@ -80,6 +73,7 @@ def recurring_note(request, series_id):
         "series": series,
         "form": form,
         "rows": rows,
+        "preview_token": preview_token(rows),
         "note_version": note_version(series),
         "apply_error": error,
         "note_undo": note_undo_for(request, f"recurring:{series_id}"),
