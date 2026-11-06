@@ -2,6 +2,9 @@
 from datetime import date
 
 MAX_DESCRIPTION_CHARS = 500
+MAX_NOTE_CHARS = 2_000
+# A rule's or recurring series' note line (#684): one line, added below a transaction's note.
+AUTO_NOTE_MAX_CHARS = MAX_NOTE_CHARS
 MAX_CHAT_PROMPT_CHARS = 8_000
 MAX_PAGE_CONTEXT_CHARS = 2_000
 MAX_CHAT_MESSAGES = 40

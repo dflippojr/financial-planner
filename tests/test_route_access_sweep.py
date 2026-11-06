@@ -326,6 +326,14 @@ OBJECT_ROUTES = {
             ),
         },
     ),
+    "recurring-note": ObjectRoute(
+        lambda s: {"series_id": s.series.pk},
+        data=lambda s: {"action": "save", "note": "SYN note line"},
+        body_reason=(
+            "it posts only a note, a version and a digest of the previewed charges, which the server "
+            "recomputes from the series in its path"
+        ),
+    ),
     "category-rule-application-reverse": ObjectRoute(
         lambda s: {"application_id": s.application.pk}, post_only=True, body_reason=_PATH_ONLY
     ),

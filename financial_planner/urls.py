@@ -4,6 +4,7 @@ from django.contrib.auth.decorators import login_not_required
 
 from finance import (
     account_views,
+    auto_note_views,
     audit_views,
     ai_views,
     alert_views,
@@ -308,6 +309,7 @@ urlpatterns = [
     path("transfers/", views.transfer_review, name="transfer-review"),
     path("recurring/", views.recurring_review, name="recurring-review"),
     path("recurring/create/", views.recurring_create, name="recurring-create"),
+    path("recurring/<int:series_id>/note/", auto_note_views.recurring_note, name="recurring-note"),
     path("planning/items/", planning_views.planned_item_list, name="planned-items"),
     path("planning/calendar/", bills_calendar_views.bills_calendar, name="bills-calendar"),
     path("planning/debts/", debt_planner_views.debt_payoff, name="debt-payoff"),
