@@ -302,6 +302,7 @@ def test_chat_offers_only_propose_tools_and_resolved_proposals_stay_resolved(har
         "propose_set_category", "propose_create_rule", "propose_set_budget", "propose_add_tags",
         "propose_planned_items", "propose_savings_goals", "propose_set_budgets",
         "propose_recurring_charges", "propose_transfers", "propose_ai_suggestions", "propose_notes", "propose_splits",
+        "propose_balances",
     }
     process_pending_turns(sleep=no_sleep)
     assert not Transaction.objects.exists() and not CategoryRule.objects.exists()

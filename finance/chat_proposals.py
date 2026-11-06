@@ -91,7 +91,8 @@ class ProposalError(Exception):
 
 def proposal_tools(conversation, turn):
     """Tools bound to one chat turn. Their handlers only create AiProposal rows."""
-    from .chat_cleanup_cards import cleanup_tool_rows  # it builds on this module's helpers
+    from .chat_balance_cards import balance_tool_rows  # these build on this module's helpers
+    from .chat_cleanup_cards import cleanup_tool_rows
 
     tools = (
         ("propose_set_category", "Suggest setting the category on transactions, by id. The member must confirm.", {
@@ -156,7 +157,7 @@ def proposal_tools(conversation, turn):
             "items": _items_schema({"category": {"type": "string"}, "amount_minor": {"type": "integer"}},
                                    required=["category", "amount_minor"]),
         }, ["items"], _propose_set_budgets),
-    ) + cleanup_tool_rows()
+    ) + cleanup_tool_rows() + balance_tool_rows()
     return tuple(
         ToolSpec(
             name=name,
@@ -1031,6 +1032,8 @@ ITEM_ACCEPTED = "accepted"
 ITEM_REJECTED = "rejected"
 ITEM_NOTED = "noted"
 ITEM_SPLIT = "split"
+# Balance cards (#660).
+ITEM_RECORDED = "recorded"
 ITEM_FAILED = "failed"
 ITEM_STALE = "stale"
 ITEM_INVALID = "invalid"
@@ -1133,10 +1136,11 @@ _ITEM_APPLIERS = {
 
 
 def _item_appliers():
-    """Every item card's row applier, the cleanup cards (#661) included."""
-    from .chat_cleanup_cards import CLEANUP_APPLIERS  # it builds on this module's helpers
+    """Every item card's row applier, the cleanup (#661) and balance (#660) cards included."""
+    from .chat_balance_cards import BALANCE_APPLIERS  # these build on this module's helpers
+    from .chat_cleanup_cards import CLEANUP_APPLIERS
 
-    return {**_ITEM_APPLIERS, **CLEANUP_APPLIERS}
+    return {**_ITEM_APPLIERS, **CLEANUP_APPLIERS, **BALANCE_APPLIERS}
 
 
 # ---------------------------------------------------------------------------
@@ -1150,9 +1154,10 @@ def card_for(person, proposal):
     card = {"proposal": proposal, "kind": proposal.kind, "pending": proposal.status == AiProposal.Status.PENDING}
     if proposal.status == AiProposal.Status.STALE:
         card["stale_reason"] = (proposal.result or {}).get("reason") or NO_LONGER_APPLIES
-    from .chat_cleanup_cards import CLEANUP_CARD_BUILDERS  # it builds on this module's helpers
+    from .chat_balance_cards import BALANCE_CARD_BUILDERS  # these build on this module's helpers
+    from .chat_cleanup_cards import CLEANUP_CARD_BUILDERS
 
-    builder = _CARD_BUILDERS.get(proposal.kind) or CLEANUP_CARD_BUILDERS[proposal.kind]
+    builder = {**_CARD_BUILDERS, **CLEANUP_CARD_BUILDERS, **BALANCE_CARD_BUILDERS}[proposal.kind]
     builder(person, proposal, payload, card)
     return card
 
@@ -1262,6 +1267,7 @@ _APPLIED_TEXT = {
     ITEM_REJECTED: "Rejected.",
     ITEM_NOTED: "Note added.",
     ITEM_SPLIT: "Split.",
+    ITEM_RECORDED: "Recorded.",
 }
 _OUTCOME_TEXT = {**_APPLIED_TEXT, ITEM_SKIPPED: "Skipped: not ticked."}
 
