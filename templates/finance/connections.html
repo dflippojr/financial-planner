@@ -1,4 +1,5 @@
 {% extends "finance/settings_base.html" %}
+{% load static %}
 {% block title %}Connections · Financial Planner{% endblock %}
 {% block settings_content %}
 <h2 class="mb-4 text-xl font-semibold">Connections</h2>
@@ -52,8 +53,65 @@
       </form>
     </div>
     {% if not can_sync_now %}
-    <p class="text-sm opacity-80">Sync now is limited to once every 15 minutes.</p>
+    <p class="text-sm opacity-80">{% if budget_left %}Sync now is limited to once every 15 minutes.{% else %}SimpleFIN's daily request budget is used up. The next scheduled sync still runs.{% endif %}</p>
     {% endif %}
+    <p class="text-sm opacity-80" id="simplefin-budget">SimpleFIN requests in the last 24 hours: {{ requests_used }} of {{ request_cap }}.</p>
+  </div>
+</section>
+
+<section class="card bg-base-100 shadow-sm mb-6" aria-labelledby="simplefin-banks-heading">
+  <div class="card-body" id="simplefin-flow"
+       data-csrf="{{ csrf_token }}"
+       data-start-url="{% url 'simplefin-flow-start' %}"
+       data-check-url="{% url 'simplefin-flow-check' %}"
+       data-cancel-url="{% url 'simplefin-flow-cancel' %}">
+    <h2 class="card-title" id="simplefin-banks-heading">Banks</h2>
+    <p class="text-sm opacity-80">
+      {% if read_at %}As of the last SimpleFIN read, {{ read_at|date:"Y-m-d H:i" }}.{% else %}No SimpleFIN read stored yet. The next sync fills this in.{% endif %}
+      A bank is stale when its newest balance is more than 36 hours old.
+    </p>
+    {% if banks %}
+    <ul class="divide-y divide-base-300" id="simplefin-bank-list">
+      {% for bank in banks %}
+      <li class="py-3 flex flex-wrap items-start justify-between gap-2" data-bank="{{ bank.conn_id }}">
+        <div class="min-w-0">
+          <p class="font-medium break-words">{{ bank.name }}
+            {% if bank.state == "error" %}<span class="badge badge-error ml-1">Error</span>
+            {% elif bank.state == "stale" %}<span class="badge badge-warning ml-1">Stale</span>
+            {% else %}<span class="badge badge-success badge-outline ml-1">Up to date</span>{% endif %}
+          </p>
+          <p class="text-sm opacity-80">
+            {% if bank.newest %}Newest balance: {{ bank.newest|date:"Y-m-d H:i" }}{% else %}SimpleFIN reported no balance date{% endif %}
+          </p>
+          {% for error in bank.errors %}
+          <p class="text-sm text-error break-words">SimpleFIN: {{ error }}</p>
+          {% endfor %}
+        </div>
+        {% if bank.needs_fix %}
+        <a class="btn btn-sm btn-primary" href="{{ bridge_url }}" target="_blank" rel="noopener noreferrer"
+           data-simplefin-fix="{{ bank.conn_id }}" data-bank-name="{{ bank.name }}">Fix<span class="sr-only"> {{ bank.name }}</span></a>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    <div class="flex flex-wrap gap-2">
+      <a class="btn btn-outline btn-sm" href="{{ bridge_url }}" target="_blank" rel="noopener noreferrer" data-simplefin-add>Add a bank</a>
+    </div>
+    <p class="text-sm opacity-80">Fix and Add a bank open SimpleFIN Bridge in a pop-up. The app checks SimpleFIN a few times, closes it when the bank is fixed or added, and syncs.</p>
+    <div id="simplefin-flow-panel" class="alert flex flex-col items-start gap-2" hidden>
+      <p id="simplefin-flow-text" role="status" aria-live="polite">Waiting for SimpleFIN…</p>
+      <p id="simplefin-flow-blocked" hidden>
+        Your browser blocked the pop-up.
+        <a class="link" href="{{ bridge_url }}" target="_blank" rel="noopener noreferrer">Open SimpleFIN Bridge</a>
+        in a new tab, then come back and press Done.
+      </p>
+      <div class="flex flex-wrap gap-2">
+        <button type="button" class="btn btn-primary btn-sm" id="simplefin-flow-done">Done</button>
+        <button type="button" class="btn btn-outline btn-sm" id="simplefin-flow-cancel">Cancel</button>
+      </div>
+    </div>
+    <p id="simplefin-flow-result" role="status" aria-live="polite" hidden></p>
   </div>
 </section>
 
@@ -137,4 +195,5 @@
 </section>
 {% endif %}
 {% endif %}
+<script src="{% static 'js/simplefin-flow.js' %}" defer></script>
 {% endblock %}

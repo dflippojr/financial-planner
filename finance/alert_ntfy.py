@@ -101,6 +101,16 @@ def _link_line(label, url):
     return f"\n\n{label}: {url}" if url else ""
 
 
+def send_connection_notice(prefs, title, body, tags):
+    """One SimpleFIN bank-health push (#694). Names the bank only: never accounts, numbers or balances."""
+    if not ntfy_notices_available() or not prefs.ntfy_enabled or not valid_topic(prefs.ntfy_topic):
+        return False
+    link = _absolute(reverse("simplefin-connections"))
+    sent = _send(prefs.ntfy_topic, title, body + _link_line("Open Connections", link), link, tags)
+    outcome(prefs.person, "ntfy_delivery", phase="succeeded" if sent else "failed")
+    return sent
+
+
 @member_operation
 def send_test_ntfy(prefs):
     if not ntfy_notices_available() or not prefs.ntfy_enabled or not valid_topic(prefs.ntfy_topic):

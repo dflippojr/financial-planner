@@ -1,9 +1,10 @@
-from datetime import date
+import json
+from datetime import date, datetime
 
 from django.conf import settings
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
-from django.http import Http404
+from django.http import Http404, JsonResponse
 from django.shortcuts import redirect, render
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
@@ -15,15 +16,25 @@ from .forms import SimpleFinSetupForm
 from .models import Account, AccountLink, SimpleFinConnection
 from .reauth import requires_recent_auth
 from .security_services import EVENT_TYPES, record_security_event
+from .simplefin_budget import DAILY_REQUEST_CAP, SimpleFinBudgetExceeded, interactive_requests_left, requests_used
 from .simplefin_errors import SimpleFinAlreadyClaimed, SimpleFinError, SimpleFinRateLimited
+from .simplefin_flow import BRIDGE_URL, FlowError, cancel_flow, check_flow, start_flow
+from .simplefin_health import bank_rows
 from .simplefin_schedule import next_scheduled_sync
 from .simplefin_services import (
     claim_connection,
     disconnect_connection,
     load_remote_accounts,
     save_account_links,
+    stored_listing,
     sync_connection,
 )
+
+# The Fix and Add pop-ups must stay reachable from this page so it can see
+# them close and close them itself. Django's default, same-origin, would put a
+# cross-origin pop-up in another browsing context group, where it reads as
+# closed at once and window.close() does nothing.
+OPENER_POLICY = "same-origin-allow-popups"
 
 
 def _linkable_accounts(person):
@@ -69,11 +80,26 @@ def _choices_from_post(request, remotes):
     return choices
 
 
-def _safe_remote_accounts(connection):
+def _stored_messages(connection):
+    read = connection.last_read if isinstance(connection.last_read, dict) else {}
+    found = read.get("messages")
+    return [message for message in found if isinstance(message, str)] if isinstance(found, list) else []
+
+
+def _remote_accounts(connection):
+    """The account list from the newest stored read; read once if none is stored yet.
+
+    The page otherwise makes no SimpleFIN request: every request draws on the
+    connection's small daily budget.
+    """
     if connection is None:
         return [], [], ""
+    remotes = stored_listing(connection)
+    if remotes is not None:
+        return remotes, _stored_messages(connection), ""
     try:
         remotes, provider_messages = load_remote_accounts(connection)
+        connection.refresh_from_db()
         return remotes, provider_messages, ""
     except SimpleFinError as exc:
         return [], [], str(exc)
@@ -111,6 +137,9 @@ def _handle_link(request, connection, remotes, load_error):
     try:
         save_account_links(request.user, connection.pk, _choices_from_post(request, remotes))
         sync_connection(request.user, connection.pk)
+    except SimpleFinBudgetExceeded:
+        messages.success(request, "Account links saved. They sync on the next scheduled run.")
+        return redirect("simplefin-connections")
     except SimpleFinRateLimited:
         # Saving links never bypasses the manual sync limit.
         messages.success(request, "Account links saved. They sync on the next scheduled run, or with Sync now once the 15-minute wait is over.")
@@ -147,7 +176,7 @@ def _schedule_state(connection):
         (timezone.now() - connection.last_sync_at).total_seconds()
         >= settings.SIMPLEFIN_SYNC_MIN_INTERVAL_SECONDS
     )
-    return next_sync, can_sync_now
+    return next_sync, can_sync_now and interactive_requests_left(connection) > 0
 
 
 @require_http_methods(["GET", "POST"])
@@ -162,7 +191,7 @@ def connections(request):
     person = _person(request)
     connection = SimpleFinConnection.objects.filter(owner=person).first()
     form = SimpleFinSetupForm(request.POST if request.POST.get("intent") == "claim" else None)
-    remotes, provider_messages, load_error = _safe_remote_accounts(connection)
+    remotes, provider_messages, load_error = _remote_accounts(connection)
     if request.method == "POST" and request.POST.get("intent") == "claim":
         response = _handle_claim(request, connection, form)
         if response is not None:
@@ -185,7 +214,7 @@ def connections(request):
         unlisted = link is not None and link.account_id not in listed_ids
         rows.append({**remote, "link": link, "link_unlisted": unlisted, "default_cutover": cutover})
     next_sync, can_sync_now = _schedule_state(connection)
-    return render(
+    response = render(
         request,
         "finance/connections.html",
         {
@@ -201,8 +230,88 @@ def connections(request):
             "account_types": [
                 (value, label) for value, label in Account.Type.choices if value in Account.SIMPLEFIN_TYPES
             ],
+            **_health_context(connection),
         },
     )
+    response["Cross-Origin-Opener-Policy"] = OPENER_POLICY
+    return response
+
+
+def _health_context(connection):
+    if connection is None:
+        return {}
+    read = connection.last_read if isinstance(connection.last_read, dict) else {}
+    return {
+        "banks": bank_rows(connection),
+        "read_at": _parse_time(read.get("at")),
+        "requests_used": requests_used(connection),
+        "request_cap": DAILY_REQUEST_CAP,
+        "budget_left": interactive_requests_left(connection),
+        "bridge_url": BRIDGE_URL,
+    }
+
+
+def _parse_time(value):
+    try:
+        return datetime.fromisoformat(value) if isinstance(value, str) else None
+    except ValueError:
+        return None
+
+
+def _owned_connection(request):
+    connection = SimpleFinConnection.objects.filter(owner=_person(request)).first()
+    if connection is None:
+        raise Http404
+    return connection
+
+
+def _json_body(request):
+    try:
+        body = json.loads(request.body or b"{}")
+    except (ValueError, UnicodeDecodeError):
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
+def _flow_response(request, result):
+    """JSON for the page; a final outcome is also kept as a message for the reload that follows."""
+    message = result.get("message")
+    if message and result.get("state") in {"success", "exhausted", "budget", "cancelled"}:
+        level = messages.success if result["state"] in {"success", "cancelled"} else messages.info
+        level(request, message)
+    return JsonResponse(result)
+
+
+@require_POST
+@never_cache
+def connections_flow_start(request):
+    connection = _owned_connection(request)
+    body = _json_body(request)
+    try:
+        result = start_flow(request.session, connection, str(body.get("kind") or ""), str(body.get("conn_id") or ""))
+    except FlowError as exc:
+        return JsonResponse({"ok": False, "message": str(exc)}, status=400)
+    return JsonResponse(result)
+
+
+@require_POST
+@never_cache
+def connections_flow_check(request):
+    connection = _owned_connection(request)
+    try:
+        return _flow_response(request, check_flow(request.session, request.user, connection))
+    except PermissionDenied as exc:
+        raise Http404 from exc
+
+
+@require_POST
+@never_cache
+def connections_flow_cancel(request):
+    connection = _owned_connection(request)
+    try:
+        return _flow_response(request, cancel_flow(request.session, request.user, connection))
+    except PermissionDenied as exc:
+        raise Http404 from exc
 
 
 @require_POST

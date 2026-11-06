@@ -25,6 +25,7 @@ SECRET = "Synthetic Merchant 12.34"
 # Every step of the pass, in order, and the function each one calls.
 STEPS = (
     ("sync_alerts", "finance.alert_services.evaluate_sync_alerts"),
+    ("simplefin_health_alerts", "finance.simplefin_health.evaluate_health_alerts"),
     ("recurring_refresh", "finance.alert_services.refresh_all_recurring_series"),
     ("budget_alerts", "finance.alert_services.evaluate_active_budget_alerts"),
     ("large_transaction_alerts", "finance.alert_services.evaluate_recent_large_transactions"),

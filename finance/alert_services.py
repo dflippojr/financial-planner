@@ -537,10 +537,13 @@ def run_daily_alert_pass(*, today=None, now=None):
     from .receipt_services import sweep_orphan_receipt_files
     from .reconciliation import evaluate_reconciliation_alerts
     from .security_services import purge_expired_sessions, purge_old_security_events, purge_stale_member_sessions
+    from .simplefin_health import evaluate_health_alerts
 
     # (name, function, whether it returns new alerts).
     steps = (
         ("sync_alerts", evaluate_sync_alerts, True),
+        # A bank can pass the 36-hour stale mark with no new read (#694).
+        ("simplefin_health_alerts", evaluate_health_alerts, False),
         # Before the monthly review and expected-balance steps, which read series.
         ("recurring_refresh", partial(refresh_all_recurring_series, today=today), False),
         ("budget_alerts", partial(evaluate_active_budget_alerts, today=today), True),

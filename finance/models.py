@@ -1396,6 +1396,14 @@ class SimpleFinConnection(models.Model):
     last_sync_at = models.DateTimeField(null=True, blank=True)
     last_sync_result = models.CharField(max_length=500, blank=True)
     disabled = models.BooleanField(default=False)
+    # What the newest /accounts read saw (#694), so Settings -> Connections
+    # renders without a live request: {"at", "accounts", "banks", "messages"}.
+    # Bank names and sanitized provider messages only; never the access URL.
+    last_read = models.JSONField(default=dict, blank=True)
+    # ISO times of /accounts requests in the last 24 hours: the shared budget.
+    request_log = models.JSONField(default=list, blank=True)
+    # conn_id -> the health state ("ok", "stale", "error") last pushed over ntfy.
+    health_alerts = models.JSONField(default=dict, blank=True)
 
     class QuerySet(models.QuerySet):
         def owned_by(self, principal):

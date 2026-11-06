@@ -101,6 +101,9 @@ urlpatterns = [
     ),
     path("settings/connections/", simplefin_views.connections, name="simplefin-connections"),
     path("settings/connections/sync/", simplefin_views.connections_sync, name="simplefin-sync"),
+    path("settings/connections/flow/start/", simplefin_views.connections_flow_start, name="simplefin-flow-start"),
+    path("settings/connections/flow/check/", simplefin_views.connections_flow_check, name="simplefin-flow-check"),
+    path("settings/connections/flow/cancel/", simplefin_views.connections_flow_cancel, name="simplefin-flow-cancel"),
     path(
         "settings/connections/disconnect/",
         simplefin_views.connections_disconnect,
