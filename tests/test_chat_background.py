@@ -59,6 +59,8 @@ def test_send_returns_at_once_while_the_harness_takes_a_minute(harness):
     turn = AiConversationMessage.objects.get(conversation__member=person, status=PENDING)
     assert turn.role == AiConversationMessage.Role.ASSISTANT
     assert turn.reply_to.content == "How much did I spend?"
+    # The redirect lands on the question just sent, with its reply below it (#686).
+    assert response["Location"] == f"{reverse('chat')}?c={turn.conversation_id}#turn-{turn.reply_to_id}"
 
 
 @pytest.mark.django_db
@@ -86,6 +88,21 @@ def test_pending_turn_shows_thinking_and_the_reply_arrives_by_poll_and_reload(ha
     reloaded = client.get(reverse("chat")).content.decode()
     assert "Synthetic spending was steady." in reloaded
     assert "data-chat-turn-url" not in reloaded
+
+
+@pytest.mark.django_db
+def test_each_turn_has_a_stable_id_the_popover_keeps_apart(harness):
+    _state, client, person, _household = _connected_client(harness)
+    client.post(reverse("chat-send"), {"prompt": "Where did the money go?", "next": reverse("chat")})
+    turn = AiConversationMessage.objects.get(conversation__member=person, status=PENDING)
+    page = client.get(reverse("chat") + f"?c={turn.conversation_id}").content.decode()
+    assert f'id="turn-{turn.reply_to_id}" data-chat-role="user"' in page
+    assert f'id="turn-{turn.pk}" data-chat-role="assistant"' in page
+    popover = client.get(
+        reverse("chat-popover") + f"?c={turn.conversation_id}", HTTP_ACCEPT="application/json"
+    ).json()["html"]
+    # The popover can sit on the Chat page, so its copy of the thread never repeats the page's ids.
+    assert f'id="popover-turn-{turn.pk}"' in popover and f'id="turn-{turn.pk}"' not in popover
 
 
 @pytest.mark.django_db

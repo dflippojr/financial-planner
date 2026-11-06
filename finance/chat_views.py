@@ -108,8 +108,17 @@ def chat_send(request):
     if wants_json:
         return _popover_response(person, conversation, request)
     if next_url.rstrip("/").endswith("chat") or next_url.startswith(reverse("chat")):
-        return redirect(f"{reverse('chat')}?c={conversation.pk}")
+        return redirect(f"{reverse('chat')}?c={conversation.pk}{_latest_question_anchor(conversation)}")
     return redirect(next_url)
+
+
+def _latest_question_anchor(conversation):
+    """Land on the question just sent, with its reply below it, even without JavaScript (#686)."""
+    question = (
+        conversation.messages.filter(role=AiConversationMessage.Role.USER)
+        .order_by("-created_at", "-pk").values_list("pk", flat=True).first()
+    )
+    return f"#turn-{question}" if question else ""
 
 
 def _posted_attachment(request, person):

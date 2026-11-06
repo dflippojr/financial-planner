@@ -120,7 +120,7 @@ def test_http_lifecycle_seeds_sign_in_chat_and_authenticated_teardown(monkeypatc
                 })
                 assert response.status_code == 302, "Chat send must redirect before polling"
                 location = response.headers.get("Location", "")
-                if not re.fullmatch(r"/chat/\?c=[1-9][0-9]*", location):
+                if not re.fullmatch(r"/chat/\?c=[1-9][0-9]*#turn-[1-9][0-9]*", location):
                     pytest.fail("Chat send did not redirect to a conversation")
                 conversation_url = base + location
                 answer = "Synthetic UI reply. No real provider was contacted."
