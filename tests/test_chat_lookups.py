@@ -329,13 +329,103 @@ def test_savings_goals_record_what_the_funding_plan_read(world):
     result = run_tool(world["alpha"], default_tools(), "savings_goals", {})
     assert {world["income"].pk, world["hh_planned"].pk} <= set(result.planned_item_ids)
     assert world["beta_planned"].pk not in result.planned_item_ids
-    assert {world["card"].pk, world["loan"].pk, world["private"].pk} <= set(result.account_ids)
+    # The live cash-flow accounts the surplus and buffer come from; the shared loan is
+    # not a cash-flow account and holds no charge the plan reads (#682).
+    assert set(result.account_ids) == {world["shared"].pk, world["private"].pk, world["card"].pk}
 
     world["linked_goal"].delete()
     _withhold_consent(world)
     held = run_tool(world["alpha"], default_tools(), "savings_goals", {})
     assert held.planned_item_ids == (world["income"].pk,)
-    assert world["shared"].pk not in held.account_ids and world["card"].pk in held.account_ids
+    assert set(held.account_ids) == {world["private"].pk, world["card"].pk}
+
+
+def _archived(account):
+    account.status = Account.Status.ARCHIVED
+    account.archived_at = timezone.now()
+    account.save(update_fields=["status", "archived_at"])
+    return account
+
+
+@pytest.mark.django_db
+def test_savings_goals_record_a_goals_linked_account_even_when_the_plan_skips_it(world):
+    vault = _archived(checking(world["alpha"], world["household"], "HH-SYN-VAULT"))
+    _snapshot(vault, timezone.localdate(), 250_000)
+    goal = world["goal"]
+    goal.linked_account = vault
+    goal.save(update_fields=["linked_account"])
+    result = run_tool(world["alpha"], default_tools(), "savings_goals", {})
+    row = next(row for row in assert_grounded(result)["rows"] if row["id"] == goal.pk)
+    assert row["saved_minor"] == 250_000 and row["linked_account"]["id"] == vault.pk
+    assert set(result.account_ids) == {vault.pk, world["shared"].pk, world["private"].pk, world["card"].pk}
+
+
+@pytest.mark.django_db
+def test_savings_goals_record_archived_accounts_the_projection_and_buffer_read(world):
+    today = timezone.localdate()
+    old_card = _archived(checking(world["alpha"], world["household"], "HH-SYN-OLD-CARD"))
+    spent = _archived(checking(world["alpha"], world["household"], "HH-SYN-OLD-SPEND"))
+    idle = _archived(checking(world["alpha"], world["household"], "HH-SYN-IDLE"))
+    series = RecurringSeries.objects.create(
+        person=world["alpha"], merchant_key="syn gym", display_name="SYN-GYM",
+        cadence=RecurringSeries.Cadence.MONTHLY, typical_amount_minor=-4_500,
+        status=RecurringSeries.Status.CONFIRMED, confidence=RecurringSeries.Confidence.HIGH,
+        reasons=["synthetic"], fingerprint="d" * 64,
+    )
+    # The series' history started on the archived card; its latest charges are live.
+    for offset, account in ((4, old_card), (3, world["private"]), (2, world["private"]), (1, world["private"])):
+        txn = add_txn(account, world["alpha"], add_months(today.replace(day=6), -offset), -4_500, "SYN-GYM")
+        RecurringSeriesMember.objects.create(series=series, transaction=txn)
+    # Last month's spending on an archived account still sets the default buffer.
+    last_month = add_months(today.replace(day=10), -1)
+    add_txn(spent, world["alpha"], last_month, -8_000, "SYN-OLD-SPEND")
+    # Income and an untracked transfer are not spending, so they leave the buffer alone.
+    paid = _archived(checking(world["alpha"], world["household"], "HH-SYN-OLD-PAY"))
+    add_txn(paid, world["alpha"], last_month, 8_000, "SYN-OLD-PAY")
+    moved = _archived(checking(world["alpha"], world["household"], "HH-SYN-OLD-MOVE"))
+    transfer = add_txn(moved, world["alpha"], last_month, -8_000, "SYN-OLD-MOVE")
+    transfer.untracked_transfer = True
+    transfer.save(update_fields=["untracked_transfer"])
+    result = run_tool(world["alpha"], default_tools(), "savings_goals", {})
+    payload = assert_grounded(result)
+    goal = next(row for row in payload["rows"] if row["id"] == world["goal"].pk)
+    assert goal["projected_completion"]["funded_month"][:4].isdigit()  # funded by the projection
+    assert set(result.account_ids) == {
+        old_card.pk, spent.pk, world["shared"].pk, world["private"].pk, world["card"].pk}
+    assert not {idle.pk, paid.pk, moved.pk} & set(result.account_ids)
+
+
+@pytest.mark.django_db
+def test_savings_goals_record_the_bill_history_behind_a_replaced_charge(world):
+    today = timezone.localdate()
+    old = _archived(checking(world["alpha"], world["household"], "HH-SYN-OLD-UTILITY"))
+
+    def series(person, key):
+        return RecurringSeries.objects.create(
+            person=person, merchant_key="syn utility", display_name="SYN-UTILITY",
+            cadence=RecurringSeries.Cadence.MONTHLY, typical_amount_minor=-9_000,
+            status=RecurringSeries.Status.CONFIRMED, confidence=RecurringSeries.Confidence.HIGH,
+            reasons=["synthetic"], fingerprint=key * 64,
+        )
+
+    mine, theirs = series(world["alpha"], "e"), series(world["beta"], "f")
+    # One household bill: both members' copies share the live charges; beta's
+    # copy also holds the bill's earlier charge on an archived account.
+    for offset in (3, 2, 1):
+        txn = add_txn(world["shared"], world["alpha"], add_months(today.replace(day=8), -offset), -9_000,
+                      "SYN-UTILITY")
+        RecurringSeriesMember.objects.create(series=mine, transaction=txn)
+        RecurringSeriesMember.objects.create(series=theirs, transaction=txn)
+    early = add_txn(old, world["beta"], add_months(today.replace(day=8), -4), -9_000, "SYN-UTILITY")
+    RecurringSeriesMember.objects.create(series=theirs, transaction=early)
+    plan = _planned(world["alpha"], "HH-SYN-PLANNED utility", 9_500, kind=PlannedItem.Kind.EXPENSE,
+                    household=world["household"])
+    plan.replaces_series = theirs
+    plan.save(update_fields=["replaces_series"])
+    result = run_tool(world["alpha"], default_tools(), "savings_goals", {})
+    # The plan replaces the whole bill, so alpha's copy leaves the projection
+    # because of history that includes the archived account.
+    assert old.pk in result.account_ids
 
 
 @pytest.mark.django_db
@@ -761,6 +851,42 @@ def test_unsharing_an_unrelated_account_keeps_a_chat_that_quoted_only_a_househol
     assert chat.used_rule_ids == [world["hh_rule"].pk] and chat.used_account_ids == []
     unshare_account(world["alpha"], world["shared"].pk)
     assert _exists(chat)
+
+
+@pytest.mark.django_db
+def test_unsharing_an_account_the_goals_answer_never_read_keeps_the_chat(harness, world):  # noqa: F811
+    state, url = harness
+    idle = _archived(checking(world["alpha"], world["household"], "HH-SYN-IDLE"))
+    goal = world["hh_goal"]
+    goal.linked_account = world["shared"]
+    goal.save(update_fields=["linked_account"])
+    chat = _lookup_chat(state, url, world["beta"], "savings_goals")
+    chat.refresh_from_db()
+    assert goal.pk in chat.used_goal_ids
+    # Beta's live cash-flow accounts: the shared checking and their own card.
+    assert set(chat.used_account_ids) == {world["shared"].pk, world["beta_card"].pk}
+    # Neither the archived account nor the shared loan fed the goals or their plan.
+    unshare_account(world["alpha"], idle.pk)
+    unshare_account(world["alpha"], world["loan"].pk)
+    assert _exists(chat)
+    # The goal's saved amount came from its linked account.
+    unshare_account(world["alpha"], world["shared"].pk)
+    assert not _exists(chat)
+
+
+@pytest.mark.django_db
+def test_unsharing_an_archived_account_a_goal_is_linked_to_purges_the_chat(harness, world):  # noqa: F811
+    state, url = harness
+    vault = _archived(checking(world["alpha"], world["household"], "HH-SYN-VAULT"))
+    _snapshot(vault, timezone.localdate(), 250_000)
+    goal = world["hh_goal"]
+    goal.linked_account = vault
+    goal.save(update_fields=["linked_account"])
+    chat = _lookup_chat(state, url, world["beta"], "savings_goals")
+    chat.refresh_from_db()
+    assert vault.pk in chat.used_account_ids
+    unshare_account(world["alpha"], vault.pk)
+    assert not _exists(chat)
 
 
 @pytest.mark.django_db
