@@ -1,0 +1,18 @@
+{% comment %}
+Investment-activity notice with a dismiss button (#699). A plain POST form, so it works without
+JavaScript: the view records the dismissal for the signed-in member and redirects back to this page
+with its query string. notice-dismiss.js sends the same form with fetch and removes the note, or falls back to the
+plain POST when that fails.
+The page header's More note keeps the explanation after dismissal. Pass report.
+{% endcomment %}
+{% if show_investment_notice %}
+<div role="note" class="alert alert-info mb-4 flex items-center justify-between gap-2" data-investment-notice>
+  <span class="min-w-0">{{ report.investment_notice }}</span>
+  <form method="post" action="{% url 'investment-notice-dismiss' %}" class="shrink-0" data-notice-dismiss>
+    {% csrf_token %}
+    <input type="hidden" name="notice" value="{{ investment_notice_hash }}">
+    <input type="hidden" name="next" value="{{ request.get_full_path }}">
+    <button type="submit" class="btn btn-ghost btn-sm btn-square size-11 md:size-8" aria-label="Dismiss the investment activity notice"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+  </form>
+</div>
+{% endif %}

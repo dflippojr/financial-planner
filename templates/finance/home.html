@@ -4,11 +4,9 @@
 {% block title %}Cash flow · Financial Planner{% endblock %}
 {% block content %}
 <div class="relative">
-{% include "finance/_page_header.html" with title="Cash flow" eyebrow="Household" helper="Household and your private accounts · amounts in USD. Projected months are estimates, not advice." more="Projected months are a projection from planned items and confirmed recurring charges, not a forecast or advice. Historical actuals are unchanged." helper_class="max-md:hidden" actions="finance/_cash_flow_filters.html" %}
+{% include "finance/_page_header.html" with title="Cash flow" eyebrow="Household" helper="Household and your private accounts · amounts in USD. Projected months are estimates, not advice." more="Projected months are a projection from planned items and confirmed recurring charges, not a forecast or advice. Historical actuals are unchanged." more_note=investment_more_note helper_class="max-md:hidden" actions="finance/_cash_flow_filters.html" %}
 </div>
-{% if report and report.includes_investment %}
-<div role="note" class="alert alert-info mb-4">{{ report.investment_notice }}</div>
-{% endif %}
+{% include "finance/_investment_notice.html" %}
 {% if report and report.projection_excludes_planned_items and report.projected_periods %}
 <div role="note" class="alert alert-info mb-4">Planned items are not tied to an account, so projected months for one account show only its confirmed recurring charges.</div>
 {% endif %}
@@ -284,8 +282,9 @@
   </details>
   {% endif %}
   <details class="px-1 text-sm md:hidden">
-    <summary class="cursor-pointer">Projections, not advice. <span class="link">More</span></summary>
+    <summary class="cursor-pointer">Projections, not advice.{% if investment_more_note %} Investment activity left out.{% endif %} <span class="link">More</span></summary>
     <p class="mt-2 opacity-80">Projected months are a projection from planned items and confirmed recurring charges, not a forecast or advice. Historical actuals are unchanged.</p>
+    {% if investment_more_note %}<p class="mt-2 opacity-80">{{ investment_more_note }}</p>{% endif %}
   </details>
 </div>
 {% endif %}

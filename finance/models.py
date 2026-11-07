@@ -122,6 +122,9 @@ class Person(models.Model):
         blank=True,
         related_name="dismissed_by",
     )
+    # SHA-256 of the investment-activity notice wording this member dismissed
+    # (#699); a different wording shows the notice again. See notice_dismissal.
+    investment_notice_dismissed_hash = models.CharField(max_length=64, blank=True, default="")
     require_passkey_after_password = models.BooleanField(default=False)
     # Fingerprint of the charges the last recurring detection ran on; a page
     # view detects again only when it changes. See recurring_services.

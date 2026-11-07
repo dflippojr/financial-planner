@@ -18,6 +18,7 @@
   <script src="{% static 'js/responsive-details.js' %}" defer></script>
   <script src="{% static 'js/row-menu.js' %}" defer></script>
   <script src="{% static 'js/focus-visible.js' %}" defer></script>
+  {% if show_investment_notice %}<script src="{% static 'js/notice-dismiss.js' %}" defer></script>{% endif %}
   {% if user.is_authenticated and not auth_card_layout %}<script src="{% static 'js/ai-consent.js' %}" defer></script>{% endif %}
   <link rel="stylesheet" href="{% static 'dist/app.css' %}">
 </head>

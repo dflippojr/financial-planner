@@ -1,20 +1,22 @@
 {% comment %}
 Page header (issue #328): one h1, one helper line with longer text behind More, and at most one
 primary action plus secondary buttons or a range control from the template named by actions.
-Pass title, and optionally eyebrow (a phone-only context line), helper, more, helper_class
-(such as max-md:hidden when the phone layout shows that text elsewhere) and actions.
+Pass title, and optionally eyebrow (a phone-only context line), helper, more, more_note (a second
+paragraph behind More, such as the investment-activity explanation, #699), helper_class (such as
+max-md:hidden when the phone layout shows that text elsewhere) and actions.
 {% endcomment %}
 <header class="page-header">
   <div class="page-header-text">
     {% if eyebrow %}<p class="text-sm opacity-80 md:hidden">{{ eyebrow }}</p>{% endif %}
     <h1 class="text-2xl font-bold">{{ title }}</h1>
-    {% if helper or more %}
+    {% if helper or more or more_note %}
     <div class="page-header-helper{% if helper_class %} {{ helper_class }}{% endif %}">
       {% if helper %}<p>{{ helper }}</p>{% endif %}
-      {% if more %}
+      {% if more or more_note %}
       <details class="page-header-more">
         <summary>More</summary>
-        <p>{{ more }}</p>
+        {% if more %}<p>{{ more }}</p>{% endif %}
+        {% if more_note %}<p>{{ more_note }}</p>{% endif %}
       </details>
       {% endif %}
     </div>

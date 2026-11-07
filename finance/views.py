@@ -21,6 +21,7 @@ from .access import first_message as _first_message
 from .access import service_or_404 as _service_or_404
 from .backup_health import settings_backup_context
 from .reconciliation import settings_reconciliation_context
+from .notice_dismissal import notice_context
 from .auth_services import (
     InvalidOneTimeCode,
     SETUP_THROTTLE_USERNAME,
@@ -558,6 +559,7 @@ def home(request):
             "scenario_comparison": report.scenario_comparison if report is not None else None,
             "report": report,
             "chart_data": cash_flow_chart_data(report) if report is not None else None,
+            **notice_context(request.user, report),
             "accounts": Account.objects.visible_to(request.user),
             "budget_summary": budget_summary,
             "attention_items": attention_items,
@@ -699,6 +701,7 @@ def spending_by_category(request):
         {
             "filter_form": form,
             "report": report,
+            **notice_context(request.user, report),
             "trend_report": trend_report,
             "chart_data": chart_data,
             "active_tab": tab,
@@ -770,6 +773,7 @@ def spending_category_detail(request, category_id=None):
         {
             "filter_form": form,
             "report": report,
+            **notice_context(request.user, report),
             "chart_data": chart_data,
             "category": category,
             "range_from": date_from,

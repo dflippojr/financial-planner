@@ -3,10 +3,8 @@
 {% block content %}
 {% if category.key == 'uncategorized' %}{% url 'spending-category-uncategorized' as reset_url %}{% else %}{% url 'spending-category-detail' category.key as reset_url %}{% endif %}
 <p class="mb-2"><a class="link" href="{% url 'spending-by-category' %}">Spending by category</a></p>
-{% include "finance/_page_header.html" with title=category.name helper="Spending in this category for each period. Amounts in USD." actions="finance/_range_filters.html" %}
-{% if report and report.includes_investment %}
-<div role="note" class="alert alert-info mb-4">{{ report.investment_notice }}</div>
-{% endif %}
+{% include "finance/_page_header.html" with title=category.name helper="Spending in this category for each period. Amounts in USD." more_note=investment_more_note actions="finance/_range_filters.html" %}
+{% include "finance/_investment_notice.html" %}
 {% if report %}
 <div class="flex flex-col gap-4">
   <section aria-label="Key numbers" class="grid gap-4 rounded-box border border-base-300 bg-base-100 p-5 sm:grid-cols-3 sm:gap-6">
