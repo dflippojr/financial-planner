@@ -198,5 +198,8 @@ def test_new_series_from_the_daily_refresh_reaches_the_weekly_digest():
 
     run_daily_alert_pass()
 
-    digest = build_weekly_digest(owner, today=timezone.localdate(), week="current")
+    # The series counts in the week of its first charge (Thu Jan 15), not the week it was detected (#698).
+    digest = build_weekly_digest(owner, today=date(2026, 1, 15), week="current")
     assert [item.title for item in digest.new_series] == ["Synthetic New Stream"]
+    assert digest.new_series[0].on == date(2026, 1, 15)
+    assert build_weekly_digest(owner, today=timezone.localdate(), week="current").new_series == []

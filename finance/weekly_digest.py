@@ -7,11 +7,10 @@ threshold (AlertSettings).
 """
 
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from datetime import timedelta
 
-from django.db.models import Exists, OuterRef, Prefetch, Q
+from django.db.models import Min, Prefetch, Q
 from django.urls import reverse
-from django.utils import timezone
 
 from .cash_flow import format_minor
 from .category_services import exclusion_exists_for
@@ -58,14 +57,6 @@ def week_window(today, week):
     return monday - timedelta(days=7), monday - timedelta(days=1)
 
 
-def _local_bounds(start, end):
-    zone = timezone.get_current_timezone()
-    return (
-        timezone.make_aware(datetime.combine(start, time.min), zone),
-        timezone.make_aware(datetime.combine(end + timedelta(days=1), time.min), zone),
-    )
-
-
 def _series_url(series):
     return f"{reverse('recurring-review')}#series-{series.pk}"
 
@@ -80,20 +71,31 @@ def _active_members():
 
 
 def _new_series(principal, start, end):
-    since, until = _local_bounds(start, end)
+    """Series whose first active charge falls in the window, newest first charge first.
+
+    When the series was created does not matter: importing history creates series
+    this week for charges that began months ago, and those are not new (#698).
+    """
     rows = (
         RecurringSeries.objects.visible_to(principal)
         # An inactive series has lost its members, possibly to revoked access, so it is left out.
-        .filter(status__in=_NEW_SERIES_STATUSES, is_active=True, created_at__gte=since, created_at__lt=until)
-        .filter(Exists(_active_members().filter(series_id=OuterRef("pk"))))
-        .order_by("-created_at", "display_name", "pk")
+        .filter(status__in=_NEW_SERIES_STATUSES, is_active=True)
+        # Only active charges count, as in _active_members; a series with none has no first charge.
+        .annotate(
+            first_charge=Min(
+                "members__transaction__transaction_date",
+                filter=Q(members__transaction__status=Transaction.Status.ACTIVE),
+            )
+        )
+        .filter(first_charge__gte=start, first_charge__lte=end)
+        .order_by("-first_charge", "display_name", "pk")
     )
     return [
         DigestItem(
             title=series.display_name,
             detail=f"{series.get_cadence_display()} · {series.get_status_display()}",
             amount_display=format_minor(abs(series.typical_amount_minor), series.currency),
-            on=timezone.localdate(series.created_at),
+            on=series.first_charge,
             url=_series_url(series),
         )
         for series in rows
