@@ -61,7 +61,7 @@ jobs:
           key: ${{ steps.playwright.outputs.deb-key }}
           restore-keys: ${{ steps.playwright.outputs.deb-restore }}
 
-      - name: Fetch browser system packages
+      - name: Install browser system packages
         run: PW_APT_CACHE="$HOME/.cache/browser-debs" bash scripts/ci_browser_deps.sh python -m playwright -- chromium
 
       - name: Cache Playwright browsers
@@ -73,11 +73,7 @@ jobs:
 
       - name: Install Chromium
         if: steps.browsers.outputs.cache-hit != 'true'
-        run: python -m playwright install --with-deps chromium
-
-      - name: Install Chromium system libraries
-        if: steps.browsers.outputs.cache-hit == 'true'
-        run: python -m playwright install-deps chromium
+        run: python -m playwright install chromium
 
       - name: Run browser tests
         env:
@@ -134,10 +130,10 @@ jobs:
           path: ~/.cache/browser-debs
           key: ${{ steps.tools.outputs.deb-key }}
           restore-keys: ${{ steps.tools.outputs.deb-restore }}
-      - name: Fetch browser system packages
+      - name: Install browser system packages
         run: PW_APT_CACHE="$HOME/.cache/browser-debs" bash scripts/ci_browser_deps.sh .venv/bin/python -m playwright -- chromium
       - name: Install Chromium
-        run: .venv/bin/python -m playwright install --with-deps chromium
+        run: .venv/bin/python -m playwright install chromium
       - name: Build CSS
         run: bash scripts/build_css.sh
       - name: Sign in and persist a category in a disposable instance
@@ -200,10 +196,10 @@ jobs:
           path: ~/.cache/browser-debs
           key: ${{ steps.tools.outputs.deb-key }}
           restore-keys: ${{ steps.tools.outputs.deb-restore }}
-      - name: Fetch browser system packages
+      - name: Install browser system packages
         run: PW_APT_CACHE="$HOME/.cache/browser-debs" bash scripts/ci_browser_deps.sh node_modules/.bin/playwright -- ${{ matrix.browsers }}
       - name: Install browsers
-        run: npx playwright install --with-deps ${{ matrix.browsers }}
+        run: npx playwright install ${{ matrix.browsers }}
       - name: Build CSS
         run: bash scripts/build_css.sh
       - name: Run ${{ matrix.leg }} isolated passing journeys and reflow checks

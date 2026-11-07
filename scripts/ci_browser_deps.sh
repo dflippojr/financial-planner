@@ -1,31 +1,34 @@
 #!/usr/bin/env bash
-# Prefetch the Ubuntu packages Playwright's browsers need, for CI only (#693).
+# Install the Ubuntu packages Playwright's browsers need, for CI only (#693).
 #
 #   bash scripts/ci_browser_deps.sh <playwright command...> -- <browser...>
 #   bash scripts/ci_browser_deps.sh node_modules/.bin/playwright -- chromium webkit
 #   bash scripts/ci_browser_deps.sh .venv/bin/python -m playwright -- chromium
 #
+# Run `playwright install <browser>` (without --with-deps) afterwards.
+#
 # Hosted runners fetch these .deb files from azure.archive.ubuntu.com. Most
 # runs get 139 MB in about 6 seconds, but on some runners the same mirror
 # crawls at about 40 kB/s, and the job used to hit its time limit inside
-# `playwright install --with-deps` before any test ran. This script only
-# downloads, so it is always safe to stop:
+# `playwright install --with-deps` before any test ran. So:
 #
-# - It asks Playwright which packages are missing (install-deps --dry-run),
-#   so the list stays the one the pinned Playwright version wants.
-# - It seeds /var/cache/apt/archives from $PW_APT_CACHE (a directory that
-#   actions/cache restores), when set. apt checks each cached file against
-#   the signed package index before using it, so a stale or altered file is
-#   fetched again rather than installed.
-# - Each download attempt has its own time limit ($PW_APT_LIMITS, seconds).
-#   After the first one runs out, apt drops the Azure mirror and uses the
-#   runner's next listed mirror (archive.ubuntu.com). Finished and partial
-#   downloads carry over between attempts.
-# - On success it copies the current .deb files back into $PW_APT_CACHE.
+# - Playwright's install-deps --dry-run names the missing packages, so the
+#   list stays the one the pinned Playwright version wants.
+# - .deb files restored into $PW_APT_CACHE (by actions/cache) are copied into
+#   apt's archive directory only when their hash matches the signed package
+#   index, because apt itself trusts an archive that is already there.
+# - The rest is downloaded with --download-only in attempts limited by
+#   $PW_APT_LIMITS (seconds each). Stopping a download is safe; finished and
+#   partial files carry over. After the first attempt runs out, the Azure
+#   mirror is dropped and apt uses the runner's next listed mirror
+#   (archive.ubuntu.com).
+# - The install itself runs with --no-download, so nothing reaches a mirror
+#   outside those limits and dpkg is never interrupted.
+# - The .deb files of this install are copied back into $PW_APT_CACHE.
 #
-# The caller's `playwright install --with-deps` then finds every package on
-# disk and only unpacks it. If every attempt runs out, the script fails with
-# a clear error instead of leaving the job to its time limit.
+# If every attempt runs out, the script fails with a clear error instead of
+# leaving the job to its time limit. PW_APT_ARCHIVES and PW_APT_MIRRORS exist
+# for tests/test_ci_browser_deps.py.
 set -euo pipefail
 
 playwright=()
@@ -42,8 +45,8 @@ browsers=("$@")
 
 read -r -a limits <<< "${PW_APT_LIMITS:-90 90 90}"
 cache_dir=${PW_APT_CACHE:-}
-archives=/var/cache/apt/archives
-mirrors=/etc/apt/apt-mirrors.txt
+archives=${PW_APT_ARCHIVES:-/var/cache/apt/archives}
+mirrors=${PW_APT_MIRRORS:-/etc/apt/apt-mirrors.txt}
 
 if [[ -f $mirrors ]]; then
   echo "apt mirror list ($mirrors):"
@@ -52,6 +55,17 @@ fi
 
 update_index() {
   sudo timeout -k 10 120 apt-get update -q
+}
+
+# hash_matches FILE ALGO:HEX
+hash_matches() {
+  local tool
+  case ${2%%:*} in
+    SHA512) tool=sha512sum ;;
+    SHA256) tool=sha256sum ;;
+    *) return 1 ;;
+  esac
+  [[ $("$tool" "$1" | cut -d ' ' -f 1) == "${2#*:}" ]]
 }
 
 update_index
@@ -73,11 +87,29 @@ if ((${#packages[@]} == 0)); then
   echo "::error::Could not read the package list from playwright install-deps --dry-run."
   exit 1
 fi
-echo "${#packages[@]} packages to fetch for ${browsers[*]}."
+echo "${#packages[@]} packages to install for ${browsers[*]}."
 
-if [[ -n $cache_dir ]] && compgen -G "$cache_dir/*.deb" > /dev/null; then
-  sudo cp "$cache_dir"/*.deb "$archives"/
-  echo "Seeded $(find "$cache_dir" -maxdepth 1 -name '*.deb' | wc -l) cached .deb files."
+# One line per .deb apt would fetch: 'URI' FILE SIZE SHA256:HEX
+mapfile -t debs < <(
+  sudo apt-get install -qq --print-uris --no-install-recommends \
+    -o Acquire::ForceHash=SHA256 "${packages[@]}" |
+    awk '{ print $2, $4 }'
+)
+
+if [[ -n $cache_dir && -d $cache_dir ]]; then
+  seeded=0
+  rejected=0
+  for entry in "${debs[@]}"; do
+    file=${entry%% *}
+    [[ -f $cache_dir/$file ]] || continue
+    if hash_matches "$cache_dir/$file" "${entry#* }"; then
+      sudo cp "$cache_dir/$file" "$archives/"
+      seeded=$((seeded + 1))
+    else
+      rejected=$((rejected + 1))
+    fi
+  done
+  echo "Seeded $seeded of ${#debs[@]} .deb files from the cache ($rejected did not match the index)."
 fi
 
 fetched=false
@@ -106,12 +138,17 @@ if [[ $fetched != true ]]; then
   exit 1
 fi
 
+sudo apt-get install -y -q --no-install-recommends --no-download "${packages[@]}"
+
 if [[ -n $cache_dir ]]; then
-  # autoclean drops .deb files the current index no longer offers (older
-  # versions from a restored cache), so the cache does not grow.
-  sudo apt-get autoclean -q
   mkdir -p "$cache_dir"
   find "$cache_dir" -maxdepth 1 -name '*.deb' -delete
-  cp "$archives"/*.deb "$cache_dir"/
-  echo "Kept $(find "$cache_dir" -maxdepth 1 -name '*.deb' | wc -l) .deb files for the cache."
+  kept=0
+  for entry in "${debs[@]}"; do
+    if [[ -f $archives/${entry%% *} ]]; then
+      cp "$archives/${entry%% *}" "$cache_dir/"
+      kept=$((kept + 1))
+    fi
+  done
+  echo "Kept $kept of ${#debs[@]} .deb files for the cache."
 fi
