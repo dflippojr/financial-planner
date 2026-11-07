@@ -18,6 +18,7 @@ VIEWPORTS = {"phone-320": (320, 700), "phone": (390, 844), "desktop": (1440, 900
 PAGES = ("/", "/spending/", "/spending/category/uncategorized/")
 NOTICE = "[data-investment-notice]"
 BUTTON = "Dismiss the investment activity notice"
+PASSWORD = "synthetic-notice-pass-699"
 
 LAYOUT_JS = """() => {
   const note = document.querySelector('[data-investment-notice]');
@@ -108,11 +109,24 @@ def test_dismissing_without_javascript_returns_to_the_same_page(open_page, size)
 
 
 def test_a_sign_in_redirect_never_removes_the_notice_without_saving(open_page):
-    """If the session ended while the page was open, script must not hide an unsaved dismissal."""
-    page = open_page("desktop", "/")
+    """If the session ended while the page was open, script must not hide an unsaved dismissal,
+    and signing in again returns to the page the member was on."""
+    path = "/spending/?tab=trends"
+    page = open_page("desktop", path)
+    user = open_page.person.user
+    user.set_password(PASSWORD)
+    user.save()
     page.context.clear_cookies(name="sessionid")
     with page.expect_navigation():
         page.get_by_role("button", name=BUTTON).click()
     # The plain POST took over and landed on sign-in; nothing was recorded.
     assert "/sign-in/" in page.url, page.url
     assert Person.objects.get(pk=open_page.person.pk).investment_notice_dismissed_hash == ""
+
+    page.locator("input[name=username]").fill(user.username)
+    page.locator("input[name=password]").fill(PASSWORD)
+    with page.expect_navigation():
+        page.get_by_role("button", name="Sign in", exact=True).click()
+    page.wait_for_load_state("networkidle")
+    assert page.url == open_page.base_url + path
+    expect(page.locator(NOTICE)).to_have_count(1)

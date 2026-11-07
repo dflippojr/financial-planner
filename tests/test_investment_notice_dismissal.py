@@ -5,8 +5,8 @@ investment account is in scope. Dismissal is stored on the member's Person,
 so it holds on every device and never hides the notice for another member,
 and it resets when the notice's wording changes.
 """
-import html
 import re
+from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 import pytest
 from django.test import Client
@@ -53,11 +53,15 @@ def _notice(body):
     return match.group(0) if match else None
 
 
+def _dismiss_url(next_url):
+    return f"{reverse('investment-notice-dismiss')}?{urlencode({'next': next_url})}"
+
+
 def _dismiss(client, *, shown=None, next_url="/", json=False):
     headers = {"HTTP_ACCEPT": "application/json"} if json else {}
     return client.post(
-        reverse("investment-notice-dismiss"),
-        {"notice": notice_hash() if shown is None else shown, "next": next_url},
+        _dismiss_url(next_url),
+        {"notice": notice_hash() if shown is None else shown},
         **headers,
     )
 
@@ -71,11 +75,11 @@ def test_each_page_renders_the_notice_with_an_accessible_dismiss_form(household)
         notice = _notice(body)
         assert notice is not None, page
         assert NOTICE in notice
-        assert f'action="{reverse("investment-notice-dismiss")}"' in notice
+        # The no-JS path returns to this exact page, query string included.
+        action = f'{reverse("investment-notice-dismiss")}?next={quote(page + SPENDING_QUERY, safe="")}'
+        assert f'action="{action}"' in notice
         assert 'name="csrfmiddlewaretoken"' in notice
         assert f'name="notice" value="{notice_hash()}"' in notice
-        # The no-JS path returns to this exact page, query string included.
-        assert f'name="next" value="{html.escape(page + SPENDING_QUERY)}"' in notice
         assert re.search(r'<button type="submit"[^>]*' + re.escape(DISMISS_LABEL), notice)
         # A 44 px target on phones (size-11), smaller beside the text from md up.
         assert "size-11 md:size-8" in notice
@@ -187,29 +191,45 @@ def test_dismissing_requires_a_csrf_token(household):
     owner, _member = household
     client = Client(enforce_csrf_checks=True)
     client.force_login(owner.user)
-    refused = client.post(reverse("investment-notice-dismiss"), {"notice": notice_hash(), "next": "/"})
+    refused = client.post(_dismiss_url("/"), {"notice": notice_hash()})
     assert refused.status_code == 403
     owner.refresh_from_db()
     assert owner.investment_notice_dismissed_hash == ""
 
     body = client.get(reverse("home")).content.decode()
     token = re.search(r'name="csrfmiddlewaretoken" value="([^"]+)"', _notice(body)).group(1)
-    accepted = client.post(
-        reverse("investment-notice-dismiss"),
-        {"notice": notice_hash(), "next": "/", "csrfmiddlewaretoken": token},
-    )
+    accepted = client.post(_dismiss_url("/"), {"notice": notice_hash(), "csrfmiddlewaretoken": token})
     assert accepted.status_code == 302
     owner.refresh_from_db()
     assert owner.investment_notice_dismissed_hash == notice_hash()
 
 
 @pytest.mark.django_db
-def test_dismiss_is_post_only_and_needs_a_signed_in_member(household):
+def test_a_get_changes_nothing_and_returns_to_the_page(household):
     owner, _member = household
-    assert signed_in(owner).get(reverse("investment-notice-dismiss")).status_code == 405
-    anonymous = Client().post(reverse("investment-notice-dismiss"), {"notice": notice_hash()})
+    client = signed_in(owner)
+    target = reverse("spending-by-category") + SPENDING_QUERY
+    reply = client.get(_dismiss_url(target))
+    assert reply.status_code == 302 and reply["Location"] == target
+    assert client.get(reverse("investment-notice-dismiss"))["Location"] == reverse("home")
+    assert client.get(_dismiss_url("https://elsewhere.example/"))["Location"] == reverse("home")
+    owner.refresh_from_db()
+    assert owner.investment_notice_dismissed_hash == ""
+
+
+@pytest.mark.django_db
+def test_an_expired_session_signs_in_and_returns_to_the_page_without_dismissing(household):
+    owner, _member = household
+    target = reverse("spending-by-category") + SPENDING_QUERY
+    anonymous = Client().post(_dismiss_url(target), {"notice": notice_hash()})
     assert anonymous.status_code == 302
-    assert reverse("investment-notice-dismiss") not in anonymous["Location"].split("?")[0]
+    login = urlparse(anonymous["Location"])
+    assert login.path == reverse("login")
+    after_sign_in = parse_qs(login.query)["next"][0]
+    assert after_sign_in == _dismiss_url(target)
+    # Sign-in redirects to next with a GET, which only returns to the page.
+    reply = signed_in(owner).get(after_sign_in)
+    assert reply.status_code == 302 and reply["Location"] == target
     assert not Person.objects.exclude(investment_notice_dismissed_hash="").exists()
 
 
