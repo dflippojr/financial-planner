@@ -9,7 +9,8 @@ from django.urls import reverse
 from django.utils import timezone
 
 from finance.models import Account, AlertSettings, RecurringSeries, Transaction, TransferPair
-from finance.weekly_digest import build_weekly_digest, week_window
+from finance.recurring_services import create_manual_series
+from finance.weekly_digest import build_weekly_digest, recent_span_days, week_window
 from tests.test_recurring_review import (
     add_member,
     make_account,
@@ -22,6 +23,8 @@ from tests.test_recurring_review import (
 
 # A Wednesday: the current week is Mon Oct 12 - Wed Oct 14, the last week Mon Oct 5 - Sun Oct 11.
 TODAY = date(2026, 10, 14)
+# A Saturday: the current week is Mon Nov 2 - Sat Nov 7.
+NOV_TODAY = date(2026, 11, 7)
 
 
 _real_localdate = timezone.localdate
@@ -51,10 +54,13 @@ def with_charge(series, on=date(2026, 1, 2), *, account=None, amount_minor=-1299
     return series
 
 
-def suggested(person, name, on=date(2026, 1, 2), **charge):
+def suggested(person, name, on=date(2026, 1, 2), *, created=None, **charge):
     series = make_series(person, name=name, cadence=RecurringSeries.Cadence.MONTHLY, typical_minor=-1299)
     RecurringSeries.objects.filter(pk=series.pk).update(status=RecurringSeries.Status.SUGGESTED)
-    return with_charge(series, on, **charge)
+    with_charge(series, on, **charge)
+    if created is not None:
+        first_seen(series, created)
+    return series
 
 
 def titles(items):
@@ -75,16 +81,18 @@ def test_week_window_is_monday_to_sunday_and_current_week_ends_today():
 def test_new_series_inside_outside_and_across_the_sunday_monday_boundary():
     owner = make_person("owner")
     make_household(owner)
-    # The window follows each series' first charge date; created_at is the same day for all of them.
-    sunday_late = suggested(owner, "Synthetic Sunday Stream", date(2026, 10, 11))
+    # The window follows when each series was spotted; every first charge is recent for its cadence.
+    sunday_late = suggested(owner, "Synthetic Sunday Stream", date(2026, 10, 1))
+    first_seen(sunday_late, date(2026, 10, 11), time(23, 59))
     monday_early = with_charge(
-        make_series(owner, name="Synthetic Monday Gym", cadence=RecurringSeries.Cadence.WEEKLY), date(2026, 10, 12)
+        make_series(owner, name="Synthetic Monday Gym", cadence=RecurringSeries.Cadence.WEEKLY), date(2026, 9, 28)
     )
-    before = suggested(owner, "Synthetic Old Box", date(2026, 10, 4))
-    dismissed = suggested(owner, "Synthetic Dismissed", date(2026, 10, 7))
+    first_seen(monday_early, date(2026, 10, 12), time(0, 0))
+    before = suggested(owner, "Synthetic Old Box", date(2026, 10, 1))
+    first_seen(before, date(2026, 10, 4), time(23, 59))
+    dismissed = suggested(owner, "Synthetic Dismissed", date(2026, 10, 1))
     RecurringSeries.objects.filter(pk=dismissed.pk).update(status=RecurringSeries.Status.DISMISSED)
-    for series in (sunday_late, monday_early, before, dismissed):
-        first_seen(series, date(2026, 10, 13))
+    first_seen(dismissed, date(2026, 10, 7))
 
     last = build_weekly_digest(owner, today=TODAY, week="last")
     current = build_weekly_digest(owner, today=TODAY, week="current")
@@ -93,55 +101,110 @@ def test_new_series_inside_outside_and_across_the_sunday_monday_boundary():
     assert last.new_series[0].detail == "Monthly · Suggested"
     assert last.new_series[0].amount_display == "12.99 USD"
     assert last.new_series[0].url == f"{reverse('recurring-review')}#series-{sunday_late.pk}"
-    assert last.new_series[0].on == date(2026, 10, 11)
+    assert last.new_series[0].on == date(2026, 10, 1)
     assert titles(current.new_series) == ["Synthetic Monday Gym"]
     assert current.new_series[0].detail == "Weekly · Confirmed"
-    assert current.new_series[0].on == date(2026, 10, 12)
+    assert current.new_series[0].on == date(2026, 9, 28)
 
 
 @pytest.mark.django_db
-def test_history_import_does_not_make_old_series_new():
-    # #698: an import creates series this week for charges that began months ago.
+def test_history_import_is_not_new_but_a_new_monthly_subscription_is():
+    # #698: linking accounts imports years of history, and the detector spots those old series this week.
     owner = make_person("owner")
     make_household(owner)
     account = make_account(owner)
-    imported = suggested(owner, "Synthetic Imported Store", date(2026, 7, 6), account=account)
-    for day in (date(2026, 8, 6), date(2026, 9, 6), date(2026, 10, 6)):
+    imported = suggested(owner, "Synthetic Imported Store", date(2024, 11, 6), account=account)
+    for day in (date(2025, 6, 6), date(2026, 10, 6)):
         with_charge(imported, day, account=account)
-    first_seen(imported, date(2026, 10, 7))
-    genuine = suggested(owner, "Synthetic Genuine Start", date(2026, 10, 9), account=account)
-    first_seen(genuine, date(2026, 10, 13))
+    first_seen(imported, date(2026, 11, 4))
+    genuine = suggested(owner, "Synthetic New Subscription", date(2026, 9, 1), account=account)
+    for day in (date(2026, 10, 1), date(2026, 11, 1)):
+        with_charge(genuine, day, account=account)
+    first_seen(genuine, date(2026, 11, 5))
 
-    last = build_weekly_digest(owner, today=TODAY, week="last")
-    current = build_weekly_digest(owner, today=TODAY, week="current")
+    current = build_weekly_digest(owner, today=NOV_TODAY, week="current")
 
-    assert titles(last.new_series) == ["Synthetic Genuine Start"]
-    assert last.new_series[0].on == date(2026, 10, 9)
-    assert current.new_series == []
+    assert titles(current.new_series) == ["Synthetic New Subscription"]
+    assert current.new_series[0].on == date(2026, 9, 1)
+    assert build_weekly_digest(owner, today=NOV_TODAY, week="last").new_series == []
+
+
+def test_recent_span_comes_from_the_detector_cadences():
+    # MIN_DETECTED_CHARGES * (period + tolerance) from CADENCE_DAYS.
+    assert recent_span_days(RecurringSeries.Cadence.WEEKLY) == 30
+    assert recent_span_days(RecurringSeries.Cadence.BIWEEKLY) == 51
+    assert recent_span_days(RecurringSeries.Cadence.MONTHLY) == 99
+    assert recent_span_days(RecurringSeries.Cadence.QUARTERLY) == 285
+    assert recent_span_days(RecurringSeries.Cadence.ANNUAL) == 1110
+    assert recent_span_days("irregular") == 99
 
 
 @pytest.mark.django_db
-def test_first_charge_ignores_archived_members_and_the_order_stays_most_recently_created_first():
+def test_first_charge_at_the_edge_of_the_recent_span_and_per_cadence():
     owner = make_person("owner")
     make_household(owner)
     account = make_account(owner)
-    restarted = suggested(owner, "Synthetic Restarted", date(2026, 9, 8), account=account)
+    # Spotted Thu Nov 5; the monthly span of 99 days reaches back to Jul 29.
+    suggested(owner, "Synthetic On The Edge", date(2026, 7, 29), created=date(2026, 11, 5), account=account)
+    suggested(owner, "Synthetic Past The Edge", date(2026, 7, 28), created=date(2026, 11, 5), account=account)
+    # A weekly series reaches back only 30 days, to Oct 6.
+    weekly = with_charge(
+        make_series(owner, name="Synthetic Old Weekly", cadence=RecurringSeries.Cadence.WEEKLY),
+        date(2026, 10, 5),
+        account=account,
+    )
+    first_seen(weekly, date(2026, 11, 5))
+    annual = with_charge(
+        make_series(owner, name="Synthetic Annual Renewal", cadence=RecurringSeries.Cadence.ANNUAL),
+        date(2024, 11, 20),
+        account=account,
+    )
+    first_seen(annual, date(2026, 11, 5))
+
+    current = build_weekly_digest(owner, today=NOV_TODAY, week="current")
+
+    assert titles(current.new_series) == ["Synthetic On The Edge", "Synthetic Annual Renewal"]
+
+
+@pytest.mark.django_db
+def test_hand_made_series_after_its_second_charge_is_new():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    rows = [
+        make_transaction(owner, account, transaction_date=day, amount_minor=-2500, description="Synthetic Tutor")
+        for day in (date(2026, 10, 3), date(2026, 11, 3))
+    ]
+    series = create_manual_series(owner, "Synthetic Tutor", RecurringSeries.Cadence.MONTHLY, [row.pk for row in rows])
+    first_seen(series, date(2026, 11, 4))
+
+    current = build_weekly_digest(owner, today=NOV_TODAY, week="current")
+
+    assert titles(current.new_series) == ["Synthetic Tutor"]
+    assert current.new_series[0].detail == "Monthly · Confirmed"
+    assert current.new_series[0].on == date(2026, 10, 3)
+
+
+@pytest.mark.django_db
+def test_first_charge_ignores_archived_members_and_rows_sort_by_first_charge_newest_first():
+    owner = make_person("owner")
+    make_household(owner)
+    account = make_account(owner)
+    restarted = suggested(owner, "Synthetic Restarted", date(2026, 6, 8), account=account)
     with_charge(restarted, date(2026, 10, 6), account=account)
-    # The September charge was undone; its membership stays until the next refresh.
-    Transaction.objects.filter(recurring_memberships__series=restarted, transaction_date=date(2026, 9, 8)).update(
+    # The June charge was undone; its membership stays until the next refresh. Counted, it would be too old.
+    Transaction.objects.filter(recurring_memberships__series=restarted, transaction_date=date(2026, 6, 8)).update(
         status=Transaction.Status.ARCHIVED, archived_at=timezone.now()
     )
-    later = suggested(owner, "Synthetic B Later", date(2026, 10, 9), account=account)
-    same_day = suggested(owner, "Synthetic A Same Day", date(2026, 10, 9), account=account)
-    # The order is unchanged by #698: most recently created first, then by name.
-    first_seen(restarted, date(2026, 10, 3))
-    first_seen(later, date(2026, 10, 2))
-    first_seen(same_day, date(2026, 10, 2))
+    first_seen(restarted, date(2026, 10, 6))
+    # Spotted later than Restarted, but their first charges are older; the name breaks the tie.
+    suggested(owner, "Synthetic B Later", date(2026, 9, 9), created=date(2026, 10, 8), account=account)
+    suggested(owner, "Synthetic A Same Day", date(2026, 9, 9), created=date(2026, 10, 7), account=account)
 
     last = build_weekly_digest(owner, today=TODAY, week="last")
 
     assert titles(last.new_series) == ["Synthetic Restarted", "Synthetic A Same Day", "Synthetic B Later"]
-    assert [item.on for item in last.new_series] == [date(2026, 10, 6), date(2026, 10, 9), date(2026, 10, 9)]
+    assert [item.on for item in last.new_series] == [date(2026, 10, 6), date(2026, 9, 9), date(2026, 9, 9)]
 
 
 @pytest.mark.django_db
@@ -152,6 +215,7 @@ def test_inactive_series_is_left_out():
         make_series(owner, name="Synthetic Unshared", cadence=RecurringSeries.Cadence.MONTHLY), date(2026, 10, 7)
     )
     RecurringSeries.objects.filter(pk=series.pk).update(is_active=False)
+    first_seen(series, date(2026, 10, 7))
 
     assert build_weekly_digest(owner, today=TODAY, week="last").new_series == []
 
@@ -184,7 +248,7 @@ def test_archived_charges_do_not_count_until_refresh_catches_up():
     account = make_account(owner)
     series = make_priced_series(owner, account, "Synthetic Undone", (-1000, -1000, -1000, -1500), start=date(2026, 7, 8))
     latest = series.members.order_by("-transaction__transaction_date").first().transaction
-    fresh = suggested(owner, "Synthetic Fresh", date(2026, 10, 8), account=account)
+    fresh = suggested(owner, "Synthetic Fresh", date(2026, 10, 8), created=date(2026, 10, 8), account=account)
     # Undoing the import archives the charge; the membership stays until the next refresh.
     Transaction.objects.filter(pk=latest.pk).update(status=Transaction.Status.ARCHIVED, archived_at=timezone.now())
 
@@ -264,7 +328,7 @@ def test_another_members_private_account_is_excluded():
     make_transaction(partner, hidden, transaction_date=date(2026, 10, 7), amount_minor=-7_000, description="Synthetic Hidden Big")
     # A series built on the partner's private charges belongs to the partner and never reaches the owner.
     make_priced_series(partner, hidden, "Synthetic Hidden Rise", (-1000, -1000, -1000, -1500), start=date(2026, 7, 8))
-    suggested(partner, "Synthetic Hidden New", date(2026, 10, 7), account=hidden)
+    suggested(partner, "Synthetic Hidden New", date(2026, 10, 7), created=date(2026, 10, 7), account=hidden)
 
     digest = build_weekly_digest(owner, today=TODAY, week="last")
     partner_digest = build_weekly_digest(partner, today=TODAY, week="last")
@@ -283,7 +347,7 @@ def test_own_series_with_a_charge_on_an_account_no_longer_visible_is_excluded():
     make_household(owner, partner)
     mine = make_account(owner)
     partner_private = make_account(partner, name="Synthetic Partner Private")
-    series = suggested(owner, "Synthetic Mixed", date(2026, 10, 6), account=mine)
+    series = suggested(owner, "Synthetic Mixed", date(2026, 10, 6), created=date(2026, 10, 7), account=mine)
     assert titles(build_weekly_digest(owner, today=TODAY, week="last").new_series) == ["Synthetic Mixed"]
     add_member(
         series,
@@ -343,9 +407,8 @@ def test_home_card_empty_state_and_threshold_hint(_localdate):
 def test_home_switch_selects_last_week_and_keeps_other_filters(_localdate):
     owner = make_person("owner")
     make_household(owner)
-    # Detected this week, but its first charge was last week.
-    series = suggested(owner, "Synthetic Last Week Stream", date(2026, 10, 8))
-    first_seen(series, date(2026, 10, 13))
+    series = suggested(owner, "Synthetic Last Week Stream", date(2026, 9, 8))
+    first_seen(series, date(2026, 10, 8))
     client = home_client(owner)
 
     current = client.get(reverse("home"))
@@ -368,7 +431,7 @@ def test_home_shows_five_items_per_group_with_see_all(_localdate):
     owner = make_person("owner")
     make_household(owner)
     for index in range(7):
-        suggested(owner, f"Synthetic Stream {index}", date(2026, 10, 13))
+        suggested(owner, f"Synthetic Stream {index}", date(2026, 10, 13), created=date(2026, 10, 13))
 
     content = home_client(owner).get(reverse("home")).content.decode()
 
@@ -419,7 +482,14 @@ def test_home_query_count_does_not_grow_with_series(_localdate):
             owner, account, f"Synthetic Drift {index}", (-1000, -1000, -1000, -2000), start=date(2026, 7, 12 + index % 3)
         )
         # Under the large-transaction threshold, so only the new-series group grows.
-        suggested(owner, f"Synthetic Start {index}", date(2026, 10, 12 + index % 3), account=account, amount_minor=-999)
+        suggested(
+            owner,
+            f"Synthetic Start {index}",
+            date(2026, 10, 12 + index % 3),
+            created=date(2026, 10, 13),
+            account=account,
+            amount_minor=-999,
+        )
 
     add_series(0)
     _home_query_count(client)

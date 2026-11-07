@@ -53,8 +53,10 @@ from .months import add_months, month_end
 
 MANUAL_REASON = "grouping edited manually"
 MANUAL_CREATED_REASON = "created manually by the member, not detected"
-# Detection needs three occurrences; a member who picks the charges by hand
-# is a strong enough signal for two (2026-10-09, #264).
+# Detection needs three occurrences to suggest a series (fewer stay "possible");
+# a member who picks the charges by hand is a strong enough signal for two
+# (2026-10-09, #264).
+MIN_DETECTED_CHARGES = 3
 MIN_MANUAL_SERIES_CHARGES = 2
 MANUAL_PICKER_PAGE_SIZE = 50
 MAX_AMOUNT_VARIANCE = Decimal("0.25")
@@ -375,7 +377,7 @@ def _confidence_and_reasons(chain, cadence):
         direction = "rose" if last_abs >= first_abs else "fell"
         overall = int(_step_ratio(chain[0].amount_minor, chain[-1].amount_minor) * 100)
         reasons.append(f"price {direction} {overall}% overall")
-    if count < 3:
+    if count < MIN_DETECTED_CHARGES:
         return RecurringSeries.Confidence.LOW, tuple(reasons), RecurringSeries.Status.POSSIBLE
     if exact and max_slop <= 1:
         confidence = RecurringSeries.Confidence.HIGH
