@@ -112,6 +112,12 @@ def default_date_range(today=None):
     return add_months(current_month_start, -12), today
 
 
+def home_default_date_range(today=None):
+    """Home's default range: the This month preset, first of the month through today (#700)."""
+    today = today or timezone.localdate()
+    return today.replace(day=1), today
+
+
 def date_range_presets(today=None):
     """Named ranges that match the cash-flow filter presets."""
     today = today or timezone.localdate()

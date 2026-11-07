@@ -7,7 +7,17 @@ test.beforeEach(async ({ page }) => { await signIn(page); });
 test('Home range and URL-only scenario retain state without changing actuals', async ({ page }) => {
   const numbers = page.getByRole('region', { name: 'Key numbers' });
   const actuals = await numbers.innerText();
+  const rangeToday = new Date();
+  const rangeEnd = [rangeToday.getFullYear(), String(rangeToday.getMonth() + 1).padStart(2, '0'), String(rangeToday.getDate()).padStart(2, '0')].join('-');
+  const rangeStart = rangeEnd.slice(0, 8) + '01';
+  // Home opens on This month and marks it as the current range (#700). The range
+  // control is hidden on phones, so this reads its markup rather than its role.
+  const currentRange = page.locator('nav[aria-label="Range"] a[aria-current="true"]');
+  await expect(currentRange).toHaveCount(1);
+  await expect(currentRange).toHaveText('This month');
   await page.locator('#cash-flow-filters summary').click();
+  await expect(page.locator('#cash-flow-filters [name=date_from]')).toHaveValue(rangeStart);
+  await expect(page.locator('#cash-flow-filters [name=date_to]')).toHaveValue(rangeEnd);
   // Reversed dates validate, and Reset range clears them, without changing actuals.
   await page.locator('#cash-flow-filters [name=date_from]').fill('2026-10-05');
   await page.locator('#cash-flow-filters [name=date_to]').fill('2026-10-04');
@@ -17,10 +27,8 @@ test('Home range and URL-only scenario retain state without changing actuals', a
   await page.reload();
   await expect(page).not.toHaveURL(/date_(from|to)=/);
   await expect(numbers).toHaveText(actuals, { useInnerText: true });
+  await expect(currentRange).toHaveText('This month');
   await page.locator('#cash-flow-filters summary').click();
-  const rangeToday = new Date();
-  const rangeEnd = [rangeToday.getFullYear(), String(rangeToday.getMonth() + 1).padStart(2, '0'), String(rangeToday.getDate()).padStart(2, '0')].join('-');
-  const rangeStart = rangeEnd.slice(0, 8) + '01';
   await page.locator('#cash-flow-filters [name=date_from]').fill(rangeStart);
   await page.locator('#cash-flow-filters [name=date_to]').fill(rangeEnd);
   await page.locator('#cash-flow-filters [name=grouping]').selectOption('week');

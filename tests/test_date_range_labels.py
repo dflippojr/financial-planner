@@ -65,11 +65,11 @@ def make_owner_with_activity(day):
 
 
 @pytest.mark.django_db
-def test_home_summary_default_range_shows_both_years():
+def test_home_summary_thirteen_month_range_shows_both_years():
     today = date(2026, 11, 5)
     owner = make_owner_with_activity(date(2026, 3, 4))
 
-    content = home_content(owner, today)
+    content = home_content(owner, today, {"date_from": "2025-11-01", "date_to": "2026-11-05", "grouping": "month"})
 
     assert "Nov 1, 2025 – Nov 5, 2026 · " in content
     assert "Nov 1 – Nov 5, 2026" not in content

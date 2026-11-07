@@ -168,6 +168,7 @@ from .cash_flow import (
     date_range_presets,
     default_date_range,
     format_minor,
+    home_default_date_range,
     selected_accounts,
     spending_by_category_report,
     spending_chart_data,
@@ -400,7 +401,9 @@ def _home_filter_count(*, grouping, horizon, account, scope, tag):
 @never_cache
 def home(request):
     today = timezone.localdate()
-    default_from, default_to = default_date_range(today)
+    # Home opens on This month, one of its range buttons (#700); other pages keep
+    # default_date_range().
+    default_from, default_to = home_default_date_range(today)
     # The digest week switch is not a cash-flow filter; keep it out of the filter form.
     query = request.GET.copy()
     digest_week = query.pop("digest_week", [WEEK_CURRENT])[-1]
