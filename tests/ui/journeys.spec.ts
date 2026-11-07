@@ -7,8 +7,9 @@ test.beforeEach(async ({ page }) => { await signIn(page); });
 test('Home range and URL-only scenario retain state without changing actuals', async ({ page }) => {
   const numbers = page.getByRole('region', { name: 'Key numbers' });
   const actuals = await numbers.innerText();
-  const rangeToday = new Date();
-  const rangeEnd = [rangeToday.getFullYear(), String(rangeToday.getMonth() + 1).padStart(2, '0'), String(rangeToday.getDate()).padStart(2, '0')].join('-');
+  // Today in the app's zone: ui_instance.py strips TZ, so Django uses settings.py's
+  // America/New_York default whatever the runner's clock zone is.
+  const rangeEnd = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
   const rangeStart = rangeEnd.slice(0, 8) + '01';
   // Home opens on This month and marks it as the current range (#700). The range
   // control is hidden on phones, so this reads its markup rather than its role.

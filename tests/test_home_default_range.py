@@ -111,6 +111,13 @@ def test_reset_range_and_dateless_home_links_land_on_this_month(_localdate):
         landed = client.get(reverse("home"), query)
         assert (landed.context["range_from"], landed.context["range_to"]) == (date(2026, 11, 1), TODAY)
         assert _current(landed) == ["This month"]
+        # The filter form shows those dates, bound or not.
+        form = landed.context["filter_form"]
+        assert str(form["date_from"].value()) == "2026-11-01"
+        assert str(form["date_to"].value()) == "2026-11-07"
+        content = landed.content.decode()
+        assert 'name="date_from" value="2026-11-01"' in content
+        assert 'name="date_to" value="2026-11-07"' in content
 
 
 @pytest.mark.django_db
@@ -120,9 +127,12 @@ def test_home_fills_one_missing_date_from_the_other(_localdate):
     only_end = client.get(reverse("home"), {"date_to": "2026-10-15"})
     assert not only_end.context["filter_form"].errors
     assert (only_end.context["range_from"], only_end.context["range_to"]) == (date(2026, 10, 1), date(2026, 10, 15))
+    assert only_end.context["filter_form"]["date_from"].value() == "2026-10-01"
+    assert only_end.context["filter_form"]["date_to"].value() == "2026-10-15"
     assert _current(only_end) == ["Custom"]
     only_start = client.get(reverse("home"), {"date_from": "2026-09-01"})
     assert (only_start.context["range_from"], only_start.context["range_to"]) == (date(2026, 9, 1), TODAY)
+    assert only_start.context["filter_form"]["date_to"].value() == "2026-11-07"
     assert _current(only_start) == ["3 months"]
 
 
