@@ -54,6 +54,23 @@ def map_harness_failure(code) -> str:
     return HARNESS_FAILURE_MAP.get(str(code), PROVIDER_ERROR)
 
 
+# Shared by harness, monthly review, chat and suggestion-badge labels.
+BACKEND_DISPLAY_NAMES = {
+    LOCAL_BACKEND: "Local model",
+    "claude": "Claude",
+    "codex": "Codex",
+    "cursor": "Cursor",
+}
+UNKNOWN_BACKEND_LABEL = "Unknown backend"
+
+
+def backend_display_name(backend: str | None, empty: str) -> str:
+    # Each caller passes its own empty-value fallback; unknown nonempty IDs show verbatim.
+    if not backend:
+        return empty
+    return BACKEND_DISPLAY_NAMES.get(backend, backend)
+
+
 @dataclass(frozen=True)
 class Usage:
     prompt_tokens: int | None = None
@@ -112,5 +129,8 @@ class ToolResult:
     account_ids: tuple[int, ...] = ()
     planned_item_ids: tuple[int, ...] = ()
     budget_ids: tuple[int, ...] = ()
+    # Savings goals and categorization rules a lookup quoted (#662).
+    goal_ids: tuple[int, ...] = ()
+    rule_ids: tuple[int, ...] = ()
     # Server-computed chart specs and series (#646); the model never supplies their numbers.
     charts: tuple[dict, ...] = ()

@@ -7,6 +7,9 @@
 <p class="mb-4 max-w-2xl">Values are estimates, not appraisals or verified facts. An optional note can name the source, such as a county assessment or online estimate.</p>
 {% endif %}
 {% include "finance/_messages.html" %}
+{% if fund_position %}
+<div class="mb-6 max-w-lg">{% include "finance/_fund_account_panel.html" with position=fund_position %}</div>
+{% endif %}
 {% if pair_form %}
 <section class="card bg-base-100 shadow-sm mb-6 max-w-lg">
   <div class="card-body">

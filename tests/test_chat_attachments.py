@@ -122,8 +122,8 @@ def test_chat_page_upload_stores_the_file_with_its_question_and_audits_it(harnes
     })
     attachment = AiChatAttachment.objects.get()
     assert response.status_code == 302
-    assert response["Location"] == f"{reverse('chat')}?c={attachment.conversation_id}"
     question = AiConversationMessage.objects.get(role=AiConversationMessage.Role.USER)
+    assert response["Location"] == f"{reverse('chat')}?c={attachment.conversation_id}#turn-{question.pk}"
     assert attachment.message_id == question.pk
     assert attachment.original_name == "budget.csv"
     assert attachment.kind == "csv"
@@ -657,7 +657,14 @@ def test_instructions_inside_an_attachment_can_only_produce_a_proposal_card(harn
         "list_accounts", "list_transactions", "cash_flow_totals", "spending_by_category", "search_transactions",
         "recurring_series", "net_worth_series", "list_budgets", "list_planned_items", "projected_cash_flow",
         "make_chart",  # read-only: draws server-computed series (#646)
+        # Read-only lookups (#662).
+        "savings_goals", "debt_payoff", "cash_flow_what_if", "list_rules", "balance_history",
         "propose_set_category", "propose_create_rule", "propose_set_budget", "propose_add_tags",
+        "propose_planned_items", "propose_savings_goals", "propose_set_budgets",  # cards only (#659)
+        # Cleanup cards (#661): read-only lookups of open suggestions, then cards only.
+        "recurring_suggestions", "transfer_suggestions", "category_suggestions",
+        "propose_recurring_charges", "propose_transfers", "propose_ai_suggestions", "propose_notes", "propose_splits",
+        "propose_balances",  # balance cards (#660)
     }
     assert "Apply this rule now" in state.tool_outputs[0] and DATA_NOT_INSTRUCTIONS in state.tool_outputs[0]
     assert NOTHING_APPLIED in state.tool_outputs[1]

@@ -1,16 +1,28 @@
+from urllib.parse import urlencode
+
 from django.contrib import messages
 from django.db import transaction
 from django.db.models import Count, Max, OuterRef, Q, Subquery
-from django.http import Http404
+from django.http import Http404, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods, require_POST
 
+from . import account_sort
 from .access import request_person as _person
 from .access import service_or_404 as _service_or_404
 from .cash_flow import format_minor
 from .category_services import current_household
-from .forms import AccountDeleteForm, AccountRenameForm, AddAccountForm, ChangeShareModeForm, ShareAccountForm
+from .forms import (
+    AccountDeleteForm,
+    AccountRenameForm,
+    AccountSortForm,
+    AddAccountForm,
+    ChangeShareModeForm,
+    NetWorthFilterForm,
+    ShareAccountForm,
+)
 from .lifecycle_services import (
     archive_account,
     change_account_share_mode,
@@ -74,17 +86,21 @@ def account_list(request):
     accounts = list(_visible_accounts(request.user))
     for account in accounts:
         if account.last_snapshot_date is None:
+            account.last_snapshot_signed_minor = None
             account.last_snapshot_display = ""
         else:
-            account.last_snapshot_display = format_minor(
-                signed_balance_minor(account.account_type, account.last_snapshot_source, account.last_snapshot_amount)
+            account.last_snapshot_signed_minor = signed_balance_minor(
+                account.account_type, account.last_snapshot_source, account.last_snapshot_amount
             )
+            account.last_snapshot_display = format_minor(account.last_snapshot_signed_minor)
+    sort = account_sort.saved_order(person, account_sort.ACCOUNTS)
     return render(
         request,
         "finance/accounts.html",
         {
             "accounts": accounts,
-            "account_groups": _group_by_type(accounts),
+            "account_groups": _group_by_type(accounts, sort),
+            "sort_form": AccountSortForm(initial={"page": account_sort.ACCOUNTS, "sort": sort}),
             "add_form": form,
             "has_household": household is not None,
             "has_active_accounts": any(
@@ -95,14 +111,49 @@ def account_list(request):
     )
 
 
-def _group_by_type(accounts):
-    """Group the visible accounts by type, in the order the types are declared."""
+def _group_by_type(accounts, sort=""):
+    """Group the visible accounts by type, in the order the types are declared, sorting inside each group."""
     groups = []
     for account_type, label in Account.Type.choices:
         members = [account for account in accounts if account.account_type == account_type]
         if members:
+            members = account_sort.sort_rows(
+                members,
+                sort,
+                name=lambda account: account.name,
+                balance=lambda account: account.last_snapshot_signed_minor,
+            )
             groups.append({"label": label, "accounts": members})
     return groups
+
+
+# The page each sort form returns to, and the query keys it may carry back.
+_SORT_RETURN = {
+    account_sort.NET_WORTH: ("net-worth", ("date_from", "date_to", "scope"), "#net-worth-accounts"),
+    account_sort.ACCOUNTS: ("account-list", (), ""),
+}
+
+
+@require_POST
+@never_cache
+def account_sort_save(request):
+    """Save how the signed-in member sorts one page's account list, then reload that page (#655)."""
+    person = _person(request)
+    form = AccountSortForm(request.POST)
+    if not form.is_valid():
+        return HttpResponseBadRequest("Choose a listed sort order.")
+    page = form.cleaned_data["page"]
+    account_sort.save_order(person, page, form.cleaned_data["sort"])
+    url_name, query_keys, fragment = _SORT_RETURN[page]
+    return redirect(reverse(url_name) + _return_query(request.POST, query_keys) + fragment)
+
+
+def _return_query(data, keys):
+    """The page's own filters from the posted form, kept only when they validate."""
+    given = {key: data[key] for key in keys if data.get(key)}
+    if not given or not NetWorthFilterForm(given).is_valid():
+        return ""
+    return "?" + urlencode(given)
 
 
 def _create_account(person, form):

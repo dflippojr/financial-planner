@@ -4,6 +4,7 @@ from django.contrib.auth.decorators import login_not_required
 
 from finance import (
     account_views,
+    auto_note_views,
     audit_views,
     ai_views,
     alert_views,
@@ -21,6 +22,7 @@ from finance import (
     year_end_views,
     savings_goal_plan_views,
     savings_goal_views,
+    fund_views,
     simplefin_views,
     views,
     bulk_edit_views,
@@ -100,6 +102,9 @@ urlpatterns = [
     ),
     path("settings/connections/", simplefin_views.connections, name="simplefin-connections"),
     path("settings/connections/sync/", simplefin_views.connections_sync, name="simplefin-sync"),
+    path("settings/connections/flow/start/", simplefin_views.connections_flow_start, name="simplefin-flow-start"),
+    path("settings/connections/flow/check/", simplefin_views.connections_flow_check, name="simplefin-flow-check"),
+    path("settings/connections/flow/cancel/", simplefin_views.connections_flow_cancel, name="simplefin-flow-cancel"),
     path(
         "settings/connections/disconnect/",
         simplefin_views.connections_disconnect,
@@ -167,6 +172,7 @@ urlpatterns = [
     path("join/", views.join, name="join"),
     path("recover/", views.recover, name="recover"),
     path("accounts/", account_views.account_list, name="account-list"),
+    path("accounts/sort/", account_views.account_sort_save, name="account-sort"),
     path(
         "accounts/connections/",
         RedirectView.as_view(pattern_name="simplefin-connections", permanent=True, query_string=True),
@@ -306,6 +312,7 @@ urlpatterns = [
     path("transfers/", views.transfer_review, name="transfer-review"),
     path("recurring/", views.recurring_review, name="recurring-review"),
     path("recurring/create/", views.recurring_create, name="recurring-create"),
+    path("recurring/<int:series_id>/note/", auto_note_views.recurring_note, name="recurring-note"),
     path("planning/items/", planning_views.planned_item_list, name="planned-items"),
     path("planning/calendar/", bills_calendar_views.bills_calendar, name="bills-calendar"),
     path("planning/debts/", debt_planner_views.debt_payoff, name="debt-payoff"),
@@ -343,6 +350,18 @@ urlpatterns = [
     path("planning/goals/plan/", savings_goal_plan_views.savings_goal_plan, name="savings-goal-plan"),
     path("planning/goals/plan/buffer/", savings_goal_plan_views.savings_goal_buffer, name="savings-goal-buffer"),
     path("planning/goals/import/", savings_goal_plan_views.savings_goal_import, name="savings-goal-import"),
+    path("planning/goals/set-asides/", fund_views.fund_set_asides, name="fund-set-asides"),
+    path(
+        "planning/goals/accounts/<int:account_id>/shortfall/",
+        fund_views.fund_shortfall,
+        name="fund-shortfall",
+    ),
+    path("planning/goals/<int:goal_id>/fund/", fund_views.fund_detail, name="savings-goal-fund"),
+    path(
+        "planning/goals/<int:goal_id>/fund/entries/<int:entry_id>/undo/",
+        fund_views.fund_undo,
+        name="savings-goal-fund-undo",
+    ),
     path("planning/goals/<int:goal_id>/edit/", savings_goal_views.savings_goal_edit, name="savings-goal-edit"),
     path("planning/goals/<int:goal_id>/complete/", savings_goal_views.savings_goal_complete, name="savings-goal-complete"),
     path("planning/goals/<int:goal_id>/reopen/", savings_goal_views.savings_goal_reopen, name="savings-goal-reopen"),

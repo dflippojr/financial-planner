@@ -1,5 +1,5 @@
 import uuid
-from .input_limits import BUDGET_MONTH_FLOOR, MAX_DESCRIPTION_CHARS
+from .input_limits import AUTO_NOTE_MAX_CHARS, BUDGET_MONTH_FLOOR, MAX_DESCRIPTION_CHARS
 from .money_display import format_minor
 from fractions import Fraction
 
@@ -10,6 +10,8 @@ from django.db import models
 from django.db.models import F, Q
 from django.db.models.functions import Lower
 from django.utils import timezone
+
+from .ai_types import UNKNOWN_BACKEND_LABEL, backend_display_name
 
 
 sha256_validator = RegexValidator(
@@ -1190,6 +1192,11 @@ class RecurringSeries(models.Model):
     is_active = models.BooleanField(default=True)
     cancelled_at = models.DateTimeField(null=True, blank=True)
     confirmed_at = models.DateTimeField(null=True, blank=True)
+    # A one-line note added to each new charge that joins a confirmed series (#684).
+    # note_updated_at is when it was last set: only charges imported after it get the
+    # line on their own, so setting or editing it never changes past notes.
+    note = models.CharField(max_length=AUTO_NOTE_MAX_CHARS, blank=True, default="")
+    note_updated_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -1389,6 +1396,16 @@ class SimpleFinConnection(models.Model):
     last_sync_at = models.DateTimeField(null=True, blank=True)
     last_sync_result = models.CharField(max_length=500, blank=True)
     disabled = models.BooleanField(default=False)
+    # What the newest /accounts read saw (#694), so Settings -> Connections
+    # renders without a live request: {"at", "accounts", "banks", "messages"}.
+    # Bank names and sanitized provider messages only; never the access URL.
+    last_read = models.JSONField(default=dict, blank=True)
+    # ISO times of /accounts requests in the last 24 hours: the shared budget.
+    request_log = models.JSONField(default=list, blank=True)
+    # conn_id -> the health state ("ok", "stale", "error") last pushed over ntfy.
+    health_alerts = models.JSONField(default=dict, blank=True)
+    # The open Fix or Add pop-up flow (finance.simplefin_flow), or {}.
+    flow = models.JSONField(default=dict, blank=True)
 
     class QuerySet(models.QuerySet):
         def owned_by(self, principal):
@@ -1641,6 +1658,20 @@ class SavingsGoal(ArchivableModel):
     )
     manual_amount_minor = models.BigIntegerField(null=True, blank=True)
     manual_amount_date = models.DateField(null=True, blank=True)
+    # Sinking fund (#670): the goal holds a share of linked_account. Its current
+    # amount is the sum of its FundEntry rows, not the account's whole balance.
+    # A share goal whose account was deleted keeps its entries, so the account
+    # requirement lives in the service, not a constraint.
+    share_of_account = models.BooleanField(default=False)
+    funds_planned_item = models.OneToOneField(
+        PlannedItem,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="funding_goal",
+    )
+    # Only transactions on or after this date can draw the fund down.
+    planned_item_linked_on = models.DateField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -1671,6 +1702,14 @@ class SavingsGoal(ArchivableModel):
                 name="savings_goal_manual_amount_paired_with_date",
             ),
             models.CheckConstraint(
+                condition=Q(share_of_account=False) | Q(manual_amount_minor__isnull=True),
+                name="savings_goal_share_has_no_manual_amount",
+            ),
+            models.CheckConstraint(
+                condition=Q(funds_planned_item__isnull=True) | Q(share_of_account=True),
+                name="savings_goal_planned_item_requires_share",
+            ),
+            models.CheckConstraint(
                 condition=(
                     Q(status="active", archived_at__isnull=True)
                     | Q(status="archived", archived_at__isnull=False)
@@ -1681,6 +1720,145 @@ class SavingsGoal(ArchivableModel):
 
     def __str__(self):
         return self.name
+
+
+def _detach_draw_downs(collector, field, sub_objs, using):
+    """A draw-down's transaction is deleted (with its account): keep the draw-down, unlinked.
+
+    One whose transaction was already archived (an undone import) did not count,
+    so it is marked undone first; otherwise losing the link would make it count again.
+    """
+    archived = Transaction.objects.using(using).filter(
+        pk__in=[entry.transaction_id for entry in sub_objs if entry.transaction_id is not None],  # pyright: ignore[reportAttributeAccessIssue] - runtime FK id attribute
+        status=Transaction.Status.ARCHIVED,
+    ).values_list("pk", flat=True)
+    archived = set(archived)
+    stale = [entry for entry in sub_objs if entry.transaction_id in archived and entry.undone_at is None]  # pyright: ignore[reportAttributeAccessIssue] - runtime FK id attribute
+    if stale:
+        collector.add_field_update(FundEntry._meta.get_field("undone_at"), timezone.now(), stale)
+    models.SET_NULL(collector, field, sub_objs, using)
+
+
+class FundEntry(models.Model):
+    """One change to a sinking fund's assigned amount (#670); the rows are its history.
+
+    Assignments add (positive), releases and draw-downs take out (negative). A
+    draw-down records the transaction that paid the linked planned item; undoing
+    it keeps the row, so the same transaction never draws the fund down again.
+    """
+
+    class Kind(models.TextChoices):
+        ASSIGN = "assign", "Assigned"
+        RELEASE = "release", "Released"
+        DRAW_DOWN = "draw_down", "Drawn down"
+
+    class Reason(models.TextChoices):
+        MANUAL = "manual", "By hand"
+        MONTHLY = "monthly", "Monthly set-aside"
+        BALANCE_DROP = "balance_drop", "Balance dropped below assigned"
+        PLANNED = "planned", "Planned expense posted"
+
+    goal = models.ForeignKey(SavingsGoal, on_delete=models.CASCADE, related_name="fund_entries")
+    kind = models.CharField(max_length=9, choices=Kind)
+    reason = models.CharField(max_length=12, choices=Reason)
+    amount_minor = models.BigIntegerField()
+    currency = models.CharField(max_length=3, default="USD")
+    entry_date = models.DateField()
+    # First of the month a monthly set-aside was confirmed for.
+    month = models.DateField(null=True, blank=True)
+    transaction = models.ForeignKey(
+        Transaction,
+        on_delete=_detach_draw_downs,
+        null=True,
+        blank=True,
+        related_name="fund_draw_downs",
+    )
+    # The planned item, and its occurrence, the draw-down paid. A fund relinked
+    # to another item starts a fresh set of occurrences.
+    planned_item = models.ForeignKey(
+        PlannedItem, on_delete=models.SET_NULL, null=True, blank=True, related_name="fund_draw_downs"
+    )
+    occurrence_date = models.DateField(null=True, blank=True)
+    actor = models.ForeignKey(
+        Person, on_delete=models.SET_NULL, null=True, blank=True, related_name="fund_entries"
+    )
+    undone_at = models.DateTimeField(null=True, blank=True)
+    undone_by = models.ForeignKey(
+        Person, on_delete=models.SET_NULL, null=True, blank=True, related_name="undone_fund_entries"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    @staticmethod
+    def counted_filter():
+        """Entries that make up the assigned amount.
+
+        An undone draw-down, or one whose transaction was archived (an undone
+        import), no longer counts. A draw-down whose transaction was deleted
+        with its account still counts: the payment happened.
+        """
+        return Q(undone_at__isnull=True) & (Q(transaction__isnull=True) | Q(transaction__status="active"))
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(condition=Q(currency="USD"), name="fund_entry_currency_usd"),
+            models.CheckConstraint(
+                condition=Q(kind__in=("assign", "release", "draw_down")), name="fund_entry_kind_valid"
+            ),
+            models.CheckConstraint(
+                condition=Q(reason__in=("manual", "monthly", "balance_drop", "planned")),
+                name="fund_entry_reason_valid",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(kind="assign", amount_minor__gt=0, reason__in=("manual", "monthly"))
+                    | Q(kind="release", amount_minor__lt=0, reason__in=("manual", "balance_drop"))
+                    # A payment that found the fund empty draws nothing but is still recorded.
+                    | Q(kind="draw_down", amount_minor__lte=0, reason="planned")
+                ),
+                name="fund_entry_kind_amount_reason",
+            ),
+            models.CheckConstraint(
+                condition=Q(month__isnull=True) | Q(reason="monthly"),
+                name="fund_entry_month_only_monthly",
+            ),
+            models.CheckConstraint(
+                condition=Q(reason="monthly", month__isnull=False) | ~Q(reason="monthly"),
+                name="fund_entry_monthly_has_month",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(kind="draw_down", occurrence_date__isnull=False)
+                    | Q(occurrence_date__isnull=True, transaction__isnull=True, planned_item__isnull=True,
+                        undone_at__isnull=True)
+                    & ~Q(kind="draw_down")
+                ),
+                name="fund_entry_draw_down_fields",
+            ),
+            # One draw-down per transaction ever, undone or not.
+            models.UniqueConstraint(
+                fields=("transaction",),
+                condition=Q(transaction__isnull=False),
+                name="fund_entry_unique_transaction",
+            ),
+            models.UniqueConstraint(
+                fields=("goal", "month"),
+                condition=Q(month__isnull=False),
+                name="fund_entry_unique_goal_month",
+            ),
+            models.UniqueConstraint(
+                fields=("goal", "planned_item", "occurrence_date"),
+                condition=Q(kind="draw_down", undone_at__isnull=True, planned_item__isnull=False),
+                name="fund_entry_unique_live_occurrence",
+            ),
+        ]
+        indexes = [models.Index(fields=("goal", "entry_date"), name="fund_entry_goal_date_idx")]
+
+    def __str__(self):
+        return f"Fund entry {self.pk}"
+
+    @property
+    def amount_display(self):
+        return format_minor(self.amount_minor, self.currency)
 
 
 class CategoryRule(models.Model):
@@ -1729,6 +1907,8 @@ class CategoryRule(models.Model):
     # Set when the member confirms the preview with "Apply"; cleared on edit.
     # Only confirmed rules apply automatically to imports and syncs.
     confirmed_at = models.DateTimeField(null=True, blank=True)
+    # A one-line note added to each new transaction the rule applies to (#684).
+    note = models.CharField(max_length=AUTO_NOTE_MAX_CHARS, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -2087,6 +2267,8 @@ class AiConversation(models.Model):
     used_account_ids = models.JSONField(default=list)
     used_planned_item_ids = models.JSONField(default=list)
     used_budget_ids = models.JSONField(default=list)
+    used_goal_ids = models.JSONField(default=list)
+    used_rule_ids = models.JSONField(default=list)
     # Providers (chat backend and connection, chat_attachments.provider_key) the chat has warned
     # will receive this conversation's files (#644, owner decision 5): the provider named at
     # upload, and each provider whose switch warning the member saw before asking again. Only
@@ -2239,6 +2421,18 @@ class AiProposal(models.Model):
         CREATE_RULE = "create_rule", "Create rule"
         SET_BUDGET = "set_budget", "Set budget"
         ADD_TAGS = "add_tags", "Add tags"
+        # Item cards (#659): one card, a checkbox per item, a result per item.
+        PLANNED_ITEMS = "planned_items", "Planned items"
+        SAVINGS_GOALS = "savings_goals", "Savings goals"
+        SET_BUDGETS = "set_budgets", "Set budgets"
+        # Cleanup cards (#661), the same checkbox card.
+        RECURRING = "recurring", "Recurring charges"
+        TRANSFERS = "transfers", "Transfers"
+        AI_SUGGESTIONS = "ai_suggestions", "AI category suggestions"
+        NOTES = "notes", "Notes"
+        SPLITS = "splits", "Splits"
+        # Balance cards (#660), the same checkbox card.
+        BALANCES = "balances", "Balances"
 
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"
@@ -2269,7 +2463,14 @@ class AiProposal(models.Model):
         ordering = ("pk",)
         constraints = [
             models.CheckConstraint(
-                condition=Q(kind__in=("set_category", "create_rule", "set_budget", "add_tags")),
+                condition=Q(
+                    kind__in=(
+                        "set_category", "create_rule", "set_budget", "add_tags",
+                        "planned_items", "savings_goals", "set_budgets",
+                        "recurring", "transfers", "ai_suggestions", "notes", "splits",
+                        "balances",
+                    )
+                ),
                 name="ai_proposal_kind_valid",
             ),
             models.CheckConstraint(
@@ -2324,13 +2525,7 @@ class CategorySuggestion(models.Model):
     @property
     def display_label(self):
         kind = "Agent Harness" if self.provider == "agent_harness" else (self.provider or "AI")
-        labels = {
-            "local": "Local model",
-            "claude": "Claude",
-            "codex": "Codex",
-            "cursor": "Cursor",
-        }
-        return f"AI · {kind} · {labels.get(self.backend, self.backend or 'Unknown backend')}"
+        return f"AI · {kind} · {backend_display_name(self.backend, UNKNOWN_BACKEND_LABEL)}"
 
 
 class BudgetQuerySet(_PrivateOrHouseholdQuerySet):
@@ -2477,6 +2672,7 @@ class Alert(models.Model):
         EXPECTED_BALANCE = "expected_balance", "Expected balance"
         IMPORT_DUE = "import_due", "Import due"
         RECONCILIATION = "reconciliation", "Balance reconciliation"
+        FUND = "fund", "Sinking funds"
 
     recipient = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="alerts")
     kind = models.CharField(max_length=20, choices=Kind)
@@ -2515,6 +2711,7 @@ class Alert(models.Model):
                         "expected_balance",
                         "import_due",
                         "reconciliation",
+                        "fund",
                     )
                 ),
                 name="alert_kind_valid",
@@ -2549,6 +2746,7 @@ class AlertSettings(models.Model):
     monthly_review_ai_enabled = models.BooleanField(default=True)
     expected_balance_enabled = models.BooleanField(default=False)
     import_due_enabled = models.BooleanField(default=True)
+    fund_enabled = models.BooleanField(default=True)
     unusual_spending_enabled = models.BooleanField(default=True)
     unusual_spending_ai_enabled = models.BooleanField(default=True)
     unusual_category_percent = models.PositiveIntegerField(default=50)
@@ -2608,6 +2806,43 @@ class BillsCalendarSettings(models.Model):
 
     def __str__(self):
         return f"Bills calendar settings for {self.person_id}"
+
+
+class AccountSortOrder(models.TextChoices):
+    NAME_ASC = "name_asc", "Name A–Z"
+    NAME_DESC = "name_desc", "Name Z–A"
+    BALANCE_DESC = "balance_desc", "Balance high→low"
+    BALANCE_ASC = "balance_asc", "Balance low→high"
+
+
+# Blank means the page's own order.
+_ACCOUNT_SORT_VALUES = ("", *AccountSortOrder.values)
+
+
+class AccountSortSettings(models.Model):
+    """How one member sorts the balance-by-account lists (#655); blank keeps the page's own order."""
+
+    Order = AccountSortOrder
+
+    person = models.OneToOneField(Person, on_delete=models.CASCADE, related_name="account_sort_settings")
+    net_worth_sort = models.CharField(max_length=16, blank=True, default="", choices=AccountSortOrder.choices)
+    accounts_sort = models.CharField(max_length=16, blank=True, default="", choices=AccountSortOrder.choices)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(net_worth_sort__in=_ACCOUNT_SORT_VALUES),
+                name="account_sort_net_worth_valid",
+            ),
+            models.CheckConstraint(
+                condition=Q(accounts_sort__in=_ACCOUNT_SORT_VALUES),
+                name="account_sort_accounts_valid",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Account sort settings {self.pk}"
 
 
 class MonthlyReview(models.Model):

@@ -8,17 +8,21 @@ from django.views.decorators.http import require_http_methods, require_POST
 
 from .access import first_message as _first_message
 from .access import service_or_404 as _service_or_404
+from .auto_notes import preview_token
+from .auto_note_views import note_undo_for, remember_note_undo
 from .category_services import current_household, ensure_household_categories
 from .forms import CategoryRuleForm
 from .models import CategoryRule, Person
 from .rule_services import (
     apply_rule,
+    apply_rule_note_to_existing,
     list_unreachable_applications,
     list_visible_applications,
     list_visible_rules,
     personal_rule_is_inactive,
     preview_rule,
     reverse_application,
+    rule_note_matches,
     save_category_rule,
     set_rule_enabled,
 )
@@ -35,6 +39,7 @@ def _form_from_rule(rule, principal, data=None):
         "category": rule.category_id,
         "priority": rule.priority,
         "enabled": rule.enabled,
+        "note": rule.note,
     }
     return CategoryRuleForm(data, principal=principal, initial=initial)
 
@@ -58,6 +63,7 @@ def _save_from_form(request, form, rule_id=None):
         priority=form.cleaned_data["priority"],
         enabled=form.cleaned_data["enabled"],
         action=form.cleaned_data["rule_action"],
+        note=form.cleaned_data.get("note") or "",
     )
 
 
@@ -139,6 +145,20 @@ def _post_apply_rule(request, rule, errors):
     return redirect("category-rule-detail", rule_id=rule.pk)
 
 
+def _post_apply_rule_note(request, rule, errors):
+    """Add the rule's note to the existing matches the page previewed (#684)."""
+    try:
+        changed, undo = _service_or_404(lambda: apply_rule_note_to_existing(
+            request.user, rule.pk, previewed_version=request.POST.get("rule_version") or "",
+            expected_token=request.POST.get("preview_token") or "",
+        ))
+    except ValidationError as exc:
+        errors["note"] = _first_message(exc, "The note could not be added.")
+        return None
+    remember_note_undo(request, f"rule:{rule.pk}", undo, len(changed))
+    return redirect("category-rule-detail", rule_id=rule.pk)
+
+
 def _post_reverse_rule(request):
     try:
         application_id = int(request.POST.get("application_id", "0"))
@@ -157,6 +177,8 @@ def _posted_rule_detail(request, rule, form, action, errors):
         return _toggle_rule(request, rule, True)
     if action == "apply":
         return _post_apply_rule(request, rule, errors)
+    if action == "apply_note":
+        return _post_apply_rule_note(request, rule, errors)
     if action == "reverse":
         return _post_reverse_rule(request)
     return None
@@ -180,6 +202,8 @@ def category_rule_detail(request, rule_id):
         return posted
     rule, matches = _service_or_404(lambda: preview_rule(request.user, rule.pk))
     rule.inactive = personal_rule_is_inactive(rule)
+    note_rows = _service_or_404(lambda: rule_note_matches(request.user, rule))
+    note_token = preview_token(note_rows)
     return render(
         request,
         "finance/category_rule_detail.html",
@@ -190,5 +214,9 @@ def category_rule_detail(request, rule_id):
             "match_count": len(matches),
             "applications": list_visible_applications(request.user, rule),
             "apply_error": errors.get("apply"),
+            "note_rows": note_rows,
+            "note_token": note_token,
+            "note_error": errors.get("note"),
+            "note_undo": note_undo_for(request, f"rule:{rule.pk}"),
         },
     )

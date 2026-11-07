@@ -17,7 +17,7 @@ from . import chat_markdown
 from .access import request_person as _person, service_or_404
 from .ai_api import label as api_label
 from .ai_services import AiError, local_status, member_has_ai, resolve_ai, warm_for_chat
-from .ai_types import API_KINDS, LOCAL_BACKEND
+from .ai_types import API_KINDS, LOCAL_BACKEND, backend_display_name
 from .chat_attachment_parsing import TOO_LARGE, AttachmentRejected, parse_upload
 from .chat_attachments import (
     attachments_for,
@@ -26,7 +26,15 @@ from .chat_attachments import (
     provider_needs_warning,
     remove_attachment,
 )
-from .chat_proposals import ProposalError, apply_proposal, card_for, dismiss_proposal, proposal_for
+from .chat_proposals import (
+    ITEM_FAILED,
+    ITEM_STALE,
+    ProposalError,
+    apply_proposal,
+    card_for,
+    dismiss_proposal,
+    proposal_for,
+)
 from .chat_runner import recover_stale_turns
 from .chat_services import (
     chat_backend_for,
@@ -51,8 +59,7 @@ ATTACHMENT_ACCEPT = ".csv,.xlsx,.pdf,text/csv,application/pdf,application/vnd.op
 
 
 def _backend_label(backend):
-    labels = {LOCAL_BACKEND: "Local model", "claude": "Claude", "codex": "Codex", "cursor": "Cursor"}
-    return labels.get(backend, backend or "AI")
+    return backend_display_name(backend, "AI")
 
 
 def provider_label(person, connection, backend):
@@ -101,8 +108,17 @@ def chat_send(request):
     if wants_json:
         return _popover_response(person, conversation, request)
     if next_url.rstrip("/").endswith("chat") or next_url.startswith(reverse("chat")):
-        return redirect(f"{reverse('chat')}?c={conversation.pk}")
+        return redirect(f"{reverse('chat')}?c={conversation.pk}{_latest_question_anchor(conversation)}")
     return redirect(next_url)
+
+
+def _latest_question_anchor(conversation):
+    """Land on the question just sent, with its reply below it, even without JavaScript (#686)."""
+    question = (
+        conversation.messages.filter(role=AiConversationMessage.Role.USER)
+        .order_by("-created_at", "-pk").values_list("pk", flat=True).first()
+    )
+    return f"#turn-{question}" if question else ""
 
 
 def _posted_attachment(request, person):
@@ -239,6 +255,31 @@ def _back_to_chat(proposal):
     return redirect(f"{reverse('chat')}?c={proposal.conversation_id}#proposal-{proposal.pk}")
 
 
+def _ticked_items(request):
+    """The item indexes ticked on an item card (#659), or None when the form has no checkboxes."""
+    if request.POST.get("item_selection") != "1":
+        return None
+    ticked = set()
+    for value in request.POST.getlist("item"):
+        try:
+            ticked.add(int(value))
+        except ValueError:
+            continue
+    return ticked
+
+
+def _applied_message(proposal):
+    result = proposal.result or {}
+    if "items" not in result:
+        return "Suggestion applied."
+    count = result.get("count") or 0
+    failed = sum(1 for item in result["items"] if item.get("status") in (ITEM_FAILED, ITEM_STALE))
+    text = f"Applied {count} item{'s' if count != 1 else ''}."
+    if failed:
+        text += " Some ticked items could not be applied; the card shows why."
+    return text
+
+
 @require_POST
 def chat_proposal_apply(request, proposal_id):
     person = _person(request)
@@ -246,8 +287,8 @@ def chat_proposal_apply(request, proposal_id):
     if proposal is None:
         raise Http404
     try:
-        apply_proposal(person, proposal_id)
-        messages.success(request, "Suggestion applied.")
+        applied = apply_proposal(person, proposal_id, selected=_ticked_items(request))
+        messages.success(request, _applied_message(applied))
     except ProposalError as exc:
         messages.error(request, str(exc))
     except PermissionDenied:

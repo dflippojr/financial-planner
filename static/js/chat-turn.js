@@ -75,8 +75,15 @@
     article.dispatchEvent(new CustomEvent("chat:answered", {bubbles: true}));
     if (data.proposals) {
       if (article.closest("#ai-popover")) article.dispatchEvent(new CustomEvent("chat:proposals", {bubbles: true}));
-      else window.location.reload();
+      else reloadAt(article);
     }
+  }
+
+  // Reload anchored to the turn that produced the cards (#686), so the reader stays with it. A
+  // change of hash alone never reloads, so set it in place first; chat-page-layout.js scrolls to it.
+  function reloadAt(article) {
+    if (article.id) history.replaceState(history.state, "", "#" + article.id);
+    window.location.reload();
   }
 
   function watch(article) {

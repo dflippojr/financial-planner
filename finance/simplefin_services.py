@@ -6,7 +6,7 @@ import logging
 from datetime import date, datetime, timedelta, UTC
 from types import SimpleNamespace
 from decimal import Decimal, Inexact, InvalidOperation, localcontext
-from urllib.parse import quote, urlsplit
+from urllib.parse import urlsplit
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied
@@ -35,13 +35,17 @@ from finance.models import (
     Transaction,
 )
 from finance.fx_rates import APP_CURRENCY, RateBook, RateUnavailable, currency_code, to_usd_minor
+from finance.simplefin_budget import reserve_request
 from finance.simplefin_client import CLAIM_DEADLINE_SECONDS, claim_access_url, fetch_accounts
+from finance.simplefin_health import read_record, schedule_health_push, stored_read
 from finance.simplefin_errors import (
     SimpleFinAlreadyClaimed,
     SimpleFinError,
     SimpleFinRateLimited,
     clean_text,
+    is_api_usage_notice,
     provider_errors,
+    remote_account_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -198,19 +202,6 @@ def _connection_name_by_id(payload: dict) -> dict[str, str]:
     return names
 
 
-def remote_account_key(item: dict) -> str:
-    """Stable key for a SimpleFIN account.
-
-    Account ids are unique only within one provider connection, so the key
-    includes the connection id when SimpleFIN reports one.
-    """
-    # Percent-encode each part so a ':' inside an id can never make two
-    # different accounts share one key.
-    account_id = quote(clean_text(item["id"]), safe="")
-    conn_id = quote(clean_text(item.get("conn_id") or ""), safe="")
-    return f"{conn_id}:{account_id}" if conn_id else account_id
-
-
 def _remote_accounts(payload: dict):
     """(key, item) for each usable account; one whose key cannot be stored is left out."""
     for item in payload.get("accounts") or []:
@@ -296,9 +287,33 @@ def _store_claimed_connection(person, access_url: str) -> SimpleFinConnection:
 
 
 def load_remote_accounts(connection: SimpleFinConnection) -> tuple[list[dict], list[str]]:
+    """Read the account list (balances only) and store it with each bank's health.
+
+    Counts against the connection's daily request budget like any sync.
+    """
     access_url = _readable_access_url(connection)
+    reserve_request(connection.pk, scheduled=False)
     payload = fetch_accounts(access_url, balances_only=True)
-    return listed_accounts(payload), provider_errors(payload)
+    listing = listed_accounts(payload)
+    store_read(connection.pk, payload, listing, timezone.now())
+    return listing, provider_errors(payload)
+
+
+def store_read(connection_id, payload: dict, listing: list[dict], now) -> dict:
+    """Keep what one /accounts read saw, then push any bank health change after commit."""
+    record = read_record(payload, listing, now)
+    SimpleFinConnection.objects.filter(pk=connection_id).update(last_read=record)
+    schedule_health_push(connection_id)
+    return record
+
+
+def stored_listing(connection: SimpleFinConnection) -> list[dict] | None:
+    """The account rows from the newest read, or None before the first read."""
+    read = stored_read(connection)
+    accounts = read.get("accounts")
+    if not isinstance(accounts, list):
+        return None
+    return [row for row in accounts if isinstance(row, dict) and isinstance(row.get("id"), str)]
 
 
 def _visible_linkable_account(person, account_id):
@@ -666,27 +681,11 @@ def _error_applies_to_remote(item: dict, remote: dict) -> bool:
     return bool(err_conn and conn_id and err_conn == conn_id)
 
 
-def _is_api_usage_notice(item) -> bool:
-    """A `gen.api` item naming no account or connection: advice to the developer, not missing data (#629).
-
-    The protocol: "Error in how the API is being used. This is meant for the
-    developer and not the user." Bridge sends it when the requested date range
-    passes 45 days (recommended) or 90 days (capped), so treating it as an
-    unreliable listing held back every import. A missing transaction list
-    still marks the account unreliable on its own.
-    """
-    return (
-        isinstance(item, dict)
-        and str(item.get("code") or "").strip().lower() == "gen.api"
-        and not (item.get("account_id") or item.get("conn_id"))
-    )
-
-
 def _transactions_unreliable(remote: dict, payload: dict) -> bool:
     if "transactions" not in remote or remote.get("transactions") is None:
         return True
     for item in payload.get("errlist") or []:
-        if _is_api_usage_notice(item):
+        if is_api_usage_notice(item):
             continue
         if not isinstance(item, dict) or not (item.get("account_id") or item.get("conn_id")):
             # An error naming no account or connection may affect any of them.
@@ -731,8 +730,15 @@ def _sync_one_link(person, connection, link, remote, synced_at, payload, rates) 
 
 @member_operation
 @notify_after_alert_run
-def sync_connection(principal, connection_id, *, ignore_rate_limit=False) -> dict:
+def sync_connection(principal, connection_id, *, ignore_rate_limit=False, scheduled=None) -> dict:
     """Sync one connection. A setup, fetch or import failure is recorded, then raised.
+
+    Every sync takes one request from the connection's daily budget
+    (finance.simplefin_budget). A scheduled sync is recorded but never
+    refused; any other sync is refused once the member's share is used.
+    scheduled defaults to ignore_rate_limit, which only scheduled callers set,
+    except the Fix and Add checks: they skip the 15-minute Sync now wait but
+    still draw on the member's share.
 
     The fetch runs before the transaction and household lock, so a slow
     provider never holds up other members' writes. The results are then
@@ -749,6 +755,8 @@ def sync_connection(principal, connection_id, *, ignore_rate_limit=False) -> dic
         # decrypt, is recorded like a fetch failure so the owner is alerted.
         _record_failure(person, connection_id, timezone.now(), str(exc), failure="provider_error")
         raise
+    # Not recorded as a sync failure: nothing was sent, and the next scheduled sync still runs.
+    reserve_request(connection_id, scheduled=ignore_rate_limit if scheduled is None else scheduled)
     try:
         payload = fetch_accounts(plan.access_url, start_date=plan.start_epoch, end_date=int(plan.now.timestamp()) + 1)
     except SimpleFinError as exc:
@@ -910,6 +918,8 @@ def _apply_sync(person, connection_id, plan, payload, rates, *, ignore_rate_limi
     connection, links = _locked_connection(person, connection_id, plan, ignore_rate_limit=ignore_rate_limit)
     now = plan.now
     errors = provider_errors(payload)
+    # Kept even when the import below fails: the read itself was good.
+    connection.last_read = store_read(connection.pk, payload, listed_accounts(payload), now)
     syncable_ids = set(
         Account.objects.visible_to(person)
         .filter(pk__in=[link.account_id for link in links], status=Account.Status.ACTIVE, archived_at__isnull=True)
@@ -989,9 +999,9 @@ def disconnect_connection(principal, connection_id) -> None:
 def _sync_scheduled(connection):
     if execution.get() is None:
         with operation():
-            sync_connection(connection.owner, connection.pk, ignore_rate_limit=True)
+            sync_connection(connection.owner, connection.pk, ignore_rate_limit=True, scheduled=True)
     else:
-        sync_connection(connection.owner, connection.pk, ignore_rate_limit=True)
+        sync_connection(connection.owner, connection.pk, ignore_rate_limit=True, scheduled=True)
 
 
 def _record_unexpected_failure(connection):

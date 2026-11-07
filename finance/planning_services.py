@@ -188,6 +188,20 @@ def _with_whole_bills(principal, rows, replaced):
     return widened
 
 
+def replaced_series_ids(principal, planned_item_ids):
+    """Every series the given planned items replace, widened to whole household bills (#522).
+
+    The series whose stored charges decide which recurring charges a plan
+    leaves out of the projection, as `visible_projection_inputs` decides it.
+    """
+    replaced = set(
+        PlannedItem.objects.filter(pk__in=list(planned_item_ids), replaces_series__isnull=False).values_list(
+            "replaces_series_id", flat=True
+        )
+    )
+    return _with_whole_bills(principal, [], replaced)
+
+
 def visible_projection_inputs(principal, *, account=None, scope="", accounts=None, include_household=True):
     """Planned items and confirmed series behind the projection.
 
@@ -373,6 +387,20 @@ def cash_flow_with_projection(
     report.projected_periods = project_cash_flow(inputs, today=today, horizon=horizon)
     scenario_inputs = apply_scenario(inputs, scenario_changes)
     report.scenario_projected_periods = project_cash_flow(scenario_inputs, today=today, horizon=horizon)
+    if account is None:
+        # Sinking-fund set-asides are outflows of spendable cash (#670). Like
+        # planned items, they are left out of a single-account view.
+        from .fund_projection import apply_fund_set_asides
+
+        report.projected_periods = apply_fund_set_asides(
+            principal, report.projected_periods, today=today, scope=scope
+        )
+        report.scenario_projected_periods = apply_fund_set_asides(
+            principal, report.scenario_projected_periods, today=today, scope=scope
+        )
+    report.projection_has_set_asides = any(
+        getattr(period, "set_aside_minor", 0) for period in report.projected_periods
+    )
     report.scenario_comparison = compare_projected_months(
         report.projected_periods, report.scenario_projected_periods
     )

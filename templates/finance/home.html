@@ -12,6 +12,9 @@
 {% if report and report.projection_excludes_planned_items and report.projected_periods %}
 <div role="note" class="alert alert-info mb-4">Planned items are not tied to an account, so projected months for one account show only its confirmed recurring charges.</div>
 {% endif %}
+{% if report and report.projection_has_set_asides %}
+<div role="note" class="alert alert-info mb-4">Projected spending includes each sinking fund's monthly set-aside. A planned item a fund pays for counts from the fund, not again as spending.</div>
+{% endif %}
 {% if report and not report.has_visible_transactions %}
 <div role="status" class="alert mb-4">
   <span>
@@ -31,7 +34,7 @@
         <h2 class="text-sm font-semibold opacity-80">Net cash flow</h2>
       {% ai_tile "cash-flow-totals" has_data=report.has_visible_transactions date_from=range_from date_to=range_to %}
         <p class="text-4xl font-bold tracking-tight">{% include "finance/_amount.html" with value=report.summary.net_display tone="" %}</p>
-        <p class="text-sm opacity-80">{% if range_from and range_to %}{{ range_from|date:"M j" }} – {{ range_to|date:"M j, Y" }} · {% endif %}{{ report.summary.net_change.label }}</p>
+        <p class="text-sm opacity-80">{% if range_from and range_to %}{{ range_from|date_range:range_to }} · {% endif %}{{ report.summary.net_change.label }}</p>
       </div>
       <div class="flex flex-col gap-1 md:border-l md:border-base-300 md:pl-6">
         <h2 class="text-sm font-semibold opacity-80">Income</h2>
@@ -176,7 +179,11 @@
               <summary class="link cursor-pointer text-sm">Items</summary>
               <ul class="mt-2 list-disc pl-4">
                 {% for item in period.contributions %}
-                <li>{{ item.name }} · {{ item.occurrence_count }}× · {{ item.amount_display }}</li>
+                {% if item.source == "set_aside" %}
+                <li>Set aside: {{ item.name }} · {{ item.amount_display }}</li>
+                {% else %}
+                <li>{{ item.name }} · {{ item.occurrence_count }}× · {{ item.amount_display }}{% if item.paid_from_fund_display %} · paid from fund: {{ item.paid_from_fund_display }}{% endif %}{% if item.already_paid_display %} · already paid from fund: {{ item.already_paid_display }}{% endif %}</li>
+                {% endif %}
                 {% endfor %}
               </ul>
             </details>
@@ -252,7 +259,7 @@
     <summary class="flex min-h-12 cursor-pointer items-center font-medium">Savings goal dates</summary>
   <section aria-labelledby="scenario-goals-heading" class="pb-4">
     <h2 id="scenario-goals-heading" class="sr-only">Savings goal dates</h2>
-    <p class="mb-2 opacity-80">Goal dates are shown under the baseline and the scenario. Goals do not change either projection.</p>
+    <p class="mb-2 opacity-80">Goal dates are shown under the baseline and the scenario. Goals do not change either projection; only sinking-fund set-asides count, as spending.</p>
     <div class="overflow-x-auto">
     <table class="table table-zebra max-w-3xl">
       <thead class="sticky top-0 z-10 bg-base-200">

@@ -1,6 +1,7 @@
 """Keep every operator journal written by tests in disposable storage."""
 import os
 import sys
+import threading
 
 import pytest
 
@@ -69,6 +70,62 @@ def keep_autovacuum_off(request):
     yield
     if _is_transactional(request.node):
         _turn_autovacuum_off(request.getfixturevalue("django_db_blocker"))
+
+
+class _OneRequestAtATime:
+    """Lets one live-server request at a time use a connection shared with every request thread.
+
+    The lock is taken in the WSGI app, after the request line has been read, so an idle keep-alive
+    socket never holds it. It is released when the server finishes that request, after the
+    response has been written and closed, whatever path the request took.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._owner = None
+
+    def acquire(self):
+        self._lock.acquire()
+        self._owner = threading.get_ident()
+
+    def release(self):
+        # Only the request thread that took the lock compares equal here.
+        if self._owner == threading.get_ident():
+            self._owner = None
+            self._lock.release()
+
+    def wrap_app(self, app):
+        def one_at_a_time(environ, start_response):
+            self.acquire()
+            return app(environ, start_response)
+
+        return one_at_a_time
+
+    def wrap_handler(self, handler_class):
+        gate = self
+
+        class OneRequestAtATimeHandler(handler_class):
+            def handle_one_request(self):
+                try:
+                    super().handle_one_request()
+                finally:
+                    gate.release()
+
+        return OneRequestAtATimeHandler
+
+
+@pytest.fixture(scope="session")
+def live_server(live_server):
+    # With in-memory SQLite, pytest-django hands the test thread's one connection to every request
+    # thread. Two requests inside atomic() at once (the Chat page polls each pending turn, and each
+    # poll opens one) corrupt its savepoint bookkeeping, and since an in-memory connection is never
+    # closed, every later live-server test on that xdist worker failed (#653). Serialize them.
+    if live_server.thread.connections_override:
+        gate = _OneRequestAtATime()
+        server = live_server.thread.httpd
+        server.RequestHandlerClass = gate.wrap_handler(server.RequestHandlerClass)
+        server.set_app(gate.wrap_app(server.get_app()))
+    return live_server
 
 
 @pytest.fixture(autouse=True)
@@ -175,7 +232,57 @@ class _BrowserTraces:
         self.test_id = None
 
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--coverage-shard",
+        metavar="K/N",
+        help="run only shard K of N (1-based) of the selected tests; sonar.yml splits its coverage run this way",
+    )
+
+
+def _parse_shard(value):
+    try:
+        index, count = (int(part) for part in value.split("/"))
+    except ValueError:
+        raise pytest.UsageError(f"--coverage-shard expects K/N, for example 1/3, not {value!r}") from None
+    if not 1 <= index <= count:
+        raise pytest.UsageError(f"--coverage-shard {value}: K must be between 1 and N")
+    return index, count
+
+
+class _CoverageShard:
+    """Keep one of N disjoint parts of the selected tests (issue #691).
+
+    Sorting by node id, rather than using collection order, gives every
+    process the same split even if collection order varied. Taking every Nth
+    test spreads each module, including the slow property tests that sit
+    together, across all shards. scripts/check_coverage_shards.py proves from
+    each shard's JUnit report that the shards together ran every selected
+    test exactly once.
+    """
+
+    def __init__(self, index, count):
+        self.index = index
+        self.count = count
+
+    # trylast: after -m has deselected tests, so the split is of the tests
+    # that will run.
+    @pytest.hookimpl(trylast=True)
+    def pytest_collection_modifyitems(self, config, items):
+        order = {nodeid: position for position, nodeid in enumerate(sorted(item.nodeid for item in items))}
+        keep, drop = [], []
+        for item in items:
+            (keep if order[item.nodeid] % self.count == self.index - 1 else drop).append(item)
+        if drop:
+            config.hook.pytest_deselected(items=drop)
+        items[:] = keep
+
+
 def pytest_configure(config):
+    shard = config.getoption("--coverage-shard")
+    if shard:
+        config.pluginmanager.register(_CoverageShard(*_parse_shard(shard)), "coverage-shard")
+
     directory = os.environ.get("PLAYWRIGHT_TRACE_DIR")
     if not directory:
         return

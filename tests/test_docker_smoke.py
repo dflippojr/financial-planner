@@ -11,10 +11,12 @@ the smoke runs inside the app image, on recorded outcomes.
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import sys
 
+from cryptography.fernet import Fernet
 import pytest
 
 from tests.test_backup_scripts import POSIX_BASH, _unix_path
@@ -513,3 +515,38 @@ def test_the_storage_check_accepts_project_volumes_and_read_only_repo_files(tmp_
 
     assert result.returncode == 0, result.stderr
     assert "disposable" in result.stdout
+
+
+SMOKE_CREDENTIALS = ("POSTGRES_PASSWORD", "DJANGO_SECRET_KEY", "FIELD_ENCRYPTION_KEY")
+
+
+def _smoke_env_values(tmp_path):
+    tmp_path.mkdir()
+    bin_dir, _ = _fake_docker(tmp_path)
+    _run_smoke(tmp_path, bin_dir)
+    # mktemp -d puts the run's work_dir under TMPDIR, and the fake build stops the run after the env file is written.
+    (env_file,) = tmp_path.glob("tmp.*/smoke.env")
+    values = dict(line.split("=", 1) for line in env_file.read_text(encoding="utf-8").splitlines() if "=" in line)
+    return {name: values[name] for name in SMOKE_CREDENTIALS}
+
+
+def test_each_run_generates_its_own_dummy_credentials(tmp_path):
+    first = _smoke_env_values(tmp_path / "first")
+    second = _smoke_env_values(tmp_path / "second")
+    script = SMOKE_SCRIPT.read_text(encoding="utf-8")
+
+    for name in SMOKE_CREDENTIALS:
+        assert first[name] != second[name], name
+        assert first[name] not in script and second[name] not in script, name
+    # The app's field encryption accepts only a 32-byte urlsafe-base64 Fernet key.
+    for run in (first, second):
+        Fernet(run["FIELD_ENCRYPTION_KEY"])
+    assert len(first["DJANGO_SECRET_KEY"]) >= 50
+
+
+def test_the_smoke_script_holds_no_credential_literal():
+    script = SMOKE_SCRIPT.read_text(encoding="utf-8")
+
+    for name in SMOKE_CREDENTIALS:
+        for value in re.findall(rf"^{name}=(.*)$", script, re.M):
+            assert value.startswith("$"), f"{name}={value}"

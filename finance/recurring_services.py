@@ -9,7 +9,7 @@ from decimal import Decimal
 from hashlib import sha256
 import re
 
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.db.models import Exists, OuterRef
 from django.utils import timezone
@@ -18,6 +18,14 @@ from .access import DENIED as _DENIED
 from .access import require_person as _person_for
 from .category_services import exclusion_exists_for
 from .audit_services import personal_audience, record
+from .auto_notes import (
+    NO_NOTE_TO_ADD,
+    append_note_lines,
+    apply_line_to_existing,
+    recurring_source,
+    rows_needing_line,
+    validate_note_line,
+)
 from .bill_grouping import (
     charges_in,
     choose_copy,
@@ -761,20 +769,42 @@ def _apply_detection(series, detected, *, eligible_ids, preserve_identity=False)
         RecurringSeriesMember.objects.filter(series=series, transaction_id__in=gone).delete()
     claimed_elsewhere = _active_member_transaction_ids(series.person, exclude_series_id=series.pk)
     existing_ids = {transaction_id for transaction_id, _source in members} - gone
+    joined = sorted(
+        pk for pk in chain_ids if pk in eligible_ids and pk not in claimed_elsewhere and pk not in existing_ids
+    )
     RecurringSeriesMember.objects.bulk_create(
         RecurringSeriesMember(
             series=series,
             transaction_id=pk,
             source=RecurringSeriesMember.Source.DETECTED,
         )
-        for pk in chain_ids
-        if pk in eligible_ids and pk not in claimed_elsewhere and pk not in existing_ids
+        for pk in joined
     )
+    _note_joined_charges(series.person, series, joined)
     extra = []
     if series.members.filter(source=RecurringSeriesMember.Source.MANUAL).exists():
         extra.append(MANUAL_REASON)
     _recompute_series_from_members(series, extra_reasons=extra)
     series._member_transaction_ids = None
+
+
+def _note_joined_charges(actor, series, transaction_ids):
+    """Add a confirmed series' note to charges that just joined it (#684).
+
+    Only charges imported after the note was last set get it, so a refresh that
+    absorbs an older charge, a merge, or adding an old charge by hand never
+    changes a past note; the series' note page adds it to those on confirm.
+    """
+    if not transaction_ids or not series.note or series.note_updated_at is None:
+        return
+    if series.status != RecurringSeries.Status.CONFIRMED:
+        return
+    rows = list(
+        Transaction.objects.select_for_update(of=("self",))
+        .filter(pk__in=transaction_ids, status=Transaction.Status.ACTIVE, created_at__gte=series.note_updated_at)
+        .order_by("pk")
+    )
+    append_note_lines(actor, [(txn, series.note, recurring_source(series)) for txn in rows])
 
 
 def _fingerprint_taken(person, fingerprint, *, exclude_pk):
@@ -1212,14 +1242,14 @@ def merge_recurring_series(principal, source_id, target_id):
         raise PermissionDenied(_DENIED)
     source_txn_ids = list(source.members.values_list("transaction_id", flat=True))
     existing_ids = set(target.members.values_list("transaction_id", flat=True))
+    joined = [pk for pk in source_txn_ids if pk not in existing_ids]
     RecurringSeriesMember.objects.bulk_create(
         RecurringSeriesMember(
             series=target,
             transaction_id=pk,
             source=RecurringSeriesMember.Source.MANUAL,
         )
-        for pk in source_txn_ids
-        if pk not in existing_ids
+        for pk in joined
     )
     RecurringSeriesMember.objects.filter(series=target, transaction_id__in=source_txn_ids).update(
         source=RecurringSeriesMember.Source.MANUAL
@@ -1232,6 +1262,11 @@ def merge_recurring_series(principal, source_id, target_id):
             target.confirmed_at = timezone.now()
             fields.append("confirmed_at")
         target.save(update_fields=fields)
+    if not target.note and source.note:
+        # The surviving series keeps its own note; one without takes the merged series' note.
+        target.note, target.note_updated_at = source.note, source.note_updated_at
+        target.save(update_fields=("note", "note_updated_at", "updated_at"))
+    _note_joined_charges(person, target, joined)
     _carry_price_acknowledgements(source, target)
     source_pk = source.pk
     source.delete()
@@ -1296,7 +1331,85 @@ def add_recurring_members(principal, series_id, transaction_ids):
     added = [pk for pk in requested if pk not in already]
     if added:
         _record_series(person, AuditEvent.Action.RECURRING_ADDED, series, row_count=len(added))
+        _note_joined_charges(person, series, added)
     return _recompute_series_from_members(series, extra_reasons=(MANUAL_REASON,))
+
+
+def _own_confirmed_series(person, series_id, *, lock=False):
+    """The member's own confirmed series: only its owner sets or applies its note."""
+    query = RecurringSeries.objects.visible_to(person).filter(  # pyright: ignore[reportAttributeAccessIssue] - QuerySet.as_manager() is untyped, as for every RecurringSeries.objects.visible_to in the baseline
+        pk=series_id, status=RecurringSeries.Status.CONFIRMED,
+    )
+    series = query.first()
+    if series is None:
+        raise PermissionDenied(_DENIED)
+    if lock:
+        series = RecurringSeries.objects.select_for_update(of=("self",)).filter(pk=series.pk).first()
+        if series is None or series.status != RecurringSeries.Status.CONFIRMED:
+            raise PermissionDenied(_DENIED)
+    return series
+
+
+def note_version(series):
+    """Identifies the note a preview showed; a refresh that only recomputes the series leaves it alone."""
+    return series.note_updated_at.isoformat() if series.note_updated_at else ""
+
+
+@transaction.atomic
+def set_recurring_series_note(principal, series_id, note):
+    """Set, edit or clear a confirmed series' note. Existing charges keep their notes (#684)."""
+    person = _person_for(principal)
+    line = validate_note_line(note)
+    lock_actor_household(person)
+    series = _own_confirmed_series(person, series_id, lock=True)
+    if series.note != line:
+        series.note = line
+        series.note_updated_at = timezone.now()
+        series.save(update_fields=("note", "note_updated_at", "updated_at"))
+        record(person, AuditEvent.Action.RECORD_EDITED, AuditEvent.TargetType.RECURRING, series.pk,
+               audience=personal_audience(person), fields=("note",))
+    return series
+
+
+def _series_charges(person, series):
+    return list(
+        Transaction.objects.visible_to(person)  # pyright: ignore[reportAttributeAccessIssue] - QuerySet.as_manager() is untyped, as for every Transaction.objects.visible_to in the baseline
+        .filter(recurring_memberships__series=series, status=Transaction.Status.ACTIVE)
+        .select_related("account")
+        .order_by("-transaction_date", "-pk")
+    )
+
+
+def recurring_note_preview(principal, series_id):
+    """(series, the series' current charges its note would be added to); none without a note."""
+    person = _person_for(principal)
+    series = _own_confirmed_series(person, series_id)
+    if not series.note:
+        return series, []
+    return series, rows_needing_line(_series_charges(person, series), series.note)
+
+
+@transaction.atomic
+def apply_recurring_note_to_existing(principal, series_id, *, previewed_version, expected_token):
+    """Add the series' note to the previewed existing charges, once the member confirms.
+
+    previewed_version is note_version(series) and expected_token the preview_token
+    from the preview page; if the note or the previewed rows moved, nothing is written. Returns (changed rows, undo record).
+    """
+    person = _person_for(principal)
+    lock_actor_household(person)
+    series = _own_confirmed_series(person, series_id, lock=True)
+    if note_version(series) != previewed_version:
+        raise ValidationError("This note changed since its preview. Check the preview and apply again.")
+    if not series.note:
+        raise ValidationError(NO_NOTE_TO_ADD)
+    ids = [txn.pk for txn in _series_charges(person, series)]
+    locked = list(
+        Transaction.objects.select_for_update(of=("self",))
+        .filter(pk__in=ids, status=Transaction.Status.ACTIVE)
+        .order_by("pk")
+    )
+    return apply_line_to_existing(person, locked, series.note, recurring_source(series), expected_token)
 
 
 class ManualSeriesError(ValueError):

@@ -1,0 +1,34 @@
+{% extends "finance/base.html" %}
+{% load ui %}
+{% block title %}Reduce funds · {{ account.name }} · Financial Planner{% endblock %}
+{% block content %}
+{% include "finance/_page_header.html" with title="Reduce funds" helper="The account's balance is below what its funds hold. Choose how much to take out of each fund; nothing is reduced on its own." %}
+<p class="mb-4"><a class="link" href="{% url 'savings-goals' %}">Savings goals</a> · {{ account.name }}</p>
+{% include "finance/_messages.html" %}
+<div class="page-columns">
+<div class="flex flex-col gap-4">
+  {% include "finance/_fund_account_panel.html" with position=position %}
+</div>
+<aside class="page-side" aria-label="Reduce funds">
+  <section class="card border border-base-300 bg-base-100" aria-labelledby="reduce-heading">
+    <div class="card-body">
+      <h2 id="reduce-heading" class="card-title text-base">Take money out</h2>
+      {% if position.shortfall_minor > 0 %}
+      <p>Take out at least {{ position.shortfall_display|amount_text|cut:"+" }} in total to match the balance.</p>
+      {% else %}
+      <p>The balance covers every fund now. You can still take money out of a fund here.</p>
+      {% endif %}
+      {% if form.funds %}
+      <form method="post">
+        {% csrf_token %}
+        {% include "finance/_form_fields.html" with form=form %}
+        <button type="submit" class="btn btn-primary">Reduce funds</button>
+      </form>
+      {% else %}
+      <p>No fund in this account holds money.</p>
+      {% endif %}
+    </div>
+  </section>
+</aside>
+</div>
+{% endblock %}

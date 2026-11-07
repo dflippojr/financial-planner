@@ -11,10 +11,13 @@ from django.core.validators import MaxValueValidator
 from django.db.models import Q
 from django.utils import timezone
 
-from .input_limits import MAX_DESCRIPTION_CHARS
+from .input_limits import AUTO_NOTE_MAX_CHARS, MAX_DESCRIPTION_CHARS
+from .access import visible_rows
+from .money_input import MoneyField, PercentField, WholePercentField
 from .date_bounds import EARLIEST_ACTIVITY_DATE, TOO_EARLY_ERROR, activity_date_error
 from .cash_flow import MAX_REPORT_DATE, MAX_REPORT_PERIODS, default_date_range, period_count
 from .projection import DEFAULT_HORIZON, HORIZONS
+from .account_sort import CHOICES as ACCOUNT_SORT_CHOICES, PAGE_FIELDS as ACCOUNT_SORT_PAGES
 
 from .auth_services import validated_username
 from .policy_services import current_policy
@@ -193,14 +196,14 @@ class TransactionFilterForm(forms.Form):
             (Account.Scope.HOUSEHOLD, "Household"),
         ),
     )
-    amount_min = forms.DecimalField(
+    amount_min = MoneyField(
         max_digits=19,
         decimal_places=2,
         required=False,
         label="Amount min",
         widget=forms.TextInput(attrs={"inputmode": "decimal"}),
     )
-    amount_max = forms.DecimalField(
+    amount_max = MoneyField(
         max_digits=19,
         decimal_places=2,
         required=False,
@@ -366,7 +369,7 @@ class ScenarioChangeForm(forms.Form):
     )
     name = forms.CharField(max_length=150, required=False)
     kind = forms.ChoiceField(choices=PlannedItem.Kind.choices, required=False)
-    amount = forms.DecimalField(
+    amount = MoneyField(
         required=False,
         min_value=Decimal("0.01"),
         max_digits=19,
@@ -515,14 +518,21 @@ class NetWorthFilterForm(forms.Form):
         return cleaned
 
 
+class AccountSortForm(forms.Form):
+    """Saves how a member sorts one page's balance-by-account list (#655)."""
+
+    page = forms.ChoiceField(choices=[(page, page) for page in ACCOUNT_SORT_PAGES])
+    sort = forms.ChoiceField(label="Sort by", required=False, choices=ACCOUNT_SORT_CHOICES)
+
+
 class ManualBalanceForm(forms.Form):
     snapshot_date = forms.DateField(label="Date", widget=forms.DateInput(attrs={"type": "date"}))
-    amount = forms.DecimalField(
+    amount = MoneyField(
         max_digits=19,
         decimal_places=2,
         widget=forms.TextInput(attrs={"inputmode": "decimal"}),
     )
-    net_contribution = forms.DecimalField(
+    net_contribution = MoneyField(
         label="Net contributions this period",
         max_digits=19,
         decimal_places=2,
@@ -685,7 +695,7 @@ def _correction_history_rows(transaction, actor, recorded_at, new_date, new_desc
 class TransactionCorrectionForm(forms.Form):
     transaction_date = forms.DateField(label="Date", widget=forms.DateInput(attrs={"type": "date"}))
     description = forms.CharField(max_length=MAX_DESCRIPTION_CHARS, widget=forms.Textarea(attrs={"rows": 3}))
-    amount = forms.DecimalField(
+    amount = MoneyField(
         max_digits=19,
         decimal_places=2,
         help_text="Negative is money out; positive is money in.",
@@ -759,7 +769,7 @@ class ManualTransactionForm(forms.Form):
         choices=((DIRECTION_OUT, "Out (spending, payment, withdrawal)"), (DIRECTION_IN, "In (income, deposit, refund)")),
         initial=DIRECTION_OUT,
     )
-    amount = forms.DecimalField(
+    amount = MoneyField(
         max_digits=19,
         decimal_places=2,
         min_value=Decimal("0.01"),
@@ -819,7 +829,7 @@ class TransactionCategoryForm(forms.Form):
 
 class RefundSearchForm(forms.Form):
     refund_search = forms.CharField(required=False, max_length=255, label="Purchase description")
-    refund_amount = forms.DecimalField(
+    refund_amount = MoneyField(
         required=False, decimal_places=2, max_digits=19, min_value=Decimal("0.01"), label="Purchase amount",
         widget=forms.TextInput(attrs={"inputmode": "decimal", "autocomplete": "off"}),
     )
@@ -946,7 +956,7 @@ class SplitTransactionForm(forms.Form):
                 label=f"Part {index + 1} category",
                 initial=initial_category,
             )
-            self.fields[f"part_{index}_amount"] = forms.DecimalField(
+            self.fields[f"part_{index}_amount"] = MoneyField(
                 max_digits=19,
                 decimal_places=2,
                 label=f"Part {index + 1} amount",
@@ -1139,7 +1149,7 @@ class AccountRenameForm(forms.Form):
 
 
 class DebtTermsForm(forms.Form):
-    apr_percent = forms.DecimalField(
+    apr_percent = PercentField(
         label="APR percent",
         max_digits=6,
         decimal_places=3,
@@ -1148,7 +1158,7 @@ class DebtTermsForm(forms.Form):
         widget=forms.TextInput(attrs={"inputmode": "decimal"}),
         help_text="Annual percentage rate, for example 19.990.",
     )
-    minimum_payment = forms.DecimalField(
+    minimum_payment = MoneyField(
         label="Minimum payment",
         max_digits=19,
         decimal_places=2,
@@ -1195,7 +1205,7 @@ class DebtPlannerForm(forms.Form):
             ("custom", "Custom order"),
         )
     )
-    extra = forms.DecimalField(
+    extra = MoneyField(
         label="Extra monthly payment",
         required=False,
         min_value=0,
@@ -1399,7 +1409,7 @@ class TransferWindowForm(forms.Form):
 class PlannedItemForm(forms.Form):
     name = forms.CharField(max_length=150)
     kind = forms.ChoiceField(choices=PlannedItem.Kind.choices)
-    amount = forms.DecimalField(
+    amount = MoneyField(
         min_value=Decimal("0.01"),
         max_digits=19,
         decimal_places=2,
@@ -1468,11 +1478,13 @@ class PlannedItemForm(forms.Form):
 
 class SavingsGoalForm(forms.Form):
     name = forms.CharField(max_length=150)
-    target_amount = forms.DecimalField(
+    target_amount = MoneyField(
+        required=False,
         min_value=Decimal("0.01"),
         max_digits=19,
         decimal_places=2,
         label="Target amount",
+        help_text="Leave blank to use the amount of the planned item this goal funds.",
         widget=forms.TextInput(attrs={"inputmode": "decimal"}),
     )
     target_date = forms.DateField(
@@ -1503,7 +1515,25 @@ class SavingsGoalForm(forms.Form):
         required=False,
         empty_label="No linked account",
     )
-    manual_amount = forms.DecimalField(
+    share_of_account = forms.BooleanField(
+        required=False,
+        label="Sinking fund: hold a share of the linked account",
+        help_text=(
+            "The goal counts only the money assigned to it, so several goals can split one checking or "
+            "savings account. A household fund needs a household account; a private fund one of your own."
+        ),
+    )
+    funds_planned_item = forms.ModelChoiceField(
+        queryset=PlannedItem.objects.none(),
+        required=False,
+        empty_label="No planned item",
+        label="Funds planned expense",
+        help_text=(
+            "Sinking funds only. A blank target and date come from the item: its amount and next date. "
+            "When the expense posts, the fund pays for it."
+        ),
+    )
+    manual_amount = MoneyField(
         required=False,
         max_digits=19,
         decimal_places=2,
@@ -1531,6 +1561,10 @@ class SavingsGoalForm(forms.Form):
         if instance is not None:
             candidates = candidates.exclude(pk=instance.pk)
         self.fields["depends_on"].queryset = candidates.order_by("name", "pk")
+        items = visible_rows(PlannedItem, principal).filter(kind=PlannedItem.Kind.EXPENSE)
+        current_item = instance.funds_planned_item_id if instance is not None else None
+        items = items.filter(Q(enabled=True) | Q(pk=current_item))
+        self.fields["funds_planned_item"].queryset = items.order_by("name", "pk")  # pyright: ignore[reportAttributeAccessIssue] - a ModelChoiceField, typed as Field
         if household_only:
             # Only a goal's owner can take a household goal private.
             self.fields["scope"].choices = ((SavingsGoal.Scope.HOUSEHOLD, SavingsGoal.Scope.HOUSEHOLD.label),)
@@ -1539,6 +1573,8 @@ class SavingsGoalForm(forms.Form):
 
     def clean_target_amount(self):
         amount = self.cleaned_data["target_amount"]
+        if amount is None:
+            return amount
         minor_units = int(amount * 100)
         if minor_units <= 0 or minor_units > MAX_SIGNED_BIGINT:
             raise ValidationError(AMOUNT_RANGE_ERROR)
@@ -1566,7 +1602,52 @@ class SavingsGoalForm(forms.Form):
         if (manual_amount is None) != (manual_amount_date is None):
             self.add_error("manual_amount_date", "Enter both a manual amount and its date, or neither.")
         self._check_dependency(cleaned)
+        self._check_fund(cleaned)
         return cleaned
+
+    def _check_fund(self, cleaned):
+        """Mirror the service's sinking-fund checks so a bad choice is a form error, not a 404."""
+        from .access import require_person
+        from .category_services import current_household
+        from .savings_goal_services import (
+            TARGET_REQUIRED_ERROR,
+            validate_fund,
+            validate_planned_item_link,
+        )
+
+        share = cleaned.get("share_of_account", False)
+        item = cleaned.get("funds_planned_item")
+        scope = cleaned.get("scope")
+        if "target_amount" in cleaned and cleaned.get("target_amount") is None and not (share and item):
+            self.add_error("target_amount", TARGET_REQUIRED_ERROR)
+        if scope is None:
+            return
+        if share and cleaned.get("manual_amount") is not None:
+            self.add_error("manual_amount", "A fund's amount comes from what you assign to it; leave this blank.")
+        instance = self.instance if self.instance is not None else SavingsGoal()
+        if not share and not instance.share_of_account and item is None:
+            return
+        person = require_person(self.principal, check_authenticated=False)
+        household = current_household(person) if scope == SavingsGoal.Scope.HOUSEHOLD else None
+        account = cleaned.get("linked_account")
+        saved_account_id = instance.linked_account_id  # pyright: ignore[reportAttributeAccessIssue] - runtime FK id attribute
+        if account is None and saved_account_id is not None and not visible_rows(Account, person).filter(
+            pk=saved_account_id
+        ).exists():
+            account = instance.linked_account
+        owner_id = instance.owner_id  # pyright: ignore[reportAttributeAccessIssue] - runtime FK id attribute
+        try:
+            validate_fund(
+                instance, share=share, account=account, scope=scope, household=household,
+                owner_id=owner_id if owner_id is not None else person.pk,
+            )
+        except ValidationError as exc:
+            self.add_error("share_of_account" if not share else "linked_account", exc.messages[0])
+        try:
+            validate_planned_item_link(person, instance, item, scope=scope, household=household, share=share)
+        except (ValidationError, PermissionDenied) as exc:
+            message = exc.messages[0] if isinstance(exc, ValidationError) else "Choose a planned item you can see."
+            self.add_error("funds_planned_item", message)
 
     def _check_dependency(self, cleaned):
         from .access import require_person
@@ -1597,9 +1678,10 @@ class SavingsGoalForm(forms.Form):
 
     def save_payload(self):
         manual_amount = self.cleaned_data.get("manual_amount")
+        target = self.cleaned_data.get("target_amount")
         return {
             "name": self.cleaned_data["name"],
-            "target_amount_minor": int(self.cleaned_data["target_amount"] * 100),
+            "target_amount_minor": int(target * 100) if target is not None else None,
             "target_date": self.cleaned_data.get("target_date"),
             "priority": self.cleaned_data.get("priority"),
             "depends_on": self.cleaned_data.get("depends_on"),
@@ -1608,7 +1690,98 @@ class SavingsGoalForm(forms.Form):
             "linked_account": self.cleaned_data.get("linked_account"),
             "manual_amount_minor": int(manual_amount * 100) if manual_amount is not None else None,
             "manual_amount_date": self.cleaned_data.get("manual_amount_date"),
+            "share_of_account": self.cleaned_data.get("share_of_account", False),
+            "funds_planned_item": self.cleaned_data.get("funds_planned_item"),
         }
+
+
+def _fund_amount_field(**kwargs):
+    return MoneyField(
+        min_value=Decimal("0.01"),
+        max_digits=18,  # cents must fit the BIGINT column
+        decimal_places=2,
+        widget=forms.TextInput(attrs={"inputmode": "decimal"}),
+        **kwargs,
+    )
+
+
+class FundMoveForm(forms.Form):
+    """Assign money to a sinking fund, or release it back to the account (#670)."""
+
+    ASSIGN = "assign"
+    RELEASE = "release"
+    action = forms.ChoiceField(
+        choices=((ASSIGN, "Assign from the account's unassigned money"), (RELEASE, "Release back to the account")),
+        initial=ASSIGN,
+        label="Move",
+    )
+    amount = _fund_amount_field(label="Amount")
+
+    def amount_minor(self):
+        return int(self.cleaned_data["amount"] * 100)
+
+
+class FundSetAsideForm(forms.Form):
+    """This month's suggested set-asides: a checkbox and an editable amount per fund (#670)."""
+
+    def __init__(self, *args, rows=(), **kwargs):
+        super().__init__(*args, **kwargs)
+        self.rows = list(rows)
+        for row in self.rows:
+            pk = row.goal.pk
+            self.fields[f"pick_{pk}"] = forms.BooleanField(
+                required=False, initial=row.default_minor > 0, label=f"Set aside for {row.goal.name}"
+            )
+            self.fields[f"amount_{pk}"] = _fund_amount_field(
+                required=False,
+                label=f"Amount for {row.goal.name}",
+                initial=Decimal(row.default_minor) / Decimal(100) if row.default_minor else None,
+            )
+
+    def clean(self):
+        cleaned = super().clean()
+        for row in self.rows:
+            pk = row.goal.pk
+            if cleaned.get(f"pick_{pk}") and cleaned.get(f"amount_{pk}") is None and f"amount_{pk}" not in self.errors:
+                self.add_error(f"amount_{pk}", "Enter an amount for each fund you check.")
+        return cleaned
+
+    def picks(self):
+        return [
+            (row.goal, int(self.cleaned_data[f"amount_{row.goal.pk}"] * 100))
+            for row in self.rows
+            if self.cleaned_data.get(f"pick_{row.goal.pk}")
+        ]
+
+    def row_fields(self):
+        return [
+            SimpleNamespace(row=row, pick=self[f"pick_{row.goal.pk}"], amount=self[f"amount_{row.goal.pk}"])
+            for row in self.rows
+        ]
+
+
+class FundShortfallForm(forms.Form):
+    """How much to take out of each fund after an account's balance fell below them (#670)."""
+
+    def __init__(self, *args, funds=(), **kwargs):
+        super().__init__(*args, **kwargs)
+        self.funds = list(funds)
+        for row in self.funds:
+            self.fields[f"reduce_{row.goal.pk}"] = MoneyField(
+                required=False,
+                min_value=Decimal("0"),
+                max_digits=18,
+                decimal_places=2,
+                label=f"Take out of {row.goal.name}",
+                help_text=f"Holds {row.assigned_display}.",
+                widget=forms.TextInput(attrs={"inputmode": "decimal"}),
+            )
+
+    def reductions(self):
+        return [
+            (row.goal, int((self.cleaned_data.get(f"reduce_{row.goal.pk}") or Decimal(0)) * 100))
+            for row in self.funds
+        ]
 
 
 class GoalImportForm(forms.Form):
@@ -1621,7 +1794,7 @@ class GoalImportForm(forms.Form):
 
 
 class SavingsBufferForm(forms.Form):
-    buffer = forms.DecimalField(
+    buffer = MoneyField(
         required=False,
         min_value=Decimal("0"),
         max_value=Decimal("10000000000"),
@@ -1645,7 +1818,7 @@ class BudgetForm(forms.Form):
         empty_label="Overall monthly total",
         help_text="Leave blank for an overall spending total.",
     )
-    amount = forms.DecimalField(
+    amount = MoneyField(
         min_value=Decimal("0.01"),
         max_digits=19,
         decimal_places=2,
@@ -1706,7 +1879,7 @@ class CategoryRuleForm(forms.Form):
     )
     description_contains = forms.CharField(max_length=200, label="Description contains")
     account = forms.ModelChoiceField(queryset=Account.objects.none(), required=False, empty_label="Any accessible account")
-    min_amount = forms.DecimalField(
+    min_amount = MoneyField(
         max_digits=19,
         decimal_places=2,
         required=False,
@@ -1714,7 +1887,7 @@ class CategoryRuleForm(forms.Form):
         help_text="Optional. Negative is money out; positive is money in.",
         widget=forms.TextInput(attrs={"inputmode": "decimal"}),
     )
-    max_amount = forms.DecimalField(
+    max_amount = MoneyField(
         max_digits=19,
         decimal_places=2,
         required=False,
@@ -1745,6 +1918,16 @@ class CategoryRuleForm(forms.Form):
         help_text="Lower numbers run first within personal or household rules.",
     )
     enabled = forms.BooleanField(required=False, initial=True)
+    note = forms.CharField(
+        required=False,
+        max_length=AUTO_NOTE_MAX_CHARS,
+        label="Note for new transactions",
+        help_text=(
+            "Optional. One line added below the note of each new transaction this rule applies to, "
+            "visible to everyone who can see that transaction. Existing transactions get it only "
+            "when you add it to them from the rule's page."
+        ),
+    )
 
     def __init__(self, *args, principal=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1784,10 +1967,25 @@ class CategoryRuleForm(forms.Form):
         return amount
 
 
+class AutoNoteForm(forms.Form):
+    """A recurring series' note (#684); the service trims it to one line."""
+
+    note = forms.CharField(
+        required=False,
+        max_length=AUTO_NOTE_MAX_CHARS,
+        label="Note for new charges",
+        help_text=(
+            "One line added below the note of each new charge that joins this series, visible to "
+            "everyone who can see that charge. Leave empty to stop adding a note. Existing charges "
+            "get it only when you add it to them below."
+        ),
+    )
+
+
 class AlertSettingsForm(forms.Form):
     sync_enabled = forms.BooleanField(required=False, label="Sync failures and re-linking")
     recurring_price_enabled = forms.BooleanField(required=False, label="Recurring price changes")
-    recurring_price_percent = forms.IntegerField(
+    recurring_price_percent = WholePercentField(
         required=False,
         min_value=1,
         max_value=100,
@@ -1814,13 +2012,18 @@ class AlertSettingsForm(forms.Form):
         label="Accounts due for a CSV import",
         help_text="On by default. For accounts without a SimpleFIN transactions link whose newest import is over a month old.",
     )
+    fund_enabled = forms.BooleanField(
+        required=False,
+        label="Sinking funds",
+        help_text="On by default. Each month's suggested set-asides, and a fund account whose balance fell below what its funds hold.",
+    )
     unusual_spending_enabled = forms.BooleanField(required=False, label="Unusual spending")
     unusual_spending_ai_enabled = forms.BooleanField(
         required=False,
         label="AI unusual-spending summary",
         help_text="On by default when an AI backend is connected. Phrases this month's flags in two or three sentences. The flags stay the source of truth.",
     )
-    unusual_category_percent = forms.IntegerField(
+    unusual_category_percent = WholePercentField(
         required=False,
         min_value=1,
         max_value=1000,
@@ -1828,7 +2031,7 @@ class AlertSettingsForm(forms.Form):
         label="Category unusual percent",
         help_text="Flag a category when this month exceeds its trailing 6-month median by at least this percent and by the dollar floor.",
     )
-    unusual_category_amount = forms.DecimalField(
+    unusual_category_amount = MoneyField(
         required=False,
         min_value=Decimal("0.00"),
         max_digits=18,  # cents must fit the BIGINT column
@@ -1838,7 +2041,7 @@ class AlertSettingsForm(forms.Form):
         help_text="USD. Combined with the percent: both must be exceeded versus the trailing 6-month median.",
         widget=forms.TextInput(attrs={"inputmode": "decimal"}),
     )
-    large_transaction_amount = forms.DecimalField(
+    large_transaction_amount = MoneyField(
         required=False,
         min_value=Decimal("0.01"),
         max_digits=18,  # cents must fit the BIGINT column
@@ -1853,6 +2056,7 @@ class AlertSettingsForm(forms.Form):
         ("Accounts and balances", ("sync_enabled", "expected_balance_enabled", "import_due_enabled")),
         ("Recurring charges", ("recurring_price_enabled", "recurring_price_percent", "recurring_missed_enabled")),
         ("Budgets", ("budget_enabled",)),
+        ("Savings goals", ("fund_enabled",)),
         ("Large transactions", ("large_transaction_enabled", "large_transaction_amount")),
         ("Unusual spending", (
             "unusual_spending_enabled", "unusual_spending_ai_enabled",
@@ -1887,6 +2091,7 @@ class AlertSettingsForm(forms.Form):
             "monthly_review_ai_enabled": self.cleaned_data["monthly_review_ai_enabled"],
             "expected_balance_enabled": self.cleaned_data["expected_balance_enabled"],
             "import_due_enabled": self.cleaned_data["import_due_enabled"],
+            "fund_enabled": self.cleaned_data["fund_enabled"],
             "unusual_spending_enabled": self.cleaned_data["unusual_spending_enabled"],
             "unusual_spending_ai_enabled": self.cleaned_data["unusual_spending_ai_enabled"],
             "unusual_category_percent": percent,
@@ -1949,7 +2154,7 @@ class SheetColumnMappingForm(forms.Form):
 
 
 class SheetToleranceForm(forms.Form):
-    tolerance = forms.DecimalField(
+    tolerance = MoneyField(
         min_value=Decimal("0.00"),
         max_value=Decimal("1000000.00"),
         max_digits=12,
@@ -1976,7 +2181,7 @@ class BillsCalendarForm(forms.Form):
         label="Checking and savings accounts",
         help_text="Expected balance starts from these accounts' latest snapshots.",
     )
-    threshold_amount = forms.DecimalField(
+    threshold_amount = MoneyField(
         required=False,
         min_value=Decimal("0.00"),
         max_digits=18,  # cents must fit the BIGINT column

@@ -1,0 +1,37 @@
+{% comment %}
+One account's sinking funds (#670): balance, what each fund holds, and the unassigned rest.
+Pass position (fund_services.account_position) and optionally heading_level (h2 default, h3).
+{% endcomment %}
+{% load ui %}
+<section class="card border border-base-300 bg-base-100" aria-labelledby="fund-account-{{ position.account.pk }}">
+  <div class="card-body gap-2 p-4">
+    {% if heading_level == "h3" %}
+    <h3 id="fund-account-{{ position.account.pk }}" class="text-base font-semibold break-words">Funds in {{ position.account.name }}</h3>
+    {% else %}
+    <h2 id="fund-account-{{ position.account.pk }}" class="card-title text-base break-words">Funds in {{ position.account.name }}</h2>
+    {% endif %}
+    {% if position.shortfall_minor > 0 %}
+    <div role="alert" class="alert alert-warning">
+      <span class="text-warning-content">{% include "finance/_status.html" with word="Below assigned" %}</span>
+      <p>The balance is {{ position.shortfall_display|amount_text|cut:"+" }} less than the funds hold. <a class="link" href="{% url 'fund-shortfall' position.account.pk %}">Choose which fund to reduce</a>.</p>
+    </div>
+    {% endif %}
+    <table class="table table-sm">
+      <caption class="sr-only">Money assigned to each fund in {{ position.account.name }}</caption>
+      <thead><tr><th scope="col">Fund</th><th scope="col" class="text-right">Assigned</th></tr></thead>
+      <tbody>
+        {% for row in position.funds %}
+        <tr>
+          <td class="break-words"><a class="link" href="{% url 'savings-goal-fund' row.goal.pk %}">{{ row.goal.name }}</a>{% if row.archived %} <span class="badge badge-sm badge-ghost">Archived</span>{% elif row.completed %} <span class="badge badge-sm badge-success">Complete</span>{% endif %}</td>
+          <td class="whitespace-nowrap text-right tabular-nums">{{ row.assigned_display|amount_text|cut:"+" }}</td>
+        </tr>
+        {% endfor %}
+        <tr>
+          <td class="font-medium">Unassigned</td>
+          <td class="whitespace-nowrap text-right tabular-nums font-medium">{% if position.balance_minor is None %}No balance yet{% else %}{{ position.unassigned_display|amount_text }}{% endif %}</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="text-xs opacity-80">{% if position.balance_minor is None %}Record a balance for this account before assigning money to its funds.{% else %}Balance {{ position.balance_display|amount_text }} as of {{ position.balance_as_of|date:"Y-m-d" }}. Unassigned is the balance minus every fund.{% endif %}</p>
+  </div>
+</section>

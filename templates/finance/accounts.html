@@ -11,6 +11,11 @@
 <div class="page-columns">
 <section class="card border border-base-300 bg-base-100" aria-labelledby="accounts-list-heading">
   <h2 id="accounts-list-heading" class="sr-only">Your accounts</h2>
+  {% if accounts %}
+  <div class="border-b border-base-300 p-4">
+    {% include "finance/_account_sort_form.html" with sort_id="accounts-sort" sort_label="Sort within each type" %}
+  </div>
+  {% endif %}
   <table class="table">
     <thead>
       <tr>

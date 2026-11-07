@@ -1764,6 +1764,17 @@ def _totals_base(principal, *, date_from=None, date_to=None, accounts=None, tag=
     ).filter(_is_transfer_leg=False)
 
 
+def spending_account_ids(principal, *, date_from, date_to, accounts=None):
+    """Accounts holding a row that `income_and_spending_by_window` counts as spending in the range.
+
+    The same rows as the totals: no transfer legs or untracked transfers, and a
+    refund counts wherever it sits.
+    """
+    base = _totals_base(principal, date_from=date_from, date_to=date_to, accounts=accounts)
+    rows = base.filter(Q(_is_refund=True) | Q(amount_minor__lt=0)).order_by()
+    return set(rows.values_list("account_id", flat=True).distinct())
+
+
 def _income_spending_sums():
     """Aggregates for one group of `_totals_base` rows: a refund reduces spending."""
     plain = Q(_is_refund=False)
