@@ -71,10 +71,11 @@ def _active_members():
 
 
 def _new_series(principal, start, end):
-    """Series whose first active charge falls in the window, newest first charge first.
+    """Series whose first active charge falls in the window.
 
-    When the series was created does not matter: importing history creates series
-    this week for charges that began months ago, and those are not new (#698).
+    When the series was created does not decide membership: importing history
+    creates series this week for charges that began months ago, and those are not
+    new (#698). The list keeps its existing order, most recently created first.
     """
     rows = (
         RecurringSeries.objects.visible_to(principal)
@@ -88,7 +89,7 @@ def _new_series(principal, start, end):
             )
         )
         .filter(first_charge__gte=start, first_charge__lte=end)
-        .order_by("-first_charge", "display_name", "pk")
+        .order_by("-created_at", "display_name", "pk")
     )
     return [
         DigestItem(

@@ -121,7 +121,7 @@ def test_history_import_does_not_make_old_series_new():
 
 
 @pytest.mark.django_db
-def test_first_charge_ignores_archived_members_and_orders_newest_first():
+def test_first_charge_ignores_archived_members_and_the_order_stays_most_recently_created_first():
     owner = make_person("owner")
     make_household(owner)
     account = make_account(owner)
@@ -133,13 +133,15 @@ def test_first_charge_ignores_archived_members_and_orders_newest_first():
     )
     later = suggested(owner, "Synthetic B Later", date(2026, 10, 9), account=account)
     same_day = suggested(owner, "Synthetic A Same Day", date(2026, 10, 9), account=account)
-    for series in (restarted, later, same_day):
-        first_seen(series, date(2026, 10, 1))
+    # The order is unchanged by #698: most recently created first, then by name.
+    first_seen(restarted, date(2026, 10, 3))
+    first_seen(later, date(2026, 10, 2))
+    first_seen(same_day, date(2026, 10, 2))
 
     last = build_weekly_digest(owner, today=TODAY, week="last")
 
-    assert titles(last.new_series) == ["Synthetic A Same Day", "Synthetic B Later", "Synthetic Restarted"]
-    assert [item.on for item in last.new_series] == [date(2026, 10, 9), date(2026, 10, 9), date(2026, 10, 6)]
+    assert titles(last.new_series) == ["Synthetic Restarted", "Synthetic A Same Day", "Synthetic B Later"]
+    assert [item.on for item in last.new_series] == [date(2026, 10, 6), date(2026, 10, 9), date(2026, 10, 9)]
 
 
 @pytest.mark.django_db
