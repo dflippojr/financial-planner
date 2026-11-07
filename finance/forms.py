@@ -15,7 +15,13 @@ from .input_limits import AUTO_NOTE_MAX_CHARS, MAX_DESCRIPTION_CHARS
 from .access import visible_rows
 from .money_input import MoneyField, PercentField, WholePercentField
 from .date_bounds import EARLIEST_ACTIVITY_DATE, TOO_EARLY_ERROR, activity_date_error
-from .cash_flow import MAX_REPORT_DATE, MAX_REPORT_PERIODS, default_date_range, period_count
+from .cash_flow import (
+    MAX_REPORT_DATE,
+    MAX_REPORT_PERIODS,
+    default_date_range,
+    home_default_date_range,
+    period_count,
+)
 from .projection import DEFAULT_HORIZON, HORIZONS
 from .account_sort import CHOICES as ACCOUNT_SORT_CHOICES, PAGE_FIELDS as ACCOUNT_SORT_PAGES
 
@@ -339,9 +345,11 @@ class CashFlowFilterForm(forms.Form):
 
     def clean(self):
         cleaned = super().clean()
-        default_from, default_to = default_date_range()
-        date_from = cleaned.get("date_from") or default_from
+        # Home opens on This month (#700). A missing end is today; a missing start is
+        # the first of the end date's month, so an end before this month stays valid.
+        _default_from, default_to = home_default_date_range()
         date_to = cleaned.get("date_to") or default_to
+        date_from = cleaned.get("date_from") or date_to.replace(day=1)
         cleaned["date_from"] = date_from
         cleaned["date_to"] = date_to
         grouping = cleaned.get("grouping")

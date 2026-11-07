@@ -168,6 +168,7 @@ from .cash_flow import (
     date_range_presets,
     default_date_range,
     format_minor,
+    home_default_date_range,
     selected_accounts,
     spending_by_category_report,
     spending_chart_data,
@@ -396,11 +397,26 @@ def _home_filter_count(*, grouping, horizon, account, scope, tag):
     )
 
 
+def _show_effective_dates(form, date_from, date_to):
+    """Fill blank date inputs of a bound form with the dates the report used.
+
+    A link such as ?grouping=week binds the form without dates; its inputs then show
+    This month instead of empty fields (#700). Submitted dates are never replaced.
+    """
+    data = form.data.copy()
+    for name, value in (("date_from", date_from), ("date_to", date_to)):
+        if not data.get(name):
+            data[name] = value.isoformat()
+    form.data = data
+
+
 @require_GET
 @never_cache
 def home(request):
     today = timezone.localdate()
-    default_from, default_to = default_date_range(today)
+    # Home opens on This month, one of its range buttons (#700); other pages keep
+    # default_date_range().
+    default_from, default_to = home_default_date_range(today)
     # The digest week switch is not a cash-flow filter; keep it out of the filter form.
     query = request.GET.copy()
     digest_week = query.pop("digest_week", [WEEK_CURRENT])[-1]
@@ -448,6 +464,8 @@ def home(request):
         scope = form.cleaned_data.get("scope") or ""
         horizon = form.cleaned_data.get("horizon") or DEFAULT_HORIZON
         tag = form.cleaned_data.get("tag")
+    if form.is_bound and date_from is not None:
+        _show_effective_dates(form, date_from, date_to)
     changes = list(parse_scenario_tokens(request.GET))
     inputs_for_form = ()
     if date_from is not None:

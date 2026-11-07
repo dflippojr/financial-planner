@@ -321,7 +321,18 @@ def test_home_is_cash_flow_with_default_range_and_partial_current_month(_localda
     client = Client()
     client.force_login(owner.user)
 
-    response = client.get(reverse("home"))
+    # With no range Home opens on This month (#700): one partial actual month.
+    default = client.get(reverse("home"))
+    assert default.status_code == 200
+    assert ">Cash flow</h1>" in default.content.decode()
+    assert [(item.label, item.start, item.end) for item in default.context["report"].periods] == [
+        ("September 2026 (partial)", date(2026, 9, 1), date(2026, 9, 15))
+    ]
+    default_payload = json_script_payload(default.content.decode(), "cash-flow-chart-data")
+    assert [row["spending_minor"] for row in default_payload["periods"] if not row["projected"]] == [0]
+    assert "vs previous range" in default.content.decode()
+
+    response = client.get(reverse("home"), {"date_from": "2025-09-01", "date_to": "2026-09-15"})
     content = response.content.decode()
 
     assert response.status_code == 200
@@ -429,10 +440,10 @@ def test_period_clipped_at_the_range_start_is_labeled_partial():
 
 HOME_RANGE_CASES = [
     pytest.param(
-        {"date_to": "2025-08-31", "grouping": "month"},
+        {"date_from": "2026-10-15", "grouping": "month"},
         "End date must be on or after start date.",
         False,
-        id="default-start-applied-before-validation",
+        id="default-end-applied-before-validation",
     ),
     pytest.param(
         {"date_from": "9999-12-01", "date_to": "9999-12-31", "grouping": "month"},
@@ -537,8 +548,9 @@ def test_home_range_links_keep_the_other_filters_and_mark_the_current_range(_loc
     assert [option.label for option in custom.context["range_options"] if option.current] == ["Custom"]
     assert custom.context["filter_count"] == 0
 
+    # Home opens on This month, so that button is the current one (#700).
     default = client.get(reverse("home"))
-    assert not any(option.current for option in default.context["range_options"])
+    assert [option.label for option in default.context["range_options"] if option.current] == ["This month"]
 
 
 @pytest.mark.django_db
