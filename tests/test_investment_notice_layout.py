@@ -1,29 +1,18 @@
 """The investment-activity notice's dismiss button in a real browser (#699).
 
-Needs Playwright with Chromium and a compiled static/dist/app.css; skipped otherwise. The
+Needs Playwright with Chromium and a compiled static/dist/app.css (CI's browser job). The
 synthetic demo household has an investment account, so the notice shows on Home, Spending and
 the spending-category page.
 """
 
-import os
-from pathlib import Path
-
 import pytest
-from django.conf import settings
+from playwright.sync_api import expect
 
 from finance.models import Person
+from tests.browser_support import browser, visit  # noqa: F401
 from tests.mobile_seed import seed_phone_data
 
-os.environ.setdefault("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
-
-sync_api = pytest.importorskip("playwright.sync_api")
-expect = sync_api.expect
-
-CSS = Path(settings.BASE_DIR) / "static" / "dist" / "app.css"
-pytestmark = [
-    pytest.mark.django_db(transaction=True),
-    pytest.mark.skipif(not CSS.exists(), reason="static/dist/app.css is not built"),
-]
+pytestmark = pytest.mark.django_db(transaction=True)
 
 VIEWPORTS = {"phone-320": (320, 700), "phone": (390, 844), "desktop": (1440, 900)}
 PAGES = ("/", "/spending/", "/spending/category/uncategorized/")
@@ -44,19 +33,8 @@ LAYOUT_JS = """() => {
 }"""
 
 
-@pytest.fixture(scope="module")
-def browser():
-    with sync_api.sync_playwright() as playwright:
-        try:
-            instance = playwright.chromium.launch()
-        except Exception as error:  # noqa: BLE001 - browser binaries are optional locally
-            pytest.skip(f"Chromium is not installed: {error}")
-        yield instance
-        instance.close()
-
-
 @pytest.fixture
-def open_page(live_server, client, browser):
+def open_page(live_server, client, browser):  # noqa: F811 - the shared fixture
     person = seed_phone_data()
     client.force_login(person.user)
     cookie = client.cookies["sessionid"].value
@@ -72,11 +50,11 @@ def open_page(live_server, client, browser):
         contexts.append(context)
         context.add_cookies([{"name": "sessionid", "value": cookie, "url": live_server.url}])
         page = context.new_page()
-        page.goto(live_server.url + path)
-        page.wait_for_load_state("networkidle")
+        visit(page, live_server.url, path)
         return page
 
     opener.person = person
+    opener.base_url = live_server.url
     yield opener
     for context in contexts:
         context.close()
@@ -112,7 +90,7 @@ def test_dismissing_with_the_keyboard_removes_it_in_place_and_it_stays_hidden(op
     assert page.url.endswith("/spending/?tab=trends")
 
     for path in PAGES:
-        page.goto(page.url.split("/spending/")[0] + path)
+        visit(page, open_page.base_url, path)
         expect(page.locator(NOTICE)).to_have_count(0)
     assert Person.objects.get(pk=open_page.person.pk).investment_notice_dismissed_hash != ""
 
@@ -127,3 +105,14 @@ def test_dismissing_without_javascript_returns_to_the_same_page(open_page, size)
     expect(page.locator(NOTICE)).to_have_count(0)
     page.locator("details.page-header-more summary").first.click()
     expect(page.locator("details.page-header-more").first).to_contain_text("Investment activity is left out")
+
+
+def test_a_sign_in_redirect_never_removes_the_notice_without_saving(open_page):
+    """If the session ended while the page was open, script must not hide an unsaved dismissal."""
+    page = open_page("desktop", "/")
+    page.context.clear_cookies(name="sessionid")
+    with page.expect_navigation():
+        page.get_by_role("button", name=BUTTON).click()
+    # The plain POST took over and landed on sign-in; nothing was recorded.
+    assert "/sign-in/" in page.url, page.url
+    assert Person.objects.get(pk=open_page.person.pk).investment_notice_dismissed_hash == ""
