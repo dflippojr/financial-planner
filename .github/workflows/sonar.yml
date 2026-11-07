@@ -142,7 +142,7 @@ jobs:
           python -m coverage xml -o coverage.xml
 
       - name: Scan with SonarCloud
-        uses: SonarSource/sonarqube-scan-action@d209202bc7d53ff1cc128f7f907dac145c9d6ae9 # v8
+        uses: SonarSource/sonarqube-scan-action@e805d875275f728fac1885b413934be6d7c63f65 # v8
         env:
           SONAR_TOKEN: ${{ secrets.SONARCLOUD_TOKEN }}
         with:
