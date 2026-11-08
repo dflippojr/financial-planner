@@ -65,10 +65,12 @@ FORBIDDEN = (
 CANARY_MINORS = tuple(needle for needle in FORBIDDEN if needle.isdigit())
 
 # Where an id renders and an amount never does: a URL path segment, the value of an
-# <option> or an <input>, the end of an element id such as rename-17, or a JSON key
-# that names an id ("id", "account_id", "pk") or a list of them ("member_transaction_ids").
+# <option> or an <input>, the end of an element id such as rename-17, the value of a
+# JSON key that names an id ("id", "account_id", "pk") or a list of them
+# ("member_transaction_ids"), or a JSON object key itself ({"17": "detected"}).
 _ID_TAG = re.compile(r"<(?:option|input)\b[^<>]*\bvalue=[\"']?\Z", re.IGNORECASE)
 _ID_KEY = re.compile(r'"(?:\w*_)?(?:id|pk)"\s*:\s*\Z|"\w*_ids"\s*:\s*\[[\d,\s]*\Z')
+_OBJECT_KEY_END = re.compile(r'"\s*:')
 
 
 def _whole_numbers(needle, body):
@@ -76,8 +78,10 @@ def _whole_numbers(needle, body):
     return re.finditer(rf"(?<![\w.])(?<!\w-){needle}(?!\w)(?!\.\d)", body)
 
 
-def _in_id_position(body, start):
-    if body[start - 1 : start] == "/":
+def _in_id_position(body, match):
+    start = match.start()
+    before = body[start - 1 : start]
+    if before == "/" or (before == '"' and _OBJECT_KEY_END.match(body, match.end())):
         return True
     tag = body[max(body.rfind("<", 0, start), 0) : start]
     return bool(_ID_TAG.search(tag) or _ID_KEY.search(body[max(start - 200, 0) : start]))
@@ -88,17 +92,23 @@ def _is_id_column(name):
 
 
 def csv_without_ids(text):
-    """The CSV with the cells of its id columns (id, account_id, member_transaction_ids) emptied."""
+    """The CSV's cells, one per line, without the bare ids in its id columns.
+
+    An id column (id, account_id, member_transaction_ids) loses a cell that holds
+    only numbers, such as 17 or [17,18]; any other text in it stays, so a name or
+    decimal amount there still counts. Cells come out unquoted, so the JSON rules
+    in leaks() apply inside a cell such as {"17":"detected"}.
+    """
     rows = list(csv.reader(io.StringIO(text)))
     if not rows:
         return text
-    ids = [index for index, name in enumerate(rows[0]) if _is_id_column(name.strip())]
-    out = io.StringIO()
-    writer = csv.writer(out)
-    writer.writerow(rows[0])
+    ids = {index for index, name in enumerate(rows[0]) if _is_id_column(name.strip())}
+    cells = list(rows[0])
     for row in rows[1:]:
-        writer.writerow(["" if index in ids else cell for index, cell in enumerate(row)])
-    return out.getvalue()
+        cells += [
+            "" if index in ids and re.fullmatch(r"\[?[\d,\s]*\]?", cell) else cell for index, cell in enumerate(row)
+        ]
+    return "\n".join(cells)
 
 
 def leaks(body, forbidden):
@@ -113,7 +123,7 @@ def leaks(body, forbidden):
         needle
         for needle in forbidden
         if (
-            any(not _in_id_position(body, match.start()) for match in _whole_numbers(needle, body))
+            any(not _in_id_position(body, match) for match in _whole_numbers(needle, body))
             if needle.isdigit()
             else needle in body
         )

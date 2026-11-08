@@ -101,7 +101,8 @@ def test_csv_id_columns_are_emptied_and_amount_columns_kept():
 
 
 def test_csv_id_columns_still_show_names_decimals_and_ids_used_as_json_keys():
-    comma, plain, minor = money_forms(UNCATEGORIZED_MINOR)
+    minor = str(UNCATEGORIZED_MINOR)
+    comma, plain, _minor = money_forms(GOAL_MINOR)
     header = "id,source_transaction_id,member_sources\r\n"
     assert leaks(csv_without_ids(header + f'1,{CANARY}-7,"{{""{minor}"":""detected""}}"\r\n'), FORBIDDEN) == [CANARY]
     assert leaks(csv_without_ids(header + f"1,{plain},{{}}\r\n"), FORBIDDEN) == [plain]
