@@ -68,15 +68,22 @@ CANARY_MINORS = tuple(needle for needle in FORBIDDEN if needle.isdigit())
 # next to the number, so text further away (or in another CSV cell) never excuses one.
 # HTML: a path segment of a URL that opens a quoted string or a CSV cell
 # ("/accounts/17/", "https://host/accounts/17/"), the value attribute of an <option>
-# or an <input>, or the end of an element id in an attribute (id="rename-17").
+# or an <input>, or the end of an element id in an attribute that names an element
+# (id="rename-17", for=, aria-controls=, data-open-dialog=, href="#txn-17").
 _URL_PATH = re.compile(r"[\"'\x1f](?:https?://[^\"'\s<>/\x1f]+)?/[^\"'\s<>\x1f]*/\Z")
 _ID_TAG = re.compile(r"<(?:option|input)\b[^<>]*\svalue=[\"']?\Z", re.IGNORECASE)
-_ELEMENT_ID = re.compile(r"\s[\w:-]+=[\"'][A-Za-z_][\w-]*-\Z")
-# A query value, in a link or a query string held in an attribute or JSON
-# (?tag=17, &amp;tag=17, \u0026tag=17, page_query="c=17"), and Django's invalid-choice
+_ELEMENT_ID = re.compile(
+    r"\s(?:id|for|aria-[\w-]+|data-open-dialog|data-[\w-]*-(?:id|target))=[\"'][A-Za-z_][\w-]*-\Z"
+    r"|\shref=[\"']#[A-Za-z_][\w-]*-\Z"
+)
+# A query value: after "?" that follows a URL character or a quote, after "&", "&amp;"
+# or "\u0026" that follows the previous value, or first in a query string held in
+# data-page-query or a page_query/filter_query input. And Django's invalid-choice
 # message, which echoes the id a request named. No URL in the app carries an amount.
 _ECHOED_ID = re.compile(
-    r"(?:\?|&|&amp;|\\u0026|[\"'])[\w-]+=\Z|Select a valid choice\. [\w:-]*\Z"
+    r"(?:[\"'/\w.-]\?|[\w%.:+-](?:&|&amp;|\\u0026))[\w-]+=\Z"
+    r"|(?:\sdata-page-query=|\sname=[\"'](?:page|filter)_query[\"'][^<>]*\svalue=)[\"'][\w-]+=\Z"
+    r"|Select a valid choice\. [\w:-]*\Z"
 )
 # JSON: the value of a key that names an id ("id": 17, "source_transaction_id": "TX-17",
 # "pk"), a whole list under an "_ids" key however long, or an object key
