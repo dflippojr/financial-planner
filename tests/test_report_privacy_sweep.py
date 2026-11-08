@@ -26,6 +26,7 @@ from tests.privacy_world import (
     signed_in,
     build_report_world,
     ids_starting_at,
+    leaks,
 )
 
 
@@ -68,7 +69,7 @@ def _fetch(client, url, params):
 
 
 def _leaked(body):
-    return [needle for needle in FORBIDDEN if needle in body]
+    return leaks(body, FORBIDDEN)
 
 
 def test_member_never_sees_another_members_private_data_on_any_report(world):
@@ -90,6 +91,15 @@ def test_an_id_equal_to_a_canary_amount_is_not_a_leak(db, minor):
     for url, params, body in pages:
         leaked = _leaked(body)
         assert not leaked, f"{url} {params} leaked {leaked}"
+
+
+def test_a_rendered_canary_amount_still_trips_the_sweep_when_ids_share_its_value(db):
+    """The control for the test above: the owner's page renders the amount itself, and the sweep catches it."""
+    with ids_starting_at(UNCATEGORIZED_MINOR):
+        world = build_report_world()
+        body = _fetch(signed_in(world.owner), reverse("spending-category-uncategorized"), {})
+    assert world.private.pk == UNCATEGORIZED_MINOR or world.shared.pk == UNCATEGORIZED_MINOR
+    assert str(UNCATEGORIZED_MINOR) in _leaked(body)
 
 
 def test_owner_sees_the_canaries_on_the_same_pages(world):

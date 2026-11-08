@@ -85,6 +85,7 @@ from tests.privacy_world import (
     FORBIDDEN,
     body_text,
     build_report_world,
+    leaks,
     make_person,
     money_forms,
     seed_transaction,
@@ -1426,13 +1427,7 @@ def _text(response):
 
 
 def _leaks(response, forbidden):
-    body = _text(response)
-    # A bare minor amount such as 7777 can turn up inside a UUID or a timestamp, so it leaks only as a whole number.
-    return [
-        needle
-        for needle in forbidden
-        if (re.search(rf"(?<!\w){needle}(?!\w)", body) if needle.isdigit() else needle in body)
-    ]
+    return leaks(_text(response), forbidden)
 
 
 def _assert_denied(requester, url, data, forbidden):

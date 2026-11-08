@@ -1,8 +1,10 @@
 """Synthetic households and canaries shared by the privacy sweeps (#481, #551).
 
 The owner's private rows carry CANARY in their names and distinctive amounts;
-FORBIDDEN lists every form a leaked amount can take on a page.
+FORBIDDEN lists every form a leaked amount can take on a page, and leaks()
+finds them in a response body.
 """
+import re
 from contextlib import contextmanager
 from datetime import timedelta
 from decimal import Decimal
@@ -35,7 +37,7 @@ PASSWORD = "Synthetic-passphrase-42!"
 CANARY = "SYN-CANARY"
 PRIVATE_CHARGE_MINOR = 888_888
 SHARED_CHARGE_MINOR = 1_100
-UNCATEGORIZED_MINOR = 7_777
+UNCATEGORIZED_MINOR = 77_777
 CARD_BALANCE_MINOR = 432_109
 PLANNED_MINOR = 654_321
 GOAL_MINOR = 9_876_543
@@ -49,7 +51,8 @@ def money_forms(minor):
 FORBIDDEN = (
     CANARY,
     *money_forms(PRIVATE_CHARGE_MINOR),
-    "8,899.88",
+    # The owner's groceries total, shared and private charges together.
+    *money_forms(PRIVATE_CHARGE_MINOR + SHARED_CHARGE_MINOR),
     *money_forms(UNCATEGORIZED_MINOR),
     *money_forms(CARD_BALANCE_MINOR),
     *money_forms(PLANNED_MINOR),
@@ -57,6 +60,41 @@ FORBIDDEN = (
 )
 # Each canary's bare minor string, the form an object id can take too.
 CANARY_MINORS = tuple(needle for needle in FORBIDDEN if needle.isdigit())
+
+# Where an id renders and an amount never does: a URL path segment, the value of an
+# <option> or an <input>, or the end of an element id such as rename-17.
+_ID_TAG = re.compile(r"<(?:option|input)\b[^<>]*\bvalue=[\"']?\Z", re.IGNORECASE)
+
+
+def _whole_numbers(needle, body):
+    # Not part of a longer number, word, decimal or slug; a leading minus still counts.
+    return re.finditer(rf"(?<![\w.])(?<!\w-){needle}(?!\w)(?!\.\d)", body)
+
+
+def _in_id_position(body, start):
+    if body[start - 1 : start] == "/":
+        return True
+    tag = body[max(body.rfind("<", 0, start), 0) : start]
+    return bool(_ID_TAG.search(tag))
+
+
+def leaks(body, forbidden):
+    """The forbidden needles in body.
+
+    Names and decimal amounts match anywhere. A bare minor amount such as 77777
+    matches only as a whole number outside an id position: on PostgreSQL ids run
+    on across tests, so a shared row the requester may see can land on a canary's
+    value (#709), and a UUID, token or timestamp can contain the digits.
+    """
+    return [
+        needle
+        for needle in forbidden
+        if (
+            any(not _in_id_position(body, match.start()) for match in _whole_numbers(needle, body))
+            if needle.isdigit()
+            else needle in body
+        )
+    ]
 
 
 @contextmanager
