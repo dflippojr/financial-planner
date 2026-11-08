@@ -9,6 +9,7 @@ omit =
 
 [report]
 # The floor for the whole suite: the 91% measured in October 2026 minus one
-# point, so pruning tests cannot silently drop coverage. pytest-cov reads it,
-# so the coverage run in sonar.yml fails below it (issue #528).
+# point, so pruning tests cannot silently drop coverage (issue #528). In CI,
+# the scan job in sonar.yml applies it with `coverage report` to the combined
+# shard data (#692); locally, pytest-cov applies it in scripts/ci-local.sh.
 fail_under = 90
