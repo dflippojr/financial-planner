@@ -20,6 +20,7 @@ from django.views.decorators.http import require_GET, require_http_methods, requ
 from .access import first_message as _first_message
 from .access import service_or_404 as _service_or_404
 from .backup_health import settings_backup_context
+from .post_only import post_only
 from .reconciliation import settings_reconciliation_context
 from .notice_dismissal import notice_context
 from .auth_services import (
@@ -909,7 +910,7 @@ def transaction_list(request):
     )
 
 
-@require_POST
+@post_only("transaction-list")
 @never_cache
 def transaction_saved_filter_create(request):
     form = TransactionFilterForm(request.POST or None, principal=request.user)
@@ -930,7 +931,7 @@ def transaction_saved_filter_create(request):
     return redirect(f"{path}?{params}" if params else path)
 
 
-@require_POST
+@post_only("transaction-list")
 @never_cache
 def transaction_saved_filter_delete(request, filter_id):
     _service_or_404(lambda: delete_saved_transaction_filter(request.user, filter_id))
@@ -1092,7 +1093,7 @@ def _render_transaction_edit(
     )
 
 
-@require_POST
+@post_only("transaction-edit", "transaction_id")
 @never_cache
 def transaction_note_tags(request, transaction_id):
     financial_transaction = _visible_active_transaction(request.user, transaction_id)
@@ -1115,7 +1116,7 @@ def transaction_note_tags(request, transaction_id):
     return _render_transaction_edit(request, financial_transaction, note_form=form)
 
 
-@require_POST
+@post_only("transaction-edit", "transaction_id")
 @never_cache
 def transaction_categorize(request, transaction_id):
     _visible_active_transaction(request.user, transaction_id)
@@ -1131,7 +1132,7 @@ def transaction_categorize(request, transaction_id):
     return redirect("transaction-edit", transaction_id=transaction_id)
 
 
-@require_POST
+@post_only("transaction-edit", "transaction_id")
 @never_cache
 def transaction_untracked_transfer(request, transaction_id):
     """Mark or unmark a row as a transfer to or from an account the planner doesn't track (#642)."""
@@ -1156,7 +1157,7 @@ def transaction_untracked_transfer(request, transaction_id):
     return redirect("transaction-edit", transaction_id=transaction_id)
 
 
-@require_POST
+@post_only("transaction-edit", "transaction_id")
 @never_cache
 def transaction_link_refund(request, transaction_id):
     financial_transaction = _visible_active_transaction(request.user, transaction_id)
@@ -1178,7 +1179,7 @@ def transaction_link_refund(request, transaction_id):
     return _render_transaction_edit(request, financial_transaction, refund_form=form)
 
 
-@require_POST
+@post_only("transaction-edit", "transaction_id")
 @never_cache
 def transaction_split(request, transaction_id):
     financial_transaction = _visible_active_transaction(request.user, transaction_id)
@@ -1200,7 +1201,7 @@ def transaction_split(request, transaction_id):
     return _render_transaction_edit(request, financial_transaction, split_form=form)
 
 
-@require_POST
+@post_only("transaction-edit", "transaction_id")
 @never_cache
 def transaction_unsplit(request, transaction_id):
     _visible_active_transaction(request.user, transaction_id)
@@ -1217,7 +1218,7 @@ def transaction_unsplit(request, transaction_id):
     return redirect("transaction-edit", transaction_id=transaction_id)
 
 
-@require_POST
+@post_only("transaction-edit", "transaction_id")
 @never_cache
 def transaction_split_part_category(request, transaction_id, part_id):
     financial_transaction = _visible_active_transaction(request.user, transaction_id)
@@ -1909,7 +1910,7 @@ def google_oauth_callback(request):
     return oauth2_callback(request)
 
 
-@require_POST
+@post_only("home")
 def sign_out(request):
     logout(request)
     return redirect("login")
@@ -2106,7 +2107,7 @@ def account_settings(request):
     )
 
 
-@require_POST
+@post_only("account-settings")
 @never_cache
 @requires_recent_auth("revoke-session", form_url_name="account-settings")
 def revoke_session(request, session_id):
@@ -2121,7 +2122,7 @@ def revoke_session(request, session_id):
     return redirect("account-settings")
 
 
-@require_POST
+@post_only("account-settings")
 @never_cache
 @requires_recent_auth("revoke-other-sessions", form_url_name="account-settings")
 def revoke_other_sessions(request):
@@ -2272,7 +2273,7 @@ def _account_export_zip(request):
     return response
 
 
-@require_POST
+@post_only("settings-data")
 @never_cache
 @requires_recent_auth("export-data", form_url_name="settings-data")
 def account_export(request):
@@ -2337,7 +2338,7 @@ def reauth(request):
     return redirect(safe_next_url(request, request.POST.get("next", "")))
 
 
-@require_POST
+@post_only("home")
 @never_cache
 def start_google_reauth(request):
     if not has_usable_google_sign_in(request.user):
@@ -2354,7 +2355,7 @@ def start_google_reauth(request):
     return _google_oauth_login(request)
 
 
-@require_POST
+@post_only("invite")
 @never_cache
 @requires_recent_auth("leave-household", form_url_name="invite")
 def leave_household_view(request):
@@ -2437,7 +2438,7 @@ def privacy_policy(request, version=None):
     )
 
 
-@require_POST
+@post_only("privacy-policy")
 @never_cache
 def privacy_policy_respond(request):
     person = get_object_or_404(Person, user=request.user)

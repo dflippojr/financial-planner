@@ -10,10 +10,10 @@ from django.http import HttpResponse, StreamingHttpResponse
 from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
-from django.views.decorators.http import require_POST
 
 from .forms import TransactionFilterForm
 from .models import Category, Tag, TransactionSplit
+from .post_only import post_only
 from .reauth import recent_auth_is_fresh, reauth_redirect
 from .audit_services import record_download
 from .security_services import EVENT_TYPES, record_security_event
@@ -72,7 +72,7 @@ def iter_transaction_csv(transactions, principal):
         )).encode("utf-8")
 
 
-@require_POST
+@post_only("transaction-list")
 @never_cache
 def transaction_export(request):
     form = TransactionFilterForm(request.POST, principal=request.user)

@@ -4,7 +4,6 @@ from django.http import Http404, QueryDict
 from django.shortcuts import redirect, render
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
-from django.views.decorators.http import require_POST
 
 from .access import first_message as _first_message
 from .access import service_or_404 as _service_or_404
@@ -19,6 +18,7 @@ from .bulk_edit_services import (
 from .category_services import exclusion_exists_for
 from .forms import BulkTransactionEditForm, TransactionFilterForm
 from .models import BulkEditUndo, Person, Transaction
+from .post_only import post_only
 
 
 def _matching_transactions(request):
@@ -54,7 +54,7 @@ def _bulk_kwargs(form):
     }
 
 
-@require_POST
+@post_only("transaction-list")
 @never_cache
 def bulk_edit_preview(request):
     form = BulkTransactionEditForm(request.POST, principal=request.user)
@@ -89,7 +89,7 @@ def bulk_edit_preview(request):
     )
 
 
-@require_POST
+@post_only("transaction-list")
 @never_cache
 def bulk_edit_apply(request):
     form = BulkTransactionEditForm(request.POST, principal=request.user)
@@ -114,7 +114,7 @@ def bulk_edit_apply(request):
     return redirect("transaction-list")
 
 
-@require_POST
+@post_only("transaction-list")
 @never_cache
 def bulk_edit_undo(request, undo_id):
     try:

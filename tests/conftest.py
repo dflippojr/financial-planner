@@ -19,6 +19,14 @@ def disposable_operator_journal(tmp_path_factory):
             os.environ[key] = value
 
 
+@pytest.fixture(autouse=True)
+def disposable_csv_staging(settings, tmp_path):
+    # Without this, staged uploads go to the shared $TMPDIR/financial-planner-csv-imports,
+    # where every earlier run's leftovers count toward the per-user staging limit (#696).
+    # The setting, not the environment variable: settings.py has already read that.
+    settings.CSV_IMPORT_STAGING_DIR = str(tmp_path / "csv-staging")
+
+
 # Only tables still missing the setting are altered, so a pass with nothing to fix
 # is one catalog scan.
 AUTOVACUUM_OFF = (

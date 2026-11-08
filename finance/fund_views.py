@@ -6,7 +6,7 @@ from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
-from django.views.decorators.http import require_http_methods, require_POST
+from django.views.decorators.http import require_http_methods
 
 from .access import visible_rows
 from .forms import FundMoveForm, FundSetAsideForm, FundShortfallForm
@@ -22,6 +22,7 @@ from .fund_services import (
 )
 from .funds import fund_matches_account
 from .models import Account, FundEntry, SavingsGoal
+from .post_only import post_only
 from .savings_goal_services import goal_progress
 
 
@@ -76,7 +77,7 @@ def fund_detail(request, goal_id):
     )
 
 
-@require_POST
+@post_only("savings-goal-fund", "goal_id")
 @never_cache
 def fund_undo(request, goal_id, entry_id):
     goal = _visible_fund(request.user, goal_id)

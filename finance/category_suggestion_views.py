@@ -6,7 +6,6 @@ from django.http import Http404
 from django.shortcuts import redirect
 from django.urls import reverse
 from django.views.decorators.cache import never_cache
-from django.views.decorators.http import require_POST
 
 from .access import request_person as _person
 from .access import service_or_404 as _service_or_404
@@ -18,6 +17,7 @@ from .category_suggestion_services import (
 )
 from .forms import TransactionFilterForm
 from .models import CategorySuggestion
+from .post_only import post_only
 
 
 def _safe_next(request):
@@ -27,7 +27,7 @@ def _safe_next(request):
     return reverse("transaction-list")
 
 
-@require_POST
+@post_only("transaction-list")
 @never_cache
 def suggest_categories(request):
     person = _person(request, missing_ok=True)
@@ -40,21 +40,21 @@ def suggest_categories(request):
     return redirect(_safe_next(request))
 
 
-@require_POST
+@post_only("transaction-list")
 @never_cache
 def suggestion_accept(request, suggestion_id):
     _service_or_404(lambda: accept_suggestion(request.user, suggestion_id))
     return redirect(_safe_next(request))
 
 
-@require_POST
+@post_only("transaction-list")
 @never_cache
 def suggestion_reject(request, suggestion_id):
     _service_or_404(lambda: reject_suggestion(request.user, suggestion_id))
     return redirect(_safe_next(request))
 
 
-@require_POST
+@post_only("transaction-list")
 @never_cache
 def suggestion_accept_all(request):
     raw_ids = request.POST.getlist("suggestion_id")

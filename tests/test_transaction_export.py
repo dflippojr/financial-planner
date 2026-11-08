@@ -153,7 +153,7 @@ def test_auth_reauth_resubmission_and_empty_header():
     client = Client()
     assert client.post(reverse("transaction-export")).url.startswith(reverse("login"))
     client.force_login(owner.user)
-    assert client.get(reverse("transaction-export")).status_code == 405
+    assert client.get(reverse("transaction-export"))["Location"] == reverse("transaction-list")
     filters = {"account": str(account.pk), "q": "Synthetic", "page": "4"}
     response = client.post(reverse("transaction-export"), filters)
     next_url = parse_qs(urlparse(response.url).query)["next"][0]

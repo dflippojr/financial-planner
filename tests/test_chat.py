@@ -560,8 +560,9 @@ def test_chat_views_refusals_expiry_delete_and_drawer_context(harness):
     client.force_login(user)
 
     assert client.post(reverse("chat")).status_code == 405
-    assert client.get(reverse("chat-send")).status_code == 405
-    assert client.get(reverse("chat-delete-all")).status_code == 405
+    # A GET on a POST-only chat action only returns to the chat page (#705).
+    assert client.get(reverse("chat-send"))["Location"] == reverse("chat")
+    assert client.get(reverse("chat-delete-all"))["Location"] == reverse("chat")
 
     created = client.post(reverse("chat-new"))
     assert created.status_code == 302

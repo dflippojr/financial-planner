@@ -11,7 +11,7 @@ from django.http import Http404, JsonResponse
 from django.shortcuts import redirect, render
 from django.template.loader import render_to_string
 from django.urls import reverse
-from django.views.decorators.http import require_GET, require_POST
+from django.views.decorators.http import require_GET
 
 from . import chat_markdown
 from .access import request_person as _person, service_or_404
@@ -49,6 +49,7 @@ from .chat_services import (
 from .input_limits import MAX_CHAT_MESSAGES, MAX_PAGE_CONTEXT_CHARS
 from .models import AiConversationMessage
 from .policy_services import may_use_ai
+from .post_only import post_only
 from .reauth import safe_next_url
 
 
@@ -87,7 +88,7 @@ def chat_page(request):
     return render(request, "finance/chat.html", _chat_context(person, conversation, request))
 
 
-@require_POST
+@post_only("chat")
 def chat_send(request):
     person = _person(request)
     wants_json = request.headers.get("Accept") == "application/json"
@@ -216,7 +217,7 @@ def chat_popover(request):
     return _popover_response(person, conversation, request)
 
 
-@require_POST
+@post_only("chat")
 def chat_delete(request, conversation_id):
     person = _person(request)
     service_or_404(lambda: delete_conversation(person, conversation_id))
@@ -224,7 +225,7 @@ def chat_delete(request, conversation_id):
     return redirect("chat")
 
 
-@require_POST
+@post_only("chat")
 def chat_attachment_remove(request, attachment_id):
     person = _person(request)
     conversation_id = service_or_404(lambda: remove_attachment(person, attachment_id))
@@ -232,7 +233,7 @@ def chat_attachment_remove(request, attachment_id):
     return redirect(f"{reverse('chat')}?c={conversation_id}")
 
 
-@require_POST
+@post_only("chat")
 def chat_delete_all(request):
     person = _person(request)
     delete_all_conversations(person)
@@ -240,7 +241,7 @@ def chat_delete_all(request):
     return redirect("chat")
 
 
-@require_POST
+@post_only("chat")
 def chat_new(request):
     person = _person(request)
     try:
@@ -280,7 +281,7 @@ def _applied_message(proposal):
     return text
 
 
-@require_POST
+@post_only("chat")
 def chat_proposal_apply(request, proposal_id):
     person = _person(request)
     proposal = proposal_for(person, proposal_id)
@@ -297,7 +298,7 @@ def chat_proposal_apply(request, proposal_id):
     return _back_to_chat(proposal)
 
 
-@require_POST
+@post_only("chat")
 def chat_proposal_dismiss(request, proposal_id):
     person = _person(request)
     proposal = proposal_for(person, proposal_id)
@@ -313,7 +314,7 @@ def chat_proposal_dismiss(request, proposal_id):
     return _back_to_chat(proposal)
 
 
-@require_POST
+@post_only("chat")
 def chat_warm(request):
     person = _person(request)
     if not member_has_ai(person):

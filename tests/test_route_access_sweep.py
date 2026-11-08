@@ -5,8 +5,11 @@ OBJECT_ROUTES take an object id in the path, PAGE_ROUTES read financial data
 without one, and EXEMPT_ROUTES read none. A member asking for another
 member's private object, and an outsider asking for a household's shared
 object, get the app's 404 (or a 405 for a method the view never accepts),
-see no canary and change nothing. The owner reaches every seeded object with
-the same URL, so the denials cannot pass because the seed is unreachable.
+see no canary and change nothing. A GET on a POST-only route (post_only,
+#705) instead redirects without looking the object up, to a page that shows
+no canary and refuses the object with a 404 when it names it. The owner
+reaches every seeded object with the same URL, so the denials cannot pass
+because the seed is unreachable.
 A page that names an object in its POST body gets the same probe through
 its actions, and a page that accepts POST must declare its body ids or say
 why it names none. So must an object route: its body probes post to the
@@ -18,6 +21,7 @@ until it has one.
 """
 import re
 import uuid
+from urllib.parse import urlparse
 from dataclasses import dataclass, field
 from datetime import timedelta
 from types import SimpleNamespace
@@ -26,8 +30,9 @@ from collections.abc import Callable
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db.models import Model
-from django.urls import URLPattern, URLResolver, get_resolver, reverse
+from django.urls import URLPattern, URLResolver, get_resolver, resolve, reverse
 from django.utils import timezone
+from django.utils.http import url_has_allowed_host_and_scheme
 
 from finance.category_suggestion_services import snapshot_hash
 from finance.csv_import.saved_mappings import SAVED_PROFILE_PREFIX
@@ -76,6 +81,7 @@ from finance.models import (
 )
 from finance.category_services import ensure_household_categories
 from finance.policy_services import accept_policy, current_policy
+from finance.post_only import POST_ONLY_ATTR
 from finance.reauth import RECENT_AUTH_SESSION_KEY
 from finance.year_end import CSV_SECTIONS
 from tests.privacy_world import (
@@ -149,7 +155,8 @@ class ObjectRoute:
     the object exists on: personal objects (passkeys, chats) are never
     shared, and household objects (categories, CSV mappings) are never
     private. data is minimal synthetic form data for the POST. post_only
-    marks a view that refuses GET, so the owner check posts instead. body
+    marks a view that acts only on POST (a GET just redirects to a page), so
+    the owner check posts instead. body
     lists the further object ids its POST body may name. A route that
     accepts POST needs body or a body_reason saying why its body names no
     object.
@@ -794,7 +801,10 @@ PAGE_ROUTES = {
 _SIGN_IN = "sign-in, recovery or re-authentication; runs before any financial data is read"
 _REDIRECT = "permanent redirect to a renamed route; reads nothing, and the target's own entry covers it"
 _AI_PROVIDER = "AI provider plumbing for the signed-in member's own connection; the path names a provider, not an object"
-_OWN = "POST-only action on the signed-in member's own settings or rows; takes no object id"
+_OWN = (
+    "action on the signed-in member's own settings or rows that only a POST takes; "
+    "a GET just returns to a page (post_only, #705); takes no object id"
+)
 
 EXEMPT_ROUTES = {
     "favicon": "static icon redirect",
@@ -920,15 +930,21 @@ TRACKED_MODELS = (
 )
 
 
-def _route_keys(patterns, prefix="", namespace=""):
-    """Each route's key, with its full pattern."""
+def _route_views(patterns, prefix="", namespace=""):
+    """Each route's key, with its full pattern and its view."""
     for entry in patterns:
         if isinstance(entry, URLResolver):
             inner = f"{namespace}{entry.namespace}:" if entry.namespace else namespace
-            yield from _route_keys(entry.url_patterns, prefix + str(entry.pattern), inner)
+            yield from _route_views(entry.url_patterns, prefix + str(entry.pattern), inner)
         elif isinstance(entry, URLPattern):
             pattern = prefix + str(entry.pattern)
-            yield (f"{namespace}{entry.name}" if entry.name else pattern), pattern
+            yield (f"{namespace}{entry.name}" if entry.name else pattern), pattern, entry.callback
+
+
+def _route_keys(patterns):
+    """Each route's key, with its full pattern."""
+    for key, pattern, _view in _route_views(patterns):
+        yield key, pattern
 
 
 def test_every_route_is_classified_once():
@@ -954,6 +970,18 @@ EXEMPT_IDS = (
     "categories/rules/<int:rule_id>/",
     "categories/rules/applications/<int:application_id>/reverse/",
 )
+
+
+def test_post_only_entries_match_their_views():
+    """ObjectRoute.post_only and the _OWN reason say a view takes only POST; post_only is what makes that true."""
+    views = {key: view for key, _pattern, view in _route_views(get_resolver().url_patterns)}
+    wrong = [
+        name for name, route in OBJECT_ROUTES.items() if route.post_only != hasattr(views[name], POST_ONLY_ATTR)
+    ]
+    wrong += [
+        name for name, reason in EXEMPT_ROUTES.items() if reason == _OWN and not hasattr(views[name], POST_ONLY_ATTR)
+    ]
+    assert not wrong, f"post_only in the table does not match the view's decorator: {wrong}"
 
 
 def test_every_route_with_an_id_in_its_path_is_an_object_route():
@@ -1427,11 +1455,31 @@ def _assert_denied(requester, url, data, forbidden):
         before = _ledger(requester)
         response = client.post(url, data) if method == "post" else client.get(url)
         label = f"{method.upper()} {url}"
-        assert response.status_code in DENIED, f"{label} answered {response.status_code}, not 404"
+        if method == "get" and hasattr(resolve(url).func, POST_ONLY_ATTR):
+            _assert_get_returns_to_a_refusing_page(client, label, response, forbidden)
+        else:
+            assert response.status_code in DENIED, f"{label} answered {response.status_code}, not 404"
         leaked = _leaks(response, forbidden)
         assert not leaked, f"{label} leaked {leaked}"
         changed = _changes(before, _ledger(requester))
         assert not changed, f"denied {label} changed {changed}"
+
+
+def _assert_get_returns_to_a_refusing_page(client, label, response, forbidden):
+    """A GET on a POST-only route redirects without looking the object up (#705).
+
+    The page it returns to shows the requester none of the canaries, and a
+    page that names the object in its path refuses them with the app's 404.
+    """
+    assert response.status_code == 302, f"{label} answered {response.status_code}, not the post_only redirect"
+    location = response["Location"]
+    assert url_has_allowed_host_and_scheme(location, allowed_hosts={"testserver"}), f"{label} left the site"
+    landed = client.get(location)
+    target = f"{label} -> GET {location}"
+    expected = (404,) if resolve(urlparse(location).path).kwargs else (200,)
+    assert landed.status_code in expected, f"{target} answered {landed.status_code}, not {expected}"
+    leaked = _leaks(landed, forbidden)
+    assert not leaked, f"{target} leaked {leaked}"
 
 
 def _object_cases(sides):

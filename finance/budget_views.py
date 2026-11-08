@@ -6,7 +6,7 @@ from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.cache import never_cache
-from django.views.decorators.http import require_http_methods, require_POST
+from django.views.decorators.http import require_http_methods
 
 from .access import request_person as _person
 from .access import service_or_404 as _service_or_404
@@ -26,6 +26,7 @@ from .category_services import current_household
 from .forms import BudgetForm
 from .models import Budget
 from .months import add_months
+from .post_only import post_only
 
 
 def _visible_budget(user, budget_id):
@@ -130,7 +131,7 @@ def budget_edit(request, budget_id):
     )
 
 
-@require_POST
+@post_only("budgets")
 @never_cache
 def budget_archive(request, budget_id):
     budget = _visible_budget(request.user, budget_id)
@@ -139,7 +140,7 @@ def budget_archive(request, budget_id):
     return redirect(_list_url(month))
 
 
-@require_POST
+@post_only("budgets")
 @never_cache
 def budget_rollover_toggle(request, budget_id):
     budget = _visible_budget(request.user, budget_id)

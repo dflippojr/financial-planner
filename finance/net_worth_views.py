@@ -6,7 +6,7 @@ from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
-from django.views.decorators.http import require_GET, require_http_methods, require_POST
+from django.views.decorators.http import require_GET, require_http_methods
 
 from . import account_sort
 from .access import request_person
@@ -27,6 +27,7 @@ from .models import Account, BalanceSnapshot
 from .net_worth import net_worth_chart_data, net_worth_preset_links, net_worth_report, signed_balance_minor
 from .performance import account_performance
 from .pairing_services import PairingError, set_loan_secured_asset
+from .post_only import post_only
 from .snapshot_services import SnapshotError, delete_manual_snapshot, record_manual_snapshot, update_manual_snapshot
 
 
@@ -232,7 +233,7 @@ def account_balances_calculate(request, account_id):
     )
 
 
-@require_POST
+@post_only("account-balances", "account_id")
 @never_cache
 def account_calculated_delete(request, account_id):
     account = _active_visible_account(request.user, account_id)
@@ -284,7 +285,7 @@ def account_snapshot_edit(request, account_id, snapshot_id):
     )
 
 
-@require_POST
+@post_only("account-balances", "account_id")
 @never_cache
 def account_snapshot_delete(request, account_id, snapshot_id):
     account, _snapshot = _visible_manual_snapshot(request.user, account_id, snapshot_id)
@@ -293,7 +294,7 @@ def account_snapshot_delete(request, account_id, snapshot_id):
     return redirect("account-balances", account_id)
 
 
-@require_POST
+@post_only("account-balances", "account_id")
 @never_cache
 def account_pair_loan(request, account_id):
     account = _active_visible_account(request.user, account_id)
@@ -310,7 +311,7 @@ def account_pair_loan(request, account_id):
     return redirect("account-balances", account.pk)
 
 
-@require_POST
+@post_only("account-balances", "account_id")
 @never_cache
 def account_debt_terms(request, account_id):
     account = _active_visible_account(request.user, account_id)

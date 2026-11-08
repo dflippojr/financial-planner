@@ -2,11 +2,12 @@ from django.contrib import messages
 from django.core.exceptions import ValidationError
 from django.shortcuts import redirect, render
 from django.views.decorators.cache import never_cache
-from django.views.decorators.http import require_http_methods, require_POST
+from django.views.decorators.http import require_http_methods
 
 from .access import service_or_404 as _service_or_404
 from .forms import ManualTransactionForm
 from .manual_entry_services import add_manual_transaction, delete_manual_transaction
+from .post_only import post_only
 
 
 def _save_manual_entry(request, form):
@@ -49,7 +50,7 @@ def manual_transaction_add(request):
     )
 
 
-@require_POST
+@post_only("transaction-edit", "transaction_id")
 @never_cache
 def manual_transaction_delete(request, transaction_id):
     _service_or_404(lambda: delete_manual_transaction(request.user, transaction_id))
