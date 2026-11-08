@@ -66,9 +66,15 @@ CANARY_MINORS = tuple(needle for needle in FORBIDDEN if needle.isdigit())
 
 # Where an id renders and an amount never does. Each rule needs its context right
 # next to the number, so text further away (or in another CSV cell) never excuses one.
-# HTML: a URL path segment, the value of an <option> or an <input>, or the end of an
-# element id such as rename-17.
-_ID_TAG = re.compile(r"<(?:option|input)\b[^<>]*\bvalue=[\"']?\Z", re.IGNORECASE)
+# HTML: a URL path segment, the value attribute of an <option> or an <input>, or the
+# end of an element id such as rename-17.
+_ID_TAG = re.compile(r"<(?:option|input)\b[^<>]*\svalue=[\"']?\Z", re.IGNORECASE)
+# A query value, in a link or a query string held in an attribute or JSON
+# (?tag=17, &amp;tag=17, \u0026tag=17, page_query="c=17"), and Django's invalid-choice
+# message, which echoes the id a request named. No URL in the app carries an amount.
+_ECHOED_ID = re.compile(
+    r"(?:\?|&|&amp;|\\u0026|[\"'])[\w-]+=\Z|Select a valid choice\. [\w:-]*\Z"
+)
 # JSON: the value of a key that names an id ("id", "account_id", "pk"), a whole list
 # under an "_ids" key however long, or an object key ({"17": "detected"}).
 _JSON_IDS = re.compile(
@@ -99,6 +105,8 @@ def _in_id_position(body, match, spans):
     if body[start - 1 : start] == "/":
         return True
     if _ID_TAG.search(body[max(body.rfind("<", 0, start), 0) : start]):
+        return True
+    if _ECHOED_ID.search(body[max(start - 64, 0) : start]):
         return True
     return any(low <= start < high for low, high in spans)
 
