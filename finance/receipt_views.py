@@ -2,12 +2,13 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.http import FileResponse, Http404
 from django.shortcuts import redirect
 from django.views.decorators.cache import never_cache
-from django.views.decorators.http import require_GET, require_POST
+from django.views.decorators.http import require_GET
 
 from .access import service_or_404 as _service_or_404
 from .audit_services import record_download
 from .forms import ReceiptUploadForm
 from .models import Receipt
+from .post_only import post_only
 from .receipt_services import (
     attach_receipt,
     receipt_download_name,
@@ -18,7 +19,7 @@ from .receipt_services import (
 from .views import _render_transaction_edit, _visible_active_transaction
 
 
-@require_POST
+@post_only("transaction-edit", "transaction_id")
 @never_cache
 def receipt_upload(request, transaction_id):
     financial_transaction = _visible_active_transaction(request.user, transaction_id)
@@ -33,7 +34,7 @@ def receipt_upload(request, transaction_id):
     return _render_transaction_edit(request, financial_transaction, receipt_form=form)
 
 
-@require_POST
+@post_only("transaction-edit", "transaction_id")
 @never_cache
 def receipt_delete(request, transaction_id, receipt_id):
     _visible_active_transaction(request.user, transaction_id)

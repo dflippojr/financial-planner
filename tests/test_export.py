@@ -428,7 +428,7 @@ def test_export_requires_auth_and_post():
     allowed = logged.post(reverse("account-export"))
 
     assert anonymous.status_code == 302
-    assert get_denied.status_code == 405
+    assert get_denied.status_code == 302 and get_denied["Location"] == reverse("settings-data")
     assert allowed.status_code == 200
 
 

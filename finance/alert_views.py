@@ -3,10 +3,11 @@ from django.core.paginator import Paginator
 from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.cache import never_cache
-from django.views.decorators.http import require_http_methods, require_POST
+from django.views.decorators.http import require_http_methods
 
 from .alert_services import alerts_for, mark_alert_read, mark_all_alerts_read
 from .models import Person
+from .post_only import post_only
 
 
 @require_http_methods(["GET"])
@@ -17,7 +18,7 @@ def alert_list(request):
     return render(request, "finance/alerts.html", {"alerts": page, "page_obj": page})
 
 
-@require_POST
+@post_only("alert-list")
 @never_cache
 def alert_mark_read(request, alert_id):
     try:
@@ -27,7 +28,7 @@ def alert_mark_read(request, alert_id):
     return redirect("alert-list")
 
 
-@require_POST
+@post_only("alert-list")
 @never_cache
 def alert_mark_all_read(request):
     mark_all_alerts_read(request.user)

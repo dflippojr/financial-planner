@@ -9,7 +9,7 @@ import json
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
-from django.views.decorators.http import require_GET, require_POST
+from django.views.decorators.http import require_GET
 
 from .ai_api import label as api_label, default_model
 from .ai_plan import (
@@ -54,6 +54,7 @@ from .forms import (
 from .chat_services import chat_local_enabled
 from .models import AiUsageEvent, Person
 from .policy_services import may_use_ai
+from .post_only import post_only
 from .reauth import recent_auth_is_fresh, reauth_redirect, requires_recent_auth
 from .security_services import EVENT_TYPES, record_security_event
 
@@ -165,7 +166,7 @@ def _key_cards(person):
     return cards
 
 
-@require_POST
+@post_only("settings-ai")
 @requires_recent_auth("connect-ai", form_url_name="settings-ai")
 def ai_connect(request):
     person = get_object_or_404(Person, user=request.user)
@@ -186,7 +187,7 @@ def ai_connect(request):
     return redirect("settings-ai")
 
 
-@require_POST
+@post_only("settings-ai")
 @requires_recent_auth("disconnect-ai", form_url_name="settings-ai")
 def ai_disconnect(request):
     person = get_object_or_404(Person, user=request.user)
@@ -196,7 +197,7 @@ def ai_disconnect(request):
     return redirect("settings-ai")
 
 
-@require_POST
+@post_only("settings-ai")
 @requires_recent_auth("ai-defaults", form_url_name="settings-ai")
 def ai_save_defaults(request):
     person = get_object_or_404(Person, user=request.user)
@@ -229,7 +230,7 @@ def ai_save_defaults(request):
     return redirect("settings-ai")
 
 
-@require_POST
+@post_only("settings-ai")
 @requires_recent_auth("ai-offer-local", form_url_name="settings-ai")
 def ai_save_offer_local(request):
     person = get_object_or_404(Person, user=request.user)
@@ -247,7 +248,7 @@ def ai_save_offer_local(request):
     return redirect("settings-ai")
 
 
-@require_POST
+@post_only("settings-ai")
 @requires_recent_auth("ai-offer-local-chat", form_url_name="settings-ai")
 def ai_save_offer_local_chat(request):
     person = get_object_or_404(Person, user=request.user)
@@ -265,7 +266,7 @@ def ai_save_offer_local_chat(request):
     return redirect("settings-ai")
 
 
-@require_POST
+@post_only("settings-ai")
 @requires_recent_auth("ai-shared-local", form_url_name="settings-ai")
 def ai_save_shared_local(request):
     person = get_object_or_404(Person, user=request.user)
@@ -285,7 +286,7 @@ def ai_save_shared_local(request):
     return redirect("settings-ai")
 
 
-@require_POST
+@post_only("settings-ai")
 @requires_recent_auth("connect-ai-key", form_url_name="settings-ai")
 def ai_key_connect(request):
     person = get_object_or_404(Person, user=request.user)
@@ -302,7 +303,7 @@ def ai_key_connect(request):
     return redirect("settings-ai")
 
 
-@require_POST
+@post_only("settings-ai")
 @requires_recent_auth("ai-key-defaults", form_url_name="settings-ai")
 def ai_key_defaults(request, kind):
     person = get_object_or_404(Person, user=request.user)
@@ -329,7 +330,7 @@ def ai_key_defaults(request, kind):
     return redirect("settings-ai")
 
 
-@require_POST
+@post_only("settings-ai")
 @requires_recent_auth("disconnect-ai-key", form_url_name="settings-ai")
 def ai_key_disconnect(request, kind):
     person = get_object_or_404(Person, user=request.user)
@@ -352,7 +353,7 @@ def _json_error(message, status=400):
     return JsonResponse({"ok": False, "error": message}, status=status)
 
 
-@require_POST
+@post_only("settings-ai")
 def ai_plan_start(request, backend):
     person = get_object_or_404(Person, user=request.user)
     if not recent_auth_is_fresh(request):
@@ -366,7 +367,7 @@ def ai_plan_start(request, backend):
     return JsonResponse({"ok": True, **data})
 
 
-@require_POST
+@post_only("settings-ai")
 def ai_plan_code(request, backend):
     person = get_object_or_404(Person, user=request.user)
     if not recent_auth_is_fresh(request):
@@ -394,7 +395,7 @@ def ai_plan_status(request, backend):
     return JsonResponse({"ok": True, **state})
 
 
-@require_POST
+@post_only("settings-ai")
 @requires_recent_auth("unlink-ai-plan", form_url_name="settings-ai")
 def ai_plan_unlink(request, backend):
     person = get_object_or_404(Person, user=request.user)
@@ -407,7 +408,7 @@ def ai_plan_unlink(request, backend):
     return redirect("settings-ai")
 
 
-@require_POST
+@post_only("settings-ai")
 @requires_recent_auth("ai-offer-plan", form_url_name="settings-ai")
 def ai_save_offer_plan(request):
     person = get_object_or_404(Person, user=request.user)

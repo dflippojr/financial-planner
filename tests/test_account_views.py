@@ -397,12 +397,14 @@ def test_get_mutations_are_rejected():
     account = make_account(owner)
     client = signed_in(owner)
 
-    assert client.get(reverse("account-rename", args=(account.pk,))).status_code == 405
-    assert client.get(reverse("account-share", args=(account.pk,))).status_code == 405
-    assert client.get(reverse("account-share-mode", args=(account.pk,))).status_code == 405
-    assert client.get(reverse("account-unshare", args=(account.pk,))).status_code == 405
-    assert client.get(reverse("account-archive", args=(account.pk,))).status_code == 405
+    # A GET changes nothing and only returns to the accounts page (#705).
+    for name in ("account-rename", "account-share", "account-share-mode", "account-unshare", "account-archive"):
+        response = client.get(reverse(name, args=(account.pk,)), {"name": "SYN renamed"})
+        assert response.status_code == 302 and response["Location"] == reverse("account-list"), name
+    account.refresh_from_db()
     assert account.status == Account.Status.ACTIVE
+    assert account.name != "SYN renamed"
+    assert account.scope == Account.Scope.PRIVATE
 
 
 @pytest.mark.django_db
