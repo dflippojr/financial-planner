@@ -7,11 +7,13 @@ from django.http import HttpResponse
 from django.urls import reverse
 
 from finance.export import write_export_zip
+from finance.models import RecurringSeries, RecurringSeriesMember, Transaction
 from tests.privacy_world import (
     CANARY,
     CANARY_MINORS,
     FORBIDDEN,
     GOAL_MINOR,
+    SHARED_CHARGE_MINOR,
     UNCATEGORIZED_MINOR,
     build_report_world,
     ids_starting_at,
@@ -40,6 +42,7 @@ ID_POSITIONS = [
     '{{"account_id": {n}, "import_batch_id": 3}}',
     '{{"member_transaction_ids": [\n      1,\n      {n}\n    ]}}',
     '{{"member_transaction_ids": [{n}, 2]}}',
+    '{{"member_sources": {{"{n}": "detected", "2": "manual"}}}}',
 ]
 
 # Digits that only contain a canary's value.
@@ -93,10 +96,16 @@ def test_csv_id_columns_are_emptied_and_amount_columns_kept():
             f'{minor},{minor},5,"[1,{minor}]",Synthetic\r\n'
             f"2,3,-{minor},[],Synthetic {minor}\r\n"
         )
-        cleaned = csv_without_ids(text)
-        assert cleaned.splitlines()[1] == ",,5,,Synthetic"
-        assert leaks(cleaned, FORBIDDEN) == [minor]
-        assert leaks(csv_without_ids(text.splitlines(keepends=True)[0] + text.splitlines(keepends=True)[1]), FORBIDDEN) == []
+        assert leaks(csv_without_ids(text), FORBIDDEN) == [minor]
+        assert leaks(csv_without_ids("".join(text.splitlines(keepends=True)[:2])), FORBIDDEN) == []
+
+
+def test_csv_id_columns_still_show_names_decimals_and_ids_used_as_json_keys():
+    comma, plain, minor = money_forms(UNCATEGORIZED_MINOR)
+    header = "id,source_transaction_id,member_sources\r\n"
+    assert leaks(csv_without_ids(header + f'1,{CANARY}-7,"{{""{minor}"":""detected""}}"\r\n'), FORBIDDEN) == [CANARY]
+    assert leaks(csv_without_ids(header + f"1,{plain},{{}}\r\n"), FORBIDDEN) == [plain]
+    assert leaks(csv_without_ids(header + f'1,x,"{comma}"\r\n'), FORBIDDEN) == [comma]
 
 
 def test_every_decimal_form_and_the_name_still_match_anywhere():
@@ -133,9 +142,24 @@ def test_the_members_exports_name_ids_equal_to_a_canary_amount_without_a_leak(db
     """The data export's JSON and CSV and the transaction CSV carry ids in their own keys and columns."""
     with ids_starting_at(int(minor)):
         world = build_report_world()
+        # The member's own series on the shared charge exports its transaction id as a JSON key.
+        series = RecurringSeries.objects.create(
+            person=world.member,
+            merchant_key="synthetic shared stream",
+            display_name="Synthetic shared stream",
+            cadence=RecurringSeries.Cadence.MONTHLY,
+            typical_amount_minor=-SHARED_CHARGE_MINOR,
+            status=RecurringSeries.Status.CONFIRMED,
+            confidence=RecurringSeries.Confidence.HIGH,
+            reasons=["synthetic"],
+            fingerprint="e" * 64,
+        )
+        RecurringSeriesMember.objects.create(series=series, transaction=Transaction.objects.get(account=world.shared))
         exports = _exports(world.member)
     for response, raw in exports:
         assert minor in raw, f"the export holds no id {minor}, so this proves nothing"
+        if response["Content-Type"].startswith("application/zip"):
+            assert f'"{minor}": "detected"' in raw, "the member's series is not in the export"
         assert route_leaks(response, PRIVATE_FORBIDDEN) == []
 
 
