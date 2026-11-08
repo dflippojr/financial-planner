@@ -1,4 +1,5 @@
 """The privacy sweeps' matcher: ids never trip it, every amount form does (#709)."""
+import csv
 import io
 import zipfile
 
@@ -107,6 +108,25 @@ def test_csv_id_columns_still_show_names_decimals_and_ids_used_as_json_keys():
     assert leaks(csv_without_ids(header + f'1,{CANARY}-7,"{{""{minor}"":""detected""}}"\r\n'), FORBIDDEN) == [CANARY]
     assert leaks(csv_without_ids(header + f"1,{plain},{{}}\r\n"), FORBIDDEN) == [plain]
     assert leaks(csv_without_ids(header + f'1,x,"{comma}"\r\n'), FORBIDDEN) == [comma]
+
+
+def test_a_long_id_list_holds_ids_however_far_from_its_key():
+    for minor in CANARY_MINORS:
+        items = ",\n".join(f"      {index}" for index in [*range(1, 200), minor])
+        assert leaks(f'{{\n  "member_transaction_ids": [\n{items}\n  ]\n}}', FORBIDDEN) == []
+
+
+def _csv(*rows):
+    out = io.StringIO()
+    csv.writer(out).writerows(rows)
+    return out.getvalue()
+
+
+def test_a_neighbouring_csv_cell_cannot_excuse_an_amount():
+    for minor in CANARY_MINORS:
+        for description in ('{"account_id":', '{"member_sources": {"', "/", '<input value="', "rename-"):
+            text = _csv(("description", "amount_minor"), (description, minor))
+            assert leaks(csv_without_ids(text), FORBIDDEN) == [minor], description
 
 
 def test_every_decimal_form_and_the_name_still_match_anywhere():
