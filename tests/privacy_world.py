@@ -3,11 +3,14 @@
 The owner's private rows carry CANARY in their names and distinctive amounts;
 FORBIDDEN lists every form a leaked amount can take on a page.
 """
+from contextlib import contextmanager
 from datetime import timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
+from django.apps import apps
 from django.contrib.auth import get_user_model
+from django.db import connection, models
 from django.test import Client
 from django.utils import timezone
 
@@ -52,6 +55,35 @@ FORBIDDEN = (
     *money_forms(PLANNED_MINOR),
     *money_forms(GOAL_MINOR),
 )
+# Each canary's bare minor string, the form an object id can take too.
+CANARY_MINORS = tuple(needle for needle in FORBIDDEN if needle.isdigit())
+
+
+@contextmanager
+def ids_starting_at(value):
+    """Give the next row of every table the id `value`, as a long PostgreSQL run eventually can."""
+    tables = [model._meta.db_table for model in apps.get_models() if isinstance(model._meta.pk, models.AutoField)]
+    with connection.cursor() as cursor:
+        if connection.vendor == "postgresql":
+            # Sequences ignore the test transaction, so put them back afterwards.
+            saved = {}
+            for table in tables:
+                cursor.execute("SELECT pg_get_serial_sequence(%s, 'id')", [table])
+                (sequence,) = cursor.fetchone()
+                cursor.execute(f"SELECT last_value, is_called FROM {sequence}")  # noqa: S608 - name from the catalog
+                saved[sequence] = cursor.fetchone()
+                cursor.execute("SELECT setval(%s, %s, false)", [sequence, value])
+        else:
+            for table in tables:
+                cursor.execute("DELETE FROM sqlite_sequence WHERE name = %s", [table])
+                cursor.execute("INSERT INTO sqlite_sequence (name, seq) VALUES (%s, %s)", [table, value - 1])
+    try:
+        yield
+    finally:
+        if connection.vendor == "postgresql":
+            with connection.cursor() as cursor:
+                for sequence, (last_value, is_called) in saved.items():
+                    cursor.execute("SELECT setval(%s, %s, %s)", [sequence, last_value, is_called])
 
 
 def make_person(username):
