@@ -44,6 +44,10 @@ ID_POSITIONS = [
     '{{"member_transaction_ids": [\n      1,\n      {n}\n    ]}}',
     '{{"member_transaction_ids": [{n}, 2]}}',
     '{{"member_sources": {{"{n}": "detected", "2": "manual"}}}}',
+    '{{"source_transaction_id": "{n}", "account_id": 3}}',
+    '{{"source_transaction_id": "SYN-{n}", "account_id": 3}}',
+    '{{"drilldown_url": "/transactions/{n}/edit/"}}',
+    '<a href="https://planner.example/accounts/{n}/">Account</a>',
     '<a href="/planning/goals/?fund_item={n}#add-goal">Fund</a>',
     '<a href="/transactions/?date_from=2026-10-01&amp;tag={n}">Tagged</a>',
     '{{"drilldown_url": "/transactions/?date_from=2026-10-01\\u0026tag={n}"}}',
@@ -76,6 +80,9 @@ AMOUNT_RENDERS = [
     '<input value="2" data-value="{n}">',
     '<option value="2" data-value="{n}">Two</option>',
     '<p>Spent x={n}</p>',
+    "<td>Spent/{n}</td>",
+    "<td>Spent-{n}</td>",
+    '{{"note": "Spent/{n}"}}',
     '{{"id": 1, "amount_minor": -{n}}}',
     '{{"account_id": 1, "typical_amount_minor": {n}}}',
     "Spent {n} this month.",
@@ -146,6 +153,8 @@ def test_every_decimal_form_and_the_name_still_match_anywhere():
     assert leaks(f'{{"amount": "{plain}"}}', FORBIDDEN) == [plain]
     assert leaks(f"<td>-{plain} USD</td>", FORBIDDEN) == [plain]
     assert leaks(f"<td>{CANARY}-PRIVATE</td>", FORBIDDEN) == [CANARY]
+    # An id value excuses only the bare minor form.
+    assert set(leaks(f'{{"source_transaction_id": "{CANARY} {plain} {minor}"}}', FORBIDDEN)) == {CANARY, plain}
     assert minor in CANARY_MINORS
 
 
