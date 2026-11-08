@@ -7,6 +7,7 @@ import pytest
 from django.http import HttpResponse
 from django.urls import reverse
 
+from finance.audit_services import record_download
 from finance.export import write_export_zip
 from finance.models import Receipt, RecurringSeries, RecurringSeriesMember, Transaction
 from tests.privacy_world import (
@@ -16,11 +17,14 @@ from tests.privacy_world import (
     GOAL_MINOR,
     SHARED_CHARGE_MINOR,
     UNCATEGORIZED_MINOR,
+    body_text,
     build_report_world,
+    csv_without_ids,
     ids_starting_at,
     leaks,
-    csv_without_ids,
     money_forms,
+    seed_transaction,
+    signed_in,
 )
 from tests.test_route_access_sweep import PRIVATE_FORBIDDEN, _client as fresh_client, _leaks as route_leaks
 
@@ -49,6 +53,8 @@ ID_POSITIONS = [
     '{{"drilldown_url": "/transactions/{n}/edit/"}}',
     '<a href="https://planner.example/accounts/{n}/">Account</a>',
     '{{"export_path": "receipts/{n}/Synthetic receipt.png"}}',
+    "<td>Member #{n}; affecting member #{n}</td><td>receipt #{n}</td>",
+    "<td>export_kind=receipt, transaction_id={n}</td>",
     '<a href="#txn-{n}">Jump</a><button aria-controls="panel-{n}">Open</button>',
     '<a href="/planning/goals/?fund_item={n}#add-goal">Fund</a>',
     '<a href="/transactions/?date_from=2026-10-01&amp;tag={n}">Tagged</a>',
@@ -89,6 +95,9 @@ AMOUNT_RENDERS = [
     '<span data-amount="USD-{n}"></span>',
     '<span aria-label="USD-{n}"></span>',
     "<td>Spent/{n}/month</td>",
+    '{{"note": "Spent/{n}/month"}}',
+    '<span data-amount="USD/{n}/month"></span>',
+    "<td>amount_minor={n}</td>",
     '{{"note": "receipts/{n}"}}',
     '<input name="note" value="x={n}">',
     "<td>Spent-{n}</td>",
@@ -239,3 +248,25 @@ def test_the_owners_exports_still_trip_the_sweep_when_ids_share_the_amount(db):
         exports = _exports(world.owner)
     for response, _raw in exports:
         assert str(UNCATEGORIZED_MINOR) in route_leaks(response, PRIVATE_FORBIDDEN)
+
+
+@pytest.mark.parametrize("minor", CANARY_MINORS)
+def test_the_audit_log_names_ids_equal_to_a_canary_amount_without_a_leak(db, minor):
+    """The member's audit page shows target and member ids as "#N" and metadata ids as "transaction_id=N"."""
+    world = build_report_world()
+    with ids_starting_at(int(minor)):
+        charge = seed_transaction(
+            world.shared, world.member, amount_minor=-1, when=world.when, description="Synthetic", index=90
+        )
+        receipt = Receipt.objects.create(
+            transaction=charge,
+            original_name="Synthetic receipt.png",
+            stored_name="e" * 32,
+            content_type=Receipt.ContentType.PNG,
+            size_bytes=8,
+            uploaded_by=world.member,
+        )
+        record_download(world.member.user, export_kind="receipt", receipt=receipt)
+        page = body_text(signed_in(world.member).get(reverse("settings-audit")))
+    assert f"receipt #{minor}" in page and f"transaction_id={minor}" in page, "the ids are not on the page"
+    assert leaks(page, FORBIDDEN) == []
