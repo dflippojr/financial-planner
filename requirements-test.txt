@@ -6,7 +6,7 @@
 # Django's model fields and managers.
 django-types==0.24.0
 pyright==1.1.414
-ruff==0.17.3
+ruff==0.17.4
 # Property tests of ledger invariants in tests/properties (#533).
 hypothesis==6.170.14
 playwright==1.64.1
@@ -15,4 +15,4 @@ pytest-xdist==3.8.0
 # Used directly by the disposable HTTP lifecycle tests.
 requests==2.34.2
 # Generates and checks the hashed locks (scripts/lock.sh, #605).
-uv==0.13.6
+uv==0.13.7
