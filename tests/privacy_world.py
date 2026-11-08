@@ -69,11 +69,15 @@ CANARY_MINORS = tuple(needle for needle in FORBIDDEN if needle.isdigit())
 # HTML: a path segment of a URL that opens a quoted string or a CSV cell
 # ("/accounts/17/", "https://host/accounts/17/"), the value attribute of an <option>
 # or an <input>, or the end of an element id in an attribute that names an element
-# (id="rename-17", for=, aria-controls=, data-open-dialog=, href="#txn-17").
+# (id="rename-17", for=, aria-controls= and the other id-reference aria attributes,
+# data-open-dialog=, href="#txn-17"). aria-label is text, so it still counts.
 _URL_PATH = re.compile(r"[\"'\x1f](?:https?://[^\"'\s<>/\x1f]+)?/[^\"'\s<>\x1f]*/\Z")
+# A relative path such as the export's receipts/17/receipt.png counts only as a middle
+# segment, with a slash after the number too, so "Spent/17" in text stays an amount.
+_RELATIVE_PATH = re.compile(r"[\"'\x1f][\w.~-]+(?:/[\w.~-]+)*/\Z")
 _ID_TAG = re.compile(r"<(?:option|input)\b[^<>]*\svalue=[\"']?\Z", re.IGNORECASE)
 _ELEMENT_ID = re.compile(
-    r"\s(?:id|for|aria-[\w-]+|data-open-dialog|data-[\w-]*-(?:id|target))=[\"'][A-Za-z_][\w-]*-\Z"
+    r"\s(?:id|for|aria-(?:controls|labelledby|describedby|owns)|data-open-dialog|data-[\w-]*-(?:id|target))=[\"'][A-Za-z_][\w-]*-\Z"
     r"|\shref=[\"']#[A-Za-z_][\w-]*-\Z"
 )
 # A query value: after "?" that follows a URL character or a quote, after "&", "&amp;"
@@ -115,6 +119,8 @@ def _in_id_position(body, match, spans):
     start = match.start()
     before = body[max(start - 512, 0) : start]
     if _URL_PATH.search(before) or _ELEMENT_ID.search(before) or _ECHOED_ID.search(before):
+        return True
+    if _RELATIVE_PATH.search(before) and body[match.end() : match.end() + 1] == "/":
         return True
     if _ID_TAG.search(body[max(body.rfind("<", 0, start), 0) : start]):
         return True
