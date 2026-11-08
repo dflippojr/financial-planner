@@ -16,10 +16,8 @@ body.
 A new route needs an entry here; test_every_route_is_classified_once fails
 until it has one.
 """
-import io
 import re
 import uuid
-import zipfile
 from dataclasses import dataclass, field
 from datetime import timedelta
 from types import SimpleNamespace
@@ -1419,15 +1417,8 @@ def _changes(before, after):
     return [name for name in before if before[name] != after[name]]
 
 
-def _text(response):
-    if response.get("Content-Type", "").startswith("application/zip"):
-        archive = zipfile.ZipFile(io.BytesIO(response.content))
-        return "\n".join(archive.read(name).decode("utf-8", "replace") for name in archive.namelist())
-    return body_text(response)
-
-
 def _leaks(response, forbidden):
-    return leaks(_text(response), forbidden)
+    return leaks(body_text(response), forbidden)
 
 
 def _assert_denied(requester, url, data, forbidden):
@@ -1702,7 +1693,7 @@ def test_owner_sees_the_canary_on_the_baseline_page(world, name):
     query = _baseline(world, route)
     response = _client(world.owner).get(reverse(name, kwargs=route.kwargs[0]), query)
     assert response.status_code == 200, f"{name} {query} answered {response.status_code}"
-    assert CANARY in _text(response), f"the owner does not see the canary on {name} {query}"
+    assert CANARY in body_text(response), f"the owner does not see the canary on {name} {query}"
 
 
 @pytest.mark.parametrize("name", [name for name, route in PAGE_ROUTES.items() if route.owner_post])

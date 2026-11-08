@@ -4,7 +4,10 @@ The owner's private rows carry CANARY in their names and distinctive amounts;
 FORBIDDEN lists every form a leaked amount can take on a page, and leaks()
 finds them in a response body.
 """
+import csv
+import io
 import re
+import zipfile
 from contextlib import contextmanager
 from datetime import timedelta
 from decimal import Decimal
@@ -62,8 +65,10 @@ FORBIDDEN = (
 CANARY_MINORS = tuple(needle for needle in FORBIDDEN if needle.isdigit())
 
 # Where an id renders and an amount never does: a URL path segment, the value of an
-# <option> or an <input>, or the end of an element id such as rename-17.
+# <option> or an <input>, the end of an element id such as rename-17, or a JSON key
+# that names an id ("id", "account_id", "pk") or a list of them ("member_transaction_ids").
 _ID_TAG = re.compile(r"<(?:option|input)\b[^<>]*\bvalue=[\"']?\Z", re.IGNORECASE)
+_ID_KEY = re.compile(r'"(?:\w*_)?(?:id|pk)"\s*:\s*\Z|"\w*_ids"\s*:\s*\[[\d,\s]*\Z')
 
 
 def _whole_numbers(needle, body):
@@ -75,7 +80,25 @@ def _in_id_position(body, start):
     if body[start - 1 : start] == "/":
         return True
     tag = body[max(body.rfind("<", 0, start), 0) : start]
-    return bool(_ID_TAG.search(tag))
+    return bool(_ID_TAG.search(tag) or _ID_KEY.search(body[max(start - 200, 0) : start]))
+
+
+def _is_id_column(name):
+    return name in ("id", "pk") or name.endswith(("_id", "_ids"))
+
+
+def csv_without_ids(text):
+    """The CSV with the cells of its id columns (id, account_id, member_transaction_ids) emptied."""
+    rows = list(csv.reader(io.StringIO(text)))
+    if not rows:
+        return text
+    ids = [index for index, name in enumerate(rows[0]) if _is_id_column(name.strip())]
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(rows[0])
+    for row in rows[1:]:
+        writer.writerow(["" if index in ids else cell for index, cell in enumerate(row)])
+    return out.getvalue()
 
 
 def leaks(body, forbidden):
@@ -160,9 +183,18 @@ def signed_in(person):
 
 
 def body_text(response):
-    if response.streaming:
-        return b"".join(response.streaming_content).decode("utf-8")
-    return response.content.decode("utf-8")
+    """What a sweep reads: the page, every file of a zip, and a CSV without its id columns."""
+    content_type = response.get("Content-Type", "")
+    if content_type.startswith("application/zip"):
+        archive = zipfile.ZipFile(io.BytesIO(response.content))
+        return "\n".join(_file_text(name, archive.read(name)) for name in archive.namelist())
+    raw = b"".join(response.streaming_content) if response.streaming else response.content
+    return _file_text("response.csv" if content_type.startswith("text/csv") else "", raw)
+
+
+def _file_text(name, raw):
+    text = raw.decode("utf-8", "replace")
+    return csv_without_ids(text) if name.endswith(".csv") else text
 
 
 def build_report_world():
