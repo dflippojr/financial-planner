@@ -8,7 +8,7 @@ from django.http import HttpResponse
 from django.urls import reverse
 
 from finance.export import write_export_zip
-from finance.models import RecurringSeries, RecurringSeriesMember, Transaction
+from finance.models import Receipt, RecurringSeries, RecurringSeriesMember, Transaction
 from tests.privacy_world import (
     CANARY,
     CANARY_MINORS,
@@ -48,6 +48,7 @@ ID_POSITIONS = [
     '{{"source_transaction_id": "SYN-{n}", "account_id": 3}}',
     '{{"drilldown_url": "/transactions/{n}/edit/"}}',
     '<a href="https://planner.example/accounts/{n}/">Account</a>',
+    '{{"export_path": "receipts/{n}/Synthetic receipt.png"}}',
     '<a href="#txn-{n}">Jump</a><button aria-controls="panel-{n}">Open</button>',
     '<a href="/planning/goals/?fund_item={n}#add-goal">Fund</a>',
     '<a href="/transactions/?date_from=2026-10-01&amp;tag={n}">Tagged</a>',
@@ -86,6 +87,9 @@ AMOUNT_RENDERS = [
     "<p>Spent ?x={n}</p>",
     "<p>Spent &amp;x={n}</p>",
     '<span data-amount="USD-{n}"></span>',
+    '<span aria-label="USD-{n}"></span>',
+    "<td>Spent/{n}/month</td>",
+    '{{"note": "receipts/{n}"}}',
     '<input name="note" value="x={n}">',
     "<td>Spent-{n}</td>",
     '{{"note": "Spent/{n}"}}',
@@ -155,6 +159,12 @@ def test_a_neighbouring_csv_cell_cannot_excuse_an_amount():
         assert leaks(csv_without_ids(text), FORBIDDEN) == [minor]
 
 
+def test_a_receipt_path_in_an_export_csv_is_an_id():
+    for minor in CANARY_MINORS:
+        text = _csv(("id", "export_path"), ("1", f"receipts/{minor}/Synthetic receipt.png"))
+        assert leaks(csv_without_ids(text), FORBIDDEN) == []
+
+
 def test_every_decimal_form_and_the_name_still_match_anywhere():
     comma, plain, minor = money_forms(GOAL_MINOR)
     assert (comma, plain) == ("98,765.43", "98765.43")
@@ -203,12 +213,23 @@ def test_the_members_exports_name_ids_equal_to_a_canary_amount_without_a_leak(db
             reasons=["synthetic"],
             fingerprint="e" * 64,
         )
-        RecurringSeriesMember.objects.create(series=series, transaction=Transaction.objects.get(account=world.shared))
+        shared_charge = Transaction.objects.get(account=world.shared)
+        RecurringSeriesMember.objects.create(series=series, transaction=shared_charge)
+        # The member's receipt on the shared charge exports under receipts/<its id>/.
+        Receipt.objects.create(
+            transaction=shared_charge,
+            original_name="Synthetic receipt.png",
+            stored_name="f" * 32,
+            content_type=Receipt.ContentType.PNG,
+            size_bytes=8,
+            uploaded_by=world.member,
+        )
         exports = _exports(world.member)
     for response, raw in exports:
         assert minor in raw, f"the export holds no id {minor}, so this proves nothing"
         if response["Content-Type"].startswith("application/zip"):
             assert f'"{minor}": "detected"' in raw, "the member's series is not in the export"
+            assert f"receipts/{minor}/" in raw, "the member's receipt is not in the export"
         assert route_leaks(response, PRIVATE_FORBIDDEN) == []
 
 
