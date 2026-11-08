@@ -64,13 +64,20 @@ FORBIDDEN = (
 # Each canary's bare minor string, the form an object id can take too.
 CANARY_MINORS = tuple(needle for needle in FORBIDDEN if needle.isdigit())
 
-# Where an id renders and an amount never does: a URL path segment, the value of an
-# <option> or an <input>, the end of an element id such as rename-17, the value of a
-# JSON key that names an id ("id", "account_id", "pk") or a list of them
-# ("member_transaction_ids"), or a JSON object key itself ({"17": "detected"}).
+# Where an id renders and an amount never does. Each rule needs its context right
+# next to the number, so text further away (or in another CSV cell) never excuses one.
+# HTML: a URL path segment, the value of an <option> or an <input>, or the end of an
+# element id such as rename-17.
 _ID_TAG = re.compile(r"<(?:option|input)\b[^<>]*\bvalue=[\"']?\Z", re.IGNORECASE)
-_ID_KEY = re.compile(r'"(?:\w*_)?(?:id|pk)"\s*:\s*\Z|"\w*_ids"\s*:\s*\[[\d,\s]*\Z')
-_OBJECT_KEY_END = re.compile(r'"\s*:')
+# JSON: the value of a key that names an id ("id", "account_id", "pk"), a whole list
+# under an "_ids" key however long, or an object key ({"17": "detected"}).
+_JSON_IDS = re.compile(
+    r'"(?:\w*_)?(?:id|pk)"[ \t\r\n]*:[ \t\r\n]*(\d+)'
+    r'|"\w*_ids"[ \t\r\n]*:[ \t\r\n]*(\[[\d, \t\r\n]*\])'
+    r'|"(\d+)"[ \t\r\n]*:'
+)
+# CSV cells are joined by the unit separator, which no rule above can span.
+CELL_SEPARATOR = "\x1f"
 
 
 def _whole_numbers(needle, body):
@@ -78,13 +85,22 @@ def _whole_numbers(needle, body):
     return re.finditer(rf"(?<![\w.])(?<!\w-){needle}(?!\w)(?!\.\d)", body)
 
 
-def _in_id_position(body, match):
+def _json_id_spans(body):
+    return [
+        match.span(group)
+        for match in _JSON_IDS.finditer(body)
+        for group in (1, 2, 3)
+        if match.group(group) is not None
+    ]
+
+
+def _in_id_position(body, match, spans):
     start = match.start()
-    before = body[start - 1 : start]
-    if before == "/" or (before == '"' and _OBJECT_KEY_END.match(body, match.end())):
+    if body[start - 1 : start] == "/":
         return True
-    tag = body[max(body.rfind("<", 0, start), 0) : start]
-    return bool(_ID_TAG.search(tag) or _ID_KEY.search(body[max(start - 200, 0) : start]))
+    if _ID_TAG.search(body[max(body.rfind("<", 0, start), 0) : start]):
+        return True
+    return any(low <= start < high for low, high in spans)
 
 
 def _is_id_column(name):
@@ -92,12 +108,12 @@ def _is_id_column(name):
 
 
 def csv_without_ids(text):
-    """The CSV's cells, one per line, without the bare ids in its id columns.
+    """The CSV's cells, unquoted and joined by CELL_SEPARATOR, without the bare ids in its id columns.
 
     An id column (id, account_id, member_transaction_ids) loses a cell that holds
     only numbers, such as 17 or [17,18]; any other text in it stays, so a name or
-    decimal amount there still counts. Cells come out unquoted, so the JSON rules
-    in leaks() apply inside a cell such as {"17":"detected"}.
+    decimal amount there still counts. Unquoted, a cell such as {"17":"detected"}
+    reads as the JSON it is, and the separator keeps one cell from excusing the next.
     """
     rows = list(csv.reader(io.StringIO(text)))
     if not rows:
@@ -108,7 +124,7 @@ def csv_without_ids(text):
         cells += [
             "" if index in ids and re.fullmatch(r"\[?[\d,\s]*\]?", cell) else cell for index, cell in enumerate(row)
         ]
-    return "\n".join(cells)
+    return CELL_SEPARATOR.join(cells)
 
 
 def leaks(body, forbidden):
@@ -119,11 +135,12 @@ def leaks(body, forbidden):
     on across tests, so a shared row the requester may see can land on a canary's
     value (#709), and a UUID, token or timestamp can contain the digits.
     """
+    spans = _json_id_spans(body)
     return [
         needle
         for needle in forbidden
         if (
-            any(not _in_id_position(body, match) for match in _whole_numbers(needle, body))
+            any(not _in_id_position(body, match, spans) for match in _whole_numbers(needle, body))
             if needle.isdigit()
             else needle in body
         )
