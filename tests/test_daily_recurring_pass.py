@@ -10,6 +10,7 @@ from django.utils import timezone
 
 from finance.alert_services import DailyAlertPassIncomplete, run_daily_alert_pass, settings_for
 from finance.models import Account, Alert, Person, RecurringSeries, Transaction
+from finance.months import add_months
 from finance.recurring_review import missed_charge
 from finance.recurring_services import confirm_recurring_series, refresh_recurring_series
 from finance.weekly_digest import build_weekly_digest
@@ -193,10 +194,20 @@ def test_email_notice_includes_recurring_alerts_from_the_pass(settings, django_c
 def test_new_series_from_the_daily_refresh_reaches_the_weekly_digest():
     owner = make_person("owner")
     make_household(owner)
-    add_monthly_charges(owner, make_account(owner), description="Synthetic New Stream", count=3)
+    account = make_account(owner)
+    today = timezone.localdate()
+    # Three monthly charges ending this month: a subscription that just started.
+    started = add_months(today, -2)
+    add_monthly_charges(owner, account, description="Synthetic New Stream", count=3, start=started)
+    # The same shape a year earlier: history an import brings in, spotted today too (#698).
+    add_monthly_charges(owner, account, description="Synthetic Old Stream", count=3, start=add_months(today, -14))
     assert not Person.objects.get(pk=owner.pk).recurring_inputs_signature
 
     run_daily_alert_pass()
 
-    digest = build_weekly_digest(owner, today=timezone.localdate(), week="current")
+    assert RecurringSeries.objects.filter(
+        person=owner, display_name="Synthetic Old Stream", status=RecurringSeries.Status.SUGGESTED
+    ).exists()
+    digest = build_weekly_digest(owner, today=today, week="current")
     assert [item.title for item in digest.new_series] == ["Synthetic New Stream"]
+    assert digest.new_series[0].on == started
