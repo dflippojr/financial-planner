@@ -1,7 +1,22 @@
 """The privacy sweeps' matcher: ids never trip it, every amount form does (#709)."""
 import pytest
+from django.http import HttpResponse
+from django.urls import reverse
 
-from tests.privacy_world import CANARY, CANARY_MINORS, FORBIDDEN, GOAL_MINOR, UNCATEGORIZED_MINOR, leaks, money_forms
+from finance.export import write_export_zip
+from tests.privacy_world import (
+    CANARY,
+    CANARY_MINORS,
+    FORBIDDEN,
+    GOAL_MINOR,
+    UNCATEGORIZED_MINOR,
+    build_report_world,
+    ids_starting_at,
+    leaks,
+    money_forms,
+    signed_in,
+)
+from tests.test_route_access_sweep import PRIVATE_FORBIDDEN, _client as fresh_client, _leaks as route_leaks, _text as route_text
 
 
 MINOR = str(UNCATEGORIZED_MINOR)
@@ -75,3 +90,29 @@ def test_every_decimal_form_and_the_name_still_match_anywhere():
 def test_every_canary_has_all_three_forms_in_forbidden():
     for minor in CANARY_MINORS:
         assert set(money_forms(int(minor))) <= set(FORBIDDEN)
+
+
+def _exports(person):
+    archive = HttpResponse(write_export_zip(person), content_type="application/zip")
+    transactions = fresh_client(person).post(reverse("transaction-export"))
+    assert transactions.status_code == 200
+    return archive, transactions
+
+
+@pytest.mark.parametrize("minor", CANARY_MINORS)
+def test_the_members_exports_name_ids_equal_to_a_canary_amount_without_a_leak(db, minor):
+    """The data export's JSON and CSV and the transaction CSV carry ids in their own keys and columns."""
+    with ids_starting_at(int(minor)):
+        world = build_report_world()
+        exports = _exports(world.member)
+    for response in exports:
+        assert minor in route_text(response), f"the export holds no id {minor}, so this proves nothing"
+        assert route_leaks(response, PRIVATE_FORBIDDEN) == []
+
+
+def test_the_owners_exports_still_trip_the_sweep_when_ids_share_the_amount(db):
+    with ids_starting_at(UNCATEGORIZED_MINOR):
+        world = build_report_world()
+        exports = _exports(world.owner)
+    for response in exports:
+        assert str(UNCATEGORIZED_MINOR) in route_leaks(response, PRIVATE_FORBIDDEN)
