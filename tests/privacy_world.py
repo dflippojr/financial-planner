@@ -1,21 +1,13 @@
 """Synthetic households and canaries shared by the privacy sweeps (#481, #551).
 
 The owner's private rows carry CANARY in their names and distinctive amounts;
-FORBIDDEN lists every form a leaked amount can take on a page, and leaks()
-finds them in a response body.
+FORBIDDEN lists every form a leaked amount can take on a page.
 """
-import csv
-import io
-import re
-import zipfile
-from contextlib import contextmanager
 from datetime import timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
-from django.apps import apps
 from django.contrib.auth import get_user_model
-from django.db import connection, models
 from django.test import Client
 from django.utils import timezone
 
@@ -38,12 +30,14 @@ from finance.models import (
 
 PASSWORD = "Synthetic-passphrase-42!"
 CANARY = "SYN-CANARY"
-PRIVATE_CHARGE_MINOR = 888_888
+# Canary amounts have nine digits, far above any primary key a test run reaches, so an
+# id rendered on a page can never equal one (#709).
+PRIVATE_CHARGE_MINOR = 881_726_354
 SHARED_CHARGE_MINOR = 1_100
-UNCATEGORIZED_MINOR = 77_777
-CARD_BALANCE_MINOR = 432_109
-PLANNED_MINOR = 654_321
-GOAL_MINOR = 9_876_543
+UNCATEGORIZED_MINOR = 773_916_258
+CARD_BALANCE_MINOR = 432_109_876
+PLANNED_MINOR = 654_321_987
+GOAL_MINOR = 987_654_321
 
 
 def money_forms(minor):
@@ -54,153 +48,13 @@ def money_forms(minor):
 FORBIDDEN = (
     CANARY,
     *money_forms(PRIVATE_CHARGE_MINOR),
-    # The owner's groceries total, shared and private charges together.
+    # The owner's groceries total: the private and shared charges together.
     *money_forms(PRIVATE_CHARGE_MINOR + SHARED_CHARGE_MINOR),
     *money_forms(UNCATEGORIZED_MINOR),
     *money_forms(CARD_BALANCE_MINOR),
     *money_forms(PLANNED_MINOR),
     *money_forms(GOAL_MINOR),
 )
-# Each canary's bare minor string, the form an object id can take too.
-CANARY_MINORS = tuple(needle for needle in FORBIDDEN if needle.isdigit())
-
-# Where an id renders and an amount never does. Each rule needs its context right
-# next to the number, so text further away (or in another CSV cell) never excuses one.
-# HTML: a path segment of a URL that opens a quoted string or a CSV cell
-# ("/accounts/17/", "https://host/accounts/17/"), the value attribute of an <option>
-# or an <input>, or the end of an element id in an attribute that names an element
-# (id="rename-17", for=, aria-controls= and the other id-reference aria attributes,
-# data-open-dialog=, href="#txn-17"). aria-label is text, so it still counts.
-_URL_PATH = re.compile(r"[\"'\x1f](?:https?://[^\"'\s<>/\x1f]+)?/[^\"'\s<>\x1f]*/\Z")
-# The export's receipt path, receipts/17/receipt.png, opening a quoted string or cell.
-_RECEIPT_PATH = re.compile(r"[\"'\x1f]receipts/\Z")
-# Text that names an id: "#17" (the audit log's "member #17", "receipt #17") and a
-# key that names one, "transaction_id=17" (audit metadata).
-_NAMED_ID = re.compile(r"(?<![&\w])#\Z|(?<![\w-])\w*_id=\Z")
-_ID_TAG = re.compile(r"<(?:option|input)\b[^<>]*\svalue=[\"']?\Z", re.IGNORECASE)
-_ELEMENT_ID = re.compile(
-    r"\s(?:id|for|aria-(?:controls|labelledby|describedby|owns)|data-open-dialog|data-[\w-]*-(?:id|target))=[\"'][A-Za-z_][\w-]*-\Z"
-    r"|\shref=[\"']#[A-Za-z_][\w-]*-\Z"
-)
-# A query value: after "?" that follows a URL character or a quote, after "&", "&amp;"
-# or "\u0026" that follows the previous value, or first in a query string held in
-# data-page-query or a page_query/filter_query input. And Django's invalid-choice
-# message, which echoes the id a request named. No URL in the app carries an amount.
-_ECHOED_ID = re.compile(
-    r"(?:[\"'/\w.-]\?|[\w%.:+-](?:&|&amp;|\\u0026))[\w-]+=\Z"
-    r"|(?:\sdata-page-query=|\sname=[\"'](?:page|filter)_query[\"'][^<>]*\svalue=)[\"'][\w-]+=\Z"
-    r"|Select a valid choice\. [\w:-]*\Z"
-)
-# JSON: the value of a key that names an id ("id": 17, "source_transaction_id": "TX-17",
-# "pk"), a whole list under an "_ids" key however long, or an object key
-# ({"17": "detected"}). Names and decimal amounts inside a quoted id still count.
-_JSON_IDS = re.compile(
-    r'"(?:\w*_)?(?:id|pk)"[ \t\r\n]*:[ \t\r\n]*(\d+|"[^"\\]*")'
-    r'|"\w*_ids"[ \t\r\n]*:[ \t\r\n]*(\[[\d, \t\r\n]*\])'
-    r'|"(\d+)"[ \t\r\n]*:'
-)
-# CSV cells are joined by the unit separator, and leaks() reads each cell on its own.
-CELL_SEPARATOR = "\x1f"
-
-
-def _whole_numbers(needle, body):
-    # Not part of a longer number, word or decimal; a leading minus still counts.
-    return re.finditer(rf"(?<![\w.]){needle}(?!\w)(?!\.\d)", body)
-
-
-def _json_id_spans(body):
-    return [
-        match.span(group)
-        for match in _JSON_IDS.finditer(body)
-        for group in (1, 2, 3)
-        if match.group(group) is not None
-    ]
-
-
-def _in_id_position(body, match, spans):
-    start = match.start()
-    before = body[max(start - 512, 0) : start]
-    if _URL_PATH.search(before) or _ELEMENT_ID.search(before) or _ECHOED_ID.search(before):
-        return True
-    if _RECEIPT_PATH.search(before) and body[match.end() : match.end() + 1] == "/":
-        return True
-    if _NAMED_ID.search(before):
-        return True
-    if _ID_TAG.search(body[max(body.rfind("<", 0, start), 0) : start]):
-        return True
-    return any(low <= start < high for low, high in spans)
-
-
-def _is_id_column(name):
-    return name in ("id", "pk") or name.endswith(("_id", "_ids"))
-
-
-def csv_without_ids(text):
-    """The CSV's cells, unquoted and joined by CELL_SEPARATOR, without the bare ids in its id columns.
-
-    An id column (id, account_id, member_transaction_ids) loses a cell that holds
-    only numbers, such as 17 or [17,18]; any other text in it stays, so a name or
-    decimal amount there still counts. Unquoted, a cell such as {"17":"detected"}
-    reads as the JSON it is, and the separator keeps one cell from excusing the next.
-    """
-    rows = list(csv.reader(io.StringIO(text)))
-    if not rows:
-        return text
-    ids = {index for index, name in enumerate(rows[0]) if _is_id_column(name.strip())}
-    cells = list(rows[0])
-    for row in rows[1:]:
-        cells += [
-            "" if index in ids and re.fullmatch(r"\[?[\d,\s]*\]?", cell) else cell for index, cell in enumerate(row)
-        ]
-    return CELL_SEPARATOR.join(cells)
-
-
-def leaks(body, forbidden):
-    """The forbidden needles in body.
-
-    Names and decimal amounts match anywhere. A bare minor amount such as 77777
-    matches only as a whole number outside an id position: on PostgreSQL ids run
-    on across tests, so a shared row the requester may see can land on a canary's
-    value (#709), and a UUID, token or timestamp can contain the digits.
-    """
-    # Each CSV cell is read on its own, so no rule can reach into a neighbouring cell.
-    # The leading separator marks where the cell starts.
-    cells = [CELL_SEPARATOR + cell for cell in body.split(CELL_SEPARATOR)]
-    return [needle for needle in forbidden if any(_cell_leaks(cell, needle) for cell in cells)]
-
-
-def _cell_leaks(cell, needle):
-    if not needle.isdigit():
-        return needle in cell
-    spans = _json_id_spans(cell)
-    return any(not _in_id_position(cell, match, spans) for match in _whole_numbers(needle, cell))
-
-
-@contextmanager
-def ids_starting_at(value):
-    """Give the next row of every table the id `value`, as a long PostgreSQL run eventually can."""
-    tables = [model._meta.db_table for model in apps.get_models() if isinstance(model._meta.pk, models.AutoField)]
-    with connection.cursor() as cursor:
-        if connection.vendor == "postgresql":
-            # Sequences ignore the test transaction, so put them back afterwards.
-            saved = {}
-            for table in tables:
-                cursor.execute("SELECT pg_get_serial_sequence(%s, 'id')", [table])
-                (sequence,) = cursor.fetchone()
-                cursor.execute(f"SELECT last_value, is_called FROM {sequence}")  # noqa: S608 - name from the catalog
-                saved[sequence] = cursor.fetchone()
-                cursor.execute("SELECT setval(%s, %s, false)", [sequence, value])
-        else:
-            for table in tables:
-                cursor.execute("DELETE FROM sqlite_sequence WHERE name = %s", [table])
-                cursor.execute("INSERT INTO sqlite_sequence (name, seq) VALUES (%s, %s)", [table, value - 1])
-    try:
-        yield
-    finally:
-        if connection.vendor == "postgresql":
-            with connection.cursor() as cursor:
-                for sequence, (last_value, is_called) in saved.items():
-                    cursor.execute("SELECT setval(%s, %s, %s)", [sequence, last_value, is_called])
 
 
 def make_person(username):
@@ -239,18 +93,9 @@ def signed_in(person):
 
 
 def body_text(response):
-    """What a sweep reads: the page, every file of a zip, and a CSV without its id columns."""
-    content_type = response.get("Content-Type", "")
-    if content_type.startswith("application/zip"):
-        archive = zipfile.ZipFile(io.BytesIO(response.content))
-        return "\n".join(_file_text(name, archive.read(name)) for name in archive.namelist())
-    raw = b"".join(response.streaming_content) if response.streaming else response.content
-    return _file_text("response.csv" if content_type.startswith("text/csv") else "", raw)
-
-
-def _file_text(name, raw):
-    text = raw.decode("utf-8", "replace")
-    return csv_without_ids(text) if name.endswith(".csv") else text
+    if response.streaming:
+        return b"".join(response.streaming_content).decode("utf-8")
+    return response.content.decode("utf-8")
 
 
 def build_report_world():

@@ -19,9 +19,11 @@ body.
 A new route needs an entry here; test_every_route_is_classified_once fails
 until it has one.
 """
+import io
 import re
 import uuid
 from urllib.parse import urlparse
+import zipfile
 from dataclasses import dataclass, field
 from datetime import timedelta
 from types import SimpleNamespace
@@ -89,7 +91,6 @@ from tests.privacy_world import (
     FORBIDDEN,
     body_text,
     build_report_world,
-    leaks,
     make_person,
     money_forms,
     seed_transaction,
@@ -98,11 +99,11 @@ from tests.privacy_world import (
 
 
 HOUSEHOLD_CANARY = "SYN-HOUSEHOLD"
-SNAPSHOT_MINOR = 246_813
-MANUAL_MINOR = 135_791
-SHARED_MINOR = 271_828
-BUDGET_MINOR = 314_159
-SPLIT_MINOR = 123_457
+SNAPSHOT_MINOR = 246_813_579
+MANUAL_MINOR = 135_792_468
+SHARED_MINOR = 271_828_182
+BUDGET_MINOR = 314_159_265
+SPLIT_MINOR = 123_457_689
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR" + b"\x00" * 24
 
 # The member must see none of the owner's private canaries; the outsider must
@@ -1445,8 +1446,21 @@ def _changes(before, after):
     return [name for name in before if before[name] != after[name]]
 
 
+def _text(response):
+    if response.get("Content-Type", "").startswith("application/zip"):
+        archive = zipfile.ZipFile(io.BytesIO(response.content))
+        return "\n".join(archive.read(name).decode("utf-8", "replace") for name in archive.namelist())
+    return body_text(response)
+
+
 def _leaks(response, forbidden):
-    return leaks(body_text(response), forbidden)
+    body = _text(response)
+    # A bare minor amount such as 7777 can turn up inside a UUID or a timestamp, so it leaks only as a whole number.
+    return [
+        needle
+        for needle in forbidden
+        if (re.search(rf"(?<!\w){needle}(?!\w)", body) if needle.isdigit() else needle in body)
+    ]
 
 
 def _assert_denied(requester, url, data, forbidden):
@@ -1741,7 +1755,7 @@ def test_owner_sees_the_canary_on_the_baseline_page(world, name):
     query = _baseline(world, route)
     response = _client(world.owner).get(reverse(name, kwargs=route.kwargs[0]), query)
     assert response.status_code == 200, f"{name} {query} answered {response.status_code}"
-    assert CANARY in body_text(response), f"the owner does not see the canary on {name} {query}"
+    assert CANARY in _text(response), f"the owner does not see the canary on {name} {query}"
 
 
 @pytest.mark.parametrize("name", [name for name, route in PAGE_ROUTES.items() if route.owner_post])

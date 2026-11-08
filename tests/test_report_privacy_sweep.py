@@ -17,7 +17,6 @@ from finance.year_end import CSV_SECTIONS
 from tests.page_payload import json_script_payload
 from tests.privacy_world import (
     CANARY,
-    CANARY_MINORS,
     FORBIDDEN,
     PRIVATE_CHARGE_MINOR,
     SHARED_CHARGE_MINOR,
@@ -25,8 +24,6 @@ from tests.privacy_world import (
     body_text,
     signed_in,
     build_report_world,
-    ids_starting_at,
-    leaks,
 )
 
 
@@ -68,38 +65,12 @@ def _fetch(client, url, params):
     return body_text(response)
 
 
-def _leaked(body):
-    return leaks(body, FORBIDDEN)
-
-
 def test_member_never_sees_another_members_private_data_on_any_report(world):
     client = signed_in(world.member)
     for url, params in _sweep_urls(client, world):
         body = _fetch(client, url, params)
-        leaked = _leaked(body)
+        leaked = [needle for needle in FORBIDDEN if needle in body]
         assert not leaked, f"{url} {params} leaked {leaked}"
-
-
-@pytest.mark.parametrize("minor", CANARY_MINORS)
-def test_an_id_equal_to_a_canary_amount_is_not_a_leak(db, minor):
-    """On PostgreSQL ids run on across tests, so a shared row the member may see can land on a canary's value (#709)."""
-    with ids_starting_at(int(minor)):
-        world = build_report_world()
-        client = signed_in(world.member)
-        pages = [(url, params, _fetch(client, url, params)) for url, params in _sweep_urls(client, world)]
-    assert any(minor in body for _url, _params, body in pages), f"no page renders an id {minor}, so this proves nothing"
-    for url, params, body in pages:
-        leaked = _leaked(body)
-        assert not leaked, f"{url} {params} leaked {leaked}"
-
-
-def test_a_rendered_canary_amount_still_trips_the_sweep_when_ids_share_its_value(db):
-    """The control for the test above: the owner's page renders the amount itself, and the sweep catches it."""
-    with ids_starting_at(UNCATEGORIZED_MINOR):
-        world = build_report_world()
-        body = _fetch(signed_in(world.owner), reverse("spending-category-uncategorized"), {})
-    assert world.private.pk == UNCATEGORIZED_MINOR or world.shared.pk == UNCATEGORIZED_MINOR
-    assert str(UNCATEGORIZED_MINOR) in _leaked(body)
 
 
 def test_owner_sees_the_canaries_on_the_same_pages(world):
