@@ -144,6 +144,8 @@ def test_a_neighbouring_csv_cell_cannot_excuse_an_amount():
         for description in ('{"account_id":', '{"member_sources": {"', "/", '<input value="', "rename-"):
             text = _csv(("description", "amount_minor"), (description, minor))
             assert leaks(csv_without_ids(text), FORBIDDEN) == [minor], description
+        text = _csv(("description", "amount_minor", "note"), ('{"account_id": "', minor, '"}'))
+        assert leaks(csv_without_ids(text), FORBIDDEN) == [minor]
 
 
 def test_every_decimal_form_and_the_name_still_match_anywhere():
