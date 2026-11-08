@@ -44,6 +44,13 @@ ID_POSITIONS = [
     '{{"member_transaction_ids": [\n      1,\n      {n}\n    ]}}',
     '{{"member_transaction_ids": [{n}, 2]}}',
     '{{"member_sources": {{"{n}": "detected", "2": "manual"}}}}',
+    '<a href="/planning/goals/?fund_item={n}#add-goal">Fund</a>',
+    '<a href="/transactions/?date_from=2026-10-01&amp;tag={n}">Tagged</a>',
+    '{{"drilldown_url": "/transactions/?date_from=2026-10-01\\u0026tag={n}"}}',
+    '<input type="hidden" name="page_query" value="c={n}">',
+    '<div data-page-route="/settings/audit/" data-page-query="actor={n}"></div>',
+    '<p class="errorlist" role="alert">Select a valid choice. {n} is not one of the available choices.</p>',
+    '<p class="errorlist" role="alert">Select a valid choice. saved:{n} is not one of the available choices.</p>',
 ]
 
 # Digits that only contain a canary's value.
@@ -66,6 +73,9 @@ AMOUNT_RENDERS = [
     '<option value="2">{n}</option>',
     "date,amount\n2026-10-15,-{n},USD\n",
     'data-amount="{n}"',
+    '<input value="2" data-value="{n}">',
+    '<option value="2" data-value="{n}">Two</option>',
+    '<p>Spent x={n}</p>',
     '{{"id": 1, "amount_minor": -{n}}}',
     '{{"account_id": 1, "typical_amount_minor": {n}}}',
     "Spent {n} this month.",
