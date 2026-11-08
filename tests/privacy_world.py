@@ -86,7 +86,7 @@ _JSON_IDS = re.compile(
     r'|"\w*_ids"[ \t\r\n]*:[ \t\r\n]*(\[[\d, \t\r\n]*\])'
     r'|"(\d+)"[ \t\r\n]*:'
 )
-# CSV cells are joined by the unit separator, which no rule above can span.
+# CSV cells are joined by the unit separator, and leaks() reads each cell on its own.
 CELL_SEPARATOR = "\x1f"
 
 
@@ -146,16 +146,17 @@ def leaks(body, forbidden):
     on across tests, so a shared row the requester may see can land on a canary's
     value (#709), and a UUID, token or timestamp can contain the digits.
     """
-    spans = _json_id_spans(body)
-    return [
-        needle
-        for needle in forbidden
-        if (
-            any(not _in_id_position(body, match, spans) for match in _whole_numbers(needle, body))
-            if needle.isdigit()
-            else needle in body
-        )
-    ]
+    # Each CSV cell is read on its own, so no rule can reach into a neighbouring cell.
+    # The leading separator marks where the cell starts.
+    cells = [CELL_SEPARATOR + cell for cell in body.split(CELL_SEPARATOR)]
+    return [needle for needle in forbidden if any(_cell_leaks(cell, needle) for cell in cells)]
+
+
+def _cell_leaks(cell, needle):
+    if not needle.isdigit():
+        return needle in cell
+    spans = _json_id_spans(cell)
+    return any(not _in_id_position(cell, match, spans) for match in _whole_numbers(needle, cell))
 
 
 @contextmanager
