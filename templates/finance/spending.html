@@ -10,17 +10,15 @@
 {% blocktranslate asvar range_helper %}Amounts in USD.{% endblocktranslate %}
 {% endif %}
 {% if active_tab == "trends" %}
-{% include "finance/_page_header.html" with title="Spending by category" helper=range_helper actions="finance/_range_filters.html" keep_tab="trends" %}
+{% include "finance/_page_header.html" with title="Spending by category" helper=range_helper more_note=investment_more_note actions="finance/_range_filters.html" keep_tab="trends" %}
 {% else %}
-{% include "finance/_page_header.html" with title="Spending by category" helper=range_helper actions="finance/_range_filters.html" %}
+{% include "finance/_page_header.html" with title="Spending by category" helper=range_helper more_note=investment_more_note actions="finance/_range_filters.html" %}
 {% endif %}
 <nav aria-label="Spending views" class="tabs tabs-border mb-4">
   <a class="tab{% if active_tab != 'trends' %} tab-active{% endif %}" href="{{ overview_url }}"{% if active_tab != 'trends' %} aria-current="page"{% endif %}>Overview</a>
   <a class="tab{% if active_tab == 'trends' %} tab-active{% endif %}" href="{{ trends_url }}"{% if active_tab == 'trends' %} aria-current="page"{% endif %}>Trends</a>
 </nav>
-{% if report and report.includes_investment %}
-<div role="note" class="alert alert-info mb-4">{{ report.investment_notice }}</div>
-{% endif %}
+{% include "finance/_investment_notice.html" %}
 {% if report and not report.has_visible_transactions %}
 <div role="status" class="alert mb-4">
   <span>
