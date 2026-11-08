@@ -5,7 +5,7 @@ from django.db.models import F
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
-from django.views.decorators.http import require_http_methods, require_POST
+from django.views.decorators.http import require_http_methods
 
 from .access import request_person as _person
 from .access import service_or_404 as _service_or_404
@@ -14,6 +14,7 @@ from .category_services import current_household
 from .forms import SavingsGoalForm
 from .fund_services import monthly_set_asides, visible_fund_accounts
 from .models import PlannedItem, SavingsGoal
+from .post_only import post_only
 from .savings_goal_services import (
     goal_progress,
     save_savings_goal,
@@ -118,7 +119,7 @@ def savings_goal_edit(request, goal_id):
     )
 
 
-@require_POST
+@post_only("savings-goals")
 @never_cache
 def savings_goal_complete(request, goal_id):
     goal = _visible_goal(request.user, goal_id)
@@ -126,7 +127,7 @@ def savings_goal_complete(request, goal_id):
     return redirect("savings-goals")
 
 
-@require_POST
+@post_only("savings-goals")
 @never_cache
 def savings_goal_reopen(request, goal_id):
     goal = _visible_goal(request.user, goal_id)
@@ -134,7 +135,7 @@ def savings_goal_reopen(request, goal_id):
     return redirect("savings-goals")
 
 
-@require_POST
+@post_only("savings-goals")
 @never_cache
 def savings_goal_archive(request, goal_id):
     goal = _visible_goal(request.user, goal_id)
@@ -142,7 +143,7 @@ def savings_goal_archive(request, goal_id):
     return redirect("savings-goals")
 
 
-@require_POST
+@post_only("savings-goals")
 @never_cache
 def savings_goal_unarchive(request, goal_id):
     goal = _visible_goal(request.user, goal_id)

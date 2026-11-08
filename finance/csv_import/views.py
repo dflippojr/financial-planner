@@ -7,9 +7,10 @@ from django.db.models import OuterRef, Subquery
 from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.cache import never_cache
-from django.views.decorators.http import require_http_methods, require_POST
+from django.views.decorators.http import require_http_methods
 
 from finance.models import Account, AccountLink, ImportBatch
+from finance.post_only import post_only
 
 from .forms import (
     OfxImportForm,
@@ -583,7 +584,7 @@ def csv_preview(request, account_id):
 
 
 @never_cache
-@require_POST
+@post_only("csv-import-preview", "account_id")
 def csv_undo_import(request, account_id, batch_id):
     account = _visible_account(request, account_id)
     try:

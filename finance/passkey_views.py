@@ -30,6 +30,7 @@ from .passkey_services import (
     registration_options_json,
     set_require_passkey_after_password,
 )
+from .post_only import post_only
 from .reauth import (
     recent_auth_is_fresh,
     requires_recent_auth,
@@ -59,7 +60,7 @@ def _json_error(message, *, status=400, extra=None):
     return JsonResponse(payload, status=status)
 
 
-@require_POST
+@post_only("account-settings")
 @never_cache
 def passkey_register_options(request):
     if not recent_auth_is_fresh(request):
@@ -67,7 +68,7 @@ def passkey_register_options(request):
     return JsonResponse({"ok": True, "options": json.loads(registration_options_json(request, _person(request, related=True)))})
 
 
-@require_POST
+@post_only("account-settings")
 @never_cache
 def passkey_register(request):
     if not recent_auth_is_fresh(request):
@@ -87,7 +88,7 @@ def passkey_register(request):
     return JsonResponse({"ok": True, "id": passkey.pk, "name": passkey.name})
 
 
-@require_POST
+@post_only("account-settings")
 @never_cache
 @requires_recent_auth("remove-passkey", form_url_name="account-settings")
 def passkey_delete(request, passkey_id):
@@ -96,7 +97,7 @@ def passkey_delete(request, passkey_id):
     return redirect("account-settings")
 
 
-@require_POST
+@post_only("account-settings")
 @never_cache
 @requires_recent_auth("require-passkey", form_url_name="account-settings")
 def passkey_require(request):
@@ -188,7 +189,7 @@ def passkey_sign_in_assert(request):
     return JsonResponse({"ok": True, "redirect": safe_next_url(request, next_url)})
 
 
-@require_POST
+@post_only("home")
 @never_cache
 def passkey_reauth_options(request):
     person = _person(request, related=True)
@@ -200,7 +201,7 @@ def passkey_reauth_options(request):
     return JsonResponse({"ok": True, "options": json.loads(authentication_options_json(request, person))})
 
 
-@require_POST
+@post_only("home")
 @never_cache
 def passkey_reauth_assert(request):
     person = _person(request, related=True)

@@ -7,7 +7,7 @@ from django.http import Http404, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.cache import never_cache
-from django.views.decorators.http import require_http_methods, require_POST
+from django.views.decorators.http import require_http_methods
 
 from . import account_sort
 from .access import request_person as _person
@@ -33,6 +33,7 @@ from .lifecycle_services import (
     share_account,
     unshare_account,
 )
+from .post_only import post_only
 from .reauth import requires_recent_auth
 from .models import Account, BalanceSnapshot, ImportBatch, Person, Transaction
 from .net_worth import signed_balance_minor, source_rank_expression
@@ -134,7 +135,7 @@ _SORT_RETURN = {
 }
 
 
-@require_POST
+@post_only("account-list")
 @never_cache
 def account_sort_save(request):
     """Save how the signed-in member sorts one page's account list, then reload that page (#655)."""
@@ -170,7 +171,7 @@ def _create_account(person, form):
         return create_account(person, name=name, account_type=account_type)
 
 
-@require_POST
+@post_only("account-list")
 @never_cache
 def account_rename(request, account_id):
     _active_visible_account(request.user, account_id)
@@ -182,7 +183,7 @@ def account_rename(request, account_id):
     return redirect("account-list")
 
 
-@require_POST
+@post_only("account-list")
 @never_cache
 @requires_recent_auth("share-account", form_url_name="account-list")
 def account_share(request, account_id):
@@ -195,7 +196,7 @@ def account_share(request, account_id):
     return redirect("account-list")
 
 
-@require_POST
+@post_only("account-list")
 @never_cache
 @requires_recent_auth("change-share-mode", form_url_name="account-list")
 def account_change_share_mode(request, account_id):
@@ -216,7 +217,7 @@ def account_change_share_mode(request, account_id):
     return redirect("account-list")
 
 
-@require_POST
+@post_only("account-list")
 @never_cache
 @requires_recent_auth("unshare-account", form_url_name="account-list")
 def account_unshare(request, account_id):
@@ -225,7 +226,7 @@ def account_unshare(request, account_id):
     return redirect("account-list")
 
 
-@require_POST
+@post_only("account-list")
 @never_cache
 def account_archive(request, account_id):
     _active_visible_account(request.user, account_id)

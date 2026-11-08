@@ -103,12 +103,6 @@
  },
  {
   "file": "finance/ai_tools.py",
-  "rule": "reportAttributeAccessIssue",
-  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Transaction]\"",
-  "count": 1
- },
- {
-  "file": "finance/ai_tools.py",
   "rule": "reportOptionalMemberAccess",
   "message": "\"isoformat\" is not a known attribute of \"None\"",
   "count": 2
@@ -2025,18 +2019,6 @@
   "file": "finance/views.py",
   "rule": "reportAttributeAccessIssue",
   "message": "\"login_not_required\" is unknown import symbol",
-  "count": 1
- },
- {
-  "file": "finance/views.py",
-  "rule": "reportAttributeAccessIssue",
-  "message": "Cannot access attribute \"leg_a_id\" for class \"TransferPair\"",
-  "count": 1
- },
- {
-  "file": "finance/views.py",
-  "rule": "reportAttributeAccessIssue",
-  "message": "Cannot access attribute \"leg_b_id\" for class \"TransferPair\"",
   "count": 1
  },
  {

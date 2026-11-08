@@ -8,12 +8,13 @@ from django.http import Http404, JsonResponse
 from django.shortcuts import redirect, render
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
-from django.views.decorators.http import require_http_methods, require_POST
+from django.views.decorators.http import require_http_methods
 
 from .access import request_person as _person
 from .category_services import current_household
 from .forms import SimpleFinSetupForm
 from .models import Account, AccountLink, SimpleFinConnection
+from .post_only import post_only
 from .reauth import requires_recent_auth
 from .security_services import EVENT_TYPES, record_security_event
 from .simplefin_budget import (
@@ -289,7 +290,7 @@ def _flow_response(request, result):
     return JsonResponse(result)
 
 
-@require_POST
+@post_only("simplefin-connections")
 @never_cache
 def connections_flow_start(request):
     connection = _owned_connection(request)
@@ -301,7 +302,7 @@ def connections_flow_start(request):
     return JsonResponse(result)
 
 
-@require_POST
+@post_only("simplefin-connections")
 @never_cache
 def connections_flow_check(request):
     connection = _owned_connection(request)
@@ -311,7 +312,7 @@ def connections_flow_check(request):
         raise Http404 from exc
 
 
-@require_POST
+@post_only("simplefin-connections")
 @never_cache
 def connections_flow_cancel(request):
     connection = _owned_connection(request)
@@ -321,7 +322,7 @@ def connections_flow_cancel(request):
         raise Http404 from exc
 
 
-@require_POST
+@post_only("simplefin-connections")
 @never_cache
 def connections_sync(request):
     person = _person(request)
@@ -338,7 +339,7 @@ def connections_sync(request):
     return redirect("simplefin-connections")
 
 
-@require_POST
+@post_only("simplefin-connections")
 @never_cache
 @requires_recent_auth("disconnect-simplefin", form_url_name="simplefin-connections")
 def connections_disconnect(request):
