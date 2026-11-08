@@ -3,13 +3,14 @@ from django.core.exceptions import ValidationError
 from django.shortcuts import redirect, render
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
-from django.views.decorators.http import require_http_methods, require_POST
+from django.views.decorators.http import require_http_methods
 
 from .access import request_person as _person
 from .access import service_or_404 as _service_or_404
 from .csv_import.parser import CsvInputError
 from .csv_import.staging import KIND_GOAL_IMPORT, StageUnavailable, create_stage, delete_stage, load_stage
 from .forms import GoalImportForm, SavingsBufferForm
+from .post_only import post_only
 from .projection import DEFAULT_HORIZON, HORIZONS
 from .savings_goal_import import GoalFileError, commit_goal_import, preview_goal_import
 from .savings_goal_plan import SCOPES, build_funding_plan, set_savings_buffer
@@ -54,7 +55,7 @@ def savings_goal_plan(request):
     )
 
 
-@require_POST
+@post_only("savings-goal-plan")
 @never_cache
 def savings_goal_buffer(request):
     _person(request)

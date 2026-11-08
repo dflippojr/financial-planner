@@ -4,7 +4,7 @@ from django.core.exceptions import ValidationError
 from django.http import Http404
 from django.shortcuts import redirect, render
 from django.views.decorators.cache import never_cache
-from django.views.decorators.http import require_http_methods, require_POST
+from django.views.decorators.http import require_http_methods
 
 from .access import first_message as _first_message
 from .access import service_or_404 as _service_or_404
@@ -13,6 +13,7 @@ from .auto_note_views import note_undo_for, remember_note_undo
 from .category_services import current_household, ensure_household_categories
 from .forms import CategoryRuleForm
 from .models import CategoryRule, Person
+from .post_only import post_only
 from .rule_services import (
     apply_rule,
     apply_rule_note_to_existing,
@@ -111,7 +112,7 @@ def category_rule_list(request):
     )
 
 
-@require_POST
+@post_only("category-rule-list")
 @never_cache
 def category_rule_application_reverse(request, application_id):
     """Undo an application whose rule this person can no longer open."""

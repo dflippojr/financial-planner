@@ -4,7 +4,7 @@ from django.core.exceptions import ValidationError
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
-from django.views.decorators.http import require_http_methods, require_POST
+from django.views.decorators.http import require_http_methods
 
 from .access import request_person as _person
 from .access import service_or_404 as _service_or_404
@@ -12,6 +12,7 @@ from .access import visible_rows
 from .category_services import current_household
 from .forms import PlannedItemForm
 from .models import PlannedItem, SavingsGoal
+from .post_only import post_only
 from .savings_goal_services import goal_progress
 from .planning_services import save_planned_item, set_planned_item_enabled
 
@@ -111,7 +112,7 @@ def planned_item_edit(request, item_id):
     )
 
 
-@require_POST
+@post_only("planned-items")
 @never_cache
 def planned_item_disable(request, item_id):
     item = _visible_item(request.user, item_id)
@@ -119,7 +120,7 @@ def planned_item_disable(request, item_id):
     return redirect("planned-items")
 
 
-@require_POST
+@post_only("planned-items")
 @never_cache
 def planned_item_enable(request, item_id):
     item = _visible_item(request.user, item_id)

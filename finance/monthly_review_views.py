@@ -2,7 +2,7 @@ from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
-from django.views.decorators.http import require_GET, require_POST
+from django.views.decorators.http import require_GET
 
 from .access import request_person as _person
 from .monthly_review import (
@@ -15,6 +15,7 @@ from .monthly_review import (
 )
 from .monthly_review_ai import visible_phrasing
 from .months import add_months
+from .post_only import post_only
 from .unusual_spending_ai import visible_unusual_phrasing
 
 
@@ -56,7 +57,7 @@ def monthly_review(request):
     )
 
 
-@require_POST
+@post_only("monthly-review")
 @never_cache
 def monthly_review_regenerate(request):
     person = _person(request)

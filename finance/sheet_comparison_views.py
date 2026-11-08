@@ -5,7 +5,7 @@ from django.db import transaction
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.shortcuts import redirect, render
 from django.views.decorators.cache import never_cache
-from django.views.decorators.http import require_http_methods, require_POST
+from django.views.decorators.http import require_http_methods
 
 from .access import request_person as _person
 from .forms import (
@@ -23,6 +23,7 @@ from .csv_import.staging import (
     delete_stage,
     load_stage,
 )
+from .post_only import post_only
 from .sheet_comparison import (
     DEFAULT_TOLERANCE_MINOR,
     SESSION_KEY,
@@ -224,7 +225,7 @@ def _handle_post(request, person, pending, mapping_form):
     return redirect("sheet-comparison")
 
 
-@require_POST
+@post_only("sheet-comparison")
 @never_cache
 def sheet_comparison_delete(request):
     person = _person(request)

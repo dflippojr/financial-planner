@@ -264,7 +264,9 @@ def test_unknown_page_or_order_is_refused_and_saves_nothing(data):
 @pytest.mark.django_db
 def test_sort_save_takes_only_a_csrf_checked_post_from_a_signed_in_member():
     owner = _owner_with_books()
-    assert signed_in(owner).get(reverse("account-sort"), {"page": "accounts", "sort": "name_desc"}).status_code == 405
+    # A GET only returns to the accounts page (#705).
+    got = signed_in(owner).get(reverse("account-sort"), {"page": "accounts", "sort": "name_desc"})
+    assert got.status_code == 302 and got["Location"] == reverse("account-list")
     strict = Client(enforce_csrf_checks=True)
     strict.force_login(owner.user)
     assert strict.post(reverse("account-sort"), {"page": "accounts", "sort": "name_desc"}).status_code == 403
