@@ -48,6 +48,7 @@ ID_POSITIONS = [
     '{{"source_transaction_id": "SYN-{n}", "account_id": 3}}',
     '{{"drilldown_url": "/transactions/{n}/edit/"}}',
     '<a href="https://planner.example/accounts/{n}/">Account</a>',
+    '<a href="#txn-{n}">Jump</a><button aria-controls="panel-{n}">Open</button>',
     '<a href="/planning/goals/?fund_item={n}#add-goal">Fund</a>',
     '<a href="/transactions/?date_from=2026-10-01&amp;tag={n}">Tagged</a>',
     '{{"drilldown_url": "/transactions/?date_from=2026-10-01\\u0026tag={n}"}}',
@@ -81,6 +82,11 @@ AMOUNT_RENDERS = [
     '<option value="2" data-value="{n}">Two</option>',
     '<p>Spent x={n}</p>',
     "<td>Spent/{n}</td>",
+    '<p>Spent "amount_minor={n}"</p>',
+    "<p>Spent ?x={n}</p>",
+    "<p>Spent &amp;x={n}</p>",
+    '<span data-amount="USD-{n}"></span>',
+    '<input name="note" value="x={n}">',
     "<td>Spent-{n}</td>",
     '{{"note": "Spent/{n}"}}',
     '{{"id": 1, "amount_minor": -{n}}}',
@@ -144,6 +150,7 @@ def test_a_neighbouring_csv_cell_cannot_excuse_an_amount():
         for description in ('{"account_id":', '{"member_sources": {"', "/", '<input value="', "rename-"):
             text = _csv(("description", "amount_minor"), (description, minor))
             assert leaks(csv_without_ids(text), FORBIDDEN) == [minor], description
+        assert leaks(csv_without_ids(_csv(("description",), (f'Spent "amount_minor={minor}"',))), FORBIDDEN) == [minor]
         text = _csv(("description", "amount_minor", "note"), ('{"account_id": "', minor, '"}'))
         assert leaks(csv_without_ids(text), FORBIDDEN) == [minor]
 
