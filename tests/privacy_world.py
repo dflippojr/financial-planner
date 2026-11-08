@@ -66,19 +66,23 @@ CANARY_MINORS = tuple(needle for needle in FORBIDDEN if needle.isdigit())
 
 # Where an id renders and an amount never does. Each rule needs its context right
 # next to the number, so text further away (or in another CSV cell) never excuses one.
-# HTML: a URL path segment, the value attribute of an <option> or an <input>, or the
-# end of an element id such as rename-17.
+# HTML: a path segment of a URL that opens a quoted string or a CSV cell
+# ("/accounts/17/", "https://host/accounts/17/"), the value attribute of an <option>
+# or an <input>, or the end of an element id in an attribute (id="rename-17").
+_URL_PATH = re.compile(r"[\"'\x1f](?:https?://[^\"'\s<>/\x1f]+)?/[^\"'\s<>\x1f]*/\Z")
 _ID_TAG = re.compile(r"<(?:option|input)\b[^<>]*\svalue=[\"']?\Z", re.IGNORECASE)
+_ELEMENT_ID = re.compile(r"\s[\w:-]+=[\"'][A-Za-z_][\w-]*-\Z")
 # A query value, in a link or a query string held in an attribute or JSON
 # (?tag=17, &amp;tag=17, \u0026tag=17, page_query="c=17"), and Django's invalid-choice
 # message, which echoes the id a request named. No URL in the app carries an amount.
 _ECHOED_ID = re.compile(
     r"(?:\?|&|&amp;|\\u0026|[\"'])[\w-]+=\Z|Select a valid choice\. [\w:-]*\Z"
 )
-# JSON: the value of a key that names an id ("id", "account_id", "pk"), a whole list
-# under an "_ids" key however long, or an object key ({"17": "detected"}).
+# JSON: the value of a key that names an id ("id": 17, "source_transaction_id": "TX-17",
+# "pk"), a whole list under an "_ids" key however long, or an object key
+# ({"17": "detected"}). Names and decimal amounts inside a quoted id still count.
 _JSON_IDS = re.compile(
-    r'"(?:\w*_)?(?:id|pk)"[ \t\r\n]*:[ \t\r\n]*(\d+)'
+    r'"(?:\w*_)?(?:id|pk)"[ \t\r\n]*:[ \t\r\n]*(\d+|"[^"\\]*")'
     r'|"\w*_ids"[ \t\r\n]*:[ \t\r\n]*(\[[\d, \t\r\n]*\])'
     r'|"(\d+)"[ \t\r\n]*:'
 )
@@ -87,8 +91,8 @@ CELL_SEPARATOR = "\x1f"
 
 
 def _whole_numbers(needle, body):
-    # Not part of a longer number, word, decimal or slug; a leading minus still counts.
-    return re.finditer(rf"(?<![\w.])(?<!\w-){needle}(?!\w)(?!\.\d)", body)
+    # Not part of a longer number, word or decimal; a leading minus still counts.
+    return re.finditer(rf"(?<![\w.]){needle}(?!\w)(?!\.\d)", body)
 
 
 def _json_id_spans(body):
@@ -102,11 +106,10 @@ def _json_id_spans(body):
 
 def _in_id_position(body, match, spans):
     start = match.start()
-    if body[start - 1 : start] == "/":
+    before = body[max(start - 512, 0) : start]
+    if _URL_PATH.search(before) or _ELEMENT_ID.search(before) or _ECHOED_ID.search(before):
         return True
     if _ID_TAG.search(body[max(body.rfind("<", 0, start), 0) : start]):
-        return True
-    if _ECHOED_ID.search(body[max(start - 64, 0) : start]):
         return True
     return any(low <= start < high for low, high in spans)
 
