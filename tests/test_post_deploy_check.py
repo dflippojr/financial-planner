@@ -372,3 +372,23 @@ def test_stopped_recorder_fails_closed(tmp_path, monkeypatch):
         tmp_path, history_aged_out=True, event_log="recorded"
     )
     assert "FAIL containers:" in output
+
+
+def test_unrecorded_restart_one_second_later_fails_closed(tmp_path, monkeypatch):
+    original = subprocess.run
+
+    def restart(*args, **kwargs):
+        path = Path(kwargs["env"]["FAKE_DOCKER_STATE"])
+        state = json.loads(path.read_text())
+        app = state["containers"]["app-id"]
+        app["started"] += 1
+        state["events"].append({
+            "time": app["started"], "action": "start", "id": "app-id",
+        })
+        # Recorder stopped: leave deploy-events.log unchanged.
+        path.write_text(json.dumps(state))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", restart)
+    output = _run_check(tmp_path, history_aged_out=True, event_log="recorded")
+    assert "FAIL containers:" in output, output
