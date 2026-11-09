@@ -5,8 +5,9 @@ Read-only checks after a deploy: health, deployed SHA, restarts, new tracebacks 
 .DESCRIPTION
 Run from the checkout on the tower right after `docker compose up -d`, as
 docs/deployment.md describes. It only reads: an HTTP GET of /health/,
-`docker ps`, `docker inspect`, `docker logs`, `git rev-parse` and the backup
-status file. It never restarts, recreates or writes anything.
+`docker ps`, `docker inspect`, `docker events`, `docker logs`, `git rev-parse`,
+the backup status file and the event log named by -EventLog. It never
+restarts, recreates or writes anything.
 
 It prints one line per check and exits 1 with a one-line reason per failure,
 or 0 when every check passes. Output carries only states, counts, exception
@@ -14,8 +15,8 @@ types and SHAs; never a log line, an error message or an amount.
 
 .EXAMPLE
 $DeployStart = Get-Date
-# ... build and `up -d` ...
-.\ops\post-deploy-check.ps1 -ConfigPath $Config -Since $DeployStart
+# ... build, start the event recorder as docs/deployment.md does, `up -d` ...
+.\ops\post-deploy-check.ps1 -ConfigPath $Config -Since $DeployStart -EventLog $EventLog
 #>
 [CmdletBinding()]
 param(
@@ -36,6 +37,13 @@ param(
     # Defaults to BACKUP_DIR\health\status.
     [string]$StatusPath,
     [string]$Python = 'python',
+    # A `docker events` stream recorded from before `up -d`, one
+    # "<time in ns> <action> <container id>" line per create and start, as
+    # docs/deployment.md records it. Start counts come from it instead of
+    # Docker's bounded event history, which other containers' churn on a busy
+    # host can age past the deploy within minutes (#717). When given, a missing
+    # log, or one that does not reach a new container's creation, fails.
+    [string]$EventLog,
     # Only for a rollback to a release older than #537, whose images record
     # no SHA; confirm the checked-out revision with `git rev-parse HEAD`.
     [switch]$SkipRevision
@@ -55,6 +63,8 @@ $RevisionLabel = 'org.opencontainers.image.revision'
 $FirstStartSeconds = 60
 # How far apart Compose creates the containers of one deploy.
 $CreationSkewSeconds = 5
+# Both event sources print this; docs/deployment.md records it with the same format.
+$EventFormat = '{{.TimeNano}} {{.Action}} {{.Actor.ID}}'
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $Helper = Join-Path $RepoRoot 'scripts\prod_signals.py'
 $script:Failures = New-Object System.Collections.Generic.List[string]
@@ -120,6 +130,15 @@ function ConvertFrom-DockerTime($Value) {
         [Globalization.DateTimeStyles]::AdjustToUniversal)
 }
 
+function ConvertTo-UnixNanoseconds([string]$Value) {
+    # Exact to the nanosecond Docker writes, so a start event's time can be
+    # compared with StartedAt without any tolerance.
+    if ($Value -notmatch '^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?(Z|[+-]\d\d:\d\d)$') { return $null }
+    $whole = [DateTimeOffset]::Parse($Matches[1] + $Matches[3], [Globalization.CultureInfo]::InvariantCulture)
+    $fraction = if ($Matches[2]) { [decimal]$Matches[2].PadRight(9, '0') } else { [decimal]0 }
+    return ([decimal]$whole.ToUnixTimeSeconds()) * 1000000000 + $fraction
+}
+
 function Get-ServiceContainers([string]$Service) {
     $ids = Invoke-Native 'docker' @('ps', '-a', '-q', '--no-trunc',
         '--filter', "label=com.docker.compose.project=$ProjectName",
@@ -132,7 +151,14 @@ function Get-ServiceContainers([string]$Service) {
         if (-not $id) { continue }
         $inspect = Invoke-Native 'docker' @('inspect', $id)
         if ($inspect.ExitCode -ne 0) { continue }
-        $info = @(($inspect.Output -join "`n") | ConvertFrom-Json)[0]
+        $raw = $inspect.Output -join "`n"
+        $info = @($raw | ConvertFrom-Json)[0]
+        # Read StartedAt from the raw JSON: ConvertFrom-Json can turn it into a
+        # DateTime, which drops digits past the seventh.
+        $startedNs = $null
+        if ($raw -match '"StartedAt"\s*:\s*"([^"]*)"') { $startedNs = ConvertTo-UnixNanoseconds $Matches[1] }
+        $finishedAt = $null
+        if ($raw -match '"FinishedAt"\s*:\s*"([^"]*)"') { $finishedAt = $Matches[1] }
         $revision = $null
         if ($info.Config.Labels -and $info.Config.Labels.PSObject.Properties[$RevisionLabel]) {
             $revision = $info.Config.Labels.$RevisionLabel
@@ -145,6 +171,8 @@ function Get-ServiceContainers([string]$Service) {
             RestartCount = [int]$info.RestartCount
             StartedAt    = $info.State.StartedAt
             Started      = ConvertFrom-DockerTime $info.State.StartedAt
+            StartedNs    = $startedNs
+            FinishedAt   = $finishedAt
             Created      = ConvertFrom-DockerTime $info.Created
             Revision     = $revision
         }
@@ -276,32 +304,126 @@ function ConvertTo-UnixTime([datetime]$Utc) {
     return $seconds.ToString('0.000', [Globalization.CultureInfo]::InvariantCulture)
 }
 
+function Read-EventLog([string]$Path) {
+    # Returns the log's lines, or $null when it cannot be read. The recorder
+    # still has the file open for writing, so share it rather than lock it.
+    try {
+        if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+        $full = (Resolve-Path -LiteralPath $Path).ProviderPath
+        $stream = [IO.File]::Open($full, [IO.FileMode]::Open, [IO.FileAccess]::Read,
+            [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+        try {
+            $text = (New-Object IO.StreamReader($stream)).ReadToEnd()
+        } finally {
+            $stream.Dispose()
+        }
+    } catch {
+        return $null
+    }
+    return , @($text -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+}
+
+function ConvertFrom-EventLine([string]$Line) {
+    if ($Line -notmatch '^(\d{1,19}) (create|start) (\S+)$') { return $null }
+    return [pscustomobject]@{
+        # Nanoseconds since the Unix epoch, as {{.TimeNano}} prints them.
+        Time   = [decimal]$Matches[1]
+        Action = $Matches[2]
+        Id     = $Matches[3]
+    }
+}
+
 function Test-StartCounts($Snapshot, [datetime]$DeployStart, [datetime]$Until) {
     # A restart between the deploy and the first snapshot leaves no trace in
-    # inspect when it was manual (RestartCount counts only Docker's own), so
-    # count each new container's start events since its creation instead.
+    # inspect when it was manual (RestartCount counts only Docker's own), and
+    # background's first start can come minutes after its creation while it
+    # waits for app, so StartedAt cannot tell a restart from a late first
+    # start. Count each new container's start events since its creation instead.
     $deployUtc = $DeployStart.ToUniversalTime()
     $new = @($Services | ForEach-Object { $Snapshot[$_] } | Where-Object { $_.Created -and $_.Created -ge $deployUtc })
     if ($new.Count -eq 0) { return }
-    $from = ($new | ForEach-Object { $_.Created } | Sort-Object | Select-Object -First 1).AddSeconds(-1)
-    $events = Invoke-Native 'docker' @('events', '--since', (ConvertTo-UnixTime $from), '--until', (ConvertTo-UnixTime $Until),
-        '--filter', 'type=container', '--filter', "label=com.docker.compose.project=$ProjectName",
-        '--filter', 'event=create', '--filter', 'event=start', '--format', '{{.Action}} {{.Actor.ID}}')
-    if ($events.ExitCode -ne 0) {
-        Add-Failure 'containers: cannot read docker events to count starts since the deploy'
-        return
+    # Docker sets FinishedAt whenever a container stops or restarts and never
+    # clears it on a start (moby daemon/container/state.go: SetStopped,
+    # SetRestarting, setRunning), so a running new container with one set has
+    # stopped and started again since its creation. This needs neither event
+    # source nor the daemon's clock.
+    $startedAgain = @{}
+    foreach ($container in @($new | Where-Object { $_.Status -eq 'running' })) {
+        if ($null -eq $container.FinishedAt) {
+            Add-Failure "containers: cannot read $($container.Service)'s FinishedAt to tell whether it stopped since the deploy"
+            $startedAgain[$container.Id] = $true
+        } elseif ($container.FinishedAt -notmatch '^0001-01-01T00:00:00(\.0+)?Z$') {
+            Add-Failure "containers: $($container.Service) stopped and started again since it was created (FinishedAt is set)"
+            $startedAgain[$container.Id] = $true
+        }
     }
-    $lines = @($events.Output | Where-Object { $_ })
+    if ($EventLog) {
+        # Recorded live from before `up -d`, so Docker's history rolling over
+        # cannot take events out of it. Use it alone: the same start in both
+        # sources would count twice.
+        $lines = Read-EventLog $EventLog
+        if ($null -eq $lines) {
+            Add-Failure 'containers: no event log at -EventLog to count starts since the deploy; record one from before up -d'
+            return
+        }
+        $source = 'the event log'
+    } else {
+        $from = ($new | ForEach-Object { $_.Created } | Sort-Object | Select-Object -First 1).AddSeconds(-1)
+        $events = Invoke-Native 'docker' @('events', '--since', (ConvertTo-UnixTime $from), '--until', (ConvertTo-UnixTime $Until),
+            '--filter', 'type=container', '--filter', "label=com.docker.compose.project=$ProjectName",
+            '--filter', 'event=create', '--filter', 'event=start', '--format', $EventFormat)
+        if ($events.ExitCode -ne 0) {
+            Add-Failure 'containers: cannot read docker events to count starts since the deploy'
+            return
+        }
+        $lines = @($events.Output | Where-Object { $_ })
+        $source = 'docker events'
+    }
+    $parsed = @()
+    foreach ($line in $lines) {
+        $entry = ConvertFrom-EventLine $line
+        if ($null -eq $entry) {
+            Add-Failure "containers: $source has a line that is not '<time in ns> <action> <container id>'; record it with the format in docs/deployment.md"
+            return
+        }
+        $parsed += $entry
+    }
     foreach ($container in $new) {
-        # Docker keeps a bounded event history; seeing the create event proves
-        # every later event for this container is still there.
-        if (-not ($lines -contains "create $($container.Id)")) {
-            Add-Failure "containers: Docker's event history no longer reaches the $($container.Service) deploy; run the check right after up -d"
+        $service = $container.Service
+        $mine = @($parsed | Where-Object { $_.Id -eq $container.Id })
+        # Seeing the create event proves the source reaches back far enough:
+        # Docker's history loses its oldest events first, and the log was
+        # being recorded before the container existed. Matching the last start
+        # to StartedAt below proves it also reaches forward to the latest start.
+        if (-not ($mine | Where-Object { $_.Action -eq 'create' })) {
+            if ($EventLog) {
+                Add-Failure "containers: the event log does not reach the $service deploy; start the recorder before up -d"
+            } else {
+                Add-Failure "containers: Docker's event history no longer reaches the $service deploy; record the deploy's events and pass -EventLog, as docs/deployment.md does"
+            }
             continue
         }
-        $starts = @($lines | Where-Object { $_ -eq "start $($container.Id)" }).Count
+        $startTimes = @($mine | Where-Object { $_.Action -eq 'start' } | ForEach-Object { $_.Time } | Sort-Object)
+        $starts = $startTimes.Count
+        $hint = if ($EventLog) { '; keep the recorder running until the check ends' } else { '' }
         if ($starts -gt 1) {
-            Add-Failure "containers: $($container.Service) started $starts times between the deploy and the check"
+            Add-Failure "containers: $service started $starts times between the deploy and the check"
+        } elseif ($starts -eq 0) {
+            if ($container.Status -eq 'running') {
+                # It ran by the first snapshot, so a start is missing from the source.
+                Add-Failure "containers: $source has no start for $service, which is running$hint"
+            }
+        } elseif ($null -eq $container.StartedNs -or $startTimes[-1] -lt $container.StartedNs) {
+            # Docker sets StartedAt before it logs that start's event, while it
+            # holds the container's lock, and a later start needs that lock
+            # (moby daemon/start.go, containerStart). So the event of the
+            # container's latest start is never older than StartedAt, and a
+            # start the source missed, such as a manual restart after the
+            # recorder stopped, leaves the last recorded start older than it,
+            # however soon after the first start it came.
+            Add-Failure "containers: $source missed a start of ${service}: its last recorded start is older than StartedAt$hint"
+        } elseif (-not $startedAgain[$container.Id]) {
+            Write-Pass "containers: $service has one start in $source since the deploy"
         }
     }
 }

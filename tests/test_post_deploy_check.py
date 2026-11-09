@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.fake_docker import event_line
+
 ROOT = Path(__file__).parents[1]
 SCRIPT = ROOT / "ops" / "post-deploy-check.ps1"
 FAKE_DOCKER = Path(__file__).with_name("fake_docker.py")
@@ -58,7 +60,28 @@ def _health_url(revision):
 
 
 def _run_check(tmp_path, *, restart_on_inspect=None, expected_sha=None, image_sha=None, backup_created_early=0,
-               health_revision=None, config_check_sha=None, full_result=False):
+               health_revision=None, config_check_sha=None, full_result=False, history_aged_out=False,
+               event_log=None, unrecorded=(), restart_count=None, restart_after_recorder_stopped=None,
+               log_text=None, start_event_delay=0, restart_delay=5, app_start_event_ns_offset=None,
+               first_start_unrecorded=None):
+    """Run the check against fake Docker state.
+
+    history_aged_out: Docker's event history starts after the deploy's events.
+    event_log: None passes no -EventLog; "missing" names a file that does not
+    exist; "recorded" writes the deploy's create and start events to a file,
+    leaving out each (action, service) pair in unrecorded.
+    restart_count: RestartCount by service, 0 when not named.
+    restart_after_recorder_stopped: a service that was started again by hand
+    restart_delay seconds after its first start, which Docker's history holds
+    but the log does not.
+    log_text: the event log's exact contents, in place of the recorded events.
+    start_event_delay: seconds by which each start event follows StartedAt.
+    app_start_event_ns_offset: give app's StartedAt nine fractional digits and
+    log its start event this many nanoseconds after it (negative: before).
+    first_start_unrecorded: a service that stopped and was started again 1 s
+    after its first start, where the log missed the first start but holds the
+    second, as if the daemon had dropped that event.
+    """
     now = datetime.now(UTC).timestamp()
     deployed = now - 30
     containers = {"db-id": {"id": "db-id", "service": "db", "created": now - 86400, "started": now - 86400}}
@@ -69,10 +92,11 @@ def _run_check(tmp_path, *, restart_on_inspect=None, expected_sha=None, image_sh
         containers[cid] = {"id": cid, "service": service, "created": created, "started": created}
         if image_sha and service != "db":
             containers[cid]["labels"] = {"org.opencontainers.image.revision": image_sha}
-        events += [
-            {"time": created, "action": "create", "id": cid},
-            {"time": created, "action": "start", "id": cid},
-        ]
+        start = {"time": created + start_event_delay, "action": "start", "id": cid}
+        if service == "app" and app_start_event_ns_offset is not None:
+            containers[cid]["started_ns"] = int(created) * 10**9 + 123456789
+            start["time_ns"] = containers[cid]["started_ns"] + app_start_event_ns_offset
+        events += [{"time": created, "action": "create", "id": cid}, start]
     if config_check_sha:
         # The one-shot check ran once during the deploy and exited.
         containers["config-check-id"] = {"id": "config-check-id", "service": "config-check", "created": deployed,
@@ -80,8 +104,37 @@ def _run_check(tmp_path, *, restart_on_inspect=None, expected_sha=None, image_sh
                                          "labels": {"org.opencontainers.image.revision": config_check_sha}}
     if restart_on_inspect:
         containers[f"{restart_on_inspect}-id"]["restart_on_inspect"] = True
+    for service, count in (restart_count or {}).items():
+        containers[f"{service}-id"]["restart_count"] = count
+    if first_start_unrecorded:
+        container = containers[f"{first_start_unrecorded}-id"]
+        container["finished"] = container["started"] + 0.5
+        container["started"] += 1
+        unrecorded = [*unrecorded, ("start", first_start_unrecorded)]
+    if restart_after_recorder_stopped:
+        container = containers[f"{restart_after_recorder_stopped}-id"]
+        container["started"] += restart_delay
+        restart = {"time": container["started"], "action": "start", "id": container["id"]}
+    else:
+        restart = None
+    docker_state = {"containers": containers, "events": events}
+    if history_aged_out:
+        # Other containers' churn pushed the deploy out of Docker's bounded history.
+        docker_state["history_from"] = deployed + 1
+    log_path = tmp_path / "deploy-events.log"
+    if event_log == "recorded":
+        left_out = {(action, f"{service}-id") for action, service in unrecorded}
+        lines = [event_line(e) for e in events if (e["action"], e["id"]) not in left_out]
+        if first_start_unrecorded:
+            second = containers[f"{first_start_unrecorded}-id"]
+            lines.append(event_line({"time": second["started"], "action": "start", "id": second["id"]}))
+        log_path.write_text(log_text if log_text is not None else "".join(line + "\n" for line in lines),
+                            encoding="utf-8")
+        docker_state["event_log"] = str(log_path)
+    if restart:
+        events.append(restart)
     state = tmp_path / "docker-state.json"
-    state.write_text(json.dumps({"containers": containers, "events": events}), encoding="utf-8")
+    state.write_text(json.dumps(docker_state), encoding="utf-8")
     env = dict(os.environ)
     env["PATH"] = str(_fake_docker_bin(tmp_path)) + os.pathsep + env["PATH"]
     env["FAKE_DOCKER_STATE"] = str(state)
@@ -96,6 +149,7 @@ def _run_check(tmp_path, *, restart_on_inspect=None, expected_sha=None, image_sh
                 "-Python", "fp-no-such-python",
                 "-StableSeconds", "0",
                 *(["-ExpectedSha", expected_sha] if expected_sha is not None else ["-SkipRevision"]),
+                *(["-EventLog", str(log_path)] if event_log is not None else []),
             ],
             capture_output=True,
             text=True,
@@ -122,6 +176,64 @@ def test_restart_between_check_start_and_first_snapshot_fails(tmp_path):
     assert "ok   containers: app running" in output
     assert "FAIL containers: app started 2 times between the deploy and the check" in output
     assert "backup started" not in output
+
+
+def test_aged_out_history_without_an_event_log_cannot_count_starts(tmp_path):
+    # Without a recorded stream the check still relies on Docker's history,
+    # and fails closed once that no longer reaches the deploy.
+    output = _run_check(tmp_path, history_aged_out=True)
+
+    assert "FAIL containers: Docker's event history no longer reaches the app deploy" in output
+    assert "-EventLog" in output
+
+
+def test_event_log_counts_one_start_per_new_container_after_history_aged_out(tmp_path):
+    # #717: harness containers churned the tower's event history past the
+    # deploy within the 120 s wait, although each container started once.
+    output = _run_check(tmp_path, history_aged_out=True, event_log="recorded")
+
+    assert "event history" not in output
+    assert "FAIL containers" not in output
+    for service in ("app", "backup", "background"):
+        assert f"ok   containers: {service} has one start in the event log since the deploy" in output
+
+
+def test_event_log_shows_a_restart_before_the_first_snapshot(tmp_path):
+    output = _run_check(tmp_path, history_aged_out=True, event_log="recorded", restart_on_inspect="app")
+
+    assert "FAIL containers: app started 2 times between the deploy and the check" in output
+    assert "ok   containers: backup has one start" in output
+
+
+def test_restart_count_still_fails_with_an_event_log(tmp_path):
+    # Docker's restart policy restarted the container, which RestartCount shows
+    # even if the log missed it.
+    output = _run_check(tmp_path, history_aged_out=True, event_log="recorded", restart_count={"background": 2})
+
+    assert "FAIL containers: background restarted 2 time(s) since the deploy" in output
+
+
+def test_missing_event_log_fails_closed(tmp_path):
+    output = _run_check(tmp_path, event_log="missing")
+
+    assert "FAIL containers: no event log at -EventLog to count starts since the deploy" in output
+    assert "ok   containers: app has one start" not in output
+
+
+def test_event_log_started_after_up_fails_closed(tmp_path):
+    # The recorder missed app's creation, so it may have missed a restart too,
+    # even though Docker's history still holds everything.
+    output = _run_check(tmp_path, event_log="recorded", unrecorded=[("create", "app"), ("start", "app")])
+
+    assert "FAIL containers: the event log does not reach the app deploy; start the recorder before up -d" in output
+    assert "ok   containers: backup has one start" in output
+
+
+def test_event_log_with_no_start_for_a_running_container_fails_closed(tmp_path):
+    # The recorder stopped after app was created but before it started.
+    output = _run_check(tmp_path, event_log="recorded", unrecorded=[("start", "app")])
+
+    assert "FAIL containers: the event log has no start for app, which is running; keep the recorder running" in output
 
 
 FULL_SHA = "abc1234" + "0" * 33
@@ -217,3 +329,112 @@ def test_unknown_served_revision_still_reports_the_missing_git_sha(tmp_path):
     output = _run_check(tmp_path, expected_sha=FULL_SHA, image_sha=FULL_SHA, health_revision="unknown")
 
     assert "FAIL revision: the app image has no GIT_SHA" in output
+
+
+def test_restart_after_the_recorder_stopped_fails_closed(tmp_path):
+    # The log still holds one start, but StartedAt has moved past it, so the
+    # log does not reach the check and cannot prove app started once.
+    output = _run_check(tmp_path, history_aged_out=True, event_log="recorded", restart_after_recorder_stopped="app")
+
+    assert ("FAIL containers: the event log missed a start of app: its last recorded start is older than StartedAt; "
+            "keep the recorder running until the check ends") in output
+    assert "ok   containers: app has one start" not in output
+    assert "ok   containers: backup has one start in the event log since the deploy" in output
+
+
+def test_start_event_logged_after_started_at_still_counts_as_that_start(tmp_path):
+    # On a loaded host the daemon can emit the start event seconds after the
+    # start; a later event cannot mean a start went unrecorded.
+    output = _run_check(tmp_path, history_aged_out=True, event_log="recorded", start_event_delay=3)
+
+    assert "FAIL containers" not in output
+    assert "ok   containers: app has one start in the event log since the deploy" in output
+
+
+def test_restart_a_millisecond_after_the_recorder_stopped_fails_closed(tmp_path):
+    # No tolerance: however soon a missed restart comes, its StartedAt is
+    # later than the last start the log holds.
+    output = _run_check(tmp_path, history_aged_out=True, event_log="recorded", restart_after_recorder_stopped="app",
+                        restart_delay=0.001)
+
+    assert "FAIL containers: the event log missed a start of app" in output
+    assert "ok   containers: app has one start" not in output
+
+
+@pytest.mark.parametrize(("offset", "passes"), [(0, True), (1, True), (-1, False)])
+def test_start_event_is_compared_with_started_at_to_the_nanosecond(tmp_path, offset, passes):
+    # Docker writes StartedAt with up to nine fractional digits, past what a
+    # .NET DateTime holds, so one nanosecond must still decide it.
+    output = _run_check(tmp_path, history_aged_out=True, event_log="recorded", app_start_event_ns_offset=offset)
+
+    assert ("ok   containers: app has one start in the event log since the deploy" in output) is passes
+    assert ("FAIL containers: the event log missed a start of app" in output) is not passes
+
+
+def test_container_that_stopped_since_its_creation_fails_without_relying_on_the_log(tmp_path):
+    # The log has create and one start at StartedAt, so it looks complete,
+    # but FinishedAt shows the container stopped once, so it started twice.
+    output = _run_check(tmp_path, history_aged_out=True, event_log="recorded", first_start_unrecorded="app")
+
+    assert "FAIL containers: app stopped and started again since it was created (FinishedAt is set)" in output
+    assert "ok   containers: app has one start" not in output
+    assert "ok   containers: backup has one start in the event log since the deploy" in output
+
+
+def test_restart_after_the_recorder_stopped_is_counted_from_history_without_a_log(tmp_path):
+    output = _run_check(tmp_path, restart_after_recorder_stopped="app")
+
+    assert "FAIL containers: app started 2 times between the deploy and the check" in output
+
+
+def test_event_log_without_event_times_fails_closed(tmp_path):
+    # A log recorded with an older format cannot be matched to StartedAt.
+    output = _run_check(tmp_path, event_log="recorded", log_text="create app-id\nstart app-id\n")
+
+    assert ("FAIL containers: the event log has a line that is not '<time in ns> <action> <container id>'; "
+            "record it with the format in docs/deployment.md") in output
+    assert "has one start" not in output
+
+
+def test_stopped_recorder_fails_closed(tmp_path, monkeypatch):
+    original = subprocess.run
+
+    def run_with_unrecorded_restart(*args, **kwargs):
+        path = Path(kwargs["env"]["FAKE_DOCKER_STATE"])
+        state = json.loads(path.read_text())
+        app = state["containers"]["app-id"]
+        app["started"] += 5
+        state["events"].append({
+            "time": app["started"],
+            "action": "start",
+            "id": "app-id",
+        })
+        # Recorder stopped: leave deploy-events.log unchanged.
+        path.write_text(json.dumps(state))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", run_with_unrecorded_restart)
+    output = _run_check(
+        tmp_path, history_aged_out=True, event_log="recorded"
+    )
+    assert "FAIL containers:" in output
+
+
+def test_unrecorded_restart_one_second_later_fails_closed(tmp_path, monkeypatch):
+    original = subprocess.run
+
+    def restart(*args, **kwargs):
+        path = Path(kwargs["env"]["FAKE_DOCKER_STATE"])
+        state = json.loads(path.read_text())
+        app = state["containers"]["app-id"]
+        app["started"] += 1
+        state["events"].append({
+            "time": app["started"], "action": "start", "id": "app-id",
+        })
+        # Recorder stopped: leave deploy-events.log unchanged.
+        path.write_text(json.dumps(state))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", restart)
+    output = _run_check(tmp_path, history_aged_out=True, event_log="recorded")
+    assert "FAIL containers:" in output, output
