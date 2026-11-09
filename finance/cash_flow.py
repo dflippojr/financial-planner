@@ -4,7 +4,6 @@ from decimal import ROUND_HALF_UP, Decimal
 from types import SimpleNamespace
 from urllib.parse import urlencode
 
-from django.db.models import Min
 from django.urls import reverse
 from django.utils import timezone
 
@@ -251,34 +250,32 @@ def selected_accounts(principal, *, account=None, scope="", cash_flow_only=False
     return list(query)
 
 
-def _batches_by_account(principal, accounts):
+def _import_history(principal, accounts):
+    """Covering batches and the earliest batch start per account, from one query.
+
+    Only active statement batches cover a window: a hand-entered row covers one
+    day and does not show a statement was imported. The earliest start counts
+    every batch, undone or hand-entered too: it shows the account had history
+    from that date, so a later gap still gets flagged (#713).
+    """
     batches = (
         ImportBatch.objects.visible_to(principal)
-        .filter(status=ImportBatch.Status.ACTIVE, account__in=accounts)
-        # A hand-entered row covers one day; it does not show a statement was imported.
-        .exclude(source=ImportBatch.Source.MANUAL)
-        .only("account_id", "date_range_start", "date_range_end")
-    )
-    grouped = {account.pk: [] for account in accounts}
-    for batch in batches:
-        grouped[batch.account_id].append(batch)
-    return grouped
-
-
-def _first_import_dates(principal, accounts):
-    """Each account's earliest batch start, in one query for the whole account set.
-
-    Any batch counts here, undone or hand-entered too: it shows the account had
-    history from that date, so a later gap still gets flagged (#713).
-    """
-    return dict(
-        ImportBatch.objects.visible_to(principal)
         .filter(account__in=accounts)
-        .values("account_id")
-        .annotate(first=Min("date_range_start"))
-        .order_by()
-        .values_list("account_id", "first")
+        .only("account_id", "date_range_start", "date_range_end", "status", "source")
     )
+    covering = {account.pk: [] for account in accounts}
+    first_import = {}
+    for batch in batches:
+        earliest = first_import.get(batch.account_id)
+        if earliest is None or batch.date_range_start < earliest:
+            first_import[batch.account_id] = batch.date_range_start
+        if batch.status == ImportBatch.Status.ACTIVE and batch.source != ImportBatch.Source.MANUAL:
+            covering[batch.account_id].append(batch)
+    return covering, first_import
+
+
+def _batches_by_account(principal, accounts):
+    return _import_history(principal, accounts)[0]
 
 
 def _period_missing_accounts(window, accounts, batches_by_account, first_import_by_account=None):
@@ -550,8 +547,7 @@ def cash_flow_report(
     )
     # An archived account's batches are archived with it, so it can never show coverage.
     coverage_accounts = [item for item in accounts if item.status == Account.Status.ACTIVE]
-    batches_by_account = _batches_by_account(principal, coverage_accounts)
-    first_import_by_account = _first_import_dates(principal, coverage_accounts)
+    batches_by_account, first_import_by_account = _import_history(principal, coverage_accounts)
     account_filter = accounts
     periods = []
     windows = list(iter_period_windows(date_from, date_to, grouping))
