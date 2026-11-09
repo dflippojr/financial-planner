@@ -150,7 +150,7 @@ def _tree(text):
         return _sgml_tree(text[start:])
     try:
         # DOCTYPE and ENTITY declarations are refused above, and expat on the
-        # supported interpreters (3.13 and later) resists entity expansion, so
+        # supported interpreters (3.14 and later) resists entity expansion, so
         # defusedxml would add nothing here.
         root = ET.fromstring(text)  # noqa: S314
     except ET.ParseError:

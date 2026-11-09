@@ -23,7 +23,7 @@ select = ["F", "E9", "B", "UP", "S"]
 # git, docker, python and the like found on PATH.
 "{scripts,.claude/skills}/**" = ["S603", "S607"]
 # Backup scripts run on the backup image's or the operator's own python3, not
-# the app image, so they keep working on interpreters older than 3.13.
+# the app image, so they keep working on interpreters older than the app image's Python.
 "ops/**" = ["UP017"]
 # Benchmark seed scripts: asserts check the seed and randomness only spreads
 # synthetic data.
