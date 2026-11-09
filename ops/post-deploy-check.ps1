@@ -63,8 +63,10 @@ $RevisionLabel = 'org.opencontainers.image.revision'
 $FirstStartSeconds = 60
 # How far apart Compose creates the containers of one deploy.
 $CreationSkewSeconds = 5
-# How far a start event's time may be from the StartedAt that inspect reports
-# for the same start; both come from the daemon's clock.
+# How far before the StartedAt that inspect reports the last recorded start
+# event may be and still be the same start. Both come from the daemon's clock,
+# and the event follows the start, so only an event later than StartedAt is
+# usual; one earlier by more than this means a later start went unrecorded.
 $StartEventSkewSeconds = 2
 # Both event sources print this; docs/deployment.md records it with the same format.
 $EventFormat = '{{.TimeNano}} {{.Action}} {{.Actor.ID}}'
@@ -384,7 +386,7 @@ function Test-StartCounts($Snapshot, [datetime]$DeployStart, [datetime]$Until) {
                 Add-Failure "containers: $source has no start for $service, which is running$hint"
             }
         } elseif (-not $container.Started -or
-                  [Math]::Abs(($container.Started - $startTimes[-1]).TotalSeconds) -gt $StartEventSkewSeconds) {
+                  ($container.Started - $startTimes[-1]).TotalSeconds -gt $StartEventSkewSeconds) {
             # Every start moves StartedAt, so a start the source missed, such as
             # a manual restart after the recorder stopped, leaves StartedAt later
             # than the last start recorded.

@@ -62,7 +62,7 @@ def _health_url(revision):
 def _run_check(tmp_path, *, restart_on_inspect=None, expected_sha=None, image_sha=None, backup_created_early=0,
                health_revision=None, config_check_sha=None, full_result=False, history_aged_out=False,
                event_log=None, unrecorded=(), restart_count=None, restart_after_recorder_stopped=None,
-               log_text=None):
+               log_text=None, start_event_delay=0):
     """Run the check against fake Docker state.
 
     history_aged_out: Docker's event history starts after the deploy's events.
@@ -73,6 +73,7 @@ def _run_check(tmp_path, *, restart_on_inspect=None, expected_sha=None, image_sh
     restart_after_recorder_stopped: a service that was started again by hand
     5 s after its first start, which Docker's history holds but the log does not.
     log_text: the event log's exact contents, in place of the recorded events.
+    start_event_delay: seconds by which each start event follows StartedAt.
     """
     now = datetime.now(UTC).timestamp()
     deployed = now - 30
@@ -86,7 +87,7 @@ def _run_check(tmp_path, *, restart_on_inspect=None, expected_sha=None, image_sh
             containers[cid]["labels"] = {"org.opencontainers.image.revision": image_sha}
         events += [
             {"time": created, "action": "create", "id": cid},
-            {"time": created, "action": "start", "id": cid},
+            {"time": created + start_event_delay, "action": "start", "id": cid},
         ]
     if config_check_sha:
         # The one-shot check ran once during the deploy and exited.
@@ -323,6 +324,15 @@ def test_restart_after_the_recorder_stopped_fails_closed(tmp_path):
             "keep the recorder running until the check ends") in output
     assert "ok   containers: app has one start" not in output
     assert "ok   containers: backup has one start in the event log since the deploy" in output
+
+
+def test_start_event_logged_after_started_at_still_counts_as_that_start(tmp_path):
+    # On a loaded host the daemon can emit the start event seconds after the
+    # start; a later event cannot mean a start went unrecorded.
+    output = _run_check(tmp_path, history_aged_out=True, event_log="recorded", start_event_delay=3)
+
+    assert "FAIL containers" not in output
+    assert "ok   containers: app has one start in the event log since the deploy" in output
 
 
 def test_restart_after_the_recorder_stopped_is_counted_from_history_without_a_log(tmp_path):
