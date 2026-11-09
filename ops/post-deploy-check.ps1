@@ -5,8 +5,8 @@ Read-only checks after a deploy: health, deployed SHA, restarts, new tracebacks 
 .DESCRIPTION
 Run from the checkout on the tower right after `docker compose up -d`, as
 docs/deployment.md describes. It only reads: an HTTP GET of /health/,
-`docker ps`, `docker inspect`, `docker logs`, `git rev-parse` and the backup
-status file. It never restarts, recreates or writes anything.
+`docker ps`, `docker inspect`, `docker events`, `docker logs`, `git rev-parse`,
+the backup status file and the event log named by -EventLog. It never restarts, recreates or writes anything.
 
 It prints one line per check and exits 1 with a one-line reason per failure,
 or 0 when every check passes. Output carries only states, counts, exception
@@ -14,8 +14,8 @@ types and SHAs; never a log line, an error message or an amount.
 
 .EXAMPLE
 $DeployStart = Get-Date
-# ... build and `up -d` ...
-.\ops\post-deploy-check.ps1 -ConfigPath $Config -Since $DeployStart
+# ... build, start the event recorder as docs/deployment.md does, `up -d` ...
+.\ops\post-deploy-check.ps1 -ConfigPath $Config -Since $DeployStart -EventLog $EventLog
 #>
 [CmdletBinding()]
 param(
@@ -36,6 +36,13 @@ param(
     # Defaults to BACKUP_DIR\health\status.
     [string]$StatusPath,
     [string]$Python = 'python',
+    # A `docker events` stream recorded from before `up -d`, one
+    # "<action> <container id>" line per create and start, as
+    # docs/deployment.md records it. Start counts come from it instead of
+    # Docker's bounded event history, which other containers' churn on a busy
+    # host can age past the deploy within minutes (#717). When given, a missing
+    # log, or one that does not reach a new container's creation, fails.
+    [string]$EventLog,
     # Only for a rollback to a release older than #537, whose images record
     # no SHA; confirm the checked-out revision with `git rev-parse HEAD`.
     [switch]$SkipRevision
@@ -276,32 +283,78 @@ function ConvertTo-UnixTime([datetime]$Utc) {
     return $seconds.ToString('0.000', [Globalization.CultureInfo]::InvariantCulture)
 }
 
+function Read-EventLog([string]$Path) {
+    # Returns the log's lines, or $null when it cannot be read. The recorder
+    # still has the file open for writing, so share it rather than lock it.
+    try {
+        if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+        $full = (Resolve-Path -LiteralPath $Path).ProviderPath
+        $stream = [IO.File]::Open($full, [IO.FileMode]::Open, [IO.FileAccess]::Read,
+            [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+        try {
+            $text = (New-Object IO.StreamReader($stream)).ReadToEnd()
+        } finally {
+            $stream.Dispose()
+        }
+    } catch {
+        return $null
+    }
+    return , @($text -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+}
+
 function Test-StartCounts($Snapshot, [datetime]$DeployStart, [datetime]$Until) {
     # A restart between the deploy and the first snapshot leaves no trace in
-    # inspect when it was manual (RestartCount counts only Docker's own), so
-    # count each new container's start events since its creation instead.
+    # inspect when it was manual (RestartCount counts only Docker's own), and
+    # background's first start can come minutes after its creation while it
+    # waits for app, so StartedAt cannot tell a restart from a late first
+    # start. Count each new container's start events since its creation instead.
     $deployUtc = $DeployStart.ToUniversalTime()
     $new = @($Services | ForEach-Object { $Snapshot[$_] } | Where-Object { $_.Created -and $_.Created -ge $deployUtc })
     if ($new.Count -eq 0) { return }
-    $from = ($new | ForEach-Object { $_.Created } | Sort-Object | Select-Object -First 1).AddSeconds(-1)
-    $events = Invoke-Native 'docker' @('events', '--since', (ConvertTo-UnixTime $from), '--until', (ConvertTo-UnixTime $Until),
-        '--filter', 'type=container', '--filter', "label=com.docker.compose.project=$ProjectName",
-        '--filter', 'event=create', '--filter', 'event=start', '--format', '{{.Action}} {{.Actor.ID}}')
-    if ($events.ExitCode -ne 0) {
-        Add-Failure 'containers: cannot read docker events to count starts since the deploy'
-        return
+    if ($EventLog) {
+        # Recorded live from before `up -d`, so Docker's history rolling over
+        # cannot take events out of it. Use it alone: the same start in both
+        # sources would count twice.
+        $lines = Read-EventLog $EventLog
+        if ($null -eq $lines) {
+            Add-Failure 'containers: no event log at -EventLog to count starts since the deploy; record one from before up -d'
+            return
+        }
+        $source = 'the event log'
+    } else {
+        $from = ($new | ForEach-Object { $_.Created } | Sort-Object | Select-Object -First 1).AddSeconds(-1)
+        $events = Invoke-Native 'docker' @('events', '--since', (ConvertTo-UnixTime $from), '--until', (ConvertTo-UnixTime $Until),
+            '--filter', 'type=container', '--filter', "label=com.docker.compose.project=$ProjectName",
+            '--filter', 'event=create', '--filter', 'event=start', '--format', '{{.Action}} {{.Actor.ID}}')
+        if ($events.ExitCode -ne 0) {
+            Add-Failure 'containers: cannot read docker events to count starts since the deploy'
+            return
+        }
+        $lines = @($events.Output | Where-Object { $_ })
+        $source = 'docker events'
     }
-    $lines = @($events.Output | Where-Object { $_ })
     foreach ($container in $new) {
-        # Docker keeps a bounded event history; seeing the create event proves
-        # every later event for this container is still there.
+        $service = $container.Service
+        # Seeing the create event proves the source holds every later event
+        # for this container: Docker's history is bounded at its old end, and
+        # the log was being recorded before the container existed.
         if (-not ($lines -contains "create $($container.Id)")) {
-            Add-Failure "containers: Docker's event history no longer reaches the $($container.Service) deploy; run the check right after up -d"
+            if ($EventLog) {
+                Add-Failure "containers: the event log does not reach the $service deploy; start the recorder before up -d"
+            } else {
+                Add-Failure "containers: Docker's event history no longer reaches the $service deploy; record the deploy's events and pass -EventLog, as docs/deployment.md does"
+            }
             continue
         }
         $starts = @($lines | Where-Object { $_ -eq "start $($container.Id)" }).Count
         if ($starts -gt 1) {
-            Add-Failure "containers: $($container.Service) started $starts times between the deploy and the check"
+            Add-Failure "containers: $service started $starts times between the deploy and the check"
+        } elseif ($starts -eq 0 -and $container.Status -eq 'running') {
+            # It ran by the first snapshot, so a start is missing from the source.
+            $hint = if ($EventLog) { '; keep the recorder running until the check ends' } else { '' }
+            Add-Failure "containers: $source has no start for $service, which is running$hint"
+        } elseif ($starts -eq 1) {
+            Write-Pass "containers: $service has one start in $source since the deploy"
         }
     }
 }

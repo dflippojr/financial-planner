@@ -142,19 +142,25 @@ one line per reason, when:
 - `X-App-Revision`, or the revision label of any image built from this repository (including the one `config-check` last ran, which is `background`'s), is not `origin/main`;
 - any of the four containers is not running, or restarts during a 2 minute
   window, or has restarted since the deploy (by `RestartCount`, its start
-  time, and for a new container its `start` events in `docker events`, which
-  also catch a manual restart);
-- Docker's bounded event history no longer reaches a new container's creation,
-  so the check cannot count its starts; run it right after `up -d`;
+  time, and for a new container its `start` events, which also catch a manual
+  restart);
+- the evidence for those start counts is missing: with `-EventLog`, the
+  deploy-time event log is missing, does not reach a new container's creation,
+  or has no start for a running container; without it, Docker's bounded event
+  history no longer reaches a new container's creation, which other containers'
+  churn can cause within minutes on the tower (#717);
 - `/health/` stops returning 200 by the end of the window;
 - any container logged a traceback since the deploy started;
 - the backup status file is missing or in the `error` state (`stale` is only a
   warning; the nightly alert handles it).
 
 ```powershell
-.\ops\post-deploy-check.ps1 -ConfigPath $Config -Since $DeployStart
+.\ops\post-deploy-check.ps1 -ConfigPath $Config -Since $DeployStart -EventLog $EventLog
 ```
 
+`$EventLog` is a `docker events` stream of the project's container `create`
+and `start` events, recorded from before `up -d` as
+[Upgrades and migrations](deployment.md#upgrades-and-migrations) starts it.
 It reads `DJANGO_CSRF_TRUSTED_ORIGINS` (for the health URL) and `BACKUP_DIR`
 from the env file and nothing else. Pass `-HealthUrl`, `-StatusPath`,
 `-ExpectedSha`, `-ProjectName` or `-StableSeconds` to override a default.
