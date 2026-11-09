@@ -30,12 +30,14 @@ from finance.models import (
 
 PASSWORD = "Synthetic-passphrase-42!"
 CANARY = "SYN-CANARY"
-PRIVATE_CHARGE_MINOR = 888_888
+# Canary amounts have nine digits, far above any primary key a test run reaches, so an
+# id rendered on a page can never equal one (#709).
+PRIVATE_CHARGE_MINOR = 881_726_354
 SHARED_CHARGE_MINOR = 1_100
-UNCATEGORIZED_MINOR = 7_777
-CARD_BALANCE_MINOR = 432_109
-PLANNED_MINOR = 654_321
-GOAL_MINOR = 9_876_543
+UNCATEGORIZED_MINOR = 773_916_258
+CARD_BALANCE_MINOR = 432_109_876
+PLANNED_MINOR = 654_321_987
+GOAL_MINOR = 987_654_321
 
 
 def money_forms(minor):
@@ -46,7 +48,8 @@ def money_forms(minor):
 FORBIDDEN = (
     CANARY,
     *money_forms(PRIVATE_CHARGE_MINOR),
-    "8,899.88",
+    # The owner's groceries total: the private and shared charges together.
+    *money_forms(PRIVATE_CHARGE_MINOR + SHARED_CHARGE_MINOR),
     *money_forms(UNCATEGORIZED_MINOR),
     *money_forms(CARD_BALANCE_MINOR),
     *money_forms(PLANNED_MINOR),

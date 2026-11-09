@@ -99,11 +99,11 @@ from tests.privacy_world import (
 
 
 HOUSEHOLD_CANARY = "SYN-HOUSEHOLD"
-SNAPSHOT_MINOR = 246_813
-MANUAL_MINOR = 135_791
-SHARED_MINOR = 271_828
-BUDGET_MINOR = 314_159
-SPLIT_MINOR = 123_457
+SNAPSHOT_MINOR = 246_813_579
+MANUAL_MINOR = 135_792_468
+SHARED_MINOR = 271_828_182
+BUDGET_MINOR = 314_159_265
+SPLIT_MINOR = 123_457_689
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR" + b"\x00" * 24
 
 # The member must see none of the owner's private canaries; the outsider must
