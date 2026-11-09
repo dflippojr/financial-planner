@@ -18,7 +18,7 @@ format, "<time in ns> <action> <container id>".
 import json
 import os
 import sys
-from datetime import datetime, UTC
+from datetime import datetime, timedelta, UTC
 
 
 def _docker_time(seconds):
@@ -28,8 +28,23 @@ def _docker_time(seconds):
     return text + "Z"
 
 
+def _nanoseconds(seconds):
+    # The same instant _docker_time writes, so a start event at a container's
+    # "started" time is exactly its StartedAt, as the daemon's first event can be.
+    return (datetime.fromtimestamp(seconds, UTC) - datetime(1970, 1, 1, tzinfo=UTC)) // timedelta(microseconds=1) * 1000
+
+
+def started_at(container):
+    # "started_ns" gives StartedAt all nine fractional digits Docker can write.
+    if "started_ns" in container:
+        seconds, fraction = divmod(container["started_ns"], 10**9)
+        return datetime.fromtimestamp(seconds, UTC).strftime("%Y-%m-%dT%H:%M:%S") + f".{fraction:09d}Z"
+    return _docker_time(container["started"])
+
+
 def event_line(event):
-    return f"{round(event['time'] * 1e9)} {event['action']} {event['id']}"
+    nanoseconds = event["time_ns"] if "time_ns" in event else _nanoseconds(event["time"])
+    return f"{nanoseconds} {event['action']} {event['id']}"
 
 
 def _option_values(args, name):
@@ -61,7 +76,7 @@ def _inspect(state, args, path):
         "Name": "/" + container["service"],
         "Created": _docker_time(container["created"]),
         "RestartCount": container.get("restart_count", 0),
-        "State": {"Status": container.get("status", "running"), "StartedAt": _docker_time(container["started"])},
+        "State": {"Status": container.get("status", "running"), "StartedAt": started_at(container)},
         "Config": {"Labels": container.get("labels", {})},
     }]))
     return 0

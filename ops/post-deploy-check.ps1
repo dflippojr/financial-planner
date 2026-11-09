@@ -63,11 +63,6 @@ $RevisionLabel = 'org.opencontainers.image.revision'
 $FirstStartSeconds = 60
 # How far apart Compose creates the containers of one deploy.
 $CreationSkewSeconds = 5
-# How far before the StartedAt that inspect reports the last recorded start
-# event may be and still be the same start. Both come from the daemon's clock,
-# and the event follows the start, so only an event later than StartedAt is
-# usual; one earlier by more than this means a later start went unrecorded.
-$StartEventSkewSeconds = 2
 # Both event sources print this; docs/deployment.md records it with the same format.
 $EventFormat = '{{.TimeNano}} {{.Action}} {{.Actor.ID}}'
 $RepoRoot = Split-Path -Parent $PSScriptRoot
@@ -135,6 +130,15 @@ function ConvertFrom-DockerTime($Value) {
         [Globalization.DateTimeStyles]::AdjustToUniversal)
 }
 
+function ConvertTo-UnixNanoseconds([string]$Value) {
+    # Exact to the nanosecond Docker writes, so a start event's time can be
+    # compared with StartedAt without any tolerance.
+    if ($Value -notmatch '^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?(Z|[+-]\d\d:\d\d)$') { return $null }
+    $whole = [DateTimeOffset]::Parse($Matches[1] + $Matches[3], [Globalization.CultureInfo]::InvariantCulture)
+    $fraction = if ($Matches[2]) { [decimal]$Matches[2].PadRight(9, '0') } else { [decimal]0 }
+    return ([decimal]$whole.ToUnixTimeSeconds()) * 1000000000 + $fraction
+}
+
 function Get-ServiceContainers([string]$Service) {
     $ids = Invoke-Native 'docker' @('ps', '-a', '-q', '--no-trunc',
         '--filter', "label=com.docker.compose.project=$ProjectName",
@@ -147,7 +151,12 @@ function Get-ServiceContainers([string]$Service) {
         if (-not $id) { continue }
         $inspect = Invoke-Native 'docker' @('inspect', $id)
         if ($inspect.ExitCode -ne 0) { continue }
-        $info = @(($inspect.Output -join "`n") | ConvertFrom-Json)[0]
+        $raw = $inspect.Output -join "`n"
+        $info = @($raw | ConvertFrom-Json)[0]
+        # Read StartedAt from the raw JSON: ConvertFrom-Json can turn it into a
+        # DateTime, which drops digits past the seventh.
+        $startedNs = $null
+        if ($raw -match '"StartedAt"\s*:\s*"([^"]*)"') { $startedNs = ConvertTo-UnixNanoseconds $Matches[1] }
         $revision = $null
         if ($info.Config.Labels -and $info.Config.Labels.PSObject.Properties[$RevisionLabel]) {
             $revision = $info.Config.Labels.$RevisionLabel
@@ -160,6 +169,7 @@ function Get-ServiceContainers([string]$Service) {
             RestartCount = [int]$info.RestartCount
             StartedAt    = $info.State.StartedAt
             Started      = ConvertFrom-DockerTime $info.State.StartedAt
+            StartedNs    = $startedNs
             Created      = ConvertFrom-DockerTime $info.Created
             Revision     = $revision
         }
@@ -312,9 +322,9 @@ function Read-EventLog([string]$Path) {
 
 function ConvertFrom-EventLine([string]$Line) {
     if ($Line -notmatch '^(\d{1,19}) (create|start) (\S+)$') { return $null }
-    $milliseconds = [long]([decimal]$Matches[1] / 1000000)
     return [pscustomobject]@{
-        Time   = [DateTimeOffset]::FromUnixTimeMilliseconds($milliseconds).UtcDateTime
+        # Nanoseconds since the Unix epoch, as {{.TimeNano}} prints them.
+        Time   = [decimal]$Matches[1]
         Action = $Matches[2]
         Id     = $Matches[3]
     }
@@ -385,12 +395,15 @@ function Test-StartCounts($Snapshot, [datetime]$DeployStart, [datetime]$Until) {
                 # It ran by the first snapshot, so a start is missing from the source.
                 Add-Failure "containers: $source has no start for $service, which is running$hint"
             }
-        } elseif (-not $container.Started -or
-                  ($container.Started - $startTimes[-1]).TotalSeconds -gt $StartEventSkewSeconds) {
-            # Every start moves StartedAt, so a start the source missed, such as
-            # a manual restart after the recorder stopped, leaves StartedAt later
-            # than the last start recorded.
-            Add-Failure "containers: $source has no start for $service at its StartedAt, so it may have missed a restart$hint"
+        } elseif ($null -eq $container.StartedNs -or $startTimes[-1] -lt $container.StartedNs) {
+            # Docker sets StartedAt before it logs that start's event, while it
+            # holds the container's lock, and a later start needs that lock
+            # (moby daemon/start.go, containerStart). So the event of the
+            # container's latest start is never older than StartedAt, and a
+            # start the source missed, such as a manual restart after the
+            # recorder stopped, leaves the last recorded start older than it,
+            # however soon after the first start it came.
+            Add-Failure "containers: $source missed a start of ${service}: its last recorded start is older than StartedAt$hint"
         } else {
             Write-Pass "containers: $service has one start in $source since the deploy"
         }

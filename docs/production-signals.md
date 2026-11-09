@@ -147,8 +147,8 @@ one line per reason, when:
 - the evidence for those start counts is missing: with `-EventLog`, the
   deploy-time event log is missing, does not reach a new container's creation,
   has no start for a running container, or its last start for a container is
-  not the one `StartedAt` reports (the recorder stopped before a later
-  restart); without it, Docker's bounded event
+  older than `StartedAt` (the recorder stopped before a later restart, however
+  soon); without it, Docker's bounded event
   history no longer reaches a new container's creation, which other containers'
   churn can cause within minutes on the tower (#717);
 - `/health/` stops returning 200 by the end of the window;
