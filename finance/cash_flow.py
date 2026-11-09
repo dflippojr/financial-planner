@@ -250,28 +250,48 @@ def selected_accounts(principal, *, account=None, scope="", cash_flow_only=False
     return list(query)
 
 
-def _batches_by_account(principal, accounts):
+def _import_history(principal, accounts):
+    """Covering batches and the earliest batch start per account, from one query.
+
+    Only active statement batches cover a window: a hand-entered row covers one
+    day and does not show a statement was imported. The earliest start counts
+    every batch, undone or hand-entered too: it shows the account had history
+    from that date, so a later gap still gets flagged (#713).
+    """
     batches = (
         ImportBatch.objects.visible_to(principal)
-        .filter(status=ImportBatch.Status.ACTIVE, account__in=accounts)
-        # A hand-entered row covers one day; it does not show a statement was imported.
-        .exclude(source=ImportBatch.Source.MANUAL)
-        .only("account_id", "date_range_start", "date_range_end")
+        .filter(account__in=accounts)
+        .only("account_id", "date_range_start", "date_range_end", "status", "source")
     )
-    grouped = {account.pk: [] for account in accounts}
+    covering = {account.pk: [] for account in accounts}
+    first_import = {}
     for batch in batches:
-        grouped[batch.account_id].append(batch)
-    return grouped
+        earliest = first_import.get(batch.account_id)
+        if earliest is None or batch.date_range_start < earliest:
+            first_import[batch.account_id] = batch.date_range_start
+        if batch.status == ImportBatch.Status.ACTIVE and batch.source != ImportBatch.Source.MANUAL:
+            covering[batch.account_id].append(batch)
+    return covering, first_import
 
 
-def _period_missing_accounts(window, accounts, batches_by_account):
+def _batches_by_account(principal, accounts):
+    return _import_history(principal, accounts)[0]
+
+
+def _period_missing_accounts(window, accounts, batches_by_account, first_import_by_account=None):
     """Names of the selected accounts with no import covering any of the window, by name.
 
     Investment accounts are balance-only (no importer), so they never carry the flag.
+    A window that ends before an account's first import date is skipped: there was
+    nothing to import yet (#713). An account with no batch at all is flagged.
     """
+    first_import_by_account = first_import_by_account or {}
     missing = []
     for account in accounts:
         if account.account_type == Account.Type.INVESTMENT:
+            continue
+        first_import = first_import_by_account.get(account.pk)
+        if first_import is not None and window.end < first_import:
             continue
         covered = any(
             batch.date_range_start <= window.end and batch.date_range_end >= window.start
@@ -527,7 +547,7 @@ def cash_flow_report(
     )
     # An archived account's batches are archived with it, so it can never show coverage.
     coverage_accounts = [item for item in accounts if item.status == Account.Status.ACTIVE]
-    batches_by_account = _batches_by_account(principal, coverage_accounts)
+    batches_by_account, first_import_by_account = _import_history(principal, coverage_accounts)
     account_filter = accounts
     periods = []
     windows = list(iter_period_windows(date_from, date_to, grouping))
@@ -545,7 +565,9 @@ def cash_flow_report(
             spending_minor=spending_minor,
             net_minor=income_minor - spending_minor,
         )
-        missing_accounts = _period_missing_accounts(window, coverage_accounts, batches_by_account)
+        missing_accounts = _period_missing_accounts(
+            window, coverage_accounts, batches_by_account, first_import_by_account
+        )
         periods.append(
             SimpleNamespace(
                 start=window.start,

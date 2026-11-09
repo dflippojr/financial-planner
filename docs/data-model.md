@@ -98,7 +98,7 @@ The committed `synthetic_demo` fixture contains invented names, hashes, descript
 ## Cash flow over time
 
 - Period totals call `income_and_spending_totals` for each window so transfer (pairs and untracked-transfer marks, #642), refund, and investment rules are not re-derived. Optional account lists are intersected with `Account.objects.visible_to`.
-- Missing-import flags use active `ImportBatch` date ranges on those same visible selected accounts. A period is flagged when any selected account has no overlapping active batch; the flag is separate from the zero amounts.
+- Missing-import flags use active `ImportBatch` date ranges on those same visible selected accounts. A period is flagged when any selected account has no overlapping active batch, except that a period ending before the account's earliest batch `date_range_start` is not flagged for that account, since there was nothing to import yet. That earliest date counts every visible batch, undone and manual ones too, so undoing an import does not hide the gap it leaves. Gaps after the first import are still flagged, and an account with no batch is flagged for every period (#713). The flag is separate from the zero amounts.
 - Unverified `investment_activity` rows remain omitted from income and spending; the home view states that when an investment account is included in the selection.
 
 ## SimpleFIN Bridge (verified from https://www.simplefin.org/protocol.html, 2026-10-01)
