@@ -4,6 +4,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from types import SimpleNamespace
 from urllib.parse import urlencode
 
+from django.db.models import Min
 from django.urls import reverse
 from django.utils import timezone
 
@@ -264,14 +265,36 @@ def _batches_by_account(principal, accounts):
     return grouped
 
 
-def _period_missing_accounts(window, accounts, batches_by_account):
+def _first_import_dates(principal, accounts):
+    """Each account's earliest batch start, in one query for the whole account set.
+
+    Any batch counts here, undone or hand-entered too: it shows the account had
+    history from that date, so a later gap still gets flagged (#713).
+    """
+    return dict(
+        ImportBatch.objects.visible_to(principal)
+        .filter(account__in=accounts)
+        .values("account_id")
+        .annotate(first=Min("date_range_start"))
+        .order_by()
+        .values_list("account_id", "first")
+    )
+
+
+def _period_missing_accounts(window, accounts, batches_by_account, first_import_by_account=None):
     """Names of the selected accounts with no import covering any of the window, by name.
 
     Investment accounts are balance-only (no importer), so they never carry the flag.
+    A window that ends before an account's first import date is skipped: there was
+    nothing to import yet (#713). An account with no batch at all is flagged.
     """
+    first_import_by_account = first_import_by_account or {}
     missing = []
     for account in accounts:
         if account.account_type == Account.Type.INVESTMENT:
+            continue
+        first_import = first_import_by_account.get(account.pk)
+        if first_import is not None and window.end < first_import:
             continue
         covered = any(
             batch.date_range_start <= window.end and batch.date_range_end >= window.start
@@ -528,6 +551,7 @@ def cash_flow_report(
     # An archived account's batches are archived with it, so it can never show coverage.
     coverage_accounts = [item for item in accounts if item.status == Account.Status.ACTIVE]
     batches_by_account = _batches_by_account(principal, coverage_accounts)
+    first_import_by_account = _first_import_dates(principal, coverage_accounts)
     account_filter = accounts
     periods = []
     windows = list(iter_period_windows(date_from, date_to, grouping))
@@ -545,7 +569,9 @@ def cash_flow_report(
             spending_minor=spending_minor,
             net_minor=income_minor - spending_minor,
         )
-        missing_accounts = _period_missing_accounts(window, coverage_accounts, batches_by_account)
+        missing_accounts = _period_missing_accounts(
+            window, coverage_accounts, batches_by_account, first_import_by_account
+        )
         periods.append(
             SimpleNamespace(
                 start=window.start,
