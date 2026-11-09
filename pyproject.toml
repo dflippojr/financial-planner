@@ -2,8 +2,8 @@
 # Run both checkers with: bash scripts/lint.sh
 
 [tool.ruff]
-# The production image runs python:3.13-slim (Dockerfile).
-target-version = "py313"
+# The production image runs python:3.15-slim (Dockerfile).
+target-version = "py315"
 
 [tool.ruff.lint]
 # Pyflakes (undefined names, unused imports), syntax errors, bugbear,
@@ -32,4 +32,4 @@ select = ["F", "E9", "B", "UP", "S"]
 [tool.pyright]
 include = ["finance", "financial_planner"]
 typeCheckingMode = "basic"
-pythonVersion = "3.13"
+pythonVersion = "3.15"

@@ -66,7 +66,7 @@ class GoalRow:
     action: str = ACTION_CREATE
     existing: SavingsGoal | None = None
     changes: list = field(default_factory=list)
-    dependency: "GoalRow | None" = None
+    dependency: GoalRow | None = None
 
     @property
     def key(self):

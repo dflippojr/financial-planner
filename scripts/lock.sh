@@ -5,7 +5,7 @@
 #   requirements.lock       what the production image installs.
 #   requirements-test.lock  the same pins plus the test tools; CI installs it.
 #
-# Both are wheels only and cover every platform on Python 3.13. An existing pin
+# Both are wheels only and cover every platform on Python 3.15. An existing pin
 # stays unless its input moved, so a run after an unrelated PyPI release changes
 # nothing. To move a transitive pin, add --upgrade-package NAME to the compile
 # arguments for one run. Needs uv, which requirements-test.lock installs.
@@ -21,7 +21,7 @@ compile_lock() {
   local input="$1" output="$2"
   shift 2
   "$python_bin" -m uv pip compile "$input" "$@" --output-file "$output" \
-    --universal --python-version 3.13 --generate-hashes --only-binary :all: \
+    --universal --python-version 3.15 --generate-hashes --only-binary :all: \
     --custom-compile-command "bash scripts/lock.sh" --quiet
 }
 

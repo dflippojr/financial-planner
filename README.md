@@ -5,7 +5,7 @@ It imports bank and card data, de-duplicates and categorizes it, and turns it in
 net-worth, investment, and forward-looking planning views, while keeping each person's private
 accounts private inside a shared household.
 
-![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3.15-3776AB?logo=python&logoColor=white)
 ![Django](https://img.shields.io/badge/Django-5.2-092E20?logo=django&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-18-4169E1?logo=postgresql&logoColor=white)
 ![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-v4-06B6D4?logo=tailwindcss&logoColor=white)
@@ -302,7 +302,7 @@ flowchart LR
 
 ## Running locally
 
-Requirements: Python 3.13, and Docker for PostgreSQL tests or the full stack.
+Requirements: Python 3.15, and Docker for PostgreSQL tests or the full stack.
 
 ```console
 python -m pip install --require-hashes --only-binary :all: -r requirements-test.lock
