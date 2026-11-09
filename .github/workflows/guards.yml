@@ -25,7 +25,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.13"
+          python-version: "3.15"
       - run: python scripts/check_statement_files.py
 
   # On a pull request, actions/checkout checks out the merge commit
@@ -38,7 +38,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.13"
+          python-version: "3.15"
       - run: python scripts/check_migration_numbers.py
 
   pip-audit:
@@ -48,7 +48,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.13"
+          python-version: "3.15"
       - run: python -m pip install pip-audit
       # To ignore an advisory that has no fixed release, add
       # --ignore-vuln <ID> here with a dated justification comment.

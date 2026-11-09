@@ -43,7 +43,7 @@ class DisallowedAddress(OSError):
 
 def _public_address(value: str) -> bool:
     address = ipaddress.ip_address(value.split("%", 1)[0])
-    if address.version == 6 and address.ipv4_mapped is not None:
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
         address = address.ipv4_mapped
     return address.is_global and not address.is_multicast
 
