@@ -146,7 +146,9 @@ one line per reason, when:
   restart);
 - the evidence for those start counts is missing: with `-EventLog`, the
   deploy-time event log is missing, does not reach a new container's creation,
-  or has no start for a running container; without it, Docker's bounded event
+  has no start for a running container, or its last start for a container is
+  not the one `StartedAt` reports (the recorder stopped before a later
+  restart); without it, Docker's bounded event
   history no longer reaches a new container's creation, which other containers'
   churn can cause within minutes on the tower (#717);
 - `/health/` stops returning 200 by the end of the window;
@@ -159,7 +161,7 @@ one line per reason, when:
 ```
 
 `$EventLog` is a `docker events` stream of the project's container `create`
-and `start` events, recorded from before `up -d` as
+and `start` events with their times, recorded from before `up -d` as
 [Upgrades and migrations](deployment.md#upgrades-and-migrations) starts it.
 It reads `DJANGO_CSRF_TRUSTED_ORIGINS` (for the health URL) and `BACKUP_DIR`
 from the env file and nothing else. Pass `-HealthUrl`, `-StatusPath`,

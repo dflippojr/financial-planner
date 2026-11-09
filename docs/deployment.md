@@ -279,7 +279,7 @@ git pull --ff-only origin main
 $env:GIT_SHA = git rev-parse HEAD
 $DeployStart = Get-Date
 $EventLog = Join-Path $env:TEMP "financial-planner-events-$($DeployStart.ToString('yyyyMMddHHmmss')).log"
-$Recorder = Start-Process docker -NoNewWindow -PassThru -RedirectStandardOutput $EventLog -ArgumentList 'events --filter type=container --filter label=com.docker.compose.project=financial-planner --filter event=create --filter event=start --format "{{.Action}} {{.Actor.ID}}"'
+$Recorder = Start-Process docker -NoNewWindow -PassThru -RedirectStandardOutput $EventLog -ArgumentList 'events --filter type=container --filter label=com.docker.compose.project=financial-planner --filter event=create --filter event=start --format "{{.TimeNano}} {{.Action}} {{.Actor.ID}}"'
 docker compose --env-file $Config build --pull app backup background
 docker compose --env-file $Config up -d
 docker compose --env-file $Config ps
@@ -287,7 +287,7 @@ docker compose --env-file $Config ps
 Stop-Process -Id $Recorder.Id
 ```
 
-`$Recorder` records the deploy's container `create` and `start` events into `$EventLog` as they happen, which the check counts to prove each new container started once. Start it before `up -d` (the build gives it time to connect) and stop it only after the check exits. Docker's own event history is bounded, and other containers on the tower can push the deploy out of it within the check's two minutes (#717). Without `-EventLog` the check falls back to that history and fails when it no longer reaches the deploy. If the check reports that the event log is missing, does not reach a deploy or has no start for a running container, the recorder was not running for the whole deploy: stop it, then repeat the deploy with a fresh `$DeployStart` and recorder. The log holds only event names and container IDs.
+`$Recorder` records the deploy's container `create` and `start` events into `$EventLog` as they happen, which the check counts to prove each new container started once. Start it before `up -d` (the build gives it time to connect) and stop it only after the check exits. Docker's own event history is bounded, and other containers on the tower can push the deploy out of it within the check's two minutes (#717). Without `-EventLog` the check falls back to that history and fails when it no longer reaches the deploy. The check also requires each new container's last recorded start to match the `StartedAt` that `docker inspect` reports, so a recorder that stopped early cannot hide a later restart. If the check reports that the event log is missing, does not reach a deploy, has no start for a running container or has no start at its `StartedAt`, the recorder was not running for the whole deploy: stop it, then repeat the deploy with a fresh `$DeployStart` and recorder. The log holds only event times, event names and container IDs.
 
 Starting the new app applies all pending Django migrations before Gunicorn accepts traffic. `background` waits for the app to report healthy, so it never runs against a database that has not been migrated yet. The one-shot `config-check` runs `background`'s image (`financial-planner-background`), so building `background` is what updates it; there is no separate `config-check` image to build.
 

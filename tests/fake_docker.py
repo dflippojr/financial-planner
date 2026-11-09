@@ -9,8 +9,10 @@ and has a RestartCount of 0 unless it names a "restart_count".
 
 Docker keeps a bounded event history: with "history_from" set, `events`
 returns nothing older, as on a host whose other containers churn. With
-"event_log" set, every event also goes to that file in the format
-docs/deployment.md records it, as a recorder started before `up -d` writes it.
+"event_log" set, a restart on inspect is also appended to that file, as the
+recorder docs/deployment.md starts before `up -d` would write it; the test
+writes the deploy's own events there first. Events print in that recorder's
+format, "<time in ns> <action> <container id>".
 """
 
 import json
@@ -24,6 +26,10 @@ def _docker_time(seconds):
     # fractional digits, which PowerShell 7's ConvertFrom-Json reads as dates.
     text = datetime.fromtimestamp(seconds, UTC).strftime("%Y-%m-%dT%H:%M:%S.%f").rstrip("0").rstrip(".")
     return text + "Z"
+
+
+def event_line(event):
+    return f"{round(event['time'] * 1e9)} {event['action']} {event['id']}"
 
 
 def _option_values(args, name):
@@ -48,7 +54,7 @@ def _inspect(state, args, path):
         state["events"].append({"time": now, "action": "start", "id": container["id"]})
         if state.get("event_log"):
             with open(state["event_log"], "a", encoding="utf-8") as log:
-                log.write(f"start {container['id']}\n")
+                log.write(f"{event_line(state['events'][-1])}\n")
         with open(path, "w", encoding="utf-8") as handle:
             json.dump(state, handle)
     print(json.dumps([{
@@ -68,7 +74,7 @@ def _events(state, args):
     oldest = state.get("history_from", 0)
     for event in state["events"]:
         if max(since, oldest) <= event["time"] <= until and event["action"] in actions:
-            print(f"{event['action']} {event['id']}")
+            print(event_line(event))
 
 
 def main(args):
