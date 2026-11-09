@@ -12,7 +12,7 @@ from scripts import ui_instance as ui
 from scripts import windows_css_job as windows
 
 # scripts/ui_instance.py annotates failures with BaseException.add_note, new in Python 3.11.
-# The UI tooling is documented for Python 3.12+ (the project targets 3.15), so an older
+# The UI tooling is documented for Python 3.15 (the app needs 3.14+), so an older
 # interpreter, such as a stray 3.10 first on PATH, cannot run these tests.
 pytestmark = pytest.mark.skipif(
     sys.version_info < (3, 11),

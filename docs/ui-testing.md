@@ -4,7 +4,7 @@ Contract version: 1
 
 ## Scope and isolation
 
-Public repo dflippojr/financial-planner. Use only scripts/ui_instance.py from this checkout. Never use Docker, financial-planner production compose, live Postgres, .env, a reused server or an existing browser profile. Python 3.12+, Node 22+, Bash (Git Bash on Windows), gh 2.99+ and playwright-cli are required.
+Public repo dflippojr/financial-planner. Use only scripts/ui_instance.py from this checkout. Never use Docker, financial-planner production compose, live Postgres, .env, a reused server or an existing browser profile. Python 3.15 (the app needs 3.14 or later), Node 22+, Bash (Git Bash on Windows), gh 2.99+ and playwright-cli are required.
 
 Setup: create .venv (py -3.15 -m venv .venv on Windows), install requirements-test.lock with its Python, python -m playwright install chromium webkit, npm ci, npx playwright install chromium webkit, bash scripts/build_css.sh. Windows Python: .venv/Scripts/python.exe; Linux: .venv/bin/python. No real bank, Google, SMTP or paid AI credentials are needed.
 
