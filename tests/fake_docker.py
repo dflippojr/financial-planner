@@ -4,7 +4,13 @@ It answers `ps`, `inspect` and `events` from a JSON state file named by
 FAKE_DOCKER_STATE, and never reaches a real Docker daemon. A container with
 "restart_on_inspect" starts again the first time it is inspected, which is a
 restart after the check began but before its first snapshot saw the container.
-A container is running unless it names another "status", such as "exited".
+A container is running unless it names another "status", such as "exited",
+and has a RestartCount of 0 unless it names a "restart_count".
+
+Docker keeps a bounded event history: with "history_from" set, `events`
+returns nothing older, as on a host whose other containers churn. With
+"event_log" set, every event also goes to that file in the format
+docs/deployment.md records it, as a recorder started before `up -d` writes it.
 """
 
 import json
@@ -40,12 +46,15 @@ def _inspect(state, args, path):
         now = datetime.now(UTC).timestamp()
         container["started"] = now
         state["events"].append({"time": now, "action": "start", "id": container["id"]})
+        if state.get("event_log"):
+            with open(state["event_log"], "a", encoding="utf-8") as log:
+                log.write(f"start {container['id']}\n")
         with open(path, "w", encoding="utf-8") as handle:
             json.dump(state, handle)
     print(json.dumps([{
         "Name": "/" + container["service"],
         "Created": _docker_time(container["created"]),
-        "RestartCount": 0,
+        "RestartCount": container.get("restart_count", 0),
         "State": {"Status": container.get("status", "running"), "StartedAt": _docker_time(container["started"])},
         "Config": {"Labels": container.get("labels", {})},
     }]))
@@ -56,8 +65,9 @@ def _events(state, args):
     since = float(_option_values(args, "--since")[0])
     until = float(_option_values(args, "--until")[0])
     actions = {f.split("=", 1)[1] for f in _option_values(args, "--filter") if f.startswith("event=")}
+    oldest = state.get("history_from", 0)
     for event in state["events"]:
-        if since <= event["time"] <= until and event["action"] in actions:
+        if max(since, oldest) <= event["time"] <= until and event["action"] in actions:
             print(f"{event['action']} {event['id']}")
 
 
