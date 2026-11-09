@@ -5,7 +5,8 @@ FAKE_DOCKER_STATE, and never reaches a real Docker daemon. A container with
 "restart_on_inspect" starts again the first time it is inspected, which is a
 restart after the check began but before its first snapshot saw the container.
 A container is running unless it names another "status", such as "exited",
-and has a RestartCount of 0 unless it names a "restart_count".
+and has a RestartCount of 0 unless it names a "restart_count". It has never
+stopped, so Docker's zero FinishedAt, unless it names a "finished" time.
 
 Docker keeps a bounded event history: with "history_from" set, `events`
 returns nothing older, as on a host whose other containers churn. With
@@ -65,6 +66,8 @@ def _inspect(state, args, path):
         return 1
     if container.pop("restart_on_inspect", False):
         now = datetime.now(UTC).timestamp()
+        # A restart stops the container first, which sets FinishedAt.
+        container["finished"] = now - 0.1
         container["started"] = now
         state["events"].append({"time": now, "action": "start", "id": container["id"]})
         if state.get("event_log"):
@@ -76,7 +79,11 @@ def _inspect(state, args, path):
         "Name": "/" + container["service"],
         "Created": _docker_time(container["created"]),
         "RestartCount": container.get("restart_count", 0),
-        "State": {"Status": container.get("status", "running"), "StartedAt": started_at(container)},
+        "State": {
+            "Status": container.get("status", "running"),
+            "StartedAt": started_at(container),
+            "FinishedAt": _docker_time(container["finished"]) if "finished" in container else "0001-01-01T00:00:00Z",
+        },
         "Config": {"Labels": container.get("labels", {})},
     }]))
     return 0

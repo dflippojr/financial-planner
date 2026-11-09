@@ -157,6 +157,8 @@ function Get-ServiceContainers([string]$Service) {
         # DateTime, which drops digits past the seventh.
         $startedNs = $null
         if ($raw -match '"StartedAt"\s*:\s*"([^"]*)"') { $startedNs = ConvertTo-UnixNanoseconds $Matches[1] }
+        $finishedAt = $null
+        if ($raw -match '"FinishedAt"\s*:\s*"([^"]*)"') { $finishedAt = $Matches[1] }
         $revision = $null
         if ($info.Config.Labels -and $info.Config.Labels.PSObject.Properties[$RevisionLabel]) {
             $revision = $info.Config.Labels.$RevisionLabel
@@ -170,6 +172,7 @@ function Get-ServiceContainers([string]$Service) {
             StartedAt    = $info.State.StartedAt
             Started      = ConvertFrom-DockerTime $info.State.StartedAt
             StartedNs    = $startedNs
+            FinishedAt   = $finishedAt
             Created      = ConvertFrom-DockerTime $info.Created
             Revision     = $revision
         }
@@ -339,6 +342,21 @@ function Test-StartCounts($Snapshot, [datetime]$DeployStart, [datetime]$Until) {
     $deployUtc = $DeployStart.ToUniversalTime()
     $new = @($Services | ForEach-Object { $Snapshot[$_] } | Where-Object { $_.Created -and $_.Created -ge $deployUtc })
     if ($new.Count -eq 0) { return }
+    # Docker sets FinishedAt whenever a container stops or restarts and never
+    # clears it on a start (moby daemon/container/state.go: SetStopped,
+    # SetRestarting, setRunning), so a running new container with one set has
+    # stopped and started again since its creation. This needs neither event
+    # source nor the daemon's clock.
+    $startedAgain = @{}
+    foreach ($container in @($new | Where-Object { $_.Status -eq 'running' })) {
+        if ($null -eq $container.FinishedAt) {
+            Add-Failure "containers: cannot read $($container.Service)'s FinishedAt to tell whether it stopped since the deploy"
+            $startedAgain[$container.Id] = $true
+        } elseif ($container.FinishedAt -notmatch '^0001-01-01T00:00:00(\.0+)?Z$') {
+            Add-Failure "containers: $($container.Service) stopped and started again since it was created (FinishedAt is set)"
+            $startedAgain[$container.Id] = $true
+        }
+    }
     if ($EventLog) {
         # Recorded live from before `up -d`, so Docker's history rolling over
         # cannot take events out of it. Use it alone: the same start in both
@@ -404,7 +422,7 @@ function Test-StartCounts($Snapshot, [datetime]$DeployStart, [datetime]$Until) {
             # recorder stopped, leaves the last recorded start older than it,
             # however soon after the first start it came.
             Add-Failure "containers: $source missed a start of ${service}: its last recorded start is older than StartedAt$hint"
-        } else {
+        } elseif (-not $startedAgain[$container.Id]) {
             Write-Pass "containers: $service has one start in $source since the deploy"
         }
     }

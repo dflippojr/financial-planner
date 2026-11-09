@@ -142,8 +142,8 @@ one line per reason, when:
 - `X-App-Revision`, or the revision label of any image built from this repository (including the one `config-check` last ran, which is `background`'s), is not `origin/main`;
 - any of the four containers is not running, or restarts during a 2 minute
   window, or has restarted since the deploy (by `RestartCount`, its start
-  time, and for a new container its `start` events, which also catch a manual
-  restart);
+  time, and for a new container its `start` events and a set `FinishedAt`,
+  which also catch a manual restart);
 - the evidence for those start counts is missing: with `-EventLog`, the
   deploy-time event log is missing, does not reach a new container's creation,
   has no start for a running container, or its last start for a container is
