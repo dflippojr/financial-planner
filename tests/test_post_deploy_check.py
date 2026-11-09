@@ -296,3 +296,27 @@ def test_unknown_served_revision_still_reports_the_missing_git_sha(tmp_path):
     output = _run_check(tmp_path, expected_sha=FULL_SHA, image_sha=FULL_SHA, health_revision="unknown")
 
     assert "FAIL revision: the app image has no GIT_SHA" in output
+
+
+def test_stopped_recorder_fails_closed(tmp_path, monkeypatch):
+    original = subprocess.run
+
+    def run_with_unrecorded_restart(*args, **kwargs):
+        path = Path(kwargs["env"]["FAKE_DOCKER_STATE"])
+        state = json.loads(path.read_text())
+        app = state["containers"]["app-id"]
+        app["started"] += 5
+        state["events"].append({
+            "time": app["started"],
+            "action": "start",
+            "id": "app-id",
+        })
+        # Recorder stopped: leave deploy-events.log unchanged.
+        path.write_text(json.dumps(state))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", run_with_unrecorded_restart)
+    output = _run_check(
+        tmp_path, history_aged_out=True, event_log="recorded"
+    )
+    assert "FAIL containers:" in output
