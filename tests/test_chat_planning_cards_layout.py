@@ -100,9 +100,8 @@ def test_checkbox_card_layout_and_partial_apply(page_session, harness, viewport,
             "Applied 2 of 4 items."
         )
         assert sorted(PlannedItem.objects.values_list("name", flat=True)) == sorted([ITEMS[0]["name"], ITEMS[2]["name"]])
-        expect(page.locator('main [data-proposal-item="1"] [data-proposal-item-outcome]')).to_have_text(
-            "Skipped: not ticked."
-        )
+        # The applied card collapses to its status line (#721): its item rows are gone.
+        expect(page.locator('main [data-chat-proposal="planned_items"] [data-proposal-item]')).to_have_count(0)
         assert not page.evaluate("() => document.documentElement.scrollWidth > document.documentElement.clientWidth")
     finally:
         context.close()

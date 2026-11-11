@@ -141,7 +141,8 @@ def test_recurring_card_confirms_and_dismisses_only_the_ticked_series(harness):
     }
     assert all(event.actor_id == person.pk and event.metadata["proposal_id"] == proposal.pk for event in events)
     after = client.get(reverse("chat")).content.decode()
-    assert "Confirmed." in after and "Dismissed." in after and "Applied 2 of 3 items." in after
+    # The applied card collapses to its status line (#721).
+    assert "Confirmed." not in after and "data-proposal-item" not in after and "Applied 2 of 3 items." in after
 
 
 @pytest.mark.django_db

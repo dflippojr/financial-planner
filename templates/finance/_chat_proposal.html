@@ -12,8 +12,12 @@
     {% if card.before_amount %}{{ card.before_amount }} → <strong>{{ card.new_amount }}</strong>{% else %}new budget of <strong>{{ card.new_amount }}</strong>{% endif %}.
     <a class="link inline-flex min-h-11 items-center" href="{{ card.budgets_url }}">Open budgets</a></p>
   {% elif card.item_rows is not None %}
-  {% include "finance/_chat_proposal_items.html" %}
+  <p><strong>{{ card.heading }}</strong>{% if card.pending %}: untick anything you do not want, then apply.{% endif %}
+    <a class="link inline-flex min-h-11 items-center" href="{{ card.page_url }}">{{ card.page_label }}</a></p>
   {% endif %}
+  {% comment %}Only a pending card shows what it would change (#721): once applied, dismissed or stale, every kind collapses to its summary and the status line below.{% endcomment %}
+  {% if card.pending %}
+  {% if card.item_rows is not None %}{% include "finance/_chat_proposal_items.html" %}{% endif %}
   {% if card.transactions %}
   <ul class="mt-2 space-y-1 text-sm">
     {% for txn in card.transactions %}
@@ -23,7 +27,6 @@
   {% if card.more %}<p class="text-sm opacity-80">and {{ card.more }} more</p>{% endif %}
   {% endif %}
   {% if card.matches %}{% include "finance/_rule_preview_table.html" with matches=card.matches %}{% if card.more %}<p class="text-sm opacity-80">and {{ card.more }} more</p>{% endif %}{% endif %}
-  {% if card.pending %}
   <div class="mt-2 flex flex-wrap gap-2">
     <form method="post" action="{% url 'chat-proposal-apply' card.proposal.pk %}" id="{% if popover %}popover-{% endif %}proposal-{{ card.proposal.pk }}-apply">
       {% csrf_token %}
