@@ -159,3 +159,19 @@ def test_a_stale_card_collapses_to_its_reason(harness, place):
     planned.refresh_from_db()
     _assert_collapsed(_card_html(client, planned, planned.conversation_id, place), rows, "Synthetic reason.")
     _assert_collapsed(_card_html(client, stale_budget, stale_budget.conversation_id, place), [], 'role="status"')
+
+
+def test_the_apply_message_carries_the_reasons_the_collapsed_card_no_longer_shows():
+    from types import SimpleNamespace
+
+    from finance.chat_views import _applied_message
+
+    proposal = SimpleNamespace(result={"count": 1, "items": [
+        {"status": "created"},
+        {"status": "failed", "message": "Synthetic refusal."},
+        {"status": "stale", "message": "Synthetic change."},
+        {"status": "skipped"},
+    ]})
+    text = _applied_message(proposal)
+    assert text == "Applied 1 item. 2 ticked items could not be applied. Synthetic refusal. Synthetic change."
+    assert "the card shows why" not in text

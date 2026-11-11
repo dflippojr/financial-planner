@@ -274,10 +274,14 @@ def _applied_message(proposal):
     if "items" not in result:
         return "Suggestion applied."
     count = result.get("count") or 0
-    failed = sum(1 for item in result["items"] if item.get("status") in (ITEM_FAILED, ITEM_STALE))
+    failed = [item for item in result["items"] if item.get("status") in (ITEM_FAILED, ITEM_STALE)]
     text = f"Applied {count} item{'s' if count != 1 else ''}."
     if failed:
-        text += " Some ticked items could not be applied; the card shows why."
+        # An applied card collapses to its status line (#721), so the reasons go here.
+        reasons = " ".join(dict.fromkeys(str(item.get("message") or "").strip() for item in failed if item.get("message")))
+        text += f" {len(failed)} ticked item{'s' if len(failed) != 1 else ''} could not be applied."
+        if reasons:
+            text += f" {reasons}"
     return text
 
 

@@ -116,7 +116,8 @@ def test_a_pasted_list_becomes_one_card_and_only_ticked_items_are_created(harnes
     assert all(event.actor_id == person.pk and event.metadata["proposal_id"] == proposal.pk for event in events)
 
     after = client.get(reverse("chat")).content.decode()
-    assert "Skipped: not ticked." in after and after.count("Created.") == 2
+    # The applied card collapses to its status line (#721): no item rows or per-row outcomes.
+    assert "data-proposal-item" not in after and "Skipped: not ticked." not in after and "Created." not in after
     assert 'name="item"' not in after and "Applied 2 of 3 items." in after
 
 
@@ -147,7 +148,9 @@ def test_edit_and_end_target_existing_items_and_show_before_and_after(harness):
         AuditEvent.Action.RECORD_EDITED
     }
     after = client.get(reverse("chat")).content.decode()
-    assert "Amount: 700.00 USD → <strong>740.00 USD</strong>" in after and "Updated." in after and "Ended." in after
+    # The applied card collapses to its status line (#721).
+    assert "Amount: 700.00 USD" not in after and "Updated." not in after and "Ended." not in after
+    assert "Applied 2 of 2 items." in after
 
 
 @pytest.mark.django_db
@@ -753,4 +756,6 @@ def test_a_hidden_budget_never_shows_its_stored_amount(harness, resolve):
     # The other member takes the budget private without the usual purge running.
     Budget.objects.filter(pk=budget.pk).update(scope="private", household=None)
     html = client.get(reverse("chat")).content.decode()
-    assert "412.34 USD" not in html and "This budget is no longer available." in html
+    assert "412.34 USD" not in html
+    # A pending card says why the row cannot apply; a dismissed card collapses to its status (#721).
+    assert ("This budget is no longer available." if resolve == "pending" else "Dismissed.") in html

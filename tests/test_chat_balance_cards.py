@@ -132,7 +132,8 @@ def test_statement_balances_become_one_card_and_only_ticked_rows_are_recorded(ha
     }
     assert all(event.actor_id == person.pk and event.metadata["proposal_id"] == proposal.pk for event in events)
     after = client.get(reverse("chat")).content.decode()
-    assert "Recorded." in after and "Applied 2 of 3 items." in after
+    # The applied card collapses to its status line (#721).
+    assert "Recorded." not in after and "data-proposal-item" not in after and "Applied 2 of 3 items." in after
 
 
 @pytest.mark.django_db
