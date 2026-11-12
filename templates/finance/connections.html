@@ -121,7 +121,8 @@
     <h2 class="card-title">SimpleFIN accounts</h2>
     <p class="text-sm opacity-80 mb-4">
       For an existing account, the cut-over date defaults to the day after its latest transaction if you leave the
-      date blank. History before that date stays on CSV imports.
+      date blank. History before that date stays on CSV imports. A cut-over must fall after the rows file imports
+      already supplied and no later than the first transaction SimpleFIN already imported, so nothing is counted twice.
     </p>
     <form method="post">
       {% csrf_token %}

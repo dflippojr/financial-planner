@@ -339,6 +339,97 @@ def _create_linked_account(person, *, name, account_type, sharing):
     return create_account(person, name=name, account_type=account_type)
 
 
+FILE_IMPORT_SOURCES = (
+    ImportBatch.Source.HUNTINGTON,
+    ImportBatch.Source.CAPITAL_ONE,
+    ImportBatch.Source.APPLE_CARD,
+    ImportBatch.Source.VANGUARD,
+    ImportBatch.Source.OFX,
+)
+
+
+def _latest_file_day(active):
+    """The latest day an active file-imported row covers, by the date SimpleFIN would give it.
+
+    That is each row's own cut-over date: a card export's posted date, read
+    from `original_fields`, or its transaction date when that is missing.
+    """
+    rows = active.filter(import_batch__source__in=FILE_IMPORT_SOURCES)
+    latest = (
+        rows.exclude(import_batch__source__in=POSTED_DATE_MAPPINGS)
+        .order_by("-transaction_date")
+        .values_list("transaction_date", flat=True)
+        .first()
+    )
+    card_rows = rows.filter(import_batch__source__in=POSTED_DATE_MAPPINGS).values_list(
+        "import_batch__source", "original_fields", "transaction_date"
+    )
+    for source, original_fields, transaction_date in card_rows.iterator():
+        mapping = POSTED_DATE_MAPPINGS[source]
+        cell = (original_fields or {}).get(mapping.posted_date_column)
+        posted = parse_posted_date(cell, mapping.date_format) if isinstance(cell, str) else None
+        day = posted or transaction_date
+        if latest is None or day > latest:
+            latest = day
+    return latest
+
+
+def check_cutover(account, cutover: date, mode: str) -> None:
+    """Refuse a cut-over that would let a file import and a sync both supply a day (#671).
+
+    A file import refuses rows on or after the cut-over, and a sync skips rows
+    before it. So the cut-over must fall after every active file-imported row,
+    and no later than the earliest active SimpleFIN row, or one transaction
+    could be stored once from each source.
+    """
+    if mode != AccountLink.Mode.TRANSACTIONS:
+        return
+    active = Transaction.objects.filter(account=account, status=Transaction.Status.ACTIVE)
+    latest_file = _latest_file_day(active)
+    if latest_file is not None and cutover <= latest_file:
+        raise SimpleFinError(
+            f"Choose a cut-over date after {latest_file.isoformat()} for {account.name}: file imports "
+            "already cover the days up to then, so SimpleFIN would count those transactions twice. "
+            "Undo those imports first to start SimpleFIN earlier."
+        )
+    earliest_synced = (
+        active.filter(import_batch__source=ImportBatch.Source.SIMPLEFIN)
+        .order_by("transaction_date")
+        .values_list("transaction_date", flat=True)
+        .first()
+    )
+    if earliest_synced is not None and cutover > earliest_synced:
+        raise SimpleFinError(
+            f"Choose a cut-over date on or before {earliest_synced.isoformat()} for {account.name}: "
+            "SimpleFIN already imported transactions from then, and a later cut-over would let a file "
+            "import count them twice. Undo those SimpleFIN imports first to move it later."
+        )
+
+
+def _save_link(connection, simplefin_account_id, account, cutover, mode):
+    """Create or change one link. Every cut-over a link gets passes through check_cutover."""
+    # The account row lock is the one a CSV import holds while it reads the
+    # cut-over and writes rows, so an import cannot land between the check
+    # below and the save.
+    Account.objects.select_for_update().filter(pk=account.pk).first()
+    existing = (
+        AccountLink.objects.filter(connection=connection, simplefin_account_id=simplefin_account_id)
+        .values_list("account_id", "cutover_date", "mode")
+        .first()
+    )
+    unchanged = existing == (account.pk, cutover, mode)
+    # An unchanged row is re-saved by every form submit; checking it would trap
+    # a link saved before this check existed, and it moves no boundary.
+    if not unchanged:
+        check_cutover(account, cutover, mode)
+    link, _created = AccountLink.objects.update_or_create(
+        connection=connection,
+        simplefin_account_id=simplefin_account_id,
+        defaults={"account": account, "cutover_date": cutover, "mode": mode},
+    )
+    return link
+
+
 def _link_existing(person, connection, choice, simplefin_account_id):
     if not choice.get("account_id"):
         raise SimpleFinError("Choose an account to link.")
@@ -351,14 +442,15 @@ def _link_existing(person, connection, choice, simplefin_account_id):
         .exists()
     ):
         raise SimpleFinError("That account is already linked.")
-    cutover = choice.get("cutover_date") or default_cutover_date(account)
-    mode = _mode_for_account_type(account.account_type)
-    link, _created = AccountLink.objects.update_or_create(
-        connection=connection,
-        simplefin_account_id=simplefin_account_id,
-        defaults={"account": account, "cutover_date": cutover, "mode": mode},
-    )
-    return link
+    cutover = choice.get("cutover_date")
+    if not cutover:
+        # A blank date on a link that already points here keeps its cut-over;
+        # the default would move it past the rows the link already synced.
+        current = AccountLink.objects.filter(
+            connection=connection, simplefin_account_id=simplefin_account_id, account=account
+        ).values_list("cutover_date", flat=True).first()
+        cutover = current or default_cutover_date(account)
+    return _save_link(connection, simplefin_account_id, account, cutover, _mode_for_account_type(account.account_type))
 
 
 def _create_and_link(person, connection, choice, simplefin_account_id):
@@ -372,16 +464,8 @@ def _create_and_link(person, connection, choice, simplefin_account_id):
     account = _create_linked_account(person, name=name, account_type=account_type, sharing=sharing)
     # A row that is already linked is re-pointed at the new account. The
     # previously linked account keeps the data it already imported.
-    link, _created = AccountLink.objects.update_or_create(
-        connection=connection,
-        simplefin_account_id=simplefin_account_id,
-        defaults={
-            "account": account,
-            "cutover_date": choice.get("cutover_date") or timezone.localdate(),
-            "mode": _mode_for_account_type(account_type),
-        },
-    )
-    return link
+    cutover = choice.get("cutover_date") or timezone.localdate()
+    return _save_link(connection, simplefin_account_id, account, cutover, _mode_for_account_type(account_type))
 
 
 @transaction.atomic
