@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import UTC, datetime, timedelta
+from urllib.parse import unquote
 
 from django.db import transaction
 from django.utils import timezone
@@ -25,6 +26,9 @@ from finance.simplefin_errors import clean_text, is_api_usage_notice, remote_acc
 logger = logging.getLogger(__name__)
 
 STALE_AFTER = timedelta(hours=36)
+# A link whose connection has had no successful /accounts read for this long
+# is failing (#735): the daily sync has missed at least two runs in a row.
+LINK_FAILING_AFTER = timedelta(days=3)
 OK, STALE, ERROR = "ok", "stale", "error"
 MAX_BANKS = 50
 MAX_ERRORS_PER_BANK = 5
@@ -210,6 +214,47 @@ def bank_rows(connection, now=None) -> list[dict]:
 
 def find_bank(connection, conn_id) -> dict | None:
     return next((bank for bank in stored_banks(connection) if bank.get("conn_id") == conn_id), None)
+
+
+def _read_moment(connection) -> datetime | None:
+    """When the newest successful read happened: the stored read's time, else the last good sync."""
+    try:
+        moment = datetime.fromisoformat(stored_read(connection).get("at") or "")
+    except (TypeError, ValueError):
+        moment = None
+    return moment or connection.last_sync_at
+
+
+def _link_bank_key(simplefin_account_id: str) -> str:
+    """The bank (conn_id) a link's stored "conn_id:account_id" key names, or "" for a bare id."""
+    conn_id, sep, _account_id = simplefin_account_id.partition(":")
+    return unquote(conn_id) if sep else ""
+
+
+def link_is_failing(link, now=None) -> bool:
+    """Whether SimpleFIN has stopped supplying this link's account (#735).
+
+    Read from stored state only, never a live request. Failing means any of:
+    the connection is disabled after SimpleFIN refused its credentials; no
+    read has succeeded for LINK_FAILING_AFTER; the newest read lists an error
+    for the account's bank; or the newest read no longer lists the account.
+    A connection with no read recorded at all is not judged failing.
+    """
+    connection = link.connection
+    if connection.disabled:
+        return True
+    moment = _read_moment(connection)
+    if moment is None:
+        return False
+    if (now or timezone.now()) - moment > LINK_FAILING_AFTER:
+        return True
+    key = str(link.simplefin_account_id or "")
+    accounts = stored_read(connection).get("accounts")
+    if isinstance(accounts, list) and key not in {row.get("id") for row in accounts if isinstance(row, dict)}:
+        return True
+    bank_key = _link_bank_key(key)
+    bank = find_bank(connection, bank_key) if bank_key else None
+    return bank is not None and bool(bank.get("errors"))
 
 
 def read_record(payload: dict, listing: list[dict], now) -> dict:

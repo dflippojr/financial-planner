@@ -56,6 +56,18 @@
 {% endif %}
 {% if preview %}
 <h2 class="mb-3 text-xl font-semibold">Preview results</h2>
+{% with window=preview.simplefin_window %}
+{% if window and window.failing %}
+<div role="status" class="alert alert-info mb-4">
+  <span>
+    SimpleFIN has stopped supplying this account, so the file may fill the gap.
+    Rows dated {{ window.accepted_from|date:"Y-m-d" }} or later are accepted{% if window.last_synced and window.last_synced >= window.cutover %};
+    rows from {{ window.cutover|date:"Y-m-d" }} through {{ window.last_synced|date:"Y-m-d" }} came from SimpleFIN and are refused{% endif %}.
+    You do not need to trim the file.
+  </span>
+</div>
+{% endif %}
+{% endwith %}
 <p class="mb-4">
   <strong>{{ preview.new_count }}</strong> new;
   <strong>{{ preview.duplicate_count }}</strong> duplicate;

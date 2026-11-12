@@ -31,7 +31,7 @@
       <ul class="mb-3 text-sm opacity-80">
         {% for account in accounts %}
           {% if account.simplefin_cutover %}
-          <li>{{ account.name }}: CSV rows dated before {{ account.simplefin_cutover|date:"Y-m-d" }} stay as CSV history. Rows on or after that cut-over come from SimpleFIN and are refused in a file import.</li>
+          <li>{{ account.name }}: CSV rows dated before {{ account.simplefin_cutover|date:"Y-m-d" }} stay as CSV history. Rows on or after that cut-over come from SimpleFIN and are refused in a file import. While the SimpleFIN link is failing, the preview shows the day a file may fill from.</li>
           {% endif %}
         {% endfor %}
       </ul>
