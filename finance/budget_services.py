@@ -314,21 +314,26 @@ def budget_coverage(principal, month, *, scope=""):
         key = _report_key(budget.category)
         (private_keys if budget.scope == Budget.Scope.PRIVATE else household_keys).add(key)
     household_keys -= private_keys
-    household_spending = {}
-    if household_keys and scope == Account.Scope.HOUSEHOLD:
-        household_spending = {row.key: row.spending_minor for row in report.rows}
-    elif household_keys and scope == "":
-        shared = spending_by_category_report(
-            principal, date_from=month, date_to=month_end(month), scope=Account.Scope.HOUSEHOLD
+    # What a household budget leaves uncovered, by category: private-account spending.
+    # Under All accounts this is the Private report, never All minus the Household
+    # report: both All and Private judge transfers and refunds by every visible leg,
+    # while a household-only selection judges them by household legs alone (#297),
+    # so a household-to-private transfer is spending there and nothing here.
+    private_spending = {}
+    if household_keys and scope == "":
+        private = spending_by_category_report(
+            principal, date_from=month, date_to=month_end(month), scope=Account.Scope.PRIVATE
         )
-        household_spending = {row.key: row.spending_minor for row in shared.rows}
+        private_spending = {row.key: row.spending_minor for row in private.rows}
     budgeted_minor = 0
     gap_rows = []
     for row in report.rows:
         if row.key in private_keys:
             covered = row.spending_minor
-        elif row.key in household_keys:
-            covered = household_spending.get(row.key, 0)
+        elif row.key in household_keys and scope == Account.Scope.HOUSEHOLD:
+            covered = row.spending_minor
+        elif row.key in household_keys and scope == "":
+            covered = row.spending_minor - private_spending.get(row.key, 0)
         else:
             covered = 0
         budgeted_minor += covered
