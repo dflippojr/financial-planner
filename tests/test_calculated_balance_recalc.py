@@ -64,8 +64,9 @@ def import_csv(owner, account, *rows):
 
 def _owed_on(person, card, day):
     report = net_worth_report(person, date_from=day.replace(day=1), date_to=day, today=day)
-    (row,) = [row for row in report.periods[-1].accounts if row.account_id == card.pk]
-    return row.liabilities_minor, row.source
+    rows = [row for row in report.periods[-1].accounts if row.account_id == card.pk]
+    # With no balance of any kind left, the card has no net worth row at all.
+    return (rows[0].liabilities_minor, rows[0].source) if rows else None
 
 
 # --- #676: the repro from the issue body ---------------------------------------------------
@@ -88,6 +89,7 @@ def test_deleting_the_anchor_balance_leaves_calculated_rows_with_no_anchor():
     anchor = BalanceSnapshot.objects.get(account=card, source=MANUAL)
     delete_manual_snapshot(owner, card.pk, anchor.pk)
     assert _owed_on(owner, card, date(2026, 11, 5)) != (36_000, CALCULATED)
+    assert _owed_on(owner, card, date(2026, 11, 5)) is None
     assert calculated(card) == []
 
 
@@ -268,3 +270,13 @@ def test_accounts_without_calculated_rows_are_left_alone():
     import_csv(owner, checking, (date(2026, 10, 1), -1_000))
     assert calculated(checking) == []
     assert Account.objects.get(pk=checking.pk).transactions.filter(status=Transaction.Status.ACTIVE).count() == 7
+
+
+
+def test_the_balances_page_says_calculated_rows_update_on_their_own():
+    owner = make_person("page-copy")
+    checking = checking_with_history(owner)
+    save_calculated_balances(owner, checking.pk)
+    page = signed_in(owner).get(reverse("account-balances", args=[checking.pk])).content.decode()
+    assert "They update on their own when its transactions or balances change." in page
+    assert "calculate again" not in page

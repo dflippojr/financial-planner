@@ -19,7 +19,11 @@ its balance depends on every transaction in that window, so one gap flags
 every earlier month-end too.
 
 Nothing is written until save_calculated_balances(), which recalculates under
-the account lock and replaces only that account's calculated rows. Amounts
+the account lock and replaces only that account's calculated rows. After
+that, refresh_calculated_balances() keeps the saved rows equal to calculate()
+whenever an import, edit or deletion changes a transaction or a real balance
+(owner decision for #641 and #676), and deletes them when calculate() no
+longer can, for example once no real balance remains. Amounts
 never go to logs or error messages.
 """
 
@@ -31,7 +35,7 @@ from django.db.models import Min
 
 from .audit_services import record
 from .lifecycle_services import _person_for
-from .models import AuditEvent, BalanceSnapshot, Transaction
+from .models import Account, AuditEvent, BalanceSnapshot, Transaction
 from .months import add_months, month_end
 from .net_worth import signed_balance_minor, source_rank_expression
 from .reconciliation import RECONCILED_TYPES, _coverage, _covered, _daily_totals
@@ -150,19 +154,14 @@ def _locked_calculated_rows(account):
     )
 
 
-@transaction.atomic
-def save_calculated_balances(principal, account_id):
-    """Recalculate under the account lock and replace that account's calculated rows.
+def _replace_calculated_rows(person, account, wanted):
+    """Make the account's calculated rows equal `wanted` ({month_end: balance_minor}).
 
-    SimpleFIN and manual rows are never touched: every calculated date lies
-    before the earliest of them. Unchanged rows are kept and record nothing, as
-    for other no-op writes; each created, changed or removed row records the
-    same balance audit event a manual balance does.
+    Unchanged rows are kept and record nothing, as for other no-op writes; each
+    created, changed or removed row records the same balance audit event a
+    manual balance does. Returns (created, updated, deleted).
     """
-    account = _lock_editable_account(principal, account_id)
-    calculation = calculate(account)
-    person = _person_for(principal)
-    wanted = {row.month_end: row.balance_minor for row in calculation.rows}
+    wanted = dict(wanted)
     created = updated = deleted = 0
     for existing in _locked_calculated_rows(account):
         amount = wanted.pop(existing.snapshot_date, None)
@@ -187,7 +186,50 @@ def save_calculated_balances(principal, account_id):
         )
         _record_snapshot(person, account, snapshot, AuditEvent.Action.RECORD_CREATED)
         created += 1
+    return created, updated, deleted
+
+
+@transaction.atomic
+def save_calculated_balances(principal, account_id):
+    """Recalculate under the account lock and replace that account's calculated rows.
+
+    SimpleFIN and manual rows are never touched: every calculated date lies
+    before the earliest of them. refresh_calculated_balances keeps that true
+    after later imports, edits and deletions.
+    """
+    account = _lock_editable_account(principal, account_id)
+    calculation = calculate(account)
+    wanted = {row.month_end: row.balance_minor for row in calculation.rows}
+    created, updated, deleted = _replace_calculated_rows(_person_for(principal), account, wanted)
     return SaveResult(saved=len(calculation.rows), created=created, updated=updated, deleted=deleted)
+
+
+@transaction.atomic
+def refresh_calculated_balances(person, account_id):
+    """Keep saved calculated rows equal to calculate() after a ledger change (#641, #676).
+
+    Every path that adds, edits, archives or deletes an account's transactions,
+    or its SimpleFIN or manual balances, calls this in the same database
+    transaction, after its own permission checks. It takes the account row
+    lock (a no-op when the caller already holds it).
+
+    An account with no calculated rows is left alone: calculating is the
+    member's choice. When calculate() refuses, for example because no real
+    balance remains, the calculated rows are deleted, since nothing could
+    produce them now. A change only after the anchor leaves calculate()
+    unchanged, so nothing is written or recorded. Returns (created, updated,
+    deleted).
+    """
+    account = Account.objects.select_for_update(of=("self",)).filter(pk=account_id).first()
+    if account is None or not BalanceSnapshot.objects.filter(
+        account=account, source=BalanceSnapshot.Source.CALCULATED
+    ).exists():
+        return (0, 0, 0)
+    try:
+        wanted = {row.month_end: row.balance_minor for row in calculate(account).rows}
+    except CalculationError:
+        wanted = {}
+    return _replace_calculated_rows(person, account, wanted)
 
 
 @transaction.atomic

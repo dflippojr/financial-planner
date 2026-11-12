@@ -764,6 +764,9 @@ class TransactionCorrectionForm(forms.Form):
         transaction.amount_minor = new_amount_minor
         transaction.save(update_fields=("transaction_date", "description", "amount_minor", "updated_at"))
         TransactionCorrectionHistory.objects.bulk_create(history_rows)
+        from .calculated_balances import refresh_calculated_balances
+
+        refresh_calculated_balances(actor, transaction.account_id)
         return transaction
 
 

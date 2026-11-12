@@ -7,6 +7,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from finance.audit_services import record
+from finance.calculated_balances import refresh_calculated_balances
 from finance.input_limits import MAX_DESCRIPTION_CHARS
 from finance.csv_import.fingerprint import file_import_fingerprint_description, transaction_fingerprint
 from finance.csv_import.parser import Preview, preview_csv
@@ -195,6 +196,8 @@ def commit_csv_import(
                 for row in new_rows
             ]
         )
+        # Late rows dated on or before the anchor change saved calculated balances (#641).
+        refresh_calculated_balances(person, account.pk)
     counts = {"new_count": preview.new_count, "duplicate_count": preview.duplicate_count,
               "invalid_count": preview.invalid_count, "format": source, "batch_id": batch.pk}
     if new_rows:
@@ -292,6 +295,7 @@ def archive_batch(principal, account_id, batch_id, *, manual):
     batch.status = ImportBatch.Status.ARCHIVED
     batch.archived_at = now
     batch.save(update_fields=("status", "archived_at"))
+    refresh_calculated_balances(person, account.pk)
     revalidate_pairs_touching_import_batch(person, batch_id)
     transaction.on_commit(lambda: refresh_transfer_pairs(person, transaction_ids=seed_leg_ids))
     if not manual:

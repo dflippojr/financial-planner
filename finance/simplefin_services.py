@@ -707,6 +707,7 @@ def _sync_one_link(person, connection, link, remote, synced_at, payload, rates) 
                 fields=_balance_in_usd(remote, balance_date, conversion),
                 batch=None,
             )
+            _refresh_calculated(person, account)
         return 0
     end = max(link.cutover_date, balance_date, timezone.localdate())
     new_batches = [
@@ -725,7 +726,15 @@ def _sync_one_link(person, connection, link, remote, synced_at, payload, rates) 
         fields=_balance_in_usd(remote, balance_date, conversion),
         batch=batch,
     )
+    _refresh_calculated(person, account)
     return imported
+
+
+def _refresh_calculated(person, account):
+    """Late rows dated on or before the anchor change saved calculated balances (#641)."""
+    from finance.calculated_balances import refresh_calculated_balances
+
+    refresh_calculated_balances(person, account.pk)
 
 
 @member_operation
