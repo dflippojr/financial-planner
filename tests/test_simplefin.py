@@ -3,6 +3,7 @@ from datetime import date, datetime, timedelta
 from datetime import UTC
 from http.client import IncompleteRead
 from io import BytesIO
+from unittest.mock import patch
 from urllib.error import HTTPError
 
 import pytest
@@ -721,7 +722,10 @@ def test_a_provider_error_holds_back_only_the_accounts_it_may_affect(monkeypatch
     first, second, connection = _link_two_institutions(owner, monkeypatch, _two_institution_payload(errlist=errlist))
     accounts = {"first": first, "second": second}
 
-    sync_connection(owner, connection.pk, ignore_rate_limit=True)
+    # Synced soon after the March rows, so a 90-day cap still reaches back past
+    # the cut-over: a capped window holds them (#640).
+    with patch("django.utils.timezone.now", return_value=datetime(2026, 3, 20, 16, tzinfo=UTC)):
+        sync_connection(owner, connection.pk, ignore_rate_limit=True)
 
     for name, account in accounts.items():
         has_batch = ImportBatch.objects.filter(
