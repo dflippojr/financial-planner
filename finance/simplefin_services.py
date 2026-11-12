@@ -738,17 +738,15 @@ def _active_link_batches(account, link):
     )
 
 
-def _uncovered_ranges(account, link, end, fetched_from=None):
+def _uncovered_ranges(account, link, end):
     """Date ranges from the cut-over through end that no active batch covers.
 
     A sync creates one batch per gap, so batches never overlap: undoing any
     one of them uncovers exactly its own dates and brings back the
-    missing-import warning there. When Bridge capped the window, the ranges
-    start no earlier than fetched_from, the first day it sent (#640): a batch
-    never claims days SimpleFIN did not return.
+    missing-import warning there.
     """
     gaps = []
-    cursor = link.cutover_date if fetched_from is None else max(link.cutover_date, fetched_from)
+    cursor = link.cutover_date
     ranges = (
         _active_link_batches(account, link)
         .filter(date_range_end__gte=cursor, date_range_start__lte=end)
@@ -764,7 +762,22 @@ def _uncovered_ranges(account, link, end, fetched_from=None):
     return gaps
 
 
-def _ensure_batch(person, account, connection, link, synced_at, start, end):
+def _fetched_parts(gaps, fetched_from):
+    """Each uncovered range trimmed to the days Bridge sent, as (start, end, requested_from).
+
+    When Bridge capped the window, a batch never claims a day before
+    fetched_from, the first day it sent (#640). A trimmed batch keeps the day
+    its range was asked from, so the missing-import warning still counts the
+    account's history from there; a range wholly before fetched_from gets no batch.
+    """
+    for start, end in gaps:
+        if fetched_from is None or start >= fetched_from:
+            yield start, end, None
+        elif end >= fetched_from:
+            yield fetched_from, end, start
+
+
+def _ensure_batch(person, account, connection, link, synced_at, start, end, requested_from=None):
     return ImportBatch.objects.create(
         account=account,
         imported_by=person,
@@ -773,6 +786,7 @@ def _ensure_batch(person, account, connection, link, synced_at, start, end):
         simplefin_account_id=link.simplefin_account_id,
         date_range_start=start,
         date_range_end=end,
+        requested_from=requested_from,
     )
 
 
@@ -852,14 +866,16 @@ def _sync_one_link(person, connection, link, remote, synced_at, payload, rates, 
     if link.mode == AccountLink.Mode.TRANSACTIONS and _transactions_unreliable(remote, payload):
         _record_balance(account, remote, balance_date, conversion, batch=None)
         return 0, False
+    end = max(link.cutover_date, balance_date, timezone.localdate())
+    # What the link asks for, read before a capped first sync moves its cut-over.
+    gaps = _uncovered_ranges(account, link, end)
     moved = None
     if fetched_from is not None:
         moved = _start_link_at_fetched_day(person, connection, link, fetched_from)
         link = moved or link
-    end = max(link.cutover_date, balance_date, timezone.localdate())
     new_batches = [
-        _ensure_batch(person, account, connection, link, synced_at, gap_start, gap_end)
-        for gap_start, gap_end in _uncovered_ranges(account, link, end, fetched_from)
+        _ensure_batch(person, account, connection, link, synced_at, start, gap_end, requested_from)
+        for start, gap_end, requested_from in _fetched_parts(gaps, fetched_from)
     ]
     new_ids = [batch.pk for batch in new_batches]
     batches = new_batches + list(_active_link_batches(account, link).exclude(pk__in=new_ids))

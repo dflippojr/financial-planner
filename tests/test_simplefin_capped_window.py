@@ -134,6 +134,7 @@ def _linked_120_days_back(monkeypatch, *, csv_before=None):
 def test_a_capped_first_sync_records_a_batch_that_starts_at_most_90_days_back(monkeypatch):
     today = _today()
     owner, checking, connection = _linked_120_days_back(monkeypatch)
+    requested = _cutover(checking)
     bridge = FakeBridge([_txn("old", today - timedelta(days=115)), _txn("recent", today - timedelta(days=10))])
 
     _sync(owner, connection, monkeypatch, bridge)
@@ -141,6 +142,8 @@ def test_a_capped_first_sync_records_a_batch_that_starts_at_most_90_days_back(mo
     first = _first_synced_day(checking)
     assert first == bridge.first_whole_day()
     assert first >= today - timedelta(days=90)
+    # The batch keeps the day the link asked from.
+    assert _sync_batches(checking).get().requested_from == requested
     assert not _sync_batches(checking).filter(date_range_start__lt=first).exists()
     # Only what SimpleFIN sent was imported.
     assert list(_active(checking).values_list("source_transaction_id", flat=True)) == ["recent"]
@@ -305,6 +308,7 @@ def test_a_capped_sync_after_a_long_pause_does_not_claim_the_days_it_could_not_f
 
     later = _sync_batches(checking).exclude(date_range_start=cutover).get()
     assert later.date_range_start == bridge.first_whole_day()
+    assert later.requested_from == cutover + timedelta(days=6)
     assert later.date_range_start >= today - timedelta(days=90)
     assert missing_import_on(owner, [checking], cutover + timedelta(days=10))
 
@@ -321,6 +325,7 @@ def test_an_uncapped_sync_still_covers_from_the_cutover(monkeypatch):
 
     assert _first_synced_day(checking) == cutover
     assert _cutover(checking) == cutover
+    assert _sync_batches(checking).get().requested_from is None
 
 
 @pytest.mark.django_db

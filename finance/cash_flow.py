@@ -256,19 +256,22 @@ def _import_history(principal, accounts):
     Only active statement batches cover a window: a hand-entered row covers one
     day and does not show a statement was imported. The earliest start counts
     every batch, undone or hand-entered too: it shows the account had history
-    from that date, so a later gap still gets flagged (#713).
+    from that date, so a later gap still gets flagged (#713). A SimpleFIN batch
+    whose window Bridge capped counts from the day the link asked for, so the
+    days it could not fetch are flagged even when it is the first import (#640).
     """
     batches = (
         ImportBatch.objects.visible_to(principal)
         .filter(account__in=accounts)
-        .only("account_id", "date_range_start", "date_range_end", "status", "source")
+        .only("account_id", "date_range_start", "date_range_end", "requested_from", "status", "source")
     )
     covering = {account.pk: [] for account in accounts}
     first_import = {}
     for batch in batches:
         earliest = first_import.get(batch.account_id)
-        if earliest is None or batch.date_range_start < earliest:
-            first_import[batch.account_id] = batch.date_range_start
+        history_from = min(batch.date_range_start, batch.requested_from or batch.date_range_start)
+        if earliest is None or history_from < earliest:
+            first_import[batch.account_id] = history_from
         if batch.status == ImportBatch.Status.ACTIVE and batch.source != ImportBatch.Source.MANUAL:
             covering[batch.account_id].append(batch)
     return covering, first_import

@@ -257,10 +257,12 @@ def test_a_capped_first_sync_leaves_its_unfetched_days_to_a_csv_and_counts_each_
         served_from = timezone.localtime(datetime.fromtimestamp(first_served, tz=UTC)).date()
         boundary = served_from + timedelta(days=1) if capped else case.cutover
         assert AccountLink.objects.get(account=account).cutover_date == boundary
-        assert not ImportBatch.objects.filter(
+        synced = ImportBatch.objects.filter(
             account=account, source=ImportBatch.Source.SIMPLEFIN, status=ImportBatch.Status.ACTIVE,
-            date_range_start__lt=boundary,
-        ).exists()
+        ).order_by("date_range_start")
+        assert not synced.filter(date_range_start__lt=boundary).exists()
+        # A capped batch remembers the day the link asked from (the missing-import warning reads it).
+        assert synced.first().requested_from == (case.cutover if capped else None)
         expected_rows = Counter(
             (row.day, row.amount_minor, "USD", case.shape.stored_description(row))
             if posted_day(row) < boundary
