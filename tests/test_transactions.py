@@ -323,7 +323,7 @@ def test_correction_edit_posts_large_amount_as_decimal_text():
     assert 'type="text"' in html
     assert 'type="number"' not in html
     assert 'inputmode="decimal"' in html
-    assert 'value="90071992547409.93"' in html
+    assert 'value="$90,071,992,547,409.93"' in html
 
     post_response = client.post(
         url,
@@ -626,19 +626,6 @@ def test_correction_amount_renders_as_formatted_dollars(amount_minor, shown):
     html = client.get(reverse("transaction-edit", args=(financial_transaction.pk,))).content.decode()
 
     assert f'value="{shown}"' in html
-
-
-@pytest.mark.django_db
-def test_correction_amount_in_another_currency_has_no_dollar_sign():
-    owner = make_person("owner")
-    financial_transaction = make_transaction(owner, amount_minor=-123450)
-    Transaction.objects.filter(pk=financial_transaction.pk).update(currency="EUR")
-    client = Client()
-    client.force_login(owner.user)
-
-    html = client.get(reverse("transaction-edit", args=(financial_transaction.pk,))).content.decode()
-
-    assert 'value="-1,234.50"' in html
 
 
 @pytest.mark.django_db

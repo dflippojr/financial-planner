@@ -14,6 +14,7 @@ from django.utils import timezone
 from .input_limits import AUTO_NOTE_MAX_CHARS, MAX_DESCRIPTION_CHARS
 from .access import visible_rows
 from .money_input import MoneyField, PercentField, WholePercentField
+from .money_display import format_minor_input
 from .date_bounds import EARLIEST_ACTIVITY_DATE, TOO_EARLY_ERROR, activity_date_error
 from .cash_flow import (
     MAX_REPORT_DATE,
@@ -731,7 +732,7 @@ class TransactionCorrectionForm(forms.Form):
             initial={
                 "transaction_date": transaction.transaction_date,
                 "description": transaction.description,
-                "amount": Decimal(transaction.amount_minor) / Decimal(100),
+                "amount": format_minor_input(transaction.amount_minor),
             },
             **kwargs,
         )
