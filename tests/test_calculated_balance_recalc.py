@@ -377,3 +377,26 @@ def test_a_change_to_an_archived_account_keeps_its_calculated_history():
     with transaction.atomic():
         assert refresh_calculated_balances(owner, checking.pk) == (0, 0, 0)
     assert calculated(checking) == before
+
+
+def test_a_sync_locks_its_accounts_in_primary_key_order_before_writing():
+    """Review of #733: link order must not decide lock order, or a sync can deadlock with undo or archive."""
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    if connection.vendor != "postgresql":
+        pytest.skip("SELECT ... FOR UPDATE is only emitted on PostgreSQL")
+    owner = make_person("lock-order")
+    checking = make_account(owner)
+    sf_connection = harness.link_simplefin(owner, checking, date(2026, 8, 1))
+    rows = [(1, (date(2026, 8, 5), -10_000))]
+    with CaptureQueriesContext(connection) as queries:
+        _sync(owner, sf_connection, _sync_payload(rows, balance=100_000, balance_day=date(2026, 11, 3)))
+    sql = [query["sql"] for query in queries]
+    account_locks = [n for n, text in enumerate(sql)
+                     if text.startswith('SELECT "finance_account"."id"') and 'FOR UPDATE OF "finance_account"' in text
+                     and '"finance_account"."id" IN (' in text and " ORDER BY " in text]
+    first_write = next(n for n, text in enumerate(sql)
+                       if text.startswith(("INSERT INTO \"finance_transaction\"", "INSERT INTO \"finance_balancesnapshot\"")))
+    # One statement locks every syncable account, ordered by pk, before the first write.
+    assert account_locks and account_locks[0] < first_write

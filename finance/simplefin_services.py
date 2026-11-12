@@ -802,10 +802,7 @@ def _transactions_unreliable(remote: dict, payload: dict) -> bool:
 
 
 def _sync_one_link(person, connection, link, remote, synced_at, payload, rates) -> int:
-    account = link.account
-    # Lock the account before writing its balance or rows, in the order undo
-    # and Save calculated balances use, so _refresh_calculated below runs under it.
-    Account.objects.select_for_update(of=("self",)).filter(pk=account.pk).first()
+    account = link.account  # locked by _import_links before any write
     conversion = _conversion_for(remote, rates)
     balance_date = posted_date(remote.get("balance-date")) or timezone.localdate()
     if link.mode == AccountLink.Mode.TRANSACTIONS and _transactions_unreliable(remote, payload):
@@ -992,6 +989,15 @@ def _import_links(person, connection, links, syncable_ids, payload, now, rates):
     imported = 0
     skipped = 0
     unconverted = []
+    # Lock every account this sync may write, in primary-key order as undo and
+    # archive do, before writing any balance or row, so _refresh_calculated runs
+    # under the account lock and no link order can deadlock against them.
+    list(
+        Account.objects.select_for_update(of=("self",))
+        .filter(pk__in=syncable_ids)
+        .order_by("pk")
+        .values_list("pk", flat=True)
+    )
     for link in links:
         if link.account_id not in syncable_ids:
             # Archived, or no longer visible to the connection owner
