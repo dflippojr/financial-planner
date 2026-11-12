@@ -5,6 +5,39 @@
 <h1 class="mb-4 text-2xl font-bold">Correct transaction</h1>
 {% include "finance/_messages.html" %}
 <p class="mb-4 opacity-80">{{ transaction.account.name }} · {{ transaction.import_batch.get_source_display }} · {{ transaction.currency }}</p>
+{% if is_split %}
+<h2 class="mb-3 text-xl font-semibold">Split parts</h2>
+<ul class="mb-6 space-y-3">
+  {% for part, part_form in part_forms %}
+  <li>
+    <form method="post" action="{% url 'transaction-split-part-category' transaction.pk part.pk %}" class="flex flex-wrap items-end gap-3">
+      {% csrf_token %}
+      <p class="mb-0">{{ part.amount_display }}</p>
+      {% include "finance/_form_fields.html" with form=part_form %}
+      <button type="submit" class="btn btn-primary">Save part category</button>
+    </form>
+  </li>
+  {% endfor %}
+</ul>
+<form method="post" action="{% url 'transaction-unsplit' transaction.pk %}" class="mb-8 max-w-lg">
+  {% csrf_token %}
+  {% include "finance/_form_fields.html" with form=unsplit_form %}
+  <button type="submit" class="btn btn-primary">Unsplit</button>
+</form>
+{% else %}
+<form method="post" action="{% url 'transaction-categorize' transaction.pk %}" class="mb-8 max-w-lg">
+  {% csrf_token %}
+  {% include "finance/_form_fields.html" with form=category_form %}
+  <button type="submit" class="btn btn-primary">Save category</button>
+</form>
+{% if rule_offer %}
+<div role="status" class="alert mb-8 max-w-lg flex flex-wrap">
+  <span class="min-w-0 break-words">{{ rule_offer.count }} other transaction{{ rule_offer.count|pluralize }} contain “{{ rule_offer.description_contains }}” and aren't in {{ rule_offer.category_name }}.</span>
+  <a class="btn btn-sm min-h-11 h-auto max-w-full whitespace-normal break-words" href="{{ rule_offer.url }}">Preview a rule for “{{ rule_offer.description_contains }}”</a>
+</div>
+{% endif %}
+<p class="mb-8 max-w-lg text-sm"><a class="btn btn-link min-h-11" href="{% url 'category-list' %}">Manage categories</a></p>
+{% endif %}
 <form method="post" class="mb-8 max-w-lg">
   {% csrf_token %}
   {% include "finance/_form_fields.html" %}
@@ -53,39 +86,6 @@
   {% include "finance/_form_fields.html" with form=note_form %}
   <button type="submit" class="btn btn-primary">Save note and tags</button>
 </form>
-{% if is_split %}
-<h2 class="mb-3 text-xl font-semibold">Split parts</h2>
-<ul class="mb-6 space-y-3">
-  {% for part, part_form in part_forms %}
-  <li>
-    <form method="post" action="{% url 'transaction-split-part-category' transaction.pk part.pk %}" class="flex flex-wrap items-end gap-3">
-      {% csrf_token %}
-      <p class="mb-0">{{ part.amount_display }}</p>
-      {% include "finance/_form_fields.html" with form=part_form %}
-      <button type="submit" class="btn btn-primary">Save part category</button>
-    </form>
-  </li>
-  {% endfor %}
-</ul>
-<form method="post" action="{% url 'transaction-unsplit' transaction.pk %}" class="mb-8 max-w-lg">
-  {% csrf_token %}
-  {% include "finance/_form_fields.html" with form=unsplit_form %}
-  <button type="submit" class="btn btn-primary">Unsplit</button>
-</form>
-{% else %}
-<form method="post" action="{% url 'transaction-categorize' transaction.pk %}" class="mb-8 max-w-lg">
-  {% csrf_token %}
-  {% include "finance/_form_fields.html" with form=category_form %}
-  <button type="submit" class="btn btn-primary">Save category</button>
-</form>
-{% if rule_offer %}
-<div role="status" class="alert mb-8 max-w-lg flex flex-wrap">
-  <span class="min-w-0 break-words">{{ rule_offer.count }} other transaction{{ rule_offer.count|pluralize }} contain “{{ rule_offer.description_contains }}” and aren't in {{ rule_offer.category_name }}.</span>
-  <a class="btn btn-sm min-h-11 h-auto max-w-full whitespace-normal break-words" href="{{ rule_offer.url }}">Preview a rule for “{{ rule_offer.description_contains }}”</a>
-</div>
-{% endif %}
-<p class="mb-8 max-w-lg text-sm"><a class="btn btn-link min-h-11" href="{% url 'category-list' %}">Manage categories</a></p>
-{% endif %}
 {% if transaction.untracked_transfer %}
 <section class="mb-8 max-w-lg" aria-labelledby="untracked-heading">
   <h2 id="untracked-heading" class="mb-3 text-xl font-semibold">Transfer to or from an account you don't track</h2>

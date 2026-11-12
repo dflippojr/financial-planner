@@ -261,3 +261,13 @@ def test_offer_keeps_repeated_spaces_so_the_rule_matches_its_rows():
     offer = _categorize(client, edited, dining(household)).context["rule_offer"]
     assert offer["count"] == 2
     assert client.get(offer["url"]).context["form"].initial["description_contains"] == padded
+
+
+@pytest.mark.django_db
+def test_rule_offer_sits_with_the_category_control_above_the_correction_form():
+    owner, household, account, edited, rest, client = _setup()
+    html = _categorize(client, edited, dining(household)).content.decode()
+    categorize = html.index("Save category")
+    offer = html.index("Preview a rule for")
+    correction = html.index("Save correction")
+    assert categorize < offer < correction
