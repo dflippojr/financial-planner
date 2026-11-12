@@ -12,7 +12,13 @@ from .access import DENIED as _DENIED
 from .access import require_person as _person
 from .access import visible_rows
 from .audit_services import owned_audience, record
-from .cash_flow import _combine_category_spending, format_minor, selected_accounts, spending_by_category_report
+from .cash_flow import (
+    _combine_category_spending,
+    format_minor,
+    selected_accounts,
+    spending_by_category_report,
+    spending_category_detail_url,
+)
 from .category_services import current_household, spending_by_category_by_window
 from .edit_permission_services import check_can_edit
 from .input_limits import BUDGET_MONTH_FLOOR, BUDGET_FUTURE_MONTHS, MAX_CARRY_MONTHS
@@ -281,12 +287,11 @@ def _report_key(category):
     return "uncategorized" if category.code == Category.Code.UNCATEGORIZED else str(category.pk)
 
 
-def _category_query(month, *, scope, key):
-    query = {"date_from": month.isoformat(), "date_to": month_end(month).isoformat()}
-    if scope:
-        query["scope"] = scope
-    query["category"] = key
-    return f"{reverse('transaction-list')}?{urlencode(query)}"
+def _spending_category_url(month, *, scope, key):
+    """The Spending category view for the month and scope: it applies the report's
+    own transfer and refund rules, where the Transactions list judges a transfer
+    by every visible leg even in Household scope."""
+    return spending_category_detail_url(key, month, month_end(month), scope=scope)
 
 
 def budget_coverage(principal, month, *, scope=""):
@@ -348,8 +353,8 @@ def budget_coverage(principal, month, *, scope=""):
             spending_minor=gap_minor,
             spending_display=format_minor(gap_minor),
             private_only=partial,
-            drilldown_url=(
-                _category_query(month, scope=Account.Scope.PRIVATE, key=row.key) if partial else row.drilldown_url
+            drilldown_url=_spending_category_url(
+                month, scope=Account.Scope.PRIVATE if partial else scope, key=row.key
             ),
         ))
     gap_rows.sort(key=lambda item: (-item.spending_minor, item.name.lower()))

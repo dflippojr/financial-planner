@@ -221,7 +221,7 @@ def test_budgets_page_shows_budgeted_total_and_gap_for_month_and_scope():
     assert "\u2212$83.00" in section  # budgeted: 50.00 - 7.00 + 40.00
     assert "\u2212$135.00" in section  # total, the Spending page figure
     assert "\u2212$52.00" in section  # gap: 25 + 18 + 9
-    assert "category=uncategorized" in section
+    assert 'href="/spending/category/uncategorized/?date_from=2026-01-01' in section
     assert ">Dining</a>" in section
     assert ">Groceries</a>" not in section
 
