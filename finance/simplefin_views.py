@@ -10,7 +10,7 @@ from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods
 
-from .access import request_person as _person
+from .access import request_person as _person, visible_rows
 from .category_services import current_household
 from .forms import SimpleFinSetupForm
 from .models import Account, AccountLink, SimpleFinConnection
@@ -26,7 +26,7 @@ from .simplefin_budget import (
 )
 from .simplefin_errors import SimpleFinAlreadyClaimed, SimpleFinError, SimpleFinRateLimited
 from .simplefin_flow import BRIDGE_URL, FlowError, cancel_flow, check_flow, start_flow
-from .simplefin_health import bank_rows, stored_read
+from .simplefin_health import bank_rows, last_synced_days, stored_read
 from .simplefin_schedule import next_scheduled_sync
 from .simplefin_services import (
     claim_connection,
@@ -163,6 +163,65 @@ def _handle_link(request, connection, remotes, load_error):
     return redirect("simplefin-connections")
 
 
+def _orphaned_links(person, connection, remotes, load_error):
+    """Saved links whose account the latest successful read no longer reports.
+
+    Empty when the read failed: an outage must never make a link look orphaned.
+    A linked account the member can no longer see keeps its name and dates hidden.
+    """
+    if connection is None or load_error:
+        return []
+    reported = {remote["id"] for remote in remotes}
+    links = list(
+        AccountLink.objects.filter(connection=connection)
+        .exclude(simplefin_account_id__in=reported)
+        .order_by("account__name", "pk")
+        .values("simplefin_account_id", "account_id", "account__name", "cutover_date")
+    )
+    visible = set(visible_rows(Account, person).values_list("pk", flat=True))
+    last_synced = last_synced_days({link["account_id"] for link in links} & visible)
+    rows = []
+    for link in links:
+        shown = link["account_id"] in visible
+        rows.append({
+            "simplefin_account_id": link["simplefin_account_id"],
+            "visible": shown,
+            "account_name": link["account__name"] if shown else "",
+            "last_synced": last_synced.get(link["account_id"]) if shown else None,
+            "cutover": link["cutover_date"] if shown else None,
+        })
+    return rows
+
+
+def _handle_orphans(request, connection, orphans, load_error):
+    """Keep or unlink the posted orphaned links. Unlink is the Ignore path: only the link is deleted."""
+    if load_error:
+        messages.error(request, "SimpleFIN accounts could not be listed, so no link was changed.")
+        return redirect("simplefin-connections")
+    orphan_ids = {row["simplefin_account_id"] for row in orphans}
+    unlink = []
+    for key in request.POST:
+        suffix = key.removeprefix("orphan_id_")
+        if suffix == key or not suffix.isdigit():
+            continue
+        simplefin_account_id = request.POST.get(key, "")
+        # Only links the latest read no longer reports; a reported link is changed in the table above.
+        if simplefin_account_id in orphan_ids and request.POST.get(f"orphan_action_{suffix}") == "unlink":
+            unlink.append({"simplefin_account_id": simplefin_account_id, "action": "ignore"})
+    if not unlink:
+        messages.info(request, "No link was changed.")
+        return redirect("simplefin-connections")
+    try:
+        save_account_links(request.user, connection.pk, unlink)
+    except PermissionDenied as exc:
+        raise Http404 from exc
+    if len(unlink) == 1:
+        messages.success(request, "Unlinked 1 account. Its transactions were kept.")
+    else:
+        messages.success(request, f"Unlinked {len(unlink)} accounts. Their transactions were kept.")
+    return redirect("simplefin-connections")
+
+
 def _cutover_for(remote, link_map):
     link = link_map.get(remote["id"])
     if link is not None:
@@ -207,6 +266,9 @@ def connections(request):
         response = _handle_link(request, connection, remotes, load_error)
         if response is not None:
             return response
+    orphans = _orphaned_links(person, connection, remotes, load_error)
+    if request.method == "POST" and request.POST.get("intent") == "orphans" and connection is not None:
+        return _handle_orphans(request, connection, orphans, load_error)
     link_map = {
         link.simplefin_account_id: link
         for link in AccountLink.objects.select_related("account").filter(connection=connection)
@@ -228,6 +290,7 @@ def connections(request):
             "form": form,
             "connection": connection,
             "rows": rows,
+            "orphans": orphans,
             "accounts": accounts,
             "has_household": current_household(person) is not None,
             "provider_messages": provider_messages,

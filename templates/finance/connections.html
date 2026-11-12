@@ -195,6 +195,44 @@
   </div>
 </section>
 {% endif %}
+
+{% if orphans %}
+<section class="card bg-base-100 shadow-sm mb-6" aria-labelledby="simplefin-orphans-heading">
+  <div class="card-body">
+    <h2 class="card-title" id="simplefin-orphans-heading">No longer reported by SimpleFIN</h2>
+    <p class="text-sm opacity-80 max-w-2xl">
+      These accounts are still linked, but SimpleFIN's latest read did not include them. While linked, CSV imports
+      refuse rows from the cut-over through the newest synced transaction. Unlink stops that, as Ignore does. The account and its transactions stay.
+    </p>
+    <form method="post">
+      {% csrf_token %}
+      <input type="hidden" name="intent" value="orphans">
+      <ul class="divide-y divide-base-300" id="simplefin-orphan-list">
+        {% for orphan in orphans %}
+        <li class="py-3 flex flex-wrap items-end justify-between gap-2">
+          <div class="min-w-0">
+            <p class="font-medium break-words">{% if orphan.visible %}{{ orphan.account_name }}{% else %}An account you can no longer see{% endif %}</p>
+            {% if orphan.visible %}
+            <p class="text-sm opacity-80">Last synced transaction: {% if orphan.last_synced %}{{ orphan.last_synced|date:"Y-m-d" }}{% else %}none yet{% endif %}</p>
+            <p class="text-sm opacity-80">Cut-over: {{ orphan.cutover|date:"Y-m-d" }}</p>
+            {% endif %}
+          </div>
+          <div>
+            <input type="hidden" name="orphan_id_{{ forloop.counter0 }}" value="{{ orphan.simplefin_account_id }}">
+            <label class="sr-only" for="orphan-action-{{ forloop.counter0 }}">Keep or unlink {% if orphan.visible %}{{ orphan.account_name }}{% else %}the account you can no longer see{% endif %}</label>
+            <select id="orphan-action-{{ forloop.counter0 }}" class="select select-bordered select-sm" name="orphan_action_{{ forloop.counter0 }}">
+              <option value="keep" selected>Keep</option>
+              <option value="unlink">Unlink</option>
+            </select>
+          </div>
+        </li>
+        {% endfor %}
+      </ul>
+      <button type="submit" class="btn btn-primary mt-4">Save</button>
+    </form>
+  </div>
+</section>
+{% endif %}
 {% endif %}
 <script src="{% static 'js/simplefin-flow.js' %}" defer></script>
 {% endblock %}

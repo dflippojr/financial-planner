@@ -231,6 +231,26 @@ def _link_bank_key(simplefin_account_id: str) -> str:
     return unquote(conn_id) if sep else ""
 
 
+def last_synced_days(account_ids) -> dict:
+    """Each account's newest active SimpleFIN transaction date, in one grouped query."""
+    from django.db.models import Max
+
+    from finance.models import ImportBatch, Transaction
+
+    if not account_ids:
+        return {}
+    rows = (
+        Transaction.objects.filter(
+            account_id__in=account_ids,
+            status=Transaction.Status.ACTIVE,
+            import_batch__source=ImportBatch.Source.SIMPLEFIN,
+        )
+        .values("account_id")
+        .annotate(latest=Max("transaction_date"))
+    )
+    return {row["account_id"]: row["latest"] for row in rows}
+
+
 def link_is_failing(link, now=None) -> bool:
     """Whether SimpleFIN has stopped supplying this link's account (#735).
 

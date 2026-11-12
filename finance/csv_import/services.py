@@ -21,7 +21,7 @@ from finance.lifecycle_services import (
 )
 from finance.csv_import.saved_mappings import headers_match, lock_saved_mapping, mapping_from_saved
 from finance.models import Account, AccountLink, AuditEvent, ImportBatch, SavedCsvMapping, Transaction
-from finance.simplefin_health import link_is_failing
+from finance.simplefin_health import last_synced_days, link_is_failing
 
 MAPPING_CHANGED = "This mapping changed; preview the file again."
 
@@ -90,20 +90,6 @@ class SimpleFinWindow:
         return f"Covered by SimpleFIN through {(accepted_from - timedelta(days=1)).isoformat()}."
 
 
-def _last_synced_day(account):
-    """The account's newest active SimpleFIN transaction date, or None."""
-    return (
-        Transaction.objects.filter(
-            account=account,
-            status=Transaction.Status.ACTIVE,
-            import_batch__source=ImportBatch.Source.SIMPLEFIN,
-        )
-        .order_by("-transaction_date")
-        .values_list("transaction_date", flat=True)
-        .first()
-    )
-
-
 def simplefin_window(account, now=None) -> SimpleFinWindow | None:
     """The account's transactions-mode SimpleFIN window, or None when it has no such link."""
     link = (
@@ -117,7 +103,7 @@ def simplefin_window(account, now=None) -> SimpleFinWindow | None:
     return SimpleFinWindow(
         cutover=link.cutover_date,
         failing=failing,
-        last_synced=_last_synced_day(account) if failing else None,
+        last_synced=last_synced_days({account.pk}).get(account.pk) if failing else None,
     )
 
 
