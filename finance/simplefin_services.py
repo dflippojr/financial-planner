@@ -874,7 +874,8 @@ def _locked_connection(person, connection_id, plan, *, ignore_rate_limit):
     if _rate_limited(connection, ignore_rate_limit=ignore_rate_limit):
         # Another sync finished while this one was fetching.
         raise SimpleFinRateLimited(RATE_LIMITED)
-    links = list(AccountLink.objects.select_related("account").filter(connection=connection))
+    # Link order fixes the order of skip messages, so it must not depend on row storage.
+    links = list(AccountLink.objects.select_related("account").filter(connection=connection).order_by("pk"))
     start_epoch = _start_epoch([link.cutover_date for link in links])
     if start_epoch is not None and (plan.start_epoch is None or start_epoch < plan.start_epoch):
         # A link with an earlier cut-over was saved after the fetch began, so
