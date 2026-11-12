@@ -7,7 +7,11 @@ from django.db import transaction
 from django.utils import timezone
 
 from finance.audit_services import record
-from finance.calculated_balances import refresh_calculated_balances
+from finance.calculated_balances import (
+    has_calculated_expression,
+    refresh_calculated_balances,
+    refresh_locked_calculated_balances,
+)
 from finance.input_limits import MAX_DESCRIPTION_CHARS
 from finance.csv_import.fingerprint import file_import_fingerprint_description, transaction_fingerprint
 from finance.csv_import.parser import Preview, preview_csv
@@ -16,7 +20,6 @@ from finance.lifecycle_services import (
     _DENIED,
     _lock_visible_account_with_pair_and_refund_counterparts,
     _person_for,
-    _visible_account_for_update,
     lock_actor_household,
 )
 from finance.csv_import.saved_mappings import headers_match, lock_saved_mapping, mapping_from_saved
@@ -34,7 +37,17 @@ class ImportCommitResult:
 
 
 def _active_account(principal, account_id):
-    account = _visible_account_for_update(principal, account_id)
+    # The same lock query as _visible_account_for_update, also reading whether the
+    # account has saved calculated balances, so an import pays no query to learn it.
+    account = (
+        Account.objects.visible_to(principal)
+        .select_for_update()
+        .annotate(_has_calculated=has_calculated_expression())
+        .filter(pk=account_id)
+        .first()
+    )
+    if account is None:
+        raise PermissionDenied(_DENIED)
     if account.status != Account.Status.ACTIVE or account.archived_at is not None:
         raise PermissionDenied(_DENIED)
     return account
@@ -197,7 +210,8 @@ def commit_csv_import(
             ]
         )
         # Late rows dated on or before the anchor change saved calculated balances (#641).
-        refresh_calculated_balances(person, account.pk)
+        if account._has_calculated:
+            refresh_locked_calculated_balances(person, account)
     counts = {"new_count": preview.new_count, "duplicate_count": preview.duplicate_count,
               "invalid_count": preview.invalid_count, "format": source, "batch_id": batch.pk}
     if new_rows:

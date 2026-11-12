@@ -18,7 +18,7 @@ FINANCE = Path(__file__).resolve().parent.parent / "finance"
 LEDGER_MODELS = {"Transaction", "BalanceSnapshot"}
 QUERYSET_WRITES = {"create", "bulk_create", "update_or_create", "get_or_create", "update", "delete", "bulk_update"}
 LEDGER_FIELDS = {"status", "archived_at", "amount_minor", "transaction_date", "account", "account_id", "snapshot_date"}
-REFRESH_CALLS = {"refresh_calculated_balances", "_refresh_calculated"}
+REFRESH_CALLS = {"refresh_calculated_balances", "refresh_locked_calculated_balances", "_refresh_calculated"}
 
 COVERED_BY_CALLER = {
     "simplefin_services.py:_upsert_snapshot": "simplefin_services.py:_sync_one_link",

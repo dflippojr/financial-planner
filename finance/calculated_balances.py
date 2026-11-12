@@ -222,12 +222,25 @@ def refresh_calculated_balances(person, account_id):
     """
     if not transaction.get_connection().in_atomic_block:
         raise RuntimeError("refresh_calculated_balances must run inside the caller's transaction.")
-    has_calculated = Exists(
-        BalanceSnapshot.objects.filter(account=OuterRef("pk"), source=BalanceSnapshot.Source.CALCULATED)
-    )
-    account = Account.objects.select_for_update(of=("self",)).filter(has_calculated, pk=account_id).first()
+    account = Account.objects.select_for_update(of=("self",)).filter(has_calculated_expression(), pk=account_id).first()
     if account is None:
         return (0, 0, 0)
+    return refresh_locked_calculated_balances(person, account)
+
+
+def has_calculated_expression():
+    """Annotate an account query with whether the account has calculated rows (no extra query)."""
+    return Exists(BalanceSnapshot.objects.filter(account=OuterRef("pk"), source=BalanceSnapshot.Source.CALCULATED))
+
+
+def refresh_locked_calculated_balances(person, account):
+    """refresh_calculated_balances for a caller that already holds the account lock.
+
+    For a hot path that read has_calculated_expression() with its own lock
+    query and found calculated rows, so the refresh adds no lock query.
+    """
+    if not transaction.get_connection().in_atomic_block:
+        raise RuntimeError("refresh_locked_calculated_balances must run inside the caller's transaction.")
     try:
         wanted = {row.month_end: row.balance_minor for row in calculate(account).rows}
     except CalculationError:
