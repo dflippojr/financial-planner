@@ -23,6 +23,7 @@ from hypothesis import example, given
 from hypothesis import strategies as st
 
 from finance.bills_calendar import build_month, calendar_inputs
+from finance.bulk_edit_services import ACTION_MARK_UNTRACKED, apply_bulk_edit
 from finance.cash_flow import (
     cash_flow_report,
     selected_accounts,
@@ -35,19 +36,23 @@ from finance.category_services import (
     income_and_spending_totals,
     link_refund,
 )
+from finance.csv_import.services import undo_import_batch
 from finance.lifecycle_services import archive_account
 from finance.models import (
     Account,
     BalanceSnapshot,
     Category,
+    CategoryRule,
     PlannedItem,
     RecurringSeries,
     SavingsGoal,
+    Transaction,
     TransferPair,
 )
 from finance.monthly_review import review_for_viewer
 from finance.months import add_months, month_end
 from finance.net_worth import net_worth_report
+from finance.rule_services import apply_rule, save_category_rule
 from finance.planning_services import projected_months_for, save_planned_item, visible_projection_inputs
 from finance.savings_goal_services import goal_progress
 from finance.untracked_transfers import mark_untracked_transfer
@@ -422,6 +427,94 @@ def test_a_stored_review_never_silently_disagrees_with_cash_flow_after_a_late_im
         shown = _review_totals(page.context["review"])
         stale_hint = "new transactions since this review" in page.content.decode().lower()
         assert shown == _report_by_month(viewer, "")[case.review_month] or stale_hint
+
+
+# A change to a row in another month can move the review month's rows in or out
+# of income and spending: marking a July purchase as an untracked transfer (edit
+# page, bulk edit or rule) or undoing its import drops the link of its August
+# refund, which then counts as income (#570, #642). The same law as for a late
+# import holds for every such change (#675): the page matches cash flow or says it may not.
+STALE_HINT = "may not match cash flow until you regenerate it"
+OTHER_MONTH_CHANGES = ("mark", "bulk", "rule", "undo")
+
+
+@dataclass(frozen=True)
+class OtherMonthCase:
+    purchases: tuple  # July purchase sizes on the joint account, imported as one file
+    refunds: tuple  # (size, index into purchases): August refunds linked to July purchases
+    income: tuple  # unlinked August deposits
+    change: str  # one of OTHER_MONTH_CHANGES
+    targets: tuple  # indexes into purchases that the change marks (every purchase for "undo")
+    actor: str  # who makes the change: either member sees the joint account
+
+
+@st.composite
+def other_month_cases(draw):
+    purchase_count = draw(st.integers(1, 3))
+    refund_count = draw(st.integers(0, 3))
+    income_count = draw(st.integers(0, 2))
+    sizes = _distinct_sizes(draw, purchase_count + refund_count + income_count)
+    purchases = tuple(sizes[:purchase_count])
+    refunds = tuple((size, draw(st.integers(0, purchase_count - 1)))
+                    for size in sizes[purchase_count:purchase_count + refund_count])
+    change = draw(st.sampled_from(OTHER_MONTH_CHANGES))
+    targets = tuple(range(purchase_count)) if change == "undo" else tuple(sorted(draw(
+        st.sets(st.integers(0, purchase_count - 1), min_size=1, max_size=1 if change == "rule" else purchase_count))))
+    return OtherMonthCase(purchases, refunds, tuple(sizes[purchase_count + refund_count:]), change, targets,
+                          draw(st.sampled_from(("viewer", "other"))))
+
+
+def _change_another_month(case, actor, account, july_batch, pks, purchase_rows):
+    target_ids = [pks[purchase_rows[index].payee] for index in case.targets]
+    if case.change == "mark":
+        for transaction_id in target_ids:
+            mark_untracked_transfer(actor, transaction_id)
+    elif case.change == "bulk":
+        apply_bulk_edit(actor, matching=Transaction.objects.none(), transaction_ids=target_ids,
+                        action=ACTION_MARK_UNTRACKED)
+    elif case.change == "rule":
+        rule = save_category_rule(
+            actor, owner_kind="personal", description_contains=purchase_rows[case.targets[0]].payee,
+            account_id=None, min_amount_minor=None, max_amount_minor=None, category_id=None, priority=0,
+            action=CategoryRule.Action.UNTRACKED_TRANSFER,
+        )
+        apply_rule(actor, rule.pk)
+    else:
+        undo_import_batch(actor.user, account.pk, july_batch.pk)
+
+
+@given(other_month_cases())
+# The #675 report: a 50.00 July purchase with a 20.00 August refund, marked untracked.
+@example(OtherMonthCase(purchases=(5_000,), refunds=((2_000, 0),), income=(), change="mark", targets=(0,),
+                        actor="viewer"))
+def test_a_stored_review_never_silently_disagrees_with_cash_flow_after_a_change_to_another_month(case):
+    july, august = date(2026, 7, 20), date(2026, 8, 5)
+    purchase_rows = [_row(i, july, -size, "PURCHASE") for i, size in enumerate(case.purchases)]
+    refund_rows = [_row(len(purchase_rows) + i, august, size, "REFUND") for i, (size, _o) in enumerate(case.refunds)]
+    income_rows = [_row(len(purchase_rows) + len(refund_rows) + i, august, size, "PAY")
+                   for i, size in enumerate(case.income)]
+    with ledger.isolated():
+        people = {"viewer": ledger.make_member("viewer"), "other": ledger.make_member("other")}
+        household = ledger.make_household(*people.values())
+        viewer = people["viewer"]
+        account = ledger.make_account(viewer, Account.Type.CHECKING, household=household)
+        july_batch = ledger.import_rows(viewer, account, HUNTINGTON, purchase_rows).batch
+        ledger.import_rows(viewer, account, HUNTINGTON, refund_rows + income_rows)
+        pks = _rows_by_description([account])
+        for row, (_size, original) in zip(refund_rows, case.refunds, strict=True):
+            link_refund(viewer, pks[row.payee], pks[purchase_rows[original].payee])
+        review_month = date(2026, 8, 1)
+        review_for_viewer(viewer, review_month, today=TODAY)
+
+        _change_another_month(case, people[case.actor], account, july_batch, pks, purchase_rows)
+
+        client = Client()
+        client.force_login(viewer.user)
+        page = client.get(reverse("monthly-review") + "?month=2026-08")
+        assert page.status_code == 200
+        shown = _review_totals(page.context["review"])
+        stale_hint = STALE_HINT in page.content.decode().lower()
+        assert shown == _report_by_month(viewer, "")[review_month] or stale_hint
 
 
 # 4. Recurring: the monthly total is the annual total / 12, to the cent, on every view.

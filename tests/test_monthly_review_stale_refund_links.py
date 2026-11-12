@@ -18,14 +18,18 @@ from finance.cash_flow import cash_flow_report
 from finance.category_services import assign_category, link_refund
 from finance.csv_import.parser import read_csv
 from finance.csv_import.services import commit_csv_import, undo_import_batch
-from finance.models import CategoryRule, ImportBatch, RefundLink, Transaction
+from finance.models import CategoryRule, ImportBatch, RefundLink, Transaction, TransactionCorrectionHistory
 from finance.monthly_review import review_for_viewer
 from finance.rule_services import apply_rule, save_category_rule
 from finance.untracked_transfers import mark_untracked_transfer
 from tests.test_category_rules import mapping
-from tests.test_untracked_transfers import MONTH, TODAY, world  # noqa: F401 - pytest fixture
+from tests import test_untracked_transfers as untracked
+from tests.test_untracked_transfers import MONTH, TODAY
 
 pytestmark = pytest.mark.django_db
+
+# The owner and a member share a household checking account (fixture from #642's tests).
+world = untracked.world
 
 STALE = "may not match cash flow until you regenerate it"
 PURCHASE = "SYNTHETIC GADGET"
@@ -40,7 +44,8 @@ def _july_purchase_with_august_refund(world, *, purchase=None):
     Transaction.objects.filter(pk=refund.pk).update(transaction_date=date(2026, 8, 5))
     assign_category(owner, purchase.pk, world["shopping"].pk)
     link_refund(owner, refund.pk, purchase.pk)
-    review_for_viewer(owner, MONTH[0], today=TODAY)
+    for viewer in (owner, world["member"]):
+        review_for_viewer(viewer, MONTH[0], today=TODAY)
     return purchase, refund
 
 
@@ -109,3 +114,16 @@ def test_undoing_the_july_import_shows_the_hint_on_the_august_review(world):
 
     undo_import_batch(owner.user, world["shared"].pk, batch.pk)
     _assert_stale_until_regenerated(world, refund)
+
+
+def test_a_refund_link_dropped_for_another_member_alone_shows_no_hint(world):
+    owner, member = world["owner"], world["member"]
+    _purchase, refund = _july_purchase_with_august_refund(world)
+    # A link dropped for one member alone is listed only to them (#570), so it
+    # must not tell anyone else that something changed.
+    TransactionCorrectionHistory.objects.create(
+        transaction=refund, actor=member, field_name=TransactionCorrectionHistory.Field.REFUND_LINK,
+        previous_description="linked", new_description="unlinked", only_for=member,
+    )
+    assert STALE not in _august_page(owner).content.decode().lower()
+    assert STALE in _august_page(member).content.decode().lower()
