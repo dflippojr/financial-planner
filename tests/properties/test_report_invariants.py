@@ -11,6 +11,7 @@ xfail(strict=True) with that bug's number and its shrunk counterexample.
 """
 
 from collections import Counter
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_EVEN, Decimal
@@ -23,6 +24,7 @@ from hypothesis import example, given
 from hypothesis import strategies as st
 
 from finance.bills_calendar import build_month, calendar_inputs
+from finance.budget_services import budget_coverage, save_budget
 from finance.cash_flow import (
     cash_flow_report,
     selected_accounts,
@@ -39,6 +41,7 @@ from finance.lifecycle_services import archive_account
 from finance.models import (
     Account,
     BalanceSnapshot,
+    Budget,
     Category,
     PlannedItem,
     RecurringSeries,
@@ -221,7 +224,9 @@ def _percent(display):
     return None if display == "—" else Decimal(display.rstrip("%"))
 
 
-def _check_category_shares(case):
+@contextmanager
+def _category_ledger(case):
+    """The case's ledger on one household checking account; yields viewer, household, categories, expected."""
     august = date(2026, 8, 12)
     rows = [_row(i, august, -size, "PURCHASE") for i, (size, _category) in enumerate(case.purchases)]
     rows += [_row(len(rows) + i, date(2026, 7, 12), -size, "EARLIER") for i, (size, _c) in enumerate(case.earlier)]
@@ -250,6 +255,11 @@ def _check_category_shares(case):
             expected[category] += size
         for size, original in case.refunds:
             expected[originals[original][1]] -= size
+        yield viewer, household, categories, expected
+
+
+def _check_category_shares(case):
+    with _category_ledger(case) as (viewer, _household, categories, expected):
         report = spending_by_category_report(viewer, date_from=REPORT_MONTH[0], date_to=REPORT_MONTH[1])
         names = {None: "Uncategorized", **{i: category.name for i, category in enumerate(categories)}}
         assert {row.name: row.spending_minor for row in report.rows if row.spending_minor} == {
@@ -289,6 +299,53 @@ def test_category_shares_are_percentages_of_spending_that_match_the_donut(case):
 @example(CategoryCase(purchases=((1, None),), earlier=((2, 0),), refunds=((3, 1),), income=()))
 def test_category_shares_stay_within_0_and_100_percent_when_refunds_exceed_spending(case):
     _check_category_shares(case)
+
+
+@given(
+    category_cases(with_refunds=True),
+    st.sets(st.none() | st.integers(0, 3)),
+    st.sets(st.none() | st.integers(0, 3)),
+    st.booleans(),
+)
+def test_budget_coverage_splits_the_spending_total_by_category_budget(case, private, shared, overall):
+    """Budgets coverage (#725): the total is the Spending report's, and the gap is
+    exactly the generated spending of categories with no category budget; an
+    overall budget changes nothing. Every account here is household, so a
+    household budget covers its category as fully as a private one."""
+    with _category_ledger(case) as (viewer, household, categories, expected):
+        uncategorized = Category.objects.get(household=household, code=Category.Code.UNCATEGORIZED)
+        for indexes, scope in ((private, Budget.Scope.PRIVATE), (shared, Budget.Scope.HOUSEHOLD)):
+            for index in indexes:
+                save_budget(viewer.user, {
+                    "scope": scope,
+                    "category": uncategorized if index is None else categories[index],
+                    "amount_minor": 10_000,
+                    "effective_month": date(2026, 8, 1),
+                    "rollover_enabled": False,
+                })
+        if overall:
+            save_budget(viewer.user, {
+                "scope": Budget.Scope.PRIVATE, "category": None, "amount_minor": 1,
+                "effective_month": date(2026, 8, 1), "rollover_enabled": False,
+            })
+        # Index None is the Uncategorized category's budget, not the overall total.
+        budgeted = private | shared
+        names = {None: "Uncategorized", **{i: category.name for i, category in enumerate(categories)}}
+        for scope in ("", HOUSEHOLD, PRIVATE):
+            report = spending_by_category_report(
+                viewer, date_from=REPORT_MONTH[0], date_to=REPORT_MONTH[1], scope=scope
+            )
+            coverage = budget_coverage(viewer.user, date(2026, 8, 1), scope=scope)
+            assert coverage.total_spending_minor == report.total_spending_minor
+            if scope == PRIVATE:
+                assert coverage.total_spending_minor == coverage.budgeted_minor == coverage.gap_minor == 0
+                continue
+            gap = {names[key]: amount for key, amount in expected.items() if key not in budgeted and amount}
+            assert {row.name: row.spending_minor for row in coverage.gap_rows} == gap
+            assert coverage.gap_minor == sum(gap.values())
+            assert coverage.budgeted_minor == sum(
+                amount for key, amount in expected.items() if key in budgeted
+            )
 
 
 # 3. Cash flow: per month and scope, net is income minus spending, and every view agrees.

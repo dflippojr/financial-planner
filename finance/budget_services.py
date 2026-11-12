@@ -10,8 +10,9 @@ from django.utils import timezone
 
 from .access import DENIED as _DENIED
 from .access import require_person as _person
+from .access import visible_rows
 from .audit_services import owned_audience, record
-from .cash_flow import _combine_category_spending, format_minor, selected_accounts
+from .cash_flow import _combine_category_spending, format_minor, selected_accounts, spending_by_category_report
 from .category_services import current_household, spending_by_category_by_window
 from .edit_permission_services import check_can_edit
 from .input_limits import BUDGET_MONTH_FLOOR, BUDGET_FUTURE_MONTHS, MAX_CARRY_MONTHS
@@ -267,6 +268,102 @@ def month_budget_cards(principal, month, *, include_archived=False, accounts=Non
             cards.append(progress_for(budget, month, reports, named))
     cards.sort(key=lambda card: (card.budget.scope, card.name.lower(), card.budget.pk))
     return cards
+
+
+COVERAGE_SCOPES = ("", Account.Scope.PRIVATE, Account.Scope.HOUSEHOLD)
+
+
+def parse_coverage_scope(raw):
+    return raw if raw in COVERAGE_SCOPES else ""
+
+
+def _report_key(category):
+    return "uncategorized" if category.code == Category.Code.UNCATEGORIZED else str(category.pk)
+
+
+def _category_query(month, *, scope, key):
+    query = {"date_from": month.isoformat(), "date_to": month_end(month).isoformat()}
+    if scope:
+        query["scope"] = scope
+    query["category"] = key
+    return f"{reverse('transaction-list')}?{urlencode(query)}"
+
+
+def budget_coverage(principal, month, *, scope=""):
+    """Category-budgeted spending against the month's total, with the gap by category (#725).
+
+    The total and the per-category amounts are the Spending page's own report for
+    the month and account scope, so refunds, transfers and untracked transfers
+    count exactly as they do there. Only category budgets cover spending (owner
+    decision on #725); an overall budget never does. A budget covers the accounts
+    it measures: a private budget every account the viewer sees, a household
+    budget household accounts only, so with All accounts a category with only a
+    household budget leaves its private-account spending in the gap.
+    """
+    month = month_start(month)
+    scope = parse_coverage_scope(scope)
+    report = spending_by_category_report(principal, date_from=month, date_to=month_end(month), scope=scope)
+    budgets = (
+        visible_rows(Budget, principal)
+        .filter(status=Budget.Status.ACTIVE, category__isnull=False)
+        .select_related("category")
+    )
+    private_keys = set()
+    household_keys = set()
+    for budget in budgets:
+        key = _report_key(budget.category)
+        (private_keys if budget.scope == Budget.Scope.PRIVATE else household_keys).add(key)
+    household_keys -= private_keys
+    household_spending = {}
+    if household_keys and scope == Account.Scope.HOUSEHOLD:
+        household_spending = {row.key: row.spending_minor for row in report.rows}
+    elif household_keys and scope == "":
+        shared = spending_by_category_report(
+            principal, date_from=month, date_to=month_end(month), scope=Account.Scope.HOUSEHOLD
+        )
+        household_spending = {row.key: row.spending_minor for row in shared.rows}
+    budgeted_minor = 0
+    gap_rows = []
+    for row in report.rows:
+        if row.key in private_keys:
+            covered = row.spending_minor
+        elif row.key in household_keys:
+            covered = household_spending.get(row.key, 0)
+        else:
+            covered = 0
+        budgeted_minor += covered
+        gap_minor = row.spending_minor - covered
+        if gap_minor == 0:
+            continue
+        # With All accounts, a household budget covers the shared accounts; what is left is private.
+        partial = scope == "" and row.key in household_keys
+        gap_rows.append(SimpleNamespace(
+            key=row.key,
+            name=row.name,
+            spending_minor=gap_minor,
+            spending_display=format_minor(gap_minor),
+            private_only=partial,
+            drilldown_url=(
+                _category_query(month, scope=Account.Scope.PRIVATE, key=row.key) if partial else row.drilldown_url
+            ),
+        ))
+    gap_rows.sort(key=lambda item: (-item.spending_minor, item.name.lower()))
+    total_minor = report.total_spending_minor
+    gap_total = total_minor - budgeted_minor
+    spending_query = {"date_from": month.isoformat(), "date_to": month_end(month).isoformat(), "grouping": "month"}
+    if scope:
+        spending_query["scope"] = scope
+    return SimpleNamespace(
+        scope=scope,
+        total_spending_minor=total_minor,
+        total_spending_display=format_minor(total_minor),
+        budgeted_minor=budgeted_minor,
+        budgeted_display=format_minor(budgeted_minor),
+        gap_minor=gap_total,
+        gap_display=format_minor(gap_total),
+        gap_rows=gap_rows,
+        spending_url=f"{reverse('spending-by-category')}?{urlencode(spending_query)}",
+    )
 
 
 NEAR_LIMIT_PERCENT = 85
