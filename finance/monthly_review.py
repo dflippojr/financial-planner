@@ -530,6 +530,20 @@ def has_newer_transactions(principal, review):
     )
 
 
+def _month_history_since(principal, review, field_name):
+    """Visible correction history of `field_name` on the review month's rows, newer than the review.
+
+    History the viewer may not see, such as a refund link dropped for another
+    member alone, never counts, so the hint reveals nothing about it.
+    """
+    return TransactionCorrectionHistory.objects.visible_to(principal).filter(  # pyright: ignore[reportAttributeAccessIssue] - QuerySet.as_manager() is untyped, as for every visible_to in the baseline
+        transaction__transaction_date__gte=review.month,
+        transaction__transaction_date__lte=month_end(review.month),
+        field_name=field_name,
+        recorded_at__gt=review.generated_at,
+    )
+
+
 def has_changed_transfer_marks(principal, review):
     """Whether a visible row for the review's month was marked or unmarked as an
     untracked transfer (#642) after the review was generated.
@@ -538,15 +552,20 @@ def has_changed_transfer_marks(principal, review):
     import (#509), the stored review stays as it was and the page says why it
     may disagree with cash flow.
     """
-    month_rows = Transaction.objects.visible_to(principal).filter(  # pyright: ignore[reportAttributeAccessIssue] - QuerySet.as_manager() is untyped, as for every Transaction.objects.visible_to in the baseline
-        transaction_date__gte=review.month,
-        transaction_date__lte=month_end(review.month),
-    )
-    return TransactionCorrectionHistory.objects.filter(
-        transaction_id__in=month_rows.values("pk"),
-        field_name=TransactionCorrectionHistory.Field.UNTRACKED,
-        recorded_at__gt=review.generated_at,
-    ).exists()
+    return _month_history_since(principal, review, TransactionCorrectionHistory.Field.UNTRACKED).exists()
+
+
+def has_changed_refund_links(principal, review):
+    """Whether a visible refund dated in the review's month was linked or unlinked
+    after the review was generated (#675).
+
+    A linked refund reduces spending in its own month; unlinked, it counts as
+    income. A link is dropped by a change to a row in another month (marking
+    its original as an untracked transfer, by any path, or undoing the
+    original's import), so the review month's own rows may be untouched
+    otherwise. The link history is recorded on the refund, so it is found here.
+    """
+    return _month_history_since(principal, review, TransactionCorrectionHistory.Field.REFUND_LINK).exists()
 
 
 def review_for_viewer(principal, month, *, today=None, force=False):
