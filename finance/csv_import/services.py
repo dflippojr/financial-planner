@@ -155,7 +155,7 @@ def commit_csv_import(
     saved_csv_mapping=None,
 ):
     person = _person_for(principal)
-    lock_actor_household(person)
+    own_membership, _memberships = lock_actor_household(person)
     account = _active_account(person, account_id)
     if saved_csv_mapping is not None:
         saved_csv_mapping = _locked_saved_mapping(person, saved_csv_mapping, mapping, document)
@@ -203,7 +203,14 @@ def commit_csv_import(
             ]
         )
         # Late rows dated on or before the anchor change saved calculated balances (#641).
-        if account._has_calculated:
+        if own_membership is None:
+            # Nothing serialized this import with a concurrent Save calculated
+            # balances before the account lock, so the lock query may have
+            # waited for it and read a stale answer: check again now.
+            refresh_calculated_balances(person, account.pk)
+        elif account._has_calculated:
+            # Save takes the same household lock first, so the lock query
+            # started after any concurrent Save committed and its answer is current.
             refresh_locked_calculated_balances(person, account)
     counts = {"new_count": preview.new_count, "duplicate_count": preview.duplicate_count,
               "invalid_count": preview.invalid_count, "format": source, "batch_id": batch.pk}

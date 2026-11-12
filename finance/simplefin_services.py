@@ -697,6 +697,9 @@ def _transactions_unreliable(remote: dict, payload: dict) -> bool:
 
 def _sync_one_link(person, connection, link, remote, synced_at, payload, rates) -> int:
     account = link.account
+    # Lock the account before writing its balance or rows, in the order undo
+    # and Save calculated balances use, so _refresh_calculated below runs under it.
+    Account.objects.select_for_update(of=("self",)).filter(pk=account.pk).first()
     conversion = _conversion_for(remote, rates)
     balance_date = posted_date(remote.get("balance-date")) or timezone.localdate()
     if link.mode == AccountLink.Mode.TRANSACTIONS and _transactions_unreliable(remote, payload):
@@ -734,9 +737,6 @@ def _refresh_calculated(person, account):
     """Late rows dated on or before the anchor change saved calculated balances (#641)."""
     from finance.calculated_balances import refresh_calculated_balances
 
-    # A sync does not otherwise hold the account lock; take it first so a
-    # concurrent Save calculated balances is either seen or sees these rows.
-    Account.objects.select_for_update(of=("self",)).filter(pk=account.pk).first()
     refresh_calculated_balances(person, account.pk)
 
 

@@ -35,6 +35,25 @@ EXEMPT = {
 }
 
 
+QUERYSET_CHAIN = {"objects", "filter", "exclude", "all", "select_for_update", "order_by", "only", "defer",
+                  "select_related", "prefetch_related", "annotate", "distinct", "visible_to", "active"}
+
+
+def _ledger_root(node):
+    """The name a write's receiver is built on, following only manager and queryset methods.
+
+    `rows.filter(...).update()` is rooted at `rows`; `txn.splits.all().delete()`
+    is not rooted at `txn`, because it writes a related model's rows.
+    """
+    while True:
+        if isinstance(node, ast.Call):
+            node = node.func
+        elif isinstance(node, ast.Attribute) and node.attr in QUERYSET_CHAIN:
+            node = node.value
+        else:
+            return node.id if isinstance(node, ast.Name) else None
+
+
 def _root_name(node):
     while isinstance(node, (ast.Attribute, ast.Call, ast.Subscript)):
         node = node.func if isinstance(node, ast.Call) else node.value
@@ -57,14 +76,23 @@ def _ledger_helpers(tree):
     }
 
 
+def _rooted_in(expr, sources):
+    """Whether expr is built on one of `sources`: Model.objects..., helper(...), or list(...) of either."""
+    while isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name) and expr.func.id in {"list", "sorted", "tuple"}:
+        if not expr.args:
+            return False
+        expr = expr.args[0]
+    return _root_name(expr) in sources
+
+
 def _ledger_variables(function, helpers):
-    """Local names bound to something built from a ledger model or a module helper that reads one."""
+    """Local names bound to ledger rows or querysets: from a ledger model, or a module helper that reads one."""
     names = {arg.arg for arg in function.args.args if arg.arg in {"snapshot", "transaction"}}
     while True:  # to a fixed point: `rows = helper()` then `for row in rows` binds `row` too
         sources = LEDGER_MODELS | helpers | names
         found = set(names)
         for node in ast.walk(function):
-            if isinstance(node, ast.Assign) and _names_in(node.value) & (LEDGER_MODELS | helpers):
+            if isinstance(node, ast.Assign) and _rooted_in(node.value, sources):
                 found |= {target.id for target in node.targets if isinstance(target, ast.Name)}
             elif isinstance(node, ast.For) and _names_in(node.iter) & sources and isinstance(node.target, ast.Name):
                 found.add(node.target.id)
@@ -74,22 +102,20 @@ def _ledger_variables(function, helpers):
 
 
 def _is_ledger_write(call, ledger_variables):
+    """A write to ledger rows, on the model's manager or through a variable holding its rows or queryset."""
     if not isinstance(call.func, ast.Attribute):
         return False
     method, receiver = call.func.attr, call.func.value
-    if method in QUERYSET_WRITES and _root_name(receiver) in LEDGER_MODELS:
-        if method == "update":
-            return bool({keyword.arg for keyword in call.keywords} & LEDGER_FIELDS)
-        if method == "bulk_update":
-            return bool(_constant_strings(call.args[1] if len(call.args) > 1 else call) & LEDGER_FIELDS)
-        return True
-    if isinstance(receiver, ast.Name) and receiver.id in ledger_variables:
-        if method == "delete":
-            return True
-        if method == "save":
-            fields = [keyword.value for keyword in call.keywords if keyword.arg == "update_fields"]
-            return not fields or bool(_constant_strings(fields[0]) & LEDGER_FIELDS)
-    return False
+    if _ledger_root(receiver) not in LEDGER_MODELS | ledger_variables:
+        return False
+    if method == "update":
+        return bool({keyword.arg for keyword in call.keywords} & LEDGER_FIELDS)
+    if method == "bulk_update":
+        return bool(_constant_strings(call.args[1] if len(call.args) > 1 else call) & LEDGER_FIELDS)
+    if method == "save":
+        fields = [keyword.value for keyword in call.keywords if keyword.arg == "update_fields"]
+        return not fields or bool(_constant_strings(fields[0]) & LEDGER_FIELDS)
+    return method in QUERYSET_WRITES
 
 
 def _calls_refresh(function):
@@ -100,20 +126,26 @@ def _calls_refresh(function):
     )
 
 
+def write_sites_in(source, prefix):
+    """{"prefix:function": calls_refresh} for each function in `source` that writes ledger rows."""
+    tree = ast.parse(source)
+    helpers = _ledger_helpers(tree)
+    sites = {}
+    for function in ast.walk(tree):
+        if not isinstance(function, ast.FunctionDef):
+            continue
+        variables = _ledger_variables(function, helpers)
+        if any(isinstance(node, ast.Call) and _is_ledger_write(node, variables) for node in ast.walk(function)):
+            sites[f"{prefix}:{function.name}"] = _calls_refresh(function)
+    return sites
+
+
 def ledger_write_sites():
     """{"path/under/finance.py:function": calls_refresh} for every function in finance/ that writes ledger rows."""
     sites = {}
     for path in sorted(FINANCE.rglob("*.py")):
-        if "migrations" in path.parts:
-            continue
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        helpers = _ledger_helpers(tree)
-        for function in ast.walk(tree):
-            if not isinstance(function, ast.FunctionDef):
-                continue
-            variables = _ledger_variables(function, helpers)
-            if any(isinstance(node, ast.Call) and _is_ledger_write(node, variables) for node in ast.walk(function)):
-                sites[f"{path.relative_to(FINANCE).as_posix()}:{function.name}"] = _calls_refresh(function)
+        if "migrations" not in path.parts:
+            sites.update(write_sites_in(path.read_text(encoding="utf-8"), path.relative_to(FINANCE).as_posix()))
     return sites
 
 
@@ -157,3 +189,48 @@ def test_the_scan_sees_the_paths_this_fix_wired_up():
         assert sites.get(key) is True, key
     for helper in ("simplefin_services.py:_upsert_snapshot", "simplefin_services.py:_import_transactions"):
         assert sites.get(helper) is False, helper
+
+
+SHAPES = """
+def queryset_variable(ids):
+    rows = Transaction.objects.filter(pk__in=ids)
+    rows.update(amount_minor=1)
+
+def chained_variable(ids):
+    rows = Transaction.objects.filter(pk__in=ids)
+    rows.filter(status="active").update(status="archived")
+
+def listed_rows(account):
+    for row in list(BalanceSnapshot.objects.filter(account=account)):
+        row.delete()
+
+def instance_save(account):
+    Transaction(account=account).save()
+
+def wired(ids):
+    Transaction.objects.filter(pk__in=ids).delete()
+    refresh_calculated_balances(None, 1)
+
+def note_only(ids):
+    rows = Transaction.objects.filter(pk__in=ids)
+    rows.update(note="x")
+
+def related_rows(txn_id):
+    transaction = Transaction.objects.get(pk=txn_id)
+    transaction.splits.all().delete()
+
+def other_model(ids):
+    pairs = TransferPair.objects.filter(leg_a__in=Transaction.objects.filter(pk__in=ids))
+    pairs.update(status="undone")
+"""
+
+
+def test_the_scan_catches_each_write_shape_and_ignores_non_ledger_writes():
+    """Regression for the review of #733: a write through a queryset variable must be seen."""
+    assert write_sites_in(SHAPES, "shapes") == {
+        "shapes:queryset_variable": False,
+        "shapes:chained_variable": False,
+        "shapes:listed_rows": False,
+        "shapes:instance_save": False,
+        "shapes:wired": True,
+    }

@@ -280,3 +280,78 @@ def test_the_balances_page_says_calculated_rows_update_on_their_own():
     page = signed_in(owner).get(reverse("account-balances", args=[checking.pk])).content.decode()
     assert "They update on their own when its transactions or balances change." in page
     assert "calculate again" not in page
+
+
+# --- concurrency: an import that waited for a Save sees the rows it saved (review of #733) ---
+
+
+def _wait_until_blocked_on_a_lock(timeout=10):
+    import time
+
+    from django.db import connection
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'"
+            )
+            if cursor.fetchone()[0]:
+                return True
+        time.sleep(0.05)
+    return False
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("in_household", [False, True], ids=["no-household", "household"])
+def test_an_import_waiting_on_a_concurrent_save_still_recalculates(in_household):
+    import threading
+
+    from django.db import connection, connections, transaction
+
+    from tests.test_alerts import make_household
+
+    if connection.vendor != "postgresql":
+        pytest.skip("row locks can only be exercised on PostgreSQL")
+    owner = make_person("race-owner")
+    if in_household:
+        make_household(owner)
+    checking = checking_with_history(owner)
+    saved, release = threading.Event(), threading.Event()
+    errors = []
+
+    def save():
+        try:
+            with transaction.atomic():
+                save_calculated_balances(owner, checking.pk)
+                saved.set()
+                release.wait(timeout=20)  # hold the locks, rows still uncommitted
+        except Exception as exc:  # noqa: BLE001 - reported to the main thread
+            errors.append(exc)
+        finally:
+            connections.close_all()
+
+    def late_import():
+        try:
+            import_csv(owner, checking, (date(2026, 10, 30), -403_773))
+        except Exception as exc:  # noqa: BLE001 - reported to the main thread
+            errors.append(exc)
+        finally:
+            connections.close_all()
+
+    saver = threading.Thread(target=save)
+    saver.start()
+    importer = None
+    try:
+        assert saved.wait(timeout=10)
+        importer = threading.Thread(target=late_import)
+        importer.start()
+        assert _wait_until_blocked_on_a_lock()
+    finally:
+        release.set()
+        saver.join(timeout=30)
+        if importer is not None:
+            importer.join(timeout=30)
+    assert errors == []
+    assert calculated(checking) == expected(checking)
+    assert checking.transactions.filter(transaction_date=date(2026, 10, 30)).exists()
