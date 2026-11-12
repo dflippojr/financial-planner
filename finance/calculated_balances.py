@@ -214,7 +214,8 @@ def refresh_calculated_balances(person, account_id):
     that checks for calculated rows, so an import pays one query for it.
 
     An account with no calculated rows is left alone: calculating is the
-    member's choice. When calculate() refuses, for example because no real
+    member's choice. So is an archived one, which keeps its history as it
+    was through its archive date (for example a sync that raced the archive). When calculate() refuses, for example because no real
     balance remains, the calculated rows are deleted, since nothing could
     produce them now. A change only after the anchor leaves calculate()
     unchanged, so nothing is written or recorded. Returns (created, updated,
@@ -222,8 +223,13 @@ def refresh_calculated_balances(person, account_id):
     """
     if not transaction.get_connection().in_atomic_block:
         raise RuntimeError("refresh_calculated_balances must run inside the caller's transaction.")
-    account = Account.objects.select_for_update(of=("self",)).filter(has_calculated_expression(), pk=account_id).first()
-    if account is None:
+    account = (
+        Account.objects.select_for_update(of=("self",))
+        .filter(has_calculated_expression(), pk=account_id)
+        .first()
+    )
+    if account is None or account.status != Account.Status.ACTIVE or account.archived_at is not None:
+        # An archived account keeps its history as it was, calculated rows included.
         return (0, 0, 0)
     return refresh_locked_calculated_balances(person, account)
 

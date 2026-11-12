@@ -309,14 +309,20 @@ def test_an_import_waiting_on_a_concurrent_save_still_recalculates(in_household)
 
     from django.db import connection, connections, transaction
 
-    from tests.test_alerts import make_household
+    from django.utils import timezone
 
     if connection.vendor != "postgresql":
         pytest.skip("row locks can only be exercised on PostgreSQL")
+    from finance.lifecycle_services import lock_actor_household
+    from finance.models import Membership
+
     owner = make_person("race-owner")
-    if in_household:
-        make_household(owner)
-    checking = checking_with_history(owner)
+    checking = checking_with_history(owner)  # creates a household for its split categories
+    if not in_household:
+        Membership.objects.filter(person=owner).update(ended_at=timezone.now())
+    # The precondition each case is about: whether a household lock serializes Save and import.
+    with transaction.atomic():
+        assert (lock_actor_household(owner)[0] is not None) is in_household
     saved, release = threading.Event(), threading.Event()
     errors = []
 
@@ -355,3 +361,19 @@ def test_an_import_waiting_on_a_concurrent_save_still_recalculates(in_household)
     assert errors == []
     assert calculated(checking) == expected(checking)
     assert checking.transactions.filter(transaction_date=date(2026, 10, 30)).exists()
+
+
+def test_a_change_to_an_archived_account_keeps_its_calculated_history():
+    from finance.calculated_balances import refresh_calculated_balances
+    from finance.lifecycle_services import archive_account
+    from django.db import transaction
+
+    owner = make_person("archived-history")
+    checking = checking_with_history(owner)
+    save_calculated_balances(owner, checking.pk)
+    before = calculated(checking)
+    archive_account(owner, checking.pk)
+
+    with transaction.atomic():
+        assert refresh_calculated_balances(owner, checking.pk) == (0, 0, 0)
+    assert calculated(checking) == before
