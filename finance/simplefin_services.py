@@ -860,12 +860,11 @@ def _start_link_at_fetched_day(person, connection, link, fetched_from):
 
 def _sync_one_link(person, connection, link, remote, synced_at, payload, rates, fetched_from=None):
     """Apply one linked account. Returns (new rows imported, whether its cut-over moved)."""
-    account = link.account  # locked by _import_links before any write
+    account = link.account
     conversion = _conversion_for(remote, rates)
     balance_date = posted_date(remote.get("balance-date")) or timezone.localdate()
     if link.mode == AccountLink.Mode.TRANSACTIONS and _transactions_unreliable(remote, payload):
         _record_balance(account, remote, balance_date, conversion, batch=None)
-        _refresh_calculated(person, account)
         return 0, False
     end = max(link.cutover_date, balance_date, timezone.localdate())
     # What the link asks for, read before a capped first sync moves its cut-over.
@@ -885,15 +884,25 @@ def _sync_one_link(person, connection, link, remote, synced_at, payload, rates, 
         imported = _import_transactions(account, link, remote, batches, conversion)
     batch = _batch_covering(batches, balance_date) if batches else None
     _record_balance(account, remote, balance_date, conversion, batch=batch)
-    _refresh_calculated(person, account)
     return imported, moved is not None
 
 
-def _refresh_calculated(person, account):
-    """Late rows dated on or before the anchor change saved calculated balances (#641)."""
+def _refresh_calculated(person, account_ids):
+    """Recalculate saved calculated balances after a sync has committed (#641).
+
+    Late rows dated on or before the anchor change them. Each account gets its
+    own short transaction that locks only that account: the sync itself holds
+    no account locks while transfer matching locks counterpart accounts in
+    primary-key order, so neither can deadlock the other. The plain lock comes
+    first, so the refresh's own query starts after any concurrent Save
+    calculated balances has committed.
+    """
     from finance.calculated_balances import refresh_calculated_balances
 
-    refresh_calculated_balances(person, account.pk)
+    for account_id in sorted(account_ids):
+        with transaction.atomic():
+            Account.objects.select_for_update(of=("self",)).filter(pk=account_id).first()
+            refresh_calculated_balances(person, account_id)
 
 
 @member_operation
@@ -936,8 +945,9 @@ def sync_connection(principal, connection_id, *, ignore_rate_limit=False, schedu
     # Like the fetch, rate lookups run before the transaction and household lock.
     rates = _load_rates(plan.links, payload)
     result, failure = _apply_sync(person, connection_id, plan, payload, rates, ignore_rate_limit=ignore_rate_limit)
-    if failure is not None:
-        raise failure
+    if failure is not None or result is None:
+        raise failure or SimpleFinError(UNEXPECTED_FAILURE)
+    _refresh_calculated(person, result.pop("_synced_account_ids"))
     return result
 
 
@@ -1058,15 +1068,6 @@ def _import_links(person, connection, links, syncable_ids, payload, now, rates, 
     skipped = 0
     unconverted = []
     moved = []
-    # Lock every account this sync may write, in primary-key order as undo and
-    # archive do, before writing any balance or row, so _refresh_calculated runs
-    # under the account lock and no link order can deadlock against them.
-    list(
-        Account.objects.select_for_update(of=("self",))
-        .filter(pk__in=syncable_ids)
-        .order_by("pk")
-        .values_list("pk", flat=True)
-    )
     for link in links:
         if link.account_id not in syncable_ids:
             # Archived, or no longer visible to the connection owner
@@ -1158,6 +1159,8 @@ def _apply_sync(person, connection_id, plan, payload, rates, *, ignore_rate_limi
         "unconverted": unconverted,
         # The page that ran the sync shows every skipped account in full.
         "result": " ".join([head, *unconverted, *tail]),
+        # Popped by sync_connection, which refreshes calculated balances once this commits.
+        "_synced_account_ids": syncable_ids,
     }, None
 
 

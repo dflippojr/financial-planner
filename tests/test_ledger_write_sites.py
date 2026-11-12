@@ -21,8 +21,9 @@ LEDGER_FIELDS = {"status", "archived_at", "amount_minor", "transaction_date", "a
 REFRESH_CALLS = {"refresh_calculated_balances", "refresh_locked_calculated_balances", "_refresh_calculated"}
 
 COVERED_BY_CALLER = {
-    "simplefin_services.py:_upsert_snapshot": "simplefin_services.py:_sync_one_link",
-    "simplefin_services.py:_import_transactions": "simplefin_services.py:_sync_one_link",
+    # The sync refreshes each account in its own transaction after it commits (see _refresh_calculated).
+    "simplefin_services.py:_upsert_snapshot": "simplefin_services.py:sync_connection",
+    "simplefin_services.py:_import_transactions": "simplefin_services.py:sync_connection",
     "snapshot_services.py:_apply_manual_fields": "snapshot_services.py:update_manual_snapshot",
 }
 EXEMPT = {

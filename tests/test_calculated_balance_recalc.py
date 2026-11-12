@@ -379,8 +379,12 @@ def test_a_change_to_an_archived_account_keeps_its_calculated_history():
     assert calculated(checking) == before
 
 
-def test_a_sync_locks_its_accounts_in_primary_key_order_before_writing():
-    """Review of #733: link order must not decide lock order, or a sync can deadlock with undo or archive."""
+@pytest.mark.django_db(transaction=True)
+def test_a_sync_holds_no_account_lock_and_refreshes_each_account_after_it_commits():
+    """Review of #733: the sync must not hold account locks while transfer matching
+    locks counterpart accounts in pk order, or a sync can deadlock with undo, archive
+    or another member's transfer refresh. The refresh runs after the sync commits,
+    one account per transaction, and still corrects the late rows."""
     from django.db import connection
     from django.test.utils import CaptureQueriesContext
 
@@ -389,14 +393,17 @@ def test_a_sync_locks_its_accounts_in_primary_key_order_before_writing():
     owner = make_person("lock-order")
     checking = make_account(owner)
     sf_connection = harness.link_simplefin(owner, checking, date(2026, 8, 1))
-    rows = [(1, (date(2026, 8, 5), -10_000))]
+    first = [(1, (date(2026, 8, 5), -10_000))]
+    _sync(owner, sf_connection, _sync_payload(first, balance=100_000, balance_day=date(2026, 11, 3)))
+    save_calculated_balances(owner, checking.pk)
+    late = [*first, (2, (date(2026, 11, 2), -5_000))]
     with CaptureQueriesContext(connection) as queries:
-        _sync(owner, sf_connection, _sync_payload(rows, balance=100_000, balance_day=date(2026, 11, 3)))
+        _sync(owner, sf_connection, _sync_payload(late, balance=100_000, balance_day=date(2026, 11, 4)))
     sql = [query["sql"] for query in queries]
+    sync_commit = next(n for n, text in enumerate(sql)
+                       if text == "COMMIT" and any(t.startswith('INSERT INTO "finance_transaction"') for t in sql[:n]))
     account_locks = [n for n, text in enumerate(sql)
-                     if text.startswith('SELECT "finance_account"."id"') and 'FOR UPDATE OF "finance_account"' in text
-                     and '"finance_account"."id" IN (' in text and " ORDER BY " in text]
-    first_write = next(n for n, text in enumerate(sql)
-                       if text.startswith(("INSERT INTO \"finance_transaction\"", "INSERT INTO \"finance_balancesnapshot\"")))
-    # One statement locks every syncable account, ordered by pk, before the first write.
-    assert account_locks and account_locks[0] < first_write
+                     if text.startswith('SELECT "finance_account"') and 'FOR UPDATE OF "finance_account"' in text]
+    assert account_locks and min(account_locks) > sync_commit
+    assert calculated(checking) == expected(checking) == [(date(2026, 8, 31), 105_000), (date(2026, 9, 30), 105_000),
+                                                          (date(2026, 10, 31), 105_000)]
