@@ -21,8 +21,8 @@ from finance.csv_import.ofx import read_ofx
 from finance.csv_import.parser import preview_csv, read_csv
 from finance.csv_import.services import categorize_imported_batch, commit_csv_import
 from finance.csv_import.views import FIXED_PROFILES
-from finance.models import Account, Household, Membership, Person, Transaction
-from finance.simplefin_services import claim_connection, save_account_links, sync_connection
+from finance.models import Account, BalanceSnapshot, Household, Membership, Person, Transaction
+from finance.simplefin_services import SimpleFinError, claim_connection, save_account_links, sync_connection
 
 from .strategies import EARLIEST, simplefin_payload
 
@@ -95,11 +95,31 @@ def import_rows(person, account, shape, rows):
     return import_file(person, account, shape.render(rows), profile=shape.profile)
 
 
-def link_simplefin(owner, account, cutover):
-    """Claim a synthetic SimpleFIN connection and link it to `account` in transactions mode."""
+def claim_simplefin(owner):
+    """Claim a synthetic SimpleFIN connection with no accounts linked yet."""
     token = base64.b64encode(CLAIM_URL.encode("utf-8")).decode("ascii")
     with patch("finance.simplefin_services.claim_access_url", return_value=ACCESS_URL):
-        connection = claim_connection(owner, token)
+        return claim_connection(owner, token)
+
+
+def save_link(owner, connection, account, cutover):
+    """Link (or re-link) `account` in transactions mode the way the form does.
+
+    Returns False when the save is refused, which leaves every link as it was.
+    """
+    try:
+        save_account_links(owner, connection.pk, [{
+            "simplefin_account_id": "CON-1:sf-checking", "action": "link",
+            "account_id": account.pk, "cutover_date": cutover,
+        }])
+    except SimpleFinError:
+        return False
+    return True
+
+
+def link_simplefin(owner, account, cutover):
+    """Claim a synthetic SimpleFIN connection and link it to `account` in transactions mode."""
+    connection = claim_simplefin(owner)
     with patch("finance.simplefin_services.fetch_accounts", return_value=simplefin_payload([])):
         save_account_links(owner, connection.pk, [{
             "simplefin_account_id": "CON-1:sf-checking", "action": "link",
@@ -108,10 +128,20 @@ def link_simplefin(owner, account, cutover):
     return connection
 
 
-def sync(owner, connection, items):
-    """Run one sync whose provider feed holds `items`, (key, Row) pairs with stable ids."""
-    with patch("finance.simplefin_services.fetch_accounts", return_value=simplefin_payload(items)):
+def sync(owner, connection, items, **account_fields):
+    """Run one sync whose provider feed holds `items`, (key, Row) pairs with stable ids.
+
+    `account_fields` (balance, currency) override the feed's account object.
+    """
+    payload = simplefin_payload(items, **account_fields)
+    with patch("finance.simplefin_services.fetch_accounts", return_value=payload):
         return sync_connection(owner, connection.pk, ignore_rate_limit=True)
+
+
+def simplefin_balances(account):
+    """The account's SimpleFIN balance snapshots, oldest day first, as minor amounts."""
+    return list(BalanceSnapshot.objects.filter(account=account, source=BalanceSnapshot.Source.SIMPLEFIN)
+                .order_by("snapshot_date").values_list("amount_minor", flat=True))
 
 
 def active_rows(accounts):

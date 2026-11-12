@@ -14,6 +14,8 @@ PAYMENT_VOCABULARY = (
     "e-payment",
     "transfer",
     "transfers",
+    # Huntington's abbreviation: INTERNET TFR TO CHECKING / INTERNET TFR FRM CHECKING (#639).
+    "tfr",
     "xfer",
     "ach",
     "online banking",

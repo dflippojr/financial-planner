@@ -5,9 +5,11 @@ import pytest
 from finance.category_services import (
     assign_category,
     confirm_transfer_pair,
+    dismiss_transfer_pair,
     downgrade_unevidenced_auto_marked_pairs,
     income_and_spending_totals,
     refresh_transfer_pairs,
+    undo_transfer_pair,
 )
 from finance.models import Account, Transaction, TransferPair
 from finance.pairing_evidence import has_payment_wording
@@ -17,13 +19,18 @@ from tests.test_categorization import make_account, make_household, make_person,
 @pytest.mark.parametrize(
     "text",
     ["Synthetic PAYMENT thank you", "web pmt 123", "AUTOPAY", "ACH deposit internet transfer", "Online Banking xfer",
-     "Synthetic e-payment", "CRCARDPMT", "synthetic_pymt_ref", "Payments received", "EPAY 01"],
+     "Synthetic e-payment", "CRCARDPMT", "synthetic_pymt_ref", "Payments received", "EPAY 01",
+     "INTERNET TFR TO CHECKING", "INTERNET TFR FRM CHECKING", "Synthetic tfr"],
 )
 def test_vocabulary_matches(text):
     assert has_payment_wording(text)
 
 
-@pytest.mark.parametrize("text", ["", None, "Synthetic store", "Synthetic achievement", "Synthetic repayment", "Synthetic cash"])
+@pytest.mark.parametrize(
+    "text",
+    ["", None, "Synthetic store", "Synthetic achievement", "Synthetic repayment", "Synthetic cash",
+     "Synthetic TFRX", "Synthetic ATFR", "Synthetic tfrs_ref"],
+)
 def test_vocabulary_ignores_other_text(text):
     assert not has_payment_wording(text)
 
@@ -99,6 +106,61 @@ def test_savings_transfer_needs_wording(out_text, expected):
     make_transaction(owner, savings, amount_minor=2500, description="Synthetic move in")
 
     assert only_pair(owner).status == expected
+
+
+@pytest.mark.django_db
+def test_huntington_tfr_wording_auto_marks_own_account_pair():
+    owner, _, checking, _, _ = setup_accounts()
+    other_checking = make_account(owner, name="Synthetic Checking Two")
+    make_transaction(owner, checking, amount_minor=-5000, description="INTERNET TFR TO CHECKING")
+    make_transaction(owner, other_checking, amount_minor=5000, description="INTERNET TFR FRM CHECKING")
+
+    pair = only_pair(owner)
+
+    assert pair.status == TransferPair.Status.AUTO_MARKED
+    assert pair.kind == TransferPair.Kind.TRANSFER
+    assert pair.confidence == TransferPair.Confidence.HIGH
+    assert "payment or transfer wording on a leg" in pair.reasons
+    assert not any("no payment or transfer wording" in reason for reason in pair.reasons)
+    assert income_and_spending_totals(owner).spending_minor == 0
+
+
+@pytest.mark.django_db
+def test_undone_tfr_pair_is_not_remarked_on_refresh():
+    owner, _, checking, _, _ = setup_accounts()
+    other_checking = make_account(owner, name="Synthetic Checking Two")
+    make_transaction(owner, checking, amount_minor=-5000, description="INTERNET TFR TO CHECKING")
+    make_transaction(owner, other_checking, amount_minor=5000, description="INTERNET TFR FRM CHECKING")
+    pair = only_pair(owner)
+    assert pair.status == TransferPair.Status.AUTO_MARKED
+    undo_transfer_pair(owner, pair.pk)
+
+    refresh_transfer_pairs(owner)
+
+    pair.refresh_from_db()
+    assert pair.status == TransferPair.Status.UNDONE
+    assert TransferPair.objects.count() == 1
+
+
+@pytest.mark.django_db
+def test_dismissed_tfr_suggestion_is_not_remarked_when_it_becomes_unique():
+    owner, _, checking, savings, _ = setup_accounts()
+    other_checking = make_account(owner, name="Synthetic Checking Two")
+    make_transaction(owner, checking, amount_minor=-5000, description="INTERNET TFR TO CHECKING")
+    make_transaction(owner, other_checking, amount_minor=5000, description="INTERNET TFR FRM CHECKING")
+    rival = make_transaction(owner, savings, amount_minor=5000, description="Synthetic plain in")
+    refresh_transfer_pairs(owner)
+    pair = only_pair(owner)
+    assert pair.status == TransferPair.Status.SUGGESTED
+    dismiss_transfer_pair(owner, pair.pk)
+    # The rival leaves the window, so the dismissed pair is now the only candidate for both legs.
+    Transaction.objects.filter(pk=rival.pk).update(transaction_date=date(2026, 6, 2))
+
+    refresh_transfer_pairs(owner)
+
+    pair.refresh_from_db()
+    assert pair.status == TransferPair.Status.DISMISSED
+    assert not TransferPair.objects.filter(status=TransferPair.Status.AUTO_MARKED).exists()
 
 
 @pytest.mark.django_db

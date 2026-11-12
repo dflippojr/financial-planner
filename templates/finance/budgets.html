@@ -157,6 +157,46 @@
   </aside>
   {% endif %}
 </div>
+<section class="mt-4 rounded-box border border-base-300 bg-base-100 p-4" aria-label="Spending outside category budgets" data-budget-coverage>
+  <div class="flex flex-wrap items-center justify-between gap-2">
+    <h2 class="font-semibold">Spending outside category budgets</h2>
+    <nav aria-label="Coverage accounts" class="tabs tabs-border">
+      {% for option in coverage_scopes %}
+      <a class="tab max-md:min-h-11{% if option.current %} tab-active{% endif %}" href="{{ option.url }}"{% if option.current %} aria-current="page"{% endif %}>{{ option.label }}</a>
+      {% endfor %}
+    </nav>
+  </div>
+  <p class="mt-1 text-sm opacity-80">Only category budgets count; an overall budget does not cover the gap. The total matches the Spending page for this month.</p>
+  <dl class="mt-3 grid gap-2 sm:grid-cols-3">
+    <div class="rounded-box bg-base-200 p-3">
+      <dt class="text-sm opacity-80">In category budgets</dt>
+      <dd class="text-xl font-bold">{% include "finance/_amount.html" with value=coverage.budgeted_display tone="out" %}</dd>
+    </div>
+    <div class="rounded-box bg-base-200 p-3">
+      <dt class="text-sm opacity-80">Total spending</dt>
+      <dd class="text-xl font-bold"><a class="link link-hover" href="{{ coverage.spending_url }}">{% include "finance/_amount.html" with value=coverage.total_spending_display tone="out" %}</a></dd>
+    </div>
+    <div class="rounded-box bg-base-200 p-3">
+      <dt class="text-sm opacity-80">Outside category budgets</dt>
+      <dd class="text-xl font-bold">{% include "finance/_amount.html" with value=coverage.gap_display tone="out" %}</dd>
+    </div>
+  </dl>
+  {% if coverage.gap_rows %}
+  <ul class="mt-3 divide-y divide-base-300" aria-label="Categories outside category budgets">
+    {% for row in coverage.gap_rows %}
+    <li class="flex min-h-11 flex-wrap items-center justify-between gap-x-3 py-1">
+      <span class="min-w-0">
+        <a class="link link-hover font-semibold" href="{{ row.drilldown_url }}">{{ row.name }}</a>
+        {% if row.private_only %}<span class="block text-xs opacity-80">Private accounts; the household budget covers shared accounts</span>{% endif %}
+      </span>
+      <span class="whitespace-nowrap">{% include "finance/_amount.html" with value=row.spending_display tone="out" %}</span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="mt-3 text-sm">All spending this month falls under a category budget.</p>
+  {% endif %}
+</section>
 {% endblock %}
 {% block extra_js %}
 <script src="{% static 'js/budget-row-menu.js' %}" defer></script>
