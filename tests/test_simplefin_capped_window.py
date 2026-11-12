@@ -189,15 +189,17 @@ def test_a_csv_import_can_supply_the_days_a_capped_first_sync_did_not_fetch(monk
 @pytest.mark.django_db
 def test_a_capped_first_sync_moves_the_cutover_to_the_first_day_it_fetched_and_audits_it(monkeypatch):
     owner, checking, connection = _linked_120_days_back(monkeypatch)
-    before = AuditEvent.objects.filter(action=AuditEvent.Action.SIMPLEFIN_LINKS_CHANGED).count()
+    before = AuditEvent.objects.filter(
+        action=AuditEvent.Action.SIMPLEFIN_LINKS_CHANGED, target_id=connection.pk,
+    ).count()
 
     result = _sync(owner, connection, monkeypatch, FakeBridge([]))
 
     first = _first_synced_day(checking)
     assert _cutover(checking) == first
-    events = AuditEvent.objects.filter(action=AuditEvent.Action.SIMPLEFIN_LINKS_CHANGED)
+    events = AuditEvent.objects.filter(action=AuditEvent.Action.SIMPLEFIN_LINKS_CHANGED, target_id=connection.pk)
     assert events.count() == before + 1
-    assert events.order_by("-pk").first().changed_fields == ["cutover"]
+    assert events.filter(changed_fields=["cutover"]).count() == 1
     assert checking.name in result["result"]
     assert "90 days" in result["result"]
 

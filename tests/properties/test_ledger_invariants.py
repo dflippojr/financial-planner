@@ -12,11 +12,12 @@ import csv
 import io
 from collections import Counter
 from dataclasses import dataclass, replace
-from datetime import date
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 
 import pytest
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.utils import timezone
 from hypothesis import example, given
 from hypothesis import strategies as st
 
@@ -26,7 +27,7 @@ from finance.csv_import.parser import Mapping
 from finance.csv_import.services import undo_import_batch
 from finance.export import minor_from_decimal_string, money_decimal
 from finance.lifecycle_services import change_account_share_mode, share_account
-from finance.models import Account, ImportBatch, RefundLink, TransferPair
+from finance.models import Account, AccountLink, ImportBatch, RefundLink, TransferPair
 from finance.transaction_export import iter_transaction_csv
 from finance.transaction_filters import visible_transaction_queryset
 
@@ -204,6 +205,64 @@ def test_a_cutover_counts_each_transaction_once_in_any_mix_of_csv_and_simplefin(
         sent = [reported_balance_minor(case.feed_fields[index][0]) for kind, index in case.steps if kind == "sync"]
         sent = [minor for minor in sent if minor is not None]
         assert ledger.simplefin_balances(account) == sent[-1:]
+
+
+@dataclass(frozen=True)
+class CappedCase:
+    shape: object
+    cutover: date
+    sync_at: datetime
+    world: tuple
+    steps: tuple
+
+
+@st.composite
+def capped_first_sync_cases(draw):
+    """A link whose first sync may come more than Bridge's 90 days after its cut-over (#640)."""
+    shape = draw(st.sampled_from((HUNTINGTON, CAPITAL_ONE, APPLE_CARD)))
+    cutover = draw(st.dates(date(2025, 3, 1), date(2026, 6, 1)))
+    sync_day = shifted(cutover, draw(st.integers(10, 150)))
+    sync_at = datetime.combine(sync_day, time(), tzinfo=UTC) + timedelta(seconds=draw(st.integers(0, 86399)))
+    # Every row has posted before the sync day, so an uncapped window holds it.
+    world = draw(rows(min_size=1, max_size=10, unique=True, lag_strategy=_card_lags(shape),
+                      day_strategy=st.dates(shifted(cutover, -20), shifted(sync_day, -7))))
+    # The first sync, then a full bank export and maybe another sync, in any order.
+    steps = ("sync", *draw(st.permutations(["csv", *draw(st.sampled_from(([], ["sync"])))])))
+    return CappedCase(shape, cutover, sync_at, tuple(world), steps)
+
+
+@given(capped_first_sync_cases())
+def test_a_capped_first_sync_leaves_its_unfetched_days_to_a_csv_and_counts_each_transaction_once(case):
+    with ledger.isolated():
+        owner = ledger.make_member()
+        ledger.make_household(owner)
+        account = ledger.make_account(owner, case.shape.account_type)
+        connection = ledger.link_simplefin(owner, account, case.cutover)
+        feed = [(index, _feed_row(index, row)) for index, row in enumerate(case.world)]
+        first_served = None
+        for step in case.steps:
+            if step == "csv":
+                ledger.import_rows(owner, account, case.shape, list(case.world))
+            else:
+                served = ledger.sync_with_bridge_cap(owner, connection, feed, now=case.sync_at)
+                first_served = served if first_served is None else first_served
+
+        # SimpleFIN owns the days from the first whole day it served; a CSV the rest.
+        served_from = timezone.localtime(datetime.fromtimestamp(first_served, tz=UTC)).date()
+        boundary = case.cutover if served_from <= case.cutover else served_from + timedelta(days=1)
+        assert AccountLink.objects.get(account=account).cutover_date == boundary
+        assert not ImportBatch.objects.filter(
+            account=account, source=ImportBatch.Source.SIMPLEFIN, status=ImportBatch.Status.ACTIVE,
+            date_range_start__lt=boundary,
+        ).exists()
+        expected_rows = Counter(
+            (row.day, row.amount_minor, "USD", case.shape.stored_description(row))
+            if posted_day(row) < boundary
+            else (posted_day(row), row.amount_minor, "USD", _feed_row(index, row).payee)
+            for index, row in enumerate(case.world)
+        )
+        assert ledger.content_counter([account]) == expected_rows
+        assert ledger.totals(owner, [account]) == ledger.expected_totals([row.amount_minor for row in case.world])
 
 
 @st.composite

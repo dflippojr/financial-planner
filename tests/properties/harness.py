@@ -138,6 +138,39 @@ def sync(owner, connection, items, **account_fields):
         return sync_connection(owner, connection.pk, ignore_rate_limit=True)
 
 
+# Bridge cuts a longer window to the last 90 days, counted back from its end,
+# and says so with this notice (#629, #640).
+BRIDGE_LIMIT_SECONDS = 90 * 86400
+BRIDGE_CAPPED_NOTICE = {"code": "gen.api", "msg": "Requested date range exceeds limit of 90 days and was capped."}
+
+
+def sync_with_bridge_cap(owner, connection, items, *, now):
+    """Run one sync at `now` against a feed that serves only the window Bridge would.
+
+    Returns the first instant (epoch seconds) the feed served, or None when it
+    was asked for no start.
+    """
+    served = []
+
+    def fetch(access_url, *, start_date=None, end_date=None, balances_only=False):
+        payload = simplefin_payload(items)
+        start = start_date
+        if start_date is not None and end_date - start_date > BRIDGE_LIMIT_SECONDS:
+            start = end_date - BRIDGE_LIMIT_SECONDS
+            payload["errlist"].append(dict(BRIDGE_CAPPED_NOTICE))
+        served.append(start)
+        remote = payload["accounts"][0]
+        remote["transactions"] = [
+            item for item in remote["transactions"] if start is None or start <= item["posted"] < end_date
+        ]
+        return payload
+
+    with patch("finance.simplefin_services.fetch_accounts", fetch), \
+            patch("django.utils.timezone.now", return_value=now):
+        sync_connection(owner, connection.pk, ignore_rate_limit=True)
+    return served[-1]
+
+
 def simplefin_balances(account):
     """The account's SimpleFIN balance snapshots, oldest day first, as minor amounts."""
     return list(BalanceSnapshot.objects.filter(account=account, source=BalanceSnapshot.Source.SIMPLEFIN)
