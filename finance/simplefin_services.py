@@ -734,6 +734,9 @@ def _refresh_calculated(person, account):
     """Late rows dated on or before the anchor change saved calculated balances (#641)."""
     from finance.calculated_balances import refresh_calculated_balances
 
+    # A sync does not otherwise hold the account lock; take it first so a
+    # concurrent Save calculated balances is either seen or sees these rows.
+    Account.objects.select_for_update(of=("self",)).filter(pk=account.pk).first()
     refresh_calculated_balances(person, account.pk)
 
 

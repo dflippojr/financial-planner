@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 
 from django.db import transaction
-from django.db.models import Min
+from django.db.models import Exists, Min, OuterRef
 
 from .audit_services import record
 from .lifecycle_services import _person_for
@@ -204,14 +204,14 @@ def save_calculated_balances(principal, account_id):
     return SaveResult(saved=len(calculation.rows), created=created, updated=updated, deleted=deleted)
 
 
-@transaction.atomic
 def refresh_calculated_balances(person, account_id):
     """Keep saved calculated rows equal to calculate() after a ledger change (#641, #676).
 
     Every path that adds, edits, archives or deletes an account's transactions,
     or its SimpleFIN or manual balances, calls this in the same database
     transaction, after its own permission checks. It takes the account row
-    lock (a no-op when the caller already holds it).
+    lock (a no-op when the caller already holds it) in the same single query
+    that checks for calculated rows, so an import pays one query for it.
 
     An account with no calculated rows is left alone: calculating is the
     member's choice. When calculate() refuses, for example because no real
@@ -220,10 +220,13 @@ def refresh_calculated_balances(person, account_id):
     unchanged, so nothing is written or recorded. Returns (created, updated,
     deleted).
     """
-    account = Account.objects.select_for_update(of=("self",)).filter(pk=account_id).first()
-    if account is None or not BalanceSnapshot.objects.filter(
-        account=account, source=BalanceSnapshot.Source.CALCULATED
-    ).exists():
+    if not transaction.get_connection().in_atomic_block:
+        raise RuntimeError("refresh_calculated_balances must run inside the caller's transaction.")
+    has_calculated = Exists(
+        BalanceSnapshot.objects.filter(account=OuterRef("pk"), source=BalanceSnapshot.Source.CALCULATED)
+    )
+    account = Account.objects.select_for_update(of=("self",)).filter(has_calculated, pk=account_id).first()
+    if account is None:
         return (0, 0, 0)
     try:
         wanted = {row.month_end: row.balance_minor for row in calculate(account).rows}
