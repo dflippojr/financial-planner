@@ -6,7 +6,9 @@ active SimpleFIN row, so a CSV import and a sync can never both supply a day.
 Synthetic data only.
 """
 
+import ast
 from datetime import date
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -182,3 +184,69 @@ def test_undone_rows_do_not_bound_the_cutover(monkeypatch):
     connection = connect_owner(owner, monkeypatch, _payload())
     _link(owner, connection, checking, date(2026, 3, 1))
     assert _cutover(checking) == date(2026, 3, 1)
+
+
+# Class-level check: no code path writes a cut-over without check_cutover.
+
+FINANCE = Path(__file__).resolve().parent.parent / "finance"
+WRITE_METHODS = {"create", "update", "update_or_create", "get_or_create", "bulk_create", "bulk_update", "save"}
+
+
+def _writes_cutover(node):
+    """True for a call or assignment in `node` that stores an AccountLink cut-over."""
+    if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        return any(isinstance(t, ast.Attribute) and t.attr == "cutover_date" for t in targets)
+    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and node.func.attr in WRITE_METHODS):
+        return False
+    for keyword in node.keywords:
+        if keyword.arg == "cutover_date":
+            return True
+        if isinstance(keyword.value, ast.Dict) and any(
+            isinstance(key, ast.Constant) and key.value == "cutover_date" for key in keyword.value.keys
+        ):
+            return True
+        if keyword.arg == "update_fields" and "cutover_date" in ast.unparse(keyword.value):
+            return True
+    return False
+
+
+def _cutover_writers():
+    found = set()
+    for path in FINANCE.rglob("*.py"):
+        if "migrations" in path.parts:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for function in ast.walk(tree):
+            if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if any(_writes_cutover(node) for node in ast.walk(function)):
+                found.add((path.relative_to(FINANCE).as_posix(), function.name))
+        module_level = [n for n in tree.body if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                                                  ast.ClassDef))]
+        if any(_writes_cutover(node) for top in module_level for node in ast.walk(top)):
+            found.add((path.relative_to(FINANCE).as_posix(), "<module>"))
+    return found
+
+
+def test_every_cutover_write_goes_through_the_overlap_check():
+    """A new way to set or move a cut-over must call check_cutover, through _save_link (#671)."""
+    assert _cutover_writers() == {("simplefin_services.py", "_save_link")}
+    source = (FINANCE / "simplefin_services.py").read_text(encoding="utf-8")
+    save_link = next(node for node in ast.walk(ast.parse(source))
+                     if isinstance(node, ast.FunctionDef) and node.name == "_save_link")
+    assert "check_cutover(" in ast.unparse(save_link)
+
+
+def test_the_writer_scan_sees_each_way_to_store_a_cutover():
+    """Guard the guard: each write shape the scan claims to catch is caught."""
+    for snippet in (
+        "def f(): AccountLink.objects.create(cutover_date=day)",
+        "def f(): AccountLink.objects.filter(pk=1).update(cutover_date=day)",
+        "def f(): AccountLink.objects.update_or_create(pk=1, defaults={'cutover_date': day})",
+        "def f(link): link.cutover_date = day",
+        "def f(link): link.save(update_fields=['cutover_date'])",
+    ):
+        tree = ast.parse(snippet)
+        assert any(_writes_cutover(node) for node in ast.walk(tree)), snippet
