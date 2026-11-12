@@ -21,7 +21,7 @@ from finance.csv_import.ofx import read_ofx
 from finance.csv_import.parser import preview_csv, read_csv
 from finance.csv_import.services import categorize_imported_batch, commit_csv_import
 from finance.csv_import.views import FIXED_PROFILES
-from finance.models import Account, Household, Membership, Person, Transaction
+from finance.models import Account, BalanceSnapshot, Household, Membership, Person, Transaction
 from finance.simplefin_services import claim_connection, save_account_links, sync_connection
 
 from .strategies import EARLIEST, simplefin_payload
@@ -108,10 +108,20 @@ def link_simplefin(owner, account, cutover):
     return connection
 
 
-def sync(owner, connection, items):
-    """Run one sync whose provider feed holds `items`, (key, Row) pairs with stable ids."""
-    with patch("finance.simplefin_services.fetch_accounts", return_value=simplefin_payload(items)):
+def sync(owner, connection, items, **account_fields):
+    """Run one sync whose provider feed holds `items`, (key, Row) pairs with stable ids.
+
+    `account_fields` (balance, currency) override the feed's account object.
+    """
+    payload = simplefin_payload(items, **account_fields)
+    with patch("finance.simplefin_services.fetch_accounts", return_value=payload):
         return sync_connection(owner, connection.pk, ignore_rate_limit=True)
+
+
+def simplefin_balances(account):
+    """The account's SimpleFIN balance snapshots, oldest day first, as minor amounts."""
+    return list(BalanceSnapshot.objects.filter(account=account, source=BalanceSnapshot.Source.SIMPLEFIN)
+                .order_by("snapshot_date").values_list("amount_minor", flat=True))
 
 
 def active_rows(accounts):

@@ -1,5 +1,6 @@
 from calendar import month_name
 from decimal import Decimal
+from urllib.parse import urlencode
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.http import Http404
@@ -13,8 +14,10 @@ from .access import service_or_404 as _service_or_404
 from .budget_services import (
     NEAR_LIMIT_PERCENT,
     amount_for,
+    budget_coverage,
     budget_label,
     month_budget_cards,
+    parse_coverage_scope,
     parse_month,
     reset_budget_rollover,
     save_budget,
@@ -33,8 +36,14 @@ def _visible_budget(user, budget_id):
     return get_object_or_404(Budget.objects.visible_to(user), pk=budget_id)
 
 
-def _list_url(month):
-    return f"{reverse('budgets')}?month={month.isoformat()[:7]}"
+def _list_url(month, scope=""):
+    query = {"month": month.isoformat()[:7]}
+    if scope:
+        query["scope"] = scope
+    return f"{reverse('budgets')}?{urlencode(query)}"
+
+
+COVERAGE_SCOPE_LABELS = (("", "All accounts"), ("private", "Private"), ("household", "Household"))
 
 
 def _form(request, person, data=None, instance=None, *, month):
@@ -63,6 +72,7 @@ def _form(request, person, data=None, instance=None, *, month):
 def budget_list(request):
     person = _person(request)
     month = parse_month(request.GET.get("month") or request.POST.get("month"))
+    scope = parse_coverage_scope(request.GET.get("scope", ""))
     form = _form(request, person, request.POST if request.method == "POST" else None, month=month)
     if request.method == "POST" and form.is_valid():
         try:
@@ -94,8 +104,13 @@ def budget_list(request):
             "add_form": form,
             "month": month,
             "month_label": f"{month_name[month.month]} {month.year}",
-            "previous_url": _list_url(previous_month),
-            "next_url": _list_url(next_month),
+            "previous_url": _list_url(previous_month, scope),
+            "next_url": _list_url(next_month, scope),
+            "coverage": budget_coverage(request.user, month, scope=scope),
+            "coverage_scopes": [
+                {"label": label, "url": _list_url(month, value), "current": value == scope}
+                for value, label in COVERAGE_SCOPE_LABELS
+            ],
         },
     )
 

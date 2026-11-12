@@ -526,7 +526,7 @@ def test_manual_transaction_add_and_correction_accept_formatted_amounts():
     txn = Transaction.objects.get(account=account)
     assert txn.amount_minor == -123_456
     shown = resubmit_unchanged(client, reverse("transaction-edit", args=[txn.pk]), "amount")
-    assert shown == "-1234.56"
+    assert shown == "-$1,234.56"
     txn.refresh_from_db()
     assert txn.amount_minor == -123_456
 

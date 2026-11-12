@@ -37,9 +37,12 @@ from .strategies import (
     HUNTINGTON,
     MAX_MINOR,
     Row,
+    feed_balances,
+    feed_currencies,
     overlapping_files,
     posted_day,
     posting_lags,
+    reported_balance_minor,
     rows,
     shapes,
     shifted,
@@ -129,6 +132,8 @@ class CutoverCase:
     csv_files: tuple
     feeds: tuple
     steps: tuple
+    # (balance, currency) each feed's account object sends; either may be blank (#627, #672).
+    feed_fields: tuple = ()
 
 
 def _feed_row(index, row):
@@ -165,7 +170,9 @@ def cutover_cases(draw):
     operations = [("csv", i) for i in range(file_count)] + [("sync", i) for i in range(feed_count)]
     repeats = draw(st.lists(st.sampled_from(operations), max_size=2))
     steps = draw(st.permutations(operations + repeats))
-    return CutoverCase(shape, cutover, tuple(world), tuple(map(tuple, csv_files)), tuple(map(tuple, feeds)), tuple(steps))
+    feed_fields = tuple((draw(feed_balances), draw(feed_currencies)) for _ in range(feed_count))
+    return CutoverCase(shape, cutover, tuple(world), tuple(map(tuple, csv_files)), tuple(map(tuple, feeds)),
+                       tuple(steps), feed_fields)
 
 
 @given(cutover_cases())
@@ -179,7 +186,8 @@ def test_a_cutover_counts_each_transaction_once_in_any_mix_of_csv_and_simplefin(
             if kind == "csv":
                 ledger.import_rows(owner, account, case.shape, list(case.csv_files[index]))
             else:
-                ledger.sync(owner, connection, case.feeds[index])
+                balance, currency = case.feed_fields[index]
+                ledger.sync(owner, connection, case.feeds[index], balance=balance, currency=currency)
 
         # A CSV row keeps its Transaction Date; a SimpleFIN row is dated when it posted.
         expected_rows = Counter(
@@ -192,6 +200,10 @@ def test_a_cutover_counts_each_transaction_once_in_any_mix_of_csv_and_simplefin(
         expected = ledger.expected_totals([row.amount_minor for row in case.world])
         assert ledger.totals(owner, [account]) == expected
         assert ledger.report_income_and_spending(owner, [account]) == (expected.income, expected.spending)
+        # A blank balance keeps the day's snapshot; the newest balance actually sent wins.
+        sent = [reported_balance_minor(case.feed_fields[index][0]) for kind, index in case.steps if kind == "sync"]
+        sent = [minor for minor in sent if minor is not None]
+        assert ledger.simplefin_balances(account) == sent[-1:]
 
 
 @st.composite

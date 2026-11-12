@@ -323,7 +323,7 @@ def test_correction_edit_posts_large_amount_as_decimal_text():
     assert 'type="text"' in html
     assert 'type="number"' not in html
     assert 'inputmode="decimal"' in html
-    assert 'value="90071992547409.93"' in html
+    assert 'value="$90,071,992,547,409.93"' in html
 
     post_response = client.post(
         url,
@@ -607,3 +607,77 @@ def test_transaction_list_totals_say_which_filters_they_use():
     assert "Totals for these filters" not in content
     assert "Cash flow totals" in content
     assert "Search, category and the other filters don't change them." in content
+
+
+# -- #726: the edit page leads with the category control; the amount reads as dollars --
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("amount_minor", "shown"),
+    [(-1200, "-$12.00"), (123450, "$1,234.50"), (-5, "-$0.05"), (0, "$0.00")],
+)
+def test_correction_amount_renders_as_formatted_dollars(amount_minor, shown):
+    owner = make_person("owner")
+    financial_transaction = make_transaction(owner, amount_minor=amount_minor)
+    client = Client()
+    client.force_login(owner.user)
+
+    html = client.get(reverse("transaction-edit", args=(financial_transaction.pk,))).content.decode()
+
+    assert f'value="{shown}"' in html
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("typed", "amount_minor"),
+    [("$1,234.50", 123450), ("-$12", -1200), ("-1,234.50", -123450), ("$-0.05", -5)],
+)
+def test_correction_amount_accepts_commas_and_dollar_sign(typed, amount_minor):
+    owner = make_person("owner")
+    financial_transaction = make_transaction(owner, amount_minor=-1)
+    client = Client()
+    client.force_login(owner.user)
+
+    response = client.post(
+        reverse("transaction-edit", args=(financial_transaction.pk,)),
+        {"transaction_date": "2026-01-02", "description": financial_transaction.description, "amount": typed},
+    )
+
+    assert response.status_code == 302
+    financial_transaction.refresh_from_db()
+    assert financial_transaction.amount_minor == amount_minor
+
+
+@pytest.mark.django_db
+def test_unchanged_formatted_amount_saves_no_correction():
+    owner = make_person("owner")
+    financial_transaction = make_transaction(owner, amount_minor=-123450)
+    client = Client()
+    client.force_login(owner.user)
+    url = reverse("transaction-edit", args=(financial_transaction.pk,))
+    form = client.get(url).context["form"]
+    shown = form["amount"].value()
+
+    client.post(
+        url,
+        {"transaction_date": "2026-01-02", "description": financial_transaction.description, "amount": form.fields["amount"].prepare_value(shown)},
+    )
+
+    financial_transaction.refresh_from_db()
+    assert financial_transaction.amount_minor == -123450
+    assert not TransactionCorrectionHistory.objects.filter(transaction=financial_transaction).exists()
+
+
+@pytest.mark.django_db
+def test_category_control_comes_before_the_correction_form():
+    owner = make_person("owner")
+    financial_transaction = make_transaction(owner)
+    client = Client()
+    client.force_login(owner.user)
+
+    html = client.get(reverse("transaction-edit", args=(financial_transaction.pk,))).content.decode()
+
+    categorize = html.index("Save category")
+    correction = html.index("Save correction")
+    assert categorize < correction
