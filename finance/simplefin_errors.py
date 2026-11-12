@@ -74,6 +74,24 @@ def is_api_usage_notice(item) -> bool:
     )
 
 
+# Bridge's exact notice (#629): "Requested date range exceeds limit of 90 days and was capped."
+_CAPPED_NOTICE = re.compile(r"exceeds limit of (\d{1,4}) days and was capped", re.IGNORECASE)
+
+
+def capped_window_days(payload: dict) -> int | None:
+    """The day limit Bridge says it cut the requested window to, or None when it was not cut (#640).
+
+    The limit counts back from the end of the request. The 45-day notice is
+    only a recommendation and does not cut anything.
+    """
+    for item in payload.get("errlist") or []:
+        if is_api_usage_notice(item):
+            match = _CAPPED_NOTICE.search(clean_text(item.get("msg") or ""))
+            if match and int(match.group(1)) > 0:
+                return int(match.group(1))
+    return None
+
+
 def provider_errors(payload: dict) -> list[str]:
     messages = _from_errlist(payload.get("errlist") or [])
     messages.extend(_from_deprecated_errors(payload.get("errors") or []))

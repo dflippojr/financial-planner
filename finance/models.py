@@ -605,6 +605,10 @@ class ImportBatch(ArchivableModel):
     simplefin_account_id = models.CharField(max_length=255, blank=True, default="")
     date_range_start = models.DateField()
     date_range_end = models.DateField()
+    # A SimpleFIN sync batch whose window Bridge capped: the first day the link
+    # asked for. Nothing covers the days from here to date_range_start, and the
+    # missing-import warning counts the account's history from here (#640).
+    requested_from = models.DateField(null=True, blank=True)
     imported_at = models.DateTimeField(auto_now_add=True)
     saved_csv_mapping = models.ForeignKey(
         SavedCsvMapping,
