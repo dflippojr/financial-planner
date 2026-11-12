@@ -161,17 +161,49 @@ def test_household_budget_covers_only_household_account_spending():
 
 
 @pytest.mark.django_db
-def test_gap_rows_link_to_transactions_filtered_by_category_month_and_scope():
+def test_gap_rows_link_to_spending_filtered_by_category_month_and_scope():
     owner, _member, _household, groceries, dining, _transportation = _ledger()
     add_budget(owner, category=groceries, amount_minor=10_000)
     coverage = budget_coverage(owner.user, MONTH, scope=Account.Scope.HOUSEHOLD)
     rows = {row.name: row for row in coverage.gap_rows}
     assert set(rows) == {"Transportation", "Uncategorized"}
     url = rows["Uncategorized"].drilldown_url
-    assert url.startswith(reverse("transaction-list") + "?")
-    for part in ("date_from=2026-01-01", "date_to=2026-01-31", "scope=household", "category=uncategorized"):
+    assert url.startswith(reverse("spending-category-uncategorized") + "?")
+    for part in ("date_from=2026-01-01", "date_to=2026-01-31", "scope=household"):
         assert part in url
-    assert f"category={dining.pk}" not in rows["Transportation"].drilldown_url
+    assert rows["Transportation"].drilldown_url.startswith(
+        reverse("spending-category-detail", args=[_transportation.pk]) + "?"
+    )
+
+
+def _linked_total(client, url):
+    return client.get(url).context["report"].total_spending_minor
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("scope", ["", Account.Scope.PRIVATE, Account.Scope.HOUSEHOLD])
+def test_each_gap_link_opens_a_view_showing_the_gap_amount(scope):
+    owner, _member, household, groceries, _dining, _transportation = _ledger()
+    add_budget(owner, category=groceries, amount_minor=10_000, scope=Budget.Scope.HOUSEHOLD, household=household)
+    client = signed_in(owner)
+    coverage = budget_coverage(owner.user, MONTH, scope=scope)
+    assert coverage.gap_rows
+    for row in coverage.gap_rows:
+        assert _linked_total(client, row.drilldown_url) == row.spending_minor, row.name
+
+
+@pytest.mark.django_db
+def test_household_transfer_gap_link_shows_the_household_leg():
+    """Review finding on #729: in Household scope a household-to-private transfer's
+    household leg is spending, but the Transactions list leaves it out, so the gap
+    row must link to a view that applies the report's Household rules."""
+    from tests.test_household_transfer_totals import AUGUST, _cross_scope_pair
+
+    owner, _member, _household, _out_leg = _cross_scope_pair()
+    coverage = budget_coverage(owner.user, AUGUST[0], scope=Account.Scope.HOUSEHOLD)
+    (row,) = coverage.gap_rows
+    assert (row.name, row.spending_minor) == ("Uncategorized", 50_000)
+    assert _linked_total(signed_in(owner), row.drilldown_url) == 50_000
 
 
 def _coverage_section(body):
