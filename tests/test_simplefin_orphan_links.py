@@ -15,7 +15,6 @@ from django.urls import reverse
 from django.utils import timezone
 
 from finance.audit_models import AuditEvent
-from finance.lifecycle_services import unshare_account
 from finance.models import Account, AccountLink, SimpleFinConnection, Transaction
 from finance.simplefin_errors import SimpleFinError
 from finance.simplefin_services import listed_accounts, store_read, sync_connection
@@ -158,7 +157,9 @@ def test_an_orphaned_link_to_an_account_no_longer_visible_does_not_show_its_name
     household = make_household(member, sharer)
     shared = make_account(sharer, name="Synthetic Sharer Account", scope=Account.Scope.HOUSEHOLD, household=household)
     _member, _shared, connection = _orphaned(monkeypatch, owner=member, account=shared)
-    unshare_account(sharer, shared.pk)
+    # Unsharing releases the link (#450); a direct update stands in for any other way the
+    # member could lose sight of a still-linked account.
+    Account.objects.filter(pk=shared.pk).update(scope=Account.Scope.PRIVATE, household=None, share_mode="")
 
     section = _orphan_section(signed_in(member).get(reverse("simplefin-connections")))
 
