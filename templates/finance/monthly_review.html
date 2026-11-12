@@ -5,12 +5,14 @@
 {% include "finance/_page_header.html" with title="Monthly review" helper="Computed facts for a closed month. Amounts in USD. Not advice." more="Computed facts for a closed month, using the same totals as Cash flow, Spending, Budgets, Recurring, Goals, and Net worth. This is not advice." actions="finance/_monthly_review_actions.html" %}
 
 <p class="mb-4 text-sm opacity-80">Generated {{ review.generated_at|date:"Y-m-d" }}.</p>
-{% if has_newer_transactions or has_changed_transfer_marks %}
+{% if has_newer_transactions or has_changed_transfer_marks or has_changed_refund_links %}
 <div role="status" class="alert alert-warning mb-4 flex flex-wrap items-center justify-between gap-2">
   {% if has_newer_transactions %}
   <span>New transactions since this review. It may not match Cash flow until you regenerate it.</span>
-  {% else %}
+  {% elif has_changed_transfer_marks %}
   <span>Transactions were marked or unmarked as transfers to or from an untracked account since this review. It may not match Cash flow until you regenerate it.</span>
+  {% else %}
+  <span>Refunds in this month were linked or unlinked since this review. It may not match Cash flow until you regenerate it.</span>
   {% endif %}
   <form method="post" action="{{ regenerate_url }}">
     {% csrf_token %}
