@@ -21,7 +21,6 @@ from finance.csv_import.services import commit_csv_import, undo_import_batch
 from finance.models import CategoryRule, ImportBatch, RefundLink, Transaction, TransactionCorrectionHistory
 from finance.monthly_review import review_for_viewer
 from finance.rule_services import apply_rule, save_category_rule
-from finance.untracked_transfers import mark_untracked_transfer
 from tests.test_category_rules import mapping
 from tests import test_untracked_transfers as untracked
 from tests.test_untracked_transfers import MONTH, TODAY
@@ -77,7 +76,10 @@ def _assert_stale_until_regenerated(world, refund):
 
 def test_marking_the_july_purchase_on_the_edit_page_shows_the_hint_on_the_august_review(world):
     purchase, refund = _july_purchase_with_august_refund(world)
-    mark_untracked_transfer(world["owner"], purchase.pk)
+    client = Client()
+    client.force_login(world["owner"].user)
+    response = client.post(reverse("transaction-untracked-transfer", args=[purchase.pk]), {"action": "mark"})
+    assert response.status_code == 302
     _assert_stale_until_regenerated(world, refund)
 
 
