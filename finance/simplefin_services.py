@@ -42,6 +42,7 @@ from finance.simplefin_errors import (
     SimpleFinAlreadyClaimed,
     SimpleFinError,
     SimpleFinRateLimited,
+    capped_window_days,
     clean_text,
     is_api_usage_notice,
     provider_errors,
@@ -761,7 +762,22 @@ def _uncovered_ranges(account, link, end):
     return gaps
 
 
-def _ensure_batch(person, account, connection, link, synced_at, start, end):
+def _fetched_parts(gaps, fetched_from):
+    """Each uncovered range trimmed to the days Bridge sent, as (start, end, requested_from).
+
+    When Bridge capped the window, a batch never claims a day before
+    fetched_from, the first day it sent (#640). A trimmed batch keeps the day
+    its range was asked from, so the missing-import warning still counts the
+    account's history from there; a range wholly before fetched_from gets no batch.
+    """
+    for start, end in gaps:
+        if fetched_from is None or start >= fetched_from:
+            yield start, end, None
+        elif end >= fetched_from:
+            yield fetched_from, end, start
+
+
+def _ensure_batch(person, account, connection, link, synced_at, start, end, requested_from=None):
     return ImportBatch.objects.create(
         account=account,
         imported_by=person,
@@ -770,6 +786,7 @@ def _ensure_batch(person, account, connection, link, synced_at, start, end):
         simplefin_account_id=link.simplefin_account_id,
         date_range_start=start,
         date_range_end=end,
+        requested_from=requested_from,
     )
 
 
@@ -801,17 +818,64 @@ def _transactions_unreliable(remote: dict, payload: dict) -> bool:
     return False
 
 
-def _sync_one_link(person, connection, link, remote, synced_at, payload, rates) -> int:
+def _first_fetched_day(payload, now) -> date | None:
+    """The first whole day a capped window holds, or None when Bridge did not cap it (#640).
+
+    Bridge counts its limit back from the end of the request, one second after
+    now. The day the cap falls in was at most partly sent, so it is left out.
+    """
+    days = capped_window_days(payload)
+    if days is None:
+        return None
+    cap = timezone.localtime(now + timedelta(seconds=1) - timedelta(days=days))
+    return cap.date() + timedelta(days=1)
+
+
+def _start_link_at_fetched_day(person, connection, link, fetched_from):
+    """Move a link's cut-over up to fetched_from when its first sync was capped (#640).
+
+    Bridge never sent the days before fetched_from. With the cut-over there, a
+    CSV import may supply them, the sync still skips them, and with no batch
+    covering them the missing-import warning shows the gap. Only a link whose
+    cut-over no active batch covers yet moves: one that already synced from its
+    cut-over keeps it. The move goes through _save_link, so check_cutover
+    (#671) still applies; if it refuses, the cut-over stays as it was.
+    Returns the link as saved, or None when it did not move.
+    """
+    if link.mode != AccountLink.Mode.TRANSACTIONS or link.cutover_date >= fetched_from:
+        return None
+    covered = _active_link_batches(link.account, link).filter(
+        date_range_start__lte=link.cutover_date, date_range_end__gte=link.cutover_date
+    )
+    if covered.exists():
+        return None
+    try:
+        saved = _save_link(connection, link.simplefin_account_id, link.account, fetched_from, link.mode)
+    except SimpleFinError:
+        return None
+    append_event(action=AuditEvent.Action.SIMPLEFIN_LINKS_CHANGED, actor=person, target_id=connection.pk,
+                 changed_fields=["cutover"])
+    return saved
+
+
+def _sync_one_link(person, connection, link, remote, synced_at, payload, rates, fetched_from=None):
+    """Apply one linked account. Returns (new rows imported, whether its cut-over moved)."""
     account = link.account
     conversion = _conversion_for(remote, rates)
     balance_date = posted_date(remote.get("balance-date")) or timezone.localdate()
     if link.mode == AccountLink.Mode.TRANSACTIONS and _transactions_unreliable(remote, payload):
         _record_balance(account, remote, balance_date, conversion, batch=None)
-        return 0
+        return 0, False
     end = max(link.cutover_date, balance_date, timezone.localdate())
+    # What the link asks for, read before a capped first sync moves its cut-over.
+    gaps = _uncovered_ranges(account, link, end)
+    moved = None
+    if fetched_from is not None:
+        moved = _start_link_at_fetched_day(person, connection, link, fetched_from)
+        link = moved or link
     new_batches = [
-        _ensure_batch(person, account, connection, link, synced_at, gap_start, gap_end)
-        for gap_start, gap_end in _uncovered_ranges(account, link, end)
+        _ensure_batch(person, account, connection, link, synced_at, start, gap_end, requested_from)
+        for start, gap_end, requested_from in _fetched_parts(gaps, fetched_from)
     ]
     new_ids = [batch.pk for batch in new_batches]
     batches = new_batches + list(_active_link_batches(account, link).exclude(pk__in=new_ids))
@@ -820,7 +884,7 @@ def _sync_one_link(person, connection, link, remote, synced_at, payload, rates) 
         imported = _import_transactions(account, link, remote, batches, conversion)
     batch = _batch_covering(batches, balance_date) if batches else None
     _record_balance(account, remote, balance_date, conversion, batch=batch)
-    return imported
+    return imported, moved is not None
 
 
 @member_operation
@@ -974,12 +1038,17 @@ def _skip_message(link, remote, reason) -> str:
     return f"Skipped {label}: {reason} It will be retried on the next sync."
 
 
-def _import_links(person, connection, links, syncable_ids, payload, now, rates):
-    """Apply each linked account. Returns (imported, skipped, unconverted messages)."""
+def _import_links(person, connection, links, syncable_ids, payload, now, rates, fetched_from=None):
+    """Apply each linked account.
+
+    Returns (imported, skipped, unconverted messages, names of accounts whose
+    cut-over moved to fetched_from).
+    """
     remote_accounts = _accounts_by_simplefin_id(payload)
     imported = 0
     skipped = 0
     unconverted = []
+    moved = []
     for link in links:
         if link.account_id not in syncable_ids:
             # Archived, or no longer visible to the connection owner
@@ -992,10 +1061,23 @@ def _import_links(person, connection, links, syncable_ids, payload, now, rates):
         try:
             # A savepoint per account: one that cannot convert leaves no half-written rows.
             with transaction.atomic():
-                imported += _sync_one_link(person, connection, link, remote, now, payload, rates)
+                count, cutover_moved = _sync_one_link(
+                    person, connection, link, remote, now, payload, rates, fetched_from
+                )
         except AccountSkipped as exc:
             unconverted.append(_skip_message(link, remote, str(exc)))
-    return imported, skipped, unconverted
+            continue
+        imported += count
+        if cutover_moved:
+            moved.append(link.account.name)
+    return imported, skipped, unconverted, moved
+
+
+def _moved_cutover_note(moved, fetched_from, days) -> str:
+    return (
+        f"SimpleFIN returned only the last {days} days, so SimpleFIN now starts on "
+        f"{fetched_from.isoformat()} for {', '.join(moved)}. Import a file for the days before it."
+    )
 
 
 def _fit_summary(head, unconverted, tail, limit) -> str:
@@ -1021,18 +1103,21 @@ def _apply_sync(person, connection_id, plan, payload, rates, *, ignore_rate_limi
         .filter(pk__in=[link.account_id for link in links], status=Account.Status.ACTIVE, archived_at__isnull=True)
         .values_list("pk", flat=True)
     )
+    fetched_from = _first_fetched_day(payload, now)
     try:
         # A savepoint: a failure part-way undoes this run's imports while the
         # failure record below still commits.
         with transaction.atomic():
-            imported, skipped, unconverted = _import_links(
-                person, connection, links, syncable_ids, payload, now, rates
+            imported, skipped, unconverted, moved = _import_links(
+                person, connection, links, syncable_ids, payload, now, rates, fetched_from
             )
     except SimpleFinError as exc:
         _save_failure(person, connection, now, str(exc), failure="import_failed")
         return None, exc
     synced = _refresh_after_sync(person, syncable_ids, now)
     head = f"Synced {imported} new transaction(s)."
+    if moved:
+        head = f"{head} {_moved_cutover_note(moved, fetched_from, capped_window_days(payload))}"
     if skipped:
         head = f"{head} Skipped {skipped} linked account(s) that are archived or no longer available to you."
     tail = errors[:1]
