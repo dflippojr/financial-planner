@@ -20,6 +20,7 @@ from finance.lifecycle_services import (
     _DENIED,
     _lock_visible_account_with_pair_and_refund_counterparts,
     _person_for,
+    _visible_account_for_update,
     lock_actor_household,
 )
 from finance.csv_import.saved_mappings import headers_match, lock_saved_mapping, mapping_from_saved
@@ -37,17 +38,9 @@ class ImportCommitResult:
 
 
 def _active_account(principal, account_id):
-    # The same lock query as _visible_account_for_update, also reading whether the
-    # account has saved calculated balances, so an import pays no query to learn it.
-    account = (
-        Account.objects.visible_to(principal)
-        .select_for_update()
-        .annotate(_has_calculated=has_calculated_expression())
-        .filter(pk=account_id)
-        .first()
-    )
-    if account is None:
-        raise PermissionDenied(_DENIED)
+    # The lock query also reads whether the account has saved calculated
+    # balances, so an import pays no query to learn it.
+    account = _visible_account_for_update(principal, account_id, _has_calculated=has_calculated_expression())
     if account.status != Account.Status.ACTIVE or account.archived_at is not None:
         raise PermissionDenied(_DENIED)
     return account
