@@ -225,3 +225,38 @@ def test_member_page_never_counts_another_members_private_spending():
     assert "$25.00" not in section
     assert "$135.00" not in section
     assert "\u2212$67.00" in section
+
+
+@pytest.mark.django_db
+def test_household_budget_never_covers_a_transfer_the_all_accounts_view_leaves_out():
+    """Review finding on #729: a household-to-private transfer counts as household
+    spending in Household scope but is left out with All accounts, so coverage
+    under All accounts must use the All accounts rules, not the Household report."""
+    from tests.test_household_transfer_totals import AUGUST, _cross_scope_pair
+
+    owner, member, household, _out_leg = _cross_scope_pair()
+    uncategorized = household.categories.get(code="uncategorized")
+    add_budget(owner, category=uncategorized, amount_minor=10_000, month=AUGUST[0],
+               scope=Budget.Scope.HOUSEHOLD, household=household)
+
+    everything = budget_coverage(owner.user, AUGUST[0])
+    assert everything.total_spending_minor == _report_total(owner, AUGUST, "") == 0
+    assert everything.budgeted_minor == 0
+    assert everything.gap_minor == 0
+    assert everything.gap_rows == []
+
+    shared = budget_coverage(owner.user, AUGUST[0], scope=Account.Scope.HOUSEHOLD)
+    assert shared.total_spending_minor == _report_total(owner, AUGUST, Account.Scope.HOUSEHOLD) == 50_000
+    assert shared.budgeted_minor == 50_000
+    assert shared.gap_rows == []
+
+    # The member sees only the household leg, so it is spending under a household budget.
+    for_member = budget_coverage(member.user, AUGUST[0])
+    assert for_member.total_spending_minor == for_member.budgeted_minor == 50_000
+    assert for_member.gap_rows == []
+
+
+def _report_total(principal, window, scope):
+    return spending_by_category_report(
+        principal, date_from=window[0], date_to=window[1], scope=scope
+    ).total_spending_minor
