@@ -179,6 +179,32 @@ def test_the_cash_flow_report_flags_the_weeks_a_capped_first_sync_did_not_fetch(
 
 
 @pytest.mark.django_db
+def test_cash_flow_flags_the_unfetched_weeks_even_when_the_capped_sync_is_the_first_import(monkeypatch):
+    """Nothing was imported before the sync, but the link asked for history from its cut-over (#713, #640)."""
+    today = _today()
+    owner, checking, connection = _linked_120_days_back(monkeypatch)
+    requested = _cutover(checking)
+
+    _sync(owner, connection, monkeypatch, FakeBridge([]))
+
+    first = _first_synced_day(checking)
+    report = cash_flow_report(
+        owner, date_from=requested, date_to=today - timedelta(days=7),
+        grouping=GROUPING_WEEK, account=checking, today=today,
+    )
+    gap_weeks = [period for period in report.periods if requested <= period.start and period.end < first]
+    synced_weeks = [period for period in report.periods if period.start >= first]
+    assert gap_weeks and all(period.missing_import for period in gap_weeks)
+    assert synced_weeks and not any(period.missing_import for period in synced_weeks)
+    # Weeks before the requested history start were never asked for.
+    earlier = cash_flow_report(
+        owner, date_from=requested - timedelta(days=60), date_to=requested - timedelta(days=8),
+        grouping=GROUPING_WEEK, account=checking, today=today,
+    )
+    assert earlier.periods and not any(period.missing_import for period in earlier.periods)
+
+
+@pytest.mark.django_db
 def test_a_csv_import_can_supply_the_days_a_capped_first_sync_did_not_fetch(monkeypatch):
     today = _today()
     gap_day = today - timedelta(days=100)
