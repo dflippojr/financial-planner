@@ -349,13 +349,29 @@ FILE_IMPORT_SOURCES = (
 
 
 def _latest_file_day(active):
-    """The latest day an active file-imported row covers, by the date SimpleFIN would give it."""
+    """The latest day an active file-imported row covers, by the date SimpleFIN would give it.
+
+    That is each row's own cut-over date: a card export's posted date, read
+    from `original_fields`, or its transaction date when that is missing.
+    """
     rows = active.filter(import_batch__source__in=FILE_IMPORT_SOURCES)
-    latest = rows.order_by("-transaction_date").values_list("transaction_date", flat=True).first()
-    if latest is None:
-        return None
-    posted = _latest_posted_date(rows)
-    return posted if posted is not None and posted > latest else latest
+    latest = (
+        rows.exclude(import_batch__source__in=POSTED_DATE_MAPPINGS)
+        .order_by("-transaction_date")
+        .values_list("transaction_date", flat=True)
+        .first()
+    )
+    card_rows = rows.filter(import_batch__source__in=POSTED_DATE_MAPPINGS).values_list(
+        "import_batch__source", "original_fields", "transaction_date"
+    )
+    for source, original_fields, transaction_date in card_rows.iterator():
+        mapping = POSTED_DATE_MAPPINGS[source]
+        cell = (original_fields or {}).get(mapping.posted_date_column)
+        posted = parse_posted_date(cell, mapping.date_format) if isinstance(cell, str) else None
+        day = posted or transaction_date
+        if latest is None or day > latest:
+            latest = day
+    return latest
 
 
 def check_cutover(account, cutover: date, mode: str) -> None:
@@ -392,6 +408,10 @@ def check_cutover(account, cutover: date, mode: str) -> None:
 
 def _save_link(connection, simplefin_account_id, account, cutover, mode):
     """Create or change one link. Every cut-over a link gets passes through check_cutover."""
+    # The account row lock is the one a CSV import holds while it reads the
+    # cut-over and writes rows, so an import cannot land between the check
+    # below and the save.
+    Account.objects.select_for_update().filter(pk=account.pk).first()
     existing = (
         AccountLink.objects.filter(connection=connection, simplefin_account_id=simplefin_account_id)
         .values_list("account_id", "cutover_date", "mode")

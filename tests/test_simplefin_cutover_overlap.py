@@ -12,6 +12,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from django.db import connection as db_connection
+from django.test.utils import CaptureQueriesContext
 
 from finance.csv_import.services import undo_import_batch
 from finance.models import AccountLink, Transaction
@@ -122,6 +124,39 @@ def test_a_card_rows_posted_day_bounds_the_cutover(monkeypatch):
 
 
 @pytest.mark.django_db
+def test_a_card_row_posted_before_its_transaction_date_bounds_by_the_posted_day(monkeypatch):
+    """Each row counts by its own posted day, as classify_overlap does, not the later of its two dates."""
+    owner = make_person("owner")
+    make_household(owner)
+    card = make_account(owner, name="Synthetic Card", account_type="credit_card")
+    ledger.import_file(owner, card, (
+        b"Transaction Date,Posted Date,Card No.,Description,Category,Debit,Credit\n"
+        b"2026-03-12,2026-03-10,0000,SYNTHETIC GROCER,Merchandise,25.00,\n"
+    ), profile="capital_one")
+    connection = connect_owner(owner, monkeypatch, _payload())
+    with pytest.raises(SimpleFinError, match="after 2026-03-10"):
+        _link(owner, connection, card, date(2026, 3, 10))
+    _link(owner, connection, card, date(2026, 3, 11))
+    assert _cutover(card) == date(2026, 3, 11)
+
+
+@pytest.mark.django_db
+def test_saving_a_cutover_locks_the_account_before_reading_its_rows(monkeypatch):
+    """The CSV import holds this row lock, so an import cannot slip in between the check and the save."""
+    if not db_connection.features.has_select_for_update:
+        pytest.skip("Row locks need PostgreSQL")
+    owner, checking = _owner_with_checking()
+    connection = connect_owner(owner, monkeypatch, _payload())
+    with CaptureQueriesContext(db_connection) as queries:
+        _link(owner, connection, checking, date(2026, 3, 1))
+    sql = [query["sql"] for query in queries.captured_queries]
+    account_lock = next(i for i, q in enumerate(sql) if 'FROM "finance_account"' in q and "FOR UPDATE" in q
+                        and q.lstrip().startswith("SELECT") and str(checking.pk) in q)
+    first_row_read = next(i for i, q in enumerate(sql) if 'FROM "finance_transaction"' in q)
+    assert account_lock < first_row_read
+
+
+@pytest.mark.django_db
 def test_moving_the_cutover_past_a_synced_row_is_refused(monkeypatch):
     owner, checking = _owner_with_checking()
     payload = _payload()
@@ -197,17 +232,24 @@ def _writes_cutover(node):
     if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
         targets = node.targets if isinstance(node, ast.Assign) else [node.target]
         return any(isinstance(t, ast.Attribute) and t.attr == "cutover_date" for t in targets)
-    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-            and node.func.attr in WRITE_METHODS):
+    if not isinstance(node, ast.Call):
         return False
+    # AccountLink(cutover_date=...) builds a row for save() or bulk_create().
+    name = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
+    if name == "AccountLink" and any(keyword.arg == "cutover_date" for keyword in node.keywords):
+        return True
+    if not (isinstance(node.func, ast.Attribute) and node.func.attr in WRITE_METHODS):
+        return False
+    # A field list naming it, positional or keyword: bulk_update(links, ["cutover_date"]), update_fields=.
+    if any(isinstance(inner, ast.Constant) and inner.value == "cutover_date"
+           for arg in [*node.args, *(keyword.value for keyword in node.keywords)] for inner in ast.walk(arg)):
+        return True
     for keyword in node.keywords:
         if keyword.arg == "cutover_date":
             return True
         if isinstance(keyword.value, ast.Dict) and any(
             isinstance(key, ast.Constant) and key.value == "cutover_date" for key in keyword.value.keys
         ):
-            return True
-        if keyword.arg == "update_fields" and "cutover_date" in ast.unparse(keyword.value):
             return True
     return False
 
@@ -247,6 +289,10 @@ def test_the_writer_scan_sees_each_way_to_store_a_cutover():
         "def f(): AccountLink.objects.update_or_create(pk=1, defaults={'cutover_date': day})",
         "def f(link): link.cutover_date = day",
         "def f(link): link.save(update_fields=['cutover_date'])",
+        "def f(): AccountLink.objects.bulk_create([AccountLink(cutover_date=day)])",
+        "def f(links): AccountLink.objects.bulk_update(links, ['cutover_date'])",
+        "def f(links): AccountLink.objects.bulk_update(links, fields=('cutover_date', 'mode'))",
+        "def f(): models.AccountLink(cutover_date=day).save()",
     ):
         tree = ast.parse(snippet)
         assert any(_writes_cutover(node) for node in ast.walk(tree)), snippet
