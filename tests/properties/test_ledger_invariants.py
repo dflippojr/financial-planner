@@ -242,6 +242,65 @@ def test_a_blank_cutover_after_a_csv_import_counts_each_transaction_once(case):
         assert ledger.totals(owner, [account]) == ledger.expected_totals([row.amount_minor for row in world])
 
 
+@st.composite
+def cutover_edit_cases(draw):
+    """CSV imports, syncs and cut-over saves in any order, including before the first link (#671).
+
+    The steps reach both ways a cut-over could overlap rows already stored: a
+    link saved with an explicit cut-over earlier than rows a CSV imported, and
+    an existing link's cut-over moved later than rows a sync imported. Files
+    and feeds may each hold any of the transactions, on either side of any
+    cut-over.
+    """
+    shape = draw(st.sampled_from((HUNTINGTON, CAPITAL_ONE, APPLE_CARD)))
+    anchor = draw(st.dates(date(2025, 3, 1), date(2026, 8, 1)))
+    near = st.integers(-30, 30).map(lambda offset: shifted(anchor, offset))
+    world = draw(rows(min_size=1, max_size=8, unique=True, lag_strategy=_card_lags(shape), day_strategy=near))
+    indexes = st.lists(st.integers(0, len(world) - 1), min_size=1, max_size=len(world), unique=True)
+    csv_files = draw(st.lists(indexes, min_size=1, max_size=2))
+    feeds = draw(st.lists(indexes, min_size=1, max_size=2))
+    # None is a blank cut-over: a new link defaults it, an existing one keeps it.
+    cutovers = draw(st.lists(st.one_of(st.none(), near), min_size=1, max_size=3))
+    operations = ([("csv", i) for i in range(len(csv_files))] + [("sync", i) for i in range(len(feeds))]
+                  + [("link", cutover) for cutover in cutovers])
+    steps = draw(st.permutations(operations))
+    return shape, tuple(world), csv_files, feeds, tuple(steps)
+
+
+@given(cutover_edit_cases())
+@example((HUNTINGTON, (Row(date(2026, 3, 12), -2500, "SYN GROCER N0", "", "SYN-00000"),), [[0]], [[0]],
+          (("csv", 0), ("link", date(2026, 3, 1)), ("sync", 0))))
+@example((HUNTINGTON, (Row(date(2026, 3, 12), -2500, "SYN GROCER N0", "", "SYN-00000"),), [[0]], [[0]],
+          (("link", date(2026, 3, 1)), ("sync", 0), ("link", date(2026, 4, 1)), ("csv", 0))))
+def test_no_order_of_imports_syncs_and_cutover_edits_counts_a_transaction_twice(case):
+    shape, world, csv_files, feeds, steps = case
+    with ledger.isolated():
+        owner = ledger.make_member()
+        ledger.make_household(owner)
+        account = ledger.make_account(owner, shape.account_type)
+        connection = ledger.claim_simplefin(owner)
+        linked = False
+        for kind, value in steps:
+            if kind == "csv":
+                ledger.import_rows(owner, account, shape, [world[i] for i in csv_files[value]])
+            elif kind == "link":
+                linked = ledger.save_link(owner, connection, account, value) or linked
+            elif linked:
+                ledger.sync(owner, connection, [(i, _feed_row(i, world[i])) for i in feeds[value]])
+
+        # Each transaction is stored at most once: from a file or from the feed, never both.
+        index_of = {(row.day, row.amount_minor, "USD", shape.stored_description(row)): i
+                    for i, row in enumerate(world)}
+        index_of |= {(posted_day(row), row.amount_minor, "USD", _feed_row(i, row).payee): i
+                     for i, row in enumerate(world)}
+        stored = ledger.content_counter([account])
+        assert set(stored) <= set(index_of)
+        per_transaction = Counter()
+        for key, count in stored.items():
+            per_transaction[index_of[key]] += count
+        assert all(count == 1 for count in per_transaction.values()), per_transaction
+
+
 # 4. Transfers net to zero; a refund never reduces spending that was never counted.
 
 ACCOUNT_SHAPES = {"checking": HUNTINGTON, "savings": HUNTINGTON, "card": CAPITAL_ONE}
