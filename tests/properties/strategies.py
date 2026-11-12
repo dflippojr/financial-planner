@@ -204,8 +204,38 @@ def simplefin_epoch(day):
     return int(datetime.combine(day, time(12), tzinfo=UTC).timestamp())
 
 
-def simplefin_payload(items):
-    """A SimpleFIN /accounts payload for one synthetic checking account."""
+# A field the provider left out of the account object entirely.
+ABSENT = "<absent>"
+
+# Required account fields as a provider may really send them: Bridge has sent ""
+# for a required currency (#627), and a blank, null or missing balance must skip
+# the snapshot, never the sync (#672). A non-blank balance is any exact amount.
+feed_balances = st.one_of(st.sampled_from(("", None, "  ", ABSENT)), amounts.map(decimal_text))
+feed_currencies = st.sampled_from(("USD", "", None, ABSENT))
+
+
+def reported_balance_minor(balance):
+    """The minor amount a feed's balance should store, or None when it sent none."""
+    if balance is None or balance == ABSENT or not balance.strip():
+        return None
+    whole, _, cents = balance.lstrip("-").partition(".")
+    minor = int(whole) * 100 + int(cents)
+    return -minor if balance.startswith("-") else minor
+
+
+def simplefin_payload(items, *, balance="0.00", currency="USD"):
+    """A SimpleFIN /accounts payload for one synthetic checking account; ABSENT drops a field."""
+    payload = _simplefin_payload(items)
+    remote = payload["accounts"][0]
+    for field, value in (("balance", balance), ("currency", currency)):
+        if value == ABSENT:
+            del remote[field]
+        else:
+            remote[field] = value
+    return payload
+
+
+def _simplefin_payload(items):
     return {
         "errlist": [],
         "connections": [

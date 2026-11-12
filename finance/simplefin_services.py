@@ -514,6 +514,28 @@ def _balance_in_usd(remote: dict, balance_date: date, conversion: _Conversion | 
     }
 
 
+def _has_balance(remote: dict) -> bool:
+    """False when the provider left the balance out, null or blank.
+
+    The protocol requires it, but Bridge has sent "" for other required
+    fields (#627), so a blank balance skips the snapshot rather than the sync (#672).
+    """
+    value = remote.get("balance")
+    return value is not None and not (isinstance(value, str) and not value.strip())
+
+
+def _record_balance(account, remote, balance_date, conversion, *, batch):
+    """Store the reported balance for the day, or keep what is there when none was sent."""
+    if not _has_balance(remote):
+        return
+    _upsert_snapshot(
+        account,
+        snapshot_date=balance_date,
+        fields=_balance_in_usd(remote, balance_date, conversion),
+        batch=batch,
+    )
+
+
 def _upsert_snapshot(account, *, snapshot_date, fields, batch):
     # A snapshot stays tied to the sync that first recorded its date, so
     # undoing a later batch never deletes an earlier day's balance.
@@ -700,13 +722,7 @@ def _sync_one_link(person, connection, link, remote, synced_at, payload, rates) 
     conversion = _conversion_for(remote, rates)
     balance_date = posted_date(remote.get("balance-date")) or timezone.localdate()
     if link.mode == AccountLink.Mode.TRANSACTIONS and _transactions_unreliable(remote, payload):
-        if remote.get("balance") not in (None, ""):
-            _upsert_snapshot(
-                account,
-                snapshot_date=balance_date,
-                fields=_balance_in_usd(remote, balance_date, conversion),
-                batch=None,
-            )
+        _record_balance(account, remote, balance_date, conversion, batch=None)
         return 0
     end = max(link.cutover_date, balance_date, timezone.localdate())
     new_batches = [
@@ -719,12 +735,7 @@ def _sync_one_link(person, connection, link, remote, synced_at, payload, rates) 
     if link.mode == AccountLink.Mode.TRANSACTIONS:
         imported = _import_transactions(account, link, remote, batches, conversion)
     batch = _batch_covering(batches, balance_date) if batches else None
-    _upsert_snapshot(
-        account,
-        snapshot_date=balance_date,
-        fields=_balance_in_usd(remote, balance_date, conversion),
-        batch=batch,
-    )
+    _record_balance(account, remote, balance_date, conversion, batch=batch)
     return imported
 
 
