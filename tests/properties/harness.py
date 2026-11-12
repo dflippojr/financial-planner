@@ -147,8 +147,8 @@ BRIDGE_CAPPED_NOTICE = {"code": "gen.api", "msg": "Requested date range exceeds 
 def sync_with_bridge_cap(owner, connection, items, *, now):
     """Run one sync at `now` against a feed that serves only the window Bridge would.
 
-    Returns the first instant (epoch seconds) the feed served, or None when it
-    was asked for no start.
+    Returns (the first instant the feed served, in epoch seconds, or None when
+    it was asked for no start; whether it cut the window).
     """
     served = []
 
@@ -158,7 +158,7 @@ def sync_with_bridge_cap(owner, connection, items, *, now):
         if start_date is not None and end_date - start_date > BRIDGE_LIMIT_SECONDS:
             start = end_date - BRIDGE_LIMIT_SECONDS
             payload["errlist"].append(dict(BRIDGE_CAPPED_NOTICE))
-        served.append(start)
+        served.append((start, start != start_date))
         remote = payload["accounts"][0]
         remote["transactions"] = [
             item for item in remote["transactions"] if start is None or start <= item["posted"] < end_date

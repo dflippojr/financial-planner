@@ -232,6 +232,9 @@ def capped_first_sync_cases(draw):
 
 
 @given(capped_first_sync_cases())
+# Bridge serves from 07:00:01 New York time on the cut-over day itself (review of #734).
+@example(CappedCase(HUNTINGTON, date(2026, 3, 1), datetime(2026, 5, 30, 12, tzinfo=UTC),
+                    (Row(date(2026, 3, 1), -2500, "SYN GROCER N0", "", "SYN-00000", None),), ("sync", "csv")))
 def test_a_capped_first_sync_leaves_its_unfetched_days_to_a_csv_and_counts_each_transaction_once(case):
     with ledger.isolated():
         owner = ledger.make_member()
@@ -239,17 +242,20 @@ def test_a_capped_first_sync_leaves_its_unfetched_days_to_a_csv_and_counts_each_
         account = ledger.make_account(owner, case.shape.account_type)
         connection = ledger.link_simplefin(owner, account, case.cutover)
         feed = [(index, _feed_row(index, row)) for index, row in enumerate(case.world)]
-        first_served = None
+        first = None
         for step in case.steps:
             if step == "csv":
                 ledger.import_rows(owner, account, case.shape, list(case.world))
             else:
                 served = ledger.sync_with_bridge_cap(owner, connection, feed, now=case.sync_at)
-                first_served = served if first_served is None else first_served
+                first = served if first is None else first
 
-        # SimpleFIN owns the days from the first whole day it served; a CSV the rest.
+        # SimpleFIN owns the days from the first whole day it served; a CSV the
+        # rest. A capped window starts partway through a day, even when that day
+        # is the cut-over, so that day is left to a CSV.
+        first_served, capped = first
         served_from = timezone.localtime(datetime.fromtimestamp(first_served, tz=UTC)).date()
-        boundary = case.cutover if served_from <= case.cutover else served_from + timedelta(days=1)
+        boundary = served_from + timedelta(days=1) if capped else case.cutover
         assert AccountLink.objects.get(account=account).cutover_date == boundary
         assert not ImportBatch.objects.filter(
             account=account, source=ImportBatch.Source.SIMPLEFIN, status=ImportBatch.Status.ACTIVE,

@@ -8,7 +8,8 @@ covered: a silent gap. The fake Bridge below caps the window the same way.
 Dates are relative to today because the cap is. Synthetic data only.
 """
 
-from datetime import datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
+from unittest.mock import patch
 
 import pytest
 from django.utils import timezone
@@ -49,6 +50,7 @@ class FakeBridge:
         self.transactions = transactions
         self.balance_day = balance_day or _today()
         self.requests = []
+        self.served_from = None
 
     def __call__(self, access_url, *, start_date=None, end_date=None, balances_only=False):
         self.requests.append((start_date, end_date))
@@ -60,10 +62,16 @@ class FakeBridge:
         if end_date - start_date > LIMIT_SECONDS:
             start = end_date - LIMIT_SECONDS
             payload["errlist"].append(dict(CAPPED_NOTICE))
+        self.served_from = start
         payload["accounts"][0]["transactions"] = [
             item for item in self.transactions if start <= item["posted"] < end_date
         ]
         return payload
+
+    def first_whole_day(self):
+        """The first local day the last answer served in full: the day it started in was only partly sent."""
+        started = timezone.localtime(datetime.fromtimestamp(self.served_from, tz=UTC))
+        return started.date() + timedelta(days=1)
 
 
 def _huntington(*rows):
@@ -131,7 +139,8 @@ def test_a_capped_first_sync_records_a_batch_that_starts_at_most_90_days_back(mo
     _sync(owner, connection, monkeypatch, bridge)
 
     first = _first_synced_day(checking)
-    assert today - timedelta(days=90) <= first <= today - timedelta(days=89)
+    assert first == bridge.first_whole_day()
+    assert first >= today - timedelta(days=90)
     assert not _sync_batches(checking).filter(date_range_start__lt=first).exists()
     # Only what SimpleFIN sent was imported.
     assert list(_active(checking).values_list("source_transaction_id", flat=True)) == ["recent"]
@@ -215,12 +224,12 @@ def test_calculated_month_ends_before_a_capped_first_sync_are_incomplete(monkeyp
         monkeypatch, csv_before=[(today - timedelta(days=150), "-10.00"), (today - timedelta(days=121), "-10.00")],
     )
 
-    _sync(owner, connection, monkeypatch, FakeBridge([_txn("recent", today - timedelta(days=10))]))
+    bridge = FakeBridge([_txn("recent", today - timedelta(days=10))])
+    _sync(owner, connection, monkeypatch, bridge)
 
-    # SimpleFIN sent nothing from 90 days back or earlier; it sent every day
-    # from 89 days back on.
-    never_fetched = today - timedelta(days=90)
-    fetched_from = today - timedelta(days=89)
+    # SimpleFIN sent every day from fetched_from on, and none in full before it.
+    fetched_from = bridge.first_whole_day()
+    never_fetched = fetched_from - timedelta(days=1)
     rows = calculate(checking).rows
     in_gap = [row for row in rows if row.month_end + timedelta(days=1) <= never_fetched]
     assert in_gap, "the gap should hold at least one month-end"
@@ -265,10 +274,12 @@ def test_a_capped_sync_after_a_long_pause_does_not_claim_the_days_it_could_not_f
         date_range_start=cutover, date_range_end=cutover + timedelta(days=5),
     )
 
-    _sync(owner, connection, monkeypatch, FakeBridge([]))
+    bridge = FakeBridge([])
+    _sync(owner, connection, monkeypatch, bridge)
 
     later = _sync_batches(checking).exclude(date_range_start=cutover).get()
-    assert today - timedelta(days=90) <= later.date_range_start <= today - timedelta(days=89)
+    assert later.date_range_start == bridge.first_whole_day()
+    assert later.date_range_start >= today - timedelta(days=90)
     assert missing_import_on(owner, [checking], cutover + timedelta(days=10))
 
 
@@ -284,6 +295,18 @@ def test_an_uncapped_sync_still_covers_from_the_cutover(monkeypatch):
 
     assert _first_synced_day(checking) == cutover
     assert _cutover(checking) == cutover
+
+
+@pytest.mark.django_db
+def test_a_cap_that_crosses_a_daylight_saving_change_starts_at_the_first_whole_local_day(monkeypatch):
+    """90 x 24 hours back from 23:30 EST on Nov 12 is 00:30 EDT on Aug 15, so Aug 16 is the first whole day."""
+    with timezone.override("America/New_York"), \
+            patch("django.utils.timezone.now", return_value=datetime(2026, 11, 13, 4, 30, tzinfo=UTC)):
+        owner, checking, connection = _linked_120_days_back(monkeypatch)
+        _sync(owner, connection, monkeypatch, FakeBridge([]))
+
+    assert _first_synced_day(checking) == date(2026, 8, 16)
+    assert _cutover(checking) == date(2026, 8, 16)
 
 
 # Reading the notice.
