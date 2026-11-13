@@ -97,6 +97,24 @@ class SimpleFinWindow:
         # Only a failing link with a SimpleFIN row on or after its cut-over gets here.
         return f"Covered by SimpleFIN through {(accepted_from - timedelta(days=1)).isoformat()}."
 
+    def owned_through(self, rows, date_range_end) -> date | None:
+        """The last day a file imported now owns once its rows are classified (#743), or None.
+
+        Only while the link is failing: the later of the confirmed range end and
+        the latest day the import compared among the rows it accepted (new or
+        duplicate), so a card row that posted after the range ended still counts.
+        A file reaching no day the failing link accepts owns none: those days
+        are SimpleFIN's, and owning them would drop its late-posting rows.
+        """
+        accepted_from = self.accepted_from
+        if accepted_from is None:
+            return None
+        days = [row.cutover_date for row in rows if row.overlap_status in ("new", "duplicate")]
+        if date_range_end is not None:
+            days.append(date_range_end)
+        through = max(days, default=None)
+        return through if through is not None and through >= accepted_from else None
+
 
 def simplefin_window(account, now=None) -> SimpleFinWindow | None:
     """The account's transactions-mode SimpleFIN window, or None when it has no such link."""
@@ -189,6 +207,12 @@ def _locked_saved_mapping(person, saved_csv_mapping, mapping, document):
     return locked
 
 
+def _owned_through(preview, date_range_end):
+    """The day a file committed from `preview` owns through (#743), or None; see SimpleFinWindow.owned_through."""
+    window = preview.simplefin_window
+    return window.owned_through(preview.rows, date_range_end) if isinstance(window, SimpleFinWindow) else None
+
+
 @transaction.atomic
 def commit_csv_import(
     principal,
@@ -227,6 +251,7 @@ def commit_csv_import(
         date_range_start=date_range_start,
         date_range_end=date_range_end,
         saved_csv_mapping=saved_csv_mapping,
+        owns_simplefin_through=_owned_through(preview, date_range_end),
     )
     if saved_csv_mapping is not None:
         lock_saved_mapping(saved_csv_mapping)
@@ -356,7 +381,9 @@ def archive_batch(principal, account_id, batch_id, *, manual):
     BalanceSnapshot.objects.filter(import_batch=batch).delete()
     batch.status = ImportBatch.Status.ARCHIVED
     batch.archived_at = now
-    batch.save(update_fields=("status", "archived_at"))
+    # An undone file hands the days it owned back to SimpleFIN (#743).
+    batch.owns_simplefin_through = None
+    batch.save(update_fields=("status", "archived_at", "owns_simplefin_through"))
     refresh_calculated_balances(person, account.pk)
     revalidate_pairs_touching_import_batch(person, batch_id)
     transaction.on_commit(lambda: refresh_transfer_pairs(person, transaction_ids=seed_leg_ids))

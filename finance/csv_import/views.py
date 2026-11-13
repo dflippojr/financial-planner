@@ -54,6 +54,7 @@ from .saved_mappings import (
 )
 from .services import (
     MAPPING_CHANGED,
+    SimpleFinWindow,
     categorize_imported_batch,
     classify_overlap,
     commit_csv_import,
@@ -232,20 +233,16 @@ def _import_batches(request, account):
 def _days_file_will_own(preview, mapping_form):
     """(first, last) days this file will own once imported while its link is failing (#743), or None.
 
-    The file owns from the first day the failing link accepts through the end
-    of the date range the member confirms, or a later row of its own, but only
-    when it adds a row on or after that day: one that adds none owns nothing.
+    The file owns from the first day the failing link accepts through the day
+    the commit stores (SimpleFinWindow.owned_through): the later of the date
+    range the member confirms and the latest day among the rows it accepts.
     """
     window = getattr(preview, "simplefin_window", None)
-    accepted_from = window.accepted_from if window is not None else None
-    if accepted_from is None:
-        return None
-    days = [row.cutover_date for row in preview.rows
-            if row.overlap_status == "new" and row.cutover_date >= accepted_from]
-    if not days:
+    if not isinstance(window, SimpleFinWindow) or window.accepted_from is None:
         return None
     end = (getattr(mapping_form, "cleaned_data", None) or {}).get("date_range_end")
-    return accepted_from, max(days if end is None else [end, *days])
+    through = window.owned_through(preview.rows, end)
+    return (window.accepted_from, through) if through is not None else None
 
 
 def _render_preview(request, account, context):

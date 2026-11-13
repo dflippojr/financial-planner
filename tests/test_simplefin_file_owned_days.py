@@ -1,11 +1,12 @@
 """Days a file import supplied after a SimpleFIN cut-over belong to the file (#743).
 
 While a link is failing (#735), a file may fill the days after its last synced
-row. The link then has a second boundary derived from the ledger: the latest
-`date_range_end` of an active file batch that reaches past the cut-over. A
-sync skips SimpleFIN rows posted on or before it, as it skips rows before the
-cut-over, so a recovered link never supplies a day the file already did.
-Undoing the gap file removes the boundary. Dates only, never amounts (#671,
+row. The import stores on its batch the last day it owns
+(`owns_simplefin_through`): the later of the confirmed range end and the latest
+day it compared among the rows it accepted. A sync skips SimpleFIN rows posted
+on or before the latest such day among active batches, as it skips rows before
+the cut-over, so a recovered link never supplies a day the file already did.
+Undoing the gap file clears its boundary. Dates only, never amounts (#671,
 #732). All data is synthetic.
 """
 
@@ -211,15 +212,44 @@ def test_the_preview_says_which_days_the_file_will_own(staging):  # noqa: F811 -
 
 
 @pytest.mark.django_db
-def test_the_preview_of_a_file_that_adds_no_gap_row_claims_no_days(staging):  # noqa: F811 - the imported fixture
-    """A reimport finds every gap row duplicate; the earlier file already owns those days."""
+def test_the_preview_of_a_file_that_reaches_no_gap_day_claims_no_days(staging):  # noqa: F811 - the imported fixture
+    """Its days are all ones SimpleFIN supplied before it failed; owning them would drop late SimpleFIN rows."""
+    owner, checking, connection = _synced_checking()
+    _fail(owner, connection)
+
+    page = _preview_page(owner, checking, b"Date,Description,Amount\n2026-10-03,SYN CSV SYNCED DAY,-1.00\n")
+
+    assert "This file will own" not in page
+    imported = _import_file(owner, checking, b"Date,Description,Amount\n2026-10-03,SYN CSV SYNCED DAY,-1.00\n")
+    assert imported.batch.owns_simplefin_through is None
+
+
+@pytest.mark.django_db
+def test_the_preview_of_a_duplicates_only_reimport_claims_its_range(staging):  # noqa: F811 - the imported fixture
+    """Owner decision (option A): a file imported while failing owns its confirmed range, stored rows or not."""
     owner, checking, connection = _synced_checking()
     _fail(owner, connection)
     _import_file(owner, checking, GAP_CSV)
 
     page = _preview_page(owner, checking, GAP_CSV)
 
-    assert "This file will own" not in page
+    assert "<strong>2</strong> duplicate;" in page
+    assert "This file will own 2026-10-06 through 2026-10-08" in page
+
+
+@pytest.mark.django_db
+def test_the_stored_boundary_is_set_only_while_failing_and_cleared_by_undo():
+    owner, checking, connection = _synced_checking()
+    healthy = _import_file(owner, checking, GAP_CSV, end=date(2026, 10, 9))
+    assert healthy.batch.owns_simplefin_through is None
+    _fail(owner, connection)
+    gap = _import_file(owner, checking, GAP_CSV, end=date(2026, 10, 9))
+    assert gap.batch.owns_simplefin_through == date(2026, 10, 9)
+
+    undo_import_batch(owner, checking.pk, gap.batch.pk)
+
+    gap.batch.refresh_from_db()
+    assert (gap.batch.status, gap.batch.owns_simplefin_through) == (ImportBatch.Status.ARCHIVED, None)
 
 
 @pytest.mark.django_db

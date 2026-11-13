@@ -2,21 +2,21 @@
 
 A file import refuses rows on or after a link's cut-over, except while the
 link is failing (#735): then a file may fill the days after the last synced
-row. Those days belong to the file. The link gets a second boundary that is
-derived from the ledger, not stored: the latest `date_range_end` of an active
-file batch that reaches past the cut-over, meaning one whose confirmed range
-ends on or after it and that holds an active row dated on or after it. The range is the one the member confirmed, not the
-latest row date, so a file exported partway through its last day still owns
-that day. The sync skips SimpleFIN rows
-posted on or before it, as it skips rows before the cut-over, so a recovered
-link never supplies a day the file already did. Undoing the batch removes the
-boundary. Dates only: nothing here compares amounts (#671, #732).
+row. Those days belong to the file. `commit_csv_import` stores the boundary on
+the batch as `owns_simplefin_through`, only while the link is failing: the
+later of the range the member confirmed and the latest day the import compared
+among the rows it accepted (owner decision, option A). The range is the one
+the member confirmed, not the latest row date, so a file exported partway
+through its last day still owns that day; a card row that posted after the
+range ended still counts by the posted date the import compared. The sync
+skips SimpleFIN rows posted on or before the latest value among active
+batches, as it skips rows before the cut-over, so a recovered link never
+supplies a day the file already did. Undoing the batch clears it. Dates only:
+nothing here compares amounts (#671, #732).
 
-Every day here is the date SimpleFIN would give a row: a card export's posted
-date, read from `original_fields`, or the transaction date when that is
-missing. A batch's own rows can reach past its confirmed range (a card row
-posts after the range ends, or the member typed an earlier end), so a batch
-owns through the later of its range end and its latest row.
+Every row day here is the date SimpleFIN would give a row: a card export's
+posted date, read from `original_fields`, or the transaction date when that is
+missing.
 """
 
 from __future__ import annotations
@@ -51,12 +51,12 @@ def _file_rows(active):
 
 
 def _card_row_days(rows):
-    """(batch id, day) for each card-export row in `rows`, by its posted date."""
+    """The day of each card-export row in `rows`, by its posted date."""
     card_rows = rows.filter(import_batch__source__in=POSTED_DATE_MAPPINGS).values_list(
-        "import_batch_id", "import_batch__source", "original_fields", "transaction_date"
+        "import_batch__source", "original_fields", "transaction_date"
     )
-    for batch_id, source, original_fields, transaction_date in card_rows.iterator():
-        yield batch_id, _row_day(source, original_fields, transaction_date)
+    for source, original_fields, transaction_date in card_rows.iterator():
+        yield _row_day(source, original_fields, transaction_date)
 
 
 def latest_file_day(active, *, owned: tuple[date, date] | None = None) -> date | None:
@@ -70,7 +70,7 @@ def latest_file_day(active, *, owned: tuple[date, date] | None = None) -> date |
     if owned is not None:
         plain = plain.exclude(transaction_date__range=owned)
     latest = plain.aggregate(day=Max("transaction_date"))["day"]
-    for _batch_id, day in _card_row_days(rows):
+    for day in _card_row_days(rows):
         if owned is not None and owned[0] <= day <= owned[1]:
             continue
         if latest is None or day > latest:
@@ -93,53 +93,26 @@ class OwnedDays:
 
 
 def _batch_ends(account, cutover):
-    """{batch id: (range start, the last day it owns)} for each active file batch past the cut-over.
-
-    A batch reaches past the cut-over when its confirmed range ends on or after
-    it and it holds an active row dated on or after it: a file the import
-    accepted while the link was failing. A file imported while the link was
-    healthy had every such row refused, so however far its confirmed range
-    runs it supplied no day and owns none; letting its range own days would
-    make the sync drop transactions no file supplied. The range test also
-    keeps out a generic-mapped card file whose rows the import compared by
-    their mapped date, before the cut-over, though their Posted Date is later.
-    """
-    batches = ImportBatch.objects.filter(
-        account=account,
-        source__in=FILE_IMPORT_SOURCES,
-        status=ImportBatch.Status.ACTIVE,
-        archived_at__isnull=True,
+    """[(range start, the last day it owns)] for each active batch that owns days on or after the cut-over."""
+    return list(
+        ImportBatch.objects.filter(
+            account=account,
+            status=ImportBatch.Status.ACTIVE,
+            archived_at__isnull=True,
+            owns_simplefin_through__gte=cutover,
+        ).values_list("date_range_start", "owns_simplefin_through")
     )
-    rows = Transaction.objects.filter(
-        account=account, status=Transaction.Status.ACTIVE, import_batch__in=batches
-    )
-    row_days = dict(
-        rows.exclude(import_batch__source__in=POSTED_DATE_MAPPINGS)
-        .filter(transaction_date__gte=cutover)
-        .values("import_batch_id")
-        .annotate(day=Max("transaction_date"))
-        .values_list("import_batch_id", "day")
-    )
-    for batch_id, day in _card_row_days(rows):
-        if day >= cutover and (batch_id not in row_days or day > row_days[batch_id]):
-            row_days[batch_id] = day
-    if not row_days:
-        return {}
-    ranges = batches.filter(pk__in=row_days, date_range_end__gte=cutover).values_list(
-        "pk", "date_range_start", "date_range_end"
-    )
-    return {pk: (start, max(end, row_days[pk])) for pk, start, end in ranges}
 
 
 def file_owned_through(account, cutover: date) -> date | None:
-    """The last day file imports own after `cutover`, or None when no active file batch reaches past it."""
-    ends = [end for _start, end in _batch_ends(account, cutover).values()]
+    """The last day file imports own on or after `cutover`, or None when no active batch owns one."""
+    ends = [end for _start, end in _batch_ends(account, cutover)]
     return max(ends) if ends else None
 
 
 def file_owned_days(account, cutover: date) -> OwnedDays:
     """The boundary the sync honours, with the spans each file supplied after the cut-over."""
-    spans = sorted(_batch_ends(account, cutover).values(), key=lambda span: (span[1], span[0]))
+    spans = sorted(_batch_ends(account, cutover), key=lambda span: (span[1], span[0]))
     if not spans:
         return OwnedDays(None)
     synced = Transaction.objects.filter(
