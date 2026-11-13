@@ -69,16 +69,20 @@ def _propose_and_answer(person, conversation, cafe, kiosk, store, shop):
 
 
 @pytest.mark.parametrize(("viewport", "scheme"), [((390, 844), "light"), ((1440, 900), "dark")], ids=["phone", "desktop"])
-def test_cleanup_cards_layout_and_partial_apply(page_session, harness, viewport, scheme):  # noqa: F811
+def test_cleanup_cards_layout_and_partial_apply(page_session, harness, viewport, scheme, live_requests_paused):  # noqa: F811
     _state, url = harness
     context, page = page_session(viewport, scheme, "/")
     try:
-        person = _member(url)
-        cafe, kiosk, store, shop = _rows(person)
-        conversation = send_message(person, "Add notes and split the store run.")
+        # The test thread has its own SQLite connection, so its database work waits for the page's
+        # requests rather than overlapping them (#738); the pending turn is answered mid-poll.
+        with live_requests_paused():
+            person = _member(url)
+            cafe, kiosk, store, shop = _rows(person)
+            conversation = send_message(person, "Add notes and split the store run.")
         page.goto(page.url.split("?")[0].rstrip("/") + f"/chat/?c={conversation.pk}")
         page.locator("main [data-chat-turn-url] [data-chat-thinking]").wait_for(state="visible")
-        _propose_and_answer(person, conversation, cafe, kiosk, store, shop)
+        with live_requests_paused():
+            _propose_and_answer(person, conversation, cafe, kiosk, store, shop)
         notes = page.locator('main [data-chat-proposal="notes"]')
         expect(notes).to_be_visible(timeout=15000)
         page.wait_for_load_state("networkidle")
@@ -100,8 +104,9 @@ def test_cleanup_cards_layout_and_partial_apply(page_session, harness, viewport,
         notes.get_by_role("button", name="Apply ticked items").click()
         page.wait_for_load_state("networkidle")
         expect(page.locator('main [data-chat-proposal="notes"] [role="status"]')).to_have_text("Applied 1 of 2 items.")
-        assert Transaction.objects.get(pk=cafe.pk).note == LONG_NOTE
-        assert Transaction.objects.get(pk=kiosk.pk).note == ""
+        with live_requests_paused():
+            assert Transaction.objects.get(pk=cafe.pk).note == LONG_NOTE
+            assert Transaction.objects.get(pk=kiosk.pk).note == ""
         assert not page.evaluate("() => document.documentElement.scrollWidth > document.documentElement.clientWidth")
     finally:
         context.close()
