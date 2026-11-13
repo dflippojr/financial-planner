@@ -10,7 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 WORKFLOWS = ROOT / ".github/workflows"
-SETUP_PYTHON = re.compile(r"^(\s*)-?\s*uses: actions/setup-python@")
+SETUP_PYTHON = re.compile(r"^(\s*)-?\s*uses:\s*[\"']?actions/setup-python@")
 PYTHON_VERSION = re.compile(r"^\s*python-version:\s*[\"']?([^\"'\s#]+)")
 
 
@@ -18,13 +18,21 @@ def _declared():
     return (ROOT / ".python-version").read_text(encoding="utf-8").strip()
 
 
+def _workflow_files():
+    # GitHub runs both extensions, so a renamed workflow must still be checked.
+    return sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")])
+
+
 def _setup_python_versions(text):
     """The python-version of each setup-python step in one workflow file, as (line number, version or None)."""
     lines = text.splitlines()
+    live = [(number, line) for number, line in enumerate(lines) if not line.lstrip().startswith("#")]
+    # A setup-python line this reader does not recognise must fail, not be skipped.
+    unrecognised = [number + 1 for number, line in live if "setup-python" in line and not SETUP_PYTHON.match(line)]
+    assert not unrecognised, f"setup-python at lines {unrecognised} is not a 'uses:' step this test can read"
+
     found = []
-    for number, line in enumerate(lines):
-        if line.lstrip().startswith("#"):
-            continue
+    for number, line in live:
         match = SETUP_PYTHON.match(line)
         if not match:
             continue
@@ -50,7 +58,7 @@ def test_python_version_file_declares_major_minor():
 def test_every_setup_python_step_matches_python_version_file():
     declared = _declared()
     steps = []
-    for workflow in sorted(WORKFLOWS.glob("*.yml")):
+    for workflow in _workflow_files():
         for line_number, version in _setup_python_versions(workflow.read_text(encoding="utf-8")):
             steps.append((workflow.name, line_number, version))
 
@@ -75,10 +83,34 @@ def test_setup_python_detection_reads_the_version_under_each_step():
         "        with:\n"
         "          python-version: \"3.15\"\n"
         "      - run: echo 3.14\n"
-        "      - uses: actions/setup-python@v7\n"
+        "      - uses: \"actions/setup-python@v7\"\n"
         "        # python-version: \"3.13\"\n"
         "      - name: later\n"
         "        with:\n"
         "          python-version: \"3.12\"\n"
+        "      - uses: 'actions/setup-python@v7'\n"
+        "        with:\n"
+        "          python-version: 3.15\n"
     )
-    assert _setup_python_versions(text) == [(4, "3.15"), (8, None)]
+    assert _setup_python_versions(text) == [(4, "3.15"), (8, None), (13, "3.15")]
+
+
+def test_setup_python_detection_fails_on_a_form_it_cannot_read():
+    text = (
+        "jobs:\n"
+        "  a:\n"
+        "    steps:\n"
+        "      - uses: actions/setup-python@v7   # ok\n"
+        "        with:\n"
+        "          python-version: \"3.15\"\n"
+        "      - uses: actions/setup-python@v7\n"
+        "        with:\n"
+        "          python-version: \"3.15\"\n"
+        "      - name: setup-python via ${{ env.ACTION }}\n"
+    )
+    try:
+        _setup_python_versions(text)
+    except AssertionError as error:
+        assert "[10]" in str(error)
+    else:
+        raise AssertionError("an unreadable setup-python line was skipped")
