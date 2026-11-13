@@ -2,6 +2,7 @@
 import os
 import sys
 import threading
+from contextlib import contextmanager
 
 import pytest
 
@@ -124,16 +125,47 @@ class _OneRequestAtATime:
 
 @pytest.fixture(scope="session")
 def live_server(live_server):
-    # With in-memory SQLite, pytest-django hands the test thread's one connection to every request
+    # With in-memory SQLite, pytest-django hands the connection it finds at start-up to every request
     # thread. Two requests inside atomic() at once (the Chat page polls each pending turn, and each
     # poll opens one) corrupt its savepoint bookkeeping, and since an in-memory connection is never
     # closed, every later live-server test on that xdist worker failed (#653). Serialize them.
+    live_server.request_gate = None
     if live_server.thread.connections_override:
         gate = _OneRequestAtATime()
         server = live_server.thread.httpd
         server.RequestHandlerClass = gate.wrap_handler(server.RequestHandlerClass)
         server.set_app(gate.wrap_app(server.get_app()))
+        live_server.request_gate = gate
     return live_server
+
+
+@pytest.fixture
+def live_requests_paused(live_server):
+    """Return a context manager that holds off live-server requests while the test uses the database.
+
+    A browser test's thread does not share the live server's in-memory SQLite connection: Playwright
+    runs an asyncio loop in that thread, so Django's connections there come from asgiref's
+    context-variable storage and the test thread opens a second connection to the shared-cache
+    database. Shared-cache connections lock whole tables and fail at once with "database table is
+    locked" rather than wait, so a test-thread write while a request reads the same table fails
+    (#738). Inside the block no request runs: entering waits for the one in flight to finish, and
+    requests the page sends meanwhile wait until the block ends. Make no Playwright call inside it,
+    since the page's requests could not be answered. On other databases it does nothing.
+    """
+    gate = live_server.request_gate
+
+    @contextmanager
+    def paused():
+        if gate is None:
+            yield
+            return
+        gate.acquire()
+        try:
+            yield
+        finally:
+            gate.release()
+
+    return paused
 
 
 @pytest.fixture(autouse=True)
