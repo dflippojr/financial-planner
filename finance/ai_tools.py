@@ -49,6 +49,11 @@ INSTRUCTION_CONTEXT = (
 # A transaction note can hold 2,000 characters; tool rows carry the start of it (#684).
 MAX_TOOL_NOTE_CHARS = 500
 WITHHELD_TAG_NAME = "Household tag (name withheld)"
+# The answer to scope=household while household consent is incomplete (#677).
+HOUSEHOLD_SCOPE_WITHHELD = (
+    "Household figures are available once every household member has accepted the AI policy. "
+    "Until then, leave scope out or use scope private for the member's own private accounts."
+)
 
 
 def default_tools():
@@ -209,6 +214,17 @@ def visible_accounts(person, *, include_archived=False):
     return query
 
 
+def household_scope_refused(person, scope):
+    """Whether a scope=household answer must wait for household consent (#677).
+
+    Until consent is complete the tools read only the member's private
+    accounts, so a household scope over them is empty: its zeros or empty rows
+    would read as the household's real figures. Every tool that takes a scope
+    answers HOUSEHOLD_SCOPE_WITHHELD instead.
+    """
+    return scope == Account.Scope.HOUSEHOLD and not household_consent_complete(person)
+
+
 def _ai_scope(person, *, include_archived=True):
     """Report tiles retain visible archived history and enforce household consent."""
     return visible_accounts(person, include_archived=include_archived), household_consent_complete(person)
@@ -343,6 +359,8 @@ def cash_flow_totals(person, args):
     if error:
         return ToolResult(text=error, ok=False)
     accounts, scope = _transaction_scope(person, args)
+    if household_scope_refused(person, scope):
+        return ToolResult(text=HOUSEHOLD_SCOPE_WITHHELD, ok=False)
     if all_dates:
         accounts = selected_accounts(person, account=account, scope=scope, accounts=accounts)
         totals = income_and_spending_totals(person, date_from=date_from, date_to=date_to, accounts=accounts)
@@ -411,6 +429,8 @@ def spending_by_category(person, args):
     if error:
         return ToolResult(text=error, ok=False)
     scope = _scope(args.get("scope"))
+    if household_scope_refused(person, scope):
+        return ToolResult(text=HOUSEHOLD_SCOPE_WITHHELD, ok=False)
     accounts, _include_household = _ai_scope(person)
     report = spending_by_category_report(
         person,
@@ -474,6 +494,8 @@ def search_transactions(person, args):
     from .transaction_filters import apply_transaction_filters, visible_transaction_queryset
 
     accounts, scope = _transaction_scope(person, args)
+    if household_scope_refused(person, scope):
+        return ToolResult(text=HOUSEHOLD_SCOPE_WITHHELD, ok=False)
     query = visible_transaction_queryset(person).filter(account_id__in=accounts.values("pk"))
     needle = (args.get("q") or "").strip()
     category = (args.get("category") or "").strip()
@@ -570,6 +592,8 @@ def recurring_series(person, args):
 def net_worth_series(person, args):
     date_from, date_to = _dates(args)
     scope = _scope(args.get("scope"))
+    if household_scope_refused(person, scope):
+        return ToolResult(text=HOUSEHOLD_SCOPE_WITHHELD, ok=False)
     accounts, _include_household = _ai_scope(person)
     report = net_worth_report(
         person, date_from=date_from, date_to=date_to, scope=scope, accounts=accounts
@@ -599,12 +623,14 @@ def net_worth_series(person, args):
 
 
 def list_budgets(person, args):
+    scope = _scope(args.get("scope"))
+    if household_scope_refused(person, scope):
+        return ToolResult(text=HOUSEHOLD_SCOPE_WITHHELD, ok=False)
     accounts, include_household = _ai_scope(person)
     month = parse_month(args.get("month"))
     cards = month_budget_cards(
         person, month, accounts=accounts, include_household=include_household
     )
-    scope = _scope(args.get("scope"))
     if scope:
         cards = [card for card in cards if card.budget.scope == scope]
     url = f"{reverse('budgets')}?{urlencode({'month': month.isoformat()[:7]})}"
@@ -646,6 +672,8 @@ def projected_cash_flow_tool(person, args):
     if error:
         return ToolResult(text=error, ok=False)
     scope = _scope(args.get("scope"))
+    if household_scope_refused(person, scope):
+        return ToolResult(text=HOUSEHOLD_SCOPE_WITHHELD, ok=False)
     months = projected_months_for(
         person,
         today=today,

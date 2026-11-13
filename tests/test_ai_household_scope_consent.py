@@ -14,7 +14,7 @@ from datetime import date
 import pytest
 from django.test import Client
 
-from finance.ai_tools import default_tools, run_tool
+from finance.ai_tools import HOUSEHOLD_SCOPE_WITHHELD, default_tools, run_tool
 from finance.budget_services import save_budget
 from finance.chat_charts import FILTERS, chart_tools, make_chart
 from finance.models import BalanceSnapshot, Budget, Category
@@ -114,7 +114,7 @@ def test_household_chart_without_consent_is_refused_not_drawn_as_zero():
         page_total = sum(row["spending_minor"] for row in rows if not row.get("projected"))
         drawn_total = sum(sum(series["values"]) for series in chart["series"])
         assert drawn_total == page_total
-    assert not result.ok and "accepted the AI policy" in result.text
+    assert not result.ok and result.text == HOUSEHOLD_SCOPE_WITHHELD
 
 
 def test_private_and_unscoped_calls_still_answer_from_private_accounts_before_consent():

@@ -18,6 +18,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from .ai_tools import (
+    HOUSEHOLD_SCOPE_WITHHELD,
     MAX_TOOL_ROWS,
     WITHHELD_CATEGORY_NAME,
     _account_ids,
@@ -28,6 +29,7 @@ from .ai_tools import (
     _visible_account,
     ai_nameable_categories,
     household_consent_complete,
+    household_scope_refused,
     withheld_category_ids,
 )
 from .ai_types import ToolResult, ToolSpec
@@ -240,6 +242,10 @@ def _validated(person, args):
     spec["scope"] = _scope(args.get("scope"))
     if report == "net_worth":
         _net_worth_scope(person, spec["scope"])
+    if household_scope_refused(person, spec["scope"]):
+        # The tools see only private accounts until then, so a household chart would draw zeros
+        # while the report page it links to shows the household's real figures (#677).
+        raise ChartError(HOUSEHOLD_SCOPE_WITHHELD)
     if not spec["scope"] and not household_consent_complete(person):
         # Until household consent is complete the tools see only private accounts, so the chart
         # and the report page it links to both say so (cash_flow_totals does the same).
