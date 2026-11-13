@@ -169,6 +169,7 @@
                 <label class="sr-only" for="cutover-{{ forloop.counter0 }}">Cut-over date for {{ row.name }}</label>
                 <input id="cutover-{{ forloop.counter0 }}" class="input input-bordered input-sm mb-2" type="date" name="cutover_{{ forloop.counter0 }}" value="{{ row.default_cutover }}" aria-describedby="cutover-help-{{ forloop.counter0 }}">
                 <p id="cutover-help-{{ forloop.counter0 }}" class="text-xs opacity-70 mb-2">Leave blank to start the day after the chosen account's latest transaction.</p>
+                {% include "finance/_file_owned_days.html" with owned=row.owned %}
                 <label class="sr-only" for="name-{{ forloop.counter0 }}">New account name for {{ row.name }}</label>
                 <input id="name-{{ forloop.counter0 }}" class="input input-bordered input-sm mb-2" type="text" name="name_{{ forloop.counter0 }}" value="{{ row.name }}" maxlength="150">
                 <label class="sr-only" for="type-{{ forloop.counter0 }}">New account type for {{ row.name }}</label>
@@ -215,6 +216,7 @@
             {% if orphan.visible %}
             <p class="text-sm opacity-80">Last synced transaction: {% if orphan.last_synced %}{{ orphan.last_synced|date:"Y-m-d" }}{% else %}none yet{% endif %}</p>
             <p class="text-sm opacity-80">Cut-over: {{ orphan.cutover|date:"Y-m-d" }}</p>
+            {% include "finance/_file_owned_days.html" with owned=orphan.owned %}
             {% endif %}
           </div>
           <div>

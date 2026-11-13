@@ -225,3 +225,17 @@ def test_connections_names_no_owned_days_without_a_gap_file():
     page = signed_in(owner).get(reverse("simplefin-connections")).content.decode()
 
     assert "File imports own" not in page
+
+
+@pytest.mark.django_db
+def test_a_file_imported_while_the_link_is_healthy_owns_no_days():
+    """Every row on or after the cut-over was refused, so however far its range runs it supplied no day."""
+    owner, checking, connection = _synced_checking()
+    refused = _import_file(owner, checking, GAP_CSV, end=date(2026, 10, 9))
+    assert (refused.new_count, refused.invalid_count) == (0, 2)
+
+    ledger.sync(owner, connection, SYNCED + BACKFILL + LATER)
+
+    assert [source for _day, _amount, source in _ledger(checking)] == [SF] * 5
+    page = signed_in(owner).get(reverse("simplefin-connections")).content.decode()
+    assert "skips SimpleFIN transactions" not in page

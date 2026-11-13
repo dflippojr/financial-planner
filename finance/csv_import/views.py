@@ -229,8 +229,27 @@ def _import_batches(request, account):
     )
 
 
+def _days_file_will_own(preview, mapping_form):
+    """(first, last) days this file will own once imported while its link is failing (#743), or None.
+
+    The file owns from the first day the failing link accepts through the end
+    of the date range the member confirms, or a later row of its own.
+    """
+    window = getattr(preview, "simplefin_window", None)
+    accepted_from = window.accepted_from if window is not None else None
+    if accepted_from is None:
+        return None
+    cleaned = getattr(mapping_form, "cleaned_data", None) or {}
+    days = [row.cutover_date for row in preview.rows if row.overlap_status == "new"]
+    last = max((day for day in [cleaned.get("date_range_end"), *days] if day is not None), default=None)
+    if last is None or last < accepted_from:
+        return None
+    return accepted_from, last
+
+
 def _render_preview(request, account, context):
     context.setdefault("upload_form", _upload_form(request, account))
+    context["file_will_own"] = _days_file_will_own(context.get("preview"), context.get("mapping_form"))
     context["account"] = account
     context["import_batches"] = _import_batches(request, account)
     if request.method == "GET":

@@ -26,6 +26,7 @@ from .simplefin_budget import (
 )
 from .simplefin_errors import SimpleFinAlreadyClaimed, SimpleFinError, SimpleFinRateLimited
 from .simplefin_flow import BRIDGE_URL, FlowError, cancel_flow, check_flow, start_flow
+from .simplefin_file_days import file_owned_days
 from .simplefin_health import bank_rows, last_synced_days, stored_read
 from .simplefin_schedule import next_scheduled_sync
 from .simplefin_services import (
@@ -176,7 +177,7 @@ def _orphaned_links(person, connection, remotes, load_error):
         AccountLink.objects.filter(connection=connection)
         .exclude(simplefin_account_id__in=reported)
         .order_by("account__name", "pk")
-        .values("simplefin_account_id", "account_id", "account__name", "cutover_date")
+        .values("simplefin_account_id", "account_id", "account__name", "cutover_date", "mode")
     )
     visible = set(visible_rows(Account, person).values_list("pk", flat=True))
     last_synced = last_synced_days({link["account_id"] for link in links} & visible)
@@ -189,6 +190,7 @@ def _orphaned_links(person, connection, remotes, load_error):
             "account_name": link["account__name"] if shown else "",
             "last_synced": last_synced.get(link["account_id"]) if shown else None,
             "cutover": link["cutover_date"] if shown else None,
+            "owned": _owned_days(link["account_id"], link["cutover_date"], link["mode"]) if shown else None,
         })
     return rows
 
@@ -220,6 +222,14 @@ def _handle_orphans(request, connection, orphans, load_error):
     else:
         messages.success(request, f"Unlinked {len(unlink)} accounts. Their transactions were kept.")
     return redirect("simplefin-connections")
+
+
+def _owned_days(account_id, cutover, mode):
+    """The days file imports own after a transactions-mode link's cut-over (#743), or None."""
+    if mode != AccountLink.Mode.TRANSACTIONS:
+        return None
+    owned = file_owned_days(account_id, cutover)
+    return owned if owned.through is not None else None
 
 
 def _cutover_for(remote, link_map):
@@ -281,7 +291,9 @@ def connections(request):
         # A link to an archived or hidden account cannot be shown in the
         # account list; keep it unchanged unless the member picks another action.
         unlisted = link is not None and link.account_id not in listed_ids
-        rows.append({**remote, "link": link, "link_unlisted": unlisted, "default_cutover": cutover})
+        # An unlisted account may be one the member can no longer see: name none of its days.
+        owned = _owned_days(link.account_id, link.cutover_date, link.mode) if link and not unlisted else None
+        rows.append({**remote, "link": link, "link_unlisted": unlisted, "default_cutover": cutover, "owned": owned})
     next_sync, can_sync_now = _schedule_state(connection)
     response = render(
         request,

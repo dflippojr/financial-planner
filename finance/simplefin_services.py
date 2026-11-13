@@ -37,6 +37,7 @@ from finance.models import (
 from finance.fx_rates import APP_CURRENCY, RateBook, RateUnavailable, currency_code, to_usd_minor
 from finance.simplefin_budget import reserve_request
 from finance.simplefin_client import CLAIM_DEADLINE_SECONDS, claim_access_url, fetch_accounts
+from finance.simplefin_file_days import file_owned_through, latest_file_day
 from finance.simplefin_health import read_record, schedule_health_push, stored_read
 from finance.simplefin_errors import (
     SimpleFinAlreadyClaimed,
@@ -340,53 +341,25 @@ def _create_linked_account(person, *, name, account_type, sharing):
     return create_account(person, name=name, account_type=account_type)
 
 
-FILE_IMPORT_SOURCES = (
-    ImportBatch.Source.HUNTINGTON,
-    ImportBatch.Source.CAPITAL_ONE,
-    ImportBatch.Source.APPLE_CARD,
-    ImportBatch.Source.VANGUARD,
-    ImportBatch.Source.OFX,
-)
-
-
-def _latest_file_day(active):
-    """The latest day an active file-imported row covers, by the date SimpleFIN would give it.
-
-    That is each row's own cut-over date: a card export's posted date, read
-    from `original_fields`, or its transaction date when that is missing.
-    """
-    rows = active.filter(import_batch__source__in=FILE_IMPORT_SOURCES)
-    latest = (
-        rows.exclude(import_batch__source__in=POSTED_DATE_MAPPINGS)
-        .order_by("-transaction_date")
-        .values_list("transaction_date", flat=True)
-        .first()
-    )
-    card_rows = rows.filter(import_batch__source__in=POSTED_DATE_MAPPINGS).values_list(
-        "import_batch__source", "original_fields", "transaction_date"
-    )
-    for source, original_fields, transaction_date in card_rows.iterator():
-        mapping = POSTED_DATE_MAPPINGS[source]
-        cell = (original_fields or {}).get(mapping.posted_date_column)
-        posted = parse_posted_date(cell, mapping.date_format) if isinstance(cell, str) else None
-        day = posted or transaction_date
-        if latest is None or day > latest:
-            latest = day
-    return latest
-
-
-def check_cutover(account, cutover: date, mode: str) -> None:
+def check_cutover(account, cutover: date, mode: str, *, owned_from: date | None = None) -> None:
     """Refuse a cut-over that would let a file import and a sync both supply a day (#671).
 
     A file import refuses rows on or after the cut-over, and a sync skips rows
     before it. So the cut-over must fall after every active file-imported row,
     and no later than the earliest active SimpleFIN row, or one transaction
     could be stored once from each source.
+
+    `owned_from` is the cut-over the link already has. File rows from it
+    through the days file imports own (#743) are the gap a file filled while
+    the link was failing: the sync skips those days, so they are measured
+    neither way, and "after every file row" counts only the rows before it.
     """
     if mode != AccountLink.Mode.TRANSACTIONS:
         return
     active = Transaction.objects.filter(account=account, status=Transaction.Status.ACTIVE)
-    latest_file = _latest_file_day(active)
+    owned_through = file_owned_through(account, owned_from) if owned_from is not None else None
+    owned = (owned_from, owned_through) if owned_from is not None and owned_through is not None else None
+    latest_file = latest_file_day(active, owned=owned)
     if latest_file is not None and cutover <= latest_file:
         raise SimpleFinError(
             f"Choose a cut-over date after {latest_file.isoformat()} for {account.name}: file imports "
@@ -422,7 +395,9 @@ def _save_link(connection, simplefin_account_id, account, cutover, mode):
     # An unchanged row is re-saved by every form submit; checking it would trap
     # a link saved before this check existed, and it moves no boundary.
     if not unchanged:
-        check_cutover(account, cutover, mode)
+        # The same account keeps its gap rows owned (#743); a newly chosen account has none.
+        same_account = existing is not None and existing[0] == account.pk
+        check_cutover(account, cutover, mode, owned_from=existing[1] if same_account else None)
     link, _created = AccountLink.objects.update_or_create(
         connection=connection,
         simplefin_account_id=simplefin_account_id,
@@ -644,9 +619,12 @@ def _posted_source_id(item) -> str:
     return source_id
 
 
-def _new_transaction(account, link, item, source_id, *, row_number, conversion=None):
+def _new_transaction(account, link, item, source_id, *, row_number, conversion=None, owned_through=None):
     txn_date = posted_date(item.get("posted"))
     if txn_date is None or txn_date < link.cutover_date:
+        return None
+    if owned_through is not None and txn_date <= owned_through:
+        # A file import already supplied this day (#743).
         return None
     if conversion is None:
         amount_minor = decimal_to_minor(str(item.get("amount")))
@@ -697,13 +675,17 @@ def _import_transactions(account, link, remote, batches, conversion=None) -> int
         .exclude(source_transaction_id="")
         .values_list("source_transaction_id", flat=True)
     )
+    # Read once per sync: only file imports move it, and a member who shares
+    # this account takes the household lock this sync holds (see #743 docs).
+    owned_through = file_owned_through(account, link.cutover_date)
     created = []
     next_row = {}
     for item in remote.get("transactions") or []:
         source_id = _posted_source_id(item)
         if not source_id or source_id in existing_ids:
             continue
-        txn = _new_transaction(account, link, item, source_id, row_number=1, conversion=conversion)
+        txn = _new_transaction(account, link, item, source_id, row_number=1, conversion=conversion,
+                               owned_through=owned_through)
         if txn is None:
             continue
         batch = _batch_covering(batches, txn.transaction_date)
