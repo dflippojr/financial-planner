@@ -334,3 +334,104 @@ def test_a_generic_mapped_card_file_before_the_cutover_owns_no_days():
         (date(2026, 10, 2), -1100, SF), (date(2026, 10, 5), -2200, SF),
         (date(2026, 10, 6), -300, SF), (date(2026, 10, 8), -400, SF),
     ]
+
+
+# The boundary is stored on the batch (owner decision, option A) -------------
+#
+# The three cases from the review of #744 at bcbea69: no rule derived only from
+# the ledger gets all of them right, because the ledger records neither which
+# date an import compared nor whether the link was failing at the time.
+
+
+@pytest.mark.django_db
+def test_a_healthy_generic_mapped_card_file_with_a_range_past_the_cutover_owns_no_days():
+    """Review case 1: the link was healthy, so however far the typed range runs the file owns nothing.
+
+    The generic mapper compared the row by its mapped Transaction Date (09-29);
+    its Posted Date (10-08) is past the cut-over, and the member typed a range
+    ending 10-31. The sync must still supply every SimpleFIN purchase.
+    """
+    from finance.csv_import.parser import Mapping
+
+    owner, checking, connection = _synced_checking()
+    content = (
+        b"Transaction Date,Posted Date,Description,Amount\n"
+        b"2026-09-29,2026-10-08,SYN CSV CARD,-9.00\n"
+    )
+    mapping = Mapping(date_column="Transaction Date", description_column="Description", date_format="iso",
+                      number_format="dot_none", amount_mode="signed", amount_column="Amount")
+    imported = commit_csv_import(
+        owner, checking.pk, content=content, document=read_csv(content), mapping=mapping,
+        source=ImportBatch.Source.CAPITAL_ONE, date_range_start=date(2026, 9, 29),
+        date_range_end=date(2026, 10, 31),
+    )
+    assert imported.new_count == 1
+
+    ledger.sync(owner, connection, SYNCED + BACKFILL + LATER)
+
+    assert [row for row in _ledger(checking) if row[2] == SF] == [
+        (date(2026, 10, 2), -1100, SF), (date(2026, 10, 5), -2200, SF),
+        (date(2026, 10, 6), -300, SF), (date(2026, 10, 8), -400, SF),
+        (date(2026, 10, 10), -500, SF),
+    ]
+
+
+CAPITAL_ONE_GAP = (
+    b"Transaction Date,Posted Date,Card No.,Description,Category,Debit,Credit\r\n"
+    b"2026-09-30,2026-10-02,0000,SYN CSV STORE,Synthetic,42.00,\r\n"
+)
+
+
+@pytest.mark.django_db
+def test_a_card_purchase_posted_after_the_default_range_counts_once_after_recovery():
+    """Review case 2: the default range ends on the transaction date, before the cut-over.
+
+    On a failing link with no synced row (cut-over 10-01), a Capital One
+    purchase dated 09-30 and posted 10-02 is accepted by its posted date. The
+    batch owns through that posted date, so the recovered sync does not import
+    the purchase again.
+    """
+    from finance.csv_import.profiles import CAPITAL_ONE_MAPPING
+
+    owner = ledger.make_member()
+    ledger.make_household(owner)
+    card = ledger.make_account(owner, Account.Type.CREDIT_CARD)
+    connection = ledger.link_simplefin(owner, card, CUTOVER)
+    _fail(owner, connection)
+    imported = commit_csv_import(
+        owner, card.pk, content=CAPITAL_ONE_GAP, document=read_csv(CAPITAL_ONE_GAP), mapping=CAPITAL_ONE_MAPPING,
+        source=ImportBatch.Source.CAPITAL_ONE, date_range_start=date(2026, 9, 30), date_range_end=date(2026, 9, 30),
+    )
+    assert imported.new_count == 1
+
+    ledger.sync(owner, connection, [
+        ("p", Row(date(2026, 10, 2), -4200, "SYN SF STORE", "", "")),
+        ("q", Row(date(2026, 10, 3), -100, "SYN SF LATER", "", "")),
+    ])
+
+    assert _ledger(card) == [
+        (date(2026, 9, 30), -4200, ImportBatch.Source.CAPITAL_ONE),
+        (date(2026, 10, 3), -100, SF),
+    ]
+    assert ledger.totals(owner, [card]).spending == 4200 + 100
+
+
+@pytest.mark.django_db
+def test_a_duplicates_only_file_owns_the_range_it_was_confirmed_for():
+    """Review case 3: a file imported while failing owns its confirmed range even if it stores no row."""
+    owner, checking, connection = _synced_checking()
+    _fail(owner, connection)
+    _import_file(owner, checking, GAP_CSV)
+    again = _import_file(owner, checking, GAP_CSV, end=date(2026, 10, 9))
+    assert (again.new_count, again.duplicate_count) == (0, 2)
+    evening = [("e", Row(date(2026, 10, 9), -900, "SYN SF EVENING", "", ""))]
+
+    ledger.sync(owner, connection, SYNCED + BACKFILL + evening + LATER)
+
+    assert _ledger(checking) == [
+        (date(2026, 10, 2), -1100, SF), (date(2026, 10, 5), -2200, SF),
+        (date(2026, 10, 6), -300, FILE), (date(2026, 10, 8), -400, FILE),
+        (date(2026, 10, 10), -500, SF),
+    ]
+    page = signed_in(owner).get(reverse("simplefin-connections")).content.decode()
+    assert "File imports own 2026-10-06 through 2026-10-09" in page
