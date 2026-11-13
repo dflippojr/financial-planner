@@ -87,6 +87,9 @@ _XML_ENCODING = re.compile(rb"""\bencoding\s*=\s*["']([^"']*)["']""")
 _UTF8_NAMES = frozenset({b"utf-8", b"utf8", b"us-ascii", b"ascii"})
 _WIDE_BOMS = (b"\xff\xfe", b"\xfe\xff")
 _REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+# Excel's "Strict Open XML Spreadsheet" (ISO/IEC 29500 Strict) names the same relationships differently (#678).
+_STRICT_REL_NS = "http://purl.oclc.org/ooxml/officeDocument/relationships"
+_SHEET_ID_ATTRS = (f"{{{_REL_NS}}}id", f"{{{_STRICT_REL_NS}}}id")
 _WORKSHEET_REL = "/worksheet"
 _CELL_REF = re.compile(r"^([A-Za-z]{1,3})(\d+)$")
 # Built-in number formats that show a date or time (ECMA-376 18.8.30).
@@ -390,7 +393,8 @@ def _read_workbook(archive, members):
         if tag == "workbookPr":
             date1904 = str(element.get("date1904", "")).lower() in {"1", "true"}
         elif tag == "sheet":
-            sheets.append((element.get("name") or "Sheet", element.get(f"{{{_REL_NS}}}id") or ""))
+            rel = next((element.get(attr) for attr in _SHEET_ID_ATTRS if element.get(attr)), "")
+            sheets.append((element.get("name") or "Sheet", rel))
     targets = _worksheet_targets(archive, members)
     sheets = [(name, targets[rel]) for name, rel in sheets if rel in targets]
     if not sheets:
