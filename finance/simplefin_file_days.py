@@ -4,8 +4,8 @@ A file import refuses rows on or after a link's cut-over, except while the
 link is failing (#735): then a file may fill the days after the last synced
 row. Those days belong to the file. The link gets a second boundary that is
 derived from the ledger, not stored: the latest `date_range_end` of an active
-file batch that reaches past the cut-over, meaning one that holds an active
-row dated on or after it. The range is the one the member confirmed, not the
+file batch that reaches past the cut-over, meaning one whose confirmed range
+ends on or after it and that holds an active row dated on or after it. The range is the one the member confirmed, not the
 latest row date, so a file exported partway through its last day still owns
 that day. The sync skips SimpleFIN rows
 posted on or before it, as it skips rows before the cut-over, so a recovered
@@ -95,11 +95,14 @@ class OwnedDays:
 def _batch_ends(account, cutover):
     """{batch id: (range start, the last day it owns)} for each active file batch past the cut-over.
 
-    A batch reaches past the cut-over when it holds an active row dated on or
-    after it: a file the import accepted while the link was failing. A file
-    imported while the link was healthy had every such row refused, so however
-    far its confirmed range runs it supplied no day and owns none; letting its
-    range own days would make the sync drop transactions no file supplied.
+    A batch reaches past the cut-over when its confirmed range ends on or after
+    it and it holds an active row dated on or after it: a file the import
+    accepted while the link was failing. A file imported while the link was
+    healthy had every such row refused, so however far its confirmed range
+    runs it supplied no day and owns none; letting its range own days would
+    make the sync drop transactions no file supplied. The range test also
+    keeps out a generic-mapped card file whose rows the import compared by
+    their mapped date, before the cut-over, though their Posted Date is later.
     """
     batches = ImportBatch.objects.filter(
         account=account,
@@ -122,7 +125,9 @@ def _batch_ends(account, cutover):
             row_days[batch_id] = day
     if not row_days:
         return {}
-    ranges = batches.filter(pk__in=row_days).values_list("pk", "date_range_start", "date_range_end")
+    ranges = batches.filter(pk__in=row_days, date_range_end__gte=cutover).values_list(
+        "pk", "date_range_start", "date_range_end"
+    )
     return {pk: (start, max(end, row_days[pk])) for pk, start, end in ranges}
 
 
