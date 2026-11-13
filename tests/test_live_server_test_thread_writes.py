@@ -28,8 +28,11 @@ from tests.browser_support import browser  # noqa: F401
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
-# How long the request keeps its read lock when nothing releases it sooner.
-HOLD_SECONDS = 1
+# The request holds its read lock until the test releases it; this only bounds a broken run.
+HOLD_LIMIT_SECONDS = 30
+# The pause test releases the request this long after it starts waiting for the gate. If the
+# request ends first, the write still has to succeed, so the order cannot fail the test.
+RELEASE_AFTER_SECONDS = 0.2
 
 
 def _status(url):
@@ -55,7 +58,7 @@ class _ReadingRequest:
                 # A shared-cache read lock on auth_group, held until this transaction ends.
                 list(Group.objects.values_list("pk", flat=True))
                 self.reading.set()
-                self.release.wait(HOLD_SECONDS)
+                self.release.wait(HOLD_LIMIT_SECONDS)
             self.finished.set()
             return original(request)
 
@@ -99,9 +102,13 @@ def test_a_write_while_live_requests_are_paused_waits_for_the_request_in_flight(
     _shared_connection(live_server)
     group = Group.objects.create(name="SYN readers")
     with _ReadingRequest(live_server, monkeypatch) as request:
+        # The test thread cannot release the request while it waits for the gate, so a timer does.
+        releaser = threading.Timer(RELEASE_AFTER_SECONDS, request.release.set)
+        releaser.start()
         with live_requests_paused():
             # The pause returns only once the request has finished and released its lock.
             assert request.finished.is_set()
             assert Group.objects.filter(pk=group.pk).update(name="SYN writers") == 1
+        releaser.join()
     assert request.statuses == [200]
     assert Group.objects.get(pk=group.pk).name == "SYN writers"
