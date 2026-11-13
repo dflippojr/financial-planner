@@ -292,7 +292,7 @@ def connections(request):
         # account list; keep it unchanged unless the member picks another action.
         unlisted = link is not None and link.account_id not in listed_ids
         # An unlisted account may be one the member can no longer see: name none of its days.
-        owned = _owned_days(link.account_id, link.cutover_date, link.mode) if link and not unlisted else None
+        owned = _owned_days(link.account.pk, link.cutover_date, link.mode) if link and not unlisted else None
         rows.append({**remote, "link": link, "link_unlisted": unlisted, "default_cutover": cutover, "owned": owned})
     next_sync, can_sync_now = _schedule_state(connection)
     response = render(

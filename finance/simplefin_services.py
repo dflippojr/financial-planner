@@ -396,8 +396,8 @@ def _save_link(connection, simplefin_account_id, account, cutover, mode):
     # a link saved before this check existed, and it moves no boundary.
     if not unchanged:
         # The same account keeps its gap rows owned (#743); a newly chosen account has none.
-        same_account = existing is not None and existing[0] == account.pk
-        check_cutover(account, cutover, mode, owned_from=existing[1] if same_account else None)
+        owned_from = existing[1] if existing is not None and existing[0] == account.pk else None
+        check_cutover(account, cutover, mode, owned_from=owned_from)
     link, _created = AccountLink.objects.update_or_create(
         connection=connection,
         simplefin_account_id=simplefin_account_id,
@@ -675,8 +675,8 @@ def _import_transactions(account, link, remote, batches, conversion=None) -> int
         .exclude(source_transaction_id="")
         .values_list("source_transaction_id", flat=True)
     )
-    # Read once per sync: only file imports move it, and a member who shares
-    # this account takes the household lock this sync holds (see #743 docs).
+    # The days file imports own (#743), read once: only a file import moves
+    # them, and it takes the household lock this sync already holds.
     owned_through = file_owned_through(account, link.cutover_date)
     created = []
     next_row = {}
