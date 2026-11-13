@@ -233,18 +233,19 @@ def _days_file_will_own(preview, mapping_form):
     """(first, last) days this file will own once imported while its link is failing (#743), or None.
 
     The file owns from the first day the failing link accepts through the end
-    of the date range the member confirms, or a later row of its own.
+    of the date range the member confirms, or a later row of its own, but only
+    when it adds a row on or after that day: one that adds none owns nothing.
     """
     window = getattr(preview, "simplefin_window", None)
     accepted_from = window.accepted_from if window is not None else None
     if accepted_from is None:
         return None
-    cleaned = getattr(mapping_form, "cleaned_data", None) or {}
-    days = [row.cutover_date for row in preview.rows if row.overlap_status == "new"]
-    last = max((day for day in [cleaned.get("date_range_end"), *days] if day is not None), default=None)
-    if last is None or last < accepted_from:
+    days = [row.cutover_date for row in preview.rows
+            if row.overlap_status == "new" and row.cutover_date >= accepted_from]
+    if not days:
         return None
-    return accepted_from, last
+    end = (getattr(mapping_form, "cleaned_data", None) or {}).get("date_range_end")
+    return accepted_from, max(days if end is None else [end, *days])
 
 
 def _render_preview(request, account, context):

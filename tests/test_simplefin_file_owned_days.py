@@ -185,25 +185,41 @@ def test_a_gap_file_does_not_trap_the_link_when_its_cutover_is_changed():
     assert ledger.save_link(owner, connection, checking, CUTOVER) is True
 
 
-@pytest.mark.django_db
-def test_the_preview_says_which_days_the_file_will_own(staging):  # noqa: F811 - the imported fixture
-    owner, checking, connection = _synced_checking()
-    _fail(owner, connection)
+def _preview_page(owner, account, content):
     client = signed_in(owner)
-    url = reverse("csv-import-preview", args=(checking.pk,))
+    url = reverse("csv-import-preview", args=(account.pk,))
     token = client.post(url, {
-        "action": "upload", "csv_file": SimpleUploadedFile("synthetic.csv", GAP_CSV, "text/csv"),
+        "action": "upload", "csv_file": SimpleUploadedFile("synthetic.csv", content, "text/csv"),
     }).context["mapping_form"].initial["token"]
-
-    page = client.post(url, {
+    return client.post(url, {
         "token": token, "date_column": "Date", "description_column": "Description",
         "date_format": "iso", "number_format": "dot_none", "amount_mode": "signed",
         "amount_column": "Amount", "debit_column": "", "credit_column": "", "currency_column": "",
         "action": "preview",
     }).content.decode()
 
+
+@pytest.mark.django_db
+def test_the_preview_says_which_days_the_file_will_own(staging):  # noqa: F811 - the imported fixture
+    owner, checking, connection = _synced_checking()
+    _fail(owner, connection)
+
+    page = _preview_page(owner, checking, GAP_CSV)
+
     assert "This file will own 2026-10-06 through 2026-10-08" in page
     assert "skips SimpleFIN transactions posted on or before 2026-10-08" in page
+
+
+@pytest.mark.django_db
+def test_the_preview_of_a_file_that_adds_no_gap_row_claims_no_days(staging):  # noqa: F811 - the imported fixture
+    """A reimport finds every gap row duplicate; the earlier file already owns those days."""
+    owner, checking, connection = _synced_checking()
+    _fail(owner, connection)
+    _import_file(owner, checking, GAP_CSV)
+
+    page = _preview_page(owner, checking, GAP_CSV)
+
+    assert "This file will own" not in page
 
 
 @pytest.mark.django_db
