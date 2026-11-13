@@ -62,10 +62,12 @@ def lock_actor_household(person):
     return own, memberships
 
 
-def _visible_account_for_update(principal, account_id):
+def _visible_account_for_update(principal, account_id, **annotations):
+    """Lock a visible account; `annotations` are read in the same query."""
     account = (
         Account.objects.visible_to(principal)
         .select_for_update()
+        .annotate(**annotations)
         .filter(pk=account_id)
         .first()
     )

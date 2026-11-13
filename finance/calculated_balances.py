@@ -19,19 +19,24 @@ its balance depends on every transaction in that window, so one gap flags
 every earlier month-end too.
 
 Nothing is written until save_calculated_balances(), which recalculates under
-the account lock and replaces only that account's calculated rows. Amounts
+the account lock and replaces only that account's calculated rows. After
+that, refresh_calculated_balances() keeps the saved rows equal to calculate()
+whenever an import, edit or deletion changes a transaction or a real balance
+(owner decision for #641 and #676), and deletes them when calculate() no
+longer can, for example once no real balance remains. Amounts
 never go to logs or error messages.
 """
 
 from dataclasses import dataclass
 from datetime import date, timedelta
 
+from django.core.exceptions import PermissionDenied
 from django.db import transaction
-from django.db.models import Min
+from django.db.models import Exists, Min, OuterRef
 
 from .audit_services import record
 from .lifecycle_services import _person_for
-from .models import AuditEvent, BalanceSnapshot, Transaction
+from .models import Account, AuditEvent, BalanceSnapshot, Transaction
 from .months import add_months, month_end
 from .net_worth import signed_balance_minor, source_rank_expression
 from .reconciliation import RECONCILED_TYPES, _coverage, _covered, _daily_totals
@@ -150,32 +155,44 @@ def _locked_calculated_rows(account):
     )
 
 
-@transaction.atomic
-def save_calculated_balances(principal, account_id):
-    """Recalculate under the account lock and replace that account's calculated rows.
+def _audited(event, *, hidden_ok):
+    """Record one balance event; for an automatic refresh, skip it if the actor cannot see the account.
 
-    SimpleFIN and manual rows are never touched: every calculated date lies
-    before the earliest of them. Unchanged rows are kept and record nothing, as
-    for other no-op writes; each created, changed or removed row records the
-    same balance audit event a manual balance does.
+    A refresh can run for a member who lost access in the meantime, for example
+    when a shared account is made private right after their sync commits. As
+    for record_correction, no event may name an account its actor cannot see:
+    the rows are still corrected, and the change that caused them is audited.
     """
-    account = _lock_editable_account(principal, account_id)
-    calculation = calculate(account)
-    person = _person_for(principal)
-    wanted = {row.month_end: row.balance_minor for row in calculation.rows}
+    try:
+        event()
+    except PermissionDenied:
+        if not hidden_ok:
+            raise
+
+
+def _replace_calculated_rows(person, account, wanted, *, hidden_ok=False):
+    """Make the account's calculated rows equal `wanted` ({month_end: balance_minor}).
+
+    Unchanged rows are kept and record nothing, as for other no-op writes; each
+    created, changed or removed row records the same balance audit event a
+    manual balance does. Returns (created, updated, deleted).
+    """
+    wanted = dict(wanted)
     created = updated = deleted = 0
     for existing in _locked_calculated_rows(account):
         amount = wanted.pop(existing.snapshot_date, None)
         if amount is None:
             target_id = existing.pk
             existing.delete()
-            record(person, AuditEvent.Action.RECORD_DELETED, AuditEvent.TargetType.BALANCE, target_id,
-                   audience={"account": account})
+            _audited(lambda target_id=target_id: record(
+                person, AuditEvent.Action.RECORD_DELETED, AuditEvent.TargetType.BALANCE, target_id,
+                audience={"account": account}), hidden_ok=hidden_ok)
             deleted += 1
         elif amount != existing.amount_minor:
             existing.amount_minor = amount
             existing.save(update_fields=("amount_minor",))
-            _record_snapshot(person, account, existing, AuditEvent.Action.RECORD_EDITED, ["amount"])
+            _audited(lambda existing=existing: _record_snapshot(
+                person, account, existing, AuditEvent.Action.RECORD_EDITED, ["amount"]), hidden_ok=hidden_ok)
             updated += 1
     for day, amount in sorted(wanted.items()):
         snapshot = BalanceSnapshot.objects.create(
@@ -185,9 +202,75 @@ def save_calculated_balances(principal, account_id):
             currency=account.currency,
             source=BalanceSnapshot.Source.CALCULATED,
         )
-        _record_snapshot(person, account, snapshot, AuditEvent.Action.RECORD_CREATED)
+        _audited(lambda snapshot=snapshot: _record_snapshot(
+            person, account, snapshot, AuditEvent.Action.RECORD_CREATED), hidden_ok=hidden_ok)
         created += 1
+    return created, updated, deleted
+
+
+@transaction.atomic
+def save_calculated_balances(principal, account_id):
+    """Recalculate under the account lock and replace that account's calculated rows.
+
+    SimpleFIN and manual rows are never touched: every calculated date lies
+    before the earliest of them. refresh_calculated_balances keeps that true
+    after later imports, edits and deletions.
+    """
+    account = _lock_editable_account(principal, account_id)
+    calculation = calculate(account)
+    wanted = {row.month_end: row.balance_minor for row in calculation.rows}
+    created, updated, deleted = _replace_calculated_rows(_person_for(principal), account, wanted)
     return SaveResult(saved=len(calculation.rows), created=created, updated=updated, deleted=deleted)
+
+
+def refresh_calculated_balances(person, account_id):
+    """Keep saved calculated rows equal to calculate() after a ledger change (#641, #676).
+
+    Every path that adds, edits, archives or deletes an account's transactions,
+    or its SimpleFIN or manual balances, calls this in the same database
+    transaction, after its own permission checks. It takes the account row
+    lock (a no-op when the caller already holds it) in the same single query
+    that checks for calculated rows, so an import pays one query for it.
+
+    An account with no calculated rows is left alone: calculating is the
+    member's choice. So is an archived one, which keeps its history as it
+    was through its archive date (for example a sync that raced the archive). When calculate() refuses, for example because no real
+    balance remains, the calculated rows are deleted, since nothing could
+    produce them now. A change only after the anchor leaves calculate()
+    unchanged, so nothing is written or recorded. Returns (created, updated,
+    deleted).
+    """
+    if not transaction.get_connection().in_atomic_block:
+        raise RuntimeError("refresh_calculated_balances must run inside the caller's transaction.")
+    account = (
+        Account.objects.select_for_update(of=("self",))
+        .filter(has_calculated_expression(), pk=account_id)
+        .first()
+    )
+    if account is None or account.status != Account.Status.ACTIVE or account.archived_at is not None:
+        # An archived account keeps its history as it was, calculated rows included.
+        return (0, 0, 0)
+    return refresh_locked_calculated_balances(person, account)
+
+
+def has_calculated_expression():
+    """Annotate an account query with whether the account has calculated rows (no extra query)."""
+    return Exists(BalanceSnapshot.objects.filter(account=OuterRef("pk"), source=BalanceSnapshot.Source.CALCULATED))
+
+
+def refresh_locked_calculated_balances(person, account):
+    """refresh_calculated_balances for a caller that already holds the account lock.
+
+    For a hot path that read has_calculated_expression() with its own lock
+    query and found calculated rows, so the refresh adds no lock query.
+    """
+    if not transaction.get_connection().in_atomic_block:
+        raise RuntimeError("refresh_locked_calculated_balances must run inside the caller's transaction.")
+    try:
+        wanted = {row.month_end: row.balance_minor for row in calculate(account).rows}
+    except CalculationError:
+        wanted = {}
+    return _replace_calculated_rows(person, account, wanted, hidden_ok=True)
 
 
 @transaction.atomic
