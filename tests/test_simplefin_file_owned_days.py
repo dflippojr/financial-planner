@@ -301,3 +301,36 @@ def test_a_member_without_a_household_serializes_a_sync_and_a_file_import():
     assert any(i < first_write for i in _locks_on(sql, "finance_simplefinconnection", connection.pk))
     assert not _locks_on(sql, "finance_person", owner.pk)
     assert [row for row in _ledger(checking) if row[0] == date(2026, 10, 10)] == [(date(2026, 10, 10), -500, SF)]
+
+
+@pytest.mark.django_db
+def test_a_generic_mapped_card_file_before_the_cutover_owns_no_days():
+    """Re-review of #744: the generic mapper compares a card row by the column it maps, not the Posted Date.
+
+    A row dated 09-29 by its mapped Transaction Date, with a Posted Date of
+    10-08, was imported while the link was healthy (cut-over 10-01) under a
+    confirmed range ending 09-29. It supplied no day past the cut-over, so the
+    sync still supplies 10-02 through 10-08.
+    """
+    from finance.csv_import.parser import Mapping
+
+    owner, checking, connection = _synced_checking()
+    content = (
+        b"Transaction Date,Posted Date,Description,Amount\n"
+        b"2026-09-29,2026-10-08,SYN CSV CARD,-9.00\n"
+    )
+    mapping = Mapping(date_column="Transaction Date", description_column="Description", date_format="iso",
+                      number_format="dot_none", amount_mode="signed", amount_column="Amount")
+    document = read_csv(content)
+    imported = commit_csv_import(
+        owner, checking.pk, content=content, document=document, mapping=mapping,
+        source=ImportBatch.Source.CAPITAL_ONE, date_range_start=date(2026, 9, 29), date_range_end=date(2026, 9, 29),
+    )
+    assert imported.new_count == 1
+
+    ledger.sync(owner, connection, SYNCED + BACKFILL)
+
+    assert [row for row in _ledger(checking) if row[2] == SF] == [
+        (date(2026, 10, 2), -1100, SF), (date(2026, 10, 5), -2200, SF),
+        (date(2026, 10, 6), -300, SF), (date(2026, 10, 8), -400, SF),
+    ]
