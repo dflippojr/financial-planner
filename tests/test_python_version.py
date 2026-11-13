@@ -10,8 +10,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 WORKFLOWS = ROOT / ".github/workflows"
-SETUP_PYTHON = re.compile(r"^(\s*)-?\s*uses:\s*[\"']?actions/setup-python@")
-PYTHON_VERSION = re.compile(r"^\s*python-version:\s*[\"']?([^\"'\s#]+)")
+# "uses:" with or without its list-item dash, so "- name:" then "uses:" at the same indent still matches.
+SETUP_PYTHON = re.compile(r"^\s*(?:-\s+)?uses:\s*[\"']?actions/setup-python@")
+PYTHON_VERSION = re.compile(r"^\s*python-version:(.*)$")
 
 
 def _declared():
@@ -23,8 +24,30 @@ def _workflow_files():
     return sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")])
 
 
+def _indent(line):
+    return len(line) - len(line.lstrip())
+
+
+def _scalar(raw):
+    """The whole value of a python-version key: no comment, no quotes, nothing trimmed out of the middle."""
+    value = re.sub(r"\s+#.*$", "", raw).strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        value = value[1:-1]
+    return value
+
+
+def _step_indent(lines, number):
+    """Indent of the list-item dash that opens the step whose uses key is on line number."""
+    key = _indent(lines[number])
+    for above in range(number, -1, -1):
+        stripped = lines[above].lstrip()
+        if stripped.startswith("-") and (above == number or _indent(lines[above]) < key):
+            return _indent(lines[above])
+    return key
+
+
 def _setup_python_versions(text):
-    """The python-version of each setup-python step in one workflow file, as (line number, version or None)."""
+    """The python-version of each setup-python step in one workflow file, as (line number, value or None)."""
     lines = text.splitlines()
     live = [(number, line) for number, line in enumerate(lines) if not line.lstrip().startswith("#")]
     # A setup-python line this reader does not recognise must fail, not be skipped.
@@ -33,20 +56,19 @@ def _setup_python_versions(text):
 
     found = []
     for number, line in live:
-        match = SETUP_PYTHON.match(line)
-        if not match:
+        if not SETUP_PYTHON.match(line):
             continue
-        # The step's keys sit deeper than its "- uses:" dash; the step ends at the next line at or above that indent.
-        step_indent = len(match.group(1))
+        # A step's keys sit deeper than its dash; the step ends at the next non-blank line at or above that indent.
+        step_indent = _step_indent(lines, number)
         versions = []
         for step_line in lines[number + 1:]:
-            if step_line.strip() and len(step_line) - len(step_line.lstrip()) <= step_indent:
+            if step_line.strip() and _indent(step_line) <= step_indent:
                 break
             if step_line.lstrip().startswith("#"):
                 continue
             version = PYTHON_VERSION.match(step_line)
             if version:
-                versions.append(version.group(1))
+                versions.append(_scalar(version.group(1)))
         found.append((number + 1, versions[0] if len(versions) == 1 else None))
     return found
 
@@ -90,9 +112,13 @@ def test_setup_python_detection_reads_the_version_under_each_step():
         "          python-version: \"3.12\"\n"
         "      - uses: 'actions/setup-python@v7'\n"
         "        with:\n"
-        "          python-version: 3.15\n"
+        "          python-version: 3.15  # pinned\n"
+        "      - name: Set up Python\n"
+        "        uses: actions/setup-python@v7\n"
+        "        with:\n"
+        "          python-version: \"3.15 || 3.14\"\n"
     )
-    assert _setup_python_versions(text) == [(4, "3.15"), (8, None), (13, "3.15")]
+    assert _setup_python_versions(text) == [(4, "3.15"), (8, None), (13, "3.15"), (17, "3.15 || 3.14")]
 
 
 def test_setup_python_detection_fails_on_a_form_it_cannot_read():
@@ -103,14 +129,11 @@ def test_setup_python_detection_fails_on_a_form_it_cannot_read():
         "      - uses: actions/setup-python@v7   # ok\n"
         "        with:\n"
         "          python-version: \"3.15\"\n"
-        "      - uses: actions/setup-python@v7\n"
-        "        with:\n"
-        "          python-version: \"3.15\"\n"
         "      - name: setup-python via ${{ env.ACTION }}\n"
     )
     try:
         _setup_python_versions(text)
     except AssertionError as error:
-        assert "[10]" in str(error)
+        assert "[7]" in str(error)
     else:
         raise AssertionError("an unreadable setup-python line was skipped")
