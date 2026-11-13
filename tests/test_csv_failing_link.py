@@ -146,6 +146,24 @@ def test_a_link_with_no_successful_read_for_n_days_is_failing(age, failing):
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize(("age", "failing"), [
+    (N_DAYS - timedelta(hours=1), False),
+    (N_DAYS + timedelta(hours=1), True),
+], ids=["new-connection", "old-connection"])
+def test_a_connection_with_no_stored_read_is_judged_by_its_age_not_its_last_failed_attempt(age, failing):
+    """A failed sync stamps last_sync_at too, so only a stored read proves one succeeded (review of #740)."""
+    _owner, checking, connection = _synced_checking()
+    SimpleFinConnection.objects.filter(pk=connection.pk).update(
+        last_read={}, last_sync_at=timezone.now(), created_at=timezone.now() - age,
+    )
+
+    preview = _preview(checking)
+
+    assert preview.simplefin_window.failing is failing
+    assert _statuses(preview)[2] == ("new" if failing else "invalid")
+
+
+@pytest.mark.django_db
 def test_a_disabled_connection_is_failing():
     _owner, checking, connection = _synced_checking()
     SimpleFinConnection.objects.filter(pk=connection.pk).update(disabled=True)
@@ -186,7 +204,7 @@ def test_gap_rows_import_once_and_a_reimport_finds_them_duplicate():
 
 
 @pytest.mark.django_db
-def test_the_window_reads_only_the_account_asked_about():
+def test_an_unlinked_account_has_no_window():
     owner, checking, connection = _synced_checking()
     _sync_payload(owner, connection, _read_with_bank_error())
     unlinked = ledger.make_account(owner, Account.Type.CHECKING, name="Synthetic Unlinked")
