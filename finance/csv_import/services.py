@@ -23,6 +23,7 @@ from finance.lifecycle_services import (
     _person_for,
     _visible_account_for_update,
     lock_actor_household,
+    lock_ledger_writer,
 )
 from finance.csv_import.saved_mappings import headers_match, lock_saved_mapping, mapping_from_saved
 from finance.models import Account, AccountLink, AuditEvent, ImportBatch, SavedCsvMapping, Transaction
@@ -202,7 +203,7 @@ def commit_csv_import(
     saved_csv_mapping=None,
 ):
     person = _person_for(principal)
-    own_membership, _memberships = lock_actor_household(person)
+    own_membership, _memberships = lock_ledger_writer(person)
     account = _active_account(person, account_id)
     if saved_csv_mapping is not None:
         saved_csv_mapping = _locked_saved_mapping(person, saved_csv_mapping, mapping, document)

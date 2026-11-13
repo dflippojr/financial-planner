@@ -15,6 +15,7 @@ from .models import (
     ImportBatch,
     Invitation,
     Membership,
+    Person,
     Receipt,
     RecurringExclusion,
     RecurringSeries,
@@ -59,6 +60,23 @@ def lock_actor_household(person):
         .order_by("pk")
     )
     own = next((m for m in memberships if m.pk == reference["pk"]), None)
+    return own, memberships
+
+
+def lock_ledger_writer(person):
+    """lock_actor_household, and for a member with no current household, their own Person row.
+
+    A file import and a SimpleFIN sync both write one account's ledger, and the
+    sync reads the days file imports own before it writes (#743). In a household
+    the membership locks serialize them. A member with none locks nothing there,
+    and can write only accounts they alone see, so locking their own row first
+    serializes every writer of those accounts. NO KEY UPDATE leaves rows that
+    merely reference the member (an import batch's imported_by) unblocked.
+    Returns what lock_actor_household returns.
+    """
+    own, memberships = lock_actor_household(person)
+    if own is None:
+        Person.objects.select_for_update(no_key=True).filter(pk=person.pk).first()
     return own, memberships
 
 

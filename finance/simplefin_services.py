@@ -22,7 +22,7 @@ from finance.date_bounds import activity_date_error
 from finance.encryption import check_encryption_key, decrypt_access_url, encrypt_access_url
 from finance.audit_services import append_event
 from finance.audit_operations import execution, operation, outcome, member_operation
-from finance.lifecycle_services import _DENIED, _person_for, create_account, lock_actor_household
+from finance.lifecycle_services import _DENIED, _person_for, create_account, lock_actor_household, lock_ledger_writer
 from finance.models import (
     Account,
     AuditEvent,
@@ -676,7 +676,7 @@ def _import_transactions(account, link, remote, batches, conversion=None) -> int
         .values_list("source_transaction_id", flat=True)
     )
     # The days file imports own (#743), read once: only a file import moves
-    # them, and it takes the household lock this sync already holds.
+    # them, and it takes the lock_ledger_writer lock this sync already holds.
     owned_through = file_owned_through(account, link.cutover_date)
     created = []
     next_row = {}
@@ -1013,8 +1013,8 @@ def _save_failure(person, connection, now, message, *, failure, disabled=None):
 
 
 def _locked_connection(person, connection_id, plan, *, ignore_rate_limit):
-    """Lock the household and connection, then re-check what the fetch assumed."""
-    lock_actor_household(person)
+    """Lock the household (or the member, without one) and connection, then re-check what the fetch assumed."""
+    lock_ledger_writer(person)
     connection = (
         SimpleFinConnection.objects.select_for_update().filter(pk=connection_id, owner=person).first()
     )
