@@ -12,10 +12,14 @@ on anything else, rather than guessing.
 import re
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).parents[1]
 WORKFLOWS = ROOT / ".github/workflows"
 # "uses:" with or without its list-item dash, so "- name:" then "uses:" at the same indent still matches.
 SETUP_PYTHON = re.compile(r"^\s*(?:-\s+)?uses:\s*[\"']?actions/setup-python@")
+# A name is free text: a step may name itself after setup-python without using it.
+NAME_KEY = re.compile(r"^\s*(?:-\s+)?name:")
 PYTHON_VERSION = re.compile(r"^\s*python-version:(.*)$")
 
 
@@ -97,13 +101,16 @@ def _step_python_versions(lines, number):
 def _setup_python_versions(text):
     """The python-version of each setup-python step in one workflow file, as (line number, value or None)."""
     lines = text.splitlines()
-    # An action reference this reader does not recognise must fail, not be skipped.
+    # Any other line that mentions setup-python (quoted keys, folded values, continuation lines) must fail, not be skipped.
     unrecognised = [
         number + 1
         for number, line in enumerate(lines)
-        if _is_content(line) and "uses:" in line and "actions/setup-python" in line and not SETUP_PYTHON.match(line)
+        if _is_content(line)
+        and "setup-python" in line
+        and not SETUP_PYTHON.match(line)
+        and not NAME_KEY.match(line)
     ]
-    assert not unrecognised, f"setup-python action reference at lines {unrecognised} is not one this test can read"
+    assert not unrecognised, f"setup-python at lines {unrecognised} is not a 'uses:' action reference this test can read"
 
     found = []
     for number, line in enumerate(lines):
@@ -171,21 +178,25 @@ def test_setup_python_detection_reads_the_version_under_each_step():
     ]
 
 
-def test_setup_python_detection_fails_on_a_form_it_cannot_read():
-    inline = (
-        "jobs:\n"
-        "  a:\n"
-        "    steps:\n"
-        "      - uses: actions/setup-python@v7\n"
-        "        with: {python-version: \"3.15\"}\n"
-    )
-    try:
-        _setup_python_versions(inline)
-    except AssertionError as error:
-        assert "line 5" in str(error)
-    else:
-        raise AssertionError("an inline with: mapping was read as if it were block style")
+@pytest.mark.parametrize(
+    ("step", "offset"),
+    [
+        # An inline with: mapping: its python-version is not read. The with: line is the step's second line.
+        ("      - uses: actions/setup-python@v7\n        with: {python-version: \"3.15\"}\n", 1),
+        # A quoted key: the reader matches only a plain uses: key. The step's first line.
+        ("      - \"uses\": actions/setup-python@v7\n        with:\n          python-version: \"3.14\"\n", 0),
+        # A folded value: the action reference is on the step's second line, a continuation.
+        ("      - uses: >-\n          actions/setup-python@v7\n        with:\n          python-version: \"3.14\"\n", 1),
+    ],
+)
+def test_setup_python_detection_fails_on_a_form_it_cannot_read(step, offset):
+    # The text starts with three lines, so the step's first line is line 4.
+    text = "jobs:\n  a:\n    steps:\n" + step
+    with pytest.raises(AssertionError, match=rf"lines? \[?{4 + offset}\b"):
+        _setup_python_versions(text)
 
+
+def test_setup_python_detection_ignores_names_that_mention_setup_python():
     quoted_action_in_a_name = (
         "jobs:\n"
         "  a:\n"
