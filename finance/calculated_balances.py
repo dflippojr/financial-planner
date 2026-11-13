@@ -30,6 +30,7 @@ never go to logs or error messages.
 from dataclasses import dataclass
 from datetime import date, timedelta
 
+from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.db.models import Exists, Min, OuterRef
 
@@ -154,7 +155,22 @@ def _locked_calculated_rows(account):
     )
 
 
-def _replace_calculated_rows(person, account, wanted):
+def _audited(event, *, hidden_ok):
+    """Record one balance event; for an automatic refresh, skip it if the actor cannot see the account.
+
+    A refresh can run for a member who lost access in the meantime, for example
+    when a shared account is made private right after their sync commits. As
+    for record_correction, no event may name an account its actor cannot see:
+    the rows are still corrected, and the change that caused them is audited.
+    """
+    try:
+        event()
+    except PermissionDenied:
+        if not hidden_ok:
+            raise
+
+
+def _replace_calculated_rows(person, account, wanted, *, hidden_ok=False):
     """Make the account's calculated rows equal `wanted` ({month_end: balance_minor}).
 
     Unchanged rows are kept and record nothing, as for other no-op writes; each
@@ -168,13 +184,15 @@ def _replace_calculated_rows(person, account, wanted):
         if amount is None:
             target_id = existing.pk
             existing.delete()
-            record(person, AuditEvent.Action.RECORD_DELETED, AuditEvent.TargetType.BALANCE, target_id,
-                   audience={"account": account})
+            _audited(lambda target_id=target_id: record(
+                person, AuditEvent.Action.RECORD_DELETED, AuditEvent.TargetType.BALANCE, target_id,
+                audience={"account": account}), hidden_ok=hidden_ok)
             deleted += 1
         elif amount != existing.amount_minor:
             existing.amount_minor = amount
             existing.save(update_fields=("amount_minor",))
-            _record_snapshot(person, account, existing, AuditEvent.Action.RECORD_EDITED, ["amount"])
+            _audited(lambda existing=existing: _record_snapshot(
+                person, account, existing, AuditEvent.Action.RECORD_EDITED, ["amount"]), hidden_ok=hidden_ok)
             updated += 1
     for day, amount in sorted(wanted.items()):
         snapshot = BalanceSnapshot.objects.create(
@@ -184,7 +202,8 @@ def _replace_calculated_rows(person, account, wanted):
             currency=account.currency,
             source=BalanceSnapshot.Source.CALCULATED,
         )
-        _record_snapshot(person, account, snapshot, AuditEvent.Action.RECORD_CREATED)
+        _audited(lambda snapshot=snapshot: _record_snapshot(
+            person, account, snapshot, AuditEvent.Action.RECORD_CREATED), hidden_ok=hidden_ok)
         created += 1
     return created, updated, deleted
 
@@ -251,7 +270,7 @@ def refresh_locked_calculated_balances(person, account):
         wanted = {row.month_end: row.balance_minor for row in calculate(account).rows}
     except CalculationError:
         wanted = {}
-    return _replace_calculated_rows(person, account, wanted)
+    return _replace_calculated_rows(person, account, wanted, hidden_ok=True)
 
 
 @transaction.atomic

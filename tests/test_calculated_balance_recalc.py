@@ -407,3 +407,35 @@ def test_a_sync_holds_no_account_lock_and_refreshes_each_account_after_it_commit
     assert account_locks and min(account_locks) > sync_commit
     assert calculated(checking) == expected(checking) == [(date(2026, 8, 31), 105_000), (date(2026, 9, 30), 105_000),
                                                           (date(2026, 10, 31), 105_000)]
+
+
+def test_a_refresh_for_a_member_who_lost_access_still_corrects_the_rows_without_naming_them():
+    """Review of #733: a shared account made private between a member's sync commit and its
+    refresh must not leave stale rows or fail the sync; no event may name a hidden account."""
+    from django.db import transaction
+
+    from finance.calculated_balances import refresh_calculated_balances
+    from tests.test_reconciliation import add_batch, add_rows
+
+    owner, former_member = make_person("private-owner"), make_person("former-member")
+    checking = checking_with_history(owner)
+    save_calculated_balances(owner, checking.pk)
+    # A late row the former member's sync committed before the account went private.
+    add_rows(add_batch(checking, date(2026, 10, 25), date(2026, 10, 25)), (date(2026, 10, 25), -7_500))
+    events = AuditEvent.objects.filter(actor=former_member).count()
+
+    with transaction.atomic():
+        refresh_calculated_balances(former_member, checking.pk)
+
+    assert calculated(checking) == expected(checking)
+    assert AuditEvent.objects.filter(actor=former_member).count() == events
+
+
+def test_saving_calculated_balances_stays_strict_about_the_audit():
+    from django.core.exceptions import PermissionDenied
+
+    owner, stranger = make_person("strict-owner"), make_person("strict-stranger")
+    checking = checking_with_history(owner)
+    with pytest.raises(PermissionDenied):
+        save_calculated_balances(stranger, checking.pk)
+    assert calculated(checking) == []
