@@ -267,15 +267,15 @@ def _locks_on(sql, table, pk):
 
 @pytest.mark.django_db
 def test_a_member_without_a_household_serializes_a_sync_and_a_file_import():
-    """Without a household the membership locks lock nothing, so both take the member's own row first.
+    """Without a household the membership locks lock nothing, so the import takes the sync's connection lock first.
 
     Otherwise a gap import could commit between the sync's read of the
-    file-owned days and its writes, and both would supply those days.
+    file-owned days and its writes, and both would supply those days. Neither
+    path locks the member's Person row: the recurring refresh updates it after
+    locking their series, so that lock could deadlock (re-review of #744).
     """
     from django.db import connection as db_connection
     from django.test.utils import CaptureQueriesContext
-
-    from finance.models import Person
 
     if not db_connection.features.has_select_for_update:
         pytest.skip("Row locks need PostgreSQL")
@@ -284,19 +284,20 @@ def test_a_member_without_a_household_serializes_a_sync_and_a_file_import():
     connection = ledger.link_simplefin(owner, checking, CUTOVER)
     ledger.sync(owner, connection, SYNCED)
     _fail(owner, connection)
-    person = Person.objects.get(pk=owner.pk)
 
     with CaptureQueriesContext(db_connection) as queries:
         _import_file(owner, checking, GAP_CSV)
     sql = [query["sql"] for query in queries.captured_queries]
-    assert _locks_on(sql, "finance_person", person.pk), "the import did not lock the member"
-    assert _locks_on(sql, "finance_person", person.pk)[0] < _locks_on(sql, "finance_account", checking.pk)[0]
+    connection_locks = [i for i, q in enumerate(sql) if q.lstrip().startswith("SELECT")
+                        and 'FROM "finance_simplefinconnection"' in q and "FOR UPDATE" in q]
+    assert connection_locks, "the import did not take the connection lock"
+    assert connection_locks[0] < _locks_on(sql, "finance_account", checking.pk)[0]
+    assert not _locks_on(sql, "finance_person", owner.pk)
 
     with CaptureQueriesContext(db_connection) as queries:
         ledger.sync(owner, connection, SYNCED + BACKFILL + LATER)
     sql = [query["sql"] for query in queries.captured_queries]
     first_write = next(i for i, q in enumerate(sql) if q.lstrip().startswith('INSERT INTO "finance_transaction"'))
-    # The lock the sync holds while it reads the owned days and writes rows.
-    connection_lock = max(i for i in _locks_on(sql, "finance_simplefinconnection", connection.pk) if i < first_write)
-    assert any(i < connection_lock for i in _locks_on(sql, "finance_person", person.pk)), "the sync did not lock the member"
+    assert any(i < first_write for i in _locks_on(sql, "finance_simplefinconnection", connection.pk))
+    assert not _locks_on(sql, "finance_person", owner.pk)
     assert [row for row in _ledger(checking) if row[0] == date(2026, 10, 10)] == [(date(2026, 10, 10), -500, SF)]

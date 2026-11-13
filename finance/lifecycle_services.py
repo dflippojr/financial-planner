@@ -15,12 +15,12 @@ from .models import (
     ImportBatch,
     Invitation,
     Membership,
-    Person,
     Receipt,
     RecurringExclusion,
     RecurringSeries,
     RecurringSeriesMember,
     RefundLink,
+    SimpleFinConnection,
     Transaction,
     TransactionCorrectionHistory,
     TransactionTag,
@@ -64,19 +64,21 @@ def lock_actor_household(person):
 
 
 def lock_ledger_writer(person):
-    """lock_actor_household, and for a member with no current household, their own Person row.
+    """lock_actor_household, and for a member with no current household, their SimpleFIN connection.
 
     A file import and a SimpleFIN sync both write one account's ledger, and the
-    sync reads the days file imports own before it writes (#743). In a household
-    the membership locks serialize them. A member with none locks nothing there,
-    and can write only accounts they alone see, so locking their own row first
-    serializes every writer of those accounts. NO KEY UPDATE leaves rows that
-    merely reference the member (an import batch's imported_by) unblocked.
-    Returns what lock_actor_household returns.
+    sync reads the days file imports own before it writes (#743). In a
+    household the membership locks serialize them. A member with none locks
+    nothing there and can import only into accounts they alone see, which only
+    their own connection syncs; the sync locks that connection row before it
+    reads or writes, so a file import takes it first too. Nothing locks the
+    connection after a ledger or recurring lock, so this adds no lock cycle
+    (a Person row lock would: the recurring refresh updates the member after
+    locking their series). Returns what lock_actor_household returns.
     """
     own, memberships = lock_actor_household(person)
     if own is None:
-        Person.objects.select_for_update(no_key=True).filter(pk=person.pk).first()
+        list(SimpleFinConnection.objects.select_for_update().filter(owner=person).order_by("pk").values_list("pk"))
     return own, memberships
 
 
