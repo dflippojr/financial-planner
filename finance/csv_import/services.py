@@ -1,6 +1,7 @@
 import hashlib
 from collections import Counter
 from dataclasses import dataclass
+from datetime import date, timedelta
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
@@ -25,6 +26,7 @@ from finance.lifecycle_services import (
 )
 from finance.csv_import.saved_mappings import headers_match, lock_saved_mapping, mapping_from_saved
 from finance.models import Account, AccountLink, AuditEvent, ImportBatch, SavedCsvMapping, Transaction
+from finance.simplefin_health import last_synced_days, link_is_failing
 
 MAPPING_CHANGED = "This mapping changed; preview the file again."
 
@@ -60,12 +62,55 @@ def _active_fingerprint_counts(account):
     return Counter(fingerprints)
 
 
-def simplefin_cutover(account):
-    """The cut-over date of the account's transactions-mode SimpleFIN link, or None."""
-    return (
-        AccountLink.objects.filter(account=account, mode=AccountLink.Mode.TRANSACTIONS)
-        .values_list("cutover_date", flat=True)
+@dataclass(frozen=True)
+class SimpleFinWindow:
+    """The days a transactions-mode SimpleFIN link claims from a file import.
+
+    A healthy link claims every day from its cut-over. While the link is
+    failing (#735) it claims only the days through its last SimpleFIN row, so
+    a file may fill the gap after it; with no SimpleFIN row it claims none.
+    """
+
+    cutover: date
+    failing: bool
+    last_synced: date | None
+
+    @property
+    def accepted_from(self) -> date | None:
+        """The first day on or after the cut-over a file import may supply, or None for a healthy link."""
+        if not self.failing:
+            return None
+        if self.last_synced is None or self.last_synced < self.cutover:
+            return self.cutover
+        return self.last_synced + timedelta(days=1)
+
+    def refusal(self, day) -> str | None:
+        """Why a row compared on `day` is refused, or None when a file import may supply it."""
+        if day < self.cutover:
+            return None
+        accepted_from = self.accepted_from
+        if accepted_from is None:
+            return f"Covered by SimpleFIN from {self.cutover.isoformat()}."
+        if day >= accepted_from:
+            return None
+        # Only a failing link with a SimpleFIN row on or after its cut-over gets here.
+        return f"Covered by SimpleFIN through {(accepted_from - timedelta(days=1)).isoformat()}."
+
+
+def simplefin_window(account, now=None) -> SimpleFinWindow | None:
+    """The account's transactions-mode SimpleFIN window, or None when it has no such link."""
+    link = (
+        AccountLink.objects.select_related("connection")
+        .filter(account=account, mode=AccountLink.Mode.TRANSACTIONS)
         .first()
+    )
+    if link is None:
+        return None
+    failing = link_is_failing(link, now)
+    return SimpleFinWindow(
+        cutover=link.cutover_date,
+        failing=failing,
+        last_synced=last_synced_days({account.pk}).get(account.pk) if failing else None,
     )
 
 
@@ -77,15 +122,17 @@ def classify_overlap(account, preview: Preview) -> Preview:
     reimport. Matching is limited to this account so a private ledger cannot
     hide overlap on a household account, and archived (undone) rows do not count.
     Rows on or after a transactions-mode SimpleFIN cut-over are invalid: the sync
-    supplies that period, and its descriptions differ from the bank's CSV. A
+    supplies that period, and its descriptions differ from the bank's CSV. While
+    the link is failing, only rows through its last SimpleFIN row are (#735). A
     card row is compared by its posted date, the day SimpleFIN dates it by.
     """
     remaining = _active_fingerprint_counts(account)
-    cutover = simplefin_cutover(account)
+    window = simplefin_window(account)
     classified = []
     for row in preview.rows:
-        if row.is_valid and cutover is not None and row.cutover_date >= cutover:
-            row = row.with_error(f"Covered by SimpleFIN from {cutover.isoformat()}.")
+        refusal = window.refusal(row.cutover_date) if row.is_valid and window is not None else None
+        if refusal is not None:
+            row = row.with_error(refusal)
         if not row.is_valid:
             classified.append(row.classified("invalid"))
             continue
@@ -95,7 +142,7 @@ def classify_overlap(account, preview: Preview) -> Preview:
             classified.append(row.classified("duplicate"))
         else:
             classified.append(row.classified("new"))
-    return Preview(tuple(classified))
+    return Preview(tuple(classified), simplefin_window=window)
 
 
 def _original_fields(headers, source_row, mapping):

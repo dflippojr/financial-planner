@@ -14,6 +14,7 @@ from collections import Counter
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
+from unittest.mock import patch
 
 import pytest
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -28,6 +29,7 @@ from finance.csv_import.services import undo_import_batch
 from finance.export import minor_from_decimal_string, money_decimal
 from finance.lifecycle_services import change_account_share_mode, share_account
 from finance.models import Account, AccountLink, ImportBatch, RefundLink, TransferPair
+from finance.simplefin_services import sync_connection
 from finance.transaction_export import iter_transaction_csv
 from finance.transaction_filters import visible_transaction_queryset
 
@@ -47,6 +49,7 @@ from .strategies import (
     rows,
     shapes,
     shifted,
+    simplefin_payload,
 )
 
 pytestmark = [pytest.mark.property, pytest.mark.django_db]
@@ -205,6 +208,85 @@ def test_a_cutover_counts_each_transaction_once_in_any_mix_of_csv_and_simplefin(
         sent = [reported_balance_minor(case.feed_fields[index][0]) for kind, index in case.steps if kind == "sync"]
         sent = [minor for minor in sent if minor is not None]
         assert ledger.simplefin_balances(account) == sent[-1:]
+
+
+@dataclass(frozen=True)
+class FailingLinkCase:
+    shape: object
+    cutover: date
+    last_synced: date
+    absent: bool
+    world: tuple
+    csv_files: tuple
+    steps: tuple
+
+
+@st.composite
+def failing_link_cases(draw):
+    """A link that synced through some day and then failed, and bank files that fill the gap (#735).
+
+    The feed holds every row posted from the cut-over through `last_synced`;
+    later rows reach the ledger only through a file. Files may repeat any row,
+    including ones the feed already supplied, and arrive in any order.
+    """
+    shape = draw(st.sampled_from((HUNTINGTON, CAPITAL_ONE, APPLE_CARD)))
+    cutover = draw(st.dates(date(2025, 3, 1), date(2026, 8, 1)))
+    last_synced = shifted(cutover, draw(st.integers(-1, 30)))
+    # The days either side of each boundary are where an off-by-one would show.
+    boundaries = st.sampled_from([shifted(cutover, -1), cutover, last_synced, shifted(last_synced, 1)])
+    days = st.one_of(boundaries, st.integers(-20, 45).map(lambda offset: shifted(cutover, offset)))
+    world = draw(rows(min_size=1, max_size=10, unique=True, lag_strategy=_card_lags(shape), day_strategy=days))
+    file_count = draw(st.integers(1, 3))
+    csv_files = [[] for _ in range(file_count)]
+    for row in world:
+        fed = cutover <= posted_day(row) <= last_synced
+        if not fed or draw(st.booleans()):
+            for file in draw(st.sets(st.integers(0, file_count - 1), min_size=1)):
+                csv_files[file].append(row)
+    steps = draw(st.permutations(list(range(file_count)) + draw(st.lists(st.integers(0, file_count - 1),
+                                                                         max_size=2))))
+    return FailingLinkCase(shape, cutover, last_synced, draw(st.booleans()), tuple(world),
+                           tuple(map(tuple, csv_files)), tuple(steps))
+
+
+def _failing_read(absent):
+    """A read whose bank reports a sign-in error, or that no longer lists the linked account."""
+    payload = simplefin_payload([])
+    if absent:
+        payload["accounts"][0]["id"] = "sf-other"
+    else:
+        payload["errlist"].append({"code": "con.auth", "conn_id": "CON-1", "msg": "Synthetic sign-in required."})
+    return payload
+
+
+@given(failing_link_cases())
+# The day after the last synced row is the first a file may supply; the last synced day stays refused.
+@example(FailingLinkCase(HUNTINGTON, date(2026, 3, 1), date(2026, 3, 5), False,
+                         (Row(date(2026, 3, 5), -2500, "SYN GROCER N0", "", "SYN-00000", None),
+                          Row(date(2026, 3, 6), -1200, "SYN CAFE N1", "", "SYN-00001", None)),
+                         ((Row(date(2026, 3, 5), -2500, "SYN GROCER N0", "", "SYN-00000", None),
+                           Row(date(2026, 3, 6), -1200, "SYN CAFE N1", "", "SYN-00001", None)),), (0,)))
+def test_files_fill_a_failing_links_gap_and_count_each_transaction_once(case):
+    with ledger.isolated():
+        owner, account = _new_member_with_account(case.shape)
+        connection = ledger.link_simplefin(owner, account, case.cutover)
+        fed = [(index, _feed_row(index, row)) for index, row in enumerate(case.world)
+               if case.cutover <= posted_day(row) <= case.last_synced]
+        ledger.sync(owner, connection, fed)
+        with patch("finance.simplefin_services.fetch_accounts", return_value=_failing_read(case.absent)):
+            sync_connection(owner, connection.pk, ignore_rate_limit=True)
+        for index in case.steps:
+            ledger.import_rows(owner, account, case.shape, list(case.csv_files[index]))
+
+        # The feed owns its days; a file owns the days before the cut-over and after the feed stopped.
+        expected_rows = Counter(
+            (posted_day(row), row.amount_minor, "USD", _feed_row(index, row).payee)
+            if case.cutover <= posted_day(row) <= case.last_synced
+            else (row.day, row.amount_minor, "USD", case.shape.stored_description(row))
+            for index, row in enumerate(case.world)
+        )
+        assert ledger.content_counter([account]) == expected_rows
+        assert ledger.totals(owner, [account]) == ledger.expected_totals([row.amount_minor for row in case.world])
 
 
 @dataclass(frozen=True)

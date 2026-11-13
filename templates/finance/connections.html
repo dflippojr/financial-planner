@@ -202,7 +202,7 @@
     <h2 class="card-title" id="simplefin-orphans-heading">No longer reported by SimpleFIN</h2>
     <p class="text-sm opacity-80 max-w-2xl">
       These accounts are still linked, but SimpleFIN's latest read did not include them. While linked, CSV imports
-      refuse rows from the cut-over on. Unlink stops that, as Ignore does. The account and its transactions stay.
+      refuse rows from the cut-over through the newest synced transaction. Unlink stops that, as Ignore does. The account and its transactions stay.
     </p>
     <form method="post">
       {% csrf_token %}

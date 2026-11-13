@@ -4,7 +4,6 @@ from datetime import date, datetime
 from django.conf import settings
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
-from django.db.models import Max
 from django.http import Http404, JsonResponse
 from django.shortcuts import redirect, render
 from django.utils import timezone
@@ -14,7 +13,7 @@ from django.views.decorators.http import require_http_methods
 from .access import request_person as _person, visible_rows
 from .category_services import current_household
 from .forms import SimpleFinSetupForm
-from .models import Account, AccountLink, ImportBatch, SimpleFinConnection, Transaction
+from .models import Account, AccountLink, SimpleFinConnection
 from .post_only import post_only
 from .reauth import requires_recent_auth
 from .security_services import EVENT_TYPES, record_security_event
@@ -27,7 +26,7 @@ from .simplefin_budget import (
 )
 from .simplefin_errors import SimpleFinAlreadyClaimed, SimpleFinError, SimpleFinRateLimited
 from .simplefin_flow import BRIDGE_URL, FlowError, cancel_flow, check_flow, start_flow
-from .simplefin_health import bank_rows, stored_read
+from .simplefin_health import bank_rows, last_synced_days, stored_read
 from .simplefin_schedule import next_scheduled_sync
 from .simplefin_services import (
     claim_connection,
@@ -180,7 +179,7 @@ def _orphaned_links(person, connection, remotes, load_error):
         .values("simplefin_account_id", "account_id", "account__name", "cutover_date")
     )
     visible = set(visible_rows(Account, person).values_list("pk", flat=True))
-    last_synced = _last_synced_days({link["account_id"] for link in links} & visible)
+    last_synced = last_synced_days({link["account_id"] for link in links} & visible)
     rows = []
     for link in links:
         shown = link["account_id"] in visible
@@ -192,22 +191,6 @@ def _orphaned_links(person, connection, remotes, load_error):
             "cutover": link["cutover_date"] if shown else None,
         })
     return rows
-
-
-def _last_synced_days(account_ids):
-    """Each account's newest active SimpleFIN transaction date, in one grouped query."""
-    if not account_ids:
-        return {}
-    rows = (
-        Transaction.objects.filter(
-            account_id__in=account_ids,
-            status=Transaction.Status.ACTIVE,
-            import_batch__source=ImportBatch.Source.SIMPLEFIN,
-        )
-        .values("account_id")
-        .annotate(latest=Max("transaction_date"))
-    )
-    return {row["account_id"]: row["latest"] for row in rows}
 
 
 def _handle_orphans(request, connection, orphans, load_error):

@@ -31,7 +31,8 @@ from tests.test_simplefin import (
 HEADING = "No longer reported by SimpleFIN"
 LINKED_ID = "CON-1:sf-checking"
 CUTOVER = date(2026, 3, 1)
-COVERED = "Covered by SimpleFIN from 2026-03-01."
+# An orphaned link is failing (#735): it still claims the days through its last synced row.
+COVERED = "Covered by SimpleFIN through 2026-03-10."
 
 
 @pytest.fixture
@@ -171,7 +172,7 @@ def test_an_orphaned_link_to_an_account_no_longer_visible_does_not_show_its_name
 
 CSV = (
     b"When,Memo,Amount,Currency\n"
-    b"03/16/2026,SYNTHETIC AFTER CUTOVER,-3.00,USD\n"
+    b"03/05/2026,SYNTHETIC SYNCED PERIOD,-3.00,USD\n"
 )
 
 

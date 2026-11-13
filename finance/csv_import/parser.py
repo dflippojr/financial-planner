@@ -108,6 +108,8 @@ class PreviewRow:
 @dataclass(frozen=True)
 class Preview:
     rows: tuple[PreviewRow, ...]
+    # The account's SimpleFIN window (services.SimpleFinWindow), or None when unlinked.
+    simplefin_window: object | None = None
 
     @property
     def valid_count(self):
