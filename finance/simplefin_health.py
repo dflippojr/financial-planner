@@ -217,12 +217,17 @@ def find_bank(connection, conn_id) -> dict | None:
 
 
 def _read_moment(connection) -> datetime | None:
-    """When the newest successful read happened: the stored read's time, else the last good sync."""
+    """Since when a successful read is known: the stored read's time, else when the connection was made.
+
+    Every successful read stores itself (#694), so with no stored read none
+    has succeeded since the connection was made. last_sync_at is no use here:
+    a failed sync stamps it too.
+    """
     try:
         moment = datetime.fromisoformat(stored_read(connection).get("at") or "")
     except (TypeError, ValueError):
         moment = None
-    return moment or connection.last_sync_at
+    return moment or connection.created_at
 
 
 def _link_bank_key(simplefin_account_id: str) -> str:
@@ -256,9 +261,9 @@ def link_is_failing(link, now=None) -> bool:
 
     Read from stored state only, never a live request. Failing means any of:
     the connection is disabled after SimpleFIN refused its credentials; no
-    read has succeeded for LINK_FAILING_AFTER; the newest read lists an error
-    for the account's bank; or the newest read no longer lists the account.
-    A connection with no read recorded at all is not judged failing.
+    read has succeeded for LINK_FAILING_AFTER (counted from when the
+    connection was made if it has no stored read); the newest read lists an
+    error for the account's bank; or the newest read no longer lists the account.
     """
     connection = link.connection
     if connection.disabled:
