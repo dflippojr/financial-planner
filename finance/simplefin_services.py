@@ -887,6 +887,24 @@ def _sync_one_link(person, connection, link, remote, synced_at, payload, rates, 
     return imported, moved is not None
 
 
+def _refresh_calculated(person, account_ids):
+    """Recalculate saved calculated balances after a sync has committed (#641).
+
+    Late rows dated on or before the anchor change them. Each account gets its
+    own short transaction that locks only that account: the sync itself holds
+    no account locks while transfer matching locks counterpart accounts in
+    primary-key order, so neither can deadlock the other. The plain lock comes
+    first, so the refresh's own query starts after any concurrent Save
+    calculated balances has committed.
+    """
+    from finance.calculated_balances import refresh_calculated_balances
+
+    for account_id in sorted(account_ids):
+        with transaction.atomic():
+            Account.objects.select_for_update(of=("self",)).filter(pk=account_id).first()
+            refresh_calculated_balances(person, account_id)
+
+
 @member_operation
 @notify_after_alert_run
 def sync_connection(principal, connection_id, *, ignore_rate_limit=False, scheduled=None) -> dict:
@@ -927,8 +945,9 @@ def sync_connection(principal, connection_id, *, ignore_rate_limit=False, schedu
     # Like the fetch, rate lookups run before the transaction and household lock.
     rates = _load_rates(plan.links, payload)
     result, failure = _apply_sync(person, connection_id, plan, payload, rates, ignore_rate_limit=ignore_rate_limit)
-    if failure is not None:
-        raise failure
+    if failure is not None or result is None:
+        raise failure or SimpleFinError(UNEXPECTED_FAILURE)
+    _refresh_calculated(person, result.pop("_synced_account_ids"))
     return result
 
 
@@ -1140,6 +1159,8 @@ def _apply_sync(person, connection_id, plan, payload, rates, *, ignore_rate_limi
         "unconverted": unconverted,
         # The page that ran the sync shows every skipped account in full.
         "result": " ".join([head, *unconverted, *tail]),
+        # Popped by sync_connection, which refreshes calculated balances once this commits.
+        "_synced_account_ids": syncable_ids,
     }, None
 
 

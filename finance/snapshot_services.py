@@ -45,6 +45,13 @@ def _record_snapshot(person, account, snapshot, action, changed=()):
     record(person, action, AuditEvent.TargetType.BALANCE, snapshot.pk, audience={"account": account}, fields=changed)
 
 
+def _refresh_calculated(person, account):
+    # A manual balance may be, or become, the anchor of saved calculated rows (#676).
+    from .calculated_balances import refresh_calculated_balances
+
+    refresh_calculated_balances(person, account.pk)
+
+
 def _apply_manual_fields(person, account, snapshot, *, snapshot_date, amount_minor, note, net_contribution_minor):
     before = audit_snapshot(snapshot, SNAPSHOT_AUDIT_FIELDS)
     note_changed = snapshot.note != note
@@ -74,7 +81,7 @@ def record_manual_snapshot(principal, account_id, *, snapshot_date, amount_minor
         .first()
     )
     if existing is not None:
-        return _apply_manual_fields(
+        updated = _apply_manual_fields(
             person,
             account,
             existing,
@@ -83,6 +90,8 @@ def record_manual_snapshot(principal, account_id, *, snapshot_date, amount_minor
             note=note,
             net_contribution_minor=net_contribution_minor,
         )
+        _refresh_calculated(person, account)
+        return updated
     try:
         created = BalanceSnapshot.objects.create(
             account=account,
@@ -96,6 +105,7 @@ def record_manual_snapshot(principal, account_id, *, snapshot_date, amount_minor
     except IntegrityError as exc:
         raise SnapshotError(DUPLICATE_MANUAL) from exc
     _record_snapshot(person, account, created, AuditEvent.Action.RECORD_CREATED)
+    _refresh_calculated(person, account)
     return created
 
 
@@ -103,8 +113,9 @@ def record_manual_snapshot(principal, account_id, *, snapshot_date, amount_minor
 def update_manual_snapshot(principal, account_id, snapshot_id, *, snapshot_date, amount_minor, note="", net_contribution_minor=None):
     account = _lock_editable_account(principal, account_id)
     snapshot = _lock_manual_snapshot(account, snapshot_id)
-    return _apply_manual_fields(
-        _person_for(principal),
+    person = _person_for(principal)
+    updated = _apply_manual_fields(
+        person,
         account,
         snapshot,
         snapshot_date=snapshot_date,
@@ -112,6 +123,8 @@ def update_manual_snapshot(principal, account_id, snapshot_id, *, snapshot_date,
         note=note,
         net_contribution_minor=net_contribution_minor,
     )
+    _refresh_calculated(person, account)
+    return updated
 
 
 @transaction.atomic
@@ -120,5 +133,7 @@ def delete_manual_snapshot(principal, account_id, snapshot_id):
     snapshot = _lock_manual_snapshot(account, snapshot_id)
     target_id = snapshot.pk
     snapshot.delete()
-    record(_person_for(principal), AuditEvent.Action.RECORD_DELETED, AuditEvent.TargetType.BALANCE, target_id,
+    person = _person_for(principal)
+    record(person, AuditEvent.Action.RECORD_DELETED, AuditEvent.TargetType.BALANCE, target_id,
            audience={"account": account})
+    _refresh_calculated(person, account)

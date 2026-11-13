@@ -14,6 +14,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from .audit_services import record
+from .calculated_balances import refresh_calculated_balances
 from .category_services import assignable_categories
 from .csv_import.fingerprint import manual_entry_fingerprint
 from .csv_import.services import archive_batch, categorize_imported_batch
@@ -100,6 +101,7 @@ def _create_manual_entry(person, account_id, *, transaction_date, amount_minor, 
         category_source=Transaction.CategorySource.MANUAL if category else Transaction.CategorySource.UNSET,
     )
     entry.tags.set(tags)
+    refresh_calculated_balances(person, account.pk)
     record(person, AuditEvent.Action.RECORD_CREATED, AuditEvent.TargetType.TRANSACTION, entry.pk,
            audience={"account": account}, metadata={"batch_id": batch.pk, "format": "manual"})
     return entry
