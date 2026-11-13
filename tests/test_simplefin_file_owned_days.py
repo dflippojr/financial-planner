@@ -18,7 +18,7 @@ from django.urls import reverse
 
 from finance.csv_import.parser import preview_csv, read_csv
 from finance.csv_import.services import commit_csv_import, undo_import_batch
-from finance.models import AccountLink, ImportBatch, Transaction
+from finance.models import Account, AccountLink, ImportBatch, Transaction
 from tests.properties import harness as ledger
 from tests.properties.strategies import Row
 from tests.test_csv_failing_link import (
@@ -255,3 +255,48 @@ def test_a_file_imported_while_the_link_is_healthy_owns_no_days():
     assert [source for _day, _amount, source in _ledger(checking)] == [SF] * 5
     page = signed_in(owner).get(reverse("simplefin-connections")).content.decode()
     assert "skips SimpleFIN transactions" not in page
+
+
+# Serializing a sync with a file import (review of #744) ----------------------
+
+
+def _locks_on(sql, table, pk):
+    return [i for i, q in enumerate(sql) if q.lstrip().startswith("SELECT") and f'FROM "{table}"' in q
+            and "FOR " in q and "UPDATE" in q and str(pk) in q]
+
+
+@pytest.mark.django_db
+def test_a_member_without_a_household_serializes_a_sync_and_a_file_import():
+    """Without a household the membership locks lock nothing, so both take the member's own row first.
+
+    Otherwise a gap import could commit between the sync's read of the
+    file-owned days and its writes, and both would supply those days.
+    """
+    from django.db import connection as db_connection
+    from django.test.utils import CaptureQueriesContext
+
+    from finance.models import Person
+
+    if not db_connection.features.has_select_for_update:
+        pytest.skip("Row locks need PostgreSQL")
+    owner = ledger.make_member()
+    checking = ledger.make_account(owner, Account.Type.CHECKING)
+    connection = ledger.link_simplefin(owner, checking, CUTOVER)
+    ledger.sync(owner, connection, SYNCED)
+    _fail(owner, connection)
+    person = Person.objects.get(pk=owner.pk)
+
+    with CaptureQueriesContext(db_connection) as queries:
+        _import_file(owner, checking, GAP_CSV)
+    sql = [query["sql"] for query in queries.captured_queries]
+    assert _locks_on(sql, "finance_person", person.pk), "the import did not lock the member"
+    assert _locks_on(sql, "finance_person", person.pk)[0] < _locks_on(sql, "finance_account", checking.pk)[0]
+
+    with CaptureQueriesContext(db_connection) as queries:
+        ledger.sync(owner, connection, SYNCED + BACKFILL + LATER)
+    sql = [query["sql"] for query in queries.captured_queries]
+    first_write = next(i for i, q in enumerate(sql) if q.lstrip().startswith('INSERT INTO "finance_transaction"'))
+    # The lock the sync holds while it reads the owned days and writes rows.
+    connection_lock = max(i for i in _locks_on(sql, "finance_simplefinconnection", connection.pk) if i < first_write)
+    assert any(i < connection_lock for i in _locks_on(sql, "finance_person", person.pk)), "the sync did not lock the member"
+    assert [row for row in _ledger(checking) if row[0] == date(2026, 10, 10)] == [(date(2026, 10, 10), -500, SF)]
