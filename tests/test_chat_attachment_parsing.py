@@ -13,12 +13,14 @@ from finance.chat_attachment_parsing import AttachmentRejected, parse_upload
 from tests.chat_attachment_fixtures import (
     BUDGET_CSV,
     MAIN_NS,
+    STRICT_MAIN_NS,
     budget_xlsx,
     encrypted_office_file,
     legacy_xls_file,
     make_pdf,
     make_xlsx,
     rows_xml,
+    to_strict,
     upload,
 )
 
@@ -191,6 +193,66 @@ def test_xlsx_with_absolute_targets_and_several_sheets():
         {"name": "One", "rows": 1, "columns": 1},
         {"name": "Two lines", "rows": 2, "columns": 1},
     ]
+
+
+_DATE_STYLES = (
+    '<numFmts count="1"><numFmt numFmtId="164" formatCode="yyyy\\-mm\\-dd"/></numFmts>'
+    '<cellXfs><xf numFmtId="0"/><xf numFmtId="164"/></cellXfs>'
+)
+
+
+def test_strict_ooxml_workbook_is_read():
+    # Excel's "Strict Open XML Spreadsheet" (#678): the workbook and sheet relationships use the
+    # ISO/IEC 29500 Strict namespaces, so r:id is not in the Transitional relationships namespace.
+    strict_main = "http://purl.oclc.org/ooxml/spreadsheetml/main"
+    strict_rel = "http://purl.oclc.org/ooxml/officeDocument/relationships"
+    pkg_rel = "http://schemas.openxmlformats.org/package/2006/relationships"
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')
+        archive.writestr("xl/workbook.xml", (
+            f'<workbook xmlns="{strict_main}" xmlns:r="{strict_rel}" conformance="strict">'
+            '<sheets><sheet name="Budget" sheetId="1" r:id="rId1"/></sheets></workbook>'))
+        archive.writestr("xl/_rels/workbook.xml.rels", (
+            f'<Relationships xmlns="{pkg_rel}"><Relationship Id="rId1" Type="{strict_rel}/worksheet" '
+            'Target="worksheets/sheet1.xml"/></Relationships>'))
+        archive.writestr("xl/worksheets/sheet1.xml", (
+            f'<worksheet xmlns="{strict_main}"><sheetData>'
+            '<row r="1"><c r="A1" t="inlineStr"><is><t>Category</t></is></c>'
+            '<c r="B1" t="inlineStr"><is><t>Monthly budget</t></is></c></row>'
+            '<row r="2"><c r="A2" t="inlineStr"><is><t>Synthetic groceries</t></is></c><c r="B2"><v>400</v></c></row>'
+            "</sheetData></worksheet>"))
+    try:
+        parsed = parse_upload(upload("synthetic-strict.xlsx", buffer.getvalue()))
+    except AttachmentRejected as exc:
+        raise AssertionError(f"Strict workbook refused: {exc}") from None
+    assert parsed.content["sheets"][0]["rows"] == [
+        [1, ["Category", "Monthly budget"]], [2, ["Synthetic groceries", "400"]]]
+
+
+@pytest.mark.parametrize("build", [
+    lambda: make_xlsx([("One", rows_xml([["a", 1]])), ("Two", rows_xml([["b"], ["c"]]))]),
+    lambda: make_xlsx(
+        [("Dates", '<row r="1"><c r="A1" s="1"><v>46023</v></c><c r="B1" t="s"><v>0</v></c></row>')],
+        shared_strings="<si><t>Rent</t></si>", styles=_DATE_STYLES, date1904=True),
+    lambda: make_xlsx(
+        [("Budget", rows_xml([["Rent", 1200]]))],
+        extra_rels=(
+            '<Relationship Id="rIdC" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet" '
+            'Target="chartsheets/sheet9.xml"/>')),
+], ids=["several-sheets", "shared-strings-and-1904-dates", "non-worksheet-relationships"])
+def test_a_strict_workbook_reads_exactly_like_its_transitional_twin(build):
+    # Class-level check for #678: any Strict workbook must read the same as the Transitional
+    # workbook it was rewritten from, so no relationship or sheet attribute is read in one flavour only.
+    transitional = build()
+    strict = to_strict(transitional)
+    with zipfile.ZipFile(io.BytesIO(strict)) as archive:
+        assert any(STRICT_MAIN_NS.encode() in archive.read(name) for name in archive.namelist())
+    expected = parse_upload(upload("budget.xlsx", transitional))
+    assert _rows(expected)  # The twin is not empty, so equality means something.
+    parsed = parse_upload(upload("budget.xlsx", strict))
+    assert parsed.content == expected.content
+    assert parsed.summary == expected.summary
 
 
 def test_xlsx_with_a_dtd_is_refused():
