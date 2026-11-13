@@ -1,6 +1,7 @@
 from finance.csv_import.staging import _path as _stage_file_path
 import json
 from datetime import date
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -134,6 +135,32 @@ def test_csv_errors_do_not_include_cell_values():
         parsed_month_totals(rows, mapping)
     assert "secret-payee" not in str(exc.value)
     assert "not-a-month" not in str(exc.value)
+
+
+@pytest.mark.parametrize("tail", [b"\n\n", b",,\n,,\n"], ids=["blank-lines", "delimiter-only-rows"])
+def test_sheet_comparison_ignores_trailing_empty_rows(tail):
+    raw = b"Month,Income,Spending\n2026-01,100.00,50.00\n2026-02,200.00,75.00\n" + tail
+    _headers, rows = read_sheet_csv(raw)
+    mapping = SimpleNamespace(
+        month_column="Month",
+        income_column="Income",
+        spending_column="Spending",
+        spending_sign="unsigned",
+    )
+    assert len(parsed_month_totals(rows, mapping)) == 2  # raises SheetCsvError on main
+
+
+def test_all_blank_rows_do_not_count_toward_the_month_row_limit():
+    from finance.sheet_comparison import MAX_MONTH_ROWS
+
+    month_rows = b"".join(
+        f"{2000 + index // 12}-{index % 12 + 1:02d},1.00,1.00\n".encode() for index in range(MAX_MONTH_ROWS)
+    )
+    blanks = b",,\n" * 50 + b"\n" * 50
+    _headers, rows = read_sheet_csv(b"Month,Income,Spending\n" + blanks + month_rows + blanks)
+    assert len(rows) == MAX_MONTH_ROWS
+    with pytest.raises(SheetCsvError, match="too many month rows"):
+        read_sheet_csv(b"Month,Income,Spending\n" + month_rows + b"2100-01,1.00,1.00\n")
 
 
 @pytest.mark.django_db

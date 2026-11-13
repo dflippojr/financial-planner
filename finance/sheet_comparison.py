@@ -120,8 +120,12 @@ def read_sheet_csv(raw_bytes):
         raise SheetCsvError("Column names must be unique and non-empty.")
     rows = []
     try:
-        for number, cells in enumerate(reader, start=2):
-            if number - 1 > MAX_MONTH_ROWS:
+        for cells in reader:
+            # An empty line, or one made only of delimiters, is not a month row.
+            # Skip it before counting so spreadsheet padding never hits the limit.
+            if all(not cell.strip() for cell in cells):
+                continue
+            if len(rows) >= MAX_MONTH_ROWS:
                 raise SheetCsvError("The CSV has too many month rows.")
             if len(cells) < len(headers):
                 cells = list(cells) + [""] * (len(headers) - len(cells))

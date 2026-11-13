@@ -82,6 +82,26 @@ def budget_xlsx():
     return make_xlsx([("Budget", rows_xml([["Category", "Monthly budget"], ["Groceries", 400], ["Dining", 150]]))])
 
 
+# ISO/IEC 29500 Strict namespaces (Excel's "Strict Open XML Spreadsheet"). The OPC package
+# namespaces are the same in both flavours, so only these two change.
+STRICT_MAIN_NS = "http://purl.oclc.org/ooxml/spreadsheetml/main"
+STRICT_REL_NS = "http://purl.oclc.org/ooxml/officeDocument/relationships"
+
+
+def to_strict(data: bytes) -> bytes:
+    """The same workbook with every Transitional spreadsheet or relationship namespace swapped for its Strict one."""
+    source = zipfile.ZipFile(io.BytesIO(data))
+    buffer = io.BytesIO()
+    with source, zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as target:
+        for info in source.infolist():
+            payload = source.read(info.filename)
+            if info.filename.endswith((".xml", ".rels")):
+                payload = payload.replace(MAIN_NS.encode(), STRICT_MAIN_NS.encode())
+                payload = payload.replace(REL_NS.encode(), STRICT_REL_NS.encode())
+            target.writestr(info.filename, payload)
+    return buffer.getvalue()
+
+
 def make_pdf(pages, *, user_password=None, owner_password=None):
     """A PDF whose pages carry the given text in Helvetica; optionally encrypted."""
     writer = PdfWriter()
