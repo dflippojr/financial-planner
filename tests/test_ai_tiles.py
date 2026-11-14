@@ -13,7 +13,7 @@ from django.utils import timezone
 
 from finance.ai_services import connect_harness
 from finance.ai_tiles import TILES, sanitize_tile, tile_data_shareable
-from finance.ai_tools import cash_flow_totals, default_tools, list_budgets, list_planned_items, net_worth_series, spending_by_category, projected_cash_flow_tool, search_transactions
+from finance.ai_tools import HOUSEHOLD_SCOPE_WITHHELD, cash_flow_totals, default_tools, list_budgets, list_planned_items, net_worth_series, spending_by_category, projected_cash_flow_tool, search_transactions
 from finance.category_services import ensure_household_categories
 from finance.chat_proposals import proposal_tools
 from finance.chat_services import _harness_context, sanitize_page_context
@@ -565,14 +565,18 @@ def test_monthly_budget_bead_requires_consent_for_the_spending_it_displays(membe
     response = client.get(reverse("budgets"), {"month": "2026-01"})
     card = response.context["overall_cards"][0]
     assert card.spent_minor == (1000 if budget_scope == "private" else 900)
-    rows = json.loads(list_budgets(person, {"month": "2026-01", "scope": budget_scope}).text)["rows"]
+    listed = list_budgets(person, {"month": "2026-01", "scope": budget_scope})
     html = response.content.decode()
     if consented:
         assert 'Ask AI about Monthly total' in html
-        assert [row["spent_minor"] for row in rows] == [card.spent_minor]
+        assert [row["spent_minor"] for row in json.loads(listed.text)["rows"]] == [card.spent_minor]
     else:
         assert 'Ask AI about Monthly total' not in html
-        assert [row["spent_minor"] for row in rows] == ([100] if budget_scope == "private" else [])
+        if budget_scope == "private":
+            assert [row["spent_minor"] for row in json.loads(listed.text)["rows"]] == [100]
+        else:
+            # A household scope waits for consent rather than answering with no budgets (#677).
+            assert not listed.ok and listed.text == HOUSEHOLD_SCOPE_WITHHELD
         assert 'data-ai-bead' in render_bead(user, kind="cash-flow-totals", filters={"scope": "private"})
 
 
