@@ -64,6 +64,11 @@
     Rows dated {{ window.accepted_from|date:"Y-m-d" }} or later are accepted{% if window.last_synced and window.last_synced >= window.cutover %};
     rows from {{ window.cutover|date:"Y-m-d" }} through {{ window.last_synced|date:"Y-m-d" }} came from SimpleFIN and are refused{% endif %}.
     You do not need to trim the file.
+    {% if file_will_own %}
+    This file will own {{ file_will_own.0|date:"Y-m-d" }} through {{ file_will_own.1|date:"Y-m-d" }}: once it is imported,
+    the sync skips SimpleFIN transactions posted on or before {{ file_will_own.1|date:"Y-m-d" }}, even after the link
+    recovers. Undo the import to hand those days back to SimpleFIN.
+    {% endif %}
   </span>
 </div>
 {% endif %}

@@ -609,6 +609,11 @@ class ImportBatch(ArchivableModel):
     # asked for. Nothing covers the days from here to date_range_start, and the
     # missing-import warning counts the account's history from here (#640).
     requested_from = models.DateField(null=True, blank=True)
+    # A file imported while the account's transactions-mode SimpleFIN link was
+    # failing (#735, #743): the last day it owns. The sync skips SimpleFIN rows
+    # posted on or before the latest value among active batches. Null for every
+    # other batch, and cleared when the batch is undone.
+    owns_simplefin_through = models.DateField(null=True, blank=True)
     imported_at = models.DateTimeField(auto_now_add=True)
     saved_csv_mapping = models.ForeignKey(
         SavedCsvMapping,

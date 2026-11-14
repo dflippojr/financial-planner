@@ -219,6 +219,14 @@ class FailingLinkCase:
     world: tuple
     csv_files: tuple
     steps: tuple
+    # Rows after every file's days, which only a recovered feed sees (#743).
+    later: tuple = ()
+    recover: bool = False
+
+
+# A world row is dated at most 45 days after the cut-over and posts at most 6
+# days later, so a row from here on is after every day a file covers.
+AFTER_THE_FILES = 52
 
 
 @st.composite
@@ -227,7 +235,9 @@ def failing_link_cases(draw):
 
     The feed holds every row posted from the cut-over through `last_synced`;
     later rows reach the ledger only through a file. Files may repeat any row,
-    including ones the feed already supplied, and arrive in any order.
+    including ones the feed already supplied, and arrive in any order. Then the
+    link may recover (#743): its feed holds every world row from the cut-over
+    on, the gap rows included, and later rows no file has.
     """
     shape = draw(st.sampled_from((HUNTINGTON, CAPITAL_ONE, APPLE_CARD)))
     cutover = draw(st.dates(date(2025, 3, 1), date(2026, 8, 1)))
@@ -245,8 +255,11 @@ def failing_link_cases(draw):
                 csv_files[file].append(row)
     steps = draw(st.permutations(list(range(file_count)) + draw(st.lists(st.integers(0, file_count - 1),
                                                                          max_size=2))))
+    later = draw(rows(max_size=3, unique=True, lag_strategy=_card_lags(shape),
+                      day_strategy=st.integers(AFTER_THE_FILES, 70).map(lambda offset: shifted(cutover, offset))))
+    recover = draw(st.booleans())
     return FailingLinkCase(shape, cutover, last_synced, draw(st.booleans()), tuple(world),
-                           tuple(map(tuple, csv_files)), tuple(steps))
+                           tuple(map(tuple, csv_files)), tuple(steps), tuple(later) if recover else (), recover)
 
 
 def _failing_read(absent):
@@ -266,6 +279,12 @@ def _failing_read(absent):
                           Row(date(2026, 3, 6), -1200, "SYN CAFE N1", "", "SYN-00001", None)),
                          ((Row(date(2026, 3, 5), -2500, "SYN GROCER N0", "", "SYN-00000", None),
                            Row(date(2026, 3, 6), -1200, "SYN CAFE N1", "", "SYN-00001", None)),), (0,)))
+# Gap then recover (#743): the feed's copy of the 03-06 gap row is skipped, and its later row lands.
+@example(FailingLinkCase(HUNTINGTON, date(2026, 3, 1), date(2026, 3, 5), False,
+                         (Row(date(2026, 3, 5), -2500, "SYN GROCER N0", "", "SYN-00000", None),
+                          Row(date(2026, 3, 6), -1200, "SYN CAFE N1", "", "SYN-00001", None)),
+                         ((Row(date(2026, 3, 6), -1200, "SYN CAFE N1", "", "SYN-00001", None),),), (0,),
+                         (Row(date(2026, 4, 22), -700, "SYN SHOP N0 LATER", "", "SYN-00000-L", None),), True))
 def test_files_fill_a_failing_links_gap_and_count_each_transaction_once(case):
     with ledger.isolated():
         owner, account = _new_member_with_account(case.shape)
@@ -277,16 +296,26 @@ def test_files_fill_a_failing_links_gap_and_count_each_transaction_once(case):
             sync_connection(owner, connection.pk, ignore_rate_limit=True)
         for index in case.steps:
             ledger.import_rows(owner, account, case.shape, list(case.csv_files[index]))
+        later = [(f"L{index}", _feed_row(f"L{index}", row)) for index, row in enumerate(case.later)]
+        if case.recover:
+            # The link recovers and SimpleFIN backfills every day from the cut-over (#743).
+            backfill = [(index, _feed_row(index, row)) for index, row in enumerate(case.world)
+                        if posted_day(row) >= case.cutover]
+            ledger.sync(owner, connection, backfill + later)
 
-        # The feed owns its days; a file owns the days before the cut-over and after the feed stopped.
+        # The feed owns its days; a file owns the days before the cut-over and
+        # after the feed stopped, even once the feed recovers; the recovered
+        # feed owns the days after every file.
         expected_rows = Counter(
             (posted_day(row), row.amount_minor, "USD", _feed_row(index, row).payee)
             if case.cutover <= posted_day(row) <= case.last_synced
             else (row.day, row.amount_minor, "USD", case.shape.stored_description(row))
             for index, row in enumerate(case.world)
         )
+        expected_rows.update((posted_day(row), row.amount_minor, "USD", row.payee) for _key, row in later)
         assert ledger.content_counter([account]) == expected_rows
-        assert ledger.totals(owner, [account]) == ledger.expected_totals([row.amount_minor for row in case.world])
+        amounts = [row.amount_minor for row in (*case.world, *case.later)]
+        assert ledger.totals(owner, [account]) == ledger.expected_totals(amounts)
 
 
 @dataclass(frozen=True)

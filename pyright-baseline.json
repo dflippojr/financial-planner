@@ -1824,12 +1824,6 @@
   "count": 2
  },
  {
-  "file": "finance/simplefin_services.py",
-  "rule": "reportReturnType",
-  "message": "Type \"dict[str, Unknown] | None\" is not assignable to return type \"dict[Unknown, Unknown]\"",
-  "count": 1
- },
- {
   "file": "finance/simplefin_views.py",
   "rule": "reportAttributeAccessIssue",
   "message": "Cannot access attribute \"account_id\" for class \"AccountLink\"",

@@ -20,6 +20,7 @@ from .models import (
     RecurringSeries,
     RecurringSeriesMember,
     RefundLink,
+    SimpleFinConnection,
     Transaction,
     TransactionCorrectionHistory,
     TransactionTag,
@@ -59,6 +60,25 @@ def lock_actor_household(person):
         .order_by("pk")
     )
     own = next((m for m in memberships if m.pk == reference["pk"]), None)
+    return own, memberships
+
+
+def lock_ledger_writer(person):
+    """lock_actor_household, and for a member with no current household, their SimpleFIN connection.
+
+    A file import and a SimpleFIN sync both write one account's ledger, and the
+    sync reads the days file imports own before it writes (#743). In a
+    household the membership locks serialize them. A member with none locks
+    nothing there and can import only into accounts they alone see, which only
+    their own connection syncs; the sync locks that connection row before it
+    reads or writes, so a file import takes it first too. Nothing locks the
+    connection after a ledger or recurring lock, so this adds no lock cycle
+    (a Person row lock would: the recurring refresh updates the member after
+    locking their series). Returns what lock_actor_household returns.
+    """
+    own, memberships = lock_actor_household(person)
+    if own is None:
+        list(SimpleFinConnection.objects.select_for_update().filter(owner=person).order_by("pk").values_list("pk"))
     return own, memberships
 
 

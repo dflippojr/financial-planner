@@ -54,6 +54,7 @@ from .saved_mappings import (
 )
 from .services import (
     MAPPING_CHANGED,
+    SimpleFinWindow,
     categorize_imported_batch,
     classify_overlap,
     commit_csv_import,
@@ -229,8 +230,24 @@ def _import_batches(request, account):
     )
 
 
+def _days_file_will_own(preview, mapping_form):
+    """(first, last) days this file will own once imported while its link is failing (#743), or None.
+
+    The file owns from the first day the failing link accepts through the day
+    the commit stores (SimpleFinWindow.owned_through): the later of the date
+    range the member confirms and the latest day among the rows it accepts.
+    """
+    window = getattr(preview, "simplefin_window", None)
+    if not isinstance(window, SimpleFinWindow) or window.accepted_from is None:
+        return None
+    end = (getattr(mapping_form, "cleaned_data", None) or {}).get("date_range_end")
+    through = window.owned_through(preview.rows, end)
+    return (window.accepted_from, through) if through is not None else None
+
+
 def _render_preview(request, account, context):
     context.setdefault("upload_form", _upload_form(request, account))
+    context["file_will_own"] = _days_file_will_own(context.get("preview"), context.get("mapping_form"))
     context["account"] = account
     context["import_batches"] = _import_batches(request, account)
     if request.method == "GET":

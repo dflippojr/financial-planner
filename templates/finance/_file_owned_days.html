@@ -1,0 +1,8 @@
+{% comment %}The days file imports own after a SimpleFIN cut-over (#743). Takes owned, a simplefin_file_days.OwnedDays.{% endcomment %}
+{% if owned %}
+<p class="text-xs opacity-70 mb-2" data-testid="file-owned-days">
+  {% if owned.ranges %}File imports own {% for span in owned.ranges %}{{ span.0|date:"Y-m-d" }} through {{ span.1|date:"Y-m-d" }}{% if not forloop.last %}{% if forloop.revcounter == 2 %} and {% else %}, {% endif %}{% endif %}{% endfor %}.{% else %}A file import's date range reaches {{ owned.through|date:"Y-m-d" }}.{% endif %}
+  The sync skips SimpleFIN transactions posted on or before {{ owned.through|date:"Y-m-d" }}, so no day is counted twice.
+  Undo a file import to hand its days back to SimpleFIN.
+</p>
+{% endif %}
