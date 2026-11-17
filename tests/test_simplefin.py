@@ -13,7 +13,8 @@ from django.test import Client
 from django.urls import reverse
 from django.utils import timezone
 
-from finance.category_services import ensure_household_categories, exclusion_exists_for
+from finance.category_services import ensure_household_categories
+from finance.ledger_counting import exclusion_exists_for
 from finance.csv_import.services import undo_import_batch
 from finance.encryption import decrypt_access_url
 from finance.models import (

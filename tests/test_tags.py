@@ -11,13 +11,11 @@ from django.db import IntegrityError, transaction
 from django.test import Client
 from django.urls import reverse
 
-from finance.category_services import (
-    ensure_household_categories,
-    income_and_spending_totals,
-    link_refund,
-    refresh_transfer_pairs,
-    split_transaction,
-)
+from finance.category_services import ensure_household_categories
+from finance.ledger_counting import income_and_spending_totals
+from finance.refund_links import link_refund
+from finance.splits import split_transaction
+from finance.transfer_pairing import refresh_transfer_pairs
 from finance.csv_import.parser import Mapping, read_csv
 from finance.csv_import.services import commit_csv_import
 from finance.export import collect_export_tables, write_export_zip

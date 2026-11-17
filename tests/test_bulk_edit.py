@@ -19,12 +19,9 @@ from finance.bulk_edit_services import (
     preview_bulk_edit,
     undo_bulk_edit,
 )
-from finance.category_services import (
-    assign_category,
-    ensure_household_categories,
-    link_refund,
-    split_transaction,
-)
+from finance.category_services import assign_category, ensure_household_categories
+from finance.refund_links import link_refund
+from finance.splits import split_transaction
 from finance.category_suggestion_services import accept_suggestion, snapshot_hash
 from finance.models import (
     Account,

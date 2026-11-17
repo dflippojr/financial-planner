@@ -18,7 +18,7 @@ from django.utils import timezone
 from .access import DENIED as _DENIED
 from .access import require_person as _person_for
 from .cash_flow import default_date_range, format_minor, selected_accounts
-from .category_services import income_and_spending_totals
+from .ledger_counting import income_and_spending_totals
 from .models import SheetComparisonSettings, SheetMonthTotal
 from .months import month_end, month_start
 

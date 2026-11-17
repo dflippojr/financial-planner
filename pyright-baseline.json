@@ -1290,12 +1290,6 @@
   "count": 1
  },
  {
-  "file": "finance/pairing_services.py",
-  "rule": "reportAttributeAccessIssue",
-  "message": "Cannot access attribute \"visible_to\" for class \"BaseManager[Account]\"",
-  "count": 1
- },
- {
   "file": "finance/passkey_services.py",
   "rule": "reportArgumentType",
   "message": "Argument of type \"list[Any] | list[Literal['http://localhost', 'http://127.0.0.1', 'http://testserver']]\" cannot be assigned to parameter \"expected_origin\" of type \"str | List[str]\" in function \"verify_authentication_response\"",

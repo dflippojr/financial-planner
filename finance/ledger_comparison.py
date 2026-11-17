@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from django.utils import timezone
 
 from .cash_flow import selected_accounts
-from .category_services import income_and_spending_totals
+from .ledger_counting import income_and_spending_totals
 from .months import month_end, month_start
 from .sheet_comparison import parsed_month_totals
 

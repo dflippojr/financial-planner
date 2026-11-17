@@ -12,7 +12,8 @@ from django.contrib.auth import get_user_model
 from django.urls import reverse
 
 from finance.cash_flow import format_minor
-from finance.category_services import SPLIT_SUM_ERROR, dismiss_transfer_pair, split_transaction
+from finance.splits import SPLIT_SUM_ERROR, split_transaction
+from finance.transfer_pairing import dismiss_transfer_pair
 from finance.category_suggestion_services import reject_suggestion, snapshot_hash
 from finance.chat_cleanup_cards import (
     ALREADY_SPLIT,

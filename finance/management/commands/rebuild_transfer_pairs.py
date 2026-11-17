@@ -3,7 +3,7 @@ from finance.audit_operations import outcome
 from finance.audit_commands import AuditedCommand
 from django.core.management.base import CommandError
 
-from finance.category_services import refresh_transfer_pairs
+from finance.transfer_pairing import refresh_transfer_pairs
 from finance.auth_services import normalize_username
 from finance.models import Person
 

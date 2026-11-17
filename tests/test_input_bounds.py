@@ -16,7 +16,7 @@ from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 
-from finance import category_services, transfer_pairing
+from finance import transfer_pairing
 from finance.ai_services import AiError
 from finance.alert_services import unread_alert_count, purge_old_read_alerts
 from finance.budget_services import carry_start_month, parse_month, save_budget
@@ -256,7 +256,7 @@ def test_transfer_scoring_query_count_and_work_cap(monkeypatch):
         # The cap makes this adversarial equal-amount group bounded and uncertain.
         monkeypatch.setattr(transfer_pairing, "MAX_TRANSFER_CANDIDATES", 50)
         with CaptureQueriesContext(connection) as captured:
-            category_services.refresh_transfer_pairs(person, transaction_ids=[row.pk for row in rows])
+            transfer_pairing.refresh_transfer_pairs(person, transaction_ids=[row.pk for row in rows])
         queries.append(len(captured))
     assert queries[1] <= queries[0] + 10
     from finance.models import TransferPair

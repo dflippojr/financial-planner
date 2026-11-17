@@ -22,7 +22,8 @@ from .cash_flow import (
     selected_accounts,
     spending_by_category_report,
 )
-from .category_services import STARTER_CUSTOM_NAMES, current_household
+from .category_services import STARTER_CUSTOM_NAMES
+from .households import current_household
 from .models import Account, Category, PlannedItem, RecurringSeries, RecurringSeriesMember
 from .net_worth import net_worth_report
 from .planning_services import confine_recurring_series_to_accounts, projected_months_for

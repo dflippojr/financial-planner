@@ -618,7 +618,7 @@ def _saved_mapping_for(user, account):
 @pytest.mark.django_db
 @pytest.mark.parametrize("path", ["generic", "saved"])
 def test_mapped_csv_offers_only_csv_providers_and_refuses_crafted_sources(staging_settings, path):
-    from finance.category_services import income_and_spending_totals
+    from finance.ledger_counting import income_and_spending_totals
 
     user, person = make_person("owner")
     household = Household.objects.create(name="Synthetic Household")

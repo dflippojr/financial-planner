@@ -38,7 +38,7 @@ from finance.lifecycle_services import (
     update_debt_terms,
 )
 from finance.models import Account, AuditEvent, Membership, MemberSession, Passkey, RecoveryCode
-from finance.pairing_services import set_loan_secured_asset
+from finance.loan_asset_pairing import set_loan_secured_asset
 from finance.passkey_services import set_require_passkey_after_password
 from finance.policy_services import accept_policy, current_policy, decline_policy
 from finance.security_services import revoke_other_sessions_for, revoke_session_for

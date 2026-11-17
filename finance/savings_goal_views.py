@@ -10,7 +10,7 @@ from django.views.decorators.http import require_http_methods
 from .access import request_person as _person
 from .access import service_or_404 as _service_or_404
 from .access import visible_rows
-from .category_services import current_household
+from .households import current_household
 from .forms import SavingsGoalForm
 from .fund_services import monthly_set_asides, visible_fund_accounts
 from .models import PlannedItem, SavingsGoal

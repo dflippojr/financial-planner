@@ -8,7 +8,7 @@ from django.db.models.functions import Abs
 from django.urls import reverse
 
 from .access import DENIED as _DENIED
-from .category_services import exclusion_exists_for
+from .ledger_counting import exclusion_exists_for
 from .models import (
     SAVED_FILTER_QUERY_KEYS,
     Account,

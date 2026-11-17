@@ -1148,7 +1148,7 @@ def _apply_sync(person, connection_id, plan, payload, rates, *, ignore_rate_limi
 
 
 def _refresh_after_sync(person, syncable_ids, now):
-    from finance.category_services import refresh_transfer_pairs
+    from finance.transfer_pairing import refresh_transfer_pairs
     from finance.category_suggestion_services import queue_category_suggestions_for
     from finance.recurring_services import refresh_recurring_series
     from finance.rule_services import apply_enabled_rules_to_transactions

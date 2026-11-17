@@ -17,13 +17,13 @@ from django.test import Client
 from django.urls import reverse
 from django.utils.html import escape
 
-from finance import category_services, lifecycle_services
+from finance import lifecycle_services, refund_links
 from finance.cash_flow import selected_accounts
-from finance.category_services import (
+from finance.ledger_counting import income_and_spending_totals
+from finance.refund_links import link_refund
+from finance.transfer_pairing import (
     confirm_transfer_pair,
     downgrade_unevidenced_auto_marked_pairs,
-    income_and_spending_totals,
-    link_refund,
     refresh_transfer_pairs,
     undo_transfer_pair,
 )
@@ -473,7 +473,7 @@ def test_a_member_whose_link_was_dropped_for_them_alone_cannot_relink_while_anot
     with pytest.raises(ValidationError) as refused:
         link_refund(alice, refund.pk, other.pk)
 
-    assert refused.value.messages == [category_services.REFUND_LINK_STANDS]
+    assert refused.value.messages == [refund_links.REFUND_LINK_STANDS]
     assert RefundLink.objects.get(refund=refund).original_id == original_id
     assert list(RefundLinkDrop.objects.values_list("person_id", flat=True)) == [alice.pk]
     assert list(TransactionCorrectionHistory.objects.filter(transaction=refund).values_list("pk", flat=True)) == (
@@ -484,7 +484,7 @@ def test_a_member_whose_link_was_dropped_for_them_alone_cannot_relink_while_anot
 
 def test_the_refund_page_shows_the_standing_link_note_instead_of_the_link_form():
     alice, bob, refund, other = _dropped_for_alice_with_another_purchase()
-    note = escape(category_services.REFUND_LINK_STANDS)
+    note = escape(refund_links.REFUND_LINK_STANDS)
     client = Client()
     client.force_login(alice.user)
     edit_url = reverse("transaction-edit", args=[refund.pk])
@@ -516,7 +516,7 @@ def test_a_member_relinks_by_hand_where_the_link_was_deleted_for_everyone():
     response = client.post(reverse("transaction-link-refund", args=[refund.pk]), {"original": outflow.pk})
 
     assert "Link a refund" in page
-    assert escape(category_services.REFUND_LINK_STANDS) not in page
+    assert escape(refund_links.REFUND_LINK_STANDS) not in page
     assert response.status_code == 302
     assert RefundLink.objects.get(refund=refund).original_id == outflow.pk
     assert _totals(owner) == (5000, 3000)
@@ -829,7 +829,7 @@ def test_former_members_archiving_cross_linked_accounts_concurrently_do_not_dead
     bob_done = threading.Event()
     pids = {}
     errors = []
-    drop_links = category_services.drop_refund_links_to_originals
+    drop_links = refund_links.drop_refund_links_to_originals
 
     def pause_alice_before_dropping(original_ids, actor):
         # Alice holds her account's rows here, about to write history on Bob's refund.
@@ -851,7 +851,7 @@ def test_former_members_archiving_cross_linked_accounts_concurrently_do_not_dead
                 done.set()
             connections.close_all()
 
-    with patch.object(category_services, "drop_refund_links_to_originals", pause_alice_before_dropping):
+    with patch.object(refund_links, "drop_refund_links_to_originals", pause_alice_before_dropping):
         alice_archiving = threading.Thread(target=archive, args=(alice, alice_card, "alice"))
         alice_archiving.start()
         bob_archiving = threading.Thread(target=archive, args=(bob, bob_card, "bob", bob_started, bob_done))

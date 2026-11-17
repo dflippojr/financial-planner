@@ -8,15 +8,11 @@ directions, while the link itself still counts toward spending as before.
 import pytest
 
 from finance.bulk_edit_services import ACTION_CATEGORY, apply_bulk_edit, undo_bulk_edit
-from finance.category_services import (
-    assign_category,
-    assign_split_part_category,
-    income_and_spending_totals,
-    link_refund,
-    split_transaction,
-    undo_transfer_pair,
-    unsplit_transaction,
-)
+from finance.category_services import assign_category
+from finance.ledger_counting import income_and_spending_totals
+from finance.refund_links import link_refund
+from finance.splits import assign_split_part_category, split_transaction, unsplit_transaction
+from finance.transfer_pairing import undo_transfer_pair
 from finance.lifecycle_services import leave_household, unshare_account
 from finance.models import (
     Account,

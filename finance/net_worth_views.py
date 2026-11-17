@@ -26,7 +26,7 @@ from .lifecycle_services import update_debt_terms
 from .models import Account, BalanceSnapshot
 from .net_worth import net_worth_chart_data, net_worth_preset_links, net_worth_report, signed_balance_minor
 from .performance import account_performance
-from .pairing_services import PairingError, set_loan_secured_asset
+from .loan_asset_pairing import PairingError, set_loan_secured_asset
 from .post_only import post_only
 from .snapshot_services import SnapshotError, delete_manual_snapshot, record_manual_snapshot, update_manual_snapshot
 

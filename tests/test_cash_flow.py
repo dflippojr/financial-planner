@@ -22,7 +22,7 @@ from finance.cash_flow import (
     previous_equal_range,
 )
 from tests.page_payload import json_script_payload
-from finance.category_services import income_and_spending_totals
+from finance.ledger_counting import income_and_spending_totals
 from finance.models import Account, BalanceSnapshot, Household, ImportBatch, Membership, Person, Transaction
 
 

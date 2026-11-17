@@ -4,7 +4,7 @@ from django.db.models.functions import Lower
 
 from .access import DENIED as _DENIED
 from .audit_services import record
-from .category_services import current_household
+from .households import current_household
 from .lifecycle_services import lock_actor_household
 from .models import Account, AuditEvent, Tag, Transaction, _person_for
 

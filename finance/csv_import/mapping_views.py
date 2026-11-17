@@ -7,7 +7,7 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods
 
 from finance.access import request_person as _person
-from finance.category_services import current_household
+from finance.households import current_household
 from finance.models import Account, SavedCsvMapping
 
 from .forms import SavedCsvMappingEditForm

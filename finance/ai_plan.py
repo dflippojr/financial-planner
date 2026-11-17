@@ -22,7 +22,7 @@ from .ai_harness import (
 )
 from .ai_http import HarnessHttpError
 from .ai_types import AUTHORIZATION_REQUIRED, PLAN_BACKENDS, PLAN_REPLACES_API, UNAVAILABLE
-from .category_services import current_household
+from .households import current_household
 from .encryption import decrypt_secret
 from .lifecycle_services import _DENIED, _person_for
 from .models import AiPlanLink, AiProviderConnection, AuditEvent, Membership, Person

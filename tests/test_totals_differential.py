@@ -8,18 +8,18 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 
 from finance.cash_flow import GROUPING_MONTH, cash_flow_report, iter_period_windows
-from finance.category_services import (
-    _person_for,
-    assign_category,
+from finance.access import require_person as _person_for
+from finance.category_services import assign_category
+from finance.ledger_counting import (
     income_and_spending_by_account,
     income_and_spending_by_tag,
     income_and_spending_by_window,
     income_and_spending_totals,
-    link_refund,
-    refresh_transfer_pairs,
-    split_transaction,
     spending_by_category_by_window,
 )
+from finance.refund_links import link_refund
+from finance.splits import split_transaction
+from finance.transfer_pairing import refresh_transfer_pairs
 from finance.models import (
     Account,
     Category,

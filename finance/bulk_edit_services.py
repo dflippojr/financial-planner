@@ -7,16 +7,10 @@ from django.db import transaction
 from django.utils import timezone
 
 from .access import DENIED as _DENIED
-from .category_services import (
-    _history_label,
-    _record_text_history,
-    apply_inherited_category,
-    apply_manual_category,
-    assignable_categories,
-    exclusion_exists_for,
-    linked_refunds_for_originals,
-    transaction_is_linked_refund,
-)
+from .category_services import apply_manual_category, assignable_categories
+from .ledger_counting import exclusion_exists_for
+from .ledger_edits import history_label, record_text_history
+from .refund_links import apply_inherited_category, linked_refunds_for_originals, transaction_is_linked_refund
 from .audit_services import origin, record as audit_record
 from .lifecycle_services import lock_actor_household
 from .models import (
@@ -326,7 +320,7 @@ def _apply_tags(person, txn, tags, *, add):
         next_tags = [tag for tag in previous if tag.pk not in drop]
     txn.tags.set(next_tags)
     txn.save(update_fields=("updated_at",))
-    _record_text_history(
+    record_text_history(
         txn,
         person,
         TransactionCorrectionHistory.Field.TAGS,
@@ -339,7 +333,7 @@ def _apply_note(person, txn, note_line):
     previous = txn.note or ""
     txn.note = _append_note(txn, note_line)
     txn.save(update_fields=("note", "updated_at"))
-    _record_text_history(
+    record_text_history(
         txn,
         person,
         TransactionCorrectionHistory.Field.NOTE,
@@ -508,17 +502,17 @@ def undo_bulk_edit(principal, undo_id):
         for item in rows:
             txn = by_id[item["id"]]
             if action == ACTION_CATEGORY:
-                previous_label = _history_label(txn.category)
+                previous_label = history_label(txn.category)
                 txn.category_id = item["previous_category_id"]
                 txn.category_source = item["previous_category_source"]
                 txn.save(update_fields=("category", "category_source", "updated_at"))
                 txn.refresh_from_db()
-                _record_text_history(
+                record_text_history(
                     txn,
                     person,
                     TransactionCorrectionHistory.Field.CATEGORY,
                     previous_label,
-                    _history_label(txn.category),
+                    history_label(txn.category),
                 )
                 for refund in refunds_by_original.get(txn.pk, []):
                     apply_inherited_category(person, refund, txn.category)
@@ -529,7 +523,7 @@ def undo_bulk_edit(principal, undo_id):
                     raise PermissionDenied(_DENIED)
                 txn.tags.set(restored)
                 txn.save(update_fields=("updated_at",))
-                _record_text_history(
+                record_text_history(
                     txn,
                     person,
                     TransactionCorrectionHistory.Field.TAGS,
@@ -540,7 +534,7 @@ def undo_bulk_edit(principal, undo_id):
                 previous = txn.note or ""
                 txn.note = item["previous_note"]
                 txn.save(update_fields=("note", "updated_at"))
-                _record_text_history(
+                record_text_history(
                     txn,
                     person,
                     TransactionCorrectionHistory.Field.NOTE,

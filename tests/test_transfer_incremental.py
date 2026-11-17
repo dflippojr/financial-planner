@@ -7,9 +7,12 @@ from django.db import connection, transaction
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
-from finance.category_services import (
-    refresh_transfer_pairs, transfer_matching_key, confirm_transfer_pair,
-    dismiss_transfer_pair, undo_transfer_pair,
+from finance.transfer_pairing import (
+    confirm_transfer_pair,
+    dismiss_transfer_pair,
+    refresh_transfer_pairs,
+    transfer_matching_key,
+    undo_transfer_pair,
 )
 from finance.csv_import.services import categorize_imported_batch
 from finance.models import Transaction, TransferPair, TransactionCorrectionHistory

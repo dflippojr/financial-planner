@@ -15,8 +15,12 @@ from finance.audit_services import events_for, origin
 from finance.bulk_edit_services import ACTION_CATEGORY, apply_bulk_edit, undo_bulk_edit
 from finance.budget_services import reset_budget_rollover, save_budget, set_budget_archived, set_budget_rollover
 from finance.category_services import (
-    ensure_household_categories, add_category, assign_category, rename_category, split_transaction,
+    add_category,
+    assign_category,
+    ensure_household_categories,
+    rename_category,
 )
+from finance.splits import split_transaction
 from finance.csv_import.saved_mappings import (
     delete_or_archive_csv_mapping, save_csv_mapping, set_account_default_mapping, update_csv_mapping,
 )

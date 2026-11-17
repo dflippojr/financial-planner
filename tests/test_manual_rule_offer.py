@@ -6,7 +6,8 @@ from django.test import Client
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
-from finance.category_services import assign_category, split_transaction
+from finance.category_services import assign_category
+from finance.splits import split_transaction
 from finance.models import Account, Category, CategoryRule, CategorySuggestion, Membership, Transaction
 from finance.rule_services import preview_unsaved_rule, unsaved_rule
 from tests.test_category_rules import dining, groceries, make_account, make_household, make_person, make_transaction

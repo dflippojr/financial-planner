@@ -7,7 +7,7 @@ from django.db.models import Exists, OuterRef, Q
 from .access import DENIED as _DENIED
 from .access import require_person as _person
 from .cash_flow import cash_flow_report, selected_accounts
-from .category_services import current_household
+from .households import current_household
 from .audit_services import changed_names, owned_audience, record, snapshot
 from .bill_grouping import eligible_bill_charges, group_bills, stored_charge_ids
 from .models import (

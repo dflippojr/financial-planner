@@ -25,7 +25,7 @@ from .budget_services import (
     set_budget_rollover,
     visible_categories_by_id,
 )
-from .category_services import current_household
+from .households import current_household
 from .forms import BudgetForm
 from .models import Budget
 from .months import add_months

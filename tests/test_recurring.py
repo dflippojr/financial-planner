@@ -5,7 +5,8 @@ from django.contrib.auth import get_user_model
 from django.test import Client
 from django.urls import reverse
 
-from finance.category_services import ensure_household_categories, refresh_transfer_pairs
+from finance.category_services import ensure_household_categories
+from finance.transfer_pairing import refresh_transfer_pairs
 from finance.csv_import.services import undo_import_batch
 from finance.lifecycle_services import archive_account
 from finance.models import Account, Household, ImportBatch, Membership, Person, RecurringExclusion, RecurringSeries, RecurringSeriesMember, Transaction

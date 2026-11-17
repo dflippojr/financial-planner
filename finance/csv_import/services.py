@@ -304,7 +304,7 @@ def categorize_imported_batch(principal, batch):
     accounts in id order, which must not happen while the import still holds
     its own account lock.
     """
-    from finance.category_services import refresh_transfer_pairs
+    from finance.transfer_pairing import refresh_transfer_pairs
     from finance.rule_services import apply_enabled_rules_to_transactions
 
     if batch is None:
@@ -369,11 +369,8 @@ def archive_batch(principal, account_id, batch_id, *, manual):
         import_batch=batch,
         status=Transaction.Status.ACTIVE,
     ).update(status=Transaction.Status.ARCHIVED, archived_at=now)
-    from finance.category_services import (
-        drop_refund_links_to_originals,
-        refresh_transfer_pairs,
-        revalidate_pairs_touching_import_batch,
-    )
+    from finance.refund_links import drop_refund_links_to_originals
+    from finance.transfer_pairing import refresh_transfer_pairs, revalidate_pairs_touching_import_batch
 
     drop_refund_links_to_originals(removed_ids, person)
     from finance.models import BalanceSnapshot

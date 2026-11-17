@@ -48,7 +48,7 @@ from .cash_flow import (
     spending_by_category_report,
     spending_category_detail_url,
 )
-from .category_services import income_and_spending_by_window
+from .ledger_counting import income_and_spending_by_window
 from .models import Account, Category
 from .net_worth import net_worth_report
 from .spending_trends import category_spending_trend_report

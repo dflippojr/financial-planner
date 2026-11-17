@@ -9,7 +9,8 @@ import pytest
 from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
 
-from finance.category_services import link_refund, refresh_transfer_pairs
+from finance.refund_links import link_refund
+from finance.transfer_pairing import refresh_transfer_pairs
 from finance.models import Account, RefundLinkDrop, TransactionCorrectionHistory
 from tests.test_categorization import make_account, make_household, make_person, make_transaction
 

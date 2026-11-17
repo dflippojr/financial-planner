@@ -11,7 +11,7 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods
 
 from .access import request_person as _person, visible_rows
-from .category_services import current_household
+from .households import current_household
 from .forms import SimpleFinSetupForm
 from .models import Account, AccountLink, SimpleFinConnection
 from .post_only import post_only

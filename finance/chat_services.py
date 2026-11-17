@@ -57,7 +57,7 @@ from .models import (
     PlannedItem,
     SavingsGoal,
 )
-from .category_services import current_household
+from .households import current_household
 from .policy_services import household_ai_allowed, may_use_ai
 
 FEATURE = "chat"

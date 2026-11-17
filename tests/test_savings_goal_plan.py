@@ -25,7 +25,7 @@ from finance.models import (
     Transaction,
 )
 from finance.bills_calendar import calendar_inputs
-from finance.category_services import link_refund
+from finance.refund_links import link_refund
 from finance.planning_services import projected_months_for, visible_projection_inputs
 from finance.savings_goal_plan import (
     ALREADY_FUNDED,

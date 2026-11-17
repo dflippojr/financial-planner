@@ -135,7 +135,7 @@ def household_ai_allowed(household):
 def ai_slot_state(person):
     """The sidebar state and the current viewer's household consent summary."""
     from .ai_services import member_has_ai
-    from .category_services import current_household
+    from .households import current_household
 
     person = _as_person(person)
     accepted = in_acceptance(person)

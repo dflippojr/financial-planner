@@ -2,12 +2,12 @@ from datetime import date
 
 import pytest
 
-from finance.category_services import (
-    assign_category,
+from finance.category_services import assign_category
+from finance.ledger_counting import income_and_spending_totals
+from finance.transfer_pairing import (
     confirm_transfer_pair,
     dismiss_transfer_pair,
     downgrade_unevidenced_auto_marked_pairs,
-    income_and_spending_totals,
     refresh_transfer_pairs,
     undo_transfer_pair,
 )

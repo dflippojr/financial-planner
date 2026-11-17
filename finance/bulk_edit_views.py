@@ -15,7 +15,7 @@ from .bulk_edit_services import (
     preview_bulk_edit,
     undo_bulk_edit,
 )
-from .category_services import exclusion_exists_for
+from .ledger_counting import exclusion_exists_for
 from .forms import BulkTransactionEditForm, TransactionFilterForm
 from .models import BulkEditUndo, Person, Transaction
 from .post_only import post_only

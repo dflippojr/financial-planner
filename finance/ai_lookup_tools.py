@@ -30,7 +30,7 @@ from .ai_tools import (
     visible_accounts,
 )
 from .ai_types import ToolResult, ToolSpec
-from .category_services import current_household
+from .households import current_household
 from .debt_planner import STRATEGIES, STRATEGY_CUSTOM, STRATEGY_MINIMUMS
 from .debt_planner_services import build_debt_plan, list_visible_debts
 from .models import Account, BalanceSnapshot, PlannedItem, SavingsGoal

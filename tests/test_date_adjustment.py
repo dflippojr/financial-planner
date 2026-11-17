@@ -10,7 +10,7 @@ import pytest
 from django.test import Client
 from django.urls import reverse
 
-from finance.category_services import income_and_spending_totals
+from finance.ledger_counting import income_and_spending_totals
 from finance.models import Account, Transaction, TransactionCorrectionHistory
 from tests.test_csv_import_overlap import commit, make_person
 

@@ -23,7 +23,8 @@ from hypothesis import example, given
 from hypothesis import strategies as st
 
 from finance.cash_flow import selected_accounts
-from finance.category_services import confirm_transfer_pair, link_refund, undo_transfer_pair
+from finance.refund_links import link_refund
+from finance.transfer_pairing import confirm_transfer_pair, undo_transfer_pair
 from finance.csv_import.parser import Mapping
 from finance.csv_import.services import undo_import_batch
 from finance.export import minor_from_decimal_string, money_decimal

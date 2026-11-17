@@ -124,7 +124,7 @@ def measure(size, profile, *, budgets=12, matching=True):
     form = response.context["mapping_form"]
     data = {"action": "commit", "token": form.data["token"],
             "date_range_start": "2026-09-01", "date_range_end": "2026-09-30"}
-    from finance.category_services import refresh_transfer_pairs
+    from finance.transfer_pairing import refresh_transfer_pairs
     match_seconds = []
     def refresh(*args, **kwargs):
         start = time.perf_counter()
@@ -132,7 +132,7 @@ def measure(size, profile, *, budgets=12, matching=True):
         match_seconds.append(time.perf_counter() - start)
         return result
     connection.queries_log = deque(maxlen=1000000)
-    with patch("finance.category_services.refresh_transfer_pairs", side_effect=refresh):
+    with patch("finance.transfer_pairing.refresh_transfer_pairs", side_effect=refresh):
         with CaptureQueriesContext(connection) as queries:
             start = time.perf_counter()
             committed = client.post(url, data)
