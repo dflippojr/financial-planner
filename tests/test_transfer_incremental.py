@@ -7,9 +7,12 @@ from django.db import connection, transaction
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
-from finance.category_services import (
-    refresh_transfer_pairs, transfer_matching_key, confirm_transfer_pair,
-    dismiss_transfer_pair, undo_transfer_pair,
+from finance.transfer_pairing import (
+    confirm_transfer_pair,
+    dismiss_transfer_pair,
+    refresh_transfer_pairs,
+    transfer_matching_key,
+    undo_transfer_pair,
 )
 from finance.csv_import.services import categorize_imported_batch
 from finance.models import Transaction, TransferPair, TransactionCorrectionHistory
@@ -123,9 +126,9 @@ def test_incremental_does_not_materialize_unrelated_ledger():
                     amount_minor=-4000-i, description='Synthetic unrelated', source_row_number=i+2,
                     fingerprint=f'{i:064x}', original_fields={}) for i in range(500)
     ], batch_size=1000)
-    from finance import category_services
-    original = category_services._score_pairs
-    with patch.object(category_services, '_score_pairs', wraps=original) as score:
+    from finance import transfer_pairing
+    original = transfer_pairing._score_pairs
+    with patch.object(transfer_pairing, '_score_pairs', wraps=original) as score:
         refresh_transfer_pairs(p, transaction_ids=[seed.pk])
     assert {row.pk for row in score.call_args.args[0]} == {seed.pk, mate.pk}
     assert TransferPair.objects.get().status == 'auto_marked'

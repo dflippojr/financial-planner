@@ -12,7 +12,8 @@ from django.utils import timezone as django_timezone
 from finance.alert_services import run_daily_alert_pass
 from finance.budget_services import save_budget
 from finance.cash_flow import cash_flow_report, spending_by_category_report
-from finance.category_services import assign_category, ensure_household_categories, income_and_spending_totals
+from finance.category_services import assign_category, ensure_household_categories
+from finance.ledger_counting import income_and_spending_totals
 from finance.models import (
     Account,
     Alert,

@@ -6,7 +6,8 @@ from django.contrib.auth import get_user_model
 from django.test import Client
 from django.urls import reverse
 
-from finance.category_services import ensure_household_categories, split_transaction
+from finance.category_services import ensure_household_categories
+from finance.splits import split_transaction
 from finance.lifecycle_services import unshare_account
 from finance.models import (
     Account,

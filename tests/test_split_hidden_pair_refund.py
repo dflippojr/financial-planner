@@ -9,12 +9,10 @@ Nothing written for it may be listed to Bob.
 import pytest
 
 from finance.audit_models import AuditEvent
-from finance.category_services import (
-    assign_category,
-    link_refund,
-    split_transaction,
-    undo_transfer_pair,
-)
+from finance.category_services import assign_category
+from finance.refund_links import link_refund
+from finance.splits import split_transaction
+from finance.transfer_pairing import undo_transfer_pair
 from finance.models import Account, Membership, Transaction, TransactionCorrectionHistory, TransferPair
 from tests.test_categorization import make_account, make_household, make_person, make_transaction
 

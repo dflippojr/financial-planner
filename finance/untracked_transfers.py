@@ -13,12 +13,9 @@ from django.db import transaction
 
 from .access import DENIED as _DENIED
 from .access import require_person as _person_for
-from .category_services import (
-    _lock_accounts_and_transactions,
-    _record_text_history,
-    drop_refund_links_to_originals,
-    with_transfer_state,
-)
+from .ledger_counting import with_transfer_state
+from .ledger_edits import lock_accounts_and_transactions, record_text_history
+from .refund_links import drop_refund_links_to_originals
 from .models import Account, Transaction, TransactionCorrectionHistory
 
 UNTRACKED_LABEL = Transaction.UNTRACKED_TRANSFER_LABEL
@@ -67,7 +64,7 @@ def set_mark(person, txn, marked, *, label_suffix=""):
     txn.save(update_fields=("untracked_transfer", "updated_at"))
     if marked:
         drop_refund_links_to_originals([txn.pk], person)
-    return _record_text_history(
+    return record_text_history(
         txn,
         person,
         TransactionCorrectionHistory.Field.UNTRACKED,
@@ -87,7 +84,7 @@ def _locked_row(person, transaction_id):
         raise PermissionDenied(_DENIED)
     # Visible means editable here: every member who sees a row may edit it. The
     # lock helper rechecks visibility once the household and rows are locked.
-    locked = _lock_accounts_and_transactions(person, [txn])[0]
+    locked = lock_accounts_and_transactions(person, [txn])[0]
     return with_transfer_state(person, locked)
 
 

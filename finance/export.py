@@ -12,7 +12,7 @@ from decimal import Decimal
 from django.apps import apps
 from django.core.exceptions import PermissionDenied
 
-from .category_services import excluded_transfer_ids
+from .ledger_counting import excluded_transfer_ids
 from .spreadsheet import spreadsheet_text
 from .models import (
     FORMER_MEMBER_LABEL,

@@ -6,7 +6,8 @@ from hashlib import sha256
 import pytest
 
 from finance.cash_flow import cash_flow_report, selected_accounts
-from finance.category_services import income_and_spending_totals, refresh_transfer_pairs
+from finance.ledger_counting import income_and_spending_totals
+from finance.transfer_pairing import refresh_transfer_pairs
 from finance.models import Account, RecurringSeries, RecurringSeriesMember, TransferPair
 from finance.planning_services import visible_projection_inputs
 from finance.savings_goal_plan import build_funding_plan

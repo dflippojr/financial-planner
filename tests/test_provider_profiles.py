@@ -15,7 +15,7 @@ from django.test import Client, override_settings
 from django.urls import reverse
 
 from finance.csv_import.parser import CsvInputError, preview_csv, read_csv
-from finance.category_services import income_and_spending_totals
+from finance.ledger_counting import income_and_spending_totals
 from finance.csv_import.profiles import (
     APPLE_CARD_HEADER_ERROR,
     APPLE_CARD_HEADERS,

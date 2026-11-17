@@ -7,7 +7,9 @@ from django.db.models import Q
 from django.test import Client
 from django.urls import reverse
 
-from finance.category_services import assign_category, ensure_household_categories, link_refund, refresh_transfer_pairs
+from finance.category_services import assign_category, ensure_household_categories
+from finance.refund_links import link_refund
+from finance.transfer_pairing import refresh_transfer_pairs
 from finance.lifecycle_services import delete_account
 from finance.models import (
     Account,

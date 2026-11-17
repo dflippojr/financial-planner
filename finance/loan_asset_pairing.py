@@ -1,8 +1,11 @@
+"""Loan-to-asset pairing: which asset account secures a loan. Transfer pairing is in transfer_pairing.py."""
+
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
 
+from .access import DENIED as _DENIED
+from .access import visible_rows
 from .audit_services import append_event
-from .lifecycle_services import _DENIED
 from .models import Account, AuditEvent, _person_for, loan_asset_pairing_allowed
 from .snapshot_services import _lock_editable_account
 
@@ -25,7 +28,7 @@ def set_loan_secured_asset(principal, loan_id, asset_id):
             _audit_pairing(account, person)
         return account
     asset = (
-        Account.objects.visible_to(principal)
+        visible_rows(Account, principal)
         .select_for_update(of=("self",))
         .filter(pk=asset_id, status=Account.Status.ACTIVE, archived_at__isnull=True)
         .first()

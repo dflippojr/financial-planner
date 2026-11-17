@@ -51,7 +51,7 @@ from .audit_models import METADATA_ENUM_KEYS
 from .lifecycle_services import _DENIED, _person_for
 from .models import AiJob, AuditEvent, AiProviderConnection, AiUsageEvent, Membership
 from .policy_services import may_use_ai
-from .category_services import current_household
+from .households import current_household
 
 TOKEN_PREFIX = "ha-"  # noqa: S105 - not a secret
 CONNECT_DENIED = "AI backends cannot be connected until the privacy and data policy is accepted."

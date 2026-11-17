@@ -7,7 +7,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
 from django.urls import reverse
 
-from finance.category_services import income_and_spending_totals
+from finance.ledger_counting import income_and_spending_totals
 from finance.csv_import.parser import Mapping, preview_csv, read_csv
 from finance.csv_import.profiles import APPLE_CARD_MAPPING, CAPITAL_ONE_MAPPING
 from finance.csv_import.services import classify_overlap

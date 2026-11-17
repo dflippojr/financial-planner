@@ -15,7 +15,8 @@ from django.urls import reverse
 
 from finance.bulk_edit_services import ACTION_MARK_UNTRACKED, apply_bulk_edit
 from finance.cash_flow import cash_flow_report
-from finance.category_services import assign_category, link_refund
+from finance.category_services import assign_category
+from finance.refund_links import link_refund
 from finance.csv_import.parser import read_csv
 from finance.csv_import.services import commit_csv_import, undo_import_batch
 from finance.models import CategoryRule, ImportBatch, RefundLink, Transaction, TransactionCorrectionHistory

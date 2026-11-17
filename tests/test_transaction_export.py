@@ -12,7 +12,7 @@ from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 
-from finance.category_services import split_transaction
+from finance.splits import split_transaction
 from finance.models import CategorySuggestion, MemberSecurityEvent, Membership, RefundLink, SavedTransactionFilter, Tag, Transaction, TransactionSplit, TransferPair
 from finance.reauth import RECENT_AUTH_SESSION_KEY
 from finance.transaction_export import CSV_COLUMNS

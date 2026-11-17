@@ -6,7 +6,8 @@ import pytest
 from django.urls import reverse
 
 from finance.budget_services import save_budget
-from finance.category_services import assign_category, rename_category, split_transaction
+from finance.category_services import assign_category, rename_category
+from finance.splits import split_transaction
 from finance.lifecycle_services import leave_household
 from finance.rule_services import save_category_rule
 from finance.models import Budget, SavingsGoal, Transaction

@@ -6,21 +6,19 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.test import Client
 from django.urls import reverse
 
-from finance.category_services import (
+from finance.category_services import assign_category, ensure_household_categories
+from finance.ledger_counting import income_and_spending_totals
+from finance.refund_links import link_refund, SPLIT_PART_REQUIRED
+from finance.splits import (
     SPLIT_AMOUNT_ERROR,
     SPLIT_COUNT_ERROR,
-    SPLIT_PART_REQUIRED,
     SPLIT_REFUND_ERROR,
     SPLIT_SIGN_ERROR,
     SPLIT_SUM_ERROR,
-    SPLIT_TRANSFER_ERROR,
-    assign_category,
-    ensure_household_categories,
-    income_and_spending_totals,
-    link_refund,
-    refresh_transfer_pairs,
     split_transaction,
+    SPLIT_TRANSFER_ERROR,
 )
+from finance.transfer_pairing import refresh_transfer_pairs
 from finance.models import (
     Account,
     Household,
@@ -503,7 +501,7 @@ def test_splitting_suggested_transfer_leg_drops_pair_and_allows_rematch():
 
 @pytest.mark.django_db
 def test_link_refund_page_requires_a_part_of_the_split_purchase():
-    from finance.category_services import SPLIT_PART_MISMATCH
+    from finance.refund_links import SPLIT_PART_MISMATCH
 
     owner = make_person("owner")
     household = make_household(owner)

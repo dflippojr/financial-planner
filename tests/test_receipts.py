@@ -243,7 +243,8 @@ def test_split_keeps_receipts_on_the_parent(tmp_path, settings):
     owner = make_person("owner")
     household = Household.objects.create(name="Synthetic Household")
     Membership.objects.create(person=owner, household=household)
-    from finance.category_services import ensure_household_categories, split_transaction
+    from finance.category_services import ensure_household_categories
+    from finance.splits import split_transaction
 
     ensure_household_categories(household)
     groceries = household.categories.get(name="Groceries")

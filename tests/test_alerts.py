@@ -20,7 +20,8 @@ from finance.alert_services import (
 )
 from finance.forms import AlertSettingsForm
 from finance.budget_services import save_budget, progress_snapshot
-from finance.category_services import assign_category, refresh_transfer_pairs
+from finance.category_services import assign_category
+from finance.transfer_pairing import refresh_transfer_pairs
 from finance.lifecycle_services import delete_account, leave_household
 from finance.models import (
     Account,

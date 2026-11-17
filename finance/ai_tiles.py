@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import date
 import re
 
-from .category_services import current_household
+from .households import current_household
 from .models import Account, Category
 from .policy_services import household_ai_allowed
 

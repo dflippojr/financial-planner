@@ -19,7 +19,8 @@ from .cash_flow import (
     spending_by_category_report,
     spending_category_detail_url,
 )
-from .category_services import current_household, spending_by_category_by_window
+from .households import current_household
+from .ledger_counting import spending_by_category_by_window
 from .edit_permission_services import check_can_edit
 from .input_limits import BUDGET_MONTH_FLOOR, BUDGET_FUTURE_MONTHS, MAX_CARRY_MONTHS
 from .models import Account, AuditEvent, Budget, BudgetAmount, BudgetRolloverReset, Category

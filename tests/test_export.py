@@ -13,11 +13,8 @@ from django.urls import reverse
 from django.utils import timezone
 from tests.helpers import stamp_recent_auth
 
-from finance.category_services import (
-    assign_category,
-    ensure_household_categories,
-    refresh_transfer_pairs,
-)
+from finance.category_services import assign_category, ensure_household_categories
+from finance.transfer_pairing import refresh_transfer_pairs
 from finance.export import (
     CSV_FIELDS,
     ENTITY_FILES,
@@ -435,7 +432,8 @@ def test_export_requires_auth_and_post():
 @pytest.mark.django_db
 def test_export_after_leaving_hides_household_live_category_and_tag_names():
     from finance.budget_services import save_budget
-    from finance.category_services import rename_category, split_transaction
+    from finance.category_services import rename_category
+    from finance.splits import split_transaction
     from finance.lifecycle_services import leave_household
     from finance.models import Budget
     from finance.tag_services import add_tag, rename_tag, set_transaction_note_and_tags

@@ -12,7 +12,9 @@ from finance.cash_flow import (
     cash_flow_report,
     spending_by_category_report,
 )
-from finance.category_services import assign_category, link_refund, refresh_transfer_pairs
+from finance.category_services import assign_category
+from finance.refund_links import link_refund
+from finance.transfer_pairing import refresh_transfer_pairs
 from finance.models import Account, Category
 from finance.spending_trends import (
     OTHER_NAME,

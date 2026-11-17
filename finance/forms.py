@@ -752,7 +752,7 @@ class TransactionCorrectionForm(forms.Form):
         )
         if not history_rows:
             return transaction
-        from .category_services import SPLIT_AMOUNT_ERROR
+        from .splits import SPLIT_AMOUNT_ERROR
 
         if (
             transaction.category_source == Transaction.CategorySource.SPLIT
@@ -863,7 +863,7 @@ class RefundSearchForm(forms.Form):
 
 
 def refund_candidates(principal, refund):
-    from .category_services import exclusion_exists_for
+    from .ledger_counting import exclusion_exists_for
 
     # A leg of an excluded transfer or card payment was never counted as spending.
     return (
@@ -886,7 +886,7 @@ class RefundLinkForm(forms.Form):
     def __init__(self, *args, principal=None, refund=None, **kwargs):
         super().__init__(*args, **kwargs)
         self._refund = refund
-        from .category_services import REFUND_LINK_RULE, SPLIT_PART_MISMATCH
+        from .refund_links import REFUND_LINK_RULE, SPLIT_PART_MISMATCH
 
         visible = refund_candidates(principal, refund) if refund is not None else Transaction.objects.none()
         selected_id = self.data.get("original") if self.is_bound else self.initial.get("original")
@@ -905,7 +905,7 @@ class RefundLinkForm(forms.Form):
 
     def clean(self):
         cleaned = super().clean()
-        from .category_services import REFUND_LINK_RULE, SPLIT_PART_MISMATCH, SPLIT_PART_REQUIRED
+        from .refund_links import REFUND_LINK_RULE, SPLIT_PART_MISMATCH, SPLIT_PART_REQUIRED
 
         original = cleaned.get("original")
         refund = self._refund
@@ -1620,7 +1620,7 @@ class SavingsGoalForm(forms.Form):
     def _check_fund(self, cleaned):
         """Mirror the service's sinking-fund checks so a bad choice is a form error, not a 404."""
         from .access import require_person
-        from .category_services import current_household
+        from .households import current_household
         from .savings_goal_services import (
             TARGET_REQUIRED_ERROR,
             validate_fund,
@@ -1663,7 +1663,7 @@ class SavingsGoalForm(forms.Form):
 
     def _check_dependency(self, cleaned):
         from .access import require_person
-        from .category_services import current_household
+        from .households import current_household
         from .savings_goal_services import DEPENDENTS_SCOPE_ERROR, validate_dependency
 
         dependency = cleaned.get("depends_on")

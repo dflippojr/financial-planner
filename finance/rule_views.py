@@ -10,7 +10,8 @@ from .access import first_message as _first_message
 from .access import service_or_404 as _service_or_404
 from .auto_notes import preview_token
 from .auto_note_views import note_undo_for, remember_note_undo
-from .category_services import current_household, ensure_household_categories
+from .category_services import ensure_household_categories
+from .households import current_household
 from .forms import CategoryRuleForm
 from .models import CategoryRule, Person
 from .post_only import post_only

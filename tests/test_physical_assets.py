@@ -11,7 +11,7 @@ from finance.export import collect_export_tables
 from finance.lifecycle_services import archive_account, delete_account, leave_household, share_account
 from finance.models import Account, BalanceSnapshot, Household, ImportBatch, Membership, Person, Transaction, loan_asset_pairing_allowed
 from finance.net_worth import contribution_parts, net_worth_report
-from finance.pairing_services import PairingError, set_loan_secured_asset
+from finance.loan_asset_pairing import PairingError, set_loan_secured_asset
 from tests.page_payload import json_script_payload
 
 

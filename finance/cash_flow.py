@@ -7,7 +7,7 @@ from urllib.parse import urlencode
 from django.urls import reverse
 from django.utils import timezone
 
-from .category_services import income_and_spending_by_window, income_and_spending_totals
+from .ledger_counting import income_and_spending_by_window, income_and_spending_totals
 from .models import Account, Category, ImportBatch, Transaction
 from .money_display import format_minor
 from .months import add_months

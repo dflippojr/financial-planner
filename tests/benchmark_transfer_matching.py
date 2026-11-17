@@ -13,7 +13,8 @@ from django.test import Client
 from django.test.utils import CaptureQueriesContext
 from django.db import connection
 from finance.models import Person, Household, Membership, Account, ImportBatch, Transaction
-from finance.category_services import ensure_household_categories, refresh_transfer_pairs
+from finance.category_services import ensure_household_categories
+from finance.transfer_pairing import refresh_transfer_pairs
 
 mode=os.environ.get('BENCH_MODE','seed')
 if mode=='seed':

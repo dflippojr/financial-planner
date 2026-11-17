@@ -8,18 +8,12 @@ from django.db.models.functions import Coalesce
 from django.urls import reverse
 from django.utils import timezone
 
-from .category_services import (
-    _DENIED,
-    _history_label,
-    _person_for,
-    _record_text_history,
-    _restore_refund_categories,
-    assignable_categories,
-    current_household,
-    drop_refund_links_to_originals,
-    ensure_household_categories,
-    exclusion_exists_for,
-)
+from .access import DENIED as _DENIED, require_person as _person_for
+from .category_services import assignable_categories, ensure_household_categories
+from .households import current_household
+from .ledger_counting import exclusion_exists_for
+from .ledger_edits import history_label, record_text_history
+from .refund_links import drop_refund_links_to_originals, restore_refund_categories
 from .audit_services import changed_names, origin, record, snapshot
 from .auto_notes import (
     NO_NOTE_TO_ADD,
@@ -640,7 +634,7 @@ def _new_rule_wins(rule, winner):
 
 
 def _history_new_label(category, rule):
-    return f"{_history_label(category)} (rule: {rule.description_contains})"
+    return f"{history_label(category)} (rule: {rule.description_contains})"
 
 
 def _rule_suffix(rule):
@@ -893,7 +887,7 @@ def _apply_automatic_rule_groups(person, by_rule):
                 txn.updated_at = now
                 marked.append(txn)
                 continue
-            previous_label = _history_label(txn.category)
+            previous_label = history_label(txn.category)
             new_label = _history_new_label(rule.category, rule)
             if previous_label != new_label:
                 history.append(TransactionCorrectionHistory(
@@ -935,7 +929,7 @@ def _apply_automatic_rule_groups(person, by_rule):
     ).values_list("original_id", flat=True))
     for txn in changed:
         if txn.pk in originals_with_refunds:
-            _restore_refund_categories(txn, person)
+            restore_refund_categories(txn, person)
     return applications
 
 
@@ -1005,15 +999,15 @@ def reverse_application(principal, application_id):
             txn.category = restored_category
             txn.category_source = restored_source
             txn.save(update_fields=("category", "category_source", "updated_at"))
-            _record_text_history(
+            record_text_history(
                 txn,
                 person,
                 TransactionCorrectionHistory.Field.CATEGORY,
-                _history_label(previous),
-                _history_label(restored_category),
+                history_label(previous),
+                history_label(restored_category),
             )
             _carry_into_transfer_snapshots(txn, previous, restored_category)
-            _restore_refund_categories(txn, person)
+            restore_refund_categories(txn, person)
             restored += 1
     if not RuleApplicationEntry.objects.filter(application=application, reversed_at__isnull=True).exists():
         application.reversed_at = now

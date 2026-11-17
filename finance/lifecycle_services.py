@@ -162,7 +162,7 @@ def _actor_may_manage_sharing(person, account):
 
 def _lock_visible_account_for_refund_link_rule(person, account_id):
     """Lock the account and those the refund link rule reaches from it, in pk order."""
-    from finance.category_services import account_ids_for_refund_link_rule
+    from finance.refund_links import account_ids_for_refund_link_rule
 
     extras = account_ids_for_refund_link_rule(account_id) - {account_id}
     return _lock_visible_account_with_counterparts(person, account_id, extras)
@@ -189,7 +189,7 @@ def share_account(principal, account_id, share_mode):
     account.save(update_fields=("scope", "household", "share_mode", "updated_at"))
     clear_invalid_loan_pairings(account)
     append_event(account=account, action=AuditEvent.Action.ACCOUNT_SHARED, actor=person, changed_fields=("scope", "share_mode"))
-    from finance.category_services import reapply_refund_link_drops_for_account
+    from finance.refund_links import reapply_refund_link_drops_for_account
 
     reapply_refund_link_drops_for_account(account.pk, person)
     return account
@@ -219,14 +219,14 @@ def change_account_share_mode(principal, account_id, share_mode, *, confirm_give
     account.share_mode = mode
     account.save(update_fields=("share_mode", "updated_at"))
     append_event(account=account, action=AuditEvent.Action.SHARE_MODE_CHANGED, actor=person, changed_fields=("share_mode",))
-    from finance.category_services import reapply_refund_link_drops_for_account
+    from finance.refund_links import reapply_refund_link_drops_for_account
 
     reapply_refund_link_drops_for_account(account.pk, person)
     return account
 
 
 def _pair_counterpart_account_ids(account_id, seed_leg_ids=None):
-    from finance.category_services import account_ids_in_pairs_touching_transactions
+    from finance.transfer_pairing import account_ids_in_pairs_touching_transactions
 
     if seed_leg_ids is None:
         seed_leg_ids = list(Transaction.objects.filter(account_id=account_id).values_list("pk", flat=True))
@@ -260,7 +260,7 @@ def _lock_visible_account_with_pair_and_refund_counterparts(person, account_id, 
     join the ordered account locks rather than being reached after this
     account's rows are held.
     """
-    from finance.category_services import account_ids_in_refunds_touching_transactions
+    from finance.refund_links import account_ids_in_refunds_touching_transactions
 
     if seed_leg_ids is None:
         seed_leg_ids = list(Transaction.objects.filter(account_id=account_id).values_list("pk", flat=True))
@@ -356,7 +356,7 @@ def unshare_account(principal, account_id):
 
     _make_account_private(account, audit_actor=person)
     _release_simplefin_links_without_access((account.pk,), initiator=person)
-    from finance.category_services import revalidate_pairs_touching_account
+    from finance.transfer_pairing import revalidate_pairs_touching_account
 
     revalidate_pairs_touching_account(person, account_id)
     from finance.chat_services import delete_conversations_without_access
@@ -388,7 +388,7 @@ def archive_account(principal, account_id):
         .values_list("pk", flat=True)
     )
     Transaction.objects.filter(pk__in=archived_ids).update(status=Transaction.Status.ARCHIVED, archived_at=now)
-    from finance.category_services import drop_refund_links_to_originals
+    from finance.refund_links import drop_refund_links_to_originals
 
     drop_refund_links_to_originals(archived_ids, person)
     if account.status == Account.Status.ACTIVE:
@@ -396,7 +396,7 @@ def archive_account(principal, account_id):
         account.archived_at = now
         account.save(update_fields=("status", "archived_at", "updated_at"))
         append_event(account=account, action=AuditEvent.Action.ACCOUNT_ARCHIVED, actor=person, changed_fields=("status",))
-    from finance.category_services import refresh_transfer_pairs, revalidate_pairs_touching_account
+    from finance.transfer_pairing import refresh_transfer_pairs, revalidate_pairs_touching_account
 
     revalidate_pairs_touching_account(person, account_id)
     seed_ids = list(Transaction.objects.filter(account_id=account_id).values_list("pk", flat=True))
@@ -509,9 +509,9 @@ def _revalidate_after_exit(person, transitions, seed_leg_ids):
     Pairs touching the household's accounts are revalidated now that the
     membership has ended, and loans keep only same-scope asset pairings.
     """
-    from finance.category_services import _revalidate_pairs_for_leg_ids
+    from finance.transfer_pairing import revalidate_pairs_for_leg_ids
 
-    _revalidate_pairs_for_leg_ids(person, seed_leg_ids)
+    revalidate_pairs_for_leg_ids(person, seed_leg_ids)
     made_private = [
         account.pk for account, action, _fields in transitions if action == AuditEvent.Action.ACCOUNT_UNSHARED
     ]
@@ -569,10 +569,11 @@ def leave_household(principal):
 
 
 def _related_ids_for_account_delete(tx_ids):
-    from finance.category_services import _pair_rows_touching, _refund_rows_touching
+    from finance.refund_links import refund_rows_touching
+    from finance.transfer_pairing import pair_rows_touching
 
-    pair_rows = _pair_rows_touching(tx_ids)
-    refund_rows = _refund_rows_touching(tx_ids)
+    pair_rows = pair_rows_touching(tx_ids)
+    refund_rows = refund_rows_touching(tx_ids)
     pair_ids = [pk for pk, _left, _right in pair_rows]
     refund_ids = [pk for pk, _refund, _original in refund_rows]
     related_tx_ids = set(tx_ids)
@@ -629,7 +630,7 @@ def _lock_rows_for_account_delete(account):
 
 
 def _repair_then_delete_account_rows(person, account):
-    from finance.category_services import unmark_locked_pairs
+    from finance.transfer_pairing import unmark_locked_pairs
     from finance.recurring_services import revalidate_series_after_member_removal
 
     locked_txs, pairs, refunds, members, exclusions, series_ids, tx_ids = _lock_rows_for_account_delete(account)

@@ -16,7 +16,7 @@ from django.utils import timezone
 
 from .access import DENIED as _DENIED
 from .access import require_person as _person_for
-from .category_services import exclusion_exists_for
+from .ledger_counting import exclusion_exists_for
 from .audit_services import personal_audience, record
 from .auto_notes import (
     NO_NOTE_TO_ADD,

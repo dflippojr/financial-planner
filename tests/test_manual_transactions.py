@@ -12,7 +12,8 @@ from django.utils import timezone
 
 from finance.budget_services import progress_snapshot, save_budget
 from finance.cash_flow import cash_flow_report, spending_by_category_report
-from finance.category_services import ensure_household_categories, income_and_spending_totals
+from finance.category_services import ensure_household_categories
+from finance.ledger_counting import income_and_spending_totals
 from finance.csv_import.parser import Mapping, read_csv
 from finance.csv_import.services import categorize_imported_batch, commit_csv_import, undo_import_batch
 from finance.export import write_export_zip

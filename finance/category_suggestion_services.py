@@ -18,13 +18,9 @@ from .ai_services import member_has_ai, resolve_ai, run_structured
 from .ai_tools import ai_nameable_categories, visible_accounts
 from .ai_types import ProviderResult
 from .lifecycle_services import lock_actor_household
-from .category_services import (
-    _DENIED,
-    _person_for,
-    assign_category,
-    assignable_categories,
-    exclusion_exists_for,
-)
+from .access import DENIED as _DENIED, require_person as _person_for
+from .category_services import assign_category, assignable_categories
+from .ledger_counting import exclusion_exists_for
 from .models import AiJob, Category, CategoryRule, CategorySuggestion, Transaction
 
 FEATURE = "category_suggestions"

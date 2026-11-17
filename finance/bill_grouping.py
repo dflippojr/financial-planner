@@ -10,7 +10,7 @@ keeps its own presentation, and detection stays in `recurring_services`.
 
 from django.db.models import Exists, OuterRef
 
-from .category_services import exclusion_exists_for
+from .ledger_counting import exclusion_exists_for
 from .models import Account, RecurringSeriesMember, Transaction
 
 

@@ -11,7 +11,7 @@ from django.utils import timezone
 from finance.input_limits import MAX_COLUMNS
 from finance.access import require_person as _person_for
 from finance.audit_services import record
-from finance.category_services import current_household
+from finance.households import current_household
 from finance.csv_import.parser import DATE_FORMATS, NUMBER_FORMATS, Mapping
 from finance.lifecycle_services import _DENIED, lock_actor_household
 from finance.models import Account, AuditEvent, ImportBatch, SavedCsvMapping

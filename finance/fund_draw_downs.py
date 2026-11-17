@@ -28,7 +28,7 @@ from django.utils import timezone
 
 from .access import visible_rows
 from .audit_services import append_event, owned_audience
-from .category_services import exclusion_exists_for
+from .ledger_counting import exclusion_exists_for
 from .funds import assigned_minor, drawn_occurrences, linked_item, occurrence_tolerance_days
 from .models import (
     Account,

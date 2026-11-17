@@ -8,7 +8,8 @@ from django.db import connection, connections
 from django.test import Client
 from django.urls import reverse
 
-from finance.category_services import assign_category, ensure_household_categories, link_refund
+from finance.category_services import assign_category, ensure_household_categories
+from finance.refund_links import link_refund
 from finance.csv_import.parser import Mapping, read_csv
 from finance.csv_import.services import categorize_imported_batch, commit_csv_import
 from finance.models import (
@@ -712,7 +713,7 @@ def test_preview_and_auto_apply_fold_case_the_same_way():
 
 @pytest.mark.django_db
 def test_auto_apply_skips_investment_rows_and_excluded_transfers():
-    from finance.category_services import refresh_transfer_pairs
+    from finance.transfer_pairing import refresh_transfer_pairs
 
     owner = make_person("owner")
     household = make_household(owner)
@@ -1035,7 +1036,7 @@ def test_former_member_can_undo_a_household_rule_on_their_lent_account():
 
 @pytest.mark.django_db
 def test_reversing_a_rule_on_a_marked_transfer_updates_its_snapshot():
-    from finance.category_services import confirm_transfer_pair, undo_transfer_pair
+    from finance.transfer_pairing import confirm_transfer_pair, undo_transfer_pair
     from finance.models import TransferPair
 
     owner = make_person("owner-transfer")

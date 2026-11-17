@@ -10,7 +10,8 @@ from datetime import date
 import pytest
 from playwright.sync_api import expect
 
-from finance.category_services import current_household, ensure_household_categories
+from finance.category_services import ensure_household_categories
+from finance.households import current_household
 from finance.chat_proposals import proposal_tools
 from finance.chat_services import send_message
 from finance.models import AiConversationMessage, Transaction

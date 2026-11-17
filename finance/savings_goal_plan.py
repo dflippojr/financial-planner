@@ -15,7 +15,8 @@ from .access import DENIED as _DENIED
 from .access import require_person as _person
 from .audit_services import record
 from .cash_flow import format_minor, selected_accounts
-from .category_services import current_household, income_and_spending_by_window, spending_account_ids
+from .households import current_household
+from .ledger_counting import income_and_spending_by_window, spending_account_ids
 from .lifecycle_services import lock_actor_household
 from .models import Account, AuditEvent, RecurringSeriesMember, SavingsGoal
 from .months import add_months, month_end, month_start

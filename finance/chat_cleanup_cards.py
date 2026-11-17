@@ -29,19 +29,18 @@ from .ai_tools import (
 from .ai_types import ToolResult, ToolSpec
 from .bulk_edit_services import _apply_note
 from .cash_flow import format_minor
-from .category_services import (
+from .ledger_counting import with_transfer_state
+from .ledger_edits import lock_accounts_and_transactions
+from .refund_links import transaction_is_linked_refund
+from .splits import (
     SPLIT_COUNT_ERROR,
     SPLIT_REFUND_ERROR,
     SPLIT_SIGN_ERROR,
     SPLIT_SUM_ERROR,
-    SPLIT_TRANSFER_ERROR,
-    _lock_accounts_and_transactions,
-    confirm_transfer_pair,
-    dismiss_transfer_pair,
     split_transaction,
-    transaction_is_linked_refund,
-    with_transfer_state,
+    SPLIT_TRANSFER_ERROR,
 )
+from .transfer_pairing import confirm_transfer_pair, dismiss_transfer_pair
 from .category_suggestion_services import accept_suggestion, reject_suggestion, suggestion_is_current
 from .chat_proposals import (
     ACTION_UNKNOWN,
@@ -566,7 +565,7 @@ def _visible_or_denied(query, pk):
 
 def _locked_transaction(person, pk):
     """The row locked the way the manual services lock it (household, accounts, rows), or denied."""
-    return _lock_accounts_and_transactions(person, [_visible_or_denied(_ai_transactions(person), pk)])[0]
+    return lock_accounts_and_transactions(person, [_visible_or_denied(_ai_transactions(person), pk)])[0]
 
 
 def _locked(model, pk):
@@ -592,7 +591,7 @@ def _apply_recurring_row(person, _payload, row):
 def _apply_transfer_row(person, _payload, row):
     if row.get("target") == "pair":
         pair = _visible_or_denied(_ai_pairs(person), row["id"])
-        _lock_accounts_and_transactions(person, [pair.leg_a, pair.leg_b])
+        lock_accounts_and_transactions(person, [pair.leg_a, pair.leg_b])
         pair = _locked(TransferPair, pair.pk)
         if pair.status != row["before"]["status"]:
             raise _Stale(_already(pair.status))

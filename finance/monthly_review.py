@@ -22,8 +22,8 @@ from .cash_flow import (
     spending_by_category_report,
     spending_category_detail_url,
 )
-from .category_services import excluded_transfer_ids as _excluded_transfer_ids
-from .category_services import income_and_spending_totals
+from .ledger_counting import excluded_transfer_ids as _excluded_transfer_ids
+from .ledger_counting import income_and_spending_totals
 from .models import (
     Account,
     Alert,

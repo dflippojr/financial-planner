@@ -17,7 +17,7 @@ from .cash_flow import (
     selected_accounts,
     spending_by_category_report,
 )
-from .category_services import income_and_spending_by_account, income_and_spending_by_tag
+from .ledger_counting import income_and_spending_by_account, income_and_spending_by_tag
 from .export import money_decimal
 from .models import RecurringSeries, Tag
 from .net_worth import net_worth_report

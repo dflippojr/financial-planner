@@ -21,7 +21,7 @@ from django.db.models import Q
 
 from .access import require_person as _person
 from .cash_flow import format_minor
-from .category_services import current_household
+from .households import current_household
 from .lifecycle_services import lock_actor_household
 from .models import SavingsGoal
 from .savings_goal_services import save_savings_goal

@@ -19,7 +19,7 @@ from .cash_flow import (
     previous_equal_range,
     spending_by_category_report,
 )
-from .category_services import spending_by_category_by_window
+from .ledger_counting import spending_by_category_by_window
 from .models import Category
 
 

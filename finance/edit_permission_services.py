@@ -3,7 +3,7 @@
 from django.core.exceptions import PermissionDenied
 
 from .access import DENIED
-from .category_services import current_household
+from .households import current_household
 
 
 def check_can_edit(person, obj):

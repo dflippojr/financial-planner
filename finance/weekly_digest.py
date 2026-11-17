@@ -14,7 +14,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from .cash_flow import format_minor
-from .category_services import exclusion_exists_for
+from .ledger_counting import exclusion_exists_for
 from .models import AlertSettings, RecurringSeries, RecurringSeriesMember, Transaction, _person_for
 from .recurring_review import DEFAULT_PRICE_CHANGE_PERCENT, acknowledged_amounts, price_changes
 from .recurring_services import CADENCE_DAYS, MIN_DETECTED_CHARGES

@@ -12,7 +12,9 @@ from django.urls import reverse
 
 from finance.budget_services import budget_coverage
 from finance.cash_flow import spending_by_category_report
-from finance.category_services import assign_category, confirm_transfer_pair, link_refund, refresh_transfer_pairs
+from finance.category_services import assign_category
+from finance.refund_links import link_refund
+from finance.transfer_pairing import confirm_transfer_pair, refresh_transfer_pairs
 from finance.models import Account, Budget, TransferPair
 from finance.untracked_transfers import mark_untracked_transfer
 from tests.test_budgets import (

@@ -3,7 +3,7 @@ import pytest
 from django.test import Client
 from django.urls import reverse
 from finance.models import Account, RefundLink, Transaction, TransferPair
-from finance.category_services import split_transaction
+from finance.splits import split_transaction
 from tests.test_categorization import make_person, make_household, make_account, make_transaction
 
 pytestmark = pytest.mark.django_db
@@ -92,7 +92,8 @@ def test_split_selection_loads_only_selected_purchase_parts():
 
 
 def test_excluded_transfer_has_no_refund_search():
-    from finance.category_services import refresh_transfer_pairs, with_transfer_state
+    from finance.ledger_counting import with_transfer_state
+    from finance.transfer_pairing import refresh_transfer_pairs
     owner, _, account, refund, client = setup_refund()
     second = make_account(owner, name='Synthetic Savings')
     make_transaction(owner, second, amount_minor=-refund.amount_minor, description='Synthetic transfer out')
@@ -106,9 +107,9 @@ def test_excluded_transfer_has_no_refund_search():
 @pytest.mark.parametrize('paired_type', [Account.Type.SAVINGS, Account.Type.CREDIT_CARD])
 def test_excluded_leg_is_never_a_refund_original(paired_type):
     from django.core.exceptions import ValidationError
-    from finance.category_services import (
-        REFUND_LINK_RULE, income_and_spending_totals, link_refund, refresh_transfer_pairs,
-    )
+    from finance.ledger_counting import income_and_spending_totals
+    from finance.refund_links import link_refund, REFUND_LINK_RULE
+    from finance.transfer_pairing import refresh_transfer_pairs
     owner, _, account, refund, client = setup_refund()
     paired = make_account(owner, name='Synthetic Paired', account_type=paired_type)
     out_leg = make_transaction(owner, account, amount_minor=-50000, description='Synthetic paired transfer out')
@@ -134,7 +135,8 @@ def test_excluded_leg_is_never_a_refund_original(paired_type):
 
 
 def test_pair_hidden_from_viewer_does_not_block_refund_original():
-    from finance.category_services import link_refund, refresh_transfer_pairs
+    from finance.refund_links import link_refund
+    from finance.transfer_pairing import refresh_transfer_pairs
     from finance.models import Membership
     owner, household, account, _, _ = setup_refund()
     member = make_person('refund-member')
