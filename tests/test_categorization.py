@@ -818,13 +818,13 @@ def test_category_assignment_rechecks_visibility_after_locking(monkeypatch):
     account = make_account(owner, scope=Account.Scope.HOUSEHOLD, household=household)
     financial_transaction = make_transaction(owner, account)
     groceries = household.categories.get(name="Groceries")
-    real_lock = category_services._lock_owned_transactions
+    real_lock = category_services.lock_owned_transactions
 
     def unshare_then_lock(transactions):
         unshare_account(owner, account.pk)
         return real_lock(transactions)
 
-    monkeypatch.setattr(category_services, "_lock_owned_transactions", unshare_then_lock)
+    monkeypatch.setattr(category_services, "lock_owned_transactions", unshare_then_lock)
 
     with pytest.raises(PermissionDenied):
         assign_category(member, financial_transaction.pk, groceries.pk)
