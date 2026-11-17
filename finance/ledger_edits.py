@@ -1,7 +1,9 @@
 """Helpers every ledger edit shares: correction history, row locks, and who sees a pair's legs.
 
-The lock helpers take the actor's household lock, then accounts, then
-transactions, each in pk order, so every caller locks in the same order.
+Both lock helpers lock accounts, then transactions, each in pk order, so every
+caller locks in the same order. Only lock_accounts_and_transactions takes the
+actor's household lock first; callers of lock_owned_transactions take it
+themselves with lock_actor_household before calling.
 """
 
 from django.core.exceptions import PermissionDenied
