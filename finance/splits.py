@@ -7,6 +7,7 @@ from django.db import transaction
 
 from .access import DENIED as _DENIED
 from .access import require_person as _person_for
+from .access import visible_rows
 from .category_services import assignable_categories
 from .ledger_counting import with_transfer_state
 from .ledger_edits import history_label, lock_owned_transactions, record_text_history
@@ -37,6 +38,10 @@ def _split_amount_display(amount_minor):
 def _split_history_label(parts):
     bits = [f"{part.category.name} {_split_amount_display(part.amount_minor)}" for part in parts]
     return "Split: " + ", ".join(bits)
+
+
+def _parts_with_categories(parent):
+    return list(TransactionSplit.objects.filter(transaction=parent).select_related("category"))
 
 
 def _normalized_parts(person, parent, parts):
@@ -79,10 +84,10 @@ def _linked_original_refunds(parent):
 
 def _visible_linked_original_refund_ids(person, parent):
     return set(
-        RefundLink.objects.visible_to(person)
+        visible_rows(RefundLink, person)
         .filter(
             original=parent,
-            refund_id__in=Transaction.objects.visible_to(person)
+            refund_id__in=visible_rows(Transaction, person)
             .filter(status=Transaction.Status.ACTIVE)
             .values("pk"),
         )
@@ -158,7 +163,7 @@ def _replace_splits(parent, normalized):
 def split_transaction(principal, txn_id, parts, refund_assignments=None):
     person = _person_for(principal)
     financial_transaction = (
-        Transaction.objects.visible_to(person)
+        visible_rows(Transaction, person)
         .filter(pk=txn_id, status=Transaction.Status.ACTIVE)
         .select_related("account", "category")
         .first()
@@ -168,7 +173,7 @@ def split_transaction(principal, txn_id, parts, refund_assignments=None):
     refunds = _linked_original_refunds(financial_transaction)
     lock_actor_household(person)
     locked = lock_owned_transactions([financial_transaction, *refunds])
-    if not Transaction.objects.visible_to(person).filter(pk=financial_transaction.pk).exists():
+    if not visible_rows(Transaction, person).filter(pk=financial_transaction.pk).exists():
         raise PermissionDenied(_DENIED)
     by_id = {item.pk: item for item in locked}
     financial_transaction = by_id[financial_transaction.pk]
@@ -180,7 +185,7 @@ def split_transaction(principal, txn_id, parts, refund_assignments=None):
         raise ValidationError(SPLIT_REFUND_ERROR)
     normalized = _normalized_parts(person, financial_transaction, parts)
     previous_label = (
-        _split_history_label(list(financial_transaction.splits.select_related("category")))
+        _split_history_label(_parts_with_categories(financial_transaction))
         if financial_transaction.category_source == Transaction.CategorySource.SPLIT
         else history_label(financial_transaction.category)
     )
@@ -208,7 +213,7 @@ def split_transaction(principal, txn_id, parts, refund_assignments=None):
 def unsplit_transaction(principal, txn_id, category_id):
     person = _person_for(principal)
     financial_transaction = (
-        Transaction.objects.visible_to(person)
+        visible_rows(Transaction, person)
         .filter(pk=txn_id, status=Transaction.Status.ACTIVE)
         .select_related("account", "category")
         .first()
@@ -225,14 +230,14 @@ def unsplit_transaction(principal, txn_id, category_id):
     refunds = _linked_original_refunds(financial_transaction)
     lock_actor_household(person)
     locked = lock_owned_transactions([financial_transaction, *refunds])
-    if not Transaction.objects.visible_to(person).filter(pk=financial_transaction.pk).exists():
+    if not visible_rows(Transaction, person).filter(pk=financial_transaction.pk).exists():
         raise PermissionDenied(_DENIED)
     by_id = {item.pk: item for item in locked}
     financial_transaction = by_id[financial_transaction.pk]
     refunds = [by_id[item.pk] for item in refunds]
-    previous_label = _split_history_label(list(financial_transaction.splits.select_related("category")))
+    previous_label = _split_history_label(_parts_with_categories(financial_transaction))
     RefundLink.objects.filter(original=financial_transaction).update(original_part=None)
-    financial_transaction.splits.all().delete()
+    TransactionSplit.objects.filter(transaction=financial_transaction).delete()
     financial_transaction.category = category
     financial_transaction.category_source = Transaction.CategorySource.MANUAL
     financial_transaction.save(update_fields=("category", "category_source", "updated_at"))
@@ -265,7 +270,7 @@ def assign_split_part_category(principal, part_id, category_id):
     if part is None:
         raise PermissionDenied(_DENIED)
     parent = part.transaction
-    if not Transaction.objects.visible_to(person).filter(pk=parent.pk, status=Transaction.Status.ACTIVE).exists():
+    if not visible_rows(Transaction, person).filter(pk=parent.pk, status=Transaction.Status.ACTIVE).exists():
         raise PermissionDenied(_DENIED)
     if parent.category_source != Transaction.CategorySource.SPLIT:
         raise PermissionDenied(_DENIED)
@@ -280,16 +285,16 @@ def assign_split_part_category(principal, part_id, category_id):
     )
     lock_actor_household(person)
     locked = lock_owned_transactions([parent, *refunds])
-    if not Transaction.objects.visible_to(person).filter(pk=parent.pk).exists():
+    if not visible_rows(Transaction, person).filter(pk=parent.pk).exists():
         raise PermissionDenied(_DENIED)
     by_id = {item.pk: item for item in locked}
     parent = by_id[parent.pk]
     refunds = [by_id[item.pk] for item in refunds]
     part = TransactionSplit.objects.select_for_update().get(pk=part.pk)
-    previous_label = _split_history_label(list(parent.splits.select_related("category")))
+    previous_label = _split_history_label(_parts_with_categories(parent))
     part.category = category
     part.save(update_fields=("category", "updated_at"))
-    new_label = _split_history_label(list(parent.splits.select_related("category")))
+    new_label = _split_history_label(_parts_with_categories(parent))
     record_text_history(
         parent,
         person,

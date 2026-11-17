@@ -17,6 +17,7 @@ from django.db.models import Q
 
 from .access import DENIED as _DENIED
 from .access import require_person as _person_for
+from .access import visible_rows
 from .audit_services import record
 from .households import current_household
 from .input_limits import MAX_TRANSFER_CANDIDATES
@@ -49,7 +50,7 @@ from .refund_links import (
 )
 
 
-_PAIR_CACHE = ContextVar("pair_cache", default=None)
+_PAIR_CACHE: ContextVar[dict | None] = ContextVar("pair_cache", default=None)
 
 
 def _cached_pair_run(function):
@@ -71,8 +72,8 @@ def _prime_pair_cache(rows):
     memberships = Membership.objects.filter(person_id__in=owner_ids, ended_at__isnull=True).select_related("household")
     cache["memberships"] = {owner_id: None for owner_id in owner_ids}
     for membership in memberships:
-        cache["memberships"][membership.person_id] = membership.household_id
-        cache["windows"][membership.person_id] = membership.household.transfer_match_window_days
+        cache["memberships"][membership.person_id] = membership.household_id  # pyright: ignore[reportAttributeAccessIssue] - runtime FK id attribute
+        cache["windows"][membership.person_id] = membership.household.transfer_match_window_days  # pyright: ignore[reportAttributeAccessIssue] - runtime FK id attribute
     for owner_id in owner_ids:
         cache["windows"].setdefault(owner_id, settings.TRANSFER_MATCH_WINDOW_DAYS)
 
@@ -342,7 +343,7 @@ _SETTLED_PAIR_STATUSES = (
 
 def _lock_visible_transactions(person):
     transactions = list(
-        Transaction.objects.visible_to(person)
+        visible_rows(Transaction, person)
         .filter(status=Transaction.Status.ACTIVE)
         .select_related("account", "account__household", "account__owner")
     )
@@ -562,7 +563,7 @@ def revalidate_pairs_for_leg_ids(person, seed_leg_ids):
     )
     pair_ids = sorted(pk for pk, _left, _right in rows)
     existing = {
-        (pair.leg_a_id, pair.leg_b_id): pair
+        (pair.leg_a_id, pair.leg_b_id): pair  # pyright: ignore[reportAttributeAccessIssue] - runtime FK id attribute
         for pair in TransferPair.objects.select_for_update(of=("self",)).filter(pk__in=pair_ids).order_by("pk")
     }
     _revalidate_marked_pairs(existing, {item.pk: item for item in locked}, person)
@@ -603,7 +604,7 @@ def _candidate_neighbors(person, keys, window):
                     transaction_date__range=(day - timedelta(days=window), day + timedelta(days=window)),
                 ) & ~Q(account_id=account_id)
         rows = (
-            Transaction.objects.visible_to(person)
+            visible_rows(Transaction, person)
             .filter(predicate, status=Transaction.Status.ACTIVE)
             .exclude(category_source=Transaction.CategorySource.SPLIT)
             .select_related("account", "account__household", "category")
@@ -613,7 +614,7 @@ def _candidate_neighbors(person, keys, window):
 
 
 def _lock_affected_transactions(person, transaction_ids, previous_keys):
-    visible = Transaction.objects.visible_to(person)
+    visible = visible_rows(Transaction, person)
     affected = {
         row.pk: row for row in visible.filter(pk__in=transaction_ids)
         .select_related("account", "account__household", "category")
@@ -668,7 +669,7 @@ def refresh_transfer_pairs(principal, *, actor=None, transaction_ids=None, previ
     _prime_pair_cache(locked)
     tx_ids = [item.pk for item in locked]
     existing = {
-        (pair.leg_a_id, pair.leg_b_id): pair
+        (pair.leg_a_id, pair.leg_b_id): pair  # pyright: ignore[reportAttributeAccessIssue] - runtime FK id attribute
         for pair in TransferPair.objects.select_for_update(of=("self",)).filter(
             Q(leg_a_id__in=tx_ids) | Q(leg_b_id__in=tx_ids)
         ).order_by("pk")
@@ -677,13 +678,13 @@ def refresh_transfer_pairs(principal, *, actor=None, transaction_ids=None, previ
     _revalidate_marked_pairs(existing, locked_by_id, actor)
     occupied = _occupied_transaction_ids(existing.values())
     created = []
-    visible_ids = set(Transaction.objects.visible_to(person).filter(
+    visible_ids = set(visible_rows(Transaction, person).filter(
         pk__in=tx_ids, status=Transaction.Status.ACTIVE
     ).values_list("pk", flat=True))
     if actor.pk != person.pk:
         # Detection on another member's behalf only pairs rows the actor can
         # also see; that member's own refresh covers the rest.
-        visible_ids &= set(Transaction.objects.visible_to(actor).filter(
+        visible_ids &= set(visible_rows(Transaction, actor).filter(
             pk__in=visible_ids
         ).values_list("pk", flat=True))
     scored_pairs = _score_pairs([row for row in locked if row.pk in visible_ids])
@@ -723,7 +724,7 @@ def refresh_transfer_pairs(principal, *, actor=None, transaction_ids=None, previ
 def _visible_pair(principal, pair_id):
     person = _person_for(principal)
     pair = (
-        TransferPair.objects.visible_to(person)
+        visible_rows(TransferPair, person)
         .select_related("leg_a", "leg_b", "leg_a__account", "leg_b__account", "leg_a__category", "leg_b__category")
         .filter(pk=pair_id)
         .first()

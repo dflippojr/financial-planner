@@ -20,6 +20,7 @@ from django.db.models import (
 from django.db.models.functions import Coalesce
 
 from .access import require_person as _person_for
+from .access import visible_rows
 from .models import Account, RefundLink, RefundLinkDrop, Transaction, TransactionSplit, TransferPair
 
 
@@ -36,12 +37,12 @@ def exclusion_exists_for(principal, *, household_only=False):
     one private leg counts its household leg as income or spending, even for
     the private leg's owner.
     """
-    visible = Transaction.objects.visible_to(principal)
+    visible = visible_rows(Transaction, principal)
     if household_only:
         visible = visible.filter(account__scope=Account.Scope.HOUSEHOLD)
     visible = visible.values("pk")
     is_pair_leg = Exists(
-        TransferPair.objects.excluding_income_and_spending().filter(
+        TransferPair.objects.excluding_income_and_spending().filter(  # pyright: ignore[reportAttributeAccessIssue] - QuerySet.as_manager() is untyped, as for the other excluding_income_and_spending calls in the baseline
             Q(leg_a_id=OuterRef("pk")) | Q(leg_b_id=OuterRef("pk")),
             leg_a_id__in=visible,
             leg_b_id__in=visible,
@@ -84,7 +85,7 @@ def _totals_base(principal, *, date_from=None, date_to=None, accounts=None, tag=
     narrows the visible set like `tag`; it never widens it.
     """
     person = _person_for(principal)
-    visible_accounts = Account.objects.visible_to(person)
+    visible_accounts = visible_rows(Account, person)
     is_transfer_leg = exclusion_exists_for(person)
     links = RefundLink.objects.filter(refund_id=OuterRef("pk"))
     # A link dropped for this person only (#570) is theirs alone, like the pair that dropped it.
@@ -99,7 +100,7 @@ def _totals_base(principal, *, date_from=None, date_to=None, accounts=None, tag=
             output_field=BooleanField(),
         )
         is_refund = Case(When(not_household_only, then=is_refund), default=Exists(links), output_field=BooleanField())
-    transactions = Transaction.objects.visible_to(person).filter(
+    transactions = visible_rows(Transaction, person).filter(
         status=Transaction.Status.ACTIVE,
         kind=Transaction.Kind.CASH_FLOW,
         account_id__in=visible_accounts.values("pk"),

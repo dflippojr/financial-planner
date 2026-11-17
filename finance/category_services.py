@@ -5,6 +5,7 @@ from django.db import transaction
 
 from .access import DENIED as _DENIED
 from .access import require_person as _person_for
+from .access import visible_rows
 from .audit_services import record
 from .households import current_household
 from .ledger_edits import history_label, lock_owned_transactions, record_text_history
@@ -67,7 +68,7 @@ def assignable_categories(principal):
     if household is None:
         return Category.objects.none()
     ensure_household_categories(household)
-    return Category.objects.visible_to(person).exclude(code=Category.Code.TRANSFER).order_by("name", "pk")
+    return visible_rows(Category, person).exclude(code=Category.Code.TRANSFER).order_by("name", "pk")
 
 
 def apply_manual_category(person, txn, category):
@@ -88,7 +89,7 @@ def apply_manual_category(person, txn, category):
 def assign_category(principal, transaction_id, category_id):
     person = _person_for(principal)
     financial_transaction = (
-        Transaction.objects.visible_to(person)
+        visible_rows(Transaction, person)
         .filter(pk=transaction_id, status=Transaction.Status.ACTIVE)
         .select_related("account", "category")
         .first()
@@ -108,7 +109,7 @@ def assign_category(principal, transaction_id, category_id):
     locked = lock_owned_transactions([financial_transaction, *linked_refunds])
     # Recheck after locking: the account may have been unshared between the
     # first visibility query and the locks.
-    if not Transaction.objects.visible_to(person).filter(pk=financial_transaction.pk).exists():
+    if not visible_rows(Transaction, person).filter(pk=financial_transaction.pk).exists():
         raise PermissionDenied(_DENIED)
     by_id = {item.pk: item for item in locked}
     financial_transaction = by_id[financial_transaction.pk]
@@ -132,7 +133,7 @@ def add_category(principal, name):
     cleaned = name.strip()
     if not cleaned:
         raise ValidationError("Enter a category name.")
-    if household.categories.filter(name=cleaned).exists():
+    if Category.objects.filter(household=household, name=cleaned).exists():
         raise ValidationError("A category with that name already exists.")
     category = Category.objects.create(household=household, name=cleaned, code=Category.Code.CUSTOM)
     record(person, AuditEvent.Action.RECORD_CREATED, AuditEvent.TargetType.CATEGORY, category.pk,
@@ -147,13 +148,13 @@ def rename_category(principal, category_id, name):
     if household is None:
         raise PermissionDenied(_DENIED)
     lock_actor_household(person)
-    category = Category.objects.visible_to(person).select_for_update().filter(pk=category_id).first()
+    category = visible_rows(Category, person).select_for_update().filter(pk=category_id).first()
     if category is None or category.code == Category.Code.TRANSFER:
         raise PermissionDenied(_DENIED)
     cleaned = name.strip()
     if not cleaned:
         raise ValidationError("Enter a category name.")
-    if household.categories.exclude(pk=category.pk).filter(name=cleaned).exists():
+    if Category.objects.filter(household=household).exclude(pk=category.pk).filter(name=cleaned).exists():
         raise ValidationError("A category with that name already exists.")
     renamed = category.name != cleaned
     category.name = cleaned

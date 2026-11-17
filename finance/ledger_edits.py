@@ -8,6 +8,7 @@ from django.core.exceptions import PermissionDenied
 from django.utils import timezone
 
 from .access import DENIED as _DENIED
+from .access import visible_rows
 from .audit_services import record_correction
 from .lifecycle_services import lock_actor_household
 from .models import Account, Membership, Transaction, TransactionCorrectionHistory
@@ -45,7 +46,7 @@ def lock_accounts_and_transactions(person, transactions):
     )
     if len(locked) != len(ids):
         raise PermissionDenied(_DENIED)
-    visible = set(Transaction.objects.visible_to(person).filter(pk__in=ids).values_list("pk", flat=True))
+    visible = set(visible_rows(Transaction, person).filter(pk__in=ids).values_list("pk", flat=True))
     if visible != set(ids):
         raise PermissionDenied(_DENIED)
     return locked

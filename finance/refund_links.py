@@ -11,6 +11,7 @@ from django.db.models import Exists, F, OuterRef, Q
 
 from .access import DENIED as _DENIED
 from .access import require_person as _person_for
+from .access import visible_rows
 from .ledger_counting import exclusion_exists_for
 from .ledger_edits import (
     account_viewer_ids,
@@ -29,6 +30,7 @@ from .models import (
     RefundLinkDrop,
     Transaction,
     TransactionCorrectionHistory,
+    TransactionSplit,
     TransferPair,
 )
 
@@ -310,13 +312,13 @@ def link_refund(principal, refund_id, original_id, original_part_id=None):
     if refund_id == original_id:
         raise PermissionDenied(_DENIED)
     refund = (
-        Transaction.objects.visible_to(person)
+        visible_rows(Transaction, person)
         .filter(pk=refund_id, status=Transaction.Status.ACTIVE)
         .select_related("account", "category")
         .first()
     )
     original = (
-        Transaction.objects.visible_to(person)
+        visible_rows(Transaction, person)
         .filter(pk=original_id, status=Transaction.Status.ACTIVE)
         .select_related("account", "category")
         .first()
@@ -350,7 +352,9 @@ def link_refund(principal, refund_id, original_id, original_part_id=None):
     if original.category_source == Transaction.CategorySource.SPLIT:
         if original_part_id is None:
             raise ValidationError(SPLIT_PART_REQUIRED)
-        original_part = original.splits.filter(pk=original_part_id).select_related("category").first()
+        original_part = (
+            TransactionSplit.objects.filter(transaction=original, pk=original_part_id).select_related("category").first()
+        )
         if original_part is None:
             raise ValidationError(SPLIT_PART_MISMATCH)
         inherited = original_part.category
