@@ -27,7 +27,10 @@ Django settings) and checks three things:
 3. The largest import cycle. The graph has one node per module and an edge from
    a module to each finance module it imports, at any level, including imports
    inside functions. `from .x import y` is an edge to x.y when x.y is a module
-   (a submodule import) and to x otherwise; `import finance.x` is an edge to x.
+   (a submodule import) and to x otherwise; `import finance.x` is an edge to x,
+   and `import finance` an edge to "__init__". Relative imports resolve from the
+   importer's package; a package is a directory with an __init__.py, even one
+   with no other modules.
    Self-edges are dropped. A cycle is a strongly connected component (Tarjan's
    algorithm); its size is its module count. The largest may not grow above
    MAX_CYCLE_SIZE.
@@ -150,33 +153,37 @@ PRIVATE_IMPORT_BASELINE = frozenset({
 
 
 def finance_sources(root=FINANCE):
-    """Map each finance module's dotted name (relative to finance/) to its source."""
+    """Return ({dotted module name: source}, {names that are packages}), relative to finance/."""
     sources = {}
+    packages = set()
     for path in sorted(root.rglob("*.py")):
         relative = path.relative_to(root)
         if relative.parts[0] == "migrations":
             continue
         parts = list(relative.with_suffix("").parts)
-        if parts[-1] == "__init__":
+        is_package = parts[-1] == "__init__"
+        if is_package:
             parts.pop()
-        sources[".".join(parts) or ROOT_MODULE] = path.read_text(encoding="utf-8")
-    return sources
+        name = ".".join(parts) or ROOT_MODULE
+        sources[name] = path.read_text(encoding="utf-8")
+        if is_package:
+            packages.add(name)
+    return sources, packages
 
 
 def _is_private(name):
     return name.startswith("_") and not (name.startswith("__") and name.endswith("__"))
 
 
-def _package_parts(module, sources):
+def _package_parts(module, packages):
     """The package a module's relative imports start from, as a list of name parts."""
     if module == ROOT_MODULE:
         return []
     parts = module.split(".")
-    is_package = any(other.startswith(module + ".") for other in sources)
-    return parts if is_package else parts[:-1]
+    return parts if module in packages else parts[:-1]
 
 
-def _import_base(node, module, sources):
+def _import_base(node, module, packages):
     """The dotted finance module a `from ... import` names, or None if it is outside finance."""
     if node.level == 0:
         name = node.module or ""
@@ -185,7 +192,7 @@ def _import_base(node, module, sources):
         if name.startswith(PACKAGE + "."):
             return name[len(PACKAGE) + 1:]
         return None
-    parts = _package_parts(module, sources)
+    parts = _package_parts(module, packages)
     if node.level > 1:
         parts = parts[: len(parts) - (node.level - 1)]
     if node.module:
@@ -218,8 +225,12 @@ def _import_statements(tree):
             pending.extend((child, inner) for child in getattr(node, field, ()))
 
 
-def scan(sources):
-    """Return (private imports, function-import count, import graph) for a module->source map."""
+def scan(sources, packages=frozenset()):
+    """Return (private imports, function-import count, import graph).
+
+    sources maps each module's dotted name to its source; packages names the
+    modules that are packages (an __init__.py), which relative imports start from.
+    """
     private = set()
     function_imports = 0
     graph = {module: set() for module in sources}
@@ -228,12 +239,12 @@ def scan(sources):
             function_imports += in_function
             if isinstance(node, ast.Import):
                 for alias in node.names:
-                    if alias.name.startswith(PACKAGE + "."):
+                    if alias.name == PACKAGE or alias.name.startswith(PACKAGE + "."):
                         target = _known(alias.name[len(PACKAGE) + 1:], sources)
                         if target:
                             graph[module].add(target)
             elif isinstance(node, ast.ImportFrom):
-                base = _import_base(node, module, sources)
+                base = _import_base(node, module, packages)
                 if base is None:
                     continue
                 for alias in node.names:
@@ -315,7 +326,7 @@ def _ratchet(name, found, recorded, detail=""):
 
 @functools.cache
 def finance_scan():
-    return scan(finance_sources())
+    return scan(*finance_sources())
 
 
 def test_no_new_private_cross_module_imports():
@@ -355,7 +366,7 @@ def test_scan_resolves_relative_absolute_and_submodule_imports():
         "csv_import.services": "from ..models import _helper\nfrom . import _private_submodule\n",
         "csv_import._private_submodule": "from finance.csv_import.services import _x\n",
     }
-    private, _, graph = scan(sources)
+    private, _, graph = scan(sources, packages={ROOT_MODULE, "csv_import"})
     assert private == {
         "access -> models._person_for",
         "csv_import.services -> models._helper",
@@ -389,3 +400,21 @@ def test_largest_cycle_counts_imports_inside_functions():
     }
     _, _, graph = scan(sources)
     assert largest_cycle(graph) == {"a", "b", "c"}
+
+
+def test_package_with_only_an_initializer_resolves_relative_imports_from_itself():
+    sources = {
+        ROOT_MODULE: "",
+        "parser": "",
+        "csv_import": "",
+        "csv_import.parser": "",
+        "csv_import.helpers": "from ..parser import _parse_date\n",
+    }
+    private, _, _ = scan(sources, packages={ROOT_MODULE, "csv_import", "csv_import.helpers"})
+    assert private == {"csv_import.helpers -> csv_import.parser._parse_date"}
+
+
+def test_plain_import_of_the_package_is_an_edge_to_its_initializer():
+    sources = {ROOT_MODULE: "from . import forms\n", "forms": "import finance\n"}
+    _, _, graph = scan(sources, packages={ROOT_MODULE})
+    assert largest_cycle(graph) == {ROOT_MODULE, "forms"}
