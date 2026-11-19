@@ -42,6 +42,7 @@ from .auth_services import (
     throttle_key,
     validated_username,
 )
+from .transaction_services import correct_transaction
 from .forms import (
     ReceiptUploadForm,
     AlertSettingsForm,
@@ -975,7 +976,7 @@ def transaction_edit(request, transaction_id):
                 )
                 previous_key = transfer_matching_key(financial_transaction)
                 try:
-                    form.apply(financial_transaction, actor=person)
+                    correct_transaction(person, financial_transaction, form.cleaned_data)
                 except ValidationError as exc:
                     form.add_error("amount", _first_message(exc, "The amount could not be saved."))
                     return _render_transaction_edit(request, financial_transaction, form=form)

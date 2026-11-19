@@ -41,7 +41,6 @@ from .models import (
     SavingsGoal,
     SheetComparisonSettings,
     Transaction,
-    TransactionCorrectionHistory,
     TransactionSplit,
 )
 
@@ -662,45 +661,6 @@ class SpendingFilterForm(forms.Form):
         return cleaned
 
 
-def _correction_history_rows(transaction, actor, recorded_at, new_date, new_description, new_amount_minor):
-    rows = []
-    if new_date != transaction.transaction_date:
-        rows.append(
-            TransactionCorrectionHistory(
-                transaction=transaction,
-                actor=actor,
-                recorded_at=recorded_at,
-                field_name=TransactionCorrectionHistory.Field.TRANSACTION_DATE,
-                previous_date=transaction.transaction_date,
-                new_date=new_date,
-            )
-        )
-    if new_description != transaction.description:
-        rows.append(
-            TransactionCorrectionHistory(
-                transaction=transaction,
-                actor=actor,
-                recorded_at=recorded_at,
-                field_name=TransactionCorrectionHistory.Field.DESCRIPTION,
-                previous_description=transaction.description,
-                new_description=new_description,
-            )
-        )
-    if new_amount_minor != transaction.amount_minor:
-        rows.append(
-            TransactionCorrectionHistory(
-                transaction=transaction,
-                actor=actor,
-                recorded_at=recorded_at,
-                field_name=TransactionCorrectionHistory.Field.AMOUNT_MINOR,
-                previous_amount_minor=transaction.amount_minor,
-                new_amount_minor=new_amount_minor,
-                currency=transaction.currency,
-            )
-        )
-    return rows
-
-
 class TransactionCorrectionForm(forms.Form):
     transaction_date = forms.DateField(label="Date", widget=forms.DateInput(attrs={"type": "date"}))
     description = forms.CharField(max_length=MAX_DESCRIPTION_CHARS, widget=forms.Textarea(attrs={"rows": 3}))
@@ -736,38 +696,6 @@ class TransactionCorrectionForm(forms.Form):
             },
             **kwargs,
         )
-
-    def apply(self, transaction, *, actor):
-        new_date = self.cleaned_data["transaction_date"]
-        new_description = self.cleaned_data["description"]
-        new_amount_minor = int(self.cleaned_data["amount"] * 100)
-        recorded_at = timezone.now()
-        history_rows = _correction_history_rows(
-            transaction,
-            actor,
-            recorded_at,
-            new_date,
-            new_description,
-            new_amount_minor,
-        )
-        if not history_rows:
-            return transaction
-        from .splits import SPLIT_AMOUNT_ERROR
-
-        if (
-            transaction.category_source == Transaction.CategorySource.SPLIT
-            and new_amount_minor != transaction.amount_minor
-        ):
-            raise ValidationError(SPLIT_AMOUNT_ERROR)
-        transaction.transaction_date = new_date
-        transaction.description = new_description
-        transaction.amount_minor = new_amount_minor
-        transaction.save(update_fields=("transaction_date", "description", "amount_minor", "updated_at"))
-        TransactionCorrectionHistory.objects.bulk_create(history_rows)
-        from .calculated_balances import refresh_calculated_balances
-
-        refresh_calculated_balances(actor, transaction.account_id)
-        return transaction
 
 
 class ManualTransactionForm(forms.Form):

@@ -183,7 +183,7 @@ def test_the_scan_sees_the_paths_this_fix_wired_up():
         "csv_import/services.py:commit_csv_import",
         "csv_import/services.py:archive_batch",
         "manual_entry_services.py:_create_manual_entry",
-        "forms.py:apply",
+        "transaction_services.py:correct_transaction",
         "snapshot_services.py:record_manual_snapshot",
         "snapshot_services.py:delete_manual_snapshot",
     ):
