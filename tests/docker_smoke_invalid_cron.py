@@ -1,8 +1,9 @@
 """The Docker smoke's verdict on an invalid SIMPLEFIN_SYNC_CRON (#531, #560).
 
 scripts/docker-smoke.sh starts the stack once per invalid schedule, records
-each case under SMOKE_INVALID_CRON_DIR and runs this file with the app image's
-own pytest. The name keeps it out of the normal suite, which tests it against
+each case under SMOKE_INVALID_CRON_DIR and runs this file with pytest in a
+one-off python:3.15-slim container (#758), not the app image. The name keeps it
+out of the normal suite, which tests it against
 recorded outcomes in tests/test_docker_smoke.py. Each case directory holds:
 
 - schedule: the SIMPLEFIN_SYNC_CRON value;

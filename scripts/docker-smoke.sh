@@ -15,8 +15,9 @@
 #      naming the variable, never start background (so no restart loop), leave
 #      backup running with no restarts, and leave app healthy with /health/
 #      naming the variable, all from that one `up` (#560). The verdict is the
-#      pytest file tests/docker_smoke_invalid_cron.py, run with the app image's
-#      pytest.
+#      pytest file tests/docker_smoke_invalid_cron.py, run in a one-off
+#      python:3.15-slim container that installs requirements-test.lock, so the
+#      app image carries no test tools (#758).
 #
 # It builds only the services docs/deployment.md builds, so config-check must
 # come from background's image, as it does on an upgrade.
@@ -197,14 +198,17 @@ invalid_cron_outcome() {
   esac
 }
 
-# Run tests/docker_smoke_invalid_cron.py on the recorded cases with the app
-# image's own pytest, in a one-off container with no database.
+# Run tests/docker_smoke_invalid_cron.py on the recorded cases in a one-off
+# python:3.15-slim container with no database and no compose project. The
+# production image has no pytest (#758), so the container installs the hashed
+# requirements-test.lock first, then runs the verdict.
 judge_invalid_cron() {
   chmod -R a+rX "$work_dir/invalid-cron"
-  compose run --rm --no-deps -T --entrypoint python \
+  docker run --rm \
+    -v "$repo_dir/requirements-test.lock:/smoke/requirements-test.lock:ro" \
     -v "$repo_dir/tests/docker_smoke_invalid_cron.py:/smoke/invalid_cron.py:ro" \
     -v "$work_dir/invalid-cron:/smoke/invalid-cron:ro" \
-    app -B -m pytest -p no:django -p no:cacheprovider --noconftest -c /dev/null --rootdir /smoke -rxX /smoke/invalid_cron.py
+    python:3.15-slim sh -c 'python -m pip install --quiet --no-cache-dir --root-user-action=ignore --require-hashes --only-binary :all: -r /smoke/requirements-test.lock && exec python -B -m pytest -p no:django -p no:cacheprovider --noconftest -c /dev/null --rootdir /smoke -rxX /smoke/invalid_cron.py'
 }
 
 # Try each schedule in $@, record its case for the pytest verdict, and fail

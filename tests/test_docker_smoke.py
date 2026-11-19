@@ -5,7 +5,7 @@ functions, and replace compose and container_state, so no Docker daemon is
 reached. Each stub state is "<status> <restart count>", as docker inspect
 prints it. The isolation tests run the whole script with a fake docker on PATH,
 and the #560 tests run tests/docker_smoke_invalid_cron.py, the pytest verdict
-the smoke runs inside the app image, on recorded outcomes.
+the smoke runs in a one-off python:3.15-slim container, on recorded outcomes.
 """
 
 import json
@@ -23,6 +23,7 @@ from tests.test_backup_scripts import POSIX_BASH, _unix_path
 
 SMOKE_SCRIPT = Path(__file__).parents[1] / "scripts" / "docker-smoke.sh"
 INVALID_CRON_VERDICT = Path(__file__).parent / "docker_smoke_invalid_cron.py"
+TEST_LOCK = Path(__file__).parents[1] / "requirements-test.lock"
 
 
 def _run(tmp_path, body, **env):
@@ -72,7 +73,7 @@ HEALTH = "ok\nbackground not started: SIMPLEFIN_SYNC_CRON supports numbers only 
 VERDICT_OUTPUT = "11 passed"
 
 
-# Runs the real verdict on what the stubbed smoke recorded, as the app image would.
+# Runs the real verdict on what the stubbed smoke recorded, as the verdict container would.
 # Only the directory is resolved: a virtualenv's python is a symlink to one without its packages.
 PYTHON = f"{_unix_path(Path(sys.executable).parent)}/{Path(sys.executable).name}"
 REAL_VERDICT = (
@@ -103,7 +104,8 @@ def _invalid_cron(tmp_path, state, *, logs=CRON_MESSAGE, verdict_code=0, verdict
         f'compose() {{ echo "$(tr "\\n" " " < "$env_file")$*" >> "{_unix_path(calls)}"; '
         'case $1 in up) if [ "$*" = "up -d" ]; then echo "$up_failure"; return 1; fi; '
         f'touch "{_unix_path(repaired)}" ;; start|restart|create) touch "{_unix_path(repaired)}" ;; '
-        f'logs) printf "%s\\n" "{logs}" ;; run) {verdict} ;; esac; }}\n'
+        f'logs) printf "%s\\n" "{logs}" ;; esac; }}\n'
+        f'docker() {{ echo "docker $*" >> "{_unix_path(calls)}"; case $1 in run) {verdict} ;; esac; }}\n'
         f'container_state() {{ case $1 in background) echo "{state}" ;; backup) echo "{backup}" ;; '
         f'app) if [ -f "{_unix_path(repaired)}" ]; then echo "running 0"; else echo "{app}"; fi ;; esac; }}\n'
         'container_health() { case $(container_state "$1") in running*) echo healthy ;; *) echo unhealthy ;; esac; }\n'
@@ -144,11 +146,16 @@ def test_invalid_cron_hands_each_case_to_the_pytest_verdict(tmp_path):
     assert (case / "backup-state").read_text(encoding="utf-8") == "running 0\n"
     assert "-H Host: smoke.example.test -H X-Forwarded-Proto: https http://127.0.0.1:8000/health/" in calls
     assert " logs --no-color config-check" in calls
-    verdict = [line for line in calls.splitlines() if " run " in line]
+    verdict = [line for line in calls.splitlines() if line.startswith("docker run ")]
     assert len(verdict) == 1
+    # One-off python:3.15-slim, not the app image, installs the hashed test lock first.
+    assert verdict[0].startswith("docker run --rm ")
+    assert "python:3.15-slim sh -c python -m pip install --quiet --no-cache-dir --root-user-action=ignore --require-hashes --only-binary :all: -r /smoke/requirements-test.lock" in verdict[0]
+    assert f"{_unix_path(TEST_LOCK)}:/smoke/requirements-test.lock:ro" in verdict[0]
     assert f"{_unix_path(INVALID_CRON_VERDICT)}:/smoke/invalid_cron.py:ro" in verdict[0]
     assert f"{_unix_path(cases)}:/smoke/invalid-cron:ro" in verdict[0]
-    assert verdict[0].endswith("app -B -m pytest -p no:django -p no:cacheprovider --noconftest -c /dev/null --rootdir /smoke -rxX /smoke/invalid_cron.py")
+    assert verdict[0].endswith("exec python -B -m pytest -p no:django -p no:cacheprovider --noconftest -c /dev/null --rootdir /smoke -rxX /smoke/invalid_cron.py")
+    assert not any(" run " in line and not line.startswith("docker ") for line in calls.splitlines())
 
 
 def test_a_restart_loop_is_recorded_as_one(tmp_path):
