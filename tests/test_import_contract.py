@@ -54,7 +54,7 @@ PACKAGE = "finance"
 ROOT_MODULE = "__init__"
 
 # Measured on main at a4fc0ac. Lower these as they fall; raising one is a gate change.
-MAX_FUNCTION_IMPORTS = 230
+MAX_FUNCTION_IMPORTS = 227
 MAX_CYCLE_SIZE = 67
 
 # Today's private cross-module imports (main at a4fc0ac). Shrink only.
@@ -79,7 +79,6 @@ PRIVATE_IMPORT_BASELINE = frozenset({
     "audit_services -> models._person_for",
     "budget_services -> cash_flow._combine_category_spending",
     "bulk_edit_services -> models._person_for",
-    "bulk_edit_views -> views._apply_transaction_filters",
     "calculated_balances -> lifecycle_services._person_for",
     "calculated_balances -> reconciliation._coverage",
     "calculated_balances -> reconciliation._covered",
@@ -134,8 +133,6 @@ PRIVATE_IMPORT_BASELINE = frozenset({
     "net_worth_views -> account_views._active_visible_account",
     "net_worth_views -> account_views._service_or_404",
     "receipt_services -> models._person_for",
-    "receipt_views -> views._render_transaction_edit",
-    "receipt_views -> views._visible_active_transaction",
     "recurring_review -> models._person_for",
     "simplefin_services -> lifecycle_services._DENIED",
     "simplefin_services -> lifecycle_services._person_for",

@@ -393,7 +393,7 @@ def test_export_view_streams_zip_without_storing_cache_or_logging_content(caplog
     client.force_login(owner.user)
     stamp_recent_auth(client)
     caplog.set_level(logging.DEBUG)
-    with patch("finance.views.timezone.localdate", return_value=date(2026, 10, 1)):
+    with patch("finance.settings_views.timezone.localdate", return_value=date(2026, 10, 1)):
         response = client.post(reverse("account-export"))
 
     assert response.status_code == 200

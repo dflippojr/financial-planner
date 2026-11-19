@@ -16,28 +16,28 @@ from .receipt_services import (
     stored_receipt_path,
     visible_receipt_or_none,
 )
-from .views import _render_transaction_edit, _visible_active_transaction
+from .transaction_views import render_transaction_edit, visible_active_transaction
 
 
 @post_only("transaction-edit", "transaction_id")
 @never_cache
 def receipt_upload(request, transaction_id):
-    financial_transaction = _visible_active_transaction(request.user, transaction_id)
+    financial_transaction = visible_active_transaction(request.user, transaction_id)
     form = ReceiptUploadForm(request.POST, request.FILES)
     if form.is_valid():
         try:
             _service_or_404(lambda: attach_receipt(request.user, transaction_id, form.cleaned_data["receipt"]))
         except ValidationError as exc:
             form.add_error("receipt", exc.messages[0] if exc.messages else "That file could not be attached.")
-            return _render_transaction_edit(request, financial_transaction, receipt_form=form)
+            return render_transaction_edit(request, financial_transaction, receipt_form=form)
         return redirect("transaction-edit", transaction_id=transaction_id)
-    return _render_transaction_edit(request, financial_transaction, receipt_form=form)
+    return render_transaction_edit(request, financial_transaction, receipt_form=form)
 
 
 @post_only("transaction-edit", "transaction_id")
 @never_cache
 def receipt_delete(request, transaction_id, receipt_id):
-    _visible_active_transaction(request.user, transaction_id)
+    visible_active_transaction(request.user, transaction_id)
     _service_or_404(lambda: remove_receipt(request.user, transaction_id, receipt_id))
     return redirect("transaction-edit", transaction_id=transaction_id)
 

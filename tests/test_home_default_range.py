@@ -52,7 +52,7 @@ def test_home_default_is_the_this_month_preset():
 
 
 @pytest.mark.django_db
-@patch("finance.views.timezone.localdate", return_value=TODAY)
+@patch("finance.dashboard_views.timezone.localdate", return_value=TODAY)
 def test_home_with_no_range_opens_on_this_month(_localdate):
     response = _client().get(reverse("home"))
     content = response.content.decode()
@@ -77,7 +77,7 @@ def test_home_with_no_range_opens_on_this_month(_localdate):
 
 
 @pytest.mark.django_db
-@patch("finance.views.timezone.localdate", return_value=TODAY)
+@patch("finance.dashboard_views.timezone.localdate", return_value=TODAY)
 def test_every_home_range_marks_exactly_one_option(_localdate):
     client = _client()
     first = client.get(reverse("home"))
@@ -99,7 +99,7 @@ def test_every_home_range_marks_exactly_one_option(_localdate):
 
 
 @pytest.mark.django_db
-@patch("finance.views.timezone.localdate", return_value=TODAY)
+@patch("finance.dashboard_views.timezone.localdate", return_value=TODAY)
 def test_reset_range_and_dateless_home_links_land_on_this_month(_localdate):
     client = _client()
     page = client.get(reverse("home"), {"date_from": "2026-10-01", "date_to": "2026-10-31"})
@@ -121,7 +121,7 @@ def test_reset_range_and_dateless_home_links_land_on_this_month(_localdate):
 
 
 @pytest.mark.django_db
-@patch("finance.views.timezone.localdate", return_value=TODAY)
+@patch("finance.dashboard_views.timezone.localdate", return_value=TODAY)
 def test_home_fills_one_missing_date_from_the_other(_localdate):
     client = _client()
     only_end = client.get(reverse("home"), {"date_to": "2026-10-15"})
@@ -137,7 +137,7 @@ def test_home_fills_one_missing_date_from_the_other(_localdate):
 
 
 @pytest.mark.django_db
-@patch("finance.views.timezone.localdate", return_value=TODAY)
+@patch("finance.dashboard_views.timezone.localdate", return_value=TODAY)
 def test_other_pages_keep_the_thirteen_month_default(_localdate):
     client = _client()
     for name in ("spending-by-category", "net-worth"):

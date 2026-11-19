@@ -19,11 +19,10 @@ from .ledger_counting import exclusion_exists_for
 from .forms import BulkTransactionEditForm, TransactionFilterForm
 from .models import BulkEditUndo, Person, Transaction
 from .post_only import post_only
+from .transaction_filters import apply_transaction_filters
 
 
 def _matching_transactions(request):
-    from .views import _apply_transaction_filters
-
     transactions = (
         Transaction.objects.visible_to(request.user)
         .filter(status=Transaction.Status.ACTIVE)
@@ -35,7 +34,7 @@ def _matching_transactions(request):
     raw = request.POST.get("filter_query", "")
     form = TransactionFilterForm(QueryDict(raw) if raw else None, principal=request.user)
     if form.is_valid():
-        return _apply_transaction_filters(transactions, form.cleaned_data, request.user)
+        return apply_transaction_filters(transactions, form.cleaned_data, request.user)
     if form.is_bound:
         return transactions.none()
     return transactions

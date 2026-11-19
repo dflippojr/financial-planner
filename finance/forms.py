@@ -6,6 +6,7 @@ from django import forms
 from .ai_api import MODELS as API_MODELS, label as api_label
 from .ai_types import API_KINDS
 from django.contrib.auth import get_user_model, password_validation
+from django.contrib.auth.models import AbstractUser
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.validators import MaxValueValidator
 from django.db.models import Q
@@ -59,6 +60,8 @@ BALANCE_RANGE_ERROR = "Enter an amount between -$1,000,000,000,000 and $1,000,00
 
 
 class PasswordPairForm(forms.Form):
+    # Set by a view when a signed-in member changes their own password.
+    existing_user: AbstractUser | None = None
     password1 = forms.CharField(label="New password", widget=forms.PasswordInput)
     password2 = forms.CharField(label="Confirm new password", widget=forms.PasswordInput)
 
