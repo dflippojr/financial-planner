@@ -10,6 +10,10 @@ ruff==0.17.5
 # Property tests of ledger invariants in tests/properties (#533).
 hypothesis==6.170.15
 playwright==1.65.1
+# The test runner and its Django plugin. They live here, not in requirements.txt,
+# so the production image carries no test tools (#758).
+pytest==9.2.0
+pytest-django==4.14.0
 pytest-cov==7.1.0
 pytest-xdist==3.8.0
 # Used directly by the disposable HTTP lifecycle tests.
