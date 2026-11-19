@@ -9,8 +9,10 @@ from django.db import DatabaseError, connection, connections
 from django.test import Client
 from django.urls import reverse
 
+from finance import transaction_views
 from finance.forms import TransactionCorrectionForm
 from finance.lifecycle_services import archive_account
+from finance.transaction_services import correct_transaction
 from finance.models import Account, Household, ImportBatch, Membership, Person, Transaction, TransactionCorrectionHistory
 from tests.lock_races import backend_pid, wait_until_blocked_by
 
@@ -371,16 +373,16 @@ def test_correction_cannot_be_saved_after_the_editor_is_evicted_from_the_househo
     pids = {}
     observed = {}
     errors = []
-    original_apply = TransactionCorrectionForm.apply
+    original_apply = correct_transaction
 
-    def pause_before_saving(form, target, **kwargs):
+    def pause_before_saving(actor, target, cleaned_data):
         pids["edit"] = backend_pid()
         editing_paused.set()
         # The test releases the edit only after PostgreSQL shows the removal
         # blocked on this transaction's membership lock.
         assert release_edit.wait(timeout=30)
         observed["removal_committed_before_save"] = removal_committed.is_set()
-        return original_apply(form, target, **kwargs)
+        return original_apply(actor, target, cleaned_data)
 
     def edit():
         try:
@@ -406,7 +408,7 @@ def test_correction_cannot_be_saved_after_the_editor_is_evicted_from_the_househo
         finally:
             connections.close_all()
 
-    with patch.object(TransactionCorrectionForm, "apply", pause_before_saving):
+    with patch.object(transaction_views, "correct_transaction", pause_before_saving):
         editing = threading.Thread(target=edit)
         editing.start()
         assert editing_paused.wait(timeout=10)

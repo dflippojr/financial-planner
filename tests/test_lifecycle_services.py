@@ -11,7 +11,7 @@ from django.test import Client
 from django.urls import reverse
 from django.utils import timezone
 
-from finance.forms import TransactionCorrectionForm
+from finance import transaction_views
 from finance.lifecycle_services import (
     archive_account,
     change_account_share_mode,
@@ -636,7 +636,7 @@ def test_share_mode_change_and_transaction_edit_do_not_deadlock(start_competitor
             confirm_give_up_ownership=True,
         ),
         start_competitor_first=start_competitor_first,
-        pause_after=(TransactionCorrectionForm, "apply"),
+        pause_after=(transaction_views, "correct_transaction"),
     )
 
     assert edit_statuses == [302]
