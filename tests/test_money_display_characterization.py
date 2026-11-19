@@ -16,7 +16,7 @@ from finance.models import (
     TransactionCorrectionHistory,
     TransactionSplit,
 )
-from finance.views import _money_display
+from finance.recurring_views import _money_display
 
 
 MAX_BIGINT = 2**63 - 1

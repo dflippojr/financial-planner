@@ -783,7 +783,7 @@ def test_migration_converts_existing_not_now_declines_to_dismissals():
 @pytest.mark.django_db
 def test_json_denial_uses_fresh_person_even_after_relation_was_cached():
     from django.test import RequestFactory
-    from finance.views import privacy_policy_respond
+    from finance.settings_views import privacy_policy_respond
     user, person, _ = make_member("owner")
     policy = current_policy()
     assert user.person.privacy_policy_declined_version_id is None

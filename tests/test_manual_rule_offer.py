@@ -163,7 +163,7 @@ def test_offer_adds_at_most_two_queries():
     client.get(url)
     with CaptureQueriesContext(connection) as with_offer:
         assert client.get(url).context["rule_offer"]["count"] == 2
-    with patch("finance.views.manual_rule_offer", return_value=None), CaptureQueriesContext(connection) as without:
+    with patch("finance.transaction_views.manual_rule_offer", return_value=None), CaptureQueriesContext(connection) as without:
         client.get(url)
     assert len(with_offer) - len(without) <= 2
 

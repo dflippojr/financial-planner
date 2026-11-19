@@ -364,7 +364,7 @@ def home_client(person):
 
 
 @pytest.mark.django_db
-@patch("finance.views.timezone.localdate", side_effect=fake_localdate)
+@patch("finance.dashboard_views.timezone.localdate", side_effect=fake_localdate)
 def test_home_card_shows_groups_links_and_the_current_week_by_default(_localdate):
     owner = make_person("owner")
     make_household(owner)
@@ -390,7 +390,7 @@ def test_home_card_shows_groups_links_and_the_current_week_by_default(_localdate
 
 
 @pytest.mark.django_db
-@patch("finance.views.timezone.localdate", side_effect=fake_localdate)
+@patch("finance.dashboard_views.timezone.localdate", side_effect=fake_localdate)
 def test_home_card_empty_state_and_threshold_hint(_localdate):
     owner = make_person("owner")
     make_household(owner)
@@ -403,7 +403,7 @@ def test_home_card_empty_state_and_threshold_hint(_localdate):
 
 
 @pytest.mark.django_db
-@patch("finance.views.timezone.localdate", side_effect=fake_localdate)
+@patch("finance.dashboard_views.timezone.localdate", side_effect=fake_localdate)
 def test_home_switch_selects_last_week_and_keeps_other_filters(_localdate):
     owner = make_person("owner")
     make_household(owner)
@@ -426,7 +426,7 @@ def test_home_switch_selects_last_week_and_keeps_other_filters(_localdate):
 
 
 @pytest.mark.django_db
-@patch("finance.views.timezone.localdate", side_effect=fake_localdate)
+@patch("finance.dashboard_views.timezone.localdate", side_effect=fake_localdate)
 def test_home_shows_five_items_per_group_with_see_all(_localdate):
     owner = make_person("owner")
     make_household(owner)
@@ -441,7 +441,7 @@ def test_home_shows_five_items_per_group_with_see_all(_localdate):
 
 
 @pytest.mark.django_db
-@patch("finance.views.timezone.localdate", side_effect=fake_localdate)
+@patch("finance.dashboard_views.timezone.localdate", side_effect=fake_localdate)
 def test_home_expands_extra_large_transactions_in_place(_localdate):
     owner = make_person("owner")
     make_household(owner)
@@ -469,7 +469,7 @@ def _home_query_count(client):
 
 
 @pytest.mark.django_db
-@patch("finance.views.timezone.localdate", side_effect=fake_localdate)
+@patch("finance.dashboard_views.timezone.localdate", side_effect=fake_localdate)
 def test_home_query_count_does_not_grow_with_series(_localdate):
     owner = make_person("owner")
     make_household(owner)

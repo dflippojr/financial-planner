@@ -305,7 +305,7 @@ def test_quarter_and_year_windows_cover_selected_range():
 
 
 @pytest.mark.django_db
-@patch("finance.views.timezone.localdate", return_value=date(2026, 9, 15))
+@patch("finance.dashboard_views.timezone.localdate", return_value=date(2026, 9, 15))
 def test_home_is_cash_flow_with_default_range_and_partial_current_month(_localdate):
     owner = make_person("owner")
     make_household(owner)
@@ -474,7 +474,7 @@ HOME_RANGE_CASES = [
 
 @pytest.mark.django_db
 @pytest.mark.parametrize(("query", "message", "builds_report"), HOME_RANGE_CASES)
-@patch("finance.views.timezone.localdate", return_value=date(2026, 9, 30))
+@patch("finance.dashboard_views.timezone.localdate", return_value=date(2026, 9, 30))
 @patch("finance.cash_flow.timezone.localdate", return_value=date(2026, 9, 30))
 def test_home_validates_the_range_before_building_the_report(_cash_today, _view_today, query, message, builds_report):
     owner = make_person("owner")
@@ -520,7 +520,7 @@ def test_previous_equal_range_is_none_before_the_earliest_date():
 
 
 @pytest.mark.django_db
-@patch("finance.views.timezone.localdate", return_value=date(2026, 9, 15))
+@patch("finance.dashboard_views.timezone.localdate", return_value=date(2026, 9, 15))
 def test_home_range_links_keep_the_other_filters_and_mark_the_current_range(_localdate):
     owner = make_person("owner")
     make_household(owner)
@@ -554,7 +554,7 @@ def test_home_range_links_keep_the_other_filters_and_mark_the_current_range(_loc
 
 
 @pytest.mark.django_db
-@patch("finance.views.timezone.localdate", return_value=date(2026, 9, 15))
+@patch("finance.dashboard_views.timezone.localdate", return_value=date(2026, 9, 15))
 def test_home_coverage_column_names_the_account_missing_an_import(_localdate):
     owner = make_person("owner")
     make_household(owner)

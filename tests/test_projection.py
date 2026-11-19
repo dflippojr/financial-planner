@@ -399,7 +399,7 @@ def test_private_items_and_private_series_do_not_leak_to_household_member():
 
 
 @pytest.mark.django_db
-@patch("finance.views.timezone.localdate", return_value=date(2026, 10, 1))
+@patch("finance.dashboard_views.timezone.localdate", return_value=date(2026, 10, 1))
 def test_home_chart_payload_matches_projected_table(_localdate):
     owner = make_person("owner")
     make_household(owner)

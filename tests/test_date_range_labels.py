@@ -49,7 +49,7 @@ def test_date_range_is_empty_when_either_end_is_missing(start, end):
 def home_content(owner, today, params=None):
     client = Client()
     client.force_login(owner.user)
-    with patch("finance.views.timezone.localdate", side_effect=pinned_localdate(today)):
+    with patch("finance.dashboard_views.timezone.localdate", side_effect=pinned_localdate(today)):
         response = client.get(reverse("home"), params or {})
     assert response.status_code == 200
     assert response.context["report"] is not None

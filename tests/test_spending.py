@@ -262,7 +262,7 @@ def test_member_does_not_see_private_account_in_spending_or_drilldown():
 
 
 @pytest.mark.django_db
-@patch("finance.views.timezone.localdate", return_value=date(2026, 9, 15))
+@patch("finance.dashboard_views.timezone.localdate", return_value=date(2026, 9, 15))
 @patch("finance.cash_flow.timezone.localdate", return_value=date(2026, 9, 15))
 def test_spending_page_default_range_presets_and_nav(_cash_today, _view_today):
     owner = make_person("owner")

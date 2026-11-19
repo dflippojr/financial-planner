@@ -12,7 +12,7 @@ from tests.test_recurring_review import make_household, make_person, make_series
 @pytest.fixture
 def review_client(monkeypatch):
     # Exercise rendering of persisted review states without detection replacing them.
-    monkeypatch.setattr("finance.views.refresh_recurring_series", lambda *args, **kwargs: None)
+    monkeypatch.setattr("finance.recurring_views.refresh_recurring_series", lambda *args, **kwargs: None)
     owner = make_person("owner")
     make_household(owner)
     client = Client()

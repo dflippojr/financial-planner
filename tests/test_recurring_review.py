@@ -368,7 +368,7 @@ def test_cancel_leaves_totals_and_projection_and_resume_resolutions_work():
 
 
 @pytest.mark.django_db
-@patch("finance.views.timezone.localdate", return_value=TODAY)
+@patch("finance.recurring_views.timezone.localdate", return_value=TODAY)
 @patch("finance.recurring_services.timezone.localdate", return_value=TODAY)
 def test_recurring_page_shows_review_sections_and_actions(_refresh_today, _view_today):
     owner = make_person("owner")
@@ -531,7 +531,7 @@ def test_keep_cancelled_stays_with_the_series_owner():
 
 
 @pytest.mark.django_db
-@patch("finance.views.timezone.localdate", return_value=TODAY)
+@patch("finance.recurring_views.timezone.localdate", return_value=TODAY)
 @patch("finance.recurring_services.timezone.localdate", return_value=TODAY)
 def test_recurring_page_lists_a_shared_bill_with_cancel_only_and_counts_a_joint_bill_once(_refresh, _view):
     owner, member, _outsider, series = _shared_bill()
@@ -575,7 +575,7 @@ def test_cancelling_one_copy_of_a_joint_bill_cancels_every_copy_the_member_can_a
 
 
 @pytest.mark.django_db
-@patch("finance.views.timezone.localdate", return_value=TODAY)
+@patch("finance.recurring_views.timezone.localdate", return_value=TODAY)
 @patch("finance.recurring_services.timezone.localdate", return_value=TODAY)
 def test_recurring_page_shows_a_joint_bill_once_when_two_other_members_confirmed_it(_refresh, _view):
     owner, member, _outsider, series = _shared_bill()
@@ -648,7 +648,7 @@ def test_cancel_and_resume_cover_every_copy_of_a_chained_bill():
 
 
 @pytest.mark.django_db
-@patch("finance.views.timezone.localdate", return_value=TODAY)
+@patch("finance.recurring_views.timezone.localdate", return_value=TODAY)
 @patch("finance.recurring_services.timezone.localdate", return_value=TODAY)
 def test_recurring_page_counts_a_chained_bill_once(_refresh, _view):
     _owner, member, _third, copies = _chain_of_copies()
@@ -668,7 +668,7 @@ def test_recurring_page_counts_a_chained_bill_once(_refresh, _view):
 
 
 @pytest.mark.django_db
-@patch("finance.views.timezone.localdate", return_value=TODAY)
+@patch("finance.recurring_views.timezone.localdate", return_value=TODAY)
 @patch("finance.recurring_services.timezone.localdate", return_value=TODAY)
 def test_shared_bill_row_is_the_copy_with_the_latest_charge_and_cancelled_copies_bridge(_refresh, _view):
     owner, member, _outsider, older = _shared_bill()
@@ -761,7 +761,7 @@ def test_a_bridging_copy_on_an_archived_account_still_links_the_bill_for_cancel(
 
 
 @pytest.mark.django_db
-@patch("finance.views.timezone.localdate", return_value=TODAY)
+@patch("finance.recurring_views.timezone.localdate", return_value=TODAY)
 @patch("finance.recurring_services.timezone.localdate", return_value=TODAY)
 def test_shared_bill_row_ignores_archived_account_charges_when_choosing_the_current_copy(_refresh, _view):
     owner, member, _outsider, stale = _shared_bill()
@@ -801,7 +801,7 @@ def _add_member(name):
 def _page(person, today=TODAY):
     client = Client()
     client.force_login(person.user)
-    with patch("finance.views.timezone.localdate", return_value=today), patch(
+    with patch("finance.recurring_views.timezone.localdate", return_value=today), patch(
         "finance.recurring_services.timezone.localdate", return_value=today
     ):
         return client.get(reverse("recurring-review"))

@@ -36,7 +36,8 @@ from .chat_proposals import (
     _store_items,
     _text,
 )
-from .forms import BALANCE_RANGE_ERROR, MAX_BALANCE_MINOR, ManualBalanceForm
+from .forms.accounts import ManualBalanceForm
+from .forms.common import BALANCE_RANGE_ERROR, MAX_BALANCE_MINOR
 from .models import Account, AiProposal, BalanceSnapshot
 from .snapshot_services import SnapshotError, _lock_editable_account, record_manual_snapshot
 

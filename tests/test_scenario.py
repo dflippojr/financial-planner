@@ -161,7 +161,7 @@ def test_scenario_scope_follows_projection_and_ignores_private_ids():
 
 
 @pytest.mark.django_db
-@patch("finance.views.timezone.localdate", return_value=date(2026, 10, 1))
+@patch("finance.dashboard_views.timezone.localdate", return_value=date(2026, 10, 1))
 def test_home_without_changes_matches_baseline(_localdate):
     owner = make_person("owner")
     PlannedItem.objects.create(
@@ -182,7 +182,7 @@ def test_home_without_changes_matches_baseline(_localdate):
 
 
 @pytest.mark.django_db
-@patch("finance.views.timezone.localdate", return_value=date(2026, 10, 1))
+@patch("finance.dashboard_views.timezone.localdate", return_value=date(2026, 10, 1))
 def test_home_shows_baseline_and_scenario_without_saving(_localdate):
     owner = make_person("owner")
     make_household(owner)
