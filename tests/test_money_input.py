@@ -1,7 +1,9 @@
 """Money inputs accept ordinary formats such as 10,000 and $10,000 (#657)."""
 
 import ast
+import importlib
 import inspect
+import pkgutil
 from decimal import Decimal
 from html.parser import HTMLParser
 from pathlib import Path
@@ -13,6 +15,7 @@ from django.core.exceptions import ValidationError
 from django.test import Client
 from django.urls import reverse
 
+import finance
 import finance.audit_views
 import finance.csv_import.forms
 import finance.forms
@@ -31,7 +34,7 @@ from finance.models import (
 from finance.money_input import MoneyField, PercentField, WholePercentField
 
 PASSWORD = "Synthetic-passphrase-42!"
-FINANCE_DIR = Path(finance.forms.__file__).resolve().parent
+FINANCE_DIR = Path(finance.__file__).resolve().parent
 
 # -- the shared field ---------------------------------------------------------
 
@@ -217,7 +220,12 @@ def test_debt_terms_apr_accepts_a_trailing_percent_and_payment_accepts_dollars()
 
 # -- every money input uses the shared field ---------------------------------
 
-FORM_MODULES = (finance.forms, finance.csv_import.forms, finance.audit_views)
+# finance.forms is a package of area modules; each class is defined in one of them.
+FORM_MODULES = (
+    *(importlib.import_module(f"finance.forms.{info.name}") for info in pkgutil.iter_modules(finance.forms.__path__)),
+    finance.csv_import.forms,
+    finance.audit_views,
+)
 # Decimal fields that are not dollar amounts. A new entry needs a reason.
 NOT_MONEY_DECIMALS = {("DebtTermsForm", "apr_percent")}  # a percent, PercentField
 PERCENT_INTEGERS = {

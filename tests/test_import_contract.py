@@ -54,8 +54,8 @@ PACKAGE = "finance"
 ROOT_MODULE = "__init__"
 
 # Measured on main at a4fc0ac. Lower these as they fall; raising one is a gate change.
-MAX_FUNCTION_IMPORTS = 227
-MAX_CYCLE_SIZE = 67
+MAX_FUNCTION_IMPORTS = 205
+MAX_CYCLE_SIZE = 65
 
 # Today's private cross-module imports (main at a4fc0ac). Shrink only.
 PRIVATE_IMPORT_BASELINE = frozenset({
