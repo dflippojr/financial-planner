@@ -68,7 +68,7 @@ class JoinForm(PrivacyPolicyOnboardingMixin, PasswordPairForm):
     username = forms.CharField(max_length=150)
     display_name = forms.CharField(max_length=150)
 
-    field_order = [  # pyright: ignore[reportOptionalMemberAccess] - current_policy() is None only before a policy is seeded
+    field_order = [
         "invitation_code",
         "username",
         "display_name",
@@ -91,7 +91,7 @@ class SetupForm(PrivacyPolicyOnboardingMixin, PasswordPairForm):
     display_name = forms.CharField(max_length=150)
     household_name = forms.CharField(max_length=150, label="Household name")
 
-    field_order = [  # pyright: ignore[reportOptionalMemberAccess] - current_policy() is None only before a policy is seeded
+    field_order = [
         "setup_code",
         "username",
         "display_name",
