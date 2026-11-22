@@ -8,9 +8,9 @@ from decimal import Decimal, InvalidOperation
 
 from django.urls import Resolver404, resolve
 
-from .ai_jobs import enqueue_review_phrasing
-from .ai_services import member_has_ai, run_structured
-from .ai_types import UNKNOWN_BACKEND_LABEL, ProviderResult, backend_display_name
+from .ai.jobs import enqueue_review_phrasing
+from .ai.services import member_has_ai, run_structured
+from .ai.types import UNKNOWN_BACKEND_LABEL, ProviderResult, backend_display_name
 from .alert_services import settings_for
 from .households import current_household
 from .input_limits import MAX_AI_FACTS_CHARS, MAX_DESCRIPTION_CHARS, MAX_UNUSUAL_FLAGS
@@ -212,7 +212,7 @@ def _own_private_facts(person, facts):
 
 def _withhold_category_names(person, flags):
     """Flags on own private rows still name household categories, so mask the household's own names (#521)."""
-    from .ai_tools import WITHHELD_CATEGORY_NAME, withheld_category_ids
+    from .ai.tools import WITHHELD_CATEGORY_NAME, withheld_category_ids
     from .unusual_spending import KIND_CATEGORY
 
     withheld = withheld_category_ids(person)

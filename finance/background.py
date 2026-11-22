@@ -15,8 +15,8 @@ from django.db import close_old_connections, connections
 from django.utils import timezone
 
 from .audit_operations import operation
-from .ai_jobs import AiJobLane
-from .chat_runner import ChatLane
+from .ai.jobs import AiJobLane
+from .chat.runner import ChatLane
 from .simplefin_schedule import next_scheduled_sync, seconds_until, validate_sync_schedule
 
 logger = logging.getLogger(__name__)

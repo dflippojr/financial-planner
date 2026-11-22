@@ -470,7 +470,7 @@ def save_planned_item(principal, payload, *, item=None):
                 record(person, action, AuditEvent.TargetType.PLANNED_ITEM, item.pk,
                        audience=owned_audience(item), fields=changed)
         if was_household and item.scope != PlannedItem.Scope.HOUSEHOLD:
-            from .chat_services import delete_conversations_without_access
+            from .chat.services import delete_conversations_without_access
 
             delete_conversations_without_access(planned_item_ids=(item.pk,))
     return item

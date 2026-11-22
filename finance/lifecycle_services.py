@@ -359,7 +359,7 @@ def unshare_account(principal, account_id):
     from finance.transfer_pairing import revalidate_pairs_touching_account
 
     revalidate_pairs_touching_account(person, account_id)
-    from finance.chat_services import delete_conversations_without_access
+    from finance.chat.services import delete_conversations_without_access
 
     delete_conversations_without_access((account.pk,))
 
@@ -489,7 +489,7 @@ def end_current_membership(person, *, audit_actor=None):
     # Plan links through another member's harness only last while both share a household.
     AiPlanLink.objects.filter(person=person).exclude(connection__owner=person).delete()
     AiPlanLink.objects.filter(connection__owner=person).exclude(person=person).delete()
-    from finance.chat_services import delete_conversations_without_access
+    from finance.chat.services import delete_conversations_without_access
 
     delete_conversations_without_access(
         (account.pk for account in household_accounts),
@@ -683,7 +683,7 @@ def _delete_rule_history_for_account(account, tx_ids):
     RuleApplication.objects.filter(rule_id__in=unused).delete()
     CategoryRule.objects.filter(pk__in=unused).delete()
     if unused:
-        from finance.chat_services import delete_conversations_without_access
+        from finance.chat.services import delete_conversations_without_access
 
         # A deleted rule is no longer visible to anyone who quoted it in chat.
         delete_conversations_without_access(rule_ids=unused)
@@ -706,7 +706,7 @@ def delete_account(principal, account_id):
     append_event(account=account, action=AuditEvent.Action.ACCOUNT_DELETED, actor=person)
     prepare_account_deletion(account)
     _repair_then_delete_account_rows(person, account)
-    from finance.chat_services import delete_conversations_for_account
+    from finance.chat.services import delete_conversations_for_account
 
     delete_conversations_for_account(kept_id)
     return name

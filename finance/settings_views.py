@@ -57,7 +57,7 @@ from .models import (
     Person,
     PrivacyPolicyVersion,
 )
-from .ai_views import ai_settings_context
+from .ai.views import ai_settings_context
 from .policy_services import (
     accept_shown_version,
     current_policy,

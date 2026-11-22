@@ -13,10 +13,10 @@ from django.urls import reverse
 from django.utils import timezone
 
 from .input_limits import MAX_DESCRIPTION_CHARS, MAX_PROMPT_CHARS, MAX_PROMPT_LINE_CHARS
-from .ai_jobs import enqueue_jobs
-from .ai_services import member_has_ai, resolve_ai, run_structured
-from .ai_tools import ai_nameable_categories, visible_accounts
-from .ai_types import ProviderResult
+from .ai.jobs import enqueue_jobs
+from .ai.services import member_has_ai, resolve_ai, run_structured
+from .ai.tools import ai_nameable_categories, visible_accounts
+from .ai.types import ProviderResult
 from .lifecycle_services import lock_actor_household
 from .access import DENIED as _DENIED, require_person as _person_for
 from .category_services import assign_category, assignable_categories

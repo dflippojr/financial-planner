@@ -4,7 +4,7 @@ from django.db import models
 from django.db.models import Q
 from django.utils import timezone
 
-from ..ai_types import UNKNOWN_BACKEND_LABEL, backend_display_name
+from ..ai.types import UNKNOWN_BACKEND_LABEL, backend_display_name
 from .people import Person, person_for as _person_for
 from .categories import Category
 from .ledger import Transaction

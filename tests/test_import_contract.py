@@ -40,6 +40,15 @@ naming the new number so that PR lowers the recorded value. Raising a recorded
 number, or adding a baseline entry, loosens a check: list it under the PR's
 "### Gate changes" with the reason.
 
+4. Who imports the AI and chat packages (#771). finance/ai/ and finance/chat/
+   hold the former ai_* and chat_* modules. A module outside them that imports
+   either one, at any level and through the same graph as check 3, must be in
+   AI_CHAT_IMPORTERS with exactly the AI and chat modules it imports today, and
+   every entry there must still hold: a new importer or a new target fails, and
+   so does an entry the code no longer needs. The old flat paths
+   (finance/ai_services.py and the rest) are one-stage shims; no finance module
+   may import one, so removing them later breaks nothing in finance/.
+
 finance/migrations/ is excluded throughout: Django generates it and no app
 module imports it.
 """
@@ -57,22 +66,23 @@ ROOT_MODULE = "__init__"
 MAX_FUNCTION_IMPORTS = 205
 MAX_CYCLE_SIZE = 65
 
-# Today's private cross-module imports (main at a4fc0ac). Shrink only.
+# Today's private cross-module imports (main at a4fc0ac; the ai_* and chat_* keys renamed to
+# ai.* and chat.* when those modules moved into packages, #771). Shrink only.
 PRIVATE_IMPORT_BASELINE = frozenset({
     "access -> models._person_for",
-    "ai_jobs -> ai_services._token",
-    "ai_jobs -> monthly_review_ai._requeue_if_regenerated",
-    "ai_lookup_tools -> ai_tools._account_ids",
-    "ai_lookup_tools -> ai_tools._ai_scope",
-    "ai_lookup_tools -> ai_tools._figure",
-    "ai_lookup_tools -> ai_tools._parse_date",
-    "ai_lookup_tools -> ai_tools._scope",
-    "ai_lookup_tools -> ai_tools._visible_account",
-    "ai_plan -> ai_harness._label",
-    "ai_plan -> lifecycle_services._DENIED",
-    "ai_plan -> lifecycle_services._person_for",
-    "ai_services -> lifecycle_services._DENIED",
-    "ai_services -> lifecycle_services._person_for",
+    "ai.jobs -> ai.services._token",
+    "ai.jobs -> monthly_review_ai._requeue_if_regenerated",
+    "ai.lookup_tools -> ai.tools._account_ids",
+    "ai.lookup_tools -> ai.tools._ai_scope",
+    "ai.lookup_tools -> ai.tools._figure",
+    "ai.lookup_tools -> ai.tools._parse_date",
+    "ai.lookup_tools -> ai.tools._scope",
+    "ai.lookup_tools -> ai.tools._visible_account",
+    "ai.plan -> ai.harness._label",
+    "ai.plan -> lifecycle_services._DENIED",
+    "ai.plan -> lifecycle_services._person_for",
+    "ai.services -> lifecycle_services._DENIED",
+    "ai.services -> lifecycle_services._person_for",
     "alert_services -> models._person_for",
     "audit_models -> models._person_for",
     "audit_operations -> models._person_for",
@@ -85,39 +95,39 @@ PRIVATE_IMPORT_BASELINE = frozenset({
     "calculated_balances -> reconciliation._daily_totals",
     "calculated_balances -> snapshot_services._lock_editable_account",
     "calculated_balances -> snapshot_services._record_snapshot",
-    "chat_attachments -> ai_jobs._connection_marker",
-    "chat_attachments -> models._person_for",
-    "chat_balance_cards -> chat_proposals._Stale",
-    "chat_balance_cards -> chat_proposals._card_items",
-    "chat_balance_cards -> chat_proposals._form_problem",
-    "chat_balance_cards -> chat_proposals._int_or_none",
-    "chat_balance_cards -> chat_proposals._items_schema",
-    "chat_balance_cards -> chat_proposals._raw_items",
-    "chat_balance_cards -> chat_proposals._store_items",
-    "chat_balance_cards -> chat_proposals._text",
-    "chat_balance_cards -> snapshot_services._lock_editable_account",
-    "chat_charts -> ai_tools._account_ids",
-    "chat_charts -> ai_tools._ai_scope",
-    "chat_charts -> ai_tools._figure",
-    "chat_charts -> ai_tools._range_query",
-    "chat_charts -> ai_tools._transaction_scope",
-    "chat_charts -> ai_tools._visible_account",
-    "chat_cleanup_cards -> ai_tools._figure",
-    "chat_cleanup_cards -> bulk_edit_services._apply_note",
-    "chat_cleanup_cards -> chat_proposals._Stale",
-    "chat_cleanup_cards -> chat_proposals._card_items",
-    "chat_cleanup_cards -> chat_proposals._category_by_name",
-    "chat_cleanup_cards -> chat_proposals._category_name",
-    "chat_cleanup_cards -> chat_proposals._int_or_none",
-    "chat_cleanup_cards -> chat_proposals._items_schema",
-    "chat_cleanup_cards -> chat_proposals._raw_items",
-    "chat_cleanup_cards -> chat_proposals._store_items",
-    "chat_cleanup_cards -> chat_proposals._text",
-    "chat_proposals -> bulk_edit_services._apply_tags",
-    "chat_runner -> ai_jobs._lock_qs",
-    "chat_services -> ai_jobs._connection_marker",
-    "chat_services -> lifecycle_services._DENIED",
-    "chat_services -> lifecycle_services._person_for",
+    "chat.attachments -> ai.jobs._connection_marker",
+    "chat.attachments -> models._person_for",
+    "chat.balance_cards -> chat.proposals._Stale",
+    "chat.balance_cards -> chat.proposals._card_items",
+    "chat.balance_cards -> chat.proposals._form_problem",
+    "chat.balance_cards -> chat.proposals._int_or_none",
+    "chat.balance_cards -> chat.proposals._items_schema",
+    "chat.balance_cards -> chat.proposals._raw_items",
+    "chat.balance_cards -> chat.proposals._store_items",
+    "chat.balance_cards -> chat.proposals._text",
+    "chat.balance_cards -> snapshot_services._lock_editable_account",
+    "chat.charts -> ai.tools._account_ids",
+    "chat.charts -> ai.tools._ai_scope",
+    "chat.charts -> ai.tools._figure",
+    "chat.charts -> ai.tools._range_query",
+    "chat.charts -> ai.tools._transaction_scope",
+    "chat.charts -> ai.tools._visible_account",
+    "chat.cleanup_cards -> ai.tools._figure",
+    "chat.cleanup_cards -> bulk_edit_services._apply_note",
+    "chat.cleanup_cards -> chat.proposals._Stale",
+    "chat.cleanup_cards -> chat.proposals._card_items",
+    "chat.cleanup_cards -> chat.proposals._category_by_name",
+    "chat.cleanup_cards -> chat.proposals._category_name",
+    "chat.cleanup_cards -> chat.proposals._int_or_none",
+    "chat.cleanup_cards -> chat.proposals._items_schema",
+    "chat.cleanup_cards -> chat.proposals._raw_items",
+    "chat.cleanup_cards -> chat.proposals._store_items",
+    "chat.cleanup_cards -> chat.proposals._text",
+    "chat.proposals -> bulk_edit_services._apply_tags",
+    "chat.runner -> ai.jobs._lock_qs",
+    "chat.services -> ai.jobs._connection_marker",
+    "chat.services -> lifecycle_services._DENIED",
+    "chat.services -> lifecycle_services._person_for",
     "csv_import.saved_mappings -> lifecycle_services._DENIED",
     "csv_import.services -> lifecycle_services._DENIED",
     "csv_import.services -> lifecycle_services._lock_visible_account_with_pair_and_refund_counterparts",
@@ -147,6 +157,75 @@ PRIVATE_IMPORT_BASELINE = frozenset({
     "unusual_spending_ai -> monthly_review_ai._run_review_phrasing_job",
     "weekly_digest -> models._person_for",
 })
+
+
+AI_CHAT_PACKAGES = ("ai", "chat")
+
+# Every module outside finance/ai/ and finance/chat/ that imports them (main at 3134a44, #771):
+# importer -> (the AI and chat modules it imports, why). Exact: a new importer or target fails,
+# and so does an entry the code no longer has.
+AI_CHAT_IMPORTERS = {
+    "background": (
+        {"ai.jobs", "chat.runner"},
+        "The worker thread runs the AI job lane and the chat turn lane.",
+    ),
+    "budget_services": (
+        {"chat.services"},
+        "Making a household budget private purges conversations that quoted it (in a function).",
+    ),
+    "category_suggestion_services": (
+        {"ai.jobs", "ai.services", "ai.tools", "ai.types"},
+        "AI category suggestions queue and run as AI jobs.",
+    ),
+    "forms.ai": (
+        {"ai.api", "ai.types"},
+        "The AI settings forms list the API providers and their labels.",
+    ),
+    "lifecycle_services": (
+        {"chat.services"},
+        "Account, household and membership changes purge conversations that lost access (in functions).",
+    ),
+    "models": (
+        {"ai.types"},
+        "The models package re-exports the backend label helpers models.ai uses.",
+    ),
+    "models.ai": (
+        {"ai.types"},
+        "AI model rows show backend labels from ai.types; ai.types imports no models, so it stays one-way.",
+    ),
+    "monthly_review_ai": (
+        {"ai.jobs", "ai.services", "ai.tools", "ai.types"},
+        "The monthly review's AI phrasing runs as an AI job.",
+    ),
+    "planning_services": (
+        {"chat.services"},
+        "Making a planned item private purges conversations that quoted it (in a function).",
+    ),
+    "policy_services": (
+        {"ai.services"},
+        "The privacy policy page says whether the member has AI connected (in a function).",
+    ),
+    "savings_goal_services": (
+        {"chat.services"},
+        "Making a household savings goal private purges conversations that quoted it (in a function).",
+    ),
+    "settings_views": (
+        {"ai.views"},
+        "The settings page embeds the AI settings section.",
+    ),
+    "templatetags.ui": (
+        {"ai.services", "ai.tiles", "chat.markdown", "chat.services"},
+        "Shared page chrome: the chat bead and popover, AI tiles and the chat markdown filter.",
+    ),
+    "transaction_views": (
+        {"ai.services"},
+        "The transactions page offers AI category suggestions only to members with AI (in a function).",
+    ),
+    "unusual_spending_ai": (
+        {"ai.jobs", "ai.services"},
+        "Unusual spending's AI phrasing runs as an AI job.",
+    ),
+}
 
 
 def finance_sources(root=FINANCE):
@@ -351,6 +430,69 @@ def test_largest_import_cycle_does_not_grow():
     _ratchet("The largest import cycle", len(cycle), MAX_CYCLE_SIZE, f" Its modules: {', '.join(sorted(cycle))}.")
 
 
+def _in_ai_chat(module):
+    return module.split(".")[0] in AI_CHAT_PACKAGES
+
+
+def _is_ai_chat_shim(module):
+    """An old flat path such as ai_services: a top-level module that only re-exports a moved one."""
+    return "." not in module and module.startswith(tuple(f"{package}_" for package in AI_CHAT_PACKAGES))
+
+
+def ai_chat_importers(graph):
+    """{module outside finance/ai/ and finance/chat/: the AI and chat modules it imports}.
+
+    An import of an old shim path counts as an import of the package too, so a
+    caller cannot bypass the allow-list through a shim.
+    """
+    found = {}
+    for module, targets in graph.items():
+        if _in_ai_chat(module) or _is_ai_chat_shim(module):
+            continue
+        hits = {target for target in targets if _in_ai_chat(target) or _is_ai_chat_shim(target)}
+        if hits:
+            found[module] = hits
+    return found
+
+
+def check_ai_chat_importers(graph, allowed):
+    """Return the problems with graph's AI and chat importers against allowed, as messages."""
+    found = ai_chat_importers(graph)
+    problems = []
+    for module in sorted(found.keys() - allowed.keys()):
+        problems.append(f"{module} imports {', '.join(sorted(found[module]))} and is not in AI_CHAT_IMPORTERS")
+    for module in sorted(found.keys() & allowed.keys()):
+        targets, _ = allowed[module]
+        if found[module] != targets:
+            problems.append(
+                f"{module} imports {', '.join(sorted(found[module]))}; AI_CHAT_IMPORTERS records "
+                f"{', '.join(sorted(targets))}"
+            )
+    for module in sorted(allowed.keys() - found.keys()):
+        problems.append(f"{module} no longer imports finance.ai or finance.chat; delete its AI_CHAT_IMPORTERS entry")
+    for module, targets in sorted(found.items()):
+        shims = sorted(target for target in targets if _is_ai_chat_shim(target))
+        if shims:
+            problems.append(f"{module} imports the old shim path {', '.join(shims)}; import from finance.ai or finance.chat")
+    return problems
+
+
+def test_only_allow_listed_modules_import_ai_and_chat():
+    _, _, graph = finance_scan()
+    problems = check_ai_chat_importers(graph, AI_CHAT_IMPORTERS)
+    assert not problems, (
+        "The AI and chat import contract changed. A new caller should go through an existing "
+        "allow-listed module, or be added to AI_CHAT_IMPORTERS with its reason and listed under the "
+        "PR's ### Gate changes:\n  " + "\n  ".join(problems)
+    )
+
+
+def test_every_ai_chat_importer_has_a_reason():
+    for module, (targets, reason) in AI_CHAT_IMPORTERS.items():
+        assert targets and all(_in_ai_chat(target) for target in targets), module
+        assert reason.strip(), f"{module} needs a one-line reason"
+
+
 # The scanner itself, on synthetic modules, so the counting rules above hold as written.
 
 
@@ -415,3 +557,35 @@ def test_plain_import_of_the_package_is_an_edge_to_its_initializer():
     sources = {ROOT_MODULE: "from . import forms\n", "forms": "import finance\n"}
     _, _, graph = scan(sources, packages={ROOT_MODULE})
     assert largest_cycle(graph) == {ROOT_MODULE, "forms"}
+
+
+def test_ai_chat_contract_fails_on_a_new_importer_a_new_target_a_stale_entry_and_a_shim():
+    sources = {
+        ROOT_MODULE: "",
+        "ai": "",
+        "ai.services": "from ..models import Person\n",
+        "ai.types": "",
+        "ai_services": "from finance.ai import services as _moved\n",
+        "chat": "",
+        "chat.services": "from ..ai.services import run\n",
+        "models": "from .ai.types import LABEL\n",
+        "lifecycle_services": "def purge():\n    from .chat.services import delete\n",
+        "budget_services": "from .ai_services import member_has_ai\n",
+        "policy_services": "",
+    }
+    _, _, graph = scan(sources, packages={ROOT_MODULE, "ai", "chat"})
+    allowed = {
+        "models": ({"ai.types"}, "labels"),
+        "lifecycle_services": ({"chat.services"}, "purge"),
+    }
+    assert check_ai_chat_importers(graph, allowed) == [
+        "budget_services imports ai_services and is not in AI_CHAT_IMPORTERS",
+        "budget_services imports the old shim path ai_services; import from finance.ai or finance.chat",
+    ]
+    allowed["policy_services"] = ({"ai.services"}, "gone")
+    allowed["models"] = ({"ai.services"}, "wrong target")
+    graph.pop("budget_services")
+    assert check_ai_chat_importers(graph, allowed) == [
+        "models imports ai.types; AI_CHAT_IMPORTERS records ai.services",
+        "policy_services no longer imports finance.ai or finance.chat; delete its AI_CHAT_IMPORTERS entry",
+    ]

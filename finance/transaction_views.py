@@ -83,7 +83,7 @@ def _query_without_page(request):
 @require_GET
 @never_cache
 def transaction_list(request):
-    from .ai_services import member_has_ai
+    from .ai.services import member_has_ai
     from .category_suggestion_services import (
         pending_suggestions_for,
         proposed_rule_from_accepts,
