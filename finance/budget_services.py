@@ -489,7 +489,7 @@ def save_budget(principal, payload, *, budget=None):
                 record(person, AuditEvent.Action.RECORD_CREATED if is_new else AuditEvent.Action.RECORD_EDITED,
                        AuditEvent.TargetType.BUDGET, budget.pk, audience=owned_audience(budget), fields=changed)
             if was_household and budget.scope != Budget.Scope.HOUSEHOLD:
-                from .chat_services import delete_conversations_without_access
+                from .chat.services import delete_conversations_without_access
 
                 delete_conversations_without_access(budget_ids=(budget.pk,))
     except IntegrityError as exc:

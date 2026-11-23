@@ -5,7 +5,7 @@ from django import template
 from django.template.defaultfilters import date as date_filter
 from django.forms.widgets import CheckboxInput, CheckboxSelectMultiple, FileInput, RadioSelect, Select, Textarea
 
-from finance import chat_markdown
+from finance.chat import markdown as chat_markdown
 
 
 register = template.Library()
@@ -147,8 +147,8 @@ def _is_zero(whole, fraction):
 
 
 def _bead_member(context):
-    from finance.ai_services import AiError, member_has_ai
-    from finance.chat_services import chat_backend_for
+    from finance.ai.services import AiError, member_has_ai
+    from finance.chat.services import chat_backend_for
     from finance.policy_services import may_use_ai
 
     request = context.get("request")
@@ -177,7 +177,7 @@ BEAD_FILTER_FIELDS = {
 
 
 def _bead_form_filters(kind, values, cleaned):
-    from finance.ai_tiles import TILES
+    from finance.ai.tiles import TILES
 
     filters = dict(values)
     for source, target in BEAD_FILTER_FIELDS.items():
@@ -205,7 +205,7 @@ BEAD_IGNORED_FIELDS = {
 
 
 def _bead_unsupported_filters(form, kind, cleaned):
-    from finance.ai_tiles import TILES
+    from finance.ai.tiles import TILES
 
     supported = {key for key, target in BEAD_FILTER_FIELDS.items() if target in TILES[kind].filters}
     # Amount mode has no effect without an amount bound, which is excluded below.
@@ -236,7 +236,7 @@ def _bead_filters(context, kind, values):
 
 @register.inclusion_tag("finance/_ai_bead.html", takes_context=True)
 def ai_tile(context, kind, *, has_data=False, **values):
-    from finance.ai_tiles import TILES, sanitize_tile, tile_data_shareable
+    from finance.ai.tiles import TILES, sanitize_tile, tile_data_shareable
 
     if not has_data or kind not in TILES:
         return {}

@@ -20,7 +20,7 @@ from django.core.validators import RegexValidator  # noqa: F401
 from django.db.models import F, Q  # noqa: F401
 from django.db.models.functions import Lower  # noqa: F401
 
-from ..ai_types import UNKNOWN_BACKEND_LABEL, backend_display_name  # noqa: F401
+from ..ai.types import UNKNOWN_BACKEND_LABEL, backend_display_name  # noqa: F401
 from ..input_limits import AUTO_NOTE_MAX_CHARS, BUDGET_MONTH_FLOOR, MAX_DESCRIPTION_CHARS  # noqa: F401
 from ..money_display import format_minor  # noqa: F401
 from .base import (  # noqa: F401

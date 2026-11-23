@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from .ai_jobs import enqueue_review_phrasing
-from .ai_services import member_has_ai, run_structured
+from .ai.jobs import enqueue_review_phrasing
+from .ai.services import member_has_ai, run_structured
 from .alert_services import settings_for
 from .monthly_review_ai import (
     _run_review_phrasing_job,

@@ -2,16 +2,16 @@ from django.urls import path
 from django.views.generic import RedirectView
 from django.contrib.auth.decorators import login_not_required
 
+from finance.ai import views as ai_views
+from finance.chat import views as chat_views
 from finance import (
     account_views,
     auto_note_views,
     audit_views,
-    ai_views,
     alert_views,
     budget_views,
     bills_calendar_views,
     category_suggestion_views,
-    chat_views,
     debt_planner_views,
     net_worth_views,
     notice_views,

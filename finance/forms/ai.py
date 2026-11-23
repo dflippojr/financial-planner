@@ -3,8 +3,8 @@
 
 from django import forms
 
-from ..ai_api import MODELS as API_MODELS, label as api_label
-from ..ai_types import API_KINDS
+from ..ai.api import MODELS as API_MODELS, label as api_label
+from ..ai.types import API_KINDS
 
 
 

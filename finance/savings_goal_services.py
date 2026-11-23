@@ -401,7 +401,7 @@ def save_savings_goal(principal, payload, *, goal=None):
                 record(person, AuditEvent.Action.RECORD_EDITED, AuditEvent.TargetType.GOAL, goal.pk,
                        audience=owned_audience(goal), fields=changed)
         if was_household and goal.scope != SavingsGoal.Scope.HOUSEHOLD:
-            from .chat_services import delete_conversations_without_access
+            from .chat.services import delete_conversations_without_access
 
             delete_conversations_without_access(goal_ids=(goal.pk,))
     return goal
