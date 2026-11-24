@@ -2,6 +2,7 @@
 
 import logging
 from datetime import date
+from unittest.mock import patch
 
 import pytest
 from django.core.management import call_command
@@ -145,6 +146,61 @@ def test_one_accounts_unstorable_row_does_not_block_the_other_accounts(monkeypat
     connection.refresh_from_db()
     assert f"Skipped Synthetic First: {UNSTORABLE_AMOUNT}" in connection.last_sync_result
     assert "Synthetic Second" not in connection.last_sync_result
+
+
+@pytest.mark.django_db
+def test_an_overlong_id_on_a_row_before_the_cutover_does_not_fail_the_sync(monkeypatch):
+    """A row before the cut-over is dropped before its id is checked, so it never skips the account (#791)."""
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner)
+    old = posted_txn(txn_id="x" * 300, day=2, amount="-1.00")   # before the Mar 10 cut-over: never imported
+    new = posted_txn(txn_id="sf-ok", day=12, amount="-25.00")
+    payload = account_payload(transactions=[old, new])
+    connection = connect_owner(owner, monkeypatch, payload)
+    save_account_links(owner, connection.pk, [{"simplefin_account_id": "CON-1:sf-checking", "action": "link",
+                                               "account_id": checking.pk, "cutover_date": date(2026, 3, 10)}])
+    with patch("finance.simplefin_services.fetch_accounts", return_value=payload):
+        sync_connection(owner, connection.pk, ignore_rate_limit=True)
+    assert Transaction.objects.filter(account=checking, status=Transaction.Status.ACTIVE).count() == 1
+    assert Transaction.objects.get(account=checking, status=Transaction.Status.ACTIVE).source_transaction_id == "sf-ok"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("field,value", [("id", "x" * 300), ("amount", "-1.005"), ("amount", "1e1000000")])
+def test_an_unstorable_row_before_the_cutover_is_ignored_and_the_rest_imports(monkeypatch, field, value):
+    """Every field of a row before the cut-over is left unvalidated: the account syncs and names no skip (#791)."""
+    owner = make_person("owner")
+    make_household(owner)
+    checking = make_account(owner)
+    old = posted_txn(txn_id="sf-old", day=2, amount="-1.00")
+    old[field] = value
+    new = posted_txn(txn_id="sf-ok", day=12, amount="-25.00")
+    payload = account_payload(transactions=[old, new])
+    connection = connect_owner(owner, monkeypatch, payload)
+    save_account_links(owner, connection.pk, [{"simplefin_account_id": "CON-1:sf-checking", "action": "link",
+                                               "account_id": checking.pk, "cutover_date": date(2026, 3, 10)}])
+    with patch("finance.simplefin_services.fetch_accounts", return_value=payload):
+        result = sync_connection(owner, connection.pk, ignore_rate_limit=True)
+    assert result["unconverted"] == []
+    assert Transaction.objects.get(account=checking, status=Transaction.Status.ACTIVE).source_transaction_id == "sf-ok"
+    connection.refresh_from_db()
+    assert connection.last_sync_result.startswith("Synced 1 ")
+
+
+@pytest.mark.django_db
+def test_an_overlong_id_on_the_cutover_day_still_skips_its_account(monkeypatch):
+    """The cut-over day is imported, so an unstorable id on it still skips the account (#673, #791)."""
+    owner, checking, connection = _linked_owner_and_checking(monkeypatch, cutover=date(2026, 3, 10))
+    make_household(owner)
+    use_payload(monkeypatch, payload_with(posted_txn(txn_id="x" * 300, day=10, amount="-1.00")))
+
+    result = sync_connection(owner, connection.pk, ignore_rate_limit=True)
+
+    assert result["unconverted"] == [f"Skipped {checking.name}: {UNSTORABLE_ID} It will be retried on the next sync."]
+    connection.refresh_from_db()
+    assert f"Skipped {checking.name}: {UNSTORABLE_ID}" in connection.last_sync_result
+    assert not Transaction.objects.filter(account=checking).exists()
 
 
 @pytest.mark.django_db
