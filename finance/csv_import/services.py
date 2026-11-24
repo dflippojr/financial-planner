@@ -35,11 +35,10 @@ from finance.models import (
     Transaction,
     TransactionCorrectionHistory,
 )
+from finance.simplefin_file_days import FILE_IMPORT_SOURCES
 from finance.simplefin_health import last_synced_days, link_is_failing
 
 MAPPING_CHANGED = "This mapping changed; preview the file again."
-# Batches a statement file made: every source but a manual entry and a SimpleFIN sync.
-FILE_IMPORT_SOURCES = frozenset(ImportBatch.Source.values) - {ImportBatch.Source.MANUAL, ImportBatch.Source.SIMPLEFIN}
 
 
 @dataclass(frozen=True)
@@ -548,10 +547,17 @@ def archive_batch(principal, account_id, batch_id, *, manual) -> ImportUndoResul
     lock_actor_household(person)
     if not Account.objects.visible_to(person).filter(pk=account_id).exists():
         raise PermissionDenied(_DENIED)
-    seed_leg_ids = list(
-        Transaction.objects.filter(import_batch_id=batch_id, account_id=account_id).values_list("pk", flat=True)
-    )
-    account = _lock_visible_account_with_pair_and_refund_counterparts(person, account_id, seed_leg_ids=seed_leg_ids)
+    # A manual entry's batch holds its one row for good, so its rows can seed
+    # the ordered counterpart locks. An import's cannot: until the account lock
+    # is held, a concurrent undo may re-home a row into the batch (#796), and a
+    # counterpart account missed here would be reached later out of order. Every
+    # row of the account seeds the locks instead; rows never change account.
+    manual_leg_ids = None
+    if manual:
+        manual_leg_ids = list(
+            Transaction.objects.filter(import_batch_id=batch_id, account_id=account_id).values_list("pk", flat=True)
+        )
+    account = _lock_visible_account_with_pair_and_refund_counterparts(person, account_id, seed_leg_ids=manual_leg_ids)
     if account.status != Account.Status.ACTIVE or account.archived_at is not None:
         raise PermissionDenied(_DENIED)
     batch = (
@@ -569,6 +575,8 @@ def archive_batch(principal, account_id, batch_id, *, manual) -> ImportUndoResul
     from finance.receipt_services import delete_receipts_for_transactions
 
     now = timezone.now()
+    # Read under the account lock, before any row leaves the batch.
+    seed_leg_ids = list(Transaction.objects.filter(import_batch=batch).values_list("pk", flat=True))
     # Deleting a manual entry removes that entry, whatever a file also holds.
     others = [] if manual else _other_active_file_batches(account, batch)
     rehomed_ids = _rehome_rows_other_batches_skipped(person, batch, others, now)
