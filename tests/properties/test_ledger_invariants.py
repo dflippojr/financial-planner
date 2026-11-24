@@ -240,7 +240,11 @@ def unstorable_row_cases(draw):
     count = draw(st.integers(2, 3))
     owners = [draw(st.integers(0, count - 1)) for _ in world]
     feeds = tuple(
-        tuple((index, _feed_row(index, row)) for index, (row, owner) in enumerate(zip(world, owners)) if owner == a)
+        tuple(
+            (index, _feed_row(index, row))
+            for index, (row, owner) in enumerate(zip(world, owners, strict=True))
+            if owner == a
+        )
         for a in range(count)
     )
     return UnstorableRowCase(cutover, feeds, draw(st.integers(0, count - 1)), draw(UNSTORABLE_FIELDS), draw(near))
