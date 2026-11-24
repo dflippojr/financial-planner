@@ -1,4 +1,4 @@
-import finance.models.base
+import finance.models
 from django.db import migrations, models
 
 
@@ -23,7 +23,7 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='importbatch',
             name='skipped_duplicates',
-            field=models.JSONField(blank=True, default=dict, validators=[finance.models.base.validate_json_object]),
+            field=models.JSONField(blank=True, default=dict, validators=[finance.models.validate_json_object]),
         ),
         migrations.AlterField(
             model_name='transactioncorrectionhistory',
