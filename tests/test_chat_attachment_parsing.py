@@ -560,6 +560,10 @@ LONE_SURROGATE = "\ud800"
 EMOJI = "\U0001F600"  # A valid non-BMP character; JSON carries it as a surrogate pair.
 
 
+# Assertions compare ascii() forms: a failure message holding a raw lone surrogate cannot be
+# sent between pytest-xdist workers, so it would crash the run instead of failing this test.
+
+
 def _has_lone_surrogate(text: str) -> bool:
     return any(0xD800 <= ord(ch) <= 0xDFFF for ch in text)
 
@@ -570,8 +574,8 @@ def test_pdf_text_with_a_lone_surrogate_is_made_storable_and_keeps_valid_pairs(m
     monkeypatch.setattr(parsing, "_run_pdf_worker", lambda data, timeout: json.loads(worker_output))
     parsed = parse_upload(upload("statement.pdf", make_pdf(["x"])))
     pages = parsed.content["pages"]
-    assert not any(_has_lone_surrogate(page) for page in pages)
-    assert pages == ["Total ? due", f"Party {EMOJI}"]
+    assert not any(_has_lone_surrogate(page) for page in pages), ascii(pages)
+    assert ascii(pages) == ascii(["Total ? due", f"Party {EMOJI}"])
     # What the jsonb column receives must encode as UTF-8.
     json.dumps(parsed.content, ensure_ascii=False).encode("utf-8")
 
@@ -580,7 +584,7 @@ def test_csv_bytes_cannot_decode_to_a_lone_surrogate():
     # UTF-8 refuses encoded surrogates, so the CSV falls back to cp1252 and reads them as three characters.
     parsed = parse_upload(upload("odd.csv", b"name,amount\n\xed\xa0\x80,1\n"))
     cells = [cell for row in parsed.content["sheets"][0]["rows"] for cell in row[1]]
-    assert not any(_has_lone_surrogate(cell) for cell in cells)
+    assert not any(_has_lone_surrogate(cell) for cell in cells), ascii(cells)
 
 
 @pytest.mark.parametrize("cell_xml", [
@@ -594,4 +598,4 @@ def test_xlsx_with_a_lone_surrogate_reference_is_unreadable_not_stored(cell_xml)
 
 def test_a_file_name_with_a_lone_surrogate_is_made_storable():
     parsed = parse_upload(upload(f"bud{LONE_SURROGATE}get.csv", BUDGET_CSV.encode()))
-    assert parsed.name == "bud?get.csv"
+    assert ascii(parsed.name) == ascii("bud?get.csv")

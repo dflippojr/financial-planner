@@ -162,7 +162,8 @@ def test_pdf_text_with_a_lone_surrogate_is_stored_and_shown(harness, monkeypatch
     assert response.status_code == 302
     attachment = AiChatAttachment.objects.get()
     attachment.refresh_from_db()
-    assert attachment.content == {"pages": ["Total ? due", "Party \U0001F600"]}
+    # ascii(): a raw lone surrogate in a failure message would crash pytest-xdist instead of failing.
+    assert ascii(attachment.content) == ascii({"pages": ["Total ? due", "Party \U0001F600"]})
     assert attachment.summary == {"pages": 2, "truncated": False}
     html = client.get(f"{reverse('chat')}?c={attachment.conversation_id}").content.decode()
     assert f'id="attachment-{attachment.pk}"' in html and "statement.pdf" in html
