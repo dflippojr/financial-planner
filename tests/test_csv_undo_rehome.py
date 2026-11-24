@@ -446,3 +446,54 @@ def test_a_row_whose_date_was_corrected_into_range_is_not_matched(client):
     page = undo_page(client, user, account, first.batch)
 
     assert "still marked as covered" not in page
+
+
+def test_undo_locks_the_counterpart_account_of_a_row_another_undo_moved_into_the_batch(monkeypatch):
+    """Batch membership is read under the account lock, not before it.
+
+    A concurrent undo can move a transfer-linked row into a batch after a
+    second undo of that batch has started. Reading the batch's rows before the
+    account lock would miss the row, leave its counterpart account out of the
+    ordered locks, and reach for it later out of order (a deadlock).
+    """
+    from finance import lifecycle_services
+    from finance.csv_import import services
+    from finance.csv_import.services import categorize_imported_batch
+    from finance.models import TransferPair
+
+    user, person = make_owner()
+    savings = make_account(person, "Synthetic Savings")
+    checking = make_account(person)
+    assert savings.pk < checking.pk
+    out = b"09/28/2026,SYNTHETIC TRANSFER TO SAVINGS,-40.00,USD\n"
+    arrived = b"09/28/2026,SYNTHETIC TRANSFER FROM CHECKING,40.00,USD\n"
+    deposit = commit(user, savings, arrived)
+    first = commit(user, checking, out)
+    categorize_imported_batch(user, deposit.batch)
+    categorize_imported_batch(user, first.batch)
+    assert TransferPair.objects.count() == 1
+    later = commit(user, checking, out)
+    assert not later.batch.transactions.exists()
+
+    # The other undo commits between this undo's start and its account lock.
+    real_lock = services._lock_visible_account_with_pair_and_refund_counterparts
+    locked_extras = []
+
+    def lock_after_the_other_undo(*args, **kwargs):
+        monkeypatch.setattr(services, "_lock_visible_account_with_pair_and_refund_counterparts", real_lock)
+        undo_import_batch(user, checking.pk, first.batch.pk)
+        real_counterparts = lifecycle_services._lock_visible_account_with_counterparts
+
+        def spy(person_, account_id, extras):
+            locked_extras.append(set(extras))
+            return real_counterparts(person_, account_id, extras)
+
+        monkeypatch.setattr(lifecycle_services, "_lock_visible_account_with_counterparts", spy)
+        return real_lock(*args, **kwargs)
+
+    monkeypatch.setattr(services, "_lock_visible_account_with_pair_and_refund_counterparts", lock_after_the_other_undo)
+
+    undo_import_batch(user, checking.pk, later.batch.pk)
+
+    assert locked_extras == [{savings.pk}]
+    assert not Transaction.objects.filter(account=checking, status="active").exists()
