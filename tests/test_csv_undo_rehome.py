@@ -254,7 +254,7 @@ def test_undo_records_what_was_rehomed_in_the_audit_event_and_row_history():
     assert not TransactionCorrectionHistory.objects.filter(transaction=grocer).exists()
 
 
-def test_undo_page_says_how_many_rows_a_later_import_kept(client):
+def test_undo_page_says_how_many_rows_another_import_kept(client):
     user, person = make_owner()
     account = make_account(person)
     first = commit(user, account, GROCER, COFFEE)
@@ -266,7 +266,7 @@ def test_undo_page_says_how_many_rows_a_later_import_kept(client):
     )
 
     assert response.status_code == 200
-    assert "1 row stayed because a later import also contains it." in response.content.decode()
+    assert "1 row stayed because another active import also contains it." in response.content.decode()
 
 
 def undo_page(client, user, account, batch):

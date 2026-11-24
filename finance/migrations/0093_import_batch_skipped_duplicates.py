@@ -2,6 +2,15 @@ import finance.models
 from django.db import migrations, models
 
 
+def drop_import_batch_history(apps, schema_editor):
+    """Rollback only: 0092's value-shape constraint does not admit the `import_batch` history entries.
+
+    Runs before that constraint returns. The re-homed transactions stay active
+    on the batch that took them; only the record of the move is lost.
+    """
+    apps.get_model("finance", "TransactionCorrectionHistory").objects.filter(field_name="import_batch").delete()
+
+
 class Migration(migrations.Migration):
     """Additive (#796): each file import's skipped-duplicate fingerprints, and an `import_batch` history field.
 
@@ -9,7 +18,8 @@ class Migration(migrations.Migration):
     what they skipped cannot be rebuilt. Undoing a batch they overlap archives
     as before and warns with the affected days. Batches committed from here on
     store an object. The history value-shape constraint is replaced to admit
-    the new field name; no row is rewritten.
+    the new field name; no row is rewritten. Rolling back deletes the
+    `import_batch` history entries, which the old constraint rejects.
     """
 
     dependencies = [
@@ -21,6 +31,8 @@ class Migration(migrations.Migration):
             model_name='transactioncorrectionhistory',
             name='correction_history_value_shape',
         ),
+        # Reversed just before the old constraint is restored above.
+        migrations.RunPython(migrations.RunPython.noop, drop_import_batch_history),
         migrations.AddField(
             model_name='importbatch',
             name='skipped_duplicates',
