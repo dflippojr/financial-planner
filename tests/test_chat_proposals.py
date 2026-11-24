@@ -1,6 +1,7 @@
 """Chat proposals: the model can suggest changes, but only an Apply POST from the member writes."""
 
 from datetime import date, timedelta
+from unittest.mock import patch
 
 import pytest
 from django.core.exceptions import PermissionDenied
@@ -210,6 +211,22 @@ def test_rule_proposal_shows_the_rules_page_preview_and_applies(harness):
     history = TransactionCorrectionHistory.objects.filter(field_name="category")
     assert history.count() == 2 and all(row.new_description.endswith(VIA_CHAT) for row in history)
     assert "Open rule" in client.get(reverse("chat")).content.decode()
+
+
+@pytest.mark.django_db
+def test_chat_rule_apply_schedules_budget_recheck_once(harness):
+    """The chat proposal applies through apply_rule, so it gets the recheck there, once (#798)."""
+    state, client, person, household = _setup(harness)
+    account = checking(person, household, "Shared Checking")
+    add_txn(account, person, date(2026, 1, 3), -1200, "SYNTHETIC CAFE 1")
+    _propose(state, person, "propose_create_rule", {"description_contains": "synthetic cafe", "category": "Dining"})
+    proposal = AiProposal.objects.get()
+
+    with patch("finance.alert_services.schedule_after_category_change") as schedule:
+        client.post(reverse("chat-proposal-apply", args=[proposal.pk]))
+
+    assert CategoryRule.objects.get().confirmed_at is not None
+    assert schedule.call_count == 1
 
 
 @pytest.mark.django_db

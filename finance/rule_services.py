@@ -773,7 +773,17 @@ def apply_rule(principal, rule_id, *, previewed_version=None):
     if not rule.enabled:
         return None, 0
     with origin(per_row=False):
-        return _apply_to_locked(person, rule, locked)
+        application, skipped_manual = _apply_to_locked(person, rule, locked)
+    if application is not None:
+        _schedule_budget_recheck()
+    return application, skipped_manual
+
+
+def _schedule_budget_recheck():
+    """Recheck budget alerts on commit, as after every other category change (#798)."""
+    from .alert_services import schedule_after_category_change
+
+    schedule_after_category_change()
 
 
 def rule_note_matches(principal, rule):
@@ -1021,6 +1031,8 @@ def reverse_application(principal, application_id):
             # A former household member reversing rows on their now-private account.
             record(person, AuditEvent.Action.RULE_REVERSED, AuditEvent.TargetType.RULE, application.rule_id,
                    audience={"private_owner": person}, metadata=reversal)
+    if restored:
+        _schedule_budget_recheck()
     return ReverseResult(restored=restored, skipped_manual=skipped_manual)
 
 
