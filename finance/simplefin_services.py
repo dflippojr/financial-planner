@@ -609,6 +609,14 @@ def _upsert_snapshot(account, *, snapshot_date, fields, batch):
     )
 
 
+def _before_cutover(item, cutover: date) -> bool:
+    """True for a posted row dated before the cut-over, which the import never stores (#791)."""
+    if not isinstance(item, dict):
+        return False
+    day = posted_date(item.get("posted"))
+    return day is not None and day < cutover
+
+
 def _posted_source_id(item) -> str:
     """The id of a posted (not pending) transaction item, or "" to skip it."""
     if not isinstance(item, dict) or _is_pending(item):
@@ -682,6 +690,10 @@ def _import_transactions(account, link, remote, batches, conversion=None) -> int
     created = []
     next_row = {}
     for item in remote.get("transactions") or []:
+        if _before_cutover(item, link.cutover_date):
+            # Dropped by date in _new_transaction, so it is never validated:
+            # an unstorable id here must not skip the whole account (#791).
+            continue
         source_id = _posted_source_id(item)
         if not source_id or source_id in existing_ids:
             continue
