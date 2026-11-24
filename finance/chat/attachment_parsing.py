@@ -33,6 +33,8 @@ from xml.etree import ElementTree
 
 from django.conf import settings
 
+from ..storable_text import storable_text
+
 CSV = "csv"
 XLSX = "xlsx"
 PDF = "pdf"
@@ -140,8 +142,8 @@ def safe_name(name: str) -> str:
 
 
 def clean_label(value: str, limit: int) -> str:
-    """One line of plain text: control characters become spaces, runs collapse, then truncate."""
-    text = "".join(" " if (ord(ch) < 32 or 0x7F <= ord(ch) < 0xA0 or ch in "  ") else ch for ch in str(value))
+    """One line of storable plain text: control characters become spaces, runs collapse, then truncate."""
+    text = "".join(" " if (ord(ch) < 32 or 0x7F <= ord(ch) < 0xA0 or ch in "  ") else ch for ch in storable_text(value))
     return " ".join(text.split())[:limit]
 
 
@@ -594,6 +596,9 @@ def _parse_pdf(data: bytes):
     pages = result.get("pages")
     if error or not isinstance(pages, list) or not all(isinstance(page, str) for page in pages):
         raise AttachmentRejected(UNREADABLE)
+    # The worker prints JSON with ensure_ascii, so a lone surrogate in the PDF's text survives as an
+    # escape; PostgreSQL jsonb refuses it (#799). A valid surrogate pair decodes to one character and stays.
+    pages = [storable_text(page) for page in pages]
     if not any(page.strip() for page in pages):
         raise AttachmentRejected(NO_PDF_TEXT)
     page_count = _int(result.get("page_count"), len(pages))
