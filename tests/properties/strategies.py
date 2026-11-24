@@ -235,6 +235,23 @@ def simplefin_payload(items, *, balance="0.00", currency="USD"):
     return payload
 
 
+def simplefin_item(key, row):
+    """One posted feed transaction for a (key, Row) pair, with a stable id."""
+    return {"id": f"SYN-SF-{key}", "posted": simplefin_epoch(posted_day(row)),
+            "amount": decimal_text(row.amount_minor), "description": row.payee}
+
+
+def simplefin_accounts_payload(feeds):
+    """A payload with one synthetic checking account per (remote id, transaction items) pair (#673)."""
+    payload = _simplefin_payload([])
+    template = payload["accounts"][0]
+    payload["accounts"] = [
+        {**template, "id": remote_id, "name": f"Synthetic Checking {remote_id}", "transactions": list(items)}
+        for remote_id, items in feeds
+    ]
+    return payload
+
+
 def _simplefin_payload(items):
     return {
         "errlist": [],
@@ -250,11 +267,7 @@ def _simplefin_payload(items):
                 "currency": "USD",
                 "balance": "0.00",
                 "balance-date": simplefin_epoch(LATEST),
-                "transactions": [
-                    {"id": f"SYN-SF-{key}", "posted": simplefin_epoch(posted_day(row)),
-                     "amount": decimal_text(row.amount_minor), "description": row.payee}
-                    for key, row in items
-                ],
+                "transactions": [simplefin_item(key, row) for key, row in items],
                 "extra": {},
             }
         ],

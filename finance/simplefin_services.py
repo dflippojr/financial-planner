@@ -842,7 +842,19 @@ def _start_link_at_fetched_day(person, connection, link, fetched_from):
 
 
 def _sync_one_link(person, connection, link, remote, synced_at, payload, rates, fetched_from=None):
-    """Apply one linked account. Returns (new rows imported, whether its cut-over moved)."""
+    """Apply one linked account. Returns (new rows imported, whether its cut-over moved).
+
+    A row this account sent that cannot be stored skips the account, not the
+    whole connection (#673): the error is one of the fixed messages above,
+    never provider text, so it is safe to show.
+    """
+    try:
+        return _apply_one_link(person, connection, link, remote, synced_at, payload, rates, fetched_from)
+    except SimpleFinError as exc:
+        raise AccountSkipped(str(exc)) from None
+
+
+def _apply_one_link(person, connection, link, remote, synced_at, payload, rates, fetched_from):
     account = link.account
     conversion = _conversion_for(remote, rates)
     balance_date = posted_date(remote.get("balance-date")) or timezone.localdate()

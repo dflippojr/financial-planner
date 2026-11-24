@@ -30,7 +30,7 @@ from finance.csv_import.services import undo_import_batch
 from finance.export import minor_from_decimal_string, money_decimal
 from finance.lifecycle_services import change_account_share_mode, share_account
 from finance.models import Account, AccountLink, ImportBatch, RefundLink, TransferPair
-from finance.simplefin_services import sync_connection
+from finance.simplefin_services import save_account_links, sync_connection
 from finance.transaction_export import iter_transaction_csv
 from finance.transaction_filters import visible_transaction_queryset
 
@@ -50,6 +50,9 @@ from .strategies import (
     rows,
     shapes,
     shifted,
+    simplefin_accounts_payload,
+    simplefin_epoch,
+    simplefin_item,
     simplefin_payload,
 )
 
@@ -209,6 +212,98 @@ def test_a_cutover_counts_each_transaction_once_in_any_mix_of_csv_and_simplefin(
         sent = [reported_balance_minor(case.feed_fields[index][0]) for kind, index in case.steps if kind == "sync"]
         sent = [minor for minor in sent if minor is not None]
         assert ledger.simplefin_balances(account) == sent[-1:]
+
+
+# Rows no ledger column can hold: a sub-cent, overflowing, infinite or
+# non-numeric amount, or an id longer than the stored limit (#673).
+UNSTORABLE_FIELDS = st.sampled_from((
+    ("amount", "-1.005"), ("amount", "1e1000000"), ("amount", "9" * 25), ("amount", "Infinity"),
+    ("amount", "SYN"), ("id", "SYN-SF-" + "X" * 300),
+))
+
+
+@dataclass(frozen=True)
+class UnstorableRowCase:
+    cutover: date
+    # One tuple of (key, Row) per linked account on the connection.
+    feeds: tuple
+    bad_account: int
+    bad_field: tuple
+    bad_day: date
+
+
+@st.composite
+def unstorable_row_cases(draw):
+    cutover = draw(st.dates(date(2025, 3, 1), date(2026, 8, 1)))
+    near = st.integers(-30, 30).map(lambda offset: shifted(cutover, offset))
+    world = draw(rows(min_size=1, max_size=8, unique=True, day_strategy=near))
+    count = draw(st.integers(2, 3))
+    owners = [draw(st.integers(0, count - 1)) for _ in world]
+    feeds = tuple(
+        tuple(
+            (index, _feed_row(index, row))
+            for index, (row, owner) in enumerate(zip(world, owners, strict=True))
+            if owner == a
+        )
+        for a in range(count)
+    )
+    bad_field = draw(UNSTORABLE_FIELDS)
+    # An overlong id before the cut-over is still validated before it is dropped: #791.
+    bad_day = draw(st.integers(0, 30).map(lambda offset: shifted(cutover, offset)) if bad_field[0] == "id" else near)
+    return UnstorableRowCase(cutover, feeds, draw(st.integers(0, count - 1)), bad_field, bad_day)
+
+
+def _feed_with_unstorable_row(case):
+    feeds = []
+    for a, items in enumerate(case.feeds):
+        transactions = [simplefin_item(key, row) for key, row in items]
+        if a == case.bad_account:
+            bad = {"id": "SYN-SF-BAD", "posted": simplefin_epoch(case.bad_day), "amount": "-1.00",
+                   "description": "SYN BAD ROW"}
+            field, value = case.bad_field
+            bad[field] = value
+            transactions.insert(len(transactions) // 2, bad)
+        feeds.append((f"sf-acct-{a}", transactions))
+    return simplefin_accounts_payload(feeds)
+
+
+@given(unstorable_row_cases())
+def test_one_accounts_unstorable_row_never_blocks_the_other_accounts_on_its_connection(case):
+    """An unstorable row skips only its own account, and only when it is on or after the cut-over (#673)."""
+    with ledger.isolated():
+        owner = ledger.make_member()
+        ledger.make_household(owner)
+        accounts = [
+            ledger.make_account(owner, Account.Type.CHECKING, name=f"Synthetic Account N{a}")
+            for a in range(len(case.feeds))
+        ]
+        payload = _feed_with_unstorable_row(case)
+        connection = ledger.claim_simplefin(owner)
+        with patch("finance.simplefin_services.fetch_accounts", return_value=payload):
+            save_account_links(owner, connection.pk, [
+                {"simplefin_account_id": f"CON-1:sf-acct-{a}", "action": "link",
+                 "account_id": account.pk, "cutover_date": case.cutover}
+                for a, account in enumerate(accounts)
+            ])
+            result = sync_connection(owner, connection.pk, ignore_rate_limit=True)
+
+        bad_counts = case.bad_day >= case.cutover
+        for a, account in enumerate(accounts):
+            expected = Counter(
+                (posted_day(row), row.amount_minor, "USD", row.payee)
+                for _, row in case.feeds[a] if posted_day(row) >= case.cutover
+            )
+            if a == case.bad_account and bad_counts:
+                expected = Counter()
+            assert ledger.content_counter([account]) == expected
+        connection.refresh_from_db()
+        bad_name = accounts[case.bad_account].name
+        if bad_counts:
+            assert [message.split(":")[0] for message in result["unconverted"]] == [f"Skipped {bad_name}"]
+            assert f"Skipped {bad_name}:" in connection.last_sync_result
+        else:
+            assert result["unconverted"] == []
+            assert "Skipped" not in connection.last_sync_result
 
 
 @dataclass(frozen=True)
