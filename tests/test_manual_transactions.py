@@ -482,20 +482,28 @@ def test_entry_takes_household_tags_and_refuses_bad_input():
 
 
 class _FormScan(HTMLParser):
-    """Collect each form's attributes and the submit buttons inside it."""
+    """Collect each form's attributes and the fields and submit buttons between its open and close tags."""
 
     def __init__(self):
         super().__init__()
         self.forms = []
+        self._form = None
 
     def handle_starttag(self, tag, attrs):
         attributes = dict(attrs)
         if tag == "form":
-            self.forms.append({"attrs": attributes, "fields": set(), "buttons": []})
-        elif self.forms and tag in {"input", "textarea", "select"} and attributes.get("name"):
-            self.forms[-1]["fields"].add(attributes["name"])
-        elif self.forms and tag == "button" and attributes.get("type", "submit") == "submit":
-            self.forms[-1]["buttons"].append(attributes)
+            self._form = {"attrs": attributes, "fields": set(), "buttons": []}
+            self.forms.append(self._form)
+        elif self._form is None:
+            return
+        elif tag in {"input", "textarea", "select"} and attributes.get("name"):
+            self._form["fields"].add(attributes["name"])
+        elif tag == "button" and attributes.get("type", "submit") == "submit":
+            self._form["buttons"].append(attributes)
+
+    def handle_endtag(self, tag):
+        if tag == "form":
+            self._form = None
 
 
 @pytest.mark.django_db
