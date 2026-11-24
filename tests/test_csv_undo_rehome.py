@@ -4,6 +4,7 @@ Every file here is synthetic.
 """
 
 from datetime import date
+from decimal import Decimal
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -128,7 +129,7 @@ def test_undo_ignores_a_later_batch_with_the_same_row_on_another_account():
     assert Transaction.objects.filter(account=other, status="active").count() == 2
 
 
-def test_undo_does_not_rehome_to_an_earlier_or_an_undone_batch():
+def test_undo_does_not_rehome_to_an_undone_batch_or_one_that_never_skipped_the_row():
     user, person = make_owner()
     account = make_account(person)
     first = commit(user, account, GROCER)
@@ -397,3 +398,51 @@ def test_undoing_the_batch_a_row_moved_to_warns_for_an_earlier_batch_with_no_rec
         "Huntington Bank import for 2026-09-01 to 2026-10-31."
     ) in page
 
+
+
+def correct_date(person, account, memo, new_day):
+    from finance.transaction_services import correct_transaction
+
+    txn = Transaction.objects.get(account=account, description=memo)
+    correct_transaction(
+        person, txn, {"transaction_date": new_day, "description": txn.description, "amount": Decimal(txn.amount_minor) / 100}
+    )
+
+
+def legacy_september_batch(user, account, *rows):
+    """A later batch from before migration 0093 (no record) that the member confirmed for September."""
+    later = commit(user, account, *rows)
+    ImportBatch.objects.filter(pk=later.batch.pk).update(
+        skipped_duplicates=None, date_range_start=date(2026, 9, 1), date_range_end=date(2026, 9, 30)
+    )
+    return later
+
+
+def test_a_row_whose_date_was_corrected_out_of_range_is_matched_by_its_import_time_date(client):
+    user, person = make_owner()
+    account = make_account(person)
+    first = commit(user, account, COFFEE)
+    legacy_september_batch(user, account, COFFEE, BAKERY)
+    # The fingerprint keeps the imported day; the member moved the row to October afterwards.
+    correct_date(person, account, "SYNTHETIC COFFEE", date(2026, 10, 2))
+
+    page = undo_page(client, user, account, first.batch)
+
+    assert (
+        "1 removed row dated 2026-09-28 is still marked as covered by the Huntington Bank import "
+        "for 2026-09-01 to 2026-09-30. Import that file again to restore it."
+    ) in page
+
+
+def test_a_row_whose_date_was_corrected_into_range_is_not_matched(client):
+    user, person = make_owner()
+    account = make_account(person)
+    first = commit(user, account, FUEL)
+    legacy_september_batch(user, account, BAKERY)
+    # Imported as an October row, which the September file cannot have held.
+    correct_date(person, account, "SYNTHETIC FUEL", date(2026, 9, 15))
+    correct_date(person, account, "SYNTHETIC FUEL", date(2026, 9, 16))
+
+    page = undo_page(client, user, account, first.batch)
+
+    assert "still marked as covered" not in page
