@@ -50,7 +50,7 @@ def make_account(person, name="Synthetic Checking"):
     return Account.objects.create(name=name, account_type="checking", owner=person)
 
 
-def commit(user, account, *rows):
+def commit(user, account, *rows, source=ImportBatch.Source.HUNTINGTON):
     content = HEADER + b"".join(rows)
     return commit_csv_import(
         user,
@@ -58,7 +58,7 @@ def commit(user, account, *rows):
         content=content,
         document=read_csv(content),
         mapping=mapping(),
-        source=ImportBatch.Source.HUNTINGTON,
+        source=source,
         date_range_start=date(2026, 9, 1),
         date_range_end=date(2026, 10, 31),
     )
@@ -266,3 +266,87 @@ def test_undo_page_says_how_many_rows_a_later_import_kept(client):
 
     assert response.status_code == 200
     assert "1 row stayed because a later import also contains it." in response.content.decode()
+
+
+def undo_page(client, user, account, batch):
+    client.force_login(user)
+    response = client.post(
+        reverse("csv-import-undo", kwargs={"account_id": account.pk, "batch_id": batch.pk}), follow=True
+    )
+    assert response.status_code == 200
+    return response.content.decode()
+
+
+def test_undo_warns_with_the_days_when_a_later_batch_from_before_the_record_covers_them(client):
+    user, person = make_owner()
+    account = make_account(person)
+    first = commit(user, account, GROCER, COFFEE, FUEL)
+    later = commit(user, account, COFFEE, BAKERY)
+    # A batch committed before migration 0093 recorded nothing about what it skipped.
+    ImportBatch.objects.filter(pk=later.batch.pk).update(
+        skipped_duplicates=None, date_range_start=date(2026, 9, 28), date_range_end=date(2026, 9, 30)
+    )
+
+    page = undo_page(client, user, account, first.batch)
+
+    # Nothing says which rows the later file held, so they are archived as before,
+    # and the warning names the removed rows' days that the later batch still covers.
+    assert rows_by_memo(account) == {
+        ("SYNTHETIC GROCER", "archived"): first.batch.pk,
+        ("SYNTHETIC COFFEE", "archived"): first.batch.pk,
+        ("SYNTHETIC FUEL", "archived"): first.batch.pk,
+        ("SYNTHETIC BAKERY", "active"): later.batch.pk,
+    }
+    assert (
+        "1 removed row is dated 2026-09-28, a day a later import still marks as covered. "
+        "Import that later file again to restore any row it also holds."
+    ) in page
+    assert "2026-09-27" not in page and "2026-10-02" not in page
+
+
+def test_undo_warns_instead_of_rehoming_to_a_batch_from_another_source(client):
+    user, person = make_owner()
+    account = make_account(person)
+    first = commit(user, account, GROCER, COFFEE)
+    later = commit(user, account, GROCER, COFFEE, FUEL, source=ImportBatch.Source.CAPITAL_ONE)
+    assert later.duplicate_count == 2
+
+    page = undo_page(client, user, account, first.batch)
+
+    # The stored original fields are read by the batch's source, so a row never
+    # moves to a batch of another source; the gap is named instead.
+    assert rows_by_memo(account) == {
+        ("SYNTHETIC GROCER", "archived"): first.batch.pk,
+        ("SYNTHETIC COFFEE", "archived"): first.batch.pk,
+        ("SYNTHETIC FUEL", "active"): later.batch.pk,
+    }
+    assert (
+        "2 removed rows are dated 2026-09-27 and 2026-09-28, days a later import still marks as covered. "
+        "Import that later file again to restore any rows it also holds."
+    ) in page
+    assert not TransactionCorrectionHistory.objects.exists()
+
+
+def test_undo_does_not_warn_when_nothing_later_covers_the_removed_rows(client):
+    user, person = make_owner()
+    account = make_account(person)
+    first = commit(user, account, GROCER, COFFEE)
+    commit(user, account, BAKERY, FUEL)
+
+    page = undo_page(client, user, account, first.batch)
+
+    assert "still marks as covered" not in page
+
+
+def test_the_warning_lists_at_most_ten_days(client):
+    user, person = make_owner()
+    account = make_account(person)
+    rows = [f"09/{day:02d}/2026,SYNTHETIC DAY {day},-1.00,USD\n".encode() for day in range(1, 13)]
+    first = commit(user, account, *rows)
+    commit(user, account, *rows, source=ImportBatch.Source.CAPITAL_ONE)
+
+    page = undo_page(client, user, account, first.batch)
+
+    assert "12 removed rows are dated 2026-09-01, 2026-09-02," in page
+    assert "2026-09-10 and 2 more days, days a later import still marks as covered." in page
+    assert "2026-09-11" not in page

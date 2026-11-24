@@ -5,10 +5,11 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
     """Additive (#796): each file import's skipped-duplicate fingerprints, and an `import_batch` history field.
 
-    Existing batches keep an empty object: their files were discarded, so what
-    they skipped is unknown and undoing an earlier batch archives as before.
-    The history value-shape constraint is replaced to admit the new field name;
-    no row is rewritten.
+    Existing batches get null, meaning unknown: their files were discarded, so
+    what they skipped cannot be rebuilt. Undoing a batch they overlap archives
+    as before and warns with the affected days. Batches committed from here on
+    store an object. The history value-shape constraint is replaced to admit
+    the new field name; no row is rewritten.
     """
 
     dependencies = [
@@ -23,7 +24,13 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='importbatch',
             name='skipped_duplicates',
-            field=models.JSONField(blank=True, default=dict, validators=[finance.models.validate_json_object]),
+            field=models.JSONField(blank=True, null=True, validators=[finance.models.validate_json_object]),
+        ),
+        # State only: batches created from now on default to an empty object.
+        migrations.AlterField(
+            model_name='importbatch',
+            name='skipped_duplicates',
+            field=models.JSONField(blank=True, default=dict, null=True, validators=[finance.models.validate_json_object]),
         ),
         migrations.AlterField(
             model_name='transactioncorrectionhistory',

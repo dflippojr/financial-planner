@@ -269,8 +269,32 @@ def _prefill_date_range(post_data, preview):
     return data
 
 
+UNCOVERED_DAY_LIMIT = 10
+
+
+def _uncovered_warning(batch):
+    """What the undo message says about removed rows a later import still covers (#796), or ""."""
+    count, days = batch.uncovered_count, [day.isoformat() for day in batch.uncovered_days]
+    if not count:
+        return ""
+    more = len(days) - UNCOVERED_DAY_LIMIT
+    named = days[:UNCOVERED_DAY_LIMIT]
+    if more > 0:
+        listed = f"{', '.join(named)} and {more} more day{'s' if more != 1 else ''}"
+    elif len(named) > 1:
+        listed = f"{', '.join(named[:-1])} and {named[-1]}"
+    else:
+        listed = named[0]
+    one = count == 1
+    return (
+        f"{count} removed row{' is' if one else 's are'} dated {listed}, "
+        f"{'a day' if len(days) == 1 else 'days'} a later import still marks as covered. "
+        f"Import that later file again to restore any row{'' if one else 's'} it also holds."
+    )
+
+
 def _store_result(request, account_id, *, new_count=0, duplicate_count=0, invalid_count=0, undone=False,
-                  rehomed_count=0):
+                  rehomed_count=0, uncovered_warning=""):
     request.session[RESULT_SESSION_KEY] = {
         "account_id": account_id,
         "new_count": new_count,
@@ -278,6 +302,7 @@ def _store_result(request, account_id, *, new_count=0, duplicate_count=0, invali
         "invalid_count": invalid_count,
         "undone": undone,
         "rehomed_count": rehomed_count,
+        "uncovered_warning": uncovered_warning,
     }
 
 
@@ -610,5 +635,6 @@ def csv_undo_import(request, account_id, batch_id):
         batch = undo_import_batch(request.user, account.pk, batch_id)
     except PermissionDenied as exc:
         raise Http404 from exc
-    _store_result(request, account.pk, undone=True, rehomed_count=batch.rehomed_count)
+    _store_result(request, account.pk, undone=True, rehomed_count=batch.rehomed_count,
+                  uncovered_warning=_uncovered_warning(batch))
     return redirect("csv-import-preview", account_id=account.pk)
