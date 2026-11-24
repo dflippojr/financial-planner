@@ -553,3 +553,45 @@ def test_memory_exhaustion_while_parsing_is_a_clean_refusal(monkeypatch):
                                ("b.pdf", make_pdf(["x"]), "_parse_pdf")):
         monkeypatch.setattr(parsing, target, exhausted)
         _rejected(name, data, parsing.TOO_MUCH_TEXT)
+
+
+# A lone UTF-16 surrogate cannot be encoded as UTF-8, so PostgreSQL refuses it in jsonb (#799).
+LONE_SURROGATE = "\ud800"
+EMOJI = "\U0001F600"  # A valid non-BMP character; JSON carries it as a surrogate pair.
+
+
+def _has_lone_surrogate(text: str) -> bool:
+    return any(0xD800 <= ord(ch) <= 0xDFFF for ch in text)
+
+
+def test_pdf_text_with_a_lone_surrogate_is_made_storable_and_keeps_valid_pairs(monkeypatch):
+    # The worker prints JSON with ensure_ascii, so a lone surrogate arrives as an escape.
+    worker_output = json.dumps({"pages": [f"Total {LONE_SURROGATE} due", f"Party {EMOJI}\x00"], "page_count": 2})
+    monkeypatch.setattr(parsing, "_run_pdf_worker", lambda data, timeout: json.loads(worker_output))
+    parsed = parse_upload(upload("statement.pdf", make_pdf(["x"])))
+    pages = parsed.content["pages"]
+    assert not any(_has_lone_surrogate(page) for page in pages)
+    assert pages == ["Total ? due", f"Party {EMOJI}"]
+    # What the jsonb column receives must encode as UTF-8.
+    json.dumps(parsed.content, ensure_ascii=False).encode("utf-8")
+
+
+def test_csv_bytes_cannot_decode_to_a_lone_surrogate():
+    # UTF-8 refuses encoded surrogates, so the CSV falls back to cp1252 and reads them as three characters.
+    parsed = parse_upload(upload("odd.csv", b"name,amount\n\xed\xa0\x80,1\n"))
+    cells = [cell for row in parsed.content["sheets"][0]["rows"] for cell in row[1]]
+    assert not any(_has_lone_surrogate(cell) for cell in cells)
+
+
+@pytest.mark.parametrize("cell_xml", [
+    '<c r="A1" t="inlineStr"><is><t>&#xD800;</t></is></c>',
+    '<c r="A1" t="str"><v>&#55296;</v></c>',
+], ids=["inline-string", "formula-string"])
+def test_xlsx_with_a_lone_surrogate_reference_is_unreadable_not_stored(cell_xml):
+    # Expat refuses a character reference to a surrogate, so the workbook is never parsed.
+    _rejected("odd.xlsx", make_xlsx([("Sheet1", f'<row r="1">{cell_xml}</row>')]), parsing.UNREADABLE)
+
+
+def test_a_file_name_with_a_lone_surrogate_is_made_storable():
+    parsed = parse_upload(upload(f"bud{LONE_SURROGATE}get.csv", BUDGET_CSV.encode()))
+    assert parsed.name == "bud?get.csv"

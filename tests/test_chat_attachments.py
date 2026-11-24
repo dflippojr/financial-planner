@@ -5,6 +5,7 @@ is deleted with it; the attach control names the provider; access follows the co
 All data is synthetic.
 """
 
+import json
 import re
 from datetime import date, timedelta
 from html import unescape
@@ -19,6 +20,7 @@ from django.utils import timezone
 from finance.ai_services import connect_api_key, connect_harness, set_api_defaults
 from finance.category_services import ensure_household_categories
 from finance.lifecycle_services import delete_member_data
+from finance import chat_attachment_parsing
 from finance.chat_attachment_parsing import PASSWORD_PROTECTED, TOO_LARGE, UNSUPPORTED, parse_upload
 from finance.chat_attachments import (
     provider_needs_warning,
@@ -144,6 +146,26 @@ def test_chat_page_upload_stores_the_file_with_its_question_and_audits_it(harnes
     assert "budget.csv" in html and "CSV · 4 rows" in html
     assert reverse("chat-attachment-remove", args=[attachment.pk]) in html
     assert 'enctype="multipart/form-data"' in html
+
+
+@pytest.mark.django_db
+def test_pdf_text_with_a_lone_surrogate_is_stored_and_shown(harness, monkeypatch):
+    """PostgreSQL jsonb refuses a lone surrogate escape (#799); SQLite stores it, so the CI postgres job is the red run."""
+    # The worker prints JSON with ensure_ascii, so a lone surrogate arrives as an escape next to a valid pair.
+    worker_output = json.dumps({"pages": ["Total \ud800 due", "Party \U0001F600"], "page_count": 2, "truncated": False})
+    monkeypatch.setattr(chat_attachment_parsing, "_run_pdf_worker", lambda data, timeout: json.loads(worker_output))
+    client, person, _household = _harness_member(harness)
+    response = client.post(reverse("chat-send"), {
+        "prompt": "Read this statement.", "attachment_provider": _key(person),
+        "attachment": upload("statement.pdf", make_pdf(["x"]), "application/pdf"),
+    })
+    assert response.status_code == 302
+    attachment = AiChatAttachment.objects.get()
+    attachment.refresh_from_db()
+    assert attachment.content == {"pages": ["Total ? due", "Party \U0001F600"]}
+    assert attachment.summary == {"pages": 2, "truncated": False}
+    html = client.get(f"{reverse('chat')}?c={attachment.conversation_id}").content.decode()
+    assert f'id="attachment-{attachment.pk}"' in html and "statement.pdf" in html
 
 
 @pytest.mark.django_db
