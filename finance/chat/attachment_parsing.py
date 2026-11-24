@@ -60,6 +60,11 @@ MAX_ELEMENTS_PER_ITEM = 50_000
 MAX_SHARED_STRINGS = 1_000_000
 # Real workbook parts nest a handful of levels; deeper nesting is refused as unreadable.
 MAX_XML_DEPTH = 32
+# Elements parsed across every worksheet part of one workbook. A full sheet within the row and
+# column caps (5,000 x 100 number cells, each a <c> and its <v>) is about 1,000,000; the text cap
+# allows at most 2,000,000 non-empty cells, about 4,000,000 elements as numbers. This leaves room
+# for styled blank cells on top while stopping well short of what 64 MB of parts could hold.
+MAX_WORKBOOK_PARSE_ELEMENTS = 8_000_000
 
 TOO_LARGE = "That file is larger than 10 MB. Attach a smaller file."
 UNSUPPORTED = "Attach a CSV, XLSX or PDF file. Other file types can't be read."
@@ -73,6 +78,9 @@ TOO_MANY_SHEETS = f"That workbook has more than {MAX_SHEETS} sheets. Remove some
 TOO_MANY_ROWS = f"A sheet in that file has more than {MAX_ROWS:,} rows. Remove rows or split it and attach it again."
 TOO_MANY_COLUMNS = f"A sheet in that file uses more than {MAX_COLUMNS} columns. Remove columns and attach it again."
 TOO_MUCH_TEXT = "That file has too much text to read. Split it and attach the parts you need."
+WORKBOOK_TOO_LARGE = (
+    "That workbook is too large to read. Remove sheets or rows you don't need, or save it as CSV, and attach it again."
+)
 TOO_MANY_PAGES = f"That PDF has more than {MAX_PAGES} pages. Attach only the pages you need."
 
 _BOUNDED_COMPRESSION = frozenset({zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED})
@@ -247,6 +255,12 @@ class _Rows:
         self.columns = max(self.columns, len(cells))
         self.rows.append([number, cells])
 
+    def renamed(self, name):
+        """The same rows under another sheet name, for a sheet entry that shares this part."""
+        copy = _Rows(name)
+        copy.rows, copy.columns, copy.chars = self.rows, self.columns, self.chars
+        return copy
+
 
 def _cell_text(value) -> str:
     text = str(value if value is not None else "").replace("\x00", "")
@@ -346,13 +360,26 @@ def _parse_xml(payload):
     return ElementTree.fromstring(payload)  # noqa: S314 - DTDs are refused before parsing
 
 
-def _stream(payload, tags):
+class _ParseBudget:
+    """Elements a workbook's worksheet parts may still parse, shared by every part of one upload."""
+
+    def __init__(self, limit):
+        self.left = limit
+
+    def spend(self):
+        self.left -= 1
+        if self.left < 0:
+            raise AttachmentRejected(WORKBOOK_TOO_LARGE)
+
+
+def _stream(payload, tags, budget=None):
     """Yield (element, ancestor tags) for each element named in tags, as it ends.
 
     Everything else is dropped from the tree as soon as it ends, and each yielded element
     is dropped once the caller moves on, so memory holds one item at a time however large
     the part. Nesting deeper than MAX_XML_DEPTH and items with too many descendants are
-    refused, so the work per event stays constant.
+    refused, so the work per event stays constant. A budget, when given, is charged for
+    every element as it starts, so parsing stops inside the part once it runs out.
     """
     stack = []
     open_items = 0
@@ -361,6 +388,8 @@ def _stream(payload, tags):
     for event, element in ElementTree.iterparse(io.BytesIO(payload), events=("start", "end")):  # noqa: S314 - DTDs are refused
         name = _local(element.tag)
         if event == "start":
+            if budget is not None:
+                budget.spend()
             if len(stack) >= MAX_XML_DEPTH:
                 raise AttachmentRejected(UNREADABLE)
             if open_items:
@@ -406,10 +435,15 @@ def _read_workbook(archive, members):
     strings = _shared_strings(archive, members)
     date_styles = _date_styles(archive, members)
     epoch = _EXCEL_1904_EPOCH if date1904 else _EXCEL_EPOCH
+    budget = _ParseBudget(MAX_WORKBOOK_PARSE_ELEMENTS)
+    by_part = {}
     parsed = []
     total = 0
     for name, path in sheets:
-        rows = _read_sheet(_read_member(archive, members, path), name, strings, date_styles, epoch)
+        # Several sheet entries may name one part; it is parsed once and each entry reuses it.
+        if path not in by_part:
+            by_part[path] = _read_sheet(_read_member(archive, members, path), name, strings, date_styles, epoch, budget)
+        rows = by_part[path].renamed(name)
         total += rows.chars
         if total > MAX_TEXT_CHARS:
             raise AttachmentRejected(TOO_MUCH_TEXT)
@@ -500,12 +534,12 @@ def _column_index(letters: str) -> int:
     return index
 
 
-def _read_sheet(payload, name, strings, date_styles, epoch):
+def _read_sheet(payload, name, strings, date_styles, epoch, budget=None):
     rows = _Rows(name)
     if payload is None:
         return rows
     previous_row = 0
-    for element, _ancestors in _stream(payload, {"row"}):
+    for element, _ancestors in _stream(payload, {"row"}, budget):
         number = _int(element.get("r"), previous_row + 1)
         previous_row = number
         cells = {}
