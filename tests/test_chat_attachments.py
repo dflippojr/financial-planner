@@ -20,7 +20,7 @@ from django.utils import timezone
 from finance.ai_services import connect_api_key, connect_harness, set_api_defaults
 from finance.category_services import ensure_household_categories
 from finance.lifecycle_services import delete_member_data
-from finance import chat_attachment_parsing
+from finance.chat import attachment_parsing as chat_attachment_parsing
 from finance.chat_attachment_parsing import PASSWORD_PROTECTED, TOO_LARGE, UNSUPPORTED, parse_upload
 from finance.chat_attachments import (
     provider_needs_warning,
