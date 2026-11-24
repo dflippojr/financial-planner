@@ -1179,3 +1179,102 @@ def test_apply_from_a_stale_preview_page_is_refused():
     assert "changed since its preview" in response.content.decode()
     rule.refresh_from_db()
     assert rule.confirmed_at is None
+
+
+def _recheck_calls(monkeypatch):
+    """Record calls to the budget-alert recheck scheduler (#798)."""
+    import finance.rule_services as rule_services
+
+    calls = []
+    monkeypatch.setattr(rule_services, "schedule_after_category_change", lambda: calls.append(True))
+    return calls
+
+
+@pytest.mark.django_db
+def test_apply_rule_schedules_budget_recheck_once(monkeypatch):
+    owner = make_person("owner-recheck-apply")
+    household = make_household(owner)
+    account = make_account(owner)
+    make_transaction(owner, account)
+    rule = save_category_rule(
+        owner, owner_kind="personal", description_contains="kroger", account_id=None,
+        min_amount_minor=None, max_amount_minor=None, category_id=groceries(household).pk, priority=0,
+    )
+    calls = _recheck_calls(monkeypatch)
+
+    application, _skipped = apply_rule(owner, rule.pk)
+
+    assert application is not None
+    assert len(calls) == 1
+
+
+@pytest.mark.django_db
+def test_reverse_application_schedules_budget_recheck_once(monkeypatch):
+    owner = make_person("owner-recheck-reverse")
+    household = make_household(owner)
+    account = make_account(owner)
+    make_transaction(owner, account)
+    rule = save_category_rule(
+        owner, owner_kind="personal", description_contains="kroger", account_id=None,
+        min_amount_minor=None, max_amount_minor=None, category_id=groceries(household).pk, priority=0,
+    )
+    application, _skipped = apply_rule(owner, rule.pk)
+    calls = _recheck_calls(monkeypatch)
+
+    result = reverse_application(owner, application.pk)
+
+    assert result.restored == 1
+    assert len(calls) == 1
+
+
+@pytest.mark.django_db
+def test_rule_apply_and_reversal_that_change_no_row_schedule_nothing(monkeypatch):
+    owner = make_person("owner-recheck-noop")
+    household = make_household(owner)
+    account = make_account(owner)
+    txn = make_transaction(owner, account)
+    rule = save_category_rule(
+        owner, owner_kind="personal", description_contains="kroger", account_id=None,
+        min_amount_minor=None, max_amount_minor=None, category_id=groceries(household).pk, priority=0,
+    )
+    application, _skipped = apply_rule(owner, rule.pk)
+    # A hand edit after the rule ran: reversal leaves that row alone and changes nothing.
+    assign_category(owner, txn.pk, dining(household).pk)
+    calls = _recheck_calls(monkeypatch)
+
+    result = reverse_application(owner, application.pk)
+    assert result.restored == 0
+    assert calls == []
+
+    empty = save_category_rule(
+        owner, owner_kind="personal", description_contains="no-such-merchant", account_id=None,
+        min_amount_minor=None, max_amount_minor=None, category_id=groceries(household).pk, priority=0,
+    )
+    none_applied, _skipped = apply_rule(owner, empty.pk)
+
+    assert none_applied is None
+    assert calls == []
+
+
+@pytest.mark.django_db
+def test_automatic_rule_apply_on_import_does_not_schedule_a_second_recheck(monkeypatch):
+    from django.utils import timezone
+
+    owner = make_person("owner-recheck-auto")
+    household = make_household(owner)
+    account = make_account(owner)
+    make_transaction(owner, account)
+    rule = save_category_rule(
+        owner, owner_kind="personal", description_contains="kroger", account_id=None,
+        min_amount_minor=None, max_amount_minor=None, category_id=groceries(household).pk, priority=0,
+    )
+    # Automatic use needs a confirmed preview; set it directly so only the import path runs.
+    CategoryRule.objects.filter(pk=rule.pk).update(confirmed_at=timezone.now())
+    fresh = make_transaction(owner, account, fingerprint="f1".ljust(64, "0"))
+    calls = _recheck_calls(monkeypatch)
+
+    apply_enabled_rules_to_transactions(owner, [fresh])
+
+    fresh.refresh_from_db()
+    assert fresh.category_id == groceries(household).pk
+    assert calls == []

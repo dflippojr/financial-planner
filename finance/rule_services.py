@@ -9,6 +9,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from .access import DENIED as _DENIED, require_person as _person_for
+from .alert_services import schedule_after_category_change
 from .category_services import assignable_categories, ensure_household_categories
 from .households import current_household
 from .ledger_counting import exclusion_exists_for
@@ -773,7 +774,11 @@ def apply_rule(principal, rule_id, *, previewed_version=None):
     if not rule.enabled:
         return None, 0
     with origin(per_row=False):
-        return _apply_to_locked(person, rule, locked)
+        application, skipped_manual = _apply_to_locked(person, rule, locked)
+    if application is not None:
+        # Budget alerts recheck on commit, as after every other category change (#798).
+        schedule_after_category_change()
+    return application, skipped_manual
 
 
 def rule_note_matches(principal, rule):
@@ -1021,6 +1026,8 @@ def reverse_application(principal, application_id):
             # A former household member reversing rows on their now-private account.
             record(person, AuditEvent.Action.RULE_REVERSED, AuditEvent.TargetType.RULE, application.rule_id,
                    audience={"private_owner": person}, metadata=reversal)
+    if restored:
+        schedule_after_category_change()
     return ReverseResult(restored=restored, skipped_manual=skipped_manual)
 
 
