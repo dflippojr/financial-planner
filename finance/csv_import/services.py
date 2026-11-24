@@ -475,18 +475,38 @@ def _coverage_holes(batch, others, removed_ids):
     left. A batch of another source recorded the row but cannot take it; it has
     a hole while fewer active rows with the fingerprint remain on the account
     than its file held. A batch from before migration 0093 (`skipped_duplicates`
-    null) recorded nothing, so a removed row dated inside its range may be one
-    it held: when the batch was committed after the undone one, or when the row
-    was itself re-homed here and so may have passed that batch on the way.
+    null) recorded nothing, so a removed row whose import-time day is inside
+    its range may be one it held: when the batch was committed after the undone
+    one, or when the row was itself re-homed here and so may have passed that
+    batch on the way. That part is best effort: nothing stored can show a row
+    such a file held outside the range the member confirmed for it. The days a
+    hole names are import-time days, the ones the batch marks covered.
     """
     unknown = [other for other in others if other.skipped_duplicates is None]
     recorded = [other for other in others if other.skipped_duplicates and other.source != batch.source]
     if not removed_ids or not (unknown or recorded):
         return ()
-    removed = list(
-        Transaction.objects.filter(pk__in=removed_ids)
-        .order_by("transaction_date", "pk")
-        .values_list("pk", "fingerprint", "transaction_date")
+    # A row is matched by the day it was imported with, which its fingerprint
+    # was built from: the first date its correction history replaced, or its
+    # current date when the date was never corrected. A row moved out of a
+    # batch's range afterwards is still that batch's row.
+    imported_days = {}
+    for pk, day in (
+        TransactionCorrectionHistory.objects.filter(
+            transaction_id__in=removed_ids, field_name=TransactionCorrectionHistory.Field.TRANSACTION_DATE
+        )
+        .order_by("-recorded_at", "-pk")
+        .values_list("transaction_id", "previous_date")
+    ):
+        imported_days[pk] = day
+    removed = sorted(
+        (
+            (pk, fingerprint, imported_days.get(pk, day))
+            for pk, fingerprint, day in Transaction.objects.filter(pk__in=removed_ids).values_list(
+                "pk", "fingerprint", "transaction_date"
+            )
+        ),
+        key=lambda row: (row[2], row[0]),
     )
     fingerprints = {fingerprint for _pk, fingerprint, _day in removed}
     active = _active_counts_by_batch(batch.account_id, fingerprints) if recorded else {}
