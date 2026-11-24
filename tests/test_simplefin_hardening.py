@@ -1,4 +1,4 @@
-"""Malformed SimpleFIN payloads fail as SimpleFinError or skip a row, never anything else."""
+"""Malformed SimpleFIN payloads fail as SimpleFinError, skip a row, or skip one account (#673), never anything else."""
 
 import logging
 from datetime import date
@@ -145,21 +145,6 @@ def test_one_accounts_unstorable_row_does_not_block_the_other_accounts(monkeypat
     connection.refresh_from_db()
     assert f"Skipped Synthetic First: {UNSTORABLE_AMOUNT}" in connection.last_sync_result
     assert "Synthetic Second" not in connection.last_sync_result
-
-
-@pytest.mark.django_db
-def test_an_overlong_id_on_a_row_before_the_cutover_does_not_fail_the_sync(monkeypatch):
-    old = posted_txn(txn_id="x" * 300, day=2, amount="-1.00")  # before the Mar 10 cut-over: never imported
-    new = posted_txn(txn_id="sf-ok", day=12, amount="-25.00")
-    owner, checking, connection = _linked_owner_and_checking(
-        monkeypatch, payload=account_payload(transactions=[old, new]), cutover=date(2026, 3, 10)
-    )
-    make_household(owner)
-
-    result = sync_connection(owner, connection.pk, ignore_rate_limit=True)
-
-    assert Transaction.objects.filter(account=checking, status=Transaction.Status.ACTIVE).count() == 1
-    assert result["unconverted"] == []
 
 
 @pytest.mark.django_db

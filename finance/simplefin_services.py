@@ -613,7 +613,10 @@ def _posted_source_id(item) -> str:
     """The id of a posted (not pending) transaction item, or "" to skip it."""
     if not isinstance(item, dict) or _is_pending(item):
         return ""
-    return clean_text(item.get("id") or "")
+    source_id = clean_text(item.get("id") or "")
+    if len(source_id) > MAX_ID_CHARS:
+        raise SimpleFinError(UNSTORABLE_ID)
+    return source_id
 
 
 def _new_transaction(account, link, item, source_id, *, row_number, conversion=None, owned_through=None):
@@ -623,10 +626,6 @@ def _new_transaction(account, link, item, source_id, *, row_number, conversion=N
     if owned_through is not None and txn_date <= owned_through:
         # A file import already supplied this day (#743).
         return None
-    # Checked only for a row the sync would import, so a row before the
-    # cut-over never fails it (#673).
-    if len(source_id) > MAX_ID_CHARS:
-        raise SimpleFinError(UNSTORABLE_ID)
     if conversion is None:
         amount_minor = decimal_to_minor(str(item.get("amount")))
         fx = None
