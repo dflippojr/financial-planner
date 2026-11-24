@@ -248,8 +248,7 @@ def unstorable_row_cases(draw):
         for a in range(count)
     )
     bad_field = draw(UNSTORABLE_FIELDS)
-    # An overlong id before the cut-over is still validated before it is dropped: #791.
-    bad_day = draw(st.integers(0, 30).map(lambda offset: shifted(cutover, offset)) if bad_field[0] == "id" else near)
+    bad_day = draw(near)
     return UnstorableRowCase(cutover, feeds, draw(st.integers(0, count - 1)), bad_field, bad_day)
 
 
