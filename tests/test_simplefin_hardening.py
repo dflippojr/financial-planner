@@ -6,10 +6,12 @@ from datetime import date
 import pytest
 from django.core.management import call_command
 
-from finance.models import AccountLink, SimpleFinConnection, Transaction
+from finance.models import AccountLink, ImportBatch, SimpleFinConnection, Transaction
 from finance.simplefin_errors import SimpleFinError, clean_text, sanitize_provider_message
 from finance.simplefin_services import (
     UNEXPECTED_FAILURE,
+    UNSTORABLE_AMOUNT,
+    UNSTORABLE_ID,
     decimal_to_minor,
     listed_accounts,
     posted_date,
@@ -20,6 +22,7 @@ from finance.simplefin_services import (
 from tests.test_simplefin import (
     _linked_owner_and_checking,
     account_payload,
+    connect_owner,
     epoch,
     make_account,
     make_household,
@@ -92,18 +95,71 @@ def test_sync_skips_rows_with_unusable_posted_dates(monkeypatch, posted):
     ("id", "x" * 300),
 ])
 def test_sync_rejects_unstorable_rows_as_simplefin_error(monkeypatch, field, value):
+    """An unstorable row skips its account (#673): the sync succeeds and names it."""
     owner, checking, connection = _linked_owner_and_checking(monkeypatch)
     make_household(owner)
     item = posted_txn(txn_id="sf-bad", day=10, amount="-1.00")
     item[field] = value
     use_payload(monkeypatch, payload_with(item))
 
-    with pytest.raises(SimpleFinError):
-        sync_connection(owner, connection.pk, ignore_rate_limit=True)
+    result = sync_connection(owner, connection.pk, ignore_rate_limit=True)
 
+    message = UNSTORABLE_ID if field == "id" else UNSTORABLE_AMOUNT
+    assert result["imported"] == 0
+    assert result["unconverted"] == [f"Skipped {checking.name}: {message} It will be retried on the next sync."]
     connection.refresh_from_db()
-    assert connection.last_sync_result
+    assert f"Skipped {checking.name}: {message}" in connection.last_sync_result
     assert not Transaction.objects.filter(account=checking).exists()
+    assert not ImportBatch.objects.filter(account=checking).exists()
+
+
+def _two_accounts_payload(bad_amount):
+    payload = account_payload(account_id="acct-1", transactions=[posted_txn(txn_id="t-a", day=10, amount=bad_amount)])
+    other = dict(payload["accounts"][0])
+    other.update({"id": "acct-2", "transactions": [posted_txn(txn_id="t-b", day=11, amount="-20.00")]})
+    payload["accounts"].append(other)
+    return payload
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("bad_amount", ["-1.005", "1e1000000"])
+def test_one_accounts_unstorable_row_does_not_block_the_other_accounts(monkeypatch, bad_amount):
+    owner = make_person("owner")
+    make_household(owner)
+    first = make_account(owner, name="Synthetic First")
+    second = make_account(owner, name="Synthetic Second")
+    payload = _two_accounts_payload(bad_amount)
+    connection = connect_owner(owner, monkeypatch, payload)
+    save_account_links(owner, connection.pk, [
+        {"simplefin_account_id": "CON-1:acct-1", "action": "link", "account_id": first.pk,
+         "cutover_date": date(2026, 3, 1)},
+        {"simplefin_account_id": "CON-1:acct-2", "action": "link", "account_id": second.pk,
+         "cutover_date": date(2026, 3, 1)},
+    ])
+
+    result = sync_connection(owner, connection.pk, ignore_rate_limit=True)
+
+    assert Transaction.objects.filter(account=second, status=Transaction.Status.ACTIVE).count() == 1
+    assert not Transaction.objects.filter(account=first).exists()
+    assert result["imported"] == 1
+    connection.refresh_from_db()
+    assert f"Skipped Synthetic First: {UNSTORABLE_AMOUNT}" in connection.last_sync_result
+    assert "Synthetic Second" not in connection.last_sync_result
+
+
+@pytest.mark.django_db
+def test_an_overlong_id_on_a_row_before_the_cutover_does_not_fail_the_sync(monkeypatch):
+    old = posted_txn(txn_id="x" * 300, day=2, amount="-1.00")  # before the Mar 10 cut-over: never imported
+    new = posted_txn(txn_id="sf-ok", day=12, amount="-25.00")
+    owner, checking, connection = _linked_owner_and_checking(
+        monkeypatch, payload=account_payload(transactions=[old, new]), cutover=date(2026, 3, 10)
+    )
+    make_household(owner)
+
+    result = sync_connection(owner, connection.pk, ignore_rate_limit=True)
+
+    assert Transaction.objects.filter(account=checking, status=Transaction.Status.ACTIVE).count() == 1
+    assert result["unconverted"] == []
 
 
 @pytest.mark.django_db
