@@ -269,13 +269,15 @@ def _prefill_date_range(post_data, preview):
     return data
 
 
-def _store_result(request, account_id, *, new_count=0, duplicate_count=0, invalid_count=0, undone=False):
+def _store_result(request, account_id, *, new_count=0, duplicate_count=0, invalid_count=0, undone=False,
+                  rehomed_count=0):
     request.session[RESULT_SESSION_KEY] = {
         "account_id": account_id,
         "new_count": new_count,
         "duplicate_count": duplicate_count,
         "invalid_count": invalid_count,
         "undone": undone,
+        "rehomed_count": rehomed_count,
     }
 
 
@@ -605,8 +607,8 @@ def csv_preview(request, account_id):
 def csv_undo_import(request, account_id, batch_id):
     account = _visible_account(request, account_id)
     try:
-        undo_import_batch(request.user, account.pk, batch_id)
+        batch = undo_import_batch(request.user, account.pk, batch_id)
     except PermissionDenied as exc:
         raise Http404 from exc
-    _store_result(request, account.pk, undone=True)
+    _store_result(request, account.pk, undone=True, rehomed_count=batch.rehomed_count)
     return redirect("csv-import-preview", account_id=account.pk)

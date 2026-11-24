@@ -33,6 +33,8 @@ METADATA_INT_KEYS = frozenset({
     "bulk_edit_id", "rule_application_id", "surviving_id", "source_id", "proposal_id",
     "transaction_id", "account_id", "undo_id", "connection_id", "usage_id", "job_id", "turn_id", "attempt",
     "conversation_id",
+    # Rows an undone import handed to the later import that skipped them as duplicates (#796).
+    "rehomed_count",
 })
 METADATA_ENUM_KEYS = {
     "operation": frozenset({"simplefin_sync", "ai_claim", "ai_attempt", "ai_recovery", "ai_job", "ai_inference", "chat_turn",

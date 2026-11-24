@@ -3,7 +3,13 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import F, Q
 
-from .base import ArchivableModel, sha256_validator, validate_header_name_list, validate_stored_csv_headers
+from .base import (
+    ArchivableModel,
+    sha256_validator,
+    validate_header_name_list,
+    validate_json_object,
+    validate_stored_csv_headers,
+)
 from .people import (
     Household,
     Membership,
@@ -320,6 +326,11 @@ class ImportBatch(ArchivableModel):
     # posted on or before the latest value among active batches. Null for every
     # other batch, and cleared when the batch is undone.
     owns_simplefin_through = models.DateField(null=True, blank=True)
+    # The valid rows this file import skipped as duplicates (#796): fingerprint
+    # to count. Their transactions stay on the batches that stored them; undoing
+    # one of those batches moves the rows this file also holds here. Empty for
+    # batches committed before migration 0093, and for manual and SimpleFIN ones.
+    skipped_duplicates = models.JSONField(default=dict, blank=True, validators=(validate_json_object,))
     imported_at = models.DateTimeField(auto_now_add=True)
     saved_csv_mapping = models.ForeignKey(
         SavedCsvMapping,

@@ -194,6 +194,25 @@ def test_a_duplicate_another_active_row_still_stands_in_for_is_not_rehomed():
     assert not coffee.filter(import_batch=third.batch).exists()
 
 
+def test_a_batch_never_comes_to_rely_on_a_row_of_a_batch_after_it():
+    user, person = make_owner()
+    account = make_account(person)
+    first = commit(user, account, COFFEE)
+    second = commit(user, account, COFFEE)
+    third = commit(user, account, COFFEE, COFFEE)
+    assert (third.new_count, third.duplicate_count) == (1, 1)
+
+    # The third batch's own row must not stand in for the second file's copy:
+    # undoing the third batch next would archive it and leave the second file's row missing.
+    undo_import_batch(user, account.pk, first.batch.pk)
+    coffee = Transaction.objects.filter(account=account, status="active")
+    assert coffee.filter(import_batch=second.batch).count() == 1
+    assert coffee.filter(import_batch=third.batch).count() == 1
+
+    undo_import_batch(user, account.pk, third.batch.pk)
+    assert list(coffee.values_list("import_batch_id", flat=True)) == [second.batch.pk]
+
+
 def test_reimporting_an_undone_file_counts_the_rehomed_rows_as_duplicates():
     user, person = make_owner()
     account = make_account(person)
