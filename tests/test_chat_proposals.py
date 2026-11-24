@@ -222,7 +222,7 @@ def test_chat_rule_apply_schedules_budget_recheck_once(harness):
     _propose(state, person, "propose_create_rule", {"description_contains": "synthetic cafe", "category": "Dining"})
     proposal = AiProposal.objects.get()
 
-    with patch("finance.alert_services.schedule_after_category_change") as schedule:
+    with patch("finance.rule_services.schedule_after_category_change") as schedule:
         client.post(reverse("chat-proposal-apply", args=[proposal.pk]))
 
     assert CategoryRule.objects.get().confirmed_at is not None

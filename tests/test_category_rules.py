@@ -1183,10 +1183,10 @@ def test_apply_from_a_stale_preview_page_is_refused():
 
 def _recheck_calls(monkeypatch):
     """Record calls to the budget-alert recheck scheduler (#798)."""
-    import finance.alert_services as alert_services
+    import finance.rule_services as rule_services
 
     calls = []
-    monkeypatch.setattr(alert_services, "schedule_after_category_change", lambda: calls.append(True))
+    monkeypatch.setattr(rule_services, "schedule_after_category_change", lambda: calls.append(True))
     return calls
 
 
