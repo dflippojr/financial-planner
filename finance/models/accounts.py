@@ -331,6 +331,8 @@ class ImportBatch(ArchivableModel):
     # one of those batches moves the rows this file also holds here. Empty for
     # batches committed before migration 0093, and for manual and SimpleFIN ones.
     skipped_duplicates = models.JSONField(default=dict, blank=True, validators=(validate_json_object,))
+    # Not stored: undo_import_batch sets it on the batch it returns, the rows it moved to later batches.
+    rehomed_count = 0
     imported_at = models.DateTimeField(auto_now_add=True)
     saved_csv_mapping = models.ForeignKey(
         SavedCsvMapping,
